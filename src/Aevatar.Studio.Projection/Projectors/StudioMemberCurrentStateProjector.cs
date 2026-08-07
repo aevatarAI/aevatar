@@ -4,6 +4,7 @@ using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.StudioMember;
+using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Projection.Mapping;
 using Aevatar.Studio.Projection.Orchestration;
 using Aevatar.Studio.Projection.ReadModels;
@@ -86,6 +87,7 @@ public sealed class StudioMemberCurrentStateProjector
         ApplyImplementationRef(document, state.ImplementationRef);
         ApplyLastBinding(document, state.LastBinding);
         ApplyBindingStatus(document, state.Binding);
+        ApplyScheduleProvisioningStatus(document, state.WorkflowScheduleProvisioning);
 
         // Team membership (ADR-0017). Mirror the actor's optional team_id
         // into the document — absence means "unassigned" on both the actor
@@ -156,6 +158,40 @@ public sealed class StudioMemberCurrentStateProjector
             document.BindingFailureCode = binding.LastFailure.Code ?? string.Empty;
             document.BindingFailureMessage = binding.LastFailure.Message ?? string.Empty;
             document.BindingFailureAt = binding.LastFailure.FailedAtUtc;
+        }
+    }
+
+    private static void ApplyScheduleProvisioningStatus(
+        StudioMemberCurrentStateDocument document,
+        StudioMemberWorkflowScheduleProvisioningState? provisioning)
+    {
+        if (provisioning?.Intent == null)
+            return;
+
+        document.ScheduleProvisioningId = provisioning.Intent.ProvisioningId;
+        document.ScheduleProvisioningStatus = provisioning.Status switch
+        {
+            StudioMemberWorkflowScheduleProvisioningStatus.PendingBinding =>
+                StudioWorkflowScheduleProvisioningStatusNames.PendingBinding,
+            StudioMemberWorkflowScheduleProvisioningStatus.Provisioning =>
+                StudioWorkflowScheduleProvisioningStatusNames.Provisioning,
+            StudioMemberWorkflowScheduleProvisioningStatus.RetryPending =>
+                StudioWorkflowScheduleProvisioningStatusNames.RetryPending,
+            StudioMemberWorkflowScheduleProvisioningStatus.Succeeded =>
+                StudioWorkflowScheduleProvisioningStatusNames.Succeeded,
+            StudioMemberWorkflowScheduleProvisioningStatus.Failed =>
+                StudioWorkflowScheduleProvisioningStatusNames.Failed,
+            _ => string.Empty,
+        };
+        document.ScheduleProvisioningRevisionId = provisioning.Intent.RevisionId;
+        document.ScheduleProvisioningScheduleId = provisioning.ScheduleId;
+        document.ScheduleProvisioningOperationId = provisioning.OperationId;
+        document.ScheduleProvisioningAttemptCount = provisioning.AttemptCount;
+        document.ScheduleProvisioningUpdatedAt = provisioning.UpdatedAtUtc;
+        if (provisioning.Failure != null)
+        {
+            document.ScheduleProvisioningFailureCode = provisioning.Failure.Code;
+            document.ScheduleProvisioningFailureMessage = provisioning.Failure.Message;
         }
     }
 }

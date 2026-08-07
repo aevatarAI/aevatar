@@ -61,6 +61,13 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
         document.ActiveTask.Status.Should().Be("active");
         document.ActiveTask.ActiveStepId.Should().Be("step-beta");
         document.ActiveTask.ActiveOperationId.Should().Be("operation-beta");
+        document.ActiveTask.SchemaVersion.Should().Be(4);
+        document.ActiveTask.ActorId.Should().Be(ActorId);
+        document.ActiveTask.PlanId.Should().Be("plan-alpha");
+        document.ActiveTask.PlanRevision.Should().Be(3);
+        document.ActiveTask.Title.Should().Be("Connect GitHub safely");
+        document.ActiveTask.Gate.Mode.Should().Be("confirm");
+        document.ActiveTask.Gate.Reason.Should().Be("External access will change.");
         document.ActiveTask.Steps.Select(static step => step.StepId)
             .Should().Equal("step-alpha", "step-beta");
 
@@ -85,6 +92,17 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
         active.Operation.OperationId.Should().Be("operation-beta");
         active.Operation.OperationGeneration.Should().Be(3);
         active.Operation.Phase.Should().Be("running");
+        active.AddedBy.Should().Be("replan");
+        active.DependsOn.Should().Equal("step-alpha");
+        active.Estimate.Kind.Should().Be("duration");
+        active.Estimate.Seconds.Should().Be(45);
+        active.Substeps.Should().ContainSingle().Which.Should()
+            .BeEquivalentTo(new NyxIdChatConversationSubstepDocument
+            {
+                SubstepId = "substep-beta",
+                Title = "Wait for NyxID",
+                Status = "running",
+            });
 
         document.PendingApproval.ApprovalRequestId.Should().Be("approval-alpha");
         document.PendingApproval.StepId.Should().Be("step-beta");
@@ -130,6 +148,43 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
         NyxIdChatConversationCurrentStateDocument.Descriptor.Fields.InFieldNumberOrder()
             .Should().NotContain(field =>
                 field.Name == "state_root" || field.Name == "owner_subject");
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldCopyAuthoritativeToolRecoverySourceWithoutInference()
+    {
+        var dispatcher = new RecordingWriteDispatcher();
+        var projector = new NyxIdChatConversationCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-08-05T10:00:00Z")));
+        var state = BuildState();
+        var step = state.ActiveTask.Steps.Single(item => item.StepId == "step-alpha");
+        step.Source = new NyxIdChatStepSource
+        {
+            Tool = new NyxIdChatToolStepSource
+            {
+                ToolName = "repository_update",
+                ServiceId = "connected-service-alpha",
+                ServiceSlug = "service-slug-alpha",
+                ReadinessCapabilityId = "readiness-capability-alpha",
+            },
+        };
+
+        await projector.ProjectAsync(
+            NewContext(),
+            WrapCommitted(
+                new NyxIdChatOperationReconciledEvent(),
+                state,
+                version: 30,
+                eventId: "event-alpha-30",
+                stateEventTimestamp: DateTimeOffset.Parse("2026-08-05T09:59:00Z")));
+
+        var source = dispatcher.Upserts.Should().ContainSingle().Which.ActiveTask.Steps
+            .Single(item => item.StepId == "step-alpha").Source.Tool;
+        source.ToolName.Should().Be("repository_update");
+        source.ServiceId.Should().Be("connected-service-alpha");
+        source.ServiceSlug.Should().Be("service-slug-alpha");
+        source.ReadinessCapabilityId.Should().Be("readiness-capability-alpha");
     }
 
     [Fact]
@@ -368,6 +423,16 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
                 ActiveOperationId = "operation-beta",
                 CreatedAt = now.Clone(),
                 UpdatedAt = now.Clone(),
+                SchemaVersion = 4,
+                ActorId = ActorId,
+                PlanId = "plan-alpha",
+                PlanRevision = 3,
+                Title = "Connect GitHub safely",
+                Gate = new NyxIdChatPlanGate
+                {
+                    Mode = NyxIdChatPlanGateMode.Confirm,
+                    Reason = "External access will change.",
+                },
             },
             PendingApproval = new NyxIdChatPendingApprovalState
             {
@@ -489,6 +554,22 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
             Description = "Connect a service.",
             ExternalEffect = NyxIdChatEffectEvidence.NotApplied,
             ActionRequestId = "action-alpha",
+            AddedBy = NyxIdChatStepAddedBy.Replan,
+            DependsOn = { "step-alpha" },
+            Estimate = new NyxIdChatStepEstimate
+            {
+                Kind = NyxIdChatStepEstimateKind.Duration,
+                Seconds = 45,
+            },
+            Substeps =
+            {
+                new NyxIdChatSubstepState
+                {
+                    SubstepId = "substep-beta",
+                    Title = "Wait for NyxID",
+                    Status = NyxIdChatSubstepStatus.Running,
+                },
+            },
             AvailableActions = new NyxIdChatAvailableActions { Stop = true },
             UpdatedAt = now.Clone(),
             Operation = new NyxIdChatOperationState
@@ -517,6 +598,7 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
             Required = true,
             Description = "Plan the work.",
             ExternalEffect = NyxIdChatEffectEvidence.NotStarted,
+            AddedBy = NyxIdChatStepAddedBy.Initial,
             AvailableActions = new NyxIdChatAvailableActions(),
             UpdatedAt = now.Clone(),
         });

@@ -199,7 +199,7 @@ public sealed class MCPConnectorTests
             {
                 CallToolHandler = (_, _) => ValueTask.FromResult(new CallToolResult
                 {
-                    Content = [new TextContentBlock { Text = "remote tool failed", Type = "text" }],
+                    Content = [new TextContentBlock { Text = "remote tool failed" }],
                     IsError = true,
                 }),
             },
@@ -254,6 +254,68 @@ public sealed class MCPConnectorTests
         }
     }
 
+    [Theory]
+    [InlineData("72")]
+    [InlineData("[\"alpha\",\"beta\"]")]
+    public async Task ExecuteAsync_WhenMCP2ReturnsStructuredContent_ShouldPreserveCompleteResult(
+        string structuredJson)
+    {
+        var clientToServer = new Pipe();
+        var serverToClient = new Pipe();
+        using var serverCancellation = new CancellationTokenSource();
+        using var structuredDocument = JsonDocument.Parse(structuredJson);
+        var serverOptions = new McpServerOptions
+        {
+            ServerInfo = new Implementation { Name = "test-mcp-2", Version = "2.0.0" },
+            Handlers = new McpServerHandlers
+            {
+                CallToolHandler = (_, _) => ValueTask.FromResult(new CallToolResult
+                {
+                    Content = [new TextContentBlock { Text = "structured result" }],
+                    StructuredContent = structuredDocument.RootElement.Clone(),
+                }),
+            },
+        };
+        await using var server = McpServer.Create(
+            new StreamServerTransport(
+                clientToServer.Reader.AsStream(),
+                serverToClient.Writer.AsStream(),
+                "test-mcp-2"),
+            serverOptions);
+        var serverTask = server.RunAsync(serverCancellation.Token);
+
+        try
+        {
+            await using var client = await McpClient.CreateAsync(
+                new StreamClientTransport(
+                    clientToServer.Writer.AsStream(),
+                    serverToClient.Reader.AsStream()),
+                cancellationToken: serverCancellation.Token);
+            client.NegotiatedProtocolVersion.Should().Be("2026-07-28");
+
+            var adapter = new MCPToolAdapter("mcp_structured", "structured", "{}", client, "test-mcp-2");
+            var resultJson = await adapter.ExecuteAsync("{}", serverCancellation.Token);
+
+            using var resultDocument = JsonDocument.Parse(resultJson);
+            resultDocument.RootElement.GetProperty("structuredContent").GetRawText().Should().Be(structuredJson);
+            resultDocument.RootElement.GetProperty("content")[0].GetProperty("type").GetString()
+                .Should().Be("text");
+            resultDocument.RootElement.GetProperty("content")[0].GetProperty("text").GetString()
+                .Should().Be("structured result");
+        }
+        finally
+        {
+            serverCancellation.Cancel();
+            try
+            {
+                await serverTask;
+            }
+            catch (OperationCanceledException) when (serverCancellation.IsCancellationRequested)
+            {
+            }
+        }
+    }
+
     [Fact]
     public async Task ExecuteAsync_ConcurrentFirstUse_ShouldConnectAndDiscoverOnce()
     {
@@ -287,6 +349,25 @@ public sealed class MCPConnectorTests
 
         discovery.ConnectAndDiscoverCalls.Should().Be(1);
         results.Should().OnlyContain(result => result.Success && result.Output == """{"ok":true}""");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenToolListTtlIsZero_ShouldRefreshBeforeNextCall()
+    {
+        var discovery = new StaticDiscoveryPort(new FakeAgentTool("mcp_echo", "{}"))
+        {
+            TimeToLive = TimeSpan.Zero,
+        };
+        await using var connector = CreateConnector(
+            defaultTool: "mcp_echo",
+            discoveryPort: discovery);
+
+        var first = await connector.ExecuteAsync(CreateRequest("step-first", "mcp-first"));
+        var second = await connector.ExecuteAsync(CreateRequest("step-second", "mcp-second"));
+
+        first.Success.Should().BeTrue();
+        second.Success.Should().BeTrue();
+        discovery.ConnectAndDiscoverCalls.Should().Be(2);
     }
 
     [Fact]
@@ -376,13 +457,19 @@ public sealed class MCPConnectorTests
 
     private sealed class StaticDiscoveryPort(params IAgentTool[] tools) : IMCPToolDiscoveryPort
     {
-        public Task<IReadOnlyList<IAgentTool>> ConnectAndDiscoverAsync(
+        private int _connectAndDiscoverCalls;
+
+        public TimeSpan? TimeToLive { get; init; }
+        public int ConnectAndDiscoverCalls => Volatile.Read(ref _connectAndDiscoverCalls);
+
+        public Task<MCPToolDiscoveryResult> ConnectAndDiscoverAsync(
             MCPServerConfig config,
             CancellationToken ct = default)
         {
             _ = config;
             ct.ThrowIfCancellationRequested();
-            return Task.FromResult<IReadOnlyList<IAgentTool>>(tools);
+            Interlocked.Increment(ref _connectAndDiscoverCalls);
+            return Task.FromResult(new MCPToolDiscoveryResult(tools, TimeToLive));
         }
     }
 
@@ -394,7 +481,7 @@ public sealed class MCPConnectorTests
 
         public int ConnectAndDiscoverCalls => Volatile.Read(ref _connectAndDiscoverCalls);
 
-        public async Task<IReadOnlyList<IAgentTool>> ConnectAndDiscoverAsync(
+        public async Task<MCPToolDiscoveryResult> ConnectAndDiscoverAsync(
             MCPServerConfig config,
             CancellationToken ct = default)
         {
@@ -402,7 +489,7 @@ public sealed class MCPConnectorTests
             Interlocked.Increment(ref _connectAndDiscoverCalls);
             _entered.TrySetResult(true);
             await _release.Task.WaitAsync(ct);
-            return tools;
+            return new MCPToolDiscoveryResult(tools, null);
         }
 
         public Task WaitForFirstDiscoveryAsync() =>

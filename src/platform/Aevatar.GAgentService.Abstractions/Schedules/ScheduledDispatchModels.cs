@@ -432,6 +432,8 @@ public sealed record ScheduledDispatchSummary(
 
     public string OwnerLLMModel { get; init; } = string.Empty;
 
+    public string ServiceRevisionId { get; init; } = string.Empty;
+
     public string NyxIdRevocationStatus { get; init; } = string.Empty;
 
     public string VaultRevocationStatus { get; init; } = string.Empty;
@@ -548,6 +550,15 @@ public interface IScheduledDispatchActorPort
     Task<DispatchAdmission> DispatchBeginTeamAutomationCredentialOperationAsync(
         string actorId,
         TeamAutomationCredentialOperation operation,
+        string observationRequestId,
+        CancellationToken ct = default) =>
+        throw new NotSupportedException();
+
+    Task<DispatchAdmission> DispatchRetryTeamAutomationCredentialOperationAsync(
+        string actorId,
+        TeamMemberAutomationOwner owner,
+        string operationId,
+        string idempotencyKey,
         string observationRequestId,
         CancellationToken ct = default) =>
         throw new NotSupportedException();
@@ -794,6 +805,14 @@ public interface IScheduledDispatchApplicationService
 
     Task<TeamAutomationCommittedMutationReceipt> BeginTeamAutomationCredentialOperationAsync(
         TeamAutomationCredentialOperation operation,
+        CancellationToken ct = default) =>
+        throw new NotSupportedException();
+
+    Task<TeamAutomationCommittedMutationReceipt> RetryTeamAutomationCredentialOperationAsync(
+        string scheduleId,
+        TeamMemberAutomationOwner owner,
+        string operationId,
+        string idempotencyKey,
         CancellationToken ct = default) =>
         throw new NotSupportedException();
 

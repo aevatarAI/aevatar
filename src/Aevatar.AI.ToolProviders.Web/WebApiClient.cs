@@ -1,5 +1,6 @@
 using System.Net.Http.Headers;
 using System.Text;
+using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -8,6 +9,8 @@ namespace Aevatar.AI.ToolProviders.Web;
 /// <summary>HTTP client for web search and fetch operations.</summary>
 public sealed class WebApiClient : IWebApiClient, IDisposable
 {
+    private const string FirecrawlNyxIdSearchSlug = "api-firecrawl";
+
     private readonly HttpClient _http;
     private readonly WebToolOptions _options;
     private readonly ILogger _logger;
@@ -34,9 +37,17 @@ public sealed class WebApiClient : IWebApiClient, IDisposable
         if (!string.IsNullOrWhiteSpace(_options.NyxIdSearchSlug) &&
             !string.IsNullOrWhiteSpace(_options.NyxIdBaseUrl))
         {
+            var slug = _options.NyxIdSearchSlug.Trim();
+            var proxyBaseUrl = $"{_options.NyxIdBaseUrl.TrimEnd('/')}/api/v1/proxy/s/{Uri.EscapeDataString(slug)}";
+            if (string.Equals(slug, FirecrawlNyxIdSearchSlug, StringComparison.OrdinalIgnoreCase))
+            {
+                var url = $"{proxyBaseUrl}/v2/search";
+                return WebToolResultBoundaryJson.ParseSearchPayload(
+                    await PostJsonAsync(token, url, new { query, limit = maxResults }, ct));
+            }
+
             var path = $"/search?q={Uri.EscapeDataString(query)}&limit={maxResults}";
-            var url = $"{_options.NyxIdBaseUrl.TrimEnd('/')}/api/v1/proxy/{Uri.EscapeDataString(_options.NyxIdSearchSlug)}{path}";
-            return WebToolResultBoundaryJson.ParseSearchPayload(await GetAsync(token, url, ct));
+            return WebToolResultBoundaryJson.ParseSearchPayload(await GetAsync(token, $"{proxyBaseUrl}{path}", ct));
         }
 
         if (!string.IsNullOrWhiteSpace(_options.SearchApiBaseUrl))
@@ -201,6 +212,24 @@ public sealed class WebApiClient : IWebApiClient, IDisposable
         if (!string.IsNullOrWhiteSpace(token))
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
+        return await SendAsync(request, url, ct);
+    }
+
+    private async Task<string> PostJsonAsync(string token, string url, object payload, CancellationToken ct)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, url)
+        {
+            Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json"),
+        };
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        if (!string.IsNullOrWhiteSpace(token))
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+        return await SendAsync(request, url, ct);
+    }
+
+    private async Task<string> SendAsync(HttpRequestMessage request, string url, CancellationToken ct)
+    {
         try
         {
             using var response = await _http.SendAsync(request, ct);

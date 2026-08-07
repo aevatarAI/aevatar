@@ -187,6 +187,7 @@ internal static class AgentToolReceiptFactory
             ApprovalMode = MapApprovalMode(tool.ApprovalMode),
             IsDestructive = callSafety.IsDestructive,
             SideEffectKind = NormalizeSideEffectKind(tool.SideEffectKind),
+            Effect = AgentToolReceiptEffectPolicy.FromCallSafety(callSafety, tool.SideEffectKind),
         };
 
     private static string NormalizeSideEffectKind(string? sideEffectKind) =>
@@ -226,6 +227,9 @@ internal static class AgentToolReceiptFactory
         normalized.SideEffectKind = string.IsNullOrWhiteSpace(normalized.SideEffectKind)
             ? NormalizeSideEffectKind(tool.SideEffectKind)
             : NormalizeSideEffectKind(normalized.SideEffectKind);
+        normalized.Effect = AgentToolReceiptEffectPolicy.FromCallSafety(
+            callSafety,
+            normalized.SideEffectKind);
         if (normalized.Status == AgentToolReceiptStatus.Unspecified)
         {
             normalized.ResultJson = UnknownResultJson;

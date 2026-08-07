@@ -52,6 +52,8 @@ public sealed class ToolCallModuleApprovalTests
         suspended.ToolApproval.ToolName.Should().Be("danger");
         suspended.ToolApproval.ToolCallId.Should().Be("workflow:run-1:danger_step:exec-1");
         suspended.ToolApproval.ApprovalRequestId.Should().Be("approval-1");
+        ctx.Published.Single(x => x.Event is WorkflowSuspendedEvent)
+            .Direction.Should().Be(TopologyAudience.Self);
         var state = ctx.LoadState<ToolCallModuleState>("tool_call");
         state.PendingApprovals.Should().ContainKey("run-1:danger_step:exec-1:workflow:run-1:danger_step:exec-1:approval-1");
         var pendingState = state.PendingApprovals.Values.Should().ContainSingle().Subject;
@@ -286,16 +288,19 @@ public sealed class ToolCallModuleApprovalTests
             CancellationToken.None);
 
         tool.Requests.Should().ContainSingle();
-        ctx.Published.Select(x => x.Event).OfType<WorkflowToolCallCompletedEvent>().Single().Success.Should().BeFalse();
+        var toolCompleted = ctx.Published.Select(x => x.Event).OfType<WorkflowToolCallCompletedEvent>().Single();
+        toolCompleted.Success.Should().BeFalse();
+        toolCompleted.Error.Should().Contain("approval_denied");
         var completed = ctx.Published.Select(x => x.Event).OfType<StepCompletedEvent>().Single();
         completed.Success.Should().BeFalse();
+        completed.Error.Should().Contain("approval_denied");
         completed.Error.Should().Contain("approval rejected");
         completed.Error.Should().Contain("blocked");
         ctx.LoadState<ToolCallModuleState>("tool_call").PendingApprovals.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task MismatchedResume_ShouldIgnoreWithoutClearingPendingState()
+    public async Task MismatchedResume_ShouldPublishTypedRejectionWithoutClearingPendingState()
     {
         var pending = new WorkflowToolApprovalPendingOutcome(
             ApprovalRequestId: "approval-1",
@@ -329,8 +334,78 @@ public sealed class ToolCallModuleApprovalTests
             CancellationToken.None);
 
         tool.Requests.Should().ContainSingle();
-        ctx.Published.Should().BeEmpty();
+        var rejected = ctx.Published.Select(x => x.Event)
+            .OfType<WorkflowToolApprovalResumeRejectedEvent>()
+            .Should().ContainSingle().Subject;
+        rejected.RunId.Should().Be("run-1");
+        rejected.StepId.Should().Be("danger_step");
+        rejected.Reason.Should().Be(WorkflowToolApprovalResumeRejectionReason.IdentityMismatch);
+        rejected.SubmittedApproval.Should().NotBeNull();
+        rejected.SubmittedApproval.ExecutionId.Should().Be("exec-1");
+        rejected.SubmittedApproval.ToolCallId.Should().Be("workflow:run-1:danger_step:exec-1");
+        rejected.SubmittedApproval.ApprovalRequestId.Should().Be("other-approval");
+        ctx.Published.Single(x => x.Event is WorkflowToolApprovalResumeRejectedEvent)
+            .Direction.Should().Be(TopologyAudience.Self);
         ctx.LoadState<ToolCallModuleState>("tool_call").PendingApprovals.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ResumeWithoutPendingApproval_ShouldPublishTypedNotFoundRejection()
+    {
+        var module = CreateModule(new ScriptedWorkflowTool(
+            "danger",
+            _ => WorkflowToolExecutionResult.Success("{}")));
+        var ctx = new RecordingWorkflowContext();
+
+        await module.HandleAsync(
+            Envelope(new WorkflowResumedEvent
+            {
+                RunId = "run-1",
+                StepId = "danger_step",
+                Approved = true,
+                ToolApproval = new WorkflowToolApprovalResume
+                {
+                    ExecutionId = "exec-1",
+                    ToolCallId = "tool-call-1",
+                    ApprovalRequestId = "approval-1",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Select(x => x.Event)
+            .OfType<WorkflowToolApprovalResumeRejectedEvent>()
+            .Should().ContainSingle()
+            .Which.Reason.Should().Be(WorkflowToolApprovalResumeRejectionReason.PendingApprovalNotFound);
+    }
+
+    [Fact]
+    public async Task ResumeWithIncompleteApprovalIdentity_ShouldPublishTypedInvalidIdentityRejection()
+    {
+        var module = CreateModule(new ScriptedWorkflowTool(
+            "danger",
+            _ => WorkflowToolExecutionResult.Success("{}")));
+        var ctx = new RecordingWorkflowContext();
+
+        await module.HandleAsync(
+            Envelope(new WorkflowResumedEvent
+            {
+                RunId = "run-1",
+                StepId = "danger_step",
+                Approved = true,
+                ToolApproval = new WorkflowToolApprovalResume
+                {
+                    ExecutionId = "exec-1",
+                    ToolCallId = "tool-call-1",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Select(x => x.Event)
+            .OfType<WorkflowToolApprovalResumeRejectedEvent>()
+            .Should().ContainSingle()
+            .Which.Reason.Should().Be(WorkflowToolApprovalResumeRejectionReason.InvalidIdentity);
     }
 
     private static ToolCallModule CreateModule(IWorkflowTool tool) =>

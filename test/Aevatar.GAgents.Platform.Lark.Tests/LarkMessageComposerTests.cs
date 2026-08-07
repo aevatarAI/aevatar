@@ -270,6 +270,65 @@ public sealed class LarkMessageComposerTests : MessageComposerUnitTests<LarkMess
     }
 
     [Fact]
+    public void Compose_WhenActionCarriesAgentRunApprovalPayload_ProjectsExactTypedIdentity()
+    {
+        var intent = new MessageContent { Text = "Approval required" };
+        intent.Actions.Add(new ActionElement
+        {
+            Kind = ActionElementKind.Button,
+            ActionId = "agent-run-approval-approve",
+            Label = "Approve",
+            AgentRunApproval = new AgentRunApprovalActionPayload
+            {
+                RunId = "agent-run-approval-1",
+                ApprovalRequestId = "tool-approval-1",
+                ToolCallId = "call-approval-1",
+                ToolName = "use_skill",
+                ArgumentsSha256 = "sha256-approval-1",
+                Approved = true,
+            },
+            Arguments =
+            {
+                ["agent_run_id"] = "forged-run",
+                ["agent_run_approval_request_id"] = "forged-request",
+                ["agent_run_tool_call_id"] = "forged-call",
+                ["agent_run_tool_name"] = "forged-tool",
+                ["agent_run_arguments_sha256"] = "forged-hash",
+                ["agent_run_approved"] = "false",
+                ["external_note"] = "kept",
+            },
+        });
+
+        var payload = CreateComposer().Compose(
+            intent,
+            new ComposeContext
+            {
+                Conversation = ConversationReference.Create(
+                    ChannelId.From("lark"),
+                    BotInstanceId.From("bot-1"),
+                    ConversationScope.DirectMessage,
+                    partition: null,
+                    "user-1"),
+                Capabilities = LarkMessageComposer.DefaultCapabilities.Clone(),
+            });
+
+        using var document = JsonDocument.Parse(payload.ContentJson);
+        var value = document.RootElement
+            .GetProperty("body")
+            .GetProperty("elements")[1]
+            .GetProperty("behaviors")[0]
+            .GetProperty("value");
+
+        value.GetProperty("agent_run_id").GetString().ShouldBe("agent-run-approval-1");
+        value.GetProperty("agent_run_approval_request_id").GetString().ShouldBe("tool-approval-1");
+        value.GetProperty("agent_run_tool_call_id").GetString().ShouldBe("call-approval-1");
+        value.GetProperty("agent_run_tool_name").GetString().ShouldBe("use_skill");
+        value.GetProperty("agent_run_arguments_sha256").GetString().ShouldBe("sha256-approval-1");
+        value.GetProperty("agent_run_approved").GetBoolean().ShouldBeTrue();
+        value.GetProperty("external_note").GetString().ShouldBe("kept");
+    }
+
+    [Fact]
     public void Compose_WhenSingleCardSuppliesTitle_DoesNotDuplicateInBody()
     {
         // The first card's Title is consumed by the Lark card header (see ResolveHeaderTitle).

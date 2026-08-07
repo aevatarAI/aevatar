@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AGUI.Contracts;
 using Aevatar.CQRS.Core.Abstractions.Commands;
@@ -10,10 +11,12 @@ using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Metadata;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -123,6 +126,116 @@ public sealed class NyxIdChatPublicEndpointsTests
         credentials.NyxIdAccessToken.Should().Be("proxy-delegation");
         credentials.NyxIdCredentialKind.Should().Be(AgentToolNyxIdCredentialKind.ProxyDelegation);
         AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(credentials).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task FirstText_WithInlineImage_ShouldIngestArtifactAndDispatchTypedFileRef()
+    {
+        var chat = new RecordingInteraction<NyxIdChatCommand>();
+        var ingress = new RecordingFileArtifactIngressPort();
+        var context = CreateContext("scope-alpha", services => services
+            .AddSingleton<ICommandInteractionService<NyxIdChatCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>(chat)
+            .AddSingleton<ICommandInteractionService<NyxIdActionContinuationCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>(new RecordingInteraction<NyxIdActionContinuationCommand>())
+            .AddSingleton<IScopeResourceAdmissionPort>(new RecordingAdmissionPort())
+            .AddSingleton<IFileArtifactIngressPort>(ingress));
+        context.Request.Headers.Authorization = "Bearer delegated-token";
+        context.Response.Body = new MemoryStream();
+        var rawPart = new NyxIdChatEndpoints.ContentPartDto(
+            Type: "image",
+            DataBase64: "c3ludGhldGljLWludm9pY2U=",
+            MediaType: "image/png",
+            Name: "synthetic-invoice.png");
+
+        await NyxIdChatEndpoints.HandlePublicChatAsync(context, Parse("""
+            {
+              "type": "text",
+              "clientRequestId": "invoice-request",
+              "prompt": "Review this invoice",
+              "inputParts": [{
+                "type": "image",
+                "dataBase64": "c3ludGhldGljLWludm9pY2U=",
+                "mediaType": "image/png",
+                "name": "synthetic-invoice.png"
+              }]
+            }
+            """));
+
+        var request = ingress.Requests.Should().ContainSingle().Which;
+        request.Content.ToArray().Should().Equal("synthetic-invoice"u8.ToArray());
+        request.SourceKind.Should().Be(FileArtifactSourceKind.ChatInput);
+        request.OwnerScopeId.Should().Be("scope-alpha");
+
+        var command = chat.Commands.Should().ContainSingle().Which;
+        var inputPart = command.InputParts.Should().ContainSingle().Which;
+        inputPart.Kind.Should().Be(ChatContentPartKind.Image);
+        inputPart.DataBase64.Should().BeEmpty();
+        inputPart.FileRef.Should().NotBeNull();
+        inputPart.FileRef!.ArtifactId.Should().Be("workflow-file://inline-1");
+        inputPart.FileRef.SourceKind.Should().Be(ChatFileSourceKind.ChatInput);
+        inputPart.FileRef.OwnerScopeId.Should().Be("scope-alpha");
+        command.CommandId.Should().Be(NyxIdChatPublicIdentity.CreateChatCommandId(
+            command.ActorId,
+            command.ScopeId,
+            command.OwnerSubject!,
+            command.ClientRequestId,
+            command.TurnId,
+            command.Prompt,
+            [rawPart.ToProto()],
+            command.AgentProfileReference));
+        command.InputPartsFingerprint.Should().Be(
+            NyxIdChatPublicIdentity.CreateInputPartsFingerprint([rawPart.ToProto()]));
+
+        var envelope = new NyxIdChatCommandEnvelopeFactory().CreateEnvelope(
+            command,
+            new CommandContext(
+                command.ActorId,
+                command.CommandId!,
+                command.CorrelationId!,
+                new Dictionary<string, string>()));
+        var start = envelope.Payload.Unpack<NyxIdChatConversationCreateCommand>().FirstTurn;
+        start.InputParts.Should().ContainSingle().Which.FileRef.ArtifactId
+            .Should().Be("workflow-file://inline-1");
+        start.InputPartsFingerprint.Should().Be(command.InputPartsFingerprint);
+    }
+
+    [Fact]
+    public void CommandEnvelope_WithCase13MultimodalPrompt_ShouldCarryExactSkillRecovery()
+    {
+        const string prompt =
+            "请从这张合成发票图片中提取字段、归一化金额和日期，并检查历史重复。" +
+            "请先通过 Ornn 搜索确认并使用精确名称为 invoice-ocr-policy-review 的 skill，" +
+            "把其中的 workflow 挂载到当前 scope 后实际运行；禁止直接用模型视觉回答，" +
+            "禁止创建审批，结果只以 typed artifact 为准。";
+        var command = new NyxIdChatCommand(
+            "conversation-alpha",
+            "scope-alpha",
+            prompt,
+            "turn-alpha",
+            "delegated-token",
+            [new NyxIdChatEndpoints.ContentPartDto(
+                Type: "image",
+                DataBase64: "c3ludGhldGljLWludm9pY2U=",
+                MediaType: "image/png",
+                Name: "synthetic-invoice.png").ToProto()],
+            Metadata: null,
+            OwnerSubject: "user-alpha");
+
+        var envelope = new NyxIdChatCommandEnvelopeFactory().CreateEnvelope(
+            command,
+            new CommandContext(
+                command.ActorId,
+                "command-alpha",
+                "correlation-alpha",
+                new Dictionary<string, string>()));
+
+        var start = envelope.Payload.Unpack<NyxIdChatStartTurnCommand>();
+        start.InputParts.Should().ContainSingle().Which.Kind.Should().Be(ChatContentPartKind.Image);
+        var recovery = AgentToolExecutionContextMapper.FromPayload(start.ToolContext).SkillRecovery;
+        recovery.RequireInitialOrnnSearch.Should().BeTrue();
+        recovery.RequireOrnnSearchOnBlocker.Should().BeTrue();
+        recovery.PrimarySkillName.Should().Be("invoice-ocr-policy-review");
+        recovery.OriginalCommand.Should().Be(prompt);
+        recovery.CommandArguments.Should().Be(prompt);
     }
 
     [Fact]
@@ -598,6 +711,32 @@ public sealed class NyxIdChatPublicEndpointsTests
         admission.Targets.Should().ContainSingle().Which.Operation.Should().Be(ScopeResourceOperation.Use);
         using var body = JsonDocument.Parse(response.Body);
         body.RootElement.GetProperty("stateVersion").GetInt64().Should().Be(9);
+        body.RootElement.GetProperty("projectionStatus").GetString().Should().Be("current");
+    }
+
+    [Fact]
+    public async Task TranscriptRoute_ShouldExposeAcknowledgedPendingConversation()
+    {
+        var history = new RecordingHistoryPort
+        {
+            MessagesResult = ChatHistoryConversationMessagesResult.Pending(),
+        };
+        var admission = new RecordingAdmissionPort();
+        var context = CreateContext("scope-alpha", services => services
+            .AddSingleton<IChatHistoryQueryPort>(history)
+            .AddSingleton<IScopeResourceAdmissionPort>(admission));
+
+        var response = await ExecutePublicRouteAsync(
+            context,
+            HttpMethods.Get,
+            "/api/chat/conversations/{conversationId}",
+            new RouteValueDictionary { ["conversationId"] = "conversation-alpha" });
+
+        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        using var body = JsonDocument.Parse(response.Body);
+        body.RootElement.GetProperty("projectionStatus").GetString().Should().Be("pending");
+        body.RootElement.GetProperty("stateVersion").GetInt64().Should().Be(0);
+        body.RootElement.GetProperty("messages").GetArrayLength().Should().Be(0);
     }
 
     [Fact]
@@ -619,6 +758,30 @@ public sealed class NyxIdChatPublicEndpointsTests
         response.StatusCode.Should().Be(StatusCodes.Status200OK);
         state.Queries.Should().ContainSingle().Which.Should().Be(
             new NyxIdChatConversationStateQuery("scope-alpha", "conversation-alpha", 8, "turn-alpha"));
+    }
+
+    [Fact]
+    public void StateRoute_ShouldPublishTypedOpenApiResponseSchema()
+    {
+        var app = WebApplication.CreateBuilder().Build();
+        app.MapNyxIdChatPublicEndpoints();
+        var endpoint = ((IEndpointRouteBuilder)app).DataSources
+            .SelectMany(static source => source.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Single(item => item.RoutePattern.RawText ==
+                "/api/chat/conversations/{conversationId}/state");
+
+        var responseTypes = endpoint.Metadata
+            .GetOrderedMetadata<IProducesResponseTypeMetadata>();
+
+        responseTypes.Should().Contain(item =>
+            item.StatusCode == StatusCodes.Status200OK &&
+            item.Type == typeof(NyxIdChatConversationStateResponse));
+        responseTypes.Should().Contain(item =>
+            item.StatusCode == StatusCodes.Status404NotFound &&
+            item.Type == typeof(NyxIdChatConversationStateNotFoundResponse));
+        typeof(NyxIdChatToolStepSourceSnapshot).GetProperty("ReadinessCapabilityId")
+            .Should().NotBeNull();
     }
 
     [Fact]
@@ -786,6 +949,34 @@ public sealed class NyxIdChatPublicEndpointsTests
         {
             Targets.Add(target);
             return Task.FromResult(ScopeResourceAdmissionResult.Allowed());
+        }
+    }
+
+    private sealed class RecordingFileArtifactIngressPort : IFileArtifactIngressPort
+    {
+        public List<FileArtifactIngressRequest> Requests { get; } = [];
+
+        public ValueTask<FileArtifactIngressResult> IngestAsync(
+            FileArtifactIngressRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Requests.Add(request);
+            return ValueTask.FromResult(new FileArtifactIngressResult(new FileArtifactRef
+            {
+                FileId = "inline-1",
+                ArtifactId = "workflow-file://inline-1",
+                SourceKind = request.SourceKind,
+                SourceMessageId = request.SourceMessageId,
+                SourceResourceKey = request.SourceResourceKey,
+                FileName = request.FileName,
+                MediaType = request.MediaType,
+                SizeBytes = request.Content.Length,
+                Sha256 = "sha-alpha",
+                CreatedAtUnixMs = 1,
+                ExpiresAtUnixMs = 2,
+                OwnerScopeId = request.OwnerScopeId,
+            }));
         }
     }
 

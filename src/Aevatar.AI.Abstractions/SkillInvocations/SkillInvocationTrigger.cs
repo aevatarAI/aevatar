@@ -6,4 +6,5 @@ public sealed record SkillInvocationTrigger(
     bool IsDiscovery,
     string OriginalText,
     string TriggerToken,
-    string Platform);
+    string Platform,
+    bool MountWorkflowsRequested = false);

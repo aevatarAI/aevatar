@@ -51,7 +51,7 @@ public sealed class WorkflowExecutionCurrentStateProjector
             DefinitionActorId = state.DefinitionActorId ?? string.Empty,
             RunId = string.IsNullOrWhiteSpace(state.RunId) ? context.RootActorId : state.RunId,
             WorkflowName = state.WorkflowName ?? string.Empty,
-            Status = state.Status ?? string.Empty,
+            Status = ResolveCurrentStateStatus(state),
             ScopeId = state.ScopeId ?? string.Empty,
             RunOrigin = state.RunOrigin ?? string.Empty,
             ScheduleId = state.ScheduleId ?? string.Empty,
@@ -116,6 +116,24 @@ public sealed class WorkflowExecutionCurrentStateProjector
         }
 
         return [];
+    }
+
+    private static string ResolveCurrentStateStatus(WorkflowRunState state)
+    {
+        var status = state.Status ?? string.Empty;
+        if (status is "completed" or "failed" or "stopped")
+            return status;
+
+        foreach (var executionState in state.ExecutionStates.Values)
+        {
+            if (!executionState.Is(ToolCallModuleState.Descriptor))
+                continue;
+
+            if (executionState.Unpack<ToolCallModuleState>().PendingApprovals.Count > 0)
+                return "awaiting_tool_approval";
+        }
+
+        return status;
     }
 
     private static WorkflowStepIdempotencyReadModel MapStepIdempotency(

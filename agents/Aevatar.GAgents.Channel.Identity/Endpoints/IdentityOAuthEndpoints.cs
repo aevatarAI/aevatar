@@ -490,26 +490,49 @@ public static class IdentityOAuthEndpoints
                     new CapabilityScope { Value = AevatarOAuthClientScopes.Proxy },
                     ct)
                 .ConfigureAwait(false);
+            // The binding id itself is a bearer credential, so only its
+            // irreversible digest prefix is correlatable from logs.
+            logger.LogInformation(
+                "New channel NyxID binding cleared the configured runtime floor. probe_result={ProbeResult}, binding_digest={BindingDigest}",
+                nameof(IssuedBindingProbeResult.Usable),
+                BindingDigest(bindingId));
             return IssuedBindingProbeResult.Usable;
         }
         catch (BindingScopeMismatchException ex)
         {
-            logger.LogInformation(ex, "New channel NyxID binding lacks the required proxy scope.");
+            logger.LogInformation(
+                ex,
+                "New channel NyxID binding lacks the required proxy scope. probe_result={ProbeResult}, binding_digest={BindingDigest}",
+                nameof(IssuedBindingProbeResult.MissingRequiredAccess),
+                BindingDigest(bindingId));
             return IssuedBindingProbeResult.MissingRequiredAccess;
         }
         catch (BindingServiceAccessMismatchException ex)
         {
-            logger.LogInformation(ex, "New channel NyxID binding lacks one or more required services.");
+            logger.LogInformation(
+                ex,
+                "New channel NyxID binding lacks one or more required services. probe_result={ProbeResult}, binding_digest={BindingDigest}, unsatisfied_resource_count={UnsatisfiedResourceCount}",
+                nameof(IssuedBindingProbeResult.MissingRequiredAccess),
+                BindingDigest(bindingId),
+                ex.RequiredResources.Count);
             return IssuedBindingProbeResult.MissingRequiredAccess;
         }
         catch (BindingRevokedException ex)
         {
-            logger.LogWarning(ex, "New channel NyxID binding was already revoked before adoption.");
+            logger.LogWarning(
+                ex,
+                "New channel NyxID binding was already revoked before adoption. probe_result={ProbeResult}, binding_digest={BindingDigest}",
+                nameof(IssuedBindingProbeResult.Invalid),
+                BindingDigest(bindingId));
             return IssuedBindingProbeResult.Invalid;
         }
         catch (BindingNotFoundException ex)
         {
-            logger.LogWarning(ex, "New channel NyxID binding was not found before adoption.");
+            logger.LogWarning(
+                ex,
+                "New channel NyxID binding was not found before adoption. probe_result={ProbeResult}, binding_digest={BindingDigest}",
+                nameof(IssuedBindingProbeResult.Invalid),
+                BindingDigest(bindingId));
             return IssuedBindingProbeResult.Invalid;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -518,10 +541,17 @@ public static class IdentityOAuthEndpoints
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "New channel NyxID binding could not be verified before adoption.");
+            logger.LogWarning(
+                ex,
+                "New channel NyxID binding could not be verified before adoption. probe_result={ProbeResult}, binding_digest={BindingDigest}",
+                nameof(IssuedBindingProbeResult.Unavailable),
+                BindingDigest(bindingId));
             return IssuedBindingProbeResult.Unavailable;
         }
     }
+
+    private static string BindingDigest(string bindingId) =>
+        NyxIdRemoteCapabilityBroker.BindingDigest(bindingId);
 
     private static IResult BuildIssuedBindingProbeError(IssuedBindingProbeResult probeResult) =>
         probeResult switch
@@ -555,11 +585,14 @@ public static class IdentityOAuthEndpoints
 
     internal static async Task<IResult> HandleAevatarOAuthClientStatusAsync(
         [FromServices] IAevatarOAuthClientProvider provider,
+        [FromServices] IOptions<NyxIdBrokerOptions> brokerOptions,
         CancellationToken ct)
     {
         try
         {
             var snapshot = await provider.GetAsync(ct).ConfigureAwait(false);
+            var options = brokerOptions.Value;
+            var requiredServiceSlugs = RequiredServiceSlugs(options);
             var resolvedRedirectUri = NyxIdRedirectUriResolver.Resolve();
             var resolvedRedirectUris = NyxIdRedirectUriResolver.ResolveRegisteredRedirectUris();
             var registeredRedirectUris = NyxIdRedirectUriResolver.NormalizeRedirectUris(snapshot.RedirectUris ?? []);
@@ -591,6 +624,16 @@ public static class IdentityOAuthEndpoints
                 oauth_scope_drifted = oauthScopeDrifted,
                 broker_capability_observed = snapshot.BrokerCapabilityObserved,
                 broker_capability_observed_at = snapshot.BrokerCapabilityObservedAt,
+                required_service_slugs = requiredServiceSlugs,
+                // /oauth/authorize deliberately sends no RFC 8707 `resource`, so
+                // NyxID's consent page no longer marks these as required. Consent
+                // defaults are what preselect them; without that, users routinely
+                // land in the callback's 409 repair loop.
+                consent_defaults_handoff =
+                    "Every slug in required_service_slugs must also appear in this OAuth client's NyxID "
+                    + "default_service_catalog_slugs. Those defaults only preselect checkboxes on the consent "
+                    + "page — they are never an authorization fact. Aevatar enforces this set fail-closed at "
+                    + "callback and at every short-lived capability issuance.",
                 ops_handoff = oauthScopeDrifted
                     ? "The configured OAuth client registration must include the canonical proxy-capable scope."
                     : snapshot.BrokerCapabilityObserved
@@ -607,6 +650,11 @@ public static class IdentityOAuthEndpoints
             }, statusCode: StatusCodes.Status503ServiceUnavailable);
         }
     }
+
+    private static string[] RequiredServiceSlugs(NyxIdBrokerOptions options) =>
+        AevatarOAuthClientResources.RequiredServiceSlugs(
+            options.RequiredLlmServiceSlug,
+            options.AdditionalRequiredServiceSlugs);
 
     // ─── Operator rebuild ───
 
@@ -1177,8 +1225,8 @@ public static class IdentityOAuthEndpoints
         {
             await brokerCallback.RevokeBindingByIdAsync(bindingId, ct).ConfigureAwait(false);
             logger.LogInformation(
-                "Revoked orphan binding_id={BindingId} after concurrent /init",
-                bindingId);
+                "Revoked unadopted NyxID binding after OAuth callback rejection. binding_digest={BindingDigest}",
+                BindingDigest(bindingId));
         }
         catch (Exception ex)
         {
@@ -1186,8 +1234,8 @@ public static class IdentityOAuthEndpoints
             // to failing the user's already-bound response. NyxID's CAE
             // sweeper eventually reclaims unused bindings.
             logger.LogWarning(ex,
-                "Failed to revoke orphan binding_id={BindingId}; NyxID will eventually reap it",
-                bindingId);
+                "Failed to revoke unadopted NyxID binding; NyxID will eventually reap it. binding_digest={BindingDigest}",
+                BindingDigest(bindingId));
         }
     }
 

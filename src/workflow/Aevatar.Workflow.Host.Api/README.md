@@ -89,6 +89,33 @@
 
 Host 只做“协议 + 组合”，核心用例在 `workflow/*` 能力实现层。
 
+## 本地启动 Admin Studio
+
+Workflow Host 组合了真实的 AI tool admission 与审计身份哈希。Development/Testing 环境使用
+内存审计、Actor 与 Projection provider，并允许配置本地临时 key；Production 环境仍必须提供
+持久化审计 key 与 Redis admission storage，不会回退到本地默认值。
+
+```bash
+ASPNETCORE_ENVIRONMENT=Development \
+Aevatar__Authentication__Enabled=false \
+Audit__ActorIdentityHasher__ActiveKeyId=local-development-key \
+Audit__ActorIdentityHasher__Keys__0__KeyId=local-development-key \
+Audit__ActorIdentityHasher__Keys__0__Key=local-development-audit-identity-key \
+Projection__Document__Providers__Elasticsearch__Enabled=false \
+Projection__Document__Providers__InMemory__Enabled=true \
+Projection__Graph__Providers__Neo4j__Enabled=false \
+Projection__Graph__Providers__InMemory__Enabled=true \
+Projection__Policies__Environment=Development \
+Projection__Policies__DenyInMemoryDocumentReadStore=false \
+Projection__Policies__DenyInMemoryGraphFactStore=false \
+ActorRuntime__Provider=InMemory \
+ActorRuntime__SecretStoreBackend=InMemory \
+dotnet run --project src/workflow/Aevatar.Workflow.Host.Api --urls http://127.0.0.1:5100
+```
+
+启动后通过 `http://127.0.0.1:5100/workflow/studio` 访问 Admin Studio。示例审计 key
+只允许用于本机临时数据，不得用于共享环境或 Production。
+
 ## 能力文档维护策略
 
 - `docs/canon/chat-api.md`：完整说明（权威版本）

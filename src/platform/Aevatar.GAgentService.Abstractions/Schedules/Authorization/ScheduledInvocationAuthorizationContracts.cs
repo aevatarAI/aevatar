@@ -27,9 +27,7 @@ public sealed record ScheduledInvocationAuthorizationRequest(
     AuthorizationGrantRequirement ServiceGrantRequirement,
     DateTimeOffset ExpiresAtUtc,
     DateTimeOffset EvaluatedAtUtc,
-    IReadOnlyList<AuthorizationSourceStamp>? SourceStamps = null,
-    ScheduledInvocationMemberEvidence? TrustedMemberEvidence = null,
-    ScheduledInvocationWorkflowEvidence? TrustedWorkflowEvidence = null)
+    IReadOnlyList<AuthorizationSourceStamp>? SourceStamps = null)
 {
     public AuthorizationOwnerIdentity Owner => OwnerContext.Owner;
 }
@@ -120,6 +118,48 @@ public static class NyxIdAuthorizationCatalogIntegrity
         if (gatewayLLMTarget != null)
             content.GatewayLlmTarget = gatewayLLMTarget.Clone();
         return Convert.ToHexStringLower(SHA256.HashData(content.ToByteArray()));
+    }
+
+    public static bool TryResolveServiceAuthorityWindow(
+        NyxIdAuthorizationCatalogSnapshot snapshot,
+        NyxIdAuthorizationServiceEvidence service,
+        out DateTimeOffset observedAtUtc,
+        out DateTimeOffset freshUntilUtc)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        ArgumentNullException.ThrowIfNull(service);
+
+        var hasServiceAuthorityStamp =
+            service.ObservedAt != null ||
+            service.FreshUntil != null ||
+            service.EvaluatedAt != null ||
+            !string.IsNullOrWhiteSpace(service.AuthorityContractVersion) ||
+            !string.IsNullOrWhiteSpace(service.AuthorityPolicyVersion);
+        if (!hasServiceAuthorityStamp)
+        {
+            observedAtUtc = snapshot.ObservedAtUtc;
+            freshUntilUtc = snapshot.FreshUntilUtc;
+            return observedAtUtc != default && freshUntilUtc > observedAtUtc;
+        }
+
+        if (service.ObservedAt == null ||
+            service.FreshUntil == null ||
+            service.EvaluatedAt == null ||
+            string.IsNullOrWhiteSpace(service.AuthorityContractVersion) ||
+            string.IsNullOrWhiteSpace(service.AuthorityPolicyVersion))
+        {
+            observedAtUtc = default;
+            freshUntilUtc = default;
+            return false;
+        }
+
+        observedAtUtc = service.ObservedAt.ToDateTimeOffset();
+        freshUntilUtc = service.FreshUntil.ToDateTimeOffset();
+        var evaluatedAtUtc = service.EvaluatedAt.ToDateTimeOffset();
+        return observedAtUtc != default &&
+               evaluatedAtUtc != default &&
+               evaluatedAtUtc <= observedAtUtc &&
+               freshUntilUtc > observedAtUtc;
     }
 }
 
@@ -319,7 +359,8 @@ public sealed record ScheduledInvocationWorkflowEvidence(
     long StateVersion,
     IReadOnlyList<ExternalWorkflowCapabilityRef> ExternalCapabilities,
     bool OwnerLLMRouteRequired,
-    AuthorizationGrantRequirement ServiceGrantRequirement);
+    AuthorizationGrantRequirement ServiceGrantRequirement,
+    WorkflowCapabilityAdmissionPlan? CapabilityAdmissionPlan = null);
 
 public sealed record ScheduledInvocationConnectorEvidence(
     long StateVersion,

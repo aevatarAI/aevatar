@@ -35,6 +35,7 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
         "body_required",
         "body_mode",
         "response_mode",
+        "risk",
     };
 
     private readonly WorkflowCompatibilityProfile _profile;
@@ -350,6 +351,7 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
                 $"{path}/capability/nyxid_request") ?? false,
             BodyMode = ReadScalar(node, "body_mode") ?? string.Empty,
             ResponseMode = ReadScalar(node, "response_mode") ?? string.Empty,
+            Risk = ReadScalar(node, "risk") ?? string.Empty,
         };
     }
 
@@ -724,6 +726,7 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
                 ["body_mode"] = capability.NyxIdRequest.BodyMode,
                 ["response_mode"] = capability.NyxIdRequest.ResponseMode,
             };
+            AddIfNotBlank(request, "risk", capability.NyxIdRequest.Risk);
             AddIfPresent(request, "query_parameters", capability.NyxIdRequest.QueryParameters);
             AddIfPresent(request, "header_parameters", capability.NyxIdRequest.HeaderParameters);
             result["nyxid_request"] = request;
@@ -738,6 +741,15 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
         {
             dictionary[key] = value;
         }
+    }
+
+    private static void AddIfNotBlank(
+        IDictionary<string, object?> dictionary,
+        string key,
+        string? value)
+    {
+        if (!string.IsNullOrWhiteSpace(value))
+            dictionary[key] = value;
     }
 
     private void CanonicalizeStepTypeParameters(IDictionary<string, StudioStepParameterValue?> parameters)

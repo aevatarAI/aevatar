@@ -192,6 +192,17 @@ message WorkflowRunState
   // Committed call-site admission proof owned by this Run for its whole lifetime.
   WorkflowCapabilityAdmissionPlan capability_admission_plan = 43;
   ExternalCapabilityExecutionMode expected_execution_mode = 44;
+  repeated WorkflowArtifactSourceIdentity processed_artifact_sources = 45;
+  string current_turn_id = 46;
+  repeated WorkflowInteractiveActionHandoffState interactive_action_handoffs = 47;
+}
+
+message WorkflowInteractiveActionHandoffState
+{
+  string handoff_id = 1;
+  WorkflowInteractiveActionRequestWirePayload request = 2;
+  WorkflowLlmInvocationCompletedEvent terminal_continuation = 3;
+  bool continuation_dispatched = 4;
 }
 
 message WorkflowRunExecutionContextState

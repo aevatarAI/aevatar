@@ -111,13 +111,15 @@ The issued key must have exactly:
 - a finite configured expiry
 
 No extra service grant is accepted. NyxID's `chrono-sandbox` UserService must
-set `forward_access_token=false`, `inject_delegation_token=true`, and the
-temporary internal-canary `delegation_token_scope=proxy:*`. Aevatar validates
-these settings during explicit provisioning, reconciliation, and rotation.
+set `inject_delegation_token=true` and the temporary internal-canary
+`delegation_token_scope=proxy:*`. Aevatar validates these settings during
+explicit provisioning, reconciliation, and rotation. `forward_access_token`
+may be either value because managed execution sends no bearer; the shared
+service uses `true` so ordinary `/execute` can receive the caller bearer.
 
-The only persistent raw-key copy is stored in `ISecretVault`. Actor state, events, read models, APIs, logs, workflow state, and chrono request bodies contain only typed non-secret facts such as the key ID and `SecretReference`. Execution resolves the raw value immediately before the NyxID request and uses it only as that request's Authorization value. Aevatar never intentionally serializes or forwards it to chrono-sandbox or codex-runner.
+The only persistent raw-key copy is stored in `ISecretVault`. Actor state, events, read models, APIs, logs, workflow state, and chrono request bodies contain only typed non-secret facts such as the key ID and `SecretReference`. Execution resolves the raw value immediately before the NyxID request and uses it only as that request's `X-API-Key` value. Aevatar never intentionally serializes or forwards it to chrono-sandbox or codex-runner.
 
-For the internal P0, the NyxID UserService forwarding policy is a trust boundary rather than an end-to-end guarantee Aevatar can enforce. The UserService owner can currently change `forward_access_token` after Aevatar validates it. Broad or public rollout remains blocked on #2899 providing immutable/version-bound policy or a request-level fail-closed guarantee that NyxID will not forward the caller credential.
+For the internal P0, the mutable delegation-injection policy remains a trust boundary rather than an end-to-end guarantee Aevatar can enforce. The UserService owner can currently change token injection or scope after Aevatar validates it. Broad or public rollout remains blocked on #2899 providing immutable/version-bound policy or a request-level fail-closed delegation guarantee.
 
 ## Managed runtime call
 
@@ -125,7 +127,8 @@ Aevatar sends exactly one fixed proxy request:
 
 ```text
 POST /api/v1/proxy/s/chrono-sandbox/codex/execute?_nyxid_via=<chrono-sandbox-user-service-id>
-Authorization: Bearer <per-user agent key resolved from ISecretVault>
+X-API-Key: <per-user agent key resolved from ISecretVault>
+Authorization: <absent>
 ```
 
 The server-selected `_nyxid_via` value is the same personal UserService ID stored in the credential descriptor and granted to the key. NyxID strips this internal routing parameter before forwarding the request. This prevents slug auto-resolution from selecting an inherited service when the user has multiple services with the same slug.
@@ -144,12 +147,17 @@ The interactive workflow bearer is not used for the chrono request. Under the va
 
 The managed runtime is a gVisor tenant. The runner executes Codex with its inner sandbox disabled; escape isolation is the gVisor boundary, and there is no fail-closed Landlock preflight. Egress scoping is an IP-level Kubernetes NetworkPolicy owned by operations — coarser than an FQDN allow-list because the NyxID gateway sits behind a shared CDN range — with no egress sidecar. The sandbox create call requests no `networkPolicy` and no `credentialProxy`.
 
-Aevatar reads the fixed terminal response with `ResponseHeadersRead`, rejects
-an oversized `Content-Length`, and stops the response stream as soon as
+Aevatar reads every success or failure response with `ResponseHeadersRead`,
+rejects an oversized `Content-Length`, and stops the response stream as soon as
 `MaxResponseBytes` is exceeded. Only then does it parse success, bounded output,
-exit code, elapsed milliseconds, and a diagnostic ID. Proxy errors and malformed
-chrono responses map to stable typed failures. Raw upstream bodies and
-infrastructure exception text are never returned or logged.
+exit code, elapsed milliseconds, and a diagnostic ID. For a non-2xx response,
+the transport may inspect that bounded content in-process only to extract an
+exact chrono `error.code` from the explicit allowlist. The code is mapped to
+`managed_upstream_codex_*` while the HTTP status continues to determine the
+typed failure kind and safe public message. Unknown codes, upstream messages,
+raw bodies, and infrastructure exception text are never returned, persisted,
+or logged. A failure still performs one managed request only; it does not retry
+or fall back to ordinary `/execute`.
 
 The production deadline chain is ordered outside chrono-sandbox's complete
 180-second execution lifecycle:

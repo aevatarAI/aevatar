@@ -48,6 +48,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
     private const string CompletionNotificationRetryCallbackPrefix = "role-chat-completion-retry";
     private const int CompletionNotificationRetryInitialDelayMs = 250;
     private const int CompletionNotificationRetryMaxDelayMs = 30_000;
+    private const int MaxStreamedDeltaBatchCharacters = 1_024;
+    private static readonly TimeSpan StreamedDeltaBatchInterval = TimeSpan.FromMilliseconds(200);
     private static readonly TimeSpan ToolRecoveryPayloadLifetime = TimeSpan.FromHours(24);
     private string _appliedEventModules = string.Empty;
     private string _appliedEventRoutes = string.Empty;
@@ -134,6 +136,14 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         await RequestIncompleteSessionFinalizationAsync(ct);
     }
 
+    protected override Task OnCommittedStatePublicationRecoveredAsync(
+        EventEnvelope envelope,
+        CancellationToken ct)
+    {
+        _ = envelope;
+        return RequestIncompleteSessionFinalizationAsync(ct);
+    }
+
     public async Task<IReadOnlyList<PreparedChatToolOperation>> PrepareBatchAsync(
         ChatToolBatchIntent batch,
         CancellationToken ct = default)
@@ -172,7 +182,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 ChatToolRecoveryPayloadKind.Arguments,
                 operation.ToolCall.ArgumentsJson,
                 expiresAt,
-                ct).ConfigureAwait(false);
+                ct);
             var intent = new RoleChatToolIntentState
             {
                 OperationId = operation.OperationId,
@@ -207,7 +217,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 ExpectedGeneration = expectedGeneration,
                 Checkpoint = checkpoint,
             },
-            ct).ConfigureAwait(false);
+            ct);
         return prepared;
     }
 
@@ -218,8 +228,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
     {
         try
         {
-            await CommitCompletionCoreAsync(operation, result, storedResult: null, ct)
-                .ConfigureAwait(false);
+            await CommitCompletionCoreAsync(operation, result, storedResult: null, ct);
         }
         catch (ChatToolPostExternalCheckpointException)
         {
@@ -277,7 +286,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             operation.SessionId,
             operation.OperationId,
             now,
-            ct).ConfigureAwait(false);
+            ct);
         var checkpoint = storedCheckpoint.Clone();
         var expectedGeneration = checkpoint.Generation;
         checkpoint.Generation = expectedGeneration + 1;
@@ -295,8 +304,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                         result.Receipt?.ErrorCode ?? string.Empty,
                         result.Receipt),
                     expiresAt,
-                    ct)
-                .ConfigureAwait(false);
+                    ct);
             var completion = new RoleChatToolCompletionState
             {
                 OperationId = operation.OperationId,
@@ -357,13 +365,13 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             [
                 checkpointUpdated,
                 new PendingToolApprovalPersistedEvent { Pending = pending },
-            ], ct).ConfigureAwait(false);
+            ], ct);
         }
         else
         {
             await PersistDomainEventAsync(
                 checkpointUpdated,
-                ct).ConfigureAwait(false);
+                ct);
         }
     }
 
@@ -648,7 +656,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             {
                 var recoveredPendingContext = await TryResolveRecoveryExecutionContextAsync(
                     pendingCheckpoint,
-                    approvalResumeCt).ConfigureAwait(false);
+                    approvalResumeCt);
                 if (pendingCheckpoint.RequiresRuntimeCredential && recoveredPendingContext is null)
                 {
                     throw new InvalidOperationException(
@@ -684,7 +692,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                     pending.SessionId,
                     pending.OperationId,
                     _timeProvider.GetUtcNow(),
-                    approvalResumeCt).ConfigureAwait(false);
+                    approvalResumeCt);
                 if (storedResult is null)
                 {
                     toolOutcome = await _toolExecutionPort.ExecuteAsync(
@@ -735,7 +743,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                             toolOutcome.FailureCode,
                             toolOutcome.Receipt),
                         ResolveRecoveryPayloadExpiry(State.Sessions[pending.SessionId].RecoveryCheckpoint!),
-                        approvalResumeCt).ConfigureAwait(false);
+                        approvalResumeCt);
 
                     Logger.LogInformation(
                         "[{Role}] Tool executed. result length={Len} request={RequestId}",
@@ -1808,7 +1816,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         var recoveredControl = LLMControlContextMapper.FromPayload(checkpoint.LlmControl);
         var recoveredContext = await TryResolveRecoveryExecutionContextAsync(
             checkpoint,
-            CancellationToken.None).ConfigureAwait(false);
+            CancellationToken.None);
         if (recoveredContext is null)
         {
             await FinalizeRecoveryOutcomeUncertainAsync(
@@ -1831,7 +1839,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 request.SessionId,
                 checkpoint,
                 recoveredContext,
-                CancellationToken.None).ConfigureAwait(false);
+                CancellationToken.None);
         }
         catch (ChatToolRecoveryPayloadMaterialException ex)
         {
@@ -2008,7 +2016,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 sourceSessionId,
                 checkpoint,
                 AgentToolExecutionContext.Empty,
-                CancellationToken.None).ConfigureAwait(false);
+                CancellationToken.None);
         }
         catch (ChatToolRecoveryPayloadMaterialException)
         {
@@ -2077,7 +2085,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 reference.OwnerScopeKey,
                 reference.SubjectId,
                 "role-chat-checkpoint-recovery"),
-            ct).ConfigureAwait(false);
+            ct);
         if (!resolved.Resolved ||
             string.IsNullOrWhiteSpace(resolved.Secret) ||
             !MatchesResolvedCredentialReference(reference, resolved.Reference, _timeProvider.GetUtcNow()))
@@ -2181,7 +2189,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                     sessionId,
                     intent.OperationId,
                     _timeProvider.GetUtcNow(),
-                    ct).ConfigureAwait(false);
+                    ct);
                 if (!string.Equals(
                         AgentToolArgumentsDigest.ComputeSha256(committedResult.ResultJson),
                         completion.ResultSha256,
@@ -2202,7 +2210,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                     intent.OperationId,
                     ChatToolRecoveryPayloadKind.Arguments,
                     _timeProvider.GetUtcNow(),
-                    ct).ConfigureAwait(false);
+                    ct);
                 if (!string.Equals(
                         AgentToolArgumentsDigest.ComputeSha256(committedArguments),
                         intent.ArgumentsSha256,
@@ -2231,7 +2239,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 sessionId,
                 intent.OperationId,
                 _timeProvider.GetUtcNow(),
-                ct).ConfigureAwait(false);
+                ct);
             if (storedResult is not null)
             {
                 var storedArguments = await payloadStore.ResolveAsync(
@@ -2241,7 +2249,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                     intent.OperationId,
                     ChatToolRecoveryPayloadKind.Arguments,
                     _timeProvider.GetUtcNow(),
-                    ct).ConfigureAwait(false);
+                    ct);
                 if (!string.Equals(
                         AgentToolArgumentsDigest.ComputeSha256(storedArguments),
                         intent.ArgumentsSha256,
@@ -2278,7 +2286,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                         !storedResult.Payload.Success,
                         storedResult.Payload.Receipt?.Clone()),
                     storedResult,
-                    ct).ConfigureAwait(false);
+                    ct);
                 results.Add(new RecoveredChatToolResult(
                     intent.Round,
                     storedOperation.ToolCall,
@@ -2303,7 +2311,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 intent.OperationId,
                 ChatToolRecoveryPayloadKind.Arguments,
                 _timeProvider.GetUtcNow(),
-                ct).ConfigureAwait(false);
+                ct);
             if (!string.Equals(
                     AgentToolArgumentsDigest.ComputeSha256(arguments),
                     intent.ArgumentsSha256,
@@ -2332,7 +2340,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 checkpoint,
                 intent,
                 operationContext,
-                ct).ConfigureAwait(false);
+                ct);
             if (tool is null)
                 return null;
             var outcome = await _toolExecutionPort.ExecuteAsync(
@@ -2343,7 +2351,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                     AgentToolApprovalContinuationMode.ActorOwned,
                     null,
                     AgentToolExecutionAttemptKind.ActorRecovery),
-                ct).ConfigureAwait(false);
+                ct);
             if (!outcome.TerminalInvoked && outcome.Retryable)
                 throw new InvalidOperationException(outcome.SafeMessage);
             if (string.Equals(outcome.FailureCode, "outcome_uncertain", StringComparison.OrdinalIgnoreCase))
@@ -2373,7 +2381,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                     AgentToolExecutionAttemptKind.ActorRecovery),
                 result,
                 storedResult: null,
-                ct).ConfigureAwait(false);
+                ct);
             results.Add(new RecoveredChatToolResult(
                 intent.Round,
                 new ToolCall
@@ -2572,10 +2580,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 requestSummary.InputPartCount);
 
             // ─── AG-UI: TEXT_MESSAGE_START ───
-            await PersistSessionProgressAsync(
-                request.SessionId,
-                progress => progress.TextStarted = new RoleChatTextStartedProgress { AgentId = Id },
-                streamCt);
+            await EnsureSessionTextStartedAsync(request.SessionId, streamCt);
             streamCt.ThrowIfCancellationRequested();
             await PublishAsync(new TextMessageStartEvent
             {
@@ -3101,6 +3106,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         var toolCallSnapshots = new List<ToolCallEvent>();
         TokenUsage? usage = null;
         var firstStreamedOutputObserved = false;
+        var sessionDeltas = CreateSessionDeltaBatcher(
+            request.SessionId,
+            publishParentDeltas: true);
         // Refactor (iter56/cluster-917-workflow-llm-control-metadata): old=Headers/Metadata bag for control fields, new=typed ChatRequestEvent.Telegram
         IReadOnlyDictionary<string, string>? metadata = request.Metadata.Count > 0
             ? AgentToolExecutionContextMapper.StripOwnedControlKeys(
@@ -3151,21 +3159,12 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             if (!string.IsNullOrEmpty(chunk.DeltaContent))
             {
                 fullContent.Append(chunk.DeltaContent);
-                await PersistSessionProgressAsync(
-                    request.SessionId,
-                    progress => progress.TextDelta = new RoleChatTextDeltaProgress { Delta = chunk.DeltaContent },
-                    streamCt);
-                streamCt.ThrowIfCancellationRequested();
-                await PublishAsync(new TextMessageContentEvent
-                {
-                    Delta = chunk.DeltaContent,
-                    SessionId = request.SessionId,
-                }, TopologyAudience.Parent, streamCt);
-                streamCt.ThrowIfCancellationRequested();
+                await sessionDeltas.AppendTextAsync(chunk.DeltaContent, streamCt);
             }
 
             if (chunk.DeltaContentPart != null)
             {
+                await sessionDeltas.FlushAsync(streamCt);
                 contentParts.Add(chunk.DeltaContentPart);
                 var part = ContentPartProtoMapper.ToProto(chunk.DeltaContentPart);
                 await PersistSessionProgressAsync(
@@ -3189,20 +3188,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             if (!string.IsNullOrEmpty(chunk.DeltaReasoningContent))
             {
                 fullReasoning.Append(chunk.DeltaReasoningContent);
-                await PersistSessionProgressAsync(
-                    request.SessionId,
-                    progress => progress.ReasoningDelta = new RoleChatReasoningDeltaProgress
-                    {
-                        Delta = chunk.DeltaReasoningContent,
-                    },
-                    streamCt);
-                streamCt.ThrowIfCancellationRequested();
-                await PublishAsync(new TextMessageReasoningEvent
-                {
-                    Delta = chunk.DeltaReasoningContent,
-                    SessionId = request.SessionId,
-                }, TopologyAudience.Parent, streamCt);
-                streamCt.ThrowIfCancellationRequested();
+                await sessionDeltas.AppendReasoningAsync(chunk.DeltaReasoningContent, streamCt);
             }
 
             if (chunk.DeltaToolCall != null)
@@ -3210,6 +3196,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
 
             if (chunk.ToolCallStarted != null)
             {
+                await sessionDeltas.FlushAsync(streamCt);
                 var started = chunk.ToolCallStarted;
                 CaptureToolCallSnapshot(toolCallSnapshots, started);
                 await PersistSessionProgressAsync(
@@ -3229,6 +3216,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
 
             if (chunk.ToolCallCompleted != null)
             {
+                await sessionDeltas.FlushAsync(streamCt);
                 var completed = chunk.ToolCallCompleted;
                 var toolResult = new ToolResultEvent
                 {
@@ -3259,6 +3247,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
 
         // Also reject a provider that observes cancellation and then ends the stream normally.
         streamCt.ThrowIfCancellationRequested();
+        await sessionDeltas.FlushAsync(streamCt);
 
         var appendedHistoryMessages = History.Messages
             .Skip(Math.Min(initialHistoryCount, History.Count))
@@ -3599,7 +3588,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         return events;
     }
 
-    private async Task PersistSessionProgressAsync(
+    protected async Task PersistSessionProgressAsync(
         string? sessionId,
         Action<RoleChatSessionProgressedEvent> configure,
         CancellationToken ct = default)
@@ -3609,6 +3598,179 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             return;
 
         await PersistDomainEventAsync(CreateSessionProgress(sessionId, configure), ct);
+    }
+
+    protected RoleChatSessionDeltaBatcher CreateSessionDeltaBatcher(
+        string? sessionId,
+        bool publishParentDeltas) =>
+        new(this, sessionId, publishParentDeltas);
+
+    protected sealed class RoleChatSessionDeltaBatcher
+    {
+        private readonly RoleGAgent _owner;
+        private readonly string? _sessionId;
+        private readonly bool _publishParentDeltas;
+        private readonly StringBuilder _text = new();
+        private readonly StringBuilder _reasoning = new();
+        private long _lastSuccessfulFlushTimestamp;
+        private bool _textPublished;
+        private bool _reasoningPublished;
+
+        internal RoleChatSessionDeltaBatcher(
+            RoleGAgent owner,
+            string? sessionId,
+            bool publishParentDeltas)
+        {
+            _owner = owner;
+            _sessionId = sessionId;
+            _publishParentDeltas = publishParentDeltas;
+            _lastSuccessfulFlushTimestamp = owner.ChatRequestTimeProvider.GetTimestamp();
+        }
+
+        public async Task AppendTextAsync(string delta, CancellationToken ct = default)
+        {
+            if (string.IsNullOrEmpty(delta))
+                return;
+
+            await FlushReasoningAsync(ct);
+            _text.Append(delta);
+            await FlushReadyTextAsync(ct);
+        }
+
+        public async Task AppendReasoningAsync(string delta, CancellationToken ct = default)
+        {
+            if (string.IsNullOrEmpty(delta))
+                return;
+
+            await FlushTextAsync(ct);
+            _reasoning.Append(delta);
+            await FlushReadyReasoningAsync(ct);
+        }
+
+        public async Task FlushAsync(CancellationToken ct = default)
+        {
+            await FlushTextAsync(ct);
+            await FlushReasoningAsync(ct);
+        }
+
+        private async Task FlushReadyTextAsync(CancellationToken ct)
+        {
+            if (!_textPublished)
+                await FlushTextBatchAsync(Math.Min(_text.Length, MaxStreamedDeltaBatchCharacters), ct);
+
+            while (_text.Length >= MaxStreamedDeltaBatchCharacters)
+                await FlushTextBatchAsync(MaxStreamedDeltaBatchCharacters, ct);
+
+            if (_text.Length > 0 && HasReachedFlushCadence())
+                await FlushTextBatchAsync(_text.Length, ct);
+        }
+
+        private async Task FlushReadyReasoningAsync(CancellationToken ct)
+        {
+            if (!_reasoningPublished)
+            {
+                await FlushReasoningBatchAsync(
+                    Math.Min(_reasoning.Length, MaxStreamedDeltaBatchCharacters),
+                    ct);
+            }
+
+            while (_reasoning.Length >= MaxStreamedDeltaBatchCharacters)
+                await FlushReasoningBatchAsync(MaxStreamedDeltaBatchCharacters, ct);
+
+            if (_reasoning.Length > 0 && HasReachedFlushCadence())
+                await FlushReasoningBatchAsync(_reasoning.Length, ct);
+        }
+
+        private async Task FlushTextAsync(CancellationToken ct)
+        {
+            while (_text.Length > 0)
+            {
+                await FlushTextBatchAsync(
+                    Math.Min(_text.Length, MaxStreamedDeltaBatchCharacters),
+                    ct);
+            }
+        }
+
+        private async Task FlushReasoningAsync(CancellationToken ct)
+        {
+            while (_reasoning.Length > 0)
+            {
+                await FlushReasoningBatchAsync(
+                    Math.Min(_reasoning.Length, MaxStreamedDeltaBatchCharacters),
+                    ct);
+            }
+        }
+
+        private async Task FlushTextBatchAsync(int length, CancellationToken ct)
+        {
+            var delta = _text.ToString(0, length);
+            await _owner.PersistSessionProgressAsync(
+                _sessionId,
+                progress => progress.TextDelta = new RoleChatTextDeltaProgress { Delta = delta },
+                ct);
+            ct.ThrowIfCancellationRequested();
+            if (_publishParentDeltas)
+            {
+                await _owner.PublishAsync(new TextMessageContentEvent
+                {
+                    Delta = delta,
+                    SessionId = _sessionId,
+                }, TopologyAudience.Parent, ct);
+                ct.ThrowIfCancellationRequested();
+            }
+
+            _text.Remove(0, length);
+            _textPublished = true;
+            MarkSuccessfulFlush();
+        }
+
+        private async Task FlushReasoningBatchAsync(int length, CancellationToken ct)
+        {
+            var delta = _reasoning.ToString(0, length);
+            await _owner.PersistSessionProgressAsync(
+                _sessionId,
+                progress => progress.ReasoningDelta = new RoleChatReasoningDeltaProgress { Delta = delta },
+                ct);
+            ct.ThrowIfCancellationRequested();
+            if (_publishParentDeltas)
+            {
+                await _owner.PublishAsync(new TextMessageReasoningEvent
+                {
+                    Delta = delta,
+                    SessionId = _sessionId,
+                }, TopologyAudience.Parent, ct);
+                ct.ThrowIfCancellationRequested();
+            }
+
+            _reasoning.Remove(0, length);
+            _reasoningPublished = true;
+            MarkSuccessfulFlush();
+        }
+
+        private bool HasReachedFlushCadence() =>
+            _owner.ChatRequestTimeProvider.GetElapsedTime(_lastSuccessfulFlushTimestamp) >=
+            StreamedDeltaBatchInterval;
+
+        private void MarkSuccessfulFlush() =>
+            _lastSuccessfulFlushTimestamp = _owner.ChatRequestTimeProvider.GetTimestamp();
+    }
+
+    protected Task EnsureSessionTextStartedAsync(
+        string? sessionId,
+        CancellationToken ct = default)
+    {
+        var normalizedSessionId = sessionId?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(normalizedSessionId) ||
+            (State.Sessions.TryGetValue(normalizedSessionId, out var session) &&
+             session.LastProgressSequence > 0))
+        {
+            return Task.CompletedTask;
+        }
+
+        return PersistSessionProgressAsync(
+            normalizedSessionId,
+            progress => progress.TextStarted = new RoleChatTextStartedProgress { AgentId = Id },
+            ct);
     }
 
     private RoleChatSessionProgressedEvent CreateSessionProgress(
@@ -4091,7 +4253,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         }
     }
 
-    private async Task RequestIncompleteSessionFinalizationAsync(CancellationToken ct)
+    protected async Task RequestIncompleteSessionFinalizationAsync(CancellationToken ct)
     {
         var candidates = State.Sessions
             .Where(entry => !entry.Value.Completed)

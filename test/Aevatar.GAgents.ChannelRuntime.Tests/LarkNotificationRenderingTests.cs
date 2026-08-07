@@ -128,6 +128,53 @@ public sealed class LarkNotificationRenderingTests
     }
 
     [Fact]
+    public void WorkflowToolApprovalAction_ShouldRenderNestedResumeIdentityAsFormSubmitCallback()
+    {
+        var card = new CardBlock
+        {
+            Kind = CardBlockKind.Section,
+            Title = "Workflow Tool Approval Required",
+            Text = "Approve?",
+        };
+        card.Actions.Add(new ActionElement
+        {
+            Kind = ActionElementKind.FormSubmit,
+            ActionId = "workflow-tool-approval-approve",
+            Label = "Approve",
+            WorkflowResume = new WorkflowResumeActionPayload
+            {
+                ActorId = "workflow-actor-1",
+                RunId = "workflow-run-1",
+                StepId = "tool-step-1",
+                Approved = true,
+                ToolApproval = new WorkflowToolApprovalResumeActionPayload
+                {
+                    ExecutionId = "execution-1",
+                    ToolCallId = "tool-call-1",
+                    ApprovalRequestId = "approval-request-1",
+                },
+            },
+        });
+        var intent = new MessageContent { Cards = { card } };
+        var producer = new LarkChannelNativeMessageProducer(new LarkMessageComposer());
+
+        var native = producer.Produce(intent, new ComposeContext());
+
+        native.IsInteractive.Should().BeTrue();
+        var cardJson = native.CardPayload.Should().BeAssignableTo<JsonElement>().Subject.GetRawText();
+        using var document = JsonDocument.Parse(cardJson);
+        var callback = FindCallbackValue(document.RootElement, "workflow-tool-approval-approve");
+        callback.GetProperty("action_kind").GetString().Should().Be("form_submit");
+        callback.GetProperty("actor_id").GetString().Should().Be("workflow-actor-1");
+        callback.GetProperty("run_id").GetString().Should().Be("workflow-run-1");
+        callback.GetProperty("step_id").GetString().Should().Be("tool-step-1");
+        callback.GetProperty("approved").GetBoolean().Should().BeTrue();
+        callback.GetProperty("execution_id").GetString().Should().Be("execution-1");
+        callback.GetProperty("tool_call_id").GetString().Should().Be("tool-call-1");
+        callback.GetProperty("approval_request_id").GetString().Should().Be("approval-request-1");
+    }
+
+    [Fact]
     public void BuildCardJson_WhenTemplateSpecPresent_ShouldRenderLarkTemplateContent()
     {
         var template = new InteractionTemplateSpec { TemplateId = "tpl-1" };

@@ -827,7 +827,7 @@ public sealed class IdempotentStepExecutionTests
     }
 
     [Fact]
-    public async Task StepCompleted_ShouldNotCarryStartInputFileRefsToNextStep()
+    public async Task StepCompleted_ShouldCarryStartInputFileRefsToNextStep()
     {
         var ctx = new RecordingEventHandlerContext();
         var host = new RecordingStateHost();
@@ -857,8 +857,8 @@ public sealed class IdempotentStepExecutionTests
 
         var second = StepRequests(ctx).Single();
         second.StepId.Should().Be("step-b");
-        second.InputFileRefs.Should().BeEmpty();
-        LoadKernelState(host).CurrentStepInputFileRefs.Should().BeEmpty();
+        second.InputFileRefs.Should().ContainSingle().Which.FileId.Should().Be("file-first");
+        LoadKernelState(host).CurrentStepInputFileRefs.Should().ContainSingle().Which.FileId.Should().Be("file-first");
     }
 
     [Fact]

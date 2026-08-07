@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using Aevatar.Capabilities;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.Studio.Application.Studio.Abstractions;
@@ -41,7 +42,7 @@ public static partial class NyxIdChatEndpoints
         if (!owned)
         {
             return Results.Json(
-                new { status = "not_found" },
+                new NyxIdChatConversationStateNotFoundResponse("not_found"),
                 statusCode: StatusCodes.Status404NotFound);
         }
 
@@ -56,23 +57,21 @@ public static partial class NyxIdChatEndpoints
 
         return result.Status switch
         {
-            NyxIdChatConversationStateQueryStatus.Current => Results.Ok(new
-            {
-                status = "current",
-                result.StateVersion,
-                result.TurnId,
-                result.Snapshot,
-            }),
-            NyxIdChatConversationStateQueryStatus.NotModified => Results.Ok(new
-            {
-                status = "not_modified",
-                result.StateVersion,
-                result.TurnId,
-            }),
+            NyxIdChatConversationStateQueryStatus.Current => Results.Ok(
+                new NyxIdChatConversationStateResponse(
+                    "current",
+                    result.StateVersion,
+                    result.TurnId,
+                    Snapshot: result.Snapshot)),
+            NyxIdChatConversationStateQueryStatus.NotModified => Results.Ok(
+                new NyxIdChatConversationStateResponse(
+                    "not_modified",
+                    result.StateVersion,
+                    result.TurnId)),
             NyxIdChatConversationStateQueryStatus.ReloadRequired =>
                 ReloadRequired(result.StateVersion, result.TurnId, result.ReasonCode),
             NyxIdChatConversationStateQueryStatus.NotFound => Results.Json(
-                new { status = "not_found" },
+                new NyxIdChatConversationStateNotFoundResponse("not_found"),
                 statusCode: StatusCodes.Status404NotFound),
             _ => ReloadRequired(result.StateVersion, result.TurnId, "unknown_query_status"),
         };
@@ -122,13 +121,22 @@ public static partial class NyxIdChatEndpoints
         long stateVersion,
         string? turnId,
         string? reasonCode) =>
-        Results.Ok(new
-        {
-            status = "reload_required",
+        Results.Ok(new NyxIdChatConversationStateResponse(
+            "reload_required",
             stateVersion,
             turnId,
-            reasonCode = string.IsNullOrWhiteSpace(reasonCode)
+            ReasonCode: string.IsNullOrWhiteSpace(reasonCode)
                 ? "reload_required"
-                : reasonCode,
-        });
+                : reasonCode));
 }
+
+public sealed record NyxIdChatConversationStateResponse(
+    string Status,
+    long StateVersion,
+    string? TurnId,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? ReasonCode = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    NyxIdChatConversationStateSnapshot? Snapshot = null);
+
+public sealed record NyxIdChatConversationStateNotFoundResponse(string Status);

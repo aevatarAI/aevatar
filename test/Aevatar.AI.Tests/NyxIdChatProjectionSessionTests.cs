@@ -1107,8 +1107,11 @@ public sealed class NyxIdChatProjectionSessionTests
         hub.Published[0].Event.Custom.Payload.Unpack<NyxIdChatTaskState>()
             .Should().BeEquivalentTo(state.ActiveTask);
         hub.Published[1].Event.Custom.Name.Should().Be("nyxid.task.step.changed");
-        hub.Published[1].Event.Custom.Payload.Unpack<NyxIdChatTaskStepState>()
-            .Should().BeEquivalentTo(state.ActiveTask.Steps.Single());
+        var changed = hub.Published[1].Event.Custom.Payload.Unpack<NyxIdChatTaskStepChanged>();
+        changed.TaskId.Should().Be(state.ActiveTask.TaskId);
+        changed.PlanRevision.Should().Be(state.ActiveTask.PlanRevision);
+        changed.ChangeKind.Should().Be(NyxIdChatStepChangeKind.Status);
+        changed.Step.Should().BeEquivalentTo(state.ActiveTask.Steps.Single());
         hub.Published[2].Event.TextMessageStart.MessageId.Should().Be("turn-alpha");
     }
 
@@ -1143,7 +1146,19 @@ public sealed class NyxIdChatProjectionSessionTests
                 ToolStarted = new NyxIdChatToolProgress
                 {
                     CallId = "call-alpha",
-                    ToolName = "repository_update",
+                    ToolName = "use_skill",
+                    Presentation = new ToolPresentationDescriptor
+                    {
+                        InvocationName = "use_skill",
+                        DisplayName = "release-readiness-review",
+                        Kind = ToolPresentationKind.Skill,
+                        Availability = ToolAvailability.Available,
+                        Skill = new SkillRef
+                        {
+                            SkillName = "release-readiness-review",
+                            Source = "local-or-remote",
+                        },
+                    },
                 },
             },
         };
@@ -1173,7 +1188,9 @@ public sealed class NyxIdChatProjectionSessionTests
         hub.Published[1].Event.Custom.Payload.Unpack<NyxIdChatReasoningProgress>().Delta
             .Should().Be("reasoning");
         hub.Published[2].Event.ToolCallStart.ToolCallId.Should().Be("call-alpha");
-        hub.Published[2].Event.ToolCallStart.ToolName.Should().Be("repository_update");
+        hub.Published[2].Event.ToolCallStart.ToolName.Should().Be("use_skill");
+        hub.Published[2].Event.ToolCallStart.Presentation.Skill.SkillName.Should()
+            .Be("release-readiness-review");
     }
 
     [Fact]
@@ -1545,8 +1562,8 @@ public sealed class NyxIdChatProjectionSessionTests
             entry.Event.EventCase == AGUIEvent.EventOneofCase.Custom &&
             entry.Event.Custom.Name ==
                 NyxIdChatConversationAguiFrameBuilder.TaskStepChangedEventName).Which;
-        changed.Event.Custom.Payload.Unpack<NyxIdChatTaskStepState>()
-            .ExternalEffect.Should().Be(NyxIdChatEffectEvidence.Confirmed);
+        changed.Event.Custom.Payload.Unpack<NyxIdChatTaskStepChanged>()
+            .Step.ExternalEffect.Should().Be(NyxIdChatEffectEvidence.Confirmed);
         hub.Published.Should().ContainSingle(entry =>
             entry.Event.EventCase == AGUIEvent.EventOneofCase.ToolCallEnd &&
             entry.Event.ToolCallEnd.ToolCallId == "call-alpha");
@@ -1989,6 +2006,7 @@ public sealed class NyxIdChatProjectionSessionTests
             Kind = NyxIdChatStepKind.Llm,
             Status = NyxIdChatStepStatus.Running,
             Required = true,
+            AddedBy = NyxIdChatStepAddedBy.Initial,
             Operation = new NyxIdChatOperationState
             {
                 Key = key,
@@ -2003,6 +2021,12 @@ public sealed class NyxIdChatProjectionSessionTests
             Status = taskStatus,
             ActiveStepId = taskStatus == NyxIdChatTaskStatus.Active ? key.StepId : string.Empty,
             ActiveOperationId = taskStatus == NyxIdChatTaskStatus.Active ? key.OperationId : string.Empty,
+            SchemaVersion = 4,
+            ActorId = "conversation-alpha",
+            PlanId = "plan-alpha",
+            PlanRevision = 1,
+            Title = "Complete the assistant task",
+            Gate = new NyxIdChatPlanGate { Mode = NyxIdChatPlanGateMode.Auto },
         };
         task.Steps.Add(step);
         return new NyxIdChatConversationGAgentState

@@ -24,6 +24,13 @@ NyxID `GET /api/v1/mcp/config` is the only descriptor source for published opera
 
 同一个 `user_service_id` 若在 user/org 结果中对应不同 token、credential 或 route facts，该身份整项删除。inactive 或 credential-forbidden 的实例不进入工具。不同 `user_service_id` 即使显示 slug 相同也保持独立，不合并，也不按前缀、字符串相等或 route 位置推断身份。
 
+面向 NyxID Chat 展示与恢复的 `NyxIdOperationRef` 还可以携带可选的
+`readiness_capability_id`。该值只能由拥有 NyxID Assistant readiness
+registry 映射的 producer 明确提供；Aevatar 只做 typed snapshot 与投影，
+不调用 readiness API，也不从 `user_service_id`、route `service_slug`、
+`catalog_service_slug`、tool name 或错误文本推导。connected service ID、
+route slug、catalog slug 与 readiness capability ID 始终是四个独立身份域。
+
 MCP catalog 中 `is_user_service=true` 的 `service_id` 是 exact UserService identity；`endpoint_id` 是 service-local opaque operation identity。`PublishedEndpoint` selector 使用 `user_service_id + endpoint_id`，display name、method、path 与 slug 都不能替代或重建任一 ID。`AuthoredRequest` selector 使用 typed request contract，并且只有 authenticated binder 对当前 digest/risk 的确认生成 `NyxIdExplicitRequestGrant` 后才能成为 admitted proof；它不把 request contract 降级为 endpoint selector。
 
 ## 2. Shared MCP catalog adapter
@@ -80,7 +87,7 @@ flowchart LR
     J --> K["Exact proof-bound NyxID Proxy route"]
 ```
 
-Workflow live discovery uses the caller token to read MCP only for `nyxid_operation`, which is `PublishedEndpoint(endpoint_id)`. Its definition actor commits a call-site-scoped proof with server-derived slug, endpoint identity, request schema, response policy, execution policy, source stamp, and contract digest. `nyxid_request` is instead `AuthoredRequest(request_contract_digest)`: bind-time admission reads one active, caller-visible, credential-allowed exact `user_service_id` from inventory, derives the slug constraint server-side, and does zero MCP/OpenAPI read. The definition actor persists the request proof only after an authenticated binder explicitly confirms its current request-contract digest and derived risk as `NyxIdExplicitRequestGrant`; apply/save cannot grant it.
+Workflow live discovery uses the caller token to read MCP only for `nyxid_operation`, which is `PublishedEndpoint(endpoint_id)`. Its definition actor commits a call-site-scoped proof with server-derived slug, endpoint identity, request schema, response policy, execution policy, source stamp, and contract digest. `nyxid_request` is instead `AuthoredRequest(request_contract_digest)`: bind-time admission reads one active, caller-visible, credential-allowed exact `user_service_id` from inventory, derives the slug constraint server-side, and does zero MCP/OpenAPI read. The definition actor persists the request proof only after an authenticated binder explicitly confirms its current request-contract digest and effective risk as `NyxIdExplicitRequestGrant`; apply/save cannot grant it. Omitted risk remains method-derived. Explicit `POST + READ_ONLY` is supported for semantically read-only APIs but is interactive-only; `PUT/PATCH/DELETE + READ_ONLY` is rejected.
 
 这个重验是 terminal 内的资源一致性检查，不能代替 terminal 前的统一准入。所有 server-owned connected-service 工具都通过 `IAgentToolExecutionPort`；只有 `AdmittedAgentToolExecutor` 可以调用 raw `IAgentTool.ExecuteAsync`。端口冻结最终 arguments 并只分类一次，随后依次执行 credential policy、exact actor-owned grant、start-once admission ledger 与 `WAITING_APPROVAL/RUNNING/TERMINAL` audit observation。只有 ledger 返回 `Started` 才能进入上述 `/keys` 重验和 proxy 调用；ledger `Duplicate`、`Conflict`、审批拒绝或 credential 拒绝的下游请求数都为 0。audit append status 不授予执行；terminal 已调用后任何 audit failure 都保留实际结果并标记不可重试。
 
@@ -103,9 +110,9 @@ Dynamic exposure、workflow definition admission 与 runtime authorization 是�
 
 1. **Current-turn exposure**：缺 NyxID typed exposure policy，因此 operation 数量为零。
 2. **Workflow definition admission**：MCP resolves only `PublishedEndpoint`; exact inventory plus authenticated binder grant resolves `AuthoredRequest`.
-3. **Runtime authorization**：managed workflow accepts only its committed call-site proof and matching authored-request grant. Durable additionally requires exact-service catalog authorization, but only for trusted `READ_ONLY` GET/HEAD/OPTIONS.
+3. **Runtime authorization**：managed workflow accepts only its committed call-site proof and matching authored-request grant. Durable additionally requires exact-service catalog authorization plus the schedule operation-authorization gate; `READ_ONLY` remains limited to GET/HEAD/OPTIONS, while `WRITE` and `DESTRUCTIVE` requests keep their admitted risk in the proof.
 
-GET/HEAD/OPTIONS are durable-capable only when the binder attests `READ_ONLY` and exact-service durable authorization exists. Without that attestation they are conservative writes: approval-required and interactive-only. POST/PUT/PATCH are always write, approval-required, interactive-only; DELETE is destructive, approval-required, interactive-only. A selector, route proof, source observation, or service durable authorization cannot replace the explicit grant or required approval.
+GET/HEAD/OPTIONS are durable-capable when the binder attests `READ_ONLY` and exact-service durable authorization exists. After the complete durable proof/grant integrity check, these safe reads do not require the separate schedule operation-authorization preview contract; NyxID still enforces current policy on every runtime proxy call. `POST + READ_ONLY` remains interactive-only; `PUT/PATCH/DELETE + READ_ONLY` is rejected. `WRITE` and `DESTRUCTIVE` authored requests may be durable only with the matching explicit grant, durable catalog evidence, execution mode, and schedule operation authorization. A selector, route proof, source observation, or service durable authorization cannot replace the explicit grant or policy gate.
 
 - NyxID 是实例、credential、route 与 spec 的唯一真实源；Aevatar 不维护 process-local catalog 或 spec cache。
 - Aevatar 不新增 NyxID endpoint，不绕过 proxy 直连下游，不引入第二条投影或 read model。

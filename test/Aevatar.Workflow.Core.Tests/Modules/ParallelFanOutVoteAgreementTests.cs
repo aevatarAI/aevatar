@@ -241,6 +241,48 @@ public sealed class ParallelFanOutVoteAgreementTests
         completed.Annotations["vote.agreement.kind"].Should().Be("Agreed");
     }
 
+    [Fact]
+    public async Task HandleAsync_WithDeterministicSubStep_ShouldExpandParametersAndMergeInDispatchOrder()
+    {
+        var module = new ParallelFanOutModule();
+        var ctx = new RecordingWorkflowContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "fanout",
+                StepType = "parallel",
+                RunId = "run-1",
+                Input = "synthetic",
+                Parameters =
+                {
+                    ["parallel_count"] = "3",
+                    ["sub_step_type"] = "assign",
+                    ["sub_param_target"] = "worker_${index}",
+                    ["sub_param_value"] = "result-${index}",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var requests = ctx.Published.Select(x => x.Event).OfType<StepRequestEvent>().ToArray();
+        requests.Should().HaveCount(3);
+        requests.Select(x => x.StepType).Should().OnlyContain(x => x == "assign");
+        requests.Select(x => x.Parameters["target"]).Should().Equal("worker_0", "worker_1", "worker_2");
+        requests.Select(x => x.Parameters["value"]).Should().Equal("result-0", "result-1", "result-2");
+        requests.Select(x => x.TargetRole).Should().OnlyContain(x => string.IsNullOrEmpty(x));
+
+        ctx.Published.Clear();
+        await module.HandleAsync(Envelope(new StepCompletedEvent { StepId = "fanout_sub_2", RunId = "run-1", Success = true, Output = "result-2" }), ctx, CancellationToken.None);
+        await module.HandleAsync(Envelope(new StepCompletedEvent { StepId = "fanout_sub_0", RunId = "run-1", Success = true, Output = "result-0" }), ctx, CancellationToken.None);
+        await module.HandleAsync(Envelope(new StepCompletedEvent { StepId = "fanout_sub_1", RunId = "run-1", Success = true, Output = "result-1" }), ctx, CancellationToken.None);
+
+        var completed = ctx.Published.Select(x => x.Event).OfType<StepCompletedEvent>().Single();
+        completed.StepId.Should().Be("fanout");
+        completed.Success.Should().BeTrue();
+        completed.Output.Should().Be("result-0\n---\nresult-1\n---\nresult-2");
+    }
+
     private static EventEnvelope Envelope(IMessage message) =>
         new()
         {

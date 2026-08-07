@@ -1,9 +1,12 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
+using Aevatar.Workflow.Application.ExternalCapabilities;
 using Aevatar.Workflow.Application.Runs;
 using FluentAssertions;
+using Timestamp = Google.Protobuf.WellKnownTypes.Timestamp;
 
 namespace Aevatar.Workflow.Application.Tests;
 
@@ -37,7 +40,10 @@ public sealed class WorkflowRunActorResolverTests
         var bindingReader = new StaticWorkflowActorBindingReader(null);
         var actorPort = new RecordingWorkflowRunActorPort();
         var registry = new InMemoryWorkflowDefinitionCatalog();
-        registry.Register("direct", "name: direct\nroles: []\nsteps: []\n");
+        registry.Register(
+            "direct",
+            "name: direct\nroles: []\nsteps: []\n",
+            ExternalCapabilityExecutionMode.Interactive);
         var resolver = new WorkflowRunActorResolver(bindingReader, actorPort, actorPort, registry);
 
         var result = await resolver.ResolveOrCreateAsync(
@@ -58,7 +64,10 @@ public sealed class WorkflowRunActorResolverTests
         var bindingReader = new StaticWorkflowActorBindingReader(null);
         var actorPort = new RecordingWorkflowRunActorPort();
         var registry = new InMemoryWorkflowDefinitionCatalog();
-        registry.Register("direct", "name: direct\nroles: []\nsteps: []\n");
+        registry.Register(
+            "direct",
+            "name: direct\nroles: []\nsteps: []\n",
+            ExternalCapabilityExecutionMode.Interactive);
         var resolver = new WorkflowRunActorResolver(bindingReader, actorPort, actorPort, registry);
 
         var result = await resolver.ResolveOrCreateAsync(
@@ -80,7 +89,10 @@ public sealed class WorkflowRunActorResolverTests
         var bindingReader = new StaticWorkflowActorBindingReader(null);
         var actorPort = new RecordingWorkflowRunActorPort();
         var registry = new InMemoryWorkflowDefinitionCatalog();
-        registry.Register("auto", "name: auto\nroles: []\nsteps: []\n");
+        registry.Register(
+            "auto",
+            "name: auto\nroles: []\nsteps: []\n",
+            ExternalCapabilityExecutionMode.Interactive);
         var resolver = new WorkflowRunActorResolver(bindingReader, actorPort, actorPort, registry, new WorkflowRunBehaviorOptions
             {
                 UseAutoAsDefaultWhenWorkflowUnspecified = true,
@@ -101,7 +113,10 @@ public sealed class WorkflowRunActorResolverTests
     {
         var actorPort = new RecordingWorkflowRunActorPort();
         var registry = new InMemoryWorkflowDefinitionCatalog();
-        registry.Register("review", "name: review\nroles: []\nsteps: []\n");
+        registry.Register(
+            "review",
+            "name: review\nroles: []\nsteps: []\n",
+            ExternalCapabilityExecutionMode.Interactive);
         var resolver = new WorkflowRunActorResolver(new StaticWorkflowActorBindingReader(null), actorPort, actorPort, registry, new WorkflowRunBehaviorOptions
             {
                 DefaultWorkflowName = "review",
@@ -123,7 +138,10 @@ public sealed class WorkflowRunActorResolverTests
         var bindingReader = new ThrowingWorkflowActorBindingReader();
         var actorPort = new RecordingWorkflowRunActorPort();
         var registry = new InMemoryWorkflowDefinitionCatalog();
-        registry.Register("direct", "name: direct\nroles: []\nsteps: []\n");
+        registry.Register(
+            "direct",
+            "name: direct\nroles: []\nsteps: []\n",
+            ExternalCapabilityExecutionMode.Interactive);
         var resolver = new WorkflowRunActorResolver(bindingReader, actorPort, actorPort, registry);
 
         var result = await resolver.ResolveOrCreateAsync(
@@ -201,10 +219,204 @@ public sealed class WorkflowRunActorResolverTests
         actorPort.CreateRunBindings[0].WorkflowName.Should().Be("inline_entry");
         actorPort.CreateRunBindings[0].WorkflowYaml.Should().Be(entryWorkflowYaml);
         actorPort.CreateRunBindings[0].RunOrigin.Should().Be(Aevatar.Workflow.Abstractions.WorkflowRunOrigins.Draft);
-        actorPort.CreateRunBindings[0].InlineWorkflowYamls.Should().Contain(
-            new KeyValuePair<string, string>("inline_entry", entryWorkflowYaml));
-        actorPort.CreateRunBindings[0].InlineWorkflowYamls.Should().Contain(
-            new KeyValuePair<string, string>("helper", helperWorkflowYaml));
+        actorPort.CreateRunBindings[0].InlineWorkflowYamls.Should().ContainSingle()
+            .Which.Should().Be(new KeyValuePair<string, string>("helper", helperWorkflowYaml));
+    }
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_ShouldAttachInteractiveAdmissionToAuthenticatedInlineDraftRun()
+    {
+        var workflowYaml =
+            """
+            name: inline_external
+            roles: []
+            steps:
+              - id: call_external
+                type: tool_call
+                capability:
+                  nyxid_request:
+                    user_service_id: user-service-alpha
+                    method: GET
+                    path_template: /2/users/{id}/timelines/reverse_chronological
+                    query_parameters: [max_results]
+                    body_mode: none
+                    response_mode: text
+                parameters:
+                  tool: nyxid_proxy
+                  arguments: "{}"
+            """ + "\n";
+        var selector = new NyxIdRequestSelector
+        {
+            UserServiceId = "user-service-alpha",
+            Method = NyxIdRequestMethod.Get,
+            PathTemplate = "/2/users/{id}/timelines/reverse_chronological",
+            BodyMode = NyxIdRequestBodyMode.None,
+            ResponseMode = NyxIdRequestResponseMode.Text,
+        };
+        selector.QueryParameters.Add("max_results");
+        var dependencies = new WorkflowAuthorizationDependencies();
+        dependencies.ExternalInvocations.Add(new ExternalToolInvocationSpec
+        {
+            CallSiteId = "inline_external/call_external",
+            ToolName = "nyxid_proxy",
+            Selector = new ExternalWorkflowCapabilitySelector
+            {
+                NyxIdRequest = selector.Clone(),
+            },
+        });
+        var actorPort = new RecordingWorkflowRunActorPort();
+        actorPort.ParseResults[workflowYaml] = WorkflowYamlParseResult.Success("inline_external", dependencies);
+        var readinessPort = new ReadyExplicitRequestReadinessPort(selector);
+        var draftAdmissionService = new WorkflowDraftRunCapabilityAdmissionService(
+            new WorkflowExplicitRequestPreviewService(actorPort, readinessPort),
+            new WorkflowExternalCapabilityAdmissionService(actorPort, readinessPort));
+        var resolver = new WorkflowRunActorResolver(
+            new StaticWorkflowActorBindingReader(null),
+            actorPort,
+            actorPort,
+            new InMemoryWorkflowDefinitionCatalog(),
+            draftAdmissionService);
+
+        var result = await resolver.ResolveOrCreateAsync(
+            new WorkflowChatRunRequest(
+                "run the draft",
+                WorkflowChatSource.InlineYamlBundle([workflowYaml]),
+                ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
+                ScopeId: "scope-alpha",
+                CallerCredential: new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential(
+                    "bearer-alpha",
+                    new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerNyxIdAuthority(
+                        "nyxid",
+                        string.Empty,
+                        "owner-alpha",
+                        "proxy"),
+                    NyxIdCallerCredentialKind.SourceReadableUserBearer),
+                CommandIdSeed: "command-alpha"),
+            CancellationToken.None);
+
+        result.Error.Should().Be(WorkflowChatRunStartError.None);
+        actorPort.CreateRunBindings.Should().ContainSingle();
+        var binding = actorPort.CreateRunBindings[0];
+        binding.SourceKind.Should().Be("workflow_draft_run");
+        binding.CapabilityAdmissionPlan.Should().NotBeNull();
+        binding.CapabilityAdmissionPlan!.SchemaVersion.Should()
+            .Be(WorkflowCapabilityAdmissionPlanIntegrity.SchemaVersion);
+        binding.CapabilityAdmissionPlan.ExecutionMode.Should()
+            .Be(ExternalCapabilityExecutionMode.Interactive);
+        var invocationAdmission = binding.CapabilityAdmissionPlan.InvocationAdmissions
+            .Should().ContainSingle().Which;
+        invocationAdmission.CallSiteId.Should().Be("inline_external/call_external");
+        invocationAdmission.Capability.CapabilityCase.Should()
+            .Be(ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest);
+        invocationAdmission.NyxIdExplicitRequestGrant.Should().NotBeNull();
+        binding.WorkflowId.Should().NotBeNullOrWhiteSpace();
+        binding.RevisionId.Should().NotBeNullOrWhiteSpace();
+        binding.WorkflowId.Should().NotBe(binding.RevisionId);
+        invocationAdmission.NyxIdExplicitRequestGrant!.WorkflowId.Should().Be(binding.WorkflowId);
+        invocationAdmission.NyxIdExplicitRequestGrant.RevisionId.Should().Be(binding.RevisionId);
+        invocationAdmission.NyxIdExplicitRequestGrant.AllowedExecutionModes.Should()
+            .Equal(ExternalCapabilityExecutionMode.Interactive);
+        binding.InlineWorkflowYamls.Should().BeEmpty();
+        WorkflowCapabilityAdmissionPlanIntegrity.ValidateOrThrow(
+            binding.CapabilityAdmissionPlan,
+            binding.WorkflowYaml,
+            binding.InlineWorkflowYamls,
+            ExternalCapabilityExecutionMode.Interactive,
+            dependencies.ExternalInvocations,
+            binding.WorkflowId,
+            binding.RevisionId);
+    }
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_ShouldRejectDraftRunBeforeActorCreation_WhenCapabilityAdmissionIsBlocked()
+    {
+        const string workflowYaml =
+            """
+            name: inline_external
+            roles: []
+            steps:
+              - id: call_external
+                type: tool_call
+                capability:
+                  nyxid_request:
+                    user_service_id: user-service-alpha
+                    method: GET
+                    path_template: /2/users/me
+                    body_mode: none
+                    response_mode: text
+                parameters:
+                  tool: nyxid_proxy
+                  arguments: "{}"
+            """;
+        var selector = new ExternalWorkflowCapabilitySelector
+        {
+            NyxIdRequest = new NyxIdRequestSelector
+            {
+                UserServiceId = "user-service-alpha",
+                Method = NyxIdRequestMethod.Get,
+                PathTemplate = "/2/users/me",
+                BodyMode = NyxIdRequestBodyMode.None,
+                ResponseMode = NyxIdRequestResponseMode.Text,
+            },
+        };
+        var dependencies = new WorkflowAuthorizationDependencies();
+        dependencies.ExternalInvocations.Add(new ExternalToolInvocationSpec
+        {
+            CallSiteId = "inline_external/call_external",
+            ToolName = "nyxid_proxy",
+            Selector = selector.Clone(),
+        });
+        var blockedReadiness = new ExternalCapabilityReadiness
+        {
+            ExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+            Status = ExternalCapabilityReadinessStatus.ServiceRegistrationRequired,
+            SelectedSelector = selector.Clone(),
+        };
+        blockedReadiness.Blockers.Add(new ExternalCapabilityBlocker
+        {
+            Status = blockedReadiness.Status,
+            Code = "USER_SERVICE_NOT_VISIBLE",
+            SafeMessage = "The selected NyxID UserService is not visible to the current caller.",
+        });
+        var actorPort = new RecordingWorkflowRunActorPort();
+        actorPort.ParseResults[workflowYaml] = WorkflowYamlParseResult.Success("inline_external", dependencies);
+        var readinessPort = new StaticExternalCapabilityReadinessPort(blockedReadiness);
+        var draftAdmissionService = new WorkflowDraftRunCapabilityAdmissionService(
+            new WorkflowExplicitRequestPreviewService(actorPort, readinessPort),
+            new WorkflowExternalCapabilityAdmissionService(actorPort, readinessPort));
+        var resolver = new WorkflowRunActorResolver(
+            new StaticWorkflowActorBindingReader(null),
+            actorPort,
+            actorPort,
+            new InMemoryWorkflowDefinitionCatalog(),
+            draftAdmissionService);
+
+        var result = await resolver.ResolveOrCreateAsync(
+            new WorkflowChatRunRequest(
+                "run the draft",
+                WorkflowChatSource.InlineYamlBundle([workflowYaml]),
+                ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
+                ScopeId: "scope-alpha",
+                CallerCredential: new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential(
+                    "bearer-alpha",
+                    new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerNyxIdAuthority(
+                        "nyxid",
+                        string.Empty,
+                        "owner-alpha",
+                        "proxy"),
+                    NyxIdCallerCredentialKind.SourceReadableUserBearer),
+                CommandIdSeed: "command-alpha"),
+            CancellationToken.None);
+
+        result.Error.Should().Be(WorkflowChatRunStartError.InvalidWorkflowYaml);
+        result.Target.Should().BeNull();
+        result.FailureDetail.Should().NotBeNull();
+        result.FailureDetail!.ExternalCapabilityReadiness.Should().NotBeSameAs(blockedReadiness);
+        result.FailureDetail.ExternalCapabilityReadiness!.Status.Should()
+            .Be(ExternalCapabilityReadinessStatus.ServiceRegistrationRequired);
+        result.FailureDetail.ExternalCapabilityReadiness.Blockers.Should().ContainSingle()
+            .Which.Code.Should().Be("USER_SERVICE_NOT_VISIBLE");
+        actorPort.CreateRunBindings.Should().BeEmpty();
     }
 
     [Fact]
@@ -275,7 +487,10 @@ public sealed class WorkflowRunActorResolverTests
                 ScopeId: "source-scope-1"));
         var actorPort = new RecordingWorkflowRunActorPort();
         var registry = new InMemoryWorkflowDefinitionCatalog();
-        registry.Register("direct", "name: direct\nroles: []\nsteps: []\n");
+        registry.Register(
+            "direct",
+            "name: direct\nroles: []\nsteps: []\n",
+            ExternalCapabilityExecutionMode.Interactive);
         var resolver = new WorkflowRunActorResolver(bindingReader, actorPort, actorPort, registry);
 
         var result = await resolver.ResolveOrCreateAsync(
@@ -295,6 +510,62 @@ public sealed class WorkflowRunActorResolverTests
         actorPort.CreateRunBindings[0].WorkflowName.Should().Be("direct");
         actorPort.CreateRunBindings[0].WorkflowYaml.Should().Be(legacyYaml);
         actorPort.CreateRunBindings[0].ScopeId.Should().Be("source-scope-1");
+    }
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_ShouldCarrySourceBindingAdmissionPlanAndRevisionIdentity()
+    {
+        const string sourceActorId = "definition-service-active";
+        const string workflowYaml =
+            """
+            name: admitted
+            roles: []
+            steps: []
+            """;
+        var admissionPlan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            workflowYaml,
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+            ExternalCapabilityExecutionMode.Interactive,
+            [],
+            []);
+        var bindingReader = new RecordingWorkflowActorBindingReader();
+        bindingReader.Register(
+            sourceActorId,
+            new WorkflowActorBinding(
+                WorkflowActorKind.Definition,
+                sourceActorId,
+                sourceActorId,
+                string.Empty,
+                "admitted",
+                workflowYaml,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
+                ScopeId: "scope-authoritative",
+                SourceKind: "service_revision",
+                CapabilityAdmissionPlan: admissionPlan,
+                WorkflowId: "wf-admitted",
+                RevisionId: "rev-admitted"));
+        var actorPort = new RecordingWorkflowRunActorPort();
+        var resolver = new WorkflowRunActorResolver(bindingReader, actorPort, actorPort, new InMemoryWorkflowDefinitionCatalog());
+
+        var result = await resolver.ResolveOrCreateAsync(
+            new WorkflowChatRunRequest(
+                "hello",
+                WorkflowChatSource.DefinitionActor(sourceActorId, "admitted"),
+                ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
+                ScopeId: "scope-request"),
+            CancellationToken.None);
+
+        result.Error.Should().Be(WorkflowChatRunStartError.None);
+        actorPort.CreateRunBindings.Should().ContainSingle();
+        var runBinding = actorPort.CreateRunBindings[0];
+        runBinding.DefinitionActorId.Should().Be(sourceActorId);
+        runBinding.ScopeId.Should().Be("scope-authoritative");
+        runBinding.SourceKind.Should().Be("service_revision");
+        runBinding.CapabilityAdmissionPlan.Should().NotBeSameAs(admissionPlan);
+        runBinding.CapabilityAdmissionPlan!.AdmissionDigest.Should().Be(admissionPlan.AdmissionDigest);
+        runBinding.WorkflowId.Should().Be("wf-admitted");
+        runBinding.RevisionId.Should().Be("rev-admitted");
     }
 
     [Fact]
@@ -475,8 +746,7 @@ public sealed class WorkflowRunActorResolverTests
         actorPort.CreateRunBindings.Should().ContainSingle();
         actorPort.CreateRunBindings[0].WorkflowName.Should().Be("inline_entry");
         actorPort.CreateRunBindings[0].WorkflowYaml.Should().Be(entryWorkflowYaml);
-        actorPort.CreateRunBindings[0].InlineWorkflowYamls.Should().ContainSingle()
-            .Which.Should().Be(new KeyValuePair<string, string>("inline_entry", entryWorkflowYaml));
+        actorPort.CreateRunBindings[0].InlineWorkflowYamls.Should().BeEmpty();
     }
 
     [Fact]
@@ -558,7 +828,10 @@ public sealed class WorkflowRunActorResolverTests
     public async Task ResolveOrCreateAsync_ShouldUseRegistryYaml_WhenSourceBindingHasWorkflowNameOnly()
     {
         var registry = new InMemoryWorkflowDefinitionCatalog();
-        registry.Register("direct", "name: direct\nroles: []\nsteps: []\n");
+        registry.Register(
+            "direct",
+            "name: direct\nroles: []\nsteps: []\n",
+            ExternalCapabilityExecutionMode.Interactive);
         var actorPort = new RecordingWorkflowRunActorPort();
         var resolver = new WorkflowRunActorResolver(
             new StaticWorkflowActorBindingReader(
@@ -588,7 +861,10 @@ public sealed class WorkflowRunActorResolverTests
     public async Task ResolveOrCreateAsync_ShouldPreferSourceBindingYamlAndDefinitionActorId_WhenPresent()
     {
         var registry = new InMemoryWorkflowDefinitionCatalog();
-        registry.Register("direct", "name: direct\nroles: []\nsteps: []\n");
+        registry.Register(
+            "direct",
+            "name: direct\nroles: []\nsteps: []\n",
+            ExternalCapabilityExecutionMode.Interactive);
         var actorPort = new RecordingWorkflowRunActorPort();
         var resolver = new WorkflowRunActorResolver(
             new StaticWorkflowActorBindingReader(
@@ -699,7 +975,10 @@ public sealed class WorkflowRunActorResolverTests
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase), ExternalCapabilityExecutionMode.Interactive));
         var actorPort = new RecordingWorkflowRunActorPort();
         var registry = new InMemoryWorkflowDefinitionCatalog();
-        registry.Register("direct", latestYaml);
+        registry.Register(
+            "direct",
+            latestYaml,
+            ExternalCapabilityExecutionMode.Interactive);
         var resolver = new WorkflowRunActorResolver(bindingReader, actorPort, actorPort, registry);
 
         var boundResult = await resolver.ResolveOrCreateAsync(
@@ -760,7 +1039,10 @@ public sealed class WorkflowRunActorResolverTests
             CreateRunException = new InvalidOperationException("boom"),
         };
         var registry = new InMemoryWorkflowDefinitionCatalog();
-        registry.Register("direct", "name: direct\nroles: []\nsteps: []\n");
+        registry.Register(
+            "direct",
+            "name: direct\nroles: []\nsteps: []\n",
+            ExternalCapabilityExecutionMode.Interactive);
         var resolver = new WorkflowRunActorResolver(new StaticWorkflowActorBindingReader(null), actorPort, actorPort, registry);
 
         var act = async () => await resolver.ResolveOrCreateAsync(
@@ -924,17 +1206,83 @@ public sealed class WorkflowRunActorResolverTests
         }
     }
 
+    private sealed class ReadyExplicitRequestReadinessPort(NyxIdRequestSelector requestContract) :
+        IExternalWorkflowCapabilityReadinessPort
+    {
+        public Task<ExternalCapabilityReadiness> InspectAsync(
+            InspectExternalWorkflowCapabilityReadinessRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var policy = new NyxIdOperationExecutionPolicy
+            {
+                Risk = NyxIdOperationRisk.ReadOnly,
+                Approval = NyxIdOperationApproval.None,
+                EnforcementOwner = NyxIdOperationEnforcementOwner.Aevatar,
+            };
+            policy.AllowedExecutionModes.Add(ExternalCapabilityExecutionMode.Interactive);
+            var requestDigest = WorkflowCapabilityAdmissionPlanIntegrity
+                .ComputeNyxIdRequestContractDigest(requestContract);
+            var readiness = new ExternalCapabilityReadiness
+            {
+                ExecutionMode = request.ExecutionMode,
+                Status = ExternalCapabilityReadinessStatus.Ready,
+                SelectedSelector = request.Selector.Clone(),
+                SelectedCapability = new ExternalWorkflowCapabilityRef
+                {
+                    NyxIdUserRequest = new NyxIdUserRequestCapabilityRef
+                    {
+                        Request = requestContract.Clone(),
+                        ServiceSlugSnapshot = "x",
+                        ContractDigest = WorkflowCapabilityAdmissionPlanIntegrity
+                            .ComputeNyxIdExplicitRequestProofDigest(requestDigest, "x"),
+                        ExecutionPolicy = policy,
+                    },
+                },
+            };
+            var observedAt = DateTimeOffset.UtcNow;
+            readiness.Sources.Add(new ExternalCapabilitySourceStamp
+            {
+                SourceKind = ExternalCapabilitySourceKind.NyxIdUserServices,
+                SourceId = "nyxid-user-services:caller:owner-alpha",
+                ObservedAt = Timestamp.FromDateTimeOffset(observedAt),
+                FreshUntil = Timestamp.FromDateTimeOffset(observedAt.AddMinutes(5)),
+                ContentDigest = "user-services-alpha",
+            });
+            return Task.FromResult(readiness);
+        }
+    }
+
+    private sealed class StaticExternalCapabilityReadinessPort(ExternalCapabilityReadiness readiness) :
+        IExternalWorkflowCapabilityReadinessPort
+    {
+        public Task<ExternalCapabilityReadiness> InspectAsync(
+            InspectExternalWorkflowCapabilityReadinessRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var result = readiness.Clone();
+            result.ExecutionMode = request.ExecutionMode;
+            return Task.FromResult(result);
+        }
+    }
+
     private sealed class InMemoryWorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
     {
         private readonly Dictionary<string, WorkflowDefinitionRegistration> _definitions = new(StringComparer.OrdinalIgnoreCase);
 
-        public void Register(string name, string yaml)
+        public void Register(
+            string name,
+            string yaml,
+            ExternalCapabilityExecutionMode expectedExecutionMode)
         {
             var normalizedName = name.Trim();
             _definitions[normalizedName] = new WorkflowDefinitionRegistration(
                 normalizedName,
                 yaml,
-                $"definition-{normalizedName}");
+                $"definition-{normalizedName}",
+                expectedExecutionMode,
+                "test");
         }
 
         public WorkflowDefinitionRegistration? GetDefinition(string name) =>

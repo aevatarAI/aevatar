@@ -3436,6 +3436,12 @@ public sealed class ScheduledDispatchEndpointsTests
             CancellationToken ct = default) =>
             throw new NotSupportedException();
 
+        public Task<StudioMemberWorkflowScheduleResult> ReplaceAsync(
+            StudioMemberWorkflowScheduleRequest request,
+            string confirmedPermissionDigest,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
         public Task<StudioMemberAutomationMutationReceipt> UpdateAsync(
             StudioMemberAutomationUpdateCommand command,
             CancellationToken ct = default) =>

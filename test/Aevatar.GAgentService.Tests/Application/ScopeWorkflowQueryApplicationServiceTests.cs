@@ -163,6 +163,171 @@ public sealed class ScopeWorkflowQueryApplicationServiceTests
     }
 
     [Fact]
+    public async Task LookupByWorkflowIdAsync_ShouldResolveExplicitPublishedServiceDescriptor()
+    {
+        const string workflowId = "wf-alpha";
+        const string publishedServiceId = "svc-alpha";
+        var snapshot = CreateServiceSnapshot(
+            publishedServiceId,
+            "Studio Workflow",
+            activeRevisionId: "rev-alpha",
+            deploymentId: "dep-alpha",
+            primaryActorId: "actor-alpha",
+            appId: "studio");
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(
+            getResult: snapshot,
+            deploymentResult: CreateDeploymentCatalog(snapshot));
+        var bindingReader = new FakeWorkflowActorBindingReader(
+            CreateBinding("actor-alpha", "studio-workflow", workflowId));
+        var descriptorSource = new FakePublishedServiceDescriptorSource(
+            new ScopeWorkflowPublishedServiceDescriptor(
+                ScopeId,
+                workflowId,
+                "studio",
+                DefaultOptions.ServiceNamespace,
+                publishedServiceId,
+                "Studio Workflow",
+                DateTimeOffset.UtcNow));
+        var service = CreateService(lifecyclePort, bindingReader, descriptorSource);
+
+        var result = await service.LookupByWorkflowIdAsync(ScopeId, workflowId);
+
+        result.Status.Should().Be(ScopeWorkflowLookupStatus.Runnable);
+        result.Workflow.Should().NotBeNull();
+        result.Workflow!.WorkflowId.Should().Be(workflowId);
+        result.Workflow.ServiceKey.Should().Be(snapshot.ServiceKey);
+        result.Workflow.ServiceAppId.Should().Be("studio");
+        result.Workflow.PublishedServiceId.Should().Be(publishedServiceId);
+        lifecyclePort.LastGetRequest.Should().NotBeNull();
+        lifecyclePort.LastGetRequest!.AppId.Should().Be("studio");
+        lifecyclePort.LastGetRequest.ServiceId.Should().Be(publishedServiceId);
+        lifecyclePort.LastGetRequest.ServiceId.Should().NotBe(workflowId);
+    }
+
+    [Fact]
+    public async Task ListAsync_ShouldIncludeExplicitPublishedServiceDescriptor()
+    {
+        var snapshot = CreateServiceSnapshot(
+            "svc-alpha",
+            "Studio Workflow",
+            primaryActorId: "actor-alpha",
+            appId: "studio");
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(
+            getResult: snapshot,
+            deploymentResult: CreateDeploymentCatalog(snapshot));
+        var bindingReader = new FakeWorkflowActorBindingReader(
+            CreateBinding("actor-alpha", "studio-workflow", "wf-alpha"));
+        var descriptorSource = new FakePublishedServiceDescriptorSource(
+            new ScopeWorkflowPublishedServiceDescriptor(
+                ScopeId,
+                "wf-alpha",
+                "studio",
+                DefaultOptions.ServiceNamespace,
+                "svc-alpha",
+                "Studio Workflow",
+                DateTimeOffset.UtcNow));
+        var service = CreateService(lifecyclePort, bindingReader, descriptorSource);
+
+        var result = await service.ListAsync(ScopeId);
+
+        result.Should().ContainSingle();
+        result[0].WorkflowId.Should().Be("wf-alpha");
+        result[0].ServiceKey.Should().Be(snapshot.ServiceKey);
+    }
+
+    [Fact]
+    public async Task LookupByWorkflowIdAsync_ShouldRejectConventionalAndExplicitIdentityConflict()
+    {
+        const string workflowId = "wf-alpha";
+        var directSnapshot = CreateServiceSnapshot(workflowId, "Direct Workflow");
+        var studioSnapshot = CreateServiceSnapshot(
+            "svc-alpha",
+            "Studio Workflow",
+            appId: "studio");
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(
+            listResult: [directSnapshot, studioSnapshot]);
+        var descriptorSource = new FakePublishedServiceDescriptorSource(
+            new ScopeWorkflowPublishedServiceDescriptor(
+                ScopeId,
+                workflowId,
+                "studio",
+                DefaultOptions.ServiceNamespace,
+                "svc-alpha",
+                "Studio Workflow",
+                DateTimeOffset.UtcNow));
+        var service = CreateService(
+            lifecyclePort,
+            new FakeWorkflowActorBindingReader(),
+            descriptorSource);
+
+        var result = await service.LookupByWorkflowIdAsync(ScopeId, workflowId);
+
+        result.Status.Should().Be(ScopeWorkflowLookupStatus.Stale);
+        result.Workflow.Should().BeNull();
+        result.Reason.Should().Be("published_service_descriptor_conflicts_with_conventional_identity");
+    }
+
+    [Fact]
+    public async Task ListAsync_ShouldHideConventionalAndExplicitIdentityConflict()
+    {
+        const string workflowId = "wf-alpha";
+        var directSnapshot = CreateServiceSnapshot(workflowId, "Direct Workflow");
+        var studioSnapshot = CreateServiceSnapshot(
+            "svc-alpha",
+            "Studio Workflow",
+            appId: "studio");
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(
+            listResult: [directSnapshot, studioSnapshot]);
+        var descriptorSource = new FakePublishedServiceDescriptorSource(
+            new ScopeWorkflowPublishedServiceDescriptor(
+                ScopeId,
+                workflowId,
+                "studio",
+                DefaultOptions.ServiceNamespace,
+                "svc-alpha",
+                "Studio Workflow",
+                DateTimeOffset.UtcNow));
+        var service = CreateService(
+            lifecyclePort,
+            new FakeWorkflowActorBindingReader(),
+            descriptorSource);
+
+        var result = await service.ListAsync(ScopeId);
+
+        result.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task LookupByWorkflowIdAsync_ShouldRejectMismatchedActorBindingWorkflowIdentity()
+    {
+        var snapshot = CreateServiceSnapshot(
+            "svc-alpha",
+            "Studio Workflow",
+            primaryActorId: "actor-alpha",
+            appId: "studio");
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(
+            getResult: snapshot,
+            deploymentResult: CreateDeploymentCatalog(snapshot));
+        var bindingReader = new FakeWorkflowActorBindingReader(
+            CreateBinding("actor-alpha", "studio-workflow", "wf-other"));
+        var descriptorSource = new FakePublishedServiceDescriptorSource(
+            new ScopeWorkflowPublishedServiceDescriptor(
+                ScopeId,
+                "wf-alpha",
+                "studio",
+                DefaultOptions.ServiceNamespace,
+                "svc-alpha",
+                "Studio Workflow",
+                DateTimeOffset.UtcNow));
+        var service = CreateService(lifecyclePort, bindingReader, descriptorSource);
+
+        var result = await service.LookupByWorkflowIdAsync(ScopeId, "wf-alpha");
+
+        result.Status.Should().Be(ScopeWorkflowLookupStatus.Stale);
+        result.Reason.Should().Be("workflow_actor_binding_workflow_mismatched");
+    }
+
+    [Fact]
     public async Task GetByWorkflowIdAsync_ShouldReturnNull_WhenLookupIsNotRunnable()
     {
         var snapshot = CreateServiceSnapshot(
@@ -222,11 +387,13 @@ public sealed class ScopeWorkflowQueryApplicationServiceTests
 
     private static ScopeWorkflowQueryApplicationService CreateService(
         FakeServiceLifecycleQueryPort lifecyclePort,
-        FakeWorkflowActorBindingReader bindingReader) =>
+        FakeWorkflowActorBindingReader bindingReader,
+        IScopeWorkflowPublishedServiceDescriptorSource? descriptorSource = null) =>
         new(
             lifecyclePort,
             bindingReader,
-            Options.Create(new ScopeWorkflowCapabilityOptions()));
+            Options.Create(new ScopeWorkflowCapabilityOptions()),
+            descriptorSource == null ? null : [descriptorSource]);
 
     private static ServiceCatalogSnapshot CreateServiceSnapshot(
         string serviceId,
@@ -234,14 +401,16 @@ public sealed class ScopeWorkflowQueryApplicationServiceTests
         DateTimeOffset? updatedAt = null,
         string activeRevisionId = "rev-1",
         string deploymentId = "dep-default",
-        string primaryActorId = "actor-default")
+        string primaryActorId = "actor-default",
+        string? appId = null)
     {
         var options = new ScopeWorkflowCapabilityOptions();
-        var serviceKey = ServiceKeys.Build(ScopeId, options.ServiceAppId, options.ServiceNamespace, serviceId);
+        var resolvedAppId = appId ?? options.ServiceAppId;
+        var serviceKey = ServiceKeys.Build(ScopeId, resolvedAppId, options.ServiceNamespace, serviceId);
         return new ServiceCatalogSnapshot(
             ServiceKey: serviceKey,
             TenantId: ScopeId,
-            AppId: options.ServiceAppId,
+            AppId: resolvedAppId,
             Namespace: options.ServiceNamespace,
             ServiceId: serviceId,
             DisplayName: displayName,
@@ -273,7 +442,8 @@ public sealed class ScopeWorkflowQueryApplicationServiceTests
 
     private static IReadOnlyDictionary<string, WorkflowActorBinding> CreateBinding(
         string actorId,
-        string workflowName) =>
+        string workflowName,
+        string workflowId = "") =>
         new Dictionary<string, WorkflowActorBinding>(StringComparer.Ordinal)
         {
             [actorId] = new(
@@ -284,7 +454,8 @@ public sealed class ScopeWorkflowQueryApplicationServiceTests
                 WorkflowName: workflowName,
                 WorkflowYaml: "yaml: true",
                 InlineWorkflowYamls: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
-                ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive),
+                ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
+                WorkflowId: workflowId),
         };
 
     private sealed class FakeServiceLifecycleQueryPort : IServiceLifecycleQueryPort
@@ -293,6 +464,7 @@ public sealed class ScopeWorkflowQueryApplicationServiceTests
         private readonly ServiceCatalogSnapshot? _getResult;
         private readonly ServiceDeploymentCatalogSnapshot? _deploymentResult;
         public ListRequest? LastListRequest { get; private set; }
+        public ServiceIdentity? LastGetRequest { get; private set; }
 
         public FakeServiceLifecycleQueryPort(
             IReadOnlyList<ServiceCatalogSnapshot>? listResult = null,
@@ -304,8 +476,12 @@ public sealed class ScopeWorkflowQueryApplicationServiceTests
             _deploymentResult = deploymentResult;
         }
 
-        public Task<ServiceCatalogSnapshot?> GetServiceAsync(ServiceIdentity identity, CancellationToken ct = default) =>
-            Task.FromResult(_getResult ?? _listResult.FirstOrDefault(x => string.Equals(x.ServiceId, identity.ServiceId, StringComparison.Ordinal)));
+        public Task<ServiceCatalogSnapshot?> GetServiceAsync(ServiceIdentity identity, CancellationToken ct = default)
+        {
+            LastGetRequest = identity.Clone();
+            var candidate = _getResult ?? _listResult.FirstOrDefault(x => MatchesIdentity(x, identity));
+            return Task.FromResult(candidate != null && MatchesIdentity(candidate, identity) ? candidate : null);
+        }
 
         public Task<IReadOnlyList<ServiceCatalogSnapshot>> ListServicesAsync(
             string tenantId,
@@ -315,7 +491,13 @@ public sealed class ScopeWorkflowQueryApplicationServiceTests
             CancellationToken ct = default)
         {
             LastListRequest = new ListRequest(tenantId, appId, @namespace, take);
-            return Task.FromResult(_listResult);
+            return Task.FromResult<IReadOnlyList<ServiceCatalogSnapshot>>(_listResult
+                .Where(snapshot =>
+                    string.Equals(snapshot.TenantId, tenantId, StringComparison.Ordinal) &&
+                    string.Equals(snapshot.AppId, appId, StringComparison.Ordinal) &&
+                    string.Equals(snapshot.Namespace, @namespace, StringComparison.Ordinal))
+                .Take(take)
+                .ToArray());
         }
 
         public Task<ServiceRevisionCatalogSnapshot?> GetServiceRevisionsAsync(ServiceIdentity identity, CancellationToken ct = default) =>
@@ -325,6 +507,12 @@ public sealed class ScopeWorkflowQueryApplicationServiceTests
             Task.FromResult(_deploymentResult);
 
         public sealed record ListRequest(string TenantId, string AppId, string Namespace, int Take);
+
+        private static bool MatchesIdentity(ServiceCatalogSnapshot snapshot, ServiceIdentity identity) =>
+            string.Equals(snapshot.TenantId, identity.TenantId, StringComparison.Ordinal) &&
+            string.Equals(snapshot.AppId, identity.AppId, StringComparison.Ordinal) &&
+            string.Equals(snapshot.Namespace, identity.Namespace, StringComparison.Ordinal) &&
+            string.Equals(snapshot.ServiceId, identity.ServiceId, StringComparison.Ordinal);
     }
 
     private sealed class FakeWorkflowActorBindingReader : IWorkflowActorBindingReader
@@ -341,5 +529,31 @@ public sealed class ScopeWorkflowQueryApplicationServiceTests
             _bindings.TryGetValue(actorId, out var binding);
             return Task.FromResult(binding);
         }
+    }
+
+    private sealed class FakePublishedServiceDescriptorSource
+        : IScopeWorkflowPublishedServiceDescriptorSource
+    {
+        private readonly IReadOnlyList<ScopeWorkflowPublishedServiceDescriptor> _descriptors;
+
+        public FakePublishedServiceDescriptorSource(params ScopeWorkflowPublishedServiceDescriptor[] descriptors)
+        {
+            _descriptors = descriptors;
+        }
+
+        public Task<IReadOnlyList<ScopeWorkflowPublishedServiceDescriptor>> ListAsync(
+            string scopeId,
+            int take,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<ScopeWorkflowPublishedServiceDescriptor>>(
+                _descriptors.Where(descriptor => descriptor.ScopeId == scopeId).Take(take).ToArray());
+
+        public Task<IReadOnlyList<ScopeWorkflowPublishedServiceDescriptor>> FindByWorkflowIdAsync(
+            string scopeId,
+            string workflowId,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<ScopeWorkflowPublishedServiceDescriptor>>(
+                _descriptors.Where(descriptor =>
+                    descriptor.ScopeId == scopeId && descriptor.WorkflowId == workflowId).ToArray());
     }
 }

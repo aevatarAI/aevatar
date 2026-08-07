@@ -45,6 +45,30 @@ public sealed class ProjectionNyxIdChatConversationStateQueryPortTests
         result.Snapshot.ActiveTurn!.CommandId.Should().Be("command-alpha");
         result.Snapshot.ActiveTask!.Steps.Should().ContainSingle().Which.Operation!
             .OperationId.Should().Be("operation-alpha");
+        result.Snapshot.ActiveTask.SchemaVersion.Should().Be(4);
+        result.Snapshot.ActiveTask.ActorId.Should().Be("conversation-alpha");
+        result.Snapshot.ActiveTask.PlanId.Should().Be("plan-alpha");
+        result.Snapshot.ActiveTask.PlanRevision.Should().Be(2);
+        result.Snapshot.ActiveTask.Title.Should().Be("Update GitHub safely");
+        result.Snapshot.ActiveTask.Gate.Should().BeEquivalentTo(
+            new NyxIdChatConversationPlanGateSnapshot(
+                "confirm",
+                "The plan contains an effect-capable operation."));
+        var source = result.Snapshot.ActiveTask.Steps.Single().Source!.Tool!;
+        source.ToolName.Should().Be("repository_update");
+        source.ServiceId.Should().Be("connected-service-alpha");
+        source.ServiceSlug.Should().Be("service-slug-alpha");
+        source.ReadinessCapabilityId.Should().Be("readiness-capability-alpha");
+        var step = result.Snapshot.ActiveTask.Steps.Single();
+        step.AddedBy.Should().Be("replan");
+        step.DependsOn.Should().Equal("step-plan");
+        step.Estimate.Should().BeEquivalentTo(
+            new NyxIdChatConversationStepEstimateSnapshot("duration", 20));
+        step.Substeps.Should().ContainSingle().Which.Should().BeEquivalentTo(
+            new NyxIdChatConversationSubstepSnapshot(
+                "substep-alpha",
+                "Validate repository",
+                "done"));
         result.Snapshot.PendingActions.Should().ContainSingle().Which.Reports
             .Should().ContainSingle().Which.Resource!.UserServiceId.Should()
             .Be("user-service-alpha");
@@ -237,6 +261,16 @@ public sealed class ProjectionNyxIdChatConversationStateQueryPortTests
             Status = "active",
             ActiveStepId = "step-alpha",
             ActiveOperationId = "operation-alpha",
+            SchemaVersion = 4,
+            ActorId = "conversation-alpha",
+            PlanId = "plan-alpha",
+            PlanRevision = 2,
+            Title = "Update GitHub safely",
+            Gate = new NyxIdChatConversationPlanGateDocument
+            {
+                Mode = "confirm",
+                Reason = "The plan contains an effect-capable operation.",
+            },
             Steps =
             {
                 new NyxIdChatConversationStepDocument
@@ -246,6 +280,32 @@ public sealed class ProjectionNyxIdChatConversationStateQueryPortTests
                     Kind = "tool",
                     Status = "running",
                     ExternalEffect = "not_started",
+                    AddedBy = "replan",
+                    DependsOn = { "step-plan" },
+                    Estimate = new NyxIdChatConversationStepEstimateDocument
+                    {
+                        Kind = "duration",
+                        Seconds = 20,
+                    },
+                    Substeps =
+                    {
+                        new NyxIdChatConversationSubstepDocument
+                        {
+                            SubstepId = "substep-alpha",
+                            Title = "Validate repository",
+                            Status = "done",
+                        },
+                    },
+                    Source = new NyxIdChatConversationStepSourceDocument
+                    {
+                        Tool = new NyxIdChatConversationToolStepSourceDocument
+                        {
+                            ToolName = "repository_update",
+                            ServiceId = "connected-service-alpha",
+                            ServiceSlug = "service-slug-alpha",
+                            ReadinessCapabilityId = "readiness-capability-alpha",
+                        },
+                    },
                     Operation = new NyxIdChatConversationOperationDocument
                     {
                         ConversationActorId = "conversation-alpha",

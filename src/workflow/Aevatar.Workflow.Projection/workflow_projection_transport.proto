@@ -145,6 +145,14 @@ message WorkflowExecutionStepTrace {
   string requested_variable_name = 19;
   WorkflowUsageMetricsReadModel usage_value = 20;
   string suspension_content = 21;
+  WorkflowToolApprovalReadModel tool_approval_value = 22;
+}
+
+message WorkflowToolApprovalReadModel {
+  string execution_id = 1;
+  string tool_name = 2;
+  string tool_call_id = 3;
+  string approval_request_id = 4;
 }
 
 message WorkflowUsageMetricsReadModel {

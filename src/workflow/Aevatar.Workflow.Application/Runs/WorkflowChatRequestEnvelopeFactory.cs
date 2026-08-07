@@ -21,6 +21,7 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             Prompt = command.Prompt,
             SessionId = sessionId,
             ScopeId = command.ScopeId ?? string.Empty,
+            CurrentTurnId = command.CurrentTurnId ?? string.Empty,
         };
         if (command.InputParts is { Count: > 0 })
             chatRequest.InputParts.Add(command.InputParts.Select(ToProto));
@@ -246,6 +247,7 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             StateVersion = Math.Max(0, source.StateVersion),
             Truncated = source.Truncated,
             MaxMessageCount = Math.Max(0, source.MaxMessageCount),
+            CurrentTurnId = Normalize(source.CurrentTurnId),
         };
         payload.Messages.Add(source.Messages
             .Where(static message => !string.IsNullOrWhiteSpace(message.Content))

@@ -171,6 +171,54 @@ public sealed class NyxIdLlmServiceCatalogUserKeyMergeTests
     }
 
     [Fact]
+    public void ComposeUserServiceInventory_WithInventoryDefault_ShouldExposeModelCatalogDefault()
+    {
+        var result = NyxIdLlmServiceCatalogParser.ComposeUserServiceInventory(
+            new NyxIdLlmServicesResult([], null),
+            new NyxIdUserServices([Inventory("us-alpha", "chrono-llm", defaultModel: "gpt-5.5")]));
+
+        var catalog = result.Services.Should().ContainSingle().Subject.ModelCatalog;
+        catalog.Certainty.Should().Be(LLMModelCatalogCertainty.Enumerated);
+        catalog.DefaultModelId.Should().Be("gpt-5.5");
+        catalog.ModelIds.Should().Equal("gpt-5.5");
+    }
+
+    [Fact]
+    public void ComposeUserServiceInventory_WithInventoryDefaultOutsideDiagnosticModels_ShouldReconcileModelCatalog()
+    {
+        var diagnostic = Diagnostic("diag-alpha", "chrono-llm") with
+        {
+            ModelCatalog = new LLMModelCatalog
+            {
+                Certainty = LLMModelCatalogCertainty.Enumerated,
+                DefaultModelId = "gpt-5.4",
+                ModelIds = { "gpt-5.4" },
+            },
+        };
+        var result = NyxIdLlmServiceCatalogParser.ComposeUserServiceInventory(
+            new NyxIdLlmServicesResult([diagnostic], null),
+            new NyxIdUserServices([Inventory("us-alpha", "chrono-llm", defaultModel: "gpt-5.5")]));
+
+        var catalog = result.Services.Should().ContainSingle().Subject.ModelCatalog;
+        catalog.Certainty.Should().Be(LLMModelCatalogCertainty.Enumerated);
+        catalog.DefaultModelId.Should().Be("gpt-5.5");
+        catalog.ModelIds.Should().Equal("gpt-5.4", "gpt-5.5");
+    }
+
+    [Fact]
+    public void ComposeUserServiceInventory_WithUnavailableDiagnostic_ShouldNotExposeInventoryDefault()
+    {
+        var result = NyxIdLlmServiceCatalogParser.ComposeUserServiceInventory(
+            new NyxIdLlmServicesResult([NotConnectedProxyService()], null),
+            new NyxIdUserServices([Inventory("us-alpha", "chrono-llm", defaultModel: "gpt-5.5")]));
+
+        var catalog = result.Services.Should().ContainSingle().Subject.ModelCatalog;
+        catalog.Certainty.Should().Be(LLMModelCatalogCertainty.Unavailable);
+        catalog.DiagnosticKind.Should().Be(LLMModelCatalogDiagnosticKind.RouteNotReady);
+        catalog.DefaultModelId.Should().BeEmpty();
+    }
+
+    [Fact]
     public void ParseProvisionedService_ShouldKeepResponseIdDiagnosticOnly()
     {
         var service = NyxIdLlmServiceCatalogParser.ParseProvisionedService("""
@@ -295,7 +343,8 @@ public sealed class NyxIdLlmServiceCatalogUserKeyMergeTests
         string id,
         string slug,
         bool isActive = true,
-        bool? organizationAllowed = null) => new(
+        bool? organizationAllowed = null,
+        string? defaultModel = null) => new(
         Id: id,
         Slug: slug,
         Label: $"Inventory {id}",
@@ -309,7 +358,8 @@ public sealed class NyxIdLlmServiceCatalogUserKeyMergeTests
                 OrganizationRole: NyxIdOrganizationRole.Member,
                 Allowed: allowed)
             : new NyxIdUserServiceCredentialSource(
-                NyxIdUserServiceCredentialSourceKind.Personal));
+                NyxIdUserServiceCredentialSourceKind.Personal),
+        DefaultModel: defaultModel);
 
     [Fact]
     public void ActiveKeyReplacesNotConnectedProxyEntryAsSelectable()

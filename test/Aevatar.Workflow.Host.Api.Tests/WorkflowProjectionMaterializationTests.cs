@@ -1,9 +1,11 @@
+using System.Text.Json;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
-using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Abstractions.Security;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Projection;
 using Aevatar.Workflow.Projection.Orchestration;
@@ -505,6 +507,68 @@ public sealed class WorkflowProjectionMaterializationTests
         report.RoleReplies[0].ContentLength.Should().Be(report.RoleReplies[0].Content.Length);
     }
 
+    [Fact]
+    public async Task WorkflowRunInsightReportArtifactProjector_ShouldNotPersistContactIdentifiers()
+    {
+        const string email = "synthetic.contact@example.test";
+        const string userId = "synthetic-user-identifier";
+        var requestArguments = JsonSerializer.Serialize(new
+        {
+            body = new { emails = new[] { email } },
+        });
+        var toolOutput = JsonSerializer.Serialize(new
+        {
+            code = 0,
+            data = new
+            {
+                user_list = new[] { new { user_id = userId, email } },
+            },
+        });
+        var store = new RecordingDocumentStore<WorkflowRunInsightReportDocument>(x => x.Id);
+        var graphWriter = new RecordingGraphWriter<WorkflowRunInsightReportDocument>(x => x.Id);
+        var projector = new WorkflowRunInsightReportArtifactProjector(store, store, graphWriter);
+        var context = new WorkflowExecutionMaterializationContext
+        {
+            RootActorId = "actor-1",
+            ProjectionKind = "workflow-execution-materialization",
+        };
+
+        await projector.ProjectAsync(
+            context,
+            BuildCommittedEnvelope(
+                1,
+                new StepRequestEvent
+                {
+                    RunId = "run-1",
+                    StepId = "resolve-contact",
+                    StepType = "tool_call",
+                    Parameters =
+                    {
+                        ["arguments"] = requestArguments,
+                    },
+                },
+                BuildState("running")));
+        await projector.ProjectAsync(
+            context,
+            BuildCommittedEnvelope(
+                2,
+                new StepCompletedEvent
+                {
+                    RunId = "run-1",
+                    StepId = "resolve-contact",
+                    Success = true,
+                    Output = toolOutput,
+                },
+                BuildState("running")));
+
+        var report = store.Stored["actor-1"];
+        FlattenReportStrings(report).Should().NotContain(value =>
+            value.Contains(email, StringComparison.Ordinal) ||
+            value.Contains(userId, StringComparison.Ordinal));
+        report.Steps.Should().ContainSingle();
+        report.Steps[0].RequestParameters["arguments"].Should().Contain(WorkflowAuditTextSanitizer.RedactedValue);
+        report.Steps[0].OutputPreview.Should().Contain(WorkflowAuditTextSanitizer.RedactedValue);
+    }
 
     [Fact]
     public async Task WorkflowRunInsightReportArtifactProjector_ShouldTrackSuspensionSignalAndStoppedBranches()
@@ -718,6 +782,50 @@ public sealed class WorkflowProjectionMaterializationTests
     }
 
     [Fact]
+    public async Task WorkflowRunInsightReportArtifactProjector_ShouldIgnoreRelayedChildStateRoot()
+    {
+        var reportStore = new RecordingDocumentStore<WorkflowRunInsightReportDocument>(x => x.Id);
+        var graphWriter = new RecordingGraphWriter<WorkflowRunInsightReportDocument>(x => x.Id);
+        var projector = new WorkflowRunInsightReportArtifactProjector(reportStore, reportStore, graphWriter);
+        var context = new WorkflowExecutionMaterializationContext
+        {
+            RootActorId = "actor-1",
+            ProjectionKind = "workflow-execution-materialization",
+        };
+
+        await projector.ProjectAsync(
+            context,
+            BuildCommittedEnvelope(
+                1,
+                new StepRequestEvent
+                {
+                    RunId = "run-1",
+                    StepId = "parent-step",
+                    StepType = "tool_call",
+                },
+                BuildState("running")));
+        await projector.ProjectAsync(
+            context,
+            BuildCommittedEnvelope(
+                31,
+                new StepRequestEvent
+                {
+                    RunId = "child-run",
+                    StepId = "child-step",
+                    StepType = "workflow_call",
+                },
+                BuildState("failed", runId: "child-run", finalError: "child failed"),
+                publisherActorId: "child-run"));
+
+        reportStore.UpsertCount.Should().Be(1);
+        graphWriter.UpsertCount.Should().Be(1);
+        var report = reportStore.Stored["actor-1"];
+        report.StateVersion.Should().Be(1);
+        report.CompletionStatus.Should().Be(WorkflowExecutionCompletionStatus.Running);
+        report.Steps.Select(x => x.StepId).Should().Equal("parent-step");
+    }
+
+    [Fact]
     public void WorkflowMaterializationLeases_And_Codecs_ShouldCoverLifecycleBranches()
     {
         var materializationLease = new WorkflowExecutionMaterializationRuntimeLease(new WorkflowExecutionMaterializationContext
@@ -757,14 +865,15 @@ public sealed class WorkflowProjectionMaterializationTests
         long version,
         IMessage payload,
         WorkflowRunState state,
-        string? eventId = null)
+        string? eventId = null,
+        string publisherActorId = "actor-1")
     {
         var timestamp = DateTimeOffset.Parse($"2026-03-17T10:{version:00}:00+00:00");
         return new EventEnvelope
         {
             Id = $"outer-{version}",
             Timestamp = Timestamp.FromDateTimeOffset(timestamp),
-            Route = EnvelopeRouteSemantics.CreateObserverPublication("actor-1"),
+            Route = EnvelopeRouteSemantics.CreateObserverPublication(publisherActorId),
             Payload = Any.Pack(new CommittedStateEventPublished
             {
                 StateEvent = new StateEvent

@@ -14,6 +14,12 @@ enum ServiceDeploymentStatus {
   SERVICE_DEPLOYMENT_STATUS_FAILED = 3;
 }
 
+enum ServiceDeploymentActivationFailureCode {
+  SERVICE_DEPLOYMENT_ACTIVATION_FAILURE_CODE_UNSPECIFIED = 0;
+  SERVICE_DEPLOYMENT_ACTIVATION_FAILURE_CODE_PREPARED_ARTIFACT_MISSING = 1;
+  SERVICE_DEPLOYMENT_ACTIVATION_FAILURE_CODE_REVISION_PREPARATION_FAILED = 2;
+}
+
 message ServiceDeploymentRecord {
   string deployment_id = 1;
   string revision_id = 2;
@@ -28,14 +34,28 @@ message ServiceDeploymentState {
   map<string, ServiceDeploymentRecord> deployments = 2;
   int64 last_applied_event_version = 3;
   string last_event_id = 4;
+  map<string, ServiceDeploymentActivationFailureRecord> activation_failures = 5;
+  map<string, ServiceDeploymentPendingActivationRecord> pending_activations = 6;
+}
+
+message ServiceDeploymentActivationFailureRecord {
+  string revision_id = 1;
+  ServiceDeploymentActivationFailureCode failure_code = 2;
+  string failure_reason = 3;
+  google.protobuf.Timestamp occurred_at = 4;
+}
+
+message ServiceDeploymentPendingActivationRecord {
+  string revision_id = 1;
+  google.protobuf.Timestamp deadline_at = 2;
+  google.protobuf.Timestamp deferred_at = 3;
 }
 
 message ActivateServiceRevisionCommand {
   ServiceIdentity identity = 1;
   string revision_id = 2;
-  // Deadline after which the activation stops tolerating revision-catalog projection lag.
-  // Stamped by the deployment manager on first handling when unset; carried across self
-  // re-arm continuations so the bounded retry budget survives actor reactivation/replay.
+  // Optional deadline propagated by a previously scheduled self continuation. The
+  // deployment actor owns the authoritative pending activation deadline.
   google.protobuf.Timestamp activation_deadline_at = 3;
 }
 
@@ -65,4 +85,19 @@ message ServiceDeploymentHealthChangedEvent {
   string deployment_id = 2;
   ServiceDeploymentStatus status = 3;
   google.protobuf.Timestamp occurred_at = 4;
+}
+
+message ServiceDeploymentActivationFailedEvent {
+  ServiceIdentity identity = 1;
+  string revision_id = 2;
+  ServiceDeploymentActivationFailureCode failure_code = 3;
+  string failure_reason = 4;
+  google.protobuf.Timestamp occurred_at = 5;
+}
+
+message ServiceDeploymentActivationDeferredEvent {
+  ServiceIdentity identity = 1;
+  string revision_id = 2;
+  google.protobuf.Timestamp deadline_at = 3;
+  google.protobuf.Timestamp deferred_at = 4;
 }

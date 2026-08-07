@@ -60,24 +60,29 @@ public sealed class ServiceCommittedStateProjectionActivationPlanProviderTests
         plans.Should().BeEmpty();
     }
 
-    [Fact]
-    public void GetPlans_ShouldMapDeploymentEventsToDeploymentAndCatalogScopes()
+    [Theory]
+    [MemberData(nameof(DeploymentEvents))]
+    public void GetPlans_ShouldMapDeploymentEventsToDeploymentAndCatalogScopes(IMessage deploymentEvent)
     {
         var provider = new ServiceCommittedStateProjectionActivationPlanProvider();
 
         var plans = provider.GetPlans(BuildContext(
             typeof(ServiceDeploymentManagerGAgent),
-            new ServiceDeploymentActivatedEvent
-            {
-                Identity = Identity(),
-                DeploymentId = "deployment-1",
-            })).ToArray();
+            deploymentEvent)).ToArray();
 
         plans.Should().HaveCount(2);
         plans.Select(x => x.LeaseType).Should().Equal(
             typeof(ServiceProjectionRuntimeLease<ServiceDeploymentCatalogProjectionContext>),
             typeof(ServiceProjectionRuntimeLease<ServiceCatalogProjectionContext>));
         plans.Select(x => x.StartRequest.ProjectionKind).Should().Equal("service-deployments", "service-catalog");
+    }
+
+    public static IEnumerable<object[]> DeploymentEvents()
+    {
+        yield return [new ServiceDeploymentActivatedEvent { Identity = Identity(), DeploymentId = "deployment-1" }];
+        yield return [new ServiceDeploymentDeactivatedEvent { Identity = Identity(), DeploymentId = "deployment-1" }];
+        yield return [new ServiceDeploymentHealthChangedEvent { Identity = Identity(), DeploymentId = "deployment-1" }];
+        yield return [new ServiceDeploymentActivationFailedEvent { Identity = Identity(), RevisionId = "revision-1" }];
     }
 
     [Fact]

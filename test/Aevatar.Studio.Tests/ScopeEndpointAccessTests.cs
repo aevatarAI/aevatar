@@ -92,34 +92,34 @@ public sealed class ScopeEndpointAccessTests
     }
 
     [Fact]
-    public void TryCreateMemberAccessDeniedResult_ShouldAllow_WhenMemberClaimMatches()
+    public void TryCreateMemberAccessDeniedResult_ShouldAllow_WhenScopeMatchesAndCallerIdentityDiffersFromMember()
     {
-        var http = CreateContext(true, new Claim("member_id", "member-1"));
-        AevatarMemberAccessGuard.TryCreateMemberAccessDeniedResult(http, "member-1", out _)
+        var http = CreateContext(
+            true,
+            new Claim("scope_id", "scope-alpha"),
+            new Claim("sub", "user-alpha"));
+
+        AevatarMemberAccessGuard.TryCreateMemberAccessDeniedResult(
+                http,
+                "scope-alpha",
+                "m-alpha",
+                out _)
             .Should().BeFalse();
     }
 
     [Fact]
-    public void TryCreateMemberAccessDeniedResult_ShouldDeny_WhenMemberClaimDiffers()
+    public void TryCreateMemberAccessDeniedResult_ShouldDeny_WhenScopeDiffers()
     {
-        var http = CreateContext(true, new Claim("member_id", "member-1"));
-        AevatarMemberAccessGuard.TryCreateMemberAccessDeniedResult(http, "member-2", out _)
-            .Should().BeTrue();
-    }
+        var http = CreateContext(
+            true,
+            new Claim("scope_id", "scope-other"),
+            new Claim("sub", "user-alpha"));
 
-    [Fact]
-    public void TryCreateScopeAdminRequiredResult_ShouldAllow_WhenScopeAdminRoleIsPresent()
-    {
-        var http = CreateContext(true, new Claim("role", "scope-admin"));
-        AevatarMemberAccessGuard.TryCreateScopeAdminRequiredResult(http, "member-1", out _)
-            .Should().BeFalse();
-    }
-
-    [Fact]
-    public void TryCreateScopeAdminRequiredResult_ShouldDeny_WhenOnlyMemberClaimMatches()
-    {
-        var http = CreateContext(true, new Claim("member_id", "member-1"));
-        AevatarMemberAccessGuard.TryCreateScopeAdminRequiredResult(http, "member-1", out _)
+        AevatarMemberAccessGuard.TryCreateMemberAccessDeniedResult(
+                http,
+                "scope-alpha",
+                "m-alpha",
+                out _)
             .Should().BeTrue();
     }
 

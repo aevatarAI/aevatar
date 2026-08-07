@@ -79,7 +79,9 @@ public static class NyxIdChatBrowserActions
             sourceStep = FindStep(actionState, signalKey.StepId)!;
         }
 
-        var validated = registry.ResolveCatalogServiceConnect(blocker.ServiceSlug);
+        var validated = registry.ResolveCatalogServiceConnect(
+            blocker.ServiceSlug,
+            blocker.RequestedScopes);
         var actionRequestId = BuildStableIdentity(
             "action",
             actionState.ConversationActorId,
@@ -163,10 +165,23 @@ public static class NyxIdChatBrowserActions
             },
             ActionRequestId = request.ActionRequestId,
             ExternalEffect = NyxIdChatEffectEvidence.NotStarted,
+            AddedBy = task.Steps.Count == 0
+                ? NyxIdChatStepAddedBy.Initial
+                : NyxIdChatStepAddedBy.Replan,
             UpdatedAt = now.Clone(),
         };
         actionStep.AvailableActions = NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(actionStep);
         task.Steps.Add(actionStep);
+        if (actionStep.AddedBy == NyxIdChatStepAddedBy.Replan)
+            task.PlanRevision = Math.Max(1, task.PlanRevision + 1);
+        if (request.AdvisoryRisk is NyxIdAssistantActionRisk.Grant or NyxIdAssistantActionRisk.Destructive)
+        {
+            task.Gate = new NyxIdChatPlanGate
+            {
+                Mode = NyxIdChatPlanGateMode.Confirm,
+                Reason = "This plan contains a browser-owned NyxID action that requires confirmation.",
+            };
+        }
         task.Status = NyxIdChatTaskStatus.Blocked;
         task.ActiveStepId = actionStep.StepId;
         task.ActiveOperationId = string.Empty;
@@ -318,19 +333,22 @@ public static class NyxIdChatBrowserActions
         admission.ActionReports.Add(sanitizedReports.Select(static report => report.Clone()));
         next.ContinuationAdmission = admission.Clone();
 
-        var continuationTaskId = BuildStableIdentity(
-            "task",
-            next.ConversationActorId,
-            admission.ContinuationTurnId,
-            admission.ClientRequestId,
-            "action-continuation");
+        var previousTask = next.ActiveTask?.Clone();
+        var continuationTaskId = string.IsNullOrWhiteSpace(previousTask?.TaskId)
+            ? BuildStableIdentity(
+                "task",
+                next.ConversationActorId,
+                admission.OriginTurnId,
+                admission.ClientRequestId,
+                "action-continuation")
+            : previousTask.TaskId;
         var turn = new NyxIdChatTurnState
         {
             TurnId = admission.ContinuationTurnId,
             TaskId = continuationTaskId,
             ClientRequestId = admission.ClientRequestId,
             Status = NyxIdChatTurnStatus.Active,
-            CreatedAt = now.Clone(),
+            CreatedAt = previousTask?.CreatedAt?.Clone() ?? now.Clone(),
         };
         var task = new NyxIdChatTaskState
         {
@@ -339,7 +357,22 @@ public static class NyxIdChatBrowserActions
             Status = NyxIdChatTaskStatus.Active,
             CreatedAt = now.Clone(),
             UpdatedAt = now.Clone(),
+            SchemaVersion = 4,
+            ActorId = next.ConversationActorId,
+            PlanId = string.IsNullOrWhiteSpace(previousTask?.PlanId)
+                ? continuationTaskId
+                : previousTask.PlanId,
+            PlanRevision = Math.Max(1, (previousTask?.PlanRevision ?? 0) + 1),
+            Title = string.IsNullOrWhiteSpace(previousTask?.Title)
+                ? "Verify the requested NyxID action"
+                : previousTask.Title,
+            Gate = previousTask?.Gate?.Clone() ?? new NyxIdChatPlanGate
+            {
+                Mode = NyxIdChatPlanGateMode.Auto,
+            },
         };
+        if (previousTask is not null)
+            task.Steps.AddRange(previousTask.Steps.Select(static step => step.Clone()));
 
         NyxIdChatOperationDispatchCommand? firstDispatch = null;
         if (isStateChangeWake)
@@ -349,7 +382,13 @@ public static class NyxIdChatBrowserActions
                 .ToArray();
             for (var index = 0; index < pending.Length; index++)
             {
-                var step = BuildPostconditionStep(next, turn, task, pending[index], index, now);
+                var step = BuildPostconditionStep(
+                    next,
+                    turn,
+                    task,
+                    pending[index],
+                    NextStepOrder(task),
+                    now);
                 task.Steps.Add(step);
                 if (firstDispatch is not null)
                     continue;
@@ -377,7 +416,7 @@ public static class NyxIdChatBrowserActions
                     turn,
                     task,
                     request,
-                    reportIndex,
+                    NextStepOrder(task),
                     now);
                 task.Steps.Add(step);
                 if (firstDispatch is null)
@@ -400,8 +439,9 @@ public static class NyxIdChatBrowserActions
                 turn,
                 request,
                 report,
-                reportIndex,
+                NextStepOrder(task),
                 now));
+            ApplyReportedActionOutcome(task, request, report, now);
             MoveActionToRecent(next, request.ActionRequestId);
         }
 
@@ -471,6 +511,17 @@ public static class NyxIdChatBrowserActions
             durableStep.FailureCode = string.Empty;
             durableStep.SafeMessage = string.Empty;
             durableStep.AvailableActions = NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(durableStep);
+            var actionStep = FindStep(next, durableRequest.StepId);
+            if (actionStep is not null)
+            {
+                actionStep.Status = NyxIdChatStepStatus.Done;
+                actionStep.ExternalEffect = NyxIdChatEffectEvidence.Confirmed;
+                actionStep.FailureCode = string.Empty;
+                actionStep.SafeMessage = string.Empty;
+                actionStep.AvailableActions =
+                    NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(actionStep);
+                actionStep.UpdatedAt = now.Clone();
+            }
             MoveActionToRecent(next, result.ActionRequestId);
 
             var successor = StartNextPlannedPostcondition(next, now);
@@ -532,7 +583,7 @@ public static class NyxIdChatBrowserActions
         NyxIdChatTurnState turn,
         NyxIdChatTaskState task,
         NyxIdChatActionRequestState request,
-        int index,
+        int order,
         Timestamp now)
     {
         var stepId = BuildStableIdentity(
@@ -560,7 +611,7 @@ public static class NyxIdChatBrowserActions
         var step = new NyxIdChatTaskStepState
         {
             StepId = stepId,
-            Order = index + 1,
+            Order = order,
             Kind = NyxIdChatStepKind.Postcondition,
             Status = NyxIdChatStepStatus.Planned,
             Required = true,
@@ -575,6 +626,8 @@ public static class NyxIdChatBrowserActions
             },
             ActionRequestId = request.ActionRequestId,
             ExternalEffect = NyxIdChatEffectEvidence.NotStarted,
+            AddedBy = NyxIdChatStepAddedBy.Replan,
+            DependsOn = { request.StepId },
             Operation = new NyxIdChatOperationState
             {
                 Key = key,
@@ -593,7 +646,7 @@ public static class NyxIdChatBrowserActions
         NyxIdChatTurnState turn,
         NyxIdChatActionRequestState request,
         NyxIdChatActionReport report,
-        int index,
+        int order,
         Timestamp now)
     {
         var (code, message) = DispositionFailure(report.Disposition);
@@ -605,7 +658,7 @@ public static class NyxIdChatBrowserActions
                 turn.TurnId,
                 request.ActionRequestId,
                 "reported-terminal"),
-            Order = index + 1,
+            Order = order,
             Kind = NyxIdChatStepKind.BrowserAction,
             Status = report.Disposition is
                 NyxIdChatActionDisposition.Declined or
@@ -625,12 +678,44 @@ public static class NyxIdChatBrowserActions
             },
             ActionRequestId = request.ActionRequestId,
             ExternalEffect = NyxIdChatEffectEvidence.NotApplied,
+            AddedBy = NyxIdChatStepAddedBy.Replan,
+            DependsOn = { request.StepId },
             FailureCode = code,
             SafeMessage = message,
             UpdatedAt = now.Clone(),
         };
         step.AvailableActions = NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(step);
         return step;
+    }
+
+    private static int NextStepOrder(NyxIdChatTaskState task) =>
+        task.Steps.Count == 0
+            ? 1
+            : task.Steps.Max(static step => step.Order) + 1;
+
+    private static void ApplyReportedActionOutcome(
+        NyxIdChatTaskState task,
+        NyxIdChatActionRequestState request,
+        NyxIdChatActionReport report,
+        Timestamp now)
+    {
+        var actionStep = task.Steps.FirstOrDefault(step =>
+            string.Equals(step.StepId, request.StepId, StringComparison.Ordinal));
+        if (actionStep is null)
+            return;
+
+        var (code, message) = DispositionFailure(report.Disposition);
+        actionStep.Status = report.Disposition is
+            NyxIdChatActionDisposition.Declined or
+            NyxIdChatActionDisposition.Cancelled or
+            NyxIdChatActionDisposition.Expired
+                ? NyxIdChatStepStatus.Cancelled
+                : NyxIdChatStepStatus.Failed;
+        actionStep.ExternalEffect = NyxIdChatEffectEvidence.NotApplied;
+        actionStep.FailureCode = code;
+        actionStep.SafeMessage = message;
+        actionStep.AvailableActions = NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(actionStep);
+        actionStep.UpdatedAt = now.Clone();
     }
 
     private static void CompleteContinuationTask(

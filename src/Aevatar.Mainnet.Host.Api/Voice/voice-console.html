@@ -433,15 +433,60 @@ function tokenExpiresAt(token){
 }
 function tokenIsFresh(token){ const expiresAt=tokenExpiresAt(token); return !!(token&&token.access_token) && (expiresAt===null || expiresAt>Date.now()+30000); }
 function isEmbeddedInAdmin(){ try { return window.parent && window.parent !== window && window.frameElement && window.frameElement.getAttribute("data-console-frame") === "1"; } catch(e){ return false; } }
-function notifyAdminShellAuth(type, reason, resources, tokenPurpose){
+function notifyAdminShellAuth(type, reason, resources, tokenPurpose, rejectedAccessToken){
   if(!isEmbeddedInAdmin()) return false;
-  window.parent.postMessage({ source:"aevatar-backend-console-suite", type, reason: reason || "", resources:normalizeResources(resources), tokenPurpose:tokenPurpose===VOICE_TOKEN_PURPOSE?VOICE_TOKEN_PURPOSE:"" }, location.origin);
+  window.parent.postMessage({ source:"aevatar-backend-console-suite", type, reason: reason || "", resources:normalizeResources(resources), tokenPurpose:tokenPurpose===VOICE_TOKEN_PURPOSE?VOICE_TOKEN_PURPOSE:"", rejectedAccessToken:rejectedAccessToken || "" }, location.origin);
   return true;
+}
+function replacementToken(rejectedAccessToken){
+  const current=getToken();
+  return current&&current.access_token&&current.access_token!==rejectedAccessToken ? current : null;
+}
+async function requestAdminShellTokenRefresh(rejectedAccessToken){
+  const existing=replacementToken(rejectedAccessToken); if(existing) return existing;
+  if(!isEmbeddedInAdmin()) return null;
+  const requestId="auth-"+Date.now().toString(36)+"-"+randomString(10);
+  return await new Promise(resolve=>{
+    let timer=null,settled=false;
+    function finish(){
+      if(settled) return; settled=true;
+      window.removeEventListener("message",onMessage);
+      if(timer!==null) clearTimeout(timer);
+      resolve(replacementToken(rejectedAccessToken));
+    }
+    function onMessage(ev){
+      const msg=ev.data||{};
+      if(ev.origin===location.origin&&ev.source===window.parent&&msg.source==="aevatar-backend-console-suite"&&msg.type==="auth-refresh-result"&&msg.requestId===requestId) finish();
+    }
+    window.addEventListener("message",onMessage);
+    timer=setTimeout(finish,10000);
+    window.parent.postMessage({source:"aevatar-backend-console-suite",type:"auth-refresh-request",requestId,rejectedAccessToken},location.origin);
+  });
+}
+async function fetchWithConsoleAuth(path,options){
+  let token=getToken(); if(!token||!token.access_token) throw new Error("not-authenticated");
+  options=options||{};
+  function request(activeToken){
+    const headers=Object.assign({},options.headers||{},{Authorization:"Bearer "+activeToken.access_token});
+    return fetch(path,Object.assign({},options,{headers}));
+  }
+  let res=await request(token);
+  if(res.status!==401) return res;
+  let replacement=replacementToken(token.access_token);
+  if(!replacement) replacement=await requestAdminShellTokenRefresh(token.access_token);
+  if(replacement&&replacement.access_token!==token.access_token){
+    token=replacement; res=await request(token);
+    if(res.status!==401) return res;
+  }
+  signOutSilent(token.access_token);
+  const error=new Error("unauthorized"); error.status=401; throw error;
 }
 
 async function beginLogin(requestedResources, tokenPurpose){
-  const resources=normalizeResources(CFG.resources,requestedResources);
   const purpose=tokenPurpose===VOICE_TOKEN_PURPOSE ? VOICE_TOKEN_PURPOSE : "";
+  // ADR-0018：会话登录不发送显式 resource（NyxID 会按 RFC 8707 收窄授权）；
+  // 仅 voice-realtime 专用 token 保留有意收窄。
+  const resources=purpose===VOICE_TOKEN_PURPOSE ? normalizeResources(CFG.resources,requestedResources) : [];
   if(notifyAdminShellAuth("login-request","",resources,purpose)) return;
   const verifier = randomString(64);
   const st = randomString(32);
@@ -473,7 +518,7 @@ async function completeLoginIfCallback(){
   form.set("redirect_uri", CFG.redirectUri);
   form.set("client_id", CFG.clientId);
   form.set("code_verifier", pending.verifier);
-  const requestedResources=Array.isArray(pending.resources) ? normalizeResources(pending.resources) : normalizeResources(CFG.resources);
+  const requestedResources=Array.isArray(pending.resources) ? normalizeResources(pending.resources) : [];
   requestedResources.forEach(resource => form.append("resource", resource));
   const res = await fetch(CFG.authority + "/oauth/token", { method:"POST", headers:{ "Content-Type":"application/x-www-form-urlencoded" }, body: form.toString() });
   sessionStorage.removeItem(PKCE_KEY);
@@ -532,9 +577,7 @@ function toAccount(info){ return info ? { label: info.email || info.preferred_us
 
 // scope-gated bearer GET helper, identical to observatory/studio.
 async function apiGet(path){
-  const token = getToken(); if(!token) throw new Error("not-authenticated");
-  const res = await fetch(path, { headers:{ Authorization:"Bearer " + token.access_token } });
-  if(res.status === 401){ signOutSilent(); throw new Error("unauthorized"); }
+  const res = await fetchWithConsoleAuth(path);
   if(res.status === 404) return null;
   if(!res.ok) throw new Error("api-error-" + res.status);
   return await res.json();
@@ -544,18 +587,19 @@ async function apiGet(path){
 // never throws on HTTP errors — callers branch on {status, body} because the
 // provisioning steps map statuses to honest user-facing messages.
 async function apiSend(method, path, body){
-  const token = getToken(); if(!token) throw new Error("not-authenticated");
-  const headers = { Authorization:"Bearer " + token.access_token };
+  const headers = {};
   if(body !== undefined) headers["Content-Type"] = "application/json";
-  const res = await fetch(path, { method, headers, body: body===undefined ? undefined : JSON.stringify(body) });
-  if(res.status === 401){ signOutSilent(); throw new Error("unauthorized"); }
+  const res = await fetchWithConsoleAuth(path, { method, headers, body: body===undefined ? undefined : JSON.stringify(body) });
   let parsed = null;
   try { parsed = await res.json(); } catch(e){ /* tolerate empty/non-JSON bodies */ }
   return { status: res.status, body: parsed };
 }
 
 function signOut(){ try{stopVoice(true);}catch(e){} clearToken(); if(notifyAdminShellAuth("auth-required", "已登出 NyxID，请重新登录。")) return; beginLogin(); }
-function signOutSilent(){ try{stopVoice(true);}catch(e){} clearToken(); state.signedIn = false; if(notifyAdminShellAuth("auth-required", "登录已过期，请重新使用 NyxID 登录。")) return; render(); }
+function signOutSilent(rejectedAccessToken){ const current=getToken(); if(rejectedAccessToken&&current&&current.access_token!==rejectedAccessToken) return false;
+  if(notifyAdminShellAuth("auth-required", "登录已过期，请重新使用 NyxID 登录。",[],"",rejectedAccessToken)) return true;
+  try{stopVoice(true);}catch(e){} clearToken(); state.signedIn=false;
+  render(); return true; }
 
 /* ===========================================================================
    App state + DOM helpers
@@ -636,8 +680,8 @@ function navIcon(id){ return ({agents:ICON.agent,tools:ICON.tools,test:ICON.mic,
    .brand region (CSS) keeps these entry positions stable across pages.
    =========================================================================== */
 const SUITE_NAV=[
-  {k:"observatory",href:"/workflow/observatory",label:"观测台",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>'},
-  {k:"studio",href:"/workflow/studio",label:"Studio",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="12" r="2.4"/><path d="M8.2 7.2 15.8 11M8.2 16.8 15.8 13"/></svg>'},
+  {k:"observatory",href:"/admin#/observatory",label:"观测台",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>'},
+  {k:"studio",href:"/workflow/studio",label:"工作台",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="12" r="2.4"/><path d="M8.2 7.2 15.8 11M8.2 16.8 15.8 13"/></svg>'},
   {k:"schedules",href:"/schedules",label:"定时任务",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>'},
   {k:"channels",href:"/channels",label:"渠道",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2.6"/><path d="M12 4.5v4.9M12 14.6v4.9M4.5 12h4.9M14.6 12h4.9"/></svg>'},
   {k:"voice",href:"/voice",label:"语音",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg>'},
@@ -836,8 +880,7 @@ async function submitEnable(){
   state.submitting = true; state.result = null; render();
   const url = "/api/scopes/" + encodeURIComponent(scopeId) + "/gagent-actors/" + encodeURIComponent(actorId) + "/voice-presence/enable?agentKind=" + encodeURIComponent(agentKind);
   try {
-    const res = await fetch(url, { method:"POST", headers:{ Authorization:"Bearer " + token.access_token, "Content-Type":"application/json" }, body: JSON.stringify({ moduleName: moduleName }) });
-    if(res.status === 401){ signOutSilent(); return; }
+    const res = await fetchWithConsoleAuth(url, { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ moduleName: moduleName }) });
     let body = null;
     try { body = await res.json(); } catch(e){ /* tolerate empty/non-json */ }
     if(res.status === 202 && body){

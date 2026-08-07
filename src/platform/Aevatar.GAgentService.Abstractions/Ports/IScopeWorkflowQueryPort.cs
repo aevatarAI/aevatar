@@ -21,3 +21,10 @@ public interface IScopeWorkflowQueryPort
         string actorId,
         CancellationToken ct = default);
 }
+
+public interface IScopeWorkflowCatalogueCommittedSourcePort
+{
+    Task<IReadOnlyList<ScopeWorkflowSummary>> ListCatalogueAsync(
+        string scopeId,
+        CancellationToken ct = default);
+}

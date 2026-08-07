@@ -146,6 +146,7 @@ public sealed class WorkflowGAgentExecutionTests : WorkflowGAgentTestBase
                 {
                     ScopeId = "scope-a",
                     ConversationId = "conversation-alpha",
+                    CurrentTurnId = "turn-current",
                     StateVersion = 3,
                     MaxMessageCount = 24,
                     Messages =
@@ -174,6 +175,143 @@ public sealed class WorkflowGAgentExecutionTests : WorkflowGAgentTestBase
             start.Input.Should().Contain("<current_user_message>\nteam01\n</current_user_message>");
             start.Input.Should().Contain("team01");
             start.Input.Split("team01", StringSplitOptions.None).Should().HaveCount(3);
+            agent.State.CurrentTurnId.Should().Be("turn-current");
+        }
+
+        [Fact]
+        public async Task WorkflowRunGAgent_WhenInteractiveAuthorizationIsRequired_ShouldCommitCardBeforeSuccessfulTerminalContinuation()
+        {
+            var eventStore = new InMemoryEventStore();
+            var publisher = new RecordingEventPublisher();
+            var runtime = new RecordingActorRuntime();
+            var agent = CreateRunAgent(runtime: runtime, eventStore: eventStore);
+            SetAgentId(agent, "workflow-run-interactive-action");
+            agent.EventPublisher = publisher;
+            await BindInteractiveWorkflowRunDefinitionAsync(
+                agent,
+                "definition-1",
+                BuildValidWorkflowYaml("role_a", "RoleA"),
+                "wf_valid",
+                runId: "run-interactive-action",
+                scopeId: "scope-alpha",
+                capabilityAdmissionPlan: InteractiveAdmissionPlan());
+            await agent.HandleChatRequest(new WorkflowChatRequestEvent
+            {
+                Prompt = "can i connect to github?",
+                SessionId = "studio-session-alpha",
+                CurrentTurnId = "turn-studio-alpha",
+                CallerCredential = InteractiveCallerCredential("owner-alpha"),
+            });
+            publisher.Published.Select(x => x.evt).OfType<StartWorkflowEvent>()
+                .Should().ContainSingle().Which.Input.Should().Be("can i connect to github?");
+            var completed = InteractiveAuthorizationCompletion();
+
+            await agent.HandleInteractiveAuthorizationRequirementAsync(completed);
+
+            var nyxIdActorCreation = runtime.CreateByKindCalls.Should()
+                .ContainSingle(call => call.agentKind == "nyxid.chat")
+                .Which;
+            nyxIdActorCreation.actorId.Should().StartWith("nyxid-chat-");
+            nyxIdActorCreation.actorId.Should().NotBe(agent.Id);
+            var sent = publisher.Sent.Should()
+                .ContainSingle(item => item.evt is WorkflowInteractiveActionHandoffCommand)
+                .Which;
+            sent.targetActorId.Should().Be(nyxIdActorCreation.actorId);
+            var command = sent.evt.Should().BeOfType<WorkflowInteractiveActionHandoffCommand>().Subject;
+            command.ScopeId.Should().Be("scope-alpha");
+            command.OwnerSubject.Should().Be("owner-alpha");
+            command.Request.ActorId.Should().Be(nyxIdActorCreation.actorId);
+            command.Request.OriginTurnId.Should().Be("turn-studio-alpha");
+            command.Request.Action.Should().Be("service.connect");
+            command.Request.Params.CatalogService.ServiceSlug.Should().Be("api-github");
+            command.Request.Params.CatalogService.RequestedScopes.Should().Equal("repo");
+
+            var persisted = (await eventStore.GetEventsAsync(agent.Id)).ToList();
+            var cardIndex = persisted.FindIndex(stateEvent =>
+                stateEvent.EventData.Is(WorkflowInteractiveActionHandoffDispatchedEvent.Descriptor));
+            var continuationIndex = persisted.FindIndex(stateEvent =>
+                stateEvent.EventData.Is(WorkflowInteractiveActionContinuationDispatchedEvent.Descriptor));
+            cardIndex.Should().BeGreaterThanOrEqualTo(0);
+            continuationIndex.Should().BeGreaterThan(cardIndex);
+            var card = persisted[cardIndex].EventData
+                .Unpack<WorkflowInteractiveActionHandoffDispatchedEvent>();
+            card.Request.Should().BeEquivalentTo(command.Request);
+            card.TerminalContinuation.AuthorizationRequirement.Should().BeNull();
+            var continuationPublication = publisher.PublicationsWithOptions
+                .Where(publication => publication.Event is WorkflowLlmInvocationCompletedEvent)
+                .Should()
+                .ContainSingle()
+                .Which;
+            var terminal = continuationPublication.Event
+                .Should().BeOfType<WorkflowLlmInvocationCompletedEvent>().Subject;
+            terminal.AuthorizationRequirement.Should().BeNull();
+            terminal.Success.Should().BeTrue();
+            terminal.Error.Should().BeEmpty();
+            continuationPublication.Direction.Should().Be(TopologyAudience.Self);
+            continuationPublication.Options.Should().NotBeNull();
+            continuationPublication.Options!.Delivery.Should().NotBeNull();
+            continuationPublication.Options.Delivery!.OperationId.Should()
+                .StartWith("interactive-continuation-delivery-");
+
+            var persistedCount = persisted.Count;
+            var sentCount = publisher.Sent.Count;
+            await agent.HandleInteractiveAuthorizationRequirementAsync(completed.Clone());
+
+            (await eventStore.GetEventsAsync(agent.Id)).Should().HaveCount(persistedCount);
+            publisher.Sent.Should().HaveCount(sentCount);
+        }
+
+        [Fact]
+        public async Task WorkflowRunGAgent_WhenInteractiveActionOwnerCannotBeCreated_ShouldStillDispatchTerminalContinuation()
+        {
+            var eventStore = new InMemoryEventStore();
+            var publisher = new RecordingEventPublisher();
+            var runtime = new RecordingActorRuntime();
+            var agent = CreateRunAgent(runtime: runtime, eventStore: eventStore);
+            SetAgentId(agent, "workflow-run-interactive-fallback");
+            agent.EventPublisher = publisher;
+            await BindInteractiveWorkflowRunDefinitionAsync(
+                agent,
+                "definition-1",
+                BuildValidWorkflowYaml("role_a", "RoleA"),
+                "wf_valid",
+                runId: "run-interactive-fallback",
+                scopeId: "scope-alpha",
+                capabilityAdmissionPlan: InteractiveAdmissionPlan());
+            await agent.HandleChatRequest(new WorkflowChatRequestEvent
+            {
+                Prompt = "can i connect to github?",
+                SessionId = "studio-session-alpha",
+                CallerCredential = InteractiveCallerCredential("owner-alpha"),
+                ConversationContext = new WorkflowConversationContext
+                {
+                    ScopeId = "scope-alpha",
+                    ConversationId = "chatc-alpha",
+                    CurrentTurnId = "turn-studio-alpha",
+                },
+            });
+            runtime.CreateByKindException = new InvalidOperationException("nyxid.chat unavailable");
+
+            await agent.HandleInteractiveAuthorizationRequirementAsync(
+                InteractiveAuthorizationCompletion("run-interactive-fallback"));
+
+            var terminalPublication = publisher.PublicationsWithOptions
+                .Where(publication => publication.Event is WorkflowLlmInvocationCompletedEvent)
+                .Should()
+                .ContainSingle()
+                .Which;
+            var terminal = terminalPublication.Event
+                .Should().BeOfType<WorkflowLlmInvocationCompletedEvent>().Subject;
+            terminal.Success.Should().BeFalse();
+            terminal.AuthorizationRequirement.Should().BeNull();
+            terminalPublication.Direction.Should().Be(TopologyAudience.Self);
+            terminalPublication.Options.Should().NotBeNull();
+            terminalPublication.Options!.Delivery.Should().NotBeNull();
+            terminalPublication.Options.Delivery!.OperationId.Should()
+                .StartWith("interactive-terminal-");
+            var persisted = await eventStore.GetEventsAsync(agent.Id);
+            persisted.Should().NotContain(stateEvent =>
+                stateEvent.EventData.Is(WorkflowInteractiveActionHandoffDispatchedEvent.Descriptor));
         }
 
         [Fact]
@@ -819,6 +957,28 @@ public sealed class WorkflowGAgentExecutionTests : WorkflowGAgentTestBase
                     StateEvent = new StateEvent
                     {
                         EventId = "evt-role-reply",
+                        Version = 4,
+                        EventData = Any.Pack(new WorkflowLlmInvocationCompletedEvent
+                        {
+                            SessionId = "session-1",
+                            Content = "reply",
+                            ReasoningContent = "reasoning",
+                            Success = true,
+                        }),
+                    },
+                }),
+            });
+
+            await agent.HandleWorkflowArtifactObservationEnvelope(new EventEnvelope
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                Route = EnvelopeRouteSemantics.CreateObserverPublication("workflow-run-role-reply:role_a"),
+                Payload = Any.Pack(new CommittedStateEventPublished
+                {
+                    StateEvent = new StateEvent
+                    {
+                        EventId = "evt-role-reply",
+                        Version = 4,
                         EventData = Any.Pack(new WorkflowLlmInvocationCompletedEvent
                         {
                             SessionId = "session-1",
@@ -844,6 +1004,10 @@ public sealed class WorkflowGAgentExecutionTests : WorkflowGAgentTestBase
             fact.ReasoningContent.Should().Be("reasoning");
             fact.ContentEmitted.Should().BeTrue();
             fact.ToolCalls.Should().BeEmpty();
+            fact.Source.PublisherActorId.Should().Be("workflow-run-role-reply:role_a");
+            fact.Source.CommittedEventId.Should().Be("evt-role-reply");
+            fact.Source.CommittedStateVersion.Should().Be(4);
+            agent.State.ProcessedArtifactSources.Should().ContainSingle();
         }
 
         [Fact]
@@ -926,4 +1090,41 @@ public sealed class WorkflowGAgentExecutionTests : WorkflowGAgentTestBase
                 .Should()
                 .ContainSingle(x => x.Content == "Workflow execution stopped.");
         }
+
+        private static WorkflowCapabilityAdmissionPlan InteractiveAdmissionPlan() =>
+            new()
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+            };
+
+        private static WorkflowCallerCredential InteractiveCallerCredential(string externalUserId) =>
+            new()
+            {
+                NyxIdAuthority = new WorkflowCallerNyxIdAuthority
+                {
+                    Platform = "nyxid",
+                    Tenant = "tenant-alpha",
+                    ExternalUserId = externalUserId,
+                    Scope = "scope-caller-alpha",
+                },
+            };
+
+        private static WorkflowLlmInvocationCompletedEvent InteractiveAuthorizationCompletion(
+            string runId = "run-interactive-action") =>
+            new()
+            {
+                RunId = runId,
+                StepId = "reply",
+                SessionId = "studio-session-alpha",
+                RoleActorId = "role-studio-alpha",
+                Success = false,
+                Error = "authorization_required: Connect GitHub to continue.",
+                AuthorizationRequirement = new WorkflowInteractiveAuthorizationRequirement
+                {
+                    ServiceSlug = "api-github",
+                    RequestedScopes = { "repo" },
+                    ReasonCode = "USER_SERVICE_NOT_VISIBLE",
+                    SafeMessage = "Connect GitHub to continue.",
+                },
+            };
 }

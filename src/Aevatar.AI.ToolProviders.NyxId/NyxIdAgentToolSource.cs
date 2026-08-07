@@ -59,7 +59,6 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
                 _fileArtifactIngress,
                 _options.EffectiveProxyFileArtifactMaxBytes,
                 _options.ManagedWorkflowAdmissionMode),
-            new NyxIdCodeExecuteTool(_client, _logger, _options.SandboxServiceSlug),
             new NyxIdApiKeysTool(_client),
             new NyxIdNodesTool(_client),
             new NyxIdApprovalsTool(_client),
@@ -81,19 +80,22 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
             tools.Add(new NyxIdSshExecTool(sshExecutor, _options));
         }
 
-        AddCodexExecTool(tools);
+        tools.Add(new NyxIdCodeExecuteTool(_client, _logger, _options.SandboxServiceSlug));
+        AddCodexExecutionTool(tools);
 
         _logger.LogInformation(
-            "NyxID tools registered ({Count} tools, base URL: {BaseUrl}, ssh_exec={SshEnabled}, managed_codex_exec={ManagedCodexEnabled})",
+            "NyxID tools registered ({Count} tools, base URL: {BaseUrl}, ssh_exec={SshEnabled}, managed_codex_exec={ManagedCodexEnabled}, code_execute={CodeExecuteRegistered}, codex_exec={CodexExecRegistered})",
             tools.Count,
             _options.BaseUrl,
             _options.EnableSshExecTool,
-            _options.EnableManagedCodexExecTool);
+            _options.EnableManagedCodexExecTool,
+            tools.Any(static tool => tool is NyxIdCodeExecuteTool),
+            tools.Any(static tool => tool is NyxIdCodexExecTool));
 
         return Task.FromResult<IReadOnlyList<IAgentTool>>(tools);
     }
 
-    private void AddCodexExecTool(List<IAgentTool> tools)
+    private void AddCodexExecutionTool(List<IAgentTool> tools)
     {
         var ports = new List<ICodexExecutionPort>();
         if (_options.EnableSshExecTool)
@@ -118,6 +120,8 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
         }
 
         if (ports.Count > 0)
+        {
             tools.Add(new NyxIdCodexExecTool(ports, _options));
+        }
     }
 }

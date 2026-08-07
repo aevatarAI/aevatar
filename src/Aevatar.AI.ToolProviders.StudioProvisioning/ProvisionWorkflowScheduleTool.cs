@@ -13,14 +13,14 @@ namespace Aevatar.AI.ToolProviders.StudioProvisioning;
 /// <c>aevatar_provision_workflow_schedule</c> — the Team-owned workflow scheduling
 /// tool. It provisions a runnable workflow (member create inside a confirmed Team →
 /// bind inline YAML → <c>ScheduleKind=Workflow</c> scheduled-dispatch) so its recurring
-/// runs surface in <c>/workflow/observatory</c>.
+/// runs surface in <c>/admin#/observatory</c>.
 ///
-/// The tool takes ONLY workflow/scheduling inputs from the LLM. The owning scope and
-/// owning scope and NyxID caller identity come from distinct typed fields in the
+/// The tool takes ONLY workflow/scheduling inputs from the LLM. The owning scope
+/// and NyxID caller identity come from distinct typed fields in the
 /// tool execution context. The forwarded NyxID access token remains a boundary
 /// input and is not persisted in schedule auth. There are NO
-/// channel / Lark / owner / scope / credential inputs, and the result carries only
-/// the Team/member/schedule ids plus Studio and Observatory links.
+/// channel / Lark / owner / scope / credential inputs. The result distinguishes
+/// schedule provisioning acceptance from the later schedule identity.
 /// </summary>
 internal sealed class ProvisionWorkflowScheduleTool : IAgentTool
 {
@@ -42,9 +42,9 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool
     public string Name => "aevatar_provision_workflow_schedule";
 
     public string Description =>
-        "Schedule a runnable Aevatar workflow under a confirmed Studio Team whose recurring runs appear in /workflow/observatory (never a chat/bot). " +
+        "Schedule a runnable Aevatar workflow under a confirmed Studio Team whose recurring runs appear in /admin#/observatory (never a chat/bot). " +
         "Supply team_id, the workflow body inline as workflow_yaml, plus a display_name; the tool creates the member inside that Team, binds the YAML, " +
-        "and creates a workflow-kind scheduled dispatch under the caller's scope. Do not call this tool until the user has selected an existing Team or confirmed a new Team. " +
+        "and durably requests a workflow-kind scheduled dispatch under the caller's scope. Do not call this tool until the user has selected an existing Team or confirmed a new Team. " +
         "The workflow_yaml is validated synchronously before anything is created: an invalid document returns a typed error " +
         "describing the problem and provisions nothing — fix the YAML per the error message and call again. " +
         "Provisioning is idempotent per display_name: calling again with the same display_name re-binds the same member and " +
@@ -53,8 +53,8 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool
         "automation, and pick a distinct display_name for a different automation. " +
         "Provide schedule_cron + schedule_timezone for a recurring monitor; omit them for a single near-future demo run (unless run_immediately is false). " +
         "This is the Observatory-delivered alternative to scheduled_agent_creator: use it for workflow automation instead of publishing a prose skill or scheduling a bot delivery. " +
-        "Returns the Team id, member id, schedule id, Studio member workflow URL, and Observatory link; the scope and caller identity are taken from the session context, not from arguments. " +
-        "A status of 'accepted' means the YAML was validated and the bind was dispatched — the bind and any run complete " +
+        "Returns the Team id, member id, schedule provisioning id/status, schedule id when already visible, Studio member workflow URL, and Observatory link; the scope and caller identity are taken from the session context, not from arguments. " +
+        "A status of 'accepted' means the YAML was validated, the bind was dispatched, and durable schedule provisioning was accepted — the bind, schedule creation, and any run complete " +
         "asynchronously, so verify the run in the Observatory before reporting the workflow as running.";
 
     public string ParametersSchema => $$"""
@@ -131,12 +131,16 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool
             Status = AgentToolReceiptStatus.Success,
             ApprovalMode = AgentToolReceiptApprovalMode.Unspecified,
             SideEffectKind = SideEffectKind,
-            SubjectKind = string.IsNullOrWhiteSpace(result.ScheduleId)
-                ? "studio_member_workflow_binding"
-                : "studio_member_workflow_schedule",
-            SubjectId = string.IsNullOrWhiteSpace(result.ScheduleId)
-                ? result.MemberId
-                : result.ScheduleId,
+            SubjectKind = !string.IsNullOrWhiteSpace(result.ScheduleId)
+                ? "studio_member_workflow_schedule"
+                : !string.IsNullOrWhiteSpace(result.ScheduleProvisioningId)
+                    ? "studio_member_workflow_schedule_provisioning"
+                    : "studio_member_workflow_binding",
+            SubjectId = !string.IsNullOrWhiteSpace(result.ScheduleId)
+                ? result.ScheduleId
+                : !string.IsNullOrWhiteSpace(result.ScheduleProvisioningId)
+                    ? result.ScheduleProvisioningId
+                    : result.MemberId,
             ResultJson = resultJson ?? string.Empty,
         };
     }
@@ -247,6 +251,8 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool
                 ScopeId: result.ScopeId,
                 TeamId: result.TeamId,
                 ScheduleId: result.ScheduleId,
+                ScheduleProvisioningId: result.ScheduleProvisioningId,
+                ScheduleProvisioningStatus: result.ScheduleProvisioningStatus,
                 BindingRunId: result.BindingRunId,
                 StudioUrl: result.StudioUrl,
                 ObservatoryUrl: result.ObservatoryUrl),
@@ -381,6 +387,8 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool
         string ScopeId,
         string TeamId,
         string? ScheduleId,
+        string? ScheduleProvisioningId,
+        string? ScheduleProvisioningStatus,
         string? BindingRunId,
         string StudioUrl,
         string ObservatoryUrl);

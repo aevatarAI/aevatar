@@ -190,9 +190,16 @@ public static class ServiceCollectionExtensions
             .Bind(configuration.GetSection(ScopeWorkflowCapabilityOptions.SectionName));
         services.TryAddSingleton<ScopeWorkflowQueryApplicationService>();
         services.TryAddSingleton<IScopeWorkflowQueryPort>(sp => sp.GetRequiredService<ScopeWorkflowQueryApplicationService>());
+        services.TryAddSingleton<IScopeWorkflowCatalogueCommittedSourcePort>(sp => sp.GetRequiredService<ScopeWorkflowQueryApplicationService>());
         services.TryAddSingleton<IScopeWorkflowCommandPort, ScopeWorkflowCommandApplicationService>();
         services.TryAddSingleton<IScopeWorkflowSaveAndBindPort, ScopeWorkflowSaveAndBindApplicationService>();
-        services.Replace(ServiceDescriptor.Singleton<ISkillWorkflowMountPort, SkillWorkflowMountAdapter>());
+        services.Replace(ServiceDescriptor.Singleton(
+            typeof(SkillWorkflowMountAdapter),
+            typeof(SkillWorkflowMountAdapter)));
+        services.Replace(ServiceDescriptor.Singleton<ISkillWorkflowMountPort>(sp =>
+            sp.GetRequiredService<SkillWorkflowMountAdapter>()));
+        services.Replace(ServiceDescriptor.Singleton<ISkillWorkflowConfirmationPort>(sp =>
+            sp.GetRequiredService<SkillWorkflowMountAdapter>()));
         services.TryAddSingleton<IScopeBindingCommandPort>(sp => new ScopeBindingCommandApplicationService(
             sp.GetRequiredService<IServiceCommandPort>(),
             sp.GetRequiredService<IServiceLifecycleQueryPort>(),
@@ -287,6 +294,9 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<
             IProjectionDocumentMetadataProvider<WorkflowCatalogCurrentStateDocument>,
             WorkflowCatalogCurrentStateDocumentMetadataProvider>();
+        services.TryAddSingleton<
+            IProjectionDocumentMetadataProvider<WorkflowActorBindingDocument>,
+            WorkflowActorBindingDocumentMetadataProvider>();
 
         if (documentProvider.ElasticsearchEnabled)
         {
@@ -319,6 +329,7 @@ public static class ServiceCollectionExtensions
                 NyxIdAuthorizationCatalogVersionRegressionRepairService>();
             TryAddElasticsearchDocumentProjectionStore<UserConfigCurrentStateDocument>(services, configuration, static readModel => readModel.Id);
             TryAddElasticsearchDocumentProjectionStore<WorkflowCatalogCurrentStateDocument>(services, configuration, static readModel => readModel.Id);
+            TryAddElasticsearchDocumentProjectionStore<WorkflowActorBindingDocument>(services, configuration, static readModel => readModel.Id);
         }
         else
         {
@@ -341,6 +352,7 @@ public static class ServiceCollectionExtensions
             TryAddInMemoryDocumentProjectionStore<NyxIdAuthorizationCatalogDocument>(services, static readModel => readModel.Id);
             TryAddInMemoryDocumentProjectionStore<UserConfigCurrentStateDocument>(services, static readModel => readModel.Id);
             TryAddInMemoryDocumentProjectionStore<WorkflowCatalogCurrentStateDocument>(services, static readModel => readModel.Id);
+            TryAddInMemoryDocumentProjectionStore<WorkflowActorBindingDocument>(services, static readModel => readModel.Id);
         }
 
         return services;
@@ -368,7 +380,8 @@ public static class ServiceCollectionExtensions
                && HasProjectionDocumentReaderForProvider<ScheduledDispatchDocument>(services, providerKind)
                && HasProjectionDocumentReaderForProvider<NyxIdAuthorizationCatalogDocument>(services, providerKind)
                && HasProjectionDocumentReaderForProvider<UserConfigCurrentStateDocument>(services, providerKind)
-               && HasProjectionDocumentReaderForProvider<WorkflowCatalogCurrentStateDocument>(services, providerKind);
+               && HasProjectionDocumentReaderForProvider<WorkflowCatalogCurrentStateDocument>(services, providerKind)
+               && HasProjectionDocumentReaderForProvider<WorkflowActorBindingDocument>(services, providerKind);
     }
 
     private static bool HasAnyProjectionDocumentReader<TReadModel>(IServiceCollection services)

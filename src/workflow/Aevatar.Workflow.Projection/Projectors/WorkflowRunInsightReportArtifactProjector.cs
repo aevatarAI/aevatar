@@ -37,6 +37,13 @@ public sealed class WorkflowRunInsightReportArtifactProjector
             state == null)
             return;
 
+        // The report document is keyed by the authoritative run actor. A child WorkflowRunState can be
+        // relayed through the parent's observation stream, but its state version and step set belong to
+        // another authority and must never overwrite or incrementally mutate the parent report.
+        var publisherActorId = envelope.Route?.PublisherActorId ?? string.Empty;
+        if (!string.Equals(context.RootActorId, publisherActorId, StringComparison.Ordinal))
+            return;
+
         var existing = await _reportReader.GetAsync(context.RootActorId, ct);
         if (existing != null && WorkflowExecutionArtifactMaterializationSupport.ShouldSkip(existing, stateEvent))
             return;

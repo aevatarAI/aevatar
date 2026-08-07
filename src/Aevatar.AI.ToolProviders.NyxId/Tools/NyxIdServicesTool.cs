@@ -8,6 +8,10 @@ namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 /// <summary>Tool to manage user's connected services in NyxID.</summary>
 public sealed class NyxIdServicesTool : INyxIdBuiltInTool, IAgentToolCapabilityDescriptor
 {
+    private const string RequestFailedMessage = "The NyxID services request failed.";
+    private const string ResultInvalidCode = "NYXID_SERVICES_RESULT_INVALID";
+    private const string ResultInvalidMessage = "The NyxID services result could not be verified.";
+    private const string ArgumentsInvalidCode = "NYXID_SERVICES_ARGUMENTS_INVALID";
     private static readonly NyxIdClosedActionParser<NyxIdServicesAction> ActionParser = new(
     [
         new("list", NyxIdServicesAction.List, new(false, true, false)),
@@ -89,8 +93,47 @@ public sealed class NyxIdServicesTool : INyxIdBuiltInTool, IAgentToolCapabilityD
         string callId,
         string toolName,
         string argumentsJson,
-        string resultJson) =>
-        NyxIdManagedToolReceiptFactory.TryCreate(callId, toolName, resultJson);
+        string resultJson)
+    {
+        var parsed = ActionParser.Parse(argumentsJson);
+        if (!parsed.IsValid ||
+            parsed.Action != NyxIdServicesAction.List &&
+            parsed.Action != NyxIdServicesAction.Show)
+        {
+            return NyxIdManagedToolReceiptFactory.TryCreate(callId, toolName, resultJson);
+        }
+
+        var args = ToolArgs.Parse(argumentsJson);
+        if (args.HasParseError)
+            return ErrorReceipt(callId, toolName, ArgumentsInvalidCode, "NyxID services arguments are invalid.");
+
+        try
+        {
+            using var document = JsonDocument.Parse(resultJson);
+            var root = document.RootElement;
+            if (root.ValueKind is not (JsonValueKind.Object or JsonValueKind.Array))
+                return ErrorReceipt(callId, toolName, ResultInvalidCode, ResultInvalidMessage);
+
+            if (TryReadErrorReceiptCode(root, out var errorCode))
+                return ErrorReceipt(callId, toolName, errorCode, RequestFailedMessage);
+
+            return parsed.Action switch
+            {
+                NyxIdServicesAction.List when NyxIdUserServiceListJson.HasServiceCollection(root) =>
+                    Receipt(callId, toolName, AgentToolReceiptStatus.Success, resultJson),
+                NyxIdServicesAction.Show when IsVerifiedShowResult(root, args.Str("id")) =>
+                    Receipt(callId, toolName, AgentToolReceiptStatus.Success, resultJson),
+                NyxIdServicesAction.Show when string.IsNullOrWhiteSpace(args.Str("id")) =>
+                    ErrorReceipt(callId, toolName, ArgumentsInvalidCode, "'id' is required for show."),
+                _ =>
+                    ErrorReceipt(callId, toolName, ResultInvalidCode, ResultInvalidMessage),
+            };
+        }
+        catch (JsonException)
+        {
+            return ErrorReceipt(callId, toolName, ResultInvalidCode, ResultInvalidMessage);
+        }
+    }
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
@@ -204,6 +247,73 @@ public sealed class NyxIdServicesTool : INyxIdBuiltInTool, IAgentToolCapabilityD
 
         return await _client.UpdateServiceAsync(token, id, JsonSerializer.Serialize(payload), ct);
     }
+
+    private static bool IsVerifiedShowResult(JsonElement root, string? requestedId)
+    {
+        if (root.ValueKind != JsonValueKind.Object || string.IsNullOrWhiteSpace(requestedId))
+            return false;
+
+        var actualId = NyxIdUserServiceListJson.ReadString(root, "id", "user_service_id", "userServiceId");
+        return string.Equals(actualId, requestedId.Trim(), StringComparison.Ordinal);
+    }
+
+    private static bool TryReadErrorReceiptCode(JsonElement root, out string errorCode)
+    {
+        errorCode = string.Empty;
+        if (root.ValueKind != JsonValueKind.Object ||
+            !root.TryGetProperty("error", out var error) ||
+            error.ValueKind is JsonValueKind.Null or JsonValueKind.False)
+        {
+            return false;
+        }
+
+        if (root.TryGetProperty("status", out var statusElement) &&
+            statusElement.TryGetInt32(out var status))
+        {
+            errorCode = status > 0
+                ? $"NYXID_SERVICES_HTTP_{status}"
+                : "NYXID_SERVICES_TRANSPORT_FAILURE";
+            return true;
+        }
+
+        errorCode = "NYXID_SERVICES_FAILURE";
+        return true;
+    }
+
+    private AgentToolReceipt ErrorReceipt(
+        string callId,
+        string toolName,
+        string errorCode,
+        string errorMessage) =>
+        Receipt(
+            callId,
+            toolName,
+            AgentToolReceiptStatus.Error,
+            JsonSerializer.Serialize(new
+            {
+                error = errorCode,
+                message = errorMessage,
+            }),
+            errorCode,
+            errorMessage);
+
+    private AgentToolReceipt Receipt(
+        string callId,
+        string toolName,
+        AgentToolReceiptStatus status,
+        string resultJson,
+        string errorCode = "",
+        string errorMessage = "") =>
+        new()
+        {
+            CallId = callId ?? string.Empty,
+            ToolName = string.IsNullOrWhiteSpace(toolName) ? Name : toolName,
+            Status = status,
+            ApprovalMode = AgentToolReceiptApprovalMode.NeverRequire,
+            ResultJson = resultJson ?? string.Empty,
+            ErrorCode = errorCode ?? string.Empty,
+            ErrorMessage = errorMessage ?? string.Empty,
+        };
 }
 
 internal enum NyxIdServicesAction

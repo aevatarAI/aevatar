@@ -64,6 +64,23 @@ public sealed class StudioMemberCurrentStateProjectorTests
                 LastTerminalBindingRunId = "bind-1",
                 UpdatedAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
             },
+            WorkflowScheduleProvisioning = new StudioMemberWorkflowScheduleProvisioningState
+            {
+                Intent = new StudioMemberWorkflowScheduleProvisioningIntent
+                {
+                    ProvisioningId = "schedule-provisioning-1",
+                    RevisionId = "rev-9",
+                },
+                Status = StudioMemberWorkflowScheduleProvisioningStatus.RetryPending,
+                AttemptCount = 2,
+                Failure = new StudioMemberWorkflowScheduleProvisioningFailure
+                {
+                    Code = "workflow_authorization_evidence_not_found",
+                    Message = "projection pending",
+                },
+                UpdatedAtUtc = Timestamp.FromDateTimeOffset(
+                    DateTimeOffset.Parse("2026-04-27T00:00:00Z")),
+            },
         };
 
         var envelope = WrapCommitted(
@@ -110,6 +127,19 @@ public sealed class StudioMemberCurrentStateProjectorTests
         written.BindingCurrentStatus.Should().Be(StudioMemberBindingRunStatusNames.Succeeded);
         written.BindingLastTerminalRunId.Should().Be("bind-1");
         written.BindingUpdatedAt.Should().NotBeNull();
+
+        // Durable schedule continuation status is queryable independently of
+        // the eventual schedule identity.
+        written.ScheduleProvisioningId.Should().Be("schedule-provisioning-1");
+        written.ScheduleProvisioningStatus.Should().Be("retry_pending");
+        written.ScheduleProvisioningRevisionId.Should().Be("rev-9");
+        written.ScheduleProvisioningScheduleId.Should().BeEmpty();
+        written.ScheduleProvisioningOperationId.Should().BeEmpty();
+        written.ScheduleProvisioningAttemptCount.Should().Be(2);
+        written.ScheduleProvisioningFailureCode.Should()
+            .Be("workflow_authorization_evidence_not_found");
+        written.ScheduleProvisioningFailureMessage.Should().Be("projection pending");
+        written.ScheduleProvisioningUpdatedAt.Should().NotBeNull();
     }
 
     [Fact]

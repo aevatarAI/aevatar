@@ -42,6 +42,26 @@ public sealed class StudioMemberQueryToolSource : IAgentToolSource
     }
 }
 
+public sealed class StudioMemberInvocationReadinessToolSource : IAgentToolSource
+{
+    private readonly IStudioMemberInvocationReadinessQueryPort? _readinessQueryPort;
+
+    public StudioMemberInvocationReadinessToolSource(
+        IStudioMemberInvocationReadinessQueryPort? readinessQueryPort = null)
+    {
+        _readinessQueryPort = readinessQueryPort;
+    }
+
+    public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult<IReadOnlyList<IAgentTool>>(
+            _readinessQueryPort is null
+                ? []
+                : [new GetStudioMemberInvocationReadinessTool(_readinessQueryPort)]);
+    }
+}
+
 public sealed class StudioScheduleQueryToolSource : IAgentToolSource
 {
     private readonly IStudioMemberAutomationQueryPort? _schedules;

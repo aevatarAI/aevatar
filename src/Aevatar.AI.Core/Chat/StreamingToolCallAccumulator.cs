@@ -9,20 +9,27 @@ internal sealed class StreamingToolCallAccumulator
     private readonly List<string> _order = [];
     private readonly HashSet<string> _completedKeys = new(StringComparer.Ordinal);
     private readonly Action<ToolCall>? _onToolCompleted;
+    private readonly string? _anonymousIdPrefix;
     private int _anonymousCounter;
     private string? _activeAnonymousKey;
     private string? _lastKnownKey;
 
-    public StreamingToolCallAccumulator() { }
+    public StreamingToolCallAccumulator(string? anonymousIdPrefix = null)
+    {
+        _anonymousIdPrefix = Normalize(anonymousIdPrefix);
+    }
 
     /// <summary>
     /// Creates an accumulator that invokes <paramref name="onToolCompleted"/> each time
     /// a new tool_use block transitions from the active accumulation slot to a finalized state
     /// (i.e., when the next tool_use block begins or the stream ends).
     /// </summary>
-    public StreamingToolCallAccumulator(Action<ToolCall> onToolCompleted)
+    public StreamingToolCallAccumulator(
+        Action<ToolCall> onToolCompleted,
+        string? anonymousIdPrefix = null)
     {
         _onToolCompleted = onToolCompleted;
+        _anonymousIdPrefix = Normalize(anonymousIdPrefix);
     }
 
     public ToolCall TrackDelta(ToolCall delta)
@@ -148,7 +155,10 @@ internal sealed class StreamingToolCallAccumulator
         FlushActiveTool();
         _anonymousCounter++;
         var anonymousKey = $"anon:{_anonymousCounter}";
-        var anonymousId = $"stream-tool-call-{_anonymousCounter}";
+        var generatedId = $"stream-tool-call-{_anonymousCounter}";
+        var anonymousId = _anonymousIdPrefix is null
+            ? generatedId
+            : $"{_anonymousIdPrefix}:{generatedId}";
         var aggregate = new ToolCallAggregate(anonymousId);
         _aggregates[anonymousKey] = aggregate;
         _order.Add(anonymousKey);
@@ -191,6 +201,9 @@ internal sealed class StreamingToolCallAccumulator
             return;
         }
     }
+
+    private static string? Normalize(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private sealed class ToolCallAggregate
     {

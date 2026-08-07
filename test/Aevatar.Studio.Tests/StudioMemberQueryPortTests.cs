@@ -37,6 +37,14 @@ public sealed class ProjectionStudioMemberQueryPortTests
             includeLastBinding: true,
             includeBindingStatus: true);
         document.StateVersion = 7;
+        document.ScheduleProvisioningId = "schedule-provisioning-1";
+        document.ScheduleProvisioningStatus = "retry_pending";
+        document.ScheduleProvisioningRevisionId = "rev-bind";
+        document.ScheduleProvisioningAttemptCount = 2;
+        document.ScheduleProvisioningFailureCode = "workflow_authorization_evidence_not_found";
+        document.ScheduleProvisioningFailureMessage = "projection pending";
+        document.ScheduleProvisioningUpdatedAt = Timestamp.FromDateTimeOffset(
+            DateTimeOffset.Parse("2026-04-27T00:00:00Z"));
 
         var reader = new StubDocumentReader([document]);
         var port = new ProjectionStudioMemberQueryPort(reader);
@@ -60,6 +68,19 @@ public sealed class ProjectionStudioMemberQueryPortTests
         detail.CurrentBindingRun.StateVersion.Should().Be(7);
         detail.CurrentBindingRun.Result.Should().NotBeNull();
         detail.CurrentBindingRun.Result!.ExpectedActorId.Should().Be("scope-workflow:scope-1:m-1");
+        detail.ScheduleProvisioning.Should().NotBeNull();
+        detail.ScheduleProvisioning!.ProvisioningId.Should().Be("schedule-provisioning-1");
+        detail.ScheduleProvisioning.Status.Should().Be("retry_pending");
+        detail.ScheduleProvisioning.RevisionId.Should().Be("rev-bind");
+        detail.ScheduleProvisioning.ScheduleId.Should().BeNull();
+        detail.ScheduleProvisioning.OperationId.Should().BeNull();
+        detail.ScheduleProvisioning.AttemptCount.Should().Be(2);
+        detail.ScheduleProvisioning.StateVersion.Should().Be(7);
+        detail.ScheduleProvisioning.FailureCode.Should()
+            .Be("workflow_authorization_evidence_not_found");
+        detail.ScheduleProvisioning.FailureMessage.Should().Be("projection pending");
+        detail.ScheduleProvisioning.UpdatedAt.Should()
+            .Be(DateTimeOffset.Parse("2026-04-27T00:00:00Z"));
     }
 
     [Fact]

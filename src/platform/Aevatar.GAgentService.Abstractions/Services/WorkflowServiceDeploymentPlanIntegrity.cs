@@ -8,6 +8,21 @@ public readonly record struct WorkflowServiceBindingIdentity(
 
 public static class WorkflowServiceDeploymentPlanIntegrity
 {
+    public static bool IsCompatible(
+        PreparedServiceRevisionArtifact artifact,
+        string? resolvedRevisionId)
+    {
+        try
+        {
+            _ = ResolveBindingIdentity(artifact, resolvedRevisionId);
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
     public static WorkflowServiceBindingIdentity RequireExplicitBindingIdentity(
         string? workflowId,
         string? revisionId)

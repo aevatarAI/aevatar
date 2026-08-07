@@ -141,6 +141,7 @@ public static class NyxIdChatTaskLifecycle
             toolCall,
             now);
         next.ActiveTask.Steps.Add(toolStep);
+        next.ActiveTask.PlanRevision = Math.Max(1, next.ActiveTask.PlanRevision + 1);
         ActivateStep(next, toolStep, now);
 
         var command = new NyxIdChatOperationDispatchCommand
@@ -217,10 +218,13 @@ public static class NyxIdChatTaskLifecycle
                 Input = new NyxIdChatInputStepSource { RequestId = requestId },
             },
             ExternalEffect = NyxIdChatEffectEvidence.NotStarted,
+            AddedBy = NyxIdChatStepAddedBy.Replan,
+            DependsOn = { currentStep.StepId },
             UpdatedAt = now.Clone(),
         };
         inputStep.AvailableActions = NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(inputStep);
         next.ActiveTask.Steps.Add(inputStep);
+        next.ActiveTask.PlanRevision = Math.Max(1, next.ActiveTask.PlanRevision + 1);
         next.ActiveTask.Status = NyxIdChatTaskStatus.Active;
         next.ActiveTask.ActiveStepId = stepId;
         next.ActiveTask.ActiveOperationId = string.Empty;
@@ -343,6 +347,18 @@ public static class NyxIdChatTaskLifecycle
             OperationId = operationId,
             OperationGeneration = 1,
         };
+        var toolSource = new NyxIdChatToolStepSource { ToolName = call.ToolName };
+        if (call.NyxIdProvenance is { } provenance)
+        {
+            toolSource.ServiceSlug = provenance.ServiceSlug;
+            toolSource.ServiceId = provenance.ConnectedServiceId;
+            if (provenance.HasReadinessCapabilityId &&
+                !string.IsNullOrWhiteSpace(provenance.ReadinessCapabilityId))
+            {
+                toolSource.ReadinessCapabilityId = provenance.ReadinessCapabilityId;
+            }
+        }
+
         var step = new NyxIdChatTaskStepState
         {
             StepId = stepId,
@@ -353,10 +369,12 @@ public static class NyxIdChatTaskLifecycle
             Description = $"Run authorized tool {call.ToolName}.",
             Source = new NyxIdChatStepSource
             {
-                Tool = new NyxIdChatToolStepSource { ToolName = call.ToolName },
+                Tool = toolSource,
             },
             MayChangeExternalState = call.Safety.MayChangeExternalState,
             ExternalEffect = NyxIdChatEffectEvidence.NotStarted,
+            AddedBy = NyxIdChatStepAddedBy.Replan,
+            DependsOn = { sourceStep.StepId },
             Operation = new NyxIdChatOperationState
             {
                 Key = operationKey,
@@ -411,6 +429,8 @@ public static class NyxIdChatTaskLifecycle
             Description = "Continue the assistant response with the typed tool result.",
             Source = new NyxIdChatStepSource { Llm = new NyxIdChatLLMStepSource() },
             ExternalEffect = NyxIdChatEffectEvidence.NotStarted,
+            AddedBy = NyxIdChatStepAddedBy.Replan,
+            DependsOn = { completedToolKey.StepId },
             Operation = new NyxIdChatOperationState
             {
                 Key = key.Clone(),
@@ -422,6 +442,7 @@ public static class NyxIdChatTaskLifecycle
         };
         step.AvailableActions = NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(step);
         state.ActiveTask.Steps.Add(step);
+        state.ActiveTask.PlanRevision = Math.Max(1, state.ActiveTask.PlanRevision + 1);
         ActivateStep(state, step, now);
         return new NyxIdChatOperationDispatchCommand
         {
@@ -451,6 +472,13 @@ public static class NyxIdChatTaskLifecycle
 
         step.ApprovalRequestId = receipt.ApprovalRequestId;
         step.UpdatedAt = now.Clone();
+        state.ActiveTask.ActiveStepId = step.StepId;
+        state.ActiveTask.ActiveOperationId = string.Empty;
+        state.ActiveTask.Gate = new NyxIdChatPlanGate
+        {
+            Mode = NyxIdChatPlanGateMode.Confirm,
+            Reason = "NyxID requires approval before this effect-capable tool can continue.",
+        };
         state.PendingApproval = new NyxIdChatPendingApprovalState
         {
             ApprovalRequestId = receipt.ApprovalRequestId,

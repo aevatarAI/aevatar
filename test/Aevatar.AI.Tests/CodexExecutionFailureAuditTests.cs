@@ -9,6 +9,7 @@ using Aevatar.Audit.Abstractions.Identity;
 using Aevatar.Audit.Abstractions.Models;
 using Aevatar.Audit.Abstractions.Ports;
 using FluentAssertions;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.AI.Tests;
 
@@ -30,6 +31,13 @@ public sealed class CodexExecutionFailureAuditTests
         AuditOutcome.Error,
         AuditFailureCategory.Execution)]
     [InlineData(
+        CodexExecutionFailureKind.AdmissionDenied,
+        "provider_detail\nunsafe",
+        "codex_execution_admission_denied",
+        AuditTerminalOutcome.Failed,
+        AuditOutcome.Error,
+        AuditFailureCategory.Execution)]
+    [InlineData(
         CodexExecutionFailureKind.LlmProviderNotConnected,
         "provider_detail_03",
         "codex_execution_llm_provider_not_connected",
@@ -39,6 +47,41 @@ public sealed class CodexExecutionFailureAuditTests
     [InlineData(
         CodexExecutionFailureKind.CapacityUnavailable,
         "provider_detail_04",
+        "codex_execution_capacity_unavailable",
+        AuditTerminalOutcome.Failed,
+        AuditOutcome.Error,
+        AuditFailureCategory.Execution)]
+    [InlineData(
+        CodexExecutionFailureKind.CapacityUnavailable,
+        "managed_upstream_codex_sandbox_creation_failed",
+        "managed_upstream_codex_sandbox_creation_failed",
+        AuditTerminalOutcome.Failed,
+        AuditOutcome.Error,
+        AuditFailureCategory.Execution)]
+    [InlineData(
+        CodexExecutionFailureKind.CapacityUnavailable,
+        "managed_upstream_provider_capacity_unavailable",
+        "codex_execution_capacity_unavailable",
+        AuditTerminalOutcome.Failed,
+        AuditOutcome.Error,
+        AuditFailureCategory.Execution)]
+    [InlineData(
+        CodexExecutionFailureKind.CapacityUnavailable,
+        "managed_upstream_codex_",
+        "codex_execution_capacity_unavailable",
+        AuditTerminalOutcome.Failed,
+        AuditOutcome.Error,
+        AuditFailureCategory.Execution)]
+    [InlineData(
+        CodexExecutionFailureKind.CapacityUnavailable,
+        " managed_upstream_codex_capacity_unavailable",
+        "codex_execution_capacity_unavailable",
+        AuditTerminalOutcome.Failed,
+        AuditOutcome.Error,
+        AuditFailureCategory.Execution)]
+    [InlineData(
+        CodexExecutionFailureKind.CapacityUnavailable,
+        "managed_upstream_codex_sandbox_creation_failed\nunsafe",
         "codex_execution_capacity_unavailable",
         AuditTerminalOutcome.Failed,
         AuditOutcome.Error,
@@ -123,10 +166,12 @@ public sealed class CodexExecutionFailureAuditTests
             [new FailingManagedPort(failure)],
             new NyxIdToolOptions()));
         var appender = new RecordingAuditTrailAppender();
+        var logger = new RecordingLogger<AdmittedAgentToolExecutor>();
         var executor = new AdmittedAgentToolExecutor(
             AlwaysStartingAgentToolAdmissionLedger.Instance,
             appender,
-            new StableAuditIdentityHasher());
+            new StableAuditIdentityHasher(),
+            logger: logger);
         const string argumentsJson = """
                 {
                   "target": { "kind": "managed_sandbox" },
@@ -141,6 +186,12 @@ public sealed class CodexExecutionFailureAuditTests
             {
                 Request = new AgentToolRequestIdentity("request-codex", "call-codex"),
                 ExecutionOwner = AgentToolExecutionOwners.Actor("actor-codex"),
+                WorkflowRuntime = new AgentWorkflowRuntimeContext(
+                    "parent-actor",
+                    "parent-run",
+                    "parent-step",
+                    "sensitive-root-run-id",
+                    0),
             },
             AgentToolApprovalContinuationMode.None,
             null));
@@ -163,7 +214,27 @@ public sealed class CodexExecutionFailureAuditTests
             audit.Failure.Category.Should().Be(expectedCategory.Value);
             audit.Failure.SanitizedMessage.Should().Be(expectedAuditCode);
         }
-        audit.ToString().Should().NotContain(providerCode);
+        if (expectedAuditCode == providerCode)
+            audit.ToString().Should().Contain(providerCode);
+        else
+            audit.ToString().Should().NotContain(providerCode);
+        var warning = logger.Entries.Should().ContainSingle().Which;
+        warning.Level.Should().Be(LogLevel.Warning);
+        warning.Message.Should().Contain($"failureKind={failureKind}");
+        var normalizedDiagnosticCode = providerCode.Trim();
+        var expectedDiagnosticCode = normalizedDiagnosticCode.Length is > 0 and <= 96 &&
+                                     char.IsAsciiLetterLower(normalizedDiagnosticCode[0]) &&
+                                     normalizedDiagnosticCode.All(character =>
+                                         char.IsAsciiLetterLower(character) ||
+                                         char.IsAsciiDigit(character) ||
+                                         character == '_')
+            ? normalizedDiagnosticCode
+            : "unclassified";
+        warning.Message.Should().Contain($"failureCode={expectedDiagnosticCode}");
+        if (expectedDiagnosticCode == "unclassified")
+            warning.Message.Should().NotContain(providerCode);
+        warning.Message.Should().Contain("runHash=0b42f7cb2207");
+        warning.Message.Should().NotContain("sensitive-root-run-id");
     }
 
     private sealed class FailingManagedPort(CodexExecutionFailure failure) : ICodexExecutionPort
@@ -201,5 +272,22 @@ public sealed class CodexExecutionFailureAuditTests
 
         public bool Verify(string canonicalActorKey, string auditActorId, string identityKeyId) =>
             auditActorId == "audit-actor" && identityKeyId == "audit-key";
+    }
+
+    private sealed class RecordingLogger<T> : ILogger<T>
+    {
+        public List<(LogLevel Level, string Message)> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            Entries.Add((logLevel, formatter(state, exception)));
     }
 }

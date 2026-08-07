@@ -130,7 +130,7 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 
 ### 分布式目标态（生产）
 
-1. `IActorRuntime` 在生产环境提供分布式部署能力，保证同一 `actorId` 全局单激活与邮箱串行；`IActorDispatchPort` 负责把 envelope 投递到目标 actor mailbox。
+1. `IActorRuntime` 在生产环境提供分布式部署能力，保证同一 `actorId` 全局单激活与邮箱串行；`IActorDispatchPort` 负责把 envelope 投递到目标 actor mailbox。Orleans dispatch 以 stream handoff 作为 accepted 边界，不在投递前同步解析 grain 或执行 lifecycle/existence preflight，避免把已失效 silo 的 activation 地址固化到消息主链；创建、存在性与拓扑检查仍只属于 `IActorRuntime`。
 2. `IStateStore<TState>` / `IEventStore` 使用非 InMemory 持久化实现。
 3. 投影相关编排运行态通过 Actor 化承载；中间层服务不持有跨节点事实态。
 4. `InMemory*` 仅保留本地开发与自动化测试使用。

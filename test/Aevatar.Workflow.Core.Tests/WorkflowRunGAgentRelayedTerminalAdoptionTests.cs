@@ -338,6 +338,47 @@ public sealed class WorkflowRunGAgentRelayedTerminalAdoptionTests
     }
 
     [Fact]
+    public async Task SelfOwnedToolApprovalSuspension_WithNotificationTarget_ShouldNotifyDeliveryActor()
+    {
+        var harness = await CreateStartedRunAsync(includeCompletionNotificationTarget: true);
+
+        await harness.Agent.HandleEventAsync(EnvelopeFrom(harness.RunId, ToolApprovalSuspension(harness.RunId)));
+
+        var sent = harness.Publisher.SuccessfulSends
+            .Should()
+            .ContainSingle(x => x.Event is WorkflowRunToolApprovalNotification)
+            .Subject;
+        sent.TargetActorId.Should().Be("delivery-actor-1");
+        var notification = sent.Event.Should().BeOfType<WorkflowRunToolApprovalNotification>().Subject;
+        notification.DeliveryId.Should().Be("delivery-1");
+        notification.WorkflowActorId.Should().Be(harness.RunId);
+        notification.WorkflowRunId.Should().Be(harness.RunId);
+        notification.WorkflowCommandId.Should().Be("command-1");
+        notification.WorkflowCorrelationId.Should().Be("correlation-1");
+        notification.StepId.Should().Be("tool-step-1");
+        notification.ExecutionId.Should().Be("execution-1");
+        notification.ToolName.Should().Be("lark_contact_batch_resolution");
+        notification.ToolCallId.Should().Be("tool-call-1");
+        notification.ApprovalRequestId.Should().Be("approval-request-1");
+        notification.RequestedAt.Should().NotBeNull();
+        sent.Options?.Delivery?.OperationId.Should().Contain("approval-request-1");
+    }
+
+    [Fact]
+    public async Task ExternalToolApprovalSuspension_ShouldNotNotifyDeliveryActor()
+    {
+        var harness = await CreateStartedRunAsync(includeCompletionNotificationTarget: true);
+
+        await harness.Agent.HandleEventAsync(EnvelopeFrom("external-workflow-actor", ToolApprovalSuspension(harness.RunId)));
+
+        harness.Publisher.SuccessfulSends
+            .Select(x => x.Event)
+            .OfType<WorkflowRunToolApprovalNotification>()
+            .Should()
+            .BeEmpty();
+    }
+
+    [Fact]
     public async Task StoppedRun_WithNotificationTarget_ShouldDispatchTypedStoppedTerminal()
     {
         var harness = await CreateStartedRunAsync(includeCompletionNotificationTarget: true);
@@ -435,6 +476,86 @@ public sealed class WorkflowRunGAgentRelayedTerminalAdoptionTests
             .Which.Status.Should().Be(WorkflowRunTerminalStatus.Failed);
         harness.Publisher.Published.Count(x => x.Event is WorkflowCompletedEvent).Should().Be(1);
         harness.Publisher.Published.Count(x => x.Event is WorkflowLlmInvocationCompletedEvent).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ChatRequest_WhenInputFileRefAlreadyHasOwner_ShouldBindWithExistingOwner()
+    {
+        var runId = "run-file-prebound-" + Guid.NewGuid().ToString("N");
+        var ownershipPort = new RecordingWorkflowFileArtifactOwnershipPort();
+        var harness = await CreateRunAsync(runId, fileOwnershipPort: ownershipPort);
+        var request = CreateNotificationTargetRequest();
+        request.InputParts.Add(new WorkflowChatInputPartPayload
+        {
+            Kind = WorkflowChatInputPartKind.File,
+            FileRef = new WorkflowFileRef
+            {
+                FileId = "file-1",
+                ArtifactId = "workflow-file://file-1",
+                SourceKind = WorkflowFileSourceKind.ChatInput,
+                OwnerRunId = "source-run",
+                OwnerScopeId = "source-scope",
+            },
+        });
+
+        await harness.Agent.HandleEventAsync(EnvelopeFrom(
+            "api",
+            request,
+            envelopeId: "command-1",
+            correlationId: "correlation-1"));
+
+        var bindRequest = ownershipPort.BindRequests.Should().ContainSingle().Subject;
+        bindRequest.OwnerRunId.Should().Be("source-run");
+        bindRequest.OwnerScopeId.Should().Be("source-scope");
+        var fileRef = CommittedEvents<WorkflowRunExecutionStartedEvent>(harness.CommittedPublisher)
+            .Should()
+            .ContainSingle()
+            .Subject
+            .InputFileRefs
+            .Should()
+            .ContainSingle()
+            .Subject;
+        fileRef.OwnerRunId.Should().Be("source-run");
+        fileRef.OwnerScopeId.Should().Be("source-scope");
+    }
+
+    [Fact]
+    public async Task ChatRequest_WhenInputFileRefHasNoOwner_ShouldBindWithCurrentRunOwner()
+    {
+        var runId = "run-file-ownerless-" + Guid.NewGuid().ToString("N");
+        var ownershipPort = new RecordingWorkflowFileArtifactOwnershipPort();
+        var harness = await CreateRunAsync(runId, fileOwnershipPort: ownershipPort);
+        var request = CreateNotificationTargetRequest();
+        request.InputParts.Add(new WorkflowChatInputPartPayload
+        {
+            Kind = WorkflowChatInputPartKind.File,
+            FileRef = new WorkflowFileRef
+            {
+                FileId = "file-ownerless-1",
+                ArtifactId = "workflow-file://file-ownerless-1",
+                SourceKind = WorkflowFileSourceKind.ChatInput,
+            },
+        });
+
+        await harness.Agent.HandleEventAsync(EnvelopeFrom(
+            "api",
+            request,
+            envelopeId: "command-1",
+            correlationId: "correlation-1"));
+
+        var bindRequest = ownershipPort.BindRequests.Should().ContainSingle().Subject;
+        bindRequest.OwnerRunId.Should().Be(runId);
+        bindRequest.OwnerScopeId.Should().Be("scope-1");
+        var fileRef = CommittedEvents<WorkflowRunExecutionStartedEvent>(harness.CommittedPublisher)
+            .Should()
+            .ContainSingle()
+            .Subject
+            .InputFileRefs
+            .Should()
+            .ContainSingle()
+            .Subject;
+        fileRef.OwnerRunId.Should().Be(runId);
+        fileRef.OwnerScopeId.Should().Be("scope-1");
     }
 
     [Fact]
@@ -1014,6 +1135,22 @@ public sealed class WorkflowRunGAgentRelayedTerminalAdoptionTests
             ExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
         };
 
+    private static WorkflowSuspendedEvent ToolApprovalSuspension(string runId) =>
+        new()
+        {
+            RunId = runId,
+            StepId = "tool-step-1",
+            SuspensionType = "tool_approval",
+            Prompt = "Approve contact resolution?",
+            ToolApproval = new WorkflowToolApprovalSuspension
+            {
+                ExecutionId = "execution-1",
+                ToolName = "lark_contact_batch_resolution",
+                ToolCallId = "tool-call-1",
+                ApprovalRequestId = "approval-request-1",
+            },
+        };
+
     // Seed a recoverable pending sub-workflow invocation directly into the run's committed event stream.
     // SubWorkflowInvocationRegisteredEvent's reducer (registered on WorkflowRunGAgent) adds the pending
     // invocation on replay; HandoffPhase=Registered keeps it recoverable (not StartDispatched/StartFailed).
@@ -1155,6 +1292,22 @@ public sealed class WorkflowRunGAgentRelayedTerminalAdoptionTests
             string? ownerScopeId,
             CancellationToken cancellationToken = default) =>
             ValueTask.FromException(new InvalidOperationException("file owner binding failed"));
+    }
+
+    private sealed class RecordingWorkflowFileArtifactOwnershipPort
+        : Aevatar.Workflow.Application.Abstractions.Runs.IFileArtifactOwnershipPort
+    {
+        public List<(Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactRef FileRef, string OwnerRunId, string? OwnerScopeId)> BindRequests { get; } = [];
+
+        public ValueTask BindOwnerAsync(
+            Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactRef fileRef,
+            string ownerRunId,
+            string? ownerScopeId,
+            CancellationToken cancellationToken = default)
+        {
+            BindRequests.Add((fileRef, ownerRunId, ownerScopeId));
+            return ValueTask.CompletedTask;
+        }
     }
 
     private sealed class EmptyEventModuleFactory : IEventModuleFactory<IWorkflowExecutionContext>

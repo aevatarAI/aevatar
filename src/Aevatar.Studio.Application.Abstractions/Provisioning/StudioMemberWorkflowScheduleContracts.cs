@@ -173,6 +173,8 @@ public sealed record StudioMemberAutomationView(
 
     public string OwnerLLMModel { get; init; } = string.Empty;
 
+    public string TargetRevisionId { get; init; } = string.Empty;
+
     public string NyxIdRevocationStatus { get; init; } = string.Empty;
 
     public string VaultRevocationStatus { get; init; } = string.Empty;

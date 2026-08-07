@@ -1,6 +1,7 @@
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Core.Services;
 using Aevatar.GAgentService.Tests.TestSupport;
+using Aevatar.Workflow.Abstractions;
 using FluentAssertions;
 
 namespace Aevatar.GAgentService.Tests.Core;
@@ -87,6 +88,74 @@ public sealed class ServiceInvokeReadinessEvaluatorTests
     }
 
     [Fact]
+    public void Evaluate_ShouldReturnPreparedArtifactIncompatible_WhenWorkflowExecutionModeIsMissing()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var revision = PreparedWorkflowRevision(identity, "r1", "chat");
+        revision.PreparedArtifact.DeploymentPlan.WorkflowPlan.ExecutionMode =
+            ExternalCapabilityExecutionMode.Unspecified;
+
+        var entries = _evaluator.Evaluate(
+            [GAgentServiceTestKit.CreateEndpointDescriptor(endpointId: "chat")],
+            [Target("dep-1", "r1", "actor-1", "chat")],
+            new Dictionary<string, ServiceRevisionRecordState>(StringComparer.Ordinal)
+            {
+                ["r1"] = revision,
+            });
+
+        entries.Should().ContainSingle();
+        entries[0].ReadinessStatus.Should().Be(ServiceInvokeReadinessStatus.Unavailable);
+        entries[0].UnavailableReason.Should()
+            .Be(ServiceInvokeUnavailableReason.PreparedArtifactIncompatible);
+        entries[0].SelectedRevisionId.Should().Be("r1");
+        entries[0].SelectedDeploymentId.Should().Be("dep-1");
+    }
+
+    [Fact]
+    public void Evaluate_ShouldReturnPreparedArtifactIncompatible_WhenWorkflowAdmissionPlanIsMissing()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var revision = PreparedWorkflowRevision(identity, "r1", "chat");
+        revision.PreparedArtifact.DeploymentPlan.WorkflowPlan.CapabilityAdmissionPlan = null;
+
+        var entries = _evaluator.Evaluate(
+            [GAgentServiceTestKit.CreateEndpointDescriptor(endpointId: "chat")],
+            [Target("dep-1", "r1", "actor-1", "chat")],
+            new Dictionary<string, ServiceRevisionRecordState>(StringComparer.Ordinal)
+            {
+                ["r1"] = revision,
+            });
+
+        entries.Should().ContainSingle();
+        entries[0].ReadinessStatus.Should().Be(ServiceInvokeReadinessStatus.Unavailable);
+        entries[0].UnavailableReason.Should()
+            .Be(ServiceInvokeUnavailableReason.PreparedArtifactIncompatible);
+    }
+
+    [Fact]
+    public void Evaluate_ShouldReturnPreparedArtifactIncompatible_WhenWorkflowAdmissionPlanRequiresRebind()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var revision = PreparedWorkflowRevision(identity, "r1", "chat");
+        revision.PreparedArtifact.DeploymentPlan.WorkflowPlan.CapabilityAdmissionPlan.SchemaVersion =
+            WorkflowCapabilityAdmissionPlanIntegrity.LegacySchemaVersion;
+
+        var entries = _evaluator.Evaluate(
+            [GAgentServiceTestKit.CreateEndpointDescriptor(endpointId: "chat")],
+            [Target("dep-1", "r1", "actor-1", "chat")],
+            new Dictionary<string, ServiceRevisionRecordState>(StringComparer.Ordinal)
+            {
+                ["r1"] = revision,
+            });
+
+        entries.Should().ContainSingle();
+        entries[0].ReadinessStatus.Should().Be(ServiceInvokeReadinessStatus.Unavailable);
+        entries[0].UnavailableReason.Should()
+            .Be(ServiceInvokeUnavailableReason.PreparedArtifactIncompatible);
+        entries[0].SelectedRevisionId.Should().Be("r1");
+    }
+
+    [Fact]
     public void Evaluate_ShouldOnlyUseCanonicalStatusesAndReasons()
     {
         var statuses = Enum.GetNames<ServiceInvokeReadinessStatus>();
@@ -97,7 +166,8 @@ public sealed class ServiceInvokeReadinessEvaluatorTests
             "Unspecified",
             "ServingTargetMissing",
             "PreparedArtifactMissing",
-            "RevisionNotPrepared");
+            "RevisionNotPrepared",
+            "PreparedArtifactIncompatible");
     }
 
     private static ServiceServingTargetSpec Target(
@@ -132,5 +202,51 @@ public sealed class ServiceInvokeReadinessEvaluatorTests
                 endpointIds
                     .Select(endpointId => GAgentServiceTestKit.CreateEndpointDescriptor(endpointId: endpointId))
                     .ToArray()),
+        };
+
+    private static ServiceRevisionRecordState PreparedWorkflowRevision(
+        ServiceIdentity identity,
+        string revisionId,
+        params string[] endpointIds) =>
+        new()
+        {
+            Spec = new ServiceRevisionSpec
+            {
+                Identity = identity.Clone(),
+                RevisionId = revisionId,
+                ImplementationKind = ServiceImplementationKind.Workflow,
+                WorkflowSpec = new WorkflowServiceRevisionSpec
+                {
+                    WorkflowName = "workflow-alpha",
+                    WorkflowYaml = "name: workflow-alpha\nsteps: []",
+                    ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+                },
+            },
+            Status = ServiceRevisionStatus.Published,
+            PreparedArtifact = new PreparedServiceRevisionArtifact
+            {
+                Identity = identity.Clone(),
+                RevisionId = revisionId,
+                ImplementationKind = ServiceImplementationKind.Workflow,
+                Endpoints =
+                {
+                    endpointIds.Select(endpointId =>
+                        GAgentServiceTestKit.CreateEndpointDescriptor(endpointId: endpointId)),
+                },
+                DeploymentPlan = new ServiceDeploymentPlan
+                {
+                    WorkflowPlan = new WorkflowServiceDeploymentPlan
+                    {
+                        WorkflowName = "workflow-alpha",
+                        WorkflowYaml = "name: workflow-alpha\nsteps: []",
+                        ExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+                        CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+                        {
+                            SchemaVersion = WorkflowCapabilityAdmissionPlanIntegrity.SchemaVersion,
+                            ExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+                        },
+                    },
+                },
+            },
         };
 }

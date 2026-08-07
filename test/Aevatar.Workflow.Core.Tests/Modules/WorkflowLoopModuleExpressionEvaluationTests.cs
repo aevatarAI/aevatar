@@ -83,6 +83,87 @@ public class WorkflowLoopModuleExpressionEvaluationTests
     }
 
     [Fact]
+    public async Task DispatchStep_ForEachShouldDeferSubParameterExpressionsUntilItemDispatch()
+    {
+        const string argumentsTemplate = "{\"path_params\":{\"instance_id\":\"${input}\"}}";
+        var workflow = new WorkflowDefinition
+        {
+            Name = "wf-foreach",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "fetch_each",
+                    Type = "foreach",
+                    Parameters = new Dictionary<string, string>
+                    {
+                        ["sub_step_type"] = "tool_call",
+                        ["sub_param_tool"] = "nyxid_proxy",
+                        ["sub_param_arguments"] = argumentsTemplate,
+                    },
+                },
+            ],
+        };
+
+        var ctx = new CapturingContext();
+        var module = new WorkflowExecutionKernel(workflow, (IWorkflowExecutionStateHost)ctx.Agent);
+
+        await module.HandleAsync(Wrap(new StartWorkflowEvent
+        {
+            WorkflowName = workflow.Name,
+            RunId = "run-foreach",
+            Input = "[\"instance-alpha\",\"instance-beta\"]",
+        }), ctx, CancellationToken.None);
+
+        var request = ctx.Published.Single(x => x.Event is StepRequestEvent).Event
+            .Should().BeOfType<StepRequestEvent>().Subject;
+        request.Parameters["sub_param_arguments"].Should().Be(argumentsTemplate);
+    }
+
+    [Theory]
+    [InlineData("parallel")]
+    [InlineData("race")]
+    public async Task DispatchStep_CompositionWorkerShouldDeferIndexedSubParametersUntilWorkerDispatch(
+        string stepType)
+    {
+        var workflow = new WorkflowDefinition
+        {
+            Name = $"wf-{stepType}",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "dispatch_workers",
+                    Type = stepType,
+                    Parameters = new Dictionary<string, string>
+                    {
+                        [stepType == "parallel" ? "parallel_count" : "count"] = "3",
+                        ["sub_step_type"] = "assign",
+                        ["sub_param_target"] = "worker_${index}",
+                        ["sub_param_value"] = "result-${index}",
+                    },
+                },
+            ],
+        };
+        var ctx = new CapturingContext();
+        var module = new WorkflowExecutionKernel(workflow, (IWorkflowExecutionStateHost)ctx.Agent);
+
+        await module.HandleAsync(Wrap(new StartWorkflowEvent
+        {
+            WorkflowName = workflow.Name,
+            RunId = $"run-{stepType}",
+            Input = "synthetic",
+        }), ctx, CancellationToken.None);
+
+        var request = ctx.Published.Single(x => x.Event is StepRequestEvent).Event
+            .Should().BeOfType<StepRequestEvent>().Subject;
+        request.Parameters["sub_param_target"].Should().Be("worker_${index}");
+        request.Parameters["sub_param_value"].Should().Be("result-${index}");
+    }
+
+    [Fact]
     public async Task DispatchStep_ShouldPreserveEscapedExpressionOpenInParameters()
     {
         var workflow = new WorkflowDefinition
@@ -171,6 +252,50 @@ public class WorkflowLoopModuleExpressionEvaluationTests
         request.StepParameters.TransformOperation.Key.Should().Be("department");
         request.StepParameters.TransformOperation.Value.Should().Be("amount");
         request.StepParameters.TransformOperation.Aggregate.Should().Be(TransformAggregateKind.Sum);
+    }
+
+    [Fact]
+    public async Task DispatchStep_ShouldPreserveTypedTemplateProgramWithoutExpressionExpansion()
+    {
+        const string template = "{{ data.value }} ${input}";
+        var workflow = new WorkflowDefinition
+        {
+            Name = "wf-template",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "render",
+                    Type = "transform",
+                    Parameters = new Dictionary<string, string>
+                    {
+                        ["op"] = "template",
+                        ["template"] = template,
+                    },
+                    TransformOperation = new TransformOperationSpec
+                    {
+                        Kind = TransformOperationKind.Template,
+                        Template = template,
+                    },
+                },
+            ],
+        };
+        var ctx = new CapturingContext();
+        var module = new WorkflowExecutionKernel(workflow, (IWorkflowExecutionStateHost)ctx.Agent);
+
+        await module.HandleAsync(Wrap(new StartWorkflowEvent
+        {
+            WorkflowName = "wf-template",
+            RunId = "run-template",
+            Input = "expanded-input",
+        }), ctx, CancellationToken.None);
+
+        var request = ctx.Published.Single(x => x.Event is StepRequestEvent).Event
+            .Should().BeOfType<StepRequestEvent>().Subject;
+        request.Parameters["template"].Should().Be("{{ data.value }} expanded-input");
+        request.StepParameters.TransformOperation.Kind.Should().Be(TransformOperationKind.Template);
+        request.StepParameters.TransformOperation.Template.Should().Be(template);
     }
 
     [Fact]

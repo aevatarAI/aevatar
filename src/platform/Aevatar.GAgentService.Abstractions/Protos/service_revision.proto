@@ -37,6 +37,11 @@ enum ServiceRevisionStatus {
   SERVICE_REVISION_STATUS_RETIRED = 5;
 }
 
+enum ServiceRevisionPreparedArtifactRepairReason {
+  SERVICE_REVISION_PREPARED_ARTIFACT_REPAIR_REASON_UNSPECIFIED = 0;
+  SERVICE_REVISION_PREPARED_ARTIFACT_REPAIR_REASON_WORKFLOW_DEPLOYMENT_PLAN_INCOMPATIBLE = 1;
+}
+
 message StaticServiceRevisionSpec {
   string actor_type_name = 1 [deprecated = true];
   repeated ServiceEndpointDescriptor endpoints = 2;
@@ -170,6 +175,18 @@ message ServiceRevisionPreparedEvent {
   repeated ServiceEndpointDescriptor endpoints = 5;
   google.protobuf.Timestamp prepared_at = 6;
   PreparedServiceRevisionArtifact prepared_artifact = 7;
+}
+
+message ServiceRevisionPreparedArtifactRepairedEvent {
+  ServiceIdentity identity = 1;
+  string revision_id = 2;
+  ServiceImplementationKind implementation_kind = 3;
+  string previous_artifact_hash = 4;
+  string artifact_hash = 5;
+  repeated ServiceEndpointDescriptor endpoints = 6;
+  google.protobuf.Timestamp repaired_at = 7;
+  PreparedServiceRevisionArtifact prepared_artifact = 8;
+  ServiceRevisionPreparedArtifactRepairReason repair_reason = 9;
 }
 
 message ServiceRevisionPreparationFailedEvent {

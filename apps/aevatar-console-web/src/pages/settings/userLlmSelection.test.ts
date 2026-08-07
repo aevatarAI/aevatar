@@ -80,6 +80,8 @@ describe("userLlmSelection", () => {
       serviceSlugSnapshot: "shared-openai",
       modelSelection: { kind: "provider_default" },
     });
+    expect(options.find((option) => option.value === "user-service:us-beta"))
+      .toMatchObject({ modelCatalog: { defaultModelId: "gpt-beta" } });
   });
 
   it("encodes exact user service IDs without using their route", () => {

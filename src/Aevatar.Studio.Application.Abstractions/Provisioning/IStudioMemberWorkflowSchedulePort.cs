@@ -39,6 +39,16 @@ public interface IStudioMemberWorkflowSchedulePort : IStudioMemberAutomationQuer
         string confirmedPermissionDigest,
         CancellationToken ct = default);
 
+    /// <summary>
+    /// Replaces an existing automation credential and activation decision using
+    /// the currently resolved workflow revision. Manual reauthorization keeps
+    /// the stored revision pin and therefore uses <see cref="ReauthorizeAsync"/>.
+    /// </summary>
+    Task<StudioMemberWorkflowScheduleResult> ReplaceAsync(
+        StudioMemberWorkflowScheduleRequest request,
+        string confirmedPermissionDigest,
+        CancellationToken ct = default);
+
     Task<StudioMemberAutomationMutationReceipt> UpdateAsync(
         StudioMemberAutomationUpdateCommand command,
         CancellationToken ct = default);

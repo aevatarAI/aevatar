@@ -133,6 +133,7 @@ public sealed class AIAbstractionsProtoCoverageTests
             ApprovalMode = AgentToolReceiptApprovalMode.AlwaysRequire,
             IsDestructive = false,
             SideEffectKind = "ornn.publish.skill",
+            Effect = AgentToolReceiptEffect.Mutating,
             SubjectKind = "ornn.skill",
             SubjectId = "skill-1",
             SubjectVersion = "1.0",
@@ -153,6 +154,7 @@ public sealed class AIAbstractionsProtoCoverageTests
         var receiptRoundTrip = RoundTrip(receipt, AgentToolReceipt.Parser);
         receiptRoundTrip.SubjectId.Should().Be("skill-1");
         receiptRoundTrip.SubjectHash.Should().Be("hash-1");
+        receiptRoundTrip.Effect.Should().Be(AgentToolReceiptEffect.Mutating);
         receiptRoundTrip.ManagedWorkflowHandoff.InvocationId.Should().Be("invoke-1");
         var request = RoundTrip(new ChatRequestEvent
         {

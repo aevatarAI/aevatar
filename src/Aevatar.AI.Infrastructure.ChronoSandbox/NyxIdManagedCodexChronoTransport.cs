@@ -5,6 +5,8 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace Aevatar.AI.Infrastructure.ChronoSandbox;
@@ -13,7 +15,8 @@ internal sealed class NyxIdManagedCodexChronoTransport(
     IOptions<ManagedCodexOptions> options,
     INyxIdApiClientFactory clientFactory,
     ISecretVault secretVault,
-    TimeProvider timeProvider) : IManagedCodexChronoTransport
+    TimeProvider timeProvider,
+    ILogger<NyxIdManagedCodexChronoTransport>? logger = null) : IManagedCodexChronoTransport
 {
     private readonly ManagedCodexOptions _options =
         options?.Value ?? throw new ArgumentNullException(nameof(options));
@@ -23,6 +26,48 @@ internal sealed class NyxIdManagedCodexChronoTransport(
         secretVault ?? throw new ArgumentNullException(nameof(secretVault));
     private readonly TimeProvider _timeProvider =
         timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
+    private readonly ILogger _logger = logger ?? NullLogger<NyxIdManagedCodexChronoTransport>.Instance;
+    private static readonly HashSet<string> AllowedUpstreamFailureCodes =
+        new(StringComparer.Ordinal)
+        {
+            "CODEX_AGENT_MESSAGE_MISSING",
+            "CODEX_CALLER_CREDENTIAL_FORWARDED",
+            "CODEX_CAPACITY_UNAVAILABLE",
+            "CODEX_CLEANUP_UNCONFIRMED",
+            "CODEX_COMMAND_FAILED",
+            "CODEX_COMMAND_TIMEOUT",
+            "CODEX_CONFIG_INVALID",
+            "CODEX_DELEGATION_ACTOR_INVALID",
+            "CODEX_DELEGATION_AUDIENCE_INVALID",
+            "CODEX_DELEGATION_DUPLICATED",
+            "CODEX_DELEGATION_EXPIRED",
+            "CODEX_DELEGATION_INVALID",
+            "CODEX_DELEGATION_ISSUER_INVALID",
+            "CODEX_DELEGATION_MARKER_INVALID",
+            "CODEX_DELEGATION_MISSING",
+            "CODEX_DELEGATION_NOT_YET_VALID",
+            "CODEX_DELEGATION_SCOPE_INVALID",
+            "CODEX_DELEGATION_SUBJECT_INVALID",
+            "CODEX_DELEGATION_TYPE_INVALID",
+            "CODEX_DELEGATION_VERIFIER_UNAVAILABLE",
+            "CODEX_EXECD_TERMINAL_MISSING",
+            "CODEX_EXECUTION_TIMEOUT",
+            "CODEX_FEATURE_DISABLED",
+            "CODEX_OPENSANDBOX_TIMEOUT",
+            "CODEX_OPENSANDBOX_UNAVAILABLE",
+            "CODEX_OUTPUT_INVALID",
+            "CODEX_OUTPUT_TOO_LARGE",
+            "CODEX_PROMPT_INVALID",
+            "CODEX_PROMPT_TOO_LARGE",
+            "CODEX_REQUEST_INVALID",
+            "CODEX_SANDBOX_CREATION_FAILED",
+            "CODEX_SANDBOX_READY_TIMEOUT",
+            "CODEX_TIMEOUT_INVALID",
+            "CODEX_TURN_FAILED",
+            "CODEX_TURN_TERMINAL_MISSING",
+            "CODEX_WORKSPACE_INVALID",
+            "CODEX_WORKSPACE_PREPARATION_FAILED",
+        };
 
     public async Task<CodexExecutionResult> ExecuteAsync(
         CodexExecutionRequest request,
@@ -81,14 +126,13 @@ internal sealed class NyxIdManagedCodexChronoTransport(
             _timeProvider);
         using var requestDeadline =
             CancellationTokenSource.CreateLinkedTokenSource(ct, lifecycleTimeout.Token);
-        var response = await secret.UseAsync(rawKey => _clientFactory.CreateClient().ProxyRequestBoundedAsync(
+        var response = await secret.UseAsync(rawKey => _clientFactory.CreateClient().ProxyRequestBoundedWithApiKeyAsync(
                 rawKey,
                 ManagedCodexOptions.ChronoSandboxServiceSlug,
                 credential.ChronoSandboxUserServiceId,
                 ManagedCodexOptions.ChronoExecutionPath,
                 HttpMethod.Post.Method,
                 body,
-                extraHeaders: null,
                 _options.MaxResponseBytes,
                 requestDeadline.Token))
             .ConfigureAwait(false);
@@ -105,7 +149,7 @@ internal sealed class NyxIdManagedCodexChronoTransport(
             }
 
             if (response.HttpStatus > 0)
-                throw ProxyFailure(response.HttpStatus);
+                throw ProxyFailure(response.HttpStatus, response.Content);
 
             throw Failure(
                 CodexExecutionFailureKind.CapacityUnavailable,
@@ -221,7 +265,7 @@ internal sealed class NyxIdManagedCodexChronoTransport(
         actual.Version == expected.Version &&
         string.Equals(actual.Fingerprint, expected.Fingerprint, StringComparison.Ordinal);
 
-    private static CodexExecutionResult ParseResponse(string response, string rawKey)
+    private CodexExecutionResult ParseResponse(string response, string rawKey)
     {
         try
         {
@@ -236,7 +280,7 @@ internal sealed class NyxIdManagedCodexChronoTransport(
                              statusElement.TryGetInt32(out var parsedStatus)
                     ? parsedStatus
                     : 0;
-                throw ProxyFailure(status);
+                throw ProxyFailure(status, response);
             }
 
             if (!root.TryGetProperty("success", out var success) ||
@@ -288,29 +332,189 @@ internal sealed class NyxIdManagedCodexChronoTransport(
         }
     }
 
-    private static ManagedCodexTransportException ProxyFailure(int status) => status switch
+    private ManagedCodexTransportException ProxyFailure(int status, string? response = null)
     {
-        401 or 403 => Failure(
-            CodexExecutionFailureKind.AdmissionDenied,
-            "managed_proxy_authorization_denied",
-            "Managed Codex proxy authorization was denied."),
-        404 => Failure(
-            CodexExecutionFailureKind.TargetNotConfigured,
-            "managed_proxy_target_unavailable",
-            "Managed Codex proxy target is unavailable."),
-        408 or 504 => Failure(
-            CodexExecutionFailureKind.TimedOut,
-            "managed_proxy_timeout",
-            "Managed Codex proxy request timed out."),
-        429 or 502 or 503 => Failure(
-            CodexExecutionFailureKind.CapacityUnavailable,
-            "managed_proxy_unavailable",
-            "Managed Codex proxy is temporarily unavailable."),
-        _ => Failure(
-            CodexExecutionFailureKind.TerminalFailure,
-            "managed_proxy_failed",
-            "Managed Codex proxy request failed."),
-    };
+        var upstreamCode = TryGetAllowedUpstreamFailureCode(response);
+        // Bounded shape diagnostics only. Without them a proxy failure carrying no recognizable
+        // upstream code is indistinguishable from one whose body we simply failed to parse, and
+        // triage cannot tell a gateway-level fault from a chrono-reported one. Never log the body,
+        // upstream message, credential, service id or run id.
+        _logger.LogWarning(
+            "Managed Codex proxy failure. status={Status} bodyBytes={BodyBytes} bodyShape={BodyShape} upstreamCodeResolved={Resolved}",
+            status,
+            response?.Length ?? 0,
+            ClassifyBodyShape(response),
+            upstreamCode is not null);
+        // A typed upstream code names the actual failing stage, so it classifies the failure.
+        // HTTP status alone cannot: chrono-sandbox returns 429 only for the capacity permit and
+        // uses 502 for provisioning/OpenSandbox faults, so status-only mapping reports "capacity
+        // unavailable" for sandbox-creation failures and sends triage the wrong way.
+        if (upstreamCode is not null &&
+            TryClassifyUpstreamFailure(upstreamCode) is { } upstreamFailure)
+        {
+            return Failure(upstreamFailure.Kind, upstreamCode, upstreamFailure.Message);
+        }
+
+        return status switch
+        {
+            401 => Failure(
+                CodexExecutionFailureKind.AdmissionDenied,
+                upstreamCode ?? "managed_proxy_authentication_failed",
+                "Managed Codex proxy authentication failed."),
+            403 => Failure(
+                CodexExecutionFailureKind.AdmissionDenied,
+                upstreamCode ?? "managed_proxy_authorization_denied",
+                "Managed Codex proxy authorization was denied."),
+            404 => Failure(
+                CodexExecutionFailureKind.TargetNotConfigured,
+                upstreamCode ?? "managed_proxy_target_unavailable",
+                "Managed Codex proxy target is unavailable."),
+            408 or 504 => Failure(
+                CodexExecutionFailureKind.TimedOut,
+                upstreamCode ?? "managed_proxy_timeout",
+                "Managed Codex proxy request timed out."),
+            429 or 502 or 503 => Failure(
+                CodexExecutionFailureKind.CapacityUnavailable,
+                upstreamCode ?? "managed_proxy_unavailable",
+                "Managed Codex proxy is temporarily unavailable."),
+            _ => Failure(
+                CodexExecutionFailureKind.TerminalFailure,
+                upstreamCode ?? "managed_proxy_failed",
+                "Managed Codex proxy request failed."),
+        };
+    }
+
+    /// <summary>
+    /// Classifies a proxy failure body into a fixed, non-sensitive shape label. The labels are a
+    /// closed set derived from structure only — no upstream content is read into the result.
+    /// </summary>
+    private static string ClassifyBodyShape(string? response)
+    {
+        if (string.IsNullOrWhiteSpace(response))
+            return "empty";
+
+        JsonDocument document;
+        try
+        {
+            document = JsonDocument.Parse(response);
+        }
+        catch (JsonException)
+        {
+            return "non_json";
+        }
+
+        using (document)
+        {
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                return "json_non_object";
+            // chrono's own error shape is {"error":{"code":...}}. NyxID wraps upstream failures as
+            // {"error":true,"status":N,"body":...}, so a non-object `error` must fall through to the
+            // nested body — that nesting is exactly what distinguishes a gateway-level failure from
+            // a chrono-reported one.
+            if (root.TryGetProperty("error", out var error) &&
+                error.ValueKind == JsonValueKind.Object)
+            {
+                return error.TryGetProperty("code", out var code) &&
+                       code.ValueKind == JsonValueKind.String
+                    ? "json_error_code"
+                    : "json_error_untyped";
+            }
+
+            if (!root.TryGetProperty("body", out var body))
+                return error.ValueKind == JsonValueKind.Undefined
+                    ? "json_without_error"
+                    : "json_error_untyped";
+
+            return body.ValueKind switch
+            {
+                JsonValueKind.Object => "nested_body_object",
+                JsonValueKind.String => "nested_body_string",
+                _ => "nested_body_other",
+            };
+        }
+    }
+
+    /// <summary>
+    /// Maps an allowlisted upstream failure code to the stage it actually failed at. Codes are
+    /// already normalized to <c>managed_upstream_&lt;lowercased chrono code&gt;</c>. Returns
+    /// <c>null</c> for codes whose stage the HTTP status classifies at least as well.
+    /// </summary>
+    private static (CodexExecutionFailureKind Kind, string Message)? TryClassifyUpstreamFailure(
+        string upstreamCode) =>
+        upstreamCode switch
+        {
+            "managed_upstream_codex_sandbox_creation_failed" or
+            "managed_upstream_codex_workspace_preparation_failed" or
+            "managed_upstream_codex_opensandbox_unavailable" => (
+                CodexExecutionFailureKind.ProvisioningFailed,
+                "Managed Codex sandbox provisioning failed upstream."),
+            "managed_upstream_codex_opensandbox_timeout" or
+            "managed_upstream_codex_sandbox_ready_timeout" or
+            "managed_upstream_codex_execution_timeout" or
+            "managed_upstream_codex_command_timeout" => (
+                CodexExecutionFailureKind.TimedOut,
+                "Managed Codex execution timed out upstream."),
+            "managed_upstream_codex_capacity_unavailable" => (
+                CodexExecutionFailureKind.CapacityUnavailable,
+                "Managed Codex capacity is unavailable upstream."),
+            _ => null,
+        };
+
+    private static string? TryGetAllowedUpstreamFailureCode(string? response)
+    {
+        if (string.IsNullOrWhiteSpace(response))
+            return null;
+
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            return TryGetAllowedUpstreamFailureCode(document.RootElement, allowNestedBody: true);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static string? TryGetAllowedUpstreamFailureCode(
+        JsonElement root,
+        bool allowNestedBody)
+    {
+        if (root.ValueKind != JsonValueKind.Object)
+            return null;
+
+        if (root.TryGetProperty("error", out var error) &&
+            error.ValueKind == JsonValueKind.Object &&
+            error.TryGetProperty("code", out var codeElement) &&
+            codeElement.ValueKind == JsonValueKind.String &&
+            codeElement.GetString() is { } code &&
+            AllowedUpstreamFailureCodes.Contains(code))
+        {
+            return $"managed_upstream_{code.ToLowerInvariant()}";
+        }
+
+        if (!allowNestedBody || !root.TryGetProperty("body", out var body))
+            return null;
+
+        if (body.ValueKind == JsonValueKind.Object)
+            return TryGetAllowedUpstreamFailureCode(body, allowNestedBody: false);
+
+        if (body.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(body.GetString()))
+            return null;
+
+        try
+        {
+            using var bodyDocument = JsonDocument.Parse(body.GetString()!);
+            return TryGetAllowedUpstreamFailureCode(
+                bodyDocument.RootElement,
+                allowNestedBody: false);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
 
     private static string? Redact(string? value, string rawKey) =>
         value?.Replace(rawKey, "[REDACTED]", StringComparison.Ordinal);

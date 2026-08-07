@@ -7,6 +7,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Tools;
+using Aevatar.Foundation.Abstractions.Tools;
 using FluentAssertions;
 
 namespace Aevatar.AI.Tests;
@@ -283,6 +284,52 @@ public sealed class ChatRuntimeStreamingBufferTests
     }
 
     [Fact]
+    public async Task CreateStepExecutor_WhenToolCallCompletes_ShouldEmitResolvedTypedPresentation()
+    {
+        var provider = new StreamingProvider(
+            chunks: [],
+            streamToolCall: new ToolCall
+            {
+                Id = "skill-call-1",
+                Name = "use_skill",
+                ArgumentsJson = """{"skill_name":"release-readiness-review","mount_workflows":false}""",
+            });
+        var tools = new ToolManager();
+        tools.Register(new ResolvedSkillPresentationTool());
+        var executor = CreateRuntime(provider, tools).CreateStepExecutor(turnCatalog: null);
+        var request = executor.BuildLlmStepRequest(
+            [ChatMessage.User("load the skill")],
+            "skill-presentation-request",
+            metadata: null,
+            toolContext: null,
+            llmControl: null,
+            round: 0,
+            finalNoTools: false);
+        var chunks = new List<LLMStreamChunk>();
+
+        var result = await executor.ExecuteLlmStepAsync(
+            executor.ResolveProvider(),
+            request,
+            (chunk, _) =>
+            {
+                chunks.Add(chunk);
+                return Task.CompletedTask;
+            },
+            CancellationToken.None);
+
+        result.ToolCalls.Should().ContainSingle(call =>
+            call.Id == "skill-call-1" &&
+            call.Name == "use_skill");
+        chunks.Should().NotContain(chunk => chunk.DeltaToolCall != null);
+        var started = chunks.Should().ContainSingle(chunk => chunk.ToolCallStarted != null).Which
+            .ToolCallStarted!;
+        started.ToolCall.Id.Should().Be("skill-call-1");
+        started.Presentation.Kind.Should().Be(ToolPresentationKind.Skill);
+        started.Presentation.Skill.SkillName.Should().Be("release-readiness-review");
+        started.Presentation.Skill.Source.Should().Be("local-or-remote");
+    }
+
+    [Fact]
     public void BuildLlmStepRequest_WhenFinalNoToolsWithoutMutatingReceipt_ShouldInjectConstraintWithoutMutatingCallerMessages()
     {
         var provider = new RecordingStepProvider();
@@ -310,7 +357,7 @@ public sealed class ChatRuntimeStreamingBufferTests
     }
 
     [Fact]
-    public void BuildLlmStepRequest_WhenFinalNoToolsHasMutatingSuccessReceipt_ShouldNotInjectConstraint()
+    public void BuildLlmStepRequest_WhenFinalNoToolsHasMutatingSuccessReceipt_ShouldInjectGroundingOnly()
     {
         var provider = new RecordingStepProvider();
         var runtime = CreateRuntime(provider);
@@ -335,10 +382,13 @@ public sealed class ChatRuntimeStreamingBufferTests
                 {
                     Status = AgentToolReceiptStatus.Success,
                     SideEffectKind = "definition.update",
+                    Effect = AgentToolReceiptEffect.Mutating,
                 },
             ]);
 
-        request.Messages.Should().BeEquivalentTo(messages);
+        request.Messages.Should().HaveCount(3);
+        request.Messages.Last().Content.Should().Contain("match that exact action");
+        request.Messages.Last().Content.Should().NotContain("no successful mutating tool execution");
     }
 
     [Fact]
@@ -598,6 +648,74 @@ public sealed class ChatRuntimeStreamingBufferTests
                 arguments.Contains("query-secret", StringComparison.Ordinal) ||
                 arguments.Contains("header-secret", StringComparison.Ordinal));
         providerToolCall.ArgumentsJson.Should().Be(secretArguments);
+    }
+
+    [Fact]
+    public async Task ChatStreamAsync_WhenNyxIdSourceUnavailableRepeats_ShouldEnterTerminalNoToolsRound()
+    {
+        const string arguments =
+            "{\"service_slug\":\"api-github\",\"requested_scopes\":[\"repo\"]}";
+        var provider = new QueuedStreamingProvider(
+        [
+            [new LLMStreamChunk
+            {
+                DeltaToolCall = new ToolCall
+                {
+                    Id = "call-failure-1",
+                    Name = "nyxid_require_service",
+                    ArgumentsJson = arguments,
+                },
+            }],
+            [new LLMStreamChunk
+            {
+                DeltaToolCall = new ToolCall
+                {
+                    Id = "call-failure-2",
+                    Name = "nyxid_require_service",
+                    ArgumentsJson = arguments,
+                },
+            }],
+            [new LLMStreamChunk { DeltaContent = "The readiness source is unavailable." }],
+            [new LLMStreamChunk
+            {
+                DeltaToolCall = new ToolCall
+                {
+                    Id = "call-must-not-run",
+                    Name = "nyxid_require_service",
+                    ArgumentsJson = arguments,
+                },
+            }],
+        ]);
+        var tools = new ToolManager();
+        tools.Register(new ReceiptTool(
+            "nyxid_require_service",
+            AgentToolReceiptStatus.Error,
+            isReadOnly: true,
+            errorCode: "NYXID_SOURCE_UNAVAILABLE",
+            safeResultJson:
+                "{\"error\":true,\"reason_code\":\"NYXID_SOURCE_UNAVAILABLE\"," +
+                "\"safe_message\":\"NyxID source data is unavailable.\"}"));
+        var runtime = CreateRuntime(provider, tools: tools);
+        var output = new StringBuilder();
+        var completions = new List<ToolCallCompletedChunk>();
+
+        await foreach (var chunk in runtime.ChatStreamAsync(
+                           "connect github",
+                           maxToolRounds: 8,
+                           turnCatalog: null))
+        {
+            if (!string.IsNullOrEmpty(chunk.DeltaContent))
+                output.Append(chunk.DeltaContent);
+            if (chunk.ToolCallCompleted != null)
+                completions.Add(chunk.ToolCallCompleted);
+        }
+
+        provider.StreamRequests.Should().HaveCount(3,
+            "two identical read-only failures must converge through one final no-tools round");
+        provider.StreamRequests[2].Tools.Should().BeNull();
+        completions.Should().HaveCount(2);
+        completions.Should().OnlyContain(completion => !completion.Success);
+        output.ToString().Should().Be("The readiness source is unavailable.");
     }
 
     [Fact]
@@ -982,7 +1100,7 @@ public sealed class ChatRuntimeStreamingBufferTests
     }
 
     [Fact]
-    public async Task ChatStreamAsync_WhenFinalNoToolsHasNoMutatingSuccess_ShouldInjectEphemeralConstraint()
+    public async Task ChatStreamAsync_WhenEachTurnHasNoMutatingSuccess_ShouldReinjectEphemeralConstraint()
     {
         var provider = new QueuedStreamingProvider(
         [
@@ -1026,11 +1144,11 @@ public sealed class ChatRuntimeStreamingBufferTests
         provider.StreamRequests[2].Messages
             .Where(message => message.Role == "system" &&
                               message.Content?.Contains("no successful mutating tool execution") == true)
-            .Should().BeEmpty("the guard is request-local and must not be persisted to history");
+            .Should().ContainSingle("each new turn must receive a fresh request-local guard");
     }
 
     [Fact]
-    public async Task ChatStreamAsync_WhenFinalNoToolsHasMutatingSuccess_ShouldNotInjectConstraint()
+    public async Task ChatStreamAsync_WhenFinalNoToolsHasMutatingSuccess_ShouldInjectGroundingOnly()
     {
         var provider = new QueuedStreamingProvider(
         [
@@ -1062,6 +1180,67 @@ public sealed class ChatRuntimeStreamingBufferTests
             .Where(message => message.Role == "system" &&
                               message.Content?.Contains("no successful mutating tool execution") == true)
             .Should().BeEmpty();
+        provider.StreamRequests[1].Messages.Should().ContainSingle(message =>
+            message.Role == "system" &&
+            message.Content != null &&
+            message.Content.Contains("match that exact action", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ChatStreamAsync_WhenSingleUseToolSucceeds_ShouldRetireItBeforeTheNextRound()
+    {
+        var provider = new QueuedStreamingProvider(
+        [
+            [new LLMStreamChunk
+            {
+                DeltaToolCall = new ToolCall
+                {
+                    Id = "invoke-1",
+                    Name = "aevatar_invoke_member",
+                    ArgumentsJson = "{\"member_id\":\"m-alpha\"}",
+                },
+            }],
+            [new LLMStreamChunk
+            {
+                DeltaToolCall = new ToolCall
+                {
+                    Id = "invoke-2",
+                    Name = "aevatar_invoke_member",
+                    ArgumentsJson = "{\"member_id\":\"m-alpha\"}",
+                },
+            }],
+            [new LLMStreamChunk { DeltaContent = "dispatch accepted" }],
+        ]);
+        var invocationCount = 0;
+        var tools = new ToolManager();
+        tools.Register(new DelegateTool(
+            "aevatar_invoke_member",
+            _ =>
+            {
+                invocationCount++;
+                return "{\"run_id\":\"run-alpha\",\"status\":\"streaming\"}";
+            },
+            turnReusePolicy: AgentToolTurnReusePolicy.RetireAfterSuccess));
+        tools.Register(new DelegateTool(
+            "aevatar_observe_run",
+            _ => "{\"run_id\":\"run-alpha\",\"status\":\"running\"}",
+            isReadOnly: true));
+        var runtime = CreateRuntime(provider, tools: tools);
+
+        await foreach (var _ in runtime.ChatStreamAsync("run member", maxToolRounds: 3, turnCatalog: null))
+        {
+        }
+
+        invocationCount.Should().Be(1);
+        provider.StreamRequests.Should().HaveCount(3);
+        provider.StreamRequests[1].Tools.Should().NotContain(tool =>
+            tool.Name == "aevatar_invoke_member");
+        provider.StreamRequests[1].Tools.Should().Contain(tool =>
+            tool.Name == "aevatar_observe_run");
+        provider.StreamRequests[1].Messages.Should().Contain(message =>
+            message.Role == "system" &&
+            message.Content != null &&
+            message.Content.Contains("Do not call them again", StringComparison.Ordinal));
     }
 
     [Theory]
@@ -1710,6 +1889,28 @@ public sealed class ChatRuntimeStreamingBufferTests
         }
     }
 
+    private sealed class ResolvedSkillPresentationTool : IAgentTool
+    {
+        public string Name => "use_skill";
+        public string Description => "Loads one skill.";
+        public string ParametersSchema => "{}";
+        public ToolPresentationDescriptor Presentation =>
+            ToolPresentationDescriptors.Skill(Name, "Use skill", Description, string.Empty, "local-or-remote");
+
+        public ToolPresentationDescriptor ResolvePresentation(string argumentsJson) =>
+            ToolPresentationDescriptors.Skill(
+                Name,
+                "release-readiness-review",
+                Description,
+                argumentsJson.Contains("release-readiness-review", StringComparison.Ordinal)
+                    ? "release-readiness-review"
+                    : string.Empty,
+                "local-or-remote");
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult("{}");
+    }
+
     private sealed class StreamingProvider(
         IReadOnlyList<string> chunks,
         ToolCall? streamToolCall = null,
@@ -1809,7 +2010,8 @@ public sealed class ChatRuntimeStreamingBufferTests
         Func<string, string> execute,
         bool isReadOnly = false,
         bool isDestructive = false,
-        string sideEffectKind = "") : IAgentTool
+        string sideEffectKind = "",
+        AgentToolTurnReusePolicy turnReusePolicy = AgentToolTurnReusePolicy.Reusable) : IAgentTool
     {
         public string Name => name;
         public string Description => "delegate";
@@ -1817,6 +2019,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         public bool IsReadOnly => isReadOnly;
         public bool IsDestructive => isDestructive;
         public string SideEffectKind => sideEffectKind;
+        public AgentToolTurnReusePolicy TurnReusePolicy => turnReusePolicy;
         public AgentToolReceipt? CreateSuccessReceipt(
             string callId,
             string toolName,
@@ -1894,11 +2097,17 @@ public sealed class ChatRuntimeStreamingBufferTests
             ResultJson = resultJson,
         };
 
-    private sealed class ReceiptTool(string name, AgentToolReceiptStatus status) : IAgentTool
+    private sealed class ReceiptTool(
+        string name,
+        AgentToolReceiptStatus status,
+        bool isReadOnly = false,
+        string errorCode = "SAFE_TOOL_FAILURE",
+        string safeResultJson = "{\"error\":\"safe tool failure\"}") : IAgentTool
     {
         public string Name => name;
         public string Description => "returns a typed failed receipt";
         public string ParametersSchema => "{}";
+        public bool IsReadOnly => isReadOnly;
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
         {
@@ -1916,9 +2125,9 @@ public sealed class ChatRuntimeStreamingBufferTests
                 CallId = callId,
                 ToolName = toolName,
                 Status = status,
-                ErrorCode = "SAFE_TOOL_FAILURE",
+                ErrorCode = errorCode,
                 ErrorMessage = "The tool request failed.",
-                ResultJson = "{\"error\":\"safe tool failure\"}",
+                ResultJson = safeResultJson,
             };
     }
 }

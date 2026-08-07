@@ -203,7 +203,7 @@ public sealed class WorkflowLoopModuleCoverageTests
     }
 
     [Fact]
-    public async Task HandleAsync_WhenAlreadyRunning_ShouldPublishFailure()
+    public async Task HandleAsync_WhenDifferentRunAlreadyRunning_ShouldPublishFailure()
     {
         var module = new WorkflowLoopModule();
         module.SetWorkflow(BuildWorkflow(new StepDefinition { Id = "s1", Type = "llm_call" }));
@@ -215,13 +215,13 @@ public sealed class WorkflowLoopModuleCoverageTests
             ctx,
             CancellationToken.None);
         await module.HandleAsync(
-            Envelope(new StartWorkflowEvent { RunId = runId, Input = "second" }),
+            Envelope(new StartWorkflowEvent { RunId = "run-other", Input = "second" }),
             ctx,
             CancellationToken.None);
 
         var completed = SingleWorkflowCompletion(ctx);
         completed.Success.Should().BeFalse();
-        completed.RunId.Should().Be(runId);
+        completed.RunId.Should().Be("run-other");
         completed.Error.Should().Contain("already active");
     }
 

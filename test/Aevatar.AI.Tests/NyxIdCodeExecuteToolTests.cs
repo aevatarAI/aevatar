@@ -26,6 +26,19 @@ public class NyxIdCodeExecuteToolTests
     }
 
     [Fact]
+    public void ReplayContract_DeterministicSandboxComputation_IsReadOnlyRetryable()
+    {
+        IAgentTool tool = new NyxIdCodeExecuteTool(CreateDummyClient());
+        const string arguments = """{"language":"python","code":"print(1 + 1)"}""";
+
+        tool.GetCallSafety(arguments).Should().Be(new AgentToolCallSafety(
+            RequiresApproval: null,
+            IsReadOnly: true,
+            IsDestructive: false));
+        tool.ResolveReplayPolicy(arguments).Should().Be(AgentToolReplayPolicy.ReadOnlyRetryable);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_NoToken_ReturnsError()
     {
         var tool = new NyxIdCodeExecuteTool(CreateDummyClient());
@@ -131,6 +144,67 @@ public class NyxIdCodeExecuteToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_ProxyDelegation_UsesSourceReadableCredentialForSandbox()
+    {
+        var handler = new CaptureHandler();
+        using var httpClient = new HttpClient(handler);
+        var client = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
+            httpClient);
+        var tool = new NyxIdCodeExecuteTool(client);
+        AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
+        {
+            Credentials = new AgentToolCredentials(
+                "proxy-delegation-alpha",
+                null,
+                null,
+                AgentToolNyxIdCredentialKind.ProxyDelegation,
+                "source-readable-alpha"),
+        };
+
+        try
+        {
+            await tool.ExecuteAsync("""{"language":"python","code":"print(1)"}""");
+
+            handler.AuthorizationBearer.Should().Be("source-readable-alpha");
+        }
+        finally
+        {
+            ClearMetadata();
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ProxyDelegationWithoutSourceReadableCredential_UsesExecutionCredential()
+    {
+        var handler = new CaptureHandler();
+        using var httpClient = new HttpClient(handler);
+        var client = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
+            httpClient);
+        var tool = new NyxIdCodeExecuteTool(client);
+        AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
+        {
+            Credentials = new AgentToolCredentials(
+                "proxy-delegation-alpha",
+                null,
+                null,
+                AgentToolNyxIdCredentialKind.ProxyDelegation),
+        };
+
+        try
+        {
+            await tool.ExecuteAsync("""{"language":"python","code":"print(1)"}""");
+
+            handler.AuthorizationBearer.Should().Be("proxy-delegation-alpha");
+        }
+        finally
+        {
+            ClearMetadata();
+        }
+    }
+
+    [Fact]
     public void CreateResultReceipt_Http401_ShouldReturnTypedFailure()
     {
         var tool = new NyxIdCodeExecuteTool(CreateDummyClient());
@@ -162,6 +236,79 @@ public class NyxIdCodeExecuteToolTests
 
         receipt.Should().NotBeNull();
         receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+    }
+
+    [Fact]
+    public async Task ExecuteWithOutcomeAsync_ChronoSandboxSuccessEnvelope_ShouldReturnVerifiedSuccess()
+    {
+        const string result =
+            """{"success":true,"output":{"stdout":"2\n","stderr":"","exit_code":0,"execution_time_ms":17}}""";
+        var handler = new CaptureHandler(result);
+        using var httpClient = new HttpClient(handler);
+        var client = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
+            httpClient);
+        var tool = new NyxIdCodeExecuteTool(client);
+        SetMetadata("test-token", null);
+
+        try
+        {
+            var outcome = await ((IAgentTool)tool).ExecuteWithOutcomeAsync(
+                "call-envelope-success",
+                tool.Name,
+                """{"language":"javascript","code":"console.log(1 + 1)"}""");
+            var receipt = ((IAgentTool)tool).CreateResultReceipt(
+                "call-envelope-success",
+                tool.Name,
+                """{"language":"javascript","code":"console.log(1 + 1)"}""",
+                outcome.ResultJson);
+
+            receipt.Should().NotBeNull();
+            receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        }
+        finally
+        {
+            ClearMetadata();
+        }
+    }
+
+    [Fact]
+    public void CreateResultReceipt_ChronoSandboxErrorEnvelope_ShouldReturnTypedFailure()
+    {
+        var tool = new NyxIdCodeExecuteTool(CreateDummyClient());
+        const string result =
+            """{"success":false,"output":{"stdout":"","stderr":"safe failure","exit_code":1,"execution_time_ms":9},"error":{"code":"EXECUTION_FAILED","message":"Script exited with code 1"}}""";
+
+        var receipt = ((IAgentTool)tool).CreateResultReceipt(
+            "call-envelope-error",
+            tool.Name,
+            """{"language":"javascript","code":"throw new Error()"}""",
+            result);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ErrorCode.Should().Be("CODE_EXECUTE_FAILED");
+        receipt.ResultJson.Should().NotContain("safe failure");
+    }
+
+    [Theory]
+    [InlineData("""{"success":true,"output":{"exit_code":1}}""")]
+    [InlineData("""{"success":false,"output":{"exit_code":0},"error":{"code":"EXECUTION_FAILED"}}""")]
+    [InlineData("""{"success":false,"output":{"exit_code":1}}""")]
+    [InlineData("""{"success":true,"output":{}}""")]
+    [InlineData("""{"success":"true","output":{"exit_code":0}}""")]
+    public void CreateResultReceipt_ContradictorySandboxEnvelope_ShouldLeaveOutcomeUnverified(
+        string result)
+    {
+        var tool = new NyxIdCodeExecuteTool(CreateDummyClient());
+
+        var receipt = ((IAgentTool)tool).CreateResultReceipt(
+            "call-envelope-unknown",
+            tool.Name,
+            """{"language":"javascript","code":"console.log(1)"}""",
+            result);
+
+        receipt.Should().BeNull();
     }
 
     [Fact]
@@ -209,7 +356,14 @@ public class NyxIdCodeExecuteToolTests
         };
         if (servicesContext is not null)
             metadata[LLMRequestMetadataKeys.ConnectedServicesContext] = servicesContext;
-        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(metadata);
+        var context = global::TestAgentToolContexts.FromMetadata(metadata);
+        AgentToolRequestContext.Current = context with
+        {
+            Credentials = context.Credentials with
+            {
+                NyxIdCredentialKind = AgentToolNyxIdCredentialKind.SourceReadableUserBearer,
+            },
+        };
     }
 
     private static void ClearMetadata()
@@ -219,16 +373,25 @@ public class NyxIdCodeExecuteToolTests
 
     private sealed class CaptureHandler : HttpMessageHandler
     {
+        private readonly string _response;
+
+        public CaptureHandler(string response = """{"success":true}""")
+        {
+            _response = response;
+        }
+
         public string? LastRequestUri { get; private set; }
+        public string? AuthorizationBearer { get; private set; }
 
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken)
         {
             LastRequestUri = request.RequestUri?.ToString();
+            AuthorizationBearer = request.Headers.Authorization?.Parameter;
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent("""{"success":true}"""),
+                Content = new StringContent(_response),
             });
         }
     }

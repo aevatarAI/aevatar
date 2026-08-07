@@ -125,7 +125,7 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
                 new LarkCardKitStreamElementContentRequest(
                     CardId: cardId,
                     ElementId: streamingElementId,
-                    Content: chunk.AccumulatedText,
+                    Content: LarkJsonTableFormatter.FormatAsKeyValueText(chunk.AccumulatedText),
                     Sequence: 1,
                     IdempotencyKey: $"{chunk.CorrelationId}-1"),
                 ct);
@@ -201,7 +201,7 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
                 new LarkCardKitStreamElementContentRequest(
                     CardId: cardId,
                     ElementId: elementId,
-                    Content: chunk.AccumulatedText,
+                    Content: LarkJsonTableFormatter.FormatAsKeyValueText(chunk.AccumulatedText),
                     Sequence: sequence,
                     IdempotencyKey: $"{chunk.CorrelationId}-{sequence}"),
                 ct);
@@ -236,13 +236,38 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
 
         var (cardKit, _) = ResolveOutboundClients(referenceActivity);
 
-        // 1. If final text drifted from the last flushed interim, write it before closing
-        //    streaming mode. Order matters: closing streaming first would freeze the cursor
-        //    on the stale text. Track whether the trailing write actually landed so the
-        //    actor can pick the right user-visible text on a partial-failure terminal.
+        // 1. Complete JSON is finalized as a native Card JSON 2.0 table. Other content keeps
+        //    the existing trailing stream write. Order matters: closing streaming first would
+        //    freeze the cursor on stale text. Track whether the final presentation landed so
+        //    the actor can report the right visible text on a partial-failure terminal.
         long workingSequence = sequence;
         var finalTextWritten = !finalTextDiffersFromLastFlushed || string.IsNullOrWhiteSpace(finalText);
-        if (finalTextDiffersFromLastFlushed && !string.IsNullOrWhiteSpace(finalText))
+        var jsonTableCard = TryComposeJsonTableCard(finalText, referenceActivity);
+        if (jsonTableCard is not null)
+        {
+            try
+            {
+                var updateResponse = await cardKit.UpdateCardAsync(
+                    token,
+                    new LarkCardKitUpdateRequest(
+                        CardId: cardId,
+                        CardJson: jsonTableCard,
+                        Sequence: workingSequence,
+                        IdempotencyKey: $"json-table-{cardId}-{workingSequence}"),
+                    ct);
+                if (LarkProxyResponseParser.TryParseError(updateResponse, out var updateError))
+                    return ConversationCardFinalizeResult.Failed("card_final_table_update_failed", updateError, finalTextWritten: false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "CardKit JSON table finalization threw for card_id={CardId}, seq={Sequence}", cardId, workingSequence);
+                return ConversationCardFinalizeResult.Failed("card_final_table_update_threw", ex.Message, finalTextWritten: false);
+            }
+
+            finalTextWritten = true;
+            workingSequence++;
+        }
+        else if (finalTextDiffersFromLastFlushed && !string.IsNullOrWhiteSpace(finalText))
         {
             try
             {
@@ -288,6 +313,21 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
         }
 
         return ConversationCardFinalizeResult.Succeeded();
+    }
+
+    private static string? TryComposeJsonTableCard(string? text, ChatActivity referenceActivity)
+    {
+        if (!LarkJsonTableFormatter.ContainsConvertibleJson(text))
+            return null;
+
+        var composed = new LarkMessageComposer().Compose(
+            new MessageContent { Text = text ?? string.Empty },
+            new ComposeContext
+            {
+                Conversation = referenceActivity.Conversation?.Clone() ?? new ConversationReference(),
+                Capabilities = LarkMessageComposer.DefaultCapabilities.Clone(),
+            });
+        return composed.IsInteractive ? composed.ContentJson : null;
     }
 
     // Refactor (iter17/cluster-038):

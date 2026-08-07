@@ -75,6 +75,7 @@ internal static class ChatRuntimeRequestBuilder
             Model = baseRequest.Model,
             Temperature = baseRequest.Temperature,
             MaxTokens = baseRequest.MaxTokens,
+            AllowMultipleToolCalls = baseRequest.AllowMultipleToolCalls,
             ResponseFormat = baseRequest.ResponseFormat,
         };
     }
@@ -218,6 +219,7 @@ internal static class ChatRuntimeRequestBuilder
                 Model = request.Model,
                 Temperature = request.Temperature,
                 MaxTokens = request.MaxTokens,
+                AllowMultipleToolCalls = request.AllowMultipleToolCalls,
                 ResponseFormat = request.ResponseFormat,
             };
         }

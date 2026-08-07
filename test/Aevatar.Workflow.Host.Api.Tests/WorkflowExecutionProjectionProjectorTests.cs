@@ -5,6 +5,7 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Security;
+using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Security;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Projection;
@@ -804,6 +805,82 @@ public sealed class WorkflowExecutionProjectionProjectorTests
     }
 
     [Fact]
+    public void ApplyObservedPayloadToReport_ShouldPreserveTypedToolApprovalIdentity()
+    {
+        var document = new WorkflowRunInsightReportDocument();
+
+        WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(
+            document,
+            PackStateEvent(
+                new WorkflowSuspendedEvent
+                {
+                    RunId = "run-tool",
+                    StepId = "create_approval",
+                    SuspensionType = "tool_approval",
+                    Prompt = "Approve tool execution?",
+                    ToolApproval = new WorkflowToolApprovalSuspension
+                    {
+                        ExecutionId = "exec-alpha",
+                        ToolName = "nyxid_proxy",
+                        ToolCallId = "call-alpha",
+                        ApprovalRequestId = "approval-alpha",
+                    },
+                },
+                1,
+                "evt-tool-approval"),
+            DateTimeOffset.UnixEpoch);
+
+        var approval = new WorkflowExecutionReadModelMapper()
+            .ToRunReport(document)
+            .Steps.Should().ContainSingle().Subject;
+        approval.SuspensionType.Should().Be("tool_approval");
+        approval.ToolApproval.Should().NotBeNull();
+        approval.ToolApproval!.ExecutionId.Should().Be("exec-alpha");
+        approval.ToolApproval.ToolName.Should().Be("nyxid_proxy");
+        approval.ToolApproval.ToolCallId.Should().Be("call-alpha");
+        approval.ToolApproval.ApprovalRequestId.Should().Be("approval-alpha");
+    }
+
+    [Fact]
+    public void ApplyObservedPayloadToReport_ShouldMaterializeToolApprovalResumeRejection()
+    {
+        var document = new WorkflowRunInsightReportDocument
+        {
+            RootActorId = "run-tool",
+        };
+
+        WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(
+            document,
+            PackStateEvent(
+                new WorkflowToolApprovalResumeRejectedEvent
+                {
+                    RunId = "run-tool",
+                    StepId = "create_approval",
+                    SubmittedApproval = new WorkflowToolApprovalResume
+                    {
+                        ExecutionId = "exec-alpha",
+                        ToolCallId = "call-alpha",
+                        ApprovalRequestId = "approval-stale",
+                    },
+                    Reason = WorkflowToolApprovalResumeRejectionReason.IdentityMismatch,
+                },
+                2,
+                "evt-tool-approval-resume-rejected"),
+            DateTimeOffset.UnixEpoch.AddSeconds(1));
+
+        var timeline = new WorkflowExecutionReadModelMapper()
+            .ToRunReport(document)
+            .Timeline.Should().ContainSingle().Subject;
+        timeline.Stage.Should().Be("tool_approval.resume_rejected");
+        timeline.StepId.Should().Be("create_approval");
+        timeline.StepType.Should().Be("tool_call");
+        timeline.Data.Should().ContainKey("reason").WhoseValue.Should().Be("IdentityMismatch");
+        timeline.Data.Should().ContainKey("execution_id").WhoseValue.Should().Be("exec-alpha");
+        timeline.Data.Should().ContainKey("tool_call_id").WhoseValue.Should().Be("call-alpha");
+        timeline.Data.Should().ContainKey("approval_request_id").WhoseValue.Should().Be("approval-stale");
+    }
+
+    [Fact]
     public void ReportArtifact_ShouldOwnTimelineAndGraphMaterializationInputs()
     {
         var report = new WorkflowRunInsightReportDocument
@@ -1004,6 +1081,52 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         fileRef.ExpiresAtUnixMs.Should().Be(1710003600000);
         fileRef.OwnerRunId.Should().Be("run-owner");
         fileRef.OwnerScopeId.Should().Be("scope-owner");
+    }
+
+    [Fact]
+    public async Task WorkflowExecutionCurrentStateProjector_ShouldExposePendingToolApprovalStatus()
+    {
+        var dispatcher = new RecordingWriteDispatcher<WorkflowExecutionCurrentStateDocument>();
+        var projector = new WorkflowExecutionCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-08-04T09:00:00+00:00")));
+        var state = new WorkflowRunState
+        {
+            RunId = "run-approval",
+            Status = "running",
+        };
+        state.ExecutionStates["tool_call"] = Any.Pack(new ToolCallModuleState
+        {
+            PendingApprovals =
+            {
+                ["approval-key"] = new PendingToolCallApprovalState
+                {
+                    RunId = "run-approval",
+                    StepId = "write_record",
+                    ExecutionId = "exec-alpha",
+                    ToolName = "nyxid_proxy",
+                    ToolCallId = "call-alpha",
+                    ApprovalRequestId = "approval-alpha",
+                },
+            },
+        });
+
+        await projector.ProjectAsync(
+            CreateContext(),
+            WrapCommitted(
+                new WorkflowSuspendedEvent
+                {
+                    RunId = "run-approval",
+                    StepId = "write_record",
+                    SuspensionType = "tool_approval",
+                },
+                state));
+
+        var document = dispatcher.Upserts.Should().ContainSingle().Subject;
+        document.Status.Should().Be("awaiting_tool_approval");
+        new WorkflowExecutionReadModelMapper()
+            .ToActorSnapshot(document)
+            .CompletionStatus.Should().Be(WorkflowRunCompletionStatus.AwaitingToolApproval);
     }
 
     [Fact]

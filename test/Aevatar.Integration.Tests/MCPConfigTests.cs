@@ -29,6 +29,11 @@ public class MCPConfigTests
                 },
                 "beta": {
                   "command": "python"
+                },
+                "remote": {
+                  "url": "https://mcp.example.com/mcp",
+                  "headers": { "x-tenant": "demo" },
+                  "timeoutMs": 23456
                 }
               }
             }
@@ -38,7 +43,7 @@ public class MCPConfigTests
         {
             var servers = AevatarMCPConfig.LoadServers(path);
 
-            servers.Should().HaveCount(2);
+            servers.Should().HaveCount(3);
             var alpha = servers.Single(x => x.Name == "alpha");
             alpha.Command.Should().Be("node");
             alpha.Args.Should().Equal("server.js", "--stdio");
@@ -51,6 +56,12 @@ public class MCPConfigTests
             beta.Args.Should().BeEmpty();
             beta.TimeoutMs.Should().Be(60000);
             beta.Env.Should().BeEmpty();
+
+            var remote = servers.Single(x => x.Name == "remote");
+            remote.Command.Should().BeEmpty();
+            remote.Url.Should().Be("https://mcp.example.com/mcp");
+            remote.Headers.Should().ContainKey("x-tenant").WhoseValue.Should().Be("demo");
+            remote.TimeoutMs.Should().Be(23456);
         }
         finally
         {

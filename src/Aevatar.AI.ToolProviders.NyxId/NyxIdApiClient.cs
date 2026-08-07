@@ -79,6 +79,12 @@ internal sealed record NyxIdProxyError(
 /// <summary>HTTP client for calling NyxID REST API endpoints.</summary>
 public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
 {
+    private enum ProxyCredentialTransport
+    {
+        AuthorizationBearer,
+        ApiKeyHeader,
+    }
+
     /// <summary>
     /// Default <c>User-Agent</c> injected on every call to <see cref="ProxyRequestAsync"/>
     /// when the caller does not specify one in <c>extraHeaders</c>. GitHub's REST API rejects
@@ -90,6 +96,7 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
     /// happen to send <c>reqwest/x.y</c> as their default and so never hit this.
     /// </summary>
     public const string DefaultProxyUserAgent = "aevatar-agent-builder";
+    private const string ApiKeyHeaderName = "X-API-Key";
     private const string UserAgentHeaderName = "User-Agent";
 
     private readonly HttpClient _http;
@@ -293,6 +300,30 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
             ct);
     }
 
+    public Task<NyxIdProxyTextResponse> ProxyRequestBoundedWithApiKeyAsync(
+        string apiKey,
+        string slug,
+        string userServiceId,
+        string path,
+        string method,
+        string? body,
+        long maxBytes,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(apiKey);
+        ArgumentException.ThrowIfNullOrWhiteSpace(userServiceId);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxBytes);
+        return ProxyRequestBoundedWithApiKeyCoreAsync(
+            apiKey,
+            slug,
+            userServiceId.Trim(),
+            path,
+            method,
+            body,
+            maxBytes,
+            ct);
+    }
+
     public Task<NyxIdProxyTextResponse> GetLlmRouteModelsBoundedAsync(
         string token,
         LLMRouteKind routeKind,
@@ -429,6 +460,46 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
         return await SendTextResponseAsync(request, maxBytes, ct);
     }
 
+    private async Task<NyxIdProxyTextResponse> ProxyRequestBoundedWithApiKeyCoreAsync(
+        string apiKey,
+        string slug,
+        string userServiceId,
+        string path,
+        string method,
+        string? body,
+        long maxBytes,
+        CancellationToken ct)
+    {
+        using var request = CreateApiKeyProxyRequest(
+            apiKey,
+            slug,
+            userServiceId,
+            path,
+            method,
+            body);
+        return await SendTextResponseAsync(request, maxBytes, ct);
+    }
+
+    private HttpRequestMessage CreateApiKeyProxyRequest(
+        string apiKey,
+        string slug,
+        string userServiceId,
+        string path,
+        string method,
+        string? body)
+    {
+        var request = CreateProxyRequest(
+            apiKey,
+            slug,
+            userServiceId,
+            path,
+            method,
+            body,
+            extraHeaders: null,
+            ProxyCredentialTransport.ApiKeyHeader);
+        return request;
+    }
+
     private HttpRequestMessage CreateProxyRequest(
         string token,
         string slug,
@@ -436,12 +507,16 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
         string path,
         string method,
         string? body,
-        Dictionary<string, string>? extraHeaders)
+        Dictionary<string, string>? extraHeaders,
+        ProxyCredentialTransport credentialTransport = ProxyCredentialTransport.AuthorizationBearer)
     {
         var url = BuildProxyUrl(slug, userServiceId, path);
         var httpMethod = new HttpMethod(method.ToUpperInvariant());
         var request = new HttpRequestMessage(httpMethod, url);
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        if (credentialTransport == ProxyCredentialTransport.ApiKeyHeader)
+            request.Headers.Add(ApiKeyHeaderName, token);
+        else
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
         var callerSpecifiedUserAgent = ApplyExtraHeaders(request, extraHeaders);
         if (!callerSpecifiedUserAgent)
@@ -1516,19 +1591,6 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
                 request,
                 HttpCompletionOption.ResponseHeadersRead,
                 ct);
-            if (!response.IsSuccessStatusCode)
-            {
-                _logger.LogWarning(
-                    "NyxID bounded proxy request failed: {Method} -> {Status}",
-                    request.Method,
-                    (int)response.StatusCode);
-                return new NyxIdProxyTextResponse(
-                    false,
-                    string.Empty,
-                    Detail: "http_error",
-                    HttpStatus: (int)response.StatusCode);
-            }
-
             if (response.Content.Headers.ContentLength is { } contentLength &&
                 contentLength > maxBytes)
             {
@@ -1558,9 +1620,23 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
                     HttpStatus: (int)response.StatusCode);
             }
 
+            var text = Encoding.UTF8.GetString(content.Content);
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogWarning(
+                    "NyxID bounded proxy request failed: {Method} -> {Status}",
+                    request.Method,
+                    (int)response.StatusCode);
+                return new NyxIdProxyTextResponse(
+                    false,
+                    text,
+                    Detail: "http_error",
+                    HttpStatus: (int)response.StatusCode);
+            }
+
             return new NyxIdProxyTextResponse(
                 true,
-                Encoding.UTF8.GetString(content.Content),
+                text,
                 HttpStatus: (int)response.StatusCode);
         }
         catch (OperationCanceledException)

@@ -575,16 +575,18 @@ public class NyxIdChatGAgentTests
     }
 
     [Fact]
-    public async Task ActivateAsync_WithPendingHistoryInitialization_ShouldRepublishTypedSelfSignal()
+    public async Task ActivateAsync_WithPendingHistoryInitialization_ShouldScheduleTypedSelfCallback()
     {
         var registry = new RecordingGAgentActorRegistryCommandPort();
         var eventStore = new InMemoryEventStoreForTests();
         var initialDispatch = new RecordingSelfDispatchPort();
+        var callbacks = new RecordingRuntimeCallbackScheduler();
         using var provider = BuildServiceProvider(
             registry,
             new RecordingActorRuntime(),
             new RecordingChatHistoryCommandPort(),
-            eventStore);
+            eventStore,
+            callbacks);
         const string actorId = "nyxid-chat-history-reactivation";
         var initialAgent = CreateConversationAgent(provider, actorId, initialDispatch);
         await initialAgent.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatConversationCreateCommand
@@ -599,7 +601,12 @@ public class NyxIdChatGAgentTests
         await recovered.ActivateAsync();
 
         recovered.State.PendingHistoryInitialization.ToByteString().Should().Equal(pending.ToByteString());
-        var signal = recoveryDispatch.Calls.Should().ContainSingle().Which.Envelope.Payload
+        recoveryDispatch.Calls.Should().BeEmpty();
+        var callback = callbacks.TimeoutRequests.Should().ContainSingle().Which;
+        callback.TriggerEnvelope.Propagation.CorrelationId.Should().Be(pending.OperationId);
+        callback.TriggerEnvelope.Runtime.DeliveryIdentity.OperationId.Should().Be(
+            "history-initialization-dispatch-1b202924688a5c7b8a414ea320a55afc");
+        var signal = callback.TriggerEnvelope.Payload
             .Unpack<NyxIdChatHistoryInitializationDispatchRequested>();
         signal.OperationId.Should().Be(pending.OperationId);
         signal.Attempt.Should().Be(pending.Attempt);
@@ -935,7 +942,12 @@ public class NyxIdChatGAgentTests
             message.ToolCalls[0].Id == toolCallId);
         var deltas = eventPublisher.Published.OfType<TextMessageContentEvent>()
             .Select(x => x.Delta).ToList();
-        deltas.Should().ContainInOrder(round1Text, round2Text);
+        var streamedContent = string.Concat(deltas);
+        streamedContent.Should().StartWith(round1Text);
+        streamedContent.Should().EndWith(round2Text);
+        var streamedMiddle = streamedContent[round1Text.Length..^round2Text.Length];
+        streamedMiddle.Should().MatchRegex(@"^\s*$",
+            "delta batching may combine the whitespace-only round separator with adjacent content");
 
         // ─── Completion event ───
 
@@ -2515,9 +2527,10 @@ public class NyxIdChatGAgentTests
         string actorId,
         IActorDispatchPort? dispatchPort = null)
     {
+        var actorDispatchPort = dispatchPort ?? new NoopActorDispatchPort();
         var agent = new NyxIdChatConversationGAgent(
             provider.GetService<IActorRuntime>() ?? new RecordingActorRuntime(),
-            dispatchPort ?? new NoopActorDispatchPort(),
+            actorDispatchPort,
             TimeProvider.System)
         {
             Services = provider,
@@ -2527,6 +2540,9 @@ public class NyxIdChatGAgentTests
         var setId = typeof(Aevatar.Foundation.Core.GAgentBase)
             .GetMethod("SetId", BindingFlags.Instance | BindingFlags.NonPublic)!;
         setId.Invoke(agent, [actorId]);
+        agent.EventPublisher = new NyxIdChatTestSelfEventPublisher(
+            actorId,
+            actorDispatchPort);
         return agent;
     }
 

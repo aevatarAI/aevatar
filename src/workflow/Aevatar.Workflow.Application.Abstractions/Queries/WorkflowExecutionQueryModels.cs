@@ -124,6 +124,8 @@ public enum WorkflowRunCompletionStatus
     Stopped = 4,
     NotFound = 5,
     Disabled = 6,
+    AwaitingToolApproval = 7,
+    WaitingForSignal = 8,
     Unknown = 99,
 }
 
@@ -196,10 +198,19 @@ public sealed class WorkflowRunStepTrace
     public string SuspensionContent { get; set; } = string.Empty;
     public int? SuspensionTimeoutSeconds { get; set; }
     public string RequestedVariableName { get; set; } = string.Empty;
+    public WorkflowRunToolApproval? ToolApproval { get; set; }
     public WorkflowRunUsageMetrics Usage { get; set; } = new();
     public double? DurationMs => RequestedAt.HasValue && CompletedAt.HasValue
         ? Math.Max(0, (CompletedAt.Value - RequestedAt.Value).TotalMilliseconds)
         : null;
+}
+
+public sealed class WorkflowRunToolApproval
+{
+    public string ExecutionId { get; set; } = string.Empty;
+    public string ToolName { get; set; } = string.Empty;
+    public string ToolCallId { get; set; } = string.Empty;
+    public string ApprovalRequestId { get; set; } = string.Empty;
 }
 
 public sealed class WorkflowRunRoleReply

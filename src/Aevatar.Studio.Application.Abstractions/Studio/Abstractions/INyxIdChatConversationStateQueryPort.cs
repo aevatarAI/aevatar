@@ -139,7 +139,17 @@ public sealed record NyxIdChatConversationTaskSnapshot(
     string? SafeMessage,
     DateTimeOffset? CreatedAt,
     DateTimeOffset? UpdatedAt,
-    IReadOnlyList<NyxIdChatConversationStepSnapshot> Steps);
+    IReadOnlyList<NyxIdChatConversationStepSnapshot> Steps,
+    int SchemaVersion = 4,
+    string? ActorId = null,
+    string? PlanId = null,
+    int PlanRevision = 1,
+    string? Title = null,
+    NyxIdChatConversationPlanGateSnapshot? Gate = null);
+
+public sealed record NyxIdChatConversationPlanGateSnapshot(
+    string Mode,
+    string? Reason);
 
 public sealed record NyxIdChatConversationStepSnapshot(
     string StepId,
@@ -157,7 +167,60 @@ public sealed record NyxIdChatConversationStepSnapshot(
     bool SafeToSkip,
     NyxIdChatAvailableActionsSnapshot AvailableActions,
     DateTimeOffset? UpdatedAt,
-    NyxIdChatConversationOperationSnapshot? Operation);
+    NyxIdChatConversationOperationSnapshot? Operation,
+    NyxIdChatConversationStepSourceSnapshot? Source = null,
+    string? AddedBy = null,
+    IReadOnlyList<string>? DependsOn = null,
+    NyxIdChatConversationStepEstimateSnapshot? Estimate = null,
+    IReadOnlyList<NyxIdChatConversationSubstepSnapshot>? Substeps = null);
+
+public sealed record NyxIdChatConversationStepEstimateSnapshot(
+    string Kind,
+    int Seconds);
+
+public sealed record NyxIdChatConversationSubstepSnapshot(
+    string SubstepId,
+    string Title,
+    string Status);
+
+public sealed record NyxIdChatConversationStepSourceSnapshot(
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    NyxIdChatLLMStepSourceSnapshot? Llm = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    NyxIdChatToolStepSourceSnapshot? Tool = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    NyxIdChatBrowserActionStepSourceSnapshot? BrowserAction = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    NyxIdChatPostconditionStepSourceSnapshot? Postcondition = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    NyxIdChatInputStepSourceSnapshot? Input = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    NyxIdChatApprovalStepSourceSnapshot? Approval = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    NyxIdChatWebStepSourceSnapshot? Web = null);
+
+public sealed record NyxIdChatLLMStepSourceSnapshot(string Model);
+
+public sealed record NyxIdChatToolStepSourceSnapshot(
+    string ToolName,
+    string? ServiceSlug,
+    string? ServiceId,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? ReadinessCapabilityId);
+
+public sealed record NyxIdChatBrowserActionStepSourceSnapshot(
+    string Action,
+    string? ActionRequestId);
+
+public sealed record NyxIdChatPostconditionStepSourceSnapshot(
+    string? ActionRequestId,
+    string? PostconditionKind);
+
+public sealed record NyxIdChatInputStepSourceSnapshot(string? RequestId);
+
+public sealed record NyxIdChatApprovalStepSourceSnapshot(string? ApprovalRequestId);
+
+public sealed record NyxIdChatWebStepSourceSnapshot;
 
 public sealed record NyxIdChatAvailableActionsSnapshot(
     bool Retry,

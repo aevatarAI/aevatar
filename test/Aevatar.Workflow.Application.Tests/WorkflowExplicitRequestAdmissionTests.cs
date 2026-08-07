@@ -168,6 +168,44 @@ public sealed class WorkflowExplicitRequestAdmissionTests
         plan.ToString().Should().NotContain(bearerDigest);
     }
 
+    [Fact]
+    public async Task AdmitAsync_WithInteractiveReadinessAndDurableGrantMode_ShouldPreserveDurablePolicy()
+    {
+        var service = CreateService();
+
+        var plan = await service.AdmitAsync(Request(
+            WorkflowYaml,
+            ExternalCapabilityExecutionMode.Interactive,
+            [MatchingConfirmation()],
+            ExternalCapabilityExecutionMode.Durable));
+
+        plan.ExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Interactive);
+        var admission = plan.InvocationAdmissions.Should().ContainSingle().Which;
+        admission.NyxIdExplicitRequestGrant.AllowedExecutionModes.Should().Equal(
+            ExternalCapabilityExecutionMode.Interactive,
+            ExternalCapabilityExecutionMode.Durable);
+        admission.Capability.NyxIdUserRequest.ExecutionPolicy.AllowedExecutionModes.Should().Equal(
+            ExternalCapabilityExecutionMode.Interactive,
+            ExternalCapabilityExecutionMode.Durable);
+    }
+
+    [Fact]
+    public async Task AdmitAsync_WithDurableGrantModeNotAllowedByReadiness_ShouldReject()
+    {
+        var service = CreateService(new ExplicitRequestSource(allowDurable: false));
+
+        Func<Task> act = async () => await service.AdmitAsync(Request(
+            WorkflowYaml,
+            ExternalCapabilityExecutionMode.Interactive,
+            [MatchingConfirmation()],
+            ExternalCapabilityExecutionMode.Durable));
+
+        var exception = await act.Should().ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
+        exception.Which.Readiness.Status.Should().Be(ExternalCapabilityReadinessStatus.ContractDrift);
+        exception.Which.Readiness.Blockers.Should().ContainSingle().Which.Code.Should()
+            .Be("NYXID_EXPLICIT_REQUEST_INTERACTIVE_REQUIRED");
+    }
+
     [Theory]
     [InlineData("wf-beta", "rev-alpha")]
     [InlineData("wf-alpha", "rev-beta")]
@@ -243,11 +281,12 @@ public sealed class WorkflowExplicitRequestAdmissionTests
     [InlineData("PUT", NyxIdOperationRisk.Write)]
     [InlineData("PATCH", NyxIdOperationRisk.Write)]
     [InlineData("DELETE", NyxIdOperationRisk.Destructive)]
-    public async Task AdmitAsync_WithDurableApprovalRequiredExplicitRequest_ShouldRequireInteractive(
+    public async Task AdmitAsync_WithExactCatalogAndConfirmation_ShouldAdmitDurableMutatingRequest(
         string method,
         NyxIdOperationRisk risk)
     {
-        var service = CreateService();
+        var handler = new UserServiceKeysHandler();
+        var service = CreateService(CreateRealSource(handler, ReadyCatalogSnapshot()));
         var workflowYaml = MutatingWorkflowYaml(method);
         var confirmation = new NyxIdExplicitRequestConfirmation
         {
@@ -259,10 +298,48 @@ public sealed class WorkflowExplicitRequestAdmissionTests
             RevisionId = "rev-alpha",
         };
 
-        Func<Task> act = async () => await service.AdmitAsync(Request(
+        var plan = await service.AdmitAsync(Request(
             workflowYaml,
             ExternalCapabilityExecutionMode.Durable,
             [confirmation]));
+
+        var admission = plan.InvocationAdmissions.Should().ContainSingle().Subject;
+        admission.NyxIdExplicitRequestGrant.Risk.Should().Be(risk);
+        admission.NyxIdExplicitRequestGrant.AllowedExecutionModes.Should().Equal(
+            ExternalCapabilityExecutionMode.Interactive,
+            ExternalCapabilityExecutionMode.Durable);
+        admission.Capability.NyxIdUserRequest.ExecutionPolicy.Risk.Should().Be(risk);
+        admission.Capability.NyxIdUserRequest.ExecutionPolicy.AllowedExecutionModes.Should().Equal(
+            ExternalCapabilityExecutionMode.Interactive,
+            ExternalCapabilityExecutionMode.Durable);
+        handler.Paths.Should().Equal("/api/v1/keys");
+    }
+
+    [Theory]
+    [InlineData("POST", NyxIdOperationRisk.Write)]
+    [InlineData("PUT", NyxIdOperationRisk.Write)]
+    [InlineData("PATCH", NyxIdOperationRisk.Write)]
+    [InlineData("DELETE", NyxIdOperationRisk.Destructive)]
+    public async Task AdmitAsync_WithInteractiveReadinessAndDurableGrantForMutation_ShouldRequireInteractive(
+        string method,
+        NyxIdOperationRisk risk)
+    {
+        var service = CreateService(new ExplicitRequestSource(risk, allowDurable: false));
+        var confirmation = new NyxIdExplicitRequestConfirmation
+        {
+            CallSiteId = "wf-mutating/request-mutating",
+            RequestContractDigest = WorkflowCapabilityAdmissionPlanIntegrity
+                .ComputeNyxIdRequestContractDigest(MutatingSelector(method)),
+            AttestedRisk = risk,
+            WorkflowId = "wf-alpha",
+            RevisionId = "rev-alpha",
+        };
+
+        Func<Task> act = async () => await service.AdmitAsync(Request(
+            MutatingWorkflowYaml(method),
+            ExternalCapabilityExecutionMode.Interactive,
+            [confirmation],
+            ExternalCapabilityExecutionMode.Durable));
 
         var exception = await act.Should().ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
         exception.Which.Readiness.Status.Should().Be(ExternalCapabilityReadinessStatus.ContractDrift);
@@ -370,22 +447,22 @@ public sealed class WorkflowExplicitRequestAdmissionTests
     [InlineData("HEAD", NyxIdOperationRisk.Destructive)]
     [InlineData("OPTIONS", NyxIdOperationRisk.Write)]
     [InlineData("OPTIONS", NyxIdOperationRisk.Destructive)]
-    public async Task AdmitAsync_WithDurableElevatedRiskSafeRequest_ShouldRequireInteractive(
+    public async Task AdmitAsync_WithDurableElevatedRiskSafeRequest_ShouldReturnRiskMismatch(
         string method,
         NyxIdOperationRisk currentRisk)
     {
         var service = CreateService(new ExplicitRequestSource(currentRisk));
-        var workflowYaml = SafeWorkflowYaml(method);
+        var workflowYaml = SafeReadOnlyWorkflowYaml(method);
 
         Func<Task> act = async () => await service.AdmitAsync(Request(
             workflowYaml,
             ExternalCapabilityExecutionMode.Durable,
-            [SafeConfirmation(method, currentRisk)]));
+            [SafeConfirmation(SafeReadOnlySelector(method), currentRisk)]));
 
         var exception = await act.Should().ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
         exception.Which.Readiness.Status.Should().Be(ExternalCapabilityReadinessStatus.ContractDrift);
         exception.Which.Readiness.Blockers.Should().ContainSingle().Which.Code.Should()
-            .Be("NYXID_EXPLICIT_REQUEST_INTERACTIVE_REQUIRED");
+            .Be("NYXID_EXPLICIT_REQUEST_CONFIRMATION_RISK_MISMATCH");
     }
 
     [Theory]
@@ -458,7 +535,8 @@ public sealed class WorkflowExplicitRequestAdmissionTests
     private static WorkflowExternalCapabilityAdmissionRequest Request(
         string workflowYaml,
         ExternalCapabilityExecutionMode executionMode,
-        IReadOnlyList<NyxIdExplicitRequestConfirmation>? confirmations = null) =>
+        IReadOnlyList<NyxIdExplicitRequestConfirmation>? confirmations = null,
+        ExternalCapabilityExecutionMode? explicitRequestGrantMode = null) =>
         new(
             Access(),
             workflowYaml,
@@ -467,7 +545,8 @@ public sealed class WorkflowExplicitRequestAdmissionTests
             executionMode,
             confirmations,
             workflowId: "wf-alpha",
-            revisionId: "rev-alpha");
+            revisionId: "rev-alpha",
+            explicitRequestGrantMode: explicitRequestGrantMode);
 
     private static ExternalWorkflowCapabilityAccessContext Access() =>
         new(
@@ -603,21 +682,52 @@ public sealed class WorkflowExplicitRequestAdmissionTests
             ResponseMode = NyxIdRequestResponseMode.Text,
         };
 
+    private static string SafeReadOnlyWorkflowYaml(string method) => $$"""
+        name: wf-safe
+        steps:
+          - id: request-safe
+            type: tool_call
+            capability:
+              nyxid_request:
+                user_service_id: usvc-alpha
+                method: {{method}}
+                path_template: /api/resources
+                body_mode: none
+                response_mode: text
+                risk: read_only
+            parameters:
+              tool: nyxid_proxy
+              arguments: '{}'
+        """;
+
+    private static NyxIdRequestSelector SafeReadOnlySelector(string method)
+    {
+        var selector = SafeSelector(method);
+        selector.Risk = NyxIdOperationRisk.ReadOnly;
+        return selector;
+    }
+
     private static NyxIdExplicitRequestConfirmation SafeConfirmation(
         string method,
+        NyxIdOperationRisk risk) =>
+        SafeConfirmation(SafeSelector(method), risk);
+
+    private static NyxIdExplicitRequestConfirmation SafeConfirmation(
+        NyxIdRequestSelector selector,
         NyxIdOperationRisk risk) =>
         new()
         {
             CallSiteId = "wf-safe/request-safe",
             RequestContractDigest = WorkflowCapabilityAdmissionPlanIntegrity
-                .ComputeNyxIdRequestContractDigest(SafeSelector(method)),
+                .ComputeNyxIdRequestContractDigest(selector),
             AttestedRisk = risk,
             WorkflowId = "wf-alpha",
             RevisionId = "rev-alpha",
         };
 
     private sealed class ExplicitRequestSource(
-        NyxIdOperationRisk currentRisk = NyxIdOperationRisk.ReadOnly) : IExternalWorkflowCapabilitySource
+        NyxIdOperationRisk currentRisk = NyxIdOperationRisk.ReadOnly,
+        bool allowDurable = true) : IExternalWorkflowCapabilitySource
     {
         public ExternalWorkflowCapabilitySelector.SelectorOneofCase SelectorKind =>
             ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdRequest;
@@ -636,6 +746,17 @@ public sealed class WorkflowExplicitRequestAdmissionTests
             var request = selector.NyxIdRequest.Clone();
             var requestDigest = WorkflowCapabilityAdmissionPlanIntegrity
                 .ComputeNyxIdRequestContractDigest(request);
+            var executionPolicy = new NyxIdOperationExecutionPolicy
+            {
+                Risk = currentRisk,
+                Approval = currentRisk == NyxIdOperationRisk.ReadOnly
+                    ? NyxIdOperationApproval.None
+                    : NyxIdOperationApproval.Required,
+                EnforcementOwner = NyxIdOperationEnforcementOwner.Aevatar,
+            };
+            executionPolicy.AllowedExecutionModes.Add(ExternalCapabilityExecutionMode.Interactive);
+            if (allowDurable)
+                executionPolicy.AllowedExecutionModes.Add(ExternalCapabilityExecutionMode.Durable);
             var capability = new ExternalWorkflowCapabilityRef
             {
                 NyxIdUserRequest = new NyxIdUserRequestCapabilityRef
@@ -644,19 +765,7 @@ public sealed class WorkflowExplicitRequestAdmissionTests
                     ServiceSlugSnapshot = "svc-alpha",
                     ContractDigest = WorkflowCapabilityAdmissionPlanIntegrity
                         .ComputeNyxIdExplicitRequestProofDigest(requestDigest, "svc-alpha"),
-                    ExecutionPolicy = new NyxIdOperationExecutionPolicy
-                    {
-                        Risk = currentRisk,
-                        Approval = currentRisk == NyxIdOperationRisk.ReadOnly
-                            ? NyxIdOperationApproval.None
-                            : NyxIdOperationApproval.Required,
-                        EnforcementOwner = NyxIdOperationEnforcementOwner.Aevatar,
-                        AllowedExecutionModes =
-                        {
-                            ExternalCapabilityExecutionMode.Interactive,
-                            ExternalCapabilityExecutionMode.Durable,
-                        },
-                    },
+                    ExecutionPolicy = executionPolicy,
                 },
             };
             var result = new ExternalCapabilityReadiness

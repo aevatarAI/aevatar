@@ -43,6 +43,9 @@ public sealed class LLMRequest
     /// <summary>Optional maximum number of output tokens.</summary>
     public int? MaxTokens { get; init; }
 
+    /// <summary>Optional provider constraint for whether one response may contain multiple tool calls.</summary>
+    public bool? AllowMultipleToolCalls { get; init; }
+
     /// <summary>Optional response format constraint (Text / JsonObject / JsonSchema).</summary>
     public LLMResponseFormat? ResponseFormat { get; init; }
 

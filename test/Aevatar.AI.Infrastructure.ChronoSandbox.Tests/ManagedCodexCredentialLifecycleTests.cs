@@ -1010,12 +1010,15 @@ public sealed class ManagedCodexCredentialLifecycleTests
             Arg.Any<CancellationToken>());
     }
 
-    [Fact]
-    public async Task ProvisionAsync_CreatesExactKeyAndPersistsOnlyTheVaultReference()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ProvisionAsync_WithEitherSandboxForwardingPolicy_CreatesExactKeyAndPersistsOnlyTheVaultReference(
+        bool forwardAccessToken)
     {
         var handler = new RoutingHandler(
             MeResponse(),
-            UserServicesResponse(),
+            UserServicesResponse(forwardAccessToken: forwardAccessToken),
             """{"keys":[]}""",
             IssuedKeyResponse("key-1", RawKey),
             ApiKeyListResponse("key-1", Now.AddDays(30)));
@@ -1197,6 +1200,33 @@ public sealed class ManagedCodexCredentialLifecycleTests
             .EnumerateArray()
             .Select(static value => value.GetString())
             .Should().Equal("us-sandbox", "us-llm");
+    }
+
+    [Theory]
+    [InlineData(401, "managed_user_authentication_failed")]
+    [InlineData(403, "managed_user_authorization_denied")]
+    public async Task RotateApiKeyAsync_WhenNyxIdRejectsCaller_PreservesAuthenticationBoundary(
+        int status,
+        string expectedCode)
+    {
+        var handler = new StatusRoutingHandler(
+            (HttpStatusCode)status,
+            $$"""{"error":"denied","message":"denied {{RawKey}}"}""");
+        var client = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+        var port = new NyxIdManagedCodexCredentialAdapter(
+            new TestNyxIdApiClientFactory(client));
+
+        var act = () => port.RotateApiKeyAsync(
+            "user-bearer",
+            "key-a",
+            CancellationToken.None);
+
+        var exception = (await act.Should()
+            .ThrowAsync<ManagedCodexCredentialLifecycleException>()).Which;
+        exception.Code.Should().Be(expectedCode);
+        exception.ToString().Should().NotContain(RawKey);
     }
 
     [Fact]
@@ -1460,7 +1490,6 @@ public sealed class ManagedCodexCredentialLifecycleTests
 
     [Theory]
     [InlineData(false, true, false, true, "proxy:*", "managed_user_services_unavailable")]
-    [InlineData(true, true, true, true, "proxy:*", "chrono_sandbox_delegation_misconfigured")]
     [InlineData(true, true, false, false, "proxy:*", "chrono_sandbox_delegation_misconfigured")]
     [InlineData(true, true, false, true, "llm:proxy", "chrono_sandbox_delegation_misconfigured")]
     [InlineData(true, true, false, true, "admin", "chrono_sandbox_delegation_misconfigured")]
@@ -3493,5 +3522,18 @@ public sealed class ManagedCodexCredentialLifecycleTests
                 Content = new StringContent(route(request), Encoding.UTF8, "application/json"),
             });
         }
+    }
+
+    private sealed class StatusRoutingHandler(
+        HttpStatusCode status,
+        string response) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(status)
+            {
+                Content = new StringContent(response, Encoding.UTF8, "application/json"),
+            });
     }
 }

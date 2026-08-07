@@ -29,17 +29,25 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Orleans;
 using Orleans.Hosting;
+using System.Text.Json;
 
 namespace Aevatar.Integration.Tests;
 
 public sealed class NyxIdChatWorkflowDeliveryOrleansIntegrationTests
 {
     [Theory]
-    [InlineData(WorkflowDeliveryInvocationKind.Team, ActivationCheckingServiceInvocationDispatcher.RunId)]
-    [InlineData(WorkflowDeliveryInvocationKind.Direct, ActivationCheckingWorkflowDispatchService.RunId)]
+    [InlineData(
+        WorkflowDeliveryInvocationKind.Team,
+        ActivationCheckingServiceInvocationDispatcher.RunId,
+        ActivationCheckingServiceInvocationDispatcher.CommandId)]
+    [InlineData(
+        WorkflowDeliveryInvocationKind.Direct,
+        ActivationCheckingWorkflowDispatchService.RunActorId,
+        ActivationCheckingWorkflowDispatchService.CommandId)]
     public async Task WorkflowDispatch_FromActorTurn_ShouldPreserveActivationSchedulerAfterReservation(
         WorkflowDeliveryInvocationKind invocationKind,
-        string expectedRunId)
+        string expectedRunId,
+        string expectedCommandId)
     {
         var probeActorId = $"workflow-delivery-probe-{Guid.NewGuid():N}";
         var childActorId = $"workflow-delivery-child-{Guid.NewGuid():N}";
@@ -68,6 +76,8 @@ public sealed class NyxIdChatWorkflowDeliveryOrleansIntegrationTests
             observer.Result.Should().NotBeNull();
             observer.Result!.ErrorCode.Should().BeEmpty();
             observer.Result.RunId.Should().Be(expectedRunId);
+            using var resultJson = JsonDocument.Parse(observer.Result.ToolExecutionResultJson);
+            resultJson.RootElement.GetProperty("command_id").GetString().Should().Be(expectedCommandId);
         }
         finally
         {
@@ -344,6 +354,7 @@ public sealed class NyxIdChatWorkflowDeliveryOrleansIntegrationTests
         WorkflowDeliveryDispatchObserver observer) : IServiceInvocationDispatcher
     {
         public const string RunId = "workflow-run-alpha";
+        public const string CommandId = "command-alpha";
 
         public async Task<ServiceInvocationAcceptedReceipt> DispatchAsync(
             ServiceInvocationResolvedTarget target,
@@ -371,7 +382,8 @@ public sealed class NyxIdChatWorkflowDeliveryOrleansIntegrationTests
         WorkflowDeliveryDispatchObserver observer)
         : ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
     {
-        public const string RunId = "command-alpha";
+        public const string RunActorId = "workflow-run-actor-alpha";
+        public const string CommandId = "command-alpha";
 
         public async Task<CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>> DispatchAsync(
             WorkflowChatRunRequest command,
@@ -380,7 +392,7 @@ public sealed class NyxIdChatWorkflowDeliveryOrleansIntegrationTests
             await actorRuntime.LinkAsync(observer.ParentActorId, observer.ChildActorId, ct);
             return CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>.Success(
                 new WorkflowChatRunAcceptedReceipt(
-                    "workflow-run-actor-alpha",
+                    RunActorId,
                     "workflow-alpha",
                     command.CommandIdSeed!,
                     command.CorrelationIdSeed!));

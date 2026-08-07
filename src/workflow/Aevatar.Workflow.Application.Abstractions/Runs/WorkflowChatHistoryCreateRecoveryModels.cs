@@ -36,6 +36,11 @@ public interface IWorkflowChatHistoryCreateRecoveryReadPort
         string scopeId,
         string commandId,
         CancellationToken ct = default);
+
+    Task<WorkflowChatHistoryCreateRecovery?> GetByConversationAsync(
+        string scopeId,
+        string conversationId,
+        CancellationToken ct = default);
 }
 
 public static class WorkflowChatHistoryCreateRecoveryIds

@@ -312,6 +312,34 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             ct);
     }
 
+    public async Task<TeamAutomationCommittedMutationReceipt> RetryTeamAutomationCredentialOperationAsync(
+        string scheduleId,
+        TeamMemberAutomationOwner owner,
+        string operationId,
+        string idempotencyKey,
+        CancellationToken ct = default)
+    {
+        var normalizedScheduleId = NormalizeScheduleId(scheduleId);
+        var normalizedOwner = NormalizeTeamOwner(owner);
+        var normalizedOperationId = NormalizeRequired(operationId, nameof(operationId));
+        var normalizedIdempotencyKey = NormalizeRequired(idempotencyKey, nameof(idempotencyKey));
+        var actorId = await ResolveScheduleActorAsync(normalizedScheduleId, ct);
+        return await DispatchObservedTeamOperationAsync(
+            normalizedScheduleId,
+            actorId,
+            normalizedOperationId,
+            normalizedIdempotencyKey,
+            TeamAutomationOperationObservationStages.Begin,
+            (requestId, token) => _actorPort.DispatchRetryTeamAutomationCredentialOperationAsync(
+                actorId,
+                normalizedOwner,
+                normalizedOperationId,
+                normalizedIdempotencyKey,
+                requestId,
+                token),
+            ct);
+    }
+
     public async Task<TeamAutomationCommittedMutationReceipt> RecordTeamAutomationCredentialCandidateAsync(
         string scheduleId,
         TeamMemberAutomationOwner owner,
@@ -683,16 +711,19 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         var normalizedScheduleId = NormalizeScheduleId(scheduleId);
         var normalizedOwner = NormalizeTeamOwner(owner);
         var detail = await _queryPort.GetAsync(normalizedScheduleId, ct);
-        return detail?.Schedule is
-               {
-                   TeamOwned: true,
-                   TargetKind: ScheduledDispatchTargetKind.ServiceInvocation,
-               } &&
+        return detail?.Schedule is { TeamOwned: true } &&
+               IsVisibleTeamAutomationTarget(detail.Schedule) &&
                (!detail.Schedule.Deleted || detail.Schedule.RevocationPending) &&
                TeamOwnerEquals(detail.Schedule, normalizedOwner)
             ? detail
             : null;
     }
+
+    private static bool IsVisibleTeamAutomationTarget(ScheduledDispatchSummary schedule) =>
+        schedule.TargetKind == ScheduledDispatchTargetKind.ServiceInvocation ||
+        schedule.TeamAutomationLifecycleStatus is
+            TeamAutomationLifecycleStatus.ProvisioningPending or
+            TeamAutomationLifecycleStatus.ReplacementPending;
 
     public async Task<ScheduledDispatchListResult> ListTeamAutomationsAsync(
         TeamMemberAutomationOwner owner,

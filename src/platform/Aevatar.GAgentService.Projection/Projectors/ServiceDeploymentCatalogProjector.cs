@@ -58,6 +58,12 @@ public sealed class ServiceDeploymentCatalogProjector
                 .OrderByDescending(x => x.UpdatedAt)
                 .ThenBy(x => x.DeploymentId, StringComparer.Ordinal)
                 .ToList(),
+            ActivationFailures = state.ActivationFailures
+                .Values
+                .Select(MapActivationFailure)
+                .OrderByDescending(x => x.OccurredAtUtcValue?.ToDateTimeOffset() ?? DateTimeOffset.UnixEpoch)
+                .ThenBy(x => x.RevisionId, StringComparer.Ordinal)
+                .ToList(),
         };
         await _storeDispatcher.UpsertAsync(readModel, ct);
     }
@@ -71,5 +77,15 @@ public sealed class ServiceDeploymentCatalogProjector
             Status = source.Status.ToString(),
             ActivatedAt = source.ActivatedAt?.ToDateTimeOffset(),
             UpdatedAt = ServiceProjectionMapping.FromTimestamp(source.UpdatedAt, DateTimeOffset.UnixEpoch),
+        };
+
+    private static ServiceDeploymentActivationFailureReadModel MapActivationFailure(
+        ServiceDeploymentActivationFailureRecord source) =>
+        new()
+        {
+            RevisionId = source.RevisionId ?? string.Empty,
+            FailureCode = source.FailureCode,
+            FailureReason = source.FailureReason ?? string.Empty,
+            OccurredAtUtcValue = source.OccurredAt?.Clone(),
         };
 }

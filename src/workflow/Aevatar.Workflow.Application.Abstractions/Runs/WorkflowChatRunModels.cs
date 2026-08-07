@@ -107,7 +107,8 @@ public sealed record WorkflowConversationExecutionContext(
     long StateVersion,
     IReadOnlyList<WorkflowConversationExecutionMessage> Messages,
     bool Truncated,
-    int MaxMessageCount);
+    int MaxMessageCount,
+    string CurrentTurnId = "");
 
 public enum WorkflowChatConversationIntentKind
 {
@@ -262,8 +263,10 @@ public sealed record WorkflowChatRunRequest(
     WorkflowExternalIngressContext? ExternalIngress = null,
     WorkflowChatConversationIntent? ChatConversation = null,
     WorkflowConversationExecutionContext? ConversationContext = null,
+    [property: JsonIgnore] string? CurrentTurnId = null,
     [property: JsonIgnore] WorkflowRunTargetSeed? TargetSeed = null,
-    [property: JsonIgnore] WorkflowCompletionNotificationTarget? CompletionNotificationTarget = null) : ICommandContextSeed
+    [property: JsonIgnore] WorkflowCompletionNotificationTarget? CompletionNotificationTarget = null,
+    [property: JsonIgnore] WorkflowDefinitionBinding? ResolvedDefinitionBinding = null) : ICommandContextSeed
 {
     string? ICommandContextSeed.CommandId => CommandIdSeed;
 

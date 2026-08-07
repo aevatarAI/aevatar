@@ -11,6 +11,8 @@ using Aevatar.AI.Core.Observability;
 using Aevatar.Audit;
 using Aevatar.Audit.Abstractions.Identity;
 using Aevatar.Audit.Abstractions.Ports;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.AI.Core.Tools;
 
@@ -19,15 +21,18 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
     private readonly IAgentToolAdmissionLedger _admissionLedger;
     private readonly IAuditTrailAppender _auditTrailAppender;
     private readonly ToolAuditRecordFactory _auditRecordFactory;
+    private readonly ILogger<AdmittedAgentToolExecutor> _logger;
 
     public AdmittedAgentToolExecutor(
         IAgentToolAdmissionLedger admissionLedger,
         IAuditTrailAppender auditTrailAppender,
         IAuditActorIdentityHasher identityHasher,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        ILogger<AdmittedAgentToolExecutor>? logger = null)
     {
         _admissionLedger = admissionLedger ?? throw new ArgumentNullException(nameof(admissionLedger));
         _auditTrailAppender = auditTrailAppender ?? throw new ArgumentNullException(nameof(auditTrailAppender));
+        _logger = logger ?? NullLogger<AdmittedAgentToolExecutor>.Instance;
         _auditRecordFactory = new ToolAuditRecordFactory(
             identityHasher ?? throw new ArgumentNullException(nameof(identityHasher)),
             timeProvider);
@@ -442,6 +447,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
         }
         catch (Exception ex)
         {
+            LogCodexExecutionFailure(ex, credentialDecision.ExecutionContext.WorkflowRuntime);
             outcome = CreateFailure(
                 tool,
                 toolName,
@@ -830,6 +836,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
                     NyxIdAccessToken = senderToken,
                     NyxIdOrgToken = senderToken,
                     SenderNyxIdAccessToken = senderToken,
+                    NyxIdCredentialKind = AgentToolNyxIdCredentialKind.SourceReadableUserBearer,
                 },
             };
             return new CredentialDecision(
@@ -1069,28 +1076,71 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
 
     private static string SafeExceptionClass(Exception ex) => ex.GetType().Name;
 
+    private void LogCodexExecutionFailure(
+        Exception exception,
+        AgentWorkflowRuntimeContext workflowRuntime)
+    {
+        if (exception is not CodexExecutionException codexException)
+            return;
+
+        var runId = NormalizeIdentity(workflowRuntime.RootRunId) ??
+                    NormalizeIdentity(workflowRuntime.ParentRunId);
+        var runHash = runId is null
+            ? "none"
+            : Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(runId)))[..12];
+        _logger.LogWarning(
+            "Codex execution failed inside admitted tool execution. " +
+            "failureKind={CodexFailureKind} failureCode={CodexFailureCode} runHash={WorkflowRunHash}",
+            codexException.Failure.Kind,
+            SafeDiagnosticCode(codexException.Failure.Code),
+            runHash);
+    }
+
+    private static string SafeDiagnosticCode(string? value)
+    {
+        var normalized = value?.Trim();
+        if (string.IsNullOrEmpty(normalized) || normalized.Length > 96 ||
+            !char.IsAsciiLetterLower(normalized[0]) ||
+            normalized.Any(character =>
+                !char.IsAsciiLetterLower(character) &&
+                !char.IsAsciiDigit(character) &&
+                character != '_'))
+        {
+            return "unclassified";
+        }
+
+        return normalized;
+    }
+
     private static bool IsAuditRecorded(AuditTrailAppendResult append) =>
         append.Status is AuditTrailAppendStatus.Appended or AuditTrailAppendStatus.Duplicate;
 
-    private static string ResolveExceptionErrorCode(Exception exception) =>
-        exception is CodexExecutionException codexException
-            ? codexException.Failure.Kind switch
-            {
-                CodexExecutionFailureKind.TargetNotConfigured => "codex_execution_target_not_configured",
-                CodexExecutionFailureKind.AdmissionDenied => "codex_execution_admission_denied",
-                CodexExecutionFailureKind.LlmProviderNotConnected => "codex_execution_llm_provider_not_connected",
-                CodexExecutionFailureKind.CapacityUnavailable => "codex_execution_capacity_unavailable",
-                CodexExecutionFailureKind.ProvisioningFailed => "codex_execution_provisioning_failed",
-                CodexExecutionFailureKind.ReadinessFailed => "codex_execution_readiness_failed",
-                CodexExecutionFailureKind.IsolationUnavailable => "codex_execution_isolation_unavailable",
-                CodexExecutionFailureKind.MalformedOutput => "codex_execution_malformed_output",
-                CodexExecutionFailureKind.TerminalFailure => "codex_execution_terminal_failure",
-                CodexExecutionFailureKind.TimedOut => "codex_execution_timed_out",
-                CodexExecutionFailureKind.Cancelled => "codex_execution_cancelled",
-                CodexExecutionFailureKind.CleanupFailed => "codex_execution_cleanup_failed",
-                _ => "tool_execution_exception",
-            }
-            : "tool_execution_exception";
+    private static string ResolveExceptionErrorCode(Exception exception)
+    {
+        if (exception is not CodexExecutionException codexException)
+            return "tool_execution_exception";
+
+        var managedUpstreamCode = ManagedCodexUpstreamErrorCode.Resolve(codexException.Failure.Code);
+        if (managedUpstreamCode is not null)
+            return managedUpstreamCode;
+
+        return codexException.Failure.Kind switch
+        {
+            CodexExecutionFailureKind.TargetNotConfigured => "codex_execution_target_not_configured",
+            CodexExecutionFailureKind.AdmissionDenied => "codex_execution_admission_denied",
+            CodexExecutionFailureKind.LlmProviderNotConnected => "codex_execution_llm_provider_not_connected",
+            CodexExecutionFailureKind.CapacityUnavailable => "codex_execution_capacity_unavailable",
+            CodexExecutionFailureKind.ProvisioningFailed => "codex_execution_provisioning_failed",
+            CodexExecutionFailureKind.ReadinessFailed => "codex_execution_readiness_failed",
+            CodexExecutionFailureKind.IsolationUnavailable => "codex_execution_isolation_unavailable",
+            CodexExecutionFailureKind.MalformedOutput => "codex_execution_malformed_output",
+            CodexExecutionFailureKind.TerminalFailure => "codex_execution_terminal_failure",
+            CodexExecutionFailureKind.TimedOut => "codex_execution_timed_out",
+            CodexExecutionFailureKind.Cancelled => "codex_execution_cancelled",
+            CodexExecutionFailureKind.CleanupFailed => "codex_execution_cleanup_failed",
+            _ => "tool_execution_exception",
+        };
+    }
 
     private static string? NormalizeIdentity(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

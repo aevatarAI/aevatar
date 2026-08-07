@@ -25,8 +25,8 @@ namespace Aevatar.Studio.Tests;
 /// <list type="bullet">
 ///   <item>the workflow YAML is validated synchronously through the binding
 ///   admission service BEFORE anything is created — invalid YAML provisions nothing;</item>
-///   <item>validate → create → bind → ensure-scheduled-dispatch, threading the
-///   scope through every call;</item>
+///   <item>validate → create → bind → accept actor-owned schedule provisioning,
+///   threading the scope through every call;</item>
 ///   <item>member id, workflow id and schedule id derive deterministically from
 ///   (scope, display name), so retries converge on the same resources instead of
 ///   accumulating garbage;</item>
@@ -39,8 +39,8 @@ namespace Aevatar.Studio.Tests;
 ///   token);</item>
 ///   <item>the bind is NEVER polled to completion — the service never calls
 ///   <c>GetBindingRunAsync</c>;</item>
-///   <item>the response is "accepted" (202) carrying the schedule id + binding run
-///   id + Observatory link.</item>
+///   <item>the response is "accepted" (202) carrying the provisioning id, binding
+///   run id, and Observatory link; schedule id may still be absent.</item>
 /// </list>
 /// </summary>
 public sealed class StudioWorkflowProvisioningServiceTests
@@ -62,10 +62,19 @@ public sealed class StudioWorkflowProvisioningServiceTests
     private static (string WorkflowId, string RevisionId) ProvisionIdentity(
         string scopeId,
         string teamId,
-        string displayName)
+        string displayName,
+        string workflowYaml = StudioExplicitRequestAdmissionTestKit.WorkflowYaml,
+        ExternalCapabilityExecutionMode executionMode = ExternalCapabilityExecutionMode.Durable)
     {
         var key = StudioWorkflowProvisioningService.BuildProvisionKey(scopeId, teamId, displayName);
-        return ($"workflow-{key}", $"revision-{key}");
+        var workflowId = $"workflow-{key}";
+        return (
+            workflowId,
+            StudioWorkflowProvisioningService.BuildProvisionRevisionId(
+                key,
+                workflowId,
+                workflowYaml,
+                executionMode));
     }
 
     [Fact]
@@ -83,6 +92,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
             new ProvisionWorkflowRequest("Monitor", StudioExplicitRequestAdmissionTestKit.WorkflowYaml)
             {
                 TeamId = TeamId,
+                AuthenticatedOwner = TestAuthenticatedOwner(),
                 CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(
                     [StudioExplicitRequestAdmissionTestKit.MatchingConfirmation(
                         identity.WorkflowId,
@@ -107,11 +117,666 @@ public sealed class StudioWorkflowProvisioningServiceTests
         member.BindRequest.CapabilityAdmission.ExplicitRequestConfirmations.Should().BeEmpty();
         plan.ToString().Should().NotContain(StudioExplicitRequestAdmissionTestKit.CallerBearer);
         plan.ToString().Should().NotContain(StudioExplicitRequestAdmissionTestKit.OrganizationBearer);
-        var workflowEvidence = schedule.LastCreateRequest!.AcceptedBinding!.WorkflowEvidence;
-        workflowEvidence.Should().NotBeNull();
-        workflowEvidence!.ServiceGrantRequirement.Should().Be(AuthorizationGrantRequirement.Required);
-        workflowEvidence.ExternalCapabilities.Should().ContainSingle()
-            .Which.NyxIdUserRequest.Request.UserServiceId.Should().Be("usvc-alpha");
+        schedule.LastCreateRequest!.AcceptedBinding.Should().BeEquivalentTo(
+            new StudioMemberWorkflowAcceptedBindingContext(
+                TeamId,
+                PublishedServiceId,
+                WorkflowId,
+                RevisionId));
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_WhenBindingReceiptOmitsResolvedIdentity_ShouldUseRequestedIdentity()
+    {
+        var member = NewMemberService();
+        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        var bindingPort = new RecordingBindingPort(member, null, null);
+        var schedulePort = new RecordingWorkflowSchedulePort(schedule);
+        var sut = new StudioWorkflowProvisioningService(
+            member,
+            bindingPort,
+            ImmediateScheduleCommand(schedulePort),
+            new StudioWorkflowCapabilityAdmissionTestService());
+
+        await sut.ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest("Monitor", "name: monitor", Prompt: "go")
+            {
+                TeamId = TeamId,
+                AuthenticatedOwner = TestAuthenticatedOwner(),
+            });
+
+        bindingPort.LastResult!.WorkflowId.Should().BeNull();
+        bindingPort.LastResult.RevisionId.Should().BeNull();
+        schedulePort.LastPreflightRequest!.AcceptedBinding.Should().BeEquivalentTo(
+            new StudioMemberWorkflowAcceptedBindingContext(
+                TeamId,
+                PublishedServiceId,
+                bindingPort.LastRequest!.WorkflowId!,
+                bindingPort.LastRequest.RevisionId!));
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_WithUnboundExplicitConfirmation_ShouldBindMintedWorkflowIdentity()
+    {
+        var member = NewMemberService();
+        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        var admission = StudioExplicitRequestAdmissionTestKit.CreateAdmissionService();
+        var sut = NewService(member, schedule, admission);
+        var identity = ProvisionIdentity(ScopeId, TeamId, "Monitor");
+
+        await sut.ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest("Monitor", StudioExplicitRequestAdmissionTestKit.WorkflowYaml)
+            {
+                TeamId = TeamId,
+                AuthenticatedOwner = TestAuthenticatedOwner(),
+                CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(
+                    [StudioExplicitRequestAdmissionTestKit.MatchingConfirmation(string.Empty, string.Empty)],
+                    ExternalCapabilityExecutionMode.Durable),
+            });
+
+        var provisionalConfirmation = admission.Requests.Should().ContainSingle().Which
+            .ExplicitRequestConfirmations.Should().ContainSingle().Which;
+        provisionalConfirmation.WorkflowId.Should().Be(identity.WorkflowId);
+        provisionalConfirmation.RevisionId.Should().Be(identity.RevisionId);
+        member.BindRequest!.RevisionId.Should().NotBe(identity.RevisionId);
+        var finalPlan = member.BindRequest.Workflow!.CapabilityAdmissionPlan!;
+        finalPlan.InvocationAdmissions.Should()
+            .ContainSingle().Which.NyxIdExplicitRequestGrant.RevisionId.Should()
+            .Be(member.BindRequest.RevisionId);
+        finalPlan.DefinitionDigest.Should().Be(
+            WorkflowCapabilityAdmissionPlanIntegrity.ComputeDefinitionDigest(
+                StudioExplicitRequestAdmissionTestKit.WorkflowYaml,
+                new Dictionary<string, string>(),
+                identity.WorkflowId,
+                member.BindRequest.RevisionId));
+        finalPlan.AdmissionDigest.Should().Be(
+            WorkflowCapabilityAdmissionPlanIntegrity.ComputeAdmissionDigest(finalPlan));
+        member.CreateInvoked.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_UnboundExplicitConfirmation_WhenCatalogSnapshotChanges_ShouldAdvanceRevision()
+    {
+        var firstMember = NewMemberService();
+        var secondMember = NewMemberService();
+        var firstAdmission = StudioExplicitRequestAdmissionTestKit.CreateAdmissionService(sourceVersion: 23);
+        var secondAdmission = StudioExplicitRequestAdmissionTestKit.CreateAdmissionService(sourceVersion: 24);
+        var request = new ProvisionWorkflowRequest(
+            "Monitor",
+            StudioExplicitRequestAdmissionTestKit.WorkflowYaml)
+        {
+            TeamId = TeamId,
+            AuthenticatedOwner = TestAuthenticatedOwner(),
+            CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(
+                [StudioExplicitRequestAdmissionTestKit.MatchingConfirmation(string.Empty, string.Empty)],
+                ExternalCapabilityExecutionMode.Durable),
+        };
+
+        await NewService(firstMember, new RecordingScheduleService(), firstAdmission)
+            .ProvisionAsync(ScopeId, Caller, request);
+        await NewService(secondMember, new RecordingScheduleService(), secondAdmission)
+            .ProvisionAsync(ScopeId, Caller, request);
+
+        firstMember.BindRequest!.Workflow!.WorkflowId.Should().Be(
+            secondMember.BindRequest!.Workflow!.WorkflowId);
+        firstMember.BindRequest.RevisionId.Should().NotBe(secondMember.BindRequest.RevisionId);
+        firstAdmission.Requests.Should().ContainSingle();
+        secondAdmission.Requests.Should().ContainSingle();
+        firstMember.BindRequest.Workflow.CapabilityAdmissionPlan!.InvocationAdmissions.Should()
+            .ContainSingle().Which.NyxIdExplicitRequestGrant.RevisionId.Should()
+            .Be(firstMember.BindRequest.RevisionId);
+        secondMember.BindRequest.Workflow.CapabilityAdmissionPlan!.InvocationAdmissions.Should()
+            .ContainSingle().Which.NyxIdExplicitRequestGrant.RevisionId.Should()
+            .Be(secondMember.BindRequest.RevisionId);
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_UnboundExplicitConfirmation_WhenSourceWindowChanges_ShouldAdvanceRevision()
+    {
+        var firstMember = NewMemberService();
+        var secondMember = NewMemberService();
+        var firstObservedAt = new DateTimeOffset(2026, 7, 30, 7, 59, 0, TimeSpan.Zero);
+        var firstAdmission = StudioExplicitRequestAdmissionTestKit.CreateAdmissionService(
+            sourceObservedAt: firstObservedAt);
+        var secondAdmission = StudioExplicitRequestAdmissionTestKit.CreateAdmissionService(
+            sourceObservedAt: firstObservedAt.AddMinutes(1));
+        var request = new ProvisionWorkflowRequest(
+            "Monitor",
+            StudioExplicitRequestAdmissionTestKit.WorkflowYaml)
+        {
+            TeamId = TeamId,
+            AuthenticatedOwner = TestAuthenticatedOwner(),
+            CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(
+                [StudioExplicitRequestAdmissionTestKit.MatchingConfirmation(string.Empty, string.Empty)],
+                ExternalCapabilityExecutionMode.Durable),
+        };
+
+        await NewService(firstMember, new RecordingScheduleService(), firstAdmission)
+            .ProvisionAsync(ScopeId, Caller, request);
+        await NewService(secondMember, new RecordingScheduleService(), secondAdmission)
+            .ProvisionAsync(ScopeId, Caller, request);
+
+        firstMember.BindRequest!.RevisionId.Should().NotBe(secondMember.BindRequest!.RevisionId);
+        firstAdmission.Requests.Should().ContainSingle();
+        secondAdmission.Requests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_WithExplicitConfirmationBoundToAnotherWorkflow_ShouldMutateNothing()
+    {
+        var member = NewMemberService();
+        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        var admission = StudioExplicitRequestAdmissionTestKit.CreateAdmissionService();
+        var sut = NewService(member, schedule, admission);
+
+        var action = () => sut.ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest("Monitor", StudioExplicitRequestAdmissionTestKit.WorkflowYaml)
+            {
+                TeamId = TeamId,
+                CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(
+                    [StudioExplicitRequestAdmissionTestKit.MatchingConfirmation(
+                        "workflow-other",
+                        "revision-other")],
+                    ExternalCapabilityExecutionMode.Durable),
+            });
+
+        var exception = await action.Should()
+            .ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
+        exception.Which.SafeBlockerCode.Should()
+            .Be("NYXID_EXPLICIT_REQUEST_CONFIRMATION_BINDING_MISMATCH");
+        member.GetCallCount.Should().Be(0);
+        member.CreateInvoked.Should().BeFalse();
+        member.BindRequest.Should().BeNull();
+        schedule.Ensured.Should().BeFalse();
+        schedule.PreflightRequests.Should().BeEmpty();
+        schedule.LastCreateRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_WhenDurableCatalogIsMissing_ShouldPrepareExactGrantBeforeMutation()
+    {
+        var member = NewMemberService();
+        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        var capability = DurableExplicitRequestCapability("usvc-alpha");
+        var durableAttempts = 0;
+        var admission = new StudioWorkflowCapabilityAdmissionTestService
+        {
+            AdmissionPlan = CapabilityPlan(capability),
+            OnAdmit = request =>
+            {
+                if (request.ExecutionMode == ExternalCapabilityExecutionMode.Durable &&
+                    ++durableAttempts == 1)
+                {
+                    throw DurableAuthorizationUnavailable(capability);
+                }
+            },
+        };
+        var refresh = new RecordingCatalogRefreshPort(
+            NyxIdAuthorizationCatalogRefreshResult.ObservedAt(31));
+        var visibility = new RecordingCatalogVisibilityPort(new NyxIdAuthorizationCatalogVisibilityResult(
+            NyxIdAuthorizationCatalogVisibilityStatus.Ready,
+            31,
+            31,
+            string.Empty));
+        var owner = new AuthenticatedAuthorizationOwnerContext(
+            new AuthorizationOwnerIdentity
+            {
+                Authority = NyxIdAuthorizationAuthorities.NyxId,
+                OwnerKind = AuthorizationOwnerKind.Personal,
+                OwnerSubject = "caller-alpha",
+            },
+            "nyxid",
+            string.Empty,
+            "caller-alpha",
+            "binding-alpha");
+        var sut = new StudioWorkflowProvisioningService(
+            member,
+            new RecordingBindingPort(member, WorkflowId, RevisionId),
+            ImmediateScheduleCommand(schedule),
+            admission,
+            refresh,
+            visibility);
+
+        await sut.ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest("Monitor", StudioExplicitRequestAdmissionTestKit.WorkflowYaml)
+            {
+                TeamId = TeamId,
+                AuthenticatedOwner = owner,
+                ProvisioningBearerToken = "runtime-caller-credential",
+                CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(
+                    [StudioExplicitRequestAdmissionTestKit.MatchingConfirmation(string.Empty, string.Empty)],
+                    ExternalCapabilityExecutionMode.Durable),
+            });
+
+        admission.Requests.Select(static request => request.ExecutionMode).Should().Equal(
+            ExternalCapabilityExecutionMode.Durable,
+            ExternalCapabilityExecutionMode.Interactive,
+            ExternalCapabilityExecutionMode.Durable);
+        admission.Requests.Select(static request => request.ExplicitRequestGrantMode).Should().Equal(
+            ExternalCapabilityExecutionMode.Durable,
+            ExternalCapabilityExecutionMode.Durable,
+            ExternalCapabilityExecutionMode.Durable);
+        refresh.Owner.Should().BeEquivalentTo(owner.Owner);
+        refresh.BearerToken.Should().Be("runtime-caller-credential");
+        refresh.Request!.RequiredServices.Should().ContainSingle()
+            .Which.UserServiceId.Should().Be("usvc-alpha");
+        visibility.Owner.Should().BeEquivalentTo(owner.Owner);
+        visibility.RequiredStateVersion.Should().Be(31);
+        member.CreateInvoked.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_WhenRealAdmissionNeedsCatalogPreparation_ShouldRefreshAndReadmitDurable()
+    {
+        var catalogReady = false;
+        var member = NewMemberService();
+        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        var admission = StudioExplicitRequestAdmissionTestKit.CreateAdmissionService(
+            durableCatalogReady: () => catalogReady);
+        var refresh = new RecordingCatalogRefreshPort(
+            NyxIdAuthorizationCatalogRefreshResult.ObservedAt(31))
+        {
+            OnRefresh = () => catalogReady = true,
+        };
+        var visibility = new RecordingCatalogVisibilityPort(new NyxIdAuthorizationCatalogVisibilityResult(
+            NyxIdAuthorizationCatalogVisibilityStatus.Ready,
+            31,
+            31,
+            string.Empty));
+        var owner = new AuthenticatedAuthorizationOwnerContext(
+            new AuthorizationOwnerIdentity
+            {
+                Authority = NyxIdAuthorizationAuthorities.NyxId,
+                OwnerKind = AuthorizationOwnerKind.Personal,
+                OwnerSubject = StudioExplicitRequestAdmissionTestKit.CallerId,
+            },
+            "nyxid",
+            string.Empty,
+            StudioExplicitRequestAdmissionTestKit.CallerId,
+            "binding-alpha");
+        var sut = new StudioWorkflowProvisioningService(
+            member,
+            new RecordingBindingPort(member, WorkflowId, RevisionId),
+            ImmediateScheduleCommand(schedule),
+            admission,
+            refresh,
+            visibility);
+
+        await sut.ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest("Monitor", StudioExplicitRequestAdmissionTestKit.WorkflowYaml)
+            {
+                TeamId = TeamId,
+                AuthenticatedOwner = owner,
+                ProvisioningBearerToken = "runtime-caller-credential",
+                CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(
+                    [StudioExplicitRequestAdmissionTestKit.MatchingConfirmation(string.Empty, string.Empty)],
+                    ExternalCapabilityExecutionMode.Durable),
+            });
+
+        admission.Requests.Select(static request => request.ExecutionMode).Should().Equal(
+            ExternalCapabilityExecutionMode.Durable,
+            ExternalCapabilityExecutionMode.Interactive,
+            ExternalCapabilityExecutionMode.Durable);
+        admission.Requests.Select(static request => request.ExplicitRequestGrantMode).Should().Equal(
+            ExternalCapabilityExecutionMode.Durable,
+            ExternalCapabilityExecutionMode.Durable,
+            ExternalCapabilityExecutionMode.Durable);
+        refresh.Request!.RequiredServices.Should().ContainSingle()
+            .Which.UserServiceId.Should().Be("usvc-alpha");
+        member.BindRequest!.Workflow!.CapabilityAdmissionPlan!.ExecutionMode.Should()
+            .Be(ExternalCapabilityExecutionMode.Durable);
+        admission.Requests[^1].RevisionId.Should().NotBe(member.BindRequest.RevisionId);
+        member.BindRequest.Workflow.CapabilityAdmissionPlan.InvocationAdmissions.Should()
+            .ContainSingle().Which.NyxIdExplicitRequestGrant.RevisionId.Should()
+            .Be(member.BindRequest.RevisionId);
+        schedule.Ensured.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_WhenTargetedRefreshPreservesStaleOwnerWindow_ShouldReadmitExactGrant()
+    {
+        var catalogReady = false;
+        var member = NewMemberService();
+        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        var admission = StudioExplicitRequestAdmissionTestKit.CreateAdmissionService(
+            durableCatalogReady: () => catalogReady);
+        var refresh = new RecordingCatalogRefreshPort(
+            NyxIdAuthorizationCatalogRefreshResult.ObservedAt(31))
+        {
+            OnRefresh = () => catalogReady = true,
+        };
+        var visibility = new RecordingCatalogVisibilityPort(new NyxIdAuthorizationCatalogVisibilityResult(
+            NyxIdAuthorizationCatalogVisibilityStatus.Stale,
+            31,
+            31,
+            "nyxid_catalog_snapshot_stale"));
+        var owner = new AuthenticatedAuthorizationOwnerContext(
+            new AuthorizationOwnerIdentity
+            {
+                Authority = NyxIdAuthorizationAuthorities.NyxId,
+                OwnerKind = AuthorizationOwnerKind.Personal,
+                OwnerSubject = StudioExplicitRequestAdmissionTestKit.CallerId,
+            },
+            "nyxid",
+            string.Empty,
+            StudioExplicitRequestAdmissionTestKit.CallerId,
+            "binding-alpha");
+        var sut = new StudioWorkflowProvisioningService(
+            member,
+            new RecordingBindingPort(member, WorkflowId, RevisionId),
+            ImmediateScheduleCommand(schedule),
+            admission,
+            refresh,
+            visibility);
+
+        await sut.ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest("Monitor", StudioExplicitRequestAdmissionTestKit.WorkflowYaml)
+            {
+                TeamId = TeamId,
+                AuthenticatedOwner = owner,
+                ProvisioningBearerToken = "runtime-caller-credential",
+                CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(
+                    [StudioExplicitRequestAdmissionTestKit.MatchingConfirmation(string.Empty, string.Empty)],
+                    ExternalCapabilityExecutionMode.Durable),
+            });
+
+        admission.Requests.Select(static request => request.ExecutionMode).Should().Equal(
+            ExternalCapabilityExecutionMode.Durable,
+            ExternalCapabilityExecutionMode.Interactive,
+            ExternalCapabilityExecutionMode.Durable);
+        visibility.RequiredStateVersion.Should().Be(31);
+        admission.Requests[^1].RevisionId.Should().NotBe(member.BindRequest!.RevisionId);
+        member.BindRequest.Workflow!.CapabilityAdmissionPlan!.InvocationAdmissions.Should()
+            .ContainSingle().Which.NyxIdExplicitRequestGrant.RevisionId.Should()
+            .Be(member.BindRequest.RevisionId);
+        member.CreateInvoked.Should().BeTrue();
+        schedule.Ensured.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_WhenTargetedRefreshDoesNotProveGrant_ShouldFailClosedAfterReadmission()
+    {
+        var member = NewMemberService();
+        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        var capability = DurableExplicitRequestCapability("usvc-alpha");
+        var admission = new StudioWorkflowCapabilityAdmissionTestService
+        {
+            AdmissionPlan = CapabilityPlan(capability),
+            OnAdmit = request =>
+            {
+                if (request.ExecutionMode == ExternalCapabilityExecutionMode.Durable)
+                    throw DurableAuthorizationUnavailable(capability);
+            },
+        };
+        var refresh = new RecordingCatalogRefreshPort(
+            NyxIdAuthorizationCatalogRefreshResult.ObservedAt(31));
+        var visibility = new RecordingCatalogVisibilityPort(new NyxIdAuthorizationCatalogVisibilityResult(
+            NyxIdAuthorizationCatalogVisibilityStatus.Stale,
+            31,
+            31,
+            "nyxid_catalog_snapshot_stale"));
+        var owner = new AuthenticatedAuthorizationOwnerContext(
+            new AuthorizationOwnerIdentity
+            {
+                Authority = NyxIdAuthorizationAuthorities.NyxId,
+                OwnerKind = AuthorizationOwnerKind.Personal,
+                OwnerSubject = "caller-alpha",
+            },
+            "nyxid",
+            string.Empty,
+            "caller-alpha",
+            "binding-alpha");
+        var sut = new StudioWorkflowProvisioningService(
+            member,
+            new RecordingBindingPort(member, WorkflowId, RevisionId),
+            ImmediateScheduleCommand(schedule),
+            admission,
+            refresh,
+            visibility);
+
+        var action = () => sut.ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest("Monitor", StudioExplicitRequestAdmissionTestKit.WorkflowYaml)
+            {
+                TeamId = TeamId,
+                AuthenticatedOwner = owner,
+                ProvisioningBearerToken = "runtime-caller-credential",
+                CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(
+                    [StudioExplicitRequestAdmissionTestKit.MatchingConfirmation(string.Empty, string.Empty)],
+                    ExternalCapabilityExecutionMode.Durable),
+            });
+
+        await action.Should().ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
+        admission.Requests.Select(static request => request.ExecutionMode).Should().Equal(
+            ExternalCapabilityExecutionMode.Durable,
+            ExternalCapabilityExecutionMode.Interactive,
+            ExternalCapabilityExecutionMode.Durable);
+        member.GetCallCount.Should().Be(0);
+        member.CreateInvoked.Should().BeFalse();
+        member.BindRequest.Should().BeNull();
+        schedule.Ensured.Should().BeFalse();
+        schedule.LastCreateRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_WhenRefreshedCatalogIsNotVisible_ShouldReturnPendingWithoutMutation()
+    {
+        var member = NewMemberService();
+        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        var capability = DurableExplicitRequestCapability("usvc-alpha");
+        var admission = new StudioWorkflowCapabilityAdmissionTestService
+        {
+            AdmissionPlan = CapabilityPlan(capability),
+            OnAdmit = request =>
+            {
+                if (request.ExecutionMode == ExternalCapabilityExecutionMode.Durable)
+                    throw DurableAuthorizationUnavailable(capability);
+            },
+        };
+        var refresh = new RecordingCatalogRefreshPort(
+            NyxIdAuthorizationCatalogRefreshResult.ObservedAt(31));
+        var visibility = new RecordingCatalogVisibilityPort(new NyxIdAuthorizationCatalogVisibilityResult(
+            NyxIdAuthorizationCatalogVisibilityStatus.ProjectionPending,
+            31,
+            30,
+            "catalog_projection_pending"));
+        var owner = new AuthenticatedAuthorizationOwnerContext(
+            new AuthorizationOwnerIdentity
+            {
+                Authority = NyxIdAuthorizationAuthorities.NyxId,
+                OwnerKind = AuthorizationOwnerKind.Personal,
+                OwnerSubject = "caller-alpha",
+            },
+            "nyxid",
+            string.Empty,
+            "caller-alpha",
+            "binding-alpha");
+        var sut = new StudioWorkflowProvisioningService(
+            member,
+            new RecordingBindingPort(member, WorkflowId, RevisionId),
+            ImmediateScheduleCommand(schedule),
+            admission,
+            refresh,
+            visibility);
+
+        var action = () => sut.ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest("Monitor", StudioExplicitRequestAdmissionTestKit.WorkflowYaml)
+            {
+                TeamId = TeamId,
+                AuthenticatedOwner = owner,
+                ProvisioningBearerToken = "runtime-caller-credential",
+                CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(
+                    [StudioExplicitRequestAdmissionTestKit.MatchingConfirmation(string.Empty, string.Empty)],
+                    ExternalCapabilityExecutionMode.Durable),
+            });
+
+        var exception = await action.Should()
+            .ThrowAsync<StudioMemberAutomationProjectionPendingException>();
+        exception.Which.RequiredStateVersion.Should().Be(31);
+        admission.Requests.Select(static request => request.ExecutionMode).Should().Equal(
+            ExternalCapabilityExecutionMode.Durable,
+            ExternalCapabilityExecutionMode.Interactive);
+        refresh.Request!.RequiredServices.Should().ContainSingle()
+            .Which.UserServiceId.Should().Be("usvc-alpha");
+        visibility.RequiredStateVersion.Should().Be(31);
+        member.GetCallCount.Should().Be(0);
+        member.CreateInvoked.Should().BeFalse();
+        member.BindRequest.Should().BeNull();
+        schedule.Ensured.Should().BeFalse();
+        schedule.PreflightRequests.Should().BeEmpty();
+        schedule.LastCreateRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_WhenCatalogAndAnotherRequirementAreMissing_ShouldNotRefreshOrMutate()
+    {
+        var member = NewMemberService();
+        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        var capability = DurableExplicitRequestCapability("usvc-alpha");
+        var admission = new StudioWorkflowCapabilityAdmissionTestService
+        {
+            AdmissionPlan = CapabilityPlan(capability),
+            OnAdmit = request =>
+            {
+                if (request.ExecutionMode == ExternalCapabilityExecutionMode.Durable)
+                    throw DurableAuthorizationUnavailable(capability, includeAdditionalBlocker: true);
+            },
+        };
+        var refresh = new RecordingCatalogRefreshPort(
+            NyxIdAuthorizationCatalogRefreshResult.ObservedAt(31));
+        var visibility = new RecordingCatalogVisibilityPort(new NyxIdAuthorizationCatalogVisibilityResult(
+            NyxIdAuthorizationCatalogVisibilityStatus.Ready,
+            31,
+            31,
+            string.Empty));
+        var owner = new AuthenticatedAuthorizationOwnerContext(
+            new AuthorizationOwnerIdentity
+            {
+                Authority = NyxIdAuthorizationAuthorities.NyxId,
+                OwnerKind = AuthorizationOwnerKind.Personal,
+                OwnerSubject = "caller-alpha",
+            },
+            "nyxid",
+            string.Empty,
+            "caller-alpha",
+            "binding-alpha");
+        var sut = new StudioWorkflowProvisioningService(
+            member,
+            new RecordingBindingPort(member, WorkflowId, RevisionId),
+            ImmediateScheduleCommand(schedule),
+            admission,
+            refresh,
+            visibility);
+
+        var action = () => sut.ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest("Monitor", StudioExplicitRequestAdmissionTestKit.WorkflowYaml)
+            {
+                TeamId = TeamId,
+                AuthenticatedOwner = owner,
+                ProvisioningBearerToken = "runtime-caller-credential",
+                CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(
+                    [StudioExplicitRequestAdmissionTestKit.MatchingConfirmation(string.Empty, string.Empty)],
+                    ExternalCapabilityExecutionMode.Durable),
+            });
+
+        await action.Should().ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
+        admission.Requests.Select(static request => request.ExecutionMode).Should().Equal(
+            ExternalCapabilityExecutionMode.Durable);
+        refresh.Request.Should().BeNull();
+        visibility.RequiredStateVersion.Should().Be(0);
+        member.GetCallCount.Should().Be(0);
+        member.CreateInvoked.Should().BeFalse();
+        member.BindRequest.Should().BeNull();
+        schedule.Ensured.Should().BeFalse();
+        schedule.PreflightRequests.Should().BeEmpty();
+        schedule.LastCreateRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_WhenInteractivePlanDoesNotAllowDurable_ShouldNotRefreshOrMutate()
+    {
+        var member = NewMemberService();
+        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        var capability = DurableExplicitRequestCapability("usvc-alpha");
+        capability.NyxIdUserRequest.ExecutionPolicy.AllowedExecutionModes.Remove(
+            ExternalCapabilityExecutionMode.Durable);
+        var admission = new StudioWorkflowCapabilityAdmissionTestService
+        {
+            AdmissionPlan = CapabilityPlan(capability),
+            OnAdmit = request =>
+            {
+                if (request.ExecutionMode == ExternalCapabilityExecutionMode.Durable)
+                    throw DurableAuthorizationUnavailable(capability);
+            },
+        };
+        var refresh = new RecordingCatalogRefreshPort(
+            NyxIdAuthorizationCatalogRefreshResult.ObservedAt(31));
+        var visibility = new RecordingCatalogVisibilityPort(new NyxIdAuthorizationCatalogVisibilityResult(
+            NyxIdAuthorizationCatalogVisibilityStatus.Ready,
+            31,
+            31,
+            string.Empty));
+        var owner = new AuthenticatedAuthorizationOwnerContext(
+            new AuthorizationOwnerIdentity
+            {
+                Authority = NyxIdAuthorizationAuthorities.NyxId,
+                OwnerKind = AuthorizationOwnerKind.Personal,
+                OwnerSubject = "caller-alpha",
+            },
+            "nyxid",
+            string.Empty,
+            "caller-alpha",
+            "binding-alpha");
+        var sut = new StudioWorkflowProvisioningService(
+            member,
+            new RecordingBindingPort(member, WorkflowId, RevisionId),
+            ImmediateScheduleCommand(schedule),
+            admission,
+            refresh,
+            visibility);
+
+        var action = () => sut.ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest("Monitor", StudioExplicitRequestAdmissionTestKit.WorkflowYaml)
+            {
+                TeamId = TeamId,
+                AuthenticatedOwner = owner,
+                ProvisioningBearerToken = "runtime-caller-credential",
+                CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(
+                    [StudioExplicitRequestAdmissionTestKit.MatchingConfirmation(string.Empty, string.Empty)],
+                    ExternalCapabilityExecutionMode.Durable),
+            });
+
+        await action.Should().ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
+        admission.Requests.Select(static request => request.ExecutionMode).Should().Equal(
+            ExternalCapabilityExecutionMode.Durable,
+            ExternalCapabilityExecutionMode.Interactive);
+        refresh.Request.Should().BeNull();
+        visibility.RequiredStateVersion.Should().Be(0);
+        member.GetCallCount.Should().Be(0);
+        member.CreateInvoked.Should().BeFalse();
+        member.BindRequest.Should().BeNull();
+        schedule.Ensured.Should().BeFalse();
+        schedule.PreflightRequests.Should().BeEmpty();
+        schedule.LastCreateRequest.Should().BeNull();
     }
 
     [Fact]
@@ -184,6 +849,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
             new ProvisionWorkflowRequest("Monitor", StudioExplicitRequestAdmissionTestKit.WorkflowYaml)
             {
                 TeamId = "team-alpha",
+                AuthenticatedOwner = TestAuthenticatedOwner(),
                 CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(
                     StudioExplicitRequestAdmissionTestKit.Confirmations(
                         scenario,
@@ -236,6 +902,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
             new ProvisionWorkflowRequest("Monitor", StudioExplicitRequestAdmissionTestKit.WorkflowYaml)
             {
                 TeamId = "team-alpha",
+                AuthenticatedOwner = TestAuthenticatedOwner(),
                 CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(
                     existingPlan: plan,
                     executionMode: ExternalCapabilityExecutionMode.Durable),
@@ -283,6 +950,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
                 Prompt: "go")
             {
                 TeamId = TeamId,
+                AuthenticatedOwner = TestAuthenticatedOwner(),
             });
 
         member.CreateRequest!.TeamId.Should().Be(TeamId);
@@ -380,6 +1048,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
                 Prompt: "go")
             {
                 TeamId = TeamId,
+                AuthenticatedOwner = TestAuthenticatedOwner(),
             });
 
         response.BindingStatus.Should().Be(ProvisionWorkflowBindingStatusNames.Accepted);
@@ -387,7 +1056,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
         response.ScopeId.Should().Be(ScopeId);
         response.ScheduleId.Should().Be(ScheduleId);
         response.BindingRunId.Should().Be(BindingRunId);
-        response.ObservatoryUrl.Should().Be("/workflow/observatory");
+        response.ObservatoryUrl.Should().Be("/admin#/observatory");
 
         // create → bind, carrying the caller scope and Team ownership.
         member.CreateScopeId.Should().Be(ScopeId);
@@ -417,7 +1086,8 @@ public sealed class StudioWorkflowProvisioningServiceTests
         // The bind is asynchronous; the service must NOT poll it to completion.
         member.GetBindingRunCallCount.Should().Be(0);
 
-        // A Workflow-kind scheduled-dispatch was created targeting the bound member.
+        // The immediate test command port executes the accepted intent and creates
+        // a Workflow-kind scheduled-dispatch targeting the bound member.
         schedule.Ensured.Should().BeTrue();
         var configuration = schedule.Configuration!;
         configuration.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.Workflow);
@@ -433,26 +1103,55 @@ public sealed class StudioWorkflowProvisioningServiceTests
         owner!.ScopeId.Should().Be(ScopeId);
         owner.TeamId.Should().Be(TeamId);
         owner.MemberId.Should().Be("m-alpha");
-        var acceptedBinding = schedule.LastCreateRequest!.AcceptedBinding;
-        acceptedBinding.Should().NotBeNull();
-        acceptedBinding!.PublishedServiceId.Should().Be("svc-alpha");
-        acceptedBinding.WorkflowId.Should().Be("wf-alpha");
-        acceptedBinding.WorkflowRevisionId.Should().Be("rev-alpha");
-        acceptedBinding.WorkflowEvidence.Should().NotBeNull();
-        acceptedBinding.WorkflowEvidence!.ServiceGrantRequirement.Should()
-            .Be(AuthorizationGrantRequirement.NotRequired);
-        acceptedBinding.WorkflowEvidence.ExternalCapabilities.Should().BeEmpty();
         var preflightRequest = schedule.PreflightRequests.Should().ContainSingle().Which;
         preflightRequest.Should().BeSameAs(schedulePort.LastPreflightRequest);
         preflightRequest.MemberId.Should().Be("m-alpha");
-        preflightRequest.AcceptedBinding.Should().BeEquivalentTo(acceptedBinding);
+        preflightRequest.AcceptedBinding.Should().BeEquivalentTo(
+            new StudioMemberWorkflowAcceptedBindingContext(
+                TeamId,
+                PublishedServiceId,
+                bindingPort.LastResult.WorkflowId!,
+                bindingPort.LastResult.RevisionId!));
         schedulePort.LastCreateRequest.Should().BeSameAs(schedule.LastCreateRequest);
         schedulePort.LastResult!.MemberId.Should().Be("m-alpha");
         schedulePort.LastResult.PublishedServiceId.Should().Be("svc-alpha");
     }
 
     [Fact]
-    public async Task ProvisionAsync_ThreadsCallerSubjectRefIntoDispatchAuth()
+    public async Task ProvisionAsync_ProductionCommandPort_ShouldReturnPendingWithoutExecutingScheduleWrite()
+    {
+        var member = NewMemberService();
+        var bindingPort = new RecordingBindingPort(member, WorkflowId, RevisionId);
+        var scheduleCommand = new RecordingScheduleProvisioningCommandPort();
+        var sut = new StudioWorkflowProvisioningService(
+            member,
+            bindingPort,
+            scheduleCommand,
+            new StudioWorkflowCapabilityAdmissionTestService());
+
+        var response = await sut.ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest("Monitor", "name: monitor", Prompt: "go")
+            {
+                TeamId = TeamId,
+                AuthenticatedOwner = TestAuthenticatedOwner(),
+                ProvisioningBearerToken = "must-not-enter-intent",
+            });
+
+        response.ScheduleId.Should().BeNull();
+        response.ScheduleProvisioningId.Should().Be(scheduleCommand.Intent!.ProvisioningId);
+        response.ScheduleProvisioningStatus.Should().Be(
+            StudioWorkflowScheduleProvisioningStatusNames.PendingBinding);
+        scheduleCommand.Intent.BindingRunId.Should().Be(BindingRunId);
+        scheduleCommand.Intent.RevisionId.Should().Be(RevisionId);
+        scheduleCommand.Intent.AuthenticatedOwner.VerifiedBindingId.Should().Be("binding-alpha");
+        scheduleCommand.Intent.ToString().Should().NotContain("must-not-enter-intent");
+        member.GetBindingRunCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_ThreadsAuthenticatedOwnerSubjectRefIntoDispatchAuth()
     {
         var member = NewMemberService();
         var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
@@ -465,6 +1164,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
             new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "p")
             {
                 TeamId = TeamId,
+                AuthenticatedOwner = TestAuthenticatedOwner("Lark", "tenant-9", "ou-user-1"),
             });
 
         var auth = schedule.Configuration!.Target.ServiceInvocation!.Auth;
@@ -524,6 +1224,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
             new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "p")
             {
                 TeamId = TeamId,
+                AuthenticatedOwner = TestAuthenticatedOwner(),
             });
 
         var auth = schedule.Configuration!.Target.ServiceInvocation!.Auth;
@@ -550,6 +1251,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
                 Timezone: "Asia/Shanghai")
             {
                 TeamId = TeamId,
+                AuthenticatedOwner = TestAuthenticatedOwner(),
             });
 
         // The re-mintable subject reference is the only schedule credential.
@@ -572,6 +1274,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
             new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "go")
             {
                 TeamId = TeamId,
+                AuthenticatedOwner = TestAuthenticatedOwner(),
             });
 
         response.BindingStatus.Should().Be(ProvisionWorkflowBindingStatusNames.Accepted);
@@ -594,6 +1297,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
             new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "go")
             {
                 TeamId = TeamId,
+                AuthenticatedOwner = TestAuthenticatedOwner(),
             });
 
         schedule.Configuration!.ScheduleMode.Should().Be(ScheduledDispatchScheduleMode.OneShotAtUtc);
@@ -621,6 +1325,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
                 Timezone: "Asia/Shanghai")
             {
                 TeamId = TeamId,
+                AuthenticatedOwner = TestAuthenticatedOwner(),
             });
 
         schedule.Configuration!.ScheduleMode.Should().Be(ScheduledDispatchScheduleMode.RecurringCron);
@@ -645,6 +1350,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
                 RunImmediately: false)
             {
                 TeamId = TeamId,
+                AuthenticatedOwner = TestAuthenticatedOwner(),
             });
 
         // Bind happened, but with nothing to fire there is no schedule and no run.
@@ -671,6 +1377,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
                 Cron: "*/15 * * * *")
             {
                 TeamId = TeamId,
+                AuthenticatedOwner = TestAuthenticatedOwner(),
             });
 
         schedule.Ensured.Should().BeTrue();
@@ -693,6 +1400,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
             new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "p")
             {
                 TeamId = TeamId,
+                AuthenticatedOwner = TestAuthenticatedOwner(),
             });
 
         member.CreateScopeId.Should().Be(OtherScopeId);
@@ -745,6 +1453,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
             new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "go")
             {
                 TeamId = TeamId,
+                AuthenticatedOwner = TestAuthenticatedOwner(),
             });
 
         admission.Requests.Should().ContainSingle()
@@ -764,6 +1473,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
             DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "go")
         {
             TeamId = TeamId,
+            AuthenticatedOwner = TestAuthenticatedOwner(),
         };
 
         await first.ProvisionAsync(ScopeId, Caller, request);
@@ -778,8 +1488,133 @@ public sealed class StudioWorkflowProvisioningServiceTests
             StudioMemberInputLimits.MemberIdPattern.ToString());
         firstMember.BindRequest!.Workflow!.WorkflowId.Should().Be(
             secondMember.BindRequest!.Workflow!.WorkflowId);
+        firstMember.BindRequest.RevisionId.Should().Be(secondMember.BindRequest!.RevisionId);
         firstSchedule.Configuration!.ScheduleId.Should().Be($"provision-{PublishedServiceId}");
         firstSchedule.Configuration.ScheduleId.Should().Be(secondSchedule.Configuration!.ScheduleId);
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_ChangedWorkflowSpec_KeepsWorkflowIdentityAndAdvancesRevision()
+    {
+        var originalMember = NewMemberService();
+        var changedMember = NewMemberService();
+
+        await NewService(originalMember, new RecordingScheduleService()).ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest("Monitor", "name: monitor\nsteps: []")
+            {
+                TeamId = TeamId,
+                AuthenticatedOwner = TestAuthenticatedOwner(),
+            });
+        await NewService(changedMember, new RecordingScheduleService()).ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest("Monitor", "name: monitor\nsteps:\n  - id: changed")
+            {
+                TeamId = TeamId,
+                AuthenticatedOwner = TestAuthenticatedOwner(),
+            });
+
+        originalMember.CreateRequest!.MemberId.Should().Be(changedMember.CreateRequest!.MemberId);
+        originalMember.BindRequest!.Workflow!.WorkflowId.Should().Be(
+            changedMember.BindRequest!.Workflow!.WorkflowId);
+        originalMember.BindRequest.RevisionId.Should().NotBe(changedMember.BindRequest.RevisionId);
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_ChangedInlineWorkflowSpec_KeepsWorkflowIdentityAndAdvancesRevision()
+    {
+        var originalMember = NewMemberService();
+        var changedMember = NewMemberService();
+        const string rootYaml = "name: root\nsteps: []";
+
+        await NewService(originalMember, new RecordingScheduleService()).ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest("Monitor", rootYaml, RunImmediately: false)
+            {
+                TeamId = TeamId,
+                InlineWorkflowYamls = new Dictionary<string, string>
+                {
+                    ["child"] = "name: child\nsteps: []",
+                },
+            });
+        await NewService(changedMember, new RecordingScheduleService()).ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest("Monitor", rootYaml, RunImmediately: false)
+            {
+                TeamId = TeamId,
+                InlineWorkflowYamls = new Dictionary<string, string>
+                {
+                    ["child"] = "name: child\nsteps:\n  - id: changed\n    type: assign",
+                },
+            });
+
+        originalMember.BindRequest!.Workflow!.WorkflowId.Should().Be(
+            changedMember.BindRequest!.Workflow!.WorkflowId);
+        originalMember.BindRequest.RevisionId.Should().NotBe(changedMember.BindRequest.RevisionId);
+        originalMember.BindRequest.Workflow.WorkflowYamls.Should().HaveCount(2);
+        changedMember.BindRequest.Workflow.WorkflowYamls.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_InlineWorkflowYaml_ShouldUseOneCanonicalBundleForAdmissionAndBinding()
+    {
+        var member = NewMemberService();
+        var sut = NewService(
+            member,
+            new RecordingScheduleService(),
+            out var bindingPort,
+            out _);
+        const string rootYaml = "name: root\nsteps: []\n";
+        const string childYaml = "name: child\nsteps: []\n";
+
+        await sut.ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest("Monitor", rootYaml, RunImmediately: false)
+            {
+                TeamId = TeamId,
+                InlineWorkflowYamls = new Dictionary<string, string>
+                {
+                    ["child"] = childYaml,
+                },
+            });
+
+        bindingPort.LastRequest.Should().NotBeNull();
+        bindingPort.LastRequest!.WorkflowYaml.Should().Be(rootYaml.Trim());
+        bindingPort.LastRequest.InlineWorkflowYamls.Should()
+            .Contain("child", childYaml.Trim());
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_ChangedExecutionMode_AdvancesRevision()
+    {
+        var scheduledMember = NewMemberService();
+        var bindOnlyMember = NewMemberService();
+        const string yaml = "name: monitor\nsteps: []";
+
+        await NewService(scheduledMember, new RecordingScheduleService()).ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest("Monitor", yaml)
+            {
+                TeamId = TeamId,
+                AuthenticatedOwner = TestAuthenticatedOwner(),
+            });
+        await NewService(bindOnlyMember, new RecordingScheduleService()).ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest("Monitor", yaml, RunImmediately: false)
+            {
+                TeamId = TeamId,
+            });
+
+        scheduledMember.BindRequest!.Workflow!.WorkflowId.Should().Be(
+            bindOnlyMember.BindRequest!.Workflow!.WorkflowId);
+        scheduledMember.BindRequest.RevisionId.Should().NotBe(bindOnlyMember.BindRequest.RevisionId);
     }
 
     [Fact]
@@ -793,16 +1628,19 @@ public sealed class StudioWorkflowProvisioningServiceTests
             ScopeId, Caller, new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor")
             {
                 TeamId = TeamId,
+                AuthenticatedOwner = TestAuthenticatedOwner(),
             });
         await NewService(renamed, new RecordingScheduleService()).ProvisionAsync(
             ScopeId, Caller, new ProvisionWorkflowRequest(DisplayName: "Other", WorkflowYaml: "name: monitor")
             {
                 TeamId = TeamId,
+                AuthenticatedOwner = TestAuthenticatedOwner(),
             });
         await NewService(otherScope, new RecordingScheduleService()).ProvisionAsync(
             OtherScopeId, Caller, new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor")
             {
                 TeamId = TeamId,
+                AuthenticatedOwner = TestAuthenticatedOwner(),
             });
 
         baseline.CreateRequest!.MemberId.Should().NotBe(renamed.CreateRequest!.MemberId);
@@ -841,6 +1679,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
             new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "go")
             {
                 TeamId = TeamId,
+                AuthenticatedOwner = TestAuthenticatedOwner(),
             });
 
         member.GetCallCount.Should().Be(1);
@@ -862,6 +1701,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
             new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor")
             {
                 TeamId = TeamId,
+                AuthenticatedOwner = TestAuthenticatedOwner(),
             });
         await NewService(otherTeam, new RecordingScheduleService()).ProvisionAsync(
             ScopeId,
@@ -869,6 +1709,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
             new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor")
             {
                 TeamId = OtherTeamId,
+                AuthenticatedOwner = TestAuthenticatedOwner(),
             });
 
         baseline.CreateRequest!.MemberId.Should().NotBe(otherTeam.CreateRequest!.MemberId);
@@ -891,11 +1732,59 @@ public sealed class StudioWorkflowProvisioningServiceTests
             new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "go")
             {
                 TeamId = TeamId,
+                AuthenticatedOwner = TestAuthenticatedOwner(),
             });
 
         schedule.Ensured.Should().BeTrue();
         schedule.Configuration!.ScheduleId.Should().Be($"provision-{PublishedServiceId}.2");
         response.ScheduleId.Should().Be(ScheduleId);
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_WhenLiveScheduleExists_ShouldReplaceIt()
+    {
+        var member = NewMemberService();
+        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        var sut = NewService(member, schedule, out _, out var schedulePort);
+        schedulePort.ExistingAutomation = new StudioMemberAutomationView(
+            ScopeId,
+            TeamId,
+            MemberId,
+            $"provision-{PublishedServiceId}",
+            PublishedServiceId,
+            "Existing monitor",
+            "old prompt",
+            "0 9 * * *",
+            "UTC",
+            true,
+            "active",
+            DateTimeOffset.UtcNow.AddHours(1),
+            string.Empty,
+            "studio-workflow-provision-create:old",
+            1,
+            false,
+            DateTimeOffset.UtcNow.AddMinutes(1),
+            null,
+            10)
+        {
+            TargetRevisionId = "rev-old",
+        };
+
+        var response = await sut.ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest("Monitor", "name: monitor", "new prompt")
+            {
+                TeamId = TeamId,
+                AuthenticatedOwner = TestAuthenticatedOwner(),
+            });
+
+        schedulePort.LastCreateRequest.Should().BeNull();
+        schedulePort.LastReplaceRequest.Should().NotBeNull();
+        schedulePort.LastReplaceRequest!.ScheduleId.Should().Be($"provision-{PublishedServiceId}");
+        schedulePort.LastReplaceRequest.OperationId.Should()
+            .StartWith("studio-workflow-provision-replace:");
+        response.ScheduleId.Should().Be($"provision-{PublishedServiceId}");
     }
 
     [Fact]
@@ -914,6 +1803,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
             new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor")
             {
                 TeamId = TeamId,
+                AuthenticatedOwner = TestAuthenticatedOwner(),
             });
 
         (await act.Should().ThrowAsync<InvalidOperationException>())
@@ -1004,9 +1894,8 @@ public sealed class StudioWorkflowProvisioningServiceTests
         return new StudioWorkflowProvisioningService(
             member,
             bindingPort,
-            schedulePort,
-            new StudioWorkflowCapabilityAdmissionTestService(),
-            new FakeTimeProvider());
+            ImmediateScheduleCommand(schedulePort),
+            new StudioWorkflowCapabilityAdmissionTestService());
     }
 
     private static StudioWorkflowProvisioningService NewService(
@@ -1019,10 +1908,21 @@ public sealed class StudioWorkflowProvisioningServiceTests
         return new StudioWorkflowProvisioningService(
             member,
             new RecordingBindingPort(member, WorkflowId, RevisionId),
-            new RecordingWorkflowSchedulePort(schedule),
-            admission,
-            time);
+            ImmediateScheduleCommand(schedule, time),
+            admission);
     }
+
+    private static IStudioWorkflowScheduleProvisioningCommandPort ImmediateScheduleCommand(
+        RecordingScheduleService schedule,
+        FakeTimeProvider? time = null) =>
+        ImmediateScheduleCommand(new RecordingWorkflowSchedulePort(schedule), time);
+
+    private static IStudioWorkflowScheduleProvisioningCommandPort ImmediateScheduleCommand(
+        RecordingWorkflowSchedulePort schedulePort,
+        FakeTimeProvider? time = null) =>
+        new ImmediateScheduleProvisioningCommandPort(
+            new StudioWorkflowScheduleProvisioningExecutor(schedulePort),
+            time ?? new FakeTimeProvider());
 
     private static WorkflowCapabilityAdmissionPlan CapabilityPlan(
         params ExternalWorkflowCapabilityRef[] capabilities)
@@ -1037,6 +1937,67 @@ public sealed class StudioWorkflowProvisioningServiceTests
             });
         }
         return plan;
+    }
+
+    private static ExternalWorkflowCapabilityRef DurableExplicitRequestCapability(string userServiceId)
+    {
+        var policy = new NyxIdOperationExecutionPolicy
+        {
+            Risk = NyxIdOperationRisk.ReadOnly,
+            Approval = NyxIdOperationApproval.None,
+            EnforcementOwner = NyxIdOperationEnforcementOwner.Aevatar,
+        };
+        policy.AllowedExecutionModes.Add(ExternalCapabilityExecutionMode.Interactive);
+        policy.AllowedExecutionModes.Add(ExternalCapabilityExecutionMode.Durable);
+        return new ExternalWorkflowCapabilityRef
+        {
+            NyxIdUserRequest = new NyxIdUserRequestCapabilityRef
+            {
+                Request = new NyxIdRequestSelector
+                {
+                    UserServiceId = userServiceId,
+                    Method = NyxIdRequestMethod.Get,
+                    PathTemplate = "/api/resources/{resource_id}",
+                    BodyMode = NyxIdRequestBodyMode.None,
+                    ResponseMode = NyxIdRequestResponseMode.Text,
+                },
+                ServiceSlugSnapshot = "service-alpha",
+                ContractDigest = "contract-alpha",
+                ExecutionPolicy = policy,
+            },
+        };
+    }
+
+    private static WorkflowExternalCapabilityAdmissionException DurableAuthorizationUnavailable(
+        ExternalWorkflowCapabilityRef capability,
+        bool includeAdditionalBlocker = false)
+    {
+        var readiness = new ExternalCapabilityReadiness
+        {
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            Status = ExternalCapabilityReadinessStatus.DurableAuthorizationUnavailable,
+            SelectedCapability = capability.Clone(),
+            Blockers =
+            {
+                new ExternalCapabilityBlocker
+                {
+                    Status = ExternalCapabilityReadinessStatus.DurableAuthorizationUnavailable,
+                    Code = "DURABLE_AUTHORIZATION_UNAVAILABLE",
+                    SafeMessage = "The current authorization catalog does not prove this durable grant.",
+                },
+            },
+        };
+        if (includeAdditionalBlocker)
+        {
+            readiness.Blockers.Add(new ExternalCapabilityBlocker
+            {
+                Status = ExternalCapabilityReadinessStatus.ContractDrift,
+                Code = "CONTRACT_DRIFT",
+                SafeMessage = "The capability contract changed.",
+            });
+        }
+
+        return new WorkflowExternalCapabilityAdmissionException(readiness);
     }
 
     private static RecordingMemberService NewMemberService() =>
@@ -1059,29 +2020,77 @@ public sealed class StudioWorkflowProvisioningServiceTests
             },
         };
 
-    private static AuthenticatedAuthorizationOwnerContext TestAuthenticatedOwner() =>
+    private static AuthenticatedAuthorizationOwnerContext TestAuthenticatedOwner(
+        string platform = "nyxid",
+        string tenant = "",
+        string ownerSubject = "owner-alpha") =>
         new(
             new AuthorizationOwnerIdentity
             {
                 Authority = NyxIdAuthorizationAuthorities.NyxId,
                 OwnerKind = AuthorizationOwnerKind.Personal,
-                OwnerSubject = "owner-alpha",
+                OwnerSubject = ownerSubject,
             },
-            "nyxid",
-            string.Empty,
-            "owner-alpha",
+            platform,
+            tenant,
+            ownerSubject,
             "binding-alpha");
+
+    private sealed class ImmediateScheduleProvisioningCommandPort(
+        IStudioWorkflowScheduleProvisioningExecutor executor,
+        TimeProvider timeProvider) : IStudioWorkflowScheduleProvisioningCommandPort
+    {
+        public StudioWorkflowScheduleProvisioningIntent? LastIntent { get; private set; }
+
+        public async Task<StudioWorkflowScheduleProvisioningAcceptance> AcceptAsync(
+            StudioWorkflowScheduleProvisioningIntent intent,
+            CancellationToken ct = default)
+        {
+            LastIntent = intent;
+            var oneShotFireAt = intent.ScheduleMode == ScheduledDispatchScheduleMode.OneShotAtUtc
+                ? timeProvider.GetUtcNow().AddSeconds(intent.OneShotDelaySeconds)
+                : (DateTimeOffset?)null;
+            var result = await executor.ExecuteAsync(
+                new StudioWorkflowScheduleProvisioningExecution(intent, oneShotFireAt),
+                ct);
+            if (!result.Success)
+                throw new InvalidOperationException(result.Detail);
+
+            return new StudioWorkflowScheduleProvisioningAcceptance(
+                true,
+                intent.ProvisioningId,
+                StudioWorkflowScheduleProvisioningStatusNames.Succeeded,
+                result.ScheduleId);
+        }
+    }
+
+    private sealed class RecordingScheduleProvisioningCommandPort
+        : IStudioWorkflowScheduleProvisioningCommandPort
+    {
+        public StudioWorkflowScheduleProvisioningIntent? Intent { get; private set; }
+
+        public Task<StudioWorkflowScheduleProvisioningAcceptance> AcceptAsync(
+            StudioWorkflowScheduleProvisioningIntent intent,
+            CancellationToken ct = default)
+        {
+            Intent = intent;
+            return Task.FromResult(new StudioWorkflowScheduleProvisioningAcceptance(
+                true,
+                intent.ProvisioningId,
+                StudioWorkflowScheduleProvisioningStatusNames.PendingBinding));
+        }
+    }
 
     private sealed class RecordingBindingPort : IStudioMemberWorkflowBindingPort
     {
         private readonly RecordingMemberService _member;
-        private readonly string _acceptedWorkflowId;
-        private readonly string _acceptedRevisionId;
+        private readonly string? _acceptedWorkflowId;
+        private readonly string? _acceptedRevisionId;
 
         public RecordingBindingPort(
             RecordingMemberService member,
-            string acceptedWorkflowId,
-            string acceptedRevisionId)
+            string? acceptedWorkflowId,
+            string? acceptedRevisionId)
         {
             _member = member;
             _acceptedWorkflowId = acceptedWorkflowId;
@@ -1104,7 +2113,9 @@ public sealed class StudioWorkflowProvisioningServiceTests
                     RevisionId: request.RevisionId,
                     Workflow: new StudioMemberWorkflowBindingSpec(
                         request.WorkflowId ?? "workflow-test",
-                        [request.WorkflowYaml])
+                        [request.WorkflowYaml, .. (request.InlineWorkflowYamls ?? new Dictionary<string, string>())
+                            .OrderBy(static item => item.Key, StringComparer.Ordinal)
+                            .Select(static item => item.Value)])
                     {
                         CapabilityAdmissionPlan = request.CapabilityAdmission?.ExistingPlan,
                     })
@@ -1124,6 +2135,57 @@ public sealed class StudioWorkflowProvisioningServiceTests
                 _acceptedWorkflowId,
                 _acceptedRevisionId);
             return LastResult;
+        }
+    }
+
+    private sealed class RecordingCatalogRefreshPort(NyxIdAuthorizationCatalogRefreshResult result) :
+        INyxIdAuthorizationCatalogRefreshPort
+    {
+        public Action? OnRefresh { get; init; }
+        public AuthorizationOwnerIdentity? Owner { get; private set; }
+        public string? BearerToken { get; private set; }
+        public NyxIdAuthorizationCatalogRefreshRequest? Request { get; private set; }
+
+        public Task<NyxIdAuthorizationCatalogRefreshResult> RefreshAsync(
+            AuthorizationOwnerIdentity owner,
+            string bearerToken,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<NyxIdAuthorizationCatalogRefreshResult> RefreshAsync(
+            AuthorizationOwnerIdentity owner,
+            string bearerToken,
+            NyxIdAuthorizationCatalogRefreshRequest request,
+            CancellationToken ct = default)
+        {
+            Owner = owner.Clone();
+            BearerToken = bearerToken;
+            Request = request;
+            OnRefresh?.Invoke();
+            return Task.FromResult(result);
+        }
+
+        public Task<NyxIdAuthorizationCatalogRefreshResult> RefreshPersonalAsync(
+            string verifiedOwnerSubject,
+            string bearerToken,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+    }
+
+    private sealed class RecordingCatalogVisibilityPort(NyxIdAuthorizationCatalogVisibilityResult result) :
+        INyxIdAuthorizationCatalogVisibilityPort
+    {
+        public AuthorizationOwnerIdentity? Owner { get; private set; }
+        public long RequiredStateVersion { get; private set; }
+
+        public Task<NyxIdAuthorizationCatalogVisibilityResult> ResolveAsync(
+            AuthorizationOwnerIdentity owner,
+            long requiredStateVersion,
+            CancellationToken ct = default)
+        {
+            Owner = owner.Clone();
+            RequiredStateVersion = requiredStateVersion;
+            return Task.FromResult(result);
         }
     }
 
@@ -1165,15 +2227,17 @@ public sealed class StudioWorkflowProvisioningServiceTests
 
         public StudioMemberWorkflowScheduleRequest? LastCreateRequest { get; private set; }
 
+        public StudioMemberWorkflowScheduleRequest? LastReplaceRequest { get; private set; }
+
         public StudioMemberWorkflowScheduleResult? LastResult { get; private set; }
+
+        public StudioMemberAutomationView? ExistingAutomation { get; set; }
 
         public async Task<StudioMemberWorkflowScheduleResult> CreateAsync(
             StudioMemberWorkflowScheduleRequest request,
             string confirmedPermissionDigest,
             CancellationToken ct = default)
         {
-            var acceptedBinding = request.AcceptedBinding
-                ?? throw new InvalidOperationException("Accepted binding context is required.");
             LastCreateRequest = request;
             _schedule.LastCreateRequest = request;
             var scheduleId = request.ScheduleId ?? "schedule-test";
@@ -1181,7 +2245,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
             var receipt = await _schedule.EnsureAsync(
                 new ScheduledDispatchConfiguration(
                     ScheduleId: scheduleId,
-                    DisplayName: request.DisplayName ?? $"provision-{acceptedBinding.PublishedServiceId}",
+                    DisplayName: request.DisplayName ?? $"provision-{PublishedServiceId}",
                     Target: new ScheduledDispatchTargetDescriptor(
                         ScheduledDispatchTargetKind.ServiceInvocation,
                         ServiceInvocation: new ScheduledServiceInvocationTargetDescriptor(
@@ -1190,7 +2254,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
                                 TenantId = request.ScopeId,
                                 AppId = ScopeServiceIdentityDefaults.ServiceAppId,
                                 Namespace = ScopeServiceIdentityDefaults.ServiceNamespace,
-                                ServiceId = acceptedBinding.PublishedServiceId,
+                                ServiceId = PublishedServiceId,
                             },
                             EndpointId: "chat",
                             Payload: Any.Pack(new ChatRequestEvent
@@ -1225,8 +2289,8 @@ public sealed class StudioWorkflowProvisioningServiceTests
                 request.ScopeId,
                 request.MemberId,
                 receipt.ScheduleId,
-                acceptedBinding.PublishedServiceId,
-                "/workflow/observatory",
+                PublishedServiceId,
+                "/admin#/observatory",
                 "pending");
             return LastResult;
         }
@@ -1236,6 +2300,23 @@ public sealed class StudioWorkflowProvisioningServiceTests
             string confirmedPermissionDigest,
             CancellationToken ct = default) =>
             throw new NotSupportedException();
+
+        public Task<StudioMemberWorkflowScheduleResult> ReplaceAsync(
+            StudioMemberWorkflowScheduleRequest request,
+            string confirmedPermissionDigest,
+            CancellationToken ct = default)
+        {
+            LastReplaceRequest = request;
+            LastResult = new StudioMemberWorkflowScheduleResult(
+                true,
+                request.ScopeId,
+                request.MemberId,
+                request.ScheduleId ?? "schedule-test",
+                PublishedServiceId,
+                "/admin#/observatory",
+                "pending");
+            return Task.FromResult(LastResult);
+        }
 
         public Task<StudioMemberAutomationListResponse> ListAsync(
             string scopeId,
@@ -1253,7 +2334,10 @@ public sealed class StudioWorkflowProvisioningServiceTests
             string memberId,
             string scheduleId,
             CancellationToken ct = default) =>
-            throw new NotSupportedException();
+            Task.FromResult(
+                string.Equals(ExistingAutomation?.ScheduleId, scheduleId, StringComparison.Ordinal)
+                    ? ExistingAutomation
+                    : null);
 
         public Task<StudioMemberAutomationMutationReceipt> UpdateAsync(
             StudioMemberAutomationUpdateCommand command,

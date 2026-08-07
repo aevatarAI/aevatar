@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
@@ -21,9 +22,13 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
     private const string ChannelWorkflowDeliveryUnavailableSummary =
         "This channel bot is not configured for workflow result delivery.";
     private const string ReservationExpiredCode = "workflow_run_delivery_reservation_expired";
+    private const string ToolApprovalRetryCallbackPrefix = "workflow-tool-approval-delivery-retry";
+    private const int ToolApprovalInitialRetryDelayMs = 250;
+    private const int ToolApprovalMaxRetryDelayMs = 30_000;
     private static readonly TimeSpan MaxDurableTimeoutDelay =
         TimeSpan.FromMilliseconds(int.MaxValue - 1_000L);
     private readonly NyxIdRelayOutboundPort _outboundPort;
+    private readonly IInteractiveReplyDispatcher _interactiveReplyDispatcher;
     private readonly IWorkflowResultDeliveryCredentialResolver _credentialResolver;
     private readonly IActorRuntimeCallbackScheduler _callbackScheduler;
     private readonly TimeProvider _timeProvider;
@@ -31,12 +36,15 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
 
     public WorkflowRunDeliveryGAgent(
         NyxIdRelayOutboundPort outboundPort,
+        IInteractiveReplyDispatcher interactiveReplyDispatcher,
         IWorkflowResultDeliveryCredentialResolver credentialResolver,
         IActorRuntimeCallbackScheduler callbackScheduler,
         ILogger<WorkflowRunDeliveryGAgent> logger,
         TimeProvider? timeProvider = null)
     {
         _outboundPort = outboundPort ?? throw new ArgumentNullException(nameof(outboundPort));
+        _interactiveReplyDispatcher = interactiveReplyDispatcher ??
+            throw new ArgumentNullException(nameof(interactiveReplyDispatcher));
         _credentialResolver = credentialResolver ?? throw new ArgumentNullException(nameof(credentialResolver));
         _callbackScheduler = callbackScheduler ?? throw new ArgumentNullException(nameof(callbackScheduler));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -52,6 +60,10 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
             .On<WorkflowRunDeliveryStartedEvent>(ApplyStarted)
             .On<WorkflowRunDeliveryTerminalNotificationBufferedEvent>(ApplyTerminalBuffered)
             .On<WorkflowRunDeliveryTerminalNotificationDiscardedEvent>(ApplyTerminalDiscarded)
+            .On<WorkflowRunDeliveryToolApprovalNotificationBufferedEvent>(ApplyToolApprovalBuffered)
+            .On<WorkflowRunDeliveryToolApprovalNotificationDeliveredEvent>(ApplyToolApprovalDelivered)
+            .On<WorkflowRunDeliveryToolApprovalNotificationRetryScheduledEvent>(ApplyToolApprovalRetryScheduled)
+            .On<WorkflowRunDeliveryToolApprovalNotificationDiscardedEvent>(ApplyToolApprovalDiscarded)
             .On<WorkflowRunDeliverySucceededEvent>(ApplySucceeded)
             .On<WorkflowRunDeliveryFailedEvent>(ApplyFailed)
             .On<WorkflowRunDeliveryAbandonedEvent>(ApplyAbandoned)
@@ -73,7 +85,16 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
             return;
         }
 
+        if (State.PendingToolApprovalNotification is not null &&
+            State.Status is WorkflowRunDeliveryStatus.Reserved or WorkflowRunDeliveryStatus.Started)
+        {
+            await PromoteReservedToolApprovalAsync().ConfigureAwait(false);
+            await TryDeliverPendingToolApprovalAsync(ct).ConfigureAwait(false);
+            return;
+        }
+
         if (State.PendingTerminalNotification is null &&
+            State.PendingToolApprovalNotification is null &&
             State.Status is WorkflowRunDeliveryStatus.Reserved or WorkflowRunDeliveryStatus.Started)
         {
             await EnsureReservationExpiryAsync(ct).ConfigureAwait(false);
@@ -101,8 +122,15 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
 
         if (State.Status is WorkflowRunDeliveryStatus.Reserved or WorkflowRunDeliveryStatus.Started)
         {
-            if (IsSameReservation(command) && State.PendingTerminalNotification is null)
-                await EnsureReservationExpiryAsync(CancellationToken.None).ConfigureAwait(false);
+            if (IsSameReservation(command))
+            {
+                if (State.PendingTerminalNotification is not null)
+                    await ReconcilePendingTerminalAsync(CancellationToken.None).ConfigureAwait(false);
+                else if (State.PendingToolApprovalNotification is not null)
+                    await ReconcilePendingToolApprovalAsync(CancellationToken.None).ConfigureAwait(false);
+                else
+                    await EnsureReservationExpiryAsync(CancellationToken.None).ConfigureAwait(false);
+            }
             return;
         }
 
@@ -124,11 +152,20 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
         {
             await DiscardPendingTerminalAsync("reservation_identity_mismatch").ConfigureAwait(false);
         }
+        if (State.PendingToolApprovalNotification is not null && !PendingToolApprovalMatchesReservation())
+        {
+            await DiscardPendingToolApprovalAsync("reservation_identity_mismatch").ConfigureAwait(false);
+        }
 
         if (State.PendingTerminalNotification is not null)
         {
             await PromoteReservedTerminalAsync().ConfigureAwait(false);
             await TryDeliverPendingTerminalAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+        else if (State.PendingToolApprovalNotification is not null)
+        {
+            await PromoteReservedToolApprovalAsync().ConfigureAwait(false);
+            await TryDeliverPendingToolApprovalAsync(CancellationToken.None).ConfigureAwait(false);
         }
         else
         {
@@ -169,11 +206,63 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
 
         if (State.PendingTerminalNotification is not null && !PendingMatchesStartedRun())
             await DiscardPendingTerminalAsync("workflow_actor_identity_mismatch").ConfigureAwait(false);
+        if (State.PendingToolApprovalNotification is not null && !PendingToolApprovalMatchesStartedRun())
+            await DiscardPendingToolApprovalAsync("workflow_actor_identity_mismatch").ConfigureAwait(false);
 
         if (State.PendingTerminalNotification is not null)
             await TryDeliverPendingTerminalAsync(CancellationToken.None).ConfigureAwait(false);
+        else if (State.PendingToolApprovalNotification is not null)
+            await TryDeliverPendingToolApprovalAsync(CancellationToken.None).ConfigureAwait(false);
         else
             await EnsureReservationExpiryAsync(CancellationToken.None).ConfigureAwait(false);
+    }
+
+    [EventHandler]
+    public async Task HandleToolApprovalNotificationAsync(WorkflowRunToolApprovalNotification notification)
+    {
+        ArgumentNullException.ThrowIfNull(notification);
+        if (IsTerminal(State.Status))
+            return;
+
+        var publisherActorId = ActiveInboundEnvelope?.Route?.PublisherActorId?.Trim() ?? string.Empty;
+        if (!IsValidToolApprovalNotificationEnvelope(notification, publisherActorId))
+            return;
+        if (State.DeliveredToolApprovalRequestIds.Contains(notification.ApprovalRequestId, StringComparer.Ordinal))
+            return;
+        if (State.Status is WorkflowRunDeliveryStatus.Reserved or WorkflowRunDeliveryStatus.Started &&
+            (!string.Equals(State.DeliveryId, notification.DeliveryId, StringComparison.Ordinal) ||
+             !string.Equals(State.ExpectedWorkflowCommandId, notification.WorkflowCommandId, StringComparison.Ordinal)))
+        {
+            return;
+        }
+        if (State.Status == WorkflowRunDeliveryStatus.Started &&
+            !string.Equals(State.WorkflowActorId, notification.WorkflowActorId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (State.PendingTerminalNotification is not null)
+            return;
+        if (State.PendingToolApprovalNotification is not null)
+        {
+            if (SameToolApprovalIdentity(State.PendingToolApprovalNotification, notification))
+                await ReconcilePendingToolApprovalAsync(CancellationToken.None).ConfigureAwait(false);
+            return;
+        }
+
+        await PersistDomainEventAsync(new WorkflowRunDeliveryToolApprovalNotificationBufferedEvent
+        {
+            DeliveryId = notification.DeliveryId,
+            WorkflowCommandId = notification.WorkflowCommandId,
+            PublisherActorId = publisherActorId,
+            Notification = notification.Clone(),
+            BufferedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+        });
+
+        if (State.Status == WorkflowRunDeliveryStatus.Reserved)
+            await PromoteReservedToolApprovalAsync().ConfigureAwait(false);
+        if (State.Status == WorkflowRunDeliveryStatus.Started)
+            await TryDeliverPendingToolApprovalAsync(CancellationToken.None).ConfigureAwait(false);
     }
 
     [EventHandler]
@@ -184,6 +273,16 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
             return;
 
         var publisherActorId = ActiveInboundEnvelope?.Route?.PublisherActorId?.Trim() ?? string.Empty;
+        _logger.LogWarning(
+            "Workflow run delivery terminal notification received: deliveryActorId={DeliveryActorId} deliveryId={DeliveryId} workflowActorId={WorkflowActorId} publisherActorId={PublisherActorId} workflowCommandId={WorkflowCommandId} status={TerminalStatus} currentStatus={CurrentStatus} pendingTerminal={PendingTerminal}",
+            Id,
+            notification.DeliveryId,
+            notification.WorkflowActorId,
+            publisherActorId,
+            notification.WorkflowCommandId,
+            notification.Status,
+            State.Status,
+            State.PendingTerminalNotification is not null);
         if (!IsValidNotificationEnvelope(notification, publisherActorId))
             return;
         if (State.Status is WorkflowRunDeliveryStatus.Reserved or WorkflowRunDeliveryStatus.Started &&
@@ -201,6 +300,9 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
             return;
         }
 
+        if (State.PendingToolApprovalNotification is not null)
+            await DiscardPendingToolApprovalAsync("terminal_notification_received").ConfigureAwait(false);
+
         if (State.PendingTerminalNotification is not null)
         {
             if (SameTerminalIdentity(State.PendingTerminalNotification, notification))
@@ -212,6 +314,7 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
                 return;
         }
 
+        var terminalBufferPersistStarted = Stopwatch.GetTimestamp();
         await PersistDomainEventAsync(new WorkflowRunDeliveryTerminalNotificationBufferedEvent
         {
             DeliveryId = notification.DeliveryId,
@@ -220,6 +323,14 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
             Notification = notification.Clone(),
             BufferedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
         });
+        _logger.LogWarning(
+            "Workflow run delivery terminal notification buffered: deliveryActorId={DeliveryActorId} deliveryId={DeliveryId} workflowActorId={WorkflowActorId} workflowCommandId={WorkflowCommandId} currentStatus={CurrentStatus} elapsedMs={ElapsedMs}",
+            Id,
+            State.DeliveryId,
+            State.WorkflowActorId,
+            State.ExpectedWorkflowCommandId,
+            State.Status,
+            Stopwatch.GetElapsedTime(terminalBufferPersistStarted).TotalMilliseconds);
 
         if (State.Status == WorkflowRunDeliveryStatus.Reserved)
             await PromoteReservedTerminalAsync().ConfigureAwait(false);
@@ -252,6 +363,26 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
     }
 
     [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+    public async Task HandleToolApprovalRetryAsync(
+        WorkflowRunDeliveryToolApprovalNotificationRetryReached command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        var pending = State.PendingToolApprovalNotification;
+        if (State.Status != WorkflowRunDeliveryStatus.Started ||
+            pending is null ||
+            !string.Equals(command.DeliveryId, State.DeliveryId, StringComparison.Ordinal) ||
+            !string.Equals(command.WorkflowActorId, State.WorkflowActorId, StringComparison.Ordinal) ||
+            !string.Equals(command.WorkflowCommandId, State.WorkflowCommandId, StringComparison.Ordinal) ||
+            !string.Equals(command.ApprovalRequestId, pending.ApprovalRequestId, StringComparison.Ordinal) ||
+            command.Attempt != State.ToolApprovalDeliveryAttempt)
+        {
+            return;
+        }
+
+        await TryDeliverPendingToolApprovalAsync(CancellationToken.None).ConfigureAwait(false);
+    }
+
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
     public async Task HandleReservationExpiryAsync(WorkflowRunDeliveryReservationExpiryReached command)
     {
         ArgumentNullException.ThrowIfNull(command);
@@ -269,6 +400,9 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
             await EnsureReservationExpiryAsync(CancellationToken.None).ConfigureAwait(false);
             return;
         }
+
+        if (State.PendingToolApprovalNotification is not null)
+            await DiscardPendingToolApprovalAsync("reservation_expired").ConfigureAwait(false);
 
         await PersistDomainEventAsync(new WorkflowRunDeliveryFailedEvent
         {
@@ -291,11 +425,37 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
 
         var attempt = Math.Max(1, State.DeliveryAttempt + 1);
         var observedAt = ResolveTerminalObservedAt(notification);
+        _logger.LogWarning(
+            "Workflow run delivery pending terminal relay starting: deliveryActorId={DeliveryActorId} deliveryId={DeliveryId} workflowActorId={WorkflowActorId} workflowCommandId={WorkflowCommandId} attempt={Attempt} terminalStatus={TerminalStatus}",
+            Id,
+            State.DeliveryId,
+            State.WorkflowActorId,
+            State.WorkflowCommandId,
+            attempt,
+            notification.Status);
+        var credentialResolveStarted = Stopwatch.GetTimestamp();
         var deliveryAgentKey = await ResolveWorkflowResultDeliveryAgentKeyAsync(notification, attempt, observedAt, ct)
             .ConfigureAwait(false);
+        _logger.LogWarning(
+            "Workflow run delivery credential resolution completed: deliveryActorId={DeliveryActorId} deliveryId={DeliveryId} workflowCommandId={WorkflowCommandId} attempt={Attempt} resolved={Resolved} elapsedMs={ElapsedMs}",
+            Id,
+            State.DeliveryId,
+            State.WorkflowCommandId,
+            attempt,
+            deliveryAgentKey is not null,
+            Stopwatch.GetElapsedTime(credentialResolveStarted).TotalMilliseconds);
         if (deliveryAgentKey is null)
             return;
 
+        _logger.LogWarning(
+            "Workflow run delivery outbound relay sending: deliveryActorId={DeliveryActorId} deliveryId={DeliveryId} workflowCommandId={WorkflowCommandId} attempt={Attempt} platform={Platform} replyMessageId={ReplyMessageId}",
+            Id,
+            State.DeliveryId,
+            State.WorkflowCommandId,
+            attempt,
+            State.ChannelPlatform,
+            State.ReplyMessageId);
+        var outboundStarted = Stopwatch.GetTimestamp();
         var result = await _outboundPort.SendWithAgentKeyAsync(
                 State.ChannelPlatform,
                 BuildConversationReference(),
@@ -310,9 +470,27 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
                 deliveryAgentKey,
                 ct)
             .ConfigureAwait(false);
+        _logger.LogWarning(
+            "Workflow run delivery outbound relay completed: deliveryActorId={DeliveryActorId} deliveryId={DeliveryId} workflowCommandId={WorkflowCommandId} attempt={Attempt} success={Success} errorCode={ErrorCode} sentActivityId={SentActivityId} platformMessageId={PlatformMessageId} elapsedMs={ElapsedMs}",
+            Id,
+            State.DeliveryId,
+            State.WorkflowCommandId,
+            attempt,
+            result.Success,
+            result.ErrorCode ?? string.Empty,
+            result.SentActivityId ?? string.Empty,
+            result.PlatformMessageId ?? string.Empty,
+            Stopwatch.GetElapsedTime(outboundStarted).TotalMilliseconds);
 
         if (result.Success)
         {
+            _logger.LogWarning(
+                "Workflow run delivery success event persisting: deliveryActorId={DeliveryActorId} deliveryId={DeliveryId} workflowCommandId={WorkflowCommandId} attempt={Attempt}",
+                Id,
+                State.DeliveryId,
+                State.WorkflowCommandId,
+                attempt);
+            var successPersistStarted = Stopwatch.GetTimestamp();
             await PersistDomainEventAsync(new WorkflowRunDeliverySucceededEvent
             {
                 DeliveryId = State.DeliveryId,
@@ -327,10 +505,33 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
                 TerminalErrorCode = ResolveTerminalErrorCode(notification),
                 TerminalObservedAtUnixMs = observedAt,
             });
+            _logger.LogWarning(
+                "Workflow run delivery success event persisted: deliveryActorId={DeliveryActorId} deliveryId={DeliveryId} workflowCommandId={WorkflowCommandId} attempt={Attempt} elapsedMs={ElapsedMs}",
+                Id,
+                State.DeliveryId,
+                State.WorkflowCommandId,
+                attempt,
+                Stopwatch.GetElapsedTime(successPersistStarted).TotalMilliseconds);
+            var purgeStarted = Stopwatch.GetTimestamp();
             await PurgeDurableCallbacksBestEffortAsync().ConfigureAwait(false);
+            _logger.LogWarning(
+                "Workflow run delivery callback purge completed: deliveryActorId={DeliveryActorId} deliveryId={DeliveryId} workflowCommandId={WorkflowCommandId} attempt={Attempt} elapsedMs={ElapsedMs}",
+                Id,
+                State.DeliveryId,
+                State.WorkflowCommandId,
+                attempt,
+                Stopwatch.GetElapsedTime(purgeStarted).TotalMilliseconds);
             return;
         }
 
+        _logger.LogWarning(
+            "Workflow run delivery failure event persisting: deliveryActorId={DeliveryActorId} deliveryId={DeliveryId} workflowCommandId={WorkflowCommandId} attempt={Attempt} errorCode={ErrorCode}",
+            Id,
+            State.DeliveryId,
+            State.WorkflowCommandId,
+            attempt,
+            string.IsNullOrWhiteSpace(result.ErrorCode) ? "workflow_run_delivery_failed" : result.ErrorCode);
+        var failurePersistStarted = Stopwatch.GetTimestamp();
         await PersistDeliveryFailureAsync(
                 notification,
                 attempt,
@@ -340,6 +541,235 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
                     ? "Workflow terminal reply delivery failed."
                     : result.ErrorMessage)
             .ConfigureAwait(false);
+        _logger.LogWarning(
+            "Workflow run delivery failure event persisted: deliveryActorId={DeliveryActorId} deliveryId={DeliveryId} workflowCommandId={WorkflowCommandId} attempt={Attempt} elapsedMs={ElapsedMs}",
+            Id,
+            State.DeliveryId,
+            State.WorkflowCommandId,
+            attempt,
+            Stopwatch.GetElapsedTime(failurePersistStarted).TotalMilliseconds);
+    }
+
+    private async Task TryDeliverPendingToolApprovalAsync(CancellationToken ct)
+    {
+        var notification = State.PendingToolApprovalNotification?.Clone();
+        if (State.Status != WorkflowRunDeliveryStatus.Started ||
+            notification is null ||
+            !PendingToolApprovalMatchesStartedRun() ||
+            State.PendingTerminalNotification is not null)
+        {
+            return;
+        }
+
+        if (State.ReservationExpiresAtUnixMs <= _timeProvider.GetUtcNow().ToUnixTimeMilliseconds())
+        {
+            await DiscardPendingToolApprovalAsync("reservation_expired").ConfigureAwait(false);
+            await HandleReservationExpiryAsync(new WorkflowRunDeliveryReservationExpiryReached
+            {
+                DeliveryId = State.DeliveryId,
+                WorkflowCommandId = State.ExpectedWorkflowCommandId,
+                ExpiresAtUnixMs = State.ReservationExpiresAtUnixMs,
+            }).ConfigureAwait(false);
+            return;
+        }
+
+        var attempt = Math.Max(1, State.ToolApprovalDeliveryAttempt + 1);
+        string? deliveryAgentKey;
+        try
+        {
+            deliveryAgentKey = await _credentialResolver.ResolveAsync(
+                    State.WorkflowResultDeliveryCredential ?? new ChannelWorkflowResultDeliveryCredential(),
+                    ct)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Workflow tool approval credential resolution failed; scheduling retry. deliveryId={DeliveryId} approvalRequestId={ApprovalRequestId} attempt={Attempt}",
+                State.DeliveryId,
+                notification.ApprovalRequestId,
+                attempt);
+            await ScheduleToolApprovalRetryAsync(notification, attempt, ct).ConfigureAwait(false);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(deliveryAgentKey))
+        {
+            _logger.LogWarning(
+                "Workflow tool approval credential is unavailable; scheduling retry. deliveryId={DeliveryId} approvalRequestId={ApprovalRequestId} attempt={Attempt}",
+                State.DeliveryId,
+                notification.ApprovalRequestId,
+                attempt);
+            await ScheduleToolApprovalRetryAsync(notification, attempt, ct).ConfigureAwait(false);
+            return;
+        }
+
+        InteractiveReplyDispatchResult result;
+        try
+        {
+            result = await _interactiveReplyDispatcher.DispatchAsync(
+                    ChannelId.From(State.ChannelPlatform),
+                    State.ReplyMessageId,
+                    deliveryAgentKey,
+                    WorkflowRunToolApprovalMessageMapper.ToMessageContent(notification),
+                    new ComposeContext { Conversation = BuildConversationReference() },
+                    ct)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Workflow tool approval card delivery failed; scheduling retry. deliveryId={DeliveryId} approvalRequestId={ApprovalRequestId} attempt={Attempt}",
+                State.DeliveryId,
+                notification.ApprovalRequestId,
+                attempt);
+            await ScheduleToolApprovalRetryAsync(notification, attempt, ct).ConfigureAwait(false);
+            return;
+        }
+
+        if (result.FellBackToText)
+        {
+            await PersistToolApprovalDeliveryFailureAsync(
+                    attempt,
+                    "workflow_tool_approval_interactive_delivery_unsupported",
+                    "The channel did not accept an interactive workflow approval card.")
+                .ConfigureAwait(false);
+            return;
+        }
+
+        if (!result.Succeeded)
+        {
+            _logger.LogWarning(
+                "Workflow tool approval card was not accepted as interactive; scheduling retry. deliveryId={DeliveryId} approvalRequestId={ApprovalRequestId} attempt={Attempt} detail={Detail}",
+                State.DeliveryId,
+                notification.ApprovalRequestId,
+                attempt,
+                result.Detail ?? string.Empty);
+            await ScheduleToolApprovalRetryAsync(notification, attempt, ct).ConfigureAwait(false);
+            return;
+        }
+
+        await PersistDomainEventAsync(new WorkflowRunDeliveryToolApprovalNotificationDeliveredEvent
+        {
+            DeliveryId = State.DeliveryId,
+            WorkflowCommandId = State.WorkflowCommandId,
+            ApprovalRequestId = notification.ApprovalRequestId,
+            Attempt = attempt,
+            SentActivityId = result.MessageId ?? string.Empty,
+            PlatformMessageId = result.PlatformMessageId ?? string.Empty,
+            DeliveredAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+        });
+        await EnsureReservationExpiryAsync(CancellationToken.None).ConfigureAwait(false);
+    }
+
+    private async Task PersistToolApprovalDeliveryFailureAsync(
+        int attempt,
+        string errorCode,
+        string errorSummary)
+    {
+        await PersistDomainEventAsync(new WorkflowRunDeliveryFailedEvent
+        {
+            DeliveryId = State.DeliveryId,
+            WorkflowActorId = State.WorkflowActorId,
+            WorkflowCommandId = State.WorkflowCommandId,
+            ErrorCode = errorCode,
+            ErrorSummary = errorSummary,
+            Attempt = attempt,
+            FailedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+        });
+        await PurgeDurableCallbacksBestEffortAsync().ConfigureAwait(false);
+    }
+
+    private async Task ScheduleToolApprovalRetryAsync(
+        WorkflowRunToolApprovalNotification notification,
+        int attempt,
+        CancellationToken ct)
+    {
+        var now = _timeProvider.GetUtcNow();
+        var remainingMs = State.ReservationExpiresAtUnixMs - now.ToUnixTimeMilliseconds();
+        if (remainingMs <= 0)
+        {
+            await DiscardPendingToolApprovalAsync("reservation_expired").ConfigureAwait(false);
+            return;
+        }
+
+        var delay = ResolveToolApprovalRetryDelay(attempt, remainingMs);
+        var callbackId = RuntimeCallbackKeyComposer.BuildCallbackId(
+            ToolApprovalRetryCallbackPrefix,
+            notification.DeliveryId,
+            notification.WorkflowCommandId,
+            notification.ApprovalRequestId,
+            attempt.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        var retryAt = now.Add(delay);
+        try
+        {
+            await _callbackScheduler.ScheduleTimeoutAsync(
+                    new RuntimeCallbackTimeoutRequest
+                    {
+                        ActorId = Id,
+                        CallbackId = callbackId,
+                        DueTime = delay,
+                        TriggerEnvelope = new EventEnvelope
+                        {
+                            Id = Guid.NewGuid().ToString("N"),
+                            Timestamp = Timestamp.FromDateTimeOffset(now),
+                            Payload = Any.Pack(new WorkflowRunDeliveryToolApprovalNotificationRetryReached
+                            {
+                                DeliveryId = notification.DeliveryId,
+                                WorkflowActorId = notification.WorkflowActorId,
+                                WorkflowCommandId = notification.WorkflowCommandId,
+                                ApprovalRequestId = notification.ApprovalRequestId,
+                                Attempt = attempt,
+                            }),
+                            Route = EnvelopeRouteSemantics.CreateTopologyPublication(Id, TopologyAudience.Self),
+                        },
+                    },
+                    ct)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Workflow tool approval durable retry scheduling failed; pending delivery will recover on activation. deliveryId={DeliveryId} approvalRequestId={ApprovalRequestId} attempt={Attempt}",
+                State.DeliveryId,
+                notification.ApprovalRequestId,
+                attempt);
+            return;
+        }
+
+        await PersistDomainEventAsync(new WorkflowRunDeliveryToolApprovalNotificationRetryScheduledEvent
+        {
+            DeliveryId = notification.DeliveryId,
+            WorkflowCommandId = notification.WorkflowCommandId,
+            ApprovalRequestId = notification.ApprovalRequestId,
+            Attempt = attempt,
+            CallbackId = callbackId,
+            RetryAtUnixMs = retryAt.ToUnixTimeMilliseconds(),
+        });
+    }
+
+    private static TimeSpan ResolveToolApprovalRetryDelay(int attempt, long remainingMs)
+    {
+        var exponent = Math.Clamp(attempt - 1, 0, 16);
+        var exponentialDelayMs = Math.Min(
+            ToolApprovalMaxRetryDelayMs,
+            ToolApprovalInitialRetryDelayMs * (1L << exponent));
+        return TimeSpan.FromMilliseconds(Math.Max(1L, Math.Min(exponentialDelayMs, remainingMs)));
     }
 
     private async Task PromoteReservedTerminalAsync()
@@ -368,12 +798,46 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
         });
     }
 
+    private async Task PromoteReservedToolApprovalAsync()
+    {
+        var notification = State.PendingToolApprovalNotification;
+        if (State.Status != WorkflowRunDeliveryStatus.Reserved ||
+            notification is null ||
+            !PendingToolApprovalMatchesReservation() ||
+            !string.Equals(
+                State.PendingToolApprovalPublisherActorId,
+                notification.WorkflowActorId,
+                StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        await PersistDomainEventAsync(new WorkflowRunDeliveryStartedEvent
+        {
+            DeliveryId = State.DeliveryId,
+            WorkflowActorId = notification.WorkflowActorId,
+            WorkflowRunId = notification.WorkflowRunId,
+            WorkflowCommandId = notification.WorkflowCommandId,
+            WorkflowCorrelationId = notification.WorkflowCorrelationId,
+            StreamTopic = string.Empty,
+            StartedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+        });
+    }
+
     private async Task ReconcilePendingTerminalAsync(CancellationToken ct)
     {
         if (State.Status == WorkflowRunDeliveryStatus.Reserved)
             await PromoteReservedTerminalAsync().ConfigureAwait(false);
         if (State.Status == WorkflowRunDeliveryStatus.Started)
             await TryDeliverPendingTerminalAsync(ct).ConfigureAwait(false);
+    }
+
+    private async Task ReconcilePendingToolApprovalAsync(CancellationToken ct)
+    {
+        if (State.Status == WorkflowRunDeliveryStatus.Reserved)
+            await PromoteReservedToolApprovalAsync().ConfigureAwait(false);
+        if (State.Status == WorkflowRunDeliveryStatus.Started)
+            await TryDeliverPendingToolApprovalAsync(ct).ConfigureAwait(false);
     }
 
     private async Task<string?> ResolveWorkflowResultDeliveryAgentKeyAsync(
@@ -493,9 +957,26 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
         });
     }
 
+    private async Task DiscardPendingToolApprovalAsync(string reason)
+    {
+        var pending = State.PendingToolApprovalNotification;
+        if (pending is null)
+            return;
+
+        await PersistDomainEventAsync(new WorkflowRunDeliveryToolApprovalNotificationDiscardedEvent
+        {
+            DeliveryId = pending.DeliveryId,
+            WorkflowCommandId = pending.WorkflowCommandId,
+            ApprovalRequestId = pending.ApprovalRequestId,
+            Reason = reason,
+            DiscardedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+        });
+    }
+
     private async Task EnsureReservationExpiryAsync(CancellationToken ct)
     {
         if (State.PendingTerminalNotification is not null ||
+            State.PendingToolApprovalNotification is not null ||
             State.Status is not (WorkflowRunDeliveryStatus.Reserved or WorkflowRunDeliveryStatus.Started))
         {
             return;
@@ -575,6 +1056,20 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
                notification.Status != WorkflowRunTerminalStatus.Unspecified;
     }
 
+    private static bool IsValidToolApprovalNotificationEnvelope(
+        WorkflowRunToolApprovalNotification notification,
+        string publisherActorId) =>
+        !string.IsNullOrWhiteSpace(publisherActorId) &&
+        string.Equals(publisherActorId, notification.WorkflowActorId?.Trim(), StringComparison.Ordinal) &&
+        !string.IsNullOrWhiteSpace(notification.DeliveryId) &&
+        !string.IsNullOrWhiteSpace(notification.WorkflowRunId) &&
+        !string.IsNullOrWhiteSpace(notification.WorkflowCommandId) &&
+        !string.IsNullOrWhiteSpace(notification.StepId) &&
+        !string.IsNullOrWhiteSpace(notification.ExecutionId) &&
+        !string.IsNullOrWhiteSpace(notification.ToolName) &&
+        !string.IsNullOrWhiteSpace(notification.ToolCallId) &&
+        !string.IsNullOrWhiteSpace(notification.ApprovalRequestId);
+
     private bool PendingMatchesReservation()
     {
         var pending = State.PendingTerminalNotification;
@@ -592,12 +1087,43 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
                string.Equals(State.PendingTerminalPublisherActorId, pending.WorkflowActorId, StringComparison.Ordinal);
     }
 
+    private bool PendingToolApprovalMatchesReservation()
+    {
+        var pending = State.PendingToolApprovalNotification;
+        return pending is not null &&
+               string.Equals(State.DeliveryId, pending.DeliveryId, StringComparison.Ordinal) &&
+               string.Equals(State.ExpectedWorkflowCommandId, pending.WorkflowCommandId, StringComparison.Ordinal);
+    }
+
+    private bool PendingToolApprovalMatchesStartedRun()
+    {
+        var pending = State.PendingToolApprovalNotification;
+        return PendingToolApprovalMatchesReservation() &&
+               pending is not null &&
+               string.Equals(State.WorkflowActorId, pending.WorkflowActorId, StringComparison.Ordinal) &&
+               string.Equals(
+                   State.PendingToolApprovalPublisherActorId,
+                   pending.WorkflowActorId,
+                   StringComparison.Ordinal);
+    }
+
     private static bool SameTerminalIdentity(
         WorkflowRunTerminalNotification left,
         WorkflowRunTerminalNotification right) =>
         string.Equals(left.DeliveryId, right.DeliveryId, StringComparison.Ordinal) &&
         string.Equals(left.WorkflowActorId, right.WorkflowActorId, StringComparison.Ordinal) &&
         string.Equals(left.WorkflowCommandId, right.WorkflowCommandId, StringComparison.Ordinal);
+
+    private static bool SameToolApprovalIdentity(
+        WorkflowRunToolApprovalNotification left,
+        WorkflowRunToolApprovalNotification right) =>
+        string.Equals(left.DeliveryId, right.DeliveryId, StringComparison.Ordinal) &&
+        string.Equals(left.WorkflowActorId, right.WorkflowActorId, StringComparison.Ordinal) &&
+        string.Equals(left.WorkflowCommandId, right.WorkflowCommandId, StringComparison.Ordinal) &&
+        string.Equals(left.StepId, right.StepId, StringComparison.Ordinal) &&
+        string.Equals(left.ExecutionId, right.ExecutionId, StringComparison.Ordinal) &&
+        string.Equals(left.ToolCallId, right.ToolCallId, StringComparison.Ordinal) &&
+        string.Equals(left.ApprovalRequestId, right.ApprovalRequestId, StringComparison.Ordinal);
 
     private ConversationReference BuildConversationReference()
     {
@@ -631,7 +1157,7 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
         notification.Status switch
         {
             WorkflowRunTerminalStatus.Completed => string.IsNullOrWhiteSpace(notification.Output)
-                ? "Workflow completed."
+                ? "Workflow run completed without a result to display."
                 : notification.Output.Trim(),
             WorkflowRunTerminalStatus.Stopped => string.IsNullOrWhiteSpace(notification.Error)
                 ? "Workflow stopped."
@@ -750,6 +1276,64 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
         return next;
     }
 
+    private static WorkflowRunDeliveryGAgentState ApplyToolApprovalBuffered(
+        WorkflowRunDeliveryGAgentState current,
+        WorkflowRunDeliveryToolApprovalNotificationBufferedEvent evt)
+    {
+        if (evt.Notification is null)
+            return current;
+
+        var next = current.Clone();
+        next.PendingToolApprovalNotification = evt.Notification.Clone();
+        next.PendingToolApprovalPublisherActorId = evt.PublisherActorId;
+        next.PendingToolApprovalBufferedAtUnixMs = evt.BufferedAtUnixMs;
+        next.ToolApprovalDeliveryAttempt = 0;
+        next.ToolApprovalRetryCallbackId = string.Empty;
+        next.ToolApprovalRetryAtUnixMs = 0;
+        return next;
+    }
+
+    private static WorkflowRunDeliveryGAgentState ApplyToolApprovalDelivered(
+        WorkflowRunDeliveryGAgentState current,
+        WorkflowRunDeliveryToolApprovalNotificationDeliveredEvent evt)
+    {
+        var next = current.Clone();
+        if (!MatchesPendingToolApproval(next, evt.DeliveryId, evt.WorkflowCommandId, evt.ApprovalRequestId))
+            return next;
+
+        if (!next.DeliveredToolApprovalRequestIds.Contains(evt.ApprovalRequestId, StringComparer.Ordinal))
+            next.DeliveredToolApprovalRequestIds.Add(evt.ApprovalRequestId);
+        ClearPendingToolApproval(next);
+        return next;
+    }
+
+    private static WorkflowRunDeliveryGAgentState ApplyToolApprovalRetryScheduled(
+        WorkflowRunDeliveryGAgentState current,
+        WorkflowRunDeliveryToolApprovalNotificationRetryScheduledEvent evt)
+    {
+        var next = current.Clone();
+        if (!MatchesPendingToolApproval(next, evt.DeliveryId, evt.WorkflowCommandId, evt.ApprovalRequestId) ||
+            evt.Attempt <= next.ToolApprovalDeliveryAttempt)
+        {
+            return next;
+        }
+
+        next.ToolApprovalDeliveryAttempt = evt.Attempt;
+        next.ToolApprovalRetryCallbackId = evt.CallbackId;
+        next.ToolApprovalRetryAtUnixMs = evt.RetryAtUnixMs;
+        return next;
+    }
+
+    private static WorkflowRunDeliveryGAgentState ApplyToolApprovalDiscarded(
+        WorkflowRunDeliveryGAgentState current,
+        WorkflowRunDeliveryToolApprovalNotificationDiscardedEvent evt)
+    {
+        var next = current.Clone();
+        if (MatchesPendingToolApproval(next, evt.DeliveryId, evt.WorkflowCommandId, evt.ApprovalRequestId))
+            ClearPendingToolApproval(next);
+        return next;
+    }
+
     private static WorkflowRunDeliveryGAgentState ApplySucceeded(
         WorkflowRunDeliveryGAgentState current,
         WorkflowRunDeliverySucceededEvent evt)
@@ -768,6 +1352,7 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
         next.TerminalErrorCode = evt.TerminalErrorCode;
         next.TerminalObservedAtUnixMs = evt.TerminalObservedAtUnixMs;
         ClearPendingTerminal(next);
+        ClearPendingToolApproval(next);
         return next;
     }
 
@@ -791,6 +1376,7 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
         next.TerminalErrorCode = evt.TerminalErrorCode;
         next.TerminalObservedAtUnixMs = evt.TerminalObservedAtUnixMs;
         ClearPendingTerminal(next);
+        ClearPendingToolApproval(next);
         return next;
     }
 
@@ -804,6 +1390,7 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
         next.ErrorCode = "workflow_run_delivery_abandoned";
         next.ErrorSummary = evt.Reason;
         ClearPendingTerminal(next);
+        ClearPendingToolApproval(next);
         return next;
     }
 
@@ -812,5 +1399,31 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
         state.PendingTerminalNotification = null;
         state.PendingTerminalPublisherActorId = string.Empty;
         state.PendingTerminalBufferedAtUnixMs = 0;
+    }
+
+    private static bool MatchesPendingToolApproval(
+        WorkflowRunDeliveryGAgentState state,
+        string? deliveryId,
+        string? workflowCommandId,
+        string? approvalRequestId) =>
+        state.PendingToolApprovalNotification is not null &&
+        string.Equals(state.PendingToolApprovalNotification.DeliveryId, deliveryId, StringComparison.Ordinal) &&
+        string.Equals(
+            state.PendingToolApprovalNotification.WorkflowCommandId,
+            workflowCommandId,
+            StringComparison.Ordinal) &&
+        string.Equals(
+            state.PendingToolApprovalNotification.ApprovalRequestId,
+            approvalRequestId,
+            StringComparison.Ordinal);
+
+    private static void ClearPendingToolApproval(WorkflowRunDeliveryGAgentState state)
+    {
+        state.PendingToolApprovalNotification = null;
+        state.PendingToolApprovalPublisherActorId = string.Empty;
+        state.PendingToolApprovalBufferedAtUnixMs = 0;
+        state.ToolApprovalDeliveryAttempt = 0;
+        state.ToolApprovalRetryCallbackId = string.Empty;
+        state.ToolApprovalRetryAtUnixMs = 0;
     }
 }

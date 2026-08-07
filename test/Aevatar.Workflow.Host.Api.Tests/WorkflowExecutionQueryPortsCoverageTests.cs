@@ -19,6 +19,8 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
     [InlineData("stopped", WorkflowRunCompletionStatus.Stopped)]
     [InlineData("not_found", WorkflowRunCompletionStatus.NotFound)]
     [InlineData("disabled", WorkflowRunCompletionStatus.Disabled)]
+    [InlineData("awaiting_tool_approval", WorkflowRunCompletionStatus.AwaitingToolApproval)]
+    [InlineData("waiting_for_signal", WorkflowRunCompletionStatus.WaitingForSignal)]
     [InlineData("unknown", WorkflowRunCompletionStatus.Unknown)]
     public void WorkflowExecutionReadModelMapper_ShouldMapCurrentStateStatuses(
         string status,
@@ -102,7 +104,7 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
     [InlineData(WorkflowExecutionCompletionStatus.Stopped, WorkflowRunCompletionStatus.Stopped)]
     [InlineData(WorkflowExecutionCompletionStatus.NotFound, WorkflowRunCompletionStatus.NotFound)]
     [InlineData(WorkflowExecutionCompletionStatus.Disabled, WorkflowRunCompletionStatus.Disabled)]
-    [InlineData(WorkflowExecutionCompletionStatus.WaitingForSignal, WorkflowRunCompletionStatus.Running)]
+    [InlineData(WorkflowExecutionCompletionStatus.WaitingForSignal, WorkflowRunCompletionStatus.WaitingForSignal)]
     [InlineData((WorkflowExecutionCompletionStatus)999, WorkflowRunCompletionStatus.Unknown)]
     public void WorkflowExecutionReadModelMapper_ShouldMapRunReportCompletionStatuses(
         WorkflowExecutionCompletionStatus status,
@@ -116,6 +118,33 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
         });
 
         report.CompletionStatus.Should().Be(expected);
+    }
+
+    [Fact]
+    public void WorkflowExecutionReadModelMapper_ShouldIdentifyTypedToolApprovalSuspension()
+    {
+        var mapper = new WorkflowExecutionReadModelMapper();
+        var source = new WorkflowRunInsightReportDocument
+        {
+            CompletionStatus = WorkflowExecutionCompletionStatus.WaitingForSignal,
+            Steps =
+            {
+                new WorkflowExecutionStepTrace
+                {
+                    StepId = "write_record",
+                    SuspensionType = "tool_approval",
+                    ToolApprovalValue = new WorkflowToolApprovalReadModel
+                    {
+                        ExecutionId = "exec-alpha",
+                        ToolCallId = "call-alpha",
+                        ApprovalRequestId = "approval-alpha",
+                    },
+                },
+            },
+        };
+
+        mapper.ToRunReport(source).CompletionStatus
+            .Should().Be(WorkflowRunCompletionStatus.AwaitingToolApproval);
     }
 
     [Fact]

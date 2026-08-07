@@ -123,10 +123,10 @@ button{font-family:inherit;cursor:pointer;}
 /* ============================ View region ============================ */
 .view{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;overflow:hidden;}
 #view-body{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;overflow:hidden;}
-#frame-dock{flex:1 1 auto;min-height:0;display:none;flex-direction:column;overflow:hidden;}
+#frame-dock{flex:1 1 auto;height:100%;min-height:0;display:none;flex-direction:column;overflow:hidden;}
 #frame-dock .suite-embed{display:none;}
 #frame-dock .suite-embed.active{display:block;}
-.suite-embed{flex:1 1 auto;width:100%;min-height:0;border:0;display:block;background:var(--surface);}
+.suite-embed{flex:1 1 auto;width:100%;height:100%;min-height:0;border:0;display:block;background:var(--surface);}
 #net-progress{position:fixed;top:0;left:0;right:0;height:2px;z-index:400;pointer-events:none;opacity:0;transition:opacity .2s;overflow:hidden;}
 #net-progress.on{opacity:1;}
 #net-progress i{display:block;height:100%;width:38%;background:var(--primary,#2563eb);border-radius:2px;animation:netprog 1.1s ease-in-out infinite;}
@@ -1326,6 +1326,23 @@ function scheduleTokenRefresh(t){ if(TOKEN_REFRESH_TIMER){ clearTimeout(TOKEN_RE
 function scheduleTokenRefreshRetry(){ if(TOKEN_REFRESH_TIMER) clearTimeout(TOKEN_REFRESH_TIMER);
   TOKEN_REFRESH_TIMER=setTimeout(function(){ TOKEN_REFRESH_TIMER=null;
     refreshAccessToken(false).catch(function(){ scheduleTokenRefreshRetry(); }); },TOKEN_REFRESH_RETRY_MS); }
+async function tokenRefreshError(res){ var payload={};
+  try{ payload=await res.json(); }catch(e){}
+  var externalCode=String(payload.error||payload.code||'').toLowerCase();
+  var detail=String(payload.error_description||payload.message||payload.detail||'');
+  var error=new Error('token-refresh-http-'+res.status); error.status=res.status;
+  if(externalCode==='invalid_client'||/oauth client.+inactive|client is inactive/i.test(detail)){
+    error.code='OAUTH_CLIENT_INACTIVE';
+    error.userMessage='Aevatar 的 NyxID 登录客户端已停用。请联系管理员在 NyxID 启用该 OAuth 客户端，或为此环境配置有效的 Client ID；重复登录不会恢复。';
+  }else if(externalCode==='invalid_grant'){
+    error.code='REFRESH_TOKEN_REJECTED';
+    error.userMessage='NyxID 登录已过期，请重新登录。';
+  }else{
+    error.code='TOKEN_REFRESH_FAILED';
+    error.userMessage='NyxID 登录状态刷新失败。请重新登录；若仍失败，请联系管理员检查 OAuth 客户端配置。';
+  }
+  return error;
+}
 async function refreshAccessToken(force){ var current=getToken(); if(!current) return null;
   if(!current.refresh_token||(!force&&!tokenNeedsRefresh(current))){ scheduleTokenRefresh(current); return current; }
   if(TOKEN_REFRESH_PROMISE) return TOKEN_REFRESH_PROMISE;
@@ -1335,7 +1352,7 @@ async function refreshAccessToken(force){ var current=getToken(); if(!current) r
     var res=await fetch(OIDC.authority.replace(/\/+$/,'')+'/oauth/token',{method:'POST',headers:{'Accept':'application/json','Content-Type':'application/x-www-form-urlencoded'},body:form.toString()});
     if(!res.ok){ var latestAfterFailure=getToken();
       if(latestAfterFailure&&latestAfterFailure.refresh_token&&latestAfterFailure.refresh_token!==usedRefreshToken){ scheduleTokenRefresh(latestAfterFailure); return latestAfterFailure; }
-      throw new Error('token-refresh-http-'+res.status); }
+      throw await tokenRefreshError(res); }
     var refreshed=await res.json(); if(!refreshed||!refreshed.access_token) throw new Error('token-refresh-missing-access-token');
     var latest=getToken(); if(!latest) return null;
     if(latest&&latest.refresh_token&&latest.refresh_token!==usedRefreshToken){ scheduleTokenRefresh(latest); return latest; }
@@ -1354,15 +1371,42 @@ async function ensureAccessToken(){ var current=getToken(); if(!current) return 
   }
   scheduleTokenRefresh(current); return current;
 }
+async function refreshEmbeddedAccessToken(rejectedAccessToken){
+  var current=getToken();
+  if(!current||!current.access_token) return {refreshed:false,errorCode:'AUTH_REQUIRED',reason:'NyxID 登录已失效，请重新登录。'};
+  if(rejectedAccessToken&&current.access_token!==rejectedAccessToken) return {refreshed:true,errorCode:'',reason:''};
+  var failure=null;
+  try{ await refreshAccessToken(true); }catch(e){ failure=e; }
+  var latest=getToken();
+  var refreshed=!!(latest&&latest.access_token&&latest.access_token!==rejectedAccessToken);
+  return {
+    refreshed:refreshed,
+    errorCode:refreshed?'':String(failure&&failure.code||'AUTH_REQUIRED'),
+    reason:refreshed?'':String(failure&&failure.userMessage||'NyxID 登录已失效，请重新登录。')
+  };
+}
+async function handleEmbeddedAuthRefresh(ev,msg){
+  var requestId=typeof msg.requestId==='string'?msg.requestId:'';
+  var rejectedAccessToken=typeof msg.rejectedAccessToken==='string'?msg.rejectedAccessToken:'';
+  var result=await refreshEmbeddedAccessToken(rejectedAccessToken);
+  try{ if(ev.source&&requestId) ev.source.postMessage({
+    source:'aevatar-backend-console-suite',type:'auth-refresh-result',requestId:requestId,
+    refreshed:result.refreshed,errorCode:result.errorCode,reason:result.reason
+  },ev.origin); }catch(e){}
+}
 function loginResources(requested){
   var merged=[];
   [OIDC.resources,Array.isArray(requested)?requested:[]].forEach(function(group){ group.forEach(function(value){ var resource=typeof value==='string'?value.trim():''; if(resource&&merged.indexOf(resource)<0) merged.push(resource); }); });
   return merged;
 }
 function loginResourcesGranted(){
-  var t=getToken(), granted=[];
-  var claims=decodeJwt(t&&t.access_token);
-  [t&&t.oauth_resources,t&&t.resource,claims&&claims.resources].forEach(function(group){
+  var t=getToken(); if(!t||!t.access_token) return false;
+  var claims=decodeJwt(t.access_token);
+  /* NyxID：allow_all_services claim 缺省即 allow-all（ADR-0018 会话登录不再收窄），
+     只有显式 restricted token 才需要逐项覆盖 core resources。 */
+  if(claims && claims.allow_all_services!==false) return true;
+  var granted=[];
+  [t.oauth_resources,t.resource,claims&&claims.resources].forEach(function(group){
     if(typeof group==='string')group=[group];
     (Array.isArray(group)?group:[]).forEach(function(value){ if(typeof value==='string'&&granted.indexOf(value)<0)granted.push(value); });
   });
@@ -1372,8 +1416,11 @@ function loginReturnTo(){
   var h=(location.hash&&location.hash.indexOf('#/')===0&&/^#[A-Za-z0-9._~!$&'()*+,;=:@/?%-]*$/.test(location.hash))?location.hash:'';
   return location.pathname + h;
 }
-function showLoginGate(reason){
+function showLoginGate(reason,rejectedAccessToken){
+  var current=getToken();
+  if(rejectedAccessToken&&current&&current.access_token!==rejectedAccessToken) return false;
   clearToken(); ACCOUNT=null; renderAcctW(); renderLoginGate(reason||'');
+  return true;
 }
 function logout(){ showLoginGate('已登出 NyxID，请重新登录。'); }
 function _b64url(buf){ var s=btoa(String.fromCharCode.apply(null,new Uint8Array(buf))); return s.replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); }
@@ -1381,8 +1428,11 @@ function _rand(n){ var a=new Uint8Array(n); crypto.getRandomValues(a); var s='';
 async function _sha256(s){ return _b64url(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s))); }
 async function beginLogin(requestedResources,tokenPurpose){
   if(!OIDC.authority||!OIDC.clientId){ alert('BackendConsole OIDC 配置缺失。'); return; }
-  var resources=loginResources(requestedResources);
   var purpose=tokenPurpose===VOICE_TOKEN_PURPOSE?VOICE_TOKEN_PURPOSE:'';
+  /* ADR-0018：会话登录不发送显式 resource——NyxID 会按 RFC 8707 把授权收窄成该列表，
+     导致 token 无法访问其他已同意的服务（如部署默认 LLM 路由）。授权集合由 NyxID
+     Consent 页决定。仅 voice-realtime 专用 token 保留有意收窄。 */
+  var resources=purpose===VOICE_TOKEN_PURPOSE?loginResources(requestedResources):[];
   var verifier=_rand(64), state=_rand(32), challenge=await _sha256(verifier);
   sessionStorage.setItem(PKCE_KEY, JSON.stringify({verifier:verifier,state:state,returnTo:loginReturnTo(),resources:resources,tokenPurpose:purpose}));
   var u=new URL(OIDC.authority.replace(/\/+$/,'')+'/oauth/authorize');
@@ -1411,20 +1461,25 @@ function netProgressPop(){ NET_INFLIGHT=Math.max(0,NET_INFLIGHT-1);
 /* 统一带 Bearer 请求：到期前续期；401→强制续期并重试一次，仍失败才清 token 回登录；
    403→返回 {forbidden:true} 供模块诚实降级（不展示伪造数据）。
    opts.silentProgress=true 供后台轮询使用，不驱动顶部进度条。 */
-async function adminApi(path,opts){ opts=opts||{}; var token=await ensureAccessToken();
+async function adminApi(path,opts){ opts=opts||{}; var token=await ensureAccessToken(),activeToken=token;
   var silent=!!opts.silentProgress;
   function requestInit(activeToken){ var h=Object.assign({},opts.headers||{});
     if(activeToken&&activeToken.access_token) h['Authorization']='Bearer '+activeToken.access_token;
     var init=Object.assign({},opts,{headers:h}); delete init.silentProgress; return init; }
   if(!silent) netProgressPush();
   var res;
-  try{ res=await fetch(path,requestInit(token));
-    if(res.status===401&&token&&token.refresh_token){ var refreshed=null;
-      try{ refreshed=await refreshAccessToken(true); }catch(e){}
-      if(refreshed&&refreshed.access_token&&refreshed.access_token!==token.access_token) res=await fetch(path,requestInit(refreshed)); }
+  try{ res=await fetch(path,requestInit(activeToken));
+    if(res.status===401&&activeToken){ var replacement=getToken();
+      if(!replacement||replacement.access_token===activeToken.access_token){
+        try{ replacement=activeToken.refresh_token?await refreshAccessToken(true):null; }catch(e){ replacement=null; }
+      }
+      if(replacement&&replacement.access_token&&replacement.access_token!==activeToken.access_token){
+        activeToken=replacement; res=await fetch(path,requestInit(activeToken));
+      }
+    }
   }
   finally{ if(!silent) netProgressPop(); }
-  if(res.status===401){ showLoginGate('登录已过期，请重新使用 NyxID 登录。'); throw {unauthorized:true}; }
+  if(res.status===401){ showLoginGate('登录已过期，请重新使用 NyxID 登录。',activeToken&&activeToken.access_token); throw {unauthorized:true}; }
   if(res.status===403){ return {forbidden:true,status:403}; }
   return res; }
 async function adminJson(path,opts){ var res=await adminApi(path,opts); if(res&&res.forbidden) return res;
@@ -2192,7 +2247,7 @@ var MODULE_META={
   status:{name:'系统状态', auth:'public', icon:NAV_ICON.status, live:true},
   observatory:{name:'运行观测台', auth:'login', icon:NAV_ICON.obs, live:true},
   cqrs:{name:'投影管道 CQRS', auth:'platform-admin', icon:NAV_ICON.cqrs},
-  studio:{name:'编排工作台', auth:'login', icon:NAV_ICON.studio},
+  studio:{name:'工作台', auth:'login', icon:NAV_ICON.studio},
   'agent-profiles':{name:'Agent Profile', auth:'login', icon:NAV_ICON.agentProfiles},
   skills:{name:'技能调用', auth:'login', icon:NAV_ICON.skills},
   schedules:{name:'排班调度', auth:'login', icon:NAV_ICON.sched},
@@ -3370,16 +3425,16 @@ function viewSchedules(){
     }};
 }
 /* ---------------- 模块分发 ---------------- */
-/* 内嵌真页(同源共享 token);onload 注入 CSS 隐藏真页自带 .topbar(brand+suite-nav),消除与 /admin 左栏的双层导航。 */
-function embedTrim(f){ try{ var d=f.contentDocument; if(d&&d.head){ var s=d.createElement('style'); s.textContent=':root{--topbar-h:0px!important}.topbar{display:none!important}'; d.head.appendChild(s); } }catch(e){} }
+/* 内嵌真页(同源共享 token);onload 注入 CSS 隐藏真页自带导航，消除与 /admin 壳的双层导航。 */
+function embedTrim(f){ try{ var d=f.contentDocument; if(d&&d.head){ var s=d.createElement('style'),studio=f.getAttribute('data-persistent-view')==='admin-studio'; s.setAttribute('data-admin-embed-trim',studio?'studio':'suite'); s.textContent=':root{--topbar-h:0px!important}'+(studio?'.site-header,.topbar':'.topbar')+'{display:none!important}'; d.head.appendChild(s); } }catch(e){} }
 function suiteFrame(src,title){
-  var path=src.split('?')[0],key=path==='/workflow/observatory'?'observatory':path.replace(/^\/+|\/+$/g,'').replace(/\//g,'-');
+  var path=src.split('?')[0],key=path==='/admin/workflow-observatory'?'observatory':path.replace(/^\/+|\/+$/g,'').replace(/\//g,'-');
   return '<iframe class="suite-embed" src="'+src+'" title="'+title+'" data-console-frame="1" data-persistent-view="'+key+'" data-frame-source="'+src+'" onload="embedTrim(this)"></iframe>';
 }
 function observatoryFrameSource(){
   var q=parseHash().q||{},p=new URLSearchParams();
   ['scope','status','origin','definition','schedule','from','to','run','tab'].forEach(function(key){if(q[key])p.set(key,q[key]);});
-  return '/workflow/observatory'+(p.toString()?'?'+p.toString():'');
+  return '/admin/workflow-observatory'+(p.toString()?'?'+p.toString():'');
 }
 function viewObservatoryFrame(){ var src=observatoryFrameSource(); return {html:suiteFrame(src,'运行观测台'),persistentKey:'observatory',frameSource:src}; }
 function observatoryHash(query){
@@ -3400,7 +3455,7 @@ function viewCqrs(){
   var src='/cqrs'+(p.toString()?'?'+p.toString():'');
   return {html:suiteFrame(src,'投影管道 CQRS'),persistentKey:'cqrs',frameSource:src};
 }
-function viewStudio(){ return {html:suiteFrame('/workflow/studio','编排工作台'),persistentKey:'workflow-studio',frameSource:'/workflow/studio'}; }
+function viewStudio(){ return {html:suiteFrame('/admin/studio','工作台'),persistentKey:'admin-studio',frameSource:'/admin/studio'}; }
 function viewChannels(){ return {html:suiteFrame('/channels','通道接入'),persistentKey:'channels',frameSource:'/channels'}; }
 function viewVoice(){ return {html:suiteFrame('/voice','语音台'),persistentKey:'voice',frameSource:'/voice'}; }
 
@@ -4226,7 +4281,8 @@ function bindEvents(){
     if(ev.origin!==location.origin) return;
     var msg=ev.data||{};
     if(!msg || msg.source!=='aevatar-backend-console-suite') return;
-    if(msg.type==='auth-required'){ showLoginGate(msg.reason||'登录已过期，请重新使用 NyxID 登录。'); return; }
+    if(msg.type==='auth-refresh-request'){ handleEmbeddedAuthRefresh(ev,msg); return; }
+    if(msg.type==='auth-required'){ showLoginGate(msg.reason||'登录已过期，请重新使用 NyxID 登录。',msg.rejectedAccessToken||''); return; }
     if(msg.type==='login-request'){ beginLogin(msg.resources,msg.tokenPurpose); }
     if(msg.type==='observatory-route'){ syncObservatoryHash(msg.query||{}); }
     if(msg.type==='observatory-immersive'){ setAdminImmersive(msg.enabled); }

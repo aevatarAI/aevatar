@@ -90,7 +90,8 @@ public class NyxIdChatSystemPromptTests
         var prompt = NyxIdChatSystemPrompt.Value.Content;
 
         prompt.Should().Contain("## Honest Success Rule");
-        prompt.Should().Contain("successful mutating tool result or typed success receipt");
+        prompt.Should().Contain("typed successful mutating tool receipt for that exact mutation");
+        prompt.Should().Contain("A successful receipt for another action");
         prompt.Should().Contain("Read-only checks, searches, observation, trigger/rerun requests");
         prompt.Should().Contain("genuine successful mutating tool receipt");
     }
@@ -107,7 +108,12 @@ public class NyxIdChatSystemPromptTests
         prompt.Should().Contain("must not fabricate a missing-service blocker");
         prompt.Should().Contain("does not create a pending approval");
         prompt.Should().Contain("catalog definitions are not connected UserServices");
-        prompt.Should().Contain("after resolving its exact catalog slug, call `nyxid_require_service`");
+        prompt.Should().Contain("For every connect, add, or authorize request, call `nyxid_catalog` in the current turn");
+        prompt.Should().Contain("`catalogIdentityCandidate`");
+        prompt.Should().Contain("only the exact `slug` returned by that catalog read may enter");
+        prompt.Should().Contain("Never pass a provider slug, display name, or guessed value");
+        prompt.Should().Contain("for a bare source-code-hosting connection");
+        prompt.Should().Contain("repository access scope instead of omitting scopes");
         prompt.Should().Contain("Never replace this typed handoff with NyxID CLI commands");
         prompt.Should().Contain("credential instructions");
     }

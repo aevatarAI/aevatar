@@ -150,16 +150,6 @@ public sealed class NyxIdExplicitWorkflowCapabilitySource(
         var capability = BuildCapability(request, service.Slug);
         if (executionMode == ExternalCapabilityExecutionMode.Durable)
         {
-            if (capability.NyxIdUserRequest.ExecutionPolicy.Risk != NyxIdOperationRisk.ReadOnly ||
-                !capability.NyxIdUserRequest.ExecutionPolicy.AllowedExecutionModes.Contains(
-                    ExternalCapabilityExecutionMode.Durable))
-            {
-                return Failure(
-                    selector, executionMode, ExternalCapabilityReadinessStatus.DurableAuthorizationUnavailable,
-                    "NYXID_EXPLICIT_REQUEST_INTERACTIVE_REQUIRED",
-                    "This explicit request can only be admitted for interactive execution.", source, capability);
-            }
-
             var durableAuthorizationSource = await _durableAuthorizationCatalog.InspectAsync(
                 access,
                 request.UserServiceId,
@@ -212,13 +202,8 @@ public sealed class NyxIdExplicitWorkflowCapabilitySource(
         NyxIdRequestSelector request,
         string serviceSlug)
     {
-        var risk = request.Method switch
-        {
-            NyxIdRequestMethod.Get or NyxIdRequestMethod.Head or NyxIdRequestMethod.Options =>
-                NyxIdOperationRisk.ReadOnly,
-            NyxIdRequestMethod.Delete => NyxIdOperationRisk.Destructive,
-            _ => NyxIdOperationRisk.Write,
-        };
+        if (!NyxIdRequestSelectorContract.TryResolveRisk(request.Method, request.Risk, out var risk))
+            throw new InvalidOperationException("The normalized NyxID request risk is invalid.");
         var policy = new NyxIdOperationExecutionPolicy
         {
             Risk = risk,
@@ -228,7 +213,7 @@ public sealed class NyxIdExplicitWorkflowCapabilitySource(
             EnforcementOwner = NyxIdOperationEnforcementOwner.Aevatar,
         };
         policy.AllowedExecutionModes.Add(ExternalCapabilityExecutionMode.Interactive);
-        if (risk == NyxIdOperationRisk.ReadOnly)
+        if (NyxIdRequestSelectorContract.SupportsDurableExecution(request.Method, risk))
             policy.AllowedExecutionModes.Add(ExternalCapabilityExecutionMode.Durable);
 
         var requestDigest = WorkflowCapabilityAdmissionPlanIntegrity
