@@ -175,6 +175,7 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         app.Should().Contain("async function submitPendingInputFromComposer(");
         app.Should().Contain("async function submitComposer(");
         app.Should().Contain("async function loadReadiness(");
+        app.Should().Contain("describeReadinessFailure(state.readiness.error)");
         app.Should().Contain("state.pendingFirstTurn ||=");
         app.Should().Contain("已受理，等待 Actor 确认");
         app.Should().Contain("async function submitApproval(");
@@ -194,9 +195,12 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         readiness.Should().Contain("export function normalizeReadinessSnapshot(");
         readiness.Should().Contain("Readiness snapshot contains secret fields");
         transport.Should().Contain("/api/v1/assistant/readiness");
+        transport.Should().Contain("const errorCode = refreshResult.errorCode");
         transport.Should().Contain("authorizedFetch(\"/api/chat\"");
         blocks.Should().Contain("export function buildConnectCardBlock(");
         html.Should().Contain("id=\"readinessPanel\"");
+        html.Should().Contain("id=\"readinessRecovery\"");
+        html.Should().Contain("id=\"readinessRecoveryButton\"");
         html.Should().Contain("id=\"needsYouFilterButton\"");
         html.Should().NotContain("id=\"taskPhaseList\"");
         html.Should().Contain("id=\"composerInputRequest\"");
@@ -220,18 +224,20 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         app.Should().Contain("展开计划详情");
         app.Should().Contain("cc-progress-step");
         app.Should().NotContain("function setStudioTab(tab)");
+        app.Should().NotContain("尚未取得必需能力的有效证明");
+        app.Should().NotContain("暂时无法确认运行准备状态");
         html.Should().NotContain("id=\"assistantNavButton\"");
         html.Should().NotContain("id=\"openSettingsNav\"");
         styles.Should().NotContain(".studio-tabs");
         styles.Should().Contain(".composer-wrap {\n  position: relative;");
-        styles.Should().Contain(".chat-column {\n    width: 100%;\n    height: 100%;");
+        styles.Should().Contain(".chat-column {\n  min-width: 0;\n  min-height: 0;\n  height: 100%;\n  overflow: hidden;");
         app.Should().Contain("await submitActorControl(\"steer\", null, instruction)");
         app.Should().Contain("type: \"input.resolve\"");
         app.Should().NotContain("freeText.className = \"needs-you-free-text\"");
         styles.Should().Contain("@media (max-width:");
         html.Should().Contain("<meta name=\"color-scheme\" content=\"only light\"");
         html.Should().Contain("app.js?v=20260806-studio-sidebar-focus");
-        html.Should().Contain("styles.css?v=20260807-admin-shell-scroll");
+        html.Should().Contain("styles.css?v=20260807-pane-scroll-fix");
         html.Should().Contain("<span class=\"brand-name\">Aevatar Studio</span>");
         html.Should().NotContain("class=\"brand-mark\"");
         styles.Should().Contain("color-scheme: only light");
@@ -246,7 +252,9 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         styles.Should().Contain("overflow-y: scroll");
         styles.Should().Contain("scrollbar-gutter: stable");
         styles.Should().Contain(".thread::-webkit-scrollbar-thumb");
-        styles.Should().Contain("min-height: 480px");
+        styles.Should().Contain("scrollbar-color: var(--tertiary) var(--surface)");
+        styles.Should().Contain(".recent-session-list {\n  min-height: 0;\n  flex: 1 1 0;");
+        styles.Should().NotContain("min-height: 480px");
         styles.Should().NotContain("data-theme");
     }
 
@@ -406,6 +414,57 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
             """;
 
         var result = await RunNodeAsync(script, protocol);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_ReadinessAsset_ShouldDescribeActionableRecovery()
+    {
+        var readiness = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantReadiness);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8').replace(/^export /gm, '');
+            const context = { URL, Date, Set, Error };
+            vm.createContext(context);
+            vm.runInContext(source, context);
+
+            const inactive = context.describeReadinessFailure({status:401,code:'OAUTH_CLIENT_INACTIVE'});
+            assert.equal(inactive.freshness, '登录配置不可用');
+            assert.match(inactive.summary, /已停用/);
+            assert.match(inactive.guidance, /重复登录不会恢复/);
+            assert.equal(inactive.action, 'retry');
+            assert.equal(inactive.actionLabel, '修复后重新检查');
+
+            const expired = context.describeReadinessFailure({status:401,code:'AUTH_REQUIRED'});
+            assert.equal(expired.action, 'login');
+            assert.equal(expired.actionLabel, '重新登录');
+
+            const forbidden = context.describeReadinessFailure({status:403});
+            assert.equal(forbidden.action, 'account');
+            assert.match(forbidden.guidance, /访问策略/);
+
+            const missingEndpoint = context.describeReadinessFailure({status:404});
+            assert.match(missingEndpoint.summary, /尚未提供/);
+            assert.match(missingEndpoint.guidance, /部署 assistant readiness 接口/);
+
+            const invalid = context.describeReadinessFailure({status:502,code:'READINESS_INVALID'});
+            assert.match(invalid.freshness, /格式不兼容/);
+            assert.match(invalid.guidance, /契约版本一致/);
+
+            const unavailable = context.describeReadinessFailure({status:503});
+            assert.match(unavailable.summary, /暂时无法提供/);
+
+            const disconnected = context.describeReadinessFailure(new TypeError('Failed to fetch'));
+            assert.match(disconnected.summary, /无法连接/);
+            assert.match(disconnected.guidance, /网络或 VPN/);
+
+            const unexpected = context.describeReadinessFailure({status:418});
+            assert.equal(unexpected.freshness, '检查失败 (418)');
+            """;
+
+        var result = await RunNodeAsync(script, readiness);
 
         result.ExitCode.Should().Be(0, result.Error + result.Output);
     }

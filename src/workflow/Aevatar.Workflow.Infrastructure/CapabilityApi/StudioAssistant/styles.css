@@ -39,12 +39,12 @@ html,
 body {
   width: 100%;
   height: 100%;
+  min-height: 0;
   margin: 0;
+  overflow: hidden;
 }
 
 body {
-  overflow-x: hidden;
-  overflow-y: auto;
   background: var(--bg);
   color: var(--text);
   font-family: var(--sans);
@@ -98,8 +98,9 @@ summary:focus-visible {
 
 .app-shell {
   display: flex;
-  height: 100dvh;
-  min-height: 480px;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
   overflow: hidden;
   flex-direction: column;
 }
@@ -794,6 +795,45 @@ summary:focus-visible {
 .readiness-list {
   display: flex;
   flex-direction: column;
+}
+
+.readiness-recovery {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 12px -2px 8px;
+  border-left: 3px solid var(--warning);
+  background: var(--warning-soft);
+  padding: 11px 12px;
+}
+
+.readiness-recovery-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.readiness-recovery-copy strong {
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
+.readiness-recovery-copy span {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.readiness-recovery button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.readiness-recovery button svg {
+  width: 14px;
+  height: 14px;
 }
 
 .readiness-row {
@@ -3558,6 +3598,11 @@ summary:focus-visible {
     margin-left: 0;
   }
 
+  .readiness-recovery {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
   .message {
     grid-template-columns: 25px minmax(0, 1fr);
     gap: 9px;
@@ -3736,8 +3781,9 @@ body {
 }
 
 .app-shell {
-  height: 100dvh;
-  min-height: 480px;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -3824,6 +3870,8 @@ body:has(.settings-dialog[open]) #servicesButton,
 .sidebar {
   width: auto;
   min-width: 0;
+  min-height: 0;
+  height: 100%;
   flex-basis: auto;
   overflow: hidden;
   border: 0;
@@ -3927,8 +3975,12 @@ body:has(.settings-dialog[open]) #servicesButton,
 }
 
 .recent-session-list {
+  min-height: 0;
+  flex: 1 1 0;
   gap: 4px;
+  overflow-y: scroll;
   padding-right: 2px;
+  scrollbar-gutter: stable;
 }
 
 .history-row {
@@ -3950,16 +4002,23 @@ body:has(.settings-dialog[open]) #servicesButton,
 
 .chat-column {
   min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
   border: 0;
   background: transparent;
 }
 
 .thread {
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 0;
+  overflow-x: hidden;
   overflow-y: scroll;
   padding: 0 0 28px;
   scrollbar-gutter: stable;
-  scrollbar-width: thin;
-  scrollbar-color: var(--border-strong) transparent;
+  scrollbar-width: auto;
+  scrollbar-color: var(--tertiary) var(--surface);
 }
 
 .thread,
@@ -3968,8 +4027,8 @@ body:has(.settings-dialog[open]) #servicesButton,
 .inspector-body,
 .dialog-body,
 .service-access-list {
-  scrollbar-color: var(--border-strong) transparent;
-  scrollbar-width: thin;
+  scrollbar-color: var(--tertiary) var(--surface);
+  scrollbar-width: auto;
 }
 
 .thread::-webkit-scrollbar,
@@ -3988,7 +4047,8 @@ body:has(.settings-dialog[open]) #servicesButton,
 .inspector-body::-webkit-scrollbar-track,
 .dialog-body::-webkit-scrollbar-track,
 .service-access-list::-webkit-scrollbar-track {
-  background: transparent;
+  border-left: 1px solid var(--hairline);
+  background: var(--surface);
 }
 
 .thread::-webkit-scrollbar-thumb,
@@ -3998,10 +4058,10 @@ body:has(.settings-dialog[open]) #servicesButton,
 .dialog-body::-webkit-scrollbar-thumb,
 .service-access-list::-webkit-scrollbar-thumb {
   min-height: 44px;
-  border: 3px solid transparent;
+  border: 2px solid var(--surface);
   border-radius: 999px;
-  background: var(--border-strong);
-  background-clip: content-box;
+  background: var(--tertiary);
+  background-clip: padding-box;
 }
 
 .thread::-webkit-scrollbar-thumb:hover,
@@ -4010,8 +4070,8 @@ body:has(.settings-dialog[open]) #servicesButton,
 .inspector-body::-webkit-scrollbar-thumb:hover,
 .dialog-body::-webkit-scrollbar-thumb:hover,
 .service-access-list::-webkit-scrollbar-thumb:hover {
-  background: var(--tertiary);
-  background-clip: content-box;
+  background: var(--muted);
+  background-clip: padding-box;
 }
 
 .conversation-view {

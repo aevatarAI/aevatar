@@ -60,6 +60,8 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             html.Should().Contain("studio:{name:'工作台'");
             html.Should().Contain("suiteFrame('/admin/studio','工作台')");
             html.Should().NotContain("suiteFrame('/workflow/studio','工作台')");
+            html.Should().Contain("#frame-dock{flex:1 1 auto;height:100%;min-height:0;");
+            html.Should().Contain(".suite-embed{flex:1 1 auto;width:100%;height:100%;min-height:0;");
         }
         else if (path == "/admin/studio")
         {
@@ -67,7 +69,7 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             html.Should().Contain("id=\"composerForm\"");
             html.Should().Contain("生产环境 · 操作会影响真实数据，高风险操作需要确认");
             html.Should().Contain("app.js?v=20260806-studio-sidebar-focus");
-            html.Should().Contain("styles.css?v=20260807-admin-shell-scroll");
+            html.Should().Contain("styles.css?v=20260807-pane-scroll-fix");
             html.Should().NotContain("class=\"brand-mark\"");
             html.Should().NotContain("Aevatar Studio · 工作流实录");
             html.Should().NotContain("从意图到交付的真实对话");
@@ -2687,6 +2689,12 @@ public sealed class BackendConsoleStaticAssetEndpointTests
                       }));
                     });
                   }
+                  if(phase === 'inactive') {
+                    return response(400, {
+                      error:'invalid_client',
+                      error_description:'OAuth client is inactive',
+                    });
+                  }
                   return response(200, {
                     access_token: phase === 'proactive' ? 'proactive-access' : phase === 'embedded' ? 'embedded-access' : 'retry-access',
                     refresh_token: phase === 'proactive' ? 'proactive-refresh' : phase === 'embedded' ? 'embedded-refresh' : 'retry-refresh',
@@ -2767,6 +2775,17 @@ public sealed class BackendConsoleStaticAssetEndpointTests
               assert.equal(JSON.parse(stored.get('console:test:token')).access_token, 'embedded-access', 'stale auth-required must preserve the new token');
               assert.equal(context.showLoginGate('current rejection', 'embedded-access'), true);
               assert.equal(stored.has('console:test:token'), false, 'only the currently rejected token may be cleared');
+
+              phase = 'inactive';
+              posted.length = 0;
+              context.setToken({access_token:'inactive-old',refresh_token:'inactive-refresh',expires_in:3600,obtained_at:Date.now()});
+              await context.handleEmbeddedAuthRefresh({origin:'https://console.example.test',source:{postMessage(message,origin){posted.push({message,origin});}}},
+                {requestId:'request-inactive',rejectedAccessToken:'inactive-old'});
+              assert.equal(posted.length, 1);
+              assert.equal(posted[0].message.refreshed, false);
+              assert.equal(posted[0].message.errorCode, 'OAUTH_CLIENT_INACTIVE');
+              assert.match(posted[0].message.reason, /登录客户端已停用/);
+              assert.match(posted[0].message.reason, /重复登录不会恢复/);
 
               phase = 'logout';
               context.setToken({access_token:'logout-access',refresh_token:'logout-refresh',expires_in:3600,obtained_at:Date.now()});

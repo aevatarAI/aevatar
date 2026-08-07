@@ -6,7 +6,7 @@
     <meta name="color-scheme" content="only light" />
     <meta name="supported-color-schemes" content="light" />
     <title>Aevatar Studio</title>
-    <link rel="stylesheet" href="/workflow/studio/assets/styles.css?v=20260807-admin-shell-scroll" />
+    <link rel="stylesheet" href="/workflow/studio/assets/styles.css?v=20260807-pane-scroll-fix" />
     <script defer src="https://unpkg.com/lucide@0.563.0/dist/umd/lucide.min.js"></script>
     <script defer src="https://unpkg.com/marked@15.0.12/marked.min.js"></script>
     <script defer src="https://unpkg.com/dompurify@3.2.6/dist/purify.min.js"></script>
@@ -118,6 +118,16 @@
                 </header>
                 <p id="readinessSummary">正在检查所需能力。</p>
                 <div class="readiness-list" id="readinessList" role="list"></div>
+                <div class="readiness-recovery hidden" id="readinessRecovery" role="status">
+                  <div class="readiness-recovery-copy">
+                    <strong id="readinessRecoveryTitle"></strong>
+                    <span id="readinessRecoveryDetail"></span>
+                  </div>
+                  <button class="secondary-button compact-button" id="readinessRecoveryButton" type="button">
+                    <i data-lucide="refresh-cw"></i>
+                    <span id="readinessRecoveryButtonLabel">重新检查</span>
+                  </button>
+                </div>
                 <small id="readinessFreshness">尚未检查</small>
               </section>
               <div class="quick-actions" id="quickActions" aria-label="快捷请求">

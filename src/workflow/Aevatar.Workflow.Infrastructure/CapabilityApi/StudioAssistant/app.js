@@ -23,6 +23,7 @@ import {
   reduceActorEvent,
   restoreCachedAction,
 } from "./actor-state.js";
+import { describeReadinessFailure } from "./readiness.js";
 
 const PREFERENCES_KEY = "aevatar-studio:assistant-preferences:v4";
 const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
@@ -92,6 +93,11 @@ const dom = {
   readinessFreshness: $("#readinessFreshness"),
   readinessList: $("#readinessList"),
   readinessPanel: $("#readinessPanel"),
+  readinessRecovery: $("#readinessRecovery"),
+  readinessRecoveryButton: $("#readinessRecoveryButton"),
+  readinessRecoveryButtonLabel: $("#readinessRecoveryButtonLabel"),
+  readinessRecoveryDetail: $("#readinessRecoveryDetail"),
+  readinessRecoveryTitle: $("#readinessRecoveryTitle"),
   readinessSummary: $("#readinessSummary"),
   refreshReadinessButton: $("#refreshReadinessButton"),
   refreshComposerServicesButton: $("#refreshComposerServicesButton"),
@@ -458,6 +464,12 @@ function bindEvents() {
   dom.closeComposerServicesButton.addEventListener("click", closeComposerServices);
   dom.refreshComposerServicesButton.addEventListener("click", () => void loadServices());
   dom.refreshReadinessButton.addEventListener("click", () => void loadReadiness({ fresh: true }));
+  dom.readinessRecoveryButton.addEventListener("click", () => {
+    const action = dom.readinessRecoveryButton.dataset.action;
+    if (action === "login") beginLogin();
+    else if (action === "account") openSettings();
+    else void loadReadiness({ fresh: true });
+  });
   dom.needsYouFilterButton.addEventListener("click", () => {
     state.historyFilter = state.historyFilter === "needs-you" ? "all" : "needs-you";
     renderHistoryList();
@@ -697,6 +709,7 @@ function renderReadiness() {
   dom.readinessPanel.classList.toggle("hidden", !authenticated);
   if (!authenticated) return;
   dom.refreshReadinessButton.disabled = state.readiness.loading;
+  dom.readinessRecovery.classList.add("hidden");
   if (state.readiness.loading) {
     dom.readinessFreshness.textContent = "正在检查";
     dom.readinessList.replaceChildren(el("div", "readiness-empty", "正在读取 NyxID 能力状态…"));
@@ -704,9 +717,16 @@ function renderReadiness() {
     return;
   }
   if (state.readiness.error || !state.readiness.snapshot) {
-    dom.readinessFreshness.textContent = "状态不可用";
-    dom.readinessList.replaceChildren(el("div", "readiness-empty error", "暂时无法确认运行准备状态。"));
-    dom.readinessSummary.textContent = "尚未取得必需能力的有效证明。";
+    const failure = describeReadinessFailure(state.readiness.error);
+    dom.readinessFreshness.textContent = failure.freshness;
+    dom.readinessList.replaceChildren();
+    dom.readinessSummary.textContent = failure.summary;
+    dom.readinessRecoveryTitle.textContent = "如何恢复";
+    dom.readinessRecoveryDetail.textContent = failure.guidance;
+    dom.readinessRecoveryButton.dataset.action = failure.action;
+    dom.readinessRecoveryButtonLabel.textContent = failure.actionLabel;
+    dom.readinessRecovery.classList.remove("hidden");
+    refreshIcons(dom.readinessRecovery);
     return;
   }
   const snapshot = state.readiness.snapshot;

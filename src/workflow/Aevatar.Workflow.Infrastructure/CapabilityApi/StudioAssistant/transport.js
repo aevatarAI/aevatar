@@ -78,19 +78,23 @@ function replacementToken(rejectedAccessToken) {
 
 async function requestAdminShellTokenRefresh(rejectedAccessToken) {
   const current = replacementToken(rejectedAccessToken);
-  if (current) return current;
-  if (!isEmbeddedInAdmin()) return null;
+  if (current) return { token: current, errorCode: "", reason: "" };
+  if (!isEmbeddedInAdmin()) return { token: null, errorCode: "", reason: "" };
 
   const requestId = `auth-${Date.now().toString(36)}-${randomString(10)}`;
   return await new Promise((resolve) => {
     let settled = false;
     let timer = null;
-    const finish = () => {
+    const finish = (result = {}) => {
       if (settled) return;
       settled = true;
       window.removeEventListener("message", onMessage);
       if (timer !== null) clearTimeout(timer);
-      resolve(replacementToken(rejectedAccessToken));
+      resolve({
+        token: replacementToken(rejectedAccessToken),
+        errorCode: String(result.errorCode || ""),
+        reason: String(result.reason || ""),
+      });
     };
     const onMessage = (event) => {
       const message = event.data || {};
@@ -99,7 +103,7 @@ async function requestAdminShellTokenRefresh(rejectedAccessToken) {
           message.source === "aevatar-backend-console-suite" &&
           message.type === "auth-refresh-result" &&
           message.requestId === requestId) {
-        finish();
+        finish(message);
       }
     };
     window.addEventListener("message", onMessage);
@@ -127,8 +131,11 @@ async function authorizedFetch(input, init = {}) {
   let response = await request(token);
   if (response.status !== 401) return response;
 
-  const replacement = replacementToken(token.access_token) ||
-    await requestAdminShellTokenRefresh(token.access_token);
+  const currentReplacement = replacementToken(token.access_token);
+  const refreshResult = currentReplacement
+    ? { token: currentReplacement, errorCode: "", reason: "" }
+    : await requestAdminShellTokenRefresh(token.access_token);
+  const replacement = refreshResult.token;
   if (replacement?.access_token && replacement.access_token !== token.access_token) {
     token = replacement;
     response = await request(token);
@@ -136,12 +143,14 @@ async function authorizedFetch(input, init = {}) {
   }
 
   clearToken();
+  const errorCode = refreshResult.errorCode || "AUTH_REQUIRED";
+  const reason = refreshResult.reason || "登录已过期，请重新使用 NyxID 登录。";
   notifyAdminShellAuth(
     "auth-required",
-    "登录已过期，请重新使用 NyxID 登录。",
+    reason,
     token.access_token,
   );
-  return response;
+  return jsonResponse({ code: errorCode, message: reason }, 401);
 }
 
 function b64url(buffer) {
