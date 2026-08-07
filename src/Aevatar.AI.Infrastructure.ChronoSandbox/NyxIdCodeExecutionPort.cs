@@ -167,9 +167,10 @@ internal sealed class NyxIdCodeExecutionPort(
                     service.CredentialSourceType,
                     PersonalCredentialSourceType,
                     StringComparison.Ordinal) &&
-                service.ForwardAccessToken == true &&
                 service.InjectDelegationToken == true &&
-                HasAllowedDelegationScopes(service.DelegationTokenScope))
+                HasTransitionExecutionPolicy(
+                    service.ForwardAccessToken,
+                    service.DelegationTokenScope))
             .ToArray();
 
         return matches.Length == 1
@@ -192,21 +193,25 @@ internal sealed class NyxIdCodeExecutionPort(
         _ => throw new ArgumentOutOfRangeException(nameof(language), language, null),
     };
 
-    private static bool HasAllowedDelegationScopes(string? scope)
+    private static bool HasTransitionExecutionPolicy(
+        bool? forwardAccessToken,
+        string? scope)
     {
-        if (string.IsNullOrWhiteSpace(scope))
+        if (forwardAccessToken is null || string.IsNullOrWhiteSpace(scope))
             return false;
 
         var scopes = scope.Split(
             (char[]?)null,
             StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        return scopes.Length switch
-        {
-            1 => string.Equals(scopes[0], SharedDelegationScope, StringComparison.Ordinal),
-            2 => scopes.Contains(SharedDelegationScope, StringComparer.Ordinal) &&
-                 scopes.Contains(CodeDelegationScope, StringComparer.Ordinal),
-            _ => false,
-        };
+        var isLegacyScope = scopes.Length == 1 &&
+                            string.Equals(scopes[0], SharedDelegationScope, StringComparison.Ordinal);
+        var isCombinedScope = scopes.Length == 2 &&
+                              scopes.Contains(SharedDelegationScope, StringComparer.Ordinal) &&
+                              scopes.Contains(CodeDelegationScope, StringComparer.Ordinal);
+
+        return forwardAccessToken.Value
+            ? isLegacyScope || isCombinedScope
+            : isCombinedScope;
     }
 
     private static IEnumerable<CodeUserService> EnumerateServices(JsonElement root)
