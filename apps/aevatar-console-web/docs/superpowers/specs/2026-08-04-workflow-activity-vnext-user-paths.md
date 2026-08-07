@@ -170,7 +170,7 @@ flowchart TD
 | UP-06 | Open, edit, validate, and save | 03-06, 08 | Authoritative draft update succeeds; unsaved state clears |
 | UP-07 | Run a current draft | 07, 08 | Real draft-run stream/receipt reaches Accepted or Running |
 | UP-08 | Observe a Run in Activity | 08-10, 13 | Observatory returns an authoritative `runId` and `stateVersion` |
-| UP-09 | Filter Activity by Workflow | 09 | Exact `definitionActorId` is applied, or the filter is honestly unavailable |
+| UP-09 | Filter Activity by Workflow | 09 | The row's exact `workflowId` remains visible in the URL and resolves to an exact `definitionActorId`, or the filtered view is honestly unavailable |
 | UP-10 | Inspect immutable Run detail | 11 | Detail response renders committed facts; graph may load independently |
 | UP-11 | Retry a failed Run | 12 | Fork API accepts an explicit failed `stepId`; source Run remains unchanged |
 | UP-12 | Run a completed Workflow again | 11, 12 | Fork API accepts an explicit first execution step; source remains unchanged |
@@ -548,21 +548,27 @@ HTTP success status cannot insert an Activity row or invent a `stateVersion`.
 
 **Steps:**
 
-1. The frontend resolves the scope Workflow detail through
+1. The catalogue action encodes that row's exact draft `workflowId` in the
+   Activity route query string without substituting a member, service, display
+   name, or actor identity.
+2. Activity keeps the Workflow filter visible and removable, and resolves the
+   scope Workflow detail through
    `GET /api/scopes/:scopeId/workflows/:workflowId`.
-2. Only `ScopeWorkflowDetail.source.definitionActorId` supplies the
+3. Only `ScopeWorkflowDetail.source.definitionActorId` supplies the
    observatory `definition` filter.
-3. The Activity route encodes the supported filter in its query string so
-   refresh/back navigation preserves it.
-4. The ledger shows only the server-filtered response window.
+4. Refresh, copied URLs, back, and forward restore the same `workflowId` and
+   repeat the same authoritative resolution.
+5. The ledger shows only the server-filtered response window. Removing the
+   Workflow filter removes it from the URL and returns to global Activity.
 
-**Completion:** The active filter is visible, removable, and backed by the
-exact definition identity.
+**Completion:** The active `workflowId` filter is URL-backed, visible,
+removable, and backed by the exact resolved definition identity.
 
-**Recovery:** A draft-only Workflow may not have a definition actor. In that
-case the user enters unfiltered Activity with a concise filter-unavailable
-message. The UI does not substitute `workflowId`, Workflow name, `serviceKey`,
-or a parsed actor prefix.
+**Recovery:** A missing or invalid `workflowId`, failed Workflow-detail read,
+or draft-only Workflow without a definition actor produces an honest
+invalid, error, or unavailable state. The Runs query remains disabled so the
+page never silently shows global Activity. The UI does not substitute Workflow
+name, `memberId`, `publishedServiceId`, `serviceKey`, or a parsed actor prefix.
 
 ## UP-10: Inspect Immutable Run Detail
 
@@ -671,8 +677,8 @@ PUT /api/user-config/llm
 1. Settings opens AI defaults and loads the current real selection and
    available connected-service/model catalogue through existing adapters.
 2. Changing Preferred service updates valid model choices without saving.
-3. Changing either value makes the page dirty and reveals the sticky Discard
-   and Save changes bar.
+3. Changing either value makes the page dirty and reveals the shell-fixed
+   Restore and Save changes dock without remounting the edited form control.
 4. Discard restores the last authoritative values.
 5. Save sends the selected intent and receives an accepted receipt.
 6. The UI says `Confirming saved values`, not Saved.
@@ -758,7 +764,7 @@ the mobile editor references in the baseline directory.
   remain available without desktop-only hover.
 - Run detail: failure, output, step trace, Retry, and Run again eligibility
   remain accessible.
-- Settings: section navigation, dirty save bar, save observation, Account
+- Settings: section navigation, shell-fixed dirty save dock, save observation, Account
   actions, and Advanced values remain operable.
 - Login and callback: the existing NyxID flow remains usable at mobile width,
   and the existing language switch remains reachable without desktop chrome.
@@ -853,8 +859,9 @@ Every frame has a corresponding user path:
   creates and observes a new draft, then adopts its returned ID.
 - Draft Run reaches Accepted/Running before it can reach Activity observation.
 - Activity observation requires a real observatory `runId` and `stateVersion`.
-- Workflow-specific Activity filtering uses only an exact returned
-  `definitionActorId`.
+- Workflow-specific Activity preserves the catalogue row's exact `workflowId`
+  in the URL and uses only the exact returned `definitionActorId` for the Runs
+  request; invalid resolution never falls back to global Activity.
 - Run detail remains immutable in success, failure, partial graph, Retry, and
   Run again paths.
 - Retry and Run again require explicit step identity and create a new accepted

@@ -3,7 +3,6 @@ import enUSMessages from './workflowActivityVNextMessages.en-US';
 const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
   {
     ...enUSMessages,
-    'workflowActivityVNext.activity.allOrigins': '全部来源',
     'workflowActivityVNext.activity.allStatuses': '全部状态',
     'workflowActivityVNext.activity.activityAfter': '活动时间晚于',
     'workflowActivityVNext.activity.activityBefore': '活动时间早于',
@@ -37,12 +36,6 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.activity.openRun': '打开运行',
     'workflowActivityVNext.activity.openRunAria':
       '打开 {name} 的运行 {reference}',
-    'workflowActivityVNext.activity.originChat': '聊天',
-    'workflowActivityVNext.activity.originEditor': '编辑器',
-    'workflowActivityVNext.activity.originFilter': '运行来源',
-    'workflowActivityVNext.activity.originMember': '团队成员',
-    'workflowActivityVNext.activity.originSchedule': '计划任务',
-    'workflowActivityVNext.activity.originService': '服务',
     'workflowActivityVNext.activity.search': '搜索运行记录',
     'workflowActivityVNext.activity.searchAria': '搜索运行记录',
     'workflowActivityVNext.activity.elapsed': '已运行 {duration}',
@@ -50,17 +43,36 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
       '已加载 {loaded} 条，当前显示 {visible} 条',
     'workflowActivityVNext.activity.resultCount': '已加载 {count} 条运行记录',
     'workflowActivityVNext.activity.runReference': '运行 {reference}',
+    'workflowActivityVNext.activity.statusCancelled': '已取消',
     'workflowActivityVNext.activity.statusCompleted': '已完成',
     'workflowActivityVNext.activity.statusFilter': '运行状态',
+    'workflowActivityVNext.activity.statusQueued': '排队中',
     'workflowActivityVNext.activity.statusRunning': '运行中',
+    'workflowActivityVNext.activity.statusTimedOut': '已超时',
     'workflowActivityVNext.activity.statusWaiting': '等待中',
     'workflowActivityVNext.activity.title': '活动',
     'workflowActivityVNext.activity.unavailable': '活动记录不可用',
     'workflowActivityVNext.activity.unnamed': '未命名工作流',
     'workflowActivityVNext.activity.unavailableDescription':
       '请重试加载最近的工作流运行记录。',
-    'workflowActivityVNext.activity.workflowFilterUnavailable':
-      '暂时无法按此工作流筛选，当前显示全部活动记录。',
+    'workflowActivityVNext.activity.removeWorkflowFilterAria':
+      '移除工作流筛选条件 {workflowId}',
+    'workflowActivityVNext.activity.workflowFilterInvalidDescription':
+      '此活动链接不包含工作流身份。',
+    'workflowActivityVNext.activity.workflowFilterInvalidTitle':
+      '请选择要筛选活动的工作流',
+    'workflowActivityVNext.activity.workflowFilterLabel':
+      '工作流：{workflowId}',
+    'workflowActivityVNext.activity.workflowFilterLoading':
+      '正在加载工作流活动…',
+    'workflowActivityVNext.activity.workflowFilterResolutionFailed':
+      '工作流活动不可用',
+    'workflowActivityVNext.activity.workflowFilterResolutionFailedDescription':
+      '请重试或移除工作流筛选条件。',
+    'workflowActivityVNext.activity.workflowFilterUnavailableDescription':
+      '此工作流未提供活动筛选条件，因此不显示任何运行记录。',
+    'workflowActivityVNext.activity.workflowFilterUnavailableTitle':
+      '活动筛选不可用',
     'workflowActivityVNext.brand.subtitle': '自动化账本',
     'workflowActivityVNext.common.cancel': '取消',
     'workflowActivityVNext.common.close': '关闭',
@@ -104,11 +116,28 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.editor.loadingDescription': '正在准备编辑器…',
     'workflowActivityVNext.editor.openActivity': '打开活动',
     'workflowActivityVNext.editor.publish': '发布',
+    'workflowActivityVNext.editor.publishBeforeRun':
+      '请先发布此工作流，再运行。',
+    'workflowActivityVNext.editor.publishLatestBeforeRun':
+      '请先保存并发布最新更改，再运行。',
     'workflowActivityVNext.editor.publishUnavailable': '此工作流暂时无法发布。',
+    'workflowActivityVNext.editor.publishedRunDrawer': '运行已发布工作流',
+    'workflowActivityVNext.editor.publishedTargetUnavailable':
+      '请先发布此工作流，再运行。',
+    'workflowActivityVNext.editor.waitForEditorBeforeRun':
+      '请等待工作流更新完成。',
+    'workflowActivityVNext.editor.waitForPublishedRun':
+      '请等待已发布版本可用。',
     'workflowActivityVNext.publish.accepted': '发布请求已接受',
     'workflowActivityVNext.publish.approvalNotRequired': '此请求无需额外审批。',
     'workflowActivityVNext.publish.approvalRequired': '此请求运行前需要审批。',
+    'workflowActivityVNext.publish.addExecutableStep':
+      '发布前请至少添加一个可执行步骤。',
+    'workflowActivityVNext.publish.applyNodeChanges':
+      '发布前请应用或放弃节点配置更改。',
     'workflowActivityVNext.publish.backToService': '返回',
+    'workflowActivityVNext.publish.blocked': '发布受阻 · {count} 个问题',
+    'workflowActivityVNext.publish.blockedOne': '发布受阻 · 1 个问题',
     'workflowActivityVNext.publish.checkAgain': '再次检查',
     'workflowActivityVNext.publish.delayed': '发布状态显示所需时间较长',
     'workflowActivityVNext.publish.delayedDescription':
@@ -129,7 +158,11 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
       '所选服务现在正在使用此工作流。',
     'workflowActivityVNext.publish.observingDescription':
       '正在检查所选服务是否已准备就绪。',
+    'workflowActivityVNext.publish.published': '已发布',
+    'workflowActivityVNext.publish.publishedServiceId': '已发布服务 ID',
+    'workflowActivityVNext.publish.publishing': '正在发布',
     'workflowActivityVNext.publish.publishingTo': '正在发布到 {service}',
+    'workflowActivityVNext.publish.revisionId': '版本 ID',
     'workflowActivityVNext.publish.reviewAgain': '再次审核',
     'workflowActivityVNext.publish.reviewAndPublish': '审核并发布',
     'workflowActivityVNext.publish.reviewDescription':
@@ -139,6 +172,9 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
       '正在准备此工作流以供审核。',
     'workflowActivityVNext.publish.reviewUnavailable':
       '暂时无法准备此工作流以供发布。',
+    'workflowActivityVNext.publish.readinessIssues': '发布就绪问题',
+    'workflowActivityVNext.publish.resolvePublication':
+      '再次发布前请先处理当前发布状态。',
     'workflowActivityVNext.publish.risk': '影响',
     'workflowActivityVNext.publish.risk.destructive':
       '可能删除数据或造成永久性更改',
@@ -155,17 +191,41 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.publish.submittingDescription':
       '正在将此工作流发送到所选服务。',
     'workflowActivityVNext.publish.title': '发布工作流',
+    'workflowActivityVNext.publish.waitForPublication':
+      '请等待当前发布流程完成。',
+    'workflowActivityVNext.publish.waitForEditorUpdate':
+      '请等待工作流步骤更新完成。',
+    'workflowActivityVNext.publish.waitForSave': '请等待工作流验证和保存完成。',
+    'workflowActivityVNext.publish.waitForSavedDraft':
+      '请等待已保存草稿变为可读取状态。',
+    'workflowActivityVNext.publish.workflowId': '工作流 ID',
     'workflowActivityVNext.publish.unauthorizedDescription':
       '请重新登录后检查此发布状态。',
-    'workflowActivityVNext.editor.runAccepted': '正在准备运行…',
+    'workflowActivityVNext.editor.checkLatestStatus': '检查最新状态',
+    'workflowActivityVNext.editor.currentStep': '当前步骤',
+    'workflowActivityVNext.editor.failureSummary': '失败摘要',
+    'workflowActivityVNext.editor.fullDetailsNotice':
+      '打开运行详情可查看完整时间线、诊断信息和恢复操作。',
+    'workflowActivityVNext.editor.openRunDetails': '打开运行详情',
+    'workflowActivityVNext.editor.outputSummary': '输出摘要',
+    'workflowActivityVNext.editor.runAccepted': '运行已接受',
+    'workflowActivityVNext.editor.runAgain': '再次运行',
     'workflowActivityVNext.editor.runFailed': '运行失败',
-    'workflowActivityVNext.editor.runInput': '测试输入',
+    'workflowActivityVNext.editor.runInput': '输入',
+    'workflowActivityVNext.editor.runInputExample': '例如：审核订单 42',
+    'workflowActivityVNext.editor.runInputHelp':
+      '此工作流接受一个文本输入。例如：审核订单 42。',
+    'workflowActivityVNext.editor.runInputRequired': '请输入内容。',
+    'workflowActivityVNext.editor.runInputRequiredTag': '必填',
     'workflowActivityVNext.editor.runPanel': '测试运行',
+    'workflowActivityVNext.editor.runResult': '运行结果',
     'workflowActivityVNext.editor.runUnavailable': '请先添加至少一个有效步骤。',
     'workflowActivityVNext.editor.runSubmitting': '正在启动运行…',
     'workflowActivityVNext.editor.retryActivityObservation': '再次检查',
     'workflowActivityVNext.editor.saveDelayed': '保存时间比预期更长',
     'workflowActivityVNext.editor.saveFailed': '无法保存工作流',
+    'workflowActivityVNext.editor.saveStatusAria': '工作流保存状态',
+    'workflowActivityVNext.editor.saveStatusFailed': '保存失败',
     'workflowActivityVNext.editor.saveOpenFailed':
       '工作流已保存，但暂时无法重新打开',
     'workflowActivityVNext.editor.savingProgress': '正在保存工作流…',
@@ -173,15 +233,21 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.editor.saveLeave': '保存并离开',
     'workflowActivityVNext.editor.saveSuccess': '工作流已保存',
     'workflowActivityVNext.editor.saved': '已保存',
+    'workflowActivityVNext.editor.savedAt': '已保存于 {updatedAt}',
     'workflowActivityVNext.editor.stay': '留在此处',
     'workflowActivityVNext.editor.streamEnded':
       '实时更新已结束，请打开活动记录查看最新状态。',
     'workflowActivityVNext.editor.submitRun': '开始运行',
+    'workflowActivityVNext.editor.submittedInput': '已提交输入',
+    'workflowActivityVNext.editor.snapshotNotice':
+      '再次运行将使用完全相同的输入和工作流快照。',
     'workflowActivityVNext.editor.unavailable': '工作流不可用',
     'workflowActivityVNext.editor.unavailableDescription': '无法加载此工作流。',
     'workflowActivityVNext.editor.unavailableGuidance': '请重试打开此工作流。',
     'workflowActivityVNext.editor.unsaved': '未保存',
+    'workflowActivityVNext.editor.unsavedChanges': '有未保存的更改',
     'workflowActivityVNext.editor.updatingNode': '正在更新节点…',
+    'workflowActivityVNext.editor.validating': '正在验证工作流…',
     'workflowActivityVNext.editor.unsavedDescription':
       '保存更改、放弃更改，或留在编辑器。',
     'workflowActivityVNext.editor.unsavedTitle': '工作流有未保存更改',
@@ -221,6 +287,42 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.nodeInspector.targetRole': '目标角色',
     'workflowActivityVNext.nodeInspector.title': '配置 {name}',
     'workflowActivityVNext.nodeInspector.type': '类型',
+    'workflowActivityVNext.failure.accessDenied': '你无权使用此服务或模型。',
+    'workflowActivityVNext.failure.accessDeniedGuidance':
+      '请申请权限，或选择你的账户可用的服务和模型。',
+    'workflowActivityVNext.failure.cancelled': '运行已取消。',
+    'workflowActivityVNext.failure.cancelledGuidance':
+      '此次运行已停止，但未被报告为系统故障。',
+    'workflowActivityVNext.failure.chooseAllowedService': '选择可用服务',
+    'workflowActivityVNext.failure.copyTrackingId': '复制跟踪 ID',
+    'workflowActivityVNext.failure.internal': '请求无法完成。',
+    'workflowActivityVNext.failure.internalGuidance':
+      '请重试；如果仍然失败，请在有跟踪 ID 时联系支持。',
+    'workflowActivityVNext.failure.invalidInput': '输入或工作流定义需要处理。',
+    'workflowActivityVNext.failure.invalidInputGuidance':
+      '请检查受影响的输入或工作流步骤后再试。',
+    'workflowActivityVNext.failure.rateLimited': '请求受到速率限制。',
+    'workflowActivityVNext.failure.rateLimitedGuidance':
+      '请等待配额窗口重置后再试。',
+    'workflowActivityVNext.failure.reloadLatest': '加载最新状态',
+    'workflowActivityVNext.failure.resourceMissing': '此次运行已不可用。',
+    'workflowActivityVNext.failure.resourceMissingGuidance':
+      '请刷新活动记录或返回运行列表。',
+    'workflowActivityVNext.failure.retryAfter': '{seconds} 秒后重试。',
+    'workflowActivityVNext.failure.reviewInput': '检查输入',
+    'workflowActivityVNext.failure.sessionExpired': '登录会话已过期。',
+    'workflowActivityVNext.failure.sessionExpiredGuidance':
+      '请重新登录后继续。',
+    'workflowActivityVNext.failure.signInAgain': '重新登录',
+    'workflowActivityVNext.failure.stateConflict': '加载后此次运行已发生变化。',
+    'workflowActivityVNext.failure.stateConflictGuidance':
+      '请加载最新状态后再继续。',
+    'workflowActivityVNext.failure.timeoutOrOffline': '请求超时或连接中断。',
+    'workflowActivityVNext.failure.timeoutOrOfflineGuidance':
+      '请检查网络连接后再试。',
+    'workflowActivityVNext.failure.upstreamUnavailable': '所选服务暂时不可用。',
+    'workflowActivityVNext.failure.upstreamUnavailableGuidance':
+      '请检查服务状态或稍后重试。',
     'workflowActivityVNext.nav.activity': '活动',
     'workflowActivityVNext.nav.aria': '工作流工作台',
     'workflowActivityVNext.nav.openMenu': '打开导航',
@@ -229,17 +331,15 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.new.back': '返回工作流列表',
     'workflowActivityVNext.new.changeMethod': '更换创建方式',
     'workflowActivityVNext.new.chooserAria': '工作流创建方式',
-    'workflowActivityVNext.new.createBlank': '创建工作流',
+    'workflowActivityVNext.new.createBlank': '创建并打开',
     'workflowActivityVNext.new.createFailed': '无法创建工作流',
-    'workflowActivityVNext.new.createGenerated': '创建工作流',
-    'workflowActivityVNext.new.createTemplate': '从模板创建',
+    'workflowActivityVNext.new.createTemplate': '使用模板并打开',
     'workflowActivityVNext.new.creatingDescription': '通常只需要片刻时间。',
     'workflowActivityVNext.new.description': '选择一种开始方式。',
     'workflowActivityVNext.new.defaultWorkspace': '默认工作区',
-    'workflowActivityVNext.new.directory': '保存位置',
-    'workflowActivityVNext.new.generate': '生成工作流',
-    'workflowActivityVNext.new.generatedYaml': '生成的 YAML',
-    'workflowActivityVNext.new.goal': '自动化目标',
+    'workflowActivityVNext.new.directory': '保存到',
+    'workflowActivityVNext.new.generate': '生成并打开',
+    'workflowActivityVNext.new.goal': '描述你希望这个工作流完成什么',
     'workflowActivityVNext.new.mode.blank': '从空白开始',
     'workflowActivityVNext.new.mode.blank.description':
       '从空白画布开始，自行添加步骤。',
@@ -255,20 +355,30 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.new.name': '工作流名称',
     'workflowActivityVNext.new.noDirectories':
       '没有可用的保存位置，请稍后重试或联系管理员。',
+    'workflowActivityVNext.new.noDirectoriesDescription':
+      '工作流需要明确的保存位置来确定归属；恢复访问权限期间，你可以先在此准备输入。',
     'workflowActivityVNext.new.observationFailed': '无法打开工作流',
     'workflowActivityVNext.new.observing': '正在创建工作流…',
     'workflowActivityVNext.new.projectionDelayed': '所需时间比预期更长',
     'workflowActivityVNext.new.retryDescription':
       '你的内容已保留，请重试以完成打开工作流。',
     'workflowActivityVNext.new.retryObservation': '重试',
+    'workflowActivityVNext.new.reviewAccess': '检查访问权限',
+    'workflowActivityVNext.new.saveTargetRequired':
+      '请先选择可用的保存位置，再创建工作流。',
     'workflowActivityVNext.new.template': '模板',
     'workflowActivityVNext.new.templateDescription.incidentTriage':
       '对事件分类、准备响应并请求人工审批。',
+    'workflowActivityVNext.new.templateCopyName.incidentTriage': '事件分流副本',
     'workflowActivityVNext.new.templateName.incidentTriage': '事件分流',
     'workflowActivityVNext.new.title': '新建工作流',
-    'workflowActivityVNext.new.validateCreate': '验证并创建',
+    'workflowActivityVNext.new.validateCreate': '导入并打开',
     'workflowActivityVNext.new.workspaceLoading': '正在加载保存位置…',
+    'workflowActivityVNext.new.workspaceLoadingDescription':
+      '现在可以先选择创建方式；当前工作区的保存位置加载期间，你的输入会保留在此页面。',
     'workflowActivityVNext.new.workspaceUnavailable': '保存位置不可用',
+    'workflowActivityVNext.new.workspaceUnavailableDescription':
+      '现在可以先选择创建方式；恢复访问权限期间，你的输入会保留在此页面。',
     'workflowActivityVNext.new.yaml': '工作流 YAML',
     'workflowActivityVNext.run.backAria': '返回活动列表',
     'workflowActivityVNext.run.commandId': '请求 ID',
@@ -333,6 +443,7 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
       '你的个人资料与访问权限。',
     'workflowActivityVNext.settings.accountLoading': '正在加载账户…',
     'workflowActivityVNext.settings.accountUnavailable': '账户信息不可用',
+    'workflowActivityVNext.settings.accessNotLoaded': '未加载',
     'workflowActivityVNext.settings.activeRuntime': '当前连接 URL',
     'workflowActivityVNext.settings.advanced': '高级',
     'workflowActivityVNext.settings.advancedDescription':
@@ -344,6 +455,8 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.settings.catalogUnavailable':
       '已保存的选择没有改变，请重试加载可用服务。',
     'workflowActivityVNext.settings.catalogUnavailableTitle': '服务不可用',
+    'workflowActivityVNext.settings.capabilityContractMissing':
+      '当前账户服务未提供产品能力详情。',
     'workflowActivityVNext.settings.defaultModel': '默认模型',
     'workflowActivityVNext.settings.defaultModelHelp':
       '留空时使用服务默认模型。',
@@ -354,10 +467,14 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.settings.email': '邮箱',
     'workflowActivityVNext.settings.expires': '过期时间',
     'workflowActivityVNext.settings.failed': '无法保存更改',
+    'workflowActivityVNext.settings.groups': '群组声明',
     'workflowActivityVNext.settings.llmLoading': '正在加载 AI 默认设置…',
     'workflowActivityVNext.settings.llmUnavailable': 'AI 默认设置不可用',
     'workflowActivityVNext.settings.localRuntime': '本地连接 URL',
     'workflowActivityVNext.settings.name': '名称',
+    'workflowActivityVNext.settings.manageServiceAccess': '管理服务访问权限',
+    'workflowActivityVNext.settings.notLoaded': '未加载',
+    'workflowActivityVNext.settings.notProvided': '未提供',
     'workflowActivityVNext.settings.notAccepted': '设置更新未被接受。',
     'workflowActivityVNext.settings.observed': '更改已保存',
     'workflowActivityVNext.settings.providerDefault': 'Provider 默认值',
@@ -365,11 +482,23 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.settings.preferredServiceHelp':
       '选择新会话默认使用的服务。',
     'workflowActivityVNext.settings.provider': '登录方式',
+    'workflowActivityVNext.settings.productAccess': '产品访问权限',
+    'workflowActivityVNext.settings.refreshStatus': '刷新状态',
     'workflowActivityVNext.settings.remoteRuntime': '远端连接 URL',
     'workflowActivityVNext.settings.roles': '访问权限',
     'workflowActivityVNext.settings.runtimeLoading': '正在加载连接信息…',
     'workflowActivityVNext.settings.runtimeMode': '连接模式',
     'workflowActivityVNext.settings.runtimeUnavailable': '连接信息不可用',
+    'workflowActivityVNext.settings.serviceAccessFailed':
+      '无法启动服务访问权限检查，请重试。',
+    'workflowActivityVNext.settings.sessionActive': '有效',
+    'workflowActivityVNext.settings.sessionExpired': '已过期',
+    'workflowActivityVNext.settings.sessionExpiringSoon': '即将过期',
+    'workflowActivityVNext.settings.sessionInvalid': '无效',
+    'workflowActivityVNext.settings.sessionState': '会话状态',
+    'workflowActivityVNext.settings.signInAgain': '重新登录',
+    'workflowActivityVNext.settings.signOut': '退出登录',
+    'workflowActivityVNext.settings.supportDetails': '支持详情',
     'workflowActivityVNext.settings.retryGuidance': '请重试加载此部分。',
     'workflowActivityVNext.settings.save': '保存更改',
     'workflowActivityVNext.settings.saveLeave': '保存并离开',
@@ -384,32 +513,56 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.settings.systemDefaultModel':
       '使用系统选择的服务和模型。',
     'workflowActivityVNext.settings.title': '设置',
+    'workflowActivityVNext.settings.unauthorized': '无访问权限',
+    'workflowActivityVNext.settings.unauthorizedDescription':
+      '当前会话无权查看账户或能力详情。',
     'workflowActivityVNext.settings.unsaved': '未保存的更改',
+    'workflowActivityVNext.settings.unsavedActionsAria': '未保存设置操作',
     'workflowActivityVNext.settings.unsavedDescription':
       'AI 默认设置尚未保存。',
     'workflowActivityVNext.settings.unsavedLeaveDescription':
       '保存更改、放弃更改，或留在设置页面。',
     'workflowActivityVNext.settings.unsavedLeaveTitle':
       'AI 默认设置有未保存的更改',
+    'workflowActivityVNext.settings.userId': '用户 ID',
+    'workflowActivityVNext.settings.workspaceContext': '工作区上下文',
     'workflowActivityVNext.state.forbidden': '你无权访问此工作区',
     'workflowActivityVNext.state.unauthorized': '请登录后继续',
     'workflowActivityVNext.unavailable.body': '请检查地址或返回其他页面。',
     'workflowActivityVNext.unavailable.description': '你请求的页面不可用。',
     'workflowActivityVNext.unavailable.title': '不可用',
-    'workflowActivityVNext.workflows.allView': '全部工作流',
+    'workflowActivityVNext.workflows.activeView': '活跃工作流',
+    'workflowActivityVNext.workflows.archive': '归档',
+    'workflowActivityVNext.workflows.archiveCheckAgain': '再次检查',
+    'workflowActivityVNext.workflows.archiveConfirm': '归档工作流',
+    'workflowActivityVNext.workflows.archiveDelayed':
+      '归档请求已接受，但尚未确认完成',
+    'workflowActivityVNext.workflows.archiveDescription':
+      '这会停止已发布工作流的新运行。可编辑草稿、已发布修订和活动历史仍会保留。再次发布即可恢复。',
+    'workflowActivityVNext.workflows.archiveFailed': '无法归档工作流',
+    'workflowActivityVNext.workflows.archiveSuccess': '工作流已归档',
+    'workflowActivityVNext.workflows.archiveTitle': '确认归档此工作流？',
+    'workflowActivityVNext.workflows.archiveTryAgain': '重试',
+    'workflowActivityVNext.workflows.archivedStatus': '已归档',
+    'workflowActivityVNext.workflows.archivedView': '已归档',
     'workflowActivityVNext.workflows.clearFilters': '清除筛选',
     'workflowActivityVNext.workflows.columnActions': '操作',
-    'workflowActivityVNext.workflows.columnUpdated': '更新时间',
+    'workflowActivityVNext.workflows.columnStatus': '状态',
+    'workflowActivityVNext.workflows.columnUpdated': '最近更新',
     'workflowActivityVNext.workflows.columnWorkflow': '工作流',
+    'workflowActivityVNext.workflows.copyReference': '复制工作流引用',
     'workflowActivityVNext.workflows.description':
       '创建、编辑并运行你的工作流。',
+    'workflowActivityVNext.workflows.descriptionAria': '{name} 的描述',
     'workflowActivityVNext.workflows.draftsUnavailable': '草稿工作流不可用',
     'workflowActivityVNext.workflows.draftsUnavailableDescription':
       '请重试加载草稿工作流。',
     'workflowActivityVNext.workflows.draftsView': '草稿',
+    'workflowActivityVNext.workflows.draftStatus': '草稿',
+    'workflowActivityVNext.workflows.duplicateNameWarning':
+      '另一个工作流已使用此名称。允许使用重复名称。',
     'workflowActivityVNext.workflows.deleteDescription':
       '此操作只删除可编辑草稿，已发布版本和运行历史会继续保留。',
-    'workflowActivityVNext.workflows.deleteAria': '删除 {name}',
     'workflowActivityVNext.workflows.deleteDraft': '删除草稿',
     'workflowActivityVNext.workflows.deleteFailed': '无法删除草稿',
     'workflowActivityVNext.workflows.deleteRefreshFailed':
@@ -420,12 +573,13 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.workflows.emptyDescription':
       '创建一个工作流即可开始。',
     'workflowActivityVNext.workflows.loading': '正在加载工作流…',
-    'workflowActivityVNext.workflows.moreActionsAria': '{name}的更多操作',
+    'workflowActivityVNext.workflows.moreActionsAria':
+      '{owner}中{name}的更多操作',
     'workflowActivityVNext.workflows.new': '新建工作流',
     'workflowActivityVNext.workflows.noMatch': '没有匹配的工作流',
     'workflowActivityVNext.workflows.noMatchDescription':
       '请尝试其他搜索或筛选条件。',
-    'workflowActivityVNext.workflows.openAria': '打开 {name}',
+    'workflowActivityVNext.workflows.openAria': '打开{owner}中的{name}',
     'workflowActivityVNext.workflows.runAria': '运行 {name}',
     'workflowActivityVNext.workflows.refreshAria': '刷新工作流',
     'workflowActivityVNext.workflows.retryAria': '重试加载工作流',
@@ -438,12 +592,19 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.workflows.unavailableDescription':
       '请重试加载工作流。',
     'workflowActivityVNext.workflows.viewFilter': '工作流视图',
-    'workflowActivityVNext.workflows.activityFilterUnavailable':
-      '暂时无法筛选此工作流的活动记录。',
-    'workflowActivityVNext.workflows.activityResolutionFailed':
-      '无法打开此工作流的活动记录',
     'workflowActivityVNext.workflows.partialUnavailable': '部分工作流无法加载',
-    'workflowActivityVNext.workflows.viewActivity': '活动',
+    'workflowActivityVNext.workflows.publishedStatus': '已发布',
+    'workflowActivityVNext.workflows.referenceCopied': '已复制工作流引用',
+    'workflowActivityVNext.workflows.referenceCopyFailed': '无法复制工作流引用',
+    'workflowActivityVNext.workflows.rename': '重命名',
+    'workflowActivityVNext.workflows.renameFailed': '无法重命名工作流',
+    'workflowActivityVNext.workflows.renameSave': '保存名称',
+    'workflowActivityVNext.workflows.renameSuccess': '工作流已重命名',
+    'workflowActivityVNext.workflows.renameTitle': '重命名工作流',
+    'workflowActivityVNext.workflows.viewActivity': '查看活动',
+    'workflowActivityVNext.workflows.viewActivityAria':
+      '查看{owner}中{name}的活动',
+    'workflowActivityVNext.workflows.workspaceOwner': '工作区',
   };
 
 export default workflowActivityVNextMessages;

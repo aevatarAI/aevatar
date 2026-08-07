@@ -627,8 +627,8 @@ describe('StudioWorkflowBuildPanel', () => {
       );
     });
     expect(
-      screen.getByText('The workflow adapter rejected this node.'),
-    ).toBeInTheDocument();
+      screen.queryByText('The workflow adapter rejected this node.'),
+    ).not.toBeInTheDocument();
   });
 
   it('keeps the Script bind CTA stable and uses the dry-run panel as the run entry', () => {

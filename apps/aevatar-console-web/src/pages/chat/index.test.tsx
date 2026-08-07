@@ -7,6 +7,13 @@ import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
 import { chatHistoryApi } from "./chatHistoryApi";
 import ChatPage, { hydrateStoredMessages } from "./index";
 
+const mockConsoleToast = {
+  error: jest.fn(),
+  info: jest.fn(),
+  success: jest.fn(),
+  warning: jest.fn(),
+};
+
 jest.mock("@/shared/auth/fetch", () => ({
   authFetch: jest.fn(),
 }));
@@ -43,6 +50,10 @@ jest.mock("@/shared/navigation/history", () => ({
   history: {
     push: jest.fn(),
   },
+}));
+
+jest.mock("@/shared/ui/ConsoleToast", () => ({
+  useConsoleToast: () => mockConsoleToast,
 }));
 
 jest.mock("@/shared/studio/api", () => ({
@@ -1922,7 +1933,7 @@ describe("ChatPage server-backed history", () => {
     ).toBeTruthy();
   });
 
-  it("keeps history visible when deletion fails", async () => {
+  it("reports deletion failures with a toast and keeps history visible", async () => {
     (chatHistoryApi.listConversationMetas as jest.Mock).mockResolvedValue([
       serverConversation,
     ]);
@@ -1937,8 +1948,13 @@ describe("ChatPage server-backed history", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
 
-    expect(await screen.findByText("Conversation could not be deleted")).toBeTruthy();
-    expect(screen.getByText("Delete request failed")).toBeTruthy();
+    await waitFor(() =>
+      expect(mockConsoleToast.error).toHaveBeenCalledWith(
+        "Conversation could not be deleted",
+      ),
+    );
+    expect(screen.queryByText("Conversation could not be deleted")).toBeNull();
+    expect(screen.queryByText("Delete request failed")).toBeNull();
     expect(screen.getByRole("button", { name: "Server conversation" })).toBeTruthy();
   });
 

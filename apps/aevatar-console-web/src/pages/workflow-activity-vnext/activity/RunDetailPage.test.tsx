@@ -1,10 +1,24 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import * as React from 'react';
+import { history } from '@/shared/navigation/history';
 import {
   cleanupTestQueryClients,
   renderWithQueryClient,
 } from '../../../../tests/reactQueryTestUtils';
 import RunDetailPage from './RunDetailPage';
+
+const mockConsoleToast = {
+  error: jest.fn(),
+  info: jest.fn(),
+  success: jest.fn(),
+  warning: jest.fn(),
+};
 
 jest.mock('@umijs/max', () => ({
   getIntl: () => ({
@@ -59,6 +73,10 @@ jest.mock('@/shared/navigation/history', () => ({
 jest.mock('@/shared/ui/ConsoleHeaderActions', () => ({
   ConsoleAuthActions: () => <button type="button">Account</button>,
   ConsoleLanguageSwitch: () => <button type="button">Language</button>,
+}));
+
+jest.mock('@/shared/ui/ConsoleToast', () => ({
+  useConsoleToast: () => mockConsoleToast,
 }));
 
 const mockWorkflowActivityApi = jest.requireMock(
@@ -231,7 +249,7 @@ describe('Workflow Activity vNext run detail recovery', () => {
     expect(screen.queryByText(/state version/i)).not.toBeInTheDocument();
   });
 
-  it("keeps a retry failure's server detail out of the confirmation message", async () => {
+  it('reports a retry failure with a toast and keeps server detail out of the page', async () => {
     mockWorkflowActivityApi.forkRun.mockRejectedValue(
       new Error('POST /api/workflow/runs/fork returned 503'),
     );
@@ -245,14 +263,17 @@ describe('Workflow Activity vNext run detail recovery', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: 'Confirm retry' }));
 
+    await waitFor(() =>
+      expect(mockConsoleToast.error).toHaveBeenCalledWith(
+        "The new run couldn't be started",
+      ),
+    );
     expect(
-      (await screen.findAllByText("The new run couldn't be started")).length,
-    ).toBeGreaterThan(0);
-    for (const detail of screen.getAllByText(
-      'POST /api/workflow/runs/fork returned 503',
-    )) {
-      expect(detail).not.toBeVisible();
-    }
+      screen.queryByText("The new run couldn't be started"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('POST /api/workflow/runs/fork returned 503'),
+    ).not.toBeInTheDocument();
   });
 
   it('keeps committed detail visible and disables run again when graph evidence fails', async () => {
@@ -284,6 +305,64 @@ describe('Workflow Activity vNext run detail recovery', () => {
     }
   });
 
+  it('shows one actionable toast for repeated GROUP_NOT_ALLOWED evidence', async () => {
+    const run = buildRunDetail();
+    run.finalError = 'This group cannot use the selected model.';
+    run.diagnostics = [
+      {
+        timestampUtc: '2026-08-04T10:01:00Z',
+        severity: 'error',
+        code: 'GROUP_NOT_ALLOWED',
+        source: 'workflow',
+        message: 'This group cannot use the selected model.',
+        hint: 'Choose an allowed model',
+        stepId: 'step-failed',
+        stepType: 'llm_call',
+        targetRole: '',
+      },
+      {
+        timestampUtc: '2026-08-04T10:01:01Z',
+        severity: 'error',
+        code: 'GROUP_NOT_ALLOWED',
+        source: 'final_error',
+        message: 'This group cannot use the selected model.',
+        hint: '',
+        stepId: 'step-failed',
+        stepType: 'llm_call',
+        targetRole: '',
+      },
+    ];
+    run.steps[0].error = 'This group cannot use the selected model.';
+    mockWorkflowActivityApi.getRun.mockResolvedValue(run);
+
+    renderWithQueryClient(
+      <RunDetailPage runId="run-source-alpha" scopeId="scope-alpha" />,
+    );
+
+    await waitFor(() =>
+      expect(mockConsoleToast.error).toHaveBeenCalledTimes(1),
+    );
+    const [content, options] = mockConsoleToast.error.mock.calls[0];
+    expect(options).toEqual({
+      duration: 8,
+      key: 'run-failure:run-source-alpha:access_denied',
+    });
+    const toastContent = render(content).container;
+    expect(
+      within(toastContent).getByText(
+        'This group cannot use the selected model.',
+      ),
+    ).toBeVisible();
+    fireEvent.click(
+      within(toastContent).getByRole('button', {
+        name: 'Choose allowed service',
+      }),
+    );
+    expect(history.push).toHaveBeenCalledWith(
+      '/scopes/scope-alpha/workflow-activity-vnext/settings',
+    );
+  });
+
   it('uses a product title instead of a raw run ID when the workflow name is missing', async () => {
     const run = buildRunDetail();
     run.summary.workflowName = '';
@@ -297,6 +376,19 @@ describe('Workflow Activity vNext run detail recovery', () => {
       await screen.findByRole('heading', { level: 1, name: 'Run details' }),
     ).toBeInTheDocument();
     expect(screen.queryByText('run-source-alpha')).not.toBeInTheDocument();
+  });
+
+  it('shows the backend run origin without translating it', async () => {
+    const run = buildRunDetail();
+    run.summary.runOrigin = 'backend-origin.v1';
+    mockWorkflowActivityApi.getRun.mockResolvedValue(run);
+
+    renderWithQueryClient(
+      <RunDetailPage runId="run-source-alpha" scopeId="scope-alpha" />,
+    );
+
+    expect(await screen.findAllByText('backend-origin.v1')).toHaveLength(2);
+    expect(screen.queryByText('Unknown')).not.toBeInTheDocument();
   });
 
   it('names a forbidden detail response without inventing run facts', async () => {

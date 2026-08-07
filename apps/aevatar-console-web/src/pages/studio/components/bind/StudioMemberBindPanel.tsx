@@ -46,6 +46,7 @@ import {
   type StudioMemberBindingRunStatusResponse,
 } from '@/shared/studio/models';
 import { AevatarPanel, AevatarStatusTag } from '@/shared/ui/aevatarPageShells';
+import ConsoleOperationNotice from '@/shared/ui/ConsoleOperationNotice';
 import { useConsoleToast } from '@/shared/ui/ConsoleToast';
 import { AEVATAR_INTERACTIVE_CHIP_CLASS } from '@/shared/ui/interactionStandards';
 import { getUserFacingIdentifierLabel } from '@/shared/ui/userFacingIdentifiers';
@@ -1059,19 +1060,12 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
         ),
         status: 'success',
       });
-    } catch (error) {
-      setSmokeTestResult({
-        error: error instanceof Error ? error.message : String(error),
-        eventCount: 0,
-        latencyMs: Date.now() - startedAt,
-        responseSummary: '',
-        runId: '',
-        status: 'error',
-      });
+    } catch {
+      setSmokeTestResult(createIdleSmokeTestResult());
       toast.error(
         t(
           'pages.studio.bind.studiomemberbindpanel.smoke.test.request.failed',
-          'Could not complete the smoke test. Review the result and try again.',
+          'Could not complete the smoke test. Try again.',
         ),
       );
     }
@@ -1290,13 +1284,14 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
               <Typography.Text type="secondary">
                 {pendingBindingCandidate.description}
               </Typography.Text>
-              {pendingBindNotice ? (
-                <Alert
-                  showIcon
-                  message={pendingBindNotice.message}
-                  type={pendingBindNotice.type}
-                />
-              ) : null}
+              <ConsoleOperationNotice
+                errorMessage={t(
+                  'pages.studio.bind.studiomemberbindpanel.bindingActionFailed',
+                  'Binding action could not be completed. Try again.',
+                )}
+                notice={pendingBindNotice}
+                onClose={() => setPendingBindNotice(null)}
+              />
               {currentBindingRunNotice ? (
                 <Alert
                   showIcon
