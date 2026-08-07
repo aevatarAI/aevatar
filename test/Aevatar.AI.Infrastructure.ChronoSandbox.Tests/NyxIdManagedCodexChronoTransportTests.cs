@@ -427,6 +427,7 @@ public sealed class NyxIdManagedCodexChronoTransportTests
         var exception = (await act.Should().ThrowAsync<ManagedCodexTransportException>()).Which;
         exception.Failure.Kind.Should().Be(expectedKind);
         exception.Failure.Code.Should().Be("managed_proxy_unavailable");
+        exception.Failure.DiagnosticId.Should().MatchRegex("^aevatar-[0-9a-f]{32}$");
     }
 
     [Fact]
@@ -440,6 +441,7 @@ public sealed class NyxIdManagedCodexChronoTransportTests
         var exception = (await act.Should().ThrowAsync<ManagedCodexTransportException>()).Which;
         exception.Failure.Kind.Should().Be(CodexExecutionFailureKind.TerminalFailure);
         exception.Failure.Code.Should().Be("managed_proxy_unavailable");
+        exception.Failure.DiagnosticId.Should().MatchRegex("^aevatar-[0-9a-f]{32}$");
     }
 
     [Fact]
