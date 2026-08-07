@@ -692,7 +692,7 @@ describe('Workflow Activity vNext catalogue', () => {
     );
     expect(
       (await screen.findAllByRole('menuitem')).map((item) => item.textContent),
-    ).toEqual(['Copy workflow reference', 'Archive']);
+    ).toEqual(['Rename', 'Copy workflow reference', 'Archive']);
     fireEvent.click(
       screen.getByRole('menuitem', { name: 'Copy workflow reference' }),
     );
@@ -743,7 +743,20 @@ describe('Workflow Activity vNext catalogue', () => {
           : draft,
       ),
     );
-    mockScopesApi.listWorkflows.mockResolvedValue([]);
+    mockScopesApi.listWorkflows.mockResolvedValue([
+      {
+        scopeId: 'scope-alpha',
+        workflowId: 'wf-support-apac',
+        displayName: 'Support triage',
+        serviceKey: 'scope-alpha:default:default:svc-support-apac',
+        workflowName: 'support_triage',
+        actorId: 'actor-support-apac',
+        activeRevisionId: 'rev-support-apac',
+        deploymentId: 'dep-support-apac',
+        deploymentStatus: 'Active',
+        updatedAt: '2026-08-05T11:29:00Z',
+      },
+    ]);
     mockStudioApi.getWorkflowDraft.mockImplementation(async () => {
       if (pendingName && postUpdateReads++ > 0) {
         authoritativeName = pendingName;
@@ -837,7 +850,7 @@ describe('Workflow Activity vNext catalogue', () => {
     expect(mockConsoleToast.success).toHaveBeenCalledWith('Workflow renamed');
   });
 
-  it('keeps archived workflows out of Active and scopes published rows to published actions', async () => {
+  it('keeps archived workflows out of Active and keeps rename on published rows with editable drafts', async () => {
     mockStudioApi.listWorkflowDrafts.mockResolvedValue([
       {
         workflowId: 'wf-draft-alpha',
@@ -906,7 +919,7 @@ describe('Workflow Activity vNext catalogue', () => {
     fireEvent.click(activeActions);
     expect(
       (await screen.findAllByRole('menuitem')).map((item) => item.textContent),
-    ).toEqual(['Copy workflow reference', 'Archive']);
+    ).toEqual(['Rename', 'Copy workflow reference', 'Archive']);
   });
 
   it('restores the Archived view without offering Archive again', async () => {

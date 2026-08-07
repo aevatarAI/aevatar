@@ -734,7 +734,8 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                 const description = row.description.trim();
                 const isArchived = isWorkflowArchived(row);
                 const isPublished = Boolean(row.activeRevisionId);
-                const showDraftActions =
+                const showRenameAction = row.hasDraftSource;
+                const showDeleteDraftAction =
                   row.hasDraftSource && (view === 'drafts' || !isPublished);
                 const showArchiveAction =
                   view !== 'drafts' && canArchiveWorkflow(row);
@@ -864,7 +865,7 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                         <Dropdown
                           menu={{
                             items: [
-                              ...(showDraftActions
+                              ...(showRenameAction
                                 ? [
                                     {
                                       icon: <EditOutlined />,
@@ -884,10 +885,10 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                                   'Copy workflow reference',
                                 ),
                               },
-                              ...(showDraftActions || showArchiveAction
+                              ...(showDeleteDraftAction || showArchiveAction
                                 ? [{ type: 'divider' as const }]
                                 : []),
-                              ...(showDraftActions
+                              ...(showDeleteDraftAction
                                 ? [
                                     {
                                       danger: true,
