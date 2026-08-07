@@ -64,5 +64,8 @@ handoff、单一 `ask_user` typed input，以及其他明确允许的 route-owne
 `WebAgentToolSource` 进入 ceiling。声明 `ExcludeFromNyxIdChat` 的通用 proxy
 不会进入模型可调用面。声明 `RequiresHumanSession` 的 Class-R read 只有在当前 turn 携带
 可验证的 source-readable user bearer 时才会被提供；credential 缺失、类型错误或仅有
-不可读 delegation 时，该 read 在 tool discovery 阶段即被移除。无论是否绑定 Profile，
+不可读 delegation 时，该 read 在 tool discovery 阶段即被移除。`RequiresHumanSession`
+只证明 credential shape，不证明 platform admin、operator 或 organization admin authority；
+因此 admin-only 的 service-account wrapper 在没有 typed authority admission 前不进入默认
+route ceiling，但其 typed REST adapter 可以由显式管理 surface 复用。无论是否绑定 Profile，
 mutation schema、secret-bearing 参数与新注册但未列入 ceiling 的工具都保持不可调用。
