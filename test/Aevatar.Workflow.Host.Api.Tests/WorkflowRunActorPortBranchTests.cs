@@ -284,6 +284,34 @@ public sealed class WorkflowRunActorPortBranchTests
     }
 
     [Fact]
+    public async Task CreateRunAsync_ShouldLeaveReceiptRunIdEmpty_WhenNoRoutableRunIdentityExists()
+    {
+        const string workflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        var runtime = new RecordingActorRuntime();
+        var definitionAgent = new WorkflowGAgent();
+        definitionAgent.State.WorkflowName = "direct";
+        definitionAgent.State.WorkflowYaml = workflowYaml;
+        definitionAgent.State.CapabilityAdmissionPlan = CreateCapabilityAdmissionPlan(workflowYaml);
+        definitionAgent.State.ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive;
+        runtime.StoredActors["definition-1"] = new RecordingActor("definition-1", definitionAgent);
+        runtime.ActorsToCreate.Enqueue(new RecordingActor("run-technical-address", new StubAgent("run")));
+        var port = CreatePort(runtime);
+
+        var result = await port.CreateRunAsync(
+            new WorkflowDefinitionBinding(
+                "definition-1",
+                "direct",
+                workflowYaml,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExternalCapabilityExecutionMode.Interactive),
+            CancellationToken.None);
+
+        result.ActorId.Should().Be("run-technical-address");
+        result.RunId.Should().BeEmpty();
+        result.RunId.Should().NotBe(result.ActorId);
+    }
+
+    [Fact]
     public async Task EnsureDefinitionAsync_WhenExistingExplicitIdentityDiffers_ShouldRejectWithoutRebinding()
     {
         const string workflowYaml = "name: direct\nroles: []\nsteps: []\n";

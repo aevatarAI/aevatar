@@ -420,6 +420,13 @@ message WorkflowStoppedEvent {
   string reason = 3;
   google.protobuf.Timestamp completed_at_utc = 4;
 }
+
+enum WorkflowRecoveryFailureKind {
+  WORKFLOW_RECOVERY_FAILURE_KIND_UNSPECIFIED = 0;
+  WORKFLOW_RECOVERY_FAILURE_KIND_AUTHORIZATION_FAILURE = 1;
+  WORKFLOW_RECOVERY_FAILURE_KIND_CONFIGURATION_FAILURE = 2;
+}
+
 message WorkflowCompletedEvent {
   string workflow_name = 1;
   bool success = 2;
@@ -427,6 +434,7 @@ message WorkflowCompletedEvent {
   string error = 4;
   string run_id = 5;
   google.protobuf.Timestamp completed_at_utc = 6;
+  WorkflowRecoveryFailureKind recovery_failure_kind = 7;
 }
 
 message WorkflowRunTerminalTimingRecordedEvent {
@@ -646,6 +654,7 @@ message StepCompletedEvent {
   VoteAgreementDecision vote_agreement_decision = 14;
   WorkflowStepFailureOutcome failure_outcome = 15;
   WorkflowFileItemResultSet file_item_results = 16;
+  WorkflowRecoveryFailureKind recovery_failure_kind = 17;
 }
 message SubWorkflowInvokeRequestedEvent
 {
@@ -963,6 +972,7 @@ message WorkflowLlmInvocationCompletedEvent
   WorkflowUsageMetrics usage = 9;
   WorkflowManagedHandoffOutcome managed_handoff = 10;
   WorkflowInteractiveAuthorizationRequirement authorization_requirement = 11;
+  WorkflowRecoveryFailureKind recovery_failure_kind = 12;
 }
 
 message WorkflowInteractiveAuthorizationRequirement

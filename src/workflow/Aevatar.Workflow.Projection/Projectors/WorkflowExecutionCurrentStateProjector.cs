@@ -560,52 +560,21 @@ public sealed class WorkflowExecutionCurrentStateProjector
 
     private static WorkflowFailureClassification ClassifyFailure(WorkflowRunState state)
     {
-        var error = state.FinalError ?? string.Empty;
-        if (string.IsNullOrWhiteSpace(error))
-            return WorkflowFailureClassification.None;
-
-        if (ContainsAny(
-                error,
-                "authorization",
-                "unauthorized",
-                "forbidden",
-                "credential",
-                "access denied",
-                "grant"))
+        // Fix (review round 1, F1):
+        //   Recovery classification previously inspected FinalError substrings.
+        //   Map only the typed committed failure kind owned by the run state/event path.
+        return state.TerminalRecoveryFailureKind switch
         {
-            return new WorkflowFailureClassification(
+            WorkflowRecoveryFailureKind.AuthorizationFailure => new WorkflowFailureClassification(
                 WorkflowRecoveryUnavailableReasonCodeReadModel.AuthorizationFailure,
                 "Access must be fixed before this run can be recovered.",
-                WorkflowRecoveryRecommendedActionReadModel.FixAccess);
-        }
-
-        if (ContainsAny(
-                error,
-                "configuration",
-                "not configured",
-                "missing configuration",
-                "invalid configuration",
-                "requires configuration",
-                "workflow_input_file_binding_failed"))
-        {
-            return new WorkflowFailureClassification(
+                WorkflowRecoveryRecommendedActionReadModel.FixAccess),
+            WorkflowRecoveryFailureKind.ConfigurationFailure => new WorkflowFailureClassification(
                 WorkflowRecoveryUnavailableReasonCodeReadModel.ConfigurationFailure,
                 "Configuration must be changed before this run can be recovered.",
-                WorkflowRecoveryRecommendedActionReadModel.ChangeConfiguration);
-        }
-
-        return WorkflowFailureClassification.None;
-    }
-
-    private static bool ContainsAny(string value, params string[] candidates)
-    {
-        foreach (var candidate in candidates)
-        {
-            if (value.Contains(candidate, StringComparison.OrdinalIgnoreCase))
-                return true;
-        }
-
-        return false;
+                WorkflowRecoveryRecommendedActionReadModel.ChangeConfiguration),
+            _ => WorkflowFailureClassification.None,
+        };
     }
 
     private static string Normalize(string? value) =>

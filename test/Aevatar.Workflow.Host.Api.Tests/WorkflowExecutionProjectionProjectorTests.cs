@@ -1268,10 +1268,10 @@ public sealed class WorkflowExecutionProjectionProjectorTests
     }
 
     [Theory]
-    [InlineData("Unauthorized: missing credential grant", WorkflowRecoveryUnavailableReasonCodeReadModel.AuthorizationFailure, WorkflowRecoveryRecommendedActionReadModel.FixAccess)]
-    [InlineData("workflow_input_file_binding_failed: missing configuration", WorkflowRecoveryUnavailableReasonCodeReadModel.ConfigurationFailure, WorkflowRecoveryRecommendedActionReadModel.ChangeConfiguration)]
-    public async Task WorkflowExecutionCurrentStateProjector_ShouldNotAdvertiseRetryForBackendClassifiedFailures(
-        string finalError,
+    [InlineData(WorkflowRecoveryFailureKind.AuthorizationFailure, WorkflowRecoveryUnavailableReasonCodeReadModel.AuthorizationFailure, WorkflowRecoveryRecommendedActionReadModel.FixAccess)]
+    [InlineData(WorkflowRecoveryFailureKind.ConfigurationFailure, WorkflowRecoveryUnavailableReasonCodeReadModel.ConfigurationFailure, WorkflowRecoveryRecommendedActionReadModel.ChangeConfiguration)]
+    public async Task WorkflowExecutionCurrentStateProjector_ShouldNotAdvertiseRetryForTypedBackendClassifiedFailures(
+        WorkflowRecoveryFailureKind recoveryFailureKind,
         WorkflowRecoveryUnavailableReasonCodeReadModel expectedReason,
         WorkflowRecoveryRecommendedActionReadModel expectedAction)
     {
@@ -1284,7 +1284,8 @@ public sealed class WorkflowExecutionProjectionProjectorTests
             RunId = "run-classified",
             Status = "failed",
             WorkflowYaml = CurrentStateWorkflowYaml("wf-classified"),
-            FinalError = finalError,
+            FinalError = "diagnostic text without recovery control meaning",
+            TerminalRecoveryFailureKind = recoveryFailureKind,
         };
         state.ExecutionStates["workflow_execution_kernel"] = Any.Pack(new WorkflowExecutionKernelState
         {
@@ -1294,7 +1295,12 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         await projector.ProjectAsync(
             CreateContext(),
             WrapCommitted(
-                new WorkflowCompletedEvent { Success = false, Error = finalError },
+                new WorkflowCompletedEvent
+                {
+                    Success = false,
+                    Error = "diagnostic text without recovery control meaning",
+                    RecoveryFailureKind = recoveryFailureKind,
+                },
                 state));
 
         var capability = dispatcher.Upserts.Should().ContainSingle().Subject.RecoveryCapability;

@@ -685,6 +685,7 @@ public sealed partial class WorkflowRunGAgent
                 WorkflowName = _compiledWorkflow.Name,
                 Success = false,
                 Error = InputFileBindingError,
+                RecoveryFailureKind = WorkflowRecoveryFailureKind.ConfigurationFailure,
             }, request.SessionId);
             return null;
         }
@@ -1102,6 +1103,7 @@ public sealed partial class WorkflowRunGAgent
             Error = NormalizeInteractiveValue(completed.Error, 512) ??
                     NormalizeInteractiveValue(requirement.SafeMessage, 512) ??
                     "The requested service requires authorization.",
+            RecoveryFailureKind = WorkflowRecoveryFailureKind.AuthorizationFailure,
             Usage = completed.Usage?.Clone(),
         };
 
@@ -2250,6 +2252,7 @@ public sealed partial class WorkflowRunGAgent
         next.Input = string.Empty;
         next.FinalOutput = string.Empty;
         next.FinalError = string.Empty;
+        next.TerminalRecoveryFailureKind = WorkflowRecoveryFailureKind.Unspecified;
         next.CompletedAtUtc = null;
         next.ClearDurationMs();
         next.Initiator = null;
@@ -2340,6 +2343,7 @@ public sealed partial class WorkflowRunGAgent
         next.Status = RunningStatus;
         next.FinalOutput = string.Empty;
         next.FinalError = string.Empty;
+        next.TerminalRecoveryFailureKind = WorkflowRecoveryFailureKind.Unspecified;
         next.CompletedAtUtc = null;
         next.ClearDurationMs();
         next.Initiator = BuildInitiator(evt.ExecutionContextDelta?.CallerCredential?.NyxIdAuthority);
@@ -2665,6 +2669,7 @@ public sealed partial class WorkflowRunGAgent
         next.Status = FailedStatus;
         next.FinalOutput = string.Empty;
         next.FinalError = evt.Error ?? string.Empty;
+        next.TerminalRecoveryFailureKind = WorkflowRecoveryFailureKind.Unspecified;
         next.SagaStatus = WorkflowSagaStatus.CompensationDeadLetter;
         next.CompensationExecutionId = string.Empty;
         next.DeadLetterFailedCompensationStepId = evt.FailedCompensationStepId ?? string.Empty;
@@ -2699,6 +2704,7 @@ public sealed partial class WorkflowRunGAgent
         next.FinalOutput = string.Empty;
         if (!string.IsNullOrWhiteSpace(evt.Reason))
             next.FinalError = evt.Reason;
+        next.TerminalRecoveryFailureKind = WorkflowRecoveryFailureKind.Unspecified;
         ApplyTerminalTiming(next, evt.CompletedAtUtc);
         next.ExecutionStates.Clear();
         next.ExecutionContext = new WorkflowRunExecutionContextState();
@@ -2716,6 +2722,9 @@ public sealed partial class WorkflowRunGAgent
         next.Status = evt.Success ? CompletedStatus : FailedStatus;
         next.FinalOutput = evt.Output ?? string.Empty;
         next.FinalError = evt.Error ?? string.Empty;
+        next.TerminalRecoveryFailureKind = evt.Success
+            ? WorkflowRecoveryFailureKind.Unspecified
+            : evt.RecoveryFailureKind;
         ApplyTerminalTiming(next, evt.CompletedAtUtc);
         next.TerminalWorkflowCompletionRecorded = true;
         next.ExecutionContext = new WorkflowRunExecutionContextState();
