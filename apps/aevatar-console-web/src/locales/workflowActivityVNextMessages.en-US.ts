@@ -380,9 +380,6 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.new.templateName.incidentTriage': 'Incident triage',
   'workflowActivityVNext.new.title': 'New workflow',
   'workflowActivityVNext.new.validateCreate': 'Import and open',
-  'workflowActivityVNext.new.workspaceLoading': 'Loading save locations…',
-  'workflowActivityVNext.new.workspaceLoadingDescription':
-    'Choose a creation method now. Your input stays on this page while the current workspace save location loads.',
   'workflowActivityVNext.new.workspaceUnavailable':
     'Save locations unavailable',
   'workflowActivityVNext.new.workspaceUnavailableDescription':
