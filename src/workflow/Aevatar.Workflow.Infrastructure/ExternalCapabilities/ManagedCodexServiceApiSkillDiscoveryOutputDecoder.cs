@@ -315,8 +315,8 @@ internal sealed partial class ManagedCodexServiceApiSkillDiscoveryOutputDecoder
                 "managed_service_api_discovery_field_type_invalid",
                 $"Managed Codex Service API discovery field '{name}' must be a string.");
         }
-        var text = value.GetString()?.Trim() ?? string.Empty;
-        if (text.Length == 0)
+        var text = value.GetString() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(text))
         {
             throw Failure(
                 "managed_service_api_discovery_field_invalid",

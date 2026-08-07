@@ -302,7 +302,7 @@ public sealed class AgentToolAdmissionLedgerTests
         currentAttempt.Status.Should().Be(AgentToolAdmissionStatus.Started);
     }
 
-    [Fact]
+    [PinnedRedisFact]
     public async Task GarnetStore_WithPinnedRedis_ShouldRoundTripBinaryAndExpireKey()
     {
         await using var server = await PinnedRedisServer.StartAsync();
@@ -322,7 +322,7 @@ public sealed class AgentToolAdmissionLedgerTests
         retention.Should().BePositive().And.BeLessThanOrEqualTo(TimeSpan.FromHours(24));
     }
 
-    [Fact]
+    [PinnedRedisFact]
     public async Task DistributedLedger_WithPinnedRedis_ShouldAtomicallyStartOnceThenRejectDuplicatesAndConflict()
     {
         await using var server = await PinnedRedisServer.StartAsync();
@@ -343,7 +343,7 @@ public sealed class AgentToolAdmissionLedgerTests
         conflict.Status.Should().Be(AgentToolAdmissionStatus.Conflict);
     }
 
-    [Fact]
+    [PinnedRedisFact]
     public async Task GarnetStore_WhenCallerCancels_ShouldPropagateWithoutWriting()
     {
         await using var server = await PinnedRedisServer.StartAsync();
@@ -443,8 +443,8 @@ public sealed class AgentToolAdmissionLedgerTests
 
     private sealed class PinnedRedisServer : IAsyncDisposable
     {
-        private const string ExpectedVersion = "7.2.3";
-        private const string ConnectionStringEnvironmentVariable =
+        public const string ExpectedVersion = "7.2.3";
+        public const string ConnectionStringEnvironmentVariable =
             "AGENT_TOOL_ADMISSION_REDIS_CONNECTION_STRING";
         private readonly Process? _process;
 
@@ -552,6 +552,48 @@ public sealed class AgentToolAdmissionLedgerTests
             using var listener = new TcpListener(IPAddress.Loopback, 0);
             listener.Start();
             return ((IPEndPoint)listener.LocalEndpoint).Port;
+        }
+    }
+
+    private sealed class PinnedRedisFactAttribute : FactAttribute
+    {
+        public PinnedRedisFactAttribute()
+        {
+            if (HasConfiguredConnectionString() || HasRedisServerBinary())
+                return;
+
+            Skip =
+                $"Set {PinnedRedisServer.ConnectionStringEnvironmentVariable} or install redis-server {PinnedRedisServer.ExpectedVersion} on PATH to run pinned Redis admission ledger integration tests.";
+        }
+
+        private static bool HasConfiguredConnectionString() =>
+            !string.IsNullOrWhiteSpace(
+                Environment.GetEnvironmentVariable(PinnedRedisServer.ConnectionStringEnvironmentVariable));
+
+        private static bool HasRedisServerBinary()
+        {
+            var path = Environment.GetEnvironmentVariable("PATH");
+            if (string.IsNullOrWhiteSpace(path))
+                return false;
+
+            var executableNames = OperatingSystem.IsWindows()
+                ? new[] { "redis-server.exe", "redis-server.cmd", "redis-server.bat", "redis-server" }
+                : new[] { "redis-server" };
+
+            foreach (var directory in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+            {
+                var normalizedDirectory = directory.Trim();
+                if (normalizedDirectory.Length == 0)
+                    continue;
+
+                foreach (var executableName in executableNames)
+                {
+                    if (File.Exists(Path.Combine(normalizedDirectory, executableName)))
+                        return true;
+                }
+            }
+
+            return false;
         }
     }
 }
