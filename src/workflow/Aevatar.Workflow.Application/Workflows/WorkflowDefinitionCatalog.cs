@@ -206,7 +206,11 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
                 does not return credentials or raw Ornn/Codex output.
                 `discover_service_api_workflow_capability` owns the complete descriptor-miss resolution path in Application:
                 exact Ornn verification, official Web fallback routing, request-shape admission, and terminal mapping.
-                It returns only an admitted `capability.nyxid_request`, typed `fallback_exhausted`, or a typed error.
+                It returns only an admitted `capability.nyxid_request`, typed `fallback_exhausted`, typed `readiness_required`, or a typed error.
+                When `readiness_required` is returned, follow its typed `remediations` exactly; for
+                `connect_credential`, use the existing interactive `service.connect` handoff. After the
+                remediation completes, then call `discover_service_api_workflow_capability` again with the
+                same authoritative inputs. Do not enter Web fallback or create a draft from `readiness_required`.
                 Do not call `web_search` or `web_fetch` to resolve this workflow capability, and do not construct
                 `capability.nyxid_request` from model prose or Web tool output.
                 Before capability resolution reaches

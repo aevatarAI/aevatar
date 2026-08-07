@@ -460,7 +460,11 @@ public class WorkflowDefinitionCatalogTests
         prompt.Should().Contain(
             "`discover_service_api_workflow_capability` owns the complete descriptor-miss resolution path in Application");
         prompt.Should().Contain(
-            "It returns only an admitted `capability.nyxid_request`, typed `fallback_exhausted`, or a typed error.");
+            "It returns only an admitted `capability.nyxid_request`, typed `fallback_exhausted`, typed `readiness_required`, or a typed error.");
+        prompt.Should().Contain(
+            "When `readiness_required` is returned, follow its typed `remediations`");
+        prompt.Should().Contain(
+            "then call `discover_service_api_workflow_capability` again");
         prompt.Should().Contain(
             "Do not call `web_search` or `web_fetch` to resolve this workflow capability");
         prompt.Should().Contain("The next tool call MUST be");
