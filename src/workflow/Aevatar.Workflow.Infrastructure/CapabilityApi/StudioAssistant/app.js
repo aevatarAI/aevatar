@@ -1,4 +1,4 @@
-import "./transport.js?v=20260807-readiness-contract-fix";
+import "./transport.js?v=20260807-readiness-optional-quiet";
 import {
   consumeSse,
   mergeUsage,
@@ -9,21 +9,21 @@ import {
   redact,
   safeJson,
   validateActionContinuation,
-} from "./protocol.js?v=20260807-readiness-contract-fix";
+} from "./protocol.js?v=20260807-readiness-optional-quiet";
 import {
   buildConnectCardBlock,
   connectCardSteps,
   connectorInitial,
   splitMessageSegments,
-} from "./blocks.js?v=20260807-readiness-contract-fix";
+} from "./blocks.js?v=20260807-readiness-optional-quiet";
 import {
   actorCan,
   applyCurrentStateResult,
   createActorProjection,
   reduceActorEvent,
   restoreCachedAction,
-} from "./actor-state.js?v=20260807-readiness-contract-fix";
-import { describeReadinessFailure } from "./readiness.js?v=20260807-readiness-contract-fix";
+} from "./actor-state.js?v=20260807-readiness-optional-quiet";
+import { describeReadinessFailure } from "./readiness.js?v=20260807-readiness-optional-quiet";
 
 const PREFERENCES_KEY = "aevatar-studio:assistant-preferences:v4";
 const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
@@ -169,6 +169,7 @@ const state = {
   services: [],
   connectors: { connected: [], available: [], loadedAt: 0 },
   readiness: { subject: "", snapshot: null, loading: false, error: null, inFlight: null },
+  readinessOptionalOpen: false,
   pendingFirstTurn: null,
   historyFilter: "all",
   workflowSessionId: createId("workflow-session"),
@@ -704,6 +705,14 @@ const readinessGrantCopy = {
   unknown: "授权状态未知",
 };
 
+// Optional capabilities never gate the workbench, so their status reads as a
+// neutral on/off fact instead of the alarming state words reserved for
+// capabilities that can actually block the first run.
+function readinessStatusLabel(capability) {
+  if (!capability.required) return capability.status === "available" ? "可用" : "未启用";
+  return readinessStatusCopy[capability.status];
+}
+
 function renderReadiness() {
   if (!dom.readinessPanel) return;
   const authenticated = state.auth.authenticated;
@@ -734,8 +743,8 @@ function renderReadiness() {
   const capabilities = [...snapshot.capabilities].sort((left, right) =>
     Number(right.required) - Number(left.required));
   dom.readinessFreshness.textContent = `检查于 ${new Date(snapshot.evaluatedAt).toLocaleString("zh-CN")}`;
-  dom.readinessList.replaceChildren(...capabilities.map((capability) => {
-    const row = el("div", `readiness-row status-${capability.status}`);
+  const capabilityRow = (capability) => {
+    const row = el("div", `readiness-row status-${capability.status}${capability.required ? "" : " optional"}`);
     row.dataset.capabilityId = capability.capabilityId;
     row.setAttribute("role", "listitem");
     const copy = el("div", "readiness-copy");
@@ -747,7 +756,7 @@ function renderReadiness() {
         readinessGrantCopy[capability.grantState],
       ].join(" · ")),
     );
-    row.append(copy, el("span", "readiness-status", readinessStatusCopy[capability.status]));
+    row.append(copy, el("span", "readiness-status", readinessStatusLabel(capability)));
     if (capability.managementUrl) {
       const manage = el("button", "readiness-manage", "前往 NyxID");
       manage.type = "button";
@@ -755,7 +764,29 @@ function renderReadiness() {
       row.append(manage);
     }
     return row;
-  }));
+  };
+  const required = capabilities.filter((capability) => capability.required);
+  const optional = capabilities.filter((capability) => !capability.required);
+  const requiredReady = required.every((capability) => capability.status === "available");
+  const children = required.map(capabilityRow);
+  if (optional.length && requiredReady) {
+    const inactiveCount = optional.filter((capability) => capability.status !== "available").length;
+    const disclosure = el("details", "readiness-optional");
+    disclosure.open = state.readinessOptionalOpen === true;
+    disclosure.addEventListener("toggle", () => {
+      state.readinessOptionalOpen = disclosure.open;
+    });
+    disclosure.append(
+      el("summary", "", inactiveCount
+        ? `可选能力 ${optional.length} 项 · ${inactiveCount} 项未启用，不影响使用`
+        : `可选能力 ${optional.length} 项 · 全部可用`),
+      ...optional.map(capabilityRow),
+    );
+    children.push(disclosure);
+  } else {
+    children.push(...optional.map(capabilityRow));
+  }
+  dom.readinessList.replaceChildren(...children);
   const managementUrlDrops = Array.isArray(snapshot.managementUrlDrops)
     ? snapshot.managementUrlDrops
     : [];

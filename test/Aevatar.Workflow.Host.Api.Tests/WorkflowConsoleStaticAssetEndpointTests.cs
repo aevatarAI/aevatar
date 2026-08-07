@@ -167,7 +167,7 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         var transport = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantTransport);
         var styles = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantStyles);
 
-        app.Should().Contain("import \"./transport.js?v=20260807-readiness-contract-fix\"");
+        app.Should().Contain("import \"./transport.js?v=20260807-readiness-optional-quiet\"");
         app.Should().Contain("async function sendPrompt(");
         app.Should().Contain("async function loadConversations(");
         app.Should().Contain("async function refreshActorState(");
@@ -237,13 +237,13 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         app.Should().NotContain("freeText.className = \"needs-you-free-text\"");
         styles.Should().Contain("@media (max-width:");
         html.Should().Contain("<meta name=\"color-scheme\" content=\"only light\"");
-        html.Should().Contain("app.js?v=20260807-readiness-contract-fix");
-        html.Should().Contain("styles.css?v=20260807-readiness-contract-fix");
-        app.Should().Contain("transport.js?v=20260807-readiness-contract-fix");
-        app.Should().Contain("readiness.js?v=20260807-readiness-contract-fix");
-        transport.Should().Contain("readiness.js?v=20260807-readiness-contract-fix");
-        actorState.Should().Contain("protocol.js?v=20260807-readiness-contract-fix");
-        blocks.Should().Contain("protocol.js?v=20260807-readiness-contract-fix");
+        html.Should().Contain("app.js?v=20260807-readiness-optional-quiet");
+        html.Should().Contain("styles.css?v=20260807-readiness-optional-quiet");
+        app.Should().Contain("transport.js?v=20260807-readiness-optional-quiet");
+        app.Should().Contain("readiness.js?v=20260807-readiness-optional-quiet");
+        transport.Should().Contain("readiness.js?v=20260807-readiness-optional-quiet");
+        actorState.Should().Contain("protocol.js?v=20260807-readiness-optional-quiet");
+        blocks.Should().Contain("protocol.js?v=20260807-readiness-optional-quiet");
         html.Should().Contain("<span class=\"brand-name\">Aevatar Studio</span>");
         html.Should().NotContain("class=\"brand-mark\"");
         styles.Should().Contain("color-scheme: only light");
@@ -677,6 +677,46 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         var result = await RunNodeAsync(script, app);
 
         result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_ReadinessPanel_ShouldKeepOptionalCapabilitiesQuiet()
+    {
+        var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8');
+            const start = source.indexOf('const readinessStatusCopy = {');
+            const end = source.indexOf('\nfunction renderReadiness(', start);
+            assert.notEqual(start, -1, 'readiness status copy must exist in the served Studio app');
+            assert.notEqual(end, -1, 'renderReadiness must follow the readiness copy maps');
+
+            const context = {};
+            vm.createContext(context);
+            vm.runInContext(source.slice(start, end), context);
+            const label = (capability) => vm.runInContext('readinessStatusLabel', context)(capability);
+
+            // Optional capabilities read as neutral on/off facts; only required
+            // capabilities keep the blocking state words.
+            assert.equal(label({required:false, status:'cannot_use'}), '未启用');
+            assert.equal(label({required:false, status:'missing'}), '未启用');
+            assert.equal(label({required:false, status:'cannot_check'}), '未启用');
+            assert.equal(label({required:false, status:'available'}), '可用');
+            assert.equal(label({required:true, status:'missing'}), '缺失');
+            assert.equal(label({required:true, status:'cannot_use'}), '不可使用');
+            assert.equal(label({required:true, status:'available'}), '可用');
+            """;
+
+        var result = await RunNodeAsync(script, app);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+        app.Should().Contain("readiness-optional");
+        app.Should().Contain("不影响使用");
+        app.Should().Contain("state.readinessOptionalOpen");
+        var styles = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantStyles);
+        styles.Should().Contain(".readiness-row.optional .readiness-status");
+        styles.Should().Contain(".readiness-optional > summary");
     }
 
     [Fact]

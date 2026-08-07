@@ -1,4 +1,4 @@
-import { normalizeReadinessSnapshot } from "./readiness.js?v=20260807-readiness-contract-fix";
+import { normalizeReadinessSnapshot } from "./readiness.js?v=20260807-readiness-optional-quiet";
 
 const nativeFetch = globalThis.fetch.bind(globalThis);
 const backendConfig = globalThis.__AEVATAR_ASSISTANT_CONFIG__ || {};

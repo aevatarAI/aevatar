@@ -1,4 +1,4 @@
-import { validateActionRequest } from "./protocol.js?v=20260807-readiness-contract-fix";
+import { validateActionRequest } from "./protocol.js?v=20260807-readiness-optional-quiet";
 
 const ACTOR_EVENT_TYPES = new Set([
   "task_snapshot",

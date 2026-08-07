@@ -879,6 +879,27 @@ summary:focus-visible {
   color: var(--warning);
 }
 
+.readiness-row.optional .readiness-status {
+  color: var(--muted);
+}
+
+.readiness-optional > summary {
+  cursor: pointer;
+  color: var(--tertiary);
+  font-size: 9.5px;
+  padding: 4px 0;
+  list-style-position: inside;
+}
+
+.readiness-optional > summary:hover,
+.readiness-optional > summary:focus-visible {
+  color: var(--muted);
+}
+
+.readiness-optional[open] > summary {
+  margin-bottom: 2px;
+}
+
 .readiness-row.status-available .readiness-status {
   color: var(--success);
 }
