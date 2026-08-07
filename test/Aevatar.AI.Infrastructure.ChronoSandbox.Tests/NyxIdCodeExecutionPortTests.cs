@@ -431,6 +431,47 @@ public sealed class NyxIdCodeExecutionPortTests
             "diag-timeout-1"));
     }
 
+    [Theory]
+    [InlineData("UNAUTHENTICATED", HttpStatusCode.Unauthorized, false,
+        "The code execution credential was rejected upstream.")]
+    [InlineData("UNAUTHENTICATED", HttpStatusCode.Unauthorized, true,
+        "The code execution credential was rejected upstream.")]
+    [InlineData("FORBIDDEN", HttpStatusCode.Forbidden, false,
+        "Code execution was denied upstream.")]
+    [InlineData("FORBIDDEN", HttpStatusCode.Forbidden, true,
+        "Code execution was denied upstream.")]
+    public async Task ExecuteAsync_WhenChronoReturnsTypedAuthorizationFailure_PreservesChronoEvidence(
+        string upstreamCode,
+        HttpStatusCode statusCode,
+        bool nested,
+        string expectedMessage)
+    {
+        var chronoBody = JsonSerializer.Serialize(new
+        {
+            success = false,
+            error = new { code = upstreamCode, message = "untrusted upstream detail" },
+            diagnostic_id = "chrono-auth-diag",
+        });
+        var responseBody = nested
+            ? JsonSerializer.Serialize(new
+            {
+                error = true,
+                status = (int)statusCode,
+                body = chronoBody,
+            })
+            : chronoBody;
+        var port = CreatePort(HandlerWithProxyResponse(JsonResponse(responseBody, statusCode)));
+
+        var outcome = await port.ExecuteAsync(Request(CodeServiceId));
+
+        outcome.Failure.Should().Be(new CodeExecutionFailure(
+            CodeExecutionFailureKind.AdmissionDenied,
+            upstreamCode,
+            expectedMessage,
+            "chrono-auth-diag"));
+        outcome.Failure!.Message.Should().NotContain("NyxID");
+    }
+
     [Fact]
     public async Task ExecuteAsync_WhenChronoReturnsUnknownInfrastructureCode_UsesHttpClassification()
     {
@@ -476,6 +517,7 @@ public sealed class NyxIdCodeExecutionPortTests
             Kind = CodeExecutionFailureKind.TimedOut,
             Code = "code_execution_timed_out",
         });
+        outcome.Failure!.DiagnosticId.Should().MatchRegex("^aevatar-[0-9a-f]{32}$");
     }
 
     [Fact]
@@ -496,6 +538,7 @@ public sealed class NyxIdCodeExecutionPortTests
             Kind = CodeExecutionFailureKind.ResponseTooLarge,
             Code = "code_execution_response_too_large",
         });
+        outcome.Failure!.DiagnosticId.Should().MatchRegex("^aevatar-[0-9a-f]{32}$");
         oversizedContent.ReadAttempted.Should().BeFalse();
     }
 

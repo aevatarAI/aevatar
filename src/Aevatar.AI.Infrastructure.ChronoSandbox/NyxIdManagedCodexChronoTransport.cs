@@ -127,16 +127,34 @@ internal sealed class NyxIdManagedCodexChronoTransport(
             _timeProvider);
         using var requestDeadline =
             CancellationTokenSource.CreateLinkedTokenSource(ct, lifecycleTimeout.Token);
-        var response = await secret.UseAsync(rawKey => _clientFactory.CreateClient().ProxyRequestBoundedWithApiKeyAsync(
-                rawKey,
-                ManagedCodexOptions.ManagedCodexServiceSlug,
-                credential.ManagedCodexUserServiceId,
-                ManagedCodexOptions.ChronoExecutionPath,
-                HttpMethod.Post.Method,
-                body,
-                _options.MaxResponseBytes,
-                requestDeadline.Token))
-            .ConfigureAwait(false);
+        NyxIdProxyTextResponse response;
+        try
+        {
+            response = await secret.UseAsync(rawKey =>
+                    _clientFactory.CreateClient().ProxyRequestBoundedWithApiKeyAsync(
+                        rawKey,
+                        ManagedCodexOptions.ManagedCodexServiceSlug,
+                        credential.ManagedCodexUserServiceId,
+                        ManagedCodexOptions.ChronoExecutionPath,
+                        HttpMethod.Post.Method,
+                        body,
+                        _options.MaxResponseBytes,
+                        requestDeadline.Token))
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            LogLocalProxyFailure(0, "lifecycle_timeout", localDiagnosticId);
+            throw Failure(
+                CodexExecutionFailureKind.TimedOut,
+                "managed_proxy_timeout",
+                "Managed Codex proxy request timed out.",
+                localDiagnosticId);
+        }
         if (!response.Succeeded)
         {
             if (response.Detail is
@@ -324,7 +342,8 @@ internal sealed class NyxIdManagedCodexChronoTransport(
                 : (long?)null;
             var diagnosticId = root.TryGetProperty("diagnostic_id", out var diagnosticElement) &&
                                diagnosticElement.ValueKind == JsonValueKind.String
-                ? Redact(diagnosticElement.GetString(), rawKey)
+                ? ChronoProxyFailureInspector.SanitizeDiagnosticId(
+                    Redact(diagnosticElement.GetString(), rawKey))
                 : null;
             return new CodexExecutionResult(text, exitCode, diagnosticId, elapsed);
         }

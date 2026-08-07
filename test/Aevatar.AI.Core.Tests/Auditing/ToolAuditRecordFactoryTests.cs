@@ -240,6 +240,7 @@ public sealed class ToolAuditRecordFactoryTests
     }
 
     [Theory]
+    [InlineData("FORBIDDEN")]
     [InlineData("NYXID_PROXY_HTTP_502")]
     [InlineData("NYXID_PROXY_UNAUTHORIZED")]
     [InlineData("NYXID_PROXY_FORBIDDEN")]
@@ -250,6 +251,7 @@ public sealed class ToolAuditRecordFactoryTests
     [InlineData("EXECUTION_FAILED")]
     [InlineData("SANDBOX_CREATION_FAILED")]
     [InlineData("SANDBOX_TIMEOUT")]
+    [InlineData("UNAUTHENTICATED")]
     [InlineData("managed_execution_nonzero_exit")]
     [InlineData("managed_response_invalid")]
     [InlineData("managed_upstream_codex_turn_failed")]

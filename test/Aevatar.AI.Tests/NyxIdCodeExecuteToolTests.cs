@@ -325,6 +325,30 @@ public sealed class NyxIdCodeExecuteToolTests : IDisposable
             .Should().BeNull();
     }
 
+    [Theory]
+    [InlineData("UNAUTHENTICATED")]
+    [InlineData("FORBIDDEN")]
+    public void CreateResultReceipt_WhenChronoAuthorizationFailureIsTyped_PreservesReceipt(string code)
+    {
+        IAgentTool tool = CreateTool(CodeExecutionOutcome.Succeeded(
+            new CodeExecutionResult(string.Empty, string.Empty, 0),
+            ResolvedRoute));
+        var resultJson = JsonSerializer.Serialize(new
+        {
+            success = false,
+            error = code,
+            code,
+            message = "Code execution authorization failed upstream.",
+        });
+
+        var receipt = tool.CreateResultReceipt("call-auth-failure", tool.Name, "{}", resultJson);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ErrorCode.Should().Be(code);
+        receipt.ResultJson.Should().Be(resultJson);
+    }
+
     [Fact]
     public void CreateResultReceipt_WhenFailureCodeIsNotOwned_RemainsUnverified()
     {

@@ -28,6 +28,7 @@ public sealed class NyxIdCodeExecuteTool(ICodeExecutionPort executionPort) : INy
         "code_execution_route_unavailable",
         "code_execution_timed_out",
         "code_execution_transport_unavailable",
+        "FORBIDDEN",
         "INTERNAL_ERROR",
         "INVALID_REQUEST",
         "NYXID_PROXY_FORBIDDEN",
@@ -38,6 +39,7 @@ public sealed class NyxIdCodeExecuteTool(ICodeExecutionPort executionPort) : INy
         "SANDBOX_CREATION_FAILED",
         "SANDBOX_TIMEOUT",
         "SANDBOX_UNREACHABLE",
+        "UNAUTHENTICATED",
     };
 
     private readonly ICodeExecutionPort _executionPort =

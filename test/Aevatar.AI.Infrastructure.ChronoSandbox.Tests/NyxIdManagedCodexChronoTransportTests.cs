@@ -63,6 +63,34 @@ public sealed class NyxIdManagedCodexChronoTransportTests
             Arg.Any<CancellationToken>());
     }
 
+    public static IEnumerable<object[]> InvalidSuccessfulDiagnosticIds()
+    {
+        yield return ["invalid/diagnostic"];
+        yield return [new string('x', 129)];
+    }
+
+    [Theory]
+    [MemberData(nameof(InvalidSuccessfulDiagnosticIds))]
+    public async Task ExecuteAsync_WhenSuccessfulDiagnosticIdIsUnsafe_DropsIt(string diagnosticId)
+    {
+        var handler = new RecordingHandler(JsonSerializer.Serialize(new
+        {
+            success = true,
+            output = new
+            {
+                text = "CODEX_EXEC_READY",
+                exit_code = 0,
+                execution_time_ms = 1,
+            },
+            diagnostic_id = diagnosticId,
+        }));
+        var (transport, _) = CreateTransport(handler);
+
+        var result = await transport.ExecuteAsync(Request(), Descriptor());
+
+        result.DiagnosticId.Should().BeNull();
+    }
+
     [Fact]
     public async Task ExecuteAsync_WhenReferencePurposeIsWrong_FailsBeforeProxy()
     {
@@ -539,7 +567,14 @@ public sealed class NyxIdManagedCodexChronoTransportTests
 
         var act = () => transport.ExecuteAsync(Request(timeoutSeconds: 180), Descriptor());
 
-        await act.Should().ThrowAsync<OperationCanceledException>();
+        var exception = (await act.Should().ThrowAsync<ManagedCodexTransportException>()).Which;
+        exception.Failure.Should().BeEquivalentTo(new
+        {
+            Kind = CodexExecutionFailureKind.TimedOut,
+            Code = "managed_proxy_timeout",
+            Message = "Managed Codex proxy request timed out.",
+        });
+        exception.Failure.DiagnosticId.Should().MatchRegex("^aevatar-[0-9a-f]{32}$");
         handler.ObservedToken.IsCancellationRequested.Should().BeTrue();
     }
 

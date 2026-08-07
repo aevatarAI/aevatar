@@ -24,11 +24,13 @@ internal sealed class NyxIdCodeExecutionPort(
     private static readonly HashSet<string> AllowedProxyFailureCodes =
         new(StringComparer.Ordinal)
         {
+            "FORBIDDEN",
             "INTERNAL_ERROR",
             "INVALID_REQUEST",
             "SANDBOX_CREATION_FAILED",
             "SANDBOX_TIMEOUT",
             "SANDBOX_UNREACHABLE",
+            "UNAUTHENTICATED",
         };
 
     private readonly INyxIdApiClientFactory _clientFactory =
@@ -122,7 +124,8 @@ internal sealed class NyxIdCodeExecutionPort(
             return Failed(
                 CodeExecutionFailureKind.TimedOut,
                 "code_execution_timed_out",
-                "Code execution timed out.");
+                "Code execution timed out.",
+                CreateLocalDiagnosticId());
         }
         catch (Exception exception)
         {
@@ -258,7 +261,8 @@ internal sealed class NyxIdCodeExecutionPort(
             return Failed(
                 CodeExecutionFailureKind.ResponseTooLarge,
                 "code_execution_response_too_large",
-                "Code execution returned an oversized response.");
+                "Code execution returned an oversized response.",
+                CreateLocalDiagnosticId());
         }
 
         var inspection = ChronoProxyFailureInspector.Inspect(
@@ -274,6 +278,12 @@ internal sealed class NyxIdCodeExecutionPort(
         {
             var (kind, message) = upstreamCode switch
             {
+                "UNAUTHENTICATED" => (
+                    CodeExecutionFailureKind.AdmissionDenied,
+                    "The code execution credential was rejected upstream."),
+                "FORBIDDEN" => (
+                    CodeExecutionFailureKind.AdmissionDenied,
+                    "Code execution was denied upstream."),
                 "INVALID_REQUEST" => (
                     CodeExecutionFailureKind.AdmissionDenied,
                     "The code execution request was rejected upstream."),
@@ -402,6 +412,8 @@ internal sealed class NyxIdCodeExecutionPort(
             CodeExecutionFailureKind.MalformedOutput,
             "code_execution_response_invalid",
             "Code execution returned an invalid response.");
+
+    private static string CreateLocalDiagnosticId() => $"aevatar-{Guid.NewGuid():N}";
 
     private static CodeExecutionOutcome Failed(
         CodeExecutionFailureKind kind,
