@@ -217,9 +217,12 @@ public sealed class NyxIdManagedCodexChronoTransportTests
         var act = () => transport.ExecuteAsync(Request(), Descriptor());
 
         var exception = (await act.Should().ThrowAsync<ManagedCodexTransportException>()).Which;
-        exception.Failure.Kind.Should().Be(CodexExecutionFailureKind.CapacityUnavailable);
+        // Sandbox creation / workspace preparation are provisioning stages, not capacity
+        // rejections: chrono-sandbox returns CODEX_CAPACITY_UNAVAILABLE with 429 and reserves
+        // 502 for provisioning faults, so classifying by HTTP status alone misreports them.
+        exception.Failure.Kind.Should().Be(CodexExecutionFailureKind.ProvisioningFailed);
         exception.Failure.Code.Should().Be("managed_upstream_codex_sandbox_creation_failed");
-        exception.Failure.Message.Should().Be("Managed Codex proxy is temporarily unavailable.");
+        exception.Failure.Message.Should().Be("Managed Codex sandbox provisioning failed upstream.");
         exception.Message.Should().NotContain(RawKey);
     }
 
@@ -248,9 +251,48 @@ public sealed class NyxIdManagedCodexChronoTransportTests
         var act = () => transport.ExecuteAsync(Request(), Descriptor());
 
         var exception = (await act.Should().ThrowAsync<ManagedCodexTransportException>()).Which;
-        exception.Failure.Kind.Should().Be(CodexExecutionFailureKind.CapacityUnavailable);
+        // Sandbox creation / workspace preparation are provisioning stages, not capacity
+        // rejections: chrono-sandbox returns CODEX_CAPACITY_UNAVAILABLE with 429 and reserves
+        // 502 for provisioning faults, so classifying by HTTP status alone misreports them.
+        exception.Failure.Kind.Should().Be(CodexExecutionFailureKind.ProvisioningFailed);
         exception.Failure.Code.Should().Be("managed_upstream_codex_workspace_preparation_failed");
-        exception.Failure.Message.Should().Be("Managed Codex proxy is temporarily unavailable.");
+        exception.Failure.Message.Should().Be("Managed Codex sandbox provisioning failed upstream.");
+        exception.Message.Should().NotContain(RawKey);
+    }
+
+    [Theory]
+    // chrono-sandbox 只在容量许可被拒时返回 CODEX_CAPACITY_UNAVAILABLE，且走 429；
+    // 502 携带的是 provisioning / OpenSandbox 家族的码。按 HTTP 状态一刀切成
+    // CapacityUnavailable 会把「沙箱创建失败」误报为「容量不足」，把排障引向错误方向。
+    [InlineData("CODEX_SANDBOX_CREATION_FAILED", CodexExecutionFailureKind.ProvisioningFailed)]
+    [InlineData("CODEX_WORKSPACE_PREPARATION_FAILED", CodexExecutionFailureKind.ProvisioningFailed)]
+    [InlineData("CODEX_OPENSANDBOX_UNAVAILABLE", CodexExecutionFailureKind.ProvisioningFailed)]
+    [InlineData("CODEX_OPENSANDBOX_TIMEOUT", CodexExecutionFailureKind.TimedOut)]
+    [InlineData("CODEX_SANDBOX_READY_TIMEOUT", CodexExecutionFailureKind.TimedOut)]
+    [InlineData("CODEX_CAPACITY_UNAVAILABLE", CodexExecutionFailureKind.CapacityUnavailable)]
+    public async Task ExecuteAsync_WhenUpstreamCodeIsTyped_ClassifiesByUpstreamCauseNotHttpStatus(
+        string upstreamCode,
+        CodexExecutionFailureKind expectedKind)
+    {
+        var handler = new RecordingHandler(
+            JsonSerializer.Serialize(new
+            {
+                error = "http_error",
+                status = 502,
+                body = JsonSerializer.Serialize(new
+                {
+                    success = false,
+                    error = new { code = upstreamCode, message = "upstream" },
+                }),
+            }),
+            HttpStatusCode.BadGateway);
+        var (transport, _) = CreateTransport(handler);
+
+        var act = () => transport.ExecuteAsync(Request(), Descriptor());
+
+        var exception = (await act.Should().ThrowAsync<ManagedCodexTransportException>()).Which;
+        exception.Failure.Kind.Should().Be(expectedKind);
+        exception.Failure.Code.Should().Be($"managed_upstream_{upstreamCode.ToLowerInvariant()}");
         exception.Message.Should().NotContain(RawKey);
     }
 

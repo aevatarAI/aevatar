@@ -331,6 +331,16 @@ internal sealed class NyxIdManagedCodexChronoTransport(
     private static ManagedCodexTransportException ProxyFailure(int status, string? response = null)
     {
         var upstreamCode = TryGetAllowedUpstreamFailureCode(response);
+        // A typed upstream code names the actual failing stage, so it classifies the failure.
+        // HTTP status alone cannot: chrono-sandbox returns 429 only for the capacity permit and
+        // uses 502 for provisioning/OpenSandbox faults, so status-only mapping reports "capacity
+        // unavailable" for sandbox-creation failures and sends triage the wrong way.
+        if (upstreamCode is not null &&
+            TryClassifyUpstreamFailure(upstreamCode) is { } upstreamFailure)
+        {
+            return Failure(upstreamFailure.Kind, upstreamCode, upstreamFailure.Message);
+        }
+
         return status switch
         {
             401 => Failure(
@@ -359,6 +369,32 @@ internal sealed class NyxIdManagedCodexChronoTransport(
                 "Managed Codex proxy request failed."),
         };
     }
+
+    /// <summary>
+    /// Maps an allowlisted upstream failure code to the stage it actually failed at. Codes are
+    /// already normalized to <c>managed_upstream_&lt;lowercased chrono code&gt;</c>. Returns
+    /// <c>null</c> for codes whose stage the HTTP status classifies at least as well.
+    /// </summary>
+    private static (CodexExecutionFailureKind Kind, string Message)? TryClassifyUpstreamFailure(
+        string upstreamCode) =>
+        upstreamCode switch
+        {
+            "managed_upstream_codex_sandbox_creation_failed" or
+            "managed_upstream_codex_workspace_preparation_failed" or
+            "managed_upstream_codex_opensandbox_unavailable" => (
+                CodexExecutionFailureKind.ProvisioningFailed,
+                "Managed Codex sandbox provisioning failed upstream."),
+            "managed_upstream_codex_opensandbox_timeout" or
+            "managed_upstream_codex_sandbox_ready_timeout" or
+            "managed_upstream_codex_execution_timeout" or
+            "managed_upstream_codex_command_timeout" => (
+                CodexExecutionFailureKind.TimedOut,
+                "Managed Codex execution timed out upstream."),
+            "managed_upstream_codex_capacity_unavailable" => (
+                CodexExecutionFailureKind.CapacityUnavailable,
+                "Managed Codex capacity is unavailable upstream."),
+            _ => null,
+        };
 
     private static string? TryGetAllowedUpstreamFailureCode(string? response)
     {
