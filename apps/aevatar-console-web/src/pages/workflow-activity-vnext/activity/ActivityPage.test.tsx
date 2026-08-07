@@ -292,7 +292,7 @@ describe('Workflow Activity vNext Activity ledger', () => {
         updatedAtUtc: '2026-08-04T10:01:00Z',
         stateVersion: 21,
         scopeId: 'scope-alpha',
-        runOrigin: 'ad-hoc-chat',
+        runOrigin: 'backend-native-origin.v2',
       },
     ]);
 
@@ -302,7 +302,13 @@ describe('Workflow Activity vNext Activity ledger', () => {
       await screen.findByRole('button', { name: 'Open Customer follow-up' }),
     ).toBeEnabled();
     expect(screen.getByText('Completed')).toBeInTheDocument();
-    expect(screen.getByText('Chat')).toBeInTheDocument();
+    expect(screen.getByText('backend-native-origin.v2')).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Run source' })).toBeEnabled();
+    expect(screen.queryByLabelText('Activity after')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Activity before')).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Load more' }),
+    ).not.toBeInTheDocument();
     expect(
       screen.queryByText('workflow-definition:studio:run:internal-alpha'),
     ).not.toBeInTheDocument();
@@ -315,6 +321,29 @@ describe('Workflow Activity vNext Activity ledger', () => {
     expect(
       within(activityRegion).getByText('Customer follow-up').closest('td'),
     ).toHaveAttribute('data-label', 'Workflow');
+  });
+
+  it('shows a neutral placeholder when the backend run source is empty', async () => {
+    mockListRuns.mockResolvedValue([
+      {
+        runId: 'run-empty-origin',
+        workflowName: 'Customer follow-up',
+        status: 'completed',
+        success: true,
+        startedAtUtc: '2026-08-04T10:00:00Z',
+        updatedAtUtc: '2026-08-04T10:01:00Z',
+        stateVersion: 21,
+        scopeId: 'scope-alpha',
+        runOrigin: '',
+      },
+    ]);
+
+    renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
+
+    const activityRegion = await screen.findByRole('region', {
+      name: 'Activity',
+    });
+    expect(within(activityRegion).getByText('-')).toBeInTheDocument();
   });
 
   it('renders unrecognized returned run states as Unknown', async () => {

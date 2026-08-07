@@ -20,7 +20,7 @@ import { buildWorkflowActivityRunHref } from '../navigation';
 import TableScrollRegion from '../TableScrollRegion';
 import TechnicalDetails from '../TechnicalDetails';
 import WorkflowActivityVNextShell from '../WorkflowActivityVNextShell';
-import { getRunOriginLabel, getRunStatusPresentation } from './runPresentation';
+import { getRunStatusPresentation } from './runPresentation';
 
 const supportedRunStatuses = new Set(['running', 'completed', 'failed']);
 
@@ -510,7 +510,7 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                         'Source',
                       )}
                     >
-                      {getRunOriginLabel(run.runOrigin)}
+                      {run.runOrigin || '-'}
                     </td>
                     <td
                       data-label={t(
