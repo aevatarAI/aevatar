@@ -168,13 +168,17 @@ function buildRunDetail() {
         },
       },
     ],
-    timeline: [],
+    timeline:
+      [] as import('@/shared/models/workflowActivity').WorkflowActivityTimelineEvent[],
     statistics: {
       totalSteps: 2,
       requestedSteps: 2,
       completedSteps: 2,
       roleReplyCount: 1,
-      stepTypeCounts: { human_approval: 1, llm_call: 1 },
+      stepTypeCounts: { human_approval: 1, llm_call: 1 } as Record<
+        string,
+        number
+      >,
     },
     usageTotals: {
       promptTokens: 4,
