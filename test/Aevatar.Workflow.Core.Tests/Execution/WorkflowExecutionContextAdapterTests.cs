@@ -94,6 +94,8 @@ public sealed class WorkflowExecutionContextAdapterTests
             runOrigin: null,
             scheduleId: null,
             workflowId: null,
+            revisionId: null,
+            definitionVersion: 0,
             capabilityAdmissionPlan: null,
             expectedExecutionMode: ExternalCapabilityExecutionMode.Interactive);
         var adapter = WorkflowExecutionContextAdapter.Create(new RecordingEventHandlerContext(), stateHost);

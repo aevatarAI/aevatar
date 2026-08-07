@@ -1,3 +1,4 @@
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 
 namespace Aevatar.Workflow.Application.Abstractions.Observatory;
@@ -122,6 +123,8 @@ public sealed class WorkflowActivityRunFeedRow
     public long StateVersion { get; init; }
 
     public WorkflowRunRecoveryCapability RecoveryCapability { get; init; } = new();
+
+    public WorkflowRunLineage Lineage { get; init; } = new();
 }
 
 public sealed class WorkflowActivityRunInitiatorSummary
@@ -196,6 +199,8 @@ public sealed class ObservatoryRunSummary
     // 06-23-observatory-run-coverage-filter: canonical run origin/type (draft | member-invoke | ...),
     // empty for legacy/unstamped runs. Drives the run-type filter + badge.
     public string RunOrigin { get; init; } = string.Empty;
+
+    public WorkflowRunLineage Lineage { get; init; } = new();
 }
 
 public sealed class ObservatoryRunDetail
@@ -227,6 +232,8 @@ public sealed class ObservatoryRunDetail
     public ObservatoryUsageTotals UsageTotals { get; init; } = new();
 
     public WorkflowRunRecoveryCapability RecoveryCapability { get; init; } = new();
+
+    public WorkflowRunLineage Lineage { get; init; } = new();
 }
 
 public sealed class ObservatoryRunDiagnostic

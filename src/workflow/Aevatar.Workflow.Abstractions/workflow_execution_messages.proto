@@ -270,6 +270,7 @@ message WorkflowRunForkSeed
   map<string, string> variables = 3;
   int32 attempt = 4;
   WorkflowStepIdempotencyState start_step_idempotency = 5;
+  string original_run_id = 6;
 }
 
 message WorkflowStepIdempotencyState
@@ -280,12 +281,77 @@ message WorkflowStepIdempotencyState
   string idempotency_key = 4;
 }
 
+enum WorkflowRunLineageAvailability
+{
+  WORKFLOW_RUN_LINEAGE_AVAILABILITY_UNSPECIFIED = 0;
+  WORKFLOW_RUN_LINEAGE_AVAILABILITY_AVAILABLE = 1;
+  WORKFLOW_RUN_LINEAGE_AVAILABILITY_UNAVAILABLE = 2;
+  WORKFLOW_RUN_LINEAGE_AVAILABILITY_LEGACY_UNAVAILABLE = 3;
+}
+
+enum WorkflowRunLineageRelationKind
+{
+  WORKFLOW_RUN_LINEAGE_RELATION_KIND_UNSPECIFIED = 0;
+  WORKFLOW_RUN_LINEAGE_RELATION_KIND_RETRY_FORK = 1;
+  WORKFLOW_RUN_LINEAGE_RELATION_KIND_SUB_WORKFLOW = 2;
+}
+
+message WorkflowRunLineageRunRef
+{
+  string run_id = 1;
+  string actor_id = 2;
+  string relationship_id = 3;
+  string step_id = 4;
+  int32 attempt = 5;
+  WorkflowRunLineageRelationKind relation_kind = 6;
+}
+
+message WorkflowRunRetryForkLineage
+{
+  WorkflowRunLineageAvailability availability = 1;
+  string source_run_id = 2;
+  string original_run_id = 3;
+  int32 attempt = 4;
+  string start_at_step_id = 5;
+  repeated WorkflowRunLineageRunRef child_runs = 6;
+}
+
+message WorkflowRunSubWorkflowLineage
+{
+  WorkflowRunLineageAvailability availability = 1;
+  string parent_run_id = 2;
+  string parent_actor_id = 3;
+  string parent_step_id = 4;
+  string root_run_id = 5;
+  int32 depth = 6;
+  repeated WorkflowRunLineageRunRef child_runs = 7;
+}
+
+message WorkflowRunLineage
+{
+  WorkflowRunLineageAvailability availability = 1;
+  WorkflowRunRetryForkLineage retry_fork = 2;
+  WorkflowRunSubWorkflowLineage sub_workflow = 3;
+  string unavailable_reason = 4;
+}
+
 message WorkflowRunForkRequestedEvent
 {
   string source_run_id = 1;
   string start_at_step_id = 2;
   int32 attempt = 3;
   string scope_id = 4;
+}
+
+message WorkflowRunLineageRecordedEvent
+{
+  string source_run_id = 1;
+  string child_run_id = 2;
+  string child_actor_id = 3;
+  string start_at_step_id = 4;
+  int32 attempt = 5;
+  WorkflowRunLineageRelationKind relation_kind = 6;
+  string original_run_id = 7;
 }
 
 message StartWorkflowEvent
@@ -324,6 +390,7 @@ message BindWorkflowRunDefinitionEvent
   string revision_id = 12;
   // Authoritative committed definition version/watermark used by this run. Zero means unavailable.
   int64 definition_version = 13;
+  WorkflowRunLineage initial_lineage = 14;
 }
 
 // Idempotent provisioning command for a stable Run actor identity. The first
@@ -380,6 +447,7 @@ message WorkflowRunExecutionStartedEvent
   string workflow_command_id = 11;
   string workflow_correlation_id = 12;
   string current_turn_id = 13;
+  WorkflowRunLineage lineage = 14;
 }
 message WorkflowRunExecutionContextDelta
 {

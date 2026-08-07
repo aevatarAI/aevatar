@@ -22,6 +22,43 @@ namespace Aevatar.Workflow.Core.Tests;
 public sealed class WorkflowRunGAgentForkOnFailureTests
 {
     [Fact]
+    public void BuildExecutionStartLineage_WithForkSeed_ShouldExposeSourceAndOriginalRunIds()
+    {
+        var lineage = WorkflowRunGAgent.BuildExecutionStartLineage(
+            new WorkflowRunForkSeed
+            {
+                SourceRunId = "run-source-gamma",
+                OriginalRunId = "run-original-alpha",
+                StartAtStepId = "step-retry",
+                Attempt = 3,
+            },
+            currentLineage: null,
+            runId: "run-child-beta");
+
+        lineage.Availability.Should().Be(WorkflowRunLineageAvailability.Available);
+        lineage.RetryFork.Availability.Should().Be(WorkflowRunLineageAvailability.Available);
+        lineage.RetryFork.SourceRunId.Should().Be("run-source-gamma");
+        lineage.RetryFork.OriginalRunId.Should().Be("run-original-alpha");
+        lineage.RetryFork.StartAtStepId.Should().Be("step-retry");
+        lineage.RetryFork.Attempt.Should().Be(3);
+        lineage.SubWorkflow.Availability.Should().Be(WorkflowRunLineageAvailability.Unavailable);
+    }
+
+    [Fact]
+    public void BuildExecutionStartLineage_WithoutForkSeed_ShouldReturnExplicitUnavailableLineage()
+    {
+        var lineage = WorkflowRunGAgent.BuildExecutionStartLineage(
+            forkSeed: null,
+            currentLineage: null,
+            runId: "run-standalone-beta");
+
+        lineage.Availability.Should().Be(WorkflowRunLineageAvailability.Unavailable);
+        lineage.RetryFork.Availability.Should().Be(WorkflowRunLineageAvailability.Unavailable);
+        lineage.SubWorkflow.Availability.Should().Be(WorkflowRunLineageAvailability.Unavailable);
+        lineage.UnavailableReason.Should().Contain("unavailable");
+    }
+
+    [Fact]
     public async Task TerminalFailedRun_WithForkPolicy_ShouldCommitForkRequestedEvent()
     {
         var harness = await CreateStartedRunAsync(WorkflowYaml(onFailure: true), attempt: 1);

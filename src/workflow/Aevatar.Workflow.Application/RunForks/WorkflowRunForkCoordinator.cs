@@ -1,7 +1,9 @@
 using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.RunForks;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -10,13 +12,16 @@ namespace Aevatar.Workflow.Application.RunForks;
 internal sealed class WorkflowRunForkCoordinator : ICommittedStatePublicationHook
 {
     private readonly Lazy<ICommandDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>> _forkDispatchService;
+    private readonly IActorDispatchPort? _dispatchPort;
     private readonly ILogger<WorkflowRunForkCoordinator> _logger;
 
     public WorkflowRunForkCoordinator(
         Lazy<ICommandDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>> forkDispatchService,
+        IActorDispatchPort? dispatchPort = null,
         ILogger<WorkflowRunForkCoordinator>? logger = null)
     {
         _forkDispatchService = forkDispatchService ?? throw new ArgumentNullException(nameof(forkDispatchService));
+        _dispatchPort = dispatchPort;
         _logger = logger ?? NullLogger<WorkflowRunForkCoordinator>.Instance;
     }
 
@@ -25,7 +30,8 @@ internal sealed class WorkflowRunForkCoordinator : ICommittedStatePublicationHoo
         ILogger<WorkflowRunForkCoordinator>? logger = null)
         : this(new Lazy<ICommandDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>>(
             () => forkDispatchService ?? throw new ArgumentNullException(nameof(forkDispatchService))),
-            logger)
+            dispatchPort: null,
+            logger: logger)
     {
     }
 
@@ -68,7 +74,11 @@ internal sealed class WorkflowRunForkCoordinator : ICommittedStatePublicationHoo
                     requested.Attempt,
                     result.Error?.Code,
                     result.Error?.Reason);
+                return;
             }
+
+            await RecordAcceptedForkLineageAsync(context, requested, result.Receipt, ct)
+                .ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -79,5 +89,49 @@ internal sealed class WorkflowRunForkCoordinator : ICommittedStatePublicationHoo
                 requested.StartAtStepId,
                 requested.Attempt);
         }
+    }
+
+    private async Task RecordAcceptedForkLineageAsync(
+        CommittedStatePublicationContext context,
+        WorkflowRunForkRequestedEvent requested,
+        WorkflowForkRunAcceptedReceipt? receipt,
+        CancellationToken ct)
+    {
+        if (_dispatchPort == null || receipt == null || !receipt.Accepted)
+            return;
+
+        var sourceActorId = context.ActorId?.Trim() ?? string.Empty;
+        var childRunId = receipt.NewRunId?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(sourceActorId) || string.IsNullOrWhiteSpace(childRunId))
+            return;
+
+        // Implement (issue #3252):
+        //   Behavior: source runs record accepted fork children with routable runId and separate child actor address.
+        //   Why this shape: the coordinator only relays the accepted child identity back to the source actor; the source actor commits the lineage fact.
+        await _dispatchPort.DispatchAsync(
+            sourceActorId,
+            new EventEnvelope
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                Payload = Any.Pack(new WorkflowRunLineageRecordedEvent
+                {
+                    SourceRunId = requested.SourceRunId ?? string.Empty,
+                    ChildRunId = childRunId,
+                    ChildActorId = receipt.NewRunActorId ?? string.Empty,
+                    StartAtStepId = requested.StartAtStepId ?? string.Empty,
+                    Attempt = Math.Max(0, requested.Attempt),
+                    RelationKind = WorkflowRunLineageRelationKind.RetryFork,
+                    OriginalRunId = string.IsNullOrWhiteSpace(receipt.OriginalRunId)
+                        ? requested.SourceRunId ?? string.Empty
+                        : receipt.OriginalRunId,
+                }),
+                Route = EnvelopeRouteSemantics.CreateTopologyPublication(sourceActorId, TopologyAudience.Self),
+                Propagation = new EnvelopePropagation
+                {
+                    CorrelationId = Guid.NewGuid().ToString("N"),
+                },
+            },
+            ct).ConfigureAwait(false);
     }
 }

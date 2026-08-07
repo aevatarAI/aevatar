@@ -99,6 +99,7 @@ public sealed class WorkflowExecutionCurrentStateProjector
             ForkSeedCompletedStepIds = seedSnapshot.CompletedStepIds.ToList(),
             ForkSeedLastFailedStepId = seedSnapshot.LastFailedStepId,
             RecoveryCapability = BuildRecoveryCapability(state, seedSnapshot),
+            Lineage = MapLineage(state.Lineage),
             ForkSeedIdempotencies = seedSnapshot.IdempotencyByStepId.ToDictionary(
                 x => x.Key,
                 x => MapStepIdempotency(x.Value),
@@ -150,6 +151,21 @@ public sealed class WorkflowExecutionCurrentStateProjector
                 : WorkflowAuditTextSanitizer.Sanitize(initiator.Availability),
         };
     }
+
+    private static WorkflowRunLineage MapLineage(WorkflowRunLineage? lineage) =>
+        lineage?.Clone() ?? new WorkflowRunLineage
+        {
+            Availability = WorkflowRunLineageAvailability.Unavailable,
+            UnavailableReason = "Run lineage is unavailable for this run.",
+            RetryFork = new WorkflowRunRetryForkLineage
+            {
+                Availability = WorkflowRunLineageAvailability.Unavailable,
+            },
+            SubWorkflow = new WorkflowRunSubWorkflowLineage
+            {
+                Availability = WorkflowRunLineageAvailability.Unavailable,
+            },
+        };
 
     private static WorkflowRunActivityStepReadModel ResolveCurrentStep(WorkflowRunState state)
     {

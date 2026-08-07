@@ -105,6 +105,7 @@ internal sealed class WorkflowForkRunCommandTargetResolver
         var source = WorkflowChatSource.DefinitionActor(creationReceipt.ActorId, validation.WorkflowName);
         var target = new WorkflowForkRunCommandTarget(
             sourceRunId,
+            ResolveOriginalRunId(seedView, sourceRunId),
             startAtStepId,
             creationReceipt.ActorId,
             creationReceipt.RunId,
@@ -196,7 +197,8 @@ internal sealed class WorkflowForkRunCommandTargetResolver
                 startAtStepId,
                 variables,
                 Math.Max(0, command.Attempt),
-                ResolveStartStepIdempotency(seedView, startAtStepId)),
+                ResolveStartStepIdempotency(seedView, startAtStepId),
+                ResolveOriginalRunId(seedView, sourceRunId)),
             TargetSeed: new WorkflowRunTargetSeed(
                 actorId,
                 workflowName,
@@ -270,6 +272,14 @@ internal sealed class WorkflowForkRunCommandTargetResolver
         return seedView.IdempotencyByStepId.TryGetValue(startAtStepId, out var idempotency)
             ? idempotency
             : null;
+    }
+
+    private static string ResolveOriginalRunId(
+        WorkflowRunForkSeedView seedView,
+        string sourceRunId)
+    {
+        var originalRunId = Normalize(seedView.OriginalRunId);
+        return string.IsNullOrWhiteSpace(originalRunId) ? sourceRunId : originalRunId;
     }
 
     private static bool IsTerminal(string status) =>

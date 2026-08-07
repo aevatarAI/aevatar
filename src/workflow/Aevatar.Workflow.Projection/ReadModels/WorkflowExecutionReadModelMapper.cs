@@ -41,6 +41,7 @@ public sealed class WorkflowExecutionReadModelMapper
             ActivityFirstFailure = MapActivityFirstFailure(source.ActivityFirstFailure),
             ActivityWaiting = MapActivityWaiting(source.ActivityWaiting),
             RecoveryCapability = MapRecoveryCapability(source.RecoveryCapability),
+            Lineage = MapLineage(source.Lineage),
         };
         if (source.HasDurationMs)
             snapshot.DurationMs = source.DurationMs;
@@ -61,6 +62,22 @@ public sealed class WorkflowExecutionReadModelMapper
             RunAgain = MapRecoveryActionCapability(source.RunAgain),
         };
     }
+
+    private static Aevatar.Workflow.Abstractions.WorkflowRunLineage MapLineage(
+        Aevatar.Workflow.Abstractions.WorkflowRunLineage? source) =>
+        source?.Clone() ?? new Aevatar.Workflow.Abstractions.WorkflowRunLineage
+        {
+            Availability = Aevatar.Workflow.Abstractions.WorkflowRunLineageAvailability.LegacyUnavailable,
+            UnavailableReason = "Run lineage is unavailable for this legacy run.",
+            RetryFork = new Aevatar.Workflow.Abstractions.WorkflowRunRetryForkLineage
+            {
+                Availability = Aevatar.Workflow.Abstractions.WorkflowRunLineageAvailability.LegacyUnavailable,
+            },
+            SubWorkflow = new Aevatar.Workflow.Abstractions.WorkflowRunSubWorkflowLineage
+            {
+                Availability = Aevatar.Workflow.Abstractions.WorkflowRunLineageAvailability.LegacyUnavailable,
+            },
+        };
 
     private static WorkflowRecoveryActionCapability MapRecoveryActionCapability(
         WorkflowRecoveryActionCapabilityReadModel? source)

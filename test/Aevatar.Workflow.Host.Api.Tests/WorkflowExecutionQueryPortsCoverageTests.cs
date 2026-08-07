@@ -49,6 +49,62 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
     }
 
     [Fact]
+    public void WorkflowExecutionReadModelMapper_ShouldExposeTypedLineage()
+    {
+        var mapper = new WorkflowExecutionReadModelMapper();
+
+        var snapshot = mapper.ToActorSnapshot(new WorkflowExecutionCurrentStateDocument
+        {
+            RootActorId = "actor-child-delta",
+            RunId = "run-child-beta",
+            Status = "running",
+            Lineage = new WorkflowRunLineage
+            {
+                Availability = WorkflowRunLineageAvailability.Available,
+                RetryFork = new WorkflowRunRetryForkLineage
+                {
+                    Availability = WorkflowRunLineageAvailability.Available,
+                    SourceRunId = "run-source-gamma",
+                    OriginalRunId = "run-original-alpha",
+                    Attempt = 2,
+                    StartAtStepId = "step-retry",
+                },
+                SubWorkflow = new WorkflowRunSubWorkflowLineage
+                {
+                    Availability = WorkflowRunLineageAvailability.Unavailable,
+                },
+            },
+        });
+
+        snapshot.RunId.Should().Be("run-child-beta");
+        snapshot.ActorId.Should().Be("actor-child-delta");
+        snapshot.Lineage.Availability.Should().Be(WorkflowRunLineageAvailability.Available);
+        snapshot.Lineage.RetryFork.SourceRunId.Should().Be("run-source-gamma");
+        snapshot.Lineage.RetryFork.OriginalRunId.Should().Be("run-original-alpha");
+        snapshot.Lineage.RetryFork.StartAtStepId.Should().Be("step-retry");
+        snapshot.Lineage.RetryFork.Attempt.Should().Be(2);
+        snapshot.Lineage.SubWorkflow.Availability.Should().Be(WorkflowRunLineageAvailability.Unavailable);
+    }
+
+    [Fact]
+    public void WorkflowExecutionReadModelMapper_WhenLineageMissing_ShouldReturnLegacyUnavailable()
+    {
+        var mapper = new WorkflowExecutionReadModelMapper();
+
+        var snapshot = mapper.ToActorSnapshot(new WorkflowExecutionCurrentStateDocument
+        {
+            RootActorId = "actor-legacy-delta",
+            RunId = "run-legacy-beta",
+            Status = "completed",
+        });
+
+        snapshot.Lineage.Availability.Should().Be(WorkflowRunLineageAvailability.LegacyUnavailable);
+        snapshot.Lineage.RetryFork.Availability.Should().Be(WorkflowRunLineageAvailability.LegacyUnavailable);
+        snapshot.Lineage.SubWorkflow.Availability.Should().Be(WorkflowRunLineageAvailability.LegacyUnavailable);
+        snapshot.Lineage.UnavailableReason.Should().Contain("legacy");
+    }
+
+    [Fact]
     public void WorkflowExecutionReadModelMapper_ShouldExposeCurrentStateInputFileDescriptors()
     {
         var mapper = new WorkflowExecutionReadModelMapper();

@@ -146,6 +146,22 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
             Availability = "available",
         };
         snapshot.RecoveryCapability = RecoveryCapability();
+        snapshot.Lineage = new WorkflowRunLineage
+        {
+            Availability = WorkflowRunLineageAvailability.Available,
+            RetryFork = new WorkflowRunRetryForkLineage
+            {
+                Availability = WorkflowRunLineageAvailability.Available,
+                SourceRunId = "run-source-gamma",
+                OriginalRunId = "run-original-alpha",
+                Attempt = 2,
+                StartAtStepId = "step-failed",
+            },
+            SubWorkflow = new WorkflowRunSubWorkflowLineage
+            {
+                Availability = WorkflowRunLineageAvailability.Unavailable,
+            },
+        };
         var currentState = new FakeCurrentStateQueryPort
         {
             PageResult = new WorkflowActorCurrentStatePage([snapshot], "cursor-next", 42),
@@ -195,6 +211,10 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         row.RecoveryCapability.WorkflowDefinitionRevisionId.Should().Be("rev-recovery");
         row.RecoveryCapability.RetryFailedStep.Eligibility.Should().Be(WorkflowRecoveryEligibility.Eligible);
         row.RecoveryCapability.RetryFailedStep.StartingStepId.Should().Be("step-failed");
+        row.Lineage.RetryFork.SourceRunId.Should().Be("run-source-gamma");
+        row.Lineage.RetryFork.OriginalRunId.Should().Be("run-original-alpha");
+        row.Lineage.RetryFork.StartAtStepId.Should().Be("step-failed");
+        row.Lineage.SubWorkflow.Availability.Should().Be(WorkflowRunLineageAvailability.Unavailable);
     }
 
     [Fact]
@@ -225,6 +245,7 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         row.Waiting.Availability.Should().Be("unavailable");
         row.CompletedAtUtc.Should().BeNull();
         row.DurationMs.Should().BeNull();
+        row.Lineage.Availability.Should().Be(WorkflowRunLineageAvailability.LegacyUnavailable);
     }
 
     [Fact]
