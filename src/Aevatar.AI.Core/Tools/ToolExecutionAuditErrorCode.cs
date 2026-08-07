@@ -99,6 +99,8 @@ internal static class ToolExecutionAuditErrorCode
         "managed_upstream_codex_workspace_preparation_failed",
         "NYXID_PROXY_FORBIDDEN",
         "NYXID_PROXY_HTTP_404",
+        "NYXID_PROXY_HTTP_429",
+        "NYXID_PROXY_HTTP_502",
         "NYXID_PROXY_UNAUTHORIZED",
     };
 
