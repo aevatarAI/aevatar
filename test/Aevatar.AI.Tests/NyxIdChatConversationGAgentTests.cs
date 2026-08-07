@@ -833,7 +833,12 @@ public sealed class NyxIdChatConversationGAgentTests
         const string conversationActorId = "conversation-pinned-class-r";
         const string sourceReadableBearer = "source-readable-bearer";
         string[] expectedToolNames = ["nyxid_account", "nyxid_status", "nyxid_sessions"];
-        string[] activatedToolNames = ["nyxid_developer_apps", "nyxid_oauth_bindings"];
+        string[] activatedToolNames =
+        [
+            "nyxid_developer_apps",
+            "nyxid_oauth_bindings",
+            "nyxid_service_accounts",
+        ];
         var handler = new RecordingNyxIdReadHandler();
         var options = new NyxIdToolOptions { BaseUrl = "https://nyxid.test" };
         using var apiClient = new NyxIdApiClient(options, new HttpClient(handler));
@@ -920,7 +925,7 @@ public sealed class NyxIdChatConversationGAgentTests
         var activatedTools = firstTools
             .Where(tool => activatedToolNames.Contains(tool.Name, StringComparer.Ordinal))
             .ToArray();
-        activatedTools.Should().HaveCount(2);
+        activatedTools.Should().HaveCount(activatedToolNames.Length);
         activatedTools.Should().OnlyContain(static tool =>
             tool.ApprovalMode == ToolApprovalMode.NeverRequire &&
             tool.IsReadOnly &&

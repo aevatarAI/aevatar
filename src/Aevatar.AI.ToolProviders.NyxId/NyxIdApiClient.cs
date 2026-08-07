@@ -894,6 +894,36 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
     public Task<string> ListOAuthBrokerBindingsAsync(string token, CancellationToken ct) =>
         GetAsync(token, "/api/v1/users/me/broker-bindings", ct);
 
+    // ─── Service accounts ───
+
+    public Task<string> ListServiceAccountsAsync(
+        string token,
+        string? organizationOwnerId,
+        int page,
+        int perPage,
+        CancellationToken ct)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(page, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(perPage, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(perPage, 100);
+        var path = $"/api/v1/admin/service-accounts?page={page}&per_page={perPage}";
+        if (!string.IsNullOrWhiteSpace(organizationOwnerId))
+            path += "&org_id=" + Uri.EscapeDataString(organizationOwnerId.Trim());
+        return GetAsync(token, path, ct);
+    }
+
+    public Task<string> GetServiceAccountAsync(
+        string token,
+        string serviceAccountId,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(serviceAccountId);
+        return GetAsync(
+            token,
+            $"/api/v1/admin/service-accounts/{Uri.EscapeDataString(serviceAccountId.Trim())}",
+            ct);
+    }
+
     // ─── Approvals ───
 
     public Task<string> ListApprovalsAsync(string token, CancellationToken ct) =>
