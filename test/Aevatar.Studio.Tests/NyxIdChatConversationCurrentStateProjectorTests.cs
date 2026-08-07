@@ -221,6 +221,32 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
     }
 
     [Fact]
+    public async Task ProjectAsync_ShouldPreservePresentEmptyOperationMessage()
+    {
+        var dispatcher = new RecordingWriteDispatcher();
+        var projector = new NyxIdChatConversationCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-08-07T12:30:00Z")));
+        var state = BuildState();
+        state.ActiveTask.Steps.Single(step => step.StepId == "step-alpha").Operation =
+            new NyxIdChatOperationState();
+
+        await projector.ProjectAsync(
+            NewContext(),
+            WrapCommitted(
+                new NyxIdChatOperationReconciledEvent(),
+                state,
+                version: 31,
+                eventId: "event-alpha-31",
+                stateEventTimestamp: DateTimeOffset.Parse("2026-08-07T12:29:00Z")));
+
+        var operation = dispatcher.Upserts.Should().ContainSingle().Which.ActiveTask.Steps
+            .Single(step => step.StepId == "step-alpha").Operation;
+        operation.Should().NotBeNull();
+        operation.CalculateSize().Should().Be(0);
+    }
+
+    [Fact]
     public async Task ProjectAsync_ShouldIgnoreNonControllerCommittedState()
     {
         var dispatcher = new RecordingWriteDispatcher();

@@ -247,10 +247,12 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
             NullIfEmpty(step.FailureCode),
             NullIfEmpty(step.SafeMessage),
             step.SafeToSkip,
-            new NyxIdChatAvailableActionsSnapshot(
-                step.AvailableActions?.Retry ?? false,
-                step.AvailableActions?.Skip ?? false,
-                step.AvailableActions?.Stop ?? false),
+            step.AvailableActions == null
+                ? null
+                : new NyxIdChatAvailableActionsSnapshot(
+                    step.AvailableActions.Retry,
+                    step.AvailableActions.Skip,
+                    step.AvailableActions.Stop),
             ToDateTimeOffset(step.UpdatedAt),
             ToOperation(step.Operation),
             ToSource(step.Source),

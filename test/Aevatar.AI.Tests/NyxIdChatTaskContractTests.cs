@@ -230,8 +230,54 @@ public sealed class NyxIdChatTaskContractTests
         AssertEnumField<NyxIdChatTaskStepState>("added_by", nameof(NyxIdChatStepAddedBy));
         AssertEnumField<NyxIdChatStepEstimate>("kind", nameof(NyxIdChatStepEstimateKind));
         AssertEnumField<NyxIdChatSubstepState>("status", nameof(NyxIdChatSubstepStatus));
-        AssertEnumField<NyxIdChatTaskStepChanged>("change_kind", nameof(NyxIdChatStepChangeKind));
+        AssertEnumField<NyxIdChatTaskPlanStepChanged>(
+            "change_kind",
+            nameof(NyxIdChatStepChangeKind));
         AssertEnumField<NyxIdChatActionReport>("disposition", nameof(NyxIdChatActionDisposition));
+    }
+
+    [Fact]
+    public void PublicTaskPlan_ShouldExcludeExecutionOnlyActorState()
+    {
+        NyxIdChatTaskPlan.Descriptor.Fields.InFieldNumberOrder()
+            .Select(static field => field.Name)
+            .Should().NotContain("retry_input_rebuildable");
+        NyxIdChatTaskPlanStep.Descriptor.Fields.InFieldNumberOrder()
+            .Select(static field => field.Name)
+            .Should().NotContain("retry_input_rebuildable");
+        NyxIdChatTaskPlanOperation.Descriptor.Fields.InFieldNumberOrder()
+            .Select(static field => field.Name)
+            .Should().NotContain("idempotency_key");
+        NyxIdChatTaskPlanStepChanged.Descriptor.FindFieldByName("step").MessageType
+            .Should().BeSameAs(NyxIdChatTaskPlanStep.Descriptor);
+        NyxIdChatTaskStepChanged.Descriptor.FindFieldByName("step").MessageType
+            .Should().BeSameAs(
+                NyxIdChatTaskStepState.Descriptor,
+                "the legacy message type must retain its published wire layout");
+    }
+
+    [Theory]
+    [InlineData(9_007_199_254_740_992, 0, "operationGeneration")]
+    [InlineData(0, -9_007_199_254_740_992, "latestProgressSequence")]
+    public void PublicTaskPlan_ShouldRejectBrowserUnsafeIntegers(
+        long operationGeneration,
+        long latestProgressSequence,
+        string fieldName)
+    {
+        var plan = new NyxIdChatTaskPlan();
+        plan.Steps.Add(new NyxIdChatTaskPlanStep
+        {
+            Operation = new NyxIdChatTaskPlanOperation
+            {
+                OperationGeneration = operationGeneration,
+                LatestProgressSequence = latestProgressSequence,
+            },
+        });
+
+        var act = () => NyxIdChatTaskPlanJsonFormatter.FormatTaskPlan(plan);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage($"*'{fieldName}'*browser-safe integer range*");
     }
 
     [Fact]
