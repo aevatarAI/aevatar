@@ -80,7 +80,7 @@
   var pending = null;
   try { pending = JSON.parse(sessionStorage.getItem(PKCE_KEY) || "null"); } catch(e){ pending = null; }
   var returnTo = safePath(pending && pending.returnTo, DEFAULT_RETURN);
-  var requestedResources = pending && Array.isArray(pending.resources) ? normalizeResources(pending.resources) : normalizeResources(RESOURCES);
+  var requestedResources = pending && Array.isArray(pending.resources) ? normalizeResources(pending.resources) : [];
   var rawTokenPurpose = pending && typeof pending.tokenPurpose === "string" ? pending.tokenPurpose : "";
   if(rawTokenPurpose && rawTokenPurpose !== VOICE_TOKEN_PURPOSE){ show("登录状态包含未知的令牌用途，请返回重试。"); offerBack(returnTo); return; }
   var tokenPurpose = rawTokenPurpose === VOICE_TOKEN_PURPOSE ? VOICE_TOKEN_PURPOSE : "";

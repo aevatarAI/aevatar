@@ -52,7 +52,10 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             html.Should().Contain("var NYX_API=BACKEND_CONSOLE_CONFIG.nyxidApi");
             html.Should().Contain("fetch(NYX_API+'/api/v1/admin/users");
             html.Should().NotContain("var NYX_AUTHORITY=BACKEND_CONSOLE_CONFIG.authority");
-            html.Should().Contain("searchParams.append('resource'");
+            // ADR-0018: only the deliberately narrowed voice-realtime purpose keeps
+            // explicit resources; the session login sends none.
+            html.Should().Contain("var resources=purpose===VOICE_TOKEN_PURPOSE?loginResources(requestedResources):[];");
+            html.Should().Contain("if(claims && claims.allow_all_services!==false) return true;");
             html.Should().Contain("function observatoryFrameSource()");
             html.Should().Contain("'/admin/workflow-observatory'");
             html.Should().NotContain("'/workflow/observatory'");
@@ -69,25 +72,38 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             html.Should().Contain("class=\"site-header\"");
             html.Should().Contain("id=\"composerForm\"");
             html.Should().Contain("生产环境 · 操作会影响真实数据，高风险操作需要确认");
-            html.Should().Contain("app.js?v=20260807-readiness-optional-quiet");
-            html.Should().Contain("styles.css?v=20260807-readiness-optional-quiet");
+            html.Should().Contain("app.js?v=20260807-adr18-session-login");
+            html.Should().Contain("styles.css?v=20260807-adr18-session-login");
             html.Should().NotContain("class=\"brand-mark\"");
             html.Should().NotContain("Aevatar Studio · 工作流实录");
             html.Should().NotContain("从意图到交付的真实对话");
         }
         else if (path == "/auto/callback")
         {
+            // The exchange loops over the PKCE-stored request list; session logins
+            // store an empty list (ADR-0018), so only voice-purpose logins append.
             html.Should().Contain("form.append(\"resource\"");
+            html.Should().Contain("normalizeResources(pending.resources) : []");
+            html.Should().NotContain("normalizeResources(RESOURCES)");
         }
-        else
+        else if (path == "/voice")
         {
-            html.Should().Contain("searchParams.append(\"resource\"");
             html.Should().Contain("async function fetchWithConsoleAuth(");
             html.Should().Contain("requestAdminShellTokenRefresh(");
             html.Should().Contain("rejectedAccessToken");
-            html.Should().Contain(path == "/workflow/skills"
-                ? "f.append(\"resource\""
-                : "form.append(\"resource\"");
+            // Voice keeps its deliberately narrowed realtime-token flows, but the
+            // session login must not request explicit resources.
+            html.Should().Contain("purpose===VOICE_TOKEN_PURPOSE ? normalizeResources(CFG.resources,requestedResources) : []");
+            html.Should().Contain("normalizeResources(pending.resources) : []");
+        }
+        else
+        {
+            html.Should().NotContain("searchParams.append(\"resource\"");
+            html.Should().NotContain("form.append(\"resource\"");
+            html.Should().NotContain("f.append(\"resource\"");
+            html.Should().Contain("async function fetchWithConsoleAuth(");
+            html.Should().Contain("requestAdminShellTokenRefresh(");
+            html.Should().Contain("rejectedAccessToken");
         }
     }
 

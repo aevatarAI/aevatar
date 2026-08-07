@@ -43,8 +43,10 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         html.Should().NotContain("37a93189-2734-406e-bca1-7dbdf25c5a53");
         if (endpoint == "admin-observatory")
         {
-            html.Should().Contain("searchParams.append(\"resource\"");
-            html.Should().Contain("form.append(\"resource\"");
+            // ADR-0018: session logins must not send explicit `resource` parameters,
+            // or NyxID narrows the grant below the deployment's default LLM route.
+            html.Should().NotContain("searchParams.append(\"resource\"");
+            html.Should().NotContain("form.append(\"resource\"");
             html.Should().Contain("async function fetchWithConsoleAuth(");
             html.Should().Contain("requestAdminShellTokenRefresh(");
             html.Should().Contain("rejectedAccessToken");
@@ -167,7 +169,7 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         var transport = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantTransport);
         var styles = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantStyles);
 
-        app.Should().Contain("import \"./transport.js?v=20260807-readiness-optional-quiet\"");
+        app.Should().Contain("import \"./transport.js?v=20260807-adr18-session-login\"");
         app.Should().Contain("async function sendPrompt(");
         app.Should().Contain("async function loadConversations(");
         app.Should().Contain("async function refreshActorState(");
@@ -198,6 +200,8 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         transport.Should().Contain("/api/v1/assistant/readiness");
         transport.Should().Contain("const errorCode = refreshResult.errorCode");
         transport.Should().Contain("authorizedFetch(\"/api/chat\"");
+        transport.Should().Contain("ADR-0018");
+        transport.Should().NotContain("append(\"resource\"");
         blocks.Should().Contain("export function buildConnectCardBlock(");
         html.Should().Contain("id=\"readinessPanel\"");
         html.Should().Contain("id=\"readinessRecovery\"");
@@ -237,13 +241,13 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         app.Should().NotContain("freeText.className = \"needs-you-free-text\"");
         styles.Should().Contain("@media (max-width:");
         html.Should().Contain("<meta name=\"color-scheme\" content=\"only light\"");
-        html.Should().Contain("app.js?v=20260807-readiness-optional-quiet");
-        html.Should().Contain("styles.css?v=20260807-readiness-optional-quiet");
-        app.Should().Contain("transport.js?v=20260807-readiness-optional-quiet");
-        app.Should().Contain("readiness.js?v=20260807-readiness-optional-quiet");
-        transport.Should().Contain("readiness.js?v=20260807-readiness-optional-quiet");
-        actorState.Should().Contain("protocol.js?v=20260807-readiness-optional-quiet");
-        blocks.Should().Contain("protocol.js?v=20260807-readiness-optional-quiet");
+        html.Should().Contain("app.js?v=20260807-adr18-session-login");
+        html.Should().Contain("styles.css?v=20260807-adr18-session-login");
+        app.Should().Contain("transport.js?v=20260807-adr18-session-login");
+        app.Should().Contain("readiness.js?v=20260807-adr18-session-login");
+        transport.Should().Contain("readiness.js?v=20260807-adr18-session-login");
+        actorState.Should().Contain("protocol.js?v=20260807-adr18-session-login");
+        blocks.Should().Contain("protocol.js?v=20260807-adr18-session-login");
         html.Should().Contain("<span class=\"brand-name\">Aevatar Studio</span>");
         html.Should().NotContain("class=\"brand-mark\"");
         styles.Should().Contain("color-scheme: only light");

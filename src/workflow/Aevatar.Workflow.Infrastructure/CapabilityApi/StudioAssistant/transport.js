@@ -1,4 +1,4 @@
-import { normalizeReadinessSnapshot } from "./readiness.js?v=20260807-readiness-optional-quiet";
+import { normalizeReadinessSnapshot } from "./readiness.js?v=20260807-adr18-session-login";
 
 const nativeFetch = globalThis.fetch.bind(globalThis);
 const backendConfig = globalThis.__AEVATAR_ASSISTANT_CONFIG__ || {};
@@ -181,14 +181,16 @@ async function beginLogin() {
     verifier,
     state,
     returnTo: "/workflow/studio",
-    resources: config.resources,
   }));
+  // ADR-0018: the session login never sends explicit `resource` parameters —
+  // NyxID would narrow the grant to exactly that list (RFC 8707 intersection)
+  // and the token could no longer reach other consented services such as the
+  // deployment's default LLM route. The consent page owns the granted set.
   const url = new URL(`${config.authority}/oauth/authorize`);
   url.searchParams.set("response_type", "code");
   url.searchParams.set("client_id", config.clientId);
   url.searchParams.set("redirect_uri", config.redirectUri);
   url.searchParams.set("scope", config.scope);
-  config.resources.forEach((resource) => url.searchParams.append("resource", resource));
   url.searchParams.set("state", state);
   url.searchParams.set("code_challenge", challenge);
   url.searchParams.set("code_challenge_method", "S256");
@@ -214,8 +216,6 @@ async function completeLoginIfCallback() {
   form.set("redirect_uri", config.redirectUri);
   form.set("client_id", config.clientId);
   form.set("code_verifier", pending.verifier);
-  uniqueStrings(pending.resources || config.resources)
-    .forEach((resource) => form.append("resource", resource));
   const response = await nativeFetch(`${config.authority}/oauth/token`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },

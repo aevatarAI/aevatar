@@ -192,6 +192,15 @@ public sealed class NyxIdLLMProvider : ILLMProvider
                 + AppendUpstreamDetail(
                     "Wait a moment before retrying.",
                     upstreamSummary)),
+            403 when IsServiceScopeForbidden(body) => (
+                NyxIdUpstreamFailureKind.AuthenticationFailed,
+                $"NyxID rejected LLM route '{routeName}' for model '{model}': the signed-in "
+                + "authorization does not cover this service (HTTP 403 api_key_scope_forbidden). "
+                + AppendUpstreamDetail(
+                    "Sign out and sign in again to refresh the NyxID authorization; if it "
+                    + "persists, ask an administrator to check the NyxID app's default service "
+                    + "selection for this deployment.",
+                    upstreamSummary)),
             401 or 403 => (
                 NyxIdUpstreamFailureKind.AuthenticationFailed,
                 $"Upstream LLM route '{routeName}' rejected the request with HTTP {status} for model '{model}'. "
@@ -220,6 +229,9 @@ public sealed class NyxIdLLMProvider : ILLMProvider
 
         return new NyxIdUpstreamException(kind, status, routeName, model, message, source);
     }
+
+    internal static bool IsServiceScopeForbidden(string? body) =>
+        body?.Contains("api_key_scope_forbidden", StringComparison.Ordinal) == true;
 
     private static string AppendUpstreamDetail(string message, string? upstreamSummary)
     {

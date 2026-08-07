@@ -483,8 +483,10 @@ async function fetchWithConsoleAuth(path,options){
 }
 
 async function beginLogin(requestedResources, tokenPurpose){
-  const resources=normalizeResources(CFG.resources,requestedResources);
   const purpose=tokenPurpose===VOICE_TOKEN_PURPOSE ? VOICE_TOKEN_PURPOSE : "";
+  // ADR-0018：会话登录不发送显式 resource（NyxID 会按 RFC 8707 收窄授权）；
+  // 仅 voice-realtime 专用 token 保留有意收窄。
+  const resources=purpose===VOICE_TOKEN_PURPOSE ? normalizeResources(CFG.resources,requestedResources) : [];
   if(notifyAdminShellAuth("login-request","",resources,purpose)) return;
   const verifier = randomString(64);
   const st = randomString(32);
@@ -516,7 +518,7 @@ async function completeLoginIfCallback(){
   form.set("redirect_uri", CFG.redirectUri);
   form.set("client_id", CFG.clientId);
   form.set("code_verifier", pending.verifier);
-  const requestedResources=Array.isArray(pending.resources) ? normalizeResources(pending.resources) : normalizeResources(CFG.resources);
+  const requestedResources=Array.isArray(pending.resources) ? normalizeResources(pending.resources) : [];
   requestedResources.forEach(resource => form.append("resource", resource));
   const res = await fetch(CFG.authority + "/oauth/token", { method:"POST", headers:{ "Content-Type":"application/x-www-form-urlencoded" }, body: form.toString() });
   sessionStorage.removeItem(PKCE_KEY);

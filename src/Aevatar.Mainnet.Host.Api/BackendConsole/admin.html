@@ -1400,9 +1400,13 @@ function loginResources(requested){
   return merged;
 }
 function loginResourcesGranted(){
-  var t=getToken(), granted=[];
-  var claims=decodeJwt(t&&t.access_token);
-  [t&&t.oauth_resources,t&&t.resource,claims&&claims.resources].forEach(function(group){
+  var t=getToken(); if(!t||!t.access_token) return false;
+  var claims=decodeJwt(t.access_token);
+  /* NyxID：allow_all_services claim 缺省即 allow-all（ADR-0018 会话登录不再收窄），
+     只有显式 restricted token 才需要逐项覆盖 core resources。 */
+  if(claims && claims.allow_all_services!==false) return true;
+  var granted=[];
+  [t.oauth_resources,t.resource,claims&&claims.resources].forEach(function(group){
     if(typeof group==='string')group=[group];
     (Array.isArray(group)?group:[]).forEach(function(value){ if(typeof value==='string'&&granted.indexOf(value)<0)granted.push(value); });
   });
@@ -1424,8 +1428,11 @@ function _rand(n){ var a=new Uint8Array(n); crypto.getRandomValues(a); var s='';
 async function _sha256(s){ return _b64url(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s))); }
 async function beginLogin(requestedResources,tokenPurpose){
   if(!OIDC.authority||!OIDC.clientId){ alert('BackendConsole OIDC 配置缺失。'); return; }
-  var resources=loginResources(requestedResources);
   var purpose=tokenPurpose===VOICE_TOKEN_PURPOSE?VOICE_TOKEN_PURPOSE:'';
+  /* ADR-0018：会话登录不发送显式 resource——NyxID 会按 RFC 8707 把授权收窄成该列表，
+     导致 token 无法访问其他已同意的服务（如部署默认 LLM 路由）。授权集合由 NyxID
+     Consent 页决定。仅 voice-realtime 专用 token 保留有意收窄。 */
+  var resources=purpose===VOICE_TOKEN_PURPOSE?loginResources(requestedResources):[];
   var verifier=_rand(64), state=_rand(32), challenge=await _sha256(verifier);
   sessionStorage.setItem(PKCE_KEY, JSON.stringify({verifier:verifier,state:state,returnTo:loginReturnTo(),resources:resources,tokenPurpose:purpose}));
   var u=new URL(OIDC.authority.replace(/\/+$/,'')+'/oauth/authorize');
