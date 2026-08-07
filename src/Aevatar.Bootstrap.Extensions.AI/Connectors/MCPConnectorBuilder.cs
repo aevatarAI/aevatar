@@ -70,6 +70,8 @@ public sealed class MCPConnectorBuilder : IConnectorBuilder
             Arguments = entry.MCP.Arguments,
             Environment = entry.MCP.Environment,
             AdditionalHeaders = entry.MCP.AdditionalHeaders,
+            InitializationTimeout = TimeSpan.FromMilliseconds(
+                Math.Clamp(entry.TimeoutMs <= 0 ? 30_000 : entry.TimeoutMs, 100, 300_000)),
             HttpClient = transportHttpClient,
             OwnsHttpClient = transportHttpClient != null,
         };
