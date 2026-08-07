@@ -339,17 +339,33 @@ internal sealed class NyxIdManagedCodexChronoTransport(
         // triage cannot tell a gateway-level fault from a chrono-reported one. Never log the body,
         // upstream message, credential, service id or run id.
         _logger.LogWarning(
-            "Managed Codex proxy failure. status={Status} bodyBytes={BodyBytes} bodyShape={BodyShape} upstreamCodeResolved={Resolved}",
+            "Managed Codex proxy failure. status={Status} bodyBytes={BodyBytes} bodyShape={BodyShape} upstreamCodeResolved={Resolved} diagnosticId={DiagnosticId}",
             status,
             inspection.BodyBytes,
             inspection.BodyShape,
-            upstreamCode is not null);
-        // A typed upstream code names the actual failing stage, so it classifies the failure.
+            upstreamCode is not null,
+            inspection.DiagnosticId);
+        // A typed upstream code names the actual failing stage, so it normally classifies the failure.
+        // Capacity is the exception: chrono's contract binds that code to 429, and any other
+        // status/code combination is malformed producer output rather than evidence of capacity.
         // HTTP status alone cannot: chrono-sandbox returns 429 only for the capacity permit and
         // uses 502 for provisioning/OpenSandbox faults, so status-only mapping reports "capacity
         // unavailable" for sandbox-creation failures and sends triage the wrong way.
         if (upstreamCode is not null)
         {
+            if (string.Equals(
+                    upstreamCode,
+                    "managed_upstream_codex_capacity_unavailable",
+                    StringComparison.Ordinal) &&
+                status != 429)
+            {
+                return Failure(
+                    CodexExecutionFailureKind.MalformedOutput,
+                    upstreamCode,
+                    "Managed Codex returned an inconsistent upstream failure.",
+                    inspection.DiagnosticId);
+            }
+
             var upstreamFailure = ClassifyUpstreamFailure(upstreamCode);
             return Failure(
                 upstreamFailure.Kind,

@@ -298,7 +298,6 @@ public sealed class NyxIdManagedCodexChronoTransportTests
     [InlineData("CODEX_PROMPT_TOO_LARGE", CodexExecutionFailureKind.AdmissionDenied)]
     [InlineData("CODEX_REQUEST_INVALID", CodexExecutionFailureKind.AdmissionDenied)]
     [InlineData("CODEX_SANDBOX_READY_TIMEOUT", CodexExecutionFailureKind.TimedOut)]
-    [InlineData("CODEX_CAPACITY_UNAVAILABLE", CodexExecutionFailureKind.CapacityUnavailable)]
     [InlineData("CODEX_TIMEOUT_INVALID", CodexExecutionFailureKind.AdmissionDenied)]
     [InlineData("CODEX_TURN_FAILED", CodexExecutionFailureKind.TerminalFailure)]
     [InlineData("CODEX_TURN_TERMINAL_MISSING", CodexExecutionFailureKind.MalformedOutput)]
@@ -326,6 +325,42 @@ public sealed class NyxIdManagedCodexChronoTransportTests
         var exception = (await act.Should().ThrowAsync<ManagedCodexTransportException>()).Which;
         exception.Failure.Kind.Should().Be(expectedKind);
         exception.Failure.Code.Should().Be($"managed_upstream_{upstreamCode.ToLowerInvariant()}");
+        exception.Message.Should().NotContain(RawKey);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.TooManyRequests, CodexExecutionFailureKind.CapacityUnavailable,
+        "Managed Codex capacity is unavailable upstream.")]
+    [InlineData(HttpStatusCode.BadGateway, CodexExecutionFailureKind.MalformedOutput,
+        "Managed Codex returned an inconsistent upstream failure.")]
+    [InlineData(HttpStatusCode.ServiceUnavailable, CodexExecutionFailureKind.MalformedOutput,
+        "Managed Codex returned an inconsistent upstream failure.")]
+    public async Task ExecuteAsync_WhenCapacityCodeHasHttpStatus_Requires429ForCapacityAttribution(
+        HttpStatusCode statusCode,
+        CodexExecutionFailureKind expectedKind,
+        string expectedMessage)
+    {
+        var handler = new RecordingHandler(
+            JsonSerializer.Serialize(new
+            {
+                success = false,
+                error = new
+                {
+                    code = "CODEX_CAPACITY_UNAVAILABLE",
+                    message = $"sensitive {RawKey}",
+                },
+                diagnostic_id = "capacity-contract-diag",
+            }),
+            statusCode);
+        var (transport, _) = CreateTransport(handler);
+
+        var act = () => transport.ExecuteAsync(Request(), Descriptor());
+
+        var exception = (await act.Should().ThrowAsync<ManagedCodexTransportException>()).Which;
+        exception.Failure.Kind.Should().Be(expectedKind);
+        exception.Failure.Code.Should().Be("managed_upstream_codex_capacity_unavailable");
+        exception.Failure.Message.Should().Be(expectedMessage);
+        exception.Failure.DiagnosticId.Should().Be("capacity-contract-diag");
         exception.Message.Should().NotContain(RawKey);
     }
 
