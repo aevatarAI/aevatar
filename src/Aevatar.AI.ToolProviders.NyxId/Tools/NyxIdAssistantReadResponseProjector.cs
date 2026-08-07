@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -5,6 +6,8 @@ namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 
 internal static partial class NyxIdAssistantReadResponseProjector
 {
+    private const int MaxAssistantListItems = 20;
+    private const int MaxAssistantProjectionBytes = 32 * 1024;
     private const string InvalidResponseJson = "{\"error\":\"invalid_nyxid_response\"}";
     private const string OAuthBindingNotFoundJson = "{\"error\":\"oauth_binding_not_found\"}";
 
@@ -147,12 +150,7 @@ internal static partial class NyxIdAssistantReadResponseProjector
             }
 
             if (exactBindingHash is null)
-            {
-                return JsonSerializer.Serialize(new Dictionary<string, object?>
-                {
-                    ["bindings"] = projected,
-                });
-            }
+                return ProjectOAuthBindingList(projected);
 
             var matches = projected.Where(binding =>
                     string.Equals(binding["binding_hash"] as string, exactBindingHash, StringComparison.Ordinal))
@@ -160,7 +158,7 @@ internal static partial class NyxIdAssistantReadResponseProjector
             return matches.Length switch
             {
                 0 => OAuthBindingNotFoundJson,
-                1 => JsonSerializer.Serialize(matches[0]),
+                1 => SerializeWithinAssistantProjectionBudget(matches[0]),
                 _ => InvalidResponseJson,
             };
         }
@@ -169,6 +167,135 @@ internal static partial class NyxIdAssistantReadResponseProjector
             return InvalidResponseJson;
         }
     }
+
+    private static string ProjectOAuthBindingList(
+        IReadOnlyCollection<Dictionary<string, object?>> projected)
+    {
+        var returned = new List<Dictionary<string, object?>>();
+        string result = SerializeOAuthBindingList(returned, projected.Count);
+        foreach (var binding in projected.Take(MaxAssistantListItems))
+        {
+            returned.Add(binding);
+            var candidate = SerializeOAuthBindingList(returned, projected.Count);
+            if (Encoding.UTF8.GetByteCount(candidate) > MaxAssistantProjectionBytes)
+            {
+                returned.RemoveAt(returned.Count - 1);
+                break;
+            }
+            result = candidate;
+        }
+
+        return result;
+    }
+
+    private static string SerializeOAuthBindingList(
+        IReadOnlyCollection<Dictionary<string, object?>> returned,
+        int total) =>
+        JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            ["bindings"] = returned,
+            ["total"] = total,
+            ["returned"] = returned.Count,
+            ["truncated"] = returned.Count < total,
+        });
+
+    private static string SerializeWithinAssistantProjectionBudget(
+        Dictionary<string, object?> binding)
+    {
+        var result = JsonSerializer.Serialize(binding);
+        return Encoding.UTF8.GetByteCount(result) <= MaxAssistantProjectionBytes
+            ? result
+            : InvalidResponseJson;
+    }
+
+    public static string ProjectServiceAccounts(string json, bool isList, int expectedPage)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            if (TryProjectError(document.RootElement, out var error))
+                return error;
+
+            if (!isList)
+            {
+                return TryProjectServiceAccount(document.RootElement, out var serviceAccount)
+                    ? SerializeWithinAssistantProjectionBudget(serviceAccount)
+                    : InvalidResponseJson;
+            }
+
+            if (document.RootElement.ValueKind != JsonValueKind.Object ||
+                !document.RootElement.TryGetProperty("service_accounts", out var serviceAccounts) ||
+                serviceAccounts.ValueKind != JsonValueKind.Array)
+            {
+                return InvalidResponseJson;
+            }
+
+            var projected = new List<Dictionary<string, object?>>();
+            foreach (var item in serviceAccounts.EnumerateArray())
+            {
+                if (!TryProjectServiceAccount(item, out var serviceAccount))
+                    return InvalidResponseJson;
+                projected.Add(serviceAccount);
+            }
+
+            if (!TryGetRequiredUnsignedInteger(document.RootElement, "total", out var total) ||
+                !TryGetRequiredUnsignedInteger(document.RootElement, "page", out var page) ||
+                !TryGetRequiredUnsignedInteger(document.RootElement, "per_page", out var perPage) ||
+                page != (ulong)expectedPage ||
+                perPage != NyxIdServiceAccountsTool.AssistantPageSize ||
+                projected.Count > (int)perPage ||
+                projected.Count > 0 &&
+                (page - 1) * perPage + (ulong)projected.Count > total)
+            {
+                return InvalidResponseJson;
+            }
+
+            return ProjectServiceAccountList(projected, total, page, perPage);
+        }
+        catch (JsonException)
+        {
+            return InvalidResponseJson;
+        }
+    }
+
+    private static string ProjectServiceAccountList(
+        IReadOnlyCollection<Dictionary<string, object?>> projected,
+        ulong total,
+        ulong page,
+        ulong perPage)
+    {
+        var returned = new List<Dictionary<string, object?>>();
+        string result = SerializeServiceAccountList(returned, projected.Count, total, page, perPage);
+        foreach (var serviceAccount in projected.Take(MaxAssistantListItems))
+        {
+            returned.Add(serviceAccount);
+            var candidate = SerializeServiceAccountList(returned, projected.Count, total, page, perPage);
+            if (Encoding.UTF8.GetByteCount(candidate) > MaxAssistantProjectionBytes)
+            {
+                returned.RemoveAt(returned.Count - 1);
+                break;
+            }
+            result = candidate;
+        }
+
+        return result;
+    }
+
+    private static string SerializeServiceAccountList(
+        IReadOnlyCollection<Dictionary<string, object?>> returned,
+        int pageItemCount,
+        ulong total,
+        ulong page,
+        ulong perPage) =>
+        JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            ["service_accounts"] = returned,
+            ["total"] = total,
+            ["page"] = page,
+            ["per_page"] = perPage,
+            ["returned"] = returned.Count,
+            ["truncated"] = returned.Count < pageItemCount || page * perPage < total,
+        });
 
     private static string ProjectCollectionResponse(
         string json,
@@ -263,6 +390,29 @@ internal static partial class NyxIdAssistantReadResponseProjector
         return true;
     }
 
+    private static bool TryProjectServiceAccount(
+        JsonElement source,
+        out Dictionary<string, object?> projected)
+    {
+        projected = new Dictionary<string, object?>(StringComparer.Ordinal);
+        if (source.ValueKind != JsonValueKind.Object ||
+            !TryCopyRequiredString(source, projected, "id") ||
+            !TryCopyRequiredString(source, projected, "client_id") ||
+            !TryCopyRequiredString(source, projected, "allowed_scopes") ||
+            !TryCopyRequiredStringArray(source, projected, "role_ids") ||
+            !TryCopyRequiredBoolean(source, projected, "is_active") ||
+            !TryCopyRequiredNullableUnsignedInteger(source, projected, "rate_limit_override") ||
+            !TryCopyRequiredString(source, projected, "created_at") ||
+            !TryCopyRequiredString(source, projected, "updated_at") ||
+            !TryCopyRequiredNullableString(source, projected, "last_authenticated_at"))
+        {
+            projected.Clear();
+            return false;
+        }
+
+        return true;
+    }
+
     private static bool TryCopyExternalSubject(
         JsonElement source,
         IDictionary<string, object?> projected)
@@ -334,6 +484,24 @@ internal static partial class NyxIdAssistantReadResponseProjector
         return true;
     }
 
+    private static bool TryCopyRequiredNullableString(
+        JsonElement source,
+        IDictionary<string, object?> projected,
+        string property)
+    {
+        if (!source.TryGetProperty(property, out var value))
+            return false;
+        if (value.ValueKind == JsonValueKind.Null)
+        {
+            projected[property] = null;
+            return true;
+        }
+        if (value.ValueKind != JsonValueKind.String)
+            return false;
+        projected[property] = value.GetString();
+        return true;
+    }
+
     private static bool TryCopyOptionalBoolean(
         JsonElement source,
         IDictionary<string, object?> projected,
@@ -343,6 +511,20 @@ internal static partial class NyxIdAssistantReadResponseProjector
             return true;
         if (value.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
             return false;
+        projected[property] = value.GetBoolean();
+        return true;
+    }
+
+    private static bool TryCopyRequiredBoolean(
+        JsonElement source,
+        IDictionary<string, object?> projected,
+        string property)
+    {
+        if (!source.TryGetProperty(property, out var value) ||
+            value.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+        {
+            return false;
+        }
         projected[property] = value.GetBoolean();
         return true;
     }
@@ -360,6 +542,54 @@ internal static partial class NyxIdAssistantReadResponseProjector
             return false;
         }
         projected[property] = value.EnumerateArray().Select(static item => item.GetString()).ToArray();
+        return true;
+    }
+
+    private static bool TryCopyRequiredStringArray(
+        JsonElement source,
+        IDictionary<string, object?> projected,
+        string property)
+    {
+        if (!source.TryGetProperty(property, out var value) ||
+            value.ValueKind != JsonValueKind.Array ||
+            value.EnumerateArray().Any(static item => item.ValueKind != JsonValueKind.String))
+        {
+            return false;
+        }
+        projected[property] = value.EnumerateArray().Select(static item => item.GetString()).ToArray();
+        return true;
+    }
+
+    private static bool TryGetRequiredUnsignedInteger(
+        JsonElement source,
+        string property,
+        out ulong number)
+    {
+        number = 0;
+        if (!source.TryGetProperty(property, out var value) ||
+            value.ValueKind != JsonValueKind.Number ||
+            !value.TryGetUInt64(out number))
+        {
+            return false;
+        }
+        return true;
+    }
+
+    private static bool TryCopyRequiredNullableUnsignedInteger(
+        JsonElement source,
+        IDictionary<string, object?> projected,
+        string property)
+    {
+        if (!source.TryGetProperty(property, out var value))
+            return false;
+        if (value.ValueKind == JsonValueKind.Null)
+        {
+            projected[property] = null;
+            return true;
+        }
+        if (value.ValueKind != JsonValueKind.Number || !value.TryGetUInt64(out var number))
+            return false;
+        projected[property] = number;
         return true;
     }
 

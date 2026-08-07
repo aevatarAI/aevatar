@@ -1,4 +1,4 @@
-import "./transport.js?v=20260807-m40-studio-shell";
+import "./transport.js?v=20260807-m40-thread-polish";
 import {
   consumeSse,
   mergeUsage,
@@ -9,21 +9,21 @@ import {
   redact,
   safeJson,
   validateActionContinuation,
-} from "./protocol.js?v=20260807-m40-studio-shell";
+} from "./protocol.js?v=20260807-m40-thread-polish";
 import {
   buildConnectCardBlock,
   connectCardSteps,
   connectorInitial,
   splitMessageSegments,
-} from "./blocks.js?v=20260807-m40-studio-shell";
+} from "./blocks.js?v=20260807-m40-thread-polish";
 import {
   actorCan,
   applyCurrentStateResult,
   createActorProjection,
   reduceActorEvent,
   restoreCachedAction,
-} from "./actor-state.js?v=20260807-m40-studio-shell";
-import { describeReadinessFailure } from "./readiness.js?v=20260807-m40-studio-shell";
+} from "./actor-state.js?v=20260807-m40-thread-polish";
+import { describeReadinessFailure } from "./readiness.js?v=20260807-m40-thread-polish";
 
 const PREFERENCES_KEY = "aevatar-studio:assistant-preferences:v4";
 const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;

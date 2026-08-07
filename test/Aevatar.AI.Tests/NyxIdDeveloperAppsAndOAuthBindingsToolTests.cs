@@ -100,6 +100,9 @@ public sealed class NyxIdDeveloperAppsAndOAuthBindingsToolTests
         handler.Requests.Should().ContainSingle().Which.PathAndQuery.Should()
             .Be("/api/v1/users/me/broker-bindings");
         using var document = JsonDocument.Parse(result);
+        document.RootElement.GetProperty("total").GetInt32().Should().Be(1);
+        document.RootElement.GetProperty("returned").GetInt32().Should().Be(1);
+        document.RootElement.GetProperty("truncated").GetBoolean().Should().BeFalse();
         var binding = document.RootElement.GetProperty("bindings").EnumerateArray().Single();
         binding.GetProperty("binding_hash").GetString().Should().Be(BindingHashAlpha);
         result.Should().NotMatchRegex(
@@ -122,6 +125,61 @@ public sealed class NyxIdDeveloperAppsAndOAuthBindingsToolTests
         document.RootElement.GetProperty("bindings").EnumerateArray().Single()
             .GetProperty("external_subject").GetProperty("tenant").ValueKind.Should()
             .Be(JsonValueKind.Null);
+    }
+
+    [Fact]
+    public async Task OAuthBindings_List_ShouldBoundResultsWhileShowScansTheFullCollection()
+    {
+        var hashes = Enumerable.Range(0, 21)
+            .Select(static index => index.ToString("x64"))
+            .ToArray();
+        var response = BindingListJson(hashes
+            .Select(hash => BindingJson(hash, $"oauth-client-{hash[^2..]}", "client-name-secret"))
+            .ToArray());
+        var handler = new RecordingHandler(_ => response);
+        using var client = CreateClient(handler);
+        var tool = await DiscoverToolAsync(client, "nyxid_oauth_bindings");
+        using var _ = PushSourceReadableBearer();
+
+        var list = await tool.ExecuteAsync("""{"action":"list"}""");
+        var show = await tool.ExecuteAsync(
+            JsonSerializer.Serialize(new { action = "show", binding_hash = hashes[^1] }));
+
+        using var listDocument = JsonDocument.Parse(list);
+        listDocument.RootElement.GetProperty("bindings").GetArrayLength().Should().Be(20);
+        listDocument.RootElement.GetProperty("total").GetInt32().Should().Be(21);
+        listDocument.RootElement.GetProperty("returned").GetInt32().Should().Be(20);
+        listDocument.RootElement.GetProperty("truncated").GetBoolean().Should().BeTrue();
+        list.Should().NotContain(hashes[^1]);
+        using var showDocument = JsonDocument.Parse(show);
+        showDocument.RootElement.GetProperty("binding_hash").GetString().Should().Be(hashes[^1]);
+        handler.Requests.Should().HaveCount(2).And.OnlyContain(static request =>
+            request.PathAndQuery == "/api/v1/users/me/broker-bindings");
+    }
+
+    [Fact]
+    public async Task OAuthBindings_ShouldBoundSerializedListAndRejectOversizedShow()
+    {
+        var oversizedExternalUserId = new string('x', 40_000);
+        var response = BindingListJson(
+            BindingJson(BindingHashAlpha, "oauth-client-alpha", "client-name-secret")
+                .Replace("external-user-alpha", oversizedExternalUserId, StringComparison.Ordinal));
+        var handler = new RecordingHandler(_ => response);
+        using var client = CreateClient(handler);
+        var tool = await DiscoverToolAsync(client, "nyxid_oauth_bindings");
+        using var _ = PushSourceReadableBearer();
+
+        var list = await tool.ExecuteAsync("""{"action":"list"}""");
+        var show = await tool.ExecuteAsync(
+            $$"""{"action":"show","binding_hash":"{{BindingHashAlpha}}"}""");
+
+        using var listDocument = JsonDocument.Parse(list);
+        listDocument.RootElement.GetProperty("bindings").GetArrayLength().Should().Be(0);
+        listDocument.RootElement.GetProperty("total").GetInt32().Should().Be(1);
+        listDocument.RootElement.GetProperty("returned").GetInt32().Should().Be(0);
+        listDocument.RootElement.GetProperty("truncated").GetBoolean().Should().BeTrue();
+        System.Text.Encoding.UTF8.GetByteCount(list).Should().BeLessThan(32 * 1024);
+        show.Should().Be("{\"error\":\"invalid_nyxid_response\"}");
     }
 
     [Theory]

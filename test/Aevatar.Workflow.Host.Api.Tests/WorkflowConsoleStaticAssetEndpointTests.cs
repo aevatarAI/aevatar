@@ -173,7 +173,7 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         var marked = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantMarked);
         var purify = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantPurify);
 
-        app.Should().Contain("import \"./transport.js?v=20260807-m40-studio-shell\"");
+        app.Should().Contain("import \"./transport.js?v=20260807-m40-thread-polish\"");
         app.Should().Contain("async function sendPrompt(");
         app.Should().Contain("async function loadConversations(");
         app.Should().Contain("async function refreshActorState(");
@@ -261,13 +261,13 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         app.Should().NotContain("freeText.className = \"needs-you-free-text\"");
         styles.Should().Contain("@media (max-width:");
         html.Should().Contain("<meta name=\"color-scheme\" content=\"only light\"");
-        html.Should().Contain("app.js?v=20260807-m40-studio-shell");
-        html.Should().Contain("styles.css?v=20260807-m40-studio-shell");
-        app.Should().Contain("transport.js?v=20260807-m40-studio-shell");
-        app.Should().Contain("readiness.js?v=20260807-m40-studio-shell");
-        transport.Should().Contain("readiness.js?v=20260807-m40-studio-shell");
-        actorState.Should().Contain("protocol.js?v=20260807-m40-studio-shell");
-        blocks.Should().Contain("protocol.js?v=20260807-m40-studio-shell");
+        html.Should().Contain("app.js?v=20260807-m40-thread-polish");
+        html.Should().Contain("styles.css?v=20260807-m40-thread-polish");
+        app.Should().Contain("transport.js?v=20260807-m40-thread-polish");
+        app.Should().Contain("readiness.js?v=20260807-m40-thread-polish");
+        transport.Should().Contain("readiness.js?v=20260807-m40-thread-polish");
+        actorState.Should().Contain("protocol.js?v=20260807-m40-thread-polish");
+        blocks.Should().Contain("protocol.js?v=20260807-m40-thread-polish");
         html.Should().Contain("<span class=\"brand-name\">Aevatar Studio</span>");
         html.Should().NotContain("class=\"brand-mark\"");
         styles.Should().Contain("color-scheme: only light");
