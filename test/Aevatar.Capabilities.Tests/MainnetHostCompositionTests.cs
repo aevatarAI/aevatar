@@ -725,9 +725,11 @@ public sealed class MainnetHostCompositionTests
             .Should()
             .BeAssignableTo<IReadOnlyList<IAgentToolSource>>()
             .Subject;
-        nyxIdChatToolSources.Should().ContainSingle().Which.Should()
-            .BeOfType<NyxIdAssistantToolSource>();
+        nyxIdChatToolSources.Select(static source => source.GetType()).Should().Equal(
+            typeof(NyxIdAssistantToolSource),
+            typeof(AskUserAgentToolSource));
         nyxIdChatToolSources.Should().NotContain(source => source is NyxIdAgentToolSource);
+        nyxIdChatToolSources.Should().NotContain(source => source is WebAgentToolSource);
         var scheduleQueries = app.Services.GetRequiredService<IStudioMemberAutomationQueryPort>();
         var scheduleMutations = app.Services.GetRequiredService<IStudioMemberWorkflowSchedulePort>();
         scheduleQueries.Should().BeSameAs(scheduleMutations);
@@ -758,11 +760,19 @@ public sealed class MainnetHostCompositionTests
 
         var nyxIdChatProfile = registry.Resolve(AgentProfilePolicies.NyxIdChatRouteToolSet);
         nyxIdChatProfile.IsSuccess.Should().BeTrue(nyxIdChatProfile.Error?.Message);
-        nyxIdChatProfile.Sources.Should().ContainSingle().Which.Should()
-            .BeOfType<NyxIdAssistantToolSource>();
+        nyxIdChatProfile.Sources.Select(static source => source.GetType()).Should().Equal(
+            typeof(NyxIdAssistantToolSource),
+            typeof(AskUserAgentToolSource));
         nyxIdChatProfile.Sources.Should().NotContain(source => source is NyxIdAgentToolSource);
         nyxIdChatProfile.Sources.Should().NotContain(source =>
             source is NyxIdConnectedServiceToolSource);
+        nyxIdChatProfile.Sources.Should().NotContain(source => source is WebAgentToolSource);
+        var nyxIdChatInputTools = await nyxIdChatProfile.Sources
+            .OfType<AskUserAgentToolSource>()
+            .Single()
+            .DiscoverToolsAsync();
+        nyxIdChatInputTools.Select(static tool => tool.Name).Should()
+            .ContainSingle().Which.Should().Be("ask_user");
 
         var voice = registry.Resolve("voice.realtime");
         voice.IsSuccess.Should().BeFalse();

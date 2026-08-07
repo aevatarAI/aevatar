@@ -905,11 +905,12 @@ public sealed class ConversationReplyGeneratorTests
             new HumanSessionStubTool("nyxid_services"),
             new HumanSessionStubTool("nyxid_api_keys"),
             new StubTool("nyxid_require_service"));
+        var inputSource = new StubToolSource(new StubTool("ask_user"));
         IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
             new RecordingProviderFactory { Capabilities = MultimodalCapabilities },
             BuiltInPromptFloorProvider,
             toolSources: [registeredSource],
-            nyxIdChatToolSources: [pinnedSource]);
+            nyxIdChatToolSources: [pinnedSource, inputSource]);
         var toolContext = AgentToolExecutionContext.Empty with
         {
             Credentials = new AgentToolCredentials(
@@ -944,7 +945,8 @@ public sealed class ConversationReplyGeneratorTests
         toolNames.Should().BeEquivalentTo(
             "nyxid_services",
             "nyxid_api_keys",
-            "nyxid_require_service");
+            "nyxid_require_service",
+            "ask_user");
         toolNames.Should().NotContain("newly_registered_tool");
     }
 

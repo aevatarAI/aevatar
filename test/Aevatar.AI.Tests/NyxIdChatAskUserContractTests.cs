@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Aevatar.AI.ToolProviders.Web;
 using Aevatar.AI.ToolProviders.Web.Tools;
 using Aevatar.GAgents.NyxidChat;
 using FluentAssertions;
@@ -7,6 +8,15 @@ namespace Aevatar.AI.Tests;
 
 public sealed class NyxIdChatAskUserContractTests
 {
+    [Fact]
+    public async Task ToolSource_ShouldExposeOnlyAskUser()
+    {
+        var tools = await new AskUserAgentToolSource().DiscoverToolsAsync();
+
+        tools.Select(static tool => tool.Name).Should().ContainSingle().Which.Should()
+            .Be("ask_user");
+    }
+
     [Fact]
     public void TryParse_WhenFreeTextOnly_ShouldAcceptZeroOptions()
     {

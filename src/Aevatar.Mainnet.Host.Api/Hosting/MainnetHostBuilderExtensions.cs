@@ -460,8 +460,11 @@ public static class MainnetHostBuilderExtensions
                 "NyxID connected-service operations explicitly marked x-aevatar-tool, registered as individual tools.");
             options.AddToolSet(
                 AgentProfilePolicies.NyxIdChatRouteToolSet,
-                [CreateToolSource<NyxIdAssistantToolSource>],
-                "Pinned NyxID Assistant route: safe management reads, readiness, and brokered proxy execution only.");
+                [
+                    CreateToolSource<NyxIdAssistantToolSource>,
+                    CreateToolSource<AskUserAgentToolSource>,
+                ],
+                "Pinned NyxID Assistant route: safe management reads, readiness, brokered proxy execution, and typed user input only.");
         });
 
         return builder;
