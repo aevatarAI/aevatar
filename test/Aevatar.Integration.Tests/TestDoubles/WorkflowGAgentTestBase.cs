@@ -106,7 +106,7 @@ public abstract class WorkflowGAgentTestBase
                 definitionVersion: 0,
                 capabilityAdmissionPlan,
                 ExternalCapabilityExecutionMode.Interactive,
-                ct);
+                ct: ct);
 
         internal static async Task<WorkflowGAgent> CreateRegisteredDefinitionAgentAsync(
             RecordingActorRuntime runtime,

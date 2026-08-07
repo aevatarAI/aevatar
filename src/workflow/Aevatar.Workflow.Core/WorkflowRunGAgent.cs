@@ -482,6 +482,7 @@ public sealed partial class WorkflowRunGAgent
         long definitionVersion,
         WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan,
         ExternalCapabilityExecutionMode expectedExecutionMode,
+        WorkflowRunLineage? initialLineage = null,
         CancellationToken ct = default)
     {
         if (expectedExecutionMode == ExternalCapabilityExecutionMode.Unspecified ||
@@ -515,6 +516,13 @@ public sealed partial class WorkflowRunGAgent
             CapabilityAdmissionPlan = capabilityAdmissionPlan?.Clone(),
             ExpectedExecutionMode = expectedExecutionMode,
         };
+        if (initialLineage != null)
+        {
+            // Fix (review round 1, F1):
+            //   Sub-workflow child lineage was stamped before dispatch but dropped before bind commit.
+            //   Preserve InitialLineage in the authoritative bind event and cover the bind handler path.
+            bindDefinitionEvent.InitialLineage = initialLineage.Clone();
+        }
         if (inlineWorkflowYamls != null)
         {
             foreach (var (key, value) in inlineWorkflowYamls)
@@ -543,7 +551,8 @@ public sealed partial class WorkflowRunGAgent
             request.RevisionId,
             request.DefinitionVersion,
             request.CapabilityAdmissionPlan,
-            request.ExpectedExecutionMode);
+            request.ExpectedExecutionMode,
+            request.InitialLineage);
 
     public override Task<string> GetDescriptionAsync()
     {
