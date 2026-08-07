@@ -857,7 +857,7 @@ const WorkflowEditorPage: React.FC<{
               </TechnicalDetails>
             ) : undefined
           }
-          message={
+          title={
             editor.materialization.phase === 'delayed'
               ? t(
                   'workflowActivityVNext.editor.saveDelayed',
@@ -914,7 +914,7 @@ const WorkflowEditorPage: React.FC<{
               ) : null}
             </>
           }
-          message={
+          title={
             publicationPhase === 'unauthorized'
               ? t(
                   'workflowActivityVNext.state.unauthorized',
@@ -945,7 +945,7 @@ const WorkflowEditorPage: React.FC<{
                 finding.level,
                 finding.message,
               ].join('|')}
-              message={finding.message}
+              title={finding.message}
               showIcon
               type={
                 String(finding.level).toLowerCase() === 'error'
@@ -1060,7 +1060,7 @@ const WorkflowEditorPage: React.FC<{
       >
         {editor.runPhase === 'failed' && !observedRun ? (
           <Alert
-            message={t('workflowActivityVNext.editor.runFailed', 'Run failed')}
+            title={t('workflowActivityVNext.editor.runFailed', 'Run failed')}
             description={
               editor.runError ? (
                 <TechnicalDetails>{editor.runError}</TechnicalDetails>
@@ -1144,7 +1144,7 @@ const WorkflowEditorPage: React.FC<{
                 ) : null}
               </>
             }
-            message={
+            title={
               editor.runObservation.phase === 'observed'
                 ? t(
                     'workflowActivityVNext.editor.activityObserved',

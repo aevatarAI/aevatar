@@ -2763,6 +2763,46 @@ describe('Workflow Activity vNext editor', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('renders workflow validation alerts without deprecated Ant Design props', async () => {
+    const consoleError = jest
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
+    mockStudioApi.getWorkflow.mockResolvedValue({
+      workflowId: 'wf-validation-alert',
+      name: 'Validation alert workflow',
+      fileName: 'validation-alert.yaml',
+      filePath: '/workflows/validation-alert.yaml',
+      directoryId: 'directory-alpha',
+      directoryLabel: 'Workflows',
+      yaml: 'name: validation_alert\nroles: []\nsteps: []\n',
+      updatedAtUtc: '2026-08-04T10:00:00Z',
+      document: { name: 'validation_alert', roles: [], steps: [] },
+      draftExists: true,
+      findings: [
+        {
+          code: 'WORKFLOW_UNKNOWN_STEP',
+          level: 'warning',
+          message: 'A workflow step needs review.',
+        },
+      ],
+    });
+
+    try {
+      renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+      expect(
+        await screen.findByText('A workflow step needs review.'),
+      ).toBeInTheDocument();
+      expect(consoleError).not.toHaveBeenCalledWith(
+        expect.stringContaining(
+          '[antd: Alert] `message` is deprecated. Please use `title` instead.',
+        ),
+      );
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
   it('renders loaded nodes inside the sized Workflow Studio canvas region', async () => {
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
