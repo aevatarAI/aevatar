@@ -59,6 +59,63 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
     }
 
     [Fact]
+    public async Task HandleBindWorkflowRunDefinition_WithInitialSubWorkflowLineage_ShouldCommitAndApplyChildLineage()
+    {
+        const string childRunId = "run-child-beta";
+        const string parentRunId = "run-parent-alpha";
+        const string rootRunId = "run-root-omega";
+        var harness = await CreateUnboundRunAsync(childRunId);
+
+        var initialLineage = new WorkflowRunLineage
+        {
+            Availability = WorkflowRunLineageAvailability.Available,
+            RetryFork = new WorkflowRunRetryForkLineage
+            {
+                Availability = WorkflowRunLineageAvailability.Unavailable,
+            },
+            SubWorkflow = new WorkflowRunSubWorkflowLineage
+            {
+                Availability = WorkflowRunLineageAvailability.Available,
+                ParentRunId = parentRunId,
+                ParentActorId = "actor-parent-gamma",
+                ParentStepId = "step-call-child",
+                RootRunId = rootRunId,
+                Depth = 2,
+            },
+        };
+
+        await harness.Agent.HandleBindWorkflowRunDefinition(new BindWorkflowRunDefinitionEvent
+        {
+            DefinitionActorId = "definition-child-delta",
+            WorkflowName = "wf_child_beta",
+            WorkflowYaml = WorkflowYaml(onFailure: false),
+            RunId = childRunId,
+            ScopeId = "scope-child",
+            ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+            InitialLineage = initialLineage,
+        });
+
+        var committed = CommittedEvents<BindWorkflowRunDefinitionEvent>(harness.CommittedPublisher)
+            .Should()
+            .ContainSingle()
+            .Subject;
+        committed.RunId.Should().Be(childRunId);
+        committed.InitialLineage.SubWorkflow.ParentRunId.Should().Be(parentRunId);
+        committed.InitialLineage.SubWorkflow.RootRunId.Should().Be(rootRunId);
+        committed.InitialLineage.SubWorkflow.ParentStepId.Should().Be("step-call-child");
+
+        harness.Agent.State.RunId.Should().Be(childRunId);
+        harness.Agent.State.Lineage.Availability.Should().Be(WorkflowRunLineageAvailability.Available);
+        harness.Agent.State.Lineage.RetryFork.Availability.Should().Be(WorkflowRunLineageAvailability.Unavailable);
+        harness.Agent.State.Lineage.SubWorkflow.Availability.Should().Be(WorkflowRunLineageAvailability.Available);
+        harness.Agent.State.Lineage.SubWorkflow.ParentRunId.Should().Be(parentRunId);
+        harness.Agent.State.Lineage.SubWorkflow.ParentActorId.Should().Be("actor-parent-gamma");
+        harness.Agent.State.Lineage.SubWorkflow.ParentStepId.Should().Be("step-call-child");
+        harness.Agent.State.Lineage.SubWorkflow.RootRunId.Should().Be(rootRunId);
+        harness.Agent.State.Lineage.SubWorkflow.Depth.Should().Be(2);
+    }
+
+    [Fact]
     public async Task TerminalFailedRun_WithForkPolicy_ShouldCommitForkRequestedEvent()
     {
         var harness = await CreateStartedRunAsync(WorkflowYaml(onFailure: true), attempt: 1);
@@ -421,6 +478,28 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
             .Subject;
 
         return harness with { StepExecutionId = stepRequest.ExecutionId };
+    }
+
+    private static async Task<RunHarness> CreateUnboundRunAsync(string runId)
+    {
+        var eventStore = new RecordingEventStore();
+        var committedHook = new RecordingCommittedStatePublicationHook();
+        var topologyPublisher = new RecordingEventPublisher(runId);
+        var agent = new WorkflowRunGAgent(
+            new UnsupportedActorRuntime(),
+            new UnsupportedActorRuntime(),
+            new EmptyEventModuleFactory(),
+            [new EmptyWorkflowModulePack()])
+        {
+            EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<WorkflowRunState>(eventStore),
+            EventPublisher = topologyPublisher,
+            Services = new TestServiceProvider(new NoopRuntimeCallbackScheduler(), committedHook),
+            Logger = NullLogger.Instance,
+        };
+        SetAgentId(agent, runId);
+        topologyPublisher.Agent = agent;
+        await agent.ActivateAsync();
+        return new RunHarness(agent, runId, string.Empty, committedHook, topologyPublisher);
     }
 
     private static async Task<RunHarness> CreateRunAsync(

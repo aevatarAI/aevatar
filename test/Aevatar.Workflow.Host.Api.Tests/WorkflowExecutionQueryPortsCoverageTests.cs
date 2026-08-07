@@ -71,7 +71,12 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
                 },
                 SubWorkflow = new WorkflowRunSubWorkflowLineage
                 {
-                    Availability = WorkflowRunLineageAvailability.Unavailable,
+                    Availability = WorkflowRunLineageAvailability.Available,
+                    ParentRunId = "run-parent-alpha",
+                    ParentActorId = "actor-parent-gamma",
+                    ParentStepId = "step-call-child",
+                    RootRunId = "run-root-omega",
+                    Depth = 2,
                 },
             },
         });
@@ -83,7 +88,12 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
         snapshot.Lineage.RetryFork.OriginalRunId.Should().Be("run-original-alpha");
         snapshot.Lineage.RetryFork.StartAtStepId.Should().Be("step-retry");
         snapshot.Lineage.RetryFork.Attempt.Should().Be(2);
-        snapshot.Lineage.SubWorkflow.Availability.Should().Be(WorkflowRunLineageAvailability.Unavailable);
+        snapshot.Lineage.SubWorkflow.Availability.Should().Be(WorkflowRunLineageAvailability.Available);
+        snapshot.Lineage.SubWorkflow.ParentRunId.Should().Be("run-parent-alpha");
+        snapshot.Lineage.SubWorkflow.ParentActorId.Should().Be("actor-parent-gamma");
+        snapshot.Lineage.SubWorkflow.ParentStepId.Should().Be("step-call-child");
+        snapshot.Lineage.SubWorkflow.RootRunId.Should().Be("run-root-omega");
+        snapshot.Lineage.SubWorkflow.Depth.Should().Be(2);
     }
 
     [Fact]
