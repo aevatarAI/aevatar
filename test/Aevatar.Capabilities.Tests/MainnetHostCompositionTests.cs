@@ -749,7 +749,8 @@ public sealed class MainnetHostCompositionTests
             .Subject;
         nyxIdChatToolSources.Select(static source => source.GetType()).Should().Equal(
             typeof(NyxIdAssistantToolSource),
-            typeof(AskUserAgentToolSource));
+            typeof(AskUserAgentToolSource),
+            typeof(SkillsAgentToolSource));
         nyxIdChatToolSources.Should().NotContain(source => source is NyxIdAgentToolSource);
         nyxIdChatToolSources.Should().NotContain(source => source is WebAgentToolSource);
         var scheduleQueries = app.Services.GetRequiredService<IStudioMemberAutomationQueryPort>();
@@ -784,7 +785,8 @@ public sealed class MainnetHostCompositionTests
         nyxIdChatProfile.IsSuccess.Should().BeTrue(nyxIdChatProfile.Error?.Message);
         nyxIdChatProfile.Sources.Select(static source => source.GetType()).Should().Equal(
             typeof(NyxIdAssistantToolSource),
-            typeof(AskUserAgentToolSource));
+            typeof(AskUserAgentToolSource),
+            typeof(SkillsAgentToolSource));
         nyxIdChatProfile.Sources.Should().NotContain(source => source is NyxIdAgentToolSource);
         nyxIdChatProfile.Sources.Should().NotContain(source =>
             source is NyxIdConnectedServiceToolSource);
@@ -802,6 +804,7 @@ public sealed class MainnetHostCompositionTests
 
         var unknown = registry.Resolve("missing.set");
         unknown.IsSuccess.Should().BeFalse();
+        unknown.Sources.Should().BeEmpty();
         unknown.Error!.Code.Should().Be(ToolSetResolveError.UnknownNameCode);
     }
 

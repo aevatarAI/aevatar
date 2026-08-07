@@ -473,7 +473,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         // Refactor (iter27/cluster-027-skill-registry-remote-skill-process-state):
         //   Old pattern: SkillRegistry 暴露混合 local + remote skill 注册并用 5min TTL process-wide cache 缓存 remote skill,违反读写分离 + 多用户 token 共享 + 进程内事实状态
         //   New principle: 删 SkillRegistry + TTL tests + 5min cache;新建 local-only LocalSkillCatalog;remote skill 每次 use_skill 调用 IRemoteSkillFetcher.FetchSkillAsync(currentToken, ...) 不缓存;docs/canon factual sync
-        if ((_localSkillCatalog is not null || _remoteSkillFetcher is not null) &&
+        if (!IsNyxIdChatTurn(discoveryContext) &&
+            (_localSkillCatalog is not null || _remoteSkillFetcher is not null) &&
             tools.Get("use_skill") is null)
         {
             tools.Register(new UseSkillTool(
@@ -2264,7 +2265,18 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                     continue;
                 }
 
-                discovered[tool.Name] = tool;
+                if (!discovered.TryAdd(tool.Name, tool))
+                {
+                    if (isNyxIdChatTurn)
+                    {
+                        _logger.LogError(
+                            "NyxID Chat tool catalog resolution failed closed because duplicate tool names were discovered.");
+                        throw new InvalidOperationException(
+                            "NyxID Chat tool catalog contains duplicate tool names.");
+                    }
+
+                    discovered[tool.Name] = tool;
+                }
             }
 
             if (isChannelTurn)
