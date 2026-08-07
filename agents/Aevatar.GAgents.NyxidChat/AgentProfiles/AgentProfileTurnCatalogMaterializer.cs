@@ -696,7 +696,8 @@ public sealed class AgentProfileTurnCatalogMaterializer
         return !descriptor.Capabilities.Contains(
                    AgentToolCapabilities.RequiresHumanSession,
                    StringComparer.Ordinal) ||
-               !string.IsNullOrWhiteSpace(toolContext.Credentials.NyxIdAccessToken);
+               !string.IsNullOrWhiteSpace(
+                   AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(toolContext.Credentials));
     }
 
     private static bool DeclaresCapability(IAgentTool tool, string capability) =>
