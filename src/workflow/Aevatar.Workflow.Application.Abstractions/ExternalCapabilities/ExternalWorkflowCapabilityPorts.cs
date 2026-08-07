@@ -48,6 +48,43 @@ public sealed record InspectExternalWorkflowCapabilityReadinessRequest(
     ExternalWorkflowCapabilitySelector Selector,
     ExternalCapabilityExecutionMode ExecutionMode);
 
+public sealed record ManagedCodexServiceApiSkillDiscoveryRequest(
+    ExternalWorkflowCapabilityAccessContext Access,
+    ServiceApiSkillDiscoveryInput Input);
+
+public sealed record ExactServiceApiSkillVerificationRequest(
+    ExternalWorkflowCapabilityAccessContext Access,
+    ServiceApiSkillDiscoveryInput Input,
+    ReliableServiceApiSkillCandidate Candidate);
+
+public sealed class ExactServiceApiSkillVerificationResult
+{
+    private ExactServiceApiSkillVerificationResult(
+        ExactOrnnApiSkillProvenance? provenance,
+        NoReliableServiceApiSkill? rejection)
+    {
+        Provenance = provenance?.Clone();
+        Rejection = rejection?.Clone();
+    }
+
+    public ExactOrnnApiSkillProvenance? Provenance { get; }
+
+    public NoReliableServiceApiSkill? Rejection { get; }
+
+    public bool IsVerified => Provenance is not null && Rejection is null;
+
+    public static ExactServiceApiSkillVerificationResult Verified(
+        ExactOrnnApiSkillProvenance provenance) =>
+        new(provenance ?? throw new ArgumentNullException(nameof(provenance)), null);
+
+    public static ExactServiceApiSkillVerificationResult Rejected(
+        ServiceApiNoReliableSkillReason reason) =>
+        new(null, new NoReliableServiceApiSkill { Reason = reason });
+
+    public ExactServiceApiSkillVerificationResult Clone() =>
+        new(Provenance, Rejection);
+}
+
 public sealed class WorkflowExternalCapabilityAdmissionRequest
 {
     public WorkflowExternalCapabilityAdmissionRequest(
@@ -233,6 +270,20 @@ public interface IExternalWorkflowCapabilityReadinessPort
 {
     Task<ExternalCapabilityReadiness> InspectAsync(
         InspectExternalWorkflowCapabilityReadinessRequest request,
+        CancellationToken cancellationToken = default);
+}
+
+public interface IManagedCodexServiceApiSkillDiscoveryExecutor
+{
+    Task<ManagedCodexServiceApiSkillDiscoveryResult> DiscoverAsync(
+        ManagedCodexServiceApiSkillDiscoveryRequest request,
+        CancellationToken cancellationToken = default);
+}
+
+public interface IExactServiceApiSkillVerifier
+{
+    Task<ExactServiceApiSkillVerificationResult> VerifyAsync(
+        ExactServiceApiSkillVerificationRequest request,
         CancellationToken cancellationToken = default);
 }
 
