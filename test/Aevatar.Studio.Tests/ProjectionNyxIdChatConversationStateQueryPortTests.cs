@@ -110,6 +110,30 @@ public sealed class ProjectionNyxIdChatConversationStateQueryPortTests
     }
 
     [Fact]
+    public async Task GetAsync_ShouldPreserveAvailableActionsMessagePresence()
+    {
+        var document = BuildDocument(stateVersion: 8);
+        var absent = document.ActiveTask.Steps.Single();
+        absent.AvailableActions = null;
+        var present = absent.Clone();
+        present.StepId = "step-present-actions";
+        present.Order = 2;
+        present.AvailableActions = new NyxIdChatConversationAvailableActionsDocument();
+        document.ActiveTask.Steps.Add(present);
+        var port = new ProjectionNyxIdChatConversationStateQueryPort(
+            new RecordingReader { Document = document });
+
+        var result = await port.GetAsync(new NyxIdChatConversationStateQuery(
+            "scope-alpha",
+            "conversation-alpha"));
+
+        var steps = result.Snapshot!.ActiveTask!.Steps;
+        steps.Single(step => step.StepId == "step-alpha").AvailableActions.Should().BeNull();
+        steps.Single(step => step.StepId == "step-present-actions").AvailableActions
+            .Should().BeEquivalentTo(new NyxIdChatAvailableActionsSnapshot(false, false, false));
+    }
+
+    [Fact]
     public async Task GetAttentionSummariesAsync_ShouldBatchReadActorScopedProjectionTruth()
     {
         var valid = BuildDocument(stateVersion: 23);

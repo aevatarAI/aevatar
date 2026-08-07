@@ -286,17 +286,18 @@ public sealed class NyxIdChatConversationCurrentStateProjector
     private static NyxIdChatConversationOperationDocument? ToOperation(
         NyxIdChatOperationState? operation)
     {
-        if (operation?.Key == null)
+        if (operation == null)
             return null;
 
+        var key = operation.Key;
         return new NyxIdChatConversationOperationDocument
         {
-            ConversationActorId = operation.Key.ConversationActorId,
-            TurnId = operation.Key.TurnId,
-            TaskId = operation.Key.TaskId,
-            StepId = operation.Key.StepId,
-            OperationId = operation.Key.OperationId,
-            OperationGeneration = operation.Key.OperationGeneration,
+            ConversationActorId = key?.ConversationActorId ?? string.Empty,
+            TurnId = key?.TurnId ?? string.Empty,
+            TaskId = key?.TaskId ?? string.Empty,
+            StepId = key?.StepId ?? string.Empty,
+            OperationId = key?.OperationId ?? string.Empty,
+            OperationGeneration = key?.OperationGeneration ?? 0,
             Kind = ToWireName(operation.Kind),
             Phase = ToWireName(operation.Phase),
             MayChangeExternalState = operation.MayChangeExternalState,

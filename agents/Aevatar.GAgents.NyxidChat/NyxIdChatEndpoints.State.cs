@@ -57,12 +57,13 @@ public static partial class NyxIdChatEndpoints
 
         return result.Status switch
         {
-            NyxIdChatConversationStateQueryStatus.Current => Results.Ok(
+            NyxIdChatConversationStateQueryStatus.Current => Results.Json(
                 new NyxIdChatConversationStateResponse(
                     "current",
                     result.StateVersion,
                     result.TurnId,
-                    Snapshot: result.Snapshot)),
+                    Snapshot: result.Snapshot),
+                NyxIdChatStateJson.Options),
             NyxIdChatConversationStateQueryStatus.NotModified => Results.Ok(
                 new NyxIdChatConversationStateResponse(
                     "not_modified",

@@ -156,16 +156,41 @@ describe("chatActorState", () => {
       createChatActorProjection("conversation-alpha"),
       snapshotFrame
     );
-    const stale = reduceActorFrame(
+    const changed = reduceActorFrame(
       first,
+      decodeActorFrame({
+        type: "CUSTOM",
+        sequence: 6,
+        custom: {
+          name: "nyxid.task.step.changed",
+          payload: {
+            taskId: "task-alpha",
+            planRevision: 2,
+            changeKind: "status",
+            step: {
+              stepId: "step-alpha",
+              order: 1,
+              availableActions: { retry: true, skip: false, stop: true },
+            },
+          },
+        },
+      })
+    );
+    const stale = reduceActorFrame(
+      changed,
       decodeActorFrame({
         type: "CUSTOM",
         sequence: 4,
         custom: {
           name: "nyxid.task.step.changed",
           payload: {
-            stepId: "step-alpha",
-            availableActions: { retry: true, skip: false, stop: true },
+            taskId: "task-alpha",
+            planRevision: 1,
+            changeKind: "status",
+            step: {
+              stepId: "step-alpha",
+              availableActions: { retry: false, skip: true, stop: false },
+            },
           },
         },
       })
@@ -173,7 +198,10 @@ describe("chatActorState", () => {
 
     expect(first.progressSequence).toBe(5);
     expect(actorCan(first, "skip", "step-alpha")).toBe(true);
-    expect(stale).toBe(first);
+    expect(changed.progressSequence).toBe(6);
+    expect(actorCan(changed, "retry", "step-alpha")).toBe(true);
+    expect(actorCan(changed, "skip", "step-alpha")).toBe(false);
+    expect(stale).toBe(changed);
   });
 
   it("accepts only secret-free schema-v4 service.connect requests", () => {

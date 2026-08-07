@@ -5,8 +5,8 @@ namespace Aevatar.GAgents.NyxidChat;
 
 /// <summary>
 /// Presentation-only mapping from committed controller facts to AGUI frames.
-/// It never derives task state: snapshots and step changes are the exact
-/// protobuf values already committed by the conversation authority.
+/// It preserves the established projection transport types; the HTTP boundary
+/// maps task observations to the public TaskPlan contract.
 /// </summary>
 internal static class NyxIdChatConversationAguiFrameBuilder
 {

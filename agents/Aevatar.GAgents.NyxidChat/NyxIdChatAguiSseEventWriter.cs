@@ -166,7 +166,8 @@ internal static class NyxIdChatAguiSseEventWriter
                 StringComparison.Ordinal) &&
             customEvent.Payload.Is(NyxIdChatTaskState.Descriptor))
         {
-            payload = customEvent.Payload.Unpack<NyxIdChatTaskState>();
+            payload = NyxIdChatTaskPlanWireMapper.FromState(
+                customEvent.Payload.Unpack<NyxIdChatTaskState>());
             return true;
         }
 
@@ -176,7 +177,8 @@ internal static class NyxIdChatAguiSseEventWriter
                 StringComparison.Ordinal) &&
             customEvent.Payload.Is(NyxIdChatTaskStepChanged.Descriptor))
         {
-            payload = customEvent.Payload.Unpack<NyxIdChatTaskStepChanged>();
+            payload = NyxIdChatTaskPlanWireMapper.FromState(
+                customEvent.Payload.Unpack<NyxIdChatTaskStepChanged>());
             return true;
         }
 

@@ -165,7 +165,7 @@ public sealed record NyxIdChatConversationStepSnapshot(
     string? FailureCode,
     string? SafeMessage,
     bool SafeToSkip,
-    NyxIdChatAvailableActionsSnapshot AvailableActions,
+    NyxIdChatAvailableActionsSnapshot? AvailableActions,
     DateTimeOffset? UpdatedAt,
     NyxIdChatConversationOperationSnapshot? Operation,
     NyxIdChatConversationStepSourceSnapshot? Source = null,
