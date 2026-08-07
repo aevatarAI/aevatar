@@ -102,7 +102,9 @@ public class NyxIdChatSystemPromptTests
         var prompt = NyxIdChatSystemPrompt.Value.Content;
 
         prompt.Should().Contain("identify all genuine information gaps");
-        prompt.Should().Contain("ask once in one composite prose question");
+        prompt.Should().Contain(
+            "call `ask_user` once with one composite prose question, `options: []`, and `allow_free_text: true`");
+        prompt.Should().Contain("do not answer with the question as plain assistant text");
         prompt.Should().Contain("do not execute until the answer arrives");
         prompt.Should().Contain("do not drip-feed one question per gap");
         prompt.Should().Contain("Suggested defaults are editable hints, never binding choices");
