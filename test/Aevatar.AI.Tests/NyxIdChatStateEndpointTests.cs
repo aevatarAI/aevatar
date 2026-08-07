@@ -1,9 +1,21 @@
 using System.Security.Claims;
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using Aevatar.AGUI.Contracts;
+using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Runtime.Abstractions;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Infrastructure.ActorBacked;
+using Aevatar.Studio.Projection.Orchestration;
+using Aevatar.Studio.Projection.Projectors;
+using Aevatar.Studio.Projection.ReadModels;
 using FluentAssertions;
+using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -18,6 +30,92 @@ public sealed class NyxIdChatStateEndpointTests
 {
     private const string StateRoute =
         "/api/scopes/{scopeId}/nyxid-chat/conversations/{actorId}/state";
+
+    [Fact]
+    public async Task GetState_ActiveTask_ShouldExactlyMatchLiveTaskPlanAndStepChanged()
+    {
+        var task = BuildConvergenceTask();
+        var state = new NyxIdChatConversationGAgentState
+        {
+            ConversationActorId = "conversation-alpha",
+            ScopeId = "scope-alpha",
+            ProgressSequence = 67,
+            ActiveTurn = new NyxIdChatTurnState
+            {
+                TurnId = task.TurnId,
+                TaskId = task.TaskId,
+                Status = NyxIdChatTurnStatus.Active,
+            },
+            LatestTurn = new NyxIdChatTurnState
+            {
+                TurnId = task.TurnId,
+                TaskId = task.TaskId,
+                Status = NyxIdChatTurnStatus.Active,
+            },
+            ActiveTask = task,
+        };
+
+        var frames = NyxIdChatConversationAguiFrameBuilder.BuildStarted(
+            state.ConversationActorId,
+            state.ActiveTurn.TurnId,
+            state);
+        var liveFrames = await WriteLiveFramesAsync(frames, state.ActiveTurn.TurnId);
+        var liveTask = JsonNode.Parse(liveFrames.Single(frame =>
+                frame["custom"]?["name"]?.GetValue<string>() ==
+                NyxIdChatConversationAguiFrameBuilder.TaskSnapshotEventName)
+            ["custom"]!["payload"]!.ToJsonString())!;
+        var changedStep = JsonNode.Parse(liveFrames.Single(frame =>
+                frame["custom"]?["name"]?.GetValue<string>() ==
+                NyxIdChatConversationAguiFrameBuilder.TaskStepChangedEventName)
+            ["custom"]!["payload"]!["step"]!.ToJsonString())!;
+
+        var dispatcher = new RecordingTaskStateWriteDispatcher();
+        var projector = new NyxIdChatConversationCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-08-07T12:26:00Z")));
+        await projector.ProjectAsync(
+            new StudioMaterializationContext
+            {
+                RootActorId = state.ConversationActorId,
+                ProjectionKind = "nyxid-chat-conversation",
+            },
+            WrapCommittedState(state));
+
+        dispatcher.Document.Should().NotBeNull();
+        var document = dispatcher.Document!;
+        var queryPort = new ProjectionNyxIdChatConversationStateQueryPort(
+            new SingleTaskStateDocumentReader(document));
+        var response = await ExecuteAsync(queryPort, string.Empty);
+
+        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        var responseNode = JsonNode.Parse(response.Body)!.AsObject();
+        var snapshot = responseNode["snapshot"]!.AsObject();
+        var currentTask = snapshot["activeTask"]!;
+        JsonNode.DeepEquals(liveTask, currentTask).Should().BeTrue(
+            "live and reconnect paths serialize one public TaskPlan contract");
+        JsonNode.DeepEquals(liveTask["steps"]![0], changedStep).Should().BeTrue(
+            "task.step.changed uses the same public step contract as task.snapshot");
+
+        snapshot.ContainsKey("activeTurn").Should().BeTrue();
+        snapshot["activeTurn"]!.AsObject().ContainsKey("failureCode").Should().BeTrue(
+            "the narrow TaskPlan converter must not alter other current-state JSON");
+        currentTask["createdAt"]!.GetValue<string>().Should()
+            .Be("2026-08-07T12:25:05.949835500Z");
+        currentTask["steps"]![0]!["operation"]!["operationGeneration"]!
+            .GetValue<long>().Should().Be(1);
+        currentTask["steps"]![0]!["operation"]!["latestProgressSequence"]!
+            .GetValue<long>().Should().Be(7);
+        currentTask["steps"]![0]!["availableActions"]!.AsObject().Count
+            .Should().Be(0, "a present all-false message remains a present empty object");
+        currentTask["steps"]![1]!.AsObject().ContainsKey("availableActions").Should().BeFalse(
+            "an absent message remains absent");
+        currentTask["steps"]![1]!["operation"]!.AsObject().Count.Should().Be(0,
+            "a present empty operation remains a present empty object");
+        currentTask["steps"]![0]!.AsObject().ContainsKey("retryInputRebuildable")
+            .Should().BeFalse();
+        currentTask["steps"]![0]!["operation"]!.AsObject().ContainsKey("idempotencyKey")
+            .Should().BeFalse();
+    }
 
     [Fact]
     public async Task GetState_ShouldReturnCurrentSnapshotFromTypedQueryPort()
@@ -239,6 +337,143 @@ public sealed class NyxIdChatStateEndpointTests
         source.Should().NotContain("EnsureAndAttachLeaseAsync");
     }
 
+    private static NyxIdChatTaskState BuildConvergenceTask()
+    {
+        var createdAt = new Timestamp
+        {
+            Seconds = 1_786_105_505,
+            Nanos = 949_835_500,
+        };
+        var updatedAt = new Timestamp
+        {
+            Seconds = 1_786_105_510,
+            Nanos = 919_334_800,
+        };
+        var operation = new NyxIdChatOperationState
+        {
+            Key = new NyxIdChatOperationKey
+            {
+                ConversationActorId = "conversation-alpha",
+                TurnId = "turn-alpha",
+                TaskId = "task-alpha",
+                StepId = "step-alpha",
+                OperationId = "operation-alpha",
+                OperationGeneration = 1,
+            },
+            Kind = NyxIdChatStepKind.Llm,
+            Phase = NyxIdChatOperationPhase.Succeeded,
+            IdempotencyKey = "actor-internal-idempotency-alpha",
+            LatestProgressSequence = 7,
+            RequestedAt = createdAt.Clone(),
+            DispatchedAt = new Timestamp
+            {
+                Seconds = 1_786_105_506,
+                Nanos = 191_562_800,
+            },
+            CompletedAt = updatedAt.Clone(),
+        };
+        return new NyxIdChatTaskState
+        {
+            TaskId = "task-alpha",
+            TurnId = "turn-alpha",
+            Status = NyxIdChatTaskStatus.Active,
+            ActiveStepId = "step-beta",
+            CreatedAt = createdAt,
+            UpdatedAt = updatedAt,
+            SchemaVersion = 4,
+            ActorId = "conversation-alpha",
+            PlanId = "plan-alpha",
+            PlanRevision = 2,
+            Title = "Complete the requested assistant task",
+            Gate = new NyxIdChatPlanGate { Mode = NyxIdChatPlanGateMode.Auto },
+            Steps =
+            {
+                new NyxIdChatTaskStepState
+                {
+                    StepId = "step-alpha",
+                    Order = 1,
+                    Kind = NyxIdChatStepKind.Llm,
+                    Status = NyxIdChatStepStatus.Done,
+                    Required = true,
+                    Description = "Generate the next assistant response.",
+                    Source = new NyxIdChatStepSource
+                    {
+                        Llm = new NyxIdChatLLMStepSource(),
+                    },
+                    ExternalEffect = NyxIdChatEffectEvidence.NotApplied,
+                    Operation = operation,
+                    AvailableActions = new NyxIdChatAvailableActions(),
+                    UpdatedAt = updatedAt.Clone(),
+                    RetryInputRebuildable = true,
+                    AddedBy = NyxIdChatStepAddedBy.Initial,
+                },
+                new NyxIdChatTaskStepState
+                {
+                    StepId = "step-beta",
+                    Order = 2,
+                    Kind = NyxIdChatStepKind.Input,
+                    Status = NyxIdChatStepStatus.Waiting,
+                    Required = true,
+                    Description = "Collect deployment preferences.",
+                    Source = new NyxIdChatStepSource
+                    {
+                        Input = new NyxIdChatInputStepSource
+                        {
+                            RequestId = "input-alpha",
+                        },
+                    },
+                    ExternalEffect = NyxIdChatEffectEvidence.NotStarted,
+                    Operation = new NyxIdChatOperationState(),
+                    UpdatedAt = updatedAt.Clone(),
+                    AddedBy = NyxIdChatStepAddedBy.Replan,
+                    DependsOn = { "step-alpha" },
+                    Estimate = new NyxIdChatStepEstimate(),
+                    Substeps = { new NyxIdChatSubstepState() },
+                },
+            },
+        };
+    }
+
+    private static async Task<IReadOnlyList<JsonNode>> WriteLiveFramesAsync(
+        IReadOnlyList<AGUIEvent> frames,
+        string messageId)
+    {
+        var http = new DefaultHttpContext();
+        await using var body = new MemoryStream();
+        http.Response.Body = body;
+        var writer = new NyxIdChatSseWriter(http.Response);
+        foreach (var frame in frames)
+            await NyxIdChatAguiSseEventWriter.WriteAsync(frame, messageId, writer);
+
+        body.Position = 0;
+        var text = await new StreamReader(body).ReadToEndAsync();
+        return text.Split("\n\n", StringSplitOptions.RemoveEmptyEntries)
+            .Select(static frame => frame.Trim())
+            .Where(static frame => frame.StartsWith("data: ", StringComparison.Ordinal))
+            .Select(static frame => JsonNode.Parse(frame["data: ".Length..])!)
+            .ToArray();
+    }
+
+    private static EventEnvelope WrapCommittedState(
+        NyxIdChatConversationGAgentState state) => new()
+    {
+        Id = "event-alpha-23",
+        Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-07T12:26:00Z")),
+        Route = EnvelopeRouteSemantics.CreateObserverPublication(state.ConversationActorId),
+        Payload = Any.Pack(new CommittedStateEventPublished
+        {
+            StateEvent = new StateEvent
+            {
+                EventId = "event-alpha-23",
+                Version = 23,
+                EventData = Any.Pack(new NyxIdChatTurnStartedEvent { State = state }),
+                Timestamp = Timestamp.FromDateTimeOffset(
+                    DateTimeOffset.Parse("2026-08-07T12:26:00Z")),
+            },
+            StateRoot = Any.Pack(state),
+        }),
+    };
+
     private static async Task<(int StatusCode, string Body)> ExecuteAsync(
         INyxIdChatConversationStateQueryPort queryPort,
         string queryString,
@@ -318,6 +553,51 @@ public sealed class NyxIdChatStateEndpointTests
 
         return directory?.FullName
             ?? throw new InvalidOperationException("Repository root could not be resolved.");
+    }
+
+    private sealed class RecordingTaskStateWriteDispatcher
+        : IProjectionWriteDispatcher<NyxIdChatConversationCurrentStateDocument>
+    {
+        public NyxIdChatConversationCurrentStateDocument? Document { get; private set; }
+
+        public Task<ProjectionWriteResult> UpsertAsync(
+            NyxIdChatConversationCurrentStateDocument readModel,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Document = readModel.Clone();
+            return Task.FromResult(ProjectionWriteResult.Applied());
+        }
+
+        public Task<ProjectionWriteResult> DeleteAsync(
+            string id,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+    }
+
+    private sealed class SingleTaskStateDocumentReader(
+        NyxIdChatConversationCurrentStateDocument document)
+        : IProjectionDocumentReader<NyxIdChatConversationCurrentStateDocument, string>
+    {
+        public Task<NyxIdChatConversationCurrentStateDocument?> GetAsync(
+            string key,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<NyxIdChatConversationCurrentStateDocument?>(
+                document.Clone());
+        }
+
+        public Task<ProjectionDocumentQueryResult<NyxIdChatConversationCurrentStateDocument>>
+            QueryAsync(
+                ProjectionDocumentQuery query,
+                CancellationToken ct = default) =>
+            throw new NotSupportedException();
+    }
+
+    private sealed class FixedProjectionClock(DateTimeOffset utcNow) : IProjectionClock
+    {
+        public DateTimeOffset UtcNow { get; } = utcNow;
     }
 
     private sealed class RecordingQueryPort : INyxIdChatConversationStateQueryPort

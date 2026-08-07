@@ -227,7 +227,7 @@ export function reduceActorFrame(
       applyTask(next, frame.payload);
       break;
     case "task_step_changed":
-      applyStep(next, frame.payload);
+      applyStep(next, optionalRecord(frame.payload.step));
       break;
     case "control_changed":
       next.latestControlResult = cloneRecord(frame.payload);
@@ -566,7 +566,11 @@ function applyTask(projection: ChatActorProjection, task: JsonRecord): void {
   projection.steps = new Map(steps.map((step) => [step.stepId, cloneStep(step)]));
 }
 
-function applyStep(projection: ChatActorProjection, input: JsonRecord): void {
+function applyStep(
+  projection: ChatActorProjection,
+  input: JsonRecord | null
+): void {
+  if (!input) return;
   const stepId = readIdentity(input.stepId);
   if (!stepId) return;
   const step = { ...projection.steps.get(stepId), ...cloneRecord(input), stepId };

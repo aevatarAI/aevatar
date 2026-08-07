@@ -157,8 +157,11 @@ Actor-authored task observation is committed before publication. The controller 
 
 ### TaskPlan observation contract
 
-`nyxid.task.snapshot.custom.payload` is the complete actor-owned TaskPlan. Its
-stable v1 fields are:
+`nyxid.task.snapshot.custom.payload` is the complete public `NyxIdChatTaskPlan`
+projection of the actor-owned task. The live adapter and current-state adapter
+both map their typed input to this protobuf contract and use the same JSON
+formatter; they never serialize the actor state or a read-model DTO directly.
+Its stable v1 fields are:
 
 | Field | Meaning |
 |---|---|
@@ -179,6 +182,20 @@ reserved `web` source. Tool source keeps `toolName`, exact `serviceSlug`, exact
 `serviceId`, and optional producer-authored `readinessCapabilityId` separate.
 Postcondition source carries `actionRequestId` plus the stable `check`; approval
 source carries the exact `approvalRequestId`.
+
+The public operation is flattened as
+`conversationActorId / turnId / taskId / stepId / operationId /
+operationGeneration` plus kind, phase, effect evidence, progress, safe terminal
+fields, and timestamps. `operationGeneration` and `latestProgressSequence` are
+serialized as JSON numbers only while they are within the browser-safe integer
+range; values outside that range fail closed. This is an explicit browser wire
+rule layered on the strong `int64` protobuf fields, not `JsonFormatter.Default`
+behavior. Timestamps use canonical protobuf JSON UTC formatting, and absent or
+default protobuf fields are omitted while present empty messages remain `{}`.
+
+`retryInputRebuildable` and operation `idempotencyKey` are execution-control
+facts. They remain in actor-owned state and are deliberately excluded from the
+public TaskPlan, current-state read model, SSE frames, and browser decoder.
 
 `nyxid.task.step.changed.custom.payload` is always the complete typed envelope
 `taskId / planRevision / step / changeKind`. It never publishes a bare step.

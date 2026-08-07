@@ -362,10 +362,82 @@ message NyxIdChatTaskState {
   NyxIdChatPlanGate gate = 16;
 }
 
+// Public TaskPlan projection shared by live AGUI frames and current-state
+// responses. Execution-only retry inputs and idempotency keys remain in the
+// authoritative actor state and are deliberately absent here.
+message NyxIdChatTaskPlanOperation {
+  string conversation_actor_id = 1;
+  string turn_id = 2;
+  string task_id = 3;
+  string step_id = 4;
+  string operation_id = 5;
+  int64 operation_generation = 6;
+  NyxIdChatStepKind kind = 7;
+  NyxIdChatOperationPhase phase = 8;
+  bool may_change_external_state = 9;
+  bool idempotent = 10;
+  int64 latest_progress_sequence = 11;
+  string terminal_code = 12;
+  string safe_message = 13;
+  google.protobuf.Timestamp requested_at = 14;
+  google.protobuf.Timestamp dispatched_at = 15;
+  google.protobuf.Timestamp completed_at = 16;
+}
+
+message NyxIdChatTaskPlanStep {
+  string step_id = 1;
+  int32 order = 2;
+  NyxIdChatStepKind kind = 3;
+  NyxIdChatStepStatus status = 4;
+  bool required = 5;
+  string description = 6;
+  NyxIdChatStepSource source = 7;
+  bool may_change_external_state = 8;
+  NyxIdChatEffectEvidence external_effect = 9;
+  NyxIdChatTaskPlanOperation operation = 10;
+  string approval_request_id = 11;
+  string action_request_id = 12;
+  string failure_code = 13;
+  string safe_message = 14;
+  bool safe_to_skip = 15;
+  NyxIdChatAvailableActions available_actions = 16;
+  google.protobuf.Timestamp updated_at = 17;
+  NyxIdChatStepAddedBy added_by = 18;
+  repeated string depends_on = 19;
+  NyxIdChatStepEstimate estimate = 20;
+  repeated NyxIdChatSubstepState substeps = 21;
+}
+
+message NyxIdChatTaskPlan {
+  string task_id = 1;
+  string turn_id = 2;
+  NyxIdChatTaskStatus status = 3;
+  repeated NyxIdChatTaskPlanStep steps = 4;
+  string active_step_id = 5;
+  string active_operation_id = 6;
+  string failure_code = 7;
+  string safe_message = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp updated_at = 10;
+  int32 schema_version = 11;
+  string actor_id = 12;
+  string plan_id = 13;
+  int32 plan_revision = 14;
+  string title = 15;
+  NyxIdChatPlanGate gate = 16;
+}
+
 message NyxIdChatTaskStepChanged {
   string task_id = 1;
   int32 plan_revision = 2;
   NyxIdChatTaskStepState step = 3;
+  NyxIdChatStepChangeKind change_kind = 4;
+}
+
+message NyxIdChatTaskPlanStepChanged {
+  string task_id = 1;
+  int32 plan_revision = 2;
+  NyxIdChatTaskPlanStep step = 3;
   NyxIdChatStepChangeKind change_kind = 4;
 }
 
