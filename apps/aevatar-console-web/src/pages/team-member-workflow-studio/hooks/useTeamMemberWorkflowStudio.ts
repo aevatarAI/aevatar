@@ -235,7 +235,7 @@ type TeamMemberWorkflowStudioState = {
   readonly closeNodeLibrary: () => void;
   readonly closeYamlPanel: () => void;
   readonly connectNodes: (sourceNodeId: string, targetNodeId: string) => void;
-  readonly deleteSelectedConnection: () => void;
+  readonly deleteSelectedConnection: (edgeId?: string) => void;
   readonly deleteSelectedNode: () => void;
   readonly dirty: boolean;
   readonly emptyDescription: string;
@@ -3180,27 +3180,30 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     setSelectedNodeId(result.nodeId);
     markDraftDirty();
   }, [editableDocument, markDraftDirty, selectedNodeId]);
-  const deleteSelectedConnection = React.useCallback(() => {
-    if (!editableDocument || !selectedEdgeId) {
-      return;
-    }
+  const deleteSelectedConnection = React.useCallback(
+    (edgeId: string = selectedEdgeId) => {
+      if (!editableDocument || !edgeId) {
+        return;
+      }
 
-    const connection = readConnectionFromGraphEdgeId(selectedEdgeId);
-    if (!connection) {
-      return;
-    }
+      const connection = readConnectionFromGraphEdgeId(edgeId);
+      if (!connection) {
+        return;
+      }
 
-    const result = removeStepConnection(
-      editableDocument,
-      connection.sourceStepId,
-      connection.targetStepId,
-      connection.branchLabel,
-    );
-    setEditableDocument(result.document);
-    setSelectedEdgeId('');
-    setSelectedNodeId('');
-    markDraftDirty();
-  }, [editableDocument, markDraftDirty, selectedEdgeId]);
+      const result = removeStepConnection(
+        editableDocument,
+        connection.sourceStepId,
+        connection.targetStepId,
+        connection.branchLabel,
+      );
+      setEditableDocument(result.document);
+      setSelectedEdgeId('');
+      setSelectedNodeId('');
+      markDraftDirty();
+    },
+    [editableDocument, markDraftDirty, selectedEdgeId],
+  );
   const updateSelectedStepConfiguration = React.useCallback(
     (parametersText: string) => {
       if (!editableDocument || !selectedStepDraft) {

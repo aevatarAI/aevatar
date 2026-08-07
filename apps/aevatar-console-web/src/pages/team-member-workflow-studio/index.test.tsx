@@ -58,6 +58,7 @@ jest.mock('@/shared/graphs/GraphCanvas', () => ({
     edges?: Array<{ id?: string }>;
     onCanvasSelect?: () => void;
     onConnectNodes?: (sourceNodeId: string, targetNodeId: string) => void;
+    onDeleteEdges?: (edgeIds: string[]) => Promise<void> | void;
     onEdgeSelect?: (edgeId: string) => void;
     onNodeLayoutChange?: (
       nodes: Array<{ id?: string; position?: { x: number; y: number } }>,
@@ -91,13 +92,24 @@ jest.mock('@/shared/graphs/GraphCanvas', () => ({
       ),
       props.edges?.map((edge) =>
         React.createElement(
-          'button',
-          {
-            key: edge.id,
-            onClick: () => props.onEdgeSelect?.(String(edge.id ?? '')),
-            type: 'button',
-          },
-          `edge:${edge.id}`,
+          React.Fragment,
+          { key: edge.id },
+          React.createElement(
+            'button',
+            {
+              onClick: () => props.onEdgeSelect?.(String(edge.id ?? '')),
+              type: 'button',
+            },
+            `edge:${edge.id}`,
+          ),
+          React.createElement(
+            'button',
+            {
+              onClick: () => props.onDeleteEdges?.([String(edge.id ?? '')]),
+              type: 'button',
+            },
+            `delete edge:${edge.id}`,
+          ),
         ),
       ),
       React.createElement(
@@ -3189,7 +3201,7 @@ describe('TeamMemberWorkflowStudioPage', () => {
     });
   });
 
-  it('deletes a selected connection without deleting either node', async () => {
+  it('deletes the connection requested by the canvas without deleting either node', async () => {
     window.history.replaceState(
       {},
       '',
@@ -3258,17 +3270,10 @@ describe('TeamMemberWorkflowStudioPage', () => {
       expect(screen.getByText('nodes:2')).toBeTruthy();
     });
     fireEvent.click(
-      screen.getByRole('button', { name: 'edge:edge:triage:publish:linear' }),
+      screen.getByRole('button', {
+        name: 'delete edge:edge:triage:publish:linear',
+      }),
     );
-    openMoreActionsMenu();
-    expect(
-      screen.getByRole('menuitem', { name: 'Delete selected connection' }),
-    ).toBeTruthy();
-    closeOpenMenu();
-    const confirmSpy = jest
-      .spyOn(window, 'confirm')
-      .mockImplementation(() => true);
-    clickMoreAction('Delete selected connection');
     expect(
       screen.queryByRole('button', {
         name: 'edge:edge:triage:publish:linear',
@@ -3279,10 +3284,6 @@ describe('TeamMemberWorkflowStudioPage', () => {
     expect(
       screen.queryByRole('button', { name: 'More workflow actions' }),
     ).toBeNull();
-    expect(confirmSpy).toHaveBeenCalledWith(
-      'Delete the selected connection? This cannot be undone.',
-    );
-    confirmSpy.mockRestore();
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => {

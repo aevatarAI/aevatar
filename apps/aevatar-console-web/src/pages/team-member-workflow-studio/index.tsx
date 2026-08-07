@@ -340,8 +340,9 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
             onCloseNodeLibrary={studio.closeNodeLibrary}
             onConnectNodes={studio.connectNodes}
             onDeleteEdges={(edgeIds) => {
-              if (edgeIds.includes(studio.selectedEdgeId)) {
-                studio.deleteSelectedConnection();
+              const [edgeId] = edgeIds;
+              if (edgeId) {
+                studio.deleteSelectedConnection(edgeId);
               }
             }}
             onDeleteNodes={(nodeIds) => {
