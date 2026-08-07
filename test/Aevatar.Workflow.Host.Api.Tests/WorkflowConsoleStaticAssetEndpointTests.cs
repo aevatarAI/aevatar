@@ -70,6 +70,7 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
             html.Should().NotContain("class=\"workflow-nav\"");
             html.Should().Contain("id=\"servicesButton\"");
             html.Should().Contain("id=\"mobileInspectorButton\"");
+            html.Should().Contain("\"enableStudioWireInspector\":false");
             html.Should().NotContain("class=\"studio-tabs\"");
             html.Should().Contain("<div class=\"group-label\">当前实录</div>");
             html.Should().Contain("name=\"color-scheme\" content=\"only light\"");
@@ -168,8 +169,11 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         var blocks = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantBlocks);
         var transport = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantTransport);
         var styles = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantStyles);
+        var lucide = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantLucide);
+        var marked = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantMarked);
+        var purify = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantPurify);
 
-        app.Should().Contain("import \"./transport.js?v=20260807-actor-task-anchor\"");
+        app.Should().Contain("import \"./transport.js?v=20260807-m40-studio-shell\"");
         app.Should().Contain("async function sendPrompt(");
         app.Should().Contain("async function loadConversations(");
         app.Should().Contain("async function refreshActorState(");
@@ -209,6 +213,14 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         html.Should().Contain("id=\"needsYouFilterButton\"");
         html.Should().NotContain("id=\"taskPhaseList\"");
         html.Should().Contain("id=\"composerInputRequest\"");
+        html.Should().Contain("class=\"hidden\" id=\"eventsTabButton\"");
+        html.Should().Contain("/workflow/studio/assets/vendor/lucide.min.js");
+        html.Should().Contain("/workflow/studio/assets/vendor/marked.min.js");
+        html.Should().Contain("/workflow/studio/assets/vendor/purify.min.js");
+        html.Should().NotContain("https://unpkg.com");
+        lucide.Should().Contain("@license lucide v0.563.0 - ISC");
+        marked.Should().Contain("marked v15.0.12");
+        purify.Should().Contain("DOMPurify 3.2.6");
         styles.Should().Contain(".connect-card");
         styles.Should().Contain(".readiness-panel");
         styles.Should().Contain(".needs-you-panel");
@@ -227,6 +239,14 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         styles.Should().Contain("width: min(448px, calc(100% - 48px))");
         styles.Should().Contain("grid-template-columns: var(--sidebar-width) minmax(0, 1fr)");
         app.Should().Contain("展开计划详情");
+        app.Should().Contain("root.dataset.collapsed = \"false\"");
+        app.Should().NotContain("root.dataset.collapsed = \"true\"");
+        app.Should().Contain("state.config.enableStudioWireInspector === true && state.auth.authenticated");
+        transport.Should().Contain("backendConfig.enableStudioWireInspector === true");
+        app.Should().NotContain("https://aevatar-console-backend-api.aevatar.ai");
+        app.Should().NotContain("https://nyx-api.chrono-ai.fun");
+        app.Should().NotContain("https://nyx.chrono-ai.fun");
+        transport.Should().NotContain("https://nyx.chrono-ai.fun");
         app.Should().Contain("cc-progress-step");
         app.Should().NotContain("function setStudioTab(tab)");
         app.Should().NotContain("尚未取得必需能力的有效证明");
@@ -241,13 +261,13 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         app.Should().NotContain("freeText.className = \"needs-you-free-text\"");
         styles.Should().Contain("@media (max-width:");
         html.Should().Contain("<meta name=\"color-scheme\" content=\"only light\"");
-        html.Should().Contain("app.js?v=20260807-actor-task-anchor");
-        html.Should().Contain("styles.css?v=20260807-actor-task-anchor");
-        app.Should().Contain("transport.js?v=20260807-actor-task-anchor");
-        app.Should().Contain("readiness.js?v=20260807-actor-task-anchor");
-        transport.Should().Contain("readiness.js?v=20260807-actor-task-anchor");
-        actorState.Should().Contain("protocol.js?v=20260807-actor-task-anchor");
-        blocks.Should().Contain("protocol.js?v=20260807-actor-task-anchor");
+        html.Should().Contain("app.js?v=20260807-m40-studio-shell");
+        html.Should().Contain("styles.css?v=20260807-m40-studio-shell");
+        app.Should().Contain("transport.js?v=20260807-m40-studio-shell");
+        app.Should().Contain("readiness.js?v=20260807-m40-studio-shell");
+        transport.Should().Contain("readiness.js?v=20260807-m40-studio-shell");
+        actorState.Should().Contain("protocol.js?v=20260807-m40-studio-shell");
+        blocks.Should().Contain("protocol.js?v=20260807-m40-studio-shell");
         html.Should().Contain("<span class=\"brand-name\">Aevatar Studio</span>");
         html.Should().NotContain("class=\"brand-mark\"");
         styles.Should().Contain("color-scheme: only light");
@@ -426,6 +446,106 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
             """;
 
         var result = await RunNodeAsync(script, protocol);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_Protocol_ShouldPreserveTypedRunStoppedPayload()
+    {
+        var protocol = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantProtocol);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8').replace(/^export /gm, '');
+            const context = { structuredClone, TextDecoder, URL, console };
+            vm.createContext(context);
+            vm.runInContext(source, context);
+
+            const event = context.normalizeFrame({
+              type:'RUN_STOPPED',
+              runStopped:{
+                status:'stopped', detail:'Stopped after committed partial work.',
+                partialWork:{stateVersion:17,effectEvidence:'confirmed'}
+              }
+            });
+
+            assert.equal(event.type, 'run_stopped');
+            assert.equal(event.status, 'stopped');
+            assert.equal(event.detail, 'Stopped after committed partial work.');
+            assert.equal(event.partialWork.stateVersion, 17);
+            assert.equal(event.partialWork.effectEvidence, 'confirmed');
+            """;
+
+        var result = await RunNodeAsync(script, protocol);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_WireInspector_ShouldRequireHostFlagAndAuthenticatedSession()
+    {
+        var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name, nextName) {
+              const start = source.indexOf('function ' + name + '(');
+              const end = source.indexOf('\nfunction ' + nextName + '(', start);
+              assert.notEqual(start, -1, name + ' must exist');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return source.slice(start, end);
+            }
+
+            function element() {
+              const classes = new Set();
+              const attributes = new Map();
+              return {
+                classes, attributes,
+                classList:{toggle(name, enabled){
+                  if (enabled) classes.add(name); else classes.delete(name);
+                }},
+                setAttribute(name, value){attributes.set(name, value);}
+              };
+            }
+
+            const context = {
+              state:{config:{enableStudioWireInspector:true},auth:{authenticated:false}},
+              dom:{
+                runPanel:element(), eventsPanel:element(), runTabButton:element(),
+                eventsTabButton:element()
+              }
+            };
+            vm.createContext(context);
+            vm.runInContext(`
+              ${functionSource('configureWireInspector', 'updateElapsed')}
+              ${functionSource('setInspectorTab', 'openMobilePanel')}
+            `, context);
+
+            context.configureWireInspector();
+            assert.equal(context.dom.eventsTabButton.classes.has('hidden'), true);
+            assert.equal(context.dom.eventsTabButton.attributes.get('aria-hidden'), 'true');
+            context.setInspectorTab('events');
+            assert.equal(context.dom.runPanel.classes.has('hidden'), false);
+            assert.equal(context.dom.eventsPanel.classes.has('hidden'), true);
+
+            context.state.auth.authenticated = true;
+            context.configureWireInspector();
+            assert.equal(context.dom.eventsTabButton.classes.has('hidden'), false);
+            assert.equal(context.dom.eventsTabButton.attributes.get('aria-hidden'), 'false');
+            context.setInspectorTab('events');
+            assert.equal(context.dom.runPanel.classes.has('hidden'), true);
+            assert.equal(context.dom.eventsPanel.classes.has('hidden'), false);
+
+            context.state.config.enableStudioWireInspector = false;
+            context.setInspectorTab('events');
+            assert.equal(context.dom.runPanel.classes.has('hidden'), false);
+            assert.equal(context.dom.eventsPanel.classes.has('hidden'), true);
+            """;
+
+        var result = await RunNodeAsync(script, app);
 
         result.ExitCode.Should().Be(0, result.Error + result.Output);
     }

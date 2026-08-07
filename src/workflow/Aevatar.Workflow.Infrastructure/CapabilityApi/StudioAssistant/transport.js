@@ -1,4 +1,4 @@
-import { normalizeReadinessSnapshot } from "./readiness.js?v=20260807-actor-task-anchor";
+import { normalizeReadinessSnapshot } from "./readiness.js?v=20260807-m40-studio-shell";
 
 const nativeFetch = globalThis.fetch.bind(globalThis);
 const backendConfig = globalThis.__AEVATAR_ASSISTANT_CONFIG__ || {};
@@ -10,7 +10,8 @@ const config = Object.freeze({
   resources: uniqueStrings(backendConfig.resources),
   nyxidApi: trimBaseUrl(backendConfig.nyxidApi || backendConfig.authority),
   nyxidWeb: trimBaseUrl(backendConfig.nyxidWeb || backendConfig.authority),
-  storageKey: String(backendConfig.storageKey || "aevatar-console:nyxid:pkce"),
+  storageKey: String(backendConfig.storageKey || "aevatar-studio:session"),
+  enableStudioWireInspector: backendConfig.enableStudioWireInspector === true,
   redirectUri: `${location.origin}/auto/callback`,
 });
 
@@ -449,6 +450,7 @@ async function studioFetch(input, init = {}) {
       servicesUrl: config.nyxidWeb ? new URL("/keys", config.nyxidWeb).toString() : "",
       environment: "production",
       transportLocked: true,
+      enableStudioWireInspector: config.enableStudioWireInspector,
     });
   }
   if (url.pathname === "/api/auth/session") return await userSessionResponse();

@@ -37,6 +37,9 @@ public static class WorkflowStudioEndpoints
     private static readonly BackendConsoleAsset AssistantBlocksAsset = AssistantAsset("blocks.js", "text/javascript");
     private static readonly BackendConsoleAsset AssistantTransportAsset = AssistantAsset("transport.js", "text/javascript");
     private static readonly BackendConsoleAsset AssistantStylesAsset = AssistantAsset("styles.css", "text/css");
+    private static readonly BackendConsoleAsset AssistantLucideAsset = AssistantVendorAsset("lucide.min.js");
+    private static readonly BackendConsoleAsset AssistantMarkedAsset = AssistantVendorAsset("marked.min.js");
+    private static readonly BackendConsoleAsset AssistantPurifyAsset = AssistantVendorAsset("purify.min.js");
 
     public static IEndpointRouteBuilder MapWorkflowStudio(this IEndpointRouteBuilder app)
     {
@@ -69,6 +72,15 @@ public static class WorkflowStudioEndpoints
         app.MapGet($"{AssetsRoute}/styles.css", GetAssistantStyles)
             .WithTags("WorkflowStudio")
             .AllowAnonymous();
+        app.MapGet($"{AssetsRoute}/vendor/lucide.min.js", GetAssistantLucide)
+            .WithTags("WorkflowStudio")
+            .AllowAnonymous();
+        app.MapGet($"{AssetsRoute}/vendor/marked.min.js", GetAssistantMarked)
+            .WithTags("WorkflowStudio")
+            .AllowAnonymous();
+        app.MapGet($"{AssetsRoute}/vendor/purify.min.js", GetAssistantPurify)
+            .WithTags("WorkflowStudio")
+            .AllowAnonymous();
 
         // Keep the existing schedules shell independent from the Assistant page. Both shells use the
         // shared /auto/callback flow and storage key, so no page-specific NyxID redirect URI is required.
@@ -92,6 +104,13 @@ public static class WorkflowStudioEndpoints
         Assembly: typeof(WorkflowStudioEndpoints).Assembly,
         ResourceSuffix: $"CapabilityApi.StudioAssistant.{fileName}",
         ContentType: contentType,
+        InjectHostConfiguration: false);
+
+    private static BackendConsoleAsset AssistantVendorAsset(string fileName) => new(
+        LogicalName: $"studio-assistant-vendor-{fileName}",
+        Assembly: typeof(WorkflowStudioEndpoints).Assembly,
+        ResourceSuffix: $"CapabilityApi.StudioAssistant.Vendor.{fileName}",
+        ContentType: "text/javascript",
         InjectHostConfiguration: false);
 
     internal static IResult GetStudioPage(
@@ -132,6 +151,15 @@ public static class WorkflowStudioEndpoints
 
     internal static IResult GetAssistantStyles(HttpContext http, [FromServices] IBackendConsoleAssetService assets) =>
         ServeAsset(http, assets, AssistantStylesAsset);
+
+    internal static IResult GetAssistantLucide(HttpContext http, [FromServices] IBackendConsoleAssetService assets) =>
+        ServeAsset(http, assets, AssistantLucideAsset);
+
+    internal static IResult GetAssistantMarked(HttpContext http, [FromServices] IBackendConsoleAssetService assets) =>
+        ServeAsset(http, assets, AssistantMarkedAsset);
+
+    internal static IResult GetAssistantPurify(HttpContext http, [FromServices] IBackendConsoleAssetService assets) =>
+        ServeAsset(http, assets, AssistantPurifyAsset);
 
     private static IResult ServeAsset(
         HttpContext http,

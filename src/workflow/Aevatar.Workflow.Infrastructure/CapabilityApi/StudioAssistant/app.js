@@ -1,4 +1,4 @@
-import "./transport.js?v=20260807-actor-task-anchor";
+import "./transport.js?v=20260807-m40-studio-shell";
 import {
   consumeSse,
   mergeUsage,
@@ -9,21 +9,21 @@ import {
   redact,
   safeJson,
   validateActionContinuation,
-} from "./protocol.js?v=20260807-actor-task-anchor";
+} from "./protocol.js?v=20260807-m40-studio-shell";
 import {
   buildConnectCardBlock,
   connectCardSteps,
   connectorInitial,
   splitMessageSegments,
-} from "./blocks.js?v=20260807-actor-task-anchor";
+} from "./blocks.js?v=20260807-m40-studio-shell";
 import {
   actorCan,
   applyCurrentStateResult,
   createActorProjection,
   reduceActorEvent,
   restoreCachedAction,
-} from "./actor-state.js?v=20260807-actor-task-anchor";
-import { describeReadinessFailure } from "./readiness.js?v=20260807-actor-task-anchor";
+} from "./actor-state.js?v=20260807-m40-studio-shell";
+import { describeReadinessFailure } from "./readiness.js?v=20260807-m40-studio-shell";
 
 const PREFERENCES_KEY = "aevatar-studio:assistant-preferences:v4";
 const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
@@ -157,13 +157,14 @@ const state = {
     transport: "nyxid-session",
     authMode: "site-session",
     surface: "nyxid-chat",
-    directBaseUrl: "https://aevatar-console-backend-api.aevatar.ai",
-    proxyBaseUrl: "https://nyx-api.chrono-ai.fun/api/v1/proxy/s/aevatar",
-    ornnWebUrl: "https://ornn.chrono-ai.fun",
-    nyxidWebUrl: "https://nyx.chrono-ai.fun",
-    servicesUrl: "https://nyx.chrono-ai.fun/keys",
+    directBaseUrl: "",
+    proxyBaseUrl: "",
+    ornnWebUrl: "",
+    nyxidWebUrl: "",
+    servicesUrl: "",
     scopeId: "",
     workflow: "direct",
+    enableStudioWireInspector: false,
   },
   auth: { authenticated: false, user: null, resources: [] },
   services: [],
@@ -612,6 +613,7 @@ async function refreshAuthSession({ includeServices = false } = {}) {
   }
   renderAuthUi();
   renderReadiness();
+  configureWireInspector();
   if (readinessSubjectChanged && state.auth.authenticated) await loadReadiness();
   return state.auth;
 }
@@ -1025,7 +1027,8 @@ function applyActorActionProof(card, action, projection) {
 }
 
 function connectDeepLink(card) {
-  const base = state.config.nyxidWebUrl || "https://nyx.chrono-ai.fun";
+  const base = state.config.nyxidWebUrl;
+  if (!base) return "";
   if (!card.block.known || !card.slug) return new URL("/keys", base).toString();
   const url = new URL("/keys", base);
   url.searchParams.set("slug", card.slug);
@@ -1083,6 +1086,12 @@ async function openConnectTarget(card) {
   }
   card.externalBaseline = matchingUserServiceIds(card, connectors);
   const target = connectDeepLink(card);
+  if (!target) {
+    card.status = "needs_connection";
+    card.error = "NyxID management is not configured for this deployment.";
+    renderConnectCard(card);
+    return;
+  }
   const opened = window.open(target, "nyxid-connect");
   if (opened) {
     try {
@@ -1698,6 +1707,7 @@ async function logout() {
     }
     renderAuthUi();
     renderReadiness();
+    configureWireInspector();
   }
 }
 
@@ -2568,7 +2578,7 @@ function renderActorProjection(entry) {
   const root = entry.actorTaskElement || el("section", "actor-task");
   entry.actorTaskElement = root;
   if (root.dataset.collapsed !== "true" && root.dataset.collapsed !== "false") {
-    root.dataset.collapsed = "true";
+    root.dataset.collapsed = "false";
   }
   root.replaceChildren();
   const task = projection.task;
@@ -4362,7 +4372,7 @@ function renderSteps() {
 }
 
 function renderEventLog() {
-  if (!isActiveConversationContext()) return;
+  if (!isActiveConversationContext() || !dom.eventCount || !dom.eventList) return;
   dom.eventCount.textContent = String(state.run.events.length);
   dom.eventList.replaceChildren();
   if (!state.run.events.length) {
@@ -4385,6 +4395,13 @@ function renderEventLog() {
 function clearEvents() {
   state.run.events = [];
   renderEventLog();
+}
+
+function configureWireInspector() {
+  const enabled = state.config.enableStudioWireInspector === true && state.auth.authenticated;
+  dom.eventsTabButton?.classList.toggle("hidden", !enabled);
+  dom.eventsTabButton?.setAttribute("aria-hidden", String(!enabled));
+  if (!enabled) setInspectorTab("run");
 }
 
 function updateElapsed() {
@@ -4541,13 +4558,15 @@ function renderAttachment() {
 }
 
 function setInspectorTab(tab) {
-  const events = tab === "events";
+  const events = tab === "events" &&
+    state.config.enableStudioWireInspector === true &&
+    state.auth.authenticated;
   dom.runPanel.classList.toggle("hidden", events);
-  dom.eventsPanel.classList.toggle("hidden", !events);
+  dom.eventsPanel?.classList.toggle("hidden", !events);
   dom.runTabButton.classList.toggle("active", !events);
-  dom.eventsTabButton.classList.toggle("active", events);
+  dom.eventsTabButton?.classList.toggle("active", events);
   dom.runTabButton.setAttribute("aria-selected", String(!events));
-  dom.eventsTabButton.setAttribute("aria-selected", String(events));
+  dom.eventsTabButton?.setAttribute("aria-selected", String(events));
 }
 
 function openMobilePanel(panel) {

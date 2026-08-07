@@ -24,4 +24,6 @@ public sealed class BackendConsoleOptions
     public string StorageKey { get; set; } = string.Empty;
 
     public string DefaultReturnPath { get; set; } = string.Empty;
+
+    public bool EnableStudioWireInspector { get; set; }
 }

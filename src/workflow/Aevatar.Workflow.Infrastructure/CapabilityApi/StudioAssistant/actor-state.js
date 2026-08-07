@@ -1,4 +1,4 @@
-import { validateActionRequest } from "./protocol.js?v=20260807-actor-task-anchor";
+import { validateActionRequest } from "./protocol.js?v=20260807-m40-studio-shell";
 
 const ACTOR_EVENT_TYPES = new Set([
   "task_snapshot",

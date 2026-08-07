@@ -43,6 +43,8 @@ public static class BackendConsoleHostingServiceCollectionExtensions
             NyxWebBaseUrl = section[nameof(BackendConsoleOptions.NyxWebBaseUrl)] ?? string.Empty,
             StorageKey = section[nameof(BackendConsoleOptions.StorageKey)] ?? string.Empty,
             DefaultReturnPath = section[nameof(BackendConsoleOptions.DefaultReturnPath)] ?? string.Empty,
+            EnableStudioWireInspector = section.GetValue<bool>(
+                nameof(BackendConsoleOptions.EnableStudioWireInspector)),
         };
         ApplyFallbacks(configuration, options);
         ApplyHostEnvironmentOverrides(options);
@@ -84,6 +86,9 @@ public static class BackendConsoleHostingServiceCollectionExtensions
         options.NyxWebBaseUrl = EnvironmentOverride("HOST_BACKEND_CONSOLE_NYX_WEB_BASE_URL", options.NyxWebBaseUrl);
         options.StorageKey = EnvironmentOverride("HOST_BACKEND_CONSOLE_STORAGE_KEY", options.StorageKey);
         options.DefaultReturnPath = EnvironmentOverride("HOST_BACKEND_CONSOLE_DEFAULT_RETURN_PATH", options.DefaultReturnPath);
+        options.EnableStudioWireInspector = EnvironmentOverride(
+            "HOST_BACKEND_CONSOLE_ENABLE_STUDIO_WIRE_INSPECTOR",
+            options.EnableStudioWireInspector);
     }
 
     private static void NormalizeOidcScope(BackendConsoleOptions options)
@@ -148,5 +153,11 @@ public static class BackendConsoleHostingServiceCollectionExtensions
         return string.IsNullOrWhiteSpace(value)
             ? configuredValue
             : value.Trim();
+    }
+
+    private static bool EnvironmentOverride(string key, bool configuredValue)
+    {
+        var value = Environment.GetEnvironmentVariable(key);
+        return bool.TryParse(value, out var parsed) ? parsed : configuredValue;
     }
 }

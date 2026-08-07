@@ -6,12 +6,12 @@
     <meta name="color-scheme" content="only light" />
     <meta name="supported-color-schemes" content="light" />
     <title>Aevatar Studio</title>
-    <link rel="stylesheet" href="/workflow/studio/assets/styles.css?v=20260807-actor-task-anchor" />
-    <script defer src="https://unpkg.com/lucide@0.563.0/dist/umd/lucide.min.js"></script>
-    <script defer src="https://unpkg.com/marked@15.0.12/marked.min.js"></script>
-    <script defer src="https://unpkg.com/dompurify@3.2.6/dist/purify.min.js"></script>
+    <link rel="stylesheet" href="/workflow/studio/assets/styles.css?v=20260807-m40-studio-shell" />
+    <script defer src="/workflow/studio/assets/vendor/lucide.min.js?v=20260807-m40-studio-shell"></script>
+    <script defer src="/workflow/studio/assets/vendor/marked.min.js?v=20260807-m40-studio-shell"></script>
+    <script defer src="/workflow/studio/assets/vendor/purify.min.js?v=20260807-m40-studio-shell"></script>
     <script>globalThis.__AEVATAR_ASSISTANT_CONFIG__ = __BACKEND_CONSOLE_CONFIG__;</script>
-    <script type="module" src="/workflow/studio/assets/app.js?v=20260807-actor-task-anchor"></script>
+    <script type="module" src="/workflow/studio/assets/app.js?v=20260807-m40-studio-shell"></script>
   </head>
   <body>
     <div class="app-shell">
@@ -238,7 +238,7 @@
           </div>
           <div class="inspector-tabs" role="tablist">
             <button class="active" id="runTabButton" type="button" role="tab" aria-selected="true">Run</button>
-            <button id="eventsTabButton" type="button" role="tab" aria-selected="false">Events <span id="eventCount">0</span></button>
+            <button class="hidden" id="eventsTabButton" type="button" role="tab" aria-selected="false" aria-hidden="true">Events <span id="eventCount">0</span></button>
           </div>
 
           <div class="inspector-body" id="runPanel" role="tabpanel">

@@ -206,6 +206,8 @@ function normalizeTypedFrame(raw) {
       return { type: "run_finished", ...(raw.runFinished || {}), raw };
     case "RUN_ERROR":
       return { type: "run_error", ...(raw.runError || {}), raw };
+    case "RUN_STOPPED":
+      return { type: "run_stopped", ...(raw.runStopped || {}), raw };
     case "TEXT_MESSAGE_START":
       return { type: "text_start", ...(raw.textMessageStart || {}), raw };
     case "TEXT_MESSAGE_CONTENT":
