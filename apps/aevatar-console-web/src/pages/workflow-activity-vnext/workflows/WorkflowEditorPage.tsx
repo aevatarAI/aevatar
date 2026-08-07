@@ -103,9 +103,81 @@ const WorkflowEditorPage: React.FC<{
   const inspectorRef = React.useRef<WorkflowNodeInspectorHandle>(null);
   const publicationGenerationRef = React.useRef(0);
   const publicationInFlightRef = React.useRef(false);
+  const shownPublicationToastKeysRef = React.useRef(new Set<string>());
   const runRequested = new URLSearchParams(location.search).get('run') === '1';
   const editorWriteLocked = editor.saving || editor.structuralMutationPending;
   const publication = useWorkflowPublication(publicationReceipt);
+  const publicationPhase = publicationReceipt
+    ? publication.phase
+    : publicationStage;
+  React.useEffect(() => {
+    let toastIntent: 'error' | 'success' | null = null;
+    let toastMessage: string | null = null;
+    let toastKey: string | null = null;
+
+    if (publicationReceipt) {
+      switch (publication.phase) {
+        case 'observed':
+          toastIntent = 'success';
+          toastMessage = t(
+            'workflowActivityVNext.publish.success',
+            'Workflow published',
+          );
+          break;
+        case 'unauthorized':
+          toastIntent = 'error';
+          toastMessage = t(
+            'workflowActivityVNext.state.unauthorized',
+            'Sign in to continue',
+          );
+          break;
+        case 'forbidden':
+          toastIntent = 'error';
+          toastMessage = t(
+            'workflowActivityVNext.state.forbidden',
+            "You don't have access to this workspace",
+          );
+          break;
+        case 'failed':
+          toastIntent = 'error';
+          toastMessage = t(
+            'workflowActivityVNext.publish.failed',
+            "Publication couldn't be confirmed",
+          );
+          break;
+        default:
+          return;
+      }
+      toastKey = [
+        'workflow-publication',
+        publicationGenerationRef.current,
+        publicationReceipt.scopeId,
+        publicationReceipt.workflowId,
+        publicationReceipt.revisionId,
+        publication.phase,
+      ].join(':');
+    } else if (publicationStage === 'failed') {
+      toastIntent = 'error';
+      toastMessage = t(
+        'workflowActivityVNext.publish.failed',
+        "Publication couldn't be confirmed",
+      );
+      toastKey = [
+        'workflow-publication',
+        publicationGenerationRef.current,
+        'submission',
+        'failed',
+      ].join(':');
+    }
+
+    if (!toastIntent || !toastMessage || !toastKey) return;
+    if (shownPublicationToastKeysRef.current.has(toastKey)) return;
+
+    shownPublicationToastKeysRef.current.add(toastKey);
+    if (toastIntent === 'success')
+      toast.success(toastMessage, { key: toastKey });
+    else toast.error(toastMessage, { key: toastKey });
+  }, [publication.phase, publicationReceipt, publicationStage, toast]);
   const publicationObserved = publication.phase === 'observed';
   const publicationStale = Boolean(
     publicationReceipt &&
@@ -536,9 +608,6 @@ const WorkflowEditorPage: React.FC<{
   const runDetailsHref = editor.sseRunId
     ? buildWorkflowActivityRunHref(activeScopeId, editor.sseRunId)
     : '';
-  const publicationPhase = publicationReceipt
-    ? publication.phase
-    : publicationStage;
   const publicationObservationPending =
     publicationReceipt !== null && publication.phase !== 'observed';
   const publicationActionPending =
@@ -637,22 +706,20 @@ const WorkflowEditorPage: React.FC<{
   }
   const publicationCurrent = publicationObserved && !publicationStale;
   const canPublish = publishReadinessIssues.length === 0 && !publicationCurrent;
-  const publishLabel = publicationCurrent
-    ? t('workflowActivityVNext.publish.published', 'Published')
-    : publicationActionPending
-      ? t('workflowActivityVNext.publish.publishing', 'Publishing')
-      : publishReadinessIssues.length > 0
-        ? publishReadinessIssues.length === 1
-          ? t(
-              'workflowActivityVNext.publish.blockedOne',
-              'Publish blocked · 1 issue',
-            )
-          : t(
-              'workflowActivityVNext.publish.blocked',
-              'Publish blocked · {count} issues',
-              { count: publishReadinessIssues.length },
-            )
-        : t('workflowActivityVNext.editor.publish', 'Publish');
+  const publishLabel = publicationActionPending
+    ? t('workflowActivityVNext.publish.publishing', 'Publishing')
+    : publishReadinessIssues.length > 0
+      ? publishReadinessIssues.length === 1
+        ? t(
+            'workflowActivityVNext.publish.blockedOne',
+            'Publish blocked · 1 issue',
+          )
+        : t(
+            'workflowActivityVNext.publish.blocked',
+            'Publish blocked · {count} issues',
+            { count: publishReadinessIssues.length },
+          )
+      : t('workflowActivityVNext.editor.publish', 'Publish');
   const runDisabledReason = publicationStale
     ? t(
         'workflowActivityVNext.editor.publishLatestBeforeRun',
@@ -769,25 +836,26 @@ const WorkflowEditorPage: React.FC<{
           >
             {t('workflowActivityVNext.common.run', 'Run')}
           </Button>
-          {publishReadinessIssues.length > 0 ? (
-            <Tooltip
-              placement="bottomRight"
-              title={
-                <div className="wa-vnext__publish-readiness">
-                  <ul>
-                    {publishReadinessIssues.map((issue) => (
-                      <li key={issue.id}>{issue.message}</li>
-                    ))}
-                  </ul>
-                </div>
-              }
-              trigger={['hover', 'focus']}
-            >
-              {publishButton}
-            </Tooltip>
-          ) : (
-            publishButton
-          )}
+          {!publicationCurrent &&
+            (publishReadinessIssues.length > 0 ? (
+              <Tooltip
+                placement="bottomRight"
+                title={
+                  <div className="wa-vnext__publish-readiness">
+                    <ul>
+                      {publishReadinessIssues.map((issue) => (
+                        <li key={issue.id}>{issue.message}</li>
+                      ))}
+                    </ul>
+                  </div>
+                }
+                trigger={['hover', 'focus']}
+              >
+                {publishButton}
+              </Tooltip>
+            ) : (
+              publishButton
+            ))}
         </>
       }
       onNavigate={requestNavigation}
@@ -799,6 +867,19 @@ const WorkflowEditorPage: React.FC<{
     >
       <div className="wa-vnext__toolbar wa-vnext__editor-toolbar">
         <div className="wa-vnext__editor-toolbar-meta">
+          {publicationCurrent ? (
+            <span
+              aria-label={t(
+                'workflowActivityVNext.editor.publicationStatusAria',
+                'Workflow publication status',
+              )}
+              aria-live="polite"
+              className="wa-vnext__status wa-vnext__status--succeeded"
+              role="status"
+            >
+              {t('workflowActivityVNext.publish.published', 'Published')}
+            </span>
+          ) : null}
           <span
             aria-atomic="true"
             aria-label={t(

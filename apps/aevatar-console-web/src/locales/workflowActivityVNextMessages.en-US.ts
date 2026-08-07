@@ -96,6 +96,8 @@ const workflowActivityVNextMessages = {
     'Publish this workflow before running it.',
   'workflowActivityVNext.editor.publishLatestBeforeRun':
     'Save and publish the latest changes before running.',
+  'workflowActivityVNext.editor.publicationStatusAria':
+    'Workflow publication status',
   'workflowActivityVNext.editor.publishUnavailable':
     "Publishing isn't available for this workflow yet.",
   'workflowActivityVNext.editor.publishedRunDrawer': 'Run published workflow',
@@ -121,6 +123,7 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.publish.publishing': 'Publishing',
   'workflowActivityVNext.publish.revisionId': 'Revision ID',
   'workflowActivityVNext.publish.readinessIssues': 'Publish readiness issues',
+  'workflowActivityVNext.publish.success': 'Workflow published',
   'workflowActivityVNext.publish.resolvePublication':
     'Resolve the current publication status before publishing again.',
   'workflowActivityVNext.publish.saveBeforePublishing':

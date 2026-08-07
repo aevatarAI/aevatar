@@ -1968,22 +1968,40 @@ describe('Workflow Activity vNext editor', () => {
     );
     expect(screen.queryByText('Publication accepted')).not.toBeInTheDocument();
     expect(
-      screen.queryByRole('button', { name: 'Published' }),
+      screen.queryByRole('status', {
+        name: 'Workflow publication status',
+      }),
     ).not.toBeInTheDocument();
 
     resolveWorkflowObservation?.(observedWorkflow);
 
+    const publicationStatus = await screen.findByRole('status', {
+      name: 'Workflow publication status',
+    });
+    const saveStatus = screen.getByRole('status', {
+      name: 'Workflow save status',
+    });
+    expect(publicationStatus).toHaveTextContent('Published');
+    expect(publicationStatus.parentElement).toBe(saveStatus.parentElement);
     expect(
-      await screen.findByRole('button', { name: 'Published' }),
-    ).toHaveAttribute('aria-disabled', 'true');
-    expect(screen.queryByText('Workflow published')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Published' })).toHaveAttribute(
-      'aria-disabled',
-      'true',
+      publicationStatus.compareDocumentPosition(saveStatus) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(
+      screen.queryByRole('button', { name: 'Publish' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Published' }),
+    ).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(mockConsoleToast.success).toHaveBeenCalledWith(
+        'Workflow published',
+        expect.objectContaining({
+          key: expect.stringContaining('workflow-publication:'),
+        }),
+      ),
     );
-    expect(mockConsoleToast.success).not.toHaveBeenCalledWith(
-      'Workflow published',
-    );
+    expect(mockConsoleToast.success).toHaveBeenCalledTimes(1);
     expect(mockScopeRuntimeApi.getServiceRevisions).not.toHaveBeenCalled();
   });
 
@@ -2147,7 +2165,9 @@ describe('Workflow Activity vNext editor', () => {
 
   async function publishObservedWorkflow(): Promise<void> {
     fireEvent.click(await screen.findByRole('button', { name: 'Publish' }));
-    await screen.findByRole('button', { name: 'Published' });
+    await screen.findByRole('status', {
+      name: 'Workflow publication status',
+    });
   }
 
   async function renderPublishedWorkflowPage(): Promise<void> {
@@ -2246,8 +2266,10 @@ describe('Workflow Activity vNext editor', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Publish' }));
 
     expect(
-      await screen.findByRole('button', { name: 'Published' }),
-    ).toBeInTheDocument();
+      await screen.findByRole('status', {
+        name: 'Workflow publication status',
+      }),
+    ).toHaveTextContent('Published');
     expect(
       screen.queryByText("Publication couldn't be confirmed"),
     ).not.toBeInTheDocument();
@@ -2262,6 +2284,8 @@ describe('Workflow Activity vNext editor', () => {
     expect(mockScopeRuntimeApi.getServiceRevisions).not.toHaveBeenCalled();
     expect(mockStudioApi.previewExplicitRequests).toHaveBeenCalledTimes(1);
     expect(mockStudioApi.publishWorkflow).toHaveBeenCalledTimes(1);
+    expect(mockConsoleToast.error).not.toHaveBeenCalled();
+    expect(mockConsoleToast.success).toHaveBeenCalledTimes(1);
   });
 
   it.each([
@@ -2278,6 +2302,15 @@ describe('Workflow Activity vNext editor', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Publish' }));
 
     expect(await screen.findByText(message)).toBeInTheDocument();
+    await waitFor(() =>
+      expect(mockConsoleToast.error).toHaveBeenCalledWith(
+        message,
+        expect.objectContaining({
+          key: expect.stringContaining('workflow-publication:'),
+        }),
+      ),
+    );
+    expect(mockConsoleToast.error).toHaveBeenCalledTimes(1);
     expect(
       screen.getByRole('button', { name: 'Publish blocked · 1 issue' }),
     ).toHaveAttribute('aria-disabled', 'true');
@@ -2292,6 +2325,30 @@ describe('Workflow Activity vNext editor', () => {
     expect(mockScopeRuntimeApi.getServiceRevisions).not.toHaveBeenCalled();
     expect(mockStudioApi.previewExplicitRequests).toHaveBeenCalledTimes(1);
     expect(mockStudioApi.publishWorkflow).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports one error toast when publication observation reaches a terminal failure', async () => {
+    arrangeSavedDraftPublication();
+    mockScopesApi.getWorkflowDetail.mockRejectedValue(
+      Object.assign(new Error('HTTP 400'), { status: 400 }),
+    );
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Publish' }));
+
+    expect(
+      await screen.findByText("Publication couldn't be confirmed"),
+    ).toBeInTheDocument();
+    await waitFor(() =>
+      expect(mockConsoleToast.error).toHaveBeenCalledWith(
+        "Publication couldn't be confirmed",
+        expect.objectContaining({
+          key: expect.stringContaining('workflow-publication:'),
+        }),
+      ),
+    );
+    expect(mockConsoleToast.error).toHaveBeenCalledTimes(1);
   });
 
   it('creates a fresh revision before retrying a publication that was not accepted', async () => {
@@ -2349,6 +2406,15 @@ describe('Workflow Activity vNext editor', () => {
     expect(
       await screen.findByText("Publication couldn't be confirmed"),
     ).toBeInTheDocument();
+    await waitFor(() =>
+      expect(mockConsoleToast.error).toHaveBeenCalledWith(
+        "Publication couldn't be confirmed",
+        expect.objectContaining({
+          key: expect.stringContaining('workflow-publication:'),
+        }),
+      ),
+    );
+    expect(mockConsoleToast.error).toHaveBeenCalledTimes(1);
     expect(mockStudioApi.publishWorkflow).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
 
@@ -2362,8 +2428,11 @@ describe('Workflow Activity vNext editor', () => {
     );
     expect(mockStudioApi.publishWorkflow).toHaveBeenCalledTimes(2);
     expect(
-      await screen.findByRole('button', { name: 'Published' }),
-    ).toBeInTheDocument();
+      await screen.findByRole('status', {
+        name: 'Workflow publication status',
+      }),
+    ).toHaveTextContent('Published');
+    expect(mockConsoleToast.success).toHaveBeenCalledTimes(1);
   });
 
   it('continues delayed publication observation automatically without sending a second PUT', async () => {
@@ -2597,7 +2666,11 @@ describe('Workflow Activity vNext editor', () => {
       await screen.findByText('Saved at 2026-08-04 10:05:00 UTC'),
     ).toBeInTheDocument();
     expect(mockConsoleToast.success).not.toHaveBeenCalledWith('Workflow saved');
-    expect(screen.queryByText('Published')).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('status', {
+        name: 'Workflow publication status',
+      }),
+    ).not.toBeInTheDocument();
   });
 
   it('keeps later edits while retrying a failed create receipt', async () => {

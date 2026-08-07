@@ -99,6 +99,7 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
       '请先发布此工作流，再运行。',
     'workflowActivityVNext.editor.publishLatestBeforeRun':
       '请先保存并发布最新更改，再运行。',
+    'workflowActivityVNext.editor.publicationStatusAria': '工作流发布状态',
     'workflowActivityVNext.editor.publishUnavailable': '此工作流暂时无法发布。',
     'workflowActivityVNext.editor.publishedRunDrawer': '运行已发布工作流',
     'workflowActivityVNext.editor.publishedTargetUnavailable':
@@ -123,6 +124,7 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.publish.publishing': '正在发布',
     'workflowActivityVNext.publish.revisionId': '版本 ID',
     'workflowActivityVNext.publish.readinessIssues': '发布就绪问题',
+    'workflowActivityVNext.publish.success': '工作流已发布',
     'workflowActivityVNext.publish.resolvePublication':
       '再次发布前请先处理当前发布状态。',
     'workflowActivityVNext.publish.saveBeforePublishing':
