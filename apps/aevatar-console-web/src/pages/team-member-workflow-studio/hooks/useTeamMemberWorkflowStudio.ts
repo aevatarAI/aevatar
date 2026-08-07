@@ -68,6 +68,7 @@ import type {
   StudioWorkflowSaveResult,
 } from '@/shared/studio/models';
 import { normalizeStudioMemberLifecycleStage } from '@/shared/studio/models';
+import { linkWorkflowMemberDraft } from '@/shared/studio/workflowBackingAuthority';
 import { useConsoleToast } from '@/shared/ui/ConsoleToast';
 
 type TeamMemberWorkflowStudioMode = 'new' | 'existing';
@@ -303,8 +304,6 @@ const AVAILABLE_STEP_TYPES = STUDIO_GRAPH_CATEGORIES.flatMap(
 );
 const MEMBER_BINDING_RUN_POLL_ATTEMPTS = 8;
 const MEMBER_BINDING_RUN_POLL_DELAY_MS = 900;
-const CREATED_MEMBER_MATERIALIZATION_ATTEMPTS = 8;
-const CREATED_MEMBER_MATERIALIZATION_DELAY_MS = 450;
 const WORKFLOW_DRAFT_MATERIALIZATION_ATTEMPTS = 10;
 const WORKFLOW_DRAFT_MATERIALIZATION_DELAY_MS = 900;
 const SAVE_AND_BIND_WORKFLOW_MATERIALIZATION_ATTEMPTS = 12;
@@ -586,17 +585,6 @@ function waitForBindingRunPollTick(): Promise<void> {
   });
 }
 
-function waitForCreatedMemberMaterializationTick(): Promise<void> {
-  return new Promise((resolve) => {
-    const testEnvironment =
-      typeof process !== 'undefined' && process.env.NODE_ENV === 'test';
-    window.setTimeout(
-      resolve,
-      testEnvironment ? 0 : CREATED_MEMBER_MATERIALIZATION_DELAY_MS,
-    );
-  });
-}
-
 function waitForWorkflowDraftMaterializationTick(): Promise<void> {
   return new Promise((resolve) => {
     const testEnvironment =
@@ -682,34 +670,6 @@ async function loadPublishedWorkflowWithDraftFallback(input: {
   }
 }
 
-async function waitForCreatedMemberVisible(input: {
-  readonly memberId: string;
-  readonly scopeId: string;
-}): Promise<StudioMemberDetail> {
-  let lastNotFound: unknown = null;
-
-  for (
-    let attempt = 0;
-    attempt < CREATED_MEMBER_MATERIALIZATION_ATTEMPTS;
-    attempt += 1
-  ) {
-    try {
-      return await studioApi.getMember(input.scopeId, input.memberId);
-    } catch (error) {
-      if (!isStudioApiStatus(error, 404)) {
-        throw error;
-      }
-
-      lastNotFound = error;
-      if (attempt < CREATED_MEMBER_MATERIALIZATION_ATTEMPTS - 1) {
-        await waitForCreatedMemberMaterializationTick();
-      }
-    }
-  }
-
-  throw new CreatedWorkflowMemberLinkPendingError(lastNotFound);
-}
-
 async function waitForWorkflowDraftMaterialized(input: {
   readonly receipt: StudioWorkflowDraftCreateAcceptedReceipt;
   readonly scopeId: string;
@@ -754,38 +714,7 @@ async function linkCreatedWorkflowMemberDraft(input: {
   readonly workflowId: string;
 }): Promise<void> {
   try {
-    await waitForCreatedMemberVisible({
-      memberId: input.memberId,
-      scopeId: input.scopeId,
-    });
-
-    try {
-      await studioApi.updateMemberImplementationRef({
-        scopeId: input.scopeId,
-        memberId: input.memberId,
-        implementationRef: {
-          implementationKind: 'workflow',
-          workflowId: input.workflowId,
-        },
-      });
-    } catch (error) {
-      if (!isStudioApiStatus(error, 404)) {
-        throw error;
-      }
-
-      await waitForCreatedMemberVisible({
-        memberId: input.memberId,
-        scopeId: input.scopeId,
-      });
-      await studioApi.updateMemberImplementationRef({
-        scopeId: input.scopeId,
-        memberId: input.memberId,
-        implementationRef: {
-          implementationKind: 'workflow',
-          workflowId: input.workflowId,
-        },
-      });
-    }
+    await linkWorkflowMemberDraft({ ...input, api: studioApi });
   } catch (error) {
     if (error instanceof CreatedWorkflowMemberLinkPendingError) {
       throw error;

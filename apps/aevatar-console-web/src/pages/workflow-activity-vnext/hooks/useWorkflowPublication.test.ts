@@ -1,6 +1,4 @@
-import type { ScopeServiceRevisionCatalogSnapshot } from '@/shared/models/runtime/scopeServices';
-import type { ScopeWorkflowDetail } from '@/shared/models/scopes';
-import type { StudioScopeBindingRevision } from '@/shared/studio/models';
+import type { StudioMemberBindingRunStatusResponse } from '@/shared/studio/models';
 import {
   observeWorkflowPublication,
   resolveWorkflowPublicationPhase,
@@ -9,357 +7,166 @@ import {
 
 const receipt: WorkflowPublicationReceipt = {
   scopeId: 'scope-alpha',
-  workflowId: 'wf-publication-alpha',
-  revisionId: 'rev-publication-alpha',
+  workflowId: 'wf-alpha',
+  memberId: 'm-alpha',
+  bindingRunId: 'bind-alpha',
+  revisionId: 'rev-alpha',
 };
-const publishedServiceId = 'svc-publication-alpha';
 
-function workflowDetail(
-  scopeId = receipt.scopeId,
-  workflowId = receipt.workflowId,
-  actorId = 'actor-workflow-publication',
-): ScopeWorkflowDetail & {
-  readonly workflow: NonNullable<ScopeWorkflowDetail['workflow']>;
-} {
+function bindingRun(
+  changes: Partial<StudioMemberBindingRunStatusResponse> = {},
+): StudioMemberBindingRunStatusResponse {
   return {
-    available: true,
-    scopeId,
-    workflow: {
-      scopeId,
-      workflowId,
-      publishedServiceId: receipt.publishedServiceId,
-      displayName: 'Publication workflow',
-      serviceKey: 'workflow-publication',
-      workflowName: 'Publication workflow',
-      actorId,
-      activeRevisionId: receipt.revisionId,
-      deploymentId: 'deployment-workflow-alpha',
-      deploymentStatus: 'Available',
-      serviceAppId: 'studio',
-      serviceNamespace: 'workflow-publications',
-      publishedServiceId,
-      updatedAt: '2026-08-06T10:00:00Z',
-    },
-    source: null,
-  };
-}
-
-function serviceRevision(
-  changes: Partial<StudioScopeBindingRevision> = {},
-): StudioScopeBindingRevision {
-  return {
-    revisionId: receipt.revisionId,
-    implementationKind: 'workflow',
-    status: 'Published',
-    artifactHash: 'artifact-publication-alpha',
-    failureReason: '',
-    isDefaultServing: false,
-    isActiveServing: true,
-    isServingTarget: true,
-    allocationWeight: 100,
-    servingState: 'Active',
-    deploymentId: 'deployment-service-alpha',
-    primaryActorId: 'actor-service-alpha',
-    createdAt: '2026-08-06T10:00:00Z',
-    preparedAt: '2026-08-06T10:00:01Z',
-    publishedAt: '2026-08-06T10:00:02Z',
-    retiredAt: null,
-    workflowName: 'Publication workflow',
-    workflowDefinitionActorId: 'actor-workflow-publication',
-    inlineWorkflowCount: 0,
-    scriptId: '',
-    scriptRevision: '',
-    scriptDefinitionActorId: '',
-    scriptSourceHash: '',
-    staticActorTypeName: '',
-    ...changes,
-  };
-}
-
-function revisionCatalog(
-  revisions: readonly StudioScopeBindingRevision[],
-  changes: Partial<ScopeServiceRevisionCatalogSnapshot> = {},
-): ScopeServiceRevisionCatalogSnapshot {
-  return {
+    status: 'accepted',
+    bindingRunId: receipt.bindingRunId,
     scopeId: receipt.scopeId,
-    serviceId: publishedServiceId,
-    serviceKey: 'service-publication',
-    displayName: 'Publication service',
-    defaultServingRevisionId: receipt.revisionId,
-    activeServingRevisionId: receipt.revisionId,
-    deploymentId: 'deployment-service-alpha',
-    deploymentStatus: 'Active',
-    primaryActorId: 'actor-service-alpha',
-    catalogStateVersion: 12,
-    catalogLastEventId: 'evt-service-alpha',
-    updatedAt: '2026-08-06T10:00:03Z',
-    revisions,
+    memberId: receipt.memberId,
+    stateVersion: 7,
+    platformBindingCommandId: 'command-alpha',
+    result: null,
+    failure: null,
+    updatedAt: '2026-08-07T10:00:00Z',
     ...changes,
   };
 }
 
-function httpStatusError(
-  status: number,
-  code?: string,
-): Error & { readonly status: number; readonly code?: string } {
-  return Object.assign(new Error(`HTTP ${status}`), { status, code });
+function httpStatusError(status: number): Error & { readonly status: number } {
+  return Object.assign(new Error(`HTTP ${status}`), { status });
 }
 
 describe('observeWorkflowPublication', () => {
-  it('observes only the accepted workflow, service, and revision once its active serving revision is published', async () => {
-    let resolveWorkflow: (detail: ScopeWorkflowDetail) => void = () =>
-      undefined;
-    const workflowRead = jest.fn(
-      () =>
-        new Promise<ScopeWorkflowDetail>((resolve) => {
-          resolveWorkflow = resolve;
-        }),
+  it.each([
+    'accepted',
+    'admission_pending',
+    'admitted',
+    'platform_binding_pending',
+    'member_notification_pending',
+  ] as const)('keeps observing the accepted binding run while it is %s', async (status) => {
+    const readBindingRun = jest.fn().mockResolvedValue(bindingRun({ status }));
+
+    await expect(
+      observeWorkflowPublication({
+        receipt,
+        readBindingRun,
+        wait: async () => undefined,
+        delaysMs: [0],
+      }),
+    ).resolves.toEqual({ kind: 'delayed' });
+    expect(readBindingRun).toHaveBeenCalledWith(
+      'scope-alpha',
+      'm-alpha',
+      'bind-alpha',
     );
-    const revisionsRead = jest
-      .fn()
-      .mockResolvedValue(revisionCatalog([serviceRevision()]));
+  });
 
-    const observation = observeWorkflowPublication({
-      receipt,
-      readWorkflow: workflowRead,
-      readRevisions: revisionsRead,
-      wait: async () => undefined,
-      delaysMs: [0],
-    });
-
-    await Promise.resolve();
-    expect(revisionsRead).not.toHaveBeenCalled();
-    resolveWorkflow(workflowDetail());
-
-    await expect(observation).resolves.toMatchObject({
+  it('observes publishedServiceId only from a matching succeeded binding run', async () => {
+    await expect(
+      observeWorkflowPublication({
+        receipt,
+        readBindingRun: async () =>
+          bindingRun({
+            status: 'succeeded',
+            result: {
+              publishedServiceId: 'svc-alpha',
+              revisionId: 'rev-alpha',
+              implementationKind: 'workflow',
+              expectedActorId: 'actor-alpha',
+            },
+          }),
+        wait: async () => undefined,
+        delaysMs: [0],
+      }),
+    ).resolves.toEqual({
       kind: 'observed',
-      publishedServiceId,
-      revision: { revisionId: 'rev-publication-alpha' },
+      publishedServiceId: 'svc-alpha',
+      run: expect.objectContaining({
+        status: 'succeeded',
+        bindingRunId: 'bind-alpha',
+      }),
     });
-    expect(revisionsRead).toHaveBeenCalledWith(
-      'scope-alpha',
-      'svc-publication-alpha',
-    );
-    expect(workflowRead).toHaveBeenCalledWith(
-      'scope-alpha',
-      'wf-publication-alpha',
-    );
   });
 
-  it('recognizes case, whitespace, underscore, and hyphen variants in the published serving evidence', async () => {
-    await expect(
-      observeWorkflowPublication({
-        receipt,
-        readWorkflow: async () => workflowDetail(),
-        readRevisions: async () =>
-          revisionCatalog([
-            serviceRevision({
-              status: '  PUB_lished  ',
-              servingState: ' a-c_t i-v_e ',
-            }),
-          ]),
-        wait: async () => undefined,
-        delaysMs: [0],
-      }),
-    ).resolves.toMatchObject({ kind: 'observed' });
-  });
-
-  it('treats receipt-bound workflow 404 and 409 plus a missing revision as a delayed observation without another publish request', async () => {
-    const workflowRead = jest
-      .fn()
-      .mockRejectedValueOnce(httpStatusError(404))
-      .mockRejectedValueOnce(httpStatusError(409, 'USER_WORKFLOW_NOT_READY'));
-    const revisionsRead = jest.fn().mockResolvedValue(revisionCatalog([]));
+  it('treats binding-run projection 404 as delayed observation without resubmission', async () => {
+    const readBindingRun = jest.fn().mockRejectedValue(httpStatusError(404));
 
     await expect(
       observeWorkflowPublication({
         receipt,
-        readWorkflow: workflowRead,
-        readRevisions: revisionsRead,
+        readBindingRun,
         wait: async () => undefined,
         delaysMs: [0, 0],
       }),
     ).resolves.toEqual({ kind: 'delayed' });
-    expect(workflowRead.mock.calls).toEqual([
-      ['scope-alpha', 'wf-publication-alpha'],
-      ['scope-alpha', 'wf-publication-alpha'],
-    ]);
-    expect(revisionsRead).not.toHaveBeenCalled();
+    expect(readBindingRun).toHaveBeenCalledTimes(2);
   });
 
-  it('treats a receipt-bound service revision catalog 404 as observation delay', async () => {
-    const revisionsRead = jest.fn().mockRejectedValue(httpStatusError(404));
-
+  it.each([
+    ['scope', { scopeId: 'scope-other' }],
+    ['member', { memberId: 'm-other' }],
+    ['run', { bindingRunId: 'bind-other' }],
+  ])('rejects a binding run with mismatched %s identity', async (_, changes) => {
     await expect(
       observeWorkflowPublication({
         receipt,
-        readWorkflow: async () => workflowDetail(),
-        readRevisions: revisionsRead,
+        readBindingRun: async () => bindingRun(changes),
         wait: async () => undefined,
         delaysMs: [0],
       }),
-    ).resolves.toEqual({ kind: 'delayed' });
-    expect(revisionsRead).toHaveBeenCalledWith(
-      'scope-alpha',
-      'svc-publication-alpha',
-    );
+    ).rejects.toThrow('does not match');
   });
 
-  it('waits for the workflow read model to expose its published service identity', async () => {
-    const detail = workflowDetail();
-    const revisionsRead = jest.fn();
-
+  it('rejects a succeeded run for a different revision', async () => {
     await expect(
       observeWorkflowPublication({
         receipt,
-        readWorkflow: async () => ({
-          ...detail,
-          workflow: {
-            ...detail.workflow,
-            publishedServiceId: '',
-          },
-        }),
-        readRevisions: revisionsRead,
+        readBindingRun: async () =>
+          bindingRun({
+            status: 'succeeded',
+            result: {
+              publishedServiceId: 'svc-alpha',
+              revisionId: 'rev-other',
+              implementationKind: 'workflow',
+            },
+          }),
         wait: async () => undefined,
         delaysMs: [0],
       }),
-    ).resolves.toEqual({ kind: 'delayed' });
-    expect(revisionsRead).not.toHaveBeenCalled();
+    ).rejects.toThrow('revision');
   });
 
-  it('delays only the recognized workflow projection conflict codes', async () => {
-    for (const code of ['USER_WORKFLOW_NOT_READY', 'USER_WORKFLOW_STALE']) {
-      await expect(
-        observeWorkflowPublication({
-          receipt,
-          readWorkflow: async () => {
-            throw httpStatusError(409, code);
-          },
-          readRevisions: async () => revisionCatalog([serviceRevision()]),
-          wait: async () => undefined,
-          delaysMs: [0],
-        }),
-      ).resolves.toEqual({ kind: 'delayed' });
-    }
-  });
-
-  it('fails instead of retrying bare and unrelated workflow conflicts', async () => {
-    for (const error of [
-      httpStatusError(409),
-      httpStatusError(409, 'USER_WORKFLOW_CONFLICT'),
-    ]) {
-      await expect(
-        observeWorkflowPublication({
-          receipt,
-          readWorkflow: async () => {
-            throw error;
-          },
-          readRevisions: async () => revisionCatalog([serviceRevision()]),
-          wait: async () => undefined,
-          delaysMs: [0, 0],
-        }),
-      ).rejects.toBe(error);
-    }
-  });
-
-  it('fails fulfilled workflow and catalog identity mismatches', async () => {
-    const acceptedWorkflow = workflowDetail();
-    const cases = [
-      {
-        workflow: workflowDetail('scope-other', 'wf-other'),
-        catalog: revisionCatalog([serviceRevision()]),
-        expectedRevisionCalls: 0,
-      },
-      {
-        workflow: {
-          ...acceptedWorkflow,
-          workflow: {
-            ...acceptedWorkflow.workflow,
-            scopeId: 'scope-other',
-          },
-        },
-        catalog: revisionCatalog([serviceRevision()]),
-        expectedRevisionCalls: 0,
-      },
-      {
-        workflow: workflowDetail(),
-        catalog: revisionCatalog([serviceRevision()], {
-          scopeId: 'scope-other',
-          serviceId: 'svc-other',
-        }),
-        expectedRevisionCalls: 1,
-      },
-    ];
-
-    for (const candidate of cases) {
-      const workflowRead = jest.fn().mockResolvedValue(candidate.workflow);
-      const revisionsRead = jest.fn().mockResolvedValue(candidate.catalog);
-
-      await expect(
-        observeWorkflowPublication({
-          receipt,
-          readWorkflow: workflowRead,
-          readRevisions: revisionsRead,
-          wait: async () => undefined,
-          delaysMs: [0, 0],
-        }),
-      ).rejects.toThrow('does not match');
-      expect(workflowRead).toHaveBeenCalledTimes(1);
-      expect(revisionsRead).toHaveBeenCalledTimes(
-        candidate.expectedRevisionCalls,
-      );
-    }
-  });
-
-  it('keeps observing when the exact revision exists but a prior revision remains active', async () => {
-    const workflowRead = jest.fn().mockResolvedValue(workflowDetail());
-    const revisionsRead = jest.fn().mockResolvedValue(
-      revisionCatalog([serviceRevision()], {
-        activeServingRevisionId: 'rev-prior-alpha',
-      }),
-    );
-
+  it.each([
+    'failed',
+    'rejected',
+  ] as const)('stops when the accepted binding run is %s', async (status) => {
     await expect(
       observeWorkflowPublication({
         receipt,
-        readWorkflow: workflowRead,
-        readRevisions: revisionsRead,
-        wait: async () => undefined,
-        delaysMs: [0],
-      }),
-    ).resolves.toEqual({ kind: 'delayed' });
-    expect(workflowRead).toHaveBeenCalledTimes(1);
-    expect(revisionsRead).toHaveBeenCalledTimes(1);
-  });
-
-  it('fails when the exact serving revision implements a different workflow definition', async () => {
-    const workflowRead = jest
-      .fn()
-      .mockResolvedValue(
-        workflowDetail(
-          receipt.scopeId,
-          receipt.workflowId,
-          'actor-workflow-other',
-        ),
-      );
-    const revisionsRead = jest
-      .fn()
-      .mockResolvedValue(revisionCatalog([serviceRevision()]));
-
-    await expect(
-      observeWorkflowPublication({
-        receipt,
-        readWorkflow: workflowRead,
-        readRevisions: revisionsRead,
+        readBindingRun: async () =>
+          bindingRun({
+            status,
+            failure: {
+              code: 'BINDING_FAILED',
+              message: 'Platform binding failed.',
+            },
+          }),
         wait: async () => undefined,
         delaysMs: [0, 0],
       }),
-    ).rejects.toThrow('does not implement');
-    expect(workflowRead).toHaveBeenCalledTimes(1);
-    expect(revisionsRead).toHaveBeenCalledTimes(1);
+    ).rejects.toThrow('Platform binding failed.');
   });
 
-  it('maps authorization errors from an exact observation read to distinct phases', () => {
+  it('fails a malformed succeeded response instead of guessing a service identity', async () => {
+    await expect(
+      observeWorkflowPublication({
+        receipt,
+        readBindingRun: async () => bindingRun({ status: 'succeeded' }),
+        wait: async () => undefined,
+        delaysMs: [0],
+      }),
+    ).rejects.toThrow('published service');
+  });
+
+  it('maps authorization errors from the binding-run read to distinct phases', () => {
     expect(
       resolveWorkflowPublicationPhase({
         data: undefined,
@@ -378,28 +185,5 @@ describe('observeWorkflowPublication', () => {
         isPending: false,
       }),
     ).toBe('forbidden');
-  });
-
-  it.each([
-    ['PreparationFailed', serviceRevision({ status: 'preparation_failed' })],
-    ['failure reason', serviceRevision({ failureReason: 'artifact rejected' })],
-    ['Retired', serviceRevision({ status: ' RETIRED ' })],
-  ])('stops when the accepted revision reaches terminal %s state', async (_, revision) => {
-    const workflowRead = jest.fn().mockResolvedValue(workflowDetail());
-    const revisionsRead = jest
-      .fn()
-      .mockResolvedValue(revisionCatalog([revision]));
-
-    await expect(
-      observeWorkflowPublication({
-        receipt,
-        readWorkflow: workflowRead,
-        readRevisions: revisionsRead,
-        wait: async () => undefined,
-        delaysMs: [0, 0],
-      }),
-    ).rejects.toThrow('terminal');
-    expect(workflowRead).toHaveBeenCalledTimes(1);
-    expect(revisionsRead).toHaveBeenCalledTimes(1);
   });
 });

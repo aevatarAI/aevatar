@@ -43,10 +43,16 @@ jest.mock('@/shared/studio/api', () => ({
     ),
   studioApi: {
     authorWorkflow: jest.fn(),
+    createMember: jest.fn(),
+    createTeam: jest.fn(),
     createWorkflowDraft: jest.fn(),
+    getMember: jest.fn(),
+    getTeam: jest.fn(),
     getWorkspaceSettings: jest.fn(),
+    listMembers: jest.fn(),
     listWorkflowDrafts: jest.fn(),
     parseYaml: jest.fn(),
+    updateMemberImplementationRef: jest.fn(),
   },
 }));
 
@@ -74,10 +80,16 @@ jest.mock('@/shared/ui/ConsoleHeaderActions', () => ({
 
 const mockStudioApi = jest.requireMock('@/shared/studio/api').studioApi as {
   authorWorkflow: jest.Mock;
+  createMember: jest.Mock;
+  createTeam: jest.Mock;
   createWorkflowDraft: jest.Mock;
+  getMember: jest.Mock;
+  getTeam: jest.Mock;
   getWorkspaceSettings: jest.Mock;
+  listMembers: jest.Mock;
   listWorkflowDrafts: jest.Mock;
   parseYaml: jest.Mock;
+  updateMemberImplementationRef: jest.Mock;
 };
 
 const mockScopesApi = jest.requireMock('@/shared/api/scopesApi').scopesApi as {
@@ -113,14 +125,140 @@ const materializedWorkflow = {
   },
 } as const;
 
+const hiddenTeam = {
+  teamId: 't-created-alpha',
+  scopeId: 'scope-alpha',
+  displayName: 'Incident review',
+  description: '',
+  lifecycleStage: 'active',
+  memberCount: 1,
+  createdAt: '2026-08-06T10:00:00Z',
+  updatedAt: '2026-08-06T10:00:00Z',
+} as const;
+
+const hiddenMember = {
+  memberId: 'm-created-alpha',
+  scopeId: 'scope-alpha',
+  displayName: 'Incident review',
+  description: '',
+  implementationKind: 'workflow',
+  implementationRef: {
+    implementationKind: 'workflow',
+    workflowId: 'wf-created-alpha',
+  },
+  lifecycleStage: 'created',
+  publishedServiceId: 'svc-created-alpha',
+  lastBoundRevisionId: null,
+  teamId: 't-created-alpha',
+  createdAt: '2026-08-06T10:00:00Z',
+  updatedAt: '2026-08-06T10:00:00Z',
+} as const;
+
 describe('New workflow save-target recovery', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockStudioApi.listMembers.mockResolvedValue({
+      scopeId: 'scope-alpha',
+      members: [],
+    });
+    mockStudioApi.createTeam.mockResolvedValue(hiddenTeam);
+    mockStudioApi.getTeam.mockResolvedValue(hiddenTeam);
+    mockStudioApi.createMember.mockResolvedValue(hiddenMember);
+    mockStudioApi.getMember.mockResolvedValue({
+      summary: hiddenMember,
+      implementationRef: hiddenMember.implementationRef,
+      lastBinding: null,
+      currentBindingRun: null,
+    });
+    mockStudioApi.updateMemberImplementationRef.mockResolvedValue({
+      status: 'accepted',
+      scopeId: 'scope-alpha',
+      memberId: 'm-created-alpha',
+    });
     mockStudioApi.listWorkflowDrafts.mockResolvedValue([]);
     mockScopesApi.listWorkflows.mockResolvedValue([]);
   });
 
   afterEach(() => cleanupTestQueryClients());
+
+  it('creates one hidden Team and Member for the new Workflow before opening it', async () => {
+    mockStudioApi.getWorkspaceSettings.mockResolvedValue(readyWorkspace);
+    mockStudioApi.createWorkflowDraft.mockResolvedValue(materializedWorkflow);
+
+    renderWithQueryClient(<NewWorkflowPage scopeId="scope-alpha" />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Start blank' }));
+    fireEvent.change(screen.getByLabelText('Workflow name'), {
+      target: { value: 'Incident review' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create and open' }));
+
+    await waitFor(() =>
+      expect(mockStudioApi.createTeam).toHaveBeenCalledWith({
+        scopeId: 'scope-alpha',
+        displayName: 'Incident review',
+        description: 'System-managed authority for one Workflow.',
+      }),
+    );
+    expect(mockStudioApi.createMember).toHaveBeenCalledWith({
+      scopeId: 'scope-alpha',
+      displayName: 'Incident review',
+      implementationKind: 'workflow',
+      teamId: 't-created-alpha',
+    });
+    expect(mockStudioApi.updateMemberImplementationRef).toHaveBeenCalledWith({
+      scopeId: 'scope-alpha',
+      memberId: 'm-created-alpha',
+      implementationRef: {
+        implementationKind: 'workflow',
+        workflowId: 'wf-created-alpha',
+      },
+    });
+    expect(history.push).toHaveBeenCalledWith(
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-created-alpha',
+    );
+    expect(screen.queryByText(/Team|Member/)).not.toBeInTheDocument();
+  });
+
+  it('reuses a typed backing authority when retrying after a link response failure', async () => {
+    mockStudioApi.getWorkspaceSettings.mockResolvedValue(readyWorkspace);
+    mockStudioApi.createWorkflowDraft.mockResolvedValue(materializedWorkflow);
+    mockStudioApi.listMembers
+      .mockResolvedValueOnce({ scopeId: 'scope-alpha', members: [] })
+      .mockResolvedValueOnce({
+        scopeId: 'scope-alpha',
+        members: [hiddenMember],
+      });
+    mockStudioApi.updateMemberImplementationRef.mockRejectedValueOnce(
+      new TypeError('Connection closed after dispatch'),
+    );
+
+    renderWithQueryClient(<NewWorkflowPage scopeId="scope-alpha" />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Start blank' }));
+    fireEvent.change(screen.getByLabelText('Workflow name'), {
+      target: { value: 'Incident review' },
+    });
+    const create = screen.getByRole('button', { name: 'Create and open' });
+    fireEvent.click(create);
+
+    expect(
+      await screen.findByText("Workflow couldn't be created"),
+    ).toBeVisible();
+    expect(history.push).not.toHaveBeenCalled();
+    expect(mockStudioApi.createTeam).toHaveBeenCalledTimes(1);
+    expect(mockStudioApi.createMember).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(create);
+
+    await waitFor(() =>
+      expect(history.push).toHaveBeenCalledWith(
+        '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-created-alpha',
+      ),
+    );
+    expect(mockStudioApi.createTeam).toHaveBeenCalledTimes(1);
+    expect(mockStudioApi.createMember).toHaveBeenCalledTimes(1);
+  });
 
   it('allows method selection and input while save locations are loading', () => {
     mockStudioApi.getWorkspaceSettings.mockReturnValue(new Promise(() => {}));

@@ -27,6 +27,11 @@ import type {
   StudioMemberSummary,
   StudioWorkflowDraftSummary,
 } from '@/shared/studio/models';
+import {
+  cleanupWorkflowBackingAuthority,
+  resolveWorkflowBackingAuthority,
+  type WorkflowBackingAuthority,
+} from '@/shared/studio/workflowBackingAuthority';
 import AevatarContentSkeleton from '@/shared/ui/AevatarContentSkeleton';
 import { useConsoleToast } from '@/shared/ui/ConsoleToast';
 import { AEVATAR_INTERACTIVE_BUTTON_CLASS } from '@/shared/ui/interactionStandards';
@@ -178,6 +183,8 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
   );
   const [deleteFailed, setDeleteFailed] = React.useState(false);
   const [deleteSucceeded, setDeleteSucceeded] = React.useState(false);
+  const [deleteAuthority, setDeleteAuthority] =
+    React.useState<WorkflowBackingAuthority | null>(null);
   const [deleting, setDeleting] = React.useState(false);
   const drafts = useQuery({
     queryKey: ['workflow-activity-vnext', 'drafts', scopeId],
@@ -538,6 +545,7 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
     setDeleteTarget(null);
     setDeleteFailed(false);
     setDeleteSucceeded(false);
+    setDeleteAuthority(null);
   };
 
   const confirmDelete = async () => {
@@ -547,15 +555,22 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
     let removed = deleteSucceeded;
     try {
       if (!removed) {
-        try {
-          await studioApi.deleteWorkflowDraft(deleteTarget.workflowId, scopeId);
-          removed = true;
-          setDeleteSucceeded(true);
-        } catch (error) {
-          if (!isStudioApiStatus(error, 404)) throw error;
-          removed = true;
-          setDeleteSucceeded(true);
+        let authority = deleteAuthority;
+        if (!authority) {
+          authority = resolveWorkflowBackingAuthority({
+            members: (await studioApi.listMembers(scopeId)).members,
+            workflowId: deleteTarget.workflowId,
+          });
+          setDeleteAuthority(authority);
         }
+        await cleanupWorkflowBackingAuthority({
+          api: studioApi,
+          authority,
+          scopeId,
+          workflowId: deleteTarget.workflowId,
+        });
+        removed = true;
+        setDeleteSucceeded(true);
       }
 
       suppressNextDraftListError.current = true;
@@ -564,6 +579,7 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
       if (refreshed.isError) throw refreshed.error;
       setDeleteTarget(null);
       setDeleteSucceeded(false);
+      setDeleteAuthority(null);
     } catch {
       toast.error(
         removed
@@ -1015,6 +1031,7 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                                 setDeleteTarget(row);
                                 setDeleteFailed(false);
                                 setDeleteSucceeded(false);
+                                setDeleteAuthority(null);
                               }
                               if (key === 'archive') openArchive(row);
                             },

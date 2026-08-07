@@ -409,7 +409,7 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
     return true;
   }, [adoptReadableWorkflow, document, materialization.retry]);
 
-  const save = React.useCallback(async () => {
+  const saveReadableWorkflow = React.useCallback(async () => {
     const followsCanonicalRouteReplacement =
       pendingRouteWorkflowIdRef.current === workflow?.workflowId;
     if (
@@ -421,20 +421,20 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
       structuralMutationPendingRef.current ||
       !workflowTitle.trim()
     )
-      return false;
+      return null;
     savingRef.current = true;
     setSaving(true);
     setValidating(true);
     setSaveError('');
     try {
       const parsedDocument = await parseCurrentYaml();
-      if (!parsedDocument) return false;
+      if (!parsedDocument) return null;
       const serialized = await studioApi.serializeYaml({
         document: parsedDocument,
       });
       setFindings(serialized.findings);
       if (hasBlockingFindings(serialized.document, serialized.findings))
-        return false;
+        return null;
       setValidating(false);
       const directoryId =
         workflow.directoryId ||
@@ -465,23 +465,23 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
           submittedSnapshot.document,
           submittedSnapshot.revision,
         );
-        return true;
+        return result.workflow;
       }
       pendingMaterializationRef.current = submittedSnapshot;
       savingRef.current = false;
       setSaving(false);
       const saved = await materialization.observe(result.receipt);
-      if (!saved) return false;
+      if (!saved) return null;
       pendingMaterializationRef.current = null;
       adoptReadableWorkflow(
         saved,
         submittedSnapshot.document,
         submittedSnapshot.revision,
       );
-      return true;
+      return saved;
     } catch (error) {
       setSaveError(toErrorMessage(error));
-      return false;
+      return null;
     } finally {
       savingRef.current = false;
       setSaving(false);
@@ -494,12 +494,16 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
     parseCurrentYaml,
     receiptPending,
     routeWorkflowId,
-    saving,
     scopeId,
     workflow,
     workflowTitle,
     workspace.data,
   ]);
+
+  const save = React.useCallback(
+    async () => (await saveReadableWorkflow()) !== null,
+    [saveReadableWorkflow],
+  );
 
   const addNode = React.useCallback(
     async (stepType: string): Promise<boolean> => {
@@ -747,7 +751,6 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
         !workflow.draftExists ||
         (workflow.workflowId !== routeWorkflowId &&
           !followsCanonicalRouteReplacement) ||
-        dirty ||
         savingRef.current ||
         receiptPending ||
         structuralMutationPendingRef.current ||
@@ -758,7 +761,23 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
         );
       }
 
-      const parsed = await studioApi.parseYaml({ yaml });
+      const publicationDocumentVersion = localEditRevisionRef.current;
+      const readableWorkflow = dirty ? await saveReadableWorkflow() : workflow;
+      if (!readableWorkflow) {
+        throw new Error('This workflow could not be saved for publication.');
+      }
+      if (localEditRevisionRef.current !== publicationDocumentVersion) {
+        throw new Error(
+          'This workflow changed while publication was being prepared.',
+        );
+      }
+
+      const parsed = readableWorkflow.document
+        ? {
+            document: readableWorkflow.document,
+            findings: readableWorkflow.findings,
+          }
+        : await studioApi.parseYaml({ yaml: readableWorkflow.yaml });
       setFindings(parsed.findings);
       const parsedDocument = parsed.document ?? null;
       if (
@@ -781,12 +800,19 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
       }
 
       return {
-        documentVersion: localEditRevisionRef.current,
-        workflowId: workflow.workflowId,
-        workflowName: workflowTitle.trim(),
+        documentVersion: publicationDocumentVersion,
+        workflowId: readableWorkflow.workflowId,
+        workflowName: readableWorkflow.name.trim(),
         workflowYaml: serialized.yaml,
       };
-    }, [dirty, receiptPending, routeWorkflowId, workflow, workflowTitle, yaml]);
+    }, [
+      dirty,
+      receiptPending,
+      routeWorkflowId,
+      saveReadableWorkflow,
+      workflow,
+      workflowTitle,
+    ]);
 
   const submitRun = React.useCallback(
     async (

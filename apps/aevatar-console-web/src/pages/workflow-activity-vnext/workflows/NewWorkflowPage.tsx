@@ -14,8 +14,10 @@ import { history } from '@/shared/navigation/history';
 import { isStudioApiStatus, studioApi } from '@/shared/studio/api';
 import type {
   StudioValidationFinding,
+  StudioWorkflowFile,
   StudioWorkflowSaveResult,
 } from '@/shared/studio/models';
+import { provisionWorkflowBackingAuthority } from '@/shared/studio/workflowBackingAuthority';
 import { useConsoleToast } from '@/shared/ui/ConsoleToast';
 import { useDraftMaterialization } from '../hooks/useDraftMaterialization';
 import {
@@ -142,16 +144,28 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
     [scopeId],
   );
 
+  const provisionAndNavigate = React.useCallback(
+    async (workflow: StudioWorkflowFile) => {
+      await provisionWorkflowBackingAuthority({
+        scopeId,
+        workflowId: workflow.workflowId,
+        workflowName: workflow.name,
+      });
+      navigateToWorkflow(workflow.workflowId);
+    },
+    [navigateToWorkflow, scopeId],
+  );
+
   const finishSave = React.useCallback(
     async (result: StudioWorkflowSaveResult) => {
       if (result.kind === 'materialized') {
-        navigateToWorkflow(result.workflow.workflowId);
+        await provisionAndNavigate(result.workflow);
         return;
       }
       const readable = await materialization.observe(result.receipt);
-      if (readable) navigateToWorkflow(readable.workflowId);
+      if (readable) await provisionAndNavigate(readable);
     },
-    [materialization.observe, navigateToWorkflow],
+    [materialization.observe, provisionAndNavigate],
   );
 
   const persistDraft = async (nextYaml: string, workflowName: string) => {
@@ -242,7 +256,7 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
 
   const retryObservation = async () => {
     const readable = await materialization.retry();
-    if (readable) navigateToWorkflow(readable.workflowId);
+    if (readable) await provisionAndNavigate(readable);
   };
 
   const selectedTemplate = BUNDLED_WORKFLOW_TEMPLATES.find(

@@ -164,12 +164,18 @@ jest.mock('@/shared/studio/api', () => ({
         error.status === status,
     ),
   studioApi: {
+    archiveTeam: jest.fn(),
     authorWorkflow: jest.fn(),
+    createMember: jest.fn(),
+    createTeam: jest.fn(),
     createWorkflowDraft: jest.fn(),
+    deleteMember: jest.fn(),
     deleteWorkflowDraft: jest.fn(),
     getWorkspaceSettings: jest.fn(),
     getAuthSession: jest.fn(),
     getMember: jest.fn(),
+    getMemberBindingRun: jest.fn(),
+    getTeam: jest.fn(),
     getUserConfigRuntime: jest.fn(),
     getUserLlmSettings: jest.fn(),
     getWorkflow: jest.fn(),
@@ -177,6 +183,7 @@ jest.mock('@/shared/studio/api', () => ({
     getWorkflowDraftFile: jest.fn(),
     listMembers: jest.fn(),
     listWorkflowDrafts: jest.fn(),
+    bindMemberWorkflow: jest.fn(),
     parseYaml: jest.fn(),
     previewExplicitRequests: jest.fn(),
     publishWorkflow: jest.fn(),
@@ -185,11 +192,13 @@ jest.mock('@/shared/studio/api', () => ({
     saveUserLlmSettings: jest.fn(),
     serializeYaml: jest.fn(),
     updateMemberDisplayName: jest.fn(),
+    updateMemberImplementationRef: jest.fn(),
     updateWorkflowDraft: jest.fn(),
   },
 }));
 
 jest.mock('@/shared/studio/explicitRequestConfirmation', () => ({
+  confirmInteractiveExplicitRequestPreview: jest.fn(),
   createWorkflowRevisionIdentityCandidate: jest.fn(),
 }));
 
@@ -326,12 +335,18 @@ jest.mock(
 );
 
 const mockStudioApi = jest.requireMock('@/shared/studio/api').studioApi as {
+  archiveTeam: jest.Mock;
   authorWorkflow: jest.Mock;
+  createMember: jest.Mock;
+  createTeam: jest.Mock;
   createWorkflowDraft: jest.Mock;
+  deleteMember: jest.Mock;
   deleteWorkflowDraft: jest.Mock;
   getWorkspaceSettings: jest.Mock;
   getAuthSession: jest.Mock;
   getMember: jest.Mock;
+  getMemberBindingRun: jest.Mock;
+  getTeam: jest.Mock;
   getUserConfigRuntime: jest.Mock;
   getUserLlmSettings: jest.Mock;
   getWorkflow: jest.Mock;
@@ -339,6 +354,7 @@ const mockStudioApi = jest.requireMock('@/shared/studio/api').studioApi as {
   getWorkflowDraftFile: jest.Mock;
   listMembers: jest.Mock;
   listWorkflowDrafts: jest.Mock;
+  bindMemberWorkflow: jest.Mock;
   parseYaml: jest.Mock;
   previewExplicitRequests: jest.Mock;
   publishWorkflow: jest.Mock;
@@ -347,11 +363,15 @@ const mockStudioApi = jest.requireMock('@/shared/studio/api').studioApi as {
   saveUserLlmSettings: jest.Mock;
   serializeYaml: jest.Mock;
   updateMemberDisplayName: jest.Mock;
+  updateMemberImplementationRef: jest.Mock;
   updateWorkflowDraft: jest.Mock;
 };
 const mockCreateWorkflowRevisionIdentityCandidate = jest.requireMock(
   '@/shared/studio/explicitRequestConfirmation',
 ).createWorkflowRevisionIdentityCandidate as jest.Mock;
+const mockConfirmInteractiveExplicitRequestPreview = jest.requireMock(
+  '@/shared/studio/explicitRequestConfirmation',
+).confirmInteractiveExplicitRequestPreview as jest.Mock;
 const mockScopesApi = jest.requireMock('@/shared/api/scopesApi').scopesApi as {
   getWorkflowDetail: jest.Mock;
   listWorkflows: jest.Mock;
@@ -395,6 +415,16 @@ describe('Workflow Activity vNext catalogue', () => {
       scopeId: 'scope-alpha',
       members: [],
       nextPageToken: null,
+    });
+    mockStudioApi.deleteMember.mockResolvedValue({
+      status: 'delete_accepted',
+      scopeId: 'scope-alpha',
+      memberId: 'm-alpha',
+    });
+    mockStudioApi.archiveTeam.mockResolvedValue({
+      status: 'accepted',
+      scopeId: 'scope-alpha',
+      teamId: 't-alpha',
     });
     mockStudioApi.updateMemberDisplayName.mockResolvedValue({
       status: 'accepted',
@@ -1602,7 +1632,7 @@ describe('Workflow Activity vNext catalogue', () => {
     );
   });
 
-  it('deletes only the editable draft and refreshes authoritative draft membership', async () => {
+  it('cleans the exact hidden authority before deleting the editable draft', async () => {
     mockLocation =
       '/scopes/scope-alpha/workflow-activity-vnext/workflows?view=drafts';
     let draftRows = [
@@ -1634,6 +1664,46 @@ describe('Workflow Activity vNext catalogue', () => {
         updatedAt: '2026-08-03T10:00:00Z',
       },
     ]);
+    mockStudioApi.listMembers.mockResolvedValue({
+      scopeId: 'scope-alpha',
+      members: [
+        {
+          memberId: 'm-other',
+          scopeId: 'scope-alpha',
+          displayName: 'Other workflow',
+          description: '',
+          implementationKind: 'workflow',
+          implementationRef: {
+            implementationKind: 'workflow',
+            workflowId: 'wf-other',
+          },
+          lifecycleStage: 'active',
+          publishedServiceId: 'svc-other',
+          lastBoundRevisionId: 'rev-other',
+          teamId: 't-other',
+          createdAt: '2026-08-04T09:00:00Z',
+          updatedAt: '2026-08-04T09:00:00Z',
+        },
+        {
+          memberId: 'm-alpha',
+          scopeId: 'scope-alpha',
+          displayName: 'Support triage',
+          description: '',
+          implementationKind: 'workflow',
+          implementationRef: {
+            implementationKind: 'workflow',
+            workflowId: 'wf-draft-alpha',
+          },
+          lifecycleStage: 'active',
+          publishedServiceId: 'svc-alpha',
+          lastBoundRevisionId: 'rev-alpha',
+          teamId: 't-alpha',
+          createdAt: '2026-08-04T09:00:00Z',
+          updatedAt: '2026-08-04T09:00:00Z',
+        },
+      ],
+      nextPageToken: null,
+    });
     mockStudioApi.deleteWorkflowDraft.mockImplementation(async () => {
       draftRows = [];
     });
@@ -1659,6 +1729,17 @@ describe('Workflow Activity vNext catalogue', () => {
         'wf-draft-alpha',
         'scope-alpha',
       ),
+    );
+    expect(mockStudioApi.deleteMember).toHaveBeenCalledWith({
+      scopeId: 'scope-alpha',
+      memberId: 'm-alpha',
+    });
+    expect(mockStudioApi.archiveTeam).toHaveBeenCalledWith(
+      'scope-alpha',
+      't-alpha',
+    );
+    expect(mockStudioApi.deleteMember).not.toHaveBeenCalledWith(
+      expect.objectContaining({ memberId: 'm-other' }),
     );
     await waitFor(() =>
       expect(mockStudioApi.listWorkflowDrafts).toHaveBeenCalledTimes(2),
@@ -2639,6 +2720,49 @@ describe('Workflow Activity vNext editor', () => {
         findings: [],
       },
     });
+    mockStudioApi.listMembers.mockResolvedValue({
+      scopeId: 'scope-alpha',
+      members: [
+        {
+          memberId: 'm-alpha',
+          scopeId: 'scope-alpha',
+          displayName: 'Committed source',
+          description: '',
+          implementationKind: 'workflow',
+          implementationRef: {
+            implementationKind: 'workflow',
+            workflowId: 'wf-committed-source',
+          },
+          lifecycleStage: 'draft',
+          publishedServiceId: '',
+          lastBoundRevisionId: null,
+          teamId: 't-alpha',
+          createdAt: '2026-08-07T09:00:00Z',
+          updatedAt: '2026-08-07T09:00:00Z',
+        },
+      ],
+      nextPageToken: null,
+    });
+    mockConfirmInteractiveExplicitRequestPreview.mockResolvedValue([]);
+    mockStudioApi.bindMemberWorkflow.mockResolvedValue({
+      status: 'accepted',
+      bindingRunId: 'bind-alpha',
+      scopeId: 'scope-alpha',
+      memberId: 'm-alpha',
+      ackStage: 'dispatch_accepted',
+    });
+    mockStudioApi.getMemberBindingRun.mockResolvedValue({
+      status: 'succeeded',
+      bindingRunId: 'bind-alpha',
+      scopeId: 'scope-alpha',
+      memberId: 'm-alpha',
+      result: {
+        publishedServiceId: 'svc-alpha',
+        revisionId: 'rev-preview-alpha',
+        implementationKind: 'workflow',
+      },
+      failure: null,
+    });
   });
 
   afterEach(() => cleanupTestQueryClients());
@@ -2656,6 +2780,115 @@ describe('Workflow Activity vNext editor', () => {
     expect(
       screen.queryByText('Build, test, and refine this workflow.'),
     ).not.toBeInTheDocument();
+  });
+
+  it('saves dirty content and publishes through the typed backing member binding run', async () => {
+    mockLocation =
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-alpha';
+    mockCreateWorkflowRevisionIdentityCandidate.mockReturnValue(
+      'rev-preview-alpha',
+    );
+    const savedYaml =
+      'name: approval_flow_updated\nroles: []\nsteps:\n  - id: step-alpha\n    type: llm_call\n';
+    const savedWorkflow = {
+      workflowId: 'wf-alpha',
+      name: 'Approval flow updated',
+      fileName: 'approval-flow.yaml',
+      filePath: '/workflows/approval-flow.yaml',
+      directoryId: 'directory-alpha',
+      directoryLabel: 'Workflows',
+      yaml: savedYaml,
+      updatedAtUtc: '2026-08-07T10:00:00Z',
+      document: {
+        name: 'approval_flow_updated',
+        roles: [],
+        steps: [{ id: 'step-alpha', type: 'llm_call' }],
+      },
+      draftExists: true,
+      findings: [],
+    };
+    mockStudioApi.getWorkflow.mockResolvedValue({
+      ...savedWorkflow,
+      name: 'Approval flow',
+      yaml: savedYaml.replaceAll('updated', ''),
+    });
+    mockStudioApi.listMembers.mockResolvedValue({
+      scopeId: 'scope-alpha',
+      members: [
+        {
+          memberId: 'm-alpha',
+          scopeId: 'scope-alpha',
+          displayName: 'Approval flow',
+          description: '',
+          implementationKind: 'workflow',
+          implementationRef: {
+            implementationKind: 'workflow',
+            workflowId: 'wf-alpha',
+          },
+          lifecycleStage: 'draft',
+          publishedServiceId: '',
+          lastBoundRevisionId: null,
+          teamId: 't-alpha',
+          createdAt: '2026-08-07T09:00:00Z',
+          updatedAt: '2026-08-07T09:00:00Z',
+        },
+      ],
+      nextPageToken: null,
+    });
+    mockStudioApi.parseYaml.mockResolvedValue({
+      document: savedWorkflow.document,
+      findings: [],
+    });
+    mockStudioApi.serializeYaml.mockResolvedValue({
+      yaml: savedYaml,
+      document: savedWorkflow.document,
+      findings: [],
+    });
+    mockStudioApi.saveWorkflow.mockResolvedValue({
+      kind: 'materialized',
+      workflow: savedWorkflow,
+    });
+    mockStudioApi.previewExplicitRequests.mockResolvedValue({
+      workflowId: 'wf-alpha',
+      revisionId: 'rev-preview-alpha',
+      items: [],
+    });
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    fireEvent.change(await screen.findByLabelText('Workflow name'), {
+      target: { value: 'Approval flow updated' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Publish' }));
+
+    await waitFor(() =>
+      expect(mockStudioApi.bindMemberWorkflow).toHaveBeenCalledWith({
+        scopeId: 'scope-alpha',
+        memberId: 'm-alpha',
+        displayName: 'Approval flow updated',
+        workflowId: 'wf-alpha',
+        revisionId: 'rev-preview-alpha',
+        workflowYamls: [savedYaml],
+      }),
+    );
+    expect(mockStudioApi.saveWorkflow).toHaveBeenCalledTimes(1);
+    expect(mockStudioApi.saveWorkflow.mock.invocationCallOrder[0]).toBeLessThan(
+      mockStudioApi.previewExplicitRequests.mock.invocationCallOrder[0],
+    );
+    expect(mockConfirmInteractiveExplicitRequestPreview).toHaveBeenCalledWith({
+      workflowId: 'wf-alpha',
+      revisionId: 'rev-preview-alpha',
+      items: [],
+    });
+    expect(mockStudioApi.publishWorkflow).not.toHaveBeenCalled();
+    expect(mockStudioApi.getMemberBindingRun).toHaveBeenCalledWith(
+      'scope-alpha',
+      'm-alpha',
+      'bind-alpha',
+    );
+    expect(
+      await screen.findByRole('button', { name: 'Published' }),
+    ).toBeInTheDocument();
   });
 
   it('publishes a saved workflow in one click and waits for observed evidence before showing Published', async () => {
@@ -2698,64 +2931,60 @@ describe('Workflow Activity vNext editor', () => {
       },
       findings: [],
     });
-    mockScopeRuntimeApi.listServices.mockResolvedValue([
-      {
-        serviceKey: 'tenant-alpha/app-alpha/scope-alpha/svc-alpha',
-        tenantId: 'tenant-alpha',
-        appId: 'app-alpha',
-        namespace: 'scope-alpha',
-        serviceId: 'svc-alpha',
-        displayName: 'Service alpha',
-        defaultServingRevisionId: 'rev-existing',
-        activeServingRevisionId: 'rev-existing',
-        deploymentId: 'deployment-existing',
-        primaryActorId: 'actor-existing',
-        deploymentStatus: 'active',
-        endpoints: [],
-        policyIds: [],
-        updatedAt: '2026-08-06T10:00:00Z',
-      },
-    ]);
+    mockStudioApi.listMembers.mockResolvedValue({
+      scopeId: 'scope-alpha',
+      members: [
+        {
+          memberId: 'm-alpha',
+          scopeId: 'scope-alpha',
+          displayName: 'Workflow alpha',
+          description: '',
+          implementationKind: 'workflow',
+          implementationRef: {
+            implementationKind: 'workflow',
+            workflowId: 'wf-draft-alpha',
+          },
+          lifecycleStage: 'active',
+          publishedServiceId: '',
+          lastBoundRevisionId: null,
+          teamId: 't-alpha',
+          createdAt: '2026-08-06T09:00:00Z',
+          updatedAt: '2026-08-06T09:00:00Z',
+        },
+      ],
+      nextPageToken: null,
+    });
     mockStudioApi.previewExplicitRequests.mockResolvedValue({
       workflowId: 'wf-draft-alpha',
       revisionId: 'rev-preview-alpha',
       items: [],
     });
-    mockStudioApi.publishWorkflow.mockResolvedValue({
+    mockStudioApi.bindMemberWorkflow.mockResolvedValue({
+      status: 'accepted',
+      bindingRunId: 'bind-alpha',
       scopeId: 'scope-alpha',
-      workflowId: 'wf-draft-alpha',
-      serviceKey: 'service-alpha',
-      revisionId: 'rev-preview-alpha',
-      acceptanceStage: 'accepted',
-      propagationStage: 'readmodel_propagating',
+      memberId: 'm-alpha',
+      ackStage: 'dispatch_accepted',
     });
-    const observedWorkflow = {
-      available: true,
+    const observedBindingRun = {
+      status: 'succeeded',
+      bindingRunId: 'bind-alpha',
       scopeId: 'scope-alpha',
-      workflow: {
-        scopeId: 'scope-alpha',
-        workflowId: 'wf-draft-alpha',
-        displayName: 'Workflow alpha',
-        serviceKey: 'workflow-alpha',
-        workflowName: 'Workflow alpha',
-        actorId: 'actor-workflow-alpha',
-        activeRevisionId: 'rev-preview-alpha',
-        deploymentId: 'deployment-workflow-alpha',
-        deploymentStatus: 'Available',
-        serviceAppId: 'studio',
-        serviceNamespace: 'workflow-publications',
+      memberId: 'm-alpha',
+      result: {
         publishedServiceId: 'svc-alpha',
-        updatedAt: '2026-08-06T10:00:00Z',
+        revisionId: 'rev-preview-alpha',
+        implementationKind: 'workflow',
       },
-      source: null,
+      failure: null,
     };
-    let resolveWorkflowObservation:
-      | ((workflow: typeof observedWorkflow) => void)
+    let resolveBindingRunObservation:
+      | ((run: typeof observedBindingRun) => void)
       | undefined;
-    mockScopesApi.getWorkflowDetail.mockImplementation(
+    mockStudioApi.getMemberBindingRun.mockImplementation(
       () =>
         new Promise((resolve) => {
-          resolveWorkflowObservation = resolve;
+          resolveBindingRunObservation = resolve;
         }),
     );
     mockScopeRuntimeApi.getServiceRevisions.mockResolvedValue({
@@ -2820,15 +3049,16 @@ describe('Workflow Activity vNext editor', () => {
       ),
     );
     await waitFor(() =>
-      expect(mockStudioApi.publishWorkflow).toHaveBeenCalledWith(
-        expect.objectContaining({
-          revisionId: 'rev-preview-alpha',
-          scopeId: 'scope-alpha',
-          workflowId: 'wf-draft-alpha',
-          workflowYaml:
-            'name: workflow_alpha\nroles: []\nsteps:\n  - id: step-alpha\n    type: llm_call\n',
-        }),
-      ),
+      expect(mockStudioApi.bindMemberWorkflow).toHaveBeenCalledWith({
+        displayName: 'Workflow alpha',
+        memberId: 'm-alpha',
+        revisionId: 'rev-preview-alpha',
+        scopeId: 'scope-alpha',
+        workflowId: 'wf-draft-alpha',
+        workflowYamls: [
+          'name: workflow_alpha\nroles: []\nsteps:\n  - id: step-alpha\n    type: llm_call\n',
+        ],
+      }),
     );
     expect(mockStudioApi.saveAndBindWorkflow).not.toHaveBeenCalled();
     expect(mockScopeRuntimeApi.listServices).not.toHaveBeenCalled();
@@ -2841,7 +3071,7 @@ describe('Workflow Activity vNext editor', () => {
       screen.queryByRole('button', { name: 'Published' }),
     ).not.toBeInTheDocument();
 
-    resolveWorkflowObservation?.(observedWorkflow);
+    resolveBindingRunObservation?.(observedBindingRun);
 
     expect(
       await screen.findByRole('button', { name: 'Published' }),
@@ -2858,18 +3088,21 @@ describe('Workflow Activity vNext editor', () => {
 
   it.each([
     {
-      returnedRevisionId: 'rev-returned-other',
-      returnedWorkflowId: 'wf-draft-alpha',
-      mismatch: 'revision',
+      returnedBindingRunId: 'bind-alpha',
+      returnedMemberId: 'm-other',
+      returnedScopeId: 'scope-alpha',
+      mismatch: 'member ID',
     },
     {
-      returnedRevisionId: 'rev-preview-alpha',
-      returnedWorkflowId: 'wf-returned-other',
-      mismatch: 'workflow ID',
+      returnedBindingRunId: 'bind-alpha',
+      returnedMemberId: 'm-alpha',
+      returnedScopeId: 'scope-other',
+      mismatch: 'scope ID',
     },
   ])('keeps a returned $mismatch mismatch visible without starting observation', async ({
-    returnedRevisionId,
-    returnedWorkflowId,
+    returnedBindingRunId,
+    returnedMemberId,
+    returnedScopeId,
   }) => {
     mockLocation =
       '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-draft-alpha';
@@ -2910,49 +3143,50 @@ describe('Workflow Activity vNext editor', () => {
       },
       findings: [],
     });
-    mockScopeRuntimeApi.listServices.mockResolvedValue([
-      {
-        serviceKey: 'tenant-alpha/app-alpha/scope-alpha/svc-alpha',
-        tenantId: 'tenant-alpha',
-        appId: 'app-alpha',
-        namespace: 'scope-alpha',
-        serviceId: 'svc-alpha',
-        displayName: 'Service alpha',
-        defaultServingRevisionId: 'rev-existing',
-        activeServingRevisionId: 'rev-existing',
-        deploymentId: 'deployment-existing',
-        primaryActorId: 'actor-existing',
-        deploymentStatus: 'active',
-        endpoints: [],
-        policyIds: [],
-        updatedAt: '2026-08-06T10:00:00Z',
-      },
-    ]);
+    mockStudioApi.listMembers.mockResolvedValue({
+      scopeId: 'scope-alpha',
+      members: [
+        {
+          memberId: 'm-alpha',
+          scopeId: 'scope-alpha',
+          displayName: 'Workflow alpha',
+          description: '',
+          implementationKind: 'workflow',
+          implementationRef: {
+            implementationKind: 'workflow',
+            workflowId: 'wf-draft-alpha',
+          },
+          lifecycleStage: 'active',
+          publishedServiceId: '',
+          lastBoundRevisionId: null,
+          teamId: 't-alpha',
+          createdAt: '2026-08-06T09:00:00Z',
+          updatedAt: '2026-08-06T09:00:00Z',
+        },
+      ],
+      nextPageToken: null,
+    });
     mockStudioApi.previewExplicitRequests.mockResolvedValue({
       workflowId: 'wf-draft-alpha',
       revisionId: 'rev-preview-alpha',
       items: [],
     });
-    mockStudioApi.publishWorkflow.mockResolvedValue({
-      scopeId: 'scope-alpha',
-      workflowId: returnedWorkflowId,
-      revisionId: returnedRevisionId,
-      serviceKey: 'tenant-alpha/app-alpha/scope-alpha/svc-alpha',
-      acceptanceStage: 'accepted',
-      propagationStage: 'readmodel_propagating',
+    mockStudioApi.bindMemberWorkflow.mockResolvedValue({
+      status: 'accepted',
+      bindingRunId: returnedBindingRunId,
+      scopeId: returnedScopeId,
+      memberId: returnedMemberId,
+      ackStage: 'dispatch_accepted',
     });
 
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Publish' }));
 
-    expect(
-      await screen.findByText("Publication couldn't be confirmed"),
-    ).toBeInTheDocument();
+    await waitFor(() => expect(mockConsoleToast.error).toHaveBeenCalled());
     expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled();
-    expect(mockStudioApi.publishWorkflow).toHaveBeenCalledTimes(1);
-    expect(mockScopesApi.getWorkflowDetail).not.toHaveBeenCalled();
-    expect(mockScopeRuntimeApi.getServiceRevisions).not.toHaveBeenCalled();
+    expect(mockStudioApi.bindMemberWorkflow).toHaveBeenCalledTimes(1);
+    expect(mockStudioApi.getMemberBindingRun).not.toHaveBeenCalled();
   });
 
   function arrangeSavedDraftPublication(): void {
@@ -3013,84 +3247,57 @@ describe('Workflow Activity vNext editor', () => {
         updatedAt: '2026-08-06T10:00:00Z',
       },
     ]);
+    mockStudioApi.listMembers.mockResolvedValue({
+      scopeId: 'scope-alpha',
+      members: [
+        {
+          memberId: 'm-alpha',
+          scopeId: 'scope-alpha',
+          displayName: 'Workflow alpha',
+          description: '',
+          implementationKind: 'workflow',
+          implementationRef: {
+            implementationKind: 'workflow',
+            workflowId: 'wf-draft-alpha',
+          },
+          lifecycleStage: 'active',
+          publishedServiceId: '',
+          lastBoundRevisionId: null,
+          teamId: 't-alpha',
+          createdAt: '2026-08-06T09:00:00Z',
+          updatedAt: '2026-08-06T09:00:00Z',
+        },
+      ],
+      nextPageToken: null,
+    });
     mockStudioApi.previewExplicitRequests.mockResolvedValue({
       workflowId: 'wf-draft-alpha',
       revisionId: 'rev-preview-alpha',
       items: [],
     });
-    mockStudioApi.publishWorkflow.mockResolvedValue({
+    mockConfirmInteractiveExplicitRequestPreview.mockResolvedValue([]);
+    mockStudioApi.bindMemberWorkflow.mockResolvedValue({
+      status: 'accepted',
+      bindingRunId: 'bind-alpha',
       scopeId: 'scope-alpha',
-      workflowId: 'wf-draft-alpha',
-      revisionId: 'rev-preview-alpha',
-      serviceKey: 'tenant-alpha/app-alpha/scope-alpha/svc-alpha',
-      acceptanceStage: 'accepted',
-      propagationStage: 'readmodel_propagating',
+      memberId: 'm-alpha',
+      ackStage: 'dispatch_accepted',
     });
   }
 
   function arrangeObservedWorkflowPublication(): void {
     arrangeSavedDraftPublication();
-    mockScopesApi.getWorkflowDetail.mockResolvedValue({
-      available: true,
+    mockStudioApi.getMemberBindingRun.mockResolvedValue({
+      status: 'succeeded',
+      bindingRunId: 'bind-alpha',
       scopeId: 'scope-alpha',
-      workflow: {
-        scopeId: 'scope-alpha',
-        workflowId: 'wf-draft-alpha',
-        displayName: 'Workflow alpha',
-        serviceKey: 'workflow-alpha',
-        workflowName: 'Workflow alpha',
-        actorId: 'actor-workflow-alpha',
-        activeRevisionId: 'rev-preview-alpha',
-        deploymentId: 'deployment-workflow-alpha',
-        deploymentStatus: 'Available',
-        serviceAppId: 'studio',
-        serviceNamespace: 'workflow-publications',
+      memberId: 'm-alpha',
+      result: {
         publishedServiceId: 'svc-alpha',
-        updatedAt: '2026-08-06T10:00:00Z',
+        revisionId: 'rev-preview-alpha',
+        implementationKind: 'workflow',
       },
-      source: null,
-    });
-    mockScopeRuntimeApi.getServiceRevisions.mockResolvedValue({
-      scopeId: 'scope-alpha',
-      serviceId: 'svc-alpha',
-      serviceKey: 'service-alpha',
-      displayName: 'Service alpha',
-      defaultServingRevisionId: 'rev-preview-alpha',
-      activeServingRevisionId: 'rev-preview-alpha',
-      deploymentId: 'deployment-service-alpha',
-      deploymentStatus: 'Active',
-      primaryActorId: 'actor-service-alpha',
-      catalogStateVersion: 12,
-      catalogLastEventId: 'evt-service-alpha',
-      updatedAt: '2026-08-06T10:00:03Z',
-      revisions: [
-        {
-          revisionId: 'rev-preview-alpha',
-          implementationKind: 'workflow',
-          status: 'Published',
-          artifactHash: 'artifact-publication-alpha',
-          failureReason: '',
-          isDefaultServing: true,
-          isActiveServing: true,
-          isServingTarget: true,
-          allocationWeight: 100,
-          servingState: 'Active',
-          deploymentId: 'deployment-service-alpha',
-          primaryActorId: 'actor-service-alpha',
-          createdAt: '2026-08-06T10:00:00Z',
-          preparedAt: '2026-08-06T10:00:01Z',
-          publishedAt: '2026-08-06T10:00:02Z',
-          retiredAt: null,
-          workflowName: 'Workflow alpha',
-          workflowDefinitionActorId: 'actor-workflow-alpha',
-          inlineWorkflowCount: 0,
-          scriptId: '',
-          scriptRevision: '',
-          scriptDefinitionActorId: '',
-          scriptSourceHash: '',
-          staticActorTypeName: '',
-        },
-      ],
+      failure: null,
     });
   }
 
@@ -3104,6 +3311,92 @@ describe('Workflow Activity vNext editor', () => {
     renderWithQueryClient(<WorkflowActivityVNextPage />);
     await publishObservedWorkflow();
   }
+
+  it('returns to idle without an error when explicit request confirmation is cancelled', async () => {
+    arrangeSavedDraftPublication();
+    mockConfirmInteractiveExplicitRequestPreview.mockResolvedValue(null);
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Publish' }));
+
+    await waitFor(() =>
+      expect(mockConfirmInteractiveExplicitRequestPreview).toHaveBeenCalled(),
+    );
+    expect(mockStudioApi.bindMemberWorkflow).not.toHaveBeenCalled();
+    expect(mockStudioApi.publishWorkflow).not.toHaveBeenCalled();
+    expect(mockConsoleToast.error).not.toHaveBeenCalled();
+    expect(
+      await screen.findByRole('button', { name: 'Publish' }),
+    ).toBeEnabled();
+  });
+
+  it('reports validation errors and warnings as deduplicated toasts without page alerts', async () => {
+    mockStudioApi.getWorkflow.mockResolvedValue({
+      workflowId: 'wf-committed-source',
+      name: 'Committed source',
+      fileName: 'committed-source.yaml',
+      filePath: '/workflows/committed-source.yaml',
+      directoryId: 'directory-alpha',
+      directoryLabel: 'Workflows',
+      yaml: 'name: committed_source\nroles: []\nsteps: []\n',
+      updatedAtUtc: '2026-08-07T10:00:00Z',
+      document: { name: 'committed_source', roles: [], steps: [] },
+      draftExists: true,
+      findings: [
+        {
+          code: 'STEP_INVALID',
+          level: 'error',
+          message: 'The step is invalid.',
+          path: '/steps/0',
+        },
+        {
+          code: 'STEP_REVIEW',
+          level: 'warning',
+          message: 'Review the optional step.',
+          path: '/steps/1',
+        },
+      ],
+    });
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    await screen.findByDisplayValue('Committed source');
+    await waitFor(() =>
+      expect(mockConsoleToast.error).toHaveBeenCalledWith(
+        'The step is invalid.',
+      ),
+    );
+    expect(mockConsoleToast.warning).toHaveBeenCalledWith(
+      'Review the optional step.',
+    );
+    expect(document.querySelector('.wa-vnext__editor-alerts')).toBeNull();
+    expect(document.querySelector('.ant-alert-error')).toBeNull();
+    expect(document.querySelector('.ant-alert-warning')).toBeNull();
+  });
+
+  it('reports a rejected binding run with a toast instead of a page alert', async () => {
+    arrangeSavedDraftPublication();
+    mockStudioApi.getMemberBindingRun.mockResolvedValue({
+      status: 'rejected',
+      bindingRunId: 'bind-alpha',
+      scopeId: 'scope-alpha',
+      memberId: 'm-alpha',
+      result: null,
+      failure: {
+        code: 'BINDING_REJECTED',
+        message: 'Binding was rejected.',
+      },
+    });
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Publish' }));
+
+    await waitFor(() => expect(mockConsoleToast.error).toHaveBeenCalled());
+    expect(document.querySelector('#workflow-publication-status')).toBeNull();
+    expect(document.querySelector('.ant-alert-error')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Check again' })).toBeEnabled();
+  });
 
   it('shows publish blockers in the standard compact tooltip', async () => {
     mockStudioApi.getWorkflow.mockResolvedValue({
@@ -3168,99 +3461,43 @@ describe('Workflow Activity vNext editor', () => {
 
   it('retries a failed publication observation without sending a second POST', async () => {
     arrangeSavedDraftPublication();
-    mockScopesApi.getWorkflowDetail
+    mockStudioApi.getMemberBindingRun
       .mockRejectedValueOnce(
         Object.assign(new Error('HTTP 503'), { status: 503 }),
       )
       .mockResolvedValueOnce({
-        available: true,
+        status: 'succeeded',
+        bindingRunId: 'bind-alpha',
         scopeId: 'scope-alpha',
-        workflow: {
-          scopeId: 'scope-alpha',
-          workflowId: 'wf-draft-alpha',
-          displayName: 'Workflow alpha',
-          serviceKey: 'workflow-alpha',
-          workflowName: 'Workflow alpha',
-          actorId: 'actor-workflow-alpha',
-          activeRevisionId: 'rev-preview-alpha',
-          deploymentId: 'deployment-workflow-alpha',
-          deploymentStatus: 'Available',
-          serviceAppId: 'studio',
-          serviceNamespace: 'workflow-publications',
+        memberId: 'm-alpha',
+        result: {
           publishedServiceId: 'svc-alpha',
-          updatedAt: '2026-08-06T10:00:00Z',
-        },
-        source: null,
-      });
-    mockScopeRuntimeApi.getServiceRevisions.mockResolvedValue({
-      scopeId: 'scope-alpha',
-      serviceId: 'svc-alpha',
-      serviceKey: 'service-alpha',
-      displayName: 'Service alpha',
-      defaultServingRevisionId: 'rev-preview-alpha',
-      activeServingRevisionId: 'rev-preview-alpha',
-      deploymentId: 'deployment-service-alpha',
-      deploymentStatus: 'Active',
-      primaryActorId: 'actor-service-alpha',
-      catalogStateVersion: 12,
-      catalogLastEventId: 'evt-service-alpha',
-      updatedAt: '2026-08-06T10:00:00Z',
-      revisions: [
-        {
           revisionId: 'rev-preview-alpha',
           implementationKind: 'workflow',
-          status: 'Published',
-          artifactHash: 'artifact-publication-alpha',
-          failureReason: '',
-          isDefaultServing: false,
-          isActiveServing: true,
-          isServingTarget: true,
-          allocationWeight: 100,
-          servingState: 'Active',
-          deploymentId: 'deployment-service-alpha',
-          primaryActorId: 'actor-service-alpha',
-          createdAt: '2026-08-06T10:00:00Z',
-          preparedAt: '2026-08-06T10:00:01Z',
-          publishedAt: '2026-08-06T10:00:02Z',
-          retiredAt: null,
-          workflowName: 'Workflow alpha',
-          workflowDefinitionActorId: 'actor-workflow-alpha',
-          inlineWorkflowCount: 0,
-          scriptId: '',
-          scriptRevision: '',
-          scriptDefinitionActorId: '',
-          scriptSourceHash: '',
-          staticActorTypeName: '',
         },
-      ],
-    });
+        failure: null,
+      });
 
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Publish' }));
 
-    expect(
-      await screen.findByText("Publication couldn't be confirmed"),
-    ).toBeInTheDocument();
+    await waitFor(() => expect(mockConsoleToast.error).toHaveBeenCalled());
     expect(
       screen.getByRole('button', { name: 'Publish blocked · 1 issue' }),
     ).toHaveAttribute('aria-disabled', 'true');
     fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
 
     await waitFor(() =>
-      expect(mockScopesApi.getWorkflowDetail).toHaveBeenCalledTimes(2),
+      expect(mockStudioApi.getMemberBindingRun).toHaveBeenCalledTimes(2),
     );
-    expect(mockScopesApi.getWorkflowDetail).toHaveBeenLastCalledWith(
+    expect(mockStudioApi.getMemberBindingRun).toHaveBeenLastCalledWith(
       'scope-alpha',
-      'wf-draft-alpha',
-    );
-    expect(mockScopeRuntimeApi.getServiceRevisions).toHaveBeenCalledTimes(1);
-    expect(mockScopeRuntimeApi.getServiceRevisions).toHaveBeenLastCalledWith(
-      'scope-alpha',
-      'svc-alpha',
+      'm-alpha',
+      'bind-alpha',
     );
     expect(mockStudioApi.previewExplicitRequests).toHaveBeenCalledTimes(1);
-    expect(mockStudioApi.publishWorkflow).toHaveBeenCalledTimes(1);
+    expect(mockStudioApi.bindMemberWorkflow).toHaveBeenCalledTimes(1);
   });
 
   it.each([
@@ -3268,7 +3505,7 @@ describe('Workflow Activity vNext editor', () => {
     [403, "You don't have access to this workspace"],
   ])('keeps an accepted publication receipt mutation-locked after a %i observation', async (status, message) => {
     arrangeSavedDraftPublication();
-    mockScopesApi.getWorkflowDetail.mockRejectedValue(
+    mockStudioApi.getMemberBindingRun.mockRejectedValue(
       Object.assign(new Error(`HTTP ${status}`), { status }),
     );
 
@@ -3276,22 +3513,24 @@ describe('Workflow Activity vNext editor', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Publish' }));
 
-    expect(await screen.findByText(message)).toBeInTheDocument();
+    await waitFor(() =>
+      expect(mockConsoleToast.error).toHaveBeenCalledWith(message),
+    );
     expect(
       screen.getByRole('button', { name: 'Publish blocked · 1 issue' }),
     ).toHaveAttribute('aria-disabled', 'true');
     fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
 
     await waitFor(() =>
-      expect(mockScopesApi.getWorkflowDetail).toHaveBeenCalledTimes(2),
+      expect(mockStudioApi.getMemberBindingRun).toHaveBeenCalledTimes(2),
     );
-    expect(mockScopesApi.getWorkflowDetail).toHaveBeenLastCalledWith(
+    expect(mockStudioApi.getMemberBindingRun).toHaveBeenLastCalledWith(
       'scope-alpha',
-      'wf-draft-alpha',
+      'm-alpha',
+      'bind-alpha',
     );
-    expect(mockScopeRuntimeApi.getServiceRevisions).not.toHaveBeenCalled();
     expect(mockStudioApi.previewExplicitRequests).toHaveBeenCalledTimes(1);
-    expect(mockStudioApi.publishWorkflow).toHaveBeenCalledTimes(1);
+    expect(mockStudioApi.bindMemberWorkflow).toHaveBeenCalledTimes(1);
   });
 
   it('creates a fresh revision before republishing a failed publication receipt', async () => {
@@ -3312,109 +3551,60 @@ describe('Workflow Activity vNext editor', () => {
         revisionId: freshRevisionId,
         items: [],
       });
-    mockStudioApi.publishWorkflow
+    mockStudioApi.bindMemberWorkflow
       .mockResolvedValueOnce({
+        status: 'accepted',
+        bindingRunId: 'bind-alpha',
         scopeId: 'scope-alpha',
-        workflowId: 'wf-draft-alpha',
-        revisionId: receiptRevisionId,
-        serviceKey: 'tenant-alpha/app-alpha/scope-alpha/svc-alpha',
-        acceptanceStage: 'accepted',
-        propagationStage: 'readmodel_propagating',
+        memberId: 'm-alpha',
+        ackStage: 'dispatch_accepted',
       })
       .mockResolvedValueOnce({
+        status: 'accepted',
+        bindingRunId: 'bind-beta',
         scopeId: 'scope-alpha',
-        workflowId: 'wf-draft-alpha',
-        revisionId: freshRevisionId,
-        serviceKey: 'tenant-alpha/app-alpha/scope-alpha/svc-alpha',
-        acceptanceStage: 'accepted',
-        propagationStage: 'readmodel_propagating',
+        memberId: 'm-alpha',
+        ackStage: 'dispatch_accepted',
       });
-    mockScopesApi.getWorkflowDetail
-      .mockRejectedValueOnce(
-        Object.assign(new Error('HTTP 503'), { status: 503 }),
-      )
+    mockStudioApi.getMemberBindingRun
       .mockResolvedValueOnce({
-        available: true,
+        status: 'rejected',
+        bindingRunId: 'bind-alpha',
         scopeId: 'scope-alpha',
-        workflow: {
-          scopeId: 'scope-alpha',
-          workflowId: 'wf-draft-alpha',
-          displayName: 'Workflow alpha',
-          serviceKey: 'workflow-alpha',
-          workflowName: 'Workflow alpha',
-          actorId: 'actor-workflow-alpha',
-          activeRevisionId: freshRevisionId,
-          deploymentId: 'deployment-workflow-alpha',
-          deploymentStatus: 'Available',
-          serviceAppId: 'studio',
-          serviceNamespace: 'workflow-publications',
+        memberId: 'm-alpha',
+        result: null,
+        failure: { code: 'BINDING_REJECTED', message: 'Binding rejected.' },
+      })
+      .mockResolvedValueOnce({
+        status: 'succeeded',
+        bindingRunId: 'bind-beta',
+        scopeId: 'scope-alpha',
+        memberId: 'm-alpha',
+        result: {
           publishedServiceId: 'svc-alpha',
-          updatedAt: '2026-08-06T10:00:00Z',
-        },
-        source: null,
-      });
-    mockScopeRuntimeApi.getServiceRevisions.mockResolvedValue({
-      scopeId: 'scope-alpha',
-      serviceId: 'svc-alpha',
-      serviceKey: 'service-alpha',
-      displayName: 'Service alpha',
-      defaultServingRevisionId: freshRevisionId,
-      activeServingRevisionId: freshRevisionId,
-      deploymentId: 'deployment-service-alpha',
-      deploymentStatus: 'Active',
-      primaryActorId: 'actor-service-alpha',
-      catalogStateVersion: 12,
-      catalogLastEventId: 'evt-service-alpha',
-      updatedAt: '2026-08-06T10:00:00Z',
-      revisions: [
-        {
           revisionId: freshRevisionId,
           implementationKind: 'workflow',
-          status: 'Published',
-          artifactHash: 'artifact-publication-beta',
-          failureReason: '',
-          isDefaultServing: false,
-          isActiveServing: true,
-          isServingTarget: true,
-          allocationWeight: 100,
-          servingState: 'Active',
-          deploymentId: 'deployment-service-alpha',
-          primaryActorId: 'actor-service-alpha',
-          createdAt: '2026-08-06T10:00:00Z',
-          preparedAt: '2026-08-06T10:00:01Z',
-          publishedAt: '2026-08-06T10:00:02Z',
-          retiredAt: null,
-          workflowName: 'Workflow alpha',
-          workflowDefinitionActorId: 'actor-workflow-alpha',
-          inlineWorkflowCount: 0,
-          scriptId: '',
-          scriptRevision: '',
-          scriptDefinitionActorId: '',
-          scriptSourceHash: '',
-          staticActorTypeName: '',
         },
-      ],
-    });
+        failure: null,
+      });
 
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Publish' }));
 
-    expect(
-      await screen.findByText("Publication couldn't be confirmed"),
-    ).toBeInTheDocument();
-    expect(mockStudioApi.publishWorkflow).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(mockConsoleToast.error).toHaveBeenCalled());
+    expect(mockStudioApi.bindMemberWorkflow).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
 
     await waitFor(() =>
       expect(mockStudioApi.previewExplicitRequests).toHaveBeenCalledTimes(2),
     );
     await waitFor(() =>
-      expect(mockStudioApi.publishWorkflow).toHaveBeenLastCalledWith(
+      expect(mockStudioApi.bindMemberWorkflow).toHaveBeenLastCalledWith(
         expect.objectContaining({ revisionId: freshRevisionId }),
       ),
     );
-    expect(mockStudioApi.publishWorkflow).toHaveBeenCalledTimes(2);
+    expect(mockStudioApi.bindMemberWorkflow).toHaveBeenCalledTimes(2);
     expect(
       await screen.findByRole('button', { name: 'Published' }),
     ).toBeInTheDocument();
@@ -3422,24 +3612,9 @@ describe('Workflow Activity vNext editor', () => {
 
   it('retries delayed publication observation without sending a second POST', async () => {
     arrangeSavedDraftPublication();
-    mockScopesApi.getWorkflowDetail.mockRejectedValue(
+    mockStudioApi.getMemberBindingRun.mockRejectedValue(
       Object.assign(new Error('HTTP 404'), { status: 404 }),
     );
-    mockScopeRuntimeApi.getServiceRevisions.mockResolvedValue({
-      scopeId: 'scope-alpha',
-      serviceId: 'svc-alpha',
-      serviceKey: 'service-alpha',
-      displayName: 'Service alpha',
-      defaultServingRevisionId: 'rev-existing',
-      activeServingRevisionId: 'rev-existing',
-      deploymentId: 'deployment-service-alpha',
-      deploymentStatus: 'Active',
-      primaryActorId: 'actor-service-alpha',
-      catalogStateVersion: 12,
-      catalogLastEventId: 'evt-service-alpha',
-      updatedAt: '2026-08-06T10:00:00Z',
-      revisions: [],
-    });
 
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
@@ -3451,28 +3626,27 @@ describe('Workflow Activity vNext editor', () => {
       await act(async () => {
         await jest.advanceTimersByTimeAsync(0);
       });
-      expect(mockScopesApi.getWorkflowDetail).toHaveBeenCalledTimes(1);
-      expect(mockScopeRuntimeApi.getServiceRevisions).not.toHaveBeenCalled();
+      expect(mockStudioApi.getMemberBindingRun).toHaveBeenCalledTimes(1);
       await act(async () => {
         await jest.advanceTimersByTimeAsync(5_000);
       });
 
-      expect(
-        screen.getByText('Publication is taking longer to appear'),
-      ).toBeInTheDocument();
+      expect(mockConsoleToast.warning).toHaveBeenCalledWith(
+        'Publication is taking longer to appear',
+      );
       fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
       await act(async () => {
         await jest.advanceTimersByTimeAsync(5_000);
       });
 
-      expect(mockScopesApi.getWorkflowDetail).toHaveBeenCalledTimes(10);
-      expect(mockScopesApi.getWorkflowDetail).toHaveBeenLastCalledWith(
+      expect(mockStudioApi.getMemberBindingRun).toHaveBeenCalledTimes(10);
+      expect(mockStudioApi.getMemberBindingRun).toHaveBeenLastCalledWith(
         'scope-alpha',
-        'wf-draft-alpha',
+        'm-alpha',
+        'bind-alpha',
       );
-      expect(mockScopeRuntimeApi.getServiceRevisions).not.toHaveBeenCalled();
       expect(mockStudioApi.previewExplicitRequests).toHaveBeenCalledTimes(1);
-      expect(mockStudioApi.publishWorkflow).toHaveBeenCalledTimes(1);
+      expect(mockStudioApi.bindMemberWorkflow).toHaveBeenCalledTimes(1);
     } finally {
       jest.useRealTimers();
     }
@@ -3509,7 +3683,7 @@ describe('Workflow Activity vNext editor', () => {
     });
 
     await waitFor(() =>
-      expect(mockStudioApi.publishWorkflow).toHaveBeenCalledTimes(1),
+      expect(mockStudioApi.bindMemberWorkflow).toHaveBeenCalledTimes(1),
     );
   });
 
@@ -3714,9 +3888,14 @@ describe('Workflow Activity vNext editor', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: 'Save workflow' }));
 
+    await waitFor(() =>
+      expect(mockConsoleToast.error).toHaveBeenCalledWith(
+        "Workflow was saved but couldn't be reopened",
+      ),
+    );
     expect(
-      await screen.findByText("Workflow was saved but couldn't be reopened"),
-    ).toBeInTheDocument();
+      screen.queryByText("Workflow was saved but couldn't be reopened"),
+    ).not.toBeInTheDocument();
     expect(mockStudioApi.getWorkflowDraftFile).toHaveBeenCalledWith(
       'wf-draft-api',
       'scope-alpha',
@@ -3815,12 +3994,17 @@ describe('Workflow Activity vNext editor', () => {
 
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
+    await waitFor(() =>
+      expect(mockConsoleToast.error).toHaveBeenCalledWith(
+        'Workflow YAML could not be read.',
+      ),
+    );
+    expect(mockConsoleToast.warning).toHaveBeenCalledWith(
+      'A workflow step needs review.',
+    );
     expect(
-      await screen.findByText('Workflow YAML could not be read.'),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText('A workflow step needs review.'),
-    ).toBeInTheDocument();
+      screen.queryByText('Workflow YAML could not be read.'),
+    ).not.toBeInTheDocument();
     expect(
       screen.queryByText('yaml parser: unexpected token on line 3'),
     ).not.toBeInTheDocument();
@@ -4173,9 +4357,14 @@ describe('Workflow Activity vNext editor', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: 'Save workflow' }));
 
+    await waitFor(() =>
+      expect(mockConsoleToast.error).toHaveBeenCalledWith(
+        "Workflow was saved but couldn't be reopened",
+      ),
+    );
     expect(
-      await screen.findByText("Workflow was saved but couldn't be reopened"),
-    ).toBeInTheDocument();
+      screen.queryByText("Workflow was saved but couldn't be reopened"),
+    ).not.toBeInTheDocument();
     expect(within(inspector).getByLabelText('Instruction')).toBeEnabled();
   });
 
@@ -5543,6 +5732,60 @@ describe('Workflow Activity vNext creation', () => {
     });
     mockStudioApi.listWorkflowDrafts.mockResolvedValue([]);
     mockScopesApi.listWorkflows.mockResolvedValue([]);
+    mockStudioApi.listMembers.mockResolvedValue({
+      scopeId: 'scope-alpha',
+      members: [],
+      nextPageToken: null,
+    });
+    mockStudioApi.createTeam.mockResolvedValue({
+      teamId: 't-created-alpha',
+      scopeId: 'scope-alpha',
+      displayName: 'Incident review',
+      description: '',
+      lifecycleStage: 'active',
+      memberCount: 0,
+      createdAt: '2026-08-07T10:00:00Z',
+      updatedAt: '2026-08-07T10:00:00Z',
+    });
+    mockStudioApi.getTeam.mockResolvedValue({
+      teamId: 't-created-alpha',
+      scopeId: 'scope-alpha',
+      displayName: 'Incident review',
+      description: '',
+      lifecycleStage: 'active',
+      memberCount: 1,
+      createdAt: '2026-08-07T10:00:00Z',
+      updatedAt: '2026-08-07T10:00:00Z',
+    });
+    const linkedMember = {
+      memberId: 'm-created-alpha',
+      scopeId: 'scope-alpha',
+      displayName: 'Incident review',
+      description: '',
+      implementationKind: 'workflow',
+      implementationRef: {
+        implementationKind: 'workflow',
+        workflowId: 'wf-created-alpha',
+      },
+      lifecycleStage: 'active',
+      publishedServiceId: '',
+      lastBoundRevisionId: null,
+      teamId: 't-created-alpha',
+      createdAt: '2026-08-07T10:00:00Z',
+      updatedAt: '2026-08-07T10:00:00Z',
+    };
+    mockStudioApi.createMember.mockResolvedValue(linkedMember);
+    mockStudioApi.getMember.mockResolvedValue({
+      summary: linkedMember,
+      implementationRef: linkedMember.implementationRef,
+      lastBinding: null,
+      currentBindingRun: null,
+    });
+    mockStudioApi.updateMemberImplementationRef.mockResolvedValue({
+      status: 'accepted',
+      scopeId: 'scope-alpha',
+      memberId: 'm-created-alpha',
+    });
   });
 
   afterEach(() => cleanupTestQueryClients());
