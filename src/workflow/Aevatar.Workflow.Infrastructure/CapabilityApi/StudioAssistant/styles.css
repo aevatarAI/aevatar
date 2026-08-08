@@ -1,33 +1,33 @@
 :root {
   color-scheme: only light;
-  --bg: #f4f5f7;
+  --bg: #eceff4;
   --panel: #ffffff;
   --panel-raised: #ffffff;
-  --surface: #f6f7f9;
-  --surface-hover: #eef3ff;
-  --text: #111827;
-  --text-soft: #1f2937;
-  --muted: #4b5563;
-  --tertiary: #6b7280;
-  --border: #e5e7eb;
-  --border-strong: #d8dce2;
-  --accent: #2563eb;
-  --accent-soft: #eef3ff;
-  --success: #15a34a;
-  --success-soft: #eafaf0;
-  --warning: #d97706;
-  --warning-soft: #fdf3e3;
-  --error: #dc2626;
-  --error-soft: #fdeeee;
-  --info: #2563eb;
-  --info-soft: #eef3ff;
-  --shadow: 0 6px 18px rgba(17, 24, 39, 0.1);
+  --surface: #eef1f7;
+  --surface-hover: #edf2ff;
+  --text: #0e1526;
+  --text-soft: #26314b;
+  --muted: #4d5a75;
+  --tertiary: #66738e;
+  --border: #e2e7f0;
+  --border-strong: #c9d2e2;
+  --accent: #2f5cf6;
+  --accent-soft: #edf2ff;
+  --success: #12a15c;
+  --success-soft: #e7f9f0;
+  --warning: #d9870d;
+  --warning-soft: #fdf3e0;
+  --error: #e0434b;
+  --error-soft: #fdecec;
+  --info: #2f5cf6;
+  --info-soft: #edf2ff;
+  --shadow: 0 14px 34px -10px rgba(14, 21, 38, 0.18);
   --assistant-card-max-width: 860px;
   --assistant-card-inline-gutter: 48px;
   --sans: "Alibaba PuHuiTi 2.0", "Alibaba PuHuiTi", "AlibabaSans", "PingFang SC",
     -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
   --mono: "JetBrains Mono", "SF Mono", ui-monospace, "Roboto Mono", Menlo, monospace;
-  --radius: 6px;
+  --radius: 8px;
 }
 
 * {
@@ -3757,33 +3757,33 @@ summary:focus-visible {
    accent palette collapses onto a single blue token family. */
 
 :root {
-  --bg: #f4f5f7;
+  --bg: #eceff4;
   --panel: #ffffff;
   --panel-raised: #ffffff;
-  --surface: #f6f7f9;
-  --surface-hover: #eef3ff;
-  --text: #111827;
-  --text-soft: #1f2937;
-  --muted: #4b5563;
-  --tertiary: #6b7280;
-  --border: #e5e7eb;
-  --border-strong: #d8dce2;
+  --surface: #eef1f7;
+  --surface-hover: #edf2ff;
+  --text: #0e1526;
+  --text-soft: #26314b;
+  --muted: #4d5a75;
+  --tertiary: #66738e;
+  --border: #e2e7f0;
+  --border-strong: #c9d2e2;
   --hairline: rgba(17, 24, 39, 0.1);
   --hairline-strong: rgba(17, 24, 39, 0.18);
   --overlay: rgba(17, 24, 39, 0.04);
   --overlay-strong: rgba(17, 24, 39, 0.07);
-  --accent: #2563eb;
-  --accent-strong: #1d4ed8;
-  --accent-soft: #eef3ff;
-  --success: #15a34a;
-  --success-soft: #eafaf0;
-  --warning: #d97706;
-  --warning-soft: #fdf3e3;
-  --error: #dc2626;
-  --error-soft: #fdeeee;
-  --info: #2563eb;
-  --info-soft: #eef3ff;
-  --shadow: 0 6px 18px rgba(17, 24, 39, 0.1);
+  --accent: #2f5cf6;
+  --accent-strong: #1e44d8;
+  --accent-soft: #edf2ff;
+  --success: #12a15c;
+  --success-soft: #e7f9f0;
+  --warning: #d9870d;
+  --warning-soft: #fdf3e0;
+  --error: #e0434b;
+  --error-soft: #fdecec;
+  --info: #2f5cf6;
+  --info-soft: #edf2ff;
+  --shadow: 0 14px 34px -10px rgba(14, 21, 38, 0.18);
   --assistant-card-max-width: 720px;
   --assistant-card-inline-gutter: 40px;
   --workspace-max-width: 1240px;
@@ -3791,7 +3791,7 @@ summary:focus-visible {
   --conversation-max-width: 760px;
   --conversation-inline-gutter: 40px;
   --topbar-h: 56px;
-  --radius: 6px;
+  --radius: 8px;
   --radius-lg: 8px;
   --radius-xl: 12px;
 }
