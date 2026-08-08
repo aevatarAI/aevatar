@@ -359,7 +359,9 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
                 NullIfEmpty(operation.SafeMessage),
                 ToDateTimeOffset(operation.RequestedAt),
                 ToDateTimeOffset(operation.DispatchedAt),
-                ToDateTimeOffset(operation.CompletedAt));
+                ToDateTimeOffset(operation.CompletedAt),
+                ToDateTimeOffset(operation.LastProgressAt),
+                ToDateTimeOffset(operation.StalledAt));
 
     private static NyxIdChatPendingApprovalSnapshot? ToPendingApproval(
         NyxIdChatConversationPendingApprovalDocument? approval) =>

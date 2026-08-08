@@ -275,7 +275,9 @@ public sealed record NyxIdChatConversationOperationSnapshot(
     string? SafeMessage,
     DateTimeOffset? RequestedAt,
     DateTimeOffset? DispatchedAt,
-    DateTimeOffset? CompletedAt);
+    DateTimeOffset? CompletedAt,
+    DateTimeOffset? LastProgressAt = null,
+    DateTimeOffset? StalledAt = null);
 
 public sealed record NyxIdChatPendingApprovalSnapshot(
     string ApprovalRequestId,

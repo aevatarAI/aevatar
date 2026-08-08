@@ -214,6 +214,14 @@ rule layered on the strong `int64` protobuf fields, not `JsonFormatter.Default`
 behavior. Timestamps use canonical protobuf JSON UTC formatting, and absent or
 default protobuf fields are omitted while present empty messages remain `{}`.
 
+Executor-authored operation progress may also carry one presentation-only
+phase: `substepId / title / status (running|done|failed)`. The conversation
+actor admits only a new `running` phase followed by repeated `running` or one
+terminal update for that exact substep identity. A substep has no operation
+key, effect evidence, available actions, retry/skip authority, or nested
+substeps. Work that needs independent retry, effect truth, or an external call
+is a task step, never a phase hidden under another step.
+
 `retryInputRebuildable` and operation `idempotencyKey` are execution-control
 facts. They remain in actor-owned state and are deliberately excluded from the
 public TaskPlan, current-state read model, SSE frames, and browser decoder.
@@ -233,7 +241,26 @@ service connections are separate sequential actions. On reload, the browser
 resumes from current-state `activeTask`, whose shape is identical to the live
 TaskPlan payload; it does not reconstruct a plan from action cards or text.
 
-Text, reasoning, tool-start, task, control, and terminal frames share the actor-owned progress sequence. `RUN_STARTED`, keepalive, and bounded endpoint-local setup failures are transport context and do not invent an actor sequence. A stream closes with exactly one terminal:
+Text, reasoning, tool-start, task, control, and terminal frames share the actor-owned progress sequence. `RUN_STARTED`, keepalive, and bounded endpoint-local setup failures are transport context and do not invent an actor sequence.
+
+Long-running executors relay genuine phase changes or repeated genuine phase
+observations no less often than every 30 seconds when the underlying operation
+actually reports progress. They never manufacture progress from a timer. The
+15-second SSE keepalive is transport liveness only and does not update the task
+step, `lastProgressAt`, or the actor progress sequence.
+
+Each in-flight operation records actor-committed `lastProgressAt`. A durable
+self timeout fenced by the complete operation key, operation generation, child
+progress sequence, and last-progress timestamp evaluates the 120-second stall
+deadline. A stale timeout cannot mark the operation stalled; it only ensures a
+check exists for the current committed waterline. At the deadline the actor
+commits `stalledAt`, `attentionKind=stalled`, and the step's actor-computed
+`availableActions`. Live AGUI and current-state reload both render that same
+fact. New genuine progress clears `stalledAt` and starts a new actor-owned
+deadline. Browser frame silence remains a transport diagnostic and is never
+the business authority for stalled state.
+
+A stream closes with exactly one terminal:
 
 - task and turn `succeeded`: `RUN_FINISHED`, status `completed`;
 - task and turn `blocked` or `stopped`: `RUN_FINISHED`, status `blocked`;

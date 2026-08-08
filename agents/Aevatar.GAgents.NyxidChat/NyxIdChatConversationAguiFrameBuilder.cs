@@ -58,6 +58,21 @@ internal static class NyxIdChatConversationAguiFrameBuilder
         if (progressed.Progress is null || progressed.ProgressSequence <= 0)
             return [];
 
+        if (progressed.Progress.ProgressCase ==
+            NyxIdChatOperationProgressSignal.ProgressOneofCase.Phase)
+        {
+            var task = progressed.State?.ActiveTask;
+            var step = task?.Steps.FirstOrDefault(candidate =>
+                KeysEqual(candidate.Operation?.Key, progressed.Progress.Key));
+            return step is null
+                ? []
+                : BuildTaskFrames(
+                    task,
+                    [step],
+                    progressed.ProgressSequence,
+                    NyxIdChatStepChangeKind.Substep);
+        }
+
         var frame = progressed.Progress.ProgressCase switch
         {
             NyxIdChatOperationProgressSignal.ProgressOneofCase.Text => new AGUIEvent
@@ -94,6 +109,20 @@ internal static class NyxIdChatConversationAguiFrameBuilder
 
         frame.Sequence = progressed.ProgressSequence;
         return [frame];
+    }
+
+    public static IReadOnlyList<AGUIEvent> BuildStalled(NyxIdChatOperationStalledEvent stalled)
+    {
+        ArgumentNullException.ThrowIfNull(stalled);
+        var task = stalled.State?.ActiveTask;
+        var step = task?.Steps.FirstOrDefault(candidate =>
+            KeysEqual(candidate.Operation?.Key, stalled.Key));
+        return step is null || stalled.ProgressSequence <= 0
+            ? []
+            : BuildTaskFrames(
+                task,
+                [step],
+                stalled.ProgressSequence);
     }
 
     public static IReadOnlyList<AGUIEvent> BuildReconciled(
@@ -483,28 +512,30 @@ internal static class NyxIdChatConversationAguiFrameBuilder
     private static List<AGUIEvent> BuildTaskFrames(
         NyxIdChatTaskState task,
         IEnumerable<NyxIdChatTaskStepState> changedSteps,
-        long sequence)
+        long sequence,
+        NyxIdChatStepChangeKind? changeKind = null)
     {
         var frames = new List<AGUIEvent>
         {
             Custom(TaskSnapshotEventName, task, sequence),
         };
         frames.AddRange(changedSteps.Select(step =>
-            Custom(TaskStepChangedEventName, BuildStepChanged(task, step), sequence)));
+            Custom(TaskStepChangedEventName, BuildStepChanged(task, step, changeKind), sequence)));
         return frames;
     }
 
     private static NyxIdChatTaskStepChanged BuildStepChanged(
         NyxIdChatTaskState task,
-        NyxIdChatTaskStepState step) =>
+        NyxIdChatTaskStepState step,
+        NyxIdChatStepChangeKind? changeKind = null) =>
         new()
         {
             TaskId = task.TaskId,
             PlanRevision = task.PlanRevision,
             Step = step.Clone(),
-            ChangeKind = step.Status == NyxIdChatStepStatus.Cancelled
+            ChangeKind = changeKind ?? (step.Status == NyxIdChatStepStatus.Cancelled
                 ? NyxIdChatStepChangeKind.Cancelled
-                : NyxIdChatStepChangeKind.Status,
+                : NyxIdChatStepChangeKind.Status),
         };
 
     private static IEnumerable<NyxIdChatTaskStepState> ResolveChangedSteps(

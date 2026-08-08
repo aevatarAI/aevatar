@@ -69,6 +69,8 @@ public sealed class NyxIdChatTurnOperationExecutor
         "NYXID_ACTION_POSTCONDITION_INPUT_INVALID";
     private const string InvalidPostconditionInputMessage =
         "The action postcondition input was invalid.";
+    private const string PrepareOperationSubstepId = "prepare-operation";
+    private const string ExecuteOperationSubstepId = "execute-operation";
 
     private readonly IAgentRunReplyGenerationExecutorPort _generationExecutor;
     private readonly INyxIdActionPostconditionPort _actionPostconditionPort;
@@ -397,6 +399,15 @@ public sealed class NyxIdChatTurnOperationExecutor
                 NyxIdChatEffectEvidence.NotStarted);
         }
 
+        await ReportPhaseAsync(
+                command.Key,
+                PrepareOperationSubstepId,
+                "Prepare operation",
+                NyxIdChatSubstepStatus.Running,
+                session,
+                reportProgressAsync,
+                ct)
+            .ConfigureAwait(false);
         if (await EnsureDelegationCredentialAsync(
                 command.Key,
                 session,
@@ -433,6 +444,16 @@ public sealed class NyxIdChatTurnOperationExecutor
                 NyxIdChatEffectEvidence.NotStarted);
         }
 
+        await ReportPhaseAsync(
+                command.Key,
+                PrepareOperationSubstepId,
+                "Prepare operation",
+                NyxIdChatSubstepStatus.Done,
+                session,
+                reportProgressAsync,
+                ct)
+            .ConfigureAwait(false);
+
         await ReportToolStartedOnceAsync(
                 command.Key,
                 new NyxIdChatToolProgress
@@ -450,6 +471,15 @@ public sealed class NyxIdChatTurnOperationExecutor
                 command.Key,
                 command.Tool.IdempotencyKey,
                 command.Tool.OperationAdmission);
+        await ReportPhaseAsync(
+                command.Key,
+                ExecuteOperationSubstepId,
+                "Execute operation",
+                NyxIdChatSubstepStatus.Running,
+                session,
+                reportProgressAsync,
+                ct)
+            .ConfigureAwait(false);
         var continuation = await _generationExecutor.BuildToolStepContinuationAsync(
                 workItem,
                 capability,
@@ -465,6 +495,16 @@ public sealed class NyxIdChatTurnOperationExecutor
                     ? NyxIdChatEffectEvidence.MayHaveChanged
                     : NyxIdChatEffectEvidence.NotApplied);
         }
+
+        await ReportPhaseAsync(
+                command.Key,
+                ExecuteOperationSubstepId,
+                "Execute operation",
+                NyxIdChatSubstepStatus.Done,
+                session,
+                reportProgressAsync,
+                ct)
+            .ConfigureAwait(false);
 
         var toolResult = continuation.ToolStepResult!;
         var resultMessages = toolResult.ResultMessages
@@ -1287,6 +1327,26 @@ public sealed class NyxIdChatTurnOperationExecutor
             Key = key.Clone(),
             Sequence = ++session.ProgressSequence,
             ToolStarted = progress,
+        }, ct);
+
+    private static Task ReportPhaseAsync(
+        NyxIdChatOperationKey key,
+        string substepId,
+        string title,
+        NyxIdChatSubstepStatus status,
+        NyxIdChatTransientExecutionSession session,
+        Func<NyxIdChatOperationProgressSignal, CancellationToken, Task> reportProgressAsync,
+        CancellationToken ct) =>
+        reportProgressAsync(new NyxIdChatOperationProgressSignal
+        {
+            Key = key.Clone(),
+            Sequence = ++session.ProgressSequence,
+            Phase = new NyxIdChatOperationPhaseProgress
+            {
+                SubstepId = substepId,
+                Title = title,
+                Status = status,
+            },
         }, ct);
 
     private static bool IsValidLlmExecution(

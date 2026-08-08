@@ -356,6 +356,8 @@ public sealed class NyxIdChatConversationCurrentStateProjector
             RequestedAt = operation.RequestedAt?.Clone(),
             DispatchedAt = operation.DispatchedAt?.Clone(),
             CompletedAt = operation.CompletedAt?.Clone(),
+            LastProgressAt = operation.LastProgressAt?.Clone(),
+            StalledAt = operation.StalledAt?.Clone(),
         };
     }
 
@@ -655,6 +657,7 @@ public sealed class NyxIdChatConversationCurrentStateProjector
         NyxIdChatAttentionKind.None => "none",
         NyxIdChatAttentionKind.Input => "input",
         NyxIdChatAttentionKind.Approval => "approval",
+        NyxIdChatAttentionKind.Stalled => "stalled",
         _ => string.Empty,
     };
 

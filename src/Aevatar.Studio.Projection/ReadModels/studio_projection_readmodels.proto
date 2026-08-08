@@ -351,6 +351,8 @@ message NyxIdChatConversationOperationDocument {
   google.protobuf.Timestamp requested_at = 14;
   google.protobuf.Timestamp dispatched_at = 15;
   google.protobuf.Timestamp completed_at = 16;
+  google.protobuf.Timestamp last_progress_at = 17;
+  google.protobuf.Timestamp stalled_at = 18;
 }
 
 message NyxIdChatConversationLLMStepSourceDocument {

@@ -1021,6 +1021,17 @@ public sealed class NyxIdChatTurnGAgentTests
         toolStarts.Should().ContainSingle();
         toolStarts[0].ToolStarted.CallId.Should().Be("call-alpha");
         toolStarts[0].ToolStarted.Presentation.DisplayName.Should().Be("Tool Alpha");
+        progress.Where(static signal =>
+                signal.ProgressCase == NyxIdChatOperationProgressSignal.ProgressOneofCase.Phase)
+            .Select(static signal => (
+                signal.Phase.SubstepId,
+                signal.Phase.Title,
+                signal.Phase.Status))
+            .Should().Equal(
+                ("prepare-operation", "Prepare operation", NyxIdChatSubstepStatus.Running),
+                ("prepare-operation", "Prepare operation", NyxIdChatSubstepStatus.Done),
+                ("execute-operation", "Execute operation", NyxIdChatSubstepStatus.Running),
+                ("execute-operation", "Execute operation", NyxIdChatSubstepStatus.Done));
         first.Result.ResultCase.Should().Be(NyxIdChatOperationResultSignal.ResultOneofCase.Tool);
         first.Result.Tool.ResultJson.Should().Be("{\"ok\":true}");
         first.Result.Tool.Receipt.Status.Should().Be(AgentToolReceiptStatus.Success);

@@ -290,6 +290,17 @@ public sealed class NyxIdChatTaskContractTests
             .Should().BeSameAs(
                 NyxIdChatTaskStepState.Descriptor,
                 "the legacy message type must retain its published wire layout");
+        NyxIdChatOperationPhaseProgress.Descriptor.Fields.InFieldNumberOrder()
+            .Select(static field => field.Name)
+            .Should().Equal("substep_id", "title", "status");
+        NyxIdChatOperationPhaseProgress.Descriptor.Fields.InFieldNumberOrder()
+            .Select(static field => field.Name)
+            .Should().NotContain([
+                "operation_key",
+                "external_effect",
+                "available_actions",
+                "substeps",
+            ]);
     }
 
     [Theory]

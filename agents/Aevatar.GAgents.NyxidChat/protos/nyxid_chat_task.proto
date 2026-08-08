@@ -136,6 +136,7 @@ enum NyxIdChatAttentionKind {
   NYX_ID_CHAT_ATTENTION_KIND_NONE = 1;
   NYX_ID_CHAT_ATTENTION_KIND_INPUT = 2;
   NYX_ID_CHAT_ATTENTION_KIND_APPROVAL = 3;
+  NYX_ID_CHAT_ATTENTION_KIND_STALLED = 4;
 }
 
 enum NyxIdChatApprovalReversibility {
@@ -369,6 +370,8 @@ message NyxIdChatOperationState {
   // Latest child-owned progress sequence reconciled for this exact operation.
   // This is distinct from the conversation-wide projection sequence.
   int64 latest_progress_sequence = 12;
+  google.protobuf.Timestamp last_progress_at = 13;
+  google.protobuf.Timestamp stalled_at = 14;
 }
 
 message NyxIdChatTaskStepState {
@@ -450,6 +453,8 @@ message NyxIdChatTaskPlanOperation {
   google.protobuf.Timestamp requested_at = 14;
   google.protobuf.Timestamp dispatched_at = 15;
   google.protobuf.Timestamp completed_at = 16;
+  google.protobuf.Timestamp last_progress_at = 17;
+  google.protobuf.Timestamp stalled_at = 18;
 }
 
 message NyxIdChatTaskPlanStep {
@@ -1309,6 +1314,15 @@ message NyxIdChatToolProgress {
   aevatar.foundation.tools.ToolPresentationDescriptor presentation = 3;
 }
 
+// Presentation-only phase evidence authored by the executor. A phase cannot
+// carry an operation key, effect evidence, actions, or another nested phase;
+// those authoritative facts remain on the owning task step and operation.
+message NyxIdChatOperationPhaseProgress {
+  string substep_id = 1;
+  string title = 2;
+  NyxIdChatSubstepStatus status = 3;
+}
+
 message NyxIdChatOperationProgressSignal {
   NyxIdChatOperationKey key = 1;
   int64 sequence = 2;
@@ -1316,7 +1330,16 @@ message NyxIdChatOperationProgressSignal {
     NyxIdChatTextProgress text = 10;
     NyxIdChatReasoningProgress reasoning = 11;
     NyxIdChatToolProgress tool_started = 12;
+    NyxIdChatOperationPhaseProgress phase = 13;
   }
+}
+
+// Durable self signal for the actor-owned stall deadline. The full operation
+// key plus the expected child progress waterline rejects retry/stale signals.
+message NyxIdChatOperationStallCheckSignal {
+  NyxIdChatOperationKey key = 1;
+  int64 expected_progress_sequence = 2;
+  google.protobuf.Timestamp expected_last_progress_at = 3;
 }
 
 message NyxIdChatStartTurnCommand {
@@ -1482,6 +1505,15 @@ message NyxIdChatOperationProgressedEvent {
   NyxIdChatOperationProgressSignal progress = 1;
   int64 progress_sequence = 2;
   google.protobuf.Timestamp committed_at = 3;
+  NyxIdChatConversationGAgentState state = 4;
+}
+
+message NyxIdChatOperationStalledEvent {
+  NyxIdChatOperationKey key = 1;
+  int64 expected_progress_sequence = 2;
+  google.protobuf.Timestamp stalled_at = 3;
+  int64 progress_sequence = 4;
+  NyxIdChatConversationGAgentState state = 5;
 }
 
 message NyxIdChatOperationReconciledEvent {

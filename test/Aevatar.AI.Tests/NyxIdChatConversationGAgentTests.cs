@@ -2739,6 +2739,140 @@ public sealed class NyxIdChatConversationGAgentTests
     }
 
     [Fact]
+    public async Task ChildPhaseProgress_ShouldCommitPresentationOnlySubstepsAndSubstepFrames()
+    {
+        const string actorId = "conversation-phase-alpha";
+        var eventStore = new InMemoryEventStoreForTests();
+        using var services = BuildEventSourcingServices(eventStore);
+        var agent = CreateController(services, actorId);
+        await agent.ActivateAsync();
+        var start = CreateStartTurnCommand();
+        start.ConversationActorId = actorId;
+        await agent.HandleEventAsync(CreateEnvelope(actorId, start));
+        var key = agent.State.ActiveTask.Steps.Single().Operation.Key.Clone();
+
+        await agent.HandleOperationProgressAsync(new NyxIdChatOperationProgressSignal
+        {
+            Key = key.Clone(),
+            Sequence = 1,
+            Phase = new NyxIdChatOperationPhaseProgress
+            {
+                SubstepId = "execute-operation",
+                Title = "Execute operation",
+                Status = NyxIdChatSubstepStatus.Running,
+            },
+        });
+
+        var committed = await eventStore.GetEventsAsync(actorId);
+        var progressed = committed[^1].EventData.Unpack<NyxIdChatOperationProgressedEvent>();
+        var step = agent.State.ActiveTask.Steps.Single();
+        step.Substeps.Should().ContainSingle().Which.Should().BeEquivalentTo(
+            new NyxIdChatSubstepState
+            {
+                SubstepId = "execute-operation",
+                Title = "Execute operation",
+                Status = NyxIdChatSubstepStatus.Running,
+            });
+        progressed.State.ActiveTask.Should().BeEquivalentTo(agent.State.ActiveTask);
+        var frames = NyxIdChatConversationAguiFrameBuilder.BuildProgressed("turn-alpha", progressed);
+        frames.Should().HaveCount(2);
+        frames[1].Custom.Payload.Unpack<NyxIdChatTaskPlanStepChanged>()
+            .ChangeKind.Should().Be(NyxIdChatStepChangeKind.Substep);
+
+        await agent.HandleOperationProgressAsync(new NyxIdChatOperationProgressSignal
+        {
+            Key = key.Clone(),
+            Sequence = 2,
+            Phase = new NyxIdChatOperationPhaseProgress
+            {
+                SubstepId = "hidden-external-call",
+                Title = "Hidden external call",
+                Status = NyxIdChatSubstepStatus.Done,
+            },
+        });
+        (await eventStore.GetEventsAsync(actorId)).Should().HaveCount(committed.Count,
+            "a phase cannot appear terminal without an actor-observed running phase");
+
+        await agent.HandleOperationProgressAsync(new NyxIdChatOperationProgressSignal
+        {
+            Key = key,
+            Sequence = 2,
+            Phase = new NyxIdChatOperationPhaseProgress
+            {
+                SubstepId = "execute-operation",
+                Title = "Execute operation",
+                Status = NyxIdChatSubstepStatus.Done,
+            },
+        });
+        agent.State.ActiveTask.Steps.Single().Substeps.Single().Status.Should()
+            .Be(NyxIdChatSubstepStatus.Done);
+    }
+
+    [Fact]
+    public async Task StallCheck_ShouldCommitOnlyAfterActorDeadlineAndSurviveReload()
+    {
+        const string actorId = "conversation-stall-alpha";
+        var eventStore = new InMemoryEventStoreForTests();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var clock = new MutableTimeProvider(
+            new DateTimeOffset(2026, 7, 24, 8, 0, 0, TimeSpan.Zero));
+        using var services = BuildEventSourcingServices(eventStore, callbackScheduler: scheduler);
+        var agent = CreateController(services, actorId, timeProvider: clock);
+        await agent.ActivateAsync();
+        var start = CreateStartTurnCommand();
+        start.ConversationActorId = actorId;
+        await agent.HandleEventAsync(CreateEnvelope(actorId, start));
+        var operation = agent.State.ActiveTask.Steps.Single().Operation;
+        var signal = new NyxIdChatOperationStallCheckSignal
+        {
+            Key = operation.Key.Clone(),
+            ExpectedProgressSequence = operation.LatestProgressSequence,
+            ExpectedLastProgressAt = operation.LastProgressAt.Clone(),
+        };
+        var before = (await eventStore.GetEventsAsync(actorId)).Count;
+
+        clock.Advance(TimeSpan.FromSeconds(119));
+        await agent.HandleOperationStallCheckAsync(signal.Clone());
+
+        (await eventStore.GetEventsAsync(actorId)).Should().HaveCount(before);
+        agent.State.Attention.AttentionKind.Should().Be(NyxIdChatAttentionKind.None);
+        agent.State.ActiveTask.Steps.Single().AvailableActions.Stop.Should().BeTrue();
+
+        clock.Advance(TimeSpan.FromSeconds(2));
+        await agent.HandleOperationStallCheckAsync(signal.Clone());
+
+        var stalledEvents = await eventStore.GetEventsAsync(actorId);
+        stalledEvents.Should().HaveCount(before + 1);
+        stalledEvents[^1].EventData.Is(NyxIdChatOperationStalledEvent.Descriptor).Should().BeTrue();
+        agent.State.Attention.AttentionKind.Should().Be(NyxIdChatAttentionKind.Stalled);
+        agent.State.Attention.AttentionSince.Should().Be(
+            Timestamp.FromDateTimeOffset(
+                new DateTimeOffset(2026, 7, 24, 8, 2, 0, TimeSpan.Zero)));
+        agent.State.ActiveTask.Steps.Single().AvailableActions.Stop.Should().BeTrue();
+
+        var recovered = CreateController(services, actorId, timeProvider: clock);
+        await recovered.ActivateAsync();
+        recovered.State.Attention.Should().BeEquivalentTo(agent.State.Attention);
+        recovered.State.ActiveTask.Steps.Single().Operation.StalledAt.Should()
+            .Be(agent.State.ActiveTask.Steps.Single().Operation.StalledAt);
+
+        await recovered.HandleOperationProgressAsync(new NyxIdChatOperationProgressSignal
+        {
+            Key = signal.Key.Clone(),
+            Sequence = 1,
+            Text = new NyxIdChatTextProgress { Delta = "real progress" },
+        });
+        recovered.State.Attention.AttentionKind.Should().Be(NyxIdChatAttentionKind.None);
+        recovered.State.ActiveTask.Steps.Single().Operation.StalledAt.Should().BeNull();
+
+        var afterRecovery = (await eventStore.GetEventsAsync(actorId)).Count;
+        var stale = signal.Clone();
+        stale.Key.OperationGeneration++;
+        await recovered.HandleOperationStallCheckAsync(stale);
+        (await eventStore.GetEventsAsync(actorId)).Should().HaveCount(afterRecovery);
+    }
+
+    [Fact]
     public async Task StopDuringDispatchedLlm_ShouldCommitDurableFenceAndStoppedTerminal()
     {
         const string conversationActorId = "conversation-alpha";
@@ -4468,14 +4602,16 @@ public sealed class NyxIdChatConversationGAgentTests
         ServiceProvider services,
         string actorId,
         IActorDispatchPort? actorDispatchPort = null,
-        AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer = null)
+        AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer = null,
+        TimeProvider? timeProvider = null)
     {
         var operations = new List<string>();
         var agent = new NyxIdChatConversationGAgent(
             new RecordingActorRuntime(operations),
             actorDispatchPort ??
             new RecordingActorDispatchPort(operations, static (_, _) => Task.CompletedTask),
-            new FixedTimeProvider(new DateTimeOffset(2026, 7, 24, 8, 0, 0, TimeSpan.Zero)),
+            timeProvider ?? new FixedTimeProvider(
+                new DateTimeOffset(2026, 7, 24, 8, 0, 0, TimeSpan.Zero)),
             turnCatalogMaterializer)
         {
             Services = services,
@@ -4484,6 +4620,15 @@ public sealed class NyxIdChatConversationGAgentTests
         };
         AssignActorId(agent, actorId);
         return agent;
+    }
+
+    private sealed class MutableTimeProvider(DateTimeOffset now) : TimeProvider
+    {
+        private DateTimeOffset _now = now;
+
+        public override DateTimeOffset GetUtcNow() => _now;
+
+        public void Advance(TimeSpan amount) => _now += amount;
     }
 
     private static ServiceProvider BuildEventSourcingServices(

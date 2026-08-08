@@ -111,6 +111,8 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
         active.Operation.OperationId.Should().Be("operation-beta");
         active.Operation.OperationGeneration.Should().Be(3);
         active.Operation.Phase.Should().Be("running");
+        active.Operation.LastProgressAt.Should().Be(state.ActiveTask.Steps[0].Operation.LastProgressAt);
+        active.Operation.StalledAt.Should().Be(state.ActiveTask.Steps[0].Operation.StalledAt);
         active.AddedBy.Should().Be("replan");
         active.AddedInPlanRevision.Should().Be(2);
         active.CancelledInPlanRevision.Should().Be(0);
@@ -707,6 +709,8 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
                 Phase = NyxIdChatOperationPhase.Running,
                 LatestProgressSequence = 4,
                 RequestedAt = now.Clone(),
+                LastProgressAt = now.Clone(),
+                StalledAt = now.Clone(),
             },
         });
         state.ActiveTask.Steps.Add(new NyxIdChatTaskStepState

@@ -294,6 +294,19 @@ public sealed class NyxIdChatSessionEventProjector
                     progressed));
         }
 
+        if (payload.Is(NyxIdChatOperationStalledEvent.Descriptor))
+        {
+            var stalled = payload.Unpack<NyxIdChatOperationStalledEvent>();
+            if (!MatchesControllerKey(context, stalled.Key) ||
+                !MatchesControllerState(context, stalled.State))
+            {
+                return EmptyEntries;
+            }
+            return Entries(
+                context,
+                NyxIdChatConversationAguiFrameBuilder.BuildStalled(stalled));
+        }
+
         if (payload.Is(NyxIdChatOperationReconciledEvent.Descriptor))
         {
             var reconciled = payload.Unpack<NyxIdChatOperationReconciledEvent>();

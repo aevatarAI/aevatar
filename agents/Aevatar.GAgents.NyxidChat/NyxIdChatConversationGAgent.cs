@@ -27,6 +27,7 @@ public sealed class NyxIdChatConversationGAgent
     private static readonly TimeSpan HistoryInitializationRetryDelay = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan HistoryReservationRetryDelay = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan HistoryTerminalRetryDelay = TimeSpan.FromSeconds(5);
+    internal static readonly TimeSpan OperationStallThreshold = TimeSpan.FromSeconds(120);
 
     public static string ProjectionKind => "nyxid-chat-conversation";
 
@@ -90,6 +91,7 @@ public sealed class NyxIdChatConversationGAgent
             .On<NyxIdChatHistoryTerminalRetryScheduledEvent>(ApplyHistoryTerminalRetryScheduled)
             .On<NyxIdChatOperationDispatchedEvent>(ApplyOperationDispatched)
             .On<NyxIdChatOperationProgressedEvent>(ApplyOperationProgressed)
+            .On<NyxIdChatOperationStalledEvent>(ApplyOperationStalled)
             .On<NyxIdChatOperationReconciledEvent>(ApplyOperationReconciled)
             .On<NyxIdChatLateOperationEvidenceCommittedEvent>(ApplyLateOperationEvidenceCommitted)
             .On<NyxIdChatControlFenceCommittedEvent>(ApplyControlFenceCommitted)
@@ -135,6 +137,7 @@ public sealed class NyxIdChatConversationGAgent
             return;
 
         await ScheduleOutstandingOperationRecoveryAsync(ct);
+        await ScheduleOutstandingOperationStallCheckAsync(ct);
     }
 
     [EventHandler(AllowSelfHandling = true)]
@@ -1299,19 +1302,77 @@ public sealed class NyxIdChatConversationGAgent
     public async Task HandleOperationProgressAsync(NyxIdChatOperationProgressSignal signal)
     {
         ArgumentNullException.ThrowIfNull(signal);
-        if (signal.Sequence <= 0 ||
-            signal.ProgressCase == NyxIdChatOperationProgressSignal.ProgressOneofCase.None ||
+        if (!IsValidOperationProgress(signal) ||
             !TryResolveCurrentOperation(signal.Key, out var operation) ||
-            signal.Sequence <= operation.LatestProgressSequence)
+            signal.Sequence <= operation.LatestProgressSequence ||
+            !IsValidPhaseTransition(State, signal))
         {
             return;
         }
 
-        await PersistDomainEventAsync(new NyxIdChatOperationProgressedEvent
+        var wasStalled = operation.StalledAt is not null;
+        var progressed = new NyxIdChatOperationProgressedEvent
         {
             Progress = signal.Clone(),
             ProgressSequence = State.ProgressSequence + 1,
             CommittedAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
+        };
+        progressed.State = NyxIdChatNeedsYouDecisions.RefreshAttention(
+            ApplyOperationProgressed(State, progressed));
+        await PersistDomainEventAsync(progressed, CancellationToken.None);
+
+        if (wasStalled)
+            await ScheduleOutstandingOperationStallCheckAsync(CancellationToken.None);
+    }
+
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+    public async Task HandleOperationStallCheckAsync(NyxIdChatOperationStallCheckSignal signal)
+    {
+        ArgumentNullException.ThrowIfNull(signal);
+        if (!TryResolveCurrentOperation(signal.Key, out var operation) ||
+            !IsInFlight(operation.Phase) ||
+            operation.LastProgressAt is null ||
+            operation.StalledAt is not null)
+        {
+            return;
+        }
+
+        if (signal.ExpectedProgressSequence != operation.LatestProgressSequence ||
+            !TimestampsEqual(signal.ExpectedLastProgressAt, operation.LastProgressAt))
+        {
+            await ScheduleOperationStallCheckAsync(operation, CancellationToken.None);
+            return;
+        }
+
+        var now = _timeProvider.GetUtcNow();
+        var stallAt = operation.LastProgressAt.ToDateTimeOffset() + OperationStallThreshold;
+        if (now < stallAt)
+        {
+            await ScheduleOperationStallCheckAsync(operation, CancellationToken.None);
+            return;
+        }
+
+        var next = State.Clone();
+        var task = next.ActiveTask;
+        var step = task?.Steps.FirstOrDefault(candidate =>
+            KeysEqual(candidate.Operation?.Key, signal.Key));
+        if (step?.Operation is null)
+            return;
+
+        step.Operation.StalledAt = Timestamp.FromDateTimeOffset(stallAt);
+        step.AvailableActions = NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(step);
+        step.UpdatedAt = Timestamp.FromDateTimeOffset(now);
+        task.UpdatedAt = step.UpdatedAt.Clone();
+        next.ProgressSequence = checked(next.ProgressSequence + 1);
+        next.UpdatedAt = step.UpdatedAt.Clone();
+        next = NyxIdChatNeedsYouDecisions.RefreshAttention(next);
+        await PersistDomainEventAsync(new NyxIdChatOperationStalledEvent
+        {
+            Key = signal.Key.Clone(),
+            ExpectedProgressSequence = signal.ExpectedProgressSequence,
+            StalledAt = step.Operation.StalledAt.Clone(),
+            ProgressSequence = next.ProgressSequence,
+            State = next,
         }, CancellationToken.None);
     }
 
@@ -2007,6 +2068,7 @@ public sealed class NyxIdChatConversationGAgent
 
         step.Operation.Phase = NyxIdChatOperationPhase.Dispatched;
         step.Operation.DispatchedAt = evt.DispatchedAt?.Clone();
+        step.Operation.LastProgressAt ??= evt.DispatchedAt?.Clone();
         next.UpdatedAt = evt.DispatchedAt?.Clone();
         return next;
     }
@@ -2017,10 +2079,11 @@ public sealed class NyxIdChatConversationGAgent
     {
         var progress = evt.Progress;
         var next = current.Clone();
-        var operation = next.ActiveTask?.Steps
-            .Select(static step => step.Operation)
-            .FirstOrDefault(candidate => KeysEqual(candidate?.Key, progress?.Key));
-        if (operation is null ||
+        var task = next.ActiveTask;
+        var step = task?.Steps.FirstOrDefault(candidate =>
+            KeysEqual(candidate.Operation?.Key, progress?.Key));
+        var operation = step?.Operation;
+        if (step is null || operation is null ||
             progress is null ||
             progress.Sequence <= operation.LatestProgressSequence ||
             evt.ProgressSequence <= current.ProgressSequence)
@@ -2029,9 +2092,35 @@ public sealed class NyxIdChatConversationGAgent
         }
 
         operation.LatestProgressSequence = progress.Sequence;
+        operation.LastProgressAt = evt.CommittedAt?.Clone();
+        operation.StalledAt = null;
+        ApplyPhaseProgress(step, progress.Phase);
+        step.UpdatedAt = evt.CommittedAt?.Clone();
+        task.UpdatedAt = evt.CommittedAt?.Clone();
         next.ProgressSequence = evt.ProgressSequence;
         next.UpdatedAt = evt.CommittedAt?.Clone();
         return next;
+    }
+
+    private static NyxIdChatConversationGAgentState ApplyOperationStalled(
+        NyxIdChatConversationGAgentState current,
+        NyxIdChatOperationStalledEvent evt)
+    {
+        if (evt.State?.ActiveTask is null ||
+            evt.Key is null ||
+            evt.ProgressSequence <= current.ProgressSequence ||
+            !string.Equals(evt.State.ConversationActorId, current.ConversationActorId, StringComparison.Ordinal))
+        {
+            return current;
+        }
+
+        var operation = evt.State.ActiveTask.Steps
+            .Select(static step => step.Operation)
+            .FirstOrDefault(candidate => KeysEqual(candidate?.Key, evt.Key));
+        return operation?.StalledAt is null ||
+               operation.LatestProgressSequence != evt.ExpectedProgressSequence
+            ? current
+            : evt.State.Clone();
     }
 
     private static NyxIdChatConversationGAgentState ApplyOperationReconciled(
@@ -2696,6 +2785,68 @@ public sealed class NyxIdChatConversationGAgent
             : ScheduleActivationRecoveryAsync(operation, ct);
     }
 
+    private Task ScheduleOutstandingOperationStallCheckAsync(CancellationToken ct)
+    {
+        var operation = State.ActiveTask?.Steps
+            .Select(static step => step.Operation)
+            .FirstOrDefault(static candidate =>
+                candidate?.Key is not null &&
+                candidate.LastProgressAt is not null &&
+                candidate.StalledAt is null &&
+                IsInFlight(candidate.Phase));
+        return operation is null
+            ? Task.CompletedTask
+            : ScheduleOperationStallCheckAsync(operation, ct);
+    }
+
+    private async Task ScheduleOperationStallCheckAsync(
+        NyxIdChatOperationState operation,
+        CancellationToken ct)
+    {
+        if (operation.Key is null || operation.LastProgressAt is null)
+            return;
+
+        var dueAt = operation.LastProgressAt.ToDateTimeOffset() + OperationStallThreshold;
+        var delay = dueAt - _timeProvider.GetUtcNow();
+        var signal = new NyxIdChatOperationStallCheckSignal
+        {
+            Key = operation.Key.Clone(),
+            ExpectedProgressSequence = operation.LatestProgressSequence,
+            ExpectedLastProgressAt = operation.LastProgressAt.Clone(),
+        };
+        var options = new EventEnvelopePublishOptions
+        {
+            Propagation = new EventEnvelopePropagationOverrides
+            {
+                CorrelationId = operation.Key.OperationId,
+            },
+            Delivery = new EventEnvelopeDeliveryOptions
+            {
+                OperationId = BuildStableIdentity(
+                    "operation-stall-check",
+                    operation.Key.OperationId,
+                    operation.Key.OperationGeneration.ToString(
+                        System.Globalization.CultureInfo.InvariantCulture),
+                    operation.LatestProgressSequence.ToString(
+                        System.Globalization.CultureInfo.InvariantCulture),
+                    operation.LastProgressAt.ToDateTimeOffset().ToUnixTimeMilliseconds().ToString(
+                        System.Globalization.CultureInfo.InvariantCulture)),
+            },
+        };
+        if (delay <= TimeSpan.Zero)
+        {
+            await PublishAsync(signal, TopologyAudience.Self, ct, options);
+            return;
+        }
+
+        await ScheduleSelfDurableTimeoutAsync(
+            options.Delivery.OperationId,
+            delay,
+            signal,
+            options,
+            ct);
+    }
+
     private async Task ScheduleActivationRecoveryAsync(
         NyxIdChatOperationState operation,
         CancellationToken ct)
@@ -3034,6 +3185,7 @@ public sealed class NyxIdChatConversationGAgent
             Key = command.Key.Clone(),
             DispatchedAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
         }, CancellationToken.None);
+        await ScheduleOutstandingOperationStallCheckAsync(CancellationToken.None);
     }
 
     private Task DispatchPlanGateAdmissionAsync(
@@ -3151,6 +3303,7 @@ public sealed class NyxIdChatConversationGAgent
             Key = operationKey.Clone(),
             DispatchedAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
         }, CancellationToken.None);
+        await ScheduleOutstandingOperationStallCheckAsync(CancellationToken.None);
     }
 
     private long CurrentCommittedVersion() =>
@@ -3260,6 +3413,81 @@ public sealed class NyxIdChatConversationGAgent
         string.Equals(left.StepId, right.StepId, StringComparison.Ordinal) &&
         string.Equals(left.OperationId, right.OperationId, StringComparison.Ordinal) &&
         left.OperationGeneration == right.OperationGeneration;
+
+    private static bool IsValidOperationProgress(NyxIdChatOperationProgressSignal signal)
+    {
+        if (signal.Sequence <= 0 ||
+            signal.ProgressCase == NyxIdChatOperationProgressSignal.ProgressOneofCase.None)
+        {
+            return false;
+        }
+
+        return signal.ProgressCase != NyxIdChatOperationProgressSignal.ProgressOneofCase.Phase ||
+               signal.Phase is { } phase &&
+               !string.IsNullOrWhiteSpace(phase.SubstepId) &&
+               phase.SubstepId.Length <= 128 &&
+               !string.IsNullOrWhiteSpace(phase.Title) &&
+               phase.Title.Length <= 400 &&
+               phase.Status is NyxIdChatSubstepStatus.Running or
+                   NyxIdChatSubstepStatus.Done or
+                   NyxIdChatSubstepStatus.Failed;
+    }
+
+    private static bool IsValidPhaseTransition(
+        NyxIdChatConversationGAgentState state,
+        NyxIdChatOperationProgressSignal signal)
+    {
+        if (signal.ProgressCase != NyxIdChatOperationProgressSignal.ProgressOneofCase.Phase)
+            return true;
+
+        var step = state.ActiveTask?.Steps.FirstOrDefault(candidate =>
+            KeysEqual(candidate.Operation?.Key, signal.Key));
+        var existing = step?.Substeps.FirstOrDefault(candidate =>
+            string.Equals(candidate.SubstepId, signal.Phase.SubstepId, StringComparison.Ordinal));
+        return existing is null
+            ? signal.Phase.Status == NyxIdChatSubstepStatus.Running
+            : existing.Status == NyxIdChatSubstepStatus.Running &&
+              string.Equals(existing.Title, signal.Phase.Title, StringComparison.Ordinal);
+    }
+
+    private static void ApplyPhaseProgress(
+        NyxIdChatTaskStepState step,
+        NyxIdChatOperationPhaseProgress? phase)
+    {
+        if (phase is null)
+            return;
+
+        var substep = step.Substeps.FirstOrDefault(candidate =>
+            string.Equals(candidate.SubstepId, phase.SubstepId, StringComparison.Ordinal));
+        if (substep is null)
+        {
+            if (phase.Status != NyxIdChatSubstepStatus.Running)
+                return;
+            step.Substeps.Add(new NyxIdChatSubstepState
+            {
+                SubstepId = phase.SubstepId,
+                Title = phase.Title,
+                Status = phase.Status,
+            });
+            return;
+        }
+
+        if (substep.Status != NyxIdChatSubstepStatus.Running ||
+            !string.Equals(substep.Title, phase.Title, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        substep.Status = phase.Status;
+    }
+
+    private static bool IsInFlight(NyxIdChatOperationPhase phase) =>
+        phase is NyxIdChatOperationPhase.Requested or
+            NyxIdChatOperationPhase.Dispatched or
+            NyxIdChatOperationPhase.Running;
+
+    private static bool TimestampsEqual(Timestamp? left, Timestamp? right) =>
+        left is not null && right is not null && left.Equals(right);
 
     private static string BuildStableIdentity(string prefix, params string[] parts)
     {

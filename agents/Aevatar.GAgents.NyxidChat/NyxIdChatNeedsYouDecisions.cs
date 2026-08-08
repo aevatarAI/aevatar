@@ -221,10 +221,22 @@ public static class NyxIdChatNeedsYouDecisions
             attention.AttentionKind = NyxIdChatAttentionKind.Approval;
             attention.AttentionSince = approval.AskedAt?.Clone();
         }
+        else if (ResolveStalledStep(next.ActiveTask) is { } stalledStep)
+        {
+            attention.AttentionKind = NyxIdChatAttentionKind.Stalled;
+            attention.AttentionSince = stalledStep.Operation.StalledAt?.Clone();
+        }
 
         next.Attention = attention;
         return next;
     }
+
+    private static NyxIdChatTaskStepState? ResolveStalledStep(NyxIdChatTaskState? task) =>
+        task?.Status == NyxIdChatTaskStatus.Active
+            ? task.Steps.FirstOrDefault(static step =>
+                step.Status == NyxIdChatStepStatus.Running &&
+                step.Operation?.StalledAt is not null)
+            : null;
 
     private static bool MatchesConversation(
         NyxIdChatConversationGAgentState state,

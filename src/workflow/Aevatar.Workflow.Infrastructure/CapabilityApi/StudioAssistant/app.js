@@ -1982,7 +1982,9 @@ function renderHistoryList() {
   if (!dom.recentSessionsList) return;
   dom.recentSessionsList.replaceChildren();
   const needsYou = state.conversations.filter((conversation) =>
-    conversation.attentionKind === "input" || conversation.attentionKind === "approval");
+    conversation.attentionKind === "input" ||
+    conversation.attentionKind === "approval" ||
+    conversation.attentionKind === "stalled");
   dom.needsYouCount.textContent = String(needsYou.length);
   const filteringNeedsYou = state.historyFilter === "needs-you";
   dom.needsYouFilterButton.setAttribute("aria-pressed", String(filteringNeedsYou));
@@ -2016,7 +2018,9 @@ function renderHistoryList() {
     return;
   }
   for (const conversation of recent) {
-    const attentionKind = conversation.attentionKind === "input" || conversation.attentionKind === "approval"
+    const attentionKind = conversation.attentionKind === "input" ||
+      conversation.attentionKind === "approval" ||
+      conversation.attentionKind === "stalled"
       ? conversation.attentionKind
       : null;
     const row = el(
@@ -2031,7 +2035,11 @@ function renderHistoryList() {
     const conversationState = findConversationState(conversation.id);
     const running = Boolean(conversationState?.controller);
     const meta = attentionKind
-      ? `${attentionKind === "input" ? "等待输入" : "等待批准"} · ${formatHistoryTime(conversation.attentionSince)}`
+      ? `${attentionKind === "input"
+        ? "等待输入"
+        : attentionKind === "approval"
+          ? "等待批准"
+          : "进度停滞"} · ${formatHistoryTime(conversation.attentionSince)}`
       : `${conversation.messageCount} 条消息 · ${formatHistoryTime(conversation.updatedAt)}` +
         (running ? " · 运行中" : "");
     copy.append(el("strong", "", conversation.title), el("small", "", meta));

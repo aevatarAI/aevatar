@@ -195,6 +195,8 @@ internal static class NyxIdChatTaskPlanWireMapper
             RequestedAt = operation.RequestedAt?.Clone(),
             DispatchedAt = operation.DispatchedAt?.Clone(),
             CompletedAt = operation.CompletedAt?.Clone(),
+            LastProgressAt = operation.LastProgressAt?.Clone(),
+            StalledAt = operation.StalledAt?.Clone(),
         };
     }
 
@@ -220,6 +222,8 @@ internal static class NyxIdChatTaskPlanWireMapper
                 RequestedAt = ToTimestamp(operation.RequestedAt),
                 DispatchedAt = ToTimestamp(operation.DispatchedAt),
                 CompletedAt = ToTimestamp(operation.CompletedAt),
+                LastProgressAt = ToTimestamp(operation.LastProgressAt),
+                StalledAt = ToTimestamp(operation.StalledAt),
             };
 
     private static NyxIdChatStepSource? FromSnapshot(

@@ -474,6 +474,13 @@ public static class NyxIdChatTaskTransitionPolicy
         step.Operation.Phase = result.OperationPhase;
         step.Operation.TerminalCode = result.FailureCode;
         step.Operation.SafeMessage = result.SafeMessage;
+        foreach (var substep in step.Substeps.Where(static candidate =>
+                     candidate.Status == NyxIdChatSubstepStatus.Running))
+        {
+            substep.Status = result.StepStatus == NyxIdChatStepStatus.Done
+                ? NyxIdChatSubstepStatus.Done
+                : NyxIdChatSubstepStatus.Failed;
+        }
     }
 
     private static void ApplyTaskOutcome(NyxIdChatConversationGAgentState state)
