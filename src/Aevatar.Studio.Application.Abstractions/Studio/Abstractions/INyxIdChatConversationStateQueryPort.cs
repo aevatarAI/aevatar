@@ -145,7 +145,16 @@ public sealed record NyxIdChatConversationTaskSnapshot(
     string? PlanId = null,
     int PlanRevision = 1,
     string? Title = null,
-    NyxIdChatConversationPlanGateSnapshot? Gate = null);
+    NyxIdChatConversationPlanGateSnapshot? Gate = null,
+    IReadOnlyList<NyxIdChatConversationPlanRevisionSnapshot>? PlanRevisions = null,
+    int PlanRevisionHistoryStart = 0);
+
+public sealed record NyxIdChatConversationPlanRevisionSnapshot(
+    int PlanRevision,
+    string RevisionCause,
+    DateTimeOffset? CommittedAt,
+    IReadOnlyList<string> AddedStepIds,
+    IReadOnlyList<string> CancelledStepIds);
 
 public sealed record NyxIdChatConversationPlanGateSnapshot(
     string Mode,
@@ -172,7 +181,9 @@ public sealed record NyxIdChatConversationStepSnapshot(
     string? AddedBy = null,
     IReadOnlyList<string>? DependsOn = null,
     NyxIdChatConversationStepEstimateSnapshot? Estimate = null,
-    IReadOnlyList<NyxIdChatConversationSubstepSnapshot>? Substeps = null);
+    IReadOnlyList<NyxIdChatConversationSubstepSnapshot>? Substeps = null,
+    int AddedInPlanRevision = 0,
+    int CancelledInPlanRevision = 0);
 
 public sealed record NyxIdChatConversationStepEstimateSnapshot(
     string Kind,

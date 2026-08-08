@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Text;
 using Aevatar.AI.Abstractions;
 using Aevatar.GAgents.NyxidChat;
 using FluentAssertions;
@@ -58,11 +60,26 @@ public sealed class NyxIdChatTaskContractTests
                 ActorId = "conversation-alpha",
                 PlanId = "plan-alpha",
                 PlanRevision = 2,
+                PlanRevisionHistoryStart = 1,
                 Title = "Update GitHub safely",
                 Gate = new NyxIdChatPlanGate
                 {
                     Mode = NyxIdChatPlanGateMode.Confirm,
                     Reason = "The plan contains an effect-capable operation.",
+                },
+                PlanRevisions =
+                {
+                    new NyxIdChatPlanRevisionRecord
+                    {
+                        PlanRevision = 1,
+                        RevisionCause = NyxIdChatPlanRevisionCause.Initial,
+                    },
+                    new NyxIdChatPlanRevisionRecord
+                    {
+                        PlanRevision = 2,
+                        RevisionCause = NyxIdChatPlanRevisionCause.ScopeResolution,
+                        AddedStepIds = { "step-alpha" },
+                    },
                 },
             },
             PendingApproval = new NyxIdChatPendingApprovalState
@@ -102,6 +119,7 @@ public sealed class NyxIdChatTaskContractTests
             MayChangeExternalState = true,
             ExternalEffect = NyxIdChatEffectEvidence.NotStarted,
             AddedBy = NyxIdChatStepAddedBy.Replan,
+            AddedInPlanRevision = 2,
             DependsOn = { "step-plan" },
             Estimate = new NyxIdChatStepEstimate
             {
@@ -164,8 +182,16 @@ public sealed class NyxIdChatTaskContractTests
         roundTripped.ActiveTask.Steps.Single().Operation.Key.Should().BeEquivalentTo(operationKey);
         roundTripped.ActiveTask.PlanId.Should().Be("plan-alpha");
         roundTripped.ActiveTask.PlanRevision.Should().Be(2);
+        roundTripped.ActiveTask.PlanRevisionHistoryStart.Should().Be(1);
         roundTripped.ActiveTask.Gate.Mode.Should().Be(NyxIdChatPlanGateMode.Confirm);
         roundTripped.ActiveTask.Steps.Single().AddedBy.Should().Be(NyxIdChatStepAddedBy.Replan);
+        roundTripped.ActiveTask.Steps.Single().AddedInPlanRevision.Should().Be(2);
+        roundTripped.ActiveTask.PlanRevisions.Select(static revision =>
+                (revision.PlanRevision, revision.RevisionCause))
+            .Should().Equal(
+                (1, NyxIdChatPlanRevisionCause.Initial),
+                (2, NyxIdChatPlanRevisionCause.ScopeResolution));
+        roundTripped.ActiveTask.PlanRevisions[1].AddedStepIds.Should().Equal("step-alpha");
         roundTripped.ActiveTask.Steps.Single().DependsOn.Should().Equal("step-plan");
         roundTripped.ActiveTask.Steps.Single().Substeps.Should().ContainSingle().Which.Status
             .Should().Be(NyxIdChatSubstepStatus.Done);
@@ -222,12 +248,22 @@ public sealed class NyxIdChatTaskContractTests
             NyxIdChatStepAddedBy.Initial,
             NyxIdChatStepAddedBy.Replan,
             NyxIdChatStepAddedBy.Steering);
+        Enum.GetValues<NyxIdChatPlanRevisionCause>().Should().Equal(
+            NyxIdChatPlanRevisionCause.Unspecified,
+            NyxIdChatPlanRevisionCause.Initial,
+            NyxIdChatPlanRevisionCause.ScopeResolution,
+            NyxIdChatPlanRevisionCause.FailureRecovery,
+            NyxIdChatPlanRevisionCause.Steering,
+            NyxIdChatPlanRevisionCause.UserRevision);
 
         AssertEnumField<NyxIdChatTaskState>("status", nameof(NyxIdChatTaskStatus));
         AssertEnumField<NyxIdChatTaskStepState>("status", nameof(NyxIdChatStepStatus));
         AssertEnumField<NyxIdChatTaskStepState>("external_effect", nameof(NyxIdChatEffectEvidence));
         AssertEnumField<NyxIdChatPlanGate>("mode", nameof(NyxIdChatPlanGateMode));
         AssertEnumField<NyxIdChatTaskStepState>("added_by", nameof(NyxIdChatStepAddedBy));
+        AssertEnumField<NyxIdChatPlanRevisionRecord>(
+            "revision_cause",
+            nameof(NyxIdChatPlanRevisionCause));
         AssertEnumField<NyxIdChatStepEstimate>("kind", nameof(NyxIdChatStepEstimateKind));
         AssertEnumField<NyxIdChatSubstepState>("status", nameof(NyxIdChatSubstepStatus));
         AssertEnumField<NyxIdChatTaskPlanStepChanged>(
@@ -278,6 +314,91 @@ public sealed class NyxIdChatTaskContractTests
 
         act.Should().Throw<InvalidOperationException>()
             .WithMessage($"*'{fieldName}'*browser-safe integer range*");
+    }
+
+    [Fact]
+    public async Task FormatterOutput_ShouldRoundTripThroughStudioProtocolWithRepeatedDefaults()
+    {
+        var plan = new NyxIdChatTaskPlan
+        {
+            SchemaVersion = 4,
+            ActorId = "conversation-alpha",
+            TaskId = "task-alpha",
+            TurnId = "turn-alpha",
+            PlanId = "plan-alpha",
+            PlanRevision = 2,
+            PlanRevisionHistoryStart = 1,
+            Status = NyxIdChatTaskStatus.Active,
+        };
+        plan.PlanRevisions.Add(new NyxIdChatPlanRevisionRecord
+        {
+            PlanRevision = 1,
+            RevisionCause = NyxIdChatPlanRevisionCause.Initial,
+            AddedStepIds = { "step-initial" },
+        });
+        plan.PlanRevisions.Add(new NyxIdChatPlanRevisionRecord
+        {
+            PlanRevision = 2,
+            RevisionCause = NyxIdChatPlanRevisionCause.ScopeResolution,
+            AddedStepIds = { "step-action" },
+        });
+
+        var formatterFixture = NyxIdChatTaskPlanJsonFormatter
+            .FormatTaskPlan(plan)
+            .ToJsonString();
+        formatterFixture.Should().Contain("\"revisionCause\":\"scope_resolution\"");
+        formatterFixture.Should().NotContain("cancelledStepIds",
+            "protobuf JSON omits empty repeated fields");
+
+        var repositoryRoot = GetRepositoryRoot();
+        var protocolPath = Path.Combine(
+            repositoryRoot,
+            "src",
+            "workflow",
+            "Aevatar.Workflow.Infrastructure",
+            "CapabilityApi",
+            "StudioAssistant",
+            "protocol.js");
+        var script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const fs = require('node:fs');
+            const source = fs.readFileSync(process.argv[1], 'utf8').replace(/^export /gm, '');
+            const payload = JSON.parse(Buffer.from(process.argv[2], 'base64').toString('utf8'));
+            const context = { structuredClone, TextDecoder, URL, console };
+            vm.createContext(context);
+            vm.runInContext(source, context);
+            const frame = {type:'CUSTOM', sequence:17,
+              custom:{name:'nyxid.task.snapshot', payload}};
+            const first = context.normalizeFrame(frame);
+            assert.equal(first.type, 'task_snapshot');
+            assert.deepEqual(
+              JSON.parse(JSON.stringify(first.payload.planRevisions[0].cancelledStepIds)), []);
+            assert.deepEqual(
+              JSON.parse(JSON.stringify(first.payload.planRevisions[1].cancelledStepIds)), []);
+            const second = context.normalizeFrame({type:'CUSTOM', sequence:18,
+              custom:{name:'nyxid.task.snapshot', payload:first.payload}});
+            assert.deepEqual(
+              JSON.parse(JSON.stringify(second.payload)),
+              JSON.parse(JSON.stringify(first.payload)));
+            """;
+        var startInfo = new ProcessStartInfo("node")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        startInfo.ArgumentList.Add("--eval");
+        startInfo.ArgumentList.Add(script);
+        startInfo.ArgumentList.Add(protocolPath);
+        startInfo.ArgumentList.Add(Convert.ToBase64String(Encoding.UTF8.GetBytes(formatterFixture)));
+        using var process = Process.Start(startInfo);
+        process.Should().NotBeNull("Node.js is required to verify the shipped Studio decoder");
+        var outputTask = process!.StandardOutput.ReadToEndAsync();
+        var errorTask = process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync();
+
+        process.ExitCode.Should().Be(0, await errorTask + await outputTask);
     }
 
     [Fact]
@@ -394,5 +515,13 @@ public sealed class NyxIdChatTaskContractTests
         yield return descriptor;
         foreach (var nested in descriptor.NestedTypes.SelectMany(Flatten))
             yield return nested;
+    }
+
+    private static string GetRepositoryRoot()
+    {
+        var current = new DirectoryInfo(AppContext.BaseDirectory);
+        while (current is not null && !File.Exists(Path.Combine(current.FullName, "aevatar.slnx")))
+            current = current.Parent;
+        return current?.FullName ?? throw new DirectoryNotFoundException("Repository root not found.");
     }
 }

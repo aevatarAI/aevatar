@@ -143,6 +143,7 @@ public sealed class NyxIdChatConversationCurrentStateProjector
             ActorId = task.ActorId,
             PlanId = task.PlanId,
             PlanRevision = task.PlanRevision,
+            PlanRevisionHistoryStart = task.PlanRevisionHistoryStart,
             Title = task.Title,
             Gate = task.Gate == null
                 ? null
@@ -156,6 +157,18 @@ public sealed class NyxIdChatConversationCurrentStateProjector
             .OrderBy(static step => step.Order)
             .ThenBy(static step => step.StepId, StringComparer.Ordinal)
             .Select(ToStep));
+        document.PlanRevisions.AddRange(task.PlanRevisions.Select(static revision =>
+        {
+            var result = new NyxIdChatConversationPlanRevisionDocument
+            {
+                PlanRevision = revision.PlanRevision,
+                RevisionCause = ToWireName(revision.RevisionCause),
+                CommittedAt = revision.CommittedAt?.Clone(),
+            };
+            result.AddedStepIds.AddRange(revision.AddedStepIds);
+            result.CancelledStepIds.AddRange(revision.CancelledStepIds);
+            return result;
+        }));
         return document;
     }
 
@@ -180,6 +193,8 @@ public sealed class NyxIdChatConversationCurrentStateProjector
             Operation = ToOperation(step.Operation),
             Source = ToSource(step.Source),
             AddedBy = ToWireName(step.AddedBy),
+            AddedInPlanRevision = step.AddedInPlanRevision,
+            CancelledInPlanRevision = step.CancelledInPlanRevision,
             DependsOn = { step.DependsOn },
             Estimate = step.Estimate == null
                 ? null
@@ -568,6 +583,16 @@ public sealed class NyxIdChatConversationCurrentStateProjector
         NyxIdChatStepAddedBy.Replan => "replan",
         NyxIdChatStepAddedBy.Steering => "steering",
         _ => string.Empty,
+    };
+
+    private static string ToWireName(NyxIdChatPlanRevisionCause cause) => cause switch
+    {
+        NyxIdChatPlanRevisionCause.Initial => "initial",
+        NyxIdChatPlanRevisionCause.ScopeResolution => "scope_resolution",
+        NyxIdChatPlanRevisionCause.FailureRecovery => "failure_recovery",
+        NyxIdChatPlanRevisionCause.Steering => "steering",
+        NyxIdChatPlanRevisionCause.UserRevision => "user_revision",
+        _ => "unspecified",
     };
 
     private static string ToWireName(NyxIdChatStepEstimateKind kind) => kind switch

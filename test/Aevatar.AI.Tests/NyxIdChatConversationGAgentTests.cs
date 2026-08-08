@@ -3219,6 +3219,10 @@ public sealed class NyxIdChatConversationGAgentTests
         var afterStart = await eventStore.GetEventsAsync(conversationActorId);
         var taskId = agent.State.ActiveTask.TaskId;
         var planRevision = agent.State.ActiveTask.PlanRevision;
+        agent.State.ActiveTask.PlanRevisions.Should().ContainSingle().Which.RevisionCause
+            .Should().Be(NyxIdChatPlanRevisionCause.Initial);
+        agent.State.ActiveTask.PlanRevisionHistoryStart.Should().Be(1);
+        agent.State.ActiveTask.Steps.Single().AddedInPlanRevision.Should().Be(1);
         var oldKey = agent.State.ActiveTask.Steps.Single().Operation.Key.Clone();
         var steering = CreateSteeringCommand(afterStart[^1].Version);
 
@@ -3282,12 +3286,18 @@ public sealed class NyxIdChatConversationGAgentTests
         agent.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Active);
         agent.State.ActiveTask.TaskId.Should().Be(taskId);
         agent.State.ActiveTask.PlanRevision.Should().Be(planRevision + 1);
+        agent.State.ActiveTask.PlanRevisions.Should().BeEmpty(
+            "#3321 must commit steering provenance from exact decision identities");
+        agent.State.ActiveTask.PlanRevisionHistoryStart.Should().Be(0);
         agent.State.ActiveTask.Steps.Should().HaveCount(2);
         agent.State.ActiveTask.Steps.Should().Contain(step =>
             step.Operation != null &&
             step.Operation.Key != null &&
             step.Operation.Key.TurnId == "turn-alpha" &&
             step.Status == NyxIdChatStepStatus.Cancelled);
+        agent.State.ActiveTask.Steps.Single(step => step.StepId == oldKey.StepId)
+            .CancelledInPlanRevision.Should().Be(0,
+                "#3304 must not infer steering provenance from final cancelled state");
         agent.State.ActiveTask.Steps.Should().Contain(step =>
             step.Operation != null &&
             step.Operation.Key != null &&

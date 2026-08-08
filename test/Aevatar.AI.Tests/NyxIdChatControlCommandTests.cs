@@ -18,6 +18,7 @@ public sealed class NyxIdChatControlCommandTests
             required: true,
             safeToSkip: false,
             retryInputRebuildable: true);
+        state.ActiveTask.PlanRevision = 4;
         var command = RetryCommand();
 
         var decision = NyxIdChatControlCommands.Retry(state, command, stateVersion: 3, Now);
@@ -29,6 +30,8 @@ public sealed class NyxIdChatControlCommandTests
         decision.Result.RequestId.Should().Be("retry-alpha");
         decision.Result.OperationGeneration.Should().Be(2);
         decision.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Active);
+        decision.State.ActiveTask.PlanRevision.Should().Be(4,
+            "#3321 owns failure-recovery replanning, not a same-step retry");
         decision.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Active);
         decision.State.RecentTerminalTurns.Should().BeEmpty();
         var retried = decision.State.ActiveTask.Steps.Single();

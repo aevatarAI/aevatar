@@ -49,11 +49,18 @@ public sealed class ProjectionNyxIdChatConversationStateQueryPortTests
         result.Snapshot.ActiveTask.ActorId.Should().Be("conversation-alpha");
         result.Snapshot.ActiveTask.PlanId.Should().Be("plan-alpha");
         result.Snapshot.ActiveTask.PlanRevision.Should().Be(2);
+        result.Snapshot.ActiveTask.PlanRevisionHistoryStart.Should().Be(1);
         result.Snapshot.ActiveTask.Title.Should().Be("Update GitHub safely");
         result.Snapshot.ActiveTask.Gate.Should().BeEquivalentTo(
             new NyxIdChatConversationPlanGateSnapshot(
                 "confirm",
                 "The plan contains an effect-capable operation."));
+        result.Snapshot.ActiveTask.PlanRevisions.Should().NotBeNull();
+        result.Snapshot.ActiveTask.PlanRevisions!.Select(static revision =>
+                (revision.PlanRevision, revision.RevisionCause))
+            .Should().Equal((1, "initial"), (2, "scope_resolution"));
+        result.Snapshot.ActiveTask.PlanRevisions[1].AddedStepIds.Should()
+            .Equal("step-alpha");
         var source = result.Snapshot.ActiveTask.Steps.Single().Source!.Tool!;
         source.ToolName.Should().Be("repository_update");
         source.ServiceId.Should().Be("connected-service-alpha");
@@ -61,6 +68,8 @@ public sealed class ProjectionNyxIdChatConversationStateQueryPortTests
         source.ReadinessCapabilityId.Should().Be("readiness-capability-alpha");
         var step = result.Snapshot.ActiveTask.Steps.Single();
         step.AddedBy.Should().Be("replan");
+        step.AddedInPlanRevision.Should().Be(2);
+        step.CancelledInPlanRevision.Should().Be(0);
         step.DependsOn.Should().Equal("step-plan");
         step.Estimate.Should().BeEquivalentTo(
             new NyxIdChatConversationStepEstimateSnapshot("duration", 20));
@@ -314,11 +323,27 @@ public sealed class ProjectionNyxIdChatConversationStateQueryPortTests
             ActorId = "conversation-alpha",
             PlanId = "plan-alpha",
             PlanRevision = 2,
+            PlanRevisionHistoryStart = 1,
             Title = "Update GitHub safely",
             Gate = new NyxIdChatConversationPlanGateDocument
             {
                 Mode = "confirm",
                 Reason = "The plan contains an effect-capable operation.",
+            },
+            PlanRevisions =
+            {
+                new NyxIdChatConversationPlanRevisionDocument
+                {
+                    PlanRevision = 1,
+                    RevisionCause = "initial",
+                    AddedStepIds = { "step-plan" },
+                },
+                new NyxIdChatConversationPlanRevisionDocument
+                {
+                    PlanRevision = 2,
+                    RevisionCause = "scope_resolution",
+                    AddedStepIds = { "step-alpha" },
+                },
             },
             Steps =
             {
@@ -330,6 +355,7 @@ public sealed class ProjectionNyxIdChatConversationStateQueryPortTests
                     Status = "running",
                     ExternalEffect = "not_started",
                     AddedBy = "replan",
+                    AddedInPlanRevision = 2,
                     DependsOn = { "step-plan" },
                     Estimate = new NyxIdChatConversationStepEstimateDocument
                     {

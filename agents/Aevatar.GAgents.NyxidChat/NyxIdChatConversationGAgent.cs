@@ -1546,7 +1546,12 @@ public sealed class NyxIdChatConversationGAgent
             PlanId = string.IsNullOrWhiteSpace(command.PlanId)
                 ? previousTask?.PlanId ?? command.TaskId.Trim()
                 : command.PlanId.Trim(),
-            PlanRevision = Math.Max(1, command.PlanRevision),
+            PlanRevision = previousTask is null
+                ? Math.Max(1, command.PlanRevision)
+                : command.AddedBy == NyxIdChatStepAddedBy.Steering
+                    ? Math.Max(previousTask.PlanRevision, command.PlanRevision)
+                    : previousTask.PlanRevision,
+            PlanRevisionHistoryStart = previousTask?.PlanRevisionHistoryStart ?? 0,
             Title = string.IsNullOrWhiteSpace(previousTask?.Title)
                 ? "Complete the requested assistant task"
                 : previousTask.Title,
@@ -1556,8 +1561,32 @@ public sealed class NyxIdChatConversationGAgent
             },
         };
         if (previousTask is not null)
+        {
             task.Steps.AddRange(previousTask.Steps.Select(static item => item.Clone()));
+            task.PlanRevisions.AddRange(
+                previousTask.PlanRevisions.Select(static revision => revision.Clone()));
+        }
         task.Steps.Add(step);
+        if (previousTask is null)
+        {
+            NyxIdChatPlanRevisions.CommitInitial(task, now, step);
+        }
+        else if (step.AddedBy != NyxIdChatStepAddedBy.Steering)
+        {
+            NyxIdChatPlanRevisions.CommitChange(
+                task,
+                NyxIdChatPlanRevisionCause.ScopeResolution,
+                now,
+                [step]);
+        }
+        else
+        {
+            // #3321 owns the exact steering revision decision. Until that
+            // command carries exact added/cancelled step identities, do not
+            // publish a partial revision history as if it were complete.
+            task.PlanRevisionHistoryStart = 0;
+            task.PlanRevisions.Clear();
+        }
 
         var next = new NyxIdChatConversationGAgentState
         {
@@ -1904,13 +1933,11 @@ public sealed class NyxIdChatConversationGAgent
             return current;
         }
 
-        var currentOperation = current.ActiveTask?.Steps
-            .Select(static step => step.Operation)
-            .FirstOrDefault(candidate => KeysEqual(candidate?.Key, evt.Result.Key));
-        var reconciledOperation = evt.Task.Steps
-            .Select(static step => step.Operation)
-            .FirstOrDefault(candidate => KeysEqual(candidate?.Key, evt.Result.Key));
-        if (currentOperation is null || reconciledOperation is null)
+        var currentStep = current.ActiveTask?.Steps
+            .FirstOrDefault(candidate => KeysEqual(candidate.Operation?.Key, evt.Result.Key));
+        var reconciledStep = evt.Task.Steps
+            .FirstOrDefault(candidate => KeysEqual(candidate.Operation?.Key, evt.Result.Key));
+        if (currentStep?.Operation is null || reconciledStep?.Operation is null)
             return current;
 
         if (evt.State is not null)
@@ -1927,10 +1954,11 @@ public sealed class NyxIdChatConversationGAgent
                     evt.State.ActiveTask.TaskId,
                     evt.Result.Key.TaskId,
                     StringComparison.Ordinal) ||
-                !string.Equals(
-                    evt.State.ActiveTurn.TurnId,
-                    evt.Result.Key.TurnId,
-                    StringComparison.Ordinal))
+                !OperationTurnMatchesReconciledState(
+                    current,
+                    evt.State,
+                    currentStep,
+                    evt.Result.Key))
             {
                 return current;
             }
@@ -1945,6 +1973,48 @@ public sealed class NyxIdChatConversationGAgent
         next.ProgressSequence = evt.ProgressSequence;
         next.UpdatedAt = evt.Turn.TerminalAt?.Clone() ?? evt.Task.UpdatedAt?.Clone();
         return next;
+    }
+
+    private static bool OperationTurnMatchesReconciledState(
+        NyxIdChatConversationGAgentState current,
+        NyxIdChatConversationGAgentState reconciled,
+        NyxIdChatTaskStepState currentStep,
+        NyxIdChatOperationKey key)
+    {
+        if (string.Equals(
+                reconciled.ActiveTurn.TurnId,
+                key.TurnId,
+                StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (currentStep.Kind != NyxIdChatStepKind.Postcondition ||
+            current.ContinuationAdmission is not
+            {
+                Kind: NyxIdChatContinuationKind.Action,
+                Status: NyxIdChatContinuationAdmissionStatus.Accepted,
+            } admission ||
+            !string.Equals(admission.OriginTurnId, key.TurnId, StringComparison.Ordinal) ||
+            !string.Equals(
+                admission.ContinuationTurnId,
+                reconciled.ActiveTurn.TurnId,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                reconciled.ActiveTask.TurnId,
+                admission.ContinuationTurnId,
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return current.PendingActions.Any(request =>
+            string.Equals(
+                request.ActionRequestId,
+                currentStep.ActionRequestId,
+                StringComparison.Ordinal) &&
+            string.Equals(request.OriginTurnId, key.TurnId, StringComparison.Ordinal) &&
+            string.Equals(request.TaskId, key.TaskId, StringComparison.Ordinal));
     }
 
     private static NyxIdChatConversationGAgentState ApplyLateOperationEvidenceCommitted(

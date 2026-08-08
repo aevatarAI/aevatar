@@ -168,7 +168,8 @@ Its stable v1 fields are:
 | `schemaVersion` | Decoder contract version for the complete TaskPlan shape. |
 | `actorId` | Authoritative conversation actor that owns the plan. |
 | `taskId` / `turnId` | Exact task and turn identities; neither is an alias for `actorId`. |
-| `planId` / `planRevision` | Stable plan identity and actor-authored monotonic revision. |
+| `planId` / `planRevision` | Stable plan identity and actor-authored semantic-content revision. |
+| `planRevisionHistoryStart` / `planRevisions` | Start revision and contiguous typed durable history through the current revision. |
 | `title` | Safe user-facing task title. |
 | `gate.mode` / `gate.reason` | Closed `auto` or `confirm` gate and its safe explanation. |
 | `steps` | Ordered complete step states. |
@@ -176,12 +177,30 @@ Its stable v1 fields are:
 Each step carries `stepId / order / kind / status / required / description`, a
 typed `source`, effect evidence, actor-computed `availableActions`, and its
 actor-authored update time. Planning provenance is typed as `addedBy`,
-`dependsOn`, optional `estimate`, and typed `substeps`. The closed source union
+`addedInPlanRevision`, `cancelledInPlanRevision`, `dependsOn`, optional
+`estimate`, and typed `substeps`. The closed source union
 is `llm`, `tool`, `browserAction`, `postcondition`, `input`, `approval`, or the
 reserved `web` source. Tool source keeps `toolName`, exact `serviceSlug`, exact
 `serviceId`, and optional producer-authored `readinessCapabilityId` separate.
 Postcondition source carries `actionRequestId` plus the stable `check`; approval
 source carries the exact `approvalRequestId`.
+
+`planRevision` identifies the frozen semantic plan, not a conversation turn or
+status transition. Revision 1 has cause `initial`; later records use exactly one
+of `scope_resolution`, `failure_recovery`, `steering`, or `user_revision`.
+Every record carries `planRevision`, `revisionCause`, `committedAt`, and the
+step identities added or cancelled by that revision. A pure `action.continue`,
+approval decision, reload, or recovery signal preserves the revision and its
+history when the frozen plan is unchanged. Browser-action postconditions are
+therefore declared in the same revision as their action step and continuation
+activates that existing step identity rather than appending another step.
+New tasks have `planRevisionHistoryStart = 1`. A task committed before revision
+history was deployed keeps its existing `planRevision`; its first subsequent
+semantic change sets `planRevisionHistoryStart` to that new revision and records
+only the verifiable durable suffix. The actor never fabricates missing legacy
+records or renumbers a stable plan revision. A zero step-provenance revision
+means the legacy revision is unknown; positive values identify a recorded
+revision in the durable suffix.
 
 The public operation is flattened as
 `conversationActorId / turnId / taskId / stepId / operationId /

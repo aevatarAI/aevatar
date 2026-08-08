@@ -126,6 +126,7 @@ internal static class NyxIdChatTaskPlanJsonFormatter
             "NYX_ID_CHAT_STEP_KIND_",
             "NYX_ID_CHAT_PLAN_GATE_MODE_",
             "NYX_ID_CHAT_STEP_ADDED_BY_",
+            "NYX_ID_CHAT_PLAN_REVISION_CAUSE_",
             "NYX_ID_CHAT_STEP_ESTIMATE_KIND_",
             "NYX_ID_CHAT_SUBSTEP_STATUS_",
             "NYX_ID_CHAT_STEP_CHANGE_KIND_",

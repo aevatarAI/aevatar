@@ -353,7 +353,11 @@ public static class NyxIdChatNeedsYouDecisions
         continuationStep.AddedBy = NyxIdChatStepAddedBy.Replan;
         continuationStep.DependsOn.Add(inputStep.StepId);
         activeTask.Steps.Add(continuationStep);
-        activeTask.PlanRevision = Math.Max(1, activeTask.PlanRevision + 1);
+        NyxIdChatPlanRevisions.CommitChange(
+            activeTask,
+            NyxIdChatPlanRevisionCause.ScopeResolution,
+            now,
+            [continuationStep]);
         ActivateStep(state, continuationStep, now);
         var continuation = new NyxIdChatInputContinuationInput
         {

@@ -24,6 +24,7 @@ internal static class NyxIdChatTaskPlanWireMapper
             ActorId = task.ActorId,
             PlanId = task.PlanId,
             PlanRevision = task.PlanRevision,
+            PlanRevisionHistoryStart = task.PlanRevisionHistoryStart,
             Title = task.Title,
             Gate = task.Gate?.Clone(),
         };
@@ -31,6 +32,7 @@ internal static class NyxIdChatTaskPlanWireMapper
             .OrderBy(static step => step.Order)
             .ThenBy(static step => step.StepId, StringComparer.Ordinal)
             .Select(FromState));
+        plan.PlanRevisions.AddRange(task.PlanRevisions.Select(static revision => revision.Clone()));
         return plan;
     }
 
@@ -53,6 +55,7 @@ internal static class NyxIdChatTaskPlanWireMapper
             ActorId = task.ActorId ?? string.Empty,
             PlanId = task.PlanId ?? string.Empty,
             PlanRevision = task.PlanRevision,
+            PlanRevisionHistoryStart = task.PlanRevisionHistoryStart,
             Title = task.Title ?? string.Empty,
             Gate = FromSnapshot(task.Gate),
         };
@@ -60,6 +63,21 @@ internal static class NyxIdChatTaskPlanWireMapper
             .OrderBy(static step => step.Order)
             .ThenBy(static step => step.StepId, StringComparer.Ordinal)
             .Select(FromSnapshot));
+        if (task.PlanRevisions is not null)
+        {
+            plan.PlanRevisions.AddRange(task.PlanRevisions.Select(static revision =>
+            {
+                var result = new NyxIdChatPlanRevisionRecord
+                {
+                    PlanRevision = revision.PlanRevision,
+                    RevisionCause = ParsePlanRevisionCause(revision.RevisionCause),
+                    CommittedAt = ToTimestamp(revision.CommittedAt),
+                };
+                result.AddedStepIds.AddRange(revision.AddedStepIds);
+                result.CancelledStepIds.AddRange(revision.CancelledStepIds);
+                return result;
+            }));
+        }
         return plan;
     }
 
@@ -87,6 +105,8 @@ internal static class NyxIdChatTaskPlanWireMapper
             AvailableActions = step.AvailableActions?.Clone(),
             UpdatedAt = step.UpdatedAt?.Clone(),
             AddedBy = step.AddedBy,
+            AddedInPlanRevision = step.AddedInPlanRevision,
+            CancelledInPlanRevision = step.CancelledInPlanRevision,
             Estimate = step.Estimate?.Clone(),
         };
         result.DependsOn.AddRange(step.DependsOn);
@@ -131,6 +151,8 @@ internal static class NyxIdChatTaskPlanWireMapper
             AvailableActions = FromSnapshot(step.AvailableActions),
             UpdatedAt = ToTimestamp(step.UpdatedAt),
             AddedBy = ParseStepAddedBy(step.AddedBy),
+            AddedInPlanRevision = step.AddedInPlanRevision,
+            CancelledInPlanRevision = step.CancelledInPlanRevision,
             Estimate = FromSnapshot(step.Estimate),
         };
         if (step.DependsOn is not null)
@@ -365,6 +387,16 @@ internal static class NyxIdChatTaskPlanWireMapper
         "replan" => NyxIdChatStepAddedBy.Replan,
         "steering" => NyxIdChatStepAddedBy.Steering,
         _ => NyxIdChatStepAddedBy.Unspecified,
+    };
+
+    private static NyxIdChatPlanRevisionCause ParsePlanRevisionCause(string? value) => value switch
+    {
+        "initial" => NyxIdChatPlanRevisionCause.Initial,
+        "scope_resolution" => NyxIdChatPlanRevisionCause.ScopeResolution,
+        "failure_recovery" => NyxIdChatPlanRevisionCause.FailureRecovery,
+        "steering" => NyxIdChatPlanRevisionCause.Steering,
+        "user_revision" => NyxIdChatPlanRevisionCause.UserRevision,
+        _ => NyxIdChatPlanRevisionCause.Unspecified,
     };
 
     private static NyxIdChatStepEstimateKind ParseStepEstimateKind(string value) => value switch

@@ -76,6 +76,12 @@ public sealed class NyxIdChatTaskLifecycleTests
         toolStep.Operation.Key.OperationGeneration.Should().Be(1);
         decision.State.ActiveTask.ActiveStepId.Should().Be(toolStep.StepId);
         decision.State.ActiveTask.ActiveOperationId.Should().Be(toolStep.Operation.Key.OperationId);
+        decision.State.ActiveTask.PlanRevision.Should().Be(2);
+        toolStep.AddedInPlanRevision.Should().Be(2);
+        decision.State.ActiveTask.PlanRevisions.Select(static revision => revision.RevisionCause)
+            .Should().Equal(
+                NyxIdChatPlanRevisionCause.Initial,
+                NyxIdChatPlanRevisionCause.ScopeResolution);
 
         decision.NextCommand.Should().NotBeNull();
         decision.NextCommand!.Key.Should().BeEquivalentTo(toolStep.Operation.Key);
@@ -144,6 +150,10 @@ public sealed class NyxIdChatTaskLifecycleTests
         continuation.Kind.Should().Be(NyxIdChatStepKind.Llm);
         continuation.Status.Should().Be(NyxIdChatStepStatus.Running);
         continuation.Operation.Phase.Should().Be(NyxIdChatOperationPhase.Requested);
+        continuation.AddedInPlanRevision.Should().Be(3);
+        decision.State.ActiveTask.PlanRevision.Should().Be(3);
+        decision.State.ActiveTask.PlanRevisions[^1].RevisionCause.Should()
+            .Be(NyxIdChatPlanRevisionCause.ScopeResolution);
         decision.NextCommand.Should().NotBeNull();
         decision.NextCommand!.Key.Should().BeEquivalentTo(continuation.Operation.Key);
         decision.NextCommand.InputCase.Should().Be(
@@ -369,7 +379,20 @@ public sealed class NyxIdChatTaskLifecycleTests
             ActiveOperationId = operationId,
             CreatedAt = Now.Clone(),
             UpdatedAt = Now.Clone(),
+            PlanRevision = 1,
+            PlanRevisionHistoryStart = 1,
+            PlanRevisions =
+            {
+                new NyxIdChatPlanRevisionRecord
+                {
+                    PlanRevision = 1,
+                    RevisionCause = NyxIdChatPlanRevisionCause.Initial,
+                    CommittedAt = Now.Clone(),
+                    AddedStepIds = { stepId },
+                },
+            },
         };
+        step.AddedInPlanRevision = 1;
         task.Steps.Add(step);
         return new NyxIdChatConversationGAgentState
         {

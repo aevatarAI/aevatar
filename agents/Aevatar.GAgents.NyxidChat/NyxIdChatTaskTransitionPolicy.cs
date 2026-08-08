@@ -242,9 +242,7 @@ public static class NyxIdChatTaskTransitionPolicy
             string.IsNullOrWhiteSpace(key.StepId) ||
             string.IsNullOrWhiteSpace(key.OperationId) ||
             !string.Equals(state.ConversationActorId, key.ConversationActorId, StringComparison.Ordinal) ||
-            !string.Equals(state.ActiveTurn.TurnId, key.TurnId, StringComparison.Ordinal) ||
             !string.Equals(state.ActiveTurn.TaskId, key.TaskId, StringComparison.Ordinal) ||
-            !string.Equals(state.ActiveTask.TurnId, key.TurnId, StringComparison.Ordinal) ||
             !string.Equals(state.ActiveTask.TaskId, key.TaskId, StringComparison.Ordinal))
         {
             return false;
@@ -257,8 +255,44 @@ public static class NyxIdChatTaskTransitionPolicy
             return false;
         }
 
+        var activeTurnMatches =
+            string.Equals(state.ActiveTurn.TurnId, key.TurnId, StringComparison.Ordinal) &&
+            string.Equals(state.ActiveTask.TurnId, key.TurnId, StringComparison.Ordinal);
+        if (!activeTurnMatches && !MatchesActionPostconditionOrigin(state, resolved, key))
+            return false;
+
         step = resolved;
         return true;
+    }
+
+    private static bool MatchesActionPostconditionOrigin(
+        NyxIdChatConversationGAgentState state,
+        NyxIdChatTaskStepState step,
+        NyxIdChatOperationKey key)
+    {
+        if (step.Kind != NyxIdChatStepKind.Postcondition ||
+            state.ContinuationAdmission is not
+            {
+                Kind: NyxIdChatContinuationKind.Action,
+                Status: NyxIdChatContinuationAdmissionStatus.Accepted,
+            } admission ||
+            !string.Equals(admission.OriginTurnId, key.TurnId, StringComparison.Ordinal) ||
+            !string.Equals(
+                admission.ContinuationTurnId,
+                state.ActiveTurn.TurnId,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                state.ActiveTask.TurnId,
+                admission.ContinuationTurnId,
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return state.PendingActions.Any(request =>
+            string.Equals(request.ActionRequestId, step.ActionRequestId, StringComparison.Ordinal) &&
+            string.Equals(request.OriginTurnId, key.TurnId, StringComparison.Ordinal) &&
+            string.Equals(request.TaskId, key.TaskId, StringComparison.Ordinal));
     }
 
     private static NyxIdChatTaskStepState? FindStep(

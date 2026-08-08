@@ -1871,6 +1871,14 @@ public sealed class NyxIdChatProjectionSessionTests
             Outcome = NyxIdChatNeedsYouResolutionOutcome.Accepted,
             CommittedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-01T12:01:00Z")),
         };
+        state.ActiveTask.PlanRevision = 2;
+        state.ActiveTask.PlanRevisionHistoryStart = 2;
+        state.ActiveTask.PlanRevisions.Add(new NyxIdChatPlanRevisionRecord
+        {
+            PlanRevision = 2,
+            RevisionCause = NyxIdChatPlanRevisionCause.ScopeResolution,
+            AddedStepIds = { state.ActiveTask.Steps.Single().StepId },
+        });
         await projector.ProjectAsync(
             context,
             CommittedEnvelope(
@@ -1883,12 +1891,22 @@ public sealed class NyxIdChatProjectionSessionTests
                 stateVersion: 32),
             CancellationToken.None);
 
-        var changed = hub.Published[^1].Event;
+        var changed = hub.Published[^2].Event;
         changed.Sequence.Should().Be(32);
         changed.Custom.Name.Should().Be(
             NyxIdChatConversationAguiFrameBuilder.InputChangedEventName);
         changed.Custom.Payload.Unpack<NyxIdChatInputResolutionState>()
             .Should().BeEquivalentTo(resolution);
+        var snapshot = hub.Published[^1].Event;
+        snapshot.Sequence.Should().Be(32);
+        snapshot.Custom.Name.Should().Be(
+            NyxIdChatConversationAguiFrameBuilder.TaskSnapshotEventName);
+        var liveTask = snapshot.Custom.Payload.Unpack<NyxIdChatTaskState>();
+        liveTask.Should().BeEquivalentTo(state.ActiveTask,
+            "the input-resolution commit must immediately publish its complete task fact");
+        NyxIdChatTaskPlanWireMapper.FromState(liveTask).ToByteString().Should().Equal(
+            NyxIdChatTaskPlanWireMapper.FromState(state.ActiveTask).ToByteString(),
+            "live and current-state decoding must converge at the same committed fact");
     }
 
     [Fact]

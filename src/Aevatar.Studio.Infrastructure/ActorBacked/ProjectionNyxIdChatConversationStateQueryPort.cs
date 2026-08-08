@@ -229,7 +229,15 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
                     ? null
                     : new NyxIdChatConversationPlanGateSnapshot(
                         task.Gate.Mode,
-                        NullIfEmpty(task.Gate.Reason)));
+                        NullIfEmpty(task.Gate.Reason)),
+                task.PlanRevisions.Select(static revision =>
+                    new NyxIdChatConversationPlanRevisionSnapshot(
+                        revision.PlanRevision,
+                        revision.RevisionCause,
+                        ToDateTimeOffset(revision.CommittedAt),
+                        revision.AddedStepIds.ToArray(),
+                        revision.CancelledStepIds.ToArray())).ToArray(),
+                task.PlanRevisionHistoryStart);
 
     private static NyxIdChatConversationStepSnapshot ToStep(
         NyxIdChatConversationStepDocument step) =>
@@ -267,7 +275,9 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
                 new NyxIdChatConversationSubstepSnapshot(
                     substep.SubstepId,
                     substep.Title,
-                    substep.Status)).ToArray());
+                    substep.Status)).ToArray(),
+            step.AddedInPlanRevision,
+            step.CancelledInPlanRevision);
 
     private static NyxIdChatConversationStepSourceSnapshot? ToSource(
         NyxIdChatConversationStepSourceDocument? source) =>

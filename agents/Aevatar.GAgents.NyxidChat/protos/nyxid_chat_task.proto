@@ -94,6 +94,15 @@ enum NyxIdChatStepAddedBy {
   NYX_ID_CHAT_STEP_ADDED_BY_STEERING = 3;
 }
 
+enum NyxIdChatPlanRevisionCause {
+  NYX_ID_CHAT_PLAN_REVISION_CAUSE_UNSPECIFIED = 0;
+  NYX_ID_CHAT_PLAN_REVISION_CAUSE_INITIAL = 1;
+  NYX_ID_CHAT_PLAN_REVISION_CAUSE_SCOPE_RESOLUTION = 2;
+  NYX_ID_CHAT_PLAN_REVISION_CAUSE_FAILURE_RECOVERY = 3;
+  NYX_ID_CHAT_PLAN_REVISION_CAUSE_STEERING = 4;
+  NYX_ID_CHAT_PLAN_REVISION_CAUSE_USER_REVISION = 5;
+}
+
 enum NyxIdChatStepEstimateKind {
   NYX_ID_CHAT_STEP_ESTIMATE_KIND_UNSPECIFIED = 0;
   NYX_ID_CHAT_STEP_ESTIMATE_KIND_DURATION = 1;
@@ -341,6 +350,16 @@ message NyxIdChatTaskStepState {
   repeated string depends_on = 20;
   NyxIdChatStepEstimate estimate = 21;
   repeated NyxIdChatSubstepState substeps = 22;
+  int32 added_in_plan_revision = 23;
+  int32 cancelled_in_plan_revision = 24;
+}
+
+message NyxIdChatPlanRevisionRecord {
+  int32 plan_revision = 1;
+  NyxIdChatPlanRevisionCause revision_cause = 2;
+  google.protobuf.Timestamp committed_at = 3;
+  repeated string added_step_ids = 4;
+  repeated string cancelled_step_ids = 5;
 }
 
 message NyxIdChatTaskState {
@@ -360,6 +379,8 @@ message NyxIdChatTaskState {
   int32 plan_revision = 14;
   string title = 15;
   NyxIdChatPlanGate gate = 16;
+  repeated NyxIdChatPlanRevisionRecord plan_revisions = 17;
+  int32 plan_revision_history_start = 18;
 }
 
 // Public TaskPlan projection shared by live AGUI frames and current-state
@@ -406,6 +427,8 @@ message NyxIdChatTaskPlanStep {
   repeated string depends_on = 19;
   NyxIdChatStepEstimate estimate = 20;
   repeated NyxIdChatSubstepState substeps = 21;
+  int32 added_in_plan_revision = 22;
+  int32 cancelled_in_plan_revision = 23;
 }
 
 message NyxIdChatTaskPlan {
@@ -425,6 +448,8 @@ message NyxIdChatTaskPlan {
   int32 plan_revision = 14;
   string title = 15;
   NyxIdChatPlanGate gate = 16;
+  repeated NyxIdChatPlanRevisionRecord plan_revisions = 17;
+  int32 plan_revision_history_start = 18;
 }
 
 message NyxIdChatTaskStepChanged {

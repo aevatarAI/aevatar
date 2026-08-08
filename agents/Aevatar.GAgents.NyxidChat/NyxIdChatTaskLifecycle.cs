@@ -141,7 +141,11 @@ public static class NyxIdChatTaskLifecycle
             toolCall,
             now);
         next.ActiveTask.Steps.Add(toolStep);
-        next.ActiveTask.PlanRevision = Math.Max(1, next.ActiveTask.PlanRevision + 1);
+        NyxIdChatPlanRevisions.CommitChange(
+            next.ActiveTask,
+            NyxIdChatPlanRevisionCause.ScopeResolution,
+            now,
+            [toolStep]);
         ActivateStep(next, toolStep, now);
 
         var command = new NyxIdChatOperationDispatchCommand
@@ -224,7 +228,11 @@ public static class NyxIdChatTaskLifecycle
         };
         inputStep.AvailableActions = NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(inputStep);
         next.ActiveTask.Steps.Add(inputStep);
-        next.ActiveTask.PlanRevision = Math.Max(1, next.ActiveTask.PlanRevision + 1);
+        NyxIdChatPlanRevisions.CommitChange(
+            next.ActiveTask,
+            NyxIdChatPlanRevisionCause.ScopeResolution,
+            now,
+            [inputStep]);
         next.ActiveTask.Status = NyxIdChatTaskStatus.Active;
         next.ActiveTask.ActiveStepId = stepId;
         next.ActiveTask.ActiveOperationId = string.Empty;
@@ -442,7 +450,11 @@ public static class NyxIdChatTaskLifecycle
         };
         step.AvailableActions = NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(step);
         state.ActiveTask.Steps.Add(step);
-        state.ActiveTask.PlanRevision = Math.Max(1, state.ActiveTask.PlanRevision + 1);
+        NyxIdChatPlanRevisions.CommitChange(
+            state.ActiveTask,
+            NyxIdChatPlanRevisionCause.ScopeResolution,
+            now,
+            [step]);
         ActivateStep(state, step, now);
         return new NyxIdChatOperationDispatchCommand
         {

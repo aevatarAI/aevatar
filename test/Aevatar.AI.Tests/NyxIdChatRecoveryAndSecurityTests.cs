@@ -563,8 +563,8 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         var key = new NyxIdChatOperationKey
         {
             ConversationActorId = "conversation-alpha",
-            TurnId = "turn-continuation-alpha",
-            TaskId = "task-continuation-alpha",
+            TurnId = "turn-origin-alpha",
+            TaskId = "task-alpha",
             StepId = "step-postcondition-alpha",
             OperationId = "operation-postcondition-alpha",
             OperationGeneration = 1,
@@ -575,7 +575,7 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
             ScopeId = "scope-alpha",
             ActiveTurn = new NyxIdChatTurnState
             {
-                TurnId = key.TurnId,
+                TurnId = "turn-continuation-alpha",
                 TaskId = key.TaskId,
                 ClientRequestId = "client-action-alpha",
                 Status = NyxIdChatTurnStatus.Active,
@@ -583,7 +583,7 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
             },
             ActiveTask = new NyxIdChatTaskState
             {
-                TurnId = key.TurnId,
+                TurnId = "turn-continuation-alpha",
                 TaskId = key.TaskId,
                 Status = NyxIdChatTaskStatus.Active,
                 ActiveStepId = key.StepId,
@@ -597,7 +597,7 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
                 RequestId = "command-action-alpha",
                 ClientRequestId = "client-action-alpha",
                 OriginTurnId = "turn-origin-alpha",
-                ContinuationTurnId = key.TurnId,
+                ContinuationTurnId = "turn-continuation-alpha",
                 Status = NyxIdChatContinuationAdmissionStatus.Accepted,
                 OwnerSubject = "owner-alpha",
                 CommittedAt = Timestamp.FromDateTimeOffset(FixedNow),
@@ -609,7 +609,7 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
                 DeliveryId = "delivery-continuation-alpha",
                 ScopeId = "scope-alpha",
                 ConversationId = "conversation-alpha",
-                TurnId = key.TurnId,
+                TurnId = "turn-continuation-alpha",
                 UserText = "Continue after the approved action.",
                 SourceActorId = "conversation-alpha",
                 SourceCommandId = "command-action-alpha",
@@ -669,7 +669,7 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
             RegistryRevision = "nyxid-assistant-actions.v4",
             ConversationActorId = state.ConversationActorId,
             OriginTurnId = report.OriginTurnId,
-            TaskId = "task-origin-alpha",
+            TaskId = key.TaskId,
             StepId = "step-browser-action-alpha",
             ActionRequestId = report.ActionRequestId,
             Action = NyxIdAssistantActionKind.ServiceConnect,
@@ -692,6 +692,7 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         state.ContinuationAdmission = null;
         state.PendingActions.Clear();
         var step = state.ActiveTask.Steps.Single();
+        step.Operation.Key.TurnId = state.ActiveTurn.TurnId;
         step.Kind = NyxIdChatStepKind.Llm;
         step.Source = new NyxIdChatStepSource
         {

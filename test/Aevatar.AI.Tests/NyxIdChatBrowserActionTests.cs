@@ -37,13 +37,27 @@ public sealed class NyxIdChatBrowserActionTests
         decision.State.RecentTerminalTurns.Should().ContainSingle(summary =>
             summary.TurnId == "turn-alpha" &&
             summary.Status == NyxIdChatTurnStatus.Blocked);
-        var actionStep = decision.State.ActiveTask.Steps.Last();
+        var actionStep = decision.State.ActiveTask.Steps.Single(step =>
+            step.Kind == NyxIdChatStepKind.BrowserAction);
         actionStep.StepId.Should().Be(decision.Request.StepId);
         actionStep.Kind.Should().Be(NyxIdChatStepKind.BrowserAction);
         actionStep.Status.Should().Be(NyxIdChatStepStatus.Waiting);
         actionStep.ActionRequestId.Should().Be(decision.Request.ActionRequestId);
         actionStep.Source.BrowserAction.Action.Should().Be(
             NyxIdAssistantActionKind.ServiceConnect);
+        var postcondition = decision.State.ActiveTask.Steps.Single(step =>
+            step.Kind == NyxIdChatStepKind.Postcondition);
+        postcondition.Status.Should().Be(NyxIdChatStepStatus.Planned);
+        postcondition.DependsOn.Should().Equal(actionStep.StepId);
+        postcondition.AddedInPlanRevision.Should().Be(actionStep.AddedInPlanRevision);
+        decision.State.ActiveTask.PlanRevisions.Should().HaveCount(2);
+        decision.State.ActiveTask.PlanRevisionHistoryStart.Should().Be(1);
+        decision.State.ActiveTask.PlanRevisions[0].AddedStepIds.Should()
+            .Equal("step-tool-alpha");
+        decision.State.ActiveTask.PlanRevisions[1].RevisionCause.Should()
+            .Be(NyxIdChatPlanRevisionCause.ScopeResolution);
+        decision.State.ActiveTask.PlanRevisions[1].AddedStepIds.Should()
+            .Equal(actionStep.StepId, postcondition.StepId);
     }
 
     [Fact]
@@ -95,6 +109,32 @@ public sealed class NyxIdChatBrowserActionTests
         replay.ShouldCommit.Should().BeFalse();
         replay.Outcome.Should().Be(NyxIdChatTransitionOutcome.Idempotent);
         replay.Request.RequestedAt.Should().Be(first.Request.RequestedAt);
+    }
+
+    [Fact]
+    public void LegacyTask_ShouldStartVerifiableRevisionSuffixWithoutFabricatingHistory()
+    {
+        var legacy = AuthorizationWaitingState();
+        legacy.ActiveTask.PlanRevision = 3;
+        legacy.ActiveTask.PlanRevisionHistoryStart = 0;
+        legacy.ActiveTask.PlanRevisions.Clear();
+
+        var decision = NyxIdChatBrowserActions.RequestAuthorization(
+            legacy,
+            AuthorizationRequiredSignal(legacy),
+            Registry(),
+            Now);
+
+        decision.State.ActiveTask.PlanRevision.Should().Be(4);
+        decision.State.ActiveTask.PlanRevisionHistoryStart.Should().Be(4);
+        decision.State.ActiveTask.PlanRevisions.Should().ContainSingle().Which
+            .Should().Match<NyxIdChatPlanRevisionRecord>(revision =>
+                revision.PlanRevision == 4 &&
+                revision.RevisionCause == NyxIdChatPlanRevisionCause.ScopeResolution);
+        decision.State.ActiveTask.PlanRevisions.Single().AddedStepIds.Should().HaveCount(2);
+        decision.State.ActiveTask.Steps.Single(step => step.StepId == "step-tool-alpha")
+            .AddedInPlanRevision.Should().Be(0,
+                "deployment must not fabricate provenance for a legacy step");
     }
 
     [Fact]
@@ -151,6 +191,12 @@ public sealed class NyxIdChatBrowserActionTests
     public void CompletedReport_ShouldStartNewContinuationTurnWithTypedPostcondition()
     {
         var blocked = BlockedActionState();
+        var frozenPlanId = blocked.ActiveTask.PlanId;
+        var frozenRevision = blocked.ActiveTask.PlanRevision;
+        var frozenHistory = blocked.ActiveTask.PlanRevisions.Select(static revision => revision.Clone())
+            .ToArray();
+        var predeclaredPostconditionId = blocked.ActiveTask.Steps.Single(step =>
+            step.Kind == NyxIdChatStepKind.Postcondition).StepId;
         var command = ContinueCommand(
             blocked.PendingActions.Single().ActionRequestId,
             NyxIdChatActionDisposition.Completed);
@@ -166,7 +212,9 @@ public sealed class NyxIdChatBrowserActionTests
         decision.State.ActiveTask.TaskId.Should().Be("task-alpha",
             "one goal keeps the same task identity across continuation turns");
         decision.State.ActiveTask.TurnId.Should().Be("turn-action-alpha");
-        decision.State.ActiveTask.PlanRevision.Should().Be(2);
+        decision.State.ActiveTask.PlanId.Should().Be(frozenPlanId);
+        decision.State.ActiveTask.PlanRevision.Should().Be(frozenRevision);
+        decision.State.ActiveTask.PlanRevisions.Should().BeEquivalentTo(frozenHistory);
         decision.State.RecentTerminalTurns.Should().Contain(summary =>
             summary.TurnId == "turn-alpha" &&
             summary.Status == NyxIdChatTurnStatus.Blocked);
@@ -177,6 +225,7 @@ public sealed class NyxIdChatBrowserActionTests
             .ContainSingle(step => step.Kind == NyxIdChatStepKind.Postcondition).Which;
         postconditionStep.Kind.Should().Be(NyxIdChatStepKind.Postcondition);
         postconditionStep.Status.Should().Be(NyxIdChatStepStatus.Running);
+        postconditionStep.StepId.Should().Be(predeclaredPostconditionId);
         postconditionStep.Source.Postcondition.ActionRequestId.Should().Be(
             command.Actions.Single().ActionRequestId);
         decision.NextCommand.Should().NotBeNull();
@@ -191,7 +240,92 @@ public sealed class NyxIdChatBrowserActionTests
             NyxIdAssistantActionParams.ParamsOneofCase.CatalogServiceConnect);
         decision.State.PendingActions.Single().Reports.Should().ContainSingle()
             .Which.SafeMessage.Should().BeEmpty(
-                "browser supplied prose is not durable action evidence");
+            "browser supplied prose is not durable action evidence");
+    }
+
+    [Fact]
+    public void DistinctSequentialActionContinuations_ShouldPreserveFrozenPlanIdentity()
+    {
+        var blocked = BlockedActionStateWithTwoRequests();
+        var taskId = blocked.ActiveTask.TaskId;
+        var planId = blocked.ActiveTask.PlanId;
+        var planRevision = blocked.ActiveTask.PlanRevision;
+        var revisionHistory = blocked.ActiveTask.PlanRevisions
+            .Select(static revision => revision.ToByteString().ToBase64())
+            .ToArray();
+        var actionIds = blocked.PendingActions
+            .Select(static request => request.ActionRequestId)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        var postconditionIds = blocked.ActiveTask.Steps
+            .Where(static step => step.Kind == NyxIdChatStepKind.Postcondition)
+            .ToDictionary(
+                static step => step.ActionRequestId,
+                static step => step.StepId,
+                StringComparer.Ordinal);
+
+        var firstCommand = ContinueCommand(
+            actionIds[0],
+            NyxIdChatActionDisposition.Completed);
+        var first = NyxIdChatBrowserActions.Continue(blocked, firstCommand, Now);
+        var firstTurnId = first.State.ActiveTurn.TurnId;
+        var firstReconciled = NyxIdChatBrowserActions.ReconcilePostcondition(
+            first.State,
+            VerifiedPostcondition(first.NextCommand!.Key, actionIds[0]),
+            Now);
+
+        firstReconciled.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Blocked);
+        firstReconciled.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Blocked);
+        firstReconciled.State.PendingActions.Should().ContainSingle(action =>
+            action.ActionRequestId == actionIds[1]);
+        firstReconciled.State.ActiveTask.Steps.Single(step =>
+                step.ActionRequestId == actionIds[1] &&
+                step.Kind == NyxIdChatStepKind.Postcondition)
+            .Status.Should().Be(NyxIdChatStepStatus.Planned,
+                "an unreported browser action cannot be postcondition-checked early");
+
+        var secondCommand = ContinueCommand(
+            actionIds[1],
+            NyxIdChatActionDisposition.Completed);
+        secondCommand.ClientRequestId = "client-action-beta";
+        secondCommand.CommandId = "command-action-beta";
+        secondCommand.CorrelationId = "correlation-action-beta";
+        secondCommand.ContinuationTurnId = "turn-action-beta";
+        var second = NyxIdChatBrowserActions.Continue(
+            firstReconciled.State,
+            secondCommand,
+            Now);
+
+        firstTurnId.Should().NotBe("turn-alpha");
+        second.State.ActiveTurn.TurnId.Should().Be("turn-action-beta");
+        second.State.ActiveTurn.TurnId.Should().NotBe(firstTurnId);
+        second.State.ActiveTask.TaskId.Should().Be(taskId);
+        second.State.ActiveTask.PlanId.Should().Be(planId);
+        second.State.ActiveTask.PlanRevision.Should().Be(planRevision);
+        second.State.ActiveTask.PlanRevisions.Select(static revision =>
+                revision.ToByteString().ToBase64())
+            .Should().Equal(revisionHistory);
+        second.State.ActiveTask.Steps
+            .Where(static step => step.Kind == NyxIdChatStepKind.Postcondition)
+            .ToDictionary(
+                static step => step.ActionRequestId,
+                static step => step.StepId,
+                StringComparer.Ordinal)
+            .Should().BeEquivalentTo(postconditionIds);
+        second.NextCommand!.Key.StepId.Should().Be(postconditionIds[actionIds[1]]);
+
+        var completed = NyxIdChatBrowserActions.ReconcilePostcondition(
+            second.State,
+            VerifiedPostcondition(second.NextCommand.Key, actionIds[1]),
+            Now);
+        completed.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Succeeded);
+        completed.State.PendingActions.Should().BeEmpty();
+        completed.State.ActiveTask.TaskId.Should().Be(taskId);
+        completed.State.ActiveTask.PlanRevision.Should().Be(planRevision);
+        completed.State.ActiveTask.PlanRevisions.Select(static revision =>
+                revision.ToByteString().ToBase64())
+            .Should().Equal(revisionHistory,
+                "pure action continuations cannot fabricate legacy or new revision history");
     }
 
     [Fact]
@@ -265,6 +399,11 @@ public sealed class NyxIdChatBrowserActionTests
         replay.ShouldDispatch.Should().BeTrue();
         replay.Outcome.Should().Be(NyxIdChatTransitionOutcome.Idempotent);
         replay.NextCommand!.Key.Should().BeEquivalentTo(first.NextCommand!.Key);
+        replay.State.ActiveTask.PlanRevision.Should().Be(blocked.ActiveTask.PlanRevision);
+        replay.State.ActiveTask.PlanRevisions.Should().BeEquivalentTo(
+            blocked.ActiveTask.PlanRevisions);
+        replay.State.ActiveTask.Steps.Select(static step => step.StepId).Should()
+            .OnlyHaveUniqueItems();
     }
 
     [Fact]
@@ -635,6 +774,27 @@ public sealed class NyxIdChatBrowserActionTests
             Registry(),
             Now).State;
 
+    private static NyxIdChatOperationResultSignal VerifiedPostcondition(
+        NyxIdChatOperationKey key,
+        string actionRequestId) =>
+        new()
+        {
+            Key = key.Clone(),
+            ActionPostcondition = new NyxIdChatActionPostconditionResult
+            {
+                ActionRequestId = actionRequestId,
+                Disposition = NyxIdChatActionDisposition.Completed,
+                Verified = true,
+                Resource = new NyxIdChatSafeResourceRef
+                {
+                    UserService = new NyxIdChatUserServiceRef
+                    {
+                        UserServiceId = $"service-{actionRequestId}",
+                    },
+                },
+            },
+        };
+
     private static NyxIdChatConversationGAgentState BlockedActionStateWithTwoRequests()
     {
         var state = BlockedActionState();
@@ -642,8 +802,7 @@ public sealed class NyxIdChatBrowserActionTests
         second.ActionRequestId = "action-beta";
         second.StepId = "step-action-beta";
         second.Params.CatalogServiceConnect.ServiceSlug = "api-slack";
-        state.PendingActions.Add(second);
-        return state;
+        return NyxIdChatBrowserActions.CommitRequest(state, second, Now).State;
     }
 
     private static NyxIdChatConversationGAgentState AuthorizationWaitingState()

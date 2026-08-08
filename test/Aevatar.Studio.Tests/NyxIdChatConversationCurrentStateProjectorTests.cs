@@ -65,9 +65,17 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
         document.ActiveTask.ActorId.Should().Be(ActorId);
         document.ActiveTask.PlanId.Should().Be("plan-alpha");
         document.ActiveTask.PlanRevision.Should().Be(3);
+        document.ActiveTask.PlanRevisionHistoryStart.Should().Be(1);
         document.ActiveTask.Title.Should().Be("Connect GitHub safely");
         document.ActiveTask.Gate.Mode.Should().Be("confirm");
         document.ActiveTask.Gate.Reason.Should().Be("External access will change.");
+        document.ActiveTask.PlanRevisions.Select(static revision =>
+                (revision.PlanRevision, revision.RevisionCause))
+            .Should().Equal(
+                (1, "initial"),
+                (2, "scope_resolution"),
+                (3, "failure_recovery"));
+        document.ActiveTask.PlanRevisions[1].AddedStepIds.Should().Equal("step-beta");
         document.ActiveTask.Steps.Select(static step => step.StepId)
             .Should().Equal("step-alpha", "step-beta");
 
@@ -93,6 +101,8 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
         active.Operation.OperationGeneration.Should().Be(3);
         active.Operation.Phase.Should().Be("running");
         active.AddedBy.Should().Be("replan");
+        active.AddedInPlanRevision.Should().Be(2);
+        active.CancelledInPlanRevision.Should().Be(0);
         active.DependsOn.Should().Equal("step-alpha");
         active.Estimate.Kind.Should().Be("duration");
         active.Estimate.Seconds.Should().Be(45);
@@ -486,11 +496,35 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
                 ActorId = ActorId,
                 PlanId = "plan-alpha",
                 PlanRevision = 3,
+                PlanRevisionHistoryStart = 1,
                 Title = "Connect GitHub safely",
                 Gate = new NyxIdChatPlanGate
                 {
                     Mode = NyxIdChatPlanGateMode.Confirm,
                     Reason = "External access will change.",
+                },
+                PlanRevisions =
+                {
+                    new NyxIdChatPlanRevisionRecord
+                    {
+                        PlanRevision = 1,
+                        RevisionCause = NyxIdChatPlanRevisionCause.Initial,
+                        CommittedAt = now.Clone(),
+                        AddedStepIds = { "step-alpha" },
+                    },
+                    new NyxIdChatPlanRevisionRecord
+                    {
+                        PlanRevision = 2,
+                        RevisionCause = NyxIdChatPlanRevisionCause.ScopeResolution,
+                        CommittedAt = now.Clone(),
+                        AddedStepIds = { "step-beta" },
+                    },
+                    new NyxIdChatPlanRevisionRecord
+                    {
+                        PlanRevision = 3,
+                        RevisionCause = NyxIdChatPlanRevisionCause.FailureRecovery,
+                        CommittedAt = now.Clone(),
+                    },
                 },
             },
             PendingApproval = new NyxIdChatPendingApprovalState
@@ -614,6 +648,7 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
             ExternalEffect = NyxIdChatEffectEvidence.NotApplied,
             ActionRequestId = "action-alpha",
             AddedBy = NyxIdChatStepAddedBy.Replan,
+            AddedInPlanRevision = 2,
             DependsOn = { "step-alpha" },
             Estimate = new NyxIdChatStepEstimate
             {
@@ -658,6 +693,7 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
             Description = "Plan the work.",
             ExternalEffect = NyxIdChatEffectEvidence.NotStarted,
             AddedBy = NyxIdChatStepAddedBy.Initial,
+            AddedInPlanRevision = 1,
             AvailableActions = new NyxIdChatAvailableActions(),
             UpdatedAt = now.Clone(),
         });

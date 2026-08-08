@@ -429,11 +429,21 @@ message NyxIdChatConversationStepDocument {
   repeated string depends_on = 19;
   NyxIdChatConversationStepEstimateDocument estimate = 20;
   repeated NyxIdChatConversationSubstepDocument substeps = 21;
+  int32 added_in_plan_revision = 22;
+  int32 cancelled_in_plan_revision = 23;
 }
 
 message NyxIdChatConversationPlanGateDocument {
   string mode = 1;
   string reason = 2;
+}
+
+message NyxIdChatConversationPlanRevisionDocument {
+  int32 plan_revision = 1;
+  string revision_cause = 2;
+  google.protobuf.Timestamp committed_at = 3;
+  repeated string added_step_ids = 4;
+  repeated string cancelled_step_ids = 5;
 }
 
 message NyxIdChatConversationTaskDocument {
@@ -453,6 +463,8 @@ message NyxIdChatConversationTaskDocument {
   int32 plan_revision = 14;
   string title = 15;
   NyxIdChatConversationPlanGateDocument gate = 16;
+  repeated NyxIdChatConversationPlanRevisionDocument plan_revisions = 17;
+  int32 plan_revision_history_start = 18;
 }
 
 message NyxIdChatConversationPendingApprovalDocument {

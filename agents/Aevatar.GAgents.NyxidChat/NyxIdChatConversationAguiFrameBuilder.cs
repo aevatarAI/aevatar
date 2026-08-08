@@ -195,7 +195,13 @@ internal static class NyxIdChatConversationAguiFrameBuilder
         if (committed.Resolution is null || sequence <= 0)
             return [];
 
-        return [Custom(InputChangedEventName, committed.Resolution, sequence)];
+        var frames = new List<AGUIEvent>
+        {
+            Custom(InputChangedEventName, committed.Resolution, sequence),
+        };
+        if (committed.State?.ActiveTask is { } task)
+            frames.Add(Custom(TaskSnapshotEventName, task, sequence));
+        return frames;
     }
 
     public static IReadOnlyList<AGUIEvent> BuildApprovalChanged(
