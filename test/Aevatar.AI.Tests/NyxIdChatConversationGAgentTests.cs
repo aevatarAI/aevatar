@@ -3218,6 +3218,13 @@ public sealed class NyxIdChatConversationGAgentTests
                             SideEffectKind = "repository.update",
                             MayChangeExternalState = true,
                         },
+                        NyxIdProvenance = new NyxIdOperationRef
+                        {
+                            ConnectedServiceId = "svc-repository-alpha",
+                            ServiceSlug = "repository-service",
+                            OperationId = "repository-update",
+                        },
+                        OperationAdmission = CreateEffectAdmissionWithReadBack(),
                     },
                 },
             },
@@ -3257,13 +3264,13 @@ public sealed class NyxIdChatConversationGAgentTests
         }));
 
         var committed = await eventStore.GetEventsAsync(conversationActorId);
-        committed.Should().HaveCount(beforeStop.Count + 2);
-        committed[^1].EventData.TypeUrl.Should().EndWith(
+        committed.Should().HaveCount(beforeStop.Count + 3);
+        committed[^2].EventData.TypeUrl.Should().EndWith(
             "NyxIdChatLateOperationEvidenceCommittedEvent");
-        var evidence = committed[^1].EventData.Unpack<NyxIdChatLateOperationEvidenceCommittedEvent>();
+        var evidence = committed[^2].EventData.Unpack<NyxIdChatLateOperationEvidenceCommittedEvent>();
         evidence.Key.Should().BeEquivalentTo(toolKey);
-        evidence.OperationPhase.Should().Be(NyxIdChatOperationPhase.Succeeded);
-        evidence.ExternalEffect.Should().Be(NyxIdChatEffectEvidence.Confirmed);
+        evidence.OperationPhase.Should().Be(NyxIdChatOperationPhase.Uncertain);
+        evidence.ExternalEffect.Should().Be(NyxIdChatEffectEvidence.MayHaveChanged);
         evidence.ToolReceipt.Status.Should().Be(
             Aevatar.AI.Abstractions.AgentToolReceiptStatus.Success);
         evidence.ToString().Should().NotContain("must-not-be-committed");
@@ -3272,12 +3279,43 @@ public sealed class NyxIdChatConversationGAgentTests
             step.Kind == NyxIdChatStepKind.Tool);
         stoppedTool.Status.Should().Be(NyxIdChatStepStatus.Uncertain,
             "late evidence cannot regress or advance the terminal stopped step");
-        stoppedTool.ExternalEffect.Should().Be(NyxIdChatEffectEvidence.Confirmed);
-        stoppedTool.Operation.Phase.Should().Be(NyxIdChatOperationPhase.Succeeded);
+        stoppedTool.ExternalEffect.Should().Be(NyxIdChatEffectEvidence.MayHaveChanged);
+        stoppedTool.Operation.Phase.Should().Be(NyxIdChatOperationPhase.Uncertain);
         agent.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Stopped);
         agent.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Stopped);
-        dispatch.OperationCalls.Should().HaveCount(2,
-            "late evidence cannot start an old-plan successor");
+        dispatch.OperationCalls.Should().HaveCount(3,
+            "late effect success must start only the frozen read-back operation");
+        var verification = dispatch.OperationCalls[^1].Envelope.Payload
+            .Unpack<NyxIdChatOperationDispatchCommand>();
+        verification.InputCase.Should().Be(
+            NyxIdChatOperationDispatchCommand.InputOneofCase.ToolVerification);
+        verification.ToolVerification.EffectStepId.Should().Be(toolKey.StepId);
+        verification.ToolVerification.ReadBack.Should().BeEquivalentTo(
+            CreateEffectAdmissionWithReadBack().ReadBack);
+
+        var verificationResult = new NyxIdChatToolVerificationResult
+        {
+            EffectStepId = toolKey.StepId,
+            Disposition = NyxIdChatToolVerificationDisposition.Applied,
+            ReadOperation = verification.ToolVerification.ReadBack.ReadOperation.Clone(),
+            CheckName = verification.ToolVerification.ReadBack.CheckName,
+        };
+        await agent.HandleEventAsync(CreateEnvelope(conversationActorId, new NyxIdChatOperationResultSignal
+        {
+            Key = verification.Key.Clone(),
+            ToolVerification = verificationResult.Clone(),
+        }));
+
+        var afterVerification = await eventStore.GetEventsAsync(conversationActorId);
+        afterVerification[^1].EventData.Is(NyxIdChatOperationReconciledEvent.Descriptor)
+            .Should().BeTrue();
+        var reconciliation = afterVerification[^1].EventData
+            .Unpack<NyxIdChatOperationReconciledEvent>();
+        reconciliation.Result.ResultCase.Should().Be(
+            NyxIdChatOperationResultSignal.ResultOneofCase.ToolVerification);
+        reconciliation.Result.ToolVerification.Should().BeEquivalentTo(verificationResult);
+        agent.State.ActiveTask.Steps.Single(step => step.StepId == toolKey.StepId)
+            .ExternalEffect.Should().Be(NyxIdChatEffectEvidence.Confirmed);
 
         await agent.HandleEventAsync(CreateEnvelope(conversationActorId, new NyxIdChatOperationResultSignal
         {
@@ -3294,7 +3332,8 @@ public sealed class NyxIdChatConversationGAgentTests
             },
         }));
 
-        (await eventStore.GetEventsAsync(conversationActorId)).Should().HaveCount(committed.Count,
+        (await eventStore.GetEventsAsync(conversationActorId)).Should().HaveCount(
+            afterVerification.Count,
             "terminal exact evidence is monotonic and conflicting duplicates fail closed");
         agent.State.ActiveTask.Steps.Single(step =>
                 step.Kind == NyxIdChatStepKind.Tool).ExternalEffect.Should().Be(
@@ -5276,6 +5315,76 @@ public sealed class NyxIdChatConversationGAgentTests
         Route = new EnvelopeRoute { Direct = new DirectRoute { TargetActorId = actorId } },
         Propagation = new EnvelopePropagation { CorrelationId = "correlation-alpha" },
     };
+
+    private static AgentToolOperationAdmissionPayload CreateEffectAdmissionWithReadBack()
+    {
+        var readOperation = new AgentToolOperationAdmissionPayload
+        {
+            ServiceInstanceId = "svc-repository-alpha",
+            ServiceSlug = "repository-service",
+            PublishedEndpoint = new AgentToolPublishedEndpointIdentityPayload
+            {
+                EndpointId = "repository-read",
+            },
+            AuthorizationBasis = AgentToolOperationAuthorizationBasisPayload.PublishedContract,
+            HttpMethod = "GET",
+            PathTemplate = "/repositories/{repositoryId}",
+            ContractDigest = new string('d', 64),
+            CatalogDigest = $"sha256:{new string('a', 64)}",
+            ExecutionPolicy = new AgentToolOperationExecutionPolicyPayload
+            {
+                Risk = AgentToolOperationRiskPayload.ReadOnly,
+                Approval = AgentToolOperationApprovalPayload.None,
+                EnforcementOwner = AgentToolOperationEnforcementOwnerPayload.Aevatar,
+                AllowedExecutionModes =
+                {
+                    AgentToolOperationExecutionModePayload.Interactive,
+                },
+            },
+        };
+        return new AgentToolOperationAdmissionPayload
+        {
+            ServiceInstanceId = "svc-repository-alpha",
+            ServiceSlug = "repository-service",
+            PublishedEndpoint = new AgentToolPublishedEndpointIdentityPayload
+            {
+                EndpointId = "repository-update",
+            },
+            AuthorizationBasis = AgentToolOperationAuthorizationBasisPayload.PublishedContract,
+            HttpMethod = "PATCH",
+            PathTemplate = "/repositories/{repositoryId}",
+            ContractDigest = new string('b', 64),
+            CatalogDigest = $"sha256:{new string('a', 64)}",
+            ExecutionPolicy = new AgentToolOperationExecutionPolicyPayload
+            {
+                Risk = AgentToolOperationRiskPayload.Write,
+                Approval = AgentToolOperationApprovalPayload.Required,
+                EnforcementOwner = AgentToolOperationEnforcementOwnerPayload.Aevatar,
+                AllowedExecutionModes =
+                {
+                    AgentToolOperationExecutionModePayload.Interactive,
+                },
+            },
+            ReadBack = new AgentToolOperationReadBackPayload
+            {
+                ReadOperation = readOperation,
+                Arguments = new Struct
+                {
+                    Fields =
+                    {
+                        ["repositoryId"] = Google.Protobuf.WellKnownTypes.Value.ForString(
+                            "repo-alpha"),
+                    },
+                },
+                CheckName = "repository-visible",
+                Assertion = new AgentToolReadBackAssertionPayload
+                {
+                    Match = AgentToolReadBackMatchPayload.Exists,
+                    JsonPointer = "/data",
+                },
+            },
+        };
+    }
 
     private static void AssignActorId(
         NyxIdChatConversationGAgent agent,

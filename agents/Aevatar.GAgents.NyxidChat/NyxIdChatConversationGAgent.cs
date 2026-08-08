@@ -1908,7 +1908,8 @@ public sealed class NyxIdChatConversationGAgent
                            NyxIdChatOperationResultSignal.ResultOneofCase.Llm
             ? signal.Llm.Content
             : null;
-        var terminalPrepared = PrepareHistoryTerminalOutbox(nextState, terminalText);
+        var terminalPrepared = !fencedVerification &&
+                               PrepareHistoryTerminalOutbox(nextState, terminalText);
 
         await PersistDomainEventAsync(new NyxIdChatOperationReconciledEvent
         {
@@ -1981,6 +1982,9 @@ public sealed class NyxIdChatConversationGAgent
                 break;
             case NyxIdChatOperationResultSignal.ResultOneofCase.ActionPostcondition:
                 durable.ActionPostcondition = signal.ActionPostcondition.Clone();
+                break;
+            case NyxIdChatOperationResultSignal.ResultOneofCase.ToolVerification:
+                durable.ToolVerification = signal.ToolVerification.Clone();
                 break;
             case NyxIdChatOperationResultSignal.ResultOneofCase.Failure:
                 durable.Failure = signal.Failure.Clone();

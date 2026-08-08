@@ -1286,9 +1286,11 @@ public static class NyxIdChatControlCommands
         return receipt.Status switch
         {
             AgentToolReceiptStatus.Success => new LateToolEvidence(
-                NyxIdChatOperationPhase.Succeeded,
                 step.MayChangeExternalState
-                    ? NyxIdChatEffectEvidence.Confirmed
+                    ? NyxIdChatOperationPhase.Uncertain
+                    : NyxIdChatOperationPhase.Succeeded,
+                step.MayChangeExternalState
+                    ? NyxIdChatEffectEvidence.MayHaveChanged
                     : NyxIdChatEffectEvidence.NotApplied,
                 terminalCode,
                 safeMessage),
