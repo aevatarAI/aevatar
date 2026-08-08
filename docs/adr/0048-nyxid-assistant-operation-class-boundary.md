@@ -1,6 +1,6 @@
 ---
 title: "NyxID Assistant Operation-Class Boundary"
-status: proposed
+status: accepted
 owner: eanzhao
 ---
 
@@ -17,7 +17,7 @@ Treating them as one global MCP-versus-REST choice causes two concrete failures:
 
 The decision is based on the evidence pinned in the [Milestone 40 Gate 0 inventory](../audit-scorecard/2026-08-07-milestone-40-gate-0-inventory.md), including NyxID `fa157bc4160c27922f49f8f498ccac755843a15a`, assistant registry `nyxid-assistant-actions.v4`, and support-contract gist `f45febb057a7182dab2495d4c739d2bb8d7026f5`.
 
-The deliverable baseline is still unresolved in practice. [#3317](https://github.com/AevatarAI/aevatar/issues/3317) requires `dev`; the requested implementation target is `origin/feature/integrate`. This ADR may guide work on integration, but it does not make that lineage an accepted baseline or close Gate 0.
+[Issue #3317](https://github.com/AevatarAI/aevatar/issues/3317) selects `origin/feature/integrate` as the only Milestone 40 delivery, production, and acceptance baseline. This decision is accepted against `origin/feature/integrate@6f979452853a6e3afdffeef085f7bbc550b9385e`; later evidence pins the exact integration SHA containing each implementation.
 
 ## Decision
 
@@ -109,4 +109,4 @@ The cost is explicit composition and tiered product behavior. The profile must m
 
 ## Status and rollout
 
-This ADR is `proposed` because the #3317 baseline conflict and #3315 owner correction remain open. Implementation may follow it on the integration lineage, but the decision becomes Milestone 40 acceptance evidence only after it is reviewed and lands on the selected `dev` baseline with the required tests and production evidence.
+This ADR is `accepted` for Milestone 40. Implementation lands only on `origin/feature/integrate`; issue closure still requires the focused tests and, where the behavior is online-verifiable, evidence from the exact deployed integration image.

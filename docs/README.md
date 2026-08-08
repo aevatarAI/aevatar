@@ -97,6 +97,7 @@ Immutable records of architectural choices and their rationale.
 - [Managed Codex gVisor Direct-Token Isolation Model](adr/0044-managed-codex-gvisor-direct-token.md)
 - [0045 - Runtime-owned committed-state publication recovery](adr/0045-runtime-owned-committed-state-publication-recovery.md)
 - [NyxID Assistant Operation-Class Boundary](adr/0048-nyxid-assistant-operation-class-boundary.md)
+- [NyxID Assistant Plan Gate and Revision](adr/0049-nyxid-assistant-plan-gate-and-revision.md)
 - [Agent Kind Primary-Only Identity](adr/2026-06-04-agent-kind-primary-only-identity.md)
 
 ## History
