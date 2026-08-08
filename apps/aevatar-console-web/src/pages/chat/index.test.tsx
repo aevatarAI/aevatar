@@ -1250,7 +1250,7 @@ describe('ChatPage canonical NyxID Assistant', () => {
     ).toBeInTheDocument();
   });
 
-  it('UC4 preserves the 75 override across Tier-B waiting, approval, and verification', async () => {
+  it('UC4 preserves the 75 override across Tier-B stall, return, and verified reload', async () => {
     (chatHistoryApi.listConversationMetas as jest.Mock).mockResolvedValue([
       serverConversation,
     ]);
@@ -1376,20 +1376,36 @@ describe('ChatPage canonical NyxID Assistant', () => {
         outcome: 'resolved',
       },
     });
-    const observedApprovalState = activeTaskState(waitingPlan, 32, {
+    const returnedPlan = taskPlan(
+      (waitingPlan.steps as Record<string, unknown>[]).map((step) =>
+        step.stepId === 'step-write'
+          ? {
+              ...step,
+              status: 'running',
+              operation: {
+                conversationActorId: 'conversation-alpha',
+                turnId: 'turn-alpha',
+                taskId: 'task-alpha',
+                stepId: 'step-write',
+                operationId: 'operation-write',
+                operationGeneration: 2,
+                kind: 'effect',
+                phase: 'running',
+                lastProgressAt: '2026-08-08T00:11:00Z',
+              },
+            }
+          : step,
+      ),
+      {
+        planRevision: 2,
+        planRevisions: finalPlan.planRevisions,
+        title: 'Candidate screening at 75',
+      },
+    );
+    const returnedState = activeTaskState(returnedPlan, 32, {
       latestInputResolution: {
         requestId: 'input-threshold',
         outcome: 'resolved',
-      },
-      pendingApproval: {
-        approvalRequestId: 'approval-alpha',
-        toolName: 'bitable.row.create',
-        action: 'Write accepted candidate',
-        target: 'base-alpha/table-alpha',
-        grantBoundary: 'nyxid_step_up',
-        reversibility: 'reversible',
-        nyxidRequestId: 'nyxid-approval-alpha',
-        expiresAt: '2026-08-08T00:10:00Z',
       },
     });
     const finalState = currentState(
@@ -1403,13 +1419,6 @@ describe('ChatPage canonical NyxID Assistant', () => {
         latestInputResolution: {
           requestId: 'input-threshold',
           outcome: 'resolved',
-        },
-        latestApprovalResolution: {
-          requestId: 'approval-alpha',
-          clientRequestId: 'approval-client-alpha',
-          outcome: 'resolved',
-          approved: true,
-          committedAt: '2026-08-08T00:11:00Z',
         },
       },
       33,
@@ -1442,7 +1451,7 @@ describe('ChatPage canonical NyxID Assistant', () => {
         ),
       )
       .mockResolvedValueOnce(waitingState)
-      .mockResolvedValueOnce(observedApprovalState)
+      .mockResolvedValueOnce(returnedState)
       .mockResolvedValue(finalState);
     (authFetch as jest.Mock).mockResolvedValue({ ok: true, status: 202 });
 
@@ -1482,15 +1491,21 @@ describe('ChatPage canonical NyxID Assistant', () => {
     ]);
 
     firstView.unmount();
-    const approvalView = renderWithQueryClient(<ChatPage />);
+    const returnedView = renderWithQueryClient(<ChatPage />);
     await openCanonicalConversation();
     expect(
-      await screen.findByText('NyxID request observed'),
+      await screen.findByText('Candidate screening at 75'),
     ).toBeInTheDocument();
-    expect(screen.getByText('nyxid-approval-alpha')).toBeInTheDocument();
     expect(
-      within(taskRow('Write accepted candidate')).getByText('Stalled'),
+      within(taskRow('Write accepted candidate')).getByText('running'),
     ).toBeInTheDocument();
+    expect(screen.getByText(/generation 2/)).toBeInTheDocument();
+    expect(
+      within(taskRow('Write accepted candidate')).queryByText('Stalled'),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('NyxID request observed'),
+    ).not.toBeInTheDocument();
     expect(
       screen.queryByRole('button', { name: 'Approve' }),
     ).not.toBeInTheDocument();
@@ -1499,7 +1514,7 @@ describe('ChatPage canonical NyxID Assistant', () => {
     ).not.toBeInTheDocument();
     expect(screen.queryByText('approved')).not.toBeInTheDocument();
 
-    approvalView.unmount();
+    returnedView.unmount();
     renderWithQueryClient(<ChatPage />);
     await openCanonicalConversation();
     expect(
@@ -1522,7 +1537,10 @@ describe('ChatPage canonical NyxID Assistant', () => {
     expect(
       screen.queryByText('NyxID request observed'),
     ).not.toBeInTheDocument();
-    expect(screen.getByText('approved')).toBeInTheDocument();
+    expect(
+      within(taskRow('Write accepted candidate')).getByText('confirmed'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('approved')).not.toBeInTheDocument();
     expect(
       screen.queryByRole('button', { name: 'Approve' }),
     ).not.toBeInTheDocument();
