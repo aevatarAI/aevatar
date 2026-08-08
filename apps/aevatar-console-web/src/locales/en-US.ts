@@ -43,6 +43,8 @@ const enUSMessages = {
   'pages.chat.index.chatStopped': 'Chat stopped.',
   'pages.chat.index.composerPlaceholder':
     'Describe the workflow you want, or ask about the current setup...',
+  'pages.chat.index.composerInputAnswer': 'Answer the current question...',
+  'pages.chat.index.composerSteering': 'Steer the active task...',
   'pages.chat.index.confirmAndCreate': 'Confirm and create',
   'pages.chat.index.confirmPrompt': 'Confirm. Please create it now.',
   'pages.chat.index.continuationContextMissing':

@@ -1,3 +1,10 @@
+import {
+  type ChatActorStep,
+  type ChatTaskPlan,
+  decodeChatTaskPlan,
+  decodeChatTaskStep,
+} from './chatTaskPlan';
+
 type JsonRecord = Record<string, unknown>;
 
 const ACTOR_EVENT_NAMES = {
@@ -30,7 +37,6 @@ const FORBIDDEN_ACTION_KEY =
   /(?:^|[_-])(authorization|api[-_]?key|token|secret|password|credential|cookie|user[-_]?code|device[-_]?code)(?:$|[_-])/i;
 const SECRET_VALUE =
   /(Bearer\s+)[A-Za-z0-9._~+/-]+|nyx(?:id)?_[A-Za-z0-9_-]{8,}/gi;
-const ACTION_CACHE_PREFIX = 'aevatar-console:chat-action:v4:';
 const CUSTOM_SERVICE_AUTH_METHODS = [
   'bearer',
   'header',
@@ -52,18 +58,7 @@ export class ChatActorProtocolError extends Error {
   }
 }
 
-export type ChatAvailableActions = {
-  retry: boolean;
-  skip: boolean;
-  stop: boolean;
-};
-
-export type ChatActorStep = JsonRecord & {
-  stepId: string;
-  order?: number;
-  availableActions?: ChatAvailableActions;
-  operation?: (JsonRecord & { operationGeneration?: number }) | null;
-};
+export type { ChatActorStep, ChatAvailableActions } from './chatTaskPlan';
 
 export type ChatPendingInput = JsonRecord & {
   requestId: string;
@@ -78,6 +73,10 @@ export type ChatPendingApproval = JsonRecord & {
   toolName: string;
   action?: string;
   target?: string;
+  reversibility?: 'reversible' | 'irreversible' | 'unknown';
+  grantBoundary?: 'within_grant' | 'nyxid_step_up';
+  nyxidRequestId?: string;
+  expiresAt?: string;
 };
 
 export type ChatServiceConnectActionRequest = {
@@ -131,7 +130,7 @@ export type ChatActorProjection = {
   activeTurn: JsonRecord | null;
   latestTurn: JsonRecord | null;
   recentTerminalTurns: JsonRecord[];
-  task: JsonRecord | null;
+  task: ChatTaskPlan | null;
   steps: Map<string, ChatActorStep>;
   pendingInput: ChatPendingInput | null;
   pendingApproval: ChatPendingApproval | null;
@@ -365,7 +364,7 @@ export function applyCurrentStateResult(
   next.conflicts = [...projection.conflicts];
   const activeTask = optionalRecord(snapshot.activeTask);
   if (activeTask) applyTask(next, activeTask);
-  applyActionSummaries(next, snapshot.pendingActions);
+  applyActionSummaries(next, snapshot.pendingActions, projection.actions);
   return { projection: next, reloadWithoutCursor: false };
 }
 
@@ -406,39 +405,6 @@ export function validateActionRequest(
     action: 'service.connect',
     params,
   };
-}
-
-export function writeCachedActionRequest(
-  request: ChatServiceConnectActionRequest,
-): void {
-  const validated = validateActionRequest(request);
-  try {
-    globalThis.sessionStorage?.setItem(
-      actionCacheKey(validated.actorId, validated.actionRequestId),
-      JSON.stringify(validated),
-    );
-  } catch {
-    // Session cache is optional; live actor facts remain authoritative.
-  }
-}
-
-export function readCachedActionRequest(
-  summary: Omit<ChatActionSummary, 'request'>,
-): ChatServiceConnectActionRequest | null {
-  try {
-    const raw = globalThis.sessionStorage?.getItem(
-      actionCacheKey(summary.actorId, summary.actionRequestId),
-    );
-    if (!raw || summary.conflicted) return null;
-    const request = validateActionRequest(JSON.parse(raw));
-    return summary.schemaVersion === request.schemaVersion &&
-      summary.action === request.action &&
-      ACTION_IDENTITY_KEYS.every((key) => summary[key] === request[key])
-      ? request
-      : null;
-  } catch {
-    return null;
-  }
 }
 
 export function chatActionIdentityKey(
@@ -557,23 +523,10 @@ function validateServiceConnectParams(
 }
 
 function applyTask(projection: ChatActorProjection, task: JsonRecord): void {
-  projection.task = cloneRecord(task);
-  const steps = Array.isArray(task.steps)
-    ? task.steps
-        .map(optionalRecord)
-        .filter((value): value is JsonRecord => Boolean(value))
-        .map((value) => value as ChatActorStep)
-        .filter((step) => Boolean(readIdentity(step.stepId)))
-        .sort(
-          (left, right) =>
-            Number(left.order ?? Number.MAX_SAFE_INTEGER) -
-              Number(right.order ?? Number.MAX_SAFE_INTEGER) ||
-            left.stepId.localeCompare(right.stepId),
-        )
-    : [];
-  projection.steps = new Map(
-    steps.map((step) => [step.stepId, cloneStep(step)]),
-  );
+  const decoded = decodeChatTaskPlan(task);
+  projection.task = decoded;
+  const steps = decoded.steps;
+  projection.steps = new Map(steps.map((step) => [step.stepId, step]));
 }
 
 function applyStep(
@@ -583,12 +536,17 @@ function applyStep(
   if (!input) return;
   const stepId = readIdentity(input.stepId);
   if (!stepId) return;
-  const step = {
-    ...projection.steps.get(stepId),
-    ...cloneRecord(input),
-    stepId,
-  };
-  projection.steps.set(stepId, step as ChatActorStep);
+  const step = decodeChatTaskStep(input);
+  projection.steps.set(stepId, step);
+  if (projection.task) {
+    projection.task = {
+      ...projection.task,
+      steps: [...projection.steps.values()].sort(
+        (left, right) =>
+          left.order - right.order || left.stepId.localeCompare(right.stepId),
+      ),
+    };
+  }
 }
 
 function applyActionRequest(
@@ -626,16 +584,12 @@ function applyActionRequest(
     postconditionResult: existing?.postconditionResult ?? null,
     request,
   } as ChatActionSummary);
-  writeCachedActionRequest(request);
-}
-
-function actionCacheKey(actorId: string, actionRequestId: string): string {
-  return `${ACTION_CACHE_PREFIX}${chatActionIdentityKey(actorId, actionRequestId)}`;
 }
 
 function applyActionSummaries(
   projection: ChatActorProjection,
   input: unknown,
+  observedActions: ReadonlyMap<string, ChatActionSummary> = new Map(),
 ): void {
   projection.actions = new Map();
   if (!Array.isArray(input)) return;
@@ -674,7 +628,14 @@ function applyActionSummaries(
         : [],
       postconditionResult: cloneNullableRecord(summary.postconditionResult),
     };
-    item.request = readCachedActionRequest(item);
+    const observed = observedActions.get(actionRequestId);
+    if (
+      observed?.request &&
+      !observed.conflicted &&
+      actionIdentityMatches(item, observed.request)
+    ) {
+      item.request = observed.request;
+    }
     projection.actions.set(actionRequestId, item);
   }
 }
@@ -818,7 +779,9 @@ function cloneProjection(projection: ChatActorProjection): ChatActorProjection {
   return {
     ...projection,
     recentTerminalTurns: projection.recentTerminalTurns.map(cloneRecord),
-    task: cloneNullableRecord(projection.task),
+    task: projection.task
+      ? (JSON.parse(JSON.stringify(projection.task)) as ChatTaskPlan)
+      : null,
     steps: new Map(
       [...projection.steps].map(([key, value]) => [key, cloneStep(value)]),
     ),
@@ -836,13 +799,7 @@ function cloneProjection(projection: ChatActorProjection): ChatActorProjection {
 }
 
 function cloneStep(step: ChatActorStep): ChatActorStep {
-  return {
-    ...step,
-    ...(step.availableActions
-      ? { availableActions: { ...step.availableActions } }
-      : {}),
-    ...(step.operation ? { operation: { ...step.operation } } : {}),
-  };
+  return JSON.parse(JSON.stringify(step)) as ChatActorStep;
 }
 
 function cloneRecord(value: JsonRecord): JsonRecord {

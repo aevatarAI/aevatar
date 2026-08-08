@@ -1,51 +1,102 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import React from "react";
+import { fireEvent, render, screen } from '@testing-library/react';
+import React from 'react';
+import { ChatActorControls } from './ChatActorControls';
 import {
+  type ChatActorProjection,
   chatActionIdentityKey,
   createChatActorProjection,
-} from "./chatActorState";
-import { ChatActorControls } from "./ChatActorControls";
+} from './chatActorState';
+import type { ChatActorStep, ChatTaskPlan } from './chatTaskPlan';
 
-function projectionFixture() {
-  const projection = createChatActorProjection("conversation-alpha");
-  projection.stateVersion = 7;
-  projection.activeTurn = {
-    turnId: "turn-alpha",
-    taskId: "task-alpha",
-    status: "active",
-  };
-  projection.task = {
-    taskId: "task-alpha",
-    turnId: "turn-alpha",
-    status: "active",
-  };
-  projection.pendingInput = {
-    requestId: "input-alpha",
-    turnId: "turn-alpha",
-    taskId: "task-alpha",
-    stepId: "step-input",
-    prompt: "Select a region",
-    options: [
-      { optionId: "option-sg", label: "Singapore" },
-      { optionId: "option-fra", label: "Frankfurt" },
-    ],
-    allowFreeText: false,
-    multiSelect: false,
-  };
-  projection.steps.set("step-retry", {
-    stepId: "step-retry",
+function stepFixture(overrides: Partial<ChatActorStep> = {}): ChatActorStep {
+  return {
+    stepId: 'step-read',
     order: 1,
-    description: "Connect repository",
-    availableActions: { retry: true, skip: false, stop: true },
-    operation: { operationGeneration: 2 },
-  });
-  projection.steps.set("step-skip", {
-    stepId: "step-skip",
-    order: 2,
-    description: "Optional summary",
-    availableActions: { retry: false, skip: true, stop: false },
-    operation: { operationGeneration: 0 },
-  });
+    kind: 'tool',
+    status: 'running',
+    required: true,
+    description: 'Inspect the connected repository',
+    source: {
+      kind: 'tool',
+      label: 'repository_read',
+      serviceSlug: 'github-api',
+      serviceId: 'svc-alpha',
+    },
+    mayChangeExternalState: false,
+    externalEffect: 'not_started',
+    availableActions: { retry: false, skip: false, stop: true },
+    updatedAt: '2026-08-08T00:00:00Z',
+    addedBy: 'initial',
+    addedInPlanRevision: 3,
+    dependsOn: [],
+    substeps: [
+      { substepId: 'substep-access', title: 'Check access', status: 'done' },
+      {
+        substepId: 'substep-read',
+        title: 'Read repository',
+        status: 'running',
+      },
+    ],
+    operation: {
+      conversationActorId: 'conversation-alpha',
+      turnId: 'turn-alpha',
+      taskId: 'task-alpha',
+      stepId: 'step-read',
+      operationId: 'operation-alpha',
+      operationGeneration: 2,
+      kind: 'tool',
+      phase: 'running',
+    },
+    ...overrides,
+  };
+}
+
+function planFixture(steps: readonly ChatActorStep[]): ChatTaskPlan {
+  return {
+    schemaVersion: 4,
+    actorId: 'conversation-alpha',
+    taskId: 'task-alpha',
+    turnId: 'turn-alpha',
+    planId: 'plan-alpha',
+    planRevision: 3,
+    planRevisionHistoryStart: 1,
+    planRevisions: [
+      {
+        planRevision: 3,
+        revisionCause: 'steering',
+        committedAt: '2026-08-08T00:00:00Z',
+        addedStepIds: ['step-read'],
+        cancelledStepIds: [],
+      },
+    ],
+    title: 'Inspect and verify the repository',
+    status: 'active',
+    activeStepId: steps[0]?.stepId,
+    gate: {
+      mode: 'confirm',
+      status: 'pending',
+      requestId: 'gate-alpha',
+      taskId: 'task-alpha',
+      planId: 'plan-alpha',
+      planRevision: 3,
+      reason: 'The plan contains an effect-capable operation.',
+    },
+    steps,
+  };
+}
+
+function projectionFixture(
+  steps: readonly ChatActorStep[] = [stepFixture()],
+): ChatActorProjection {
+  const projection = createChatActorProjection('conversation-alpha');
+  projection.stateVersion = 17;
+  projection.activeTurn = {
+    turnId: 'turn-alpha',
+    taskId: 'task-alpha',
+    status: 'active',
+  };
+  projection.task = planFixture(steps);
+  projection.steps = new Map(steps.map((step) => [step.stepId, step]));
   return projection;
 }
 
@@ -57,6 +108,7 @@ function callbacks() {
     onActionReport: jest.fn(),
     onApprovalResolve: jest.fn(),
     onInputResolve: jest.fn(),
+    onPlanResolve: jest.fn(),
     onRetry: jest.fn(),
     onSkip: jest.fn(),
     onSteer: jest.fn(),
@@ -64,305 +116,225 @@ function callbacks() {
   };
 }
 
-describe("ChatActorControls", () => {
-  it("submits actor option IDs and only actor-authored step controls", () => {
+describe('ChatActorControls', () => {
+  it('renders the complete plan and resolves only the exact actor-owned gate', () => {
+    const verify = stepFixture({
+      stepId: 'step-verify',
+      order: 2,
+      kind: 'postcondition',
+      status: 'done',
+      description: 'Verify repository access',
+      source: { kind: 'postcondition', label: 'service.connected' },
+      externalEffect: 'confirmed',
+      availableActions: { retry: false, skip: false, stop: false },
+      substeps: [],
+      operation: null,
+      updatedAt: '2026-08-08T00:00:05Z',
+    });
+    const projection = projectionFixture([stepFixture(), verify]);
+    const handlers = callbacks();
+    render(<ChatActorControls projection={projection} {...handlers} />);
+
+    expect(screen.getByRole('region', { name: 'Task plan' })).toHaveTextContent(
+      'Inspect and verify the repository',
+    );
+    expect(screen.getByText('repository_read')).toBeInTheDocument();
+    expect(screen.getByText('not_started')).toBeInTheDocument();
+    expect(screen.getByText('Check access · done')).toBeInTheDocument();
+    expect(screen.getByText('Stalled')).toBeInTheDocument();
+    expect(
+      screen.getByText('Verified against service.connected'),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm plan' }));
+    expect(handlers.onPlanResolve).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ requestId: 'gate-alpha', planRevision: 3 }),
+    );
+    expect(screen.getAllByRole('button', { name: /plan$/ })).toHaveLength(2);
+  });
+
+  it('submits option identities and directs free text to the shared composer', () => {
+    const projection = projectionFixture();
+    projection.pendingInput = {
+      requestId: 'input-alpha',
+      prompt: 'Choose a region or override the threshold',
+      options: [
+        { optionId: 'option-sg', label: 'Singapore' },
+        { optionId: 'option-fra', label: 'Frankfurt' },
+      ],
+      allowFreeText: true,
+      multiSelect: false,
+    };
+    const handlers = callbacks();
+    render(<ChatActorControls projection={projection} {...handlers} />);
+
+    expect(
+      screen.getByText('Type the answer in the composer below.'),
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText('Free text answer')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('radio', { name: 'Singapore' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Submit answer' }));
+    expect(handlers.onInputResolve).toHaveBeenCalledWith(
+      { selectedOptionIds: ['option-sg'] },
+      expect.objectContaining({ requestId: 'input-alpha' }),
+    );
+  });
+
+  it('shows only actor-authored recovery controls and moves steering to the composer', () => {
+    const retry = stepFixture({
+      status: 'failed',
+      externalEffect: 'not_applied',
+      availableActions: { retry: true, skip: true, stop: true },
+    });
     const handlers = callbacks();
     render(
-      <ChatActorControls projection={projectionFixture()} {...handlers} />
-    );
-
-    fireEvent.click(screen.getByRole("radio", { name: "Singapore" }));
-    fireEvent.click(screen.getByRole("button", { name: "Submit answer" }));
-    expect(handlers.onInputResolve).toHaveBeenCalledWith(
-      { selectedOptionIds: ["option-sg"] },
-      expect.objectContaining({ requestId: "input-alpha" })
+      <ChatActorControls
+        projection={projectionFixture([retry])}
+        {...handlers}
+      />,
     );
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Retry Connect repository" })
+      screen.getByRole('button', {
+        name: 'Retry Inspect the connected repository',
+      }),
     );
     fireEvent.click(
-      screen.getByRole("button", { name: "Skip Optional summary" })
+      screen.getByRole('button', {
+        name: 'Skip Inspect the connected repository',
+      }),
     );
-    expect(handlers.onRetry).toHaveBeenCalledWith(
-      expect.objectContaining({ stepId: "step-retry" })
-    );
-    expect(handlers.onSkip).toHaveBeenCalledWith(
-      expect.objectContaining({ stepId: "step-skip" })
-    );
+    fireEvent.click(screen.getByRole('button', { name: 'Stop task' }));
+    expect(handlers.onRetry).toHaveBeenCalledWith(retry);
+    expect(handlers.onSkip).toHaveBeenCalledWith(retry);
+    expect(handlers.onStop).toHaveBeenCalledTimes(1);
     expect(
-      screen.queryByRole("button", { name: "Skip Connect repository" })
+      screen.getByText('Type a steering instruction in the composer.'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByLabelText('Steering instruction'),
     ).not.toBeInTheDocument();
   });
 
-  it("renders approval, stop, and steering only from current actor facts", () => {
+  it('does not fabricate a Tier-B approval before NyxID returns a typed request identity', () => {
     const projection = projectionFixture();
-    projection.pendingInput = null;
     projection.pendingApproval = {
-      approvalRequestId: "approval-alpha",
-      turnId: "turn-alpha",
-      taskId: "task-alpha",
-      stepId: "step-approval",
-      toolName: "deploy",
-      action: "Deploy",
-      target: "production",
-      reversibility: "irreversible",
+      approvalRequestId: 'approval-alpha',
+      toolName: 'repository_update',
+      action: 'Update repository',
+      target: 'repo-alpha',
+      grantBoundary: 'nyxid_step_up',
+      reversibility: 'reversible',
     };
     const handlers = callbacks();
     const { rerender } = render(
-      <ChatActorControls projection={projection} {...handlers} />
+      <ChatActorControls projection={projection} {...handlers} />,
     );
+    expect(
+      screen.queryByRole('button', { name: 'Approve' }),
+    ).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    projection.pendingApproval = {
+      ...projection.pendingApproval,
+      nyxidRequestId: 'nyxid-approval-alpha',
+    };
+    rerender(<ChatActorControls projection={projection} {...handlers} />);
+    expect(screen.getByText('Decided on NyxID')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
     expect(handlers.onApprovalResolve).toHaveBeenCalledWith(
       true,
-      expect.objectContaining({ approvalRequestId: "approval-alpha" }),
-      undefined
+      expect.objectContaining({ nyxidRequestId: 'nyxid-approval-alpha' }),
+      undefined,
     );
-    fireEvent.change(screen.getByLabelText("Steering instruction"), {
-      target: { value: "Use read-only access" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Steer task" }));
-    expect(handlers.onSteer).toHaveBeenCalledWith("Use read-only access");
-    fireEvent.click(screen.getByRole("button", { name: "Stop task" }));
-    expect(handlers.onStop).toHaveBeenCalledTimes(1);
-
-    rerender(
-      <ChatActorControls
-        projection={createChatActorProjection("conversation-alpha")}
-        {...handlers}
-      />
-    );
-    expect(screen.queryByRole("button", { name: "Stop task" })).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Steering instruction")).not.toBeInTheDocument();
   });
 
-  it("keeps browser completion pending until exact actor proof arrives", () => {
-    const projection = createChatActorProjection("conversation-alpha");
+  it('keeps action completion pending until exact committed postcondition proof arrives', () => {
+    const projection = projectionFixture([]);
     const request = {
       schemaVersion: 4 as const,
-      actorId: "conversation-alpha",
-      originTurnId: "turn-alpha",
-      taskId: "task-alpha",
-      stepId: "step-connect",
-      actionRequestId: "action-alpha",
-      action: "service.connect" as const,
-      params: { catalogService: { serviceSlug: "api-github" } },
-    };
-    projection.actions.set("action-alpha", {
-      ...request,
-      request,
-      reports: [],
-      postconditionResult: null,
-    });
-    const handlers = callbacks();
-    const journeys = new Map([
-      [
-        chatActionIdentityKey("conversation-alpha", "action-alpha"),
-        {
-          report: {
-            actionRequestId: "action-alpha",
-            originTurnId: "turn-alpha",
-            disposition: "completed" as const,
-            resource: {
-              userService: { userServiceId: "user-service-alpha" },
-            },
-          },
-        },
-      ],
-    ]);
-    const { rerender } = render(
-      <ChatActorControls
-        actionJourneys={journeys}
-        projection={projection}
-        {...handlers}
-      />
-    );
-
-    expect(screen.getByText("Reported; waiting for actor verification")).toBeInTheDocument();
-    expect(screen.queryByText("Actor verified")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Refresh connection" }));
-    expect(handlers.onActionRefresh).toHaveBeenCalledWith(request);
-
-    const action = projection.actions.get("action-alpha");
-    if (!action) throw new Error("Expected the action fixture to exist.");
-    projection.actions.set("action-alpha", {
-      ...action,
-      postconditionResult: {
-        actionRequestId: "action-alpha",
-        disposition: "completed",
-        verified: true,
-        resource: {
-          userServiceId: "wrong-shape-is-not-proof",
+      actorId: 'conversation-alpha',
+      originTurnId: 'turn-alpha',
+      taskId: 'task-alpha',
+      stepId: 'step-connect',
+      actionRequestId: 'action-alpha',
+      action: 'service.connect' as const,
+      params: {
+        catalogService: {
+          serviceSlug: 'api-github',
+          requestedScopes: ['repo:read'],
         },
       },
-    });
-    rerender(
-      <ChatActorControls
-        actionJourneys={journeys}
-        projection={projection}
-        {...handlers}
-      />
-    );
-    expect(screen.queryByText("Actor verified")).not.toBeInTheDocument();
-
-    projection.actions.set("action-alpha", {
-      ...action,
-      postconditionResult: null,
-    });
-    projection.steps.set("step-proof", {
-      stepId: "step-proof",
-      actionRequestId: "action-alpha",
-      kind: "postcondition",
-      status: "done",
-      externalEffect: "confirmed",
-    });
-    rerender(
-      <ChatActorControls
-        actionJourneys={journeys}
-        projection={projection}
-        {...handlers}
-      />
-    );
-    expect(screen.getByText("Actor verified")).toBeInTheDocument();
-
-    projection.steps.clear();
-
-    projection.actions.set("action-alpha", {
-      ...action,
-      postconditionResult: {
-        actionRequestId: "action-alpha",
-        disposition: "completed",
-        verified: true,
-        resource: {
-          userService: { userServiceId: "user-service-alpha" },
-        },
-      },
-    });
-    rerender(
-      <ChatActorControls
-        actionJourneys={journeys}
-        projection={projection}
-        {...handlers}
-      />
-    );
-    expect(screen.getByText("Actor verified")).toBeInTheDocument();
-  });
-
-  it("restores a verified browser action from actor-owned report facts", () => {
-    const projection = createChatActorProjection("conversation-alpha");
-    const request = {
-      schemaVersion: 4 as const,
-      actorId: "conversation-alpha",
-      originTurnId: "turn-alpha",
-      taskId: "task-alpha",
-      stepId: "step-connect",
-      actionRequestId: "action-alpha",
-      action: "service.connect" as const,
-      params: { catalogService: { serviceSlug: "api-github" } },
     };
-    projection.actions.set("action-alpha", {
+    projection.actions.set('action-alpha', {
       ...request,
       request,
       reports: [
         {
-          actionRequestId: "action-alpha",
-          originTurnId: "turn-alpha",
-          disposition: "completed",
-          resource: { userServiceId: "user-service-alpha" },
+          actionRequestId: 'action-alpha',
+          originTurnId: 'turn-alpha',
+          disposition: 'completed',
+          resource: { userService: { userServiceId: 'user-service-alpha' } },
         },
       ],
-      postconditionResult: {
-        actionRequestId: "action-alpha",
-        disposition: "completed",
-        verified: true,
-        resource: { userServiceId: "user-service-alpha" },
-      },
-    });
-
-    render(
-      <ChatActorControls projection={projection} {...callbacks()} />
-    );
-
-    expect(screen.getByText("Actor verified")).toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: "Open NyxID connection" })
-    ).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("api-github credential")).not.toBeInTheDocument();
-  });
-
-  it("reads browser journey state only from the matching conversation actor", () => {
-    const projection = createChatActorProjection("conversation-beta");
-    const request = {
-      schemaVersion: 4 as const,
-      actorId: "conversation-beta",
-      originTurnId: "turn-beta",
-      taskId: "task-beta",
-      stepId: "step-connect",
-      actionRequestId: "action-shared",
-      action: "service.connect" as const,
-      params: { catalogService: { serviceSlug: "api-github" } },
-    };
-    projection.actions.set(request.actionRequestId, {
-      ...request,
-      request,
-      reports: [],
       postconditionResult: null,
     });
-
-    render(
+    const handlers = callbacks();
+    const { rerender } = render(
       <ChatActorControls
         actionJourneys={
           new Map([
-            [
-              chatActionIdentityKey("conversation-alpha", "action-shared"),
-              { error: "Wrong conversation journey" },
-            ],
-            [
-              chatActionIdentityKey("conversation-beta", "action-shared"),
-              { error: "Current conversation journey" },
-            ],
+            [chatActionIdentityKey('conversation-alpha', 'action-alpha'), {}],
           ])
         }
         projection={projection}
-        {...callbacks()}
-      />
-    );
-
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      "Current conversation journey"
-    );
-    expect(screen.queryByText("Wrong conversation journey")).not.toBeInTheDocument();
-  });
-
-  it("disables a browser journey whose action identity conflicted", () => {
-    const projection = createChatActorProjection("conversation-alpha");
-    const request = {
-      schemaVersion: 4 as const,
-      actorId: "conversation-alpha",
-      originTurnId: "turn-alpha",
-      taskId: "task-alpha",
-      stepId: "step-connect",
-      actionRequestId: "action-alpha",
-      action: "service.connect" as const,
-      params: { catalogService: { serviceSlug: "api-github" } },
-    };
-    projection.actions.set(request.actionRequestId, {
-      ...request,
-      conflicted: true,
-      request,
-      reports: [],
-      postconditionResult: null,
-    });
-
-    render(<ChatActorControls projection={projection} {...callbacks()} />);
-
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      "Action identity conflict; this browser journey is disabled."
+        {...handlers}
+      />,
     );
     expect(
-      screen.queryByRole("button", { name: "Open NyxID connection" })
+      screen.getByText(/Reported; waiting for actor verification/),
+    ).toBeInTheDocument();
+    expect(screen.getByText('repo:read')).toBeInTheDocument();
+
+    const action = projection.actions.get('action-alpha');
+    if (!action) throw new Error('Missing action fixture.');
+    projection.actions.set('action-alpha', {
+      ...action,
+      postconditionResult: {
+        actionRequestId: 'action-alpha',
+        disposition: 'completed',
+        verified: true,
+        resource: { userService: { userServiceId: 'user-service-alpha' } },
+      },
+    });
+    rerender(<ChatActorControls projection={projection} {...handlers} />);
+    expect(screen.getByText('Actor verified')).toBeInTheDocument();
+  });
+
+  it('renders a committed reload summary without browser-cached action parameters', () => {
+    const projection = projectionFixture([]);
+    projection.actions.set('action-alpha', {
+      schemaVersion: 4,
+      actorId: 'conversation-alpha',
+      originTurnId: 'turn-alpha',
+      taskId: 'task-alpha',
+      stepId: 'step-connect',
+      actionRequestId: 'action-alpha',
+      action: 'service.connect',
+      reports: [],
+      postconditionResult: null,
+      request: null,
+    });
+    render(<ChatActorControls projection={projection} {...callbacks()} />);
+
+    expect(
+      screen.getByText('Waiting for the connection decision'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/current-state contract does not expose/),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Open NyxID connection' }),
     ).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("api-github credential")).not.toBeInTheDocument();
   });
 });
