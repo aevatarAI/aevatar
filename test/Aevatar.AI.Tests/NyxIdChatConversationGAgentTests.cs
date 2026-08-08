@@ -43,7 +43,7 @@ using Type = System.Type;
 
 namespace Aevatar.AI.Tests;
 
-public sealed class NyxIdChatConversationGAgentTests
+public sealed partial class NyxIdChatConversationGAgentTests
 {
     [Fact]
     public void ConversationCreateContract_ShouldCarryTypedFirstTurn()

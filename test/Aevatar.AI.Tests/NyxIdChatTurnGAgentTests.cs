@@ -25,7 +25,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.AI.Tests;
 
-public sealed class NyxIdChatTurnGAgentTests
+public sealed partial class NyxIdChatTurnGAgentTests
 {
     [Fact]
     public async Task DispatchSession_CancelReplacement_ShouldIsolateExecutionLeasesAndSessions()
