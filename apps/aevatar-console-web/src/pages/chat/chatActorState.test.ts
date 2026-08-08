@@ -78,6 +78,12 @@ function taskPlan(stepStatus: 'running' | 'failed' = 'running') {
           stalledAt:
             stepStatus === 'failed' ? undefined : '2026-08-08T00:02:30Z',
         },
+        approvalObservation: {
+          approvalRequestId: 'nyxid-approval-alpha',
+          decisionMode: 'grant',
+          receiptStatus: 'denied',
+          observedAt: '2026-08-08T00:02:31Z',
+        },
       },
     ],
   };
@@ -139,6 +145,12 @@ describe('chatActorState', () => {
         stalledAt: '2026-08-08T00:02:30Z',
       }),
     );
+    expect(reloaded.steps.get('step-alpha')?.approvalObservation).toEqual({
+      approvalRequestId: 'nyxid-approval-alpha',
+      decisionMode: 'grant',
+      receiptStatus: 'denied',
+      observedAt: '2026-08-08T00:02:31Z',
+    });
     expect(actorCan(reloaded, 'stop')).toBe(true);
     expect(reloaded.steps.get('step-alpha')?.availableActions).toEqual({
       retry: false,

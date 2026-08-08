@@ -75,8 +75,6 @@ export type ChatPendingApproval = JsonRecord & {
   target?: string;
   reversibility?: 'reversible' | 'irreversible' | 'unknown';
   grantBoundary?: 'within_grant' | 'nyxid_step_up';
-  nyxidRequestId?: string;
-  expiresAt?: string;
 };
 
 export type ChatServiceConnectActionRequest = {

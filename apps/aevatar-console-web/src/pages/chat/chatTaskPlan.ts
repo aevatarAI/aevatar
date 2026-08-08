@@ -90,6 +90,13 @@ export type ChatTaskOperation = {
   readonly stalledAt?: string;
 };
 
+export type ChatApprovalObservation = {
+  readonly approvalRequestId: string;
+  readonly decisionMode: 'unknown' | 'per_request' | 'grant';
+  readonly receiptStatus: 'approval_required' | 'denied';
+  readonly observedAt: string;
+};
+
 export type ChatActorStep = {
   readonly stepId: string;
   readonly order: number;
@@ -109,6 +116,7 @@ export type ChatActorStep = {
   readonly estimate?: { readonly kind: 'duration'; readonly seconds: number };
   readonly substeps: readonly ChatTaskSubstep[];
   readonly operation?: ChatTaskOperation | null;
+  readonly approvalObservation?: ChatApprovalObservation;
   readonly actionRequestId?: string;
   readonly approvalRequestId?: string;
   readonly failureCode?: string;
@@ -285,6 +293,11 @@ export function decodeChatTaskStep(input: unknown): ChatActorStep {
         seconds: safeInteger(estimateRecord.seconds, 'estimate.seconds', 0),
       }
     : undefined;
+  const approvalObservation =
+    value.approvalObservation === undefined ||
+    value.approvalObservation === null
+      ? undefined
+      : decodeApprovalObservation(value.approvalObservation);
   return {
     stepId: identity(value.stepId, 'stepId'),
     order: safeInteger(value.order, 'step.order', 0),
@@ -326,6 +339,7 @@ export function decodeChatTaskStep(input: unknown): ChatActorStep {
     ...(estimate ? { estimate } : {}),
     substeps: optionalArray(value.substeps).map(decodeSubstep),
     operation,
+    ...(approvalObservation ? { approvalObservation } : {}),
     ...(optionalIdentity(value.actionRequestId)
       ? { actionRequestId: optionalIdentity(value.actionRequestId) }
       : {}),
@@ -341,6 +355,31 @@ export function decodeChatTaskStep(input: unknown): ChatActorStep {
     ...(typeof value.safeToSkip === 'boolean'
       ? { safeToSkip: value.safeToSkip }
       : {}),
+  };
+}
+
+function decodeApprovalObservation(input: unknown): ChatApprovalObservation {
+  const value = record(input, 'step approval observation');
+  return {
+    approvalRequestId: identity(
+      value.approvalRequestId,
+      'approvalObservation.approvalRequestId',
+    ),
+    decisionMode: closed(
+      value.decisionMode,
+      ['unknown', 'per_request', 'grant'] as const,
+      'approvalObservation.decisionMode',
+    ),
+    receiptStatus: closed(
+      value.receiptStatus,
+      ['approval_required', 'denied'] as const,
+      'approvalObservation.receiptStatus',
+    ),
+    observedAt: boundedString(
+      value.observedAt,
+      'approvalObservation.observedAt',
+      128,
+    ),
   };
 }
 

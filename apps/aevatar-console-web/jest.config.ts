@@ -82,6 +82,7 @@ const nodeProjectConfig = createProjectConfig('node');
 const nodeTestFiles = [
   '<rootDir>/src/pages/MissionControl/runtimeAdapter.test.ts',
   '<rootDir>/src/pages/actors/actorPresentation.test.ts',
+  '<rootDir>/src/pages/chat/chatTaskPlan.test.ts',
   '<rootDir>/src/pages/governance/components/governanceQuery.test.ts',
   '<rootDir>/src/pages/runs/runEventPresentation.test.ts',
   '<rootDir>/src/pages/scopes/components/resolvedScope.test.ts',

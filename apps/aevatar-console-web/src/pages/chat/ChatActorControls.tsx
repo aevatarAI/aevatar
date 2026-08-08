@@ -12,13 +12,16 @@ import type {
   ChatActionSummary,
   ChatActorProjection,
   ChatActorStep,
-  ChatPendingApproval,
   ChatPendingInput,
   ChatServiceConnectActionRequest,
 } from './chatActorState';
 import { chatActionIdentityKey } from './chatActorState';
 import type { ChatInputAnswer } from './chatApi';
-import type { ChatExternalEffect, ChatPlanGate } from './chatTaskPlan';
+import type {
+  ChatApprovalObservation,
+  ChatExternalEffect,
+  ChatPlanGate,
+} from './chatTaskPlan';
 
 type ActionReport = {
   actionRequestId: string;
@@ -88,15 +91,9 @@ export function ChatActorControls({
     (action) => action.action === 'service.connect',
   );
   const terminal = projection ? latestTerminalFact(projection) : null;
-  const pendingApproval = projection?.pendingApproval;
-  const visibleApproval =
-    pendingApproval && shouldRenderApproval(pendingApproval)
-      ? pendingApproval
-      : null;
   const hasControls = Boolean(
     projection?.task ||
       projection?.pendingInput ||
-      visibleApproval ||
       canStop ||
       active ||
       actions.length ||
@@ -170,40 +167,6 @@ export function ChatActorControls({
             >
               {t('pages.chat.actorControls.submitAnswer', 'Submit answer')}
             </Button>
-          ) : null}
-        </ControlCard>
-      ) : null}
-
-      {visibleApproval ? (
-        <ControlCard
-          title={t('pages.chat.actorControls.nyxIdDecision', 'NyxID decision')}
-        >
-          <div>
-            {visibleApproval.action || visibleApproval.toolName}
-            {visibleApproval.target ? ` · ${visibleApproval.target}` : ''}
-          </div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            <Tag>{String(visibleApproval.reversibility || 'unknown')}</Tag>
-            <Tag>
-              {t(
-                'pages.chat.actorControls.nyxIdRequestObserved',
-                'NyxID request observed',
-              )}
-            </Tag>
-          </div>
-          <div style={{ color: '#64748b', fontSize: 12 }}>
-            {t(
-              'pages.chat.actorControls.nyxIdDecisionOnly',
-              'This decision is owned by NyxID. Studio only shows committed facts.',
-            )}
-          </div>
-          <div style={{ color: '#475569', fontSize: 11 }}>
-            {visibleApproval.nyxidRequestId}
-          </div>
-          {visibleApproval.expiresAt ? (
-            <div style={{ color: '#64748b', fontSize: 11 }}>
-              {visibleApproval.expiresAt}
-            </div>
           ) : null}
         </ControlCard>
       ) : null}
@@ -562,6 +525,11 @@ function TaskPlanLedger({
                       ) : null}
                     </>
                   ) : null}
+                  {step.approvalObservation ? (
+                    <ApprovalObservation
+                      observation={step.approvalObservation}
+                    />
+                  ) : null}
                   {step.substeps.length ? (
                     <ul
                       style={{
@@ -783,8 +751,81 @@ function isActorReportedStalled(step: ChatActorStep): boolean {
   );
 }
 
-function shouldRenderApproval(approval: ChatPendingApproval): boolean {
-  return Boolean(approval.nyxidRequestId);
+function ApprovalObservation({
+  observation,
+}: {
+  observation: ChatApprovalObservation;
+}): React.ReactElement {
+  const facts = [
+    [
+      t('pages.chat.actorControls.approvalRequestId', 'Request ID'),
+      observation.approvalRequestId,
+    ],
+    [
+      t('pages.chat.actorControls.approvalDecisionMode', 'Decision mode'),
+      observation.decisionMode,
+    ],
+    [
+      t('pages.chat.actorControls.approvalReceiptStatus', 'Receipt status'),
+      observation.receiptStatus,
+    ],
+    [
+      t('pages.chat.actorControls.approvalObservedAt', 'Observed at'),
+      observation.observedAt,
+    ],
+  ] as const;
+  return (
+    <section
+      aria-label={t(
+        'pages.chat.actorControls.approvalObservation',
+        'NyxID approval observation',
+      )}
+      style={{
+        background: '#f8fafc',
+        borderLeft: '3px solid #64748b',
+        marginTop: 8,
+        padding: '7px 9px',
+      }}
+    >
+      <div style={{ alignItems: 'center', display: 'flex', gap: 6 }}>
+        <strong style={{ color: '#334155', fontSize: 11 }}>
+          {t(
+            'pages.chat.actorControls.nyxIdRequestObserved',
+            'NyxID request observed',
+          )}
+        </strong>
+        <Tag
+          color={observation.receiptStatus === 'denied' ? 'error' : 'warning'}
+        >
+          {observation.receiptStatus}
+        </Tag>
+      </div>
+      <dl
+        style={{
+          display: 'grid',
+          fontSize: 11,
+          gap: '3px 10px',
+          gridTemplateColumns: 'max-content minmax(0, 1fr)',
+          margin: '6px 0 0',
+        }}
+      >
+        {facts.map(([label, value]) => (
+          <React.Fragment key={label}>
+            <dt style={{ color: '#64748b' }}>{label}</dt>
+            <dd
+              style={{
+                color: '#334155',
+                margin: 0,
+                overflowWrap: 'anywhere',
+              }}
+            >
+              {value}
+            </dd>
+          </React.Fragment>
+        ))}
+      </dl>
+    </section>
+  );
 }
 
 function ControlCard({

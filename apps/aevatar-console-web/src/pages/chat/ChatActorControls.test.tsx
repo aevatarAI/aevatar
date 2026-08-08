@@ -1,4 +1,10 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from '@testing-library/react';
 import React from 'react';
 import { ChatActorControls } from './ChatActorControls';
 import {
@@ -227,33 +233,41 @@ describe('ChatActorControls', () => {
     ).not.toBeInTheDocument();
   });
 
-  it('shows only typed Tier-B facts after NyxID returns a request identity', () => {
-    const projection = projectionFixture();
-    projection.pendingApproval = {
-      approvalRequestId: 'approval-alpha',
-      toolName: 'repository_update',
-      action: 'Update repository',
-      target: 'repo-alpha',
-      grantBoundary: 'nyxid_step_up',
-      reversibility: 'reversible',
-    };
+  it('shows a Tier-B receipt only inside its step after the observation exists', () => {
     const handlers = callbacks();
     const { rerender } = render(
-      <ChatActorControls projection={projection} {...handlers} />,
+      <ChatActorControls projection={projectionFixture()} {...handlers} />,
     );
     expect(
-      screen.queryByRole('button', { name: 'Approve' }),
+      screen.queryByRole('region', { name: 'NyxID approval observation' }),
     ).not.toBeInTheDocument();
 
-    projection.pendingApproval = {
-      ...projection.pendingApproval,
-      nyxidRequestId: 'nyxid-approval-alpha',
-      expiresAt: '2026-08-08T00:10:00Z',
-    };
-    rerender(<ChatActorControls projection={projection} {...handlers} />);
-    expect(screen.getByText('NyxID request observed')).toBeInTheDocument();
-    expect(screen.getByText('nyxid-approval-alpha')).toBeInTheDocument();
-    expect(screen.getByText('2026-08-08T00:10:00Z')).toBeInTheDocument();
+    const observedStep = stepFixture({
+      approvalObservation: {
+        approvalRequestId: 'nyxid-approval-alpha',
+        decisionMode: 'per_request',
+        receiptStatus: 'approval_required',
+        observedAt: '2026-08-08T00:10:00Z',
+      },
+    });
+    rerender(
+      <ChatActorControls
+        projection={projectionFixture([observedStep])}
+        {...handlers}
+      />,
+    );
+    const step = screen
+      .getByText('Inspect the connected repository')
+      .closest('li');
+    if (!step) throw new Error('Missing observed task step.');
+    const observation = within(step).getByRole('region', {
+      name: 'NyxID approval observation',
+    });
+    expect(observation).toHaveTextContent('NyxID request observed');
+    expect(observation).toHaveTextContent('nyxid-approval-alpha');
+    expect(observation).toHaveTextContent('per_request');
+    expect(observation).toHaveTextContent('approval_required');
+    expect(observation).toHaveTextContent('2026-08-08T00:10:00Z');
     expect(
       screen.queryByRole('button', { name: 'Approve' }),
     ).not.toBeInTheDocument();
