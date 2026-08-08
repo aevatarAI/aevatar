@@ -91,7 +91,7 @@ Delegate a natural-language task to Codex. Use `managed_sandbox` for the fixed i
 In an unprofiled turn where this broad tool is present, discover live proxyable services before choosing a slug, then make authenticated requests through NyxID.
 
 ### NyxID connected-service tools
-When present, `nyxid_service_inventory`, `nyxid_service_update`, `nyxid_service_route`, `nyxid_service_delete`, `nyxid_service_request`, and `nyxid_service_operation__*` are exact-instance capabilities. Select only a `user_service_id` enumerated by that tool's schema. Never substitute a display slug, catalog id, label, endpoint id, or remembered value.
+When present, `nyxid_service_inventory` is a read-only current-caller inventory capability. Request-local `nyxop_*` tools are separately admitted exact connected-service operations; use only the arguments in each tool's frozen schema. Never substitute a display slug, catalog id, label, endpoint id, remembered value, or inventory result for an operation selector.
 For a read-only request asking which services the caller already has connected, route the read through the catalog/service-inspection path: first call `use_skill(skill="nyxid-service-discovery")`, then call `nyxid_service_inventory`. This route establishes current sender-specific service facts; execution tools only run supplied work and cannot establish that inventory. The loaded skill supplies current NyxID semantics; treat the typed inventory result as the authority for the current sender. If inventory access fails, report a temporary read failure without claiming that the binding is absent or recommending `/init` unless the binding is explicitly missing or revoked.
 
 ### `nyxid_require_service` — Report a missing connection

@@ -749,9 +749,12 @@ public sealed class MainnetHostCompositionTests
             .Subject;
         nyxIdChatToolSources.Select(static source => source.GetType()).Should().Equal(
             typeof(NyxIdAssistantToolSource),
+            typeof(NyxIdConnectedServiceToolSource),
             typeof(AskUserAgentToolSource),
             typeof(SkillsAgentToolSource));
         nyxIdChatToolSources.Should().NotContain(source => source is NyxIdAgentToolSource);
+        nyxIdChatToolSources.Should().NotContain(source =>
+            source is NyxIdConnectedServiceInventoryToolSource);
         nyxIdChatToolSources.Should().NotContain(source => source is WebAgentToolSource);
         var scheduleQueries = app.Services.GetRequiredService<IStudioMemberAutomationQueryPort>();
         var scheduleMutations = app.Services.GetRequiredService<IStudioMemberWorkflowSchedulePort>();
@@ -785,11 +788,14 @@ public sealed class MainnetHostCompositionTests
         nyxIdChatProfile.IsSuccess.Should().BeTrue(nyxIdChatProfile.Error?.Message);
         nyxIdChatProfile.Sources.Select(static source => source.GetType()).Should().Equal(
             typeof(NyxIdAssistantToolSource),
+            typeof(NyxIdConnectedServiceToolSource),
             typeof(AskUserAgentToolSource),
             typeof(SkillsAgentToolSource));
         nyxIdChatProfile.Sources.Should().NotContain(source => source is NyxIdAgentToolSource);
-        nyxIdChatProfile.Sources.Should().NotContain(source =>
+        nyxIdChatProfile.Sources.Should().ContainSingle(source =>
             source is NyxIdConnectedServiceToolSource);
+        nyxIdChatProfile.Sources.Should().NotContain(source =>
+            source is NyxIdConnectedServiceInventoryToolSource);
         nyxIdChatProfile.Sources.Should().NotContain(source => source is WebAgentToolSource);
         var nyxIdChatInputTools = await nyxIdChatProfile.Sources
             .OfType<AskUserAgentToolSource>()

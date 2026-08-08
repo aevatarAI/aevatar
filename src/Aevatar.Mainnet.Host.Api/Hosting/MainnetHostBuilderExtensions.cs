@@ -453,7 +453,7 @@ public static class MainnetHostBuilderExtensions
             options.AddToolSet(
                 ToolSetNames.NyxIdConnectedServices,
                 [CreateToolSource<NyxIdConnectedServiceToolSource>],
-                "NyxID connected-service operations explicitly marked x-aevatar-tool, registered as individual tools.");
+                "NyxID request-local operations admitted from the exact MCP and connected-service inventory intersection.");
             options.AddToolSet(
                 AgentProfilePolicies.NyxIdChatRouteToolSet,
                 [

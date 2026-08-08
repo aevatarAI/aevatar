@@ -139,7 +139,10 @@ public class NyxIdChatSystemPromptTests
 
         prompt.Should().Contain("final request's tool schemas are the only capability authority");
         prompt.Should().Contain("nyxid_service_inventory");
-        prompt.Should().Contain("nyxid_service_operation__");
+        prompt.Should().Contain("nyxop_*");
+        prompt.Should().NotContain("nyxid_service_update")
+            .And.NotContain("nyxid_service_route")
+            .And.NotContain("nyxid_service_delete");
         prompt.Should().Contain("unprofiled turn");
         prompt.Should().Contain("They do not add tools or expand the authority expressed by the final tool schemas");
     }

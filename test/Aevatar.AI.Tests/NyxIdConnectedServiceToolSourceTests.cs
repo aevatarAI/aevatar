@@ -138,6 +138,13 @@ public class NyxIdConnectedServiceToolSourceTests
         var tool = tools.Should().ContainSingle().Subject;
         tool.Name.Should().MatchRegex("^nyxop_[0-9a-f]{48}$");
         tool.Name.Should().NotContain("usvc-alpha").And.NotContain("endpoint-alpha");
+        tools.Select(static candidate => candidate.Name).Should().NotContain(
+        [
+            "nyxid_service_inventory",
+            "nyxid_service_update",
+            "nyxid_service_route",
+            "nyxid_service_delete",
+        ]);
         var owner = tool.Should().BeAssignableTo<IAgentToolOperationAdmissionOwner>().Subject;
         owner.OperationAdmission.ServiceInstanceId.Should().Be("usvc-alpha");
         owner.OperationAdmission.Identity.Should().Be(
@@ -576,6 +583,9 @@ public class NyxIdConnectedServiceToolSourceTests
 
         using var document = JsonDocument.Parse(result);
         document.RootElement.GetProperty("instances").EnumerateArray().Should().BeEmpty();
+        var receipt = inventory.CreateResultReceipt("call-empty", inventory.Name, "{}", result);
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
     }
 
     [Fact]
@@ -612,6 +622,11 @@ public class NyxIdConnectedServiceToolSourceTests
         document.RootElement.GetProperty("error").GetString()
             .Should().Be("inventory_query_unavailable");
         result.Should().NotContain(secret);
+        var receipt = inventory.CreateResultReceipt("call-error", inventory.Name, "{}", result);
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ErrorCode.Should().Be("NYXID_SERVICE_INVENTORY_FAILED");
+        receipt.ResultJson.Should().NotContain(secret);
         handler.DiscoveryRequests.Should().Be(1);
         logger.Entries.Should().ContainSingle()
             .Which.Exception.Should().BeOfType<InvalidOperationException>()

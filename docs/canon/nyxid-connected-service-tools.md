@@ -52,20 +52,9 @@ Aevatar 记录真实 observation time 作为 freshness fact，但不把时间戳
 
 ## 3. 普通 current-turn 工具
 
-成功发现 exact instance 后只生成四个 request-local 管理工具，参数和结果由 `nyxid_service_tools.proto` 定义：
+NyxID Assistant 的 management Class-R 由 `NyxIdAssistantToolSource` 提供 narrow typed REST reads。connected-service exact inventory 是其中独立的只读子边界：`nyxid_service_inventory` 由 `NyxIdConnectedServiceInventoryToolSource` 或 channel sender-authority wrapper 提供，只接受空参数，并在真正调用时读取当前 caller 的 exact `/keys` inventory。它不与 Class-P operation source 合并，也不把 inventory ID 当成 operation selector。
 
-| 工具 | 语义 | 审批 |
-|---|---|---|
-| `nyxid_service_inventory` | 列出或查看本次请求已冻结的 exact 实例 | 只读，不审批 |
-| `nyxid_service_update` | 更新一个 exact 实例的 label、endpoint、OpenAPI override 或 active 状态 | 必须审批 |
-| `nyxid_service_route` | 把一个 exact 实例设为 direct 或指定 node | 必须审批 |
-| `nyxid_service_delete` | 删除一个 exact 实例 | destructive，必须审批 |
-
-上表描述 shared connected-service control-plane adapter，不表示四个工具都属于 Milestone 40 的 NyxID Assistant route。按 ADR-0048，Assistant 的 R 类只读；`nyxid_service_update`、`nyxid_service_route` 与 `nyxid_service_delete` 可保留给显式授权的管理 surface，但不得作为 Assistant Class-A intent 的第二条执行机制。Assistant action 只从 pinned registry 解析，Milestone 40 只有 `service.connect` 可执行；其余 action 在完整 artifact 与 owner scope 到位前 fail closed。
-
-每个需要选实例的 schema 都把 `user_service_id` 收紧为本次 request-local 实例枚举。inventory 允许省略 ID 以列出全部实例；update、route、delete 必须提供枚举中的 exact ID。NyxID 原始 mutation response 只放在 typed result 的 `response_json`，不承担内部控制语义。
-
-`nyxid_service_update.openapi_spec_url` 复用 NyxID 已发布的 exact UserService update wire：省略表示保持不变，非空字符串设置 override，空字符串 `""` 清除 override。设置或清除只改变 NyxID 权威的 effective contract，不让 Aevatar 成为 OpenAPI owner。
+历史 `nyxid_service_update`、`nyxid_service_route` 与 `nyxid_service_delete` 不再由 connected-service tool source 生成。它们与 ADR-0048 的 Class-A action ownership 冲突，且 #3299 的 pinned chat allowlist 明确不允许这类 mutation 因 DI 注册进入 Assistant。需要管理 mutation 的产品 surface 必须拥有独立、显式的 authorization contract，不能复用 Class-R inventory 或 Class-P operation admission。
 
 NyxID `contract_version=1.0` 没有发布独立的 typed current-turn exposure policy。Milestone 40 因此采用 Aevatar-owned、server-sealed closed policy，而不是把 MCP catalog 整体当成授权：只有同时存在于本次 active、credential-allowed exact inventory 的 UserService 才进入候选；`GET/HEAD/OPTIONS` 作为 safe read 暴露，`POST/PUT/PATCH` 只作为必须经过统一 approval port 的 non-destructive effect 暴露，`DELETE`、generic proxy、unknown risk 和 policy/schema contradiction 全部 fail closed。生产路径仍不存在 model-visible generic proxy、raw method/path selector 或 raw OpenAPI parser；workflow admission 通过也不能自动扩大普通 turn exposure。
 
@@ -146,7 +135,7 @@ proxy request 只接受 relative path，拒绝 absolute URL、fragment、query-i
 
 ## 6. 请求期能力与 channel inventory
 
-shared 管理 adapter set 注册为 `nyxid.connected_services`（`ToolSetNames.NyxIdConnectedServices`），但注册不等于 NyxID Assistant route 激活。Studio 每个 LLM turn 都在当前 caller token 与 typed context 下分别 resolve R/A route tools 与 P admitted operation tools；结果只进入该请求的 `AgentProfileTurnCatalog` 与最终 `LLMRequest.Tools`。unknown set、discovery failure 或 duplicate name 对本请求 fail closed，不写 actor/global catalog，也不跨 caller 缓存。Workflow operation authoring 使用独立的 structured capability list/readiness tools。
+Class-P dynamic operation adapter set 注册为 `nyxid.connected_services`（`ToolSetNames.NyxIdConnectedServices`），但注册不等于 NyxID Assistant route 激活。Studio 每个 LLM turn 都在当前 caller token 与 typed context 下分别 resolve R/A route tools 与 P admitted operation tools；结果只进入该请求的 `AgentProfileTurnCatalog` 与最终 `LLMRequest.Tools`。unknown set、discovery failure 或 duplicate name 对本请求 fail closed，不写 actor/global catalog，也不跨 caller 缓存。Workflow operation authoring 使用独立的 structured capability list/readiness tools。
 
 Mainnet 不得假设 `agent-profile.nyxid-chat` 自动合并 `workspace.default` 与完整 `nyxid.connected_services`。R/A 的 route set 由 profile binding 显式激活；P operation 则只能由本次请求的 exact MCP observation 生成，并以 `user_service_id + endpoint_id + catalog_digest` 完成 admission 后注入。raw `nyxid_proxy` 自声明不适用于 NyxID Assistant，因此 profiled 与 unprofiled NyxID Chat 都不会把它提供给模型。该 surface 限制不删除 shared proxy，也不改变 workflow、Lark 或其他拥有独立 admission contract 的调用方。
 
@@ -184,8 +173,8 @@ NyxID 当前 refresh contract 还有两项 provider-owned 限制，Aevatar 不�
 - `src/Aevatar.AI.ToolProviders.NyxId/ConnectedServices/NyxIdMcpOperationCatalog.cs`
 - `src/Aevatar.AI.ToolProviders.NyxId/ConnectedServices/NyxIdOperationAdmissionProofBuilder.cs`
 - `src/Aevatar.AI.ToolProviders.NyxId/ConnectedServices/NyxIdOperationHeaderPolicy.cs`
+- `src/Aevatar.AI.ToolProviders.NyxId/ConnectedServices/NyxIdServiceInventoryReceiptFactory.cs`
 - `src/Aevatar.AI.ToolProviders.NyxId/ConnectedServices/NyxIdServiceInstanceClient.cs`
-- `src/Aevatar.AI.ToolProviders.NyxId/ConnectedServices/NyxIdServiceTools.cs`
 - `src/Aevatar.AI.ToolProviders.NyxId/ConnectedServices/nyxid_service_tools.proto`
 - `src/Aevatar.AI.ToolProviders.NyxId/NyxIdConnectedServiceToolSource.cs`
 - `src/Aevatar.AI.ToolProviders.NyxId/NyxIdExternalWorkflowCapabilitySource.cs`
