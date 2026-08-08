@@ -118,6 +118,7 @@ message InvocationToolResult {
   string endpoint_id = 10;
   InvocationWaitMode wait = 11;
   aevatar.ai.WorkflowRunBackgroundDeliveryReceipt workflow_run_delivery = 12;
+  aevatar.ai.AgentToolReceiptMutationStage mutation_stage = 13;
 }
 
 message RunEventSummary {

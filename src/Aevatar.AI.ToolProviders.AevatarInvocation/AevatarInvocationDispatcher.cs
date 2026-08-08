@@ -28,6 +28,7 @@ public sealed class AevatarInvocationDispatcher
     private const string DirectGAgentPublisherId = "aevatar.tools.invoke_gagent";
     private const string DeletedGAgentActorNameAlias = "actor_name";
     private const string WorkflowBackgroundDeliveryBindingDegradedCode = "binding_degraded";
+    private const string WorkflowStartReadModelUnavailableCode = "workflow_start_read_model_unavailable";
     private const string DefaultMemberEndpointId = "chat";
     private const string ChannelWorkflowDeliveryUnavailableMessage =
         "This channel bot is not provisioned for workflow result delivery, so the workflow was not started. Open /channels, select this registration, and choose Repair workflow replies. This repairs Aevatar's workflow result delivery binding; provider webhook settings usually do not need changes. You can also start the workflow from a surface that can observe its result.";
@@ -86,6 +87,7 @@ public sealed class AevatarInvocationDispatcher
     private readonly IServiceRunQueryPort _serviceRunQueryPort;
     private readonly IGAgentRunTerminalQueryPort _terminalQueryPort;
     private readonly IWorkflowExecutionQueryApplicationService _workflowQueryService;
+    private readonly WorkflowStartReadModelObserver _workflowStartReadModelObserver;
     private readonly IWorkflowRunBackgroundDeliveryRegistrationPort? _workflowRunDeliveryRegistrationPort;
     private readonly IScopeWorkflowQueryPort? _scopeWorkflowQueryPort;
     private readonly ILogger<AevatarInvocationDispatcher> _logger;
@@ -105,7 +107,8 @@ public sealed class AevatarInvocationDispatcher
         IWorkflowExecutionQueryApplicationService workflowQueryService,
         IWorkflowRunBackgroundDeliveryRegistrationPort? workflowRunDeliveryRegistrationPort = null,
         ILogger<AevatarInvocationDispatcher>? logger = null,
-        IScopeWorkflowQueryPort? scopeWorkflowQueryPort = null)
+        IScopeWorkflowQueryPort? scopeWorkflowQueryPort = null,
+        TimeSpan? workflowStartObservationTimeout = null)
     {
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
         _actorRegistryQueryPort = actorRegistryQueryPort ?? throw new ArgumentNullException(nameof(actorRegistryQueryPort));
@@ -119,6 +122,9 @@ public sealed class AevatarInvocationDispatcher
         _serviceRunQueryPort = serviceRunQueryPort ?? throw new ArgumentNullException(nameof(serviceRunQueryPort));
         _terminalQueryPort = terminalQueryPort ?? throw new ArgumentNullException(nameof(terminalQueryPort));
         _workflowQueryService = workflowQueryService ?? throw new ArgumentNullException(nameof(workflowQueryService));
+        _workflowStartReadModelObserver = new WorkflowStartReadModelObserver(
+            _workflowQueryService,
+            workflowStartObservationTimeout);
         _workflowRunDeliveryRegistrationPort = workflowRunDeliveryRegistrationPort;
         _scopeWorkflowQueryPort = scopeWorkflowQueryPort;
         _logger = logger ?? NullLogger<AevatarInvocationDispatcher>.Instance;
@@ -717,6 +723,24 @@ public sealed class AevatarInvocationDispatcher
                 .ConfigureAwait(false);
         }
 
+        var mutationStage = await _workflowStartReadModelObserver.ObserveAsync(
+                scopeId,
+                receipt.ActorId,
+                receipt.CommandId,
+                ct)
+            .ConfigureAwait(false)
+            ? AgentToolReceiptMutationStage.ReadModelObserved
+            : AgentToolReceiptMutationStage.Accepted;
+        if (mutationStage != AgentToolReceiptMutationStage.ReadModelObserved)
+        {
+            _logger.LogWarning(
+                "Workflow start canonical read-model observation was unavailable: code={Code} scopeId={ScopeId} actorId={ActorId} commandId={CommandId}",
+                WorkflowStartReadModelUnavailableCode,
+                scopeId,
+                receipt.ActorId,
+                receipt.CommandId);
+        }
+
         return ToChatRunRequest(chatRunRequest, new InvocationToolResult
         {
             RunId = receipt.ActorId,
@@ -727,6 +751,7 @@ public sealed class AevatarInvocationDispatcher
             CorrelationId = receipt.CorrelationId,
             Wait = wait,
             WorkflowRunDelivery = workflowRunDeliveryReceipt,
+            MutationStage = mutationStage,
         }, scopeId);
     }
 
@@ -833,6 +858,7 @@ public sealed class AevatarInvocationDispatcher
             CommandId = commandId,
             CorrelationId = commandId,
             Wait = wait,
+            MutationStage = AgentToolReceiptMutationStage.Accepted,
         }, scope.ScopeId);
     }
 

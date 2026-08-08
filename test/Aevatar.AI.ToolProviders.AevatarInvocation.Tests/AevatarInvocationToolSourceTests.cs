@@ -3108,6 +3108,164 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
+    public async Task StartWorkflow_CreateResultReceipt_WhenCanonicalRunWasObserved_ShouldPreserveTypedStage()
+    {
+        var harness = new Harness();
+        var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
+        const string result = """
+            {
+              "run_id": "workflow-actor",
+              "status": "accepted",
+              "actor_id": "workflow-actor",
+              "command_id": "workflow-command",
+              "mutation_stage": "read_model_observed"
+            }
+            """;
+
+        var receipt = tool.CreateResultReceipt(
+            "call-workflow-observed",
+            tool.Name,
+            "{}",
+            result);
+
+        receipt.Should().NotBeNull();
+        receipt!.Effect.Should().Be(AgentToolReceiptEffect.Mutating);
+        receipt.MutationStage.Should().Be(AgentToolReceiptMutationStage.ReadModelObserved);
+        receipt.SubjectKind.Should().Be(AevatarInvocationReceiptJson.InvocationRunSubjectKind);
+        receipt.SubjectId.Should().Be("workflow-actor");
+    }
+
+    [Fact]
+    public async Task StartWorkflow_CreateResultReceipt_WhenOnlyDispatchWasAccepted_ShouldNotClaimObservation()
+    {
+        var harness = new Harness();
+        var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
+        const string result = """
+            {
+              "run_id": "workflow-actor",
+              "status": "accepted",
+              "actor_id": "workflow-actor",
+              "command_id": "workflow-command",
+              "mutation_stage": "accepted"
+            }
+            """;
+
+        var receipt = tool.CreateResultReceipt(
+            "call-workflow-accepted",
+            tool.Name,
+            "{}",
+            result);
+
+        receipt.Should().NotBeNull();
+        receipt!.Effect.Should().Be(AgentToolReceiptEffect.Mutating);
+        receipt.MutationStage.Should().Be(AgentToolReceiptMutationStage.Accepted);
+        receipt.MutationStage.Should().NotBe(AgentToolReceiptMutationStage.ReadModelObserved);
+    }
+
+    [Fact]
+    public async Task StartWorkflow_WhenExactCanonicalRunIsVisible_ShouldReturnObservedReceipt()
+    {
+        var harness = new Harness();
+        harness.WorkflowQuery.Snapshot = new WorkflowActorSnapshot
+        {
+            ScopeId = "scope-1",
+            ActorId = "workflow-actor",
+            LastCommandId = "workflow-command",
+            StateVersion = 1,
+        };
+        var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
+
+        using var _ = PushContext(
+            callId: "call-workflow-observation",
+            channelPlatform: null,
+            channelRegistrationScopeId: null,
+            durableReplyCredentialRef: null);
+        var output = await tool.ExecuteAsync("""
+            {
+              "workflow_id": "wf-main",
+              "inputs": { "prompt": "run workflow" },
+              "wait": "ack"
+            }
+            """);
+        var receipt = tool.CreateResultReceipt(
+            "call-workflow-observation",
+            tool.Name,
+            "{}",
+            output);
+
+        Read(output).GetProperty("mutation_stage").GetString().Should().Be("read_model_observed");
+        harness.WorkflowQuery.LastCurrentStateActorId.Should().Be("workflow-actor");
+        receipt.Should().NotBeNull();
+        receipt!.MutationStage.Should().Be(AgentToolReceiptMutationStage.ReadModelObserved);
+    }
+
+    [Fact]
+    public async Task WorkflowStartReadModelObserver_WhenAcceptedRunIsNotVisible_ShouldRemainUnobserved()
+    {
+        var harness = new Harness();
+        var observer = new WorkflowStartReadModelObserver(
+            harness.WorkflowQuery,
+            observationTimeout: TimeSpan.Zero);
+
+        var observed = await observer.ObserveAsync(
+            "scope-1",
+            "workflow-actor",
+            "workflow-command",
+            CancellationToken.None);
+
+        observed.Should().BeFalse();
+        harness.WorkflowQuery.LastCurrentStateActorId.Should().Be("workflow-actor");
+    }
+
+    [Fact]
+    public async Task WorkflowStartReadModelObserver_WhenSnapshotIsStale_ShouldRemainUnobserved()
+    {
+        var harness = new Harness();
+        harness.WorkflowQuery.Snapshot = new WorkflowActorSnapshot
+        {
+            ScopeId = "scope-1",
+            ActorId = "workflow-actor",
+            LastCommandId = "older-command",
+            StateVersion = 9,
+        };
+        var observer = new WorkflowStartReadModelObserver(
+            harness.WorkflowQuery,
+            observationTimeout: TimeSpan.Zero);
+
+        var observed = await observer.ObserveAsync(
+            "scope-1",
+            "workflow-actor",
+            "workflow-command",
+            CancellationToken.None);
+
+        observed.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task WorkflowStartReadModelObserver_WhenExactCommittedSnapshotIsVisible_ShouldObserve()
+    {
+        var harness = new Harness();
+        harness.WorkflowQuery.Snapshot = new WorkflowActorSnapshot
+        {
+            ScopeId = "scope-1",
+            ActorId = "workflow-actor",
+            LastCommandId = "workflow-command",
+            StateVersion = 9,
+        };
+        var observer = new WorkflowStartReadModelObserver(
+            harness.WorkflowQuery,
+            observationTimeout: TimeSpan.Zero);
+
+        var observed = await observer.ObserveAsync(
+            "scope-1",
+            "workflow-actor",
+            "workflow-command",
+            CancellationToken.None);
+
+        observed.Should().BeTrue();
+    }
+
+    [Fact]
     public async Task StartWorkflow_WhenManagedRuntimeExists_ShouldPopulateInputFileRefsFromAmbientRefs()
     {
         var harness = new Harness();
@@ -4615,7 +4773,8 @@ public sealed class AevatarInvocationToolSourceTests
                 TerminalQuery,
                 WorkflowQuery,
                 withWorkflowRunDeliveryRegistrationPort ? WorkflowRunDelivery : null,
-                scopeWorkflowQueryPort: ScopeWorkflowQuery);
+                scopeWorkflowQueryPort: ScopeWorkflowQuery,
+                workflowStartObservationTimeout: TimeSpan.Zero);
 
         public void ConfigureServiceTarget(
             ServiceImplementationKind implementationKind,
