@@ -49,7 +49,7 @@ public sealed class AgentToolReceiptContractTests
                 (19, "provider_resource_id"),
                 (20, "nyx_id_approval_decision_mode"));
 
-        ((int)NyxIdApprovalDecisionMode.Unknown).Should().Be(0);
+        ((int)NyxIdApprovalDecisionMode.Unspecified).Should().Be(0);
         ((int)NyxIdApprovalDecisionMode.PerRequest).Should().Be(1);
         ((int)NyxIdApprovalDecisionMode.Grant).Should().Be(2);
 

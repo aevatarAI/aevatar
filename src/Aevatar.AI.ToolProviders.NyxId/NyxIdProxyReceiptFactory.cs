@@ -118,7 +118,7 @@ internal static class NyxIdProxyReceiptFactory
         {
             "per_request" => NyxIdApprovalDecisionMode.PerRequest,
             "grant" => NyxIdApprovalDecisionMode.Grant,
-            _ => NyxIdApprovalDecisionMode.Unknown,
+            _ => NyxIdApprovalDecisionMode.Unspecified,
         };
 
     public static AgentToolReceipt? CreateSuccess(

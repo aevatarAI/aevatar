@@ -575,7 +575,7 @@ public sealed class NyxIdChatTaskLifecycleTests
 
     [Theory]
     [InlineData(AgentToolReceiptStatus.Denied, NyxIdApprovalDecisionMode.Grant, true)]
-    [InlineData(AgentToolReceiptStatus.Error, NyxIdApprovalDecisionMode.Unknown, false)]
+    [InlineData(AgentToolReceiptStatus.Error, NyxIdApprovalDecisionMode.Unspecified, false)]
     public void ConnectedServiceReceipt_ShouldPersistOnlyTypedPostReturnApprovalFacts(
         AgentToolReceiptStatus receiptStatus,
         NyxIdApprovalDecisionMode decisionMode,

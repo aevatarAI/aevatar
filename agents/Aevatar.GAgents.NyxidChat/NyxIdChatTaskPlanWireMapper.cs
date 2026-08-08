@@ -431,7 +431,7 @@ internal static class NyxIdChatTaskPlanWireMapper
         {
             "per_request" => NyxIdApprovalDecisionMode.PerRequest,
             "grant" => NyxIdApprovalDecisionMode.Grant,
-            _ => NyxIdApprovalDecisionMode.Unknown,
+            _ => NyxIdApprovalDecisionMode.Unspecified,
         };
 
     private static AgentToolReceiptStatus ParseReceiptStatus(string value) => value switch

@@ -325,7 +325,7 @@ public sealed class NyxIdChatControlCommandTests
                     ToolName = "repository_update",
                     Status = AgentToolReceiptStatus.ApprovalRequired,
                     ApprovalRequestId = "approval-alpha",
-                    NyxIdApprovalDecisionMode = NyxIdApprovalDecisionMode.Unknown,
+                    NyxIdApprovalDecisionMode = NyxIdApprovalDecisionMode.Unspecified,
                 },
             },
         };
@@ -343,7 +343,7 @@ public sealed class NyxIdChatControlCommandTests
         refined.ApprovalRequestId.Should().Be("approval-alpha");
         refined.ApprovalObservation.Should().NotBeNull();
         refined.ApprovalObservation.ApprovalRequestId.Should().Be("approval-alpha");
-        refined.ApprovalObservation.DecisionMode.Should().Be(NyxIdApprovalDecisionMode.Unknown);
+        refined.ApprovalObservation.DecisionMode.Should().Be(NyxIdApprovalDecisionMode.Unspecified);
         refined.ApprovalObservation.ReceiptStatus.Should()
             .Be(AgentToolReceiptStatus.ApprovalRequired);
         refined.ApprovalObservation.ObservedAt.Should().Be(Now);

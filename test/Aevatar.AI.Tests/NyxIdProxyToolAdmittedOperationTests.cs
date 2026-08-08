@@ -820,7 +820,7 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
         receipt.Should().NotBeNull();
         receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
         receipt.ApprovalRequestId.Should().BeEmpty();
-        receipt.NyxIdApprovalDecisionMode.Should().Be(NyxIdApprovalDecisionMode.Unknown);
+        receipt.NyxIdApprovalDecisionMode.Should().Be(NyxIdApprovalDecisionMode.Unspecified);
         receipt.SubjectId.Should().Be("us-calendar-alpha");
         receipt.ResultJson.Should().Be(downstreamBody);
     }
@@ -847,7 +847,7 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
         outcome.Receipt.Should().NotBeNull();
         outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
         outcome.Receipt.ApprovalRequestId.Should().BeEmpty();
-        outcome.Receipt.NyxIdApprovalDecisionMode.Should().Be(NyxIdApprovalDecisionMode.Unknown);
+        outcome.Receipt.NyxIdApprovalDecisionMode.Should().Be(NyxIdApprovalDecisionMode.Unspecified);
         outcome.Receipt.SubjectId.Should().Be("us-calendar-alpha");
     }
 

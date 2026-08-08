@@ -1008,9 +1008,9 @@ public class NyxIdConnectedServiceToolSourceTests
 
     [Theory]
     [InlineData(7000, "approval_required", AgentToolReceiptStatus.ApprovalRequired, null,
-        NyxIdApprovalDecisionMode.Unknown)]
+        NyxIdApprovalDecisionMode.Unspecified)]
     [InlineData(7001, "approval_failed", AgentToolReceiptStatus.Denied, null,
-        NyxIdApprovalDecisionMode.Unknown)]
+        NyxIdApprovalDecisionMode.Unspecified)]
     [InlineData(7000, "approval_required", AgentToolReceiptStatus.ApprovalRequired, "per_request",
         NyxIdApprovalDecisionMode.PerRequest)]
     [InlineData(7001, "approval_failed", AgentToolReceiptStatus.Denied, "grant",

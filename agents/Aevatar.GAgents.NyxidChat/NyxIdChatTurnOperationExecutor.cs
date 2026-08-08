@@ -8,6 +8,8 @@ using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat.AgentProfiles;
 using Google.Protobuf;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -335,6 +337,7 @@ public sealed class NyxIdChatTurnOperationExecutor
     private readonly INyxIdChatDelegationCredentialLifecyclePort _delegationCredentialLifecycle;
     private readonly INyxIdChatToolVerificationPort _toolVerificationPort;
     private readonly TimeProvider _timeProvider;
+    private readonly ILogger<NyxIdChatTurnOperationExecutor> _logger;
 
     public NyxIdChatTurnOperationExecutor(
         IAgentRunReplyGenerationExecutorPort generationExecutor)
@@ -398,7 +401,26 @@ public sealed class NyxIdChatTurnOperationExecutor
             turnCatalogMaterializer,
             delegationCredentialLifecycle,
             toolVerificationPort,
-            TimeProvider.System)
+            TimeProvider.System,
+            NullLogger<NyxIdChatTurnOperationExecutor>.Instance)
+    {
+    }
+
+    public NyxIdChatTurnOperationExecutor(
+        IAgentRunReplyGenerationExecutorPort generationExecutor,
+        INyxIdActionPostconditionPort actionPostconditionPort,
+        AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer,
+        INyxIdChatDelegationCredentialLifecyclePort delegationCredentialLifecycle,
+        INyxIdChatToolVerificationPort toolVerificationPort,
+        ILogger<NyxIdChatTurnOperationExecutor> logger)
+        : this(
+            generationExecutor,
+            actionPostconditionPort,
+            turnCatalogMaterializer,
+            delegationCredentialLifecycle,
+            toolVerificationPort,
+            TimeProvider.System,
+            logger)
     {
     }
 
@@ -409,6 +431,25 @@ public sealed class NyxIdChatTurnOperationExecutor
         INyxIdChatDelegationCredentialLifecyclePort delegationCredentialLifecycle,
         INyxIdChatToolVerificationPort toolVerificationPort,
         TimeProvider timeProvider)
+        : this(
+            generationExecutor,
+            actionPostconditionPort,
+            turnCatalogMaterializer,
+            delegationCredentialLifecycle,
+            toolVerificationPort,
+            timeProvider,
+            NullLogger<NyxIdChatTurnOperationExecutor>.Instance)
+    {
+    }
+
+    internal NyxIdChatTurnOperationExecutor(
+        IAgentRunReplyGenerationExecutorPort generationExecutor,
+        INyxIdActionPostconditionPort actionPostconditionPort,
+        AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer,
+        INyxIdChatDelegationCredentialLifecyclePort delegationCredentialLifecycle,
+        INyxIdChatToolVerificationPort toolVerificationPort,
+        TimeProvider timeProvider,
+        ILogger<NyxIdChatTurnOperationExecutor> logger)
     {
         _generationExecutor = generationExecutor ?? throw new ArgumentNullException(nameof(generationExecutor));
         _actionPostconditionPort = actionPostconditionPort ??
@@ -419,6 +460,7 @@ public sealed class NyxIdChatTurnOperationExecutor
         _toolVerificationPort = toolVerificationPort ??
                                 throw new ArgumentNullException(nameof(toolVerificationPort));
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     public async Task<NyxIdChatTurnOperationExecution> ExecuteAsync(
@@ -1624,8 +1666,11 @@ public sealed class NyxIdChatTurnOperationExecutor
         {
             throw;
         }
-        catch
+        catch (Exception exception)
         {
+            _logger.LogWarning(
+                exception,
+                "Durable NyxID retry authorization catalog materialization failed closed");
             return null;
         }
     }
