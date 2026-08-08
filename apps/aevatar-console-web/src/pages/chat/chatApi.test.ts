@@ -110,15 +110,6 @@ describe('chatApi', () => {
       expectedStateVersion: 7,
     },
     {
-      type: 'approval.resolve',
-      conversationId: 'conversation-alpha',
-      requestId: 'approval-alpha',
-      clientRequestId: 'client-approval',
-      approved: false,
-      reason: 'Not now',
-      expectedStateVersion: 8,
-    },
-    {
       type: 'task.stop',
       conversationId: 'conversation-alpha',
       turnId: 'turn-alpha',

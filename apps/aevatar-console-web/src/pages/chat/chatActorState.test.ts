@@ -77,6 +77,9 @@ function taskPlan(stepStatus: 'running' | 'failed' = 'running') {
           operationId: 'operation-alpha',
           operationGeneration: 2,
           phase: stepStatus,
+          lastProgressAt: '2026-08-08T00:00:30Z',
+          stalledAt:
+            stepStatus === 'failed' ? undefined : '2026-08-08T00:02:30Z',
         },
       },
     ],
@@ -133,6 +136,12 @@ describe('chatActorState', () => {
 
     expect(reloaded.task).toEqual(live.task);
     expect([...reloaded.steps.values()]).toEqual([...live.steps.values()]);
+    expect(reloaded.steps.get('step-alpha')?.operation).toEqual(
+      expect.objectContaining({
+        lastProgressAt: '2026-08-08T00:00:30Z',
+        stalledAt: '2026-08-08T00:02:30Z',
+      }),
+    );
     expect(actorCan(reloaded, 'stop')).toBe(true);
 
     const changed = reduceActorFrame(
@@ -159,6 +168,42 @@ describe('chatActorState', () => {
       '2026-08-08T00:02:00Z',
     );
     expect(actorCan(changed, 'retry', 'step-alpha')).toBe(true);
+
+    const stale = reduceActorFrame(
+      changed,
+      decodeActorFrame({
+        type: 'CUSTOM',
+        sequence: 7,
+        custom: {
+          name: 'nyxid.task.step.changed',
+          payload: {
+            taskId: 'task-alpha',
+            planRevision: 3,
+            step: taskPlan().steps[0],
+            changeKind: 'status',
+          },
+        },
+      }),
+    );
+    const conflictingDuplicate = reduceActorFrame(
+      changed,
+      decodeActorFrame({
+        type: 'CUSTOM',
+        sequence: 8,
+        custom: {
+          name: 'nyxid.task.step.changed',
+          payload: {
+            taskId: 'task-alpha',
+            planRevision: 3,
+            step: taskPlan().steps[0],
+            changeKind: 'status',
+          },
+        },
+      }),
+    );
+    expect(stale).toBe(changed);
+    expect(conflictingDuplicate).toBe(changed);
+    expect(stale.steps.get('step-alpha')?.status).toBe('failed');
   });
 
   it('fails closed on invalid closed vocabulary instead of constructing browser state', () => {

@@ -86,6 +86,8 @@ export type ChatTaskOperation = {
   readonly startedAt?: string;
   readonly updatedAt?: string;
   readonly completedAt?: string;
+  readonly lastProgressAt?: string;
+  readonly stalledAt?: string;
 };
 
 export type ChatActorStep = {
@@ -518,6 +520,8 @@ function decodeOperation(input: unknown): ChatTaskOperation {
     'startedAt',
     'updatedAt',
     'completedAt',
+    'lastProgressAt',
+    'stalledAt',
   ] as const) {
     const stringValue = optionalString(value[key]);
     if (stringValue) Object.assign(operation, { [key]: stringValue });

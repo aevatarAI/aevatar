@@ -46,6 +46,8 @@ function stepFixture(overrides: Partial<ChatActorStep> = {}): ChatActorStep {
       operationGeneration: 2,
       kind: 'tool',
       phase: 'running',
+      lastProgressAt: '2026-08-08T00:00:00Z',
+      stalledAt: '2026-08-08T00:02:00Z',
     },
     ...overrides,
   };
@@ -106,7 +108,6 @@ function callbacks() {
     onActionConnectCredential: jest.fn(),
     onActionRefresh: jest.fn(),
     onActionReport: jest.fn(),
-    onApprovalResolve: jest.fn(),
     onInputResolve: jest.fn(),
     onPlanResolve: jest.fn(),
     onRetry: jest.fn(),
@@ -226,7 +227,7 @@ describe('ChatActorControls', () => {
     ).not.toBeInTheDocument();
   });
 
-  it('does not fabricate a Tier-B approval before NyxID returns a typed request identity', () => {
+  it('shows only typed Tier-B facts after NyxID returns a request identity', () => {
     const projection = projectionFixture();
     projection.pendingApproval = {
       approvalRequestId: 'approval-alpha',
@@ -247,15 +248,19 @@ describe('ChatActorControls', () => {
     projection.pendingApproval = {
       ...projection.pendingApproval,
       nyxidRequestId: 'nyxid-approval-alpha',
+      expiresAt: '2026-08-08T00:10:00Z',
     };
     rerender(<ChatActorControls projection={projection} {...handlers} />);
-    expect(screen.getByText('Decided on NyxID')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
-    expect(handlers.onApprovalResolve).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ nyxidRequestId: 'nyxid-approval-alpha' }),
-      undefined,
-    );
+    expect(screen.getByText('NyxID request observed')).toBeInTheDocument();
+    expect(screen.getByText('nyxid-approval-alpha')).toBeInTheDocument();
+    expect(screen.getByText('2026-08-08T00:10:00Z')).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Approve' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Reject' }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Approval reason')).not.toBeInTheDocument();
   });
 
   it('keeps action completion pending until exact committed postcondition proof arrives', () => {

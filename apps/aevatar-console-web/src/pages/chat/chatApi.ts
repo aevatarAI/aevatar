@@ -52,15 +52,6 @@ export type ChatCommand =
       readonly expectedStateVersion: number;
     }
   | {
-      readonly type: 'approval.resolve';
-      readonly conversationId: string;
-      readonly requestId: string;
-      readonly clientRequestId: string;
-      readonly approved: boolean;
-      readonly reason?: string;
-      readonly expectedStateVersion: number;
-    }
-  | {
       readonly type: 'task.stop';
       readonly conversationId: string;
       readonly turnId: string;

@@ -6,7 +6,7 @@ import {
   StopOutlined,
 } from '@ant-design/icons';
 import { Button, Tag, Tooltip } from 'antd';
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { t } from '@/shared/i18n/messages';
 import type {
   ChatActionSummary,
@@ -18,11 +18,7 @@ import type {
 } from './chatActorState';
 import { chatActionIdentityKey } from './chatActorState';
 import type { ChatInputAnswer } from './chatApi';
-import type {
-  ChatExternalEffect,
-  ChatPlanGate,
-  ChatTaskStepStatus,
-} from './chatTaskPlan';
+import type { ChatExternalEffect, ChatPlanGate } from './chatTaskPlan';
 
 type ActionReport = {
   actionRequestId: string;
@@ -43,11 +39,6 @@ type Props = {
   actionJourneys?: ReadonlyMap<string, ChatActionJourney>;
   disabled?: boolean;
   onInputResolve: (answer: ChatInputAnswer, input: ChatPendingInput) => void;
-  onApprovalResolve: (
-    approved: boolean,
-    approval: ChatPendingApproval,
-    reason?: string,
-  ) => void;
   onPlanResolve: (confirmed: boolean, gate: ChatPlanGate) => void;
   onStop: () => void;
   onSteer: (instruction: string) => void;
@@ -65,7 +56,6 @@ type Props = {
   ) => void;
 };
 
-const STALL_THRESHOLD_MS = 120_000;
 const buttonStyle: React.CSSProperties = {
   background: '#fff',
   border: '1px solid #d8dee8',
@@ -81,7 +71,6 @@ export function ChatActorControls({
   actionJourneys = new Map(),
   disabled = false,
   onInputResolve,
-  onApprovalResolve,
   onPlanResolve,
   onStop,
   onRetry,
@@ -92,18 +81,13 @@ export function ChatActorControls({
   onActionReport,
 }: Props): React.ReactElement | null {
   const [selectedOptionIds, setSelectedOptionIds] = useState<string[]>([]);
-  const [approvalReason, setApprovalReason] = useState('');
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const timer = globalThis.setInterval(() => setNow(Date.now()), 30_000);
-    return () => globalThis.clearInterval(timer);
-  }, []);
   const steps = [...(projection?.steps.values() ?? [])];
   const canStop = steps.some((step) => step.availableActions?.stop === true);
   const active = projection?.activeTurn?.status === 'active';
   const actions = [...(projection?.actions.values() ?? [])].filter(
     (action) => action.action === 'service.connect',
   );
+  const terminal = projection ? latestTerminalFact(projection) : null;
   const pendingApproval = projection?.pendingApproval;
   const visibleApproval =
     pendingApproval && shouldRenderApproval(pendingApproval)
@@ -116,6 +100,7 @@ export function ChatActorControls({
       canStop ||
       active ||
       actions.length ||
+      terminal ||
       steps.some(
         (step) => step.availableActions?.retry || step.availableActions?.skip,
       ),
@@ -131,7 +116,6 @@ export function ChatActorControls({
       {projection.task ? (
         <TaskPlanLedger
           disabled={disabled}
-          now={now}
           onPlanResolve={onPlanResolve}
           projection={projection}
         />
@@ -192,10 +176,7 @@ export function ChatActorControls({
 
       {visibleApproval ? (
         <ControlCard
-          title={t(
-            'pages.chat.actorControls.approvalRequired',
-            'Approval required',
-          )}
+          title={t('pages.chat.actorControls.nyxIdDecision', 'NyxID decision')}
         >
           <div>
             {visibleApproval.action || visibleApproval.toolName}
@@ -204,62 +185,26 @@ export function ChatActorControls({
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
             <Tag>{String(visibleApproval.reversibility || 'unknown')}</Tag>
             <Tag>
-              {visibleApproval.nyxidRequestId
-                ? t(
-                    'pages.chat.actorControls.decidedOnNyxId',
-                    'Decided on NyxID',
-                  )
-                : t(
-                    'pages.chat.actorControls.aevatarDecision',
-                    'Aevatar decision',
-                  )}
+              {t(
+                'pages.chat.actorControls.nyxIdRequestObserved',
+                'NyxID request observed',
+              )}
             </Tag>
           </div>
-          <input
-            aria-label={t(
-              'pages.chat.actorControls.approvalReason',
-              'Approval reason',
+          <div style={{ color: '#64748b', fontSize: 12 }}>
+            {t(
+              'pages.chat.actorControls.nyxIdDecisionOnly',
+              'This decision is owned by NyxID. Studio only shows committed facts.',
             )}
-            disabled={disabled}
-            onChange={(event) => setApprovalReason(event.target.value)}
-            placeholder={t(
-              'pages.chat.actorControls.optionalReason',
-              'Optional reason',
-            )}
-            value={approvalReason}
-          />
-          <div style={{ display: 'flex', gap: 8 }}>
-            <Button
-              disabled={disabled}
-              onClick={() =>
-                onApprovalResolve(
-                  true,
-                  visibleApproval,
-                  approvalReason.trim() || undefined,
-                )
-              }
-              icon={<CheckOutlined />}
-              size="small"
-              type="primary"
-            >
-              {t('pages.chat.actorControls.approve', 'Approve')}
-            </Button>
-            <Button
-              disabled={disabled}
-              onClick={() =>
-                onApprovalResolve(
-                  false,
-                  visibleApproval,
-                  approvalReason.trim() || undefined,
-                )
-              }
-              danger
-              icon={<CloseOutlined />}
-              size="small"
-            >
-              {t('pages.chat.actorControls.reject', 'Reject')}
-            </Button>
           </div>
+          <div style={{ color: '#475569', fontSize: 11 }}>
+            {visibleApproval.nyxidRequestId}
+          </div>
+          {visibleApproval.expiresAt ? (
+            <div style={{ color: '#64748b', fontSize: 11 }}>
+              {visibleApproval.expiresAt}
+            </div>
+          ) : null}
         </ControlCard>
       ) : null}
 
@@ -319,12 +264,15 @@ export function ChatActorControls({
             chatActionIdentityKey(action.actorId, action.actionRequestId),
           )}
           key={chatActionIdentityKey(action.actorId, action.actionRequestId)}
+          presentationTitle={projection.steps.get(action.stepId)?.description}
           onOpen={onActionOpen}
           onRefresh={onActionRefresh}
           onConnectCredential={onActionConnectCredential}
           onReport={onActionReport}
         />
       ))}
+
+      {terminal ? <TerminalFact terminal={terminal} /> : null}
 
       {active ? (
         <ControlCard
@@ -357,12 +305,10 @@ export function ChatActorControls({
 
 function TaskPlanLedger({
   disabled,
-  now,
   onPlanResolve,
   projection,
 }: {
   disabled: boolean;
-  now: number;
   onPlanResolve: Props['onPlanResolve'];
   projection: ChatActorProjection;
 }): React.ReactElement | null {
@@ -481,11 +427,7 @@ function TaskPlanLedger({
       ) : null}
       <ol style={{ listStyle: 'none', margin: 0, padding: 0 }}>
         {plan.steps.map((step) => {
-          const stalled = isPresentationStalled(
-            step.status,
-            step.updatedAt,
-            now,
-          );
+          const stalled = isActorReportedStalled(step);
           const verified =
             step.kind === 'postcondition' &&
             step.status === 'done' &&
@@ -564,29 +506,61 @@ function TaskPlanLedger({
                     ) : null}
                   </div>
                   {step.operation ? (
-                    <div
-                      style={{
-                        background: '#f8fafc',
-                        borderRadius: 6,
-                        color: '#475569',
-                        fontFamily: 'SFMono-Regular, Menlo, monospace',
-                        fontSize: 11,
-                        marginTop: 7,
-                        overflowWrap: 'anywhere',
-                        padding: '6px 8px',
-                      }}
-                    >
-                      {[
-                        step.operation.kind,
-                        step.operation.phase,
-                        step.operation.operationId,
-                        step.operation.operationGeneration !== undefined
-                          ? `generation ${step.operation.operationGeneration}`
-                          : '',
-                      ]
-                        .filter(Boolean)
-                        .join(' · ')}
-                    </div>
+                    <>
+                      <div
+                        style={{
+                          background: '#f8fafc',
+                          borderRadius: 6,
+                          color: '#475569',
+                          fontFamily: 'SFMono-Regular, Menlo, monospace',
+                          fontSize: 11,
+                          marginTop: 7,
+                          overflowWrap: 'anywhere',
+                          padding: '6px 8px',
+                        }}
+                      >
+                        {[
+                          step.operation.kind,
+                          step.operation.phase,
+                          step.operation.operationId,
+                          step.operation.operationGeneration !== undefined
+                            ? `generation ${step.operation.operationGeneration}`
+                            : '',
+                        ]
+                          .filter(Boolean)
+                          .join(' · ')}
+                      </div>
+                      {step.operation.lastProgressAt ? (
+                        <div
+                          style={{
+                            color: '#64748b',
+                            fontSize: 11,
+                            marginTop: 5,
+                          }}
+                        >
+                          {t(
+                            'pages.chat.actorControls.lastProgressAt',
+                            'Last progress {time}',
+                            { time: step.operation.lastProgressAt },
+                          )}
+                        </div>
+                      ) : null}
+                      {stalled && step.operation.stalledAt ? (
+                        <div
+                          style={{
+                            color: '#92400e',
+                            fontSize: 11,
+                            marginTop: 3,
+                          }}
+                        >
+                          {t(
+                            'pages.chat.actorControls.stalledAt',
+                            'Stalled since {time}',
+                            { time: step.operation.stalledAt },
+                          )}
+                        </div>
+                      ) : null}
+                    </>
                   ) : null}
                   {step.substeps.length ? (
                     <ul
@@ -713,6 +687,47 @@ function CommittedResults({
   );
 }
 
+function TerminalFact({
+  terminal,
+}: {
+  terminal: Record<string, unknown>;
+}): React.ReactElement {
+  const status = String(terminal.status || 'terminal');
+  return (
+    <ControlCard
+      title={t('pages.chat.actorControls.taskResult', 'Task result')}
+    >
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
+        <StatusTag status={status} />
+        {terminal.safeMessage ? (
+          <span style={{ color: '#475569', fontSize: 12 }}>
+            {String(terminal.safeMessage)}
+          </span>
+        ) : null}
+        {terminal.terminalAt ? (
+          <span style={{ color: '#64748b', fontSize: 11 }}>
+            {String(terminal.terminalAt)}
+          </span>
+        ) : null}
+      </div>
+    </ControlCard>
+  );
+}
+
+function latestTerminalFact(
+  projection: ChatActorProjection,
+): Record<string, unknown> | null {
+  const candidates = [projection.latestTurn, ...projection.recentTerminalTurns];
+  return (
+    candidates.find(
+      (candidate) =>
+        candidate &&
+        candidate.status !== 'active' &&
+        candidate.status !== 'running',
+    ) ?? null
+  );
+}
+
 function StatusTag({ status }: { status: string }): React.ReactElement {
   const color =
     status === 'done' || status === 'succeeded'
@@ -752,22 +767,19 @@ function EffectTag({
   );
 }
 
-function isPresentationStalled(
-  status: ChatTaskStepStatus,
-  updatedAt: string | undefined,
-  now: number,
-): boolean {
-  if ((status !== 'running' && status !== 'waiting') || !updatedAt)
-    return false;
-  const updated = Date.parse(updatedAt);
-  return Number.isFinite(updated) && now - updated >= STALL_THRESHOLD_MS;
+function isActorReportedStalled(step: ChatActorStep): boolean {
+  return Boolean(
+    (step.status === 'running' || step.status === 'waiting') &&
+      step.operation?.lastProgressAt &&
+      step.operation.stalledAt &&
+      (step.availableActions.retry ||
+        step.availableActions.skip ||
+        step.availableActions.stop),
+  );
 }
 
 function shouldRenderApproval(approval: ChatPendingApproval): boolean {
-  return (
-    approval.grantBoundary !== 'nyxid_step_up' ||
-    Boolean(approval.nyxidRequestId)
-  );
+  return Boolean(approval.nyxidRequestId);
 }
 
 function ControlCard({
@@ -800,6 +812,7 @@ function ActionCard({
   actorConfirmed,
   journey,
   disabled,
+  presentationTitle,
   onOpen,
   onRefresh,
   onConnectCredential,
@@ -809,6 +822,7 @@ function ActionCard({
   actorConfirmed: boolean;
   journey?: ChatActionJourney;
   disabled: boolean;
+  presentationTitle?: string;
   onOpen: Props['onActionOpen'];
   onRefresh: Props['onActionRefresh'];
   onConnectCredential: Props['onActionConnectCredential'];
@@ -821,10 +835,10 @@ function ActionCard({
     const verified = action.postconditionResult?.verified === true;
     return (
       <ControlCard
-        title={t(
-          'pages.chat.actorControls.connectionAction',
-          'Service connection',
-        )}
+        title={
+          presentationTitle ||
+          t('pages.chat.actorControls.connectionAction', 'Service connection')
+        }
       >
         <div style={{ color: '#475569', fontSize: 12 }}>
           {verified
@@ -893,9 +907,12 @@ function ActionCard({
       : request.params.customService.name;
   return (
     <ControlCard
-      title={t('pages.chat.actorControls.connectService', 'Connect {service}', {
-        service: serviceName,
-      })}
+      title={
+        presentationTitle ||
+        t('pages.chat.actorControls.connectService', 'Connect {service}', {
+          service: serviceName,
+        })
+      }
     >
       {'catalogService' in request.params &&
       request.params.catalogService.requestedScopes?.length ? (

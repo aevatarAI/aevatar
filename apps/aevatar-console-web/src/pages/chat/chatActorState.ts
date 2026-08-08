@@ -217,7 +217,7 @@ export function reduceActorFrame(
 ): ChatActorProjection {
   if (
     frame.type === 'ignored' ||
-    frame.sequence < projection.progressSequence
+    frame.sequence <= projection.progressSequence
   ) {
     return projection;
   }

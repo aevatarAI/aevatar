@@ -42,7 +42,6 @@ import {
   applyCurrentStateResult,
   type ChatActorProjection,
   type ChatActorStep,
-  type ChatPendingApproval,
   type ChatPendingInput,
   type ChatServiceConnectActionRequest,
   chatActionIdentityKey,
@@ -1028,23 +1027,6 @@ const ChatPage: React.FC = () => {
     [dispatchAcceptedCommand, requireControlContext],
   );
 
-  const handleApprovalResolve = useCallback(
-    (approved: boolean, approval: ChatPendingApproval, reason?: string) => {
-      const context = requireControlContext();
-      if (!context) return;
-      void dispatchAcceptedCommand({
-        type: 'approval.resolve',
-        conversationId: context.conversationId,
-        requestId: approval.approvalRequestId,
-        clientRequestId: createClientId(),
-        approved,
-        ...(reason ? { reason } : {}),
-        expectedStateVersion: context.state.stateVersion,
-      });
-    },
-    [dispatchAcceptedCommand, requireControlContext],
-  );
-
   const handlePlanResolve = useCallback(
     (confirmed: boolean, gate: ChatPlanGate) => {
       const context = requireControlContext();
@@ -1849,7 +1831,6 @@ const ChatPage: React.FC = () => {
                 onActionReport={(request, disposition) =>
                   void sendActionReport(request, disposition)
                 }
-                onApprovalResolve={handleApprovalResolve}
                 onInputResolve={handleInputResolve}
                 onPlanResolve={handlePlanResolve}
                 onRetry={(step) => dispatchStepControl('step.retry', step)}
