@@ -125,7 +125,12 @@ public static class NyxIdChatTaskLifecycle
                 next,
                 operationKey.StepId,
                 normalizedSignal.Tool.Receipt.ProviderResourceId);
-            successor = ActivatePlannedVerificationStep(next, normalizedSignal.Key, now);
+            successor = ActivatePlannedVerificationStep(
+                next,
+                normalizedSignal.Key,
+                now,
+                normalizedSignal.Tool.Receipt.MutationStage ==
+                AgentToolReceiptMutationStage.ReadModelObserved);
         }
         else if (currentStep.Kind == NyxIdChatStepKind.Tool &&
                  FindCurrentStep(next, operationKey)?.Status is
@@ -431,9 +436,12 @@ public static class NyxIdChatTaskLifecycle
                 return signal;
             }
 
-            var verificationPending = signal.Clone();
-            verificationPending.Tool.ExternalEffect = NyxIdChatEffectEvidence.MayHaveChanged;
-            return verificationPending;
+            var normalized = signal.Clone();
+            normalized.Tool.ExternalEffect = receipt.MutationStage ==
+                                             AgentToolReceiptMutationStage.ReadModelObserved
+                ? NyxIdChatEffectEvidence.Confirmed
+                : NyxIdChatEffectEvidence.MayHaveChanged;
+            return normalized;
         }
 
         if (signal.Tool.ExternalEffect != NyxIdChatEffectEvidence.MayHaveChanged)
@@ -645,7 +653,8 @@ public static class NyxIdChatTaskLifecycle
     private static NyxIdChatOperationDispatchCommand? ActivatePlannedVerificationStep(
         NyxIdChatConversationGAgentState state,
         NyxIdChatOperationKey completedToolKey,
-        Timestamp now)
+        Timestamp now,
+        bool mutationReadModelObserved = false)
     {
         var step = state.ActiveTask.Steps.SingleOrDefault(candidate =>
             candidate.Kind is (NyxIdChatStepKind.Llm or NyxIdChatStepKind.Postcondition) &&
@@ -654,6 +663,14 @@ public static class NyxIdChatTaskLifecycle
             string.Equals(candidate.DependsOn[0], completedToolKey.StepId, StringComparison.Ordinal));
         if (step?.Operation?.Key is null)
             return null;
+
+        if (mutationReadModelObserved)
+        {
+            step.Kind = NyxIdChatStepKind.Llm;
+            step.Description = "Communicate the typed mutation result observed from its canonical read model.";
+            step.Source = new NyxIdChatStepSource { Llm = new NyxIdChatLLMStepSource() };
+            step.Operation.Kind = NyxIdChatStepKind.Llm;
+        }
 
         var readBack = step.Source?.Postcondition?.ToolReadBack;
         if (step.Kind == NyxIdChatStepKind.Postcondition &&

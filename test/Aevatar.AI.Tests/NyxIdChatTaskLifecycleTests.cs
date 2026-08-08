@@ -316,6 +316,47 @@ public sealed class NyxIdChatTaskLifecycleTests
     }
 
     [Fact]
+    public void MutationObservedByCanonicalReadModel_ShouldContinueWithoutAdmittedExternalReadBack()
+    {
+        var planned = NyxIdChatTaskLifecycle.ApplyOperationResult(
+            ActiveState(NyxIdChatStepKind.Llm, "step-llm-alpha", "operation-llm-alpha"),
+            LlmWithToolCall(),
+            Now).State;
+        var tool = planned.ActiveTask.Steps.Single(step => step.Kind == NyxIdChatStepKind.Tool);
+
+        var decision = NyxIdChatTaskLifecycle.ApplyOperationResult(
+            planned,
+            new NyxIdChatOperationResultSignal
+            {
+                Key = tool.Operation.Key.Clone(),
+                Tool = new NyxIdChatToolOperationResult
+                {
+                    Receipt = new AgentToolReceipt
+                    {
+                        CallId = "call-alpha",
+                        ToolName = "repository_update",
+                        Status = AgentToolReceiptStatus.Success,
+                        Effect = AgentToolReceiptEffect.Mutating,
+                        MutationStage = AgentToolReceiptMutationStage.ReadModelObserved,
+                    },
+                    ExternalEffect = NyxIdChatEffectEvidence.MayHaveChanged,
+                },
+            },
+            Now);
+
+        decision.NextCommand.Should().NotBeNull();
+        decision.NextCommand!.InputCase.Should().Be(
+            NyxIdChatOperationDispatchCommand.InputOneofCase.Llm);
+        decision.State.ActiveTask.Steps.Should().NotContain(step =>
+            step.Kind == NyxIdChatStepKind.Postcondition);
+        decision.State.ActiveTask.Steps.Single(step => step.StepId == tool.StepId)
+            .ExternalEffect.Should().Be(NyxIdChatEffectEvidence.Confirmed);
+        decision.State.ActiveTask.Steps.Single(step =>
+                step.Kind == NyxIdChatStepKind.Llm && step.DependsOn.Contains(tool.StepId))
+            .Status.Should().Be(NyxIdChatStepStatus.Running);
+    }
+
+    [Fact]
     public void VerificationNotApplied_ShouldUnlockExplicitToolRetryWithoutChangingTaskIdentity()
     {
         var planned = NyxIdChatTaskLifecycle.ApplyOperationResult(

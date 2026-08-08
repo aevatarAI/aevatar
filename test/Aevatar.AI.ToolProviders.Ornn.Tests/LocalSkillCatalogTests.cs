@@ -275,6 +275,7 @@ public sealed class LocalSkillCatalogTests
         receipt.Should().NotBeNull();
         receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
         receipt.Effect.Should().Be(AgentToolReceiptEffect.Mutating);
+        receipt.MutationStage.Should().Be(AgentToolReceiptMutationStage.ReadModelObserved);
         mountPort.Requests.Should().HaveCount(2);
         mountPort.Requests[1].Confirmations.Should().ContainSingle();
         using var document = JsonDocument.Parse(result);
@@ -548,7 +549,8 @@ public sealed class LocalSkillCatalogTests
                     workflow.WorkflowId,
                     "chat",
                     "rev-1")).ToArray(),
-                Message: "Mounted."));
+                Message: "Mounted.",
+                ReadModelObserved: true));
         }
     }
 

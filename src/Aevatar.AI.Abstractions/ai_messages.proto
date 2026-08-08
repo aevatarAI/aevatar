@@ -415,6 +415,12 @@ enum AgentToolReceiptEffect {
   AGENT_TOOL_RECEIPT_EFFECT_MUTATING = 2;
 }
 
+enum AgentToolReceiptMutationStage {
+  AGENT_TOOL_RECEIPT_MUTATION_STAGE_UNSPECIFIED = 0;
+  AGENT_TOOL_RECEIPT_MUTATION_STAGE_ACCEPTED = 1;
+  AGENT_TOOL_RECEIPT_MUTATION_STAGE_READ_MODEL_OBSERVED = 2;
+}
+
 enum NyxIdApprovalDecisionMode {
   NYX_ID_APPROVAL_DECISION_MODE_UNSPECIFIED = 0;
   NYX_ID_APPROVAL_DECISION_MODE_PER_REQUEST = 1;
@@ -456,6 +462,7 @@ message AgentToolReceipt {
   // NyxID-owned approval semantics. This is intentionally separate from the
   // local tool approval mode above; omitted boundary data remains unknown.
   NyxIdApprovalDecisionMode nyx_id_approval_decision_mode = 20;
+  AgentToolReceiptMutationStage mutation_stage = 21;
 }
 
 message ManagedWorkflowHandoffReceipt {

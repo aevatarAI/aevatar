@@ -6,6 +6,7 @@ using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Aevatar.GAgentService.Tests.Infrastructure;
 
@@ -248,7 +249,12 @@ public sealed class SkillWorkflowMountAdapterTests
             ["name: shared_child\nsteps: []"] = "shared_child",
         });
         var previewService = new RecordingWorkflowExplicitRequestPreviewService();
-        var adapter = new SkillWorkflowMountAdapter(commandPort, parser, previewService);
+        var queryPort = new StubScopeWorkflowQueryPort();
+        var adapter = new SkillWorkflowMountAdapter(
+            commandPort,
+            parser,
+            previewService,
+            queryPort);
 
         var request = new SkillWorkflowMountRequest(
             ScopeId: "scope-1",
@@ -293,10 +299,12 @@ public sealed class SkillWorkflowMountAdapterTests
 
         result.Status.Should().Be("mounted");
         result.Mounted.Should().BeTrue();
+        result.ReadModelObserved.Should().BeTrue();
         result.Workflows.Should().ContainSingle();
         result.Workflows[0].WorkflowId.Should().Be("talisman_review");
         result.Workflows[0].ServiceId.Should().Be("talisman_review");
         result.Workflows[0].EndpointId.Should().Be("chat");
+        queryPort.Requests.Should().ContainSingle().Which.Should().Be(("scope-1", "talisman_review"));
     }
 
     [Fact]
@@ -313,7 +321,8 @@ public sealed class SkillWorkflowMountAdapterTests
             new RecordingWorkflowExplicitRequestPreviewService(
             [
                 ExplicitRequestPreview(),
-            ]));
+            ]),
+            new StubScopeWorkflowQueryPort());
         var request = MountRequest("guarded_workflow", yaml);
 
         var preview = await adapter.MountAsync(request);
@@ -330,6 +339,93 @@ public sealed class SkillWorkflowMountAdapterTests
     }
 
     [Fact]
+    public async Task MountAsync_AcceptedOnlyUpsert_MustNotReportMountedBeforeCanonicalReadModelObservation()
+    {
+        const string yaml = "name: guarded_workflow\nsteps: []";
+        var adapter = new SkillWorkflowMountAdapter(
+            new RecordingScopeWorkflowCommandPort(),
+            new StubWorkflowDefinitionParser(new Dictionary<string, string>
+            {
+                [yaml] = "guarded_workflow",
+            }),
+            new RecordingWorkflowExplicitRequestPreviewService());
+        var request = MountRequest("guarded_workflow", yaml);
+        var preview = await adapter.MountAsync(request);
+
+        var result = await adapter.MountAsync(request with
+        {
+            ConfirmationToken = preview.ConfirmationToken!,
+        });
+
+        result.Status.Should().Be("mount_observation_unavailable");
+        result.Mounted.Should().BeFalse();
+        result.FailureCode.Should().Be("USE_SKILL_MOUNT_READ_MODEL_UNAVAILABLE");
+    }
+
+    [Fact]
+    public async Task MountAsync_WrongRunnableRevisionUntilDeadline_ReturnsTypedObservationBlocker()
+    {
+        const string yaml = "name: guarded_workflow\nsteps: []";
+        var timeProvider = new FakeTimeProvider(DateTimeOffset.Parse("2026-08-09T00:00:00Z"));
+        var queryPort = new StubScopeWorkflowQueryPort((scopeId, workflowId) =>
+        {
+            timeProvider.Advance(TimeSpan.FromSeconds(30));
+            return RunnableLookup(scopeId, workflowId, "rev-stale");
+        });
+        var adapter = new SkillWorkflowMountAdapter(
+            new RecordingScopeWorkflowCommandPort(),
+            new StubWorkflowDefinitionParser(new Dictionary<string, string>
+            {
+                [yaml] = "guarded_workflow",
+            }),
+            new RecordingWorkflowExplicitRequestPreviewService(),
+            queryPort,
+            timeProvider);
+        var request = MountRequest("guarded_workflow", yaml);
+        var preview = await adapter.MountAsync(request);
+
+        var result = await adapter.MountAsync(request with
+        {
+            ConfirmationToken = preview.ConfirmationToken!,
+        });
+
+        result.Status.Should().Be("mount_observation_unavailable");
+        result.Mounted.Should().BeFalse();
+        result.ReadModelObserved.Should().BeFalse();
+        result.FailureCode.Should().Be("USE_SKILL_MOUNT_READ_MODEL_UNAVAILABLE");
+        queryPort.Requests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task MountAsync_WhenCanonicalQueryFails_ReturnsTypedObservationBlocker()
+    {
+        const string yaml = "name: guarded_workflow\nsteps: []";
+        var queryPort = new StubScopeWorkflowQueryPort
+        {
+            Exception = new InvalidOperationException("synthetic query failure"),
+        };
+        var adapter = new SkillWorkflowMountAdapter(
+            new RecordingScopeWorkflowCommandPort(),
+            new StubWorkflowDefinitionParser(new Dictionary<string, string>
+            {
+                [yaml] = "guarded_workflow",
+            }),
+            new RecordingWorkflowExplicitRequestPreviewService(),
+            queryPort);
+        var request = MountRequest("guarded_workflow", yaml);
+        var preview = await adapter.MountAsync(request);
+
+        var result = await adapter.MountAsync(request with
+        {
+            ConfirmationToken = preview.ConfirmationToken!,
+        });
+
+        result.Status.Should().Be("mount_observation_unavailable");
+        result.FailureCode.Should().Be("USE_SKILL_MOUNT_READ_MODEL_UNAVAILABLE");
+        queryPort.Requests.Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task MountAsync_WithChangedOpaquePreviewToken_RejectsBeforeUpsert()
     {
         const string yaml = "name: guarded_workflow\nsteps: []";
@@ -343,7 +439,8 @@ public sealed class SkillWorkflowMountAdapterTests
             new RecordingWorkflowExplicitRequestPreviewService(
             [
                 ExplicitRequestPreview(),
-            ]));
+            ]),
+            new StubScopeWorkflowQueryPort());
         var request = MountRequest("guarded_workflow", yaml);
 
         var result = await adapter.MountAsync(request with
@@ -422,7 +519,8 @@ public sealed class SkillWorkflowMountAdapterTests
             new RecordingWorkflowExplicitRequestPreviewService(
             [
                 ExplicitRequestPreview(),
-            ]));
+            ]),
+            new StubScopeWorkflowQueryPort());
         var request = MountRequest("guarded_workflow", yaml);
         var preview = await adapter.MountAsync(request);
         var confirmation = preview.ConfirmationRequests!.Single().Confirmation;
@@ -651,6 +749,62 @@ public sealed class SkillWorkflowMountAdapterTests
             true,
             WorkflowExplicitRequestApprovalEnforcement.BindTimeConfirmationAndRunTimeToolApproval,
             [ExternalCapabilityExecutionMode.Interactive]);
+
+    private static ScopeWorkflowLookupResult RunnableLookup(
+        string scopeId,
+        string workflowId,
+        string revisionId) =>
+        new(
+            ScopeWorkflowLookupStatus.Runnable,
+            new ScopeWorkflowSummary(
+                scopeId,
+                workflowId,
+                workflowId,
+                $"service:{workflowId}",
+                workflowId,
+                $"actor:{workflowId}",
+                revisionId,
+                "dep-1",
+                "ready",
+                DateTimeOffset.Parse("2026-08-09T00:00:00Z")),
+            "runnable");
+
+    private sealed class StubScopeWorkflowQueryPort(
+        Func<string, string, ScopeWorkflowLookupResult>? lookup = null) : IScopeWorkflowQueryPort
+    {
+        public List<(string ScopeId, string WorkflowId)> Requests { get; } = [];
+        public Exception? Exception { get; init; }
+
+        public Task<IReadOnlyList<ScopeWorkflowSummary>> ListAsync(
+            string scopeId,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<ScopeWorkflowSummary>>([]);
+
+        public Task<ScopeWorkflowLookupResult> LookupByWorkflowIdAsync(
+            string scopeId,
+            string workflowId,
+            CancellationToken ct = default)
+        {
+            Requests.Add((scopeId, workflowId));
+            if (Exception is not null)
+                throw Exception;
+            return Task.FromResult(
+                lookup?.Invoke(scopeId, workflowId) ??
+                RunnableLookup(scopeId, workflowId, "rev-1"));
+        }
+
+        public async Task<ScopeWorkflowSummary?> GetByWorkflowIdAsync(
+            string scopeId,
+            string workflowId,
+            CancellationToken ct = default) =>
+            (await LookupByWorkflowIdAsync(scopeId, workflowId, ct)).Workflow;
+
+        public Task<ScopeWorkflowSummary?> GetByActorIdAsync(
+            string scopeId,
+            string actorId,
+            CancellationToken ct = default) =>
+            Task.FromResult<ScopeWorkflowSummary?>(null);
+    }
 
     private sealed class RecordingScopeWorkflowCommandPort : IScopeWorkflowCommandPort
     {
