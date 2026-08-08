@@ -7,6 +7,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from nyxid_semantic_evaluation import validate_semantic_evaluation
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONTRACT_ROOT = REPO_ROOT / "docs/contracts/nyxid-assistant-conformance/v1"
@@ -39,7 +41,8 @@ def main() -> int:
 
     validate_local_digests(sources, errors)
     validate_leaf_coverage(leaves, coverage, registry, errors)
-    validate_fixture_layers(tolerant, adversarial, semantic, errors)
+    validate_fixture_layers(tolerant, adversarial, errors)
+    validate_semantic_evaluation(semantic, coverage, CONTRACT_ROOT, REPO_ROOT, errors)
 
     if args.nyxid_root:
         validate_nyxid(args.nyxid_root.resolve(), sources, leaves, errors)
@@ -177,7 +180,7 @@ def validate_leaf_coverage(leaves, coverage, registry, errors):
         errors.append("coverage class_counts are not derived from coverage rows")
 
 
-def validate_fixture_layers(tolerant, adversarial, semantic, errors):
+def validate_fixture_layers(tolerant, adversarial, errors):
     tolerant_ids = {fixture.get("id") for fixture in tolerant.get("fixtures", [])}
     required_tolerant = {
         "unknown-root-member",
@@ -218,15 +221,6 @@ def validate_fixture_layers(tolerant, adversarial, semantic, errors):
     }
     if identities != {"m-alpha", "wf-alpha", "svc-alpha"}:
         errors.append("identity-confusion fixture must keep member/workflow/service IDs distinct")
-
-    thresholds = semantic.get("thresholds", {})
-    if not semantic.get("model") or not semantic.get("prompt_version"):
-        errors.append("semantic evaluation must pin model and prompt version")
-    if thresholds.get("availability_outcome_accuracy") != 1.0:
-        errors.append("semantic evaluation must require perfect availability/outcome honesty")
-    if thresholds.get("false_execution_or_verification_claims") != 0:
-        errors.append("semantic evaluation cannot tolerate false completion claims")
-
 
 def validate_nyxid(root, sources, expected_leaves, errors):
     pin = sources["nyxid"]

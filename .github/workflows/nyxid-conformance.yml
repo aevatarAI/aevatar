@@ -10,6 +10,8 @@ on:
       - 'src/Aevatar.Mainnet.Host.Api/Hosting/MainnetHostBuilderExtensions.cs'
       - 'tools/ci/nyxid_conformance_guard.py'
       - 'tools/ci/nyxid_conformance_guard.sh'
+      - 'tools/ci/nyxid_semantic_evaluation.py'
+      - 'tools/ci/tests/test_nyxid_semantic_evaluation.py'
       - 'tools/nyxid-conformance/**'
   workflow_dispatch:
 
@@ -32,9 +34,11 @@ jobs:
           git clone --quiet https://gist.github.com/b4dd5182c5ac1efc2ad546ecb5f948f3.git external/support-contract
           git -C external/support-contract checkout --quiet f45febb057a7182dab2495d4c739d2bb8d7026f5
 
+      - name: Test semantic evidence validation
+        run: python3 -m unittest tools/ci/tests/test_nyxid_semantic_evaluation.py -v
+
       - name: Validate manifest and pinned sources
         run: >-
           bash tools/ci/nyxid_conformance_guard.sh
           --nyxid-root external/nyxid
           --gist-root external/support-contract
-
