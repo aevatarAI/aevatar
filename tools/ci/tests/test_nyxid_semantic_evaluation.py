@@ -181,6 +181,8 @@ class NyxIdSemanticEvaluationTests(unittest.TestCase):
 
     def test_not_run_and_null_results_fail_closed(self):
         semantic = load_json(CONTRACT_ROOT / "semantic-evaluation.json")
+        semantic["status"] = "not_run"
+        semantic["results"] = None
         coverage = load_json(CONTRACT_ROOT / "coverage-manifest.json")
         errors = []
 
