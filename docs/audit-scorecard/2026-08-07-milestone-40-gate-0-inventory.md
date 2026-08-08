@@ -43,7 +43,7 @@ These identifiers freeze the evidence inspected for this inventory. They are inp
 
 The CLI source digest and CLI archive digest identify different evidence artifacts and are intentionally recorded separately. Neither digest is inferred from the other.
 
-The support-contract gist remains mutable design input. [Issue #3315](https://github.com/AevatarAI/aevatar/issues/3315) owns the binding repository interpretation, including the plan gate, disclosed pre-plan reads, one user-visible plan decision, and typed revision-cause semantics. The checked-in conformance manifest, not a mutable gist, becomes the implementation authority.
+The support-contract gist remains mutable design input. [Issue #3315](https://github.com/AevatarAI/aevatar/issues/3315) and [ADR-0049](../adr/0049-nyxid-assistant-plan-gate-and-revision.md) own the binding repository interpretation, including the plan gate, disclosed pre-plan reads, explicit cross-authority decision counts, and typed revision-cause semantics. The checked-in conformance manifest, not a mutable gist, becomes the implementation authority.
 
 ## 3. Production deployment evidence
 
@@ -67,6 +67,7 @@ All listed canary conversations were deleted and their state endpoints returned 
 - `missing`: the issue's required contract or behavior is absent, or only a non-accepting fragment exists.
 - `present-needs-tests`: relevant source exists, but issue-level deterministic or browser/integration acceptance is incomplete.
 - `present-needs-production-evidence`: source-level behavior exists, but authenticated exact-image evidence is absent or stale.
+- `completed`: the owning issue's source, contract, and required issue-level evidence are complete.
 - `obsolete/superseded`: not part of the current M40 completion contract. This does not mean the product need is invalid.
 
 Uncommitted working-tree changes are not deliverable evidence and do not improve a classification.
@@ -77,15 +78,15 @@ The GitHub milestone API returned 30 attached issues even though its aggregate `
 
 | Gate | Issue | Classification | Evidence, gap, and concrete disposition |
 |---|---|---|---|
-| 0 | [#3317 baseline](https://github.com/AevatarAI/aevatar/issues/3317) | `present-needs-tests` | The only baseline is `origin/feature/integrate@6f9794528`; stewardship is `@eanz17` with target 2026-08-08. Re-run the complete classification and dependency check, then close Gate 0. |
-| 0 | [#3315 contract correction](https://github.com/AevatarAI/aevatar/issues/3315) | `present-needs-tests` | [ADR-0049](../adr/0049-nyxid-assistant-plan-gate-and-revision.md) pins strict separation, Tier B, the pre-plan Class-R exception, exact local admission, and typed revision provenance. #3302/#3304/#3324/#3321 implement and verify the accepted contract. |
+| 0 | [#3317 baseline](https://github.com/AevatarAI/aevatar/issues/3317) | `completed` | The only baseline is `origin/feature/integrate@6f9794528`; stewardship is `@eanz17` with target 2026-08-08. The complete issue classification and supersession decisions are recorded here. |
+| 0 | [#3315 contract correction](https://github.com/AevatarAI/aevatar/issues/3315) | `completed` | [ADR-0049](../adr/0049-nyxid-assistant-plan-gate-and-revision.md) pins strict separation, Tier B, the pre-plan Class-R exception, exact local admission, and typed revision provenance. #3302/#3304/#3324/#3321 implement and verify the accepted contract. |
 | 1 | [#3296 one chat trunk](https://github.com/AevatarAI/aevatar/issues/3296) | `missing` | The integration baseline still routes `/api/chat` by request shape between Workflow and Assistant runtimes. Introduce one HTTP-free canonical application facade; keep form/no-type only as a frozen compatibility adapter until its callers migrate. |
-| 1 | [#3297 R/A/P/L/X ADR](https://github.com/AevatarAI/aevatar/issues/3297) | `present-needs-tests` | [ADR-0048](../adr/0048-nyxid-assistant-operation-class-boundary.md) is accepted on the integration baseline. Its exact Class-P consumer is #3320; the ADR alone does not ship execution. |
+| 1 | [#3297 R/A/P/L/X ADR](https://github.com/AevatarAI/aevatar/issues/3297) | `completed` | [ADR-0048](../adr/0048-nyxid-assistant-operation-class-boundary.md) is accepted on the integration baseline. Its exact Class-P consumer is #3320; the ADR alone does not ship execution. |
 | 1 | [#3320 admitted execution](https://github.com/AevatarAI/aevatar/issues/3320) | `missing` | Shared MCP/admission machinery exists, but the M40 request-local Class-P chat exposure and its complete acceptance are not established. Implement only exact admitted operations; keep raw proxy hidden. |
-| 1 | [#3298 Class-R reads](https://github.com/AevatarAI/aevatar/issues/3298) | `present-needs-production-evidence` | `6a32bc32d` and `e8c5ccc94` complete the ordinary-user reads and admin-only ceiling. Deterministic tests and the exact-image canaries above passed; only the explicitly unavailable delegated/admin scenarios remain documented limitations. |
-| 1 | [#3299 allowlist exposure](https://github.com/AevatarAI/aevatar/issues/3299) | `present-needs-production-evidence` | `080bb5c28` plus `e8c5ccc94` implement the closed catalog and role ceiling. The exact-image adversarial canary passed; final release proof is consolidated under #3318. |
+| 1 | [#3298 Class-R reads](https://github.com/AevatarAI/aevatar/issues/3298) | `completed` | `6a32bc32d` and `e8c5ccc94` complete the ordinary-user reads and admin-only ceiling. Deterministic tests and exact-image canaries passed, including honest typed permission failures. |
+| 1 | [#3299 allowlist exposure](https://github.com/AevatarAI/aevatar/issues/3299) | `completed` | `080bb5c28` plus `e8c5ccc94` implement the closed catalog and role ceiling. The exact-image adversarial canary passed; final UC proof is consolidated under #3318. |
 | 1 | [#3300 credential lifecycle](https://github.com/AevatarAI/aevatar/issues/3300) | `present-needs-production-evidence` | `cce255a03` implements bearer/delegation decision and typed refresh failure with deterministic tests. The bearer production path passed; sanctioned ingress cannot exercise delegated refresh without a browser/session bridge. |
-| 1 | [#3311 approval contract](https://github.com/AevatarAI/aevatar/issues/3311) | `present-needs-tests` | ADR-0048 selects Tier B/no-NyxID-change for M40. Generic `tool_approval` is never treated as exact-service authorization. |
+| 1 | [#3311 approval contract](https://github.com/AevatarAI/aevatar/issues/3311) | `completed` | ADR-0048 selects Tier B/no-NyxID-change for M40. Generic `tool_approval` is never treated as exact-service authorization; #3324 owns implementation. |
 | 2 | [#3301 TaskPlan vocabulary](https://github.com/AevatarAI/aevatar/issues/3301) | `present-needs-tests` | Task-plan proto/decoder work from `53e20f9ba` is on the integration baseline. Review one decoder path, rename `postcondition_kind` to `check` while preserving protobuf tag 2, and add three-path convergence fixtures. |
 | 2 | [#3302 derived gate](https://github.com/AevatarAI/aevatar/issues/3302) | `present-needs-tests` | Gate vocabulary and task lifecycle fragments from `53e20f9ba` are on the integration baseline; derived behavior and propose-then-run acceptance depend on #3315's pinned plan-gate decision. |
 | 2 | [#3304 stable identity](https://github.com/AevatarAI/aevatar/issues/3304) | `present-needs-tests` | Integration preserves task and plan state through action work, but complete continuation/reorder/duplicate tests are not evidenced. Validate stable `taskId` and monotonic `planRevision` across every continuation. |
@@ -96,8 +97,8 @@ The GitHub milestone API returned 30 attached issues even though its aggregate `
 | 2 | [#3131 pending attention projection](https://github.com/AevatarAI/aevatar/issues/3131) | `present-needs-tests` | Actor-state projection work is present in [`53e20f9ba`](https://github.com/AevatarAI/aevatar/commit/53e20f9ba2bc6f883a887615a3e015ce4eac3caa). Prove the actor-scoped current-state path exposes pending input/approval attention without query-time priming. |
 | 2 | [#3152 readiness identity](https://github.com/AevatarAI/aevatar/issues/3152) | `present-needs-tests` | [`5e3f1a22b`](https://github.com/AevatarAI/aevatar/commit/5e3f1a22b) projects authoritative readiness identity. Verify intentionally distinct service/readiness IDs with issue-level projection tests. |
 | 2 | [#3154 authoritative resume](https://github.com/AevatarAI/aevatar/issues/3154) | `present-needs-tests` | [`73f0412e9`](https://github.com/AevatarAI/aevatar/commit/73f0412e9) contains needs-you continuation work. Prove duplicate/stale action decisions cannot resume a different task generation. |
-| 2 | [#3177 connect blocker](https://github.com/AevatarAI/aevatar/issues/3177) | `present-needs-production-evidence` | Integration contains readiness/connect fixes, including [`5e3f1a22b`](https://github.com/AevatarAI/aevatar/commit/5e3f1a22b). Source presence is not proof that deployed workflow-chat emits the blocker; retain for Gate 2 canary evidence. |
-| 2 | [#3167 terminal/action frames](https://github.com/AevatarAI/aevatar/issues/3167) | `present-needs-production-evidence` | Frame and Studio changes exist in [`53e20f9ba`](https://github.com/AevatarAI/aevatar/commit/53e20f9ba2bc6f883a887615a3e015ce4eac3caa). Current authenticated production proof for both action and terminal frames is missing. |
+| 2 | [#3177 connect blocker](https://github.com/AevatarAI/aevatar/issues/3177) | `obsolete/superseded` | Credential-kind and delegated-failure fixes are implemented. The remaining workflow-chat card/terminal scope is superseded by the converged trunk in #3296 and Studio acceptance in #3314/#3318. |
+| 2 | [#3167 terminal/action frames](https://github.com/AevatarAI/aevatar/issues/3167) | `obsolete/superseded` | The legacy workflow-chat path is not repaired as a second product trunk. Action, terminal, and reload acceptance belongs to #3296/#3314/#3318. |
 | 3 | [#3303 presentation substeps](https://github.com/AevatarAI/aevatar/issues/3303) | `missing` | Vocabulary fragments exist, but production substep derivation and lifecycle behavior do not satisfy the issue. Keep substeps presentation-only and actor-derived. |
 | 3 | [#3306 progress/stall](https://github.com/AevatarAI/aevatar/issues/3306) | `missing` | Progress transport exists, but cadence and honest stall thresholds lack issue-level acceptance. Stall must derive from observed silence, not be authored as an execution result. |
 | 3 | [#3308 preference/honest-can't](https://github.com/AevatarAI/aevatar/issues/3308) | `missing` | No generalized cannot-check and preference-order contract is evidenced. Implement typed unavailable outcomes before planner fallback. |
@@ -111,12 +112,11 @@ The GitHub milestone API returned 30 attached issues even though its aggregate `
 
 ## 6. Gate 0 exit blockers
 
-Gate 0 closes when the following integration-baseline work is complete:
+Gate 0 is closed. The remaining governance work belongs to later gates:
 
-1. re-run the complete issue/dependency classification at the frozen integration SHA;
-2. keep Gate stewardship assigned to `@eanz17` and record any target-date change explicitly;
-3. replace this planning inventory with the machine-readable conformance authority required by #3313; and
-4. keep deterministic source/test evidence separate from authenticated production evidence owned by #3318.
+1. keep Gate stewardship assigned to `@eanz17` and record any target-date change explicitly;
+2. replace this planning inventory with the machine-readable conformance authority required by #3313; and
+3. keep deterministic source/test evidence separate from authenticated production evidence owned by #3318.
 
 ## 7. Change and evidence protocol
 
