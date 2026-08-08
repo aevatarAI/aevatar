@@ -392,6 +392,16 @@ public sealed class NyxIdChatSessionEventProjector
                 NyxIdChatConversationAguiFrameBuilder.BuildApprovalChanged(committed));
         }
 
+        if (payload.Is(NyxIdChatPlanResolutionCommittedEvent.Descriptor))
+        {
+            var committed = payload.Unpack<NyxIdChatPlanResolutionCommittedEvent>();
+            if (!MatchesControllerState(context, committed.State))
+                return EmptyEntries;
+            return Entries(
+                context,
+                NyxIdChatConversationAguiFrameBuilder.BuildPlanResolutionChanged(committed));
+        }
+
         if (payload.Is(NyxIdChatContinuationAdmissionCommittedEvent.Descriptor))
         {
             var committed = payload.Unpack<NyxIdChatContinuationAdmissionCommittedEvent>();

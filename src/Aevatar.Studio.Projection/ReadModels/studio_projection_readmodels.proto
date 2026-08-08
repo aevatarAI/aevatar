@@ -436,6 +436,28 @@ message NyxIdChatConversationStepDocument {
 message NyxIdChatConversationPlanGateDocument {
   string mode = 1;
   string reason = 2;
+  string status = 3;
+  string request_id = 4;
+  string task_id = 5;
+  int32 plan_revision = 6;
+  google.protobuf.Timestamp decided_at = 7;
+  repeated NyxIdChatConversationPlanOperationAdmissionDocument admissions = 8;
+  string plan_id = 9;
+}
+
+message NyxIdChatConversationPlanOperationAdmissionDocument {
+  string conversation_actor_id = 1;
+  string turn_id = 2;
+  string task_id = 3;
+  string step_id = 4;
+  string operation_id = 5;
+  int64 operation_generation = 6;
+  string tool_call_id = 7;
+  string tool_name = 8;
+  bytes arguments_sha256 = 9;
+  string action_request_id = 10;
+  string action = 11;
+  bytes action_params_sha256 = 12;
 }
 
 message NyxIdChatConversationPlanRevisionDocument {

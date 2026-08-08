@@ -151,6 +151,16 @@ public sealed class NyxIdChatConversationCurrentStateProjector
                 {
                     Mode = ToWireName(task.Gate.Mode),
                     Reason = task.Gate.Reason,
+                    Status = ToWireName(task.Gate.Status),
+                    RequestId = task.Gate.RequestId,
+                    TaskId = task.Gate.TaskId,
+                    PlanRevision = task.Gate.PlanRevision,
+                    DecidedAt = task.Gate.DecidedAt?.Clone(),
+                    PlanId = task.Gate.PlanId,
+                    Admissions =
+                    {
+                        task.Gate.Admissions.Select(ToPlanAdmission),
+                    },
                 },
         };
         document.Steps.AddRange(task.Steps
@@ -170,6 +180,27 @@ public sealed class NyxIdChatConversationCurrentStateProjector
             return result;
         }));
         return document;
+    }
+
+    private static NyxIdChatConversationPlanOperationAdmissionDocument ToPlanAdmission(
+        NyxIdChatPlanOperationAdmission admission)
+    {
+        var key = admission.Key;
+        return new NyxIdChatConversationPlanOperationAdmissionDocument
+        {
+            ConversationActorId = key?.ConversationActorId ?? string.Empty,
+            TurnId = key?.TurnId ?? string.Empty,
+            TaskId = key?.TaskId ?? string.Empty,
+            StepId = key?.StepId ?? string.Empty,
+            OperationId = key?.OperationId ?? string.Empty,
+            OperationGeneration = key?.OperationGeneration ?? 0,
+            ToolCallId = admission.ToolCallId,
+            ToolName = admission.ToolName,
+            ArgumentsSha256 = admission.ArgumentsSha256,
+            ActionRequestId = admission.ActionRequestId,
+            Action = ToWireName(admission.Action),
+            ActionParamsSha256 = admission.ActionParamsSha256,
+        };
     }
 
     private static NyxIdChatConversationStepDocument ToStep(NyxIdChatTaskStepState step) =>
@@ -574,6 +605,14 @@ public sealed class NyxIdChatConversationCurrentStateProjector
     {
         NyxIdChatPlanGateMode.Auto => "auto",
         NyxIdChatPlanGateMode.Confirm => "confirm",
+        _ => string.Empty,
+    };
+
+    private static string ToWireName(NyxIdChatPlanGateStatus status) => status switch
+    {
+        NyxIdChatPlanGateStatus.Pending => "pending",
+        NyxIdChatPlanGateStatus.Satisfied => "satisfied",
+        NyxIdChatPlanGateStatus.Rejected => "rejected",
         _ => string.Empty,
     };
 

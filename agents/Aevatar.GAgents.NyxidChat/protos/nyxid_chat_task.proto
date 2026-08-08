@@ -87,6 +87,13 @@ enum NyxIdChatPlanGateMode {
   NYX_ID_CHAT_PLAN_GATE_MODE_CONFIRM = 2;
 }
 
+enum NyxIdChatPlanGateStatus {
+  NYX_ID_CHAT_PLAN_GATE_STATUS_UNSPECIFIED = 0;
+  NYX_ID_CHAT_PLAN_GATE_STATUS_PENDING = 1;
+  NYX_ID_CHAT_PLAN_GATE_STATUS_SATISFIED = 2;
+  NYX_ID_CHAT_PLAN_GATE_STATUS_REJECTED = 3;
+}
+
 enum NyxIdChatStepAddedBy {
   NYX_ID_CHAT_STEP_ADDED_BY_UNSPECIFIED = 0;
   NYX_ID_CHAT_STEP_ADDED_BY_INITIAL = 1;
@@ -291,9 +298,26 @@ message NyxIdChatStepSource {
   }
 }
 
+message NyxIdChatPlanOperationAdmission {
+  NyxIdChatOperationKey key = 1;
+  string tool_call_id = 2;
+  string tool_name = 3;
+  bytes arguments_sha256 = 4;
+  string action_request_id = 5;
+  NyxIdAssistantActionKind action = 6;
+  bytes action_params_sha256 = 7;
+}
+
 message NyxIdChatPlanGate {
   NyxIdChatPlanGateMode mode = 1;
   string reason = 2;
+  NyxIdChatPlanGateStatus status = 3;
+  string request_id = 4;
+  string task_id = 5;
+  int32 plan_revision = 6;
+  repeated NyxIdChatPlanOperationAdmission admissions = 7;
+  google.protobuf.Timestamp decided_at = 8;
+  string plan_id = 9;
 }
 
 message NyxIdChatStepEstimate {
@@ -561,6 +585,17 @@ message NyxIdChatApprovalResolutionState {
   bool approved = 4;
   bytes decision_sha256 = 5;
   google.protobuf.Timestamp committed_at = 6;
+}
+
+message NyxIdChatPlanResolutionState {
+  string request_id = 1;
+  string client_request_id = 2;
+  NyxIdChatNeedsYouResolutionOutcome outcome = 3;
+  bool confirmed = 4;
+  string task_id = 5;
+  int32 plan_revision = 6;
+  google.protobuf.Timestamp committed_at = 7;
+  string plan_id = 8;
 }
 
 message NyxIdChatConversationAttentionState {
@@ -867,6 +902,8 @@ message NyxIdChatConversationGAgentState {
   // Durable, secret-free outbox for the self-message that materializes an
   // ask_user tool call as the exact actor-owned pending input fact.
   NyxIdChatInputRequestCommand pending_input_request = 30;
+  repeated NyxIdChatPlanResolutionState recent_plan_resolutions = 31;
+  NyxIdChatPlanResolutionState latest_plan_resolution = 32;
 }
 
 message NyxIdChatHistoryInitializationOutbox {
@@ -1076,6 +1113,20 @@ message NyxIdChatToolApprovalContinuationInput {
   bool may_change_external_state = 4;
 }
 
+// A plan confirmation carries no raw tool arguments. The turn actor must match
+// this admission to the exact transient authorized call it already owns.
+message NyxIdChatPlanGateContinuationInput {
+  string gate_request_id = 1;
+  string task_id = 2;
+  int32 plan_revision = 3;
+  string tool_call_id = 4;
+  string tool_name = 5;
+  bytes arguments_sha256 = 6;
+  aevatar.ai.AgentToolExecutionContextPayload tool_context = 7;
+  bool may_change_external_state = 8;
+  string plan_id = 9;
+}
+
 message NyxIdChatOperationDispatchCommand {
   NyxIdChatOperationKey key = 1;
   oneof input {
@@ -1084,6 +1135,7 @@ message NyxIdChatOperationDispatchCommand {
     NyxIdChatActionPostconditionInput action_postcondition = 12;
     NyxIdChatInputContinuationInput input_continuation = 13;
     NyxIdChatToolApprovalContinuationInput tool_approval_continuation = 14;
+    NyxIdChatPlanGateContinuationInput plan_gate_continuation = 15;
   }
 }
 
@@ -1092,6 +1144,7 @@ message NyxIdChatToolCallSafety {
   bool is_destructive = 2;
   string side_effect_kind = 3;
   bool may_change_external_state = 4;
+  bool requires_approval = 5;
 }
 
 message NyxIdChatToolCall {
@@ -1298,6 +1351,21 @@ message NyxIdChatApprovalResolveCommand {
   aevatar.ai.AgentToolExecutionContextPayload tool_context = 10;
 }
 
+message NyxIdChatPlanResolveCommand {
+  string scope_id = 1;
+  string conversation_actor_id = 2;
+  string task_id = 3;
+  int32 plan_revision = 4;
+  string request_id = 5;
+  string client_request_id = 6;
+  bool confirmed = 7;
+  int64 expected_state_version = 8;
+  string command_id = 9;
+  string correlation_id = 10;
+  aevatar.ai.AgentToolExecutionContextPayload tool_context = 11;
+  string plan_id = 12;
+}
+
 message NyxIdChatActionContinueCommand {
   string scope_id = 1;
   string conversation_actor_id = 2;
@@ -1404,6 +1472,11 @@ message NyxIdChatInputResolutionCommittedEvent {
 
 message NyxIdChatApprovalResolutionCommittedEvent {
   NyxIdChatApprovalResolutionState resolution = 1;
+  NyxIdChatConversationGAgentState state = 2;
+}
+
+message NyxIdChatPlanResolutionCommittedEvent {
+  NyxIdChatPlanResolutionState resolution = 1;
   NyxIdChatConversationGAgentState state = 2;
 }
 

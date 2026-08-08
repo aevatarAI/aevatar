@@ -27,6 +27,8 @@ public sealed class NyxIdChatControlEndpointsTests
         "/api/scopes/{scopeId}/nyxid-chat/conversations/{actorId}/turns/{turnId}/steps/{stepId}:retry";
     private const string SkipRoute =
         "/api/scopes/{scopeId}/nyxid-chat/conversations/{actorId}/turns/{turnId}/steps/{stepId}:skip";
+    private const string PlanResolveRoute =
+        "/api/scopes/{scopeId}/nyxid-chat/conversations/{actorId}/plans/{taskId}:resolve";
     private const string ValidStopBody = """
         {
           "turnId": "turn-alpha",
@@ -207,6 +209,48 @@ public sealed class NyxIdChatControlEndpointsTests
         command.LlmControl.NyxIdAccessToken.Should().Be("steering-runtime-token-alpha");
         command.ToolContext.Credentials.NyxIdAccessToken.Should().Be(
             "steering-runtime-token-alpha");
+        command.ToolContext.Credentials.NyxIdCredentialKind.Should().Be(
+            AgentToolNyxIdCredentialKindPayload.ProxyDelegation);
+    }
+
+    [Fact]
+    public async Task PlanResolve_ShouldBindExactPlanAndCarryFreshTransientCapability()
+    {
+        var dispatch = new RecordingDispatchPort();
+        var routeValues = ConversationRouteValues();
+        routeValues["taskId"] = "task-alpha";
+
+        var response = await ExecuteAsync(
+            PlanResolveRoute,
+            routeValues,
+            """
+            {
+              "requestId": "plan-gate-alpha",
+              "clientRequestId": "client-plan-alpha",
+              "planId": "plan-alpha",
+              "planRevision": 3,
+              "confirmed": true,
+              "expectedStateVersion": 23
+            }
+            """,
+            new RecordingAdmissionPort(),
+            dispatch,
+            accessToken: "fresh-plan-token-alpha");
+
+        response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        response.Body.Should().NotContain("fresh-plan-token-alpha");
+        var command = dispatch.Dispatches.Should().ContainSingle().Which.Envelope.Payload
+            .Unpack<NyxIdChatPlanResolveCommand>();
+        command.ScopeId.Should().Be("scope-alpha");
+        command.ConversationActorId.Should().Be("conversation-alpha");
+        command.TaskId.Should().Be("task-alpha");
+        command.PlanId.Should().Be("plan-alpha");
+        command.PlanRevision.Should().Be(3);
+        command.RequestId.Should().Be("plan-gate-alpha");
+        command.ClientRequestId.Should().Be("client-plan-alpha");
+        command.Confirmed.Should().BeTrue();
+        command.ExpectedStateVersion.Should().Be(23);
+        command.ToolContext.Credentials.NyxIdAccessToken.Should().Be("fresh-plan-token-alpha");
         command.ToolContext.Credentials.NyxIdCredentialKind.Should().Be(
             AgentToolNyxIdCredentialKindPayload.ProxyDelegation);
     }

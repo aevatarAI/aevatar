@@ -32,6 +32,15 @@ public sealed class NyxIdChatBrowserActionTests
         decision.State.PendingActions.Should().ContainSingle()
             .Which.Should().BeEquivalentTo(decision.Request);
         decision.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Blocked);
+        decision.State.ActiveTask.Gate.Mode.Should().Be(NyxIdChatPlanGateMode.Confirm);
+        decision.State.ActiveTask.Gate.Status.Should().Be(NyxIdChatPlanGateStatus.Pending);
+        decision.State.ActiveTask.Gate.PlanId.Should().Be("plan-alpha");
+        decision.State.ActiveTask.Gate.Admissions.Should().ContainSingle().Which
+            .Should().Match<NyxIdChatPlanOperationAdmission>(admission =>
+                admission.ActionRequestId == decision.Request.ActionRequestId &&
+                admission.Action == decision.Request.Action &&
+                admission.ActionParamsSha256.Equals(
+                    NyxIdChatPlanGateDecisions.HashActionParams(decision.Request.Params)));
         decision.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Blocked);
         decision.State.ActiveTurn.TerminalAt.Should().NotBeNull();
         decision.State.RecentTerminalTurns.Should().ContainSingle(summary =>
@@ -58,6 +67,88 @@ public sealed class NyxIdChatBrowserActionTests
             .Be(NyxIdChatPlanRevisionCause.ScopeResolution);
         decision.State.ActiveTask.PlanRevisions[1].AddedStepIds.Should()
             .Equal(actionStep.StepId, postcondition.StepId);
+    }
+
+    [Fact]
+    public void ExactActionPlanConfirm_ShouldSatisfyOnlyLocalGateWithoutDispatchOrRevision()
+    {
+        var state = BlockedActionStateWithPendingGate();
+        var gate = state.ActiveTask.Gate.Clone();
+        var revision = state.ActiveTask.PlanRevision;
+        var history = RevisionHistory(state.ActiveTask);
+
+        var decision = NyxIdChatPlanGateDecisions.Resolve(
+            state,
+            ResolvePlanCommand(gate, confirmed: true),
+            currentStateVersion: 17,
+            Now);
+
+        decision.ShouldCommit.Should().BeTrue();
+        decision.NextCommand.Should().BeNull(
+            "local plan admission does not impersonate NyxID authorization");
+        decision.State.ActiveTask.Gate.Status.Should().Be(NyxIdChatPlanGateStatus.Satisfied);
+        decision.State.PendingActions.Should().ContainSingle();
+        decision.State.ActiveTask.Steps.Where(step =>
+                step.ActionRequestId == gate.Admissions.Single().ActionRequestId)
+            .Select(static step => step.Status)
+            .Should().Equal(NyxIdChatStepStatus.Waiting, NyxIdChatStepStatus.Planned);
+        decision.State.ActiveTask.PlanRevision.Should().Be(revision);
+        RevisionHistory(decision.State.ActiveTask).Should().Equal(history);
+    }
+
+    [Fact]
+    public void ExactActionPlanReject_ShouldCancelActionAndPostconditionWithoutDispatch()
+    {
+        var state = BlockedActionStateWithPendingGate();
+        var gate = state.ActiveTask.Gate.Clone();
+        var revision = state.ActiveTask.PlanRevision;
+        var history = RevisionHistory(state.ActiveTask);
+
+        var decision = NyxIdChatPlanGateDecisions.Resolve(
+            state,
+            ResolvePlanCommand(gate, confirmed: false),
+            currentStateVersion: 17,
+            Now);
+
+        decision.ShouldCommit.Should().BeTrue();
+        decision.NextCommand.Should().BeNull();
+        decision.State.ActiveTask.Gate.Status.Should().Be(NyxIdChatPlanGateStatus.Rejected);
+        decision.State.PendingActions.Should().BeEmpty();
+        decision.State.RecentActions.Should().ContainSingle(action =>
+            action.ActionRequestId == gate.Admissions.Single().ActionRequestId);
+        decision.State.ActiveTask.Steps.Where(step =>
+                step.ActionRequestId == gate.Admissions.Single().ActionRequestId)
+            .Should().OnlyContain(step =>
+                step.Status == NyxIdChatStepStatus.Cancelled &&
+                step.ExternalEffect == NyxIdChatEffectEvidence.NotApplied);
+        decision.State.ActiveTask.PlanRevision.Should().Be(revision);
+        RevisionHistory(decision.State.ActiveTask).Should().Equal(history);
+    }
+
+    [Fact]
+    public void ActionContinueBeforePlanConfirm_ShouldRejectWithoutDispatchOrRevisionChange()
+    {
+        var state = BlockedActionStateWithPendingGate();
+        var gate = state.ActiveTask.Gate.Clone();
+        var revision = state.ActiveTask.PlanRevision;
+        var history = RevisionHistory(state.ActiveTask);
+
+        var decision = NyxIdChatBrowserActions.Continue(
+            state,
+            ContinueCommand(
+                state.PendingActions.Single().ActionRequestId,
+                NyxIdChatActionDisposition.Completed),
+            Now);
+
+        decision.ShouldCommit.Should().BeTrue();
+        decision.ShouldDispatch.Should().BeFalse();
+        decision.Outcome.Should().Be(NyxIdChatTransitionOutcome.Rejected);
+        decision.ReasonCode.Should().Be(
+            NyxIdChatBrowserActions.ActionContinuationPlanConfirmationRequired);
+        decision.State.ActiveTask.Gate.Should().BeEquivalentTo(gate);
+        decision.State.PendingActions.Should().ContainSingle();
+        decision.State.ActiveTask.PlanRevision.Should().Be(revision);
+        RevisionHistory(decision.State.ActiveTask).Should().Equal(history);
     }
 
     [Fact]
@@ -767,7 +858,15 @@ public sealed class NyxIdChatBrowserActionTests
             action.PostconditionResult.Verified);
     }
 
-    private static NyxIdChatConversationGAgentState BlockedActionState() =>
+    private static NyxIdChatConversationGAgentState BlockedActionState()
+    {
+        var state = BlockedActionStateWithPendingGate();
+        state.ActiveTask.Gate.Status = NyxIdChatPlanGateStatus.Satisfied;
+        state.ActiveTask.Gate.DecidedAt = Now.Clone();
+        return state;
+    }
+
+    private static NyxIdChatConversationGAgentState BlockedActionStateWithPendingGate() =>
         NyxIdChatBrowserActions.RequestAuthorization(
             AuthorizationWaitingState(),
             AuthorizationRequiredSignal(AuthorizationWaitingState()),
@@ -802,7 +901,10 @@ public sealed class NyxIdChatBrowserActionTests
         second.ActionRequestId = "action-beta";
         second.StepId = "step-action-beta";
         second.Params.CatalogServiceConnect.ServiceSlug = "api-slack";
-        return NyxIdChatBrowserActions.CommitRequest(state, second, Now).State;
+        var committed = NyxIdChatBrowserActions.CommitRequest(state, second, Now).State;
+        committed.ActiveTask.Gate.Status = NyxIdChatPlanGateStatus.Satisfied;
+        committed.ActiveTask.Gate.DecidedAt = Now.Clone();
+        return committed;
     }
 
     private static NyxIdChatConversationGAgentState AuthorizationWaitingState()
@@ -841,6 +943,7 @@ public sealed class NyxIdChatBrowserActionTests
             TurnId = "turn-alpha",
             Status = NyxIdChatTaskStatus.Active,
             ActiveStepId = key.StepId,
+            PlanId = "plan-alpha",
             CreatedAt = Now.Clone(),
             UpdatedAt = Now.Clone(),
         };
@@ -911,6 +1014,26 @@ public sealed class NyxIdChatBrowserActionTests
         command.Actions.Add(ActionReport(actionRequestId, disposition));
         return command;
     }
+
+    private static NyxIdChatPlanResolveCommand ResolvePlanCommand(
+        NyxIdChatPlanGate gate,
+        bool confirmed) => new()
+    {
+        ScopeId = "scope-alpha",
+        ConversationActorId = "conversation-alpha",
+        TaskId = gate.TaskId,
+        PlanId = gate.PlanId,
+        PlanRevision = gate.PlanRevision,
+        RequestId = gate.RequestId,
+        ClientRequestId = confirmed ? "confirm-action-alpha" : "reject-action-alpha",
+        Confirmed = confirmed,
+        ExpectedStateVersion = 17,
+    };
+
+    private static string[] RevisionHistory(NyxIdChatTaskState task) =>
+        task.PlanRevisions
+            .Select(static revision => revision.ToByteString().ToBase64())
+            .ToArray();
 
     private static NyxIdChatActionReport ActionReport(
         string actionRequestId,

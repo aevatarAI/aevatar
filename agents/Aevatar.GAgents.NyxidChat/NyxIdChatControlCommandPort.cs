@@ -36,6 +36,10 @@ internal interface INyxIdChatControlCommandPort
     Task<NyxIdChatControlAcceptedReceipt> DispatchApprovalResolveAsync(
         NyxIdChatApprovalResolveCommand command,
         CancellationToken ct = default);
+
+    Task<NyxIdChatControlAcceptedReceipt> DispatchPlanResolveAsync(
+        NyxIdChatPlanResolveCommand command,
+        CancellationToken ct = default);
 }
 
 internal sealed class NyxIdChatControlCommandPort : INyxIdChatControlCommandPort
@@ -79,6 +83,12 @@ internal sealed class NyxIdChatControlCommandPort : INyxIdChatControlCommandPort
 
     public Task<NyxIdChatControlAcceptedReceipt> DispatchApprovalResolveAsync(
         NyxIdChatApprovalResolveCommand command,
+        CancellationToken ct = default) =>
+        DispatchAsync(command, command?.RequestId, command?.ConversationActorId, command?.CommandId,
+            command?.CorrelationId, ct);
+
+    public Task<NyxIdChatControlAcceptedReceipt> DispatchPlanResolveAsync(
+        NyxIdChatPlanResolveCommand command,
         CancellationToken ct = default) =>
         DispatchAsync(command, command?.RequestId, command?.ConversationActorId, command?.CommandId,
             command?.CorrelationId, ct);

@@ -1980,6 +1980,57 @@ public sealed class NyxIdChatProjectionSessionTests
             .Should().BeEquivalentTo(resolution);
     }
 
+    [Fact]
+    public async Task Projector_PlanResolution_ShouldImmediatelyEmitFullTaskSnapshot()
+    {
+        var hub = new RecordingSessionEventHub();
+        var projector = new NyxIdChatSessionEventProjector(hub);
+        var context = ControllerContext();
+        var state = ControllerState(NyxIdChatTaskStatus.Active, NyxIdChatTurnStatus.Active);
+        state.ProgressSequence = 51;
+        state.ActiveTask.PlanRevision = 2;
+        state.ActiveTask.Gate = new NyxIdChatPlanGate
+        {
+            Mode = NyxIdChatPlanGateMode.Confirm,
+            Status = NyxIdChatPlanGateStatus.Satisfied,
+            RequestId = "plan-gate-alpha",
+            TaskId = "task-alpha",
+            PlanRevision = 2,
+        };
+        var resolution = new NyxIdChatPlanResolutionState
+        {
+            RequestId = "plan-gate-alpha",
+            ClientRequestId = "client-plan-alpha",
+            Outcome = NyxIdChatNeedsYouResolutionOutcome.Accepted,
+            Confirmed = true,
+            TaskId = "task-alpha",
+            PlanRevision = 2,
+            CommittedAt = Timestamp.FromDateTimeOffset(
+                DateTimeOffset.Parse("2026-08-01T12:01:00Z")),
+        };
+
+        await projector.ProjectAsync(
+            context,
+            CommittedEnvelope(
+                context.RootActorId,
+                new NyxIdChatPlanResolutionCommittedEvent
+                {
+                    Resolution = resolution,
+                    State = state,
+                },
+                stateVersion: 51),
+            CancellationToken.None);
+
+        var snapshot = hub.Published.Select(static entry => entry.Event)
+            .Single(frame => frame.Custom?.Name ==
+                NyxIdChatConversationAguiFrameBuilder.TaskSnapshotEventName);
+        snapshot.Sequence.Should().Be(51);
+        var task = snapshot.Custom.Payload.Unpack<NyxIdChatTaskState>();
+        task.TaskId.Should().Be("task-alpha");
+        task.PlanRevision.Should().Be(2);
+        task.Gate.Status.Should().Be(NyxIdChatPlanGateStatus.Satisfied);
+    }
+
     private static EventEnvelope CommittedEnvelope(string actorId, IMessage evt, long stateVersion = 1) => new()
     {
         Payload = Any.Pack(new CommittedStateEventPublished

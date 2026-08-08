@@ -30,6 +30,9 @@ public static partial class NyxIdChatEndpoints
         group.MapPost(
             "/{scopeId}/nyxid-chat/conversations/{actorId}/turns/{turnId}/steps/{stepId}:skip",
             HandleSkipControlAsync);
+        group.MapPost(
+            "/{scopeId}/nyxid-chat/conversations/{actorId}/plans/{taskId}:resolve",
+            HandlePlanResolveControlAsync);
     }
 
     private static async Task<IResult> HandleStopControlAsync(
@@ -361,6 +364,61 @@ public static partial class NyxIdChatEndpoints
         return AcceptedControl(http, identity.ScopeId, identity.ActorId, receipt);
     }
 
+    private static async Task<IResult> HandlePlanResolveControlAsync(
+        HttpContext http,
+        string scopeId,
+        string actorId,
+        string taskId,
+        NyxIdChatPlanResolveRequest request,
+        [FromServices] IScopeResourceAdmissionPort admissionPort,
+        [FromServices] INyxIdChatControlCommandPort commandPort,
+        CancellationToken ct)
+    {
+        if (!TryValidateNeedsYouRequest(
+                scopeId,
+                actorId,
+                request.RequestId,
+                request.ClientRequestId,
+                request.ExpectedStateVersion,
+                out var identity) ||
+            !TryValidateControlIdentity(taskId, out var normalizedTaskId) ||
+            !TryValidateControlIdentity(request.PlanId, out var normalizedPlanId) ||
+            request.PlanRevision <= 0)
+        {
+            return InvalidControlRequest();
+        }
+
+        var credentials = ExtractNyxIdCredentials(http);
+        if (string.IsNullOrWhiteSpace(credentials?.NyxIdAccessToken))
+            return Results.Unauthorized();
+        var admissionError = await AuthorizeConversationAsync(
+            admissionPort,
+            identity.ScopeId,
+            identity.ActorId,
+            ScopeResourceOperation.Control,
+            ct).ConfigureAwait(false);
+        if (admissionError is not null)
+            return admissionError;
+
+        var (commandId, correlationId) = CreateControlTraceIdentity();
+        var receipt = await commandPort.DispatchPlanResolveAsync(new NyxIdChatPlanResolveCommand
+        {
+            ScopeId = identity.ScopeId,
+            ConversationActorId = identity.ActorId,
+            TaskId = normalizedTaskId,
+            PlanId = normalizedPlanId,
+            PlanRevision = request.PlanRevision,
+            RequestId = identity.RequestId,
+            ClientRequestId = identity.ClientRequestId,
+            Confirmed = request.Confirmed,
+            ExpectedStateVersion = request.ExpectedStateVersion,
+            CommandId = commandId,
+            CorrelationId = correlationId,
+            ToolContext = ToToolContextPayload(credentials!),
+        }, ct).ConfigureAwait(false);
+        return AcceptedControl(http, identity.ScopeId, identity.ActorId, receipt);
+    }
+
     private static AgentToolExecutionContextPayload BuildControlToolContext(
         string scopeId,
         string turnId,
@@ -593,5 +651,13 @@ public static partial class NyxIdChatEndpoints
         string? ClientRequestId,
         bool Approved,
         string? Reason,
+        long ExpectedStateVersion);
+
+    public sealed record NyxIdChatPlanResolveRequest(
+        string? RequestId,
+        string? ClientRequestId,
+        string? PlanId,
+        int PlanRevision,
+        bool Confirmed,
         long ExpectedStateVersion);
 }

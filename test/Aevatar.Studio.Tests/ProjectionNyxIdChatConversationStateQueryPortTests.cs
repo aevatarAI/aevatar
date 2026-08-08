@@ -51,10 +51,19 @@ public sealed class ProjectionNyxIdChatConversationStateQueryPortTests
         result.Snapshot.ActiveTask.PlanRevision.Should().Be(2);
         result.Snapshot.ActiveTask.PlanRevisionHistoryStart.Should().Be(1);
         result.Snapshot.ActiveTask.Title.Should().Be("Update GitHub safely");
-        result.Snapshot.ActiveTask.Gate.Should().BeEquivalentTo(
-            new NyxIdChatConversationPlanGateSnapshot(
-                "confirm",
-                "The plan contains an effect-capable operation."));
+        result.Snapshot.ActiveTask.Gate.Should().NotBeNull();
+        var gate = result.Snapshot.ActiveTask.Gate!;
+        gate.Mode.Should().Be("confirm");
+        gate.Reason.Should().Be("The plan contains an effect-capable operation.");
+        gate.Status.Should().Be("pending");
+        gate.RequestId.Should().Be("plan-gate-alpha");
+        gate.TaskId.Should().Be("task-alpha");
+        gate.PlanId.Should().Be("plan-alpha");
+        gate.PlanRevision.Should().Be(2);
+        var gateAdmission = gate.Admissions.Should().ContainSingle().Which;
+        gateAdmission.ActionRequestId.Should().Be("action-alpha");
+        gateAdmission.Action.Should().Be("service.connect");
+        gateAdmission.ActionParamsSha256.Should().Equal([1, 2, 3, 4]);
         result.Snapshot.ActiveTask.PlanRevisions.Should().NotBeNull();
         result.Snapshot.ActiveTask.PlanRevisions!.Select(static revision =>
                 (revision.PlanRevision, revision.RevisionCause))
@@ -329,6 +338,21 @@ public sealed class ProjectionNyxIdChatConversationStateQueryPortTests
             {
                 Mode = "confirm",
                 Reason = "The plan contains an effect-capable operation.",
+                Status = "pending",
+                RequestId = "plan-gate-alpha",
+                TaskId = "task-alpha",
+                PlanId = "plan-alpha",
+                PlanRevision = 2,
+                Admissions =
+                {
+                    new NyxIdChatConversationPlanOperationAdmissionDocument
+                    {
+                        ActionRequestId = "action-alpha",
+                        Action = "service.connect",
+                        ActionParamsSha256 = Google.Protobuf.ByteString.CopyFrom(
+                            [1, 2, 3, 4]),
+                    },
+                },
             },
             PlanRevisions =
             {

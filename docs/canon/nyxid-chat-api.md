@@ -12,7 +12,7 @@ The ownership and retention distinction between execution state, derived prompt 
 conversation transcript, and cross-conversation user memory is canonical in
 [conversation-context-and-memory.md](conversation-context-and-memory.md).
 
-The canonical client surface is Mainnet `POST /api/chat` plus `/api/chat/conversations/**`. Assistant commands are selected only by one of the eight explicit `type` discriminators: `text`, `input.resolve`, `action.continue`, `approval.resolve`, `task.stop`, `task.steer`, `step.retry`, and `step.skip`. The public routes never accept `scopeId`; they derive one unambiguous scope from the authenticated principal and fail closed otherwise.
+The canonical client surface is Mainnet `POST /api/chat` plus `/api/chat/conversations/**`. Assistant commands are selected only by one of the nine explicit `type` discriminators: `text`, `plan.resolve`, `input.resolve`, `action.continue`, `approval.resolve`, `task.stop`, `task.steer`, `step.retry`, and `step.skip`. The public routes never accept `scopeId`; they derive one unambiguous scope from the authenticated principal and fail closed otherwise.
 
 The authoritative runtime is one durable conversation-controller actor plus a run-scoped turn actor that executes one authorized operation at a time. The controller's committed protobuf state is the task authority. AGUI and the current-state query are two consumers of the same committed Projection Pipeline; neither endpoint nor projector reconstructs task truth.
 
@@ -67,6 +67,8 @@ The HTTP endpoint owns only authentication/protocol adaptation, serialized SSE w
 | `conversationId` / actor `actorId` | Server-created, conversation lifetime | One exact identity for the existing conversation-controller actor and public thread. There is no mapping table or second ID. |
 | `turnId` | Server-created, one normal submission or continuation | One observed run. It is not the conversation actor ID. |
 | `taskId` | Conversation actor, one task plan | Actor-owned task identity. It is distinct from `turnId`. |
+| `planId` | Conversation actor, one frozen semantic plan | Exact plan identity. It is not `taskId`, a revision, or a route-derived value. |
+| plan gate `requestId` | Conversation actor, one local admission decision | Selects the exact pending Aevatar plan gate. It is not an approval or browser-action identity. |
 | `stepId` | Conversation actor, one task step | Selects a typed step inside `taskId`. |
 | `operationId` | Conversation actor, one logical operation | Correlates one LLM, tool, or postcondition operation. |
 | `operationGeneration` | Conversation actor, monotonically renewed for a step | Rejects stale progress/results and fences retries. |
@@ -171,7 +173,7 @@ Its stable v1 fields are:
 | `planId` / `planRevision` | Stable plan identity and actor-authored semantic-content revision. |
 | `planRevisionHistoryStart` / `planRevisions` | Start revision and contiguous typed durable history through the current revision. |
 | `title` | Safe user-facing task title. |
-| `gate.mode` / `gate.reason` | Closed `auto` or `confirm` gate and its safe explanation. |
+| `gate` | Closed mode/status plus exact `requestId / taskId / planId / planRevision`, safe reason, decision time, and operation admissions bound to full operation identity and argument digest or action identity and typed-parameter digest. |
 | `steps` | Ordered complete step states. |
 
 Each step carries `stepId / order / kind / status / required / description`, a
@@ -338,6 +340,32 @@ The controller commits a stop or steering fence before any successor decision. O
 Steering is serialized by the actor. If an operation is physically in flight, the controller may commit `accepted_for_later`; the server starts the new `continuationTurnId` only after a safe checkpoint. Completed steps and prior effect evidence are preserved and never re-executed.
 
 Retry and skip validate the body `conversationId`, `turnId`, `taskId`, `stepId`, expected generation, expected actor version, and current actor-computed availability. Replaying the same request and content is idempotent. Reusing an identity with different content fails closed.
+
+## Plan admission gate
+
+The Aevatar plan gate is actor-owned local admission, independent of NyxID authorization. `auto` means the disclosed operation may enter the next Aevatar execution step without a separate local decision. `confirm / pending` requires an exact `plan.resolve` before the bound operation can advance. Confirming an Aevatar plan does not grant NyxID access, approve an Aevatar tool request, complete a browser journey, or prove an external effect. Those authorities retain their own typed requests and postconditions.
+
+The pending gate binds `requestId + taskId + planId + planRevision` and exactly one operation admission. A tool admission also binds the full operation key, `toolCallId`, `toolName`, and SHA-256 of the exact arguments. A browser-action admission binds `actionRequestId`, the typed action kind, and SHA-256 of the typed protobuf action parameters. Arguments and action parameters are not copied into the gate. Reload restores these same actor facts from the current-state projection; the query path never reconstructs them.
+
+Resolve the observed gate through the public command surface:
+
+```json
+{
+  "type": "plan.resolve",
+  "conversationId": "conversation-alpha",
+  "taskId": "task-alpha",
+  "planId": "plan-alpha",
+  "requestId": "plan-gate-alpha",
+  "clientRequestId": "client-plan-alpha",
+  "planRevision": 3,
+  "confirmed": true,
+  "expectedStateVersion": 23
+}
+```
+
+All identities, the actor version, decision, and operation admission must match. A stale version, wrong plan ID or revision, changed digest, unknown request, or conflicting replay fails closed without dispatch. Confirmation marks only that exact gate `satisfied`; rejection marks it `rejected`, cancels its not-started operation, and terminalizes the task without external dispatch. `action.continue`, steering, approval, reload, and duplicate delivery never satisfy a pending gate and never increase `planRevision` merely because control state changed.
+
+`202 Accepted` means only that the typed command was accepted for dispatch with a stable `commandId`. It does not mean the gate was committed, the operation started, NyxID authorized it, or the read model observed the result. Observe `nyxid.task.snapshot` / `nyxid.task.step.changed` or the current-state resource and use its authoritative `stateVersion`.
 
 ## Pending input and tool approval
 
@@ -666,13 +694,14 @@ Callers must:
 3. send `clientRequestId` only for transport idempotency;
 4. use `type=task.steer` rather than a normal text turn while work is active;
 5. preserve the exact task/step/generation/version when invoking retry or skip;
-6. preserve approval `requestId` separately from browser `actionRequestId`;
-7. resolve pending input and approval with their exact actor-owned `requestId`, a stable `clientRequestId`, and the observed `stateVersion`;
-8. send schema v4 action reports with `actionRequestId`, `originTurnId`, `disposition`, and typed resource refs, or send `actions=[]` as a signal-only wake-up;
-9. treat browser `completed` and empty wake-up as signals pending typed postcondition proof;
-10. query `/api/chat/conversations/{conversationId}/state` with `stateVersion` and obey `reload_required`;
-11. use `/api/chat/conversations`, not Workflow `create-recovery`, to confirm creation;
-12. tolerate eventual transcript/current-state materialization after admission;
-13. never send `scopeId`, a secret, OAuth/device/user code, raw credential, or secret-bearing URL in action params or reports.
+6. resolve a pending plan gate with its exact `requestId / taskId / planId / planRevision` and observed `stateVersion`;
+7. preserve approval `requestId` separately from browser `actionRequestId`;
+8. resolve pending input and approval with their exact actor-owned `requestId`, a stable `clientRequestId`, and the observed `stateVersion`;
+9. send schema v4 action reports with `actionRequestId`, `originTurnId`, `disposition`, and typed resource refs, or send `actions=[]` as a signal-only wake-up;
+10. treat browser `completed` and empty wake-up as signals pending typed postcondition proof;
+11. query `/api/chat/conversations/{conversationId}/state` with `stateVersion` and obey `reload_required`;
+12. use `/api/chat/conversations`, not Workflow `create-recovery`, to confirm creation;
+13. tolerate eventual transcript/current-state materialization after admission;
+14. never send `scopeId`, a secret, OAuth/device/user code, raw credential, or secret-bearing URL in action params or reports.
 
 Earlier schema v3 drafts that use action `id`, inner `payload`, only `completed/declined`, or a device user-code action are obsolete and must not be used to implement or test this contract.

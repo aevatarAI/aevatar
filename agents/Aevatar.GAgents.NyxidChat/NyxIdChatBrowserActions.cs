@@ -31,6 +31,8 @@ public static class NyxIdChatBrowserActions
     public const string ActionContinuationConflict = "NYXID_ACTION_CONTINUATION_CONFLICT";
     public const string ActionContinuationInvalid = "NYXID_ACTION_CONTINUATION_INVALID";
     public const string ActionContinuationActiveTurn = "NYXID_ACTION_CONTINUATION_ACTIVE_TURN";
+    public const string ActionContinuationPlanConfirmationRequired =
+        "NYXID_ACTION_CONTINUATION_PLAN_CONFIRMATION_REQUIRED";
     public const string ActionPostconditionVerified = "NYXID_ACTION_POSTCONDITION_VERIFIED";
     public const string ActionPostconditionUnverified = "NYXID_ACTION_POSTCONDITION_UNVERIFIED";
 
@@ -195,14 +197,7 @@ public static class NyxIdChatBrowserActions
                 now,
                 [actionStep, postconditionStep]);
         }
-        if (request.AdvisoryRisk is NyxIdAssistantActionRisk.Grant or NyxIdAssistantActionRisk.Destructive)
-        {
-            task.Gate = new NyxIdChatPlanGate
-            {
-                Mode = NyxIdChatPlanGateMode.Confirm,
-                Reason = "This plan contains a browser-owned NyxID action that requires confirmation.",
-            };
-        }
+        task.Gate = NyxIdChatPlanGateDecisions.BuildActionGate(next, request);
         task.Status = NyxIdChatTaskStatus.Blocked;
         task.ActiveStepId = actionStep.StepId;
         task.ActiveOperationId = string.Empty;
@@ -281,6 +276,45 @@ public static class NyxIdChatBrowserActions
                     new NyxIdChatActionRequestState(),
                 existingAdmission.Clone(),
                 replay);
+        }
+
+        if (state.ActiveTask?.Gate is
+            {
+                Mode: NyxIdChatPlanGateMode.Confirm,
+                Status: NyxIdChatPlanGateStatus.Pending,
+            })
+        {
+            const string message = "Confirm the current Aevatar plan before continuing the NyxID action.";
+            var rejectedAdmission = new NyxIdChatContinuationAdmissionState
+            {
+                Kind = NyxIdChatContinuationKind.Action,
+                RequestId = Normalize(command.CommandId),
+                ClientRequestId = Normalize(command.ClientRequestId),
+                OriginTurnId = Normalize(command.OriginTurnId),
+                ContinuationTurnId = Normalize(command.ContinuationTurnId),
+                Status = NyxIdChatContinuationAdmissionStatus.Rejected,
+                ReasonCode = ActionContinuationPlanConfirmationRequired,
+                SafeMessage = message,
+                CommittedAt = now.Clone(),
+                OwnerSubject = Normalize(command.OwnerSubject),
+            };
+            rejectedAdmission.ActionReports.Add(
+                sanitizedReports.Select(static report => report.Clone()));
+            var rejectedState = state.Clone();
+            rejectedState.ContinuationAdmission = rejectedAdmission.Clone();
+            rejectedState.ProgressSequence++;
+            rejectedState.UpdatedAt = now.Clone();
+            return new NyxIdChatBrowserActionDecision(
+                ShouldCommit: true,
+                ShouldDispatch: false,
+                NyxIdChatTransitionOutcome.Rejected,
+                ActionContinuationPlanConfirmationRequired,
+                message,
+                rejectedState,
+                FindRequestForReports(state, sanitizedReports) ??
+                    new NyxIdChatActionRequestState(),
+                rejectedAdmission,
+                NextCommand: null);
         }
 
         if (state.ActiveTurn?.Status == NyxIdChatTurnStatus.Active)

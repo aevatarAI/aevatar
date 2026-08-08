@@ -38,7 +38,9 @@ public static class NyxIdChatTaskLifecycle
     public static NyxIdChatTaskLifecycleDecision ApplyOperationResult(
         NyxIdChatConversationGAgentState state,
         NyxIdChatOperationResultSignal signal,
-        Timestamp now)
+        Timestamp now,
+        int planGateConfirmationThresholdSeconds =
+            NyxIdChatPlanGateOptions.DefaultConfirmationThresholdSeconds)
     {
         ArgumentNullException.ThrowIfNull(state);
         ArgumentNullException.ThrowIfNull(signal);
@@ -55,7 +57,13 @@ public static class NyxIdChatTaskLifecycle
         if (signal.ResultCase == NyxIdChatOperationResultSignal.ResultOneofCase.Llm &&
             signal.Llm.ToolCalls.Count > 0)
         {
-            return ApplyLlmToolPlan(state, signal, operationKey, currentStep, now);
+            return ApplyLlmToolPlan(
+                state,
+                signal,
+                operationKey,
+                currentStep,
+                now,
+                planGateConfirmationThresholdSeconds);
         }
 
         var normalizedSignal = NormalizeUncertainToolResult(signal);
@@ -92,7 +100,8 @@ public static class NyxIdChatTaskLifecycle
         NyxIdChatOperationResultSignal signal,
         NyxIdChatOperationKey operationKey,
         NyxIdChatTaskStepState currentStep,
-        Timestamp now)
+        Timestamp now,
+        int planGateConfirmationThresholdSeconds)
     {
         if (signal.Llm.ToolCalls.Count != 1)
         {
@@ -146,6 +155,36 @@ public static class NyxIdChatTaskLifecycle
             NyxIdChatPlanRevisionCause.ScopeResolution,
             now,
             [toolStep]);
+
+        var requiresConfirmation = NyxIdChatPlanGateDecisions.RequiresConfirmation(
+            toolCall,
+            next.ActiveTask.Steps,
+            planGateConfirmationThresholdSeconds);
+        next.ActiveTask.Gate = NyxIdChatPlanGateDecisions.BuildToolGate(
+            next,
+            toolStep,
+            toolCall,
+            requiresConfirmation);
+        if (requiresConfirmation)
+        {
+            toolStep.Status = NyxIdChatStepStatus.Planned;
+            toolStep.Operation.Phase = NyxIdChatOperationPhase.Requested;
+            toolStep.AvailableActions = NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(toolStep);
+            next.ActiveTask.Status = NyxIdChatTaskStatus.Active;
+            next.ActiveTask.ActiveStepId = toolStep.StepId;
+            next.ActiveTask.ActiveOperationId = string.Empty;
+            next.ActiveTask.UpdatedAt = now.Clone();
+            next.ActiveTurn.Status = NyxIdChatTurnStatus.Active;
+            next.ActiveTurn.TerminalAt = null;
+            FinalizeDerivedState(next, now);
+            return new NyxIdChatTaskLifecycleDecision(
+                transition.Outcome,
+                transition.ReasonCode,
+                transition.SafeMessage,
+                next,
+                NextCommand: null);
+        }
+
         ActivateStep(next, toolStep, now);
 
         var command = new NyxIdChatOperationDispatchCommand
@@ -486,11 +525,6 @@ public static class NyxIdChatTaskLifecycle
         step.UpdatedAt = now.Clone();
         state.ActiveTask.ActiveStepId = step.StepId;
         state.ActiveTask.ActiveOperationId = string.Empty;
-        state.ActiveTask.Gate = new NyxIdChatPlanGate
-        {
-            Mode = NyxIdChatPlanGateMode.Confirm,
-            Reason = "NyxID requires approval before this effect-capable tool can continue.",
-        };
         state.PendingApproval = new NyxIdChatPendingApprovalState
         {
             ApprovalRequestId = receipt.ApprovalRequestId,

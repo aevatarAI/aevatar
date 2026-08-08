@@ -74,6 +74,10 @@ public sealed class NyxIdChatCommittedStateProjectionActivationPlanProvider
             return eventData.Unpack<NyxIdChatApprovalResolutionCommittedEvent>()
                 .State?.ActiveTurn?.TurnId;
 
+        if (eventData.Is(NyxIdChatPlanResolutionCommittedEvent.Descriptor))
+            return eventData.Unpack<NyxIdChatPlanResolutionCommittedEvent>()
+                .State?.ActiveTurn?.TurnId;
+
         if (eventData.Is(NyxIdChatContinuationAdmissionCommittedEvent.Descriptor))
             return eventData.Unpack<NyxIdChatContinuationAdmissionCommittedEvent>()
                 .Admission?.OriginTurnId;

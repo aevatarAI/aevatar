@@ -4258,6 +4258,7 @@ public sealed class NyxIdChatConversationGAgentTests
             {
                 TurnId = "turn-alpha",
                 TaskId = "task-alpha",
+                PlanId = "plan-alpha",
                 Status = NyxIdChatTaskStatus.Active,
             },
             ProgressSequence = 1,
@@ -4298,12 +4299,14 @@ public sealed class NyxIdChatConversationGAgentTests
                 },
             },
         };
-        return NyxIdChatBrowserActions.RequestAuthorization(
+        var blocked = NyxIdChatBrowserActions.RequestAuthorization(
             state,
             signal,
             CreateActionRegistry(),
             Timestamp.FromDateTimeOffset(
             new DateTimeOffset(2026, 7, 24, 8, 0, 0, TimeSpan.Zero))).State;
+        blocked.ActiveTask.Gate.Status = NyxIdChatPlanGateStatus.Satisfied;
+        return blocked;
     }
 
     private static NyxIdChatConversationGAgentState CreatePendingHistoryTerminalState(

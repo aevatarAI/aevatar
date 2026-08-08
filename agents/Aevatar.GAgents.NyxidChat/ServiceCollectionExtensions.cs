@@ -66,6 +66,7 @@ public static class ServiceCollectionExtensions
             services.AddNyxIdApiAccess(configuration);
         var assistantActionsOptions = BindAssistantActionsOptions(configuration);
         services.TryAddSingleton(assistantActionsOptions);
+        services.TryAddSingleton(BindPlanGateOptions(configuration));
         if (assistantActionsOptions.Enabled)
         {
             services.TryAddSingleton<NyxIdAssistantActionRegistrySnapshot>();
@@ -395,6 +396,19 @@ public static class ServiceCollectionExtensions
     {
         var options = new NyxIdAssistantActionsOptions();
         configuration?.GetSection(NyxIdAssistantActionsOptions.ConfigSection).Bind(options);
+        return options;
+    }
+
+    private static NyxIdChatPlanGateOptions BindPlanGateOptions(IConfiguration? configuration)
+    {
+        var options = new NyxIdChatPlanGateOptions();
+        configuration?.GetSection(NyxIdChatPlanGateOptions.ConfigSection).Bind(options);
+        if (options.ConfirmationThresholdSeconds <= 0)
+        {
+            throw new InvalidOperationException(
+                $"{NyxIdChatPlanGateOptions.ConfigSection}:ConfirmationThresholdSeconds must be positive.");
+        }
+
         return options;
     }
 }

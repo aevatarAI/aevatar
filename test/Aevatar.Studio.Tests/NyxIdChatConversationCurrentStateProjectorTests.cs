@@ -69,6 +69,17 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
         document.ActiveTask.Title.Should().Be("Connect GitHub safely");
         document.ActiveTask.Gate.Mode.Should().Be("confirm");
         document.ActiveTask.Gate.Reason.Should().Be("External access will change.");
+        document.ActiveTask.Gate.Status.Should().Be("pending");
+        document.ActiveTask.Gate.RequestId.Should().Be("plan-gate-alpha");
+        document.ActiveTask.Gate.TaskId.Should().Be("task-alpha");
+        document.ActiveTask.Gate.PlanId.Should().Be("plan-alpha");
+        document.ActiveTask.Gate.PlanRevision.Should().Be(3);
+        var gateAdmission = document.ActiveTask.Gate.Admissions.Should()
+            .ContainSingle().Which;
+        gateAdmission.ActionRequestId.Should().Be("action-alpha");
+        gateAdmission.Action.Should().Be("service.connect");
+        gateAdmission.ActionParamsSha256.Should()
+            .Equal(ByteString.CopyFromUtf8("action-params-digest"));
         document.ActiveTask.PlanRevisions.Select(static revision =>
                 (revision.PlanRevision, revision.RevisionCause))
             .Should().Equal(
@@ -502,6 +513,21 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
                 {
                     Mode = NyxIdChatPlanGateMode.Confirm,
                     Reason = "External access will change.",
+                    Status = NyxIdChatPlanGateStatus.Pending,
+                    RequestId = "plan-gate-alpha",
+                    TaskId = "task-alpha",
+                    PlanId = "plan-alpha",
+                    PlanRevision = 3,
+                    Admissions =
+                    {
+                        new NyxIdChatPlanOperationAdmission
+                        {
+                            ActionRequestId = "action-alpha",
+                            Action = NyxIdAssistantActionKind.ServiceConnect,
+                            ActionParamsSha256 = ByteString.CopyFromUtf8(
+                                "action-params-digest"),
+                        },
+                    },
                 },
                 PlanRevisions =
                 {

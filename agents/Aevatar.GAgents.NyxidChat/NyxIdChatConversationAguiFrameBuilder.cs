@@ -215,6 +215,30 @@ internal static class NyxIdChatConversationAguiFrameBuilder
         return [Custom(ApprovalChangedEventName, committed.Resolution, sequence)];
     }
 
+    public static IReadOnlyList<AGUIEvent> BuildPlanResolutionChanged(
+        NyxIdChatPlanResolutionCommittedEvent committed)
+    {
+        ArgumentNullException.ThrowIfNull(committed);
+        var sequence = committed.State?.ProgressSequence ?? 0;
+        if (committed.Resolution is null ||
+            committed.State?.ActiveTask is not { } task ||
+            committed.State.ActiveTurn is not { } turn ||
+            sequence <= 0)
+        {
+            return [];
+        }
+
+        var frames = BuildTaskFrames(task, ResolveActiveOrLast(task), sequence);
+        AppendTerminalIfNeeded(
+            frames,
+            committed.State.ConversationActorId,
+            turn.TurnId,
+            task,
+            turn,
+            sequence);
+        return frames;
+    }
+
     private static NyxIdAssistantActionRequestWirePayload? MapActionRequestWirePayload(
         NyxIdChatActionRequestState request)
     {

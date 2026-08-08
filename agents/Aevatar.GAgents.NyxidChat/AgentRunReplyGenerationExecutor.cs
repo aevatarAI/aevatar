@@ -462,10 +462,22 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 callSafety,
                 tool.SideEffectKind ?? string.Empty,
                 BuildToolDefinitionFingerprint(tool, callSafety),
-                ToolPresentationDescriptors.Snapshot(tool, call.Name ?? string.Empty, argumentsJson)));
+                ToolPresentationDescriptors.Snapshot(tool, call.Name ?? string.Empty, argumentsJson),
+                ResolveRequiresApproval(tool, callSafety)));
         }
 
         return snapshots;
+    }
+
+    private static bool ResolveRequiresApproval(
+        IAgentTool tool,
+        AgentToolCallSafety safety)
+    {
+        if (tool.ApprovalMode == ToolApprovalMode.NeverRequire)
+            return false;
+        return safety.RequiresApproval ??
+               (tool.ApprovalMode == ToolApprovalMode.AlwaysRequire ||
+                (!safety.IsReadOnly && safety.IsDestructive));
     }
 
     private static bool HasApprovalRequiredToolCall(

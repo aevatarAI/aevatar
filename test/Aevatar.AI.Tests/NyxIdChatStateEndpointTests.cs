@@ -385,7 +385,27 @@ public sealed class NyxIdChatStateEndpointTests
             PlanId = "plan-alpha",
             PlanRevision = 2,
             Title = "Complete the requested assistant task",
-            Gate = new NyxIdChatPlanGate { Mode = NyxIdChatPlanGateMode.Auto },
+            Gate = new NyxIdChatPlanGate
+            {
+                Mode = NyxIdChatPlanGateMode.Confirm,
+                Reason = "Confirm the exact repository operation.",
+                Status = NyxIdChatPlanGateStatus.Pending,
+                RequestId = "plan-gate-alpha",
+                TaskId = "task-alpha",
+                PlanId = "plan-alpha",
+                PlanRevision = 2,
+                Admissions =
+                {
+                    new NyxIdChatPlanOperationAdmission
+                    {
+                        Key = operation.Key.Clone(),
+                        ToolCallId = "call-alpha",
+                        ToolName = "repository_update",
+                        ArgumentsSha256 = NyxIdChatPlanGateDecisions.HashArguments(
+                            "{\"repositoryId\":\"repo-alpha\"}"),
+                    },
+                },
+            },
             Steps =
             {
                 new NyxIdChatTaskStepState

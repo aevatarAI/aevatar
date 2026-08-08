@@ -96,7 +96,8 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
         var kind = ResolveKind(command);
         var admittedAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow());
         var mayChangeExternalState = command.Tool?.MayChangeExternalState == true ||
-                                     command.ToolApprovalContinuation?.MayChangeExternalState == true;
+                                     command.ToolApprovalContinuation?.MayChangeExternalState == true ||
+                                     command.PlanGateContinuation?.MayChangeExternalState == true;
         await PersistDomainEventAsync(new NyxIdChatTurnOperationAdmittedEvent
         {
             Key = command.Key.Clone(),
@@ -474,6 +475,8 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
             NyxIdChatOperationDispatchCommand.InputOneofCase.InputContinuation => NyxIdChatStepKind.Llm,
             NyxIdChatOperationDispatchCommand.InputOneofCase.Tool => NyxIdChatStepKind.Tool,
             NyxIdChatOperationDispatchCommand.InputOneofCase.ToolApprovalContinuation =>
+                NyxIdChatStepKind.Tool,
+            NyxIdChatOperationDispatchCommand.InputOneofCase.PlanGateContinuation =>
                 NyxIdChatStepKind.Tool,
             NyxIdChatOperationDispatchCommand.InputOneofCase.ActionPostcondition =>
                 NyxIdChatStepKind.Postcondition,

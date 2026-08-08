@@ -241,6 +241,16 @@ public sealed class NyxIdChatCommittedStateProjectionActivationPlanProviderTests
         ];
         yield return
         [
+            new NyxIdChatPlanResolutionCommittedEvent
+            {
+                State = new NyxIdChatConversationGAgentState
+                {
+                    ActiveTurn = new NyxIdChatTurnState { TurnId = "turn-1" },
+                },
+            },
+        ];
+        yield return
+        [
             new NyxIdChatStepControlCommittedEvent
             {
                 Result = new NyxIdChatStepControlResultState
@@ -271,6 +281,7 @@ public sealed class NyxIdChatCommittedStateProjectionActivationPlanProviderTests
         yield return [new NyxIdChatLateOperationEvidenceCommittedEvent()];
         yield return [new NyxIdChatControlFenceCommittedEvent()];
         yield return [new NyxIdChatActionRequestedEvent()];
+        yield return [new NyxIdChatPlanResolutionCommittedEvent()];
         yield return [new NyxIdChatContinuationAdmissionCommittedEvent()];
         yield return [new NyxIdChatStepControlCommittedEvent()];
         yield return [new NyxIdChatTurnAdmissionRejectedEvent()];

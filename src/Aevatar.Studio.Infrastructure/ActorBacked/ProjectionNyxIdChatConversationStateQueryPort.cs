@@ -229,7 +229,27 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
                     ? null
                     : new NyxIdChatConversationPlanGateSnapshot(
                         task.Gate.Mode,
-                        NullIfEmpty(task.Gate.Reason)),
+                        NullIfEmpty(task.Gate.Reason),
+                        task.Gate.Status,
+                        NullIfEmpty(task.Gate.RequestId),
+                        NullIfEmpty(task.Gate.TaskId),
+                        task.Gate.PlanRevision,
+                        ToDateTimeOffset(task.Gate.DecidedAt),
+                        NullIfEmpty(task.Gate.PlanId),
+                        task.Gate.Admissions.Select(static admission =>
+                            new NyxIdChatConversationPlanOperationAdmissionSnapshot(
+                                NullIfEmpty(admission.ConversationActorId),
+                                NullIfEmpty(admission.TurnId),
+                                NullIfEmpty(admission.TaskId),
+                                NullIfEmpty(admission.StepId),
+                                NullIfEmpty(admission.OperationId),
+                                admission.OperationGeneration,
+                                NullIfEmpty(admission.ToolCallId),
+                                NullIfEmpty(admission.ToolName),
+                                admission.ArgumentsSha256.ToByteArray(),
+                                NullIfEmpty(admission.ActionRequestId),
+                                NullIfEmpty(admission.Action),
+                                admission.ActionParamsSha256.ToByteArray())).ToArray()),
                 task.PlanRevisions.Select(static revision =>
                     new NyxIdChatConversationPlanRevisionSnapshot(
                         revision.PlanRevision,

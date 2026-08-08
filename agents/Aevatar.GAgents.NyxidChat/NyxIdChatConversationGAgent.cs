@@ -34,12 +34,13 @@ public sealed class NyxIdChatConversationGAgent
     private readonly IActorDispatchPort _actorDispatchPort;
     private readonly TimeProvider _timeProvider;
     private readonly AgentProfileTurnCatalogMaterializer? _turnCatalogMaterializer;
+    private readonly int _planGateConfirmationThresholdSeconds;
 
     public NyxIdChatConversationGAgent(
         IActorRuntime actorRuntime,
         IActorDispatchPort actorDispatchPort,
         TimeProvider timeProvider)
-        : this(actorRuntime, actorDispatchPort, timeProvider, null)
+        : this(actorRuntime, actorDispatchPort, timeProvider, null, null)
     {
     }
 
@@ -48,11 +49,25 @@ public sealed class NyxIdChatConversationGAgent
         IActorDispatchPort actorDispatchPort,
         TimeProvider timeProvider,
         AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer)
+        : this(actorRuntime, actorDispatchPort, timeProvider, turnCatalogMaterializer, null)
+    {
+    }
+
+    public NyxIdChatConversationGAgent(
+        IActorRuntime actorRuntime,
+        IActorDispatchPort actorDispatchPort,
+        TimeProvider timeProvider,
+        AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer,
+        NyxIdChatPlanGateOptions? planGateOptions)
     {
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         _turnCatalogMaterializer = turnCatalogMaterializer;
+        _planGateConfirmationThresholdSeconds = planGateOptions?.ConfirmationThresholdSeconds ??
+                                                NyxIdChatPlanGateOptions.DefaultConfirmationThresholdSeconds;
+        if (_planGateConfirmationThresholdSeconds <= 0)
+            throw new ArgumentOutOfRangeException(nameof(planGateOptions));
     }
 
     protected override NyxIdChatConversationGAgentState TransitionState(
@@ -84,6 +99,7 @@ public sealed class NyxIdChatConversationGAgent
             .On<NyxIdChatInputRequestedEvent>(ApplyInputRequested)
             .On<NyxIdChatInputResolutionCommittedEvent>(ApplyInputResolutionCommitted)
             .On<NyxIdChatApprovalResolutionCommittedEvent>(ApplyApprovalResolutionCommitted)
+            .On<NyxIdChatPlanResolutionCommittedEvent>(ApplyPlanResolutionCommitted)
             .OrCurrent();
         return NyxIdChatNeedsYouDecisions.RefreshAttention(next);
     }
@@ -1069,6 +1085,33 @@ public sealed class NyxIdChatConversationGAgent
     }
 
     [EventHandler]
+    public async Task HandlePlanResolveAsync(NyxIdChatPlanResolveCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        var decision = NyxIdChatPlanGateDecisions.Resolve(
+            State,
+            command,
+            CurrentCommittedVersion(),
+            Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()));
+        if (!decision.ShouldCommit || decision.Resolution is null)
+            return;
+
+        await PersistDomainEventAsync(new NyxIdChatPlanResolutionCommittedEvent
+        {
+            Resolution = decision.Resolution.Clone(),
+            State = NyxIdChatNeedsYouDecisions.RefreshAttention(decision.State),
+        }, CancellationToken.None);
+
+        if (decision.NextCommand is not null)
+        {
+            await DispatchAuthorizedOperationAsync(
+                decision.NextCommand,
+                command.CorrelationId,
+                Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()));
+        }
+    }
+
+    [EventHandler]
     public async Task HandleActionContinueAsync(NyxIdChatActionContinueCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
@@ -1204,7 +1247,8 @@ public sealed class NyxIdChatConversationGAgent
         var decision = NyxIdChatTaskLifecycle.ApplyOperationResult(
             State,
             recoveryResult,
-            now);
+            now,
+            _planGateConfirmationThresholdSeconds);
         if (decision.Outcome != NyxIdChatTransitionOutcome.Accepted)
             return;
 
@@ -1360,7 +1404,11 @@ public sealed class NyxIdChatConversationGAgent
             }
         }
 
-        var decision = NyxIdChatTaskLifecycle.ApplyOperationResult(State, signal, now);
+        var decision = NyxIdChatTaskLifecycle.ApplyOperationResult(
+            State,
+            signal,
+            now,
+            _planGateConfirmationThresholdSeconds);
         if (decision.Outcome != NyxIdChatTransitionOutcome.Accepted)
             return;
 
@@ -1613,6 +1661,9 @@ public sealed class NyxIdChatConversationGAgent
         next.RecentApprovalResolutions.AddRange(
             State.RecentApprovalResolutions.Select(static result => result.Clone()));
         next.LatestApprovalResolution = State.LatestApprovalResolution?.Clone();
+        next.RecentPlanResolutions.AddRange(
+            State.RecentPlanResolutions.Select(static result => result.Clone()));
+        next.LatestPlanResolution = State.LatestPlanResolution?.Clone();
         next.PendingActions.AddRange(
             State.PendingActions.Select(static action => action.Clone()));
         next.RecentActions.AddRange(
@@ -2251,6 +2302,11 @@ public sealed class NyxIdChatConversationGAgent
         NyxIdChatApprovalResolutionCommittedEvent evt) =>
         evt.State?.Clone() ?? current;
 
+    private static NyxIdChatConversationGAgentState ApplyPlanResolutionCommitted(
+        NyxIdChatConversationGAgentState current,
+        NyxIdChatPlanResolutionCommittedEvent evt) =>
+        evt.State?.Clone() ?? current;
+
     private NyxIdChatHistoryDeliveryReservationState BuildHistoryDeliveryReservation(
         NyxIdChatStartTurnCommand command)
     {
@@ -2736,7 +2792,8 @@ public sealed class NyxIdChatConversationGAgent
         var decision = NyxIdChatTaskLifecycle.ApplyOperationResult(
             state,
             failure,
-            Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()));
+            Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
+            _planGateConfirmationThresholdSeconds);
         if (decision.Outcome != NyxIdChatTransitionOutcome.Accepted)
             return;
 

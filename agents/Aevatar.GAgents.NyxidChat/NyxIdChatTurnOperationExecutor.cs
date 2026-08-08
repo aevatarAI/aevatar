@@ -7,6 +7,8 @@ using Aevatar.Foundation.Abstractions.Tools;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat.AgentProfiles;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 
 namespace Aevatar.GAgents.NyxidChat;
@@ -142,6 +144,9 @@ public sealed class NyxIdChatTurnOperationExecutor
                     .ConfigureAwait(false),
             NyxIdChatOperationDispatchCommand.InputOneofCase.ToolApprovalContinuation =>
                 await ExecuteToolApprovalContinuationAsync(command, session, reportProgressAsync, ct)
+                    .ConfigureAwait(false),
+            NyxIdChatOperationDispatchCommand.InputOneofCase.PlanGateContinuation =>
+                await ExecutePlanGateContinuationAsync(command, session, reportProgressAsync, ct)
                     .ConfigureAwait(false),
             _ => Failure(
                 command.Key,
@@ -683,6 +688,66 @@ public sealed class NyxIdChatTurnOperationExecutor
             .ConfigureAwait(false);
     }
 
+    private async Task<NyxIdChatTurnOperationExecution> ExecutePlanGateContinuationAsync(
+        NyxIdChatOperationDispatchCommand command,
+        NyxIdChatTransientExecutionSession session,
+        Func<NyxIdChatOperationProgressSignal, CancellationToken, Task> reportProgressAsync,
+        CancellationToken ct)
+    {
+        var admission = command.PlanGateContinuation;
+        var pending = session.StepState?.PendingToolCalls.Count == 1
+            ? session.StepState.PendingToolCalls[0]
+            : null;
+        if (admission is null ||
+            string.IsNullOrWhiteSpace(admission.GateRequestId) ||
+            string.IsNullOrWhiteSpace(admission.PlanId) ||
+            admission.PlanRevision <= 0 ||
+            session.AuthorizedToolStep is null ||
+            session.Request is null ||
+            pending is null ||
+            !string.Equals(command.Key.TaskId, admission.TaskId, StringComparison.Ordinal) ||
+            !string.Equals(pending.Id, admission.ToolCallId, StringComparison.Ordinal) ||
+            !string.Equals(pending.Name, admission.ToolName, StringComparison.Ordinal) ||
+            admission.ArgumentsSha256.IsEmpty ||
+            !CryptographicOperations.FixedTimeEquals(
+                SHA256.HashData(Encoding.UTF8.GetBytes(pending.ArgumentsJson ?? string.Empty)),
+                admission.ArgumentsSha256.Span))
+        {
+            return Failure(
+                command.Key,
+                ToolAuthorizationMismatchCode,
+                ToolAuthorizationMismatchMessage,
+                NyxIdChatEffectEvidence.NotStarted);
+        }
+
+        if (!RefreshCredentials(session, admission.ToolContext?.Credentials))
+        {
+            ClearAuthorization(session);
+            return Failure(
+                command.Key,
+                ToolAuthorizationMismatchCode,
+                ToolAuthorizationMismatchMessage,
+                NyxIdChatEffectEvidence.NotStarted);
+        }
+
+        return await ExecuteToolAsync(
+                new NyxIdChatOperationDispatchCommand
+                {
+                    Key = command.Key.Clone(),
+                    Tool = new NyxIdChatToolOperationInput
+                    {
+                        ToolName = pending.Name,
+                        CallId = pending.Id,
+                        ArgumentsJson = pending.ArgumentsJson,
+                        MayChangeExternalState = admission.MayChangeExternalState,
+                    },
+                },
+                session,
+                reportProgressAsync,
+                ct)
+            .ConfigureAwait(false);
+    }
+
     private static string BuildInputResponseJson(NyxIdChatInputContinuationInput input) =>
         input.Answer.AnswerCase switch
         {
@@ -858,6 +923,7 @@ public sealed class NyxIdChatTurnOperationExecutor
             MayChangeExternalState = !callSafety.IsReadOnly ||
                                      callSafety.IsDestructive ||
                                      !string.IsNullOrWhiteSpace(snapshot.SideEffectKind),
+            RequiresApproval = snapshot.RequiresApproval,
         };
         if (snapshot.Presentation?.SourceRefCase ==
             ToolPresentationDescriptor.SourceRefOneofCase.NyxIdOperation)

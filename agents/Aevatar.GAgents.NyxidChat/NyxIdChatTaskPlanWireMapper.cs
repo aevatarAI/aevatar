@@ -1,4 +1,5 @@
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgents.NyxidChat;
@@ -308,14 +309,58 @@ internal static class NyxIdChatTaskPlanWireMapper
             };
 
     private static NyxIdChatPlanGate? FromSnapshot(
-        NyxIdChatConversationPlanGateSnapshot? gate) =>
-        gate is null
-            ? null
-            : new NyxIdChatPlanGate
+        NyxIdChatConversationPlanGateSnapshot? gate)
+    {
+        if (gate is null)
+            return null;
+
+        var result = new NyxIdChatPlanGate
+        {
+            Mode = ParsePlanGateMode(gate.Mode),
+            Reason = gate.Reason ?? string.Empty,
+            Status = ParsePlanGateStatus(gate.Status),
+            RequestId = gate.RequestId ?? string.Empty,
+            TaskId = gate.TaskId ?? string.Empty,
+            PlanRevision = gate.PlanRevision,
+            DecidedAt = ToTimestamp(gate.DecidedAt),
+            PlanId = gate.PlanId ?? string.Empty,
+        };
+        if (gate.Admissions is not null)
+            result.Admissions.AddRange(gate.Admissions.Select(FromSnapshot));
+        return result;
+    }
+
+    private static NyxIdChatPlanOperationAdmission FromSnapshot(
+        NyxIdChatConversationPlanOperationAdmissionSnapshot admission)
+    {
+        var result = new NyxIdChatPlanOperationAdmission
+        {
+            ToolCallId = admission.ToolCallId ?? string.Empty,
+            ToolName = admission.ToolName ?? string.Empty,
+            ArgumentsSha256 = ByteString.CopyFrom(admission.ArgumentsSha256 ?? []),
+            ActionRequestId = admission.ActionRequestId ?? string.Empty,
+            Action = ParseAssistantAction(admission.Action ?? string.Empty),
+            ActionParamsSha256 = ByteString.CopyFrom(admission.ActionParamsSha256 ?? []),
+        };
+        if (!string.IsNullOrWhiteSpace(admission.ConversationActorId) ||
+            !string.IsNullOrWhiteSpace(admission.TurnId) ||
+            !string.IsNullOrWhiteSpace(admission.TaskId) ||
+            !string.IsNullOrWhiteSpace(admission.StepId) ||
+            !string.IsNullOrWhiteSpace(admission.OperationId) ||
+            admission.OperationGeneration != 0)
+        {
+            result.Key = new NyxIdChatOperationKey
             {
-                Mode = ParsePlanGateMode(gate.Mode),
-                Reason = gate.Reason ?? string.Empty,
+                ConversationActorId = admission.ConversationActorId ?? string.Empty,
+                TurnId = admission.TurnId ?? string.Empty,
+                TaskId = admission.TaskId ?? string.Empty,
+                StepId = admission.StepId ?? string.Empty,
+                OperationId = admission.OperationId ?? string.Empty,
+                OperationGeneration = admission.OperationGeneration,
             };
+        }
+        return result;
+    }
 
     private static NyxIdChatStepEstimate? FromSnapshot(
         NyxIdChatConversationStepEstimateSnapshot? estimate) =>
@@ -379,6 +424,14 @@ internal static class NyxIdChatTaskPlanWireMapper
         "auto" => NyxIdChatPlanGateMode.Auto,
         "confirm" => NyxIdChatPlanGateMode.Confirm,
         _ => NyxIdChatPlanGateMode.Unspecified,
+    };
+
+    private static NyxIdChatPlanGateStatus ParsePlanGateStatus(string value) => value switch
+    {
+        "pending" => NyxIdChatPlanGateStatus.Pending,
+        "satisfied" => NyxIdChatPlanGateStatus.Satisfied,
+        "rejected" => NyxIdChatPlanGateStatus.Rejected,
+        _ => NyxIdChatPlanGateStatus.Unspecified,
     };
 
     private static NyxIdChatStepAddedBy ParseStepAddedBy(string? value) => value switch

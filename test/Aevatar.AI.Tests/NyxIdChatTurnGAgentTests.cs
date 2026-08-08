@@ -528,6 +528,53 @@ public sealed class NyxIdChatTurnGAgentTests
     }
 
     [Fact]
+    public async Task OperationExecutor_ExactPlanGateContinuation_ShouldUseTransientCallOnce()
+    {
+        var generationExecutor = new StreamingCapabilityReplyExecutor();
+        var executor = new NyxIdChatTurnOperationExecutor(generationExecutor);
+        var session = new NyxIdChatTransientExecutionSession();
+        await ExecutePlanGateInitialLlmAsync(executor, session);
+        var continuation = PlanGateContinuation(
+            NyxIdChatPlanGateDecisions.HashArguments("{\"value\":1}"));
+
+        var execution = await executor.ExecuteAsync(
+            continuation,
+            session,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        generationExecutor.ToolExecutions.Should().Be(1);
+        execution.Result.ResultCase.Should().Be(
+            NyxIdChatOperationResultSignal.ResultOneofCase.Tool);
+        execution.Result.Tool.Receipt.Status.Should().Be(AgentToolReceiptStatus.Success);
+        execution.Result.Tool.Receipt.CallId.Should().Be("call-alpha");
+    }
+
+    [Fact]
+    public async Task OperationExecutor_PlanGateDigestMismatch_ShouldFailClosedBeforeEffect()
+    {
+        var generationExecutor = new StreamingCapabilityReplyExecutor();
+        var executor = new NyxIdChatTurnOperationExecutor(generationExecutor);
+        var session = new NyxIdChatTransientExecutionSession();
+        await ExecutePlanGateInitialLlmAsync(executor, session);
+        var continuation = PlanGateContinuation(ByteString.CopyFrom(new byte[32]));
+
+        var execution = await executor.ExecuteAsync(
+            continuation,
+            session,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        generationExecutor.ToolExecutions.Should().Be(0);
+        execution.Result.ResultCase.Should().Be(
+            NyxIdChatOperationResultSignal.ResultOneofCase.Failure);
+        execution.Result.Failure.FailureCode.Should().Be(
+            NyxIdChatTurnOperationExecutor.ToolAuthorizationMismatchCode);
+        execution.Result.Failure.ExternalEffect.Should().Be(
+            NyxIdChatEffectEvidence.NotStarted);
+    }
+
+    [Fact]
     public async Task OperationExecutor_ContinuationLlm_ShouldReuseToolUpdatedTransientSession()
     {
         var generationExecutor = new StreamingCapabilityReplyExecutor();
@@ -757,6 +804,57 @@ public sealed class NyxIdChatTurnGAgentTests
             OperationId = operationId,
             OperationGeneration = generation,
         };
+
+    private static async Task ExecutePlanGateInitialLlmAsync(
+        NyxIdChatTurnOperationExecutor executor,
+        NyxIdChatTransientExecutionSession session)
+    {
+        await executor.ExecuteAsync(
+            new NyxIdChatOperationDispatchCommand
+            {
+                Key = CreateKey(),
+                Llm = new NyxIdChatLLMOperationInput
+                {
+                    Request = new ChatRequestEvent
+                    {
+                        Prompt = "plan then run",
+                        SessionId = "turn-alpha",
+                        ToolContext = FreshToolContext("initial-plan-token"),
+                    },
+                },
+            },
+            session,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+    }
+
+    private static NyxIdChatOperationDispatchCommand PlanGateContinuation(
+        ByteString argumentsSha256) => new()
+    {
+        Key = CreateKey("step-tool-alpha", "operation-tool-alpha", 1),
+        PlanGateContinuation = new NyxIdChatPlanGateContinuationInput
+        {
+            GateRequestId = "plan-gate-alpha",
+            TaskId = "task-alpha",
+            PlanId = "plan-alpha",
+            PlanRevision = 2,
+            ToolCallId = "call-alpha",
+            ToolName = "tool-alpha",
+            ArgumentsSha256 = argumentsSha256,
+            ToolContext = FreshToolContext("fresh-plan-token"),
+            MayChangeExternalState = true,
+        },
+    };
+
+    private static AgentToolExecutionContextPayload FreshToolContext(string token) => new()
+    {
+        Credentials = new AgentToolCredentialsPayload
+        {
+            NyxIdAccessToken = token,
+            NyxIdCredentialKind =
+                AgentToolNyxIdCredentialKindPayload.SourceReadableUserBearer,
+        },
+    };
 
     private static ServiceProvider BuildEventSourcingServices(IEventStore eventStore) =>
         new ServiceCollection()

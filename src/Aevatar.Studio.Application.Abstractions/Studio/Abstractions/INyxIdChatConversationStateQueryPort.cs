@@ -158,7 +158,28 @@ public sealed record NyxIdChatConversationPlanRevisionSnapshot(
 
 public sealed record NyxIdChatConversationPlanGateSnapshot(
     string Mode,
-    string? Reason);
+    string? Reason,
+    string Status = "",
+    string? RequestId = null,
+    string? TaskId = null,
+    int PlanRevision = 0,
+    DateTimeOffset? DecidedAt = null,
+    string? PlanId = null,
+    IReadOnlyList<NyxIdChatConversationPlanOperationAdmissionSnapshot>? Admissions = null);
+
+public sealed record NyxIdChatConversationPlanOperationAdmissionSnapshot(
+    string? ConversationActorId,
+    string? TurnId,
+    string? TaskId,
+    string? StepId,
+    string? OperationId,
+    long OperationGeneration,
+    string? ToolCallId,
+    string? ToolName,
+    byte[] ArgumentsSha256,
+    string? ActionRequestId,
+    string? Action,
+    byte[] ActionParamsSha256);
 
 public sealed record NyxIdChatConversationStepSnapshot(
     string StepId,
