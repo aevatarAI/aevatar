@@ -6,6 +6,13 @@ public enum NyxIdManagedWorkflowAdmissionMode
     Enforce = 1,
 }
 
+public sealed class NyxIdAssistantReadinessCapabilityBinding
+{
+    public string CatalogServiceSlug { get; set; } = string.Empty;
+
+    public string ReadinessCapabilityId { get; set; } = string.Empty;
+}
+
 /// <summary>NyxID tool provider configuration.</summary>
 public sealed class NyxIdToolOptions
 {
@@ -53,6 +60,19 @@ public sealed class NyxIdToolOptions
     /// depend on this rollout gate.
     /// </summary>
     public bool EnableAssistantConnectedServiceEffects { get; set; }
+
+    /// <summary>
+    /// Server-owned bindings from NyxID catalog service identity to the closed assistant
+    /// readiness registry. A missing or ambiguous binding omits recovery provenance.
+    /// </summary>
+    public List<NyxIdAssistantReadinessCapabilityBinding> AssistantReadinessCapabilityBindings { get; set; } =
+    [
+        new()
+        {
+            CatalogServiceSlug = "api-github",
+            ReadinessCapabilityId = "api-github",
+        },
+    ];
 
     public NyxIdManagedWorkflowAdmissionMode ManagedWorkflowAdmissionMode { get; set; } =
         NyxIdManagedWorkflowAdmissionMode.Shadow;

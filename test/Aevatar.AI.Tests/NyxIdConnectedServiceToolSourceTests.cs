@@ -6,6 +6,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
+using Aevatar.Foundation.Abstractions.Tools;
 using FluentAssertions;
 using Microsoft.Extensions.Logging;
 
@@ -165,6 +166,74 @@ public class NyxIdConnectedServiceToolSourceTests
         handler.RawOpenApiRequests.Should().BeEmpty();
         handler.ExactReads.Should().BeEmpty();
         handler.ProxyRequests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task DiscoverToolsAsync_AuthoritativeReadinessBinding_ProjectsDistinctNyxIdIdentities()
+    {
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = Keys(
+            InstanceWithCatalogSlug(
+                "user-service-alpha",
+                "github-work",
+                "catalog-service-alpha",
+                "catalog-github"));
+        handler.McpConfigByToken["user-token"] = McpCatalog(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            McpService("user-service-alpha", "github-work", ReadEndpoint("operation-get-user")));
+        var source = CreateSource(
+            handler,
+            readinessBindings:
+            [
+                new NyxIdAssistantReadinessCapabilityBinding
+                {
+                    CatalogServiceSlug = "catalog-github",
+                    ReadinessCapabilityId = "readiness-github",
+                },
+            ]);
+
+        using var scope = PushContext("user-token");
+        var tool = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
+
+        tool.Presentation.Kind.Should().Be(ToolPresentationKind.NyxIdOperation);
+        var identity = tool.Presentation.NyxIdOperation;
+        identity.ConnectedServiceId.Should().Be("user-service-alpha");
+        identity.ServiceSlug.Should().Be("github-work");
+        identity.CatalogServiceSlug.Should().Be("catalog-github");
+        identity.ReadinessCapabilityId.Should().Be("readiness-github");
+        identity.OperationId.Should().Be("operation-get-user");
+        identity.HttpMethod.Should().Be("GET");
+        identity.PathTemplate.Should().Be("/orders/{orderId}");
+        new[]
+        {
+            identity.ConnectedServiceId,
+            identity.ServiceSlug,
+            identity.CatalogServiceSlug,
+            identity.ReadinessCapabilityId,
+        }.Should().OnlyHaveUniqueItems();
+    }
+
+    [Fact]
+    public async Task DiscoverToolsAsync_WithoutAuthoritativeReadinessBinding_OmitsRecoveryIdentity()
+    {
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = Keys(
+            InstanceWithCatalogSlug(
+                "user-service-alpha",
+                "api-shop",
+                "catalog-service-alpha",
+                "catalog-shop"));
+        handler.McpConfigByToken["user-token"] = McpCatalog(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            McpService("user-service-alpha", "api-shop", ReadEndpoint("operation-get-order")));
+        var source = CreateSource(handler);
+
+        using var scope = PushContext("user-token");
+        var identity = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject
+            .Presentation.NyxIdOperation;
+
+        identity.CatalogServiceSlug.Should().Be("catalog-shop");
+        identity.HasReadinessCapabilityId.Should().BeFalse();
     }
 
     [Fact]
@@ -798,13 +867,16 @@ public class NyxIdConnectedServiceToolSourceTests
         FakeNyxIdHandler handler,
         string? baseUrl = "https://nyx.test",
         ILogger<NyxIdConnectedServiceToolSource>? logger = null,
-        bool enableEffects = false)
+        bool enableEffects = false,
+        IReadOnlyList<NyxIdAssistantReadinessCapabilityBinding>? readinessBindings = null)
     {
         var options = new NyxIdToolOptions
         {
             BaseUrl = baseUrl,
             EnableAssistantConnectedServiceEffects = enableEffects,
         };
+        if (readinessBindings is not null)
+            options.AssistantReadinessCapabilityBindings = readinessBindings.ToList();
         var client = new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.test" },
             new HttpClient(handler));
@@ -866,6 +938,24 @@ public class NyxIdConnectedServiceToolSourceTests
           "endpoint_id": "instance-endpoint-alpha",
           "endpoint_url": "https://shop.test",
           "openapi_url": "{{openApiUrl}}",
+          "is_active": true,
+          "credential_source": {{PersonalCredentialSource}}
+        }
+        """;
+
+    private static string InstanceWithCatalogSlug(
+        string id,
+        string slug,
+        string catalogServiceId,
+        string catalogServiceSlug) => $$"""
+        {
+          "id": "{{id}}",
+          "slug": "{{slug}}",
+          "label": "Shop connection",
+          "catalog_service_id": "{{catalogServiceId}}",
+          "catalog_service_slug": "{{catalogServiceSlug}}",
+          "endpoint_id": "instance-endpoint-alpha",
+          "endpoint_url": "https://shop.test",
           "is_active": true,
           "credential_source": {{PersonalCredentialSource}}
         }

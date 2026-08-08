@@ -243,6 +243,7 @@ public sealed class NyxIdServiceInstanceClient
         var id = ReadString(item, "user_service_id") ?? ReadString(item, "id");
         var slug = ReadString(item, "service_slug") ?? ReadString(item, "slug");
         var catalogId = ReadString(item, "catalog_service_id") ?? ReadString(item, "service_id");
+        var catalogSlug = ReadString(item, "catalog_service_slug");
         var active = ReadBool(item, "is_active");
         if (string.IsNullOrWhiteSpace(id) ||
             (string.IsNullOrWhiteSpace(catalogId) && string.IsNullOrWhiteSpace(slug)) ||
@@ -272,6 +273,8 @@ public sealed class NyxIdServiceInstanceClient
         };
         if (!string.IsNullOrWhiteSpace(catalogId))
             instance.CatalogServiceId = catalogId;
+        if (!string.IsNullOrWhiteSpace(catalogSlug))
+            instance.CatalogServiceSlug = catalogSlug;
         var nodeId = ReadString(item, "node_id");
         if (!string.IsNullOrWhiteSpace(nodeId))
             instance.NodeId = nodeId;
@@ -326,6 +329,7 @@ public sealed class NyxIdServiceInstanceClient
         left.AccessTokenSource == right.AccessTokenSource &&
         left.CredentialAllowed == right.CredentialAllowed &&
         string.Equals(left.CatalogServiceId, right.CatalogServiceId, StringComparison.Ordinal) &&
+        string.Equals(left.CatalogServiceSlug, right.CatalogServiceSlug, StringComparison.Ordinal) &&
         string.Equals(left.DisplaySlug, right.DisplaySlug, StringComparison.Ordinal) &&
         string.Equals(left.EndpointId, right.EndpointId, StringComparison.Ordinal) &&
         string.Equals(left.EndpointUrl, right.EndpointUrl, StringComparison.Ordinal) &&

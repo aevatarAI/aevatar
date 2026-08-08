@@ -18,11 +18,13 @@ internal static class NyxIdConnectedServiceOperationToolFactory
         NyxIdMcpService service,
         NyxIdMcpEndpoint endpoint,
         string catalogDigest,
-        NyxIdServiceAccessTokenSource accessTokenSource)
+        NyxIdServiceInstance serviceInstance,
+        string? readinessCapabilityId)
     {
         ArgumentNullException.ThrowIfNull(proxy);
         ArgumentNullException.ThrowIfNull(service);
         ArgumentNullException.ThrowIfNull(endpoint);
+        ArgumentNullException.ThrowIfNull(serviceInstance);
 
         if (endpoint.IsDestructive)
             return null;
@@ -41,7 +43,10 @@ internal static class NyxIdConnectedServiceOperationToolFactory
             admission,
             service.ServiceName,
             endpoint.Name,
-            accessTokenSource);
+            serviceInstance.Label,
+            serviceInstance.CatalogServiceSlug,
+            readinessCapabilityId,
+            serviceInstance.AccessTokenSource);
     }
 }
 
@@ -100,6 +105,9 @@ internal sealed class NyxIdConnectedServiceOperationTool :
         AgentToolOperationAdmission admission,
         string serviceLabel,
         string operationLabel,
+        string connectionLabel,
+        string catalogServiceSlug,
+        string? readinessCapabilityId,
         NyxIdServiceAccessTokenSource accessTokenSource)
     {
         _proxy = proxy ?? throw new ArgumentNullException(nameof(proxy));
@@ -113,6 +121,11 @@ internal sealed class NyxIdConnectedServiceOperationTool :
         _accessTokenSource = accessTokenSource;
         Name = BuildOpaqueName(admission);
         ParametersSchema = NyxIdConnectedServiceOperationSchema.Build(admission);
+        Presentation = BuildPresentation(
+            admission,
+            NormalizeModelLabel(connectionLabel, _serviceLabel, selectorSecrets),
+            catalogServiceSlug,
+            readinessCapabilityId);
     }
 
     public string Name { get; }
@@ -122,6 +135,8 @@ internal sealed class NyxIdConnectedServiceOperationTool :
         : $"Run '{_operationLabel}' on connected service '{_serviceLabel}'. The effect requires approval.";
 
     public string ParametersSchema { get; }
+
+    public ToolPresentationDescriptor Presentation { get; }
 
     public ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
 
@@ -133,6 +148,39 @@ internal sealed class NyxIdConnectedServiceOperationTool :
     public string SideEffectKind => IsReadOnly ? string.Empty : "connected_service_operation";
 
     public AgentToolOperationAdmission OperationAdmission { get; }
+
+    private ToolPresentationDescriptor BuildPresentation(
+        AgentToolOperationAdmission admission,
+        string connectionLabel,
+        string catalogServiceSlug,
+        string? readinessCapabilityId)
+    {
+        var source = new NyxIdOperationRef
+        {
+            ConnectedServiceId = admission.ServiceInstanceId,
+            ServiceSlug = admission.ServiceSlug,
+            CatalogServiceSlug = catalogServiceSlug ?? string.Empty,
+            ConnectionLabel = connectionLabel,
+            ConnectorDisplayName = _serviceLabel,
+            OperationId = admission.Identity is AgentToolOperationIdentity.PublishedEndpoint published
+                ? published.EndpointId
+                : string.Empty,
+            HttpMethod = admission.HttpMethod,
+            PathTemplate = admission.PathTemplate,
+        };
+        if (!string.IsNullOrWhiteSpace(readinessCapabilityId))
+            source.ReadinessCapabilityId = readinessCapabilityId;
+
+        return new ToolPresentationDescriptor
+        {
+            InvocationName = Name,
+            DisplayName = _operationLabel,
+            Description = Description,
+            Kind = ToolPresentationKind.NyxIdOperation,
+            Availability = ToolAvailability.Available,
+            NyxIdOperation = source,
+        };
+    }
 
     public AgentToolCallSafety GetCallSafety(string argumentsJson) => new(
         RequiresApproval: IsReadOnly ? false : true,

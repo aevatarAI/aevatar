@@ -38,6 +38,7 @@ message NyxIdServiceInstance {
   reserved "proxy_spec_service_id";
   NyxIdProxyRouteConstraint route_constraint = 12;
   bool credential_allowed = 13;
+  optional string catalog_service_slug = 14;
 }
 
 message NyxIdServiceUpdateRequest {
