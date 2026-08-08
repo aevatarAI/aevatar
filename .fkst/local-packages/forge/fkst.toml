@@ -1,0 +1,22 @@
+kind = "library"
+name = "forge"
+
+[code]
+root = "."
+
+[lib_deps]
+libraries = ["contract"]
+
+[dependency_constraints]
+allowed_lib_deps = ["contract"]
+
+[library]
+name = "forge"
+stable_id = "fkst.library.forge"
+version = "workspace"
+
+[exports]
+public = ["forge.*"]
+
+[visibility]
+public = false

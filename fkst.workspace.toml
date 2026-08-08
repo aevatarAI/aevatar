@@ -9,7 +9,7 @@ workspace = "workspace"
 id = "fkst-packages"
 git = "https://github.com/eanz17/fkst-packages.git"
 rev = "16c14ae0d84fd0b0bbc0e93cdd75320a36c3ba42"
-libraries = ["contract", "forge", "testkit", "workflow", "devloop"]
+libraries = []
 packages = [
   "github-proxy",
   "consensus",
@@ -18,5 +18,4 @@ packages = [
   "github-devloop-intake-default",
   "github-devloop",
   "github-devloop-pr",
-  "github-devloop-ops",
 ]
