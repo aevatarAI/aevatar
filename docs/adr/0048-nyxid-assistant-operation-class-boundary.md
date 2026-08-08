@@ -17,7 +17,7 @@ Treating them as one global MCP-versus-REST choice causes two concrete failures:
 
 The decision is based on the evidence pinned in the [Milestone 40 Gate 0 inventory](../audit-scorecard/2026-08-07-milestone-40-gate-0-inventory.md), including NyxID `fa157bc4160c27922f49f8f498ccac755843a15a`, assistant registry `nyxid-assistant-actions.v4`, and support-contract gist `f45febb057a7182dab2495d4c739d2bb8d7026f5`.
 
-[Issue #3317](https://github.com/AevatarAI/aevatar/issues/3317) selects `origin/feature/integrate` as the only Milestone 40 delivery, production, and acceptance baseline. This decision is accepted against `origin/feature/integrate@6f979452853a6e3afdffeef085f7bbc550b9385e`; later evidence pins the exact integration SHA containing each implementation.
+[Issue #3317](https://github.com/AevatarAI/aevatar/issues/3317) selects `origin/feature/integrate` as the only Milestone 40 delivery, production, and acceptance baseline. This decision is accepted against `origin/feature/integrate@6cf0da4cc53311e27dcc29887b60b330587bcf3c`; later evidence pins the exact integration SHA containing each implementation.
 
 ## Decision
 
