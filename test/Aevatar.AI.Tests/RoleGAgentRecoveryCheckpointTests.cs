@@ -48,6 +48,50 @@ public sealed class RoleGAgentRecoveryCheckpointTests
     }
 
     [Fact]
+    public async Task Recover_WhenToolOwnsExactAdmission_ShouldUseActorCommittedProtobufFact()
+    {
+        var admission = ExactOperationAdmission();
+        var tool = new AdmissionOwnedTestTool(
+            "exact-read",
+            AgentToolReplayPolicy.ReadOnlyRetryable,
+            admission);
+        var executionPort = new RecordingExecutionPort(ExecutedOutcome("{\"ok\":true}"));
+        var fixture = await CreateFixtureAsync(
+            "role-exact-admission-recovery",
+            tool: tool,
+            executionPort: executionPort);
+        await fixture.StartSessionAsync("session-a");
+        var tools = new ToolManager();
+        tools.Register(tool);
+        var executor = new StreamingToolExecutor(
+            tools,
+            toolContext: ToolContext(fixture.ActorId, "session-a", "initial-bearer"),
+            toolExecutionPort: executionPort,
+            checkpointPort: fixture.Agent);
+
+        await executor.PrepareBatchAsync(
+            "session-a",
+            0,
+            [ToolCall("call-a", tool.Name, "{\"input\":\"safe\"}")]);
+        var committed = fixture.Agent.State.Sessions["session-a"].RecoveryCheckpoint;
+        var checkpoint = RoleChatRecoveryCheckpoint.Parser.ParseFrom(committed.ToByteArray());
+        var restored = AgentToolExecutionContextMapper.FromRecoveryPayload(
+            checkpoint.ToolIntents.Should().ContainSingle().Which.RecoveryContext);
+
+        restored.OperationAdmission.Should().BeEquivalentTo(admission);
+
+        await InvokeRecoveredResultsAsync(
+            fixture.Agent,
+            "session-a",
+            checkpoint,
+            ToolContext(fixture.ActorId, "session-a", "reissued-bearer"));
+
+        executionPort.Requests.Should().ContainSingle();
+        executionPort.Requests[0].ExecutionContext.OperationAdmission
+            .Should().BeEquivalentTo(admission);
+    }
+
+    [Fact]
     public async Task Recover_WhenCompletionIsCommitted_ShouldReuseResultWithoutExternalCall()
     {
         var fixture = await CreateFixtureAsync("role-completed-recovery");
@@ -873,6 +917,30 @@ public sealed class RoleGAgentRecoveryCheckpointTests
             ExecutionOwner = AgentToolExecutionOwners.Actor(actorId),
         };
 
+    private static AgentToolOperationAdmission ExactOperationAdmission() => new(
+        "usvc-alpha",
+        "api-shop",
+        new AgentToolOperationIdentity.PublishedEndpoint("endpoint-alpha"),
+        AgentToolOperationAuthorizationBasis.PublishedContract,
+        "GET",
+        "/orders/{orderId}",
+        "contract-digest-alpha",
+        [
+            new AgentToolOperationParameter(
+                "orderId",
+                AgentToolOperationParameterLocation.Path,
+                true,
+                AgentToolOperationValueSchema.Text),
+        ],
+        null,
+        new AgentToolOperationResponsePolicy(true, false, ["application/json"]),
+        new AgentToolOperationExecutionPolicy(
+            AgentToolOperationRisk.ReadOnly,
+            AgentToolOperationApproval.None,
+            AgentToolOperationEnforcementOwner.Aevatar,
+            [AgentToolOperationExecutionMode.Interactive]),
+        "catalog-digest-alpha");
+
     private static AgentToolExecutionOutcome ExecutedOutcome(string result) => new(
         AgentToolExecutionOutcomeKind.Executed,
         result,
@@ -1094,7 +1162,7 @@ public sealed class RoleGAgentRecoveryCheckpointTests
         public Task PersistForTestAsync(IMessage evt) => PersistDomainEventAsync(evt);
     }
 
-    private sealed class TestTool(string name, AgentToolReplayPolicy replayPolicy) : IAgentTool
+    private class TestTool(string name, AgentToolReplayPolicy replayPolicy) : IAgentTool
     {
         public string Name => name;
         public string Description => name;
@@ -1107,6 +1175,15 @@ public sealed class RoleGAgentRecoveryCheckpointTests
             ExecutionCount++;
             return Task.FromResult("{\"executed\":true}");
         }
+    }
+
+    private sealed class AdmissionOwnedTestTool(
+        string name,
+        AgentToolReplayPolicy replayPolicy,
+        AgentToolOperationAdmission admission)
+        : TestTool(name, replayPolicy), IAgentToolOperationAdmissionOwner
+    {
+        public AgentToolOperationAdmission OperationAdmission { get; } = admission;
     }
 
     private sealed class StaticToolSource(IReadOnlyList<IAgentTool> tools) : IAgentToolSource

@@ -70,7 +70,7 @@ public sealed class NyxIdConnectedServiceToolSource : IAgentToolSource
                 _options.EffectiveProxyFileArtifactMaxBytes,
                 _options.ManagedWorkflowAdmissionMode);
             var tools = catalog.Services
-                .Where(service => bindingsById.ContainsKey(service.UserServiceId))
+                .Where(service => HasExactRouteBinding(service, bindingsById))
                 .SelectMany(service => service.Endpoints
                     .Where(endpoint => endpoint.IsReadOnly ||
                         _options.EnableAssistantConnectedServiceEffects)
@@ -109,6 +109,17 @@ public sealed class NyxIdConnectedServiceToolSource : IAgentToolSource
             return [];
         }
     }
+
+    private static bool HasExactRouteBinding(
+        NyxIdMcpService service,
+        IReadOnlyDictionary<string, NyxIdServiceInstanceBinding> bindingsById) =>
+        bindingsById.TryGetValue(service.UserServiceId, out var binding) &&
+        !string.IsNullOrWhiteSpace(binding.Instance.DisplaySlug) &&
+        !string.IsNullOrWhiteSpace(service.ServiceSlug) &&
+        string.Equals(
+            binding.Instance.DisplaySlug,
+            service.ServiceSlug,
+            StringComparison.Ordinal);
 
     private async Task<NyxIdMcpCatalogRead?> ReadMcpCatalogAsync(
         string accessToken,

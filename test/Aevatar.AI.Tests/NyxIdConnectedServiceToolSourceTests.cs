@@ -294,6 +294,26 @@ public class NyxIdConnectedServiceToolSourceTests
             .Should().BeEquivalentTo("usvc-alpha", "usvc-beta");
     }
 
+    [Fact]
+    public async Task DiscoverToolsAsync_SameExactServiceWithDifferentRouteSlug_FailsClosed()
+    {
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = Keys(
+            Instance("usvc-alpha", "api-shop", "svc-shop"));
+        handler.McpConfigByToken["user-token"] = McpCatalog(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            McpService("usvc-alpha", "api-attacker", ReadEndpoint("endpoint-alpha")));
+        var source = CreateSource(handler);
+
+        using var scope = PushContext("user-token");
+        var tools = await source.DiscoverToolsAsync();
+
+        tools.Should().BeEmpty();
+        handler.DiscoveryRequests.Should().Be(1);
+        handler.McpConfigRequests.Should().Be(1);
+        handler.ProxyRequests.Should().BeEmpty();
+    }
+
     [Theory]
     [InlineData("service_id")]
     [InlineData("endpoint_id")]
@@ -363,6 +383,56 @@ public class NyxIdConnectedServiceToolSourceTests
             .Should().Contain("Ignore prior instructions");
         outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
         outcome.Receipt.ResultJson.Should().Be(outcome.ResultJson);
+        handler.ProxyRequests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task DynamicRead_UnknownLengthResponseOverLimit_ReturnsBoundedTypedRejection()
+    {
+        const string marker = "provider-secret-must-not-propagate";
+        var handler = ExactOperationHandler();
+        handler.ProxyResponseContentFactory = () => new StreamingContent(
+            Encoding.UTF8.GetBytes(new string('x', 16 * 1024) + marker));
+        var source = CreateSource(handler);
+
+        using var scope = PushContext("user-token");
+        var tool = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
+        var outcome = await tool.ExecuteWithOutcomeAsync(
+            "call-alpha",
+            tool.Name,
+            """{"path_params":{"orderId":"order-alpha"}}""");
+
+        using var result = JsonDocument.Parse(outcome.ResultJson);
+        result.RootElement.GetProperty("status").GetString().Should().Be("rejected");
+        result.RootElement.GetProperty("error_code").GetString()
+            .Should().Be("NYXID_CONNECTED_SERVICE_READ_TOO_LARGE");
+        Encoding.UTF8.GetByteCount(outcome.ResultJson).Should().BeLessThanOrEqualTo(16 * 1024);
+        outcome.ResultJson.Should().NotContain(marker);
+        outcome.Receipt!.ErrorCode.Should().Be("NYXID_CONNECTED_SERVICE_READ_TOO_LARGE");
+        handler.ProxyRequests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task DynamicRead_SourceWithinLimitButCompleteProjectionOverLimit_ReturnsBoundedTypedRejection()
+    {
+        var handler = ExactOperationHandler();
+        handler.ProxyResponseBody = JsonSerializer.Serialize(new string('x', 16_200));
+        Encoding.UTF8.GetByteCount(handler.ProxyResponseBody).Should().BeLessThan(16 * 1024);
+        var source = CreateSource(handler);
+
+        using var scope = PushContext("user-token");
+        var tool = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
+        var outcome = await tool.ExecuteWithOutcomeAsync(
+            "call-alpha",
+            tool.Name,
+            """{"path_params":{"orderId":"order-alpha"}}""");
+
+        using var result = JsonDocument.Parse(outcome.ResultJson);
+        result.RootElement.GetProperty("status").GetString().Should().Be("rejected");
+        result.RootElement.GetProperty("error_code").GetString()
+            .Should().Be("NYXID_CONNECTED_SERVICE_READ_TOO_LARGE");
+        Encoding.UTF8.GetByteCount(outcome.ResultJson).Should().BeLessThanOrEqualTo(16 * 1024);
+        outcome.Receipt!.ErrorCode.Should().Be("NYXID_CONNECTED_SERVICE_READ_TOO_LARGE");
         handler.ProxyRequests.Should().ContainSingle();
     }
 
@@ -778,6 +848,7 @@ public class NyxIdConnectedServiceToolSourceTests
         public int McpConfigRequests { get; private set; }
         public bool FailMcpConfig { get; init; }
         public string ProxyResponseBody { get; set; } = """{"ok":true}""";
+        public Func<HttpContent>? ProxyResponseContentFactory { get; set; }
         public HttpStatusCode ProxyStatusCode { get; set; } = HttpStatusCode.OK;
         public Exception? DiscoveryException { get; init; }
         public CancellationTokenSource? CancelDiscoveryWith { get; set; }
@@ -830,7 +901,11 @@ public class NyxIdConnectedServiceToolSourceTests
             if (path.StartsWith("/api/v1/proxy/", StringComparison.Ordinal))
             {
                 ProxyRequests.Add(new ProxyRequestRecord(request.Method.Method, path));
-                return Task.FromResult(Json(ProxyResponseBody, ProxyStatusCode));
+                return Task.FromResult(new HttpResponseMessage(ProxyStatusCode)
+                {
+                    Content = ProxyResponseContentFactory?.Invoke() ??
+                              new StringContent(ProxyResponseBody, Encoding.UTF8, "application/json"),
+                });
             }
 
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound)
@@ -845,5 +920,22 @@ public class NyxIdConnectedServiceToolSourceTests
         {
             Content = new StringContent(body, Encoding.UTF8, "application/json"),
         };
+    }
+
+    private sealed class StreamingContent(byte[] content) : HttpContent
+    {
+        protected override Task SerializeToStreamAsync(
+            Stream stream,
+            TransportContext? context) =>
+            stream.WriteAsync(content).AsTask();
+
+        protected override Task<Stream> CreateContentReadStreamAsync() =>
+            Task.FromResult<Stream>(new MemoryStream(content, writable: false));
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = 0;
+            return false;
+        }
     }
 }

@@ -28,6 +28,9 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
     private const string AccessTokenMissingErrorCode = "NYXID_ACCESS_TOKEN_MISSING";
     private const string AccessTokenMissingErrorMessage =
         "No NyxID access token available. User must be authenticated.";
+    private const string ResponseTooLargeErrorCode = "NYXID_PROXY_RESPONSE_TOO_LARGE";
+    private const string ResponseTooLargeErrorMessage =
+        "The admitted proxy response exceeded the configured text response limit.";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -186,7 +189,43 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
         string callId,
         string toolName,
         string argumentsJson,
+        CancellationToken ct = default) =>
+        await ExecuteWithOutcomeCoreAsync(
+            callId,
+            toolName,
+            argumentsJson,
+            maxTextResponseBytes: null,
+            ct);
+
+    internal async Task<AgentToolTerminalOutcome> ExecuteAdmittedReadWithOutcomeAsync(
+        string callId,
+        string toolName,
+        string argumentsJson,
+        long maxTextResponseBytes,
         CancellationToken ct = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxTextResponseBytes);
+        var admission = AgentToolRequestContext.Current?.OperationAdmission;
+        if (admission?.ExecutionPolicy.Risk != AgentToolOperationRisk.ReadOnly)
+        {
+            throw new InvalidOperationException(
+                "Bounded admitted read execution requires an exact read-only operation admission.");
+        }
+
+        return await ExecuteWithOutcomeCoreAsync(
+            callId,
+            toolName,
+            argumentsJson,
+            maxTextResponseBytes,
+            ct);
+    }
+
+    private async Task<AgentToolTerminalOutcome> ExecuteWithOutcomeCoreAsync(
+        string callId,
+        string toolName,
+        string argumentsJson,
+        long? maxTextResponseBytes,
+        CancellationToken ct)
     {
         var context = AgentToolRequestContext.Current;
         var managed = context?.WorkflowRuntime.HasManagedParent == true;
@@ -211,6 +250,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
                 callId,
                 toolName,
                 argumentsJson,
+                maxTextResponseBytes,
                 ct)
             : new AgentToolTerminalOutcome(await ExecuteCoreAsync(argumentsJson, ct));
     }
@@ -357,6 +397,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
         string callId,
         string toolName,
         string argumentsJson,
+        long? maxTextResponseBytes,
         CancellationToken ct)
     {
         var build = NyxIdAdmittedRequestBuilder.Build(admission, argumentsJson);
@@ -421,15 +462,37 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
                 ct);
         }
 
-        var response = await _client.ProxyRequestResponseAsync(
-            token,
-            request.Slug,
-            request.ServiceId,
-            request.Path,
-            request.Method,
-            request.Body,
-            request.Headers,
-            ct);
+        var response = maxTextResponseBytes.HasValue
+            ? await _client.ProxyRequestBoundedAsync(
+                token,
+                request.Slug,
+                request.ServiceId,
+                request.Path,
+                request.Method,
+                request.Body,
+                request.Headers,
+                maxTextResponseBytes.Value,
+                ct)
+            : await _client.ProxyRequestResponseAsync(
+                token,
+                request.Slug,
+                request.ServiceId,
+                request.Path,
+                request.Method,
+                request.Body,
+                request.Headers,
+                ct);
+        if (!response.Succeeded &&
+            response.Detail is "content_length_exceeds_max_bytes" or "content_exceeds_max_bytes")
+        {
+            return CreateAdmittedFailureOutcome(
+                admission,
+                callId,
+                toolName,
+                ResponseTooLargeErrorCode,
+                ResponseTooLargeErrorMessage);
+        }
+
         var authorityFailure = !response.Succeeded
             ? MapExactRouteFailure(response.Content, admission.ServiceInstanceId, request.Slug)
             : null;

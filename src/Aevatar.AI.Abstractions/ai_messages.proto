@@ -165,6 +165,7 @@ message AgentToolExecutionContextPayload {
   repeated ChatFileRef input_file_refs = 16;
   AgentChatInvocationContextPayload chat = 17;
   aevatar.ai.tool_providers.AgentToolExecutionOwner execution_owner = 18;
+  aevatar.ai.tool_providers.AgentToolOperationAdmissionPayload operation_admission = 19;
 }
 
 enum AgentChatInvocationSurfacePayload {
@@ -251,6 +252,7 @@ message AgentToolRecoveryContextPayload {
   bool requires_nyx_id_org_token = 18;
   bool requires_sender_nyx_id_access_token = 19;
   bool requires_source_readable_nyx_id_access_token = 20;
+  aevatar.ai.tool_providers.AgentToolOperationAdmissionPayload operation_admission = 21;
 }
 
 message AgentSkillRecoveryCheckpointPayload {

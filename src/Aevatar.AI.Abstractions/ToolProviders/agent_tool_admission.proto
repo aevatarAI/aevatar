@@ -40,3 +40,119 @@ message AgentToolAdmissionFact {
   reserved 10;
   reserved "admission_kind";
 }
+
+enum AgentToolOperationAuthorizationBasisPayload {
+  AGENT_TOOL_OPERATION_AUTHORIZATION_BASIS_PAYLOAD_UNSPECIFIED = 0;
+  AGENT_TOOL_OPERATION_AUTHORIZATION_BASIS_PAYLOAD_PUBLISHED_CONTRACT = 1;
+  AGENT_TOOL_OPERATION_AUTHORIZATION_BASIS_PAYLOAD_EXPLICIT_REQUEST = 2;
+}
+
+enum AgentToolOperationRiskPayload {
+  AGENT_TOOL_OPERATION_RISK_PAYLOAD_UNSPECIFIED = 0;
+  AGENT_TOOL_OPERATION_RISK_PAYLOAD_READ_ONLY = 1;
+  AGENT_TOOL_OPERATION_RISK_PAYLOAD_WRITE = 2;
+  AGENT_TOOL_OPERATION_RISK_PAYLOAD_DESTRUCTIVE = 3;
+}
+
+enum AgentToolOperationApprovalPayload {
+  AGENT_TOOL_OPERATION_APPROVAL_PAYLOAD_UNSPECIFIED = 0;
+  AGENT_TOOL_OPERATION_APPROVAL_PAYLOAD_NONE = 1;
+  AGENT_TOOL_OPERATION_APPROVAL_PAYLOAD_REQUIRED = 2;
+}
+
+enum AgentToolOperationEnforcementOwnerPayload {
+  AGENT_TOOL_OPERATION_ENFORCEMENT_OWNER_PAYLOAD_UNSPECIFIED = 0;
+  AGENT_TOOL_OPERATION_ENFORCEMENT_OWNER_PAYLOAD_AEVATAR = 1;
+  AGENT_TOOL_OPERATION_ENFORCEMENT_OWNER_PAYLOAD_NYX_ID = 2;
+}
+
+enum AgentToolOperationExecutionModePayload {
+  AGENT_TOOL_OPERATION_EXECUTION_MODE_PAYLOAD_UNSPECIFIED = 0;
+  AGENT_TOOL_OPERATION_EXECUTION_MODE_PAYLOAD_INTERACTIVE = 1;
+  AGENT_TOOL_OPERATION_EXECUTION_MODE_PAYLOAD_DURABLE = 2;
+}
+
+enum AgentToolOperationParameterLocationPayload {
+  AGENT_TOOL_OPERATION_PARAMETER_LOCATION_PAYLOAD_UNSPECIFIED = 0;
+  AGENT_TOOL_OPERATION_PARAMETER_LOCATION_PAYLOAD_PATH = 1;
+  AGENT_TOOL_OPERATION_PARAMETER_LOCATION_PAYLOAD_QUERY = 2;
+  AGENT_TOOL_OPERATION_PARAMETER_LOCATION_PAYLOAD_HEADER = 3;
+}
+
+enum AgentToolOperationValueKindPayload {
+  AGENT_TOOL_OPERATION_VALUE_KIND_PAYLOAD_UNSPECIFIED = 0;
+  AGENT_TOOL_OPERATION_VALUE_KIND_PAYLOAD_STRING = 1;
+  AGENT_TOOL_OPERATION_VALUE_KIND_PAYLOAD_INTEGER = 2;
+  AGENT_TOOL_OPERATION_VALUE_KIND_PAYLOAD_NUMBER = 3;
+  AGENT_TOOL_OPERATION_VALUE_KIND_PAYLOAD_BOOLEAN = 4;
+  AGENT_TOOL_OPERATION_VALUE_KIND_PAYLOAD_OBJECT = 5;
+  AGENT_TOOL_OPERATION_VALUE_KIND_PAYLOAD_ARRAY = 6;
+}
+
+message AgentToolPublishedEndpointIdentityPayload {
+  string endpoint_id = 1;
+}
+
+message AgentToolAuthoredRequestIdentityPayload {
+  string request_contract_digest = 1;
+}
+
+message AgentToolOperationSchemaPropertyPayload {
+  string name = 1;
+  AgentToolOperationValueSchemaPayload schema = 2;
+}
+
+message AgentToolOperationValueSchemaPayload {
+  AgentToolOperationValueKindPayload kind = 1;
+  repeated AgentToolOperationSchemaPropertyPayload properties = 2;
+  repeated string required_properties = 3;
+  AgentToolOperationValueSchemaPayload items = 4;
+  repeated string allowed_values = 5;
+  bool additional_properties_allowed = 6;
+}
+
+message AgentToolOperationParameterPayload {
+  string name = 1;
+  AgentToolOperationParameterLocationPayload location = 2;
+  bool required = 3;
+  AgentToolOperationValueSchemaPayload schema = 4;
+}
+
+message AgentToolOperationRequestBodyPayload {
+  bool required = 1;
+  string media_type = 2;
+  AgentToolOperationValueSchemaPayload schema = 3;
+}
+
+message AgentToolOperationResponsePolicyPayload {
+  bool text_allowed = 1;
+  bool file_artifact_allowed = 2;
+  repeated string media_types = 3;
+}
+
+message AgentToolOperationExecutionPolicyPayload {
+  AgentToolOperationRiskPayload risk = 1;
+  AgentToolOperationApprovalPayload approval = 2;
+  AgentToolOperationEnforcementOwnerPayload enforcement_owner = 3;
+  repeated AgentToolOperationExecutionModePayload allowed_execution_modes = 4;
+}
+
+// Exact server-sealed operation admission persisted with an actor-owned tool intent.
+// Credential material is deliberately absent and must be resolved again for recovery.
+message AgentToolOperationAdmissionPayload {
+  string service_instance_id = 1;
+  string service_slug = 2;
+  oneof identity {
+    AgentToolPublishedEndpointIdentityPayload published_endpoint = 3;
+    AgentToolAuthoredRequestIdentityPayload authored_request = 4;
+  }
+  AgentToolOperationAuthorizationBasisPayload authorization_basis = 5;
+  string http_method = 6;
+  string path_template = 7;
+  string contract_digest = 8;
+  repeated AgentToolOperationParameterPayload parameters = 9;
+  AgentToolOperationRequestBodyPayload request_body = 10;
+  AgentToolOperationResponsePolicyPayload response_policy = 11;
+  AgentToolOperationExecutionPolicyPayload execution_policy = 12;
+  string catalog_digest = 13;
+}

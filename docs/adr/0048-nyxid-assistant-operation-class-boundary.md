@@ -39,7 +39,7 @@ Assistant action intents resolve through the pinned Class-A registry. Milestone 
 
 ### P exposure rule
 
-The generic `nyxid_proxy` remains excluded from NyxID Assistant. Class-P tools are generated request-locally only from a current, exact MCP catalog observation and admitted as typed operations. Their selector is the complete tuple:
+The generic `nyxid_proxy` remains excluded from NyxID Assistant. Class-P tools are generated request-locally only from a current, exact MCP catalog observation and admitted as typed operations. Exposure first requires an exact ordinal `/keys` and MCP intersection on both `user_service_id` and route slug; an ID match with a different slug exposes no operation. Their selector is the complete tuple:
 
 `user_service_id + endpoint_id + catalog_digest`
 
@@ -51,7 +51,7 @@ Milestone 40 uses **request-local dynamic operation tools** as the only canonica
 
 Milestone 40 owns a closed exposure policy rather than treating every MCP entry as model authority. A current exact service must also be active and credential-allowed in the caller's inventory. `GET/HEAD/OPTIONS` operations are exposed as safe reads without local approval; `POST/PUT/PATCH` are exposed only as non-destructive effects that enter the canonical approval port; `DELETE`, generic proxy entries, unknown risks, invalid schemas, and policy contradictions are not exposed. The policy is server-sealed and cannot be widened by prompt, profile text, tool arguments, or catalog labels.
 
-Read and effect outcomes remain different contracts. A read response becomes a maximum-16-KiB typed projection with bounded service/operation provenance labels and an explicit `untrusted_external_data_only` instruction boundary; the upstream body itself is not returned as an untyped tool result. An effect returns a typed receipt projection and the provider-owned `AgentToolReceipt`; provider response bodies are not evidence and are not forwarded as the effect result.
+Read and effect outcomes remain different contracts. A read response uses a headers-first bounded network read and then becomes a maximum-16-KiB complete typed projection, measured as UTF-8 bytes, with bounded service/operation provenance labels and an explicit `untrusted_external_data_only` instruction boundary. A network or final-projection overflow returns only a deterministic typed rejection, never partial/raw provider content. An effect returns a typed receipt projection and the provider-owned `AgentToolReceipt`; provider response bodies are not evidence and are not forwarded as the effect result.
 
 ### Special controls that are not normal Class-A actions
 
@@ -83,6 +83,7 @@ Tier A remains a future cross-repository option. It requires NyxID to expose a n
 - The command path remains `Normalize -> Resolve Target -> Build Context -> Build Envelope -> Dispatch -> Receipt -> Observe`.
 - Accepted dispatch is not committed effect and not read-model visibility.
 - Pending action, running/waiting, stalled, post-return approval, and terminal outcome are actor-owned facts published through the existing committed-state projection pipeline.
+- The complete exact `AgentToolOperationAdmission` is persisted as a typed Protobuf actor checkpoint fact and restored before resumed execution; credential material is excluded and resolved again for the recovery request.
 - Timers and remote callbacks publish typed internal events carrying the minimum correlation keys; they do not mutate task state directly.
 - Query paths read actor-scoped current-state read models and never prime, replay, or reconstruct an approval from transport text.
 - Tool result text, assistant prose, and Studio card presence are not completion evidence. Typed committed state and its authoritative version are.

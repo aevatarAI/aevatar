@@ -174,6 +174,8 @@ public static class AgentToolExecutionContextMapper
             Chat = FromChatPayload(payload.Chat),
             InputFileRefs = FromInputFileRefsPayload(payload.InputFileRefs),
             ExecutionOwner = payload.ExecutionOwner?.Clone() ?? new AgentToolExecutionOwner(),
+            OperationAdmission =
+                AgentToolOperationAdmissionPayloadMapper.FromPayload(payload.OperationAdmission),
         };
     }
 
@@ -230,6 +232,12 @@ public static class AgentToolExecutionContextMapper
             SkillRecovery = ToSkillRecoveryPayload(context.SkillRecovery),
             ExecutionOwner = context.ExecutionOwner?.Clone() ?? new AgentToolExecutionOwner(),
         };
+
+        if (context.OperationAdmission is not null)
+        {
+            payload.OperationAdmission =
+                AgentToolOperationAdmissionPayloadMapper.ToPayload(context.OperationAdmission);
+        }
 
         ApplyOptionalPayloads(context, payload);
         CopyExternalMetadata(context.ExternalMetadata, payload);
@@ -294,6 +302,11 @@ public static class AgentToolExecutionContextMapper
             RequiresSourceReadableNyxIdAccessToken =
                 !string.IsNullOrWhiteSpace(context.Credentials.SourceReadableNyxIdAccessToken),
         };
+        if (context.OperationAdmission is not null)
+        {
+            payload.OperationAdmission =
+                AgentToolOperationAdmissionPayloadMapper.ToPayload(context.OperationAdmission);
+        }
         if (context.ToolVisibility.IsRestricted)
             payload.ToolVisibility = ToToolVisibilityPayload(context.ToolVisibility);
         payload.InputFileRefs.AddRange(ToInputFileRefsPayload(context.InputFileRefs));
@@ -349,6 +362,8 @@ public static class AgentToolExecutionContextMapper
             Chat = FromChatPayload(payload.Chat),
             InputFileRefs = FromInputFileRefsPayload(payload.InputFileRefs),
             ExecutionOwner = payload.ExecutionOwner?.Clone() ?? new AgentToolExecutionOwner(),
+            OperationAdmission =
+                AgentToolOperationAdmissionPayloadMapper.FromPayload(payload.OperationAdmission),
         };
     }
 
