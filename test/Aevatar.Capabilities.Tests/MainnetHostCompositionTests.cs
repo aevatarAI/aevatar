@@ -1052,9 +1052,10 @@ public sealed class MainnetHostCompositionTests
     }
 
     [Fact]
-    public void AddAevatarMainnetHost_ShouldShipConnectedServiceEffects()
+    public async Task AddAevatarMainnetHost_ShouldShipConnectedServiceEffects()
     {
         using var home = new TemporaryAevatarHomeScope();
+        var webSearchHandler = new MainnetWebSearchHandler();
         var builder = CreateBuilder(new Dictionary<string, string?>
         {
             ["Aevatar:Web:NyxIdSearchSlug"] = "api-firecrawl",
@@ -1065,10 +1066,29 @@ public sealed class MainnetHostCompositionTests
             options.EnableConnectorBootstrap = false;
             options.EnableCors = false;
         });
+        builder.Services
+            .AddHttpClient<WebApiClient>()
+            .ConfigurePrimaryHttpMessageHandler(() => webSearchHandler);
+
+        var registeredWebOptions = builder.Services
+            .Where(static descriptor => descriptor.ServiceType == typeof(WebToolOptions))
+            .Should()
+            .ContainSingle()
+            .Which.ImplementationInstance
+            .Should()
+            .BeOfType<WebToolOptions>()
+            .Subject;
+        registeredWebOptions.NyxIdSearchSlug.Should().Be("tavily-search");
 
         using var app = builder.Build();
         var options = app.Services.GetRequiredService<NyxIdToolOptions>();
         app.Services.GetRequiredService<WebToolOptions>().NyxIdSearchSlug.Should().Be("tavily-search");
+        var searchResult = await app.Services.GetRequiredService<WebApiClient>()
+            .SearchAsync("caller-token", "Aevatar", 1, CancellationToken.None);
+        searchResult.Error.Should().BeNull();
+        webSearchHandler.Method.Should().Be(HttpMethod.Post);
+        webSearchHandler.RequestUri.Should().EndWith(
+            "/api/v1/proxy/s/tavily-search/search");
         options.EnableAssistantConnectedServiceEffects.Should().BeTrue();
         var readBack = options.AssistantOperationReadBackBindings.Should().ContainSingle().Subject;
         readBack.CatalogServiceSlug.Should().Be("api-lark-bot");
@@ -1819,6 +1839,25 @@ public sealed class MainnetHostCompositionTests
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(RegistryJson),
+            });
+        }
+    }
+
+    private sealed class MainnetWebSearchHandler : HttpMessageHandler
+    {
+        public HttpMethod? Method { get; private set; }
+
+        public string? RequestUri { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            Method = request.Method;
+            RequestUri = request.RequestUri?.AbsoluteUri;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"results":[]}"""),
             });
         }
     }

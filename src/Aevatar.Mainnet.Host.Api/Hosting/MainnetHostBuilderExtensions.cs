@@ -439,23 +439,26 @@ public static class MainnetHostBuilderExtensions
             var urls = builder.Configuration[WebHostDefaults.ServerUrlsKey] ?? "http://127.0.0.1:5080";
             o.ApiBaseUrl = urls.Split(';').FirstOrDefault()?.Trim();
         });
-        builder.Services.AddWebTools(o =>
+        // AddAevatarPlatform registers WebToolOptions before Mainnet applies its host
+        // invariants. Replace that instance explicitly so a mounted appsettings.json
+        // cannot keep an obsolete provider slug alive through the earlier registration.
+        builder.Services.Replace(ServiceDescriptor.Singleton(new WebToolOptions
         {
-            o.NyxIdBaseUrl = FirstConfiguredValue(
+            NyxIdBaseUrl = FirstConfiguredValue(
                 builder.Configuration,
                 "Aevatar:Web:NyxIdBaseUrl",
                 "Aevatar:NyxId:ApiBaseUrl",
                 "Aevatar:NyxId:Authority",
                 "Cli:App:NyxId:Authority",
-                "Aevatar:Authentication:Authority");
+                "Aevatar:Authentication:Authority"),
             // Mainnet Milestone 40 has one admitted search capability. Stale deployment
             // overrides must not silently route the mounted web_search tool to another service.
-            o.NyxIdSearchSlug = "tavily-search";
-            o.SearchApiBaseUrl = FirstConfiguredValue(
+            NyxIdSearchSlug = "tavily-search",
+            SearchApiBaseUrl = FirstConfiguredValue(
                 builder.Configuration,
                 "Aevatar:Web:SearchApiBaseUrl",
-                "Aevatar:WebSearch:ApiBaseUrl");
-        });
+                "Aevatar:WebSearch:ApiBaseUrl"),
+        }));
         builder.Services.AddToolSetRegistry(options =>
         {
             options.AddToolSet(
