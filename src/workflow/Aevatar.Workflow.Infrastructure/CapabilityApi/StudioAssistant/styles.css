@@ -3784,12 +3784,12 @@ summary:focus-visible {
   --info: #2563eb;
   --info-soft: #eef3ff;
   --shadow: 0 6px 18px rgba(17, 24, 39, 0.1);
-  --assistant-card-max-width: 860px;
-  --assistant-card-inline-gutter: 48px;
-  --workspace-max-width: 1400px;
-  --sidebar-width: 264px;
-  --conversation-max-width: 900px;
-  --conversation-inline-gutter: 48px;
+  --assistant-card-max-width: 720px;
+  --assistant-card-inline-gutter: 40px;
+  --workspace-max-width: 1240px;
+  --sidebar-width: 240px;
+  --conversation-max-width: 760px;
+  --conversation-inline-gutter: 40px;
   --topbar-h: 56px;
   --radius: 6px;
   --radius-lg: 8px;
@@ -4163,7 +4163,7 @@ body:has(.settings-dialog[open]) #servicesButton,
   width: min(calc(100% - var(--conversation-inline-gutter)), var(--conversation-max-width));
   grid-template-columns: 28px minmax(0, 1fr);
   gap: 14px;
-  margin: 0 auto 32px;
+  margin: 0 auto 24px;
   font-size: 15px;
   line-height: 1.7;
 }
@@ -4202,7 +4202,7 @@ body:has(.settings-dialog[open]) #servicesButton,
 .message.user {
   display: flex;
   justify-content: flex-end;
-  padding-left: 48px;
+  padding-left: var(--conversation-inline-gutter);
 }
 
 .message.user .message-avatar {
@@ -4239,7 +4239,7 @@ body:has(.settings-dialog[open]) #servicesButton,
 }
 
 .message-content {
-  gap: 16px;
+  gap: 14px;
 }
 
 .connect-card,
@@ -4540,7 +4540,7 @@ body:has(.settings-dialog[open]) #servicesButton,
   bottom: calc(100% - 8px);
   left: 24px;
   width: auto;
-  max-width: 520px;
+  max-width: 480px;
   margin-right: auto;
   margin-left: 0;
   border-color: var(--hairline-strong);
@@ -5095,13 +5095,13 @@ body:has(.settings-dialog[open]) #servicesButton,
    share the message rows' column edges at every width, and never render an
    assistant row whose body has no content yet (orphan avatar). */
 .thread {
-  padding-top: 32px;
+  padding-top: 24px;
 }
 
 .actor-task {
-  width: calc(100% - 48px);
-  max-width: none;
-  margin: 0 auto 32px;
+  width: calc(100% - var(--conversation-inline-gutter));
+  max-width: var(--assistant-card-max-width);
+  margin: 0 auto 24px;
 }
 
 .message.assistant:has(> .message-body:empty) {
