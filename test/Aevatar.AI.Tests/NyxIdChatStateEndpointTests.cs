@@ -187,7 +187,16 @@ public sealed class NyxIdChatStateEndpointTests
                             "service-slug-beta",
                             "connected-service-beta",
                             null))),
-            ]);
+            ],
+            Gate: new NyxIdChatConversationPlanGateSnapshot(
+                "confirm",
+                "Review the complete plan.",
+                "pending",
+                "gate-alpha",
+                "task-alpha",
+                1,
+                null,
+                "plan-alpha"));
         var queryPort = new RecordingQueryPort
         {
             Result = NyxIdChatConversationStateQueryResult.Current(new NyxIdChatConversationStateSnapshot(
@@ -237,6 +246,12 @@ public sealed class NyxIdChatStateEndpointTests
         json.RootElement.GetProperty("turnId").GetString().Should().Be("turn-alpha");
         json.RootElement.GetProperty("snapshot").GetProperty("actorId").GetString()
             .Should().Be("conversation-alpha");
+        var gate = json.RootElement
+            .GetProperty("snapshot")
+            .GetProperty("activeTask")
+            .GetProperty("gate");
+        gate.GetProperty("mode").GetString().Should().Be("confirm");
+        gate.GetProperty("status").GetString().Should().Be("pending");
         var pendingApproval = json.RootElement
             .GetProperty("snapshot")
             .GetProperty("pendingApproval");
