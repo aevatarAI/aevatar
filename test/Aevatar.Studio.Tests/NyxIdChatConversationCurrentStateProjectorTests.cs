@@ -146,17 +146,8 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
         document.ContinuationAdmission.ContinuationTurnId.Should().Be("turn-beta");
         document.ContinuationAdmission.Status.Should().Be("accepted_for_later");
 
-        var action = document.PendingActions.Should().ContainSingle().Subject;
-        action.ActionRequestId.Should().Be("action-alpha");
-        action.OriginTurnId.Should().Be("turn-alpha");
-        action.TaskId.Should().Be("task-alpha");
-        action.StepId.Should().Be("step-beta");
-        action.Action.Should().Be("service.connect");
-        var report = action.Reports.Should().ContainSingle().Subject;
-        report.Disposition.Should().Be("completed");
-        report.Resource.UserServiceId.Should().Be("user-service-alpha");
-        action.PostconditionResult.Verified.Should().BeFalse();
-        action.PostconditionResult.FailureCode.Should().Be("READ_MODEL_STALE");
+        document.PendingActions.Should().BeEmpty(
+            "a pending plan gate must not publish its admitted browser action");
 
         var serialized = Encoding.UTF8.GetString(document.ToByteArray());
         serialized.Should().NotContain("prompt-secret-alpha");

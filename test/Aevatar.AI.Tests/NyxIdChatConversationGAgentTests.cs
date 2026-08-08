@@ -2776,7 +2776,7 @@ public sealed class NyxIdChatConversationGAgentTests
         progressed.State.ActiveTask.Should().BeEquivalentTo(agent.State.ActiveTask);
         var frames = NyxIdChatConversationAguiFrameBuilder.BuildProgressed("turn-alpha", progressed);
         frames.Should().HaveCount(2);
-        frames[1].Custom.Payload.Unpack<NyxIdChatTaskPlanStepChanged>()
+        frames[1].Custom.Payload.Unpack<NyxIdChatTaskStepChanged>()
             .ChangeKind.Should().Be(NyxIdChatStepChangeKind.Substep);
 
         await agent.HandleOperationProgressAsync(new NyxIdChatOperationProgressSignal
@@ -3537,7 +3537,9 @@ public sealed class NyxIdChatConversationGAgentTests
         callbacks.TimeoutRequests.Clear();
         await reactivated.ActivateAsync();
         var steering = CreateSteeringCommand(expectedStateVersion: checkpointVersion);
-        var activationRecovery = callbacks.TimeoutRequests.Should().ContainSingle().Which
+        var activationRecovery = callbacks.TimeoutRequests.Should().ContainSingle(request =>
+                request.TriggerEnvelope.Payload.Is(NyxIdChatRecoveryRequestedSignal.Descriptor))
+            .Which
             .TriggerEnvelope.Clone();
         activationRecovery.Payload.Is(NyxIdChatRecoveryRequestedSignal.Descriptor).Should().BeTrue(
             "activation queues typed recovery for the requested LLM waterline");

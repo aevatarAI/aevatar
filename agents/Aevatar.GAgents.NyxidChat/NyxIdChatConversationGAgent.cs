@@ -1354,7 +1354,10 @@ public sealed class NyxIdChatConversationGAgent
 
         var next = State.Clone();
         var task = next.ActiveTask;
-        var step = task?.Steps.FirstOrDefault(candidate =>
+        if (task is null)
+            return;
+
+        var step = task.Steps.FirstOrDefault(candidate =>
             KeysEqual(candidate.Operation?.Key, signal.Key));
         if (step?.Operation is null)
             return;
@@ -2080,7 +2083,10 @@ public sealed class NyxIdChatConversationGAgent
         var progress = evt.Progress;
         var next = current.Clone();
         var task = next.ActiveTask;
-        var step = task?.Steps.FirstOrDefault(candidate =>
+        if (task is null)
+            return current;
+
+        var step = task.Steps.FirstOrDefault(candidate =>
             KeysEqual(candidate.Operation?.Key, progress?.Key));
         var operation = step?.Operation;
         if (step is null || operation is null ||
