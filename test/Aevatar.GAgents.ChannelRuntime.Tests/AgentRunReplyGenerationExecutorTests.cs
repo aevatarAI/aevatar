@@ -1025,15 +1025,18 @@ public sealed class AgentRunReplyGenerationExecutorTests
 
         await executor.BuildToolStepContinuationAsync(
             toolWorkItem,
-            execution.AuthorizedToolStep!.WithChatOperation(new NyxIdChatOperationKey
-            {
-                ConversationActorId = "conversation-alpha",
-                TurnId = "turn-alpha",
-                TaskId = "task-alpha",
-                StepId = "step-alpha",
-                OperationId = "operation-alpha",
-                OperationGeneration = 1,
-            }),
+            execution.AuthorizedToolStep!.WithChatOperation(
+                new NyxIdChatOperationKey
+                {
+                    ConversationActorId = "conversation-alpha",
+                    TurnId = "turn-alpha",
+                    TaskId = "task-alpha",
+                    StepId = "step-alpha",
+                    OperationId = "operation-alpha",
+                    OperationGeneration = 1,
+                },
+                idempotencyKey: null,
+                operationAdmission: null),
             CancellationToken.None);
 
         tool.SeenChat.Should().Be(new AgentChatInvocationContext(

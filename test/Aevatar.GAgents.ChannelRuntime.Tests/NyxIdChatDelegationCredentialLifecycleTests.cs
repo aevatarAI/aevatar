@@ -26,22 +26,17 @@ public sealed class NyxIdChatDelegationCredentialLifecycleTests
         var handler = new DelegationRefreshHandler(HttpStatusCode.OK, () =>
             $$"""{"access_token":"{{refreshedToken}}","token_type":"Bearer","expires_in":300,"scope":"openid service:read"}""");
         var lifecycle = CreateLifecycle(time, handler);
-        var generation = new ToolCallingGenerationExecutor();
+        var generation = new ToolCallingGenerationExecutor
+        {
+            BeforeToolDispatch = () =>
+                handler.CallCount.Should().Be(1, "refresh must finish before tool dispatch"),
+        };
         var executor = new NyxIdChatTurnOperationExecutor(
             generation,
             new UnavailableNyxIdActionPostconditionPort(),
             turnCatalogMaterializer: null,
             lifecycle);
         var session = new NyxIdChatTransientExecutionSession();
-        var dispatchWaterlineCount = 0;
-        session.MarkEffectDispatchStartedAsync = (_, ct) =>
-        {
-            ct.ThrowIfCancellationRequested();
-            handler.CallCount.Should().Be(1, "refresh must finish before the dispatch waterline");
-            generation.ToolDispatchCount.Should().Be(0, "the tool must not run before the waterline");
-            dispatchWaterlineCount++;
-            return Task.CompletedTask;
-        };
 
         var llm = await executor.ExecuteAsync(
             BuildInitialLlmCommand(originalToken, AgentToolNyxIdCredentialKindPayload.ProxyDelegation),
@@ -75,7 +70,6 @@ public sealed class NyxIdChatDelegationCredentialLifecycleTests
         handler.LastAuthorization.Should().Be($"Bearer {originalToken}");
         handler.LastBody.Should().BeNull();
         generation.ExecutedToolToken.Should().Be(refreshedToken);
-        dispatchWaterlineCount.Should().Be(1);
         generation.ToolWorkItem.Should().NotBeNull();
         AssertRefreshedCarriers(generation.ToolWorkItem!.Request, generation.ToolWorkItem.StepState, refreshedToken);
         AssertRefreshedCarriers(session.Request!, session.StepState!, refreshedToken);
@@ -503,6 +497,7 @@ public sealed class NyxIdChatDelegationCredentialLifecycleTests
         public int ToolDispatchCount { get; private set; }
         public string? ExecutedToolToken { get; private set; }
         public AgentRunReplyStepExecutionRequest? ToolWorkItem { get; private set; }
+        public Action? BeforeToolDispatch { get; init; }
 
         public Task<AgentRunReplyStepState> BuildInitialStepStateAsync(
             AgentRunReplyGenerationExecutionRequest request,
@@ -551,6 +546,7 @@ public sealed class NyxIdChatDelegationCredentialLifecycleTests
                 context,
                 (executionContext, _) =>
                 {
+                    BeforeToolDispatch?.Invoke();
                     ToolDispatchCount++;
                     ExecutedToolToken = executionContext.Credentials.NyxIdAccessToken;
                     var toolResult = new AgentRunToolStepResult { AdvanceRound = true };
@@ -569,7 +565,20 @@ public sealed class NyxIdChatDelegationCredentialLifecycleTests
                     });
                     return Task.FromResult(toolResult);
                 });
-            return Task.FromResult(new AgentRunLlmStepExecution(continuation, authorized));
+            return Task.FromResult(new AgentRunLlmStepExecution(
+                continuation,
+                authorized,
+                [
+                    new AgentRunAuthorizedToolCallSafety(
+                        call.Id,
+                        call.Name,
+                        call.ArgumentsJson,
+                        new AgentToolCallSafety(
+                            RequiresApproval: false,
+                            IsReadOnly: false,
+                            IsDestructive: false),
+                        SideEffectKind: "connected_service.update"),
+                ]));
         }
 
         public async Task<AgentRunNextToolStepRequestedEvent> BuildToolStepContinuationAsync(
