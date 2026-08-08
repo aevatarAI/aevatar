@@ -460,6 +460,30 @@ public sealed class NyxIdChatSessionEventProjector
                     committed.State?.ProgressSequence ?? 0));
         }
 
+        if (payload.Is(NyxIdChatPendingSteeringContinuationFinalizedEvent.Descriptor))
+        {
+            var finalized = payload.Unpack<NyxIdChatPendingSteeringContinuationFinalizedEvent>();
+            var state = finalized.State;
+            var admission = state?.ContinuationAdmission;
+            if (state is null || admission is null ||
+                !string.Equals(admission.OriginTurnId, context.SessionId, StringComparison.Ordinal))
+            {
+                return EmptyEntries;
+            }
+
+            return Entries(
+                context,
+                NyxIdChatConversationAguiFrameBuilder.BuildContinuationChanged(
+                    context.RootActorId,
+                    context.SessionId,
+                    new NyxIdChatContinuationAdmissionCommittedEvent
+                    {
+                        Admission = admission.Clone(),
+                        State = state.Clone(),
+                    },
+                    state.ProgressSequence));
+        }
+
         if (payload.Is(NyxIdChatStepControlCommittedEvent.Descriptor))
         {
             var committed = payload.Unpack<NyxIdChatStepControlCommittedEvent>();

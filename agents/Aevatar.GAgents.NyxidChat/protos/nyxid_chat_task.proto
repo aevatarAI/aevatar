@@ -969,6 +969,11 @@ message NyxIdChatConversationGAgentState {
   // initialization is admitted. Raw credentials never enter actor state.
   aevatar.credentials.DurableCallerCredentialRef pending_creation_first_turn = 33;
   string pending_creation_first_turn_id = 34;
+  // Internal transport pointer for a delayed steering continuation. The vault
+  // owns the transient command capability; public projections omit both fields.
+  aevatar.credentials.DurableCallerCredentialRef pending_steering_continuation = 35;
+  string pending_steering_continuation_id = 36;
+  google.protobuf.Timestamp pending_steering_continuation_expires_at = 37;
 }
 
 message NyxIdChatHistoryInitializationOutbox {
@@ -1006,6 +1011,17 @@ message NyxIdChatHistoryInitializationRetryScheduledEvent {
 message NyxIdChatPendingCreationFirstTurnDispatchRequested {
   string turn_id = 1;
   string credential_ref = 2;
+}
+
+message NyxIdChatPendingSteeringContinuationDispatchRequested {
+  string turn_id = 1;
+  string credential_ref = 2;
+}
+
+message NyxIdChatPendingSteeringContinuationExpired {
+  string turn_id = 1;
+  string credential_ref = 2;
+  google.protobuf.Timestamp expected_expires_at = 3;
 }
 
 message NyxIdChatHistoryDeliveryReservationState {

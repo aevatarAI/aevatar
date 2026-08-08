@@ -1045,6 +1045,25 @@ message NyxIdChatPendingCreationFirstTurnFinalizedEvent {
   google.protobuf.Timestamp committed_at = 7;
 }
 
+enum NyxIdChatPendingSteeringContinuationOutcome {
+  NYX_ID_CHAT_PENDING_STEERING_CONTINUATION_OUTCOME_UNSPECIFIED = 0;
+  NYX_ID_CHAT_PENDING_STEERING_CONTINUATION_OUTCOME_STARTED = 1;
+  NYX_ID_CHAT_PENDING_STEERING_CONTINUATION_OUTCOME_SECRET_UNAVAILABLE = 2;
+  NYX_ID_CHAT_PENDING_STEERING_CONTINUATION_OUTCOME_INVALID_COMMAND = 3;
+  NYX_ID_CHAT_PENDING_STEERING_CONTINUATION_OUTCOME_IDENTITY_MISMATCH = 4;
+}
+
+message NyxIdChatPendingSteeringContinuationFinalizedEvent {
+  string conversation_actor_id = 1;
+  string continuation_turn_id = 2;
+  string credential_ref = 3;
+  NyxIdChatPendingSteeringContinuationOutcome outcome = 4;
+  string failure_code = 5;
+  string safe_message = 6;
+  google.protobuf.Timestamp committed_at = 7;
+  NyxIdChatConversationGAgentState state = 8;
+}
+
 message NyxIdChatConversationDeletionStartedEvent {
   string scope_id = 1;
   string actor_id = 2;

@@ -90,6 +90,10 @@ public sealed class NyxIdChatCommittedStateProjectionActivationPlanProvider
             return eventData.Unpack<NyxIdChatContinuationAdmissionCommittedEvent>()
                 .Admission?.OriginTurnId;
 
+        if (eventData.Is(NyxIdChatPendingSteeringContinuationFinalizedEvent.Descriptor))
+            return eventData.Unpack<NyxIdChatPendingSteeringContinuationFinalizedEvent>()
+                .State?.ContinuationAdmission?.OriginTurnId;
+
         if (eventData.Is(NyxIdChatStepControlCommittedEvent.Descriptor))
             return eventData.Unpack<NyxIdChatStepControlCommittedEvent>().Result?.TurnId;
 

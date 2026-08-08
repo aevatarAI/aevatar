@@ -27,6 +27,7 @@ public sealed class NyxIdChatConversationGAgent
     private static readonly TimeSpan ActivationRecoveryDelay = TimeSpan.FromMilliseconds(1);
     private static readonly TimeSpan HistoryInitializationRetryDelay = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan PendingFirstTurnRetention = TimeSpan.FromMinutes(30);
+    private static readonly TimeSpan PendingSteeringContinuationRetention = TimeSpan.FromMinutes(30);
     private static readonly TimeSpan HistoryReservationRetryDelay = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan HistoryTerminalRetryDelay = TimeSpan.FromSeconds(5);
     internal static readonly TimeSpan OperationStepChangedCadence = TimeSpan.FromSeconds(30);
@@ -85,6 +86,8 @@ public sealed class NyxIdChatConversationGAgent
             .On<NyxIdChatConversationRegistrationAcceptedEvent>(ApplyConversationRegistrationAccepted)
             .On<NyxIdChatPendingCreationFirstTurnFinalizedEvent>(
                 ApplyPendingCreationFirstTurnFinalized)
+            .On<NyxIdChatPendingSteeringContinuationFinalizedEvent>(
+                ApplyPendingSteeringContinuationFinalized)
             .On<NyxIdChatHistoryInitializationDispatchedEvent>(ApplyHistoryInitializationDispatched)
             .On<NyxIdChatHistoryInitializationRetryScheduledEvent>(ApplyHistoryInitializationRetryScheduled)
             .On<NyxIdChatTurnStartedEvent>(ApplyTurnStarted)
@@ -143,6 +146,20 @@ public sealed class NyxIdChatConversationGAgent
         {
             await ScheduleActivationHistoryTerminalAsync(pendingTerminal, ct);
         }
+
+        if (IsStartedPendingSteeringContinuation(State))
+        {
+            await FinalizePendingSteeringContinuationAsync(
+                State.PendingSteeringContinuation.Clone(),
+                NyxIdChatPendingSteeringContinuationOutcome.Started,
+                string.Empty,
+                string.Empty);
+        }
+        else if (CanDispatchPendingSteeringContinuation(State))
+            await SchedulePendingSteeringContinuationAsync(ActivationRecoveryDelay, ct);
+
+        if (State.PendingSteeringContinuation is not null)
+            await SchedulePendingSteeringContinuationExpiryAsync(ct);
 
         if (hasPendingHistoryReservation)
             return;
@@ -558,6 +575,357 @@ public sealed class NyxIdChatConversationGAgent
                 },
                 ct: ct);
     }
+
+    private async Task<DurableCallerCredentialRef> StorePendingSteeringContinuationAsync(
+        NyxIdChatStartTurnCommand command,
+        DateTimeOffset expiresAt)
+    {
+        var vault = Services.GetService<ISecretVault>() ??
+                    throw new InvalidOperationException(
+                        "The pending steering continuation secret vault is unavailable.");
+        var ownerScopeKey = $"nyxid-chat:{Id}";
+        var ownerSubject = NormalizeRequired(State.OwnerSubject, "owner_subject");
+        var requestedRef = BuildStableIdentity(
+            "pending-steering-continuation",
+            Id,
+            command.TurnId,
+            command.CommandId);
+        var stored = await vault.PutAsync(
+            new StoreSecretRequest(
+                CredentialSecretPurposes.NyxIdChatPendingSteeringContinuation,
+                ownerScopeKey,
+                ownerSubject,
+                Convert.ToBase64String(command.ToByteArray()),
+                "nyxid chat pending steering continuation",
+                expiresAt,
+                requestedRef),
+            CancellationToken.None);
+        return new DurableCallerCredentialRef
+        {
+            Ref = stored.Reference.Ref,
+            Purpose = CredentialSecretPurposes.NyxIdChatPendingSteeringContinuation,
+            OwnerScopeKey = ownerScopeKey,
+            SubjectId = ownerSubject,
+            SourceKind = DurableCallerCredentialSourceKind.NyxIdChat,
+        };
+    }
+
+    private async Task RevokePendingSteeringContinuationAsync(
+        DurableCallerCredentialRef pending,
+        string reason)
+    {
+        var vault = Services.GetService<ISecretVault>();
+        if (vault is null)
+            return;
+        try
+        {
+            await vault.RevokeAsync(new RevokeSecretRequest(
+                pending.Ref,
+                CredentialSecretPurposes.NyxIdChatPendingSteeringContinuation,
+                pending.OwnerScopeKey,
+                pending.SubjectId,
+                reason), CancellationToken.None);
+        }
+        catch (Exception exception)
+        {
+            Logger.LogWarning(
+                exception,
+                "NyxIdChat pending steering continuation cleanup failed: actor={ActorId} ref={CredentialRef}",
+                Id,
+                pending.Ref);
+        }
+    }
+
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+    public async Task HandlePendingSteeringContinuationDispatchRequestedAsync(
+        NyxIdChatPendingSteeringContinuationDispatchRequested signal)
+    {
+        ArgumentNullException.ThrowIfNull(signal);
+        var pending = State.PendingSteeringContinuation?.Clone();
+        var admission = State.ContinuationAdmission?.Clone();
+        if (pending is null || admission is not
+            {
+                Kind: NyxIdChatContinuationKind.Steering,
+                Status: NyxIdChatContinuationAdmissionStatus.Accepted,
+            })
+        {
+            return;
+        }
+
+        if (!string.Equals(pending.Ref, signal.CredentialRef, StringComparison.Ordinal) ||
+            !string.Equals(State.PendingSteeringContinuationId, signal.TurnId,
+                StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var vault = Services.GetService<ISecretVault>();
+        if (vault is null)
+        {
+            Logger.LogWarning(
+                "NyxIdChat pending steering continuation vault is temporarily unavailable: actor={ActorId} turn={TurnId}",
+                Id,
+                signal.TurnId);
+            return;
+        }
+
+        ResolveSecretResult resolved;
+        try
+        {
+            resolved = await vault.ResolveAsync(
+                new ResolveSecretRequest(
+                    pending.Ref,
+                    CredentialSecretPurposes.NyxIdChatPendingSteeringContinuation,
+                    pending.OwnerScopeKey,
+                    pending.SubjectId,
+                    "nyxid chat resume pending steering continuation"),
+                CancellationToken.None);
+        }
+        catch (Exception exception)
+        {
+            Logger.LogWarning(
+                exception,
+                "NyxIdChat pending steering continuation vault resolution failed and remains recoverable: actor={ActorId} turn={TurnId}",
+                Id,
+                signal.TurnId);
+            return;
+        }
+        if (!resolved.Resolved)
+        {
+            await FinalizePendingSteeringContinuationAsync(
+                pending,
+                NyxIdChatPendingSteeringContinuationOutcome.SecretUnavailable,
+                "NYXID_CHAT_PENDING_STEERING_CONTINUATION_SECRET_UNAVAILABLE",
+                "The delayed steering continuation could not be resumed.");
+            return;
+        }
+
+        NyxIdChatStartTurnCommand command;
+        try
+        {
+            command = NyxIdChatStartTurnCommand.Parser.ParseFrom(
+                Convert.FromBase64String(resolved.Secret ?? string.Empty));
+        }
+        catch (Exception exception) when (exception is FormatException or InvalidProtocolBufferException)
+        {
+            Logger.LogWarning(
+                exception,
+                "NyxIdChat pending steering continuation is invalid: actor={ActorId} turn={TurnId}",
+                Id,
+                signal.TurnId);
+            await FinalizePendingSteeringContinuationAsync(
+                pending,
+                NyxIdChatPendingSteeringContinuationOutcome.InvalidCommand,
+                "NYXID_CHAT_PENDING_STEERING_CONTINUATION_INVALID",
+                "The delayed steering continuation could not be resumed.");
+            return;
+        }
+
+        if (!MatchesPendingSteeringContinuation(command, admission))
+        {
+            await FinalizePendingSteeringContinuationAsync(
+                pending,
+                NyxIdChatPendingSteeringContinuationOutcome.IdentityMismatch,
+                "NYXID_CHAT_PENDING_STEERING_CONTINUATION_IDENTITY_MISMATCH",
+                "The delayed steering continuation could not be resumed.");
+            return;
+        }
+
+        try
+        {
+            await StartTurnCoreAsync(command);
+        }
+        catch (Exception exception)
+        {
+            Logger.LogWarning(
+                exception,
+                "NyxIdChat pending steering continuation start failed and remains recoverable: actor={ActorId} turn={TurnId}",
+                Id,
+                command.TurnId);
+            return;
+        }
+
+        if (State.ActiveTurn is null ||
+            !string.Equals(State.ActiveTurn.TurnId, command.TurnId, StringComparison.Ordinal))
+            return;
+
+        await FinalizePendingSteeringContinuationAsync(
+            pending,
+            NyxIdChatPendingSteeringContinuationOutcome.Started,
+            string.Empty,
+            string.Empty);
+    }
+
+    private async Task FinalizePendingSteeringContinuationAsync(
+        DurableCallerCredentialRef pending,
+        NyxIdChatPendingSteeringContinuationOutcome outcome,
+        string failureCode,
+        string safeMessage)
+    {
+        var next = State.Clone();
+        var continuationTurnId = next.PendingSteeringContinuationId;
+        next.PendingSteeringContinuation = null;
+        next.PendingSteeringContinuationId = string.Empty;
+        next.PendingSteeringContinuationExpiresAt = null;
+        if (next.ContinuationAdmission is
+            {
+                Kind: NyxIdChatContinuationKind.Steering,
+            } admission)
+        {
+            admission.Status = outcome == NyxIdChatPendingSteeringContinuationOutcome.Started
+                ? NyxIdChatContinuationAdmissionStatus.Started
+                : NyxIdChatContinuationAdmissionStatus.Rejected;
+            if (outcome != NyxIdChatPendingSteeringContinuationOutcome.Started)
+            {
+                admission.ReasonCode = failureCode;
+                admission.SafeMessage = safeMessage;
+            }
+        }
+
+        next.ProgressSequence = checked(next.ProgressSequence + 1);
+        next.UpdatedAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow());
+        await PersistDomainEventAsync(new NyxIdChatPendingSteeringContinuationFinalizedEvent
+        {
+            ConversationActorId = Id,
+            ContinuationTurnId = continuationTurnId,
+            CredentialRef = pending.Ref,
+            Outcome = outcome,
+            FailureCode = failureCode,
+            SafeMessage = safeMessage,
+            CommittedAt = next.UpdatedAt.Clone(),
+            State = next,
+        }, CancellationToken.None);
+        await RevokePendingSteeringContinuationAsync(
+            pending,
+            outcome == NyxIdChatPendingSteeringContinuationOutcome.Started
+                ? "nyxid chat steering continuation dispatched"
+                : "nyxid chat steering continuation unavailable");
+    }
+
+    private Task DispatchPendingSteeringContinuationAsync(CancellationToken ct)
+    {
+        var pending = State.PendingSteeringContinuation;
+        return !CanDispatchPendingSteeringContinuation(State) || pending is null
+            ? Task.CompletedTask
+            : PublishAsync(
+                new NyxIdChatPendingSteeringContinuationDispatchRequested
+                {
+                    TurnId = State.PendingSteeringContinuationId,
+                    CredentialRef = pending.Ref,
+                },
+                TopologyAudience.Self,
+                ct,
+                new EventEnvelopePublishOptions
+                {
+                    Delivery = new EventEnvelopeDeliveryOptions
+                    {
+                        OperationId = BuildStableIdentity(
+                            "pending-steering-continuation-dispatch",
+                            Id,
+                            State.PendingSteeringContinuationId,
+                            pending.Ref),
+                    },
+                });
+    }
+
+    private Task SchedulePendingSteeringContinuationAsync(TimeSpan delay, CancellationToken ct)
+    {
+        var pending = State.PendingSteeringContinuation;
+        return !CanDispatchPendingSteeringContinuation(State) || pending is null
+            ? Task.CompletedTask
+            : ScheduleSelfDurableTimeoutAsync(
+                BuildStableIdentity(
+                    "pending-steering-continuation-activation",
+                    Id,
+                    State.PendingSteeringContinuationId,
+                    pending.Ref),
+                delay,
+                new NyxIdChatPendingSteeringContinuationDispatchRequested
+                {
+                    TurnId = State.PendingSteeringContinuationId,
+                    CredentialRef = pending.Ref,
+                },
+                ct: ct);
+    }
+
+    private Task SchedulePendingSteeringContinuationExpiryAsync(CancellationToken ct)
+    {
+        var pending = State.PendingSteeringContinuation;
+        var expiresAt = State.PendingSteeringContinuationExpiresAt;
+        if (pending is null || expiresAt is null ||
+            string.IsNullOrWhiteSpace(State.PendingSteeringContinuationId))
+        {
+            return Task.CompletedTask;
+        }
+
+        var delay = expiresAt.ToDateTimeOffset() - _timeProvider.GetUtcNow();
+        if (delay < ActivationRecoveryDelay)
+            delay = ActivationRecoveryDelay;
+        return ScheduleSelfDurableTimeoutAsync(
+            BuildStableIdentity(
+                "pending-steering-continuation-expiry",
+                Id,
+                State.PendingSteeringContinuationId,
+                pending.Ref),
+            delay,
+            new NyxIdChatPendingSteeringContinuationExpired
+            {
+                TurnId = State.PendingSteeringContinuationId,
+                CredentialRef = pending.Ref,
+                ExpectedExpiresAt = expiresAt.Clone(),
+            },
+            ct: ct);
+    }
+
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+    public async Task HandlePendingSteeringContinuationExpiredAsync(
+        NyxIdChatPendingSteeringContinuationExpired signal)
+    {
+        ArgumentNullException.ThrowIfNull(signal);
+        var pending = State.PendingSteeringContinuation?.Clone();
+        if (pending is null ||
+            !string.Equals(pending.Ref, signal.CredentialRef, StringComparison.Ordinal) ||
+            !string.Equals(State.PendingSteeringContinuationId, signal.TurnId,
+                StringComparison.Ordinal) ||
+            State.PendingSteeringContinuationExpiresAt is null ||
+            signal.ExpectedExpiresAt is null ||
+            !State.PendingSteeringContinuationExpiresAt.Equals(signal.ExpectedExpiresAt))
+        {
+            return;
+        }
+
+        if (_timeProvider.GetUtcNow() < signal.ExpectedExpiresAt.ToDateTimeOffset())
+        {
+            await SchedulePendingSteeringContinuationExpiryAsync(CancellationToken.None);
+            return;
+        }
+
+        await FinalizePendingSteeringContinuationAsync(
+            pending,
+            NyxIdChatPendingSteeringContinuationOutcome.SecretUnavailable,
+            "NYXID_CHAT_PENDING_STEERING_CONTINUATION_EXPIRED",
+            "The delayed steering continuation expired before effect verification completed.");
+    }
+
+    private static bool CanDispatchPendingSteeringContinuation(
+        NyxIdChatConversationGAgentState state) =>
+        state.PendingSteeringContinuation is not null &&
+        !string.IsNullOrWhiteSpace(state.PendingSteeringContinuationId) &&
+        state.ContinuationAdmission is
+        {
+            Kind: NyxIdChatContinuationKind.Steering,
+            Status: NyxIdChatContinuationAdmissionStatus.Accepted,
+        };
+
+    private static bool IsStartedPendingSteeringContinuation(
+        NyxIdChatConversationGAgentState state) =>
+        state.PendingSteeringContinuation is not null &&
+        !string.IsNullOrWhiteSpace(state.PendingSteeringContinuationId) &&
+        state.ContinuationAdmission?.Status == NyxIdChatContinuationAdmissionStatus.Started &&
+        string.Equals(
+            state.ActiveTurn?.TurnId,
+            state.PendingSteeringContinuationId,
+            StringComparison.Ordinal);
 
     [EventHandler]
     public async Task HandleWorkflowInteractiveActionHandoffAsync(
@@ -1226,41 +1594,99 @@ public sealed class NyxIdChatConversationGAgent
         if (!decision.ShouldCommit)
         {
             if (decision.StartContinuationNow && decision.Admission is not null)
-                await DispatchSteeringContinuationAsync(command, decision.Admission);
+            {
+                if (State.PendingSteeringContinuation is not null)
+                    await DispatchPendingSteeringContinuationAsync(CancellationToken.None);
+                else
+                    await DispatchSteeringContinuationAsync(command, decision.Admission);
+            }
             return;
         }
 
-        var fencedState = NyxIdChatNeedsYouDecisions.RefreshAttention(decision.FencedState);
-        var terminalPrepared = PrepareHistoryTerminalOutbox(fencedState);
-        await PersistDomainEventAsync(new NyxIdChatControlFenceCommittedEvent
+        DurableCallerCredentialRef? pendingSteeringContinuation = null;
+        Timestamp? pendingSteeringContinuationExpiresAt = null;
+        if (decision.Admission?.Status ==
+            NyxIdChatContinuationAdmissionStatus.AcceptedForLater)
         {
-            Fence = decision.Result.Clone(),
-            Task = fencedState.ActiveTask?.Clone(),
-            Turn = fencedState.ActiveTurn?.Clone(),
-            State = fencedState,
-        }, CancellationToken.None);
-
-        if (operationToCancel is not null)
-            await DispatchOperationCancellationAsync(operationToCancel);
-
-        if (decision.Admission is null)
-        {
-            if (terminalPrepared)
-                await DispatchPendingHistoryTerminalAsync();
-            return;
+            NormalizeRequired(State.OwnerSubject, "owner_subject");
+            if (!OwnerMatches(
+                    State.OwnerSubject,
+                    command.ToolContext?.Caller?.OwnerSubject))
+            {
+                throw new ArgumentException(
+                    "The steering continuation owner does not match the conversation owner.",
+                    nameof(command));
+            }
+            var start = BuildSteeringContinuationCommand(command, decision.Admission);
+            pendingSteeringContinuationExpiresAt = Timestamp.FromDateTimeOffset(
+                _timeProvider.GetUtcNow() + PendingSteeringContinuationRetention);
+            pendingSteeringContinuation = await StorePendingSteeringContinuationAsync(
+                start,
+                pendingSteeringContinuationExpiresAt.ToDateTimeOffset());
         }
 
-        var continuationState = NyxIdChatNeedsYouDecisions.RefreshAttention(decision.State);
-        continuationState.PendingHistoryTerminal = State.PendingHistoryTerminal?.Clone();
-
-        await PersistDomainEventAsync(new NyxIdChatContinuationAdmissionCommittedEvent
+        var terminalPrepared = false;
+        try
         {
-            Admission = decision.Admission.Clone(),
-            State = continuationState,
-        }, CancellationToken.None);
+            var fencedState = NyxIdChatNeedsYouDecisions.RefreshAttention(decision.FencedState);
+            terminalPrepared = PrepareHistoryTerminalOutbox(fencedState);
+            await PersistDomainEventAsync(new NyxIdChatControlFenceCommittedEvent
+            {
+                Fence = decision.Result.Clone(),
+                Task = fencedState.ActiveTask?.Clone(),
+                Turn = fencedState.ActiveTurn?.Clone(),
+                State = fencedState,
+            }, CancellationToken.None);
+
+            if (operationToCancel is not null)
+                await DispatchOperationCancellationAsync(operationToCancel);
+
+            if (decision.Admission is null)
+            {
+                if (terminalPrepared)
+                    await DispatchPendingHistoryTerminalAsync();
+                return;
+            }
+
+            var continuationState = NyxIdChatNeedsYouDecisions.RefreshAttention(decision.State);
+            continuationState.PendingHistoryTerminal = State.PendingHistoryTerminal?.Clone();
+            if (pendingSteeringContinuation is not null)
+            {
+                continuationState.PendingSteeringContinuation =
+                    pendingSteeringContinuation.Clone();
+                continuationState.PendingSteeringContinuationId =
+                    decision.Admission.ContinuationTurnId;
+                continuationState.PendingSteeringContinuationExpiresAt =
+                    pendingSteeringContinuationExpiresAt?.Clone();
+            }
+
+            await PersistDomainEventAsync(new NyxIdChatContinuationAdmissionCommittedEvent
+            {
+                Admission = decision.Admission.Clone(),
+                State = continuationState,
+            }, CancellationToken.None);
+        }
+        catch
+        {
+            if (pendingSteeringContinuation is not null &&
+                !string.Equals(
+                    State.PendingSteeringContinuation?.Ref,
+                    pendingSteeringContinuation.Ref,
+                    StringComparison.Ordinal))
+            {
+                await RevokePendingSteeringContinuationAsync(
+                    pendingSteeringContinuation,
+                    "nyxid chat steering admission did not commit");
+            }
+
+            throw;
+        }
 
         if (terminalPrepared)
             await DispatchPendingHistoryTerminalAsync();
+
+        if (pendingSteeringContinuation is not null)
+            await SchedulePendingSteeringContinuationExpiryAsync(CancellationToken.None);
 
         if (decision.StartContinuationNow)
             await DispatchSteeringContinuationAsync(command, decision.Admission);
@@ -1781,6 +2207,8 @@ public sealed class NyxIdChatConversationGAgent
                 CommittedAt = now.Clone(),
                 State = lateState,
             }, CancellationToken.None);
+            if (CanDispatchPendingSteeringContinuation(State))
+                await DispatchPendingSteeringContinuationAsync(CancellationToken.None);
             if (verification is not null)
             {
                 await DispatchAuthorizedOperationAsync(
@@ -1934,6 +2362,9 @@ public sealed class NyxIdChatConversationGAgent
 
         if (terminalPrepared)
             await DispatchPendingHistoryTerminalAsync();
+
+        if (fencedVerification && CanDispatchPendingSteeringContinuation(State))
+            await DispatchPendingSteeringContinuationAsync(CancellationToken.None);
 
         if (decision.InputRequest is not null)
         {
@@ -2157,6 +2588,10 @@ public sealed class NyxIdChatConversationGAgent
         next.PendingHistoryInitialization = State.PendingHistoryInitialization?.Clone();
         next.HistoryInitializationOperationId = State.HistoryInitializationOperationId;
         next.PendingHistoryTerminal = State.PendingHistoryTerminal?.Clone();
+        next.PendingSteeringContinuation = State.PendingSteeringContinuation?.Clone();
+        next.PendingSteeringContinuationId = State.PendingSteeringContinuationId;
+        next.PendingSteeringContinuationExpiresAt =
+            State.PendingSteeringContinuationExpiresAt?.Clone();
         next.RecentTerminalTurns.AddRange(
             State.RecentTerminalTurns.Select(static summary => summary.Clone()));
         next.RecentStepControlResults.AddRange(
@@ -2370,6 +2805,28 @@ public sealed class NyxIdChatConversationGAgent
         next.PendingCreationFirstTurnId = string.Empty;
         next.UpdatedAt = evt.CommittedAt?.Clone();
         return next;
+    }
+
+    private static NyxIdChatConversationGAgentState ApplyPendingSteeringContinuationFinalized(
+        NyxIdChatConversationGAgentState current,
+        NyxIdChatPendingSteeringContinuationFinalizedEvent evt)
+    {
+        if (current.PendingSteeringContinuation is null ||
+            evt.State is null ||
+            !string.Equals(current.ConversationActorId, evt.ConversationActorId,
+                StringComparison.Ordinal) ||
+            !string.Equals(current.PendingSteeringContinuationId, evt.ContinuationTurnId,
+                StringComparison.Ordinal) ||
+            !string.Equals(current.PendingSteeringContinuation.Ref, evt.CredentialRef,
+                StringComparison.Ordinal) ||
+            evt.State.PendingSteeringContinuation is not null ||
+            !string.IsNullOrWhiteSpace(evt.State.PendingSteeringContinuationId) ||
+            evt.State.PendingSteeringContinuationExpiresAt is not null)
+        {
+            return current;
+        }
+
+        return evt.State.Clone();
     }
 
     private static NyxIdChatConversationGAgentState ApplyHistoryInitializationDispatched(
@@ -3622,7 +4079,13 @@ public sealed class NyxIdChatConversationGAgent
         });
     }
 
-    private Task DispatchSteeringContinuationAsync(
+    private Task<DispatchAdmission> DispatchSteeringContinuationAsync(
+        NyxIdChatSteeringCommand command,
+        NyxIdChatContinuationAdmissionState admission)
+        => DispatchStartTurnContinuationAsync(
+            BuildSteeringContinuationCommand(command, admission));
+
+    private NyxIdChatStartTurnCommand BuildSteeringContinuationCommand(
         NyxIdChatSteeringCommand command,
         NyxIdChatContinuationAdmissionState admission)
     {
@@ -3656,9 +4119,15 @@ public sealed class NyxIdChatConversationGAgent
             LlmControl = command.LlmControl?.Clone(),
         };
         start.InputParts.AddRange(command.InputParts.Select(static part => part.Clone()));
+        return start;
+    }
+
+    private Task<DispatchAdmission> DispatchStartTurnContinuationAsync(
+        NyxIdChatStartTurnCommand start)
+    {
         var envelope = new EventEnvelope
         {
-            Id = continuationCommandId,
+            Id = start.CommandId,
             Timestamp = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
             Payload = Any.Pack(start),
             Route = new EnvelopeRoute
@@ -3667,10 +4136,38 @@ public sealed class NyxIdChatConversationGAgent
             },
             Propagation = new EnvelopePropagation
             {
-                CorrelationId = command.CorrelationId.Trim(),
+                CorrelationId = start.CorrelationId,
             },
         };
         return _actorDispatchPort.DispatchAsync(Id, envelope, CancellationToken.None);
+    }
+
+    private bool MatchesPendingSteeringContinuation(
+        NyxIdChatStartTurnCommand command,
+        NyxIdChatContinuationAdmissionState admission)
+    {
+        var expectedCommandId = BuildStableIdentity(
+            "command",
+            Id,
+            admission.ContinuationTurnId,
+            admission.RequestId,
+            "steering-continuation");
+        return string.Equals(command.ScopeId, State.ScopeId, StringComparison.Ordinal) &&
+               string.Equals(command.ConversationActorId, Id, StringComparison.Ordinal) &&
+               string.Equals(command.TurnId, State.PendingSteeringContinuationId,
+                   StringComparison.Ordinal) &&
+               string.Equals(command.TurnId, admission.ContinuationTurnId,
+                   StringComparison.Ordinal) &&
+               string.Equals(command.ClientRequestId, admission.ClientRequestId,
+                   StringComparison.Ordinal) &&
+               string.Equals(command.CommandId, expectedCommandId, StringComparison.Ordinal) &&
+               string.Equals(command.Prompt, admission.Instruction, StringComparison.Ordinal) &&
+               OwnerMatches(
+                   State.OwnerSubject,
+                   command.ToolContext?.Caller?.OwnerSubject) &&
+               admission.InputParts.Select(static part => part.ToByteString())
+                   .SequenceEqual(command.InputParts.Select(SanitizeInputPart)
+                       .Select(static part => part.ToByteString()));
     }
 
     private async Task DispatchAuthorizedOperationAsync(
