@@ -38,7 +38,7 @@ python3 tools/nyxid-conformance/run-semantic-evaluation.py \
   --provider-route 'chrono-llm-public/chat/completions' \
   --model 'gpt-5.4-2026-03-05' \
   --temperature 0 \
-  --prompt-version 'StreamingAgentProfileTurnClassifier@0836a239bd9d4f654adbdf5b4ff1ce6e886a5125' \
+  --prompt-version 'StreamingAgentProfileTurnClassifier@7c1038082a6575cb741a5ec4e408afdfb3d51f32' \
   --provider-adapter tools/nyxid-conformance/provider-adapters/nyxid-proxy-chat-completions.py \
   --run-id '<bounded-run-id>' \
   --aevatar-revision '<full-40-character-HEAD>' \

@@ -9,7 +9,7 @@
   "provider_user_service_id": "4061b904-62de-4cee-9125-5e3ec8365afd",
   "expected_resolved_model": "gpt-5.4-2026-03-05",
   "temperature": 0,
-  "prompt_version": "StreamingAgentProfileTurnClassifier@0836a239bd9d4f654adbdf5b4ff1ce6e886a5125",
+  "prompt_version": "StreamingAgentProfileTurnClassifier@7c1038082a6575cb741a5ec4e408afdfb3d51f32",
   "prompt_source": "agents/Aevatar.GAgents.NyxidChat/AgentProfiles/StreamingAgentProfileTurnClassifier.cs",
   "prompt_text_sha256": "78f18479312dcb724c8eb5ba8def16a3e2ebd46cc4368481fff60f56d77f1847",
   "dataset": "coverage-manifest.json rows with utterances",
