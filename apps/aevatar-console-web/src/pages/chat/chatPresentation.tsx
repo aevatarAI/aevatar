@@ -1312,6 +1312,7 @@ export function ChatMessageBubble({
   const isProcessingRunIntervention =
     activeRunInterventionKey &&
     message.pendingRunIntervention?.key === activeRunInterventionKey;
+  const pendingRunIntervention = message.pendingRunIntervention;
 
   if (isUser) {
     return (
@@ -1384,14 +1385,14 @@ export function ChatMessageBubble({
           />
         ) : null}
 
-        {message.pendingRunIntervention ? (
+        {pendingRunIntervention ? (
           <RunInterventionCard
             busy={Boolean(isProcessingRunIntervention)}
-            intervention={message.pendingRunIntervention}
+            intervention={pendingRunIntervention}
             onSubmit={(action) =>
               onRunInterventionAction?.(
                 message.id,
-                message.pendingRunIntervention!,
+                pendingRunIntervention,
                 action
               )
             }

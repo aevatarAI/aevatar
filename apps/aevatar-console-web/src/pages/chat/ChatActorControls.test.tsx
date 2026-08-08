@@ -352,31 +352,24 @@ describe('ChatActorControls', () => {
     ).not.toBeInTheDocument();
   });
 
-  it('keeps a long running step live on progress frames and stalls only after silence', () => {
-    let updatedAt = new Date(Date.now()).toISOString();
-    const handlers = callbacks();
-    const { rerender } = render(
+  it('does not infer a stall from browser time without an actor-owned stalled fact', () => {
+    const baseStep = stepFixture();
+    if (!baseStep.operation) throw new Error('Missing operation fixture.');
+    const runningStep = stepFixture({
+      operation: {
+        ...baseStep.operation,
+        lastProgressAt: new Date(Date.now()).toISOString(),
+        stalledAt: undefined,
+      },
+    });
+    render(
       <ChatActorControls
-        projection={projectionFixture([stepFixture({ updatedAt })])}
-        {...handlers}
+        projection={projectionFixture([runningStep])}
+        {...callbacks()}
       />,
     );
 
-    for (let window = 0; window < 5; window += 1) {
-      act(() => jest.advanceTimersByTime(30_000));
-      updatedAt = new Date(Date.now()).toISOString();
-      rerender(
-        <ChatActorControls
-          projection={projectionFixture([stepFixture({ updatedAt })])}
-          {...handlers}
-        />,
-      );
-      expect(screen.queryByText('Stalled')).not.toBeInTheDocument();
-    }
-
-    act(() => jest.advanceTimersByTime(90_000));
+    act(() => jest.advanceTimersByTime(10 * 60_000));
     expect(screen.queryByText('Stalled')).not.toBeInTheDocument();
-    act(() => jest.advanceTimersByTime(30_000));
-    expect(screen.getByText('Stalled')).toBeInTheDocument();
   });
 });
