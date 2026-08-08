@@ -815,14 +815,10 @@ public sealed class NyxIdChatConversationGAgentTests
             start.TurnId,
             action,
             action.State.ProgressSequence);
-        var customFrames = frames.Where(static frame => frame.Custom is not null).ToArray();
-        var richCard = customFrames.Should().ContainSingle(frame =>
-            frame.Custom.Name == NyxIdChatConversationAguiFrameBuilder.ActionRequestEventName).Which;
-        var wirePayload = richCard.Custom.Payload
-            .Unpack<NyxIdAssistantActionRequestWirePayload>();
-        wirePayload.SchemaVersion.Should().Be(4);
-        wirePayload.Action.Should().Be("service.connect");
-        wirePayload.Params.CatalogService.ServiceSlug.Should().Be("aws-cost-explorer");
+        frames.Should().NotContain(frame =>
+            frame.Custom != null &&
+            frame.Custom.Name == NyxIdChatConversationAguiFrameBuilder.ActionRequestEventName,
+            "a pending local plan gate must not publish the browser action before confirmation");
         var finishedFrames = frames.Where(static frame => frame.RunFinished is not null).ToArray();
         finishedFrames.Should().ContainSingle().Which.RunFinished.Status
             .Should().Be(RunCompletionStatus.Blocked);
@@ -1572,7 +1568,8 @@ public sealed class NyxIdChatConversationGAgentTests
                             },
                         },
                     }));
-                var toolKey = agent.State.ActiveTask.Steps.Last().Operation.Key.Clone();
+                var toolKey = agent.State.ActiveTask.Steps
+                    .Single(step => step.Kind == NyxIdChatStepKind.Tool).Operation.Key.Clone();
                 await agent.HandleEventAsync(CreateEnvelope(
                     conversationActorId,
                     new NyxIdChatOperationResultSignal
@@ -1830,7 +1827,8 @@ public sealed class NyxIdChatConversationGAgentTests
                 },
             },
         }));
-        var toolKey = agent.State.ActiveTask.Steps.Last().Operation.Key.Clone();
+        var toolKey = agent.State.ActiveTask.Steps
+            .Single(step => step.Kind == NyxIdChatStepKind.Tool).Operation.Key.Clone();
         var beforeAuthorization = await eventStore.GetEventsAsync(conversationActorId);
 
         await agent.HandleEventAsync(CreateEnvelope(conversationActorId, new NyxIdChatOperationResultSignal
@@ -1906,7 +1904,8 @@ public sealed class NyxIdChatConversationGAgentTests
                 },
             },
         }));
-        var toolKey = agent.State.ActiveTask.Steps.Last().Operation.Key.Clone();
+        var toolKey = agent.State.ActiveTask.Steps
+            .Single(step => step.Kind == NyxIdChatStepKind.Tool).Operation.Key.Clone();
 
         await agent.HandleEventAsync(CreateEnvelope(conversationActorId, new NyxIdChatOperationResultSignal
         {
@@ -2663,7 +2662,8 @@ public sealed class NyxIdChatConversationGAgentTests
 
         dispatch.Calls.Should().HaveCount(2);
         stateObservedAtSuccessorDispatch.Should().NotBeNull();
-        var toolStep = stateObservedAtSuccessorDispatch!.ActiveTask.Steps.Last();
+        var toolStep = stateObservedAtSuccessorDispatch!.ActiveTask.Steps.Single(step =>
+            step.Kind == NyxIdChatStepKind.Tool);
         toolStep.Kind.Should().Be(NyxIdChatStepKind.Tool);
         toolStep.Status.Should().Be(NyxIdChatStepStatus.Running);
         toolStep.Operation.Phase.Should().Be(NyxIdChatOperationPhase.Requested);
@@ -2690,12 +2690,14 @@ public sealed class NyxIdChatConversationGAgentTests
         var committed = await eventStore.GetEventsAsync(conversationActorId);
         committed.Should().HaveCount(afterStart.Count + 2);
         committed[^1].EventData.Is(NyxIdChatOperationDispatchedEvent.Descriptor).Should().BeTrue();
-        agent.State.ActiveTask.Steps.Last().Operation.Phase.Should().Be(
+        agent.State.ActiveTask.Steps.Single(step => step.Kind == NyxIdChatStepKind.Tool)
+            .Operation.Phase.Should().Be(
             NyxIdChatOperationPhase.Dispatched);
 
         var reactivated = CreateController(services, conversationActorId);
         await reactivated.ActivateAsync();
-        var reactivatedSource = reactivated.State.ActiveTask.Steps.Last().Source.Tool;
+        var reactivatedSource = reactivated.State.ActiveTask.Steps
+            .Single(step => step.Kind == NyxIdChatStepKind.Tool).Source.Tool;
         reactivatedSource.ServiceId.Should().Be("connected-service-alpha");
         reactivatedSource.ServiceSlug.Should().Be("service-slug-alpha");
         reactivatedSource.ReadinessCapabilityId.Should().Be("readiness-capability-alpha");
@@ -2836,7 +2838,8 @@ public sealed class NyxIdChatConversationGAgentTests
                 },
             },
         }));
-        var toolKey = agent.State.ActiveTask.Steps[^1].Operation.Key.Clone();
+        var toolKey = agent.State.ActiveTask.Steps
+            .Single(step => step.Kind == NyxIdChatStepKind.Tool).Operation.Key.Clone();
         var beforeStop = await eventStore.GetEventsAsync(conversationActorId);
 
         await agent.HandleEventAsync(CreateEnvelope(
@@ -2845,8 +2848,10 @@ public sealed class NyxIdChatConversationGAgentTests
 
         agent.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Stopped);
         agent.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Stopped);
-        agent.State.ActiveTask.Steps[^1].Status.Should().Be(NyxIdChatStepStatus.Uncertain);
-        agent.State.ActiveTask.Steps[^1].ExternalEffect.Should().Be(
+        var stoppedToolBeforeReceipt = agent.State.ActiveTask.Steps.Single(step =>
+            step.Kind == NyxIdChatStepKind.Tool);
+        stoppedToolBeforeReceipt.Status.Should().Be(NyxIdChatStepStatus.Uncertain);
+        stoppedToolBeforeReceipt.ExternalEffect.Should().Be(
             NyxIdChatEffectEvidence.MayHaveChanged);
 
         await agent.HandleEventAsync(CreateEnvelope(conversationActorId, new NyxIdChatOperationResultSignal
@@ -2879,7 +2884,8 @@ public sealed class NyxIdChatConversationGAgentTests
             Aevatar.AI.Abstractions.AgentToolReceiptStatus.Success);
         evidence.ToString().Should().NotContain("must-not-be-committed");
 
-        var stoppedTool = agent.State.ActiveTask.Steps[^1];
+        var stoppedTool = agent.State.ActiveTask.Steps.Single(step =>
+            step.Kind == NyxIdChatStepKind.Tool);
         stoppedTool.Status.Should().Be(NyxIdChatStepStatus.Uncertain,
             "late evidence cannot regress or advance the terminal stopped step");
         stoppedTool.ExternalEffect.Should().Be(NyxIdChatEffectEvidence.Confirmed);
@@ -2906,8 +2912,9 @@ public sealed class NyxIdChatConversationGAgentTests
 
         (await eventStore.GetEventsAsync(conversationActorId)).Should().HaveCount(committed.Count,
             "terminal exact evidence is monotonic and conflicting duplicates fail closed");
-        agent.State.ActiveTask.Steps[^1].ExternalEffect.Should().Be(
-            NyxIdChatEffectEvidence.Confirmed);
+        agent.State.ActiveTask.Steps.Single(step =>
+                step.Kind == NyxIdChatStepKind.Tool).ExternalEffect.Should().Be(
+                NyxIdChatEffectEvidence.Confirmed);
     }
 
     [Fact]

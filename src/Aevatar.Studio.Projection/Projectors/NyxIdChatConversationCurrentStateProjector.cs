@@ -86,7 +86,9 @@ public sealed class NyxIdChatConversationCurrentStateProjector
             ContinuationAdmission = ToContinuationAdmission(state.ContinuationAdmission),
         };
         document.RecentTerminalTurns.AddRange(state.RecentTerminalTurns.Select(ToTurn));
-        document.PendingActions.AddRange(state.PendingActions.Select(ToAction));
+        document.PendingActions.AddRange(state.PendingActions
+            .Where(action => NyxIdChatPlanGateDecisions.CanPublishAction(state, action))
+            .Select(ToAction));
 
         var result = await _writeDispatcher.UpsertAsync(document, ct).ConfigureAwait(false);
         if (result.IsRejected)

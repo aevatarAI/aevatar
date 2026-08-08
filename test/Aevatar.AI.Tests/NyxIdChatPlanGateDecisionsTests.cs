@@ -31,12 +31,18 @@ public sealed class NyxIdChatPlanGateDecisionsTests
         planned.State.ActiveTask.Gate.TaskId.Should().Be("task-alpha");
         planned.State.ActiveTask.Gate.PlanId.Should().Be("plan-alpha");
         planned.State.ActiveTask.Gate.PlanRevision.Should().Be(2);
+        var toolStep = planned.State.ActiveTask.Steps.Single(step =>
+            step.Kind == NyxIdChatStepKind.Tool);
         var admission = planned.State.ActiveTask.Gate.Admissions.Should().ContainSingle().Which;
-        admission.Key.Should().BeEquivalentTo(planned.State.ActiveTask.Steps.Last().Operation.Key);
+        admission.Key.Should().BeEquivalentTo(toolStep.Operation.Key);
         admission.ToolCallId.Should().Be("call-alpha");
         admission.ToolName.Should().Be("repository_update");
         admission.ArgumentsSha256.Should().Equal(NyxIdChatPlanGateDecisions.HashArguments(arguments));
-        planned.State.ActiveTask.Steps.Last().Status.Should().Be(NyxIdChatStepStatus.Planned);
+        toolStep.Status.Should().Be(NyxIdChatStepStatus.Planned);
+        planned.State.ActiveTask.Steps.Single(step =>
+                step.Kind == NyxIdChatStepKind.Llm &&
+                step.DependsOn.Contains(toolStep.StepId))
+            .Status.Should().Be(NyxIdChatStepStatus.Planned);
 
         var bytes = planned.State.ToByteArray();
         Encoding.UTF8.GetString(bytes).Should().NotContain("repo-secret-alpha");
@@ -55,7 +61,8 @@ public sealed class NyxIdChatPlanGateDecisionsTests
         planned.State.ActiveTask.Gate.Mode.Should().Be(NyxIdChatPlanGateMode.Auto);
         planned.State.ActiveTask.Gate.Status.Should().Be(NyxIdChatPlanGateStatus.Satisfied);
         planned.State.ActiveTask.Gate.RequestId.Should().BeEmpty();
-        planned.State.ActiveTask.Steps.Last().Status.Should().Be(NyxIdChatStepStatus.Running);
+        planned.State.ActiveTask.Steps.Single(step => step.Kind == NyxIdChatStepKind.Tool)
+            .Status.Should().Be(NyxIdChatStepStatus.Running);
         planned.NextCommand.Should().NotBeNull();
         planned.NextCommand!.InputCase.Should().Be(
             NyxIdChatOperationDispatchCommand.InputOneofCase.Tool);
@@ -98,7 +105,8 @@ public sealed class NyxIdChatPlanGateDecisionsTests
         decision.IsExactReplay.Should().BeFalse();
         decision.State.ActiveTask.Gate.Status.Should().Be(NyxIdChatPlanGateStatus.Satisfied);
         decision.State.ActiveTask.Gate.DecidedAt.Should().Be(Now);
-        decision.State.ActiveTask.Steps.Last().Status.Should().Be(NyxIdChatStepStatus.Running);
+        decision.State.ActiveTask.Steps.Single(step => step.Kind == NyxIdChatStepKind.Tool)
+            .Status.Should().Be(NyxIdChatStepStatus.Running);
         decision.NextCommand.Should().NotBeNull();
         decision.NextCommand!.InputCase.Should().Be(
             NyxIdChatOperationDispatchCommand.InputOneofCase.PlanGateContinuation);
@@ -198,6 +206,8 @@ public sealed class NyxIdChatPlanGateDecisionsTests
             Now);
 
         decision.ShouldCommit.Should().BeTrue();
+        decision.Result.Outcome.Should().Be(NyxIdChatControlOutcome.Rejected);
+        decision.Result.ReasonCode.Should().Be(NyxIdChatControlCommands.PlanGatePending);
         decision.State.ActiveTask.Gate.Should().BeEquivalentTo(gate);
         decision.State.ActiveTask.Gate.Status.Should().Be(
             NyxIdChatPlanGateStatus.Pending);
@@ -223,13 +233,54 @@ public sealed class NyxIdChatPlanGateDecisionsTests
         decision.State.ActiveTask.Gate.Status.Should().Be(NyxIdChatPlanGateStatus.Rejected);
         decision.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Stopped);
         decision.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Stopped);
-        decision.State.ActiveTask.Steps.Last().Status.Should().Be(NyxIdChatStepStatus.Cancelled);
-        decision.State.ActiveTask.Steps.Last().ExternalEffect.Should()
+        var toolStep = decision.State.ActiveTask.Steps.Single(step =>
+            step.Kind == NyxIdChatStepKind.Tool);
+        toolStep.Status.Should().Be(NyxIdChatStepStatus.Cancelled);
+        toolStep.ExternalEffect.Should()
             .Be(NyxIdChatEffectEvidence.NotApplied);
+        decision.State.ActiveTask.Steps.Single(step =>
+                step.Kind == NyxIdChatStepKind.Llm &&
+                step.DependsOn.Contains(toolStep.StepId))
+            .Status.Should().Be(NyxIdChatStepStatus.Cancelled);
         decision.State.RecentTerminalTurns.Should().ContainSingle(summary =>
             summary.TurnId == "turn-alpha" &&
             summary.TaskId == "task-alpha" &&
             summary.Status == NyxIdChatTurnStatus.Stopped);
+    }
+
+    [Fact]
+    public void ExpiredTurnAdmission_ShouldFailTaskAndCancelUnexecutedVerification()
+    {
+        var state = PendingPlanState();
+        var sourceKey = state.ActiveTask.Steps.Single(step =>
+            step.Kind == NyxIdChatStepKind.Llm && step.DependsOn.Count == 0).Operation.Key;
+        var admission = NyxIdChatPlanGateDecisions.BuildTurnAdmission(state, sourceKey, Now);
+
+        var decision = NyxIdChatPlanGateDecisions.ExpireCapability(
+            state,
+            new NyxIdChatPlanGateCapabilityExpiredSignal
+            {
+                Admission = admission!.Admission.Clone(),
+                FailureCode = NyxIdChatTurnGAgent.PlanGateCapabilityExpiredCode,
+                SafeMessage = "Re-plan from a safe checkpoint.",
+            },
+            Now);
+
+        decision.ShouldCommit.Should().BeTrue();
+        decision.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Failed);
+        decision.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Failed);
+        var toolStep = decision.State.ActiveTask.Steps.Single(step =>
+            step.Kind == NyxIdChatStepKind.Tool);
+        toolStep.Status.Should().Be(NyxIdChatStepStatus.Failed);
+        toolStep.ExternalEffect.Should().Be(NyxIdChatEffectEvidence.NotApplied);
+        decision.State.ActiveTask.Steps.Single(step =>
+                step.Kind == NyxIdChatStepKind.Llm &&
+                step.DependsOn.Contains(toolStep.StepId))
+            .Status.Should().Be(NyxIdChatStepStatus.Cancelled);
+        decision.State.RecentTerminalTurns.Should().ContainSingle(summary =>
+            summary.TurnId == "turn-alpha" &&
+            summary.Status == NyxIdChatTurnStatus.Failed &&
+            summary.FailureCode == NyxIdChatTurnGAgent.PlanGateCapabilityExpiredCode);
     }
 
     private static NyxIdChatConversationGAgentState PendingPlanState() =>

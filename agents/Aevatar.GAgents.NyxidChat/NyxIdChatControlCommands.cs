@@ -44,6 +44,7 @@ public static class NyxIdChatControlCommands
     public const string IdentityMismatch = "NYXID_CHAT_CONTROL_IDENTITY_MISMATCH";
     public const string StateVersionMismatch = "NYXID_CHAT_STATE_VERSION_MISMATCH";
     public const string ControlConflict = "NYXID_CHAT_CONTROL_CONFLICT";
+    public const string PlanGatePending = "NYXID_CHAT_PLAN_GATE_PENDING";
     public const string StepControlConflict = "NYXID_CHAT_STEP_CONTROL_CONFLICT";
     public const string StepActionUnavailable = "NYXID_CHAT_STEP_ACTION_UNAVAILABLE";
     public const string StepRetryAccepted = "NYXID_CHAT_STEP_RETRY_ACCEPTED";
@@ -71,6 +72,8 @@ public static class NyxIdChatControlCommands
         "The control command was based on a stale conversation state version.";
     private const string ControlConflictMessage =
         "A different control command already fenced this chat turn.";
+    private const string PlanGatePendingMessage =
+        "Resolve the pending plan gate before steering this turn.";
     private const string StepControlConflictMessage =
         "The step control request identity was already used with different content.";
     private const string StepActionUnavailableMessage =
@@ -503,6 +506,23 @@ public static class NyxIdChatControlCommands
                 command.TurnId,
                 StateVersionMismatch,
                 StateVersionMismatchMessage,
+                now);
+        }
+
+        if (state.ActiveTask?.Gate is
+            {
+                Mode: NyxIdChatPlanGateMode.Confirm,
+                Status: NyxIdChatPlanGateStatus.Pending,
+            })
+        {
+            return Reject(
+                state,
+                NyxIdChatControlKind.Steering,
+                requestId,
+                command.ClientRequestId,
+                command.TurnId,
+                PlanGatePending,
+                PlanGatePendingMessage,
                 now);
         }
 

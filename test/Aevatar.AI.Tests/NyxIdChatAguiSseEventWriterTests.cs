@@ -426,6 +426,8 @@ public class NyxIdChatAguiSseEventWriterTests
                 TaskId = "task-alpha",
                 TurnId = "turn-alpha",
                 Status = NyxIdChatTaskStatus.Blocked,
+                PlanId = "plan-alpha",
+                PlanRevision = 2,
             },
             OriginTurn = new NyxIdChatTurnState
             {
@@ -434,6 +436,17 @@ public class NyxIdChatAguiSseEventWriterTests
                 Status = NyxIdChatTurnStatus.Blocked,
             },
         };
+        committed.State = new NyxIdChatConversationGAgentState
+        {
+            ConversationActorId = "conversation-alpha",
+            ActiveTask = committed.Task.Clone(),
+            ActiveTurn = committed.OriginTurn.Clone(),
+        };
+        committed.State.PendingActions.Add(committed.Request.Clone());
+        committed.State.ActiveTask.Gate = NyxIdChatPlanGateDecisions.BuildActionGate(
+            committed.State,
+            committed.Request);
+        committed.State.ActiveTask.Gate.Status = NyxIdChatPlanGateStatus.Satisfied;
         var actionFrame = NyxIdChatConversationAguiFrameBuilder.BuildActionRequested(
                 "conversation-alpha",
                 "turn-alpha",

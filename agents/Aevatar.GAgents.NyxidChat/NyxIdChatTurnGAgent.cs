@@ -7,6 +7,7 @@ using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
+using System.Security.Cryptography;
 
 namespace Aevatar.GAgents.NyxidChat;
 
@@ -27,6 +28,10 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
         "NYXID_CHAT_OPERATION_RESULT_DELIVERY_LOST";
     private const string ResultDeliveryLostMessage =
         "The operation completed, but its original result could not be recovered for delivery.";
+    internal const string PlanGateCapabilityExpiredCode =
+        "NYXID_CHAT_PLAN_GATE_CAPABILITY_EXPIRED";
+    private const string PlanGateCapabilityExpiredMessage =
+        "The admitted plan can no longer execute after recovery. Re-plan from a safe checkpoint.";
 
     private readonly INyxIdChatTurnOperationDispatchSession _operationDispatchSession;
     private readonly IActorDispatchPort _actorDispatchPort;
@@ -56,6 +61,8 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
         StateTransitionMatcher
             .Match(current, evt)
             .On<NyxIdChatTurnOperationAdmittedEvent>(ApplyAdmitted)
+            .On<NyxIdChatTurnPlanGateAdmissionCommittedEvent>(ApplyPlanGateAdmissionCommitted)
+            .On<NyxIdChatTurnPlanGateAdmissionExpiredEvent>(ApplyPlanGateAdmissionExpired)
             .On<NyxIdChatTurnEffectDispatchStartedEvent>(ApplyEffectDispatchStarted)
             .On<NyxIdChatTurnOperationReconciliationStartedEvent>(ApplyReconciliationStarted)
             .On<NyxIdChatTurnOperationCompletedEvent>(ApplyCompleted)
@@ -65,6 +72,16 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
         await base.OnActivateAsync(ct);
+        if (State.PlanGateAdmission is { } staleAdmission)
+        {
+            await DispatchPlanGateCapabilityExpiredAsync(staleAdmission, ct);
+            await PersistDomainEventAsync(new NyxIdChatTurnPlanGateAdmissionExpiredEvent
+            {
+                Admission = staleAdmission.Clone(),
+                ExpiredAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
+            }, ct);
+        }
+
         if (State.AdmittedOperation is null || State.ResultDelivered)
             return;
 
@@ -94,10 +111,34 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
     }
 
     [EventHandler]
+    public async Task HandlePlanGateAdmissionAsync(
+        NyxIdChatTurnPlanGateAdmissionCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (!IsValidPlanGateAdmission(command))
+            return;
+
+        if (State.PlanGateAdmission is { } existing)
+        {
+            if (existing.Equals(command.Admission))
+                return;
+
+            return;
+        }
+
+        await PersistDomainEventAsync(new NyxIdChatTurnPlanGateAdmissionCommittedEvent
+        {
+            Admission = command.Admission.Clone(),
+        }, CancellationToken.None);
+    }
+
+    [EventHandler]
     public async Task HandleOperationAsync(NyxIdChatOperationDispatchCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
-        if (!IsValid(command) || IsDuplicateOrUnavailable(command.Key))
+        if (!IsValid(command) ||
+            !MatchesPlanGateAdmission(command) ||
+            IsDuplicateOrUnavailable(command.Key))
             return;
 
         var kind = ResolveKind(command);
@@ -119,6 +160,7 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
             Idempotent = idempotent,
             IdempotencyKey = idempotencyKey,
             OperationAdmission = operationAdmission?.Clone(),
+            ConsumesPlanGateAdmission = command.PlanGateContinuation is not null,
             AdmittedAt = admittedAt,
         }, CancellationToken.None);
 
@@ -536,11 +578,41 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
         next.Idempotent = evt.Idempotent;
         next.IdempotencyKey = evt.IdempotencyKey;
         next.OperationAdmission = evt.OperationAdmission?.Clone();
+        if (evt.ConsumesPlanGateAdmission)
+            next.PlanGateAdmission = null;
         next.ReconciliationStartedAt = null;
         next.ResultDelivered = false;
         next.AdmittedAt = evt.AdmittedAt?.Clone();
         next.CompletedAt = null;
         next.DeliveredAt = null;
+        return next;
+    }
+
+    private static NyxIdChatTurnGAgentState ApplyPlanGateAdmissionCommitted(
+        NyxIdChatTurnGAgentState current,
+        NyxIdChatTurnPlanGateAdmissionCommittedEvent evt)
+    {
+        if (evt.Admission is null)
+            return current;
+
+        var next = current.Clone();
+        next.PlanGateAdmission = evt.Admission.Clone();
+        return next;
+    }
+
+    private static NyxIdChatTurnGAgentState ApplyPlanGateAdmissionExpired(
+        NyxIdChatTurnGAgentState current,
+        NyxIdChatTurnPlanGateAdmissionExpiredEvent evt)
+    {
+        if (current.PlanGateAdmission is null ||
+            evt.Admission is null ||
+            !current.PlanGateAdmission.Equals(evt.Admission))
+        {
+            return current;
+        }
+
+        var next = current.Clone();
+        next.PlanGateAdmission = null;
         return next;
     }
 
@@ -625,6 +697,76 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
              command.Key.OperationId,
              StringComparison.Ordinal));
 
+    private bool IsValidPlanGateAdmission(NyxIdChatTurnPlanGateAdmissionCommand command)
+    {
+        var admission = command.Admission;
+        return admission?.Key is
+               {
+                   ConversationActorId.Length: > 0,
+                   TurnId.Length: > 0,
+                   TaskId.Length: > 0,
+                   StepId.Length: > 0,
+                   OperationId.Length: > 0,
+                   OperationGeneration: > 0,
+               } &&
+               command.SourceOperationKey is not null &&
+               State.AdmittedOperation is not null &&
+               State.ResultDelivered &&
+               State.OperationKind == NyxIdChatStepKind.Llm &&
+               State.Phase == NyxIdChatOperationPhase.Succeeded &&
+               KeysEqual(State.AdmittedOperation, command.SourceOperationKey) &&
+               SameTask(command.SourceOperationKey, admission.Key) &&
+               string.Equals(admission.TaskId, admission.Key.TaskId, StringComparison.Ordinal) &&
+               !string.IsNullOrWhiteSpace(admission.GateRequestId) &&
+               !string.IsNullOrWhiteSpace(admission.PlanId) &&
+               admission.PlanRevision > 0 &&
+               !string.IsNullOrWhiteSpace(admission.ToolCallId) &&
+               !string.IsNullOrWhiteSpace(admission.ToolName) &&
+               admission.ArgumentsSha256.Length == SHA256.HashSizeInBytes;
+    }
+
+    private bool MatchesPlanGateAdmission(NyxIdChatOperationDispatchCommand command)
+    {
+        if (command.PlanGateContinuation is not { } continuation)
+            return State.PlanGateAdmission is null;
+
+        var expected = State.PlanGateAdmission;
+        return expected?.Key is not null &&
+               KeysEqual(expected.Key, command.Key) &&
+               string.Equals(expected.GateRequestId, continuation.GateRequestId, StringComparison.Ordinal) &&
+               string.Equals(expected.TaskId, continuation.TaskId, StringComparison.Ordinal) &&
+               string.Equals(expected.PlanId, continuation.PlanId, StringComparison.Ordinal) &&
+               expected.PlanRevision == continuation.PlanRevision &&
+               string.Equals(expected.ToolCallId, continuation.ToolCallId, StringComparison.Ordinal) &&
+               string.Equals(expected.ToolName, continuation.ToolName, StringComparison.Ordinal) &&
+               expected.MayChangeExternalState == continuation.MayChangeExternalState &&
+               expected.ArgumentsSha256.Length == continuation.ArgumentsSha256.Length &&
+               CryptographicOperations.FixedTimeEquals(
+                   expected.ArgumentsSha256.Span,
+                   continuation.ArgumentsSha256.Span) &&
+               NyxIdChatOperationAdmissionPolicy.Matches(
+                   expected.OperationAdmission,
+                   continuation.OperationAdmission);
+    }
+
+    private async Task DispatchPlanGateCapabilityExpiredAsync(
+        NyxIdChatTurnPlanGateAdmissionState admission,
+        CancellationToken ct)
+    {
+        var signal = new NyxIdChatPlanGateCapabilityExpiredSignal
+        {
+            Admission = admission.Clone(),
+            FailureCode = PlanGateCapabilityExpiredCode,
+            SafeMessage = PlanGateCapabilityExpiredMessage,
+        };
+        var envelope = CreateDirectEnvelope(
+            admission.Key.ConversationActorId,
+            $"{admission.GateRequestId}:capability-expired",
+            signal);
+        await _actorDispatchPort
+            .DispatchAsync(admission.Key.ConversationActorId, envelope, ct);
+    }
+
     private static string ResolveIdempotencyKey(NyxIdChatOperationDispatchCommand command) =>
         command.Tool?.IdempotencyKey ??
         command.ToolApprovalContinuation?.IdempotencyKey ??
@@ -653,6 +795,11 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
         };
 
     private static bool SameTurn(NyxIdChatOperationKey left, NyxIdChatOperationKey right) =>
+        string.Equals(left.ConversationActorId, right.ConversationActorId, StringComparison.Ordinal) &&
+        string.Equals(left.TurnId, right.TurnId, StringComparison.Ordinal) &&
+        string.Equals(left.TaskId, right.TaskId, StringComparison.Ordinal);
+
+    private static bool SameTask(NyxIdChatOperationKey left, NyxIdChatOperationKey right) =>
         string.Equals(left.ConversationActorId, right.ConversationActorId, StringComparison.Ordinal) &&
         string.Equals(left.TurnId, right.TurnId, StringComparison.Ordinal) &&
         string.Equals(left.TaskId, right.TaskId, StringComparison.Ordinal);

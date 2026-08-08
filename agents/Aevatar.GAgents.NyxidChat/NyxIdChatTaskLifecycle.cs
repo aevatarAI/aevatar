@@ -21,6 +21,8 @@ public sealed record NyxIdChatTaskLifecycleDecision(
 /// </summary>
 public static class NyxIdChatTaskLifecycle
 {
+    private const int DefaultToolEstimateSeconds = 60;
+    private const int DefaultVerificationEstimateSeconds = 30;
     public const string ToolSafetyRequired = "NYXID_CHAT_TOOL_SAFETY_REQUIRED";
     public const string ToolCallInvalid = "NYXID_CHAT_TOOL_CALL_INVALID";
     public const string ToolAdmissionInvalid = "NYXID_CHAT_TOOL_ADMISSION_INVALID";
@@ -84,10 +86,17 @@ public static class NyxIdChatTaskLifecycle
         NyxIdChatOperationDispatchCommand? successor = null;
         if (normalizedSignal.ResultCase ==
                 NyxIdChatOperationResultSignal.ResultOneofCase.Tool &&
-            normalizedSignal.Tool.Receipt?.Status == AgentToolReceiptStatus.Success &&
-            next.ActiveTask.Status == NyxIdChatTaskStatus.Succeeded)
+            normalizedSignal.Tool.Receipt?.Status == AgentToolReceiptStatus.Success)
         {
-            successor = AppendContinuationLlmStep(next, normalizedSignal.Key, now);
+            successor = ActivatePlannedVerificationStep(next, normalizedSignal.Key, now);
+        }
+        else if (currentStep.Kind == NyxIdChatStepKind.Tool &&
+                 FindCurrentStep(next, operationKey)?.Status is
+                     NyxIdChatStepStatus.Failed or
+                     NyxIdChatStepStatus.Cancelled or
+                     NyxIdChatStepStatus.Uncertain)
+        {
+            CancelPlannedVerificationStep(next, operationKey.StepId, now);
         }
 
         FinalizeDerivedState(next, now);
@@ -167,12 +176,14 @@ public static class NyxIdChatTaskLifecycle
             currentStep,
             toolCall,
             now);
+        var verificationStep = BuildVerificationStep(next, toolStep, now);
         next.ActiveTask.Steps.Add(toolStep);
+        next.ActiveTask.Steps.Add(verificationStep);
         NyxIdChatPlanRevisions.CommitChange(
             next.ActiveTask,
             NyxIdChatPlanRevisionCause.ScopeResolution,
             now,
-            [toolStep]);
+            [toolStep, verificationStep]);
 
         var requiresConfirmation = NyxIdChatPlanGateDecisions.RequiresConfirmation(
             toolCall,
@@ -465,38 +476,43 @@ public static class NyxIdChatTaskLifecycle
                 IdempotencyKey = operationId,
                 RequestedAt = now.Clone(),
             },
+            Estimate = new NyxIdChatStepEstimate
+            {
+                Kind = NyxIdChatStepEstimateKind.Duration,
+                Seconds = DefaultToolEstimateSeconds,
+            },
             UpdatedAt = now.Clone(),
         };
         step.AvailableActions = NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(step);
         return step;
     }
 
-    private static NyxIdChatOperationDispatchCommand AppendContinuationLlmStep(
+    private static NyxIdChatTaskStepState BuildVerificationStep(
         NyxIdChatConversationGAgentState state,
-        NyxIdChatOperationKey completedToolKey,
+        NyxIdChatTaskStepState toolStep,
         Timestamp now)
     {
-        var order = state.ActiveTask.Steps.Count + 1;
+        var order = toolStep.Order + 1;
         var stepId = BuildStableIdentity(
             "step",
             state.ConversationActorId,
-            completedToolKey.TurnId,
-            completedToolKey.TaskId,
-            completedToolKey.StepId,
+            toolStep.Operation.Key.TurnId,
+            toolStep.Operation.Key.TaskId,
+            toolStep.StepId,
             order.ToString(System.Globalization.CultureInfo.InvariantCulture),
             "llm-continuation");
         var operationId = BuildStableIdentity(
             "operation",
             state.ConversationActorId,
-            completedToolKey.TurnId,
-            completedToolKey.TaskId,
+            toolStep.Operation.Key.TurnId,
+            toolStep.Operation.Key.TaskId,
             stepId,
             "1");
         var key = new NyxIdChatOperationKey
         {
             ConversationActorId = state.ConversationActorId,
-            TurnId = completedToolKey.TurnId,
-            TaskId = completedToolKey.TaskId,
+            TurnId = toolStep.Operation.Key.TurnId,
+            TaskId = toolStep.Operation.Key.TaskId,
             StepId = stepId,
             OperationId = operationId,
             OperationGeneration = 1,
@@ -506,13 +522,13 @@ public static class NyxIdChatTaskLifecycle
             StepId = stepId,
             Order = order,
             Kind = NyxIdChatStepKind.Llm,
-            Status = NyxIdChatStepStatus.Running,
+            Status = NyxIdChatStepStatus.Planned,
             Required = true,
-            Description = "Continue the assistant response with the typed tool result.",
+            Description = "Verify the typed tool result and communicate the outcome.",
             Source = new NyxIdChatStepSource { Llm = new NyxIdChatLLMStepSource() },
             ExternalEffect = NyxIdChatEffectEvidence.NotStarted,
             AddedBy = NyxIdChatStepAddedBy.Replan,
-            DependsOn = { completedToolKey.StepId },
+            DependsOn = { toolStep.StepId },
             Operation = new NyxIdChatOperationState
             {
                 Key = key.Clone(),
@@ -520,21 +536,56 @@ public static class NyxIdChatTaskLifecycle
                 Phase = NyxIdChatOperationPhase.Requested,
                 RequestedAt = now.Clone(),
             },
+            Estimate = new NyxIdChatStepEstimate
+            {
+                Kind = NyxIdChatStepEstimateKind.Duration,
+                Seconds = DefaultVerificationEstimateSeconds,
+            },
             UpdatedAt = now.Clone(),
         };
         step.AvailableActions = NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(step);
-        state.ActiveTask.Steps.Add(step);
-        NyxIdChatPlanRevisions.CommitChange(
-            state.ActiveTask,
-            NyxIdChatPlanRevisionCause.ScopeResolution,
-            now,
-            [step]);
+        return step;
+    }
+
+    private static NyxIdChatOperationDispatchCommand? ActivatePlannedVerificationStep(
+        NyxIdChatConversationGAgentState state,
+        NyxIdChatOperationKey completedToolKey,
+        Timestamp now)
+    {
+        var step = state.ActiveTask.Steps.SingleOrDefault(candidate =>
+            candidate.Kind == NyxIdChatStepKind.Llm &&
+            candidate.Status == NyxIdChatStepStatus.Planned &&
+            candidate.DependsOn.Count == 1 &&
+            string.Equals(candidate.DependsOn[0], completedToolKey.StepId, StringComparison.Ordinal));
+        if (step?.Operation?.Key is null)
+            return null;
+
         ActivateStep(state, step, now);
         return new NyxIdChatOperationDispatchCommand
         {
-            Key = key,
+            Key = step.Operation.Key.Clone(),
             Llm = new NyxIdChatLLMOperationInput { ContinueSession = true },
         };
+    }
+
+    private static void CancelPlannedVerificationStep(
+        NyxIdChatConversationGAgentState state,
+        string toolStepId,
+        Timestamp now)
+    {
+        var step = state.ActiveTask.Steps.SingleOrDefault(candidate =>
+            candidate.Kind == NyxIdChatStepKind.Llm &&
+            candidate.Status == NyxIdChatStepStatus.Planned &&
+            candidate.DependsOn.Contains(toolStepId));
+        if (step is null)
+            return;
+
+        step.Status = NyxIdChatStepStatus.Cancelled;
+        step.ExternalEffect = NyxIdChatEffectEvidence.NotApplied;
+        step.UpdatedAt = now.Clone();
+        if (step.Operation is not null)
+            step.Operation.Phase = NyxIdChatOperationPhase.Cancelled;
+        step.AvailableActions = NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(step);
     }
 
     private static void ApplyPendingApproval(
@@ -604,6 +655,11 @@ public static class NyxIdChatTaskLifecycle
         NyxIdChatTaskStepState step,
         Timestamp now)
     {
+        step.Status = NyxIdChatStepStatus.Running;
+        step.Operation.Phase = NyxIdChatOperationPhase.Requested;
+        step.Operation.RequestedAt = now.Clone();
+        step.UpdatedAt = now.Clone();
+        step.AvailableActions = NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(step);
         state.ActiveTask.Status = NyxIdChatTaskStatus.Active;
         state.ActiveTask.FailureCode = string.Empty;
         state.ActiveTask.SafeMessage = string.Empty;

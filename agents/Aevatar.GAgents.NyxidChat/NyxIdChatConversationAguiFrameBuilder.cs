@@ -171,7 +171,20 @@ internal static class NyxIdChatConversationAguiFrameBuilder
             return [];
 
         var frames = BuildTaskFrames(committed.Task, ResolveActiveOrLast(committed.Task), sequence);
-        frames.Insert(0, Custom(ActionRequestEventName, wirePayload, sequence));
+        if (committed.State is null ||
+            !NyxIdChatPlanGateDecisions.CanPublishAction(committed.State, committed.Request))
+        {
+            AppendTerminalIfNeeded(
+                frames,
+                actorId,
+                turnId,
+                committed.Task,
+                committed.OriginTurn,
+                sequence);
+            return frames;
+        }
+
+        frames.Add(Custom(ActionRequestEventName, wirePayload, sequence));
         AppendTerminalIfNeeded(frames, actorId, turnId, committed.Task, committed.OriginTurn, sequence);
         return frames;
     }
@@ -222,6 +235,47 @@ internal static class NyxIdChatConversationAguiFrameBuilder
         var sequence = committed.State?.ProgressSequence ?? 0;
         if (committed.Resolution is null ||
             committed.State?.ActiveTask is not { } task ||
+            committed.State.ActiveTurn is not { } turn ||
+            sequence <= 0)
+        {
+            return [];
+        }
+
+        var frames = BuildTaskFrames(task, ResolveActiveOrLast(task), sequence);
+        if (committed.Resolution.Confirmed)
+        {
+            var actionAdmission = task.Gate?.Admissions.SingleOrDefault(candidate =>
+                !string.IsNullOrWhiteSpace(candidate.ActionRequestId));
+            var request = actionAdmission is null
+                ? null
+                : committed.State.PendingActions.SingleOrDefault(candidate =>
+                    string.Equals(
+                        candidate.ActionRequestId,
+                        actionAdmission.ActionRequestId,
+                        StringComparison.Ordinal));
+            if (request is not null &&
+                NyxIdChatPlanGateDecisions.CanPublishAction(committed.State, request) &&
+                MapActionRequestWirePayload(request) is { } wirePayload)
+            {
+                frames.Add(Custom(ActionRequestEventName, wirePayload, sequence));
+            }
+        }
+        AppendTerminalIfNeeded(
+            frames,
+            committed.State.ConversationActorId,
+            turn.TurnId,
+            task,
+            turn,
+            sequence);
+        return frames;
+    }
+
+    public static IReadOnlyList<AGUIEvent> BuildPlanGateCapabilityExpired(
+        NyxIdChatPlanGateCapabilityExpiredCommittedEvent committed)
+    {
+        ArgumentNullException.ThrowIfNull(committed);
+        var sequence = committed.State?.ProgressSequence ?? 0;
+        if (committed.State?.ActiveTask is not { } task ||
             committed.State.ActiveTurn is not { } turn ||
             sequence <= 0)
         {

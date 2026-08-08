@@ -292,41 +292,164 @@ public sealed class NyxIdChatTurnGAgentTests
     public async Task PlanGateEffectCommand_ShouldPersistExactAdmissionBeforeDispatch()
     {
         var admission = ExactWriteAdmission();
-        var executor = new RecordingOperationExecutor(command => new NyxIdChatOperationResultSignal
-        {
-            Key = command.Key.Clone(),
-            Tool = new NyxIdChatToolOperationResult
-            {
-                Receipt = new AgentToolReceipt
+        var executor = new RecordingOperationExecutor(command =>
+            command.InputCase == NyxIdChatOperationDispatchCommand.InputOneofCase.Llm
+                ? new NyxIdChatOperationResultSignal
                 {
-                    Status = AgentToolReceiptStatus.Success,
-                    CallId = command.PlanGateContinuation.ToolCallId,
-                    ToolName = command.PlanGateContinuation.ToolName,
-                },
-                ExternalEffect = NyxIdChatEffectEvidence.Confirmed,
-            },
-        });
+                    Key = command.Key.Clone(),
+                    Llm = new NyxIdChatLLMOperationResult
+                    {
+                        Content = "The exact plan is ready for confirmation.",
+                    },
+                }
+                : new NyxIdChatOperationResultSignal
+                {
+                    Key = command.Key.Clone(),
+                    Tool = new NyxIdChatToolOperationResult
+                    {
+                        Receipt = new AgentToolReceipt
+                        {
+                            Status = AgentToolReceiptStatus.Success,
+                            CallId = command.PlanGateContinuation.ToolCallId,
+                            ToolName = command.PlanGateContinuation.ToolName,
+                        },
+                        ExternalEffect = NyxIdChatEffectEvidence.Confirmed,
+                    },
+                });
         var eventStore = new InMemoryEventStoreForTests();
         var operationDispatch = new RecordingOperationDispatchPort(executor);
         using var services = BuildEventSourcingServices(eventStore);
         var agent = CreateAgent(services, operationDispatch, new RecordingDispatchPort());
         await agent.ActivateAsync();
+        var initial = new NyxIdChatOperationDispatchCommand
+        {
+            Key = CreateKey(),
+            Llm = new NyxIdChatLLMOperationInput
+            {
+                Request = new ChatRequestEvent
+                {
+                    Prompt = "prepare the exact plan",
+                    SessionId = "turn-alpha",
+                },
+            },
+        };
+        await agent.HandleEventAsync(CreateEnvelope("turn-actor-alpha", initial));
+        await operationDispatch.DeliverPendingSignalsAsync(agent);
         var command = PlanGateContinuation(
             NyxIdChatPlanGateDecisions.HashArguments("{\"value\":1}"));
         command.PlanGateContinuation.OperationAdmission = admission.Clone();
+        var admittedAt = Timestamp.FromDateTimeOffset(
+            new DateTimeOffset(2026, 7, 24, 8, 0, 1, TimeSpan.Zero));
+        var gateAdmission = new NyxIdChatTurnPlanGateAdmissionCommand
+        {
+            SourceOperationKey = initial.Key.Clone(),
+            Admission = new NyxIdChatTurnPlanGateAdmissionState
+            {
+                Key = command.Key.Clone(),
+                GateRequestId = command.PlanGateContinuation.GateRequestId,
+                TaskId = command.PlanGateContinuation.TaskId,
+                PlanId = command.PlanGateContinuation.PlanId,
+                PlanRevision = command.PlanGateContinuation.PlanRevision,
+                ToolCallId = command.PlanGateContinuation.ToolCallId,
+                ToolName = command.PlanGateContinuation.ToolName,
+                ArgumentsSha256 = command.PlanGateContinuation.ArgumentsSha256,
+                MayChangeExternalState = command.PlanGateContinuation.MayChangeExternalState,
+                OperationAdmission = admission.Clone(),
+                AdmittedAt = admittedAt,
+            },
+        };
+        var eventsBeforeAdmission = await eventStore.GetEventsAsync("turn-actor-alpha");
 
+        await agent.HandleEventAsync(CreateEnvelope("turn-actor-alpha", gateAdmission));
         await agent.HandleEventAsync(CreateEnvelope("turn-actor-alpha", command));
 
-        executor.Commands.Should().ContainSingle();
+        executor.Commands.Where(candidate =>
+                candidate.InputCase ==
+                NyxIdChatOperationDispatchCommand.InputOneofCase.PlanGateContinuation)
+            .Should().ContainSingle();
         agent.State.OperationAdmission.Should().BeEquivalentTo(admission);
         agent.State.IdempotencyKey.Should().Be(command.Key.OperationId);
+        agent.State.PlanGateAdmission.Should().BeNull("the exact admission is one-use");
         agent.State.EffectDispatchWaterline.Should().Be(
             NyxIdChatEffectEvidence.MayHaveChanged);
         (await eventStore.GetEventsAsync("turn-actor-alpha"))
+            .Skip(eventsBeforeAdmission.Count)
             .Select(static item => item.EventData.TypeUrl)
             .Should().Equal(
+                Any.Pack(new NyxIdChatTurnPlanGateAdmissionCommittedEvent()).TypeUrl,
                 Any.Pack(new NyxIdChatTurnOperationAdmittedEvent()).TypeUrl,
                 Any.Pack(new NyxIdChatTurnEffectDispatchStartedEvent()).TypeUrl);
+    }
+
+    [Fact]
+    public async Task PlanGateContinuation_WithoutDurableAdmission_ShouldFailClosedBeforeExecution()
+    {
+        var executor = new RecordingOperationExecutor(command =>
+            throw new InvalidOperationException($"Unexpected execution: {command.InputCase}"));
+        var eventStore = new InMemoryEventStoreForTests();
+        var operationDispatch = new RecordingOperationDispatchPort(executor);
+        using var services = BuildEventSourcingServices(eventStore);
+        var agent = CreateAgent(services, operationDispatch, new RecordingDispatchPort());
+        await agent.ActivateAsync();
+
+        await agent.HandleEventAsync(CreateEnvelope(
+            "turn-actor-alpha",
+            PlanGateContinuation(NyxIdChatPlanGateDecisions.HashArguments("{\"value\":1}"))));
+
+        executor.Commands.Should().BeEmpty();
+        (await eventStore.GetEventsAsync("turn-actor-alpha")).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task PlanGateAdmission_AfterReactivation_ShouldExpireAndSignalConversation()
+    {
+        var executor = new RecordingOperationExecutor(command => new NyxIdChatOperationResultSignal
+        {
+            Key = command.Key.Clone(),
+            Llm = new NyxIdChatLLMOperationResult { Content = "Plan ready." },
+        });
+        var eventStore = new InMemoryEventStoreForTests();
+        var originalOperationDispatch = new RecordingOperationDispatchPort(executor);
+        using var services = BuildEventSourcingServices(eventStore);
+        var original = CreateAgent(
+            services,
+            originalOperationDispatch,
+            new RecordingDispatchPort());
+        await original.ActivateAsync();
+        var initial = new NyxIdChatOperationDispatchCommand
+        {
+            Key = CreateKey(),
+            Llm = new NyxIdChatLLMOperationInput
+            {
+                Request = new ChatRequestEvent
+                {
+                    Prompt = "prepare the exact plan",
+                    SessionId = "turn-alpha",
+                },
+            },
+        };
+        await original.HandleEventAsync(CreateEnvelope("turn-actor-alpha", initial));
+        await originalOperationDispatch.DeliverPendingSignalsAsync(original);
+        var continuation = PlanGateContinuation(
+            NyxIdChatPlanGateDecisions.HashArguments("{\"value\":1}"));
+        var admission = CreatePlanGateAdmission(initial.Key, continuation);
+        await original.HandleEventAsync(CreateEnvelope("turn-actor-alpha", admission));
+        original.State.PlanGateAdmission.Should().NotBeNull();
+
+        var reactivationDispatch = new RecordingDispatchPort();
+        var reactivated = CreateAgent(
+            services,
+            new RecordingOperationDispatchPort(executor),
+            reactivationDispatch);
+        await reactivated.ActivateAsync();
+
+        reactivated.State.PlanGateAdmission.Should().BeNull();
+        var signal = reactivationDispatch.Calls.Should().ContainSingle().Which.Envelope.Payload
+            .Unpack<NyxIdChatPlanGateCapabilityExpiredSignal>();
+        signal.FailureCode.Should().Be(NyxIdChatTurnGAgent.PlanGateCapabilityExpiredCode);
+        signal.Admission.Should().BeEquivalentTo(admission.Admission);
+        (await eventStore.GetEventsAsync("turn-actor-alpha"))[^1].EventData
+            .Is(NyxIdChatTurnPlanGateAdmissionExpiredEvent.Descriptor).Should().BeTrue();
     }
 
     [Fact]
@@ -1228,6 +1351,28 @@ public sealed class NyxIdChatTurnGAgentTests
             ToolContext = FreshToolContext("fresh-plan-token"),
             MayChangeExternalState = true,
             IdempotencyKey = "operation-tool-alpha",
+        },
+    };
+
+    private static NyxIdChatTurnPlanGateAdmissionCommand CreatePlanGateAdmission(
+        NyxIdChatOperationKey sourceOperationKey,
+        NyxIdChatOperationDispatchCommand continuation) => new()
+    {
+        SourceOperationKey = sourceOperationKey.Clone(),
+        Admission = new NyxIdChatTurnPlanGateAdmissionState
+        {
+            Key = continuation.Key.Clone(),
+            GateRequestId = continuation.PlanGateContinuation.GateRequestId,
+            TaskId = continuation.PlanGateContinuation.TaskId,
+            PlanId = continuation.PlanGateContinuation.PlanId,
+            PlanRevision = continuation.PlanGateContinuation.PlanRevision,
+            ToolCallId = continuation.PlanGateContinuation.ToolCallId,
+            ToolName = continuation.PlanGateContinuation.ToolName,
+            ArgumentsSha256 = continuation.PlanGateContinuation.ArgumentsSha256,
+            MayChangeExternalState = continuation.PlanGateContinuation.MayChangeExternalState,
+            OperationAdmission = continuation.PlanGateContinuation.OperationAdmission?.Clone(),
+            AdmittedAt = Timestamp.FromDateTimeOffset(
+                new DateTimeOffset(2026, 7, 24, 8, 0, 1, TimeSpan.Zero)),
         },
     };
 

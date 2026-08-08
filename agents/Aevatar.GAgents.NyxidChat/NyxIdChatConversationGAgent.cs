@@ -100,6 +100,8 @@ public sealed class NyxIdChatConversationGAgent
             .On<NyxIdChatInputResolutionCommittedEvent>(ApplyInputResolutionCommitted)
             .On<NyxIdChatApprovalResolutionCommittedEvent>(ApplyApprovalResolutionCommitted)
             .On<NyxIdChatPlanResolutionCommittedEvent>(ApplyPlanResolutionCommitted)
+            .On<NyxIdChatPlanGateCapabilityExpiredCommittedEvent>(
+                ApplyPlanGateCapabilityExpiredCommitted)
             .OrCurrent();
         return NyxIdChatNeedsYouDecisions.RefreshAttention(next);
     }
@@ -1112,6 +1114,30 @@ public sealed class NyxIdChatConversationGAgent
     }
 
     [EventHandler]
+    public async Task HandlePlanGateCapabilityExpiredAsync(
+        NyxIdChatPlanGateCapabilityExpiredSignal signal)
+    {
+        ArgumentNullException.ThrowIfNull(signal);
+        var now = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow());
+        var decision = NyxIdChatPlanGateDecisions.ExpireCapability(State, signal, now);
+        if (!decision.ShouldCommit)
+            return;
+
+        var nextState = NyxIdChatNeedsYouDecisions.RefreshAttention(decision.State);
+        var terminalPrepared = PrepareHistoryTerminalOutbox(nextState);
+        await PersistDomainEventAsync(new NyxIdChatPlanGateCapabilityExpiredCommittedEvent
+        {
+            Admission = signal.Admission.Clone(),
+            FailureCode = signal.FailureCode,
+            SafeMessage = signal.SafeMessage,
+            State = nextState,
+        }, CancellationToken.None);
+
+        if (terminalPrepared)
+            await DispatchPendingHistoryTerminalAsync();
+    }
+
+    [EventHandler]
     public async Task HandleActionContinueAsync(NyxIdChatActionContinueCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
@@ -1429,6 +1455,18 @@ public sealed class NyxIdChatConversationGAgent
             ProgressSequence = nextState.ProgressSequence,
             State = nextState,
         }, CancellationToken.None);
+
+        var planGateAdmission = NyxIdChatPlanGateDecisions.BuildTurnAdmission(
+            nextState,
+            signal.Key,
+            now);
+        if (planGateAdmission is not null)
+        {
+            await DispatchPlanGateAdmissionAsync(
+                planGateAdmission,
+                ActiveInboundEnvelope?.Propagation?.CorrelationId ?? signal.Key.OperationId,
+                now);
+        }
 
         if (terminalPrepared)
             await DispatchPendingHistoryTerminalAsync();
@@ -2307,6 +2345,11 @@ public sealed class NyxIdChatConversationGAgent
         NyxIdChatPlanResolutionCommittedEvent evt) =>
         evt.State?.Clone() ?? current;
 
+    private static NyxIdChatConversationGAgentState ApplyPlanGateCapabilityExpiredCommitted(
+        NyxIdChatConversationGAgentState current,
+        NyxIdChatPlanGateCapabilityExpiredCommittedEvent evt) =>
+        evt.State?.Clone() ?? current;
+
     private NyxIdChatHistoryDeliveryReservationState BuildHistoryDeliveryReservation(
         NyxIdChatStartTurnCommand command)
     {
@@ -2991,6 +3034,30 @@ public sealed class NyxIdChatConversationGAgent
             Key = command.Key.Clone(),
             DispatchedAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
         }, CancellationToken.None);
+    }
+
+    private Task DispatchPlanGateAdmissionAsync(
+        NyxIdChatTurnPlanGateAdmissionCommand command,
+        string correlationId,
+        Timestamp now)
+    {
+        var turnActorId = NyxIdChatTurnActorIds.ForTurn(Id, command.Admission.Key.TurnId);
+        var envelope = new EventEnvelope
+        {
+            Id = $"{command.Admission.GateRequestId}:turn-admission",
+            Timestamp = now.Clone(),
+            Payload = Any.Pack(command),
+            Route = new EnvelopeRoute
+            {
+                Direct = new DirectRoute { TargetActorId = turnActorId },
+            },
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = NormalizeOptional(correlationId) ??
+                                command.Admission.GateRequestId,
+            },
+        };
+        return _actorDispatchPort.DispatchAsync(turnActorId, envelope, CancellationToken.None);
     }
 
     private async Task DispatchFirstOperationAsync(

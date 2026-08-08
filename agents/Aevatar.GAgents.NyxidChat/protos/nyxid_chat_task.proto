@@ -326,6 +326,23 @@ message NyxIdChatPlanGate {
   string plan_id = 9;
 }
 
+// Durable receiver-side admission for one exact plan-gate continuation. Raw
+// arguments and credentials are deliberately absent; the arguments digest and
+// provider-authored operation admission are sufficient to fail closed.
+message NyxIdChatTurnPlanGateAdmissionState {
+  NyxIdChatOperationKey key = 1;
+  string gate_request_id = 2;
+  string task_id = 3;
+  string plan_id = 4;
+  int32 plan_revision = 5;
+  string tool_call_id = 6;
+  string tool_name = 7;
+  bytes arguments_sha256 = 8;
+  bool may_change_external_state = 9;
+  aevatar.ai.tool_providers.AgentToolOperationAdmissionPayload operation_admission = 10;
+  google.protobuf.Timestamp admitted_at = 11;
+}
+
 message NyxIdChatStepEstimate {
   NyxIdChatStepEstimateKind kind = 1;
   int32 seconds = 2;
@@ -1044,6 +1061,7 @@ message NyxIdChatTurnGAgentState {
   string idempotency_key = 16;
   aevatar.ai.tool_providers.AgentToolOperationAdmissionPayload operation_admission = 17;
   google.protobuf.Timestamp reconciliation_started_at = 18;
+  NyxIdChatTurnPlanGateAdmissionState plan_gate_admission = 19;
 }
 
 message NyxIdChatTurnOperationAdmittedEvent {
@@ -1055,6 +1073,27 @@ message NyxIdChatTurnOperationAdmittedEvent {
   bool idempotent = 6;
   string idempotency_key = 7;
   aevatar.ai.tool_providers.AgentToolOperationAdmissionPayload operation_admission = 8;
+  bool consumes_plan_gate_admission = 9;
+}
+
+message NyxIdChatTurnPlanGateAdmissionCommand {
+  NyxIdChatOperationKey source_operation_key = 1;
+  NyxIdChatTurnPlanGateAdmissionState admission = 2;
+}
+
+message NyxIdChatTurnPlanGateAdmissionCommittedEvent {
+  NyxIdChatTurnPlanGateAdmissionState admission = 1;
+}
+
+message NyxIdChatTurnPlanGateAdmissionExpiredEvent {
+  NyxIdChatTurnPlanGateAdmissionState admission = 1;
+  google.protobuf.Timestamp expired_at = 2;
+}
+
+message NyxIdChatPlanGateCapabilityExpiredSignal {
+  NyxIdChatTurnPlanGateAdmissionState admission = 1;
+  string failure_code = 2;
+  string safe_message = 3;
 }
 
 message NyxIdChatTurnEffectDispatchStartedEvent {
@@ -1526,6 +1565,13 @@ message NyxIdChatApprovalResolutionCommittedEvent {
 message NyxIdChatPlanResolutionCommittedEvent {
   NyxIdChatPlanResolutionState resolution = 1;
   NyxIdChatConversationGAgentState state = 2;
+}
+
+message NyxIdChatPlanGateCapabilityExpiredCommittedEvent {
+  NyxIdChatTurnPlanGateAdmissionState admission = 1;
+  string failure_code = 2;
+  string safe_message = 3;
+  NyxIdChatConversationGAgentState state = 4;
 }
 
 message NyxIdChatTransitionDecisionFact {

@@ -12,6 +12,10 @@ public sealed record NyxIdChatPlanResolutionDecision(
     NyxIdChatPlanResolutionState? Resolution,
     NyxIdChatOperationDispatchCommand? NextCommand = null);
 
+public sealed record NyxIdChatPlanGateExpirationDecision(
+    bool ShouldCommit,
+    NyxIdChatConversationGAgentState State);
+
 public static class NyxIdChatPlanGateDecisions
 {
     private const int ResolutionHistoryLimit = 32;
@@ -220,6 +224,154 @@ public static class NyxIdChatPlanGateDecisions
     public static ByteString HashActionParams(NyxIdAssistantActionParams? actionParams) =>
         ByteString.CopyFrom(SHA256.HashData(actionParams?.ToByteArray() ?? []));
 
+    public static NyxIdChatTurnPlanGateAdmissionCommand? BuildTurnAdmission(
+        NyxIdChatConversationGAgentState state,
+        NyxIdChatOperationKey sourceOperationKey,
+        Timestamp now)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentNullException.ThrowIfNull(sourceOperationKey);
+        ArgumentNullException.ThrowIfNull(now);
+
+        var task = state.ActiveTask;
+        var gate = task?.Gate;
+        if (task is null ||
+            gate is not
+            {
+                Mode: NyxIdChatPlanGateMode.Confirm,
+                Status: NyxIdChatPlanGateStatus.Pending,
+            } ||
+            gate.Admissions.Count != 1 ||
+            !string.Equals(task.TaskId, sourceOperationKey.TaskId, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var admitted = gate.Admissions[0];
+        if (!string.IsNullOrWhiteSpace(admitted.ActionRequestId) ||
+            admitted.Key is null ||
+            admitted.ArgumentsSha256.Length != SHA256.HashSizeInBytes)
+        {
+            return null;
+        }
+
+        var step = task.Steps.SingleOrDefault(candidate =>
+            candidate.Status == NyxIdChatStepStatus.Planned &&
+            KeysEqual(candidate.Operation?.Key, admitted.Key));
+        if (step?.Source?.Tool is null)
+            return null;
+
+        return new NyxIdChatTurnPlanGateAdmissionCommand
+        {
+            SourceOperationKey = sourceOperationKey.Clone(),
+            Admission = new NyxIdChatTurnPlanGateAdmissionState
+            {
+                Key = admitted.Key.Clone(),
+                GateRequestId = gate.RequestId,
+                TaskId = gate.TaskId,
+                PlanId = gate.PlanId,
+                PlanRevision = gate.PlanRevision,
+                ToolCallId = admitted.ToolCallId,
+                ToolName = admitted.ToolName,
+                ArgumentsSha256 = admitted.ArgumentsSha256,
+                MayChangeExternalState = step.MayChangeExternalState,
+                OperationAdmission = step.Source.Tool.OperationAdmission?.Clone(),
+                AdmittedAt = now.Clone(),
+            },
+        };
+    }
+
+    public static NyxIdChatPlanGateExpirationDecision ExpireCapability(
+        NyxIdChatConversationGAgentState state,
+        NyxIdChatPlanGateCapabilityExpiredSignal signal,
+        Timestamp now)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentNullException.ThrowIfNull(signal);
+        ArgumentNullException.ThrowIfNull(now);
+
+        var admission = signal.Admission;
+        var gate = state.ActiveTask?.Gate;
+        if (admission?.Key is null ||
+            string.IsNullOrWhiteSpace(signal.FailureCode) ||
+            string.IsNullOrWhiteSpace(signal.SafeMessage) ||
+            gate is not
+            {
+                Mode: NyxIdChatPlanGateMode.Confirm,
+                Status: NyxIdChatPlanGateStatus.Pending,
+            } ||
+            !MatchesGateAdmission(gate, admission))
+        {
+            return new NyxIdChatPlanGateExpirationDecision(false, state.Clone());
+        }
+
+        var next = state.Clone();
+        var step = next.ActiveTask.Steps.SingleOrDefault(candidate =>
+            candidate.Status == NyxIdChatStepStatus.Planned &&
+            KeysEqual(candidate.Operation?.Key, admission.Key));
+        if (step?.Operation is null)
+            return new NyxIdChatPlanGateExpirationDecision(false, state.Clone());
+
+        next.ActiveTask.Gate.Status = NyxIdChatPlanGateStatus.Rejected;
+        next.ActiveTask.Gate.DecidedAt = now.Clone();
+        step.Status = NyxIdChatStepStatus.Failed;
+        step.FailureCode = signal.FailureCode;
+        step.SafeMessage = signal.SafeMessage;
+        step.ExternalEffect = NyxIdChatEffectEvidence.NotApplied;
+        step.Operation.Phase = NyxIdChatOperationPhase.Failed;
+        step.Operation.TerminalCode = signal.FailureCode;
+        step.Operation.SafeMessage = signal.SafeMessage;
+        step.Operation.CompletedAt = now.Clone();
+        step.UpdatedAt = now.Clone();
+        step.AvailableActions = NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(step);
+        CancelDependentSteps(next.ActiveTask, step.StepId, now);
+        next.ActiveTask.Status = NyxIdChatTaskStatus.Failed;
+        next.ActiveTask.ActiveStepId = string.Empty;
+        next.ActiveTask.ActiveOperationId = string.Empty;
+        next.ActiveTask.FailureCode = signal.FailureCode;
+        next.ActiveTask.SafeMessage = signal.SafeMessage;
+        next.ActiveTask.UpdatedAt = now.Clone();
+        next.ActiveTurn.Status = NyxIdChatTurnStatus.Failed;
+        next.ActiveTurn.FailureCode = signal.FailureCode;
+        next.ActiveTurn.SafeMessage = signal.SafeMessage;
+        next.ActiveTurn.TerminalAt = now.Clone();
+        next.LatestTurn = next.ActiveTurn.Clone();
+        AddTerminalSummary(next, next.ActiveTurn);
+        next.ProgressSequence = checked(Math.Max(0, next.ProgressSequence) + 1);
+        next.UpdatedAt = now.Clone();
+        return new NyxIdChatPlanGateExpirationDecision(true, next);
+    }
+
+    public static bool CanPublishAction(
+        NyxIdChatConversationGAgentState state,
+        NyxIdChatActionRequestState request)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentNullException.ThrowIfNull(request);
+
+        var task = state.ActiveTask;
+        var gate = task?.Gate;
+        if (task is null || gate is null)
+            return true;
+
+        var admission = gate.Admissions.SingleOrDefault(candidate =>
+            string.Equals(candidate.ActionRequestId, request.ActionRequestId, StringComparison.Ordinal));
+        if (admission is null)
+        {
+            return !string.Equals(request.TaskId, task.TaskId, StringComparison.Ordinal);
+        }
+
+        return gate.Status == NyxIdChatPlanGateStatus.Satisfied &&
+               string.Equals(gate.TaskId, task.TaskId, StringComparison.Ordinal) &&
+               string.Equals(gate.PlanId, task.PlanId, StringComparison.Ordinal) &&
+               gate.PlanRevision == task.PlanRevision &&
+               admission.Action == request.Action &&
+               admission.ActionParamsSha256.Length == SHA256.HashSizeInBytes &&
+               CryptographicOperations.FixedTimeEquals(
+                   admission.ActionParamsSha256.Span,
+                   HashActionParams(request.Params).Span);
+    }
+
     private static bool ExceedsEstimatedDurationThreshold(
         IEnumerable<NyxIdChatTaskStepState> plannedSteps,
         int thresholdSeconds)
@@ -242,6 +394,29 @@ public static class NyxIdChatPlanGateDecisions
         }
 
         return false;
+    }
+
+    private static bool MatchesGateAdmission(
+        NyxIdChatPlanGate gate,
+        NyxIdChatTurnPlanGateAdmissionState admission)
+    {
+        if (!string.Equals(gate.RequestId, admission.GateRequestId, StringComparison.Ordinal) ||
+            !string.Equals(gate.TaskId, admission.TaskId, StringComparison.Ordinal) ||
+            !string.Equals(gate.PlanId, admission.PlanId, StringComparison.Ordinal) ||
+            gate.PlanRevision != admission.PlanRevision)
+        {
+            return false;
+        }
+
+        var expected = gate.Admissions.SingleOrDefault(candidate =>
+            KeysEqual(candidate.Key, admission.Key));
+        return expected is not null &&
+               string.Equals(expected.ToolCallId, admission.ToolCallId, StringComparison.Ordinal) &&
+               string.Equals(expected.ToolName, admission.ToolName, StringComparison.Ordinal) &&
+               expected.ArgumentsSha256.Length == admission.ArgumentsSha256.Length &&
+               CryptographicOperations.FixedTimeEquals(
+                   expected.ArgumentsSha256.Span,
+                   admission.ArgumentsSha256.Span);
     }
 
     private static (bool IsValid, NyxIdChatOperationDispatchCommand? NextCommand) AdmitPlan(
@@ -353,6 +528,7 @@ public static class NyxIdChatPlanGateDecisions
                         actionStep.Operation.Phase = NyxIdChatOperationPhase.Cancelled;
                     actionStep.AvailableActions =
                         NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(actionStep);
+                    CancelDependentSteps(state.ActiveTask, actionStep.StepId, now);
                 }
 
                 var pendingAction = state.PendingActions.FirstOrDefault(candidate =>
@@ -377,7 +553,10 @@ public static class NyxIdChatPlanGateDecisions
             step.Status = NyxIdChatStepStatus.Cancelled;
             step.ExternalEffect = NyxIdChatEffectEvidence.NotApplied;
             step.UpdatedAt = now.Clone();
+            if (step.Operation is not null)
+                step.Operation.Phase = NyxIdChatOperationPhase.Cancelled;
             step.AvailableActions = NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(step);
+            CancelDependentSteps(state.ActiveTask, step.StepId, now);
         }
 
         const string message = "The plan was not confirmed and no operation was dispatched.";
@@ -391,6 +570,34 @@ public static class NyxIdChatPlanGateDecisions
         state.ActiveTurn.TerminalAt = now.Clone();
         state.LatestTurn = state.ActiveTurn.Clone();
         AddTerminalSummary(state, state.ActiveTurn);
+    }
+
+    private static void CancelDependentSteps(
+        NyxIdChatTaskState task,
+        string sourceStepId,
+        Timestamp now)
+    {
+        var cancelledStepIds = new HashSet<string>(StringComparer.Ordinal) { sourceStepId };
+        var changed = true;
+        while (changed)
+        {
+            changed = false;
+            foreach (var dependent in task.Steps.Where(candidate =>
+                         candidate.Status is
+                             NyxIdChatStepStatus.Planned or
+                             NyxIdChatStepStatus.Waiting &&
+                         candidate.DependsOn.Any(cancelledStepIds.Contains)))
+            {
+                dependent.Status = NyxIdChatStepStatus.Cancelled;
+                dependent.ExternalEffect = NyxIdChatEffectEvidence.NotApplied;
+                dependent.UpdatedAt = now.Clone();
+                if (dependent.Operation is not null)
+                    dependent.Operation.Phase = NyxIdChatOperationPhase.Cancelled;
+                dependent.AvailableActions =
+                    NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(dependent);
+                changed |= cancelledStepIds.Add(dependent.StepId);
+            }
+        }
     }
 
     private static void AddTerminalSummary(

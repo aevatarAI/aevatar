@@ -267,8 +267,12 @@ public sealed class NyxIdChatNeedsYouContinuationTests
             Now());
         reconciled.NextCommand.Should().BeNull();
         reconciled.State.PendingApproval.Should().BeNull();
-        reconciled.State.ActiveTask.Steps.Single().Status.Should().Be(
-            NyxIdChatStepStatus.Cancelled);
+        reconciled.State.ActiveTask.Steps.Single(step => step.Kind == NyxIdChatStepKind.Tool)
+            .Status.Should().Be(NyxIdChatStepStatus.Cancelled);
+        reconciled.State.ActiveTask.Steps.Single(step =>
+                step.Kind == NyxIdChatStepKind.Llm &&
+                step.DependsOn.Contains("step-tool-alpha"))
+            .Status.Should().Be(NyxIdChatStepStatus.Cancelled);
         reconciled.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Failed);
         reconciled.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Failed);
     }
@@ -546,6 +550,25 @@ public sealed class NyxIdChatNeedsYouContinuationTests
                         Kind = NyxIdChatStepKind.Tool,
                         Phase = NyxIdChatOperationPhase.Succeeded,
                         MayChangeExternalState = true,
+                    },
+                },
+                new NyxIdChatTaskStepState
+                {
+                    StepId = "step-verification-alpha",
+                    Order = 2,
+                    Kind = NyxIdChatStepKind.Llm,
+                    Status = NyxIdChatStepStatus.Planned,
+                    Required = true,
+                    DependsOn = { "step-tool-alpha" },
+                    Source = new NyxIdChatStepSource
+                    {
+                        Llm = new NyxIdChatLLMStepSource(),
+                    },
+                    Operation = new NyxIdChatOperationState
+                    {
+                        Key = Key("step-verification-alpha", "operation-verification-alpha"),
+                        Kind = NyxIdChatStepKind.Llm,
+                        Phase = NyxIdChatOperationPhase.Requested,
                     },
                 },
             },
