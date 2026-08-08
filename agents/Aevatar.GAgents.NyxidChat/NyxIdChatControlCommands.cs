@@ -80,6 +80,8 @@ public static class NyxIdChatControlCommands
         "The requested step action is not available at the current committed state.";
     private const string StepRetryAcceptedMessage =
         "The step retry was accepted for dispatch.";
+    private const string StepRetryPendingPlanConfirmationMessage =
+        "The step retry requires confirmation before dispatch.";
     private const string StepSkipAcceptedMessage = "The step was skipped.";
     private const string StepIdentityMismatchMessage =
         "The step control command did not match this conversation task step.";
@@ -181,11 +183,34 @@ public static class NyxIdChatControlCommands
             RequestedAt = now.Clone(),
         };
         ResetDependentVerification(next, retried, generation, now);
+        NyxIdChatPlanRevisions.CommitChange(
+            next.ActiveTask,
+            NyxIdChatPlanRevisionCause.FailureRecovery,
+            now,
+            []);
+        var requiresPlanConfirmation = RequiresRetryPlanConfirmation(next, retried);
+        if (requiresPlanConfirmation)
+        {
+            var retryInput = retried.RetryToolInput!;
+            next.ActiveTask.Gate = NyxIdChatPlanGateDecisions.BuildToolGate(
+                next,
+                retried,
+                new NyxIdChatToolCall
+                {
+                    CallId = retryInput.CallId,
+                    ToolName = retryInput.ToolName,
+                    ArgumentsJson = JsonFormatter.Default.Format(retryInput.Arguments),
+                },
+                requiresConfirmation: true);
+            retried.Status = NyxIdChatStepStatus.Planned;
+        }
         retried.AvailableActions = NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(retried);
         retried.UpdatedAt = now.Clone();
         next.ActiveTask.Status = NyxIdChatTaskStatus.Active;
         next.ActiveTask.ActiveStepId = retried.StepId;
-        next.ActiveTask.ActiveOperationId = key.OperationId;
+        next.ActiveTask.ActiveOperationId = requiresPlanConfirmation
+            ? string.Empty
+            : key.OperationId;
         next.ActiveTask.FailureCode = string.Empty;
         next.ActiveTask.SafeMessage = string.Empty;
         next.ActiveTask.UpdatedAt = now.Clone();
@@ -199,15 +224,19 @@ public static class NyxIdChatControlCommands
             generation,
             NyxIdChatTransitionOutcome.Accepted,
             StepRetryAccepted,
-            StepRetryAcceptedMessage,
+            requiresPlanConfirmation
+                ? StepRetryPendingPlanConfirmationMessage
+                : StepRetryAcceptedMessage,
             now);
         RecordStepControlResult(next, result, now);
         return new NyxIdChatStepControlDecision(
             ShouldCommit: true,
-            ShouldDispatch: true,
+            ShouldDispatch: !requiresPlanConfirmation,
             next,
             result,
-            BuildRetryDispatch(next, command, generation));
+            requiresPlanConfirmation
+                ? null
+                : BuildRetryDispatch(next, command, generation));
     }
 
     public static NyxIdChatStepControlDecision Skip(
@@ -860,8 +889,24 @@ public static class NyxIdChatControlCommands
                          Status: NyxIdChatStepStatus.Running,
                          Operation.Phase: NyxIdChatOperationPhase.Requested } &&
         step.Kind is (NyxIdChatStepKind.Llm or NyxIdChatStepKind.Tool) &&
-        step.Operation.Key.OperationGeneration == result.OperationGeneration;
+        step.Operation.Key.OperationGeneration == result.OperationGeneration &&
+        !IsBoundToConfirmGate(state.ActiveTask.Gate, step.Operation.Key);
     }
+
+    private static bool RequiresRetryPlanConfirmation(
+        NyxIdChatConversationGAgentState state,
+        NyxIdChatTaskStepState step) =>
+        step.Kind == NyxIdChatStepKind.Tool &&
+        step.MayChangeExternalState &&
+        step.RetryToolInput?.Arguments is not null &&
+        step.RetryToolInput.OperationAdmission is not null &&
+        state.ActiveTask?.Gate?.Mode == NyxIdChatPlanGateMode.Confirm;
+
+    private static bool IsBoundToConfirmGate(
+        NyxIdChatPlanGate? gate,
+        NyxIdChatOperationKey key) =>
+        gate?.Mode == NyxIdChatPlanGateMode.Confirm &&
+        gate.Admissions.Any(admission => admission.Key?.Equals(key) == true);
 
     private static NyxIdChatOperationDispatchCommand? BuildRetryDispatch(
         NyxIdChatConversationGAgentState state,

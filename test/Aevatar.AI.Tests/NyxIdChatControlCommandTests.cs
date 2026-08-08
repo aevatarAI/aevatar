@@ -13,7 +13,7 @@ public sealed class NyxIdChatControlCommandTests
         new DateTimeOffset(2026, 7, 25, 8, 0, 0, TimeSpan.Zero));
 
     [Fact]
-    public void RetryFailedLlm_ShouldCommitNextGenerationWithoutPersistingCapability()
+    public void RetryFailedLlm_ShouldCommitFailureRecoveryRevisionWithoutPersistingCapability()
     {
         var state = FailedStepState(
             NyxIdChatStepKind.Llm,
@@ -32,8 +32,10 @@ public sealed class NyxIdChatControlCommandTests
         decision.Result.RequestId.Should().Be("retry-alpha");
         decision.Result.OperationGeneration.Should().Be(2);
         decision.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Active);
-        decision.State.ActiveTask.PlanRevision.Should().Be(4,
-            "#3321 owns failure-recovery replanning, not a same-step retry");
+        decision.State.ActiveTask.PlanRevision.Should().Be(5);
+        decision.State.ActiveTask.PlanRevisions.Should().ContainSingle(record =>
+            record.PlanRevision == 5 &&
+            record.RevisionCause == NyxIdChatPlanRevisionCause.FailureRecovery);
         decision.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Active);
         decision.State.RecentTerminalTurns.Should().BeEmpty();
         var retried = decision.State.ActiveTask.Steps.Single();
@@ -172,6 +174,103 @@ public sealed class NyxIdChatControlCommandTests
         decision.NextCommand.Tool.IdempotencyKey.Should().Be(
             decision.NextCommand.Key.OperationId);
         decision.NextCommand.Key.OperationId.Should().NotBe("operation-alpha");
+    }
+
+    [Fact]
+    public void RetryConfirmModeEffect_ShouldRequireNewExactPlanConfirmationBeforeDispatch()
+    {
+        var state = FailedStepState(
+            NyxIdChatStepKind.Tool,
+            required: true,
+            safeToSkip: false,
+            retryInputRebuildable: true);
+        state.ActiveTask.PlanId = "plan-alpha";
+        state.ActiveTask.PlanRevision = 1;
+        var step = state.ActiveTask.Steps.Single();
+        step.MayChangeExternalState = true;
+        step.Source = new NyxIdChatStepSource
+        {
+            Tool = new NyxIdChatToolStepSource
+            {
+                ToolName = "opaque-effect-tool",
+                OperationAdmission = ExactEffectAdmission(),
+            },
+        };
+        step.RetryToolInput = new NyxIdChatRetryToolInputState
+        {
+            CallId = "call-effect-alpha",
+            ToolName = "opaque-effect-tool",
+            Arguments = JsonParser.Default.Parse<Struct>("{\"value\":\"alpha\"}"),
+            OperationAdmission = ExactEffectAdmission(),
+        };
+        step.AvailableActions = NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(step);
+        state.ActiveTask.Gate = NyxIdChatPlanGateDecisions.BuildToolGate(
+            state,
+            step,
+            new NyxIdChatToolCall
+            {
+                CallId = step.RetryToolInput.CallId,
+                ToolName = step.RetryToolInput.ToolName,
+                ArgumentsJson = JsonFormatter.Default.Format(step.RetryToolInput.Arguments),
+            },
+            requiresConfirmation: true);
+        state.ActiveTask.Gate.Status = NyxIdChatPlanGateStatus.Satisfied;
+        state.ActiveTask.Gate.DecidedAt = Now.Clone();
+        var oldGate = state.ActiveTask.Gate.Clone();
+
+        var retry = NyxIdChatControlCommands.Retry(
+            state,
+            RetryCommand(),
+            stateVersion: 3,
+            Now);
+
+        retry.ShouldCommit.Should().BeTrue();
+        retry.ShouldDispatch.Should().BeFalse();
+        retry.NextCommand.Should().BeNull();
+        retry.State.ActiveTask.PlanRevision.Should().Be(2);
+        retry.State.ActiveTask.PlanRevisions.Should().ContainSingle(record =>
+            record.PlanRevision == 2 &&
+            record.RevisionCause == NyxIdChatPlanRevisionCause.FailureRecovery);
+        var retried = retry.State.ActiveTask.Steps.Single();
+        retried.Status.Should().Be(NyxIdChatStepStatus.Planned);
+        retried.Operation.Key.OperationGeneration.Should().Be(2);
+        retry.State.ActiveTask.ActiveOperationId.Should().BeEmpty();
+        var newGate = retry.State.ActiveTask.Gate;
+        newGate.Status.Should().Be(NyxIdChatPlanGateStatus.Pending);
+        newGate.PlanRevision.Should().Be(2);
+        newGate.RequestId.Should().NotBe(oldGate.RequestId);
+        newGate.Admissions.Should().ContainSingle()
+            .Which.Key.Should().BeEquivalentTo(retried.Operation.Key);
+
+        var staleConfirmation = NyxIdChatPlanGateDecisions.Resolve(
+            retry.State,
+            ResolvePlan(oldGate, expectedStateVersion: 4),
+            currentStateVersion: 4,
+            Now);
+        staleConfirmation.ShouldCommit.Should().BeFalse();
+        staleConfirmation.NextCommand.Should().BeNull();
+
+        var confirmed = NyxIdChatPlanGateDecisions.Resolve(
+            retry.State,
+            ResolvePlan(newGate, expectedStateVersion: 4),
+            currentStateVersion: 4,
+            Now);
+        confirmed.ShouldCommit.Should().BeTrue();
+        confirmed.NextCommand.Should().NotBeNull();
+        confirmed.NextCommand!.InputCase.Should().Be(
+            NyxIdChatOperationDispatchCommand.InputOneofCase.PlanGateContinuation);
+        confirmed.NextCommand.Key.OperationGeneration.Should().Be(2);
+        confirmed.NextCommand.PlanGateContinuation.PlanRevision.Should().Be(2);
+
+        var retryReplay = NyxIdChatControlCommands.Retry(
+            confirmed.State,
+            RetryCommand(),
+            stateVersion: 5,
+            Now);
+        retryReplay.ShouldCommit.Should().BeFalse();
+        retryReplay.ShouldDispatch.Should().BeFalse(
+            "the confirmed plan continuation exclusively owns generation-two dispatch");
+        retryReplay.NextCommand.Should().BeNull();
     }
 
     [Fact]
@@ -435,6 +534,38 @@ public sealed class NyxIdChatControlCommandTests
             {
                 NyxIdAccessToken = "retry-runtime-token-alpha",
             },
+        },
+    };
+
+    private static NyxIdChatPlanResolveCommand ResolvePlan(
+        NyxIdChatPlanGate gate,
+        long expectedStateVersion) => new()
+    {
+        ScopeId = "scope-alpha",
+        ConversationActorId = "conversation-alpha",
+        TaskId = gate.TaskId,
+        PlanId = gate.PlanId,
+        PlanRevision = gate.PlanRevision,
+        RequestId = gate.RequestId,
+        ClientRequestId = $"confirm-{gate.PlanRevision}",
+        Confirmed = true,
+        ExpectedStateVersion = expectedStateVersion,
+        ToolContext = new AgentToolExecutionContextPayload
+        {
+            Credentials = new AgentToolCredentialsPayload
+            {
+                NyxIdAccessToken = "retry-runtime-token-alpha",
+            },
+        },
+    };
+
+    private static AgentToolOperationAdmissionPayload ExactEffectAdmission() => new()
+    {
+        ServiceInstanceId = "m-alpha",
+        ServiceSlug = "svc-alpha",
+        PublishedEndpoint = new AgentToolPublishedEndpointIdentityPayload
+        {
+            EndpointId = "endpoint-effect-alpha",
         },
     };
 

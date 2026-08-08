@@ -53,14 +53,27 @@ public sealed partial class NyxIdChatConversationGAgentTests
             actorId,
             MatrixRetryCommand(actorId, effect, beforeRetry[^1].Version)));
 
+        dispatch.OperationCalls.Should().ContainSingle(
+            "the generation-two effect remains behind the new plan gate");
+        agent.State.ActiveTask.Gate.Status.Should().Be(NyxIdChatPlanGateStatus.Pending);
+        agent.State.ActiveTask.PlanRevision.Should().Be(3);
+        var afterRetry = await eventStore.GetEventsAsync(actorId);
+        await agent.HandleEventAsync(CreateEnvelope(
+            actorId,
+            MatrixPlanResolveCommand(
+                actorId,
+                agent.State.ActiveTask.Gate,
+                afterRetry[^1].Version)));
+
         dispatch.OperationCalls.Should().HaveCount(2);
         var retryDispatch = dispatch.OperationCalls[^1].Envelope.Payload
             .Unpack<NyxIdChatOperationDispatchCommand>();
         retryDispatch.InputCase.Should().Be(
-            NyxIdChatOperationDispatchCommand.InputOneofCase.Tool);
+            NyxIdChatOperationDispatchCommand.InputOneofCase.PlanGateContinuation);
         retryDispatch.Key.OperationGeneration.Should().Be(2);
-        retryDispatch.Tool.OperationAdmission.ServiceInstanceId.Should().Be("svc-lark");
-        retryDispatch.Tool.ToolContext.Credentials.NyxIdAccessToken.Should().Be(
+        retryDispatch.PlanGateContinuation.OperationAdmission.ServiceInstanceId.Should()
+            .Be("svc-lark");
+        retryDispatch.PlanGateContinuation.ToolContext.Credentials.NyxIdAccessToken.Should().Be(
             "retry-capability-alpha");
         agent.State.ToString().Should().NotContain("retry-capability-alpha");
 
@@ -130,8 +143,20 @@ public sealed partial class NyxIdChatConversationGAgentTests
             actorId,
             MatrixRetryCommand(actorId, MatrixEffectStep(agent.State), beforeRetry[^1].Version)));
 
+        dispatch.OperationCalls.Should().BeEmpty(
+            "a confirm-mode effect retry cannot dispatch before its new plan is confirmed");
+        var afterRetry = await eventStore.GetEventsAsync(actorId);
+        await agent.HandleEventAsync(CreateEnvelope(
+            actorId,
+            MatrixPlanResolveCommand(
+                actorId,
+                agent.State.ActiveTask.Gate,
+                afterRetry[^1].Version)));
+
         var retry = dispatch.OperationCalls.Should().ContainSingle().Which.Envelope.Payload
             .Unpack<NyxIdChatOperationDispatchCommand>();
+        retry.InputCase.Should().Be(
+            NyxIdChatOperationDispatchCommand.InputOneofCase.PlanGateContinuation);
         retry.Key.OperationGeneration.Should().Be(2);
         MatrixEffectStep(agent.State).ApprovalRequestId.Should().BeEmpty();
 
@@ -506,6 +531,31 @@ public sealed partial class NyxIdChatConversationGAgentTests
         CommandId = "command-retry-effect-alpha",
         CorrelationId = "correlation-retry-effect-alpha",
         ExpectedOperationGeneration = step.Operation.Key.OperationGeneration,
+        ExpectedStateVersion = stateVersion,
+        ToolContext = new AgentToolExecutionContextPayload
+        {
+            Credentials = new AgentToolCredentialsPayload
+            {
+                NyxIdAccessToken = "retry-capability-alpha",
+            },
+        },
+    };
+
+    private static NyxIdChatPlanResolveCommand MatrixPlanResolveCommand(
+        string actorId,
+        NyxIdChatPlanGate gate,
+        long stateVersion) => new()
+    {
+        ScopeId = "scope-alpha",
+        ConversationActorId = actorId,
+        TaskId = gate.TaskId,
+        PlanId = gate.PlanId,
+        PlanRevision = gate.PlanRevision,
+        RequestId = gate.RequestId,
+        ClientRequestId = $"confirm-retry-{gate.PlanRevision}",
+        CommandId = $"command-confirm-retry-{gate.PlanRevision}",
+        CorrelationId = $"correlation-confirm-retry-{gate.PlanRevision}",
+        Confirmed = true,
         ExpectedStateVersion = stateVersion,
         ToolContext = new AgentToolExecutionContextPayload
         {
