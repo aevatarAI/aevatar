@@ -338,8 +338,26 @@ message ServiceApiSkillDiscoveryInput {
   string managed_discovery_policy_version = 9;
   string admission_policy_version = 10;
   string capability_fingerprint = 11;
-  repeated ReliableServiceApiSkillCandidate excluded_candidates = 12;
-  bool bounded_search_policy_exhausted = 13;
+}
+
+message ManagedCodexServiceApiSkillRankingInput {
+  ServiceApiSkillDiscoveryInput discovery_input = 1;
+  repeated ServiceApiSkillCatalogueCandidate catalogue_candidates = 2;
+  repeated ReliableServiceApiSkillCandidate excluded_candidates = 3;
+}
+
+message ServiceApiSkillCataloguePage {
+  int32 page = 1;
+  int32 page_size = 2;
+  int32 total = 3;
+  int32 total_pages = 4;
+  repeated ServiceApiSkillCatalogueCandidate candidates = 5;
+}
+
+message ServiceApiSkillCatalogueCandidate {
+  string guid = 1;
+  string canonical_name = 2;
+  string description = 3;
 }
 
 message ManagedCodexServiceApiSkillDiscoveryResult {

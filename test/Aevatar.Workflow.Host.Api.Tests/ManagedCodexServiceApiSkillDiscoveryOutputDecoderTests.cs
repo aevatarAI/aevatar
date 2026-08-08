@@ -14,7 +14,7 @@ public sealed class ManagedCodexServiceApiSkillDiscoveryOutputDecoderTests
     [Fact]
     public void Decode_WhenReliableSkillIsValid_ReturnsTypedCandidateWithNormalizedRequestShape()
     {
-        var result = _decoder.Decode(ReliableJson(), TargetUserServiceId, Fingerprint, true);
+        var result = _decoder.Decode(ReliableJson(), TargetUserServiceId, Fingerprint);
 
         result.ResultCase.Should().Be(ManagedCodexServiceApiSkillDiscoveryResult.ResultOneofCase.ReliableSkill);
         result.ReliableSkill.CanonicalName.Should().Be("example-messaging-service-api");
@@ -50,8 +50,7 @@ public sealed class ManagedCodexServiceApiSkillDiscoveryOutputDecoderTests
             }
             """,
             TargetUserServiceId,
-            Fingerprint,
-            true);
+            Fingerprint);
 
         result.ResultCase.Should().Be(ManagedCodexServiceApiSkillDiscoveryResult.ResultOneofCase.NoReliableApiSkill);
         result.NoReliableApiSkill.Reason.Should().Be(ServiceApiNoReliableSkillReason.NoMatchingSkill);
@@ -65,7 +64,7 @@ public sealed class ManagedCodexServiceApiSkillDiscoveryOutputDecoderTests
     [InlineData("{\"schema_version\":\"service_api_skill_discovery.v1\",\"target_user_service_id\":\"usvc-alpha\",\"capability_fingerprint\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"outcome\":\"no_reliable_skill\",\"no_reliable_skill\":{\"reason\":\"NO_MATCHING_SKILL\"},\"extra\":true}", "managed_service_api_discovery_unknown_field")]
     public void Decode_WhenEnvelopeIsInvalid_FailsClosed(string stdout, string expectedCode)
     {
-        var act = () => _decoder.Decode(stdout, TargetUserServiceId, Fingerprint, true);
+        var act = () => _decoder.Decode(stdout, TargetUserServiceId, Fingerprint);
 
         act.Should().Throw<ManagedCodexServiceApiSkillDiscoveryOutputException>()
             .Which.Code.Should().Be(expectedCode);
@@ -84,25 +83,9 @@ public sealed class ManagedCodexServiceApiSkillDiscoveryOutputDecoderTests
         var act = () => _decoder.Decode(
             ReliableJson().Replace(original, replacement, StringComparison.Ordinal),
             TargetUserServiceId,
-            Fingerprint,
-            true);
+            Fingerprint);
 
         act.Should().Throw<ManagedCodexServiceApiSkillDiscoveryOutputException>();
-    }
-
-    [Fact]
-    public void Decode_WhenNoReliableSkillPrecedesBoundedSearchExhaustion_FailsClosed()
-    {
-        var act = () => _decoder.Decode(
-            """
-            {"schema_version":"service_api_skill_discovery.v1","target_user_service_id":"usvc-alpha","capability_fingerprint":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","outcome":"no_reliable_skill","no_reliable_skill":{"reason":"NO_MATCHING_SKILL"}}
-            """,
-            TargetUserServiceId,
-            Fingerprint,
-            false);
-
-        act.Should().Throw<ManagedCodexServiceApiSkillDiscoveryOutputException>()
-            .Which.Code.Should().Be("managed_service_api_discovery_search_not_exhausted");
     }
 
     private static string ReliableJson() =>

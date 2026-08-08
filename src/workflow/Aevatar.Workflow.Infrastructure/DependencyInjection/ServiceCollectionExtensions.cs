@@ -91,7 +91,11 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<
             IManagedCodexServiceApiSkillDiscoveryExecutor,
             ManagedCodexServiceApiSkillDiscoveryExecutor>();
+        services.TryAddSingleton<IServiceApiSkillCataloguePort, OrnnServiceApiSkillCataloguePort>();
         services.TryAddSingleton<IExactServiceApiSkillVerifier, ManagedCodexExactOrnnApiSkillVerifier>();
+        services.TryAddTransient<
+            IManagedCodexServiceApiSkillDiscoveryPort,
+            Aevatar.Workflow.Application.ExternalCapabilities.ManagedServiceApiSkillDiscoveryService>();
         return services;
     }
 

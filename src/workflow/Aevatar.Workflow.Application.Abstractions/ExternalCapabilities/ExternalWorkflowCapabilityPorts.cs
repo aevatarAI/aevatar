@@ -52,6 +52,16 @@ public sealed record ManagedCodexServiceApiSkillDiscoveryRequest(
     ExternalWorkflowCapabilityAccessContext Access,
     ServiceApiSkillDiscoveryInput Input);
 
+public sealed record ManagedCodexServiceApiSkillRankingRequest(
+    ExternalWorkflowCapabilityAccessContext Access,
+    ManagedCodexServiceApiSkillRankingInput Input);
+
+public sealed record ServiceApiSkillCataloguePageRequest(
+    ExternalWorkflowCapabilityAccessContext Access,
+    string Query,
+    int Page,
+    int PageSize);
+
 public sealed record ExactServiceApiSkillVerificationRequest(
     ExternalWorkflowCapabilityAccessContext Access,
     ServiceApiSkillDiscoveryInput Input,
@@ -276,7 +286,21 @@ public interface IExternalWorkflowCapabilityReadinessPort
 public interface IManagedCodexServiceApiSkillDiscoveryExecutor
 {
     Task<ManagedCodexServiceApiSkillDiscoveryResult> DiscoverAsync(
+        ManagedCodexServiceApiSkillRankingRequest request,
+        CancellationToken cancellationToken = default);
+}
+
+public interface IManagedCodexServiceApiSkillDiscoveryPort
+{
+    Task<ManagedCodexServiceApiSkillDiscoveryResult> DiscoverAsync(
         ManagedCodexServiceApiSkillDiscoveryRequest request,
+        CancellationToken cancellationToken = default);
+}
+
+public interface IServiceApiSkillCataloguePort
+{
+    Task<ServiceApiSkillCataloguePage> ReadPageAsync(
+        ServiceApiSkillCataloguePageRequest request,
         CancellationToken cancellationToken = default);
 }
 

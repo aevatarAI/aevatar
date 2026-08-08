@@ -10,6 +10,7 @@ using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
+using Aevatar.Workflow.Application.ExternalCapabilities;
 using Aevatar.Workflow.Infrastructure.DependencyInjection;
 using Aevatar.Workflow.Infrastructure.ExternalCapabilities;
 using FluentAssertions;
@@ -41,6 +42,12 @@ public sealed class ManagedServiceApiSkillDiscoveryInfrastructureTests
         services.Should().Contain(static descriptor =>
             descriptor.ServiceType == typeof(IExactServiceApiSkillVerifier) &&
             descriptor.ImplementationType == typeof(ManagedCodexExactOrnnApiSkillVerifier));
+        services.Should().Contain(static descriptor =>
+            descriptor.ServiceType == typeof(IServiceApiSkillCataloguePort) &&
+            descriptor.ImplementationType == typeof(OrnnServiceApiSkillCataloguePort));
+        services.Should().Contain(static descriptor =>
+            descriptor.ServiceType == typeof(IManagedCodexServiceApiSkillDiscoveryPort) &&
+            descriptor.ImplementationType == typeof(ManagedServiceApiSkillDiscoveryService));
     }
 
     [Fact]
@@ -50,7 +57,7 @@ public sealed class ManagedServiceApiSkillDiscoveryInfrastructureTests
         var executor = new ManagedCodexServiceApiSkillDiscoveryExecutor([codex]);
 
         var result = await executor.DiscoverAsync(
-            new ManagedCodexServiceApiSkillDiscoveryRequest(Access(), Input()));
+            new ManagedCodexServiceApiSkillRankingRequest(Access(), RankingInput()));
 
         result.ResultCase.Should().Be(ManagedCodexServiceApiSkillDiscoveryResult.ResultOneofCase.ReliableSkill);
         result.ReliableSkill.Guid.Should().Be(SkillGuid);
@@ -74,7 +81,7 @@ public sealed class ManagedServiceApiSkillDiscoveryInfrastructureTests
         var executor = new ManagedCodexServiceApiSkillDiscoveryExecutor([codex]);
 
         Func<Task> act = async () => await executor.DiscoverAsync(
-            new ManagedCodexServiceApiSkillDiscoveryRequest(Access(), Input()));
+            new ManagedCodexServiceApiSkillRankingRequest(Access(), RankingInput()));
 
         await act.Should().ThrowAsync<ManagedCodexServiceApiSkillDiscoveryOutputException>()
             .WithMessage("*exactly one JSON object*");
@@ -198,8 +205,22 @@ public sealed class ManagedServiceApiSkillDiscoveryInfrastructureTests
             ManagedDiscoveryPolicyVersion = "service_api_skill_discovery.v1",
             AdmissionPolicyVersion = "explicit-request-admission.v1",
             CapabilityFingerprint = CapabilityFingerprint,
-            BoundedSearchPolicyExhausted = true,
         };
+
+    private static ManagedCodexServiceApiSkillRankingInput RankingInput()
+    {
+        var input = new ManagedCodexServiceApiSkillRankingInput
+        {
+            DiscoveryInput = Input(),
+        };
+        input.CatalogueCandidates.Add(new ServiceApiSkillCatalogueCandidate
+        {
+            Guid = SkillGuid,
+            CanonicalName = "example-messaging-service-api",
+            Description = "Example messaging Service API skill.",
+        });
+        return input;
+    }
 
     private static ReliableServiceApiSkillCandidate Candidate()
     {

@@ -12,8 +12,7 @@ internal sealed partial class ManagedCodexServiceApiSkillDiscoveryOutputDecoder
     public ManagedCodexServiceApiSkillDiscoveryResult Decode(
         string stdout,
         string targetUserServiceId,
-        string capabilityFingerprint,
-        bool boundedSearchPolicyExhausted)
+        string capabilityFingerprint)
     {
         var target = RequireStaticToken(targetUserServiceId, "target_user_service_id");
         var fingerprint = RequireFingerprint(capabilityFingerprint, "capability_fingerprint");
@@ -43,10 +42,7 @@ internal sealed partial class ManagedCodexServiceApiSkillDiscoveryOutputDecoder
         return outcome switch
         {
             "reliable_skill" => DecodeReliable(root, target),
-            "no_reliable_skill" when boundedSearchPolicyExhausted => DecodeNoReliable(root),
-            "no_reliable_skill" => throw Failure(
-                "managed_service_api_discovery_search_not_exhausted",
-                "Managed Codex cannot report no reliable skill before the bounded search policy is exhausted."),
+            "no_reliable_skill" => DecodeNoReliable(root),
             _ => throw Failure(
                 "managed_service_api_discovery_outcome_invalid",
                 "Managed Codex Service API discovery outcome is unsupported."),
