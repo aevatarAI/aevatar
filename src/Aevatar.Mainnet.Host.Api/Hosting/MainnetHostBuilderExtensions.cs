@@ -511,8 +511,11 @@ public static class MainnetHostBuilderExtensions
                     CreateToolSource<WebSearchAgentToolSource>,
                     CreateToolSource<AskUserAgentToolSource>,
                     CreateToolSource<SkillsAgentToolSource>,
+                    CreateToolSource<StartWorkflowToolSource>,
+                    CreateToolSource<ObserveRunToolSource>,
+                    CreateToolSource<ReadWorkflowRunArtifactToolSource>,
                 ],
-                "Pinned NyxID Assistant route: safe management reads, admitted request-local connected-service operations, web search, readiness, typed user input, and explicit skill loading only.");
+                "Pinned NyxID Assistant route: safe management reads, admitted request-local connected-service operations, web search, readiness, typed user input, explicit skill loading, and managed workflow execution with typed observation.");
         });
 
         return builder;

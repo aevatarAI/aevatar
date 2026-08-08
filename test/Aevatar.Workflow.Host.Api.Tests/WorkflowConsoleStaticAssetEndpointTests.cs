@@ -230,12 +230,12 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         styles.Should().Contain(".actor-task.collapsed");
         styles.Should().Contain(".cc-progress");
         styles.Should().Contain(".activity-card.collapsed");
-        styles.Should().Contain("--assistant-card-max-width: 860px");
-        styles.Should().Contain("--assistant-card-inline-gutter: 48px");
-        styles.Should().Contain("--workspace-max-width: 1400px");
-        styles.Should().Contain("--sidebar-width: 264px");
-        styles.Should().Contain("--conversation-max-width: 900px");
-        styles.Should().Contain("--conversation-inline-gutter: 48px");
+        styles.Should().Contain("--assistant-card-max-width: 720px");
+        styles.Should().Contain("--assistant-card-inline-gutter: 40px");
+        styles.Should().Contain("--workspace-max-width: 1240px");
+        styles.Should().Contain("--sidebar-width: 240px");
+        styles.Should().Contain("--conversation-max-width: 760px");
+        styles.Should().Contain("--conversation-inline-gutter: 40px");
         styles.Should().Contain("width: min(448px, calc(100% - 48px))");
         styles.Should().Contain("grid-template-columns: var(--sidebar-width) minmax(0, 1fr)");
         app.Should().Contain("展开计划详情");
@@ -261,8 +261,8 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         app.Should().NotContain("freeText.className = \"needs-you-free-text\"");
         styles.Should().Contain("@media (max-width:");
         html.Should().Contain("<meta name=\"color-scheme\" content=\"only light\"");
-        html.Should().Contain("app.js?v=20260807-m41-type-rhythm-polish");
-        html.Should().Contain("styles.css?v=20260807-m41-type-rhythm-polish");
+        html.Should().Contain("app.js?v=20260808-m42-card-scale-tighten");
+        html.Should().Contain("styles.css?v=20260808-m42-card-scale-tighten");
         app.Should().Contain("transport.js?v=20260807-m40-thread-polish");
         app.Should().Contain("readiness.js?v=20260807-m40-thread-polish");
         transport.Should().Contain("readiness.js?v=20260807-m40-thread-polish");
@@ -273,10 +273,10 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         styles.Should().Contain("color-scheme: only light");
         styles.Should().NotContain("color-scheme: dark");
         styles.Should().NotContain("prefers-color-scheme");
-        styles.Should().Contain("--bg: #f4f5f7");
-        styles.Should().Contain("--accent: #2563eb");
-        styles.Should().Contain("--accent-strong: #1d4ed8");
-        styles.Should().Contain("--success: #15a34a");
+        styles.Should().Contain("--bg: #eceff4");
+        styles.Should().Contain("--accent: #2f5cf6");
+        styles.Should().Contain("--accent-strong: #1e44d8");
+        styles.Should().Contain("--success: #12a15c");
         styles.Should().NotContain("--accent: #0f766e");
         styles.Should().NotContain("--accent-secondary: #df6b45");
         styles.Should().Contain("overflow-y: scroll");
@@ -977,7 +977,7 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
 
         entryVersions.Should().NotBeEmpty();
         entryVersions.Should().OnlyContain(static version =>
-            version == "20260807-m41-type-rhythm-polish");
+            version == "20260808-m42-card-scale-tighten");
         transitiveVersions.Should().NotBeEmpty();
         transitiveVersions.Should().OnlyContain(static version =>
             version == "20260807-m40-thread-polish");
@@ -1302,9 +1302,12 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
             const context = { URLSearchParams };
             vm.createContext(context);
             vm.runInContext(`
-              ${functionSource('observatoryRouteKey', 'readObservatoryViewState')}
-              ${functionSource('readObservatoryViewState', 'writeObservatoryViewState')}
-              ${functionSource('writeObservatoryViewState', 'paneScrollPosition')}
+              ${functionSource('observatoryListKey', 'observatoryDetailKey')}
+              ${functionSource('observatoryDetailKey', 'readObservatoryListState')}
+              ${functionSource('readObservatoryListState', 'writeObservatoryListState')}
+              ${functionSource('writeObservatoryListState', 'readObservatoryDetailState')}
+              ${functionSource('readObservatoryDetailState', 'writeObservatoryDetailState')}
+              ${functionSource('writeObservatoryDetailState', 'paneScrollPosition')}
               ${functionSource('paneScrollPosition', 'applyPaneScrollState')}
             `, context);
 
@@ -1316,19 +1319,29 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
             const routeA = {scope:'scope-alpha',status:'failed',origin:'',definition:'wf-alpha',schedule:'',from:'',to:'',run:'run-alpha',tab:'logs'};
             const routeB = {...routeA, run:'run-beta'};
             const key = 'console:test:observatory:view';
-            const routeAKey = vm.runInContext('observatoryRouteKey', context)(routeA);
+            const routeAListKey = vm.runInContext('observatoryListKey', context)(routeA);
+            const routeBListKey = vm.runInContext('observatoryListKey', context)(routeB);
+            const routeADetailKey = vm.runInContext('observatoryDetailKey', context)(routeA);
+            const routeBDetailKey = vm.runInContext('observatoryDetailKey', context)(routeB);
 
-            vm.runInContext('writeObservatoryViewState', context)(storage, key, routeA, {list:180, detail:760});
-            vm.runInContext('writeObservatoryViewState', context)(storage, key, routeB, {list:25, detail:40});
-            assert.deepEqual(JSON.parse(JSON.stringify(vm.runInContext('readObservatoryViewState', context)(storage, key, routeA))), {list:180, detail:760});
-            assert.deepEqual(JSON.parse(JSON.stringify(vm.runInContext('readObservatoryViewState', context)(storage, key, routeB))), {list:25, detail:40});
-            assert.match(routeAKey, /run-alpha/);
+            vm.runInContext('writeObservatoryListState', context)(storage, key, routeA, 180);
+            vm.runInContext('writeObservatoryDetailState', context)(storage, key, routeA, 760);
+            vm.runInContext('writeObservatoryDetailState', context)(storage, key, routeB, 40);
+            assert.equal(vm.runInContext('readObservatoryListState', context)(storage, key, routeA), 180);
+            assert.equal(vm.runInContext('readObservatoryListState', context)(storage, key, routeB), 180);
+            assert.equal(vm.runInContext('readObservatoryDetailState', context)(storage, key, routeA), 760);
+            assert.equal(vm.runInContext('readObservatoryDetailState', context)(storage, key, routeB), 40);
+            assert.equal(routeAListKey, routeBListKey);
+            assert.notEqual(routeADetailKey, routeBDetailKey);
+            assert.match(routeADetailKey, /run-alpha/);
             assert.equal(vm.runInContext('paneScrollPosition', context)({scrollTop:0,scrollHeight:100,clientHeight:100}, 760), 760);
             assert.equal(vm.runInContext('paneScrollPosition', context)({scrollTop:0,scrollHeight:900,clientHeight:300}, 760), 0);
             assert.equal(vm.runInContext('paneScrollPosition', context)({scrollTop:180,scrollHeight:900,clientHeight:300}, 760), 180);
 
             storage.setItem(key, '{bad json');
-            assert.deepEqual(JSON.parse(JSON.stringify(vm.runInContext('readObservatoryViewState', context)(storage, key, routeA))), {list:0, detail:0});
+            storage.setItem(key + ':detail', '{bad json');
+            assert.equal(vm.runInContext('readObservatoryListState', context)(storage, key, routeA), 0);
+            assert.equal(vm.runInContext('readObservatoryDetailState', context)(storage, key, routeA), 0);
             """;
 
         var result = await RunNodeAsync(script, html);

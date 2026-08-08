@@ -70,3 +70,11 @@ route-owned tools。生产 `web_search` 通过 `tavily-search` NyxID service bin
 因此 admin-only 的 service-account wrapper 在没有 typed authority admission 前不进入默认
 route ceiling，但其 typed REST adapter 可以由显式管理 surface 复用。无论是否绑定 Profile，
 mutation schema、secret-bearing 参数与新注册但未列入 ceiling 的工具都保持不可调用。
+
+Ornn workflow skill 的加载与执行是同一条受限能力链。ceiling 显式提供 `use_skill`，并且只提供
+`aevatar_start_workflow`、`aevatar_observe_run` 与 `aevatar_read_workflow_run_artifact` 三个
+workflow 工具，使 Assistant 可以启动已挂载或显式 inline fallback 的定义，并以 committed
+read model 与 typed artifact 判定结果。workflow 自身的 capability admission、scope authority、
+tool approval 和外部副作用策略仍逐层生效；这组工具不会引入通用 GAgent/team/member invoke、
+schedule provisioning 或 raw proxy。新增其他 workflow/control 工具仍必须通过单独的 route
+ceiling 审查，不能因注册了 `IAgentToolSource` 而自动暴露。

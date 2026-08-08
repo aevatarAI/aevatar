@@ -752,7 +752,10 @@ public sealed class MainnetHostCompositionTests
             typeof(NyxIdConnectedServiceToolSource),
             typeof(WebSearchAgentToolSource),
             typeof(AskUserAgentToolSource),
-            typeof(SkillsAgentToolSource));
+            typeof(SkillsAgentToolSource),
+            typeof(StartWorkflowToolSource),
+            typeof(ObserveRunToolSource),
+            typeof(ReadWorkflowRunArtifactToolSource));
         nyxIdChatToolSources.Should().NotContain(source => source is NyxIdAgentToolSource);
         nyxIdChatToolSources.Should().NotContain(source =>
             source is NyxIdConnectedServiceInventoryToolSource);
@@ -793,7 +796,10 @@ public sealed class MainnetHostCompositionTests
             typeof(NyxIdConnectedServiceToolSource),
             typeof(WebSearchAgentToolSource),
             typeof(AskUserAgentToolSource),
-            typeof(SkillsAgentToolSource));
+            typeof(SkillsAgentToolSource),
+            typeof(StartWorkflowToolSource),
+            typeof(ObserveRunToolSource),
+            typeof(ReadWorkflowRunArtifactToolSource));
         nyxIdChatProfile.Sources.Should().NotContain(source => source is NyxIdAgentToolSource);
         nyxIdChatProfile.Sources.Should().ContainSingle(source =>
             source is NyxIdConnectedServiceToolSource);
