@@ -53,11 +53,8 @@ function taskPlan(stepStatus: 'running' | 'failed' = 'running') {
         },
         mayChangeExternalState: false,
         externalEffect: stepStatus === 'failed' ? 'not_applied' : 'not_started',
-        availableActions: {
-          retry: stepStatus === 'failed',
-          skip: false,
-          stop: stepStatus === 'running',
-        },
+        availableActions:
+          stepStatus === 'failed' ? { retry: true } : { stop: true },
         updatedAt: '2026-08-08T00:00:00Z',
         addedBy: 'steering',
         addedInPlanRevision: 3,
@@ -143,6 +140,11 @@ describe('chatActorState', () => {
       }),
     );
     expect(actorCan(reloaded, 'stop')).toBe(true);
+    expect(reloaded.steps.get('step-alpha')?.availableActions).toEqual({
+      retry: false,
+      skip: false,
+      stop: true,
+    });
 
     const changed = reduceActorFrame(
       reloaded,
@@ -168,6 +170,11 @@ describe('chatActorState', () => {
       '2026-08-08T00:02:00Z',
     );
     expect(actorCan(changed, 'retry', 'step-alpha')).toBe(true);
+    expect(changed.steps.get('step-alpha')?.availableActions).toEqual({
+      retry: true,
+      skip: false,
+      stop: false,
+    });
 
     const stale = reduceActorFrame(
       changed,
@@ -206,6 +213,78 @@ describe('chatActorState', () => {
     expect(stale.steps.get('step-alpha')?.status).toBe('failed');
   });
 
+  it('keeps the committed control result across duplicate and stale current-state reads', () => {
+    const state = (
+      stateVersion: number,
+      outcome: string,
+      stepOutcome: string,
+      recentStepOutcomes: readonly string[],
+    ) => ({
+      status: 'current',
+      stateVersion,
+      snapshot: {
+        actorId: 'conversation-alpha',
+        scopeId: 'scope-alpha',
+        stateVersion,
+        progressSequence: stateVersion,
+        activeTurn: {
+          turnId: 'turn-alpha',
+          taskId: 'task-alpha',
+          status: 'active',
+        },
+        latestTurn: null,
+        recentTerminalTurns: [],
+        activeTask: taskPlan(),
+        pendingInput: null,
+        pendingApproval: null,
+        pendingActions: [],
+        recentActions: [],
+        latestControlResult: { outcome },
+        latestStepControlResult: { outcome: stepOutcome },
+        recentStepControlResults: recentStepOutcomes.map((recentOutcome) => ({
+          outcome: recentOutcome,
+        })),
+      },
+    });
+    const committed = applyCurrentStateResult(
+      createChatActorProjection('conversation-alpha'),
+      state(11, 'steered', 'retry_started', [
+        'retry_requested',
+        'retry_started',
+      ]),
+    ).projection;
+    const duplicate = applyCurrentStateResult(
+      committed,
+      state(11, 'duplicate-regressed', 'duplicate-step-regressed', [
+        'duplicate-step-regressed',
+      ]),
+    ).projection;
+    const stale = applyCurrentStateResult(
+      duplicate,
+      state(10, 'stale-result', 'stale-step-result', ['stale-step-result']),
+    ).projection;
+
+    expect(duplicate).toBe(committed);
+    expect(duplicate.latestControlResult).toEqual({ outcome: 'steered' });
+    expect(duplicate.latestStepControlResult).toEqual({
+      outcome: 'retry_started',
+    });
+    expect(duplicate.recentStepControlResults).toEqual([
+      { outcome: 'retry_requested' },
+      { outcome: 'retry_started' },
+    ]);
+    expect(stale).toBe(duplicate);
+    expect(stale.latestControlResult).toEqual({ outcome: 'steered' });
+    expect(stale.latestStepControlResult).toEqual({
+      outcome: 'retry_started',
+    });
+    expect(stale.recentStepControlResults).toEqual([
+      { outcome: 'retry_requested' },
+      { outcome: 'retry_started' },
+    ]);
+    expect(stale.stateVersion).toBe(11);
+  });
+
   it('fails closed on invalid closed vocabulary instead of constructing browser state', () => {
     expect(() =>
       decodeActorFrame({
@@ -232,7 +311,7 @@ describe('chatActorState', () => {
     ).toThrow(expect.objectContaining({ code: 'NYXID_TASK_PLAN_INVALID' }));
   });
 
-  it('accepts only secret-free exact action identities and never reloads params from browser storage', () => {
+  it('rehydrates only secret-free exact pending and recent action requests', () => {
     expect(validateActionRequest(actionRequest)).toEqual(actionRequest);
     expect(() =>
       validateActionRequest({ ...actionRequest, apiKey: 'secret' }),
@@ -273,11 +352,34 @@ describe('chatActorState', () => {
               action: 'service.connect',
               reports: [],
               postconditionResult: null,
+              request: actionRequest,
+            },
+          ],
+          recentActions: [
+            {
+              schemaVersion: 4,
+              originTurnId: 'turn-alpha',
+              taskId: 'task-alpha',
+              stepId: 'step-recent',
+              actionRequestId: 'action-recent',
+              action: 'service.connect',
+              reports: [],
+              postconditionResult: null,
+              request: {
+                ...actionRequest,
+                stepId: 'step-recent',
+                actionRequestId: 'action-recent',
+              },
             },
           ],
         },
       },
     ).projection;
-    expect(reload.actions.get('action-alpha')?.request).toBeUndefined();
+    expect(reload.actions.get('action-alpha')?.request).toEqual(actionRequest);
+    expect(reload.actions.get('action-recent')?.request).toEqual({
+      ...actionRequest,
+      stepId: 'step-recent',
+      actionRequestId: 'action-recent',
+    });
   });
 });

@@ -431,11 +431,15 @@ function decodeSubstep(input: unknown): ChatTaskSubstep {
 }
 
 function decodeActions(input: unknown): ChatAvailableActions {
-  const value = record(input, 'availableActions');
+  const value = input === undefined ? {} : record(input, 'availableActions');
+  const action = (key: keyof ChatAvailableActions): boolean =>
+    value[key] === undefined
+      ? false
+      : boolean(value[key], `availableActions.${key}`);
   return {
-    retry: boolean(value.retry, 'availableActions.retry'),
-    skip: boolean(value.skip, 'availableActions.skip'),
-    stop: boolean(value.stop, 'availableActions.stop'),
+    retry: action('retry'),
+    skip: action('skip'),
+    stop: action('stop'),
   };
 }
 

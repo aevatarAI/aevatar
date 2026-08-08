@@ -674,6 +674,11 @@ function CommittedResults({
           }}
         >
           <Tag>{String(result.outcome || result.status || 'committed')}</Tag>
+          {typeof result.approved === 'boolean' ? (
+            <Tag color={result.approved ? 'success' : 'error'}>
+              {result.approved ? 'approved' : 'denied'}
+            </Tag>
+          ) : null}
           {result.reasonCode ? <span>{String(result.reasonCode)}</span> : null}
           {result.safeMessage ? (
             <span>{String(result.safeMessage)}</span>
@@ -830,6 +835,23 @@ function ActionCard({
 }): React.ReactElement | null {
   const [credential, setCredential] = useState('');
   const request = action.request;
+  if (action.conflicted) {
+    return (
+      <ControlCard
+        title={
+          presentationTitle ||
+          t('pages.chat.actorControls.connectionAction', 'Service connection')
+        }
+      >
+        <div role="alert">
+          {t(
+            'pages.chat.actorControls.actionIdentityConflict',
+            'Action identity conflict; this browser journey is disabled.',
+          )}
+        </div>
+      </ControlCard>
+    );
+  }
   if (!request) {
     const report = action.reports?.at(-1);
     const verified = action.postconditionResult?.verified === true;
@@ -854,28 +876,6 @@ function ActionCard({
           {t(
             'pages.chat.actorControls.reloadedActionDetailsUnavailable',
             'This committed action is visible, but the current-state contract does not expose its connection parameters.',
-          )}
-        </div>
-      </ControlCard>
-    );
-  }
-  if (action.conflicted) {
-    const serviceName =
-      'catalogService' in request.params
-        ? request.params.catalogService.serviceSlug
-        : request.params.customService.name;
-    return (
-      <ControlCard
-        title={t(
-          'pages.chat.actorControls.connectService',
-          'Connect {service}',
-          { service: serviceName },
-        )}
-      >
-        <div role="alert">
-          {t(
-            'pages.chat.actorControls.actionIdentityConflict',
-            'Action identity conflict; this browser journey is disabled.',
           )}
         </div>
       </ControlCard>
