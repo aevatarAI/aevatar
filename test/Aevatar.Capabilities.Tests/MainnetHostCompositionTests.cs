@@ -143,6 +143,25 @@ public sealed class MainnetHostCompositionTests
     }
 
     [Fact]
+    public void AddAevatarMainnetHost_ShouldAllowCanaryEffectFaultOnlyForShareOpsOwner()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder();
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        var options = app.Services.GetRequiredService<NyxIdChatCanaryEffectFaultOptions>();
+
+        options.Enabled.Should().BeTrue();
+        options.AllowedOwnerSubjects.Should().Equal(
+            "ce646b72-dd49-4ea8-bc1e-8273672c102c");
+    }
+
+    [Fact]
     public void AddAevatarMainnetHost_ShouldResolveWorkflowScheduleProvisioningComposition()
     {
         using var home = new TemporaryAevatarHomeScope();

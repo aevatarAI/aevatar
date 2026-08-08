@@ -39,6 +39,22 @@ public sealed class NyxIdChatServiceCollectionExtensionsTests
     }
 
     [Fact]
+    public void AddNyxIdChat_Default_ShouldDenyCanaryEffectFaultAuthorization()
+    {
+        var services = new ServiceCollection();
+
+        services.AddNyxIdChat(new ConfigurationBuilder().Build());
+        using var provider = services.BuildServiceProvider();
+
+        var options = provider.GetRequiredService<NyxIdChatCanaryEffectFaultOptions>();
+        options.Enabled.Should().BeFalse();
+        options.AllowedOwnerSubjects.Should().BeEmpty();
+        provider.GetRequiredService<INyxIdChatCanaryEffectFaultAuthorizationPolicy>()
+            .CanArm("ce646b72-dd49-4ea8-bc1e-8273672c102c")
+            .Should().BeFalse();
+    }
+
+    [Fact]
     public void AddNyxIdChat_WhenAssistantActionsEnabled_ShouldRegisterStrictStartupFetcher()
     {
         var configuration = new ConfigurationBuilder()

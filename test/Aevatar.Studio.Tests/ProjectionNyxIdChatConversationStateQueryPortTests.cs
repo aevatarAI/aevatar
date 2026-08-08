@@ -114,6 +114,19 @@ public sealed class ProjectionNyxIdChatConversationStateQueryPortTests
         result.Snapshot.LatestStepControlResult.ExpectedStateVersion.Should().Be(10);
         result.Snapshot.RecentStepControlResults.Should().ContainSingle().Which.RequestId
             .Should().Be("retry-alpha");
+        result.Snapshot.CanaryEffectFault.Should().BeEquivalentTo(
+            new NyxIdChatCanaryEffectFaultSnapshot(
+                "arm-alpha",
+                "forwarded",
+                "turn-alpha",
+                "task-alpha",
+                "step-alpha",
+                "operation-alpha",
+                1,
+                DateTimeOffset.Parse("2026-08-01T12:15:00Z"),
+                DateTimeOffset.Parse("2026-08-01T12:00:00Z"),
+                DateTimeOffset.Parse("2026-08-01T12:01:00Z"),
+                null));
         reader.Keys.Should().ContainSingle("conversation-alpha");
     }
 
@@ -322,6 +335,22 @@ public sealed class ProjectionNyxIdChatConversationStateQueryPortTests
         AttentionKind = "input",
         AttentionSince = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-01T12:00:00Z")),
         ActiveStepSummary = "Choose a deployment region.",
+        CanaryEffectFault = new NyxIdChatConversationCanaryEffectFaultDocument
+        {
+            ArmId = "arm-alpha",
+            Status = "forwarded",
+            TurnId = "turn-alpha",
+            TaskId = "task-alpha",
+            StepId = "step-alpha",
+            OperationId = "operation-alpha",
+            OperationGeneration = 1,
+            ExpiresAt = Timestamp.FromDateTimeOffset(
+                DateTimeOffset.Parse("2026-08-01T12:15:00Z")),
+            ArmedAt = Timestamp.FromDateTimeOffset(
+                DateTimeOffset.Parse("2026-08-01T12:00:00Z")),
+            ForwardedAt = Timestamp.FromDateTimeOffset(
+                DateTimeOffset.Parse("2026-08-01T12:01:00Z")),
+        },
         ActiveTurn = new NyxIdChatConversationTurnDocument
         {
             TurnId = "turn-alpha",

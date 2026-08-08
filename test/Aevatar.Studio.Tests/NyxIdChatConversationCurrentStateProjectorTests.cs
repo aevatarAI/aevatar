@@ -78,6 +78,33 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
             new FixedProjectionClock(DateTimeOffset.Parse("2026-07-25T06:30:00Z")));
         var state = BuildState();
         state.OwnerSubject = "owner-alpha";
+        state.CanaryEffectFault = new NyxIdChatCanaryEffectFaultState
+        {
+            Directive = new NyxIdChatCanaryEffectFaultDirective
+            {
+                ArmId = "arm-alpha",
+                ClientRequestId = "client-arm-alpha",
+                Key = new NyxIdChatOperationKey
+                {
+                    ConversationActorId = ActorId,
+                    TurnId = "turn-alpha",
+                    TaskId = "task-alpha",
+                    StepId = "step-beta",
+                    OperationId = "operation-beta",
+                    OperationGeneration = 1,
+                },
+                ServiceInstanceId = "canary-service-sensitive",
+                CatalogDigest = $"sha256:{new string('f', 64)}",
+                OwnerSubject = "canary-owner-sensitive",
+                ExpiresAt = Timestamp.FromDateTimeOffset(
+                    DateTimeOffset.Parse("2026-07-25T06:30:00Z")),
+            },
+            Status = NyxIdChatCanaryEffectFaultStatus.Forwarded,
+            ArmedAt = Timestamp.FromDateTimeOffset(
+                DateTimeOffset.Parse("2026-07-25T06:10:00Z")),
+            ForwardedAt = Timestamp.FromDateTimeOffset(
+                DateTimeOffset.Parse("2026-07-25T06:15:00Z")),
+        };
 
         await projector.ProjectAsync(
             NewContext(),
@@ -107,6 +134,15 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
         document.LatestStepControlResult.ExpectedStateVersion.Should().Be(16);
         document.RecentStepControlResults.Should().ContainSingle().Which.RequestId
             .Should().Be("retry-alpha");
+        document.CanaryEffectFault.ArmId.Should().Be("arm-alpha");
+        document.CanaryEffectFault.Status.Should().Be("forwarded");
+        document.CanaryEffectFault.OperationId.Should().Be("operation-beta");
+        document.CanaryEffectFault.OperationGeneration.Should().Be(1);
+        document.CanaryEffectFault.ArmedAt.ToDateTimeOffset().Should().Be(
+            DateTimeOffset.Parse("2026-07-25T06:10:00Z"));
+        document.CanaryEffectFault.ForwardedAt.ToDateTimeOffset().Should().Be(
+            DateTimeOffset.Parse("2026-07-25T06:15:00Z"));
+        document.CanaryEffectFault.ConsumedAt.Should().BeNull();
 
         document.ActiveTurn.TurnId.Should().Be("turn-alpha");
         document.ActiveTurn.TaskId.Should().Be("task-alpha");
@@ -214,6 +250,9 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
         serialized.Should().NotContain("https://user:password@example.com");
         serialized.Should().NotContain("owner-subject-alpha");
         serialized.Should().NotContain("owner-alpha");
+        serialized.Should().NotContain("canary-owner-sensitive");
+        serialized.Should().NotContain("canary-service-sensitive");
+        serialized.Should().NotContain(new string('f', 64));
         serialized.Should().NotContain("access-token-alpha");
         serialized.Should().NotContain("history-initialization-outbox-sentinel");
         serialized.Should().NotContain("history-reservation-outbox-sentinel");
@@ -222,6 +261,13 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
         NyxIdChatConversationCurrentStateDocument.Descriptor.Fields.InFieldNumberOrder()
             .Should().NotContain(field =>
                 field.Name == "state_root" || field.Name == "owner_subject");
+        var canaryFieldNames = NyxIdChatConversationCanaryEffectFaultDocument.Descriptor.Fields
+            .InFieldNumberOrder()
+            .Select(static field => field.Name)
+            .ToArray();
+        canaryFieldNames.Should().NotContain("owner_subject");
+        canaryFieldNames.Should().NotContain("service_instance_id");
+        canaryFieldNames.Should().NotContain("catalog_digest");
     }
 
     [Fact]

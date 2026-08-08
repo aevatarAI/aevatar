@@ -250,6 +250,31 @@ Do not run UC3 until the narrow one-shot fault mechanism is present on the exact
 deployed image and reviewed as disabled by default. Fixture-only failure
 injection does not satisfy this production step.
 
+Before resolving the generation-1 plan gate, read the exact conversation
+`/state` document. Select its single planned effect step and record the
+conversation actor ID, active turn ID, task ID, step ID, operation ID,
+`operationGeneration=1`, admitted UserService ID, admitted catalog digest, and
+top-level `stateVersion`. Do not derive, edit, or reuse any of these values.
+Using the authenticated `share-ops` owner only, POST those exact values plus a
+fresh `armId`, `clientRequestId`, and an expiry no more than 15 minutes ahead to:
+
+```text
+/api/scopes/{scopeId}/nyxid-chat/conversations/{conversationActorId}:arm-effect-fault-canary
+```
+
+The accepted receipt is only dispatch evidence. Poll `/state` and require the
+same `armId`, exact operation key, and increasing actor `stateVersion` while the
+typed canary status progresses `armed -> forwarded -> consumed`; do not expose
+or record owner subject, UserService ID, catalog digest, or client request ID
+from the canary snapshot. Resolve the plan gate only after `armed` is visible.
+`forwarded` must appear after the exact plan resolution and `consumed` must
+appear before accepting the generation-1 uncertain result. Any other owner,
+default/non-Mainnet composition, disabled configuration, identity mismatch,
+duplicate matching step, stale version, generation other than 1, or expired arm
+must fail closed; a non-allowlisted caller must receive `404` before scope
+admission or actor dispatch. Stop if any status, identity, or version transition
+cannot be proved from the typed read model.
+
 ## UC4: Conditional Bitable Write
 
 Run two independent conversations with unique canary keys:

@@ -35,6 +35,9 @@ public sealed class NyxIdChatControlEndpointsTests
         "/api/scopes/{scopeId}/nyxid-chat/conversations/{actorId}/turns/{turnId}/steps/{stepId}:skip";
     private const string PlanResolveRoute =
         "/api/scopes/{scopeId}/nyxid-chat/conversations/{actorId}/plans/{taskId}:resolve";
+    private const string CanaryEffectFaultArmRoute =
+        "/api/scopes/{scopeId}/nyxid-chat/conversations/{actorId}:arm-effect-fault-canary";
+    private const string ShareOpsOwnerSubject = "ce646b72-dd49-4ea8-bc1e-8273672c102c";
     private const string ValidStopBody = """
         {
           "turnId": "turn-alpha",
@@ -262,6 +265,93 @@ public sealed class NyxIdChatControlEndpointsTests
     }
 
     [Fact]
+    public async Task CanaryEffectFaultArm_DefaultDisabled_ShouldReturnNotFoundWithoutAdmission()
+    {
+        var admission = new RecordingAdmissionPort();
+        var dispatch = new RecordingDispatchPort();
+
+        var response = await ExecuteAsync(
+            CanaryEffectFaultArmRoute,
+            ConversationRouteValues(),
+            ValidCanaryEffectFaultArmBody(),
+            admission,
+            dispatch,
+            authenticatedScopeId: "scope-alpha",
+            authenticatedOwnerSubject: ShareOpsOwnerSubject);
+
+        response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
+        admission.Targets.Should().BeEmpty();
+        dispatch.Dispatches.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CanaryEffectFaultArm_NonAllowlistedOwner_ShouldReturnNotFoundWithoutAdmission()
+    {
+        var admission = new RecordingAdmissionPort();
+        var dispatch = new RecordingDispatchPort();
+
+        var response = await ExecuteAsync(
+            CanaryEffectFaultArmRoute,
+            ConversationRouteValues(),
+            ValidCanaryEffectFaultArmBody(),
+            admission,
+            dispatch,
+            authenticatedScopeId: "scope-alpha",
+            authenticatedOwnerSubject: "owner-not-allowed",
+            canaryOptions: NyxIdChatCanaryEffectFaultOptions.EnabledFor(ShareOpsOwnerSubject));
+
+        response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
+        admission.Targets.Should().BeEmpty();
+        dispatch.Dispatches.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CanaryEffectFaultArm_ShareOpsOwner_ShouldDispatchExactAcceptedCommand()
+    {
+        var admission = new RecordingAdmissionPort();
+        var dispatch = new RecordingDispatchPort();
+
+        var response = await ExecuteAsync(
+            CanaryEffectFaultArmRoute,
+            ConversationRouteValues(),
+            ValidCanaryEffectFaultArmBody(),
+            admission,
+            dispatch,
+            authenticatedScopeId: "scope-alpha",
+            authenticatedOwnerSubject: ShareOpsOwnerSubject,
+            canaryOptions: NyxIdChatCanaryEffectFaultOptions.EnabledFor(ShareOpsOwnerSubject));
+
+        response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        admission.Targets.Should().ContainSingle(target =>
+            target.ScopeId == "scope-alpha" &&
+            target.ActorId == "conversation-alpha" &&
+            target.Operation == ScopeResourceOperation.Control);
+        var dispatched = dispatch.Dispatches.Should().ContainSingle().Which;
+        var command = dispatched.Envelope.Payload.Unpack<NyxIdChatCanaryEffectFaultArmCommand>();
+        command.ScopeId.Should().Be("scope-alpha");
+        command.ConversationActorId.Should().Be("conversation-alpha");
+        command.ArmId.Should().Be("arm-alpha");
+        command.ClientRequestId.Should().Be("client-arm-alpha");
+        command.Key.Should().BeEquivalentTo(new NyxIdChatOperationKey
+        {
+            ConversationActorId = "conversation-alpha",
+            TurnId = "turn-alpha",
+            TaskId = "task-alpha",
+            StepId = "step-alpha",
+            OperationId = "operation-alpha",
+            OperationGeneration = 1,
+        });
+        command.ServiceInstanceId.Should().Be("connected-service-alpha");
+        command.CatalogDigest.Should().Be($"sha256:{new string('a', 64)}");
+        command.OwnerSubject.Should().Be(ShareOpsOwnerSubject);
+        command.ExpectedStateVersion.Should().Be(23);
+        command.CommandId.Should().NotBeNullOrWhiteSpace();
+        command.CorrelationId.Should().NotBeNullOrWhiteSpace();
+        dispatched.ActorId.Should().Be("conversation-alpha");
+        dispatched.Envelope.Id.Should().Be(command.CommandId);
+    }
+
+    [Fact]
     public async Task Steering_ShouldRequireTransientCapabilityBeforeAdmission()
     {
         var admission = new RecordingAdmissionPort();
@@ -477,6 +567,22 @@ public sealed class NyxIdChatControlEndpointsTests
         }
         """;
 
+    private static string ValidCanaryEffectFaultArmBody() => $$"""
+        {
+          "armId": "arm-alpha",
+          "clientRequestId": "client-arm-alpha",
+          "turnId": "turn-alpha",
+          "taskId": "task-alpha",
+          "stepId": "step-alpha",
+          "operationId": "operation-alpha",
+          "operationGeneration": 1,
+          "serviceInstanceId": "connected-service-alpha",
+          "catalogDigest": "sha256:{{new string('a', 64)}}",
+          "expiresAt": "{{DateTimeOffset.UtcNow.AddMinutes(10):O}}",
+          "expectedStateVersion": 23
+        }
+        """;
+
     private static async Task<(int StatusCode, string Body, string? Location)> ExecuteAsync(
         string routePattern,
         IReadOnlyDictionary<string, object?> routeValues,
@@ -484,17 +590,26 @@ public sealed class NyxIdChatControlEndpointsTests
         IScopeResourceAdmissionPort admissionPort,
         IActorDispatchPort dispatchPort,
         string? accessToken = "control-runtime-token-alpha",
-        string? authenticatedScopeId = null)
+        string? authenticatedScopeId = null,
+        string? authenticatedOwnerSubject = null,
+        NyxIdChatCanaryEffectFaultOptions? canaryOptions = null)
     {
         await using var services = CreateServices(
             admissionPort,
             dispatchPort,
-            authenticationEnabled: authenticatedScopeId is not null);
+            authenticationEnabled:
+                authenticatedScopeId is not null || authenticatedOwnerSubject is not null,
+            canaryOptions);
         var context = new DefaultHttpContext { RequestServices = services };
-        if (authenticatedScopeId is not null)
+        if (authenticatedScopeId is not null || authenticatedOwnerSubject is not null)
         {
+            var claims = new List<Claim>();
+            if (authenticatedScopeId is not null)
+                claims.Add(new Claim("scope_id", authenticatedScopeId));
+            if (authenticatedOwnerSubject is not null)
+                claims.Add(new Claim("uid", authenticatedOwnerSubject));
             context.User = new ClaimsPrincipal(new ClaimsIdentity(
-                [new Claim("scope_id", authenticatedScopeId)],
+                claims,
                 authenticationType: "test"));
         }
 
@@ -520,7 +635,8 @@ public sealed class NyxIdChatControlEndpointsTests
     private static ServiceProvider CreateServices(
         IScopeResourceAdmissionPort admissionPort,
         IActorDispatchPort dispatchPort,
-        bool authenticationEnabled) =>
+        bool authenticationEnabled,
+        NyxIdChatCanaryEffectFaultOptions? canaryOptions) =>
         new ServiceCollection()
             .AddLogging()
             .AddSingleton<IConfiguration>(new ConfigurationBuilder()
@@ -537,6 +653,9 @@ public sealed class NyxIdChatControlEndpointsTests
             })
             .AddSingleton(admissionPort)
             .AddSingleton(dispatchPort)
+            .AddSingleton(canaryOptions ?? new NyxIdChatCanaryEffectFaultOptions())
+            .AddSingleton<INyxIdChatCanaryEffectFaultAuthorizationPolicy,
+                NyxIdChatCanaryEffectFaultAuthorizationPolicy>()
             .AddSingleton<INyxIdChatControlCommandPort, NyxIdChatControlCommandPort>()
             .BuildServiceProvider();
 
