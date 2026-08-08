@@ -243,11 +243,15 @@ TaskPlan payload; it does not reconstruct a plan from action cards or text.
 
 Text, reasoning, tool-start, task, control, and terminal frames share the actor-owned progress sequence. `RUN_STARTED`, keepalive, and bounded endpoint-local setup failures are transport context and do not invent an actor sequence.
 
-Long-running executors relay genuine phase changes or repeated genuine phase
-observations no less often than every 30 seconds when the underlying operation
-actually reports progress. They never manufacture progress from a timer. The
-15-second SSE keepalive is transport liveness only and does not update the task
-step, `lastProgressAt`, or the actor progress sequence.
+Long-running executors relay genuine text, reasoning, tool-start, or phase
+observations whenever the underlying operation reports progress. The
+conversation actor publishes the first observation as a `step.changed` status
+or substep frame, then coalesces additional observations into an actor-owned
+pending progress waterline. A durable self signal flushes that waterline at a
+maximum 30-second cadence. The signal cannot publish unless a newer genuine
+executor progress sequence is pending, so an operation that reports nothing
+remains silent. The 15-second SSE keepalive is transport liveness only and does
+not update the task step, `lastProgressAt`, or the actor progress sequence.
 
 Each in-flight operation records actor-committed `lastProgressAt`. A durable
 self timeout fenced by the complete operation key, operation generation, child

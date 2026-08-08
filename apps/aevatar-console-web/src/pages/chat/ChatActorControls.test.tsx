@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import React from 'react';
 import { ChatActorControls } from './ChatActorControls';
 import {
@@ -117,6 +117,15 @@ function callbacks() {
 }
 
 describe('ChatActorControls', () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-08-08T00:02:00Z'));
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
   it('renders the complete plan and resolves only the exact actor-owned gate', () => {
     const verify = stepFixture({
       stepId: 'step-verify',
@@ -336,5 +345,33 @@ describe('ChatActorControls', () => {
     expect(
       screen.queryByRole('button', { name: 'Open NyxID connection' }),
     ).not.toBeInTheDocument();
+  });
+
+  it('keeps a long running step live on progress frames and stalls only after silence', () => {
+    let updatedAt = new Date(Date.now()).toISOString();
+    const handlers = callbacks();
+    const { rerender } = render(
+      <ChatActorControls
+        projection={projectionFixture([stepFixture({ updatedAt })])}
+        {...handlers}
+      />,
+    );
+
+    for (let window = 0; window < 5; window += 1) {
+      act(() => jest.advanceTimersByTime(30_000));
+      updatedAt = new Date(Date.now()).toISOString();
+      rerender(
+        <ChatActorControls
+          projection={projectionFixture([stepFixture({ updatedAt })])}
+          {...handlers}
+        />,
+      );
+      expect(screen.queryByText('Stalled')).not.toBeInTheDocument();
+    }
+
+    act(() => jest.advanceTimersByTime(90_000));
+    expect(screen.queryByText('Stalled')).not.toBeInTheDocument();
+    act(() => jest.advanceTimersByTime(30_000));
+    expect(screen.getByText('Stalled')).toBeInTheDocument();
   });
 });

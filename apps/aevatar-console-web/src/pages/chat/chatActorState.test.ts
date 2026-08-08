@@ -145,13 +145,19 @@ describe('chatActorState', () => {
           payload: {
             taskId: 'task-alpha',
             planRevision: 3,
-            step: taskPlan('failed').steps[0],
+            step: {
+              ...taskPlan('failed').steps[0],
+              updatedAt: '2026-08-08T00:02:00Z',
+            },
             changeKind: 'status',
           },
         },
       }),
     );
     expect(changed.steps.get('step-alpha')?.status).toBe('failed');
+    expect(changed.steps.get('step-alpha')?.updatedAt).toBe(
+      '2026-08-08T00:02:00Z',
+    );
     expect(actorCan(changed, 'retry', 'step-alpha')).toBe(true);
   });
 

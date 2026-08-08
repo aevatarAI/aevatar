@@ -2765,6 +2765,7 @@ public sealed class NyxIdChatConversationGAgentTests
 
         var committed = await eventStore.GetEventsAsync(actorId);
         var progressed = committed[^1].EventData.Unpack<NyxIdChatOperationProgressedEvent>();
+        progressed.StepChangeKind.Should().Be(NyxIdChatStepChangeKind.Substep);
         var step = agent.State.ActiveTask.Steps.Single();
         step.Substeps.Should().ContainSingle().Which.Should().BeEquivalentTo(
             new NyxIdChatSubstepState
@@ -2806,6 +2807,118 @@ public sealed class NyxIdChatConversationGAgentTests
         });
         agent.State.ActiveTask.Steps.Single().Substeps.Single().Status.Should()
             .Be(NyxIdChatSubstepStatus.Done);
+    }
+
+    [Fact]
+    public async Task GenuineProgress_ShouldEmitBoundedThirtySecondStepChangesThenExposeSilence()
+    {
+        const string actorId = "conversation-cadence-alpha";
+        var eventStore = new InMemoryEventStoreForTests();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var startedAt = new DateTimeOffset(2026, 7, 24, 8, 0, 0, TimeSpan.Zero);
+        var clock = new MutableTimeProvider(startedAt);
+        using var services = BuildEventSourcingServices(eventStore, callbackScheduler: scheduler);
+        var agent = CreateController(services, actorId, timeProvider: clock);
+        await agent.ActivateAsync();
+        var start = CreateStartTurnCommand();
+        start.ConversationActorId = actorId;
+        await agent.HandleEventAsync(CreateEnvelope(actorId, start));
+        var key = agent.State.ActiveTask.Steps.Single().Operation.Key.Clone();
+
+        async Task ReportAsync(long sequence, string delta)
+        {
+            await agent.HandleOperationProgressAsync(new NyxIdChatOperationProgressSignal
+            {
+                Key = key.Clone(),
+                Sequence = sequence,
+                Text = new NyxIdChatTextProgress { Delta = delta },
+            });
+        }
+
+        await ReportAsync(1, "first genuine progress");
+        var first = (await eventStore.GetEventsAsync(actorId))[^1]
+            .EventData.Unpack<NyxIdChatOperationProgressedEvent>();
+        first.StepChangeKind.Should().Be(NyxIdChatStepChangeKind.Status);
+        NyxIdChatConversationAguiFrameBuilder.BuildProgressed(key.TurnId, first)
+            .Should().HaveCount(3, "text plus one bounded task/step heartbeat is published");
+
+        clock.Advance(TimeSpan.FromSeconds(1));
+        await ReportAsync(2, "coalesced progress one");
+        clock.Advance(TimeSpan.FromSeconds(19));
+        await ReportAsync(3, "coalesced progress two");
+
+        var progressEvents = (await eventStore.GetEventsAsync(actorId))
+            .Where(entry => entry.EventData.Is(NyxIdChatOperationProgressedEvent.Descriptor))
+            .Select(entry => entry.EventData.Unpack<NyxIdChatOperationProgressedEvent>())
+            .ToArray();
+        progressEvents[^2].StepChangeKind.Should().Be(NyxIdChatStepChangeKind.Unspecified);
+        progressEvents[^1].StepChangeKind.Should().Be(NyxIdChatStepChangeKind.Unspecified);
+        scheduler.TimeoutRequests.Count(request =>
+                request.TriggerEnvelope.Payload.Is(
+                    NyxIdChatOperationStepChangedDueSignal.Descriptor))
+            .Should().Be(1, "many token deltas share one durable cadence flush");
+
+        async Task FlushCadenceAtAsync(int targetSecond)
+        {
+            clock.Advance(startedAt.AddSeconds(targetSecond) - clock.GetUtcNow());
+            var due = scheduler.TimeoutRequests.Last(request =>
+                    request.TriggerEnvelope.Payload.Is(
+                        NyxIdChatOperationStepChangedDueSignal.Descriptor))
+                .TriggerEnvelope.Payload.Unpack<NyxIdChatOperationStepChangedDueSignal>();
+            await agent.HandleOperationStepChangedDueAsync(due);
+            var committed = (await eventStore.GetEventsAsync(actorId))[^1]
+                .EventData.Unpack<NyxIdChatOperationStepChangedCommittedEvent>();
+            committed.GenuineProgressSequence.Should()
+                .Be(agent.State.ActiveTask.Steps.Single().Operation.LatestProgressSequence);
+            var frame = NyxIdChatConversationAguiFrameBuilder.BuildProgressCadence(committed)[1]
+                .Custom.Payload.Unpack<NyxIdChatTaskStepChanged>();
+            frame.ChangeKind.Should().Be(NyxIdChatStepChangeKind.Status);
+        }
+
+        await FlushCadenceAtAsync(30);
+        clock.Advance(TimeSpan.FromSeconds(1));
+        await ReportAsync(4, "window two progress");
+        clock.Advance(TimeSpan.FromSeconds(19));
+        await ReportAsync(5, "window two latest");
+        await FlushCadenceAtAsync(60);
+        clock.Advance(TimeSpan.FromSeconds(1));
+        await ReportAsync(6, "window three progress");
+        clock.Advance(TimeSpan.FromSeconds(19));
+        await ReportAsync(7, "window three latest");
+        await FlushCadenceAtAsync(90);
+        clock.Advance(TimeSpan.FromSeconds(1));
+        await ReportAsync(8, "window four progress");
+        clock.Advance(TimeSpan.FromSeconds(28));
+        await ReportAsync(9, "window four latest");
+        await FlushCadenceAtAsync(120);
+
+        var noProgressDue = scheduler.TimeoutRequests.Last(request =>
+                request.TriggerEnvelope.Payload.Is(
+                    NyxIdChatOperationStepChangedDueSignal.Descriptor))
+            .TriggerEnvelope.Payload.Unpack<NyxIdChatOperationStepChangedDueSignal>();
+        var beforeSilentCadence = (await eventStore.GetEventsAsync(actorId)).Count;
+        await agent.HandleOperationStepChangedDueAsync(noProgressDue);
+        (await eventStore.GetEventsAsync(actorId)).Should().HaveCount(beforeSilentCadence,
+            "a timer without newer genuine executor progress cannot fabricate step.changed");
+
+        var originalStall = scheduler.TimeoutRequests.First(request =>
+                request.TriggerEnvelope.Payload.Is(NyxIdChatOperationStallCheckSignal.Descriptor))
+            .TriggerEnvelope.Payload.Unpack<NyxIdChatOperationStallCheckSignal>();
+        await agent.HandleOperationStallCheckAsync(originalStall);
+        agent.State.Attention.AttentionKind.Should().Be(NyxIdChatAttentionKind.None,
+            "continued genuine progress makes the original stall timer stale");
+
+        clock.Advance(TimeSpan.FromSeconds(119));
+        var silenceDeadline = scheduler.TimeoutRequests.Last(request =>
+                request.TriggerEnvelope.Payload.Is(NyxIdChatOperationStallCheckSignal.Descriptor))
+            .TriggerEnvelope.Payload.Unpack<NyxIdChatOperationStallCheckSignal>();
+        await agent.HandleOperationStallCheckAsync(silenceDeadline);
+        agent.State.Attention.AttentionKind.Should().Be(NyxIdChatAttentionKind.Stalled);
+        var stalled = (await eventStore.GetEventsAsync(actorId))[^1]
+            .EventData.Unpack<NyxIdChatOperationStalledEvent>();
+        NyxIdChatConversationAguiFrameBuilder.BuildStalled(stalled)[1]
+            .Custom.Payload.Unpack<NyxIdChatTaskStepChanged>()
+            .ChangeKind.Should().Be(NyxIdChatStepChangeKind.Status);
     }
 
     [Fact]
@@ -2864,6 +2977,17 @@ public sealed class NyxIdChatConversationGAgentTests
         });
         recovered.State.Attention.AttentionKind.Should().Be(NyxIdChatAttentionKind.None);
         recovered.State.ActiveTask.Steps.Single().Operation.StalledAt.Should().BeNull();
+        var liveProgress = (await eventStore.GetEventsAsync(actorId))[^1]
+            .EventData.Unpack<NyxIdChatOperationProgressedEvent>();
+        liveProgress.State.Attention.AttentionKind.Should().Be(NyxIdChatAttentionKind.None);
+        liveProgress.State.ActiveTask.Steps.Single().Operation.StalledAt.Should().BeNull();
+
+        var reloadedAfterProgress = CreateController(services, actorId, timeProvider: clock);
+        await reloadedAfterProgress.ActivateAsync();
+        reloadedAfterProgress.State.Attention.AttentionKind.Should()
+            .Be(NyxIdChatAttentionKind.None);
+        reloadedAfterProgress.State.ActiveTask.Steps.Single().Operation.StalledAt.Should()
+            .BeNull();
 
         var afterRecovery = (await eventStore.GetEventsAsync(actorId)).Count;
         var stale = signal.Clone();

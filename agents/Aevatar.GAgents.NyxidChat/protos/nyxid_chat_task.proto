@@ -372,6 +372,12 @@ message NyxIdChatOperationState {
   int64 latest_progress_sequence = 12;
   google.protobuf.Timestamp last_progress_at = 13;
   google.protobuf.Timestamp stalled_at = 14;
+  // Actor-owned presentation cadence state. A due signal may publish a
+  // step.changed only while pending_step_changed_progress_sequence identifies
+  // genuine executor progress that has not yet been presented.
+  google.protobuf.Timestamp last_step_changed_at = 15;
+  int64 pending_step_changed_progress_sequence = 16;
+  google.protobuf.Timestamp step_changed_due_at = 17;
 }
 
 message NyxIdChatTaskStepState {
@@ -1342,6 +1348,13 @@ message NyxIdChatOperationStallCheckSignal {
   google.protobuf.Timestamp expected_last_progress_at = 3;
 }
 
+// Durable self signal that flushes only previously committed genuine executor
+// progress into the bounded step.changed presentation cadence.
+message NyxIdChatOperationStepChangedDueSignal {
+  NyxIdChatOperationKey key = 1;
+  google.protobuf.Timestamp expected_due_at = 2;
+}
+
 message NyxIdChatStartTurnCommand {
   string scope_id = 1;
   string conversation_actor_id = 2;
@@ -1506,6 +1519,15 @@ message NyxIdChatOperationProgressedEvent {
   int64 progress_sequence = 2;
   google.protobuf.Timestamp committed_at = 3;
   NyxIdChatConversationGAgentState state = 4;
+  NyxIdChatStepChangeKind step_change_kind = 5;
+}
+
+message NyxIdChatOperationStepChangedCommittedEvent {
+  NyxIdChatOperationKey key = 1;
+  int64 genuine_progress_sequence = 2;
+  google.protobuf.Timestamp committed_at = 3;
+  int64 progress_sequence = 4;
+  NyxIdChatConversationGAgentState state = 5;
 }
 
 message NyxIdChatOperationStalledEvent {

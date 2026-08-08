@@ -681,6 +681,8 @@ public static class NyxIdChatTaskLifecycle
         if (step?.Operation is not null)
         {
             step.Operation.CompletedAt = now.Clone();
+            step.Operation.PendingStepChangedProgressSequence = 0;
+            step.Operation.StepChangedDueAt = null;
             step.UpdatedAt = now.Clone();
             step.AvailableActions = NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(step);
         }

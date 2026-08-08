@@ -195,6 +195,13 @@ public sealed class NyxIdChatCommittedStateProjectionActivationPlanProviderTests
         ];
         yield return
         [
+            new NyxIdChatOperationStepChangedCommittedEvent
+            {
+                Key = OperationKey("turn-1"),
+            },
+        ];
+        yield return
+        [
             new NyxIdChatOperationReconciledEvent
             {
                 Result = new NyxIdChatOperationResultSignal
@@ -277,6 +284,7 @@ public sealed class NyxIdChatCommittedStateProjectionActivationPlanProviderTests
         yield return [new NyxIdChatTurnStartedEvent()];
         yield return [new NyxIdChatOperationDispatchedEvent()];
         yield return [new NyxIdChatOperationProgressedEvent()];
+        yield return [new NyxIdChatOperationStepChangedCommittedEvent()];
         yield return [new NyxIdChatOperationReconciledEvent()];
         yield return [new NyxIdChatLateOperationEvidenceCommittedEvent()];
         yield return [new NyxIdChatControlFenceCommittedEvent()];

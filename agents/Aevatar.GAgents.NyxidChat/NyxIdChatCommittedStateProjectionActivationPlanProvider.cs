@@ -50,6 +50,8 @@ public sealed class NyxIdChatCommittedStateProjectionActivationPlanProvider
 
         if (eventData.Is(NyxIdChatOperationProgressedEvent.Descriptor))
             return eventData.Unpack<NyxIdChatOperationProgressedEvent>().Progress?.Key?.TurnId;
+        if (eventData.Is(NyxIdChatOperationStepChangedCommittedEvent.Descriptor))
+            return eventData.Unpack<NyxIdChatOperationStepChangedCommittedEvent>().Key?.TurnId;
         if (eventData.Is(NyxIdChatOperationStalledEvent.Descriptor))
             return eventData.Unpack<NyxIdChatOperationStalledEvent>().Key?.TurnId;
 

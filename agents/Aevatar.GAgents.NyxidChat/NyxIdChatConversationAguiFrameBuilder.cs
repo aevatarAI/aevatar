@@ -58,21 +58,6 @@ internal static class NyxIdChatConversationAguiFrameBuilder
         if (progressed.Progress is null || progressed.ProgressSequence <= 0)
             return [];
 
-        if (progressed.Progress.ProgressCase ==
-            NyxIdChatOperationProgressSignal.ProgressOneofCase.Phase)
-        {
-            var task = progressed.State?.ActiveTask;
-            var step = task?.Steps.FirstOrDefault(candidate =>
-                KeysEqual(candidate.Operation?.Key, progressed.Progress.Key));
-            return step is null
-                ? []
-                : BuildTaskFrames(
-                    task,
-                    [step],
-                    progressed.ProgressSequence,
-                    NyxIdChatStepChangeKind.Substep);
-        }
-
         var frame = progressed.Progress.ProgressCase switch
         {
             NyxIdChatOperationProgressSignal.ProgressOneofCase.Text => new AGUIEvent
@@ -102,13 +87,48 @@ internal static class NyxIdChatConversationAguiFrameBuilder
                         progressed.Progress.ToolStarted.ToolName),
                 },
             },
+            NyxIdChatOperationProgressSignal.ProgressOneofCase.Phase => null,
             _ => null,
         };
-        if (frame is null)
-            return [];
+        var frames = new List<AGUIEvent>();
+        if (frame is not null)
+        {
+            frame.Sequence = progressed.ProgressSequence;
+            frames.Add(frame);
+        }
 
-        frame.Sequence = progressed.ProgressSequence;
-        return [frame];
+        if (progressed.StepChangeKind != NyxIdChatStepChangeKind.Unspecified)
+        {
+            var task = progressed.State?.ActiveTask;
+            var step = task?.Steps.FirstOrDefault(candidate =>
+                KeysEqual(candidate.Operation?.Key, progressed.Progress.Key));
+            if (step is not null)
+            {
+                frames.AddRange(BuildTaskFrames(
+                    task!,
+                    [step],
+                    progressed.ProgressSequence,
+                    progressed.StepChangeKind));
+            }
+        }
+
+        return frames;
+    }
+
+    public static IReadOnlyList<AGUIEvent> BuildProgressCadence(
+        NyxIdChatOperationStepChangedCommittedEvent committed)
+    {
+        ArgumentNullException.ThrowIfNull(committed);
+        var task = committed.State?.ActiveTask;
+        var step = task?.Steps.FirstOrDefault(candidate =>
+            KeysEqual(candidate.Operation?.Key, committed.Key));
+        return step is null || committed.ProgressSequence <= 0
+            ? []
+            : BuildTaskFrames(
+                task!,
+                [step],
+                committed.ProgressSequence,
+                NyxIdChatStepChangeKind.Status);
     }
 
     public static IReadOnlyList<AGUIEvent> BuildStalled(NyxIdChatOperationStalledEvent stalled)
@@ -120,9 +140,10 @@ internal static class NyxIdChatConversationAguiFrameBuilder
         return step is null || stalled.ProgressSequence <= 0
             ? []
             : BuildTaskFrames(
-                task,
+                task!,
                 [step],
-                stalled.ProgressSequence);
+                stalled.ProgressSequence,
+                NyxIdChatStepChangeKind.Status);
     }
 
     public static IReadOnlyList<AGUIEvent> BuildReconciled(

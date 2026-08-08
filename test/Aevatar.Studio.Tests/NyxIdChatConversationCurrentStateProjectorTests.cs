@@ -165,6 +165,48 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
     }
 
     [Fact]
+    public async Task ProjectAsync_ProgressAfterStall_ShouldExposeClearedCurrentAttention()
+    {
+        var dispatcher = new RecordingWriteDispatcher();
+        var projector = new NyxIdChatConversationCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-07-25T06:30:00Z")));
+        var state = BuildState();
+        var progressedAt = Timestamp.FromDateTimeOffset(
+            DateTimeOffset.Parse("2026-07-25T06:12:30Z"));
+        var active = state.ActiveTask.Steps.Single(step => step.StepId == "step-beta");
+        state.PendingApproval = null;
+        active.Status = NyxIdChatStepStatus.Running;
+        active.Operation.StalledAt = null;
+        active.Operation.LastProgressAt = progressedAt.Clone();
+        active.UpdatedAt = progressedAt.Clone();
+        state.Attention = new NyxIdChatConversationAttentionState
+        {
+            TaskStatus = NyxIdChatTaskStatus.Active,
+            AttentionKind = NyxIdChatAttentionKind.None,
+            ActiveStepSummary = active.Description,
+        };
+
+        await projector.ProjectAsync(
+            NewContext(),
+            WrapCommitted(
+                new NyxIdChatOperationProgressedEvent { State = state.Clone() },
+                state,
+                version: 18,
+                eventId: "event-alpha-18",
+                stateEventTimestamp: progressedAt.ToDateTimeOffset()));
+
+        var document = dispatcher.Upserts.Should().ContainSingle().Subject;
+        document.AttentionKind.Should().Be("none");
+        document.AttentionSince.Should().BeNull();
+        var current = document.ActiveTask.Steps.Single(step => step.StepId == "step-beta");
+        current.Status.Should().Be("running");
+        current.UpdatedAt.Should().Be(progressedAt);
+        current.Operation.LastProgressAt.Should().Be(progressedAt);
+        current.Operation.StalledAt.Should().BeNull();
+    }
+
+    [Fact]
     public async Task ProjectAsync_ShouldCopyAuthoritativeToolRecoverySourceWithoutInference()
     {
         var dispatcher = new RecordingWriteDispatcher();

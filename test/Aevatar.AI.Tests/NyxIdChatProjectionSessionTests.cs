@@ -1194,6 +1194,57 @@ public sealed class NyxIdChatProjectionSessionTests
     }
 
     [Fact]
+    public async Task Projector_GenuineProgressCadenceAndStall_ShouldEmitStatusStepChanges()
+    {
+        var hub = new RecordingSessionEventHub();
+        var projector = new NyxIdChatSessionEventProjector(hub);
+        var context = ControllerContext();
+        var state = ControllerState(NyxIdChatTaskStatus.Active, NyxIdChatTurnStatus.Active);
+        var key = state.ActiveTask.Steps.Single().Operation.Key.Clone();
+
+        await projector.ProjectAsync(
+            context,
+            CommittedEnvelope(
+                context.RootActorId,
+                new NyxIdChatOperationStepChangedCommittedEvent
+                {
+                    Key = key.Clone(),
+                    GenuineProgressSequence = 7,
+                    ProgressSequence = 6,
+                    State = state.Clone(),
+                },
+                stateVersion: 12),
+            CancellationToken.None);
+
+        var stalledState = state.Clone();
+        stalledState.ProgressSequence = 7;
+        stalledState.ActiveTask.Steps.Single().Operation.StalledAt =
+            Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-08T00:02:00Z"));
+        await projector.ProjectAsync(
+            context,
+            CommittedEnvelope(
+                context.RootActorId,
+                new NyxIdChatOperationStalledEvent
+                {
+                    Key = key,
+                    ExpectedProgressSequence = 7,
+                    ProgressSequence = 7,
+                    State = stalledState,
+                },
+                stateVersion: 13),
+            CancellationToken.None);
+
+        hub.Published.Should().HaveCount(4);
+        hub.Published.Where(entry =>
+                entry.Event.Custom?.Name == "nyxid.task.step.changed")
+            .Select(entry => entry.Event.Custom.Payload.Unpack<NyxIdChatTaskStepChanged>()
+                .ChangeKind)
+            .Should().Equal(
+                NyxIdChatStepChangeKind.Status,
+                NyxIdChatStepChangeKind.Status);
+    }
+
+    [Fact]
     public async Task Projector_ControllerFailure_ShouldEmitOneErrorTerminalAndNoFinishedTerminal()
     {
         var hub = new RecordingSessionEventHub();
