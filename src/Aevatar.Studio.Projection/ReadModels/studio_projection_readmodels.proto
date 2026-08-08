@@ -736,6 +736,21 @@ message NyxIdChatConversationCurrentStateDocument {
   repeated NyxIdChatConversationActionDocument recent_actions = 39;
   NyxIdChatConversationStepControlResultDocument latest_step_control_result = 40;
   repeated NyxIdChatConversationStepControlResultDocument recent_step_control_results = 41;
+  NyxIdChatConversationCanaryEffectFaultDocument canary_effect_fault = 42;
+}
+
+message NyxIdChatConversationCanaryEffectFaultDocument {
+  string arm_id = 1;
+  string status = 2;
+  string turn_id = 3;
+  string task_id = 4;
+  string step_id = 5;
+  string operation_id = 6;
+  int64 operation_generation = 7;
+  google.protobuf.Timestamp expires_at = 8;
+  google.protobuf.Timestamp consumed_at = 9;
+  google.protobuf.Timestamp forwarded_at = 10;
+  google.protobuf.Timestamp armed_at = 11;
 }
 
 // ─── Chat History Create Recovery Current State ReadModel ───

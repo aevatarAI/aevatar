@@ -67,6 +67,9 @@ public static class ServiceCollectionExtensions
         var assistantActionsOptions = BindAssistantActionsOptions(configuration);
         services.TryAddSingleton(assistantActionsOptions);
         services.TryAddSingleton(BindPlanGateOptions(configuration));
+        services.TryAddSingleton(BindCanaryEffectFaultOptions(configuration));
+        services.TryAddSingleton<INyxIdChatCanaryEffectFaultAuthorizationPolicy,
+            NyxIdChatCanaryEffectFaultAuthorizationPolicy>();
         if (assistantActionsOptions.Enabled)
         {
             services.TryAddSingleton<NyxIdAssistantActionRegistrySnapshot>();
@@ -415,5 +418,13 @@ public static class ServiceCollectionExtensions
         }
 
         return options;
+    }
+
+    private static NyxIdChatCanaryEffectFaultOptions BindCanaryEffectFaultOptions(
+        IConfiguration? configuration)
+    {
+        var enabled = configuration?.GetValue<bool>(
+            $"{NyxIdChatCanaryEffectFaultOptions.ConfigSection}:Enabled") == true;
+        return new NyxIdChatCanaryEffectFaultOptions { Enabled = enabled };
     }
 }

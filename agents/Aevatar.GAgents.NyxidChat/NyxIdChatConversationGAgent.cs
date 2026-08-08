@@ -121,6 +121,10 @@ public sealed class NyxIdChatConversationGAgent
             .On<NyxIdChatInputResolutionCommittedEvent>(ApplyInputResolutionCommitted)
             .On<NyxIdChatApprovalResolutionCommittedEvent>(ApplyApprovalResolutionCommitted)
             .On<NyxIdChatPlanResolutionCommittedEvent>(ApplyPlanResolutionCommitted)
+            .On<NyxIdChatCanaryEffectFaultArmedCommittedEvent>(
+                ApplyCanaryEffectFaultArmedCommitted)
+            .On<NyxIdChatCanaryEffectFaultConsumedCommittedEvent>(
+                ApplyCanaryEffectFaultConsumedCommitted)
             .On<NyxIdChatPlanGateCapabilityExpiredCommittedEvent>(
                 ApplyPlanGateCapabilityExpiredCommitted)
             .On<NyxIdChatPlanGateAdmissionRevocationAcknowledgedEvent>(
@@ -1933,6 +1937,17 @@ public sealed class NyxIdChatConversationGAgent
 
         var admitted = State.ActiveTurnPlanGateAdmission?.Clone();
         var nextState = NyxIdChatNeedsYouDecisions.RefreshAttention(decision.State);
+        var nextCommand = decision.NextCommand;
+        if (nextCommand?.PlanGateContinuation is not null)
+        {
+            var directive = NyxIdChatCanaryEffectFaultDecisions.ForwardForPlanResolution(
+                nextState,
+                command,
+                nextCommand,
+                Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()));
+            if (directive is not null)
+                nextCommand.PlanGateContinuation.CanaryEffectFault = directive;
+        }
         if (!decision.Resolution.Confirmed && admitted is not null)
         {
             PreparePlanGateAdmissionRevocation(
@@ -1950,13 +1965,53 @@ public sealed class NyxIdChatConversationGAgent
         if (State.PendingPlanGateAdmissionRevocation is not null)
             await DispatchPendingPlanGateAdmissionRevocationAsync(CancellationToken.None);
 
-        if (decision.NextCommand is not null)
+        if (nextCommand is not null)
         {
             await DispatchAuthorizedOperationAsync(
-                decision.NextCommand,
+                nextCommand,
                 command.CorrelationId,
                 Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()));
         }
+    }
+
+    [EventHandler]
+    public async Task HandleCanaryEffectFaultArmAsync(NyxIdChatCanaryEffectFaultArmCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (!NyxIdChatCanaryEffectFaultDecisions.TryArm(
+                State,
+                command,
+                CurrentCommittedVersion(),
+                Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
+                out var next))
+        {
+            return;
+        }
+
+        await PersistDomainEventAsync(new NyxIdChatCanaryEffectFaultArmedCommittedEvent
+        {
+            State = next,
+        }, CancellationToken.None);
+    }
+
+    [EventHandler]
+    public async Task HandleCanaryEffectFaultConsumedAsync(
+        NyxIdChatCanaryEffectFaultConsumedSignal signal)
+    {
+        ArgumentNullException.ThrowIfNull(signal);
+        if (!NyxIdChatCanaryEffectFaultDecisions.TryMarkConsumed(
+                State,
+                signal,
+                Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
+                out var next))
+        {
+            return;
+        }
+
+        await PersistDomainEventAsync(new NyxIdChatCanaryEffectFaultConsumedCommittedEvent
+        {
+            State = next,
+        }, CancellationToken.None);
     }
 
     [EventHandler]
@@ -3661,6 +3716,16 @@ public sealed class NyxIdChatConversationGAgent
     private static NyxIdChatConversationGAgentState ApplyPlanResolutionCommitted(
         NyxIdChatConversationGAgentState current,
         NyxIdChatPlanResolutionCommittedEvent evt) =>
+        evt.State?.Clone() ?? current;
+
+    private static NyxIdChatConversationGAgentState ApplyCanaryEffectFaultArmedCommitted(
+        NyxIdChatConversationGAgentState current,
+        NyxIdChatCanaryEffectFaultArmedCommittedEvent evt) =>
+        evt.State?.Clone() ?? current;
+
+    private static NyxIdChatConversationGAgentState ApplyCanaryEffectFaultConsumedCommitted(
+        NyxIdChatConversationGAgentState current,
+        NyxIdChatCanaryEffectFaultConsumedCommittedEvent evt) =>
         evt.State?.Clone() ?? current;
 
     private static NyxIdChatConversationGAgentState ApplyPlanGateCapabilityExpiredCommitted(

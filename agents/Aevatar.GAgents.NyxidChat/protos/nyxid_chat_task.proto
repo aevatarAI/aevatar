@@ -232,6 +232,14 @@ enum NyxIdChatRecoveryKind {
   NYX_ID_CHAT_RECOVERY_KIND_OPERATION_RESULT_DELIVERY_WATCHDOG = 4;
 }
 
+enum NyxIdChatCanaryEffectFaultStatus {
+  NYX_ID_CHAT_CANARY_EFFECT_FAULT_STATUS_UNSPECIFIED = 0;
+  NYX_ID_CHAT_CANARY_EFFECT_FAULT_STATUS_ARMED = 1;
+  NYX_ID_CHAT_CANARY_EFFECT_FAULT_STATUS_CONSUMED = 2;
+  NYX_ID_CHAT_CANARY_EFFECT_FAULT_STATUS_EXPIRED = 3;
+  NYX_ID_CHAT_CANARY_EFFECT_FAULT_STATUS_FORWARDED = 4;
+}
+
 enum NyxIdAssistantActionKind {
   NYX_ID_ASSISTANT_ACTION_KIND_UNSPECIFIED = 0;
   NYX_ID_ASSISTANT_ACTION_KIND_SERVICE_CONNECT = 1;
@@ -271,6 +279,26 @@ message NyxIdChatOperationKey {
   string step_id = 4;
   string operation_id = 5;
   int64 operation_generation = 6;
+}
+
+// Owner-bound, one-shot production canary directive. It is server-authored,
+// secret-free, and valid only for the exact generation-1 effect operation.
+message NyxIdChatCanaryEffectFaultDirective {
+  string arm_id = 1;
+  string client_request_id = 2;
+  NyxIdChatOperationKey key = 3;
+  string service_instance_id = 4;
+  string catalog_digest = 5;
+  string owner_subject = 6;
+  google.protobuf.Timestamp expires_at = 7;
+}
+
+message NyxIdChatCanaryEffectFaultState {
+  NyxIdChatCanaryEffectFaultDirective directive = 1;
+  NyxIdChatCanaryEffectFaultStatus status = 2;
+  google.protobuf.Timestamp armed_at = 3;
+  google.protobuf.Timestamp consumed_at = 4;
+  google.protobuf.Timestamp forwarded_at = 5;
 }
 
 message NyxIdChatAvailableActions {
@@ -1052,6 +1080,9 @@ message NyxIdChatConversationGAgentState {
   // ambiguous. Recovery cannot start until the turn actor proves that this
   // exact operation committed or durably fences it against late delivery.
   NyxIdChatOperationKey pending_operation_delivery_probe = 41;
+  // Owner-only, one-shot canary fact. The actor is the sole authority; only a
+  // safe status projection leaves this state boundary.
+  NyxIdChatCanaryEffectFaultState canary_effect_fault = 42;
 }
 
 message NyxIdChatPlanGateAdmissionRevocationOutbox {
@@ -1224,6 +1255,9 @@ message NyxIdChatTurnGAgentState {
   // operation was not admitted. A delayed exact command cannot execute after
   // the conversation actor has relied on that negative result.
   repeated NyxIdChatOperationKey fenced_operation_deliveries = 26;
+  NyxIdChatCanaryEffectFaultDirective canary_effect_fault = 27;
+  bool canary_effect_fault_consumed = 28;
+  google.protobuf.Timestamp canary_effect_fault_consumed_at = 29;
 }
 
 message NyxIdChatTurnOperationAdmittedEvent {
@@ -1240,6 +1274,7 @@ message NyxIdChatTurnOperationAdmittedEvent {
   aevatar.credentials.DurableCallerCredentialRef recovery_credential = 11;
   aevatar.ai.tool_providers.AgentToolOperationReadBackPayload recovery_read_back = 12;
   string recovery_effect_step_id = 13;
+  NyxIdChatCanaryEffectFaultDirective canary_effect_fault = 14;
 }
 
 message NyxIdChatTurnPlanGateAdmissionCommand {
@@ -1293,6 +1328,7 @@ message NyxIdChatPlanGateCapabilityExpiredSignal {
 message NyxIdChatTurnEffectDispatchStartedEvent {
   NyxIdChatOperationKey key = 1;
   google.protobuf.Timestamp started_at = 2;
+  string consumed_canary_effect_fault_arm_id = 3;
 }
 
 message NyxIdChatTurnOperationReconciliationStartedEvent {
@@ -1407,6 +1443,7 @@ message NyxIdChatPlanGateContinuationInput {
   aevatar.ai.AgentProfileSnapshot agent_profile = 13;
   aevatar.ai.AgentProfileTurnAuthorityState agent_profile_turn_authority = 14;
   bool rematerialize_durable_authorization = 15;
+  NyxIdChatCanaryEffectFaultDirective canary_effect_fault = 16;
 }
 
 message NyxIdChatOperationDispatchCommand {
@@ -1748,6 +1785,22 @@ message NyxIdChatPlanResolveCommand {
   string correlation_id = 10;
   aevatar.ai.AgentToolExecutionContextPayload tool_context = 11;
   string plan_id = 12;
+  string owner_subject = 13;
+}
+
+message NyxIdChatCanaryEffectFaultArmCommand {
+  string scope_id = 1;
+  string conversation_actor_id = 2;
+  string arm_id = 3;
+  string client_request_id = 4;
+  NyxIdChatOperationKey key = 5;
+  string service_instance_id = 6;
+  string catalog_digest = 7;
+  string owner_subject = 8;
+  google.protobuf.Timestamp expires_at = 9;
+  int64 expected_state_version = 10;
+  string command_id = 11;
+  string correlation_id = 12;
 }
 
 message NyxIdChatActionContinueCommand {
@@ -1789,6 +1842,15 @@ message NyxIdChatTurnOperationDeliveryStatusSignal {
   NyxIdChatOperationKey key = 1;
   bool admitted = 2;
   NyxIdChatEffectEvidence effect_dispatch_waterline = 3;
+}
+
+// Turn-owned acknowledgement emitted only after the effect dispatch-started
+// event has atomically consumed the exact one-shot directive.
+message NyxIdChatCanaryEffectFaultConsumedSignal {
+  string arm_id = 1;
+  NyxIdChatOperationKey key = 2;
+  string turn_actor_id = 3;
+  google.protobuf.Timestamp consumed_at = 4;
 }
 
 message NyxIdChatOperationDeliveryProbeDispatchRequested {
@@ -1914,6 +1976,14 @@ message NyxIdChatApprovalResolutionCommittedEvent {
 message NyxIdChatPlanResolutionCommittedEvent {
   NyxIdChatPlanResolutionState resolution = 1;
   NyxIdChatConversationGAgentState state = 2;
+}
+
+message NyxIdChatCanaryEffectFaultArmedCommittedEvent {
+  NyxIdChatConversationGAgentState state = 1;
+}
+
+message NyxIdChatCanaryEffectFaultConsumedCommittedEvent {
+  NyxIdChatConversationGAgentState state = 1;
 }
 
 message NyxIdChatPlanGateCapabilityExpiredCommittedEvent {

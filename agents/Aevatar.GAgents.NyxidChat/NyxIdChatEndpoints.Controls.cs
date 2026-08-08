@@ -4,6 +4,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Capabilities;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -33,6 +34,9 @@ public static partial class NyxIdChatEndpoints
         group.MapPost(
             "/{scopeId}/nyxid-chat/conversations/{actorId}/plans/{taskId}:resolve",
             HandlePlanResolveControlAsync);
+        group.MapPost(
+            "/{scopeId}/nyxid-chat/conversations/{actorId}:arm-effect-fault-canary",
+            HandleCanaryEffectFaultArmControlAsync);
     }
 
     private static async Task<IResult> HandleStopControlAsync(
@@ -403,12 +407,14 @@ public static partial class NyxIdChatEndpoints
             return admissionError;
 
         var (commandId, correlationId) = CreateControlTraceIdentity();
+        AevatarPrincipalSubjectResolver.TryResolveNyxIdSubject(http.User, out var ownerSubject);
         var receipt = await commandPort.DispatchPlanResolveAsync(new NyxIdChatPlanResolveCommand
         {
             ScopeId = identity.ScopeId,
             ConversationActorId = identity.ActorId,
             TaskId = normalizedTaskId,
             PlanId = normalizedPlanId,
+            OwnerSubject = ownerSubject,
             PlanRevision = request.PlanRevision,
             RequestId = identity.RequestId,
             ClientRequestId = identity.ClientRequestId,
@@ -416,9 +422,90 @@ public static partial class NyxIdChatEndpoints
             ExpectedStateVersion = request.ExpectedStateVersion,
             CommandId = commandId,
             CorrelationId = correlationId,
-            ToolContext = ToToolContextPayload(credentials!),
+            ToolContext = (AgentToolExecutionContext.Empty with
+            {
+                Credentials = credentials!,
+                Caller = new AgentToolCallerContext(
+                    identity.ScopeId,
+                    ownerSubject,
+                    identity.RequestId),
+            }).ToPayload(),
         }, ct).ConfigureAwait(false);
         return AcceptedControl(http, identity.ScopeId, identity.ActorId, receipt);
+    }
+
+    private static async Task<IResult> HandleCanaryEffectFaultArmControlAsync(
+        HttpContext http,
+        string scopeId,
+        string actorId,
+        NyxIdChatCanaryEffectFaultArmRequest request,
+        [FromServices] IScopeResourceAdmissionPort admissionPort,
+        [FromServices] INyxIdChatControlCommandPort commandPort,
+        [FromServices] INyxIdChatCanaryEffectFaultAuthorizationPolicy canaryAuthorization,
+        CancellationToken ct)
+    {
+        if (!AevatarPrincipalSubjectResolver.TryResolveNyxIdSubject(
+                http.User,
+                out var ownerSubject) ||
+            !canaryAuthorization.CanArm(ownerSubject))
+        {
+            return Results.NotFound();
+        }
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+        if (!TryValidateControlIdentity(scopeId, out var normalizedScopeId) ||
+            !TryValidateControlIdentity(actorId, out var normalizedActorId) ||
+            !TryValidateControlIdentity(request.ArmId, out var armId) ||
+            !TryValidateControlIdentity(request.ClientRequestId, out var clientRequestId) ||
+            !TryValidateControlIdentity(request.TurnId, out var turnId) ||
+            !TryValidateControlIdentity(request.TaskId, out var taskId) ||
+            !TryValidateControlIdentity(request.StepId, out var stepId) ||
+            !TryValidateControlIdentity(request.OperationId, out var operationId) ||
+            !TryValidateControlIdentity(request.ServiceInstanceId, out var serviceInstanceId) ||
+            string.IsNullOrWhiteSpace(request.CatalogDigest) ||
+            request.OperationGeneration != 1 ||
+            request.ExpectedStateVersion < 0 ||
+            request.ExpiresAt <= DateTimeOffset.UtcNow)
+        {
+            return InvalidControlRequest();
+        }
+
+        var admissionError = await AuthorizeConversationAsync(
+            admissionPort,
+            normalizedScopeId,
+            normalizedActorId,
+            ScopeResourceOperation.Control,
+            ct).ConfigureAwait(false);
+        if (admissionError is not null)
+            return admissionError;
+
+        var (commandId, correlationId) = CreateControlTraceIdentity();
+        var receipt = await commandPort.DispatchCanaryEffectFaultArmAsync(
+            new NyxIdChatCanaryEffectFaultArmCommand
+            {
+                ScopeId = normalizedScopeId,
+                ConversationActorId = normalizedActorId,
+                ArmId = armId,
+                ClientRequestId = clientRequestId,
+                Key = new NyxIdChatOperationKey
+                {
+                    ConversationActorId = normalizedActorId,
+                    TurnId = turnId,
+                    TaskId = taskId,
+                    StepId = stepId,
+                    OperationId = operationId,
+                    OperationGeneration = request.OperationGeneration,
+                },
+                ServiceInstanceId = serviceInstanceId,
+                CatalogDigest = request.CatalogDigest.Trim(),
+                OwnerSubject = ownerSubject,
+                ExpiresAt = Timestamp.FromDateTimeOffset(request.ExpiresAt),
+                ExpectedStateVersion = request.ExpectedStateVersion,
+                CommandId = commandId,
+                CorrelationId = correlationId,
+            },
+            ct).ConfigureAwait(false);
+        return AcceptedControl(http, normalizedScopeId, normalizedActorId, receipt);
     }
 
     private static AgentToolExecutionContextPayload BuildControlToolContext(
@@ -663,5 +750,18 @@ public static partial class NyxIdChatEndpoints
         string? PlanId,
         int PlanRevision,
         bool Confirmed,
+        long ExpectedStateVersion);
+
+    public sealed record NyxIdChatCanaryEffectFaultArmRequest(
+        string? ArmId,
+        string? ClientRequestId,
+        string? TurnId,
+        string? TaskId,
+        string? StepId,
+        string? OperationId,
+        long OperationGeneration,
+        string? ServiceInstanceId,
+        string? CatalogDigest,
+        DateTimeOffset ExpiresAt,
         long ExpectedStateVersion);
 }

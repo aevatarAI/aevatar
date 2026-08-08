@@ -38,6 +38,9 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
         "NYXID_CHAT_PLAN_GATE_CAPABILITY_EXPIRED";
     private const string PlanGateCapabilityExpiredMessage =
         "The admitted plan can no longer execute after recovery. Re-plan from a safe checkpoint.";
+    internal const string CanaryEffectFaultCode = "NYXID_CHAT_CANARY_EFFECT_DISPATCH_AMBIGUOUS";
+    private const string CanaryEffectFaultMessage =
+        "The external operation may have changed state and requires exact read-back.";
 
     private readonly INyxIdChatTurnOperationDispatchSession _operationDispatchSession;
     private readonly IActorDispatchPort _actorDispatchPort;
@@ -83,6 +86,9 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
         await base.OnActivateAsync(ct);
+        if (State.CanaryEffectFaultConsumed)
+            await TryDispatchCanaryEffectFaultConsumedAsync(ct);
+
         if (State.PlanGateAdmission is
             {
                 RematerializeDurableAuthorization: false,
@@ -211,6 +217,8 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
 
         if (KeysEqual(State.AdmittedOperation, command.Key))
         {
+            if (State.CanaryEffectFaultConsumed)
+                await TryDispatchCanaryEffectFaultConsumedAsync(CancellationToken.None);
             await DispatchOperationDeliveryStatusAsync(
                 command.Key,
                 admitted: true,
@@ -240,6 +248,12 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
         var idempotent = command.Tool?.Idempotent == true;
         var idempotencyKey = ResolveIdempotencyKey(command);
         var operationAdmission = ResolveOperationAdmission(command);
+        var canaryEffectFault = NyxIdChatCanaryEffectFaultDecisions.MatchesTurnDispatch(
+            command.PlanGateContinuation?.CanaryEffectFault,
+            command,
+            admittedAt)
+            ? command.PlanGateContinuation!.CanaryEffectFault.Clone()
+            : null;
         await HydrateFrozenVerificationContextAsync(command);
         var recovery = await PrepareRecoveryAdmissionAsync(command, operationAdmission);
         var admitted = new NyxIdChatTurnOperationAdmittedEvent
@@ -263,6 +277,8 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
             admitted.RecoveryCredential = recovery.Credential;
         if (recovery.ReadBack is not null)
             admitted.RecoveryReadBack = recovery.ReadBack;
+        if (canaryEffectFault is not null)
+            admitted.CanaryEffectFault = canaryEffectFault;
         await PersistDomainEventAsync(admitted, CancellationToken.None);
 
         if (State.RecoveryCredential is not null)
@@ -275,11 +291,26 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
 
         if (NyxIdChatTurnOperationDispatchPort.MayDispatchExternalEffect(command))
         {
-            await PersistDomainEventAsync(new NyxIdChatTurnEffectDispatchStartedEvent
+            var dispatchStarted = new NyxIdChatTurnEffectDispatchStartedEvent
             {
                 Key = command.Key.Clone(),
                 StartedAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
-            }, CancellationToken.None);
+            };
+            if (State.CanaryEffectFault is not null)
+                dispatchStarted.ConsumedCanaryEffectFaultArmId = State.CanaryEffectFault.ArmId;
+            await PersistDomainEventAsync(dispatchStarted, CancellationToken.None);
+        }
+
+        if (State.CanaryEffectFaultConsumed)
+        {
+            await TryDispatchCanaryEffectFaultConsumedAsync(CancellationToken.None);
+            await CompleteAndDeliverAsync(CanaryEffectFaultResult(command.Key));
+            await DispatchOperationDeliveryStatusAsync(
+                command.Key,
+                admitted: true,
+                State.EffectDispatchWaterline,
+                CancellationToken.None);
+            return;
         }
 
         try
@@ -426,6 +457,13 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
             State.ResultDelivered ||
             !KeysEqual(State.AdmittedOperation, signal.Key))
         {
+            return;
+        }
+
+        if (State.CanaryEffectFaultConsumed)
+        {
+            await TryDispatchCanaryEffectFaultConsumedAsync(CancellationToken.None);
+            await CompleteAndDeliverAsync(CanaryEffectFaultResult(signal.Key));
             return;
         }
 
@@ -682,6 +720,18 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
         {
             FailureCode = UnavailableNyxIdChatTurnOperationReconciliationPort.OutcomeUncertainCode,
             SafeMessage = "The external operation may have changed state and could not be reconciled.",
+            ExternalEffect = NyxIdChatEffectEvidence.MayHaveChanged,
+        },
+    };
+
+    private static NyxIdChatOperationResultSignal CanaryEffectFaultResult(
+        NyxIdChatOperationKey key) => new()
+    {
+        Key = key.Clone(),
+        Failure = new NyxIdChatOperationFailure
+        {
+            FailureCode = CanaryEffectFaultCode,
+            SafeMessage = CanaryEffectFaultMessage,
             ExternalEffect = NyxIdChatEffectEvidence.MayHaveChanged,
         },
     };
@@ -1003,6 +1053,8 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
         next.RecoveryCredential = evt.RecoveryCredential?.Clone();
         next.RecoveryReadBack = evt.RecoveryReadBack?.Clone();
         next.RecoveryEffectStepId = evt.RecoveryEffectStepId;
+        next.CanaryEffectFault = evt.CanaryEffectFault?.Clone();
+        next.CanaryEffectFaultConsumed = false;
         if (evt.ConsumesPlanGateAdmission)
             next.PlanGateAdmission = null;
         next.ReconciliationStartedAt = null;
@@ -1097,6 +1149,16 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
         var next = current.Clone();
         next.EffectDispatchWaterline = NyxIdChatEffectEvidence.MayHaveChanged;
         next.EffectDispatchStartedAt = evt.StartedAt?.Clone();
+        next.CanaryEffectFaultConsumed =
+            next.CanaryEffectFault is not null &&
+            !string.IsNullOrWhiteSpace(evt.ConsumedCanaryEffectFaultArmId) &&
+            string.Equals(
+                next.CanaryEffectFault.ArmId,
+                evt.ConsumedCanaryEffectFaultArmId,
+                StringComparison.Ordinal);
+        next.CanaryEffectFaultConsumedAt = next.CanaryEffectFaultConsumed
+            ? evt.StartedAt?.Clone()
+            : null;
         return next;
     }
 
@@ -1333,6 +1395,48 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
             key.ConversationActorId,
             envelope,
             ct);
+    }
+
+    private async Task TryDispatchCanaryEffectFaultConsumedAsync(CancellationToken ct)
+    {
+        var directive = State.CanaryEffectFault;
+        if (!State.CanaryEffectFaultConsumed ||
+            directive?.Key is null ||
+            State.CanaryEffectFaultConsumedAt is null)
+        {
+            return;
+        }
+
+        var signal = new NyxIdChatCanaryEffectFaultConsumedSignal
+        {
+            ArmId = directive.ArmId,
+            Key = directive.Key.Clone(),
+            TurnActorId = Id,
+            ConsumedAt = State.CanaryEffectFaultConsumedAt.Clone(),
+        };
+        var envelope = CreateDirectEnvelope(
+            directive.Key.ConversationActorId,
+            $"{directive.ArmId}:canary-effect-fault-consumed",
+            signal);
+        try
+        {
+            await _actorDispatchPort.DispatchAsync(
+                directive.Key.ConversationActorId,
+                envelope,
+                ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            Logger.LogWarning(
+                exception,
+                "NyxIdChat canary consumption acknowledgement failed: turnActor={TurnActorId} operation={OperationId}",
+                Id,
+                directive.Key.OperationId);
+        }
     }
 
     private bool IsValidOperationDeliveryProbe(NyxIdChatOperationKey? key) =>

@@ -192,7 +192,25 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
             NullIfEmpty(document.ActiveStepSummary),
             document.RecentActions.Select(ToAction).ToArray(),
             ToStepControlResult(document.LatestStepControlResult),
-            document.RecentStepControlResults.Select(result => ToStepControlResult(result)!).ToArray());
+            document.RecentStepControlResults.Select(result => ToStepControlResult(result)!).ToArray(),
+            ToCanaryEffectFault(document.CanaryEffectFault));
+
+    private static NyxIdChatCanaryEffectFaultSnapshot? ToCanaryEffectFault(
+        NyxIdChatConversationCanaryEffectFaultDocument? fault) =>
+        fault is null
+            ? null
+            : new NyxIdChatCanaryEffectFaultSnapshot(
+                fault.ArmId,
+                fault.Status,
+                fault.TurnId,
+                fault.TaskId,
+                fault.StepId,
+                fault.OperationId,
+                fault.OperationGeneration,
+                ToDateTimeOffset(fault.ExpiresAt),
+                ToDateTimeOffset(fault.ArmedAt),
+                ToDateTimeOffset(fault.ForwardedAt),
+                ToDateTimeOffset(fault.ConsumedAt));
 
     private static NyxIdChatConversationTurnSnapshot? ToTurn(
         NyxIdChatConversationTurnDocument? turn) =>

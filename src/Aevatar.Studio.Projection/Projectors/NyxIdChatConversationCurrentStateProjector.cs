@@ -86,6 +86,7 @@ public sealed class NyxIdChatConversationCurrentStateProjector
             LatestControlResult = ToControlFence(state.LatestControlResult),
             LatestStepControlResult = ToStepControlResult(state.LatestStepControlResult),
             ContinuationAdmission = ToContinuationAdmission(state.ContinuationAdmission),
+            CanaryEffectFault = ToCanaryEffectFault(state.CanaryEffectFault),
         };
         document.RecentTerminalTurns.AddRange(state.RecentTerminalTurns.Select(ToTurn));
         document.PendingActions.AddRange(state.PendingActions
@@ -118,6 +119,30 @@ public sealed class NyxIdChatConversationCurrentStateProjector
                 TerminalAt = turn.TerminalAt?.Clone(),
                 CommandId = turn.CommandId,
             };
+
+    private static NyxIdChatConversationCanaryEffectFaultDocument? ToCanaryEffectFault(
+        NyxIdChatCanaryEffectFaultState? fault)
+    {
+        var directive = fault?.Directive;
+        var key = directive?.Key;
+        if (directive is null || key is null)
+            return null;
+
+        return new NyxIdChatConversationCanaryEffectFaultDocument
+        {
+            ArmId = directive.ArmId,
+            Status = ToWireName(fault!.Status),
+            TurnId = key.TurnId,
+            TaskId = key.TaskId,
+            StepId = key.StepId,
+            OperationId = key.OperationId,
+            OperationGeneration = key.OperationGeneration,
+            ExpiresAt = directive.ExpiresAt?.Clone(),
+            ArmedAt = fault.ArmedAt?.Clone(),
+            ConsumedAt = fault.ConsumedAt?.Clone(),
+            ForwardedAt = fault.ForwardedAt?.Clone(),
+        };
+    }
 
     private static NyxIdChatConversationTurnDocument ToTurn(NyxIdChatTurnSummary turn) =>
         new()
@@ -906,6 +931,15 @@ public sealed class NyxIdChatConversationCurrentStateProjector
         NyxIdChatContinuationAdmissionStatus.AcceptedForLater => "accepted_for_later",
         NyxIdChatContinuationAdmissionStatus.Rejected => "rejected",
         NyxIdChatContinuationAdmissionStatus.Started => "started",
+        _ => string.Empty,
+    };
+
+    private static string ToWireName(NyxIdChatCanaryEffectFaultStatus status) => status switch
+    {
+        NyxIdChatCanaryEffectFaultStatus.Armed => "armed",
+        NyxIdChatCanaryEffectFaultStatus.Forwarded => "forwarded",
+        NyxIdChatCanaryEffectFaultStatus.Consumed => "consumed",
+        NyxIdChatCanaryEffectFaultStatus.Expired => "expired",
         _ => string.Empty,
     };
 

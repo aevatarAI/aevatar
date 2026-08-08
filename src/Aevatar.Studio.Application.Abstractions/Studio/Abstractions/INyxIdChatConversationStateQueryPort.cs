@@ -120,7 +120,21 @@ public sealed record NyxIdChatConversationStateSnapshot(
     string? ActiveStepSummary = null,
     IReadOnlyList<NyxIdChatActionSnapshot>? RecentActions = null,
     NyxIdChatStepControlResultSnapshot? LatestStepControlResult = null,
-    IReadOnlyList<NyxIdChatStepControlResultSnapshot>? RecentStepControlResults = null);
+    IReadOnlyList<NyxIdChatStepControlResultSnapshot>? RecentStepControlResults = null,
+    NyxIdChatCanaryEffectFaultSnapshot? CanaryEffectFault = null);
+
+public sealed record NyxIdChatCanaryEffectFaultSnapshot(
+    string ArmId,
+    string Status,
+    string TurnId,
+    string TaskId,
+    string StepId,
+    string OperationId,
+    long OperationGeneration,
+    DateTimeOffset? ExpiresAt,
+    DateTimeOffset? ArmedAt,
+    DateTimeOffset? ForwardedAt,
+    DateTimeOffset? ConsumedAt);
 
 public sealed record NyxIdChatConversationTurnSnapshot(
     string TurnId,
