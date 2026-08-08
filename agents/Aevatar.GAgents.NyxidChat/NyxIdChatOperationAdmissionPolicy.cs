@@ -138,4 +138,5 @@ internal static class NyxIdChatOperationAdmissionPolicy
 
         return value.AsSpan(prefix.Length).IndexOfAnyExcept("0123456789abcdef") < 0;
     }
+
 }

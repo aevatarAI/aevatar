@@ -455,7 +455,10 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 continue;
 
             var argumentsJson = call.ArgumentsJson ?? string.Empty;
-            var callSafety = tool.GetCallSafety(argumentsJson);
+            var providerCallSafety = tool.GetCallSafety(argumentsJson);
+            var callSafety = ResolveEffectiveCallSafety(
+                tool,
+                providerCallSafety);
             var operationAdmission = SnapshotOperationAdmission(tool, argumentsJson);
             snapshots.Add(new AgentRunAuthorizedToolCallSafety(
                 call.Id ?? string.Empty,
@@ -463,9 +466,13 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 argumentsJson,
                 callSafety,
                 tool.SideEffectKind ?? string.Empty,
-                BuildToolDefinitionFingerprint(tool, callSafety, operationAdmission),
+                BuildToolDefinitionFingerprint(
+                    tool,
+                    providerCallSafety,
+                    callSafety,
+                    operationAdmission),
                 ToolPresentationDescriptors.Snapshot(tool, call.Name ?? string.Empty, argumentsJson),
-                ResolveRequiresApproval(tool, callSafety),
+                callSafety.RequiresApproval == true,
                 operationAdmission));
         }
 
@@ -482,6 +489,11 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                (tool.ApprovalMode == ToolApprovalMode.AlwaysRequire ||
                 (!safety.IsReadOnly && safety.IsDestructive));
     }
+
+    private static AgentToolCallSafety ResolveEffectiveCallSafety(
+        IAgentTool tool,
+        AgentToolCallSafety safety) =>
+        safety with { RequiresApproval = ResolveRequiresApproval(tool, safety) };
 
     private static bool HasApprovalRequiredToolCall(
         IReadOnlyList<ToolCall>? toolCalls,
@@ -500,14 +512,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 continue;
 
             var safety = tool.GetCallSafety(call.ArgumentsJson ?? string.Empty);
-            if (tool.ApprovalMode == ToolApprovalMode.NeverRequire)
-                continue;
-            if (safety.RequiresApproval ??
-                (tool.ApprovalMode == ToolApprovalMode.AlwaysRequire ||
-                 (!safety.IsReadOnly && safety.IsDestructive)))
-            {
+            if (ResolveRequiresApproval(tool, safety))
                 return true;
-            }
         }
 
         return false;
@@ -607,6 +613,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             AgentRunReplyStepMappers.ToolContextFromProto(workItem.StepState).InputFileRefs.Count);
 
         AgentRunToolStepResult toolStepResult;
+        AgentRunToolAuthorizationOutcome authorizationOutcome;
         if (authorizedToolStep is not null)
         {
             if (transientAuthorizationMatched)
@@ -618,6 +625,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                     workItem.StepIndex,
                     FormatToolNames(toolCalls.Select(static call => call.Name)));
                 toolStepResult = await authorizedToolStep.ExecuteAsync(ct).ConfigureAwait(false);
+                authorizationOutcome = AgentRunToolAuthorizationOutcome.TransientMatched;
             }
             else
             {
@@ -628,6 +636,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                     workItem.StepIndex,
                     FormatToolNames(toolCalls.Select(static call => call.Name)));
                 toolStepResult = BuildUnauthorizedToolStepResult(toolCalls);
+                authorizationOutcome = AgentRunToolAuthorizationOutcome.Rejected;
             }
         }
         else if (workItem.AllowDurableToolAuthorization &&
@@ -635,6 +644,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                      .ConfigureAwait(false) is { } durableToolStepResult)
         {
             toolStepResult = durableToolStepResult;
+            authorizationOutcome = AgentRunToolAuthorizationOutcome.DurableMatched;
         }
         else
         {
@@ -645,7 +655,9 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 workItem.StepIndex,
                 FormatToolNames(toolCalls.Select(static call => call.Name)));
             toolStepResult = BuildUnauthorizedToolStepResult(toolCalls);
+            authorizationOutcome = AgentRunToolAuthorizationOutcome.Rejected;
         }
+        toolStepResult.AuthorizationOutcome = authorizationOutcome;
 
         return new AgentRunNextToolStepRequestedEvent
         {
@@ -675,6 +687,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 pendingApproval)
             .ConfigureAwait(false)
             ?? throw new InvalidOperationException("The approved AgentRun tool capability no longer matches the suspended call.");
+        toolStepResult.AuthorizationOutcome =
+            AgentRunToolAuthorizationOutcome.DurableMatched;
 
         return new AgentRunNextToolStepRequestedEvent
         {
@@ -922,7 +936,10 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         IAgentTool tool,
         string argumentsJson)
     {
-        var currentSafety = tool.GetCallSafety(argumentsJson);
+        var providerCallSafety = tool.GetCallSafety(argumentsJson);
+        var currentSafety = ResolveEffectiveCallSafety(
+            tool,
+            providerCallSafety);
         var currentAdmission = SnapshotOperationAdmission(tool, argumentsJson);
         return authorization.HasRequiresApproval == currentSafety.RequiresApproval.HasValue &&
                authorization.RequiresApproval == (currentSafety.RequiresApproval ?? false) &&
@@ -931,7 +948,11 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                string.Equals(authorization.SideEffectKind, tool.SideEffectKind ?? string.Empty, StringComparison.Ordinal) &&
                string.Equals(
                    authorization.ToolDefinitionFingerprint,
-                   BuildToolDefinitionFingerprint(tool, currentSafety, currentAdmission),
+                   BuildToolDefinitionFingerprint(
+                       tool,
+                       providerCallSafety,
+                       currentSafety,
+                       currentAdmission),
                    StringComparison.Ordinal);
     }
 
@@ -948,7 +969,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
 
     private static string BuildToolDefinitionFingerprint(
         IAgentTool tool,
-        AgentToolCallSafety callSafety,
+        AgentToolCallSafety providerCallSafety,
+        AgentToolCallSafety effectiveCallSafety,
         AgentToolOperationAdmissionPayload? operationAdmission)
     {
         var canonical = string.Join('\n',
@@ -956,10 +978,12 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             tool.Description ?? string.Empty,
             tool.ParametersSchema ?? string.Empty,
             tool.SideEffectKind ?? string.Empty,
-            callSafety.RequiresApproval.HasValue ? "1" : "0",
-            callSafety.RequiresApproval == true ? "1" : "0",
-            callSafety.IsReadOnly ? "1" : "0",
-            callSafety.IsDestructive ? "1" : "0",
+            ((int)tool.ApprovalMode).ToString(System.Globalization.CultureInfo.InvariantCulture),
+            providerCallSafety.RequiresApproval.HasValue ? "1" : "0",
+            providerCallSafety.RequiresApproval == true ? "1" : "0",
+            effectiveCallSafety.RequiresApproval == true ? "1" : "0",
+            effectiveCallSafety.IsReadOnly ? "1" : "0",
+            effectiveCallSafety.IsDestructive ? "1" : "0",
             operationAdmission is null
                 ? string.Empty
                 : Convert.ToBase64String(operationAdmission.ToByteArray()));

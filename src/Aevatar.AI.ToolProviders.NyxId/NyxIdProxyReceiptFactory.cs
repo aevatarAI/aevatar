@@ -18,6 +18,9 @@ internal static class NyxIdProxyReceiptFactory
         bool proxyRequestFailed = true)
     {
         var normalizedUserServiceId = NormalizeUserServiceId(userServiceId);
+        if (!proxyRequestFailed)
+            return CreateSuccess(callId, toolName, normalizedUserServiceId, resultJson);
+
         if (!NyxIdApiClient.TryParseProxyError(resultJson, out var error) || error is null)
             return CreateSuccess(callId, toolName, normalizedUserServiceId, resultJson);
 
@@ -52,9 +55,6 @@ internal static class NyxIdProxyReceiptFactory
                 normalizedUserServiceId,
                 serviceLabel,
                 resourceUri);
-
-        if (!proxyRequestFailed)
-            return CreateSuccess(callId, toolName, normalizedUserServiceId, resultJson);
 
         var isServiceScopeForbidden = error.HttpStatus == 403 &&
                                       string.Equals(

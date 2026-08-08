@@ -220,6 +220,31 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
             ct);
     }
 
+    internal async Task<AgentToolTerminalOutcome> ExecuteAdmittedEffectWithOutcomeAsync(
+        string callId,
+        string toolName,
+        string argumentsJson,
+        CancellationToken ct = default)
+    {
+        var admission = AgentToolRequestContext.Current?.OperationAdmission;
+        if (admission?.ExecutionPolicy is not
+            {
+                Risk: AgentToolOperationRisk.Write,
+                Approval: AgentToolOperationApproval.Required,
+            })
+        {
+            throw new InvalidOperationException(
+                "Admitted effect execution requires an exact approval-gated write operation admission.");
+        }
+
+        return await ExecuteWithOutcomeCoreAsync(
+            callId,
+            toolName,
+            argumentsJson,
+            maxTextResponseBytes: null,
+            ct);
+    }
+
     private async Task<AgentToolTerminalOutcome> ExecuteWithOutcomeCoreAsync(
         string callId,
         string toolName,

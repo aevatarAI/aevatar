@@ -4,11 +4,19 @@ using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.Tools;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
+using Aevatar.Audit;
+using Aevatar.Audit.Abstractions.Identity;
+using Aevatar.Audit.Abstractions.Models;
+using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.Foundation.Abstractions.Tools;
+using Aevatar.GAgents.NyxidChat;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using ProtoValue = Google.Protobuf.WellKnownTypes.Value;
 
 namespace Aevatar.AI.Tests;
@@ -816,6 +824,188 @@ public class NyxIdConnectedServiceToolSourceTests
             .ReadBack.Should().BeNull();
     }
 
+    [Fact]
+    public async Task DynamicEffect_RealVerificationPipeline_ShouldCompleteTaskFromProviderResourceReadBack()
+    {
+        const string arguments =
+            """{"query":{"receive_id_type":"chat_id"},"body":{"receive_id":"oc_alpha","msg_type":"text","content":"{\"text\":\"m40-alpha\"}"}}""";
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = Keys(
+            InstanceWithCatalogSlug("usvc-lark", "api-lark-bot", "svc-lark", "api-lark-bot"));
+        handler.McpConfigByToken["user-token"] = McpCatalog(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            McpService(
+                "usvc-lark",
+                "api-lark-bot",
+                LarkMessageEffectEndpoint("runtime-effect-uuid"),
+                LarkMessagesReadEndpoint("runtime-read-uuid")));
+        handler.ProxyResponseBody = """{"code":0,"data":{"message_id":"om_provider_alpha"}}""";
+        var options = new NyxIdToolOptions
+        {
+            BaseUrl = "https://nyx.test",
+            EnableAssistantConnectedServiceEffects = true,
+            AssistantOperationReadBackBindings = [LarkMessageReadBackBinding()],
+        };
+        var client = new NyxIdApiClient(options, new HttpClient(handler));
+        var source = new NyxIdConnectedServiceToolSource(
+            options,
+            client,
+            new NyxIdServiceInstanceClient(client));
+        IAgentToolExecutionPort executionPort = new AdmittedAgentToolExecutor(
+            AlwaysStartingAgentToolAdmissionLedger.Instance,
+            new AppendedVerificationAuditTrail(),
+            new StableVerificationIdentityHasher());
+
+        using var scope = PushContext("user-token");
+        var effectTool = (await source.DiscoverToolsAsync()).Single(tool => !tool.IsReadOnly);
+        var admissionOwner = effectTool.Should()
+            .BeAssignableTo<IAgentToolOperationAdmissionOwner>().Subject;
+        var frozenAdmission = admissionOwner.ResolveOperationAdmission(arguments);
+        frozenAdmission.ReadBack.Should().NotBeNull();
+        frozenAdmission.ReadBack!.Assertion.ExpectedValueSource.Should()
+            .Be(AgentToolReadBackExpectedValueSource.ProviderResourceId);
+
+        var now = Timestamp.FromDateTimeOffset(
+            new DateTimeOffset(2026, 8, 9, 8, 0, 0, TimeSpan.Zero));
+        var initial = CreateVerificationPipelineState(now);
+        var llmKey = initial.ActiveTask.Steps.Single().Operation.Key.Clone();
+        var planned = NyxIdChatTaskLifecycle.ApplyOperationResult(
+            initial,
+            new NyxIdChatOperationResultSignal
+            {
+                Key = llmKey,
+                Llm = new NyxIdChatLLMOperationResult
+                {
+                    ToolCalls =
+                    {
+                        new NyxIdChatToolCall
+                        {
+                            CallId = "call-effect-alpha",
+                            ToolName = effectTool.Name,
+                            ArgumentsJson = arguments,
+                            Safety = new NyxIdChatToolCallSafety
+                            {
+                                IsReadOnly = false,
+                                IsDestructive = false,
+                                SideEffectKind = effectTool.SideEffectKind,
+                                MayChangeExternalState = true,
+                            },
+                            NyxIdProvenance = effectTool.Presentation.NyxIdOperation.Clone(),
+                            OperationAdmission =
+                                AgentToolOperationAdmissionPayloadMapper.ToPayload(frozenAdmission),
+                        },
+                    },
+                },
+            },
+            now);
+        planned.NextCommand.Should().NotBeNull();
+        var effectCommand = planned.NextCommand!;
+        effectCommand.InputCase.Should().Be(
+            NyxIdChatOperationDispatchCommand.InputOneofCase.Tool);
+
+        var effectContext = AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity(
+                "request-effect-alpha",
+                effectCommand.Tool.CallId) with
+            {
+                OperationId = effectCommand.Key.OperationId,
+            },
+            Credentials = AgentToolCredentials.Empty with
+            {
+                NyxIdAccessToken = "user-token",
+            },
+            ExecutionOwner = AgentToolExecutionOwners.Actor("conversation-alpha"),
+            OperationAdmission = AgentToolOperationAdmissionPayloadMapper.FromPayload(
+                effectCommand.Tool.OperationAdmission),
+            InvocationSurface = AgentToolInvocationSurface.HumanSession,
+            Chat = new AgentChatInvocationContext(
+                AgentChatInvocationSurface.NyxIdAssistant,
+                "conversation-alpha",
+                "turn-alpha",
+                "task-alpha",
+                effectCommand.Key.StepId,
+                null),
+        };
+        var effectOutcome = await executionPort.ExecuteAsync(
+            new AgentToolExecutionRequest(
+                effectTool,
+                effectCommand.Tool.ArgumentsJson,
+                effectContext,
+                AgentToolApprovalContinuationMode.None,
+                ApprovalGrant: null));
+
+        effectOutcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.Executed);
+        effectOutcome.Receipt.Status.Should().Be(AgentToolReceiptStatus.Success);
+        effectOutcome.Receipt.ProviderResourceId.Should().Be("om_provider_alpha");
+        effectOutcome.ResultJson.Should().NotContain("om_provider_alpha");
+
+        var afterEffect = NyxIdChatTaskLifecycle.ApplyOperationResult(
+            planned.State,
+            new NyxIdChatOperationResultSignal
+            {
+                Key = effectCommand.Key.Clone(),
+                Tool = new NyxIdChatToolOperationResult
+                {
+                    ResultJson = effectOutcome.ResultJson,
+                    Receipt = effectOutcome.Receipt.Clone(),
+                    ExternalEffect = NyxIdChatEffectEvidence.Confirmed,
+                },
+            },
+            now);
+        afterEffect.NextCommand.Should().NotBeNull();
+        var verificationCommand = afterEffect.NextCommand!;
+        verificationCommand.InputCase.Should().Be(
+            NyxIdChatOperationDispatchCommand.InputOneofCase.ToolVerification);
+        verificationCommand.ToolVerification.ProviderResourceId.Should().Be("om_provider_alpha");
+        verificationCommand.ToolVerification.ToolContext =
+            (AgentToolExecutionContext.Empty with
+            {
+                Credentials = AgentToolCredentials.Empty with
+                {
+                    NyxIdAccessToken = "user-token",
+                },
+            }).ToPayload();
+
+        handler.ProxyResponseBody =
+            """{"code":0,"data":{"items":[{"message_id":"om_old"},{"message_id":"om_provider_alpha"}]}}""";
+        INyxIdAdmittedOperationToolFactory toolFactory = new NyxIdAdmittedOperationToolFactory(
+            client,
+            options,
+            NullLogger<NyxIdAdmittedOperationToolFactory>.Instance);
+        var verification = await new NyxIdChatToolVerificationPort(
+                toolFactory,
+                executionPort)
+            .VerifyAsync(
+                verificationCommand.Key,
+                verificationCommand.ToolVerification,
+                CancellationToken.None);
+
+        verification.Disposition.Should().Be(
+            NyxIdChatToolVerificationDisposition.Applied,
+            "the real port accepts only a successful bounded read projection with exact " +
+            "selector provenance and provider resource identity");
+        verification.ReadOperation.PublishedEndpoint.EndpointId.Should().Be("runtime-read-uuid");
+        verification.CheckName.Should().Be("lark_provider_message_visible_in_chat");
+        handler.ProxyRequests.Should().HaveCount(2);
+
+        var completed = NyxIdChatTaskLifecycle.ApplyOperationResult(
+            afterEffect.State,
+            new NyxIdChatOperationResultSignal
+            {
+                Key = verificationCommand.Key.Clone(),
+                ToolVerification = verification,
+            },
+            now);
+
+        completed.Outcome.Should().Be(NyxIdChatTransitionOutcome.Accepted);
+        completed.NextCommand.Should().BeNull();
+        completed.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Succeeded);
+        completed.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Succeeded);
+        completed.State.ActiveTask.Steps.Should().OnlyContain(step =>
+            step.Status == NyxIdChatStepStatus.Done);
+    }
+
     [Theory]
     [InlineData(7000, "approval_required", AgentToolReceiptStatus.ApprovalRequired, null,
         NyxIdApprovalDecisionMode.Unknown)]
@@ -1066,6 +1256,79 @@ public class NyxIdConnectedServiceToolSourceTests
             Credentials = new AgentToolCredentials(userToken, organizationToken, null),
             Request = new AgentToolRequestIdentity("request-alpha", "call-alpha"),
         });
+
+    private static NyxIdChatConversationGAgentState CreateVerificationPipelineState(Timestamp now)
+    {
+        var key = new NyxIdChatOperationKey
+        {
+            ConversationActorId = "conversation-alpha",
+            TurnId = "turn-alpha",
+            TaskId = "task-alpha",
+            StepId = "step-llm-alpha",
+            OperationId = "operation-llm-alpha",
+            OperationGeneration = 1,
+        };
+        var step = new NyxIdChatTaskStepState
+        {
+            StepId = key.StepId,
+            Order = 1,
+            Kind = NyxIdChatStepKind.Llm,
+            Status = NyxIdChatStepStatus.Running,
+            Required = true,
+            ExternalEffect = NyxIdChatEffectEvidence.NotStarted,
+            Operation = new NyxIdChatOperationState
+            {
+                Key = key,
+                Kind = NyxIdChatStepKind.Llm,
+                Phase = NyxIdChatOperationPhase.Dispatched,
+            },
+            AvailableActions = new NyxIdChatAvailableActions { Stop = true },
+            UpdatedAt = now.Clone(),
+            AddedInPlanRevision = 1,
+        };
+        var task = new NyxIdChatTaskState
+        {
+            TaskId = key.TaskId,
+            TurnId = key.TurnId,
+            Status = NyxIdChatTaskStatus.Active,
+            ActiveStepId = key.StepId,
+            ActiveOperationId = key.OperationId,
+            CreatedAt = now.Clone(),
+            UpdatedAt = now.Clone(),
+            PlanRevision = 1,
+            PlanRevisionHistoryStart = 1,
+        };
+        task.Steps.Add(step);
+        task.PlanRevisions.Add(new NyxIdChatPlanRevisionRecord
+        {
+            PlanRevision = 1,
+            RevisionCause = NyxIdChatPlanRevisionCause.Initial,
+            CommittedAt = now.Clone(),
+            AddedStepIds = { key.StepId },
+        });
+        return new NyxIdChatConversationGAgentState
+        {
+            ConversationActorId = key.ConversationActorId,
+            ScopeId = "scope-alpha",
+            ActiveTurn = new NyxIdChatTurnState
+            {
+                TurnId = key.TurnId,
+                TaskId = key.TaskId,
+                Status = NyxIdChatTurnStatus.Active,
+                CreatedAt = now.Clone(),
+            },
+            LatestTurn = new NyxIdChatTurnState
+            {
+                TurnId = key.TurnId,
+                TaskId = key.TaskId,
+                Status = NyxIdChatTurnStatus.Active,
+                CreatedAt = now.Clone(),
+            },
+            ActiveTask = task,
+            ProgressSequence = 1,
+            UpdatedAt = now.Clone(),
+        };
+    }
 
     private static string Instance(
         string id,
@@ -1339,6 +1602,25 @@ public class NyxIdConnectedServiceToolSourceTests
     private sealed record ProxyRequestRecord(string Method, string Path);
 
     private sealed record LogEntry(string Message, Exception? Exception);
+
+    private sealed class AppendedVerificationAuditTrail : IAuditTrailAppender
+    {
+        public Task<AuditTrailAppendResult> AppendAsync(
+            AuditRecord record,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(AuditTrailAppendResult.Appended(record.AuditId));
+    }
+
+    private sealed class StableVerificationIdentityHasher : IAuditActorIdentityHasher
+    {
+        public AuditActorIdentity Hash(string canonicalActorKey) =>
+            new("actor-hash", "key-1");
+
+        public bool Verify(
+            string canonicalActorKey,
+            string auditActorId,
+            string identityKeyId) => true;
+    }
 
     private sealed class RecordingLogger<T> : ILogger<T>
     {

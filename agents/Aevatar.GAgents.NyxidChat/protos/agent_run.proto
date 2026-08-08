@@ -373,6 +373,14 @@ message AgentRunToolStepResult {
   // example reply_with_interaction). The executor surfaces the captured intent
   // here for the run actor to merge into AgentRunReplyStepState.outbound_intent.
   aevatar.gagents.channel.abstractions.MessageContent outbound_intent = 4;
+  AgentRunToolAuthorizationOutcome authorization_outcome = 5;
+}
+
+enum AgentRunToolAuthorizationOutcome {
+  AGENT_RUN_TOOL_AUTHORIZATION_OUTCOME_UNSPECIFIED = 0;
+  AGENT_RUN_TOOL_AUTHORIZATION_OUTCOME_TRANSIENT_MATCHED = 1;
+  AGENT_RUN_TOOL_AUTHORIZATION_OUTCOME_DURABLE_MATCHED = 2;
+  AGENT_RUN_TOOL_AUTHORIZATION_OUTCOME_REJECTED = 3;
 }
 
 // Transient command for the run actor. The nested NeedsLlmReplyEvent may carry

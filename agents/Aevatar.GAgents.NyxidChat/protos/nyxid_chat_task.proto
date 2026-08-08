@@ -355,6 +355,7 @@ message NyxIdChatTurnPlanGateAdmissionState {
   bool may_change_external_state = 9;
   aevatar.ai.tool_providers.AgentToolOperationAdmissionPayload operation_admission = 10;
   google.protobuf.Timestamp admitted_at = 11;
+  bool rematerialize_durable_authorization = 12;
 }
 
 message NyxIdChatStepEstimate {
@@ -434,6 +435,12 @@ message NyxIdChatTaskStepState {
   // Public projections deliberately omit this field.
   NyxIdChatRetryToolInputState retry_tool_input = 25;
   NyxIdChatPostReturnApprovalObservation approval_observation = 26;
+  // Actor-owned fact set only by an admitted explicit retry. Operation
+  // generation is a fencing counter and must not be used to infer this mode.
+  bool rematerialize_durable_authorization = 27;
+  // Exact delivered Tool/Postcondition operation whose committed NotApplied
+  // evidence authorizes this explicit retry.
+  NyxIdChatOperationKey retry_authorization_source_key = 28;
 }
 
 message NyxIdChatPlanRevisionRecord {
@@ -974,6 +981,25 @@ message NyxIdChatConversationGAgentState {
   aevatar.credentials.DurableCallerCredentialRef pending_steering_continuation = 35;
   string pending_steering_continuation_id = 36;
   google.protobuf.Timestamp pending_steering_continuation_expires_at = 37;
+  // Exact admission last sent to the turn actor for the pending plan gate.
+  // This is internal transport state and is never projected publicly.
+  NyxIdChatTurnPlanGateAdmissionState active_turn_plan_gate_admission = 38;
+  // Durable revoke outbox retained until the turn actor confirms its committed
+  // revoked fence. Dispatch admission alone never clears this fact.
+  NyxIdChatPlanGateAdmissionRevocationOutbox pending_plan_gate_admission_revocation = 39;
+  // Full, secret-free delivery command retained until the turn actor confirms
+  // that the exact admission has committed. This closes the commit-before-send
+  // activation gap and makes lost acknowledgements recoverable.
+  NyxIdChatTurnPlanGateAdmissionCommand pending_plan_gate_admission_delivery = 40;
+  // Secret-free delivery barrier retained when operation inbox admission is
+  // ambiguous. Recovery cannot start until the turn actor proves that this
+  // exact operation committed or durably fences it against late delivery.
+  NyxIdChatOperationKey pending_operation_delivery_probe = 41;
+}
+
+message NyxIdChatPlanGateAdmissionRevocationOutbox {
+  NyxIdChatTurnPlanGateAdmissionState admission = 1;
+  string reason_code = 2;
 }
 
 message NyxIdChatHistoryInitializationOutbox {
@@ -1130,6 +1156,17 @@ message NyxIdChatTurnGAgentState {
   aevatar.credentials.DurableCallerCredentialRef recovery_credential = 22;
   aevatar.ai.tool_providers.AgentToolOperationReadBackPayload recovery_read_back = 23;
   string recovery_effect_step_id = 24;
+  // Last exact admission revoked by the conversation actor. Retaining this
+  // fence makes revoke redelivery idempotent and prevents a delayed admission
+  // command from resurrecting a rejected plan.
+  // Bounded exact revocation fences. A turn can admit more than one plan-gated
+  // operation over its lifetime, so a singular last-revoked value would make
+  // later admissions impossible to revoke safely.
+  repeated NyxIdChatTurnPlanGateAdmissionState revoked_plan_gate_admissions = 25;
+  // Bounded tombstones committed by delivery probes before reporting that an
+  // operation was not admitted. A delayed exact command cannot execute after
+  // the conversation actor has relied on that negative result.
+  repeated NyxIdChatOperationKey fenced_operation_deliveries = 26;
 }
 
 message NyxIdChatTurnOperationAdmittedEvent {
@@ -1157,9 +1194,37 @@ message NyxIdChatTurnPlanGateAdmissionCommittedEvent {
   NyxIdChatTurnPlanGateAdmissionState admission = 1;
 }
 
+message NyxIdChatTurnPlanGateAdmissionCommittedSignal {
+  NyxIdChatTurnPlanGateAdmissionState admission = 1;
+}
+
+message NyxIdChatPlanGateAdmissionDeliveryDispatchRequested {
+  string gate_request_id = 1;
+}
+
 message NyxIdChatTurnPlanGateAdmissionExpiredEvent {
   NyxIdChatTurnPlanGateAdmissionState admission = 1;
   google.protobuf.Timestamp expired_at = 2;
+}
+
+message NyxIdChatTurnPlanGateAdmissionRevokeCommand {
+  NyxIdChatTurnPlanGateAdmissionState admission = 1;
+  string reason_code = 2;
+}
+
+message NyxIdChatTurnPlanGateAdmissionRevokedEvent {
+  NyxIdChatTurnPlanGateAdmissionState admission = 1;
+  string reason_code = 2;
+  google.protobuf.Timestamp revoked_at = 3;
+}
+
+message NyxIdChatTurnPlanGateAdmissionRevokedSignal {
+  NyxIdChatTurnPlanGateAdmissionState admission = 1;
+  string reason_code = 2;
+}
+
+message NyxIdChatPlanGateAdmissionRevocationDispatchRequested {
+  string gate_request_id = 1;
 }
 
 message NyxIdChatPlanGateCapabilityExpiredSignal {
@@ -1214,6 +1279,13 @@ message NyxIdChatToolOperationInput {
   bool idempotent = 6;
   string idempotency_key = 7;
   aevatar.ai.tool_providers.AgentToolOperationAdmissionPayload operation_admission = 8;
+  aevatar.ai.AgentProfileSnapshot agent_profile = 9;
+  aevatar.ai.AgentProfileTurnAuthorityState agent_profile_turn_authority = 10;
+  bool rematerialize_durable_authorization = 11;
+  // Exact delivered Tool/Postcondition operation whose committed NotApplied
+  // evidence authorized this explicit generation retry. The turn actor checks
+  // this source before the executor may rematerialize a durable capability.
+  NyxIdChatOperationKey retry_authorization_source_key = 12;
 }
 
 message NyxIdChatToolVerificationInput {
@@ -1253,8 +1325,10 @@ message NyxIdChatToolApprovalContinuationInput {
   aevatar.ai.tool_providers.AgentToolOperationAdmissionPayload operation_admission = 6;
 }
 
-// A plan confirmation carries no raw tool arguments. The turn actor must match
-// this admission to the exact transient authorized call it already owns.
+// Initial plan confirmation carries no raw tool arguments and matches the
+// transient authorized call. A confirmed retry may additionally carry the
+// credential-free typed arguments already owned by the conversation actor so
+// a fresh turn activation can re-match the current exact tool definition.
 message NyxIdChatPlanGateContinuationInput {
   string gate_request_id = 1;
   string task_id = 2;
@@ -1267,6 +1341,10 @@ message NyxIdChatPlanGateContinuationInput {
   string plan_id = 9;
   string idempotency_key = 10;
   aevatar.ai.tool_providers.AgentToolOperationAdmissionPayload operation_admission = 11;
+  google.protobuf.Struct retry_arguments = 12;
+  aevatar.ai.AgentProfileSnapshot agent_profile = 13;
+  aevatar.ai.AgentProfileTurnAuthorityState agent_profile_turn_authority = 14;
+  bool rematerialize_durable_authorization = 15;
 }
 
 message NyxIdChatOperationDispatchCommand {
@@ -1631,6 +1709,37 @@ message NyxIdChatOperationRequestedEvent {
 message NyxIdChatOperationDispatchedEvent {
   NyxIdChatOperationKey key = 1;
   google.protobuf.Timestamp dispatched_at = 2;
+  NyxIdChatEffectEvidence effect_dispatch_waterline = 3;
+}
+
+message NyxIdChatTurnOperationDeliveryProbeCommand {
+  NyxIdChatOperationKey key = 1;
+}
+
+message NyxIdChatTurnOperationDeliveryFencedEvent {
+  NyxIdChatOperationKey key = 1;
+  google.protobuf.Timestamp fenced_at = 2;
+}
+
+message NyxIdChatTurnOperationDeliveryStatusSignal {
+  NyxIdChatOperationKey key = 1;
+  bool admitted = 2;
+  NyxIdChatEffectEvidence effect_dispatch_waterline = 3;
+}
+
+message NyxIdChatOperationDeliveryProbeDispatchRequested {
+  NyxIdChatOperationKey key = 1;
+  int64 expected_state_version = 2;
+}
+
+// The transport threw after dispatch began, so inbox admission is unknown.
+// The operation remains behind a durable delivery probe; an external effect is
+// conservatively fenced as may-have-changed until the turn actor proves exact
+// admission or commits a tombstone against late delivery.
+message NyxIdChatOperationDispatchUncertainEvent {
+  NyxIdChatOperationKey key = 1;
+  google.protobuf.Timestamp observed_at = 2;
+  NyxIdChatConversationGAgentState state = 3;
 }
 
 message NyxIdChatOperationProgressedEvent {
@@ -1665,6 +1774,9 @@ message NyxIdChatOperationReconciledEvent {
   // Complete actor-derived state, including successor requested waterlines,
   // pending approval/action state, and bounded terminal summaries.
   NyxIdChatConversationGAgentState state = 5;
+  // True when this event only refines evidence for an operation whose control
+  // fence already published the task/turn terminal.
+  bool refines_existing_terminal = 6;
 }
 
 // A fenced exact tool operation may still report typed terminal evidence. The
@@ -1745,6 +1857,16 @@ message NyxIdChatPlanGateCapabilityExpiredCommittedEvent {
   string failure_code = 2;
   string safe_message = 3;
   NyxIdChatConversationGAgentState state = 4;
+}
+
+message NyxIdChatPlanGateAdmissionRevocationAcknowledgedEvent {
+  NyxIdChatTurnPlanGateAdmissionState admission = 1;
+  google.protobuf.Timestamp acknowledged_at = 2;
+}
+
+message NyxIdChatPlanGateAdmissionDeliveryAcknowledgedEvent {
+  NyxIdChatTurnPlanGateAdmissionState admission = 1;
+  google.protobuf.Timestamp acknowledged_at = 2;
 }
 
 message NyxIdChatTransitionDecisionFact {

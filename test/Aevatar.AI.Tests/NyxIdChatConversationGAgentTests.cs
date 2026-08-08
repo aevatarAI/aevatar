@@ -458,6 +458,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
             typeof(IActorDispatchPort),
             typeof(NyxIdToolOptions),
             typeof(TimeProvider),
+            typeof(ISecretVault),
         ]).Should().NotBeNull();
     }
 
@@ -1290,6 +1291,33 @@ public sealed partial class NyxIdChatConversationGAgentTests
             CreateEnvelope(conversationActorId, CreateStartTurnCommand()));
 
         await act.Should().NotThrowAsync();
+        if (failedStage == "dispatch")
+        {
+            operations.Should().Equal($"{expectedOperations},dispatch".Split(','),
+                "the second dispatch is the exact turn-owned delivery probe");
+            agent.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Active);
+            agent.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Active);
+            var uncertainStep = agent.State.ActiveTask.Steps.Should().ContainSingle().Which;
+            uncertainStep.Status.Should().Be(NyxIdChatStepStatus.Running);
+            uncertainStep.Operation.Phase.Should().Be(NyxIdChatOperationPhase.Dispatched);
+            agent.State.PendingOperationDeliveryProbe.Should().BeEquivalentTo(
+                uncertainStep.Operation.Key);
+            AssertSingleOperationDeliveryProbe(dispatch, uncertainStep.Operation.Key);
+            dispatch.RecoveryCalls.Should().BeEmpty(
+                "conversation recovery cannot run before the turn proves delivery admission");
+
+            var uncertainEvents = await eventStore.GetEventsAsync(conversationActorId);
+            uncertainEvents.Should().ContainSingle(item =>
+                item.EventData.Is(NyxIdChatOperationDispatchUncertainEvent.Descriptor));
+            uncertainEvents.Should().NotContain(item =>
+                item.EventData.Is(NyxIdChatOperationReconciledEvent.Descriptor) &&
+                item.EventData.Unpack<NyxIdChatOperationReconciledEvent>().Result != null &&
+                item.EventData.Unpack<NyxIdChatOperationReconciledEvent>().Result.Failure != null &&
+                item.EventData.Unpack<NyxIdChatOperationReconciledEvent>()
+                    .Result.Failure.FailureCode == expectedFailureCode);
+            return;
+        }
+
         operations.Should().Equal(expectedOperations.Split(','));
         agent.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Failed);
         agent.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Failed);
@@ -2272,6 +2300,34 @@ public sealed partial class NyxIdChatConversationGAgentTests
             CreateActionContinueCommand(blocked.PendingActions.Single().ActionRequestId)));
 
         await act.Should().NotThrowAsync();
+        if (failedStage == "dispatch")
+        {
+            operations.Should().Equal($"{expectedOperations},dispatch".Split(','),
+                "the second dispatch is the exact turn-owned delivery probe");
+            agent.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Active);
+            agent.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Active);
+            var uncertainStep = agent.State.ActiveTask.Steps.Should()
+                .ContainSingle(candidate => candidate.Kind == NyxIdChatStepKind.Postcondition)
+                .Which;
+            uncertainStep.Status.Should().Be(NyxIdChatStepStatus.Running);
+            uncertainStep.Operation.Phase.Should().Be(NyxIdChatOperationPhase.Dispatched);
+            agent.State.PendingOperationDeliveryProbe.Should().BeEquivalentTo(
+                uncertainStep.Operation.Key);
+            agent.State.PendingHistoryTerminal.Should().BeNull();
+            AssertSingleOperationDeliveryProbe(dispatch, uncertainStep.Operation.Key);
+            dispatch.RecoveryCalls.Should().BeEmpty(
+                "the action read-back cannot race unknown turn inbox admission");
+
+            var uncertainEvents = await eventStore.GetEventsAsync(conversationActorId);
+            uncertainEvents.Should().ContainSingle(item =>
+                item.EventData.Is(NyxIdChatOperationDispatchUncertainEvent.Descriptor));
+            uncertainEvents.Should().NotContain(item =>
+                item.EventData.Is(NyxIdChatOperationReconciledEvent.Descriptor) &&
+                item.EventData.Unpack<NyxIdChatOperationReconciledEvent>()
+                    .Result.Failure.FailureCode == expectedFailureCode);
+            return;
+        }
+
         operations.Should().Equal(expectedOperations.Split(','));
         agent.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Failed);
         agent.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Failed);
@@ -3314,6 +3370,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
         reconciliation.Result.ResultCase.Should().Be(
             NyxIdChatOperationResultSignal.ResultOneofCase.ToolVerification);
         reconciliation.Result.ToolVerification.Should().BeEquivalentTo(verificationResult);
+        reconciliation.RefinesExistingTerminal.Should().BeTrue();
         agent.State.ActiveTask.Steps.Single(step => step.StepId == toolKey.StepId)
             .ExternalEffect.Should().Be(NyxIdChatEffectEvidence.Confirmed);
 
@@ -3535,6 +3592,50 @@ public sealed partial class NyxIdChatConversationGAgentTests
         agent.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Active);
         agent.State.PendingHistoryTerminal.ToByteString().Should().Equal(
             pendingTerminal.ToByteString());
+    }
+
+    [Fact]
+    public async Task StoppedTask_ShouldNeverResumeAndNewGoalShouldUseNewTaskIdentity()
+    {
+        const string conversationActorId = "conversation-stopped-new-goal";
+        var eventStore = new InMemoryEventStoreForTests();
+        using var services = BuildEventSourcingServices(eventStore);
+        var dispatch = new RecordingActorDispatchPort([], static (_, _) => Task.CompletedTask);
+        var agent = CreateController(services, conversationActorId, dispatch);
+        await agent.ActivateAsync();
+        var original = CreateStartTurnCommand();
+        original.ConversationActorId = conversationActorId;
+        await agent.HandleEventAsync(CreateEnvelope(conversationActorId, original));
+        var beforeStop = await eventStore.GetEventsAsync(conversationActorId);
+        var stop = CreateStopCommand(beforeStop[^1].Version);
+        stop.ConversationActorId = conversationActorId;
+
+        await agent.HandleEventAsync(CreateEnvelope(conversationActorId, stop));
+
+        agent.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Stopped);
+        var stoppedTask = agent.State.ActiveTask.Clone();
+        var next = CreateStartTurnCommand();
+        next.ConversationActorId = conversationActorId;
+        next.TurnId = "turn-new-goal";
+        next.TaskId = "task-new-goal";
+        next.ClientRequestId = "client-new-goal";
+        next.CommandId = "command-new-goal";
+        next.CorrelationId = "correlation-new-goal";
+        next.Prompt = "Dinner is back on.";
+
+        await agent.HandleEventAsync(CreateEnvelope(conversationActorId, next));
+
+        agent.State.ActiveTask.TaskId.Should().Be("task-new-goal");
+        agent.State.ActiveTask.TaskId.Should().NotBe(stoppedTask.TaskId);
+        agent.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Active);
+        agent.State.ActiveTask.Steps.Should().NotContain(step =>
+            stoppedTask.Steps.Any(oldStep => oldStep.StepId == step.StepId));
+        agent.State.RecentTerminalTurns.Should().ContainSingle(summary =>
+            summary.TurnId == stoppedTask.TurnId &&
+            summary.TaskId == stoppedTask.TaskId &&
+            summary.Status == NyxIdChatTurnStatus.Stopped);
+        dispatch.OperationCalls.Should().HaveCount(2,
+            "the new goal starts one new operation and never redispatches the stopped task");
     }
 
     [Fact]
@@ -3816,6 +3917,115 @@ public sealed partial class NyxIdChatConversationGAgentTests
         finalized.State.PendingSteeringContinuation.Should().BeNull();
         finalized.State.PendingSteeringContinuationId.Should().BeEmpty();
         finalized.State.PendingSteeringContinuationExpiresAt.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task SteeringRevision_ShouldPreserveCompletedEffectEvidenceAndEmitFullTaskSnapshot()
+    {
+        const string conversationActorId = "conversation-alpha";
+        var eventStore = new InMemoryEventStoreForTests();
+        using var services = BuildEventSourcingServices(eventStore);
+        var dispatch = new RecordingActorDispatchPort([], static (_, _) => Task.CompletedTask);
+        var agent = CreateController(services, conversationActorId, dispatch);
+        await agent.ActivateAsync();
+        agent.State.OwnerSubject = "owner-alpha";
+        await agent.HandleEventAsync(CreateEnvelope(
+            conversationActorId,
+            WithOwner(CreateStartTurnCommand(), "owner-alpha")));
+
+        var task = agent.State.ActiveTask;
+        var superseded = task.Steps.Should().ContainSingle().Which;
+        superseded.Order = 2;
+        superseded.AddedBy = NyxIdChatStepAddedBy.Replan;
+        superseded.AddedInPlanRevision = 2;
+        superseded.Description = "Compare the current service state.";
+        var completed = CreateCompletedEffectStep(task.TaskId);
+        task.Steps.Insert(0, completed);
+        task.PlanRevision = 2;
+        task.PlanRevisionHistoryStart = 1;
+        task.PlanRevisions.Clear();
+        task.PlanRevisions.Add(new NyxIdChatPlanRevisionRecord
+        {
+            PlanRevision = 1,
+            RevisionCause = NyxIdChatPlanRevisionCause.Initial,
+            CommittedAt = completed.UpdatedAt.Clone(),
+            AddedStepIds = { completed.StepId },
+        });
+        task.PlanRevisions.Add(new NyxIdChatPlanRevisionRecord
+        {
+            PlanRevision = 2,
+            RevisionCause = NyxIdChatPlanRevisionCause.FailureRecovery,
+            CommittedAt = completed.UpdatedAt.Clone(),
+            AddedStepIds = { superseded.StepId },
+        });
+        var taskId = task.TaskId;
+        var completedBytes = completed.ToByteString();
+        var completedSourceBytes = completed.Source.ToByteString();
+        var supersededKey = superseded.Operation.Key.Clone();
+        var committedBeforeSteering = await eventStore.GetEventsAsync(conversationActorId);
+        var steering = CreateSteeringCommand(committedBeforeSteering[^1].Version);
+        steering.ToolContext.Caller = new Aevatar.AI.Abstractions.AgentToolCallerContextPayload
+        {
+            OwnerSubject = "owner-alpha",
+        };
+
+        await agent.HandleEventAsync(CreateEnvelope(conversationActorId, steering));
+        await agent.HandleEventAsync(CreateEnvelope(
+            conversationActorId,
+            new NyxIdChatOperationResultSignal
+            {
+                Key = supersededKey.Clone(),
+                Llm = new NyxIdChatLLMOperationResult
+                {
+                    Content = "The superseded comparison completed too late.",
+                },
+            }));
+        var continuationTurnId = agent.State.ContinuationAdmission.ContinuationTurnId;
+        var selfDispatch = dispatch.Calls.Single(call =>
+            call.Envelope.Payload.Is(
+                NyxIdChatPendingSteeringContinuationDispatchRequested.Descriptor));
+
+        await agent.HandleEventAsync(selfDispatch.Envelope);
+
+        agent.State.ActiveTask.TaskId.Should().Be(taskId);
+        agent.State.ActiveTask.PlanRevision.Should().Be(3);
+        var preserved = agent.State.ActiveTask.Steps.Single(step =>
+            step.StepId == completed.StepId);
+        preserved.ToByteString().Should().Equal(completedBytes,
+            "a steering revision cannot rewrite completed effect evidence");
+        preserved.Source.ToByteString().Should().Equal(completedSourceBytes,
+            "provider-authored service and operation provenance must remain verbatim");
+        preserved.Status.Should().Be(NyxIdChatStepStatus.Done);
+        preserved.ExternalEffect.Should().Be(NyxIdChatEffectEvidence.Confirmed);
+        preserved.Operation.Phase.Should().Be(NyxIdChatOperationPhase.Succeeded);
+        var cancelled = agent.State.ActiveTask.Steps.Single(step =>
+            step.StepId == supersededKey.StepId);
+        cancelled.Status.Should().Be(NyxIdChatStepStatus.Cancelled);
+        cancelled.CancelledInPlanRevision.Should().Be(3);
+        agent.State.ActiveTask.PlanRevisions[^1].CancelledStepIds.Should()
+            .Equal(supersededKey.StepId);
+        agent.State.ActiveTask.PlanRevisions[^1].AddedStepIds.Should().ContainSingle();
+        var addedStepId = agent.State.ActiveTask.PlanRevisions[^1].AddedStepIds.Single();
+        agent.State.ActiveTask.Steps.Single(step => step.StepId == addedStepId)
+            .AddedBy.Should().Be(NyxIdChatStepAddedBy.Steering);
+
+        var revisionStarted = (await eventStore.GetEventsAsync(conversationActorId))
+            .Where(item => item.EventData.Is(NyxIdChatTurnStartedEvent.Descriptor))
+            .Select(item => item.EventData.Unpack<NyxIdChatTurnStartedEvent>())
+            .Single(item => item.State.ActiveTask.PlanRevision == 3);
+        var snapshot = NyxIdChatConversationAguiFrameBuilder.BuildStarted(
+                conversationActorId,
+                continuationTurnId,
+                revisionStarted.State)
+            .Single(frame => frame.Custom?.Name ==
+                             NyxIdChatConversationAguiFrameBuilder.TaskSnapshotEventName)
+            .Custom.Payload.Unpack<NyxIdChatTaskState>();
+        snapshot.ToByteString().Should().Equal(
+            revisionStarted.State.ActiveTask.ToByteString(),
+            "every revision must emit the complete committed task snapshot");
+        snapshot.Steps.Should().HaveCount(3);
+        snapshot.Steps.Single(step => step.StepId == completed.StepId)
+            .ToByteString().Should().Equal(completedBytes);
     }
 
     [Theory]
@@ -4330,6 +4540,157 @@ public sealed partial class NyxIdChatConversationGAgentTests
         agent.State.ContinuationAdmission.Status.Should().Be(
             NyxIdChatContinuationAdmissionStatus.Started);
         dispatch.OperationCalls.Should().HaveCount(4);
+    }
+
+    [Fact]
+    public async Task PostCommitContinuationDispatchFailure_ShouldFinalizeAdmissionBehindDeliveryProbe()
+    {
+        const string conversationActorId = "conversation-alpha";
+        var callbacks = new RecordingRuntimeCallbackScheduler();
+        var eventStore = new InMemoryEventStoreForTests();
+        using var services = BuildEventSourcingServices(
+            eventStore,
+            callbackScheduler: callbacks);
+        var failContinuationDispatch = false;
+        var dispatch = new RecordingActorDispatchPort(
+            [],
+            (_, envelope) =>
+            {
+                if (failContinuationDispatch &&
+                    envelope.Payload.Is(NyxIdChatOperationDispatchCommand.Descriptor))
+                {
+                    throw new InvalidOperationException("continuation operation dispatch unavailable");
+                }
+
+                return Task.CompletedTask;
+            });
+        var agent = CreateController(services, conversationActorId, dispatch);
+        await agent.ActivateAsync();
+        var arranged = await ArrangePendingEffectSteeringVerificationAsync(
+            agent,
+            eventStore,
+            dispatch,
+            conversationActorId);
+        var signal = await AcceptPendingSteeringAfterVerificationAsync(
+            agent,
+            arranged,
+            conversationActorId);
+        failContinuationDispatch = true;
+
+        await agent.HandleEventAsync(signal);
+
+        agent.State.ActiveTurn.TurnId.Should().Be(arranged.ContinuationTurnId);
+        agent.State.ContinuationAdmission.Status.Should().Be(
+            NyxIdChatContinuationAdmissionStatus.Started);
+        agent.State.PendingSteeringContinuation.Should().BeNull();
+        var uncertainStep = agent.State.ActiveTask.Steps.Single(step =>
+            step.Operation?.Key.TurnId == arranged.ContinuationTurnId);
+        uncertainStep.Status.Should().Be(NyxIdChatStepStatus.Running);
+        uncertainStep.Operation.Phase.Should().Be(NyxIdChatOperationPhase.Dispatched);
+        agent.State.PendingOperationDeliveryProbe.Should().BeEquivalentTo(
+            uncertainStep.Operation.Key);
+        AssertSingleOperationDeliveryProbe(dispatch, uncertainStep.Operation.Key);
+        dispatch.RecoveryCalls.Should().BeEmpty();
+        (await eventStore.GetEventsAsync(conversationActorId))[^1].EventData.Is(
+            NyxIdChatPendingSteeringContinuationFinalizedEvent.Descriptor).Should().BeTrue();
+
+        failContinuationDispatch = false;
+        callbacks.TimeoutRequests.Clear();
+        var recoveredDispatch = new RecordingActorDispatchPort(
+            [],
+            static (_, _) => Task.CompletedTask);
+        var recovered = CreateController(
+            services,
+            conversationActorId,
+            recoveredDispatch);
+        await recovered.ActivateAsync();
+        var probeRetry = callbacks.TimeoutRequests.Should().ContainSingle(request =>
+                request.TriggerEnvelope.Payload.Is(
+                    NyxIdChatOperationDeliveryProbeDispatchRequested.Descriptor))
+            .Which;
+        callbacks.TimeoutRequests.Should().NotContain(request =>
+            request.TriggerEnvelope.Payload.Is(NyxIdChatRecoveryRequestedSignal.Descriptor));
+
+        await recovered.HandleEventAsync(probeRetry.TriggerEnvelope);
+
+        recoveredDispatch.OperationCalls.Should().BeEmpty(
+            "activation cannot replay model I/O while delivery admission is unknown");
+        var stillUncertain = recovered.State.ActiveTask.Steps.Single(step =>
+            step.Operation?.Key.TurnId == arranged.ContinuationTurnId);
+        stillUncertain.Status.Should().Be(NyxIdChatStepStatus.Running);
+        stillUncertain.Operation.Phase.Should().Be(NyxIdChatOperationPhase.Dispatched);
+        recovered.State.PendingOperationDeliveryProbe.Should().BeEquivalentTo(
+            stillUncertain.Operation.Key);
+        AssertSingleOperationDeliveryProbe(recoveredDispatch, stillUncertain.Operation.Key);
+        stillUncertain.AvailableActions.Retry.Should().BeFalse(
+            "retry cannot unlock before the turn reports admitted or fences late delivery");
+        recovered.State.ContinuationAdmission.Status.Should().Be(
+            NyxIdChatContinuationAdmissionStatus.Started);
+        recovered.State.PendingSteeringContinuation.Should().BeNull();
+        (await eventStore.GetEventsAsync(conversationActorId))
+            .Where(item => item.EventData.Is(NyxIdChatOperationReconciledEvent.Descriptor))
+            .Select(item => item.EventData.Unpack<NyxIdChatOperationReconciledEvent>())
+            .Count(item => item.Result?.Key?.TurnId == arranged.ContinuationTurnId)
+            .Should().Be(0,
+                "conversation recovery stays fenced until the turn answers the delivery probe");
+    }
+
+    [Fact]
+    public async Task ContinuationRetrySchedulerFailure_ShouldRecoverFromCommittedPendingStateAfterRestart()
+    {
+        const string conversationActorId = "conversation-alpha";
+        var eventStore = new FailTurnStartEventStore(new InMemoryEventStoreForTests());
+        var callbacks = new RecordingRuntimeCallbackScheduler();
+        using var services = BuildEventSourcingServices(
+            eventStore,
+            callbackScheduler: callbacks);
+        var dispatch = new RecordingActorDispatchPort([], static (_, _) => Task.CompletedTask);
+        var agent = CreateController(services, conversationActorId, dispatch);
+        await agent.ActivateAsync();
+        var arranged = await ArrangePendingEffectSteeringVerificationAsync(
+            agent,
+            eventStore,
+            dispatch,
+            conversationActorId);
+        var signal = await AcceptPendingSteeringAfterVerificationAsync(
+            agent,
+            arranged,
+            conversationActorId);
+        eventStore.FailTurnStart = true;
+        callbacks.ScheduleException = new InvalidOperationException("scheduler unavailable");
+
+        await FluentActions.Invoking(() => agent.HandleEventAsync(signal))
+            .Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("scheduler unavailable");
+        agent.State.PendingSteeringContinuation.Should().NotBeNull();
+        agent.State.ContinuationAdmission.Status.Should().Be(
+            NyxIdChatContinuationAdmissionStatus.Accepted);
+
+        eventStore.FailTurnStart = false;
+        callbacks.ScheduleException = null;
+        callbacks.TimeoutRequests.Clear();
+        var recoveredDispatch = new RecordingActorDispatchPort(
+            [],
+            static (_, _) => Task.CompletedTask);
+        var recovered = CreateController(
+            services,
+            conversationActorId,
+            recoveredDispatch);
+        await recovered.ActivateAsync();
+        var retry = callbacks.TimeoutRequests.Should().ContainSingle(request =>
+                request.TriggerEnvelope.Payload.Is(
+                    NyxIdChatPendingSteeringContinuationDispatchRequested.Descriptor))
+            .Which;
+
+        await recovered.HandleEventAsync(retry.TriggerEnvelope);
+        await recovered.HandleEventAsync(retry.TriggerEnvelope.Clone());
+
+        recovered.State.ActiveTurn.TurnId.Should().Be(arranged.ContinuationTurnId);
+        recovered.State.PendingSteeringContinuation.Should().BeNull();
+        recovered.State.ContinuationAdmission.Status.Should().Be(
+            NyxIdChatContinuationAdmissionStatus.Started);
+        recoveredDispatch.OperationCalls.Should().ContainSingle(
+            "the restarted actor must start the delayed continuation exactly once");
     }
 
     [Fact]
@@ -5019,7 +5380,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
     }
 
     [Fact]
-    public async Task InputResolution_WhenContinuationDispatchFails_ShouldCommitSafeTerminal()
+    public async Task InputResolution_WhenContinuationDispatchFails_ShouldWaitForDeliveryProbe()
     {
         const string conversationActorId = "conversation-alpha";
         const string refreshedToken = "dispatch-failure-token-sentinel";
@@ -5115,19 +5476,52 @@ public sealed partial class NyxIdChatConversationGAgentTests
         controller.State.PendingInput.Should().BeNull();
         controller.State.LatestInputResolution.Outcome.Should().Be(
             NyxIdChatNeedsYouResolutionOutcome.Accepted);
-        controller.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Failed);
-        controller.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Failed);
-        controller.State.ActiveTask.FailureCode.Should().Be("NYXID_CHAT_OPERATION_DISPATCH_FAILED");
-        controller.State.ActiveTask.Steps.Should().OnlyContain(step =>
-            step.Status != NyxIdChatStepStatus.Waiting &&
-            step.Status != NyxIdChatStepStatus.Running);
+        controller.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Active);
+        controller.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Active);
+        var uncertainContinuation = controller.State.ActiveTask.Steps.Should()
+            .ContainSingle(step =>
+                step.Kind == NyxIdChatStepKind.Llm &&
+                step.AddedBy == NyxIdChatStepAddedBy.Replan)
+            .Which;
+        uncertainContinuation.Status.Should().Be(NyxIdChatStepStatus.Running);
+        uncertainContinuation.Operation.Phase.Should().Be(
+            NyxIdChatOperationPhase.Dispatched);
+        controller.State.PendingOperationDeliveryProbe.Should().BeEquivalentTo(
+            uncertainContinuation.Operation.Key);
+        AssertSingleOperationDeliveryProbe(dispatch, uncertainContinuation.Operation.Key);
+        dispatch.RecoveryCalls.Should().BeEmpty(
+            "the conversation cannot recover or advance before the turn fences late delivery");
+        dispatch.OperationCalls.Count(call =>
+                call.Envelope.Payload.Unpack<NyxIdChatOperationDispatchCommand>().InputCase ==
+                NyxIdChatOperationDispatchCommand.InputOneofCase.InputContinuation)
+            .Should().Be(1,
+                "the accepted answer must dispatch one continuation without speculative replay");
         var committed = await eventStore.GetEventsAsync(conversationActorId);
         committed.Should().Contain(item =>
             item.EventData.Is(NyxIdChatInputResolutionCommittedEvent.Descriptor));
-        committed.Should().Contain(item =>
-            item.EventData.Is(NyxIdChatOperationReconciledEvent.Descriptor));
+        committed.Should().ContainSingle(item =>
+            item.EventData.Is(NyxIdChatOperationDispatchUncertainEvent.Descriptor) &&
+            item.EventData.Unpack<NyxIdChatOperationDispatchUncertainEvent>()
+                .Key.Equals(uncertainContinuation.Operation.Key));
+        committed.Should().NotContain(item =>
+            item.EventData.Is(NyxIdChatOperationReconciledEvent.Descriptor) &&
+            item.EventData.Unpack<NyxIdChatOperationReconciledEvent>().Result != null &&
+            item.EventData.Unpack<NyxIdChatOperationReconciledEvent>().Result.Failure != null &&
+            item.EventData.Unpack<NyxIdChatOperationReconciledEvent>()
+                .Result.Failure.FailureCode == "NYXID_CHAT_OPERATION_DISPATCH_FAILED");
         committed.Should().OnlyContain(item =>
             !item.EventData.ToString().Contains(refreshedToken, StringComparison.Ordinal));
+    }
+
+    private static NyxIdChatTurnOperationDeliveryProbeCommand AssertSingleOperationDeliveryProbe(
+        RecordingActorDispatchPort dispatch,
+        NyxIdChatOperationKey expectedKey)
+    {
+        var probe = dispatch.Calls.Should().ContainSingle(call =>
+                call.Envelope.Payload.Is(NyxIdChatTurnOperationDeliveryProbeCommand.Descriptor))
+            .Which.Envelope.Payload.Unpack<NyxIdChatTurnOperationDeliveryProbeCommand>();
+        probe.Key.Should().BeEquivalentTo(expectedKey);
+        return probe;
     }
 
     private static NyxIdChatStartTurnCommand CreateStartTurnCommand() => new()
@@ -5152,6 +5546,78 @@ public sealed partial class NyxIdChatConversationGAgentTests
             },
         },
     };
+
+    private static NyxIdChatTaskStepState CreateCompletedEffectStep(string taskId)
+    {
+        var completedAt = Timestamp.FromDateTimeOffset(
+            new DateTimeOffset(2026, 7, 24, 7, 59, 0, TimeSpan.Zero));
+        var operationAdmission = CreateEffectAdmissionWithReadBack();
+        return new NyxIdChatTaskStepState
+        {
+            StepId = "step-completed-effect-alpha",
+            Order = 1,
+            Kind = NyxIdChatStepKind.Tool,
+            Status = NyxIdChatStepStatus.Done,
+            Required = true,
+            Description = "Update the repository settings.",
+            Source = new NyxIdChatStepSource
+            {
+                Tool = new NyxIdChatToolStepSource
+                {
+                    ToolName = "repository_update",
+                    ServiceSlug = "repository-service",
+                    ServiceId = "svc-repository-alpha",
+                    ReadinessCapabilityId = "capability-repository-alpha",
+                    ProviderResourceId = "repository-alpha",
+                    OperationAdmission = operationAdmission.Clone(),
+                },
+            },
+            MayChangeExternalState = true,
+            ExternalEffect = NyxIdChatEffectEvidence.Confirmed,
+            Operation = new NyxIdChatOperationState
+            {
+                Key = new NyxIdChatOperationKey
+                {
+                    ConversationActorId = "conversation-alpha",
+                    TurnId = "turn-effect-alpha",
+                    TaskId = taskId,
+                    StepId = "step-completed-effect-alpha",
+                    OperationId = "operation-completed-effect-alpha",
+                    OperationGeneration = 1,
+                },
+                Kind = NyxIdChatStepKind.Tool,
+                Phase = NyxIdChatOperationPhase.Succeeded,
+                MayChangeExternalState = true,
+                Idempotent = true,
+                IdempotencyKey = "idempotency-completed-effect-alpha",
+                RequestedAt = completedAt.Clone(),
+                DispatchedAt = completedAt.Clone(),
+                CompletedAt = completedAt.Clone(),
+                TerminalCode = "NYXID_TOOL_SUCCEEDED",
+                LatestProgressSequence = 7,
+                LastProgressAt = completedAt.Clone(),
+            },
+            ApprovalRequestId = "approval-completed-effect-alpha",
+            RetryToolInput = new NyxIdChatRetryToolInputState
+            {
+                CallId = "call-completed-effect-alpha",
+                ToolName = "repository_update",
+                Arguments = JsonParser.Default.Parse<Struct>(
+                    "{\"repositoryId\":\"repository-alpha\"}"),
+                OperationAdmission = operationAdmission.Clone(),
+            },
+            ApprovalObservation = new NyxIdChatPostReturnApprovalObservation
+            {
+                ApprovalRequestId = "approval-completed-effect-alpha",
+                DecisionMode = NyxIdApprovalDecisionMode.PerRequest,
+                ReceiptStatus = AgentToolReceiptStatus.Success,
+                ObservedAt = completedAt.Clone(),
+            },
+            AddedBy = NyxIdChatStepAddedBy.Initial,
+            AddedInPlanRevision = 1,
+            UpdatedAt = completedAt.Clone(),
+        };
+    }
 
     private static void SetOwner(NyxIdChatStartTurnCommand command, string ownerSubject)
     {
@@ -6343,12 +6809,16 @@ public sealed partial class NyxIdChatConversationGAgentTests
             ct.ThrowIfCancellationRequested();
             var isOperationDispatch =
                 envelope.Payload.Is(NyxIdChatOperationDispatchCommand.Descriptor);
+            var isPlanGateAdmission =
+                envelope.Payload.Is(NyxIdChatTurnPlanGateAdmissionCommand.Descriptor);
             if (!envelope.Payload.Is(NyxIdChatHistoryTerminalDispatchRequested.Descriptor))
                 operations.Add("dispatch");
             Calls.Add((actorId, envelope.Clone()));
             if (failedStage == "dispatch" && isOperationDispatch)
                 throw new InvalidOperationException("dispatch failed with bearer-secret");
             await onDispatch(actorId, envelope);
+            if (failedStage == "plan-admission-dispatch" && isPlanGateAdmission)
+                throw new InvalidOperationException("plan admission dispatch failed");
             return failedStage == "dispatch-rejected" && isOperationDispatch
                 ? new DispatchAdmission(
                     false,
@@ -6356,6 +6826,13 @@ public sealed partial class NyxIdChatConversationGAgentTests
                     DateTimeOffset.UtcNow,
                     actorId,
                     envelope.Propagation?.CorrelationId ?? envelope.Id)
+                : failedStage == "plan-admission-rejected" && isPlanGateAdmission
+                    ? new DispatchAdmission(
+                        false,
+                        envelope.Id,
+                        DateTimeOffset.UtcNow,
+                        actorId,
+                        envelope.Propagation?.CorrelationId ?? envelope.Id)
                 : DispatchAdmissionFactory.Create(actorId, envelope);
         }
     }

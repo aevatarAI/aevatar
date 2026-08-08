@@ -2,6 +2,12 @@ using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.Tools;
+using Aevatar.Audit;
+using Aevatar.Audit.Abstractions.Identity;
+using Aevatar.Audit.Abstractions.Models;
+using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
@@ -339,6 +345,47 @@ public sealed class NyxIdChatControlEndpointsTests
     }
 
     [Fact]
+    public async Task Retry_ToolContext_ShouldExecuteThroughRealAdmissionBoundaryWithActorOwner()
+    {
+        var dispatch = new RecordingDispatchPort();
+        var response = await ExecuteAsync(
+            RetryRoute,
+            StepRouteValues(),
+            ValidRetryBody(generation: 2),
+            new RecordingAdmissionPort(),
+            dispatch,
+            accessToken: "retry-runtime-token-alpha");
+
+        response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        var command = dispatch.Dispatches.Should().ContainSingle().Which.Envelope.Payload
+            .Unpack<NyxIdChatRetryStepCommand>();
+        var endpointContext = AgentToolExecutionContextMapper.FromPayload(command.ToolContext);
+        endpointContext.ExecutionOwner.Kind.Should().Be(AgentToolExecutionOwnerKind.Actor);
+        endpointContext.ExecutionOwner.OwnerId.Should().Be("conversation-alpha");
+
+        var tool = new CountingReadOnlyTool();
+        var executor = new AdmittedAgentToolExecutor(
+            AlwaysStartingAgentToolAdmissionLedger.Instance,
+            new AppendedAuditTrail(),
+            new StableIdentityHasher());
+        var executionContext = endpointContext with
+        {
+            Request = endpointContext.Request with { CallId = "call-retry-alpha" },
+        };
+
+        var outcome = await executor.ExecuteAsync(new AgentToolExecutionRequest(
+            tool,
+            "{}",
+            executionContext,
+            AgentToolApprovalContinuationMode.ActorOwned,
+            null));
+
+        outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.Executed);
+        outcome.FailureCode.Should().NotBe("invalid_tool_execution_identity");
+        tool.ExecuteCount.Should().Be(1);
+    }
+
+    [Fact]
     public async Task Retry_ShouldRequirePositiveGenerationBeforeAdmission()
     {
         var admission = new RecordingAdmissionPort();
@@ -557,6 +604,37 @@ public sealed class NyxIdChatControlEndpointsTests
             Dispatches.Add((actorId, envelope));
             return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
+    }
+
+    private sealed class CountingReadOnlyTool : IAgentTool
+    {
+        public int ExecuteCount { get; private set; }
+        public string Name => "retry-context-fixture";
+        public string Description => "Exercises the admitted execution identity boundary.";
+        public string ParametersSchema => "{}";
+        public bool IsReadOnly => true;
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            ExecuteCount++;
+            return Task.FromResult("{}");
+        }
+    }
+
+    private sealed class AppendedAuditTrail : IAuditTrailAppender
+    {
+        public Task<AuditTrailAppendResult> AppendAsync(
+            AuditRecord record,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(AuditTrailAppendResult.Appended(record.AuditId));
+    }
+
+    private sealed class StableIdentityHasher : IAuditActorIdentityHasher
+    {
+        public AuditActorIdentity Hash(string canonicalActorKey) => new("actor-hash", "key-1");
+
+        public bool Verify(string canonicalActorKey, string auditActorId, string identityKeyId) => true;
     }
 
     private sealed class TestHostEnvironment : IHostEnvironment

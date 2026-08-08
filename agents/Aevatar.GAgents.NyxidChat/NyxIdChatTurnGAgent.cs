@@ -72,6 +72,8 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
             .On<NyxIdChatTurnOperationAdmittedEvent>(ApplyAdmitted)
             .On<NyxIdChatTurnPlanGateAdmissionCommittedEvent>(ApplyPlanGateAdmissionCommitted)
             .On<NyxIdChatTurnPlanGateAdmissionExpiredEvent>(ApplyPlanGateAdmissionExpired)
+            .On<NyxIdChatTurnPlanGateAdmissionRevokedEvent>(ApplyPlanGateAdmissionRevoked)
+            .On<NyxIdChatTurnOperationDeliveryFencedEvent>(ApplyOperationDeliveryFenced)
             .On<NyxIdChatTurnEffectDispatchStartedEvent>(ApplyEffectDispatchStarted)
             .On<NyxIdChatTurnOperationReconciliationStartedEvent>(ApplyReconciliationStarted)
             .On<NyxIdChatTurnOperationCompletedEvent>(ApplyCompleted)
@@ -81,7 +83,10 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
         await base.OnActivateAsync(ct);
-        if (State.PlanGateAdmission is { } staleAdmission)
+        if (State.PlanGateAdmission is
+            {
+                RematerializeDurableAuthorization: false,
+            } staleAdmission)
         {
             await DispatchPlanGateCapabilityExpiredAsync(staleAdmission, ct);
             await PersistDomainEventAsync(new NyxIdChatTurnPlanGateAdmissionExpiredEvent
@@ -141,10 +146,14 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
         if (!IsValidPlanGateAdmission(command))
             return;
 
+        if (State.RevokedPlanGateAdmissions.Any(revoked =>
+                revoked.Equals(command.Admission)))
+            return;
+
         if (State.PlanGateAdmission is { } existing)
         {
             if (existing.Equals(command.Admission))
-                return;
+                await DispatchPlanGateAdmissionCommittedAsync(existing, CancellationToken.None);
 
             return;
         }
@@ -153,15 +162,74 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
         {
             Admission = command.Admission.Clone(),
         }, CancellationToken.None);
+
+        await DispatchPlanGateAdmissionCommittedAsync(
+            command.Admission,
+            CancellationToken.None);
+    }
+
+    [EventHandler]
+    public async Task HandlePlanGateAdmissionRevokeAsync(
+        NyxIdChatTurnPlanGateAdmissionRevokeCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (!CanRevokePlanGateAdmission(command))
+            return;
+
+        if (!State.RevokedPlanGateAdmissions.Any(revoked =>
+                revoked.Equals(command.Admission)))
+        {
+            await PersistDomainEventAsync(new NyxIdChatTurnPlanGateAdmissionRevokedEvent
+            {
+                Admission = command.Admission.Clone(),
+                ReasonCode = command.ReasonCode,
+                RevokedAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
+            }, CancellationToken.None);
+        }
+
+        var signal = new NyxIdChatTurnPlanGateAdmissionRevokedSignal
+        {
+            Admission = command.Admission.Clone(),
+            ReasonCode = command.ReasonCode,
+        };
+        var envelope = CreateDirectEnvelope(
+            command.Admission.Key.ConversationActorId,
+            $"{command.Admission.GateRequestId}:turn-admission-revoked",
+            signal);
+        await _actorDispatchPort.DispatchAsync(
+            command.Admission.Key.ConversationActorId,
+            envelope,
+            CancellationToken.None);
     }
 
     [EventHandler]
     public async Task HandleOperationAsync(NyxIdChatOperationDispatchCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
-        if (!IsValid(command) ||
-            !MatchesPlanGateAdmission(command) ||
-            IsDuplicateOrUnavailable(command))
+        if (!IsValid(command))
+            return;
+
+        if (KeysEqual(State.AdmittedOperation, command.Key))
+        {
+            await DispatchOperationDeliveryStatusAsync(
+                command.Key,
+                admitted: true,
+                State.EffectDispatchWaterline,
+                CancellationToken.None);
+            return;
+        }
+
+        if (State.FencedOperationDeliveries.Any(key => KeysEqual(key, command.Key)))
+        {
+            await DispatchOperationDeliveryStatusAsync(
+                command.Key,
+                admitted: false,
+                NyxIdChatEffectEvidence.NotStarted,
+                CancellationToken.None);
+            return;
+        }
+
+        if (!MatchesPlanGateAdmission(command) || IsDuplicateOrUnavailable(command))
             return;
 
         var kind = ResolveKind(command);
@@ -244,6 +312,46 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
                 },
             });
         }
+
+        await DispatchOperationDeliveryStatusAsync(
+            command.Key,
+            admitted: true,
+            State.EffectDispatchWaterline,
+            CancellationToken.None);
+    }
+
+    [EventHandler]
+    public async Task HandleOperationDeliveryProbeAsync(
+        NyxIdChatTurnOperationDeliveryProbeCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (!IsValidOperationDeliveryProbe(command.Key))
+            return;
+
+        if (KeysEqual(State.AdmittedOperation, command.Key))
+        {
+            await DispatchOperationDeliveryStatusAsync(
+                command.Key,
+                admitted: true,
+                State.EffectDispatchWaterline,
+                CancellationToken.None);
+            return;
+        }
+
+        if (!State.FencedOperationDeliveries.Any(key => KeysEqual(key, command.Key)))
+        {
+            await PersistDomainEventAsync(new NyxIdChatTurnOperationDeliveryFencedEvent
+            {
+                Key = command.Key.Clone(),
+                FencedAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
+            }, CancellationToken.None);
+        }
+
+        await DispatchOperationDeliveryStatusAsync(
+            command.Key,
+            admitted: false,
+            NyxIdChatEffectEvidence.NotStarted,
+            CancellationToken.None);
     }
 
     [EventHandler(AllowSelfHandling = true)]
@@ -933,6 +1041,49 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
         return next;
     }
 
+    private static NyxIdChatTurnGAgentState ApplyPlanGateAdmissionRevoked(
+        NyxIdChatTurnGAgentState current,
+        NyxIdChatTurnPlanGateAdmissionRevokedEvent evt)
+    {
+        if (evt.Admission is null ||
+            (current.PlanGateAdmission is { } active &&
+             !active.Equals(evt.Admission)))
+        {
+            return current;
+        }
+
+        if (current.RevokedPlanGateAdmissions.Any(revoked =>
+                revoked.Equals(evt.Admission)))
+        {
+            return current;
+        }
+
+        var next = current.Clone();
+        if (next.PlanGateAdmission?.Equals(evt.Admission) == true)
+            next.PlanGateAdmission = null;
+        next.RevokedPlanGateAdmissions.Add(evt.Admission.Clone());
+        while (next.RevokedPlanGateAdmissions.Count > DeliveredOperationHistoryLimit)
+            next.RevokedPlanGateAdmissions.RemoveAt(0);
+        return next;
+    }
+
+    private static NyxIdChatTurnGAgentState ApplyOperationDeliveryFenced(
+        NyxIdChatTurnGAgentState current,
+        NyxIdChatTurnOperationDeliveryFencedEvent evt)
+    {
+        if (evt.Key is null ||
+            current.FencedOperationDeliveries.Any(key => KeysEqual(key, evt.Key)))
+        {
+            return current;
+        }
+
+        var next = current.Clone();
+        next.FencedOperationDeliveries.Add(evt.Key.Clone());
+        while (next.FencedOperationDeliveries.Count > DeliveredOperationHistoryLimit)
+            next.FencedOperationDeliveries.RemoveAt(0);
+        return next;
+    }
+
     private static NyxIdChatTurnGAgentState ApplyEffectDispatchStarted(
         NyxIdChatTurnGAgentState current,
         NyxIdChatTurnEffectDispatchStartedEvent evt)
@@ -1018,35 +1169,84 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
     private bool IsValidPlanGateAdmission(NyxIdChatTurnPlanGateAdmissionCommand command)
     {
         var admission = command.Admission;
-        return admission?.Key is
-               {
-                   ConversationActorId.Length: > 0,
-                   TurnId.Length: > 0,
-                   TaskId.Length: > 0,
-                   StepId.Length: > 0,
-                   OperationId.Length: > 0,
-                   OperationGeneration: > 0,
-               } &&
-               command.SourceOperationKey is not null &&
-               State.AdmittedOperation is not null &&
-               State.ResultDelivered &&
-               State.OperationKind == NyxIdChatStepKind.Llm &&
-               State.Phase == NyxIdChatOperationPhase.Succeeded &&
-               KeysEqual(State.AdmittedOperation, command.SourceOperationKey) &&
-               SameTask(command.SourceOperationKey, admission.Key) &&
-               string.Equals(admission.TaskId, admission.Key.TaskId, StringComparison.Ordinal) &&
-               !string.IsNullOrWhiteSpace(admission.GateRequestId) &&
-               !string.IsNullOrWhiteSpace(admission.PlanId) &&
-               admission.PlanRevision > 0 &&
-               !string.IsNullOrWhiteSpace(admission.ToolCallId) &&
-               !string.IsNullOrWhiteSpace(admission.ToolName) &&
-               admission.ArgumentsSha256.Length == SHA256.HashSizeInBytes;
+        if (admission?.Key is not
+            {
+                ConversationActorId.Length: > 0,
+                TurnId.Length: > 0,
+                TaskId.Length: > 0,
+                StepId.Length: > 0,
+                OperationId.Length: > 0,
+                OperationGeneration: > 0,
+            } ||
+            command.SourceOperationKey is null ||
+            State.AdmittedOperation is null ||
+            !State.ResultDelivered ||
+            !KeysEqual(State.AdmittedOperation, command.SourceOperationKey) ||
+            !SameTask(command.SourceOperationKey, admission.Key) ||
+            !string.Equals(admission.TaskId, admission.Key.TaskId, StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(admission.GateRequestId) ||
+            string.IsNullOrWhiteSpace(admission.PlanId) ||
+            admission.PlanRevision <= 0 ||
+            string.IsNullOrWhiteSpace(admission.ToolCallId) ||
+            string.IsNullOrWhiteSpace(admission.ToolName) ||
+            admission.ArgumentsSha256.Length != SHA256.HashSizeInBytes)
+        {
+            return false;
+        }
+
+        if (!admission.RematerializeDurableAuthorization)
+        {
+            return State.OperationKind == NyxIdChatStepKind.Llm &&
+                   State.Phase == NyxIdChatOperationPhase.Succeeded;
+        }
+
+        var sourceProvesNotApplied =
+            State.OperationKind == NyxIdChatStepKind.Postcondition &&
+            State.Phase == NyxIdChatOperationPhase.Succeeded ||
+            State.OperationKind == NyxIdChatStepKind.Tool &&
+            State.Phase is NyxIdChatOperationPhase.Failed or
+                NyxIdChatOperationPhase.Cancelled;
+        return sourceProvesNotApplied &&
+               State.ExternalEffect == NyxIdChatEffectEvidence.NotApplied &&
+               admission.Key.OperationGeneration > 1 &&
+               command.SourceOperationKey.OperationGeneration ==
+               admission.Key.OperationGeneration - 1;
+    }
+
+    private bool CanRevokePlanGateAdmission(
+        NyxIdChatTurnPlanGateAdmissionRevokeCommand command)
+    {
+        var admission = command.Admission;
+        if (admission?.Key is null ||
+            string.IsNullOrWhiteSpace(command.ReasonCode))
+        {
+            return false;
+        }
+
+        if (State.RevokedPlanGateAdmissions.Any(revoked => revoked.Equals(admission)))
+            return true;
+
+        if (State.PlanGateAdmission is { } active)
+            return active.Equals(admission);
+
+        if (KeysEqual(State.AdmittedOperation, admission.Key))
+            return true;
+
+        if (State.AdmittedOperation is null)
+            return false;
+
+        return IsValidPlanGateAdmission(new NyxIdChatTurnPlanGateAdmissionCommand
+        {
+            SourceOperationKey = State.AdmittedOperation.Clone(),
+            Admission = admission.Clone(),
+        });
     }
 
     private bool MatchesPlanGateAdmission(NyxIdChatOperationDispatchCommand command)
     {
         if (command.PlanGateContinuation is not { } continuation)
-            return State.PlanGateAdmission is null;
+            return State.PlanGateAdmission is null &&
+                   MatchesDurableRetryAuthorization(command);
 
         var expected = State.PlanGateAdmission;
         return expected?.Key is not null &&
@@ -1058,6 +1258,8 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
                string.Equals(expected.ToolCallId, continuation.ToolCallId, StringComparison.Ordinal) &&
                string.Equals(expected.ToolName, continuation.ToolName, StringComparison.Ordinal) &&
                expected.MayChangeExternalState == continuation.MayChangeExternalState &&
+               expected.RematerializeDurableAuthorization ==
+               continuation.RematerializeDurableAuthorization &&
                expected.ArgumentsSha256.Length == continuation.ArgumentsSha256.Length &&
                CryptographicOperations.FixedTimeEquals(
                    expected.ArgumentsSha256.Span,
@@ -1066,6 +1268,85 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
                    expected.OperationAdmission,
                    continuation.OperationAdmission);
     }
+
+    private bool MatchesDurableRetryAuthorization(NyxIdChatOperationDispatchCommand command)
+    {
+        var tool = command.Tool;
+        if (tool?.RematerializeDurableAuthorization != true)
+            return tool?.RetryAuthorizationSourceKey is null;
+
+        var source = tool.RetryAuthorizationSourceKey;
+        if (source is null ||
+            State.AdmittedOperation is null ||
+            !State.ResultDelivered ||
+            !KeysEqual(State.AdmittedOperation, source) ||
+            !SameTask(source, command.Key) ||
+            command.Key.OperationGeneration <= 1 ||
+            source.OperationGeneration != command.Key.OperationGeneration - 1 ||
+            State.ExternalEffect != NyxIdChatEffectEvidence.NotApplied)
+        {
+            return false;
+        }
+
+        return State.OperationKind == NyxIdChatStepKind.Postcondition &&
+               State.Phase == NyxIdChatOperationPhase.Succeeded ||
+               State.OperationKind == NyxIdChatStepKind.Tool &&
+               State.Phase is NyxIdChatOperationPhase.Failed or
+                   NyxIdChatOperationPhase.Cancelled;
+    }
+
+    private async Task DispatchPlanGateAdmissionCommittedAsync(
+        NyxIdChatTurnPlanGateAdmissionState admission,
+        CancellationToken ct)
+    {
+        var signal = new NyxIdChatTurnPlanGateAdmissionCommittedSignal
+        {
+            Admission = admission.Clone(),
+        };
+        var envelope = CreateDirectEnvelope(
+            admission.Key.ConversationActorId,
+            $"{admission.GateRequestId}:turn-admission-committed",
+            signal);
+        await _actorDispatchPort.DispatchAsync(
+            admission.Key.ConversationActorId,
+            envelope,
+            ct);
+    }
+
+    private async Task DispatchOperationDeliveryStatusAsync(
+        NyxIdChatOperationKey key,
+        bool admitted,
+        NyxIdChatEffectEvidence effectDispatchWaterline,
+        CancellationToken ct)
+    {
+        var signal = new NyxIdChatTurnOperationDeliveryStatusSignal
+        {
+            Key = key.Clone(),
+            Admitted = admitted,
+            EffectDispatchWaterline = effectDispatchWaterline,
+        };
+        var envelope = CreateDirectEnvelope(
+            key.ConversationActorId,
+            $"{key.OperationId}:turn-operation-delivery-status",
+            signal);
+        await _actorDispatchPort.DispatchAsync(
+            key.ConversationActorId,
+            envelope,
+            ct);
+    }
+
+    private bool IsValidOperationDeliveryProbe(NyxIdChatOperationKey? key) =>
+        key is not null &&
+        !string.IsNullOrWhiteSpace(key.ConversationActorId) &&
+        !string.IsNullOrWhiteSpace(key.TurnId) &&
+        !string.IsNullOrWhiteSpace(key.TaskId) &&
+        !string.IsNullOrWhiteSpace(key.StepId) &&
+        !string.IsNullOrWhiteSpace(key.OperationId) &&
+        key.OperationGeneration > 0 &&
+        string.Equals(
+            NyxIdChatTurnActorIds.ForTurn(key.ConversationActorId, key.TurnId),
+            Id,
+            StringComparison.Ordinal);
 
     private async Task DispatchPlanGateCapabilityExpiredAsync(
         NyxIdChatTurnPlanGateAdmissionState admission,

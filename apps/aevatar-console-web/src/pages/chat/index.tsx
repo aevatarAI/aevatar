@@ -27,6 +27,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
+import { isNyxIdChatWireInspectorEnabled } from '@/shared/config/consoleFeatures';
 import { t } from '@/shared/i18n/messages';
 import { history } from '@/shared/navigation/history';
 import {
@@ -119,6 +120,8 @@ type ActionDisposition =
   | 'expired';
 
 type ChatControlCommand = Exclude<ChatCommand, { type: 'text' }>;
+
+const ACTIVE_STATE_REFRESH_DELAYS_MS = [250, 500, 1_000, 2_000] as const;
 
 function readChatQueryValue(
   key: string,
@@ -455,6 +458,8 @@ const ChatPage: React.FC = () => {
   const [prompt, setPrompt] = useState('');
   const [notice, setNotice] = useState<Notice | null>(null);
   const [controlBusy, setControlBusy] = useState(false);
+  const [diagnosticWire, setDiagnosticWire] = useState<unknown>(undefined);
+  const wireInspectorEnabled = isNyxIdChatWireInspectorEnabled();
 
   const authSessionQuery = useQuery({
     queryKey: ['chat', 'auth-session'],
@@ -556,6 +561,7 @@ const ChatPage: React.FC = () => {
     setHistoryDrawerOpen(false);
     setNotice(null);
     setPrompt('');
+    setDiagnosticWire(undefined);
   }, [applyProjection, scopeId]);
 
   useEffect(() => {
@@ -636,6 +642,64 @@ const ChatPage: React.FC = () => {
     [applyProjection],
   );
 
+  useEffect(() => {
+    const conversationId = activeConversation?.conversationId?.trim();
+    if (
+      !isStreaming ||
+      !conversationId ||
+      (projection?.stateVersion ?? 0) > 0
+    ) {
+      return;
+    }
+
+    const controller = new AbortController();
+    let delayIndex = 0;
+    let timeoutId: number | undefined;
+
+    const scheduleRefresh = () => {
+      if (
+        controller.signal.aborted ||
+        delayIndex >= ACTIVE_STATE_REFRESH_DELAYS_MS.length
+      ) {
+        return;
+      }
+      const delay = ACTIVE_STATE_REFRESH_DELAYS_MS[delayIndex];
+      delayIndex += 1;
+      timeoutId = window.setTimeout(() => void refresh(), delay);
+    };
+
+    const refresh = async () => {
+      const current = projectionRef.current;
+      if (
+        controller.signal.aborted ||
+        !current ||
+        current.actorId !== conversationId ||
+        current.stateVersion > 0
+      ) {
+        return;
+      }
+      try {
+        await loadActorState(conversationId, current, controller.signal, false);
+      } catch {
+        // A failed read stays version-fenced and may be retried within this bounded window.
+      }
+      if ((projectionRef.current?.stateVersion ?? 0) === 0) {
+        scheduleRefresh();
+      }
+    };
+
+    scheduleRefresh();
+    return () => {
+      controller.abort();
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+    };
+  }, [
+    activeConversation?.conversationId,
+    isStreaming,
+    loadActorState,
+    projection?.stateVersion,
+  ]);
+
   const restoreConversation = useCallback(
     async (conversationId: string) => {
       if (!canStartChat || isStreaming) return;
@@ -668,6 +732,7 @@ const ChatPage: React.FC = () => {
           createChatActorProjection(conversationId),
           stateEnvelope,
         );
+        if (wireInspectorEnabled) setDiagnosticWire(stateEnvelope);
         const restored: ConversationState = {
           ...placeholder,
           latestTurnId:
@@ -688,7 +753,13 @@ const ChatPage: React.FC = () => {
         }
       }
     },
-    [applyProjection, canStartChat, conversations, isStreaming],
+    [
+      applyProjection,
+      canStartChat,
+      conversations,
+      isStreaming,
+      wireInspectorEnabled,
+    ],
   );
 
   const handleNewChat = useCallback(() => {
@@ -707,6 +778,7 @@ const ChatPage: React.FC = () => {
     setHistoryDrawerOpen(false);
     setNotice(null);
     setPrompt('');
+    setDiagnosticWire(undefined);
   }, [applyProjection, isStreaming]);
 
   const handleDeleteConversation = useCallback(async () => {
@@ -787,6 +859,7 @@ const ChatPage: React.FC = () => {
           signal: controller.signal,
         })) {
           rawFrames.push(frame.raw);
+          if (wireInspectorEnabled) setDiagnosticWire(frame.raw);
           const actorFrame = decodeActorFrame(frame.raw);
           if (actorFrame.type !== 'ignored') {
             actorState = reduceActorFrame(actorState, actorFrame);
@@ -840,6 +913,17 @@ const ChatPage: React.FC = () => {
             }
             actorState = { ...actorState, actorId: conversationId };
             applyProjection(actorState);
+            try {
+              actorState = await loadActorState(
+                conversationId,
+                actorState,
+                controller.signal,
+                false,
+              );
+              applyProjection(actorState);
+            } catch {
+              // Live facts remain visible, but version-fenced controls stay disabled without current state.
+            }
             streaming = {
               ...streaming,
               conversationId,
@@ -948,6 +1032,7 @@ const ChatPage: React.FC = () => {
       loadActorState,
       queryClient,
       scopeId,
+      wireInspectorEnabled,
     ],
   );
 
@@ -1824,7 +1909,8 @@ const ChatPage: React.FC = () => {
             >
               <ChatActorControls
                 actionJourneys={actionJourneys}
-                disabled={controlBusy || isStreaming}
+                diagnosticWire={diagnosticWire}
+                disabled={controlBusy || projection?.stateVersion === 0}
                 onActionConnectCredential={handleActionConnectCredential}
                 onActionOpen={handleActionOpen}
                 onActionRefresh={handleActionRefresh}
@@ -1838,6 +1924,7 @@ const ChatPage: React.FC = () => {
                 onSteer={handleSteer}
                 onStop={handleTaskStop}
                 projection={projection}
+                wireInspectorEnabled={wireInspectorEnabled && canStartChat}
               />
             </div>
             <div ref={scrollAnchorRef} />

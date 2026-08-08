@@ -127,6 +127,27 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
     }
 
     [Fact]
+    public async Task ToolVerificationPort_WhenAdmittedReadCannotBeMaterialized_ShouldReturnUnavailable()
+    {
+        var readBack = ExactReadBack();
+        var result = await new NyxIdChatToolVerificationPort().VerifyAsync(
+            CreateOperationKey(),
+            new NyxIdChatToolVerificationInput
+            {
+                EffectStepId = "step-effect-alpha",
+                ReadBack = readBack,
+                ToolContext = new AgentToolExecutionContextPayload(),
+            },
+            CancellationToken.None);
+
+        result.Disposition.Should().Be(NyxIdChatToolVerificationDisposition.Unavailable);
+        result.FailureCode.Should().Be(NyxIdChatToolVerificationPort.UnavailableCode);
+        result.EffectStepId.Should().Be("step-effect-alpha");
+        result.ReadOperation.Should().BeEquivalentTo(readBack.ReadOperation);
+        result.CheckName.Should().Be(readBack.CheckName);
+    }
+
+    [Fact]
     public async Task Activation_WithRequestedPostcondition_ShouldOnlySignalSelfForRecovery()
     {
         const string actorId = "conversation-alpha";

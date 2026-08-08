@@ -209,8 +209,9 @@ internal static class NyxIdChatConversationAguiFrameBuilder
         }
         AppendOperationEvidence(frames, reconciled, turnId);
 
-        if (state.ActiveTurn.Status == NyxIdChatTurnStatus.Active &&
-            state.ActiveTask.Status == NyxIdChatTaskStatus.Active)
+        if (reconciled.RefinesExistingTerminal ||
+            (state.ActiveTurn.Status == NyxIdChatTurnStatus.Active &&
+             state.ActiveTask.Status == NyxIdChatTaskStatus.Active))
         {
             return frames;
         }
@@ -446,14 +447,27 @@ internal static class NyxIdChatConversationAguiFrameBuilder
             });
             return frames;
         }
-        if (committed.Admission.Kind != NyxIdChatContinuationKind.Action ||
-            committed.State?.ActiveTask is not { } task ||
-            committed.State.ActiveTurn is not { } turn ||
-            !string.Equals(task.TurnId, turnId, StringComparison.Ordinal) ||
-            !string.Equals(turn.TurnId, turnId, StringComparison.Ordinal))
+        if (committed.State?.ActiveTask is not { } task ||
+            committed.State.ActiveTurn is not { } turn)
         {
             return frames;
         }
+
+        var publishesCurrentTask = committed.Admission.Kind switch
+        {
+            NyxIdChatContinuationKind.Action =>
+                string.Equals(task.TurnId, turnId, StringComparison.Ordinal) &&
+                string.Equals(turn.TurnId, turnId, StringComparison.Ordinal),
+            NyxIdChatContinuationKind.Steering =>
+                committed.Admission.Status == NyxIdChatContinuationAdmissionStatus.Started &&
+                string.Equals(
+                    committed.Admission.OriginTurnId,
+                    turnId,
+                    StringComparison.Ordinal),
+            _ => false,
+        };
+        if (!publishesCurrentTask)
+            return frames;
 
         frames.AddRange(BuildTaskFrames(task, ResolveActiveOrLast(task), sequence));
         AppendTerminalIfNeeded(frames, actorId, turnId, task, turn, sequence);

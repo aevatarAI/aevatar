@@ -172,6 +172,18 @@ message AgentToolOperationReadBackPayload {
   string check_name = 4;
 }
 
+// Credential-free authorization fence captured from the exact model-visible
+// tool definition. Recovery may use it only to re-match the same current tool;
+// it is never an executable capability by itself.
+message AgentToolDurableAuthorizationSnapshotPayload {
+  bool has_requires_approval = 1;
+  bool requires_approval = 2;
+  bool is_read_only = 3;
+  bool is_destructive = 4;
+  string side_effect_kind = 5;
+  string tool_definition_fingerprint = 6;
+}
+
 // Exact server-sealed operation admission persisted with an actor-owned tool intent.
 // Credential material is deliberately absent and must be resolved again for recovery.
 message AgentToolOperationAdmissionPayload {
@@ -191,4 +203,5 @@ message AgentToolOperationAdmissionPayload {
   AgentToolOperationExecutionPolicyPayload execution_policy = 12;
   string catalog_digest = 13;
   AgentToolOperationReadBackPayload read_back = 14;
+  AgentToolDurableAuthorizationSnapshotPayload durable_authorization = 15;
 }

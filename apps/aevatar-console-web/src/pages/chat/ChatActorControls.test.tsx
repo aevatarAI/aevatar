@@ -164,6 +164,62 @@ describe('ChatActorControls', () => {
     expect(screen.getAllByRole('button', { name: /plan$/ })).toHaveLength(2);
   });
 
+  it.each([
+    {
+      approvalObservation: undefined,
+      gate: { mode: 'auto' as const, status: 'satisfied' as const },
+      name: 'zero decisions',
+      nyxIdDecision: false,
+      planDecision: false,
+    },
+    {
+      approvalObservation: undefined,
+      gate: { mode: 'confirm' as const, status: 'satisfied' as const },
+      name: 'one plan decision',
+      nyxIdDecision: false,
+      planDecision: true,
+    },
+    {
+      approvalObservation: {
+        approvalRequestId: 'nyxid-decision-alpha',
+        decisionMode: 'per_request' as const,
+        receiptStatus: 'denied' as const,
+        observedAt: '2026-08-08T00:03:00Z',
+      },
+      gate: { mode: 'confirm' as const, status: 'satisfied' as const },
+      name: 'two separate decisions',
+      nyxIdDecision: true,
+      planDecision: true,
+    },
+  ])('reconstructs $name from committed gate and NyxID facts', ({
+    approvalObservation,
+    gate,
+    nyxIdDecision,
+    planDecision,
+  }) => {
+    const step = stepFixture({ approvalObservation });
+    const projection = projectionFixture([step]);
+    if (!projection.task) throw new Error('Missing task fixture.');
+    projection.task = { ...projection.task, gate };
+    render(<ChatActorControls projection={projection} {...callbacks()} />);
+
+    expect(
+      screen.queryByRole('button', { name: 'Confirm plan' }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText(`${gate.mode} · satisfied`)).toBeInTheDocument();
+    expect(screen.queryByText('confirm · satisfied') !== null).toBe(
+      planDecision,
+    );
+    expect(
+      screen.queryByRole('region', { name: 'NyxID approval observation' }) !==
+        null,
+    ).toBe(nyxIdDecision);
+    if (nyxIdDecision) {
+      expect(screen.getByText('nyxid-decision-alpha')).toBeInTheDocument();
+      expect(screen.getAllByText('denied')).toHaveLength(2);
+    }
+  });
+
   it('submits option identities and directs free text to the shared composer', () => {
     const projection = projectionFixture();
     projection.pendingInput = {
@@ -331,6 +387,120 @@ describe('ChatActorControls', () => {
     });
     rerender(<ChatActorControls projection={projection} {...handlers} />);
     expect(screen.getByText('Actor verified')).toBeInTheDocument();
+  });
+
+  it.each([
+    'declined',
+    'failed',
+    'cancelled',
+    'expired',
+  ] as const)('renders %s as terminal instead of waiting for verification', (disposition) => {
+    const projection = projectionFixture([]);
+    const request = {
+      schemaVersion: 4 as const,
+      actorId: 'conversation-alpha',
+      originTurnId: 'turn-alpha',
+      taskId: 'task-alpha',
+      stepId: 'step-connect',
+      actionRequestId: 'action-alpha',
+      action: 'service.connect' as const,
+      params: { catalogService: { serviceSlug: 'api-github' } },
+    };
+    projection.actions.set('action-alpha', {
+      ...request,
+      request,
+      reports: [
+        {
+          actionRequestId: 'action-alpha',
+          originTurnId: 'turn-alpha',
+          disposition,
+        },
+      ],
+      postconditionResult: null,
+    });
+
+    render(<ChatActorControls projection={projection} {...callbacks()} />);
+
+    expect(screen.getByText(disposition)).toBeInTheDocument();
+    expect(
+      screen.queryByText(/waiting for actor verification/i),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Refresh connection' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('keeps the wire inspector gated and redacts secret keys and values', () => {
+    const projection = projectionFixture();
+    const handlers = callbacks();
+    const wire = {
+      custom: {
+        name: 'nyxid.task.snapshot',
+        payload: {
+          actorId: 'conversation-alpha',
+          authorization: 'Bearer secret-bearer',
+          nested: { apiKey: 'nyxid_secretvalue' },
+          note: 'Authorization was Bearer another-secret',
+        },
+      },
+    };
+    const view = render(
+      <ChatActorControls
+        diagnosticWire={wire}
+        projection={projection}
+        {...handlers}
+      />,
+    );
+    expect(
+      screen.queryByRole('button', { name: 'Show wire' }),
+    ).not.toBeInTheDocument();
+
+    view.rerender(
+      <ChatActorControls
+        diagnosticWire={wire}
+        projection={projection}
+        wireInspectorEnabled
+        {...handlers}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Show wire' }));
+    const inspector = screen.getByRole('region', { name: 'Wire inspector' });
+    expect(inspector).toHaveTextContent('conversation-alpha');
+    expect(inspector).toHaveTextContent('Bearer [REDACTED]');
+    expect(inspector).toHaveTextContent('[REDACTED]');
+    expect(inspector).not.toHaveTextContent('secret-bearer');
+    expect(inspector).not.toHaveTextContent('nyxid_secretvalue');
+  });
+
+  it('presents typed idempotent and stale control outcomes without enabling controls', () => {
+    const projection = projectionFixture([]);
+    projection.activeTurn = null;
+    projection.task = null;
+    projection.latestTurn = {
+      turnId: 'turn-alpha',
+      taskId: 'task-alpha',
+      status: 'stopped',
+    };
+    projection.latestControlResult = {
+      outcome: 'rejected',
+      reasonCode: 'NYXID_CHAT_STATE_VERSION_MISMATCH',
+    };
+    projection.latestStepControlResult = {
+      outcome: 'idempotent',
+      reasonCode: 'NYXID_CHAT_OPERATION_ALREADY_RECONCILED',
+    };
+    render(<ChatActorControls projection={projection} {...callbacks()} />);
+
+    const committed = screen.getByRole('region', {
+      name: 'Committed results',
+    });
+    expect(committed).toHaveTextContent('rejected');
+    expect(committed).toHaveTextContent('NYXID_CHAT_STATE_VERSION_MISMATCH');
+    expect(committed).toHaveTextContent('idempotent');
+    expect(committed).toHaveTextContent(
+      'NYXID_CHAT_OPERATION_ALREADY_RECONCILED',
+    );
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
   });
 
   it('renders a committed reload summary without browser-cached action parameters', () => {

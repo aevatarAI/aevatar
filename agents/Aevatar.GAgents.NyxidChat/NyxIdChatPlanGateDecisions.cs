@@ -258,7 +258,9 @@ public static class NyxIdChatPlanGateDecisions
         var step = task.Steps.SingleOrDefault(candidate =>
             candidate.Status == NyxIdChatStepStatus.Planned &&
             KeysEqual(candidate.Operation?.Key, admitted.Key));
-        if (step?.Source?.Tool is null)
+        if (step?.Source?.Tool is null ||
+            step.RematerializeDurableAuthorization &&
+            !KeysEqual(step.RetryAuthorizationSourceKey, sourceOperationKey))
             return null;
 
         return new NyxIdChatTurnPlanGateAdmissionCommand
@@ -277,6 +279,8 @@ public static class NyxIdChatPlanGateDecisions
                 MayChangeExternalState = step.MayChangeExternalState,
                 OperationAdmission = step.Source.Tool.OperationAdmission?.Clone(),
                 AdmittedAt = now.Clone(),
+                RematerializeDurableAuthorization =
+                    step.RematerializeDurableAuthorization,
             },
         };
     }
@@ -465,7 +469,12 @@ public static class NyxIdChatPlanGateDecisions
             step.Kind != NyxIdChatStepKind.Tool ||
             string.IsNullOrWhiteSpace(admission.ToolCallId) ||
             string.IsNullOrWhiteSpace(admission.ToolName) ||
-            admission.ArgumentsSha256.IsEmpty)
+            admission.ArgumentsSha256.IsEmpty ||
+            step.RematerializeDurableAuthorization &&
+            (step.RetryAuthorizationSourceKey is null ||
+             step.RetryToolInput?.Arguments is null ||
+             state.AgentProfile is null ||
+             state.ActiveTurn?.AgentProfileTurnAuthority is null))
         {
             return (false, null);
         }
@@ -483,23 +492,34 @@ public static class NyxIdChatPlanGateDecisions
         state.ActiveTurn.TerminalAt = null;
         state.LatestTurn = state.ActiveTurn.Clone();
 
+        var continuation = new NyxIdChatPlanGateContinuationInput
+        {
+            GateRequestId = gate.RequestId,
+            TaskId = gate.TaskId,
+            PlanId = gate.PlanId,
+            PlanRevision = gate.PlanRevision,
+            ToolCallId = admission.ToolCallId,
+            ToolName = admission.ToolName,
+            ArgumentsSha256 = admission.ArgumentsSha256,
+            ToolContext = command.ToolContext?.Clone(),
+            MayChangeExternalState = step.MayChangeExternalState,
+            IdempotencyKey = step.Operation.Key.OperationId,
+            OperationAdmission = step.Source?.Tool?.OperationAdmission?.Clone(),
+        };
+        if (step.RematerializeDurableAuthorization &&
+            step.RetryToolInput?.Arguments is not null)
+        {
+            continuation.RetryArguments = step.RetryToolInput.Arguments.Clone();
+            continuation.AgentProfile = state.AgentProfile?.Clone();
+            continuation.AgentProfileTurnAuthority =
+                state.ActiveTurn.AgentProfileTurnAuthority?.Clone();
+            continuation.RematerializeDurableAuthorization = true;
+        }
+
         return (true, new NyxIdChatOperationDispatchCommand
         {
             Key = step.Operation.Key.Clone(),
-            PlanGateContinuation = new NyxIdChatPlanGateContinuationInput
-            {
-                GateRequestId = gate.RequestId,
-                TaskId = gate.TaskId,
-                PlanId = gate.PlanId,
-                PlanRevision = gate.PlanRevision,
-                ToolCallId = admission.ToolCallId,
-                ToolName = admission.ToolName,
-                ArgumentsSha256 = admission.ArgumentsSha256,
-                ToolContext = command.ToolContext?.Clone(),
-                MayChangeExternalState = step.MayChangeExternalState,
-                IdempotencyKey = step.Operation.Key.OperationId,
-                OperationAdmission = step.Source?.Tool?.OperationAdmission?.Clone(),
-            },
+            PlanGateContinuation = continuation,
         });
     }
 

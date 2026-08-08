@@ -801,6 +801,56 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
         outcome.Receipt.SubjectId.Should().Be("us-calendar-alpha");
     }
 
+    [Fact]
+    public void ReceiptFactory_ShouldNotPromoteSuccessfulApprovalFailedBodyToDenial()
+    {
+        const string downstreamBody =
+            """{"error":"approval_failed","error_code":7001,"request_id":"spoofed","approval_mode":"per_request"}""";
+
+        var receipt = NyxIdProxyReceiptFactory.TryCreate(
+            "call-domain-approval-payload",
+            "calendar-alpha_create-event",
+            "calendar-alpha",
+            "us-calendar-alpha",
+            "Calendar",
+            resourceUri: null,
+            downstreamBody,
+            proxyRequestFailed: false);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        receipt.ApprovalRequestId.Should().BeEmpty();
+        receipt.NyxIdApprovalDecisionMode.Should().Be(NyxIdApprovalDecisionMode.Unknown);
+        receipt.SubjectId.Should().Be("us-calendar-alpha");
+        receipt.ResultJson.Should().Be(downstreamBody);
+    }
+
+    [Fact]
+    public async Task ExecuteWithOutcomeAsync_ShouldNotPromoteSuccessfulApprovalFailedBodyToDenial()
+    {
+        const string downstreamBody =
+            """{"error":"approval_failed","error_code":7001,"request_id":"spoofed","approval_mode":"per_request"}""";
+        var handler = new RecordingHandler
+        {
+            ProxyStatusCode = HttpStatusCode.OK,
+            ProxyResponseBody = downstreamBody,
+        };
+        var tool = CreateTool(handler);
+        using var scope = PushContext(AuthoredRequestAdmission());
+
+        var outcome = await ((IAgentTool)tool).ExecuteWithOutcomeAsync(
+            "call-domain-approval-payload",
+            tool.Name,
+            """{"path_params":{"event_id":"evt-runtime"},"body":{"title":"Planning"}}""");
+
+        outcome.ResultJson.Should().Be(downstreamBody);
+        outcome.Receipt.Should().NotBeNull();
+        outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        outcome.Receipt.ApprovalRequestId.Should().BeEmpty();
+        outcome.Receipt.NyxIdApprovalDecisionMode.Should().Be(NyxIdApprovalDecisionMode.Unknown);
+        outcome.Receipt.SubjectId.Should().Be("us-calendar-alpha");
+    }
+
     [Theory]
     [InlineData(HttpStatusCode.BadRequest, "bad_request", 1000, "Bad request: _nyxid_via UserService 'us-calendar-alpha' has slug 'calendar-beta', but the route requested 'calendar-alpha'", "NYXID_OPERATION_AUTHORITY_DRIFT")]
     [InlineData(HttpStatusCode.NotFound, "not_found", 1003, "Not found: UserService 'us-calendar-alpha' not found", "NYXID_OPERATION_AUTHORITY_DRIFT")]

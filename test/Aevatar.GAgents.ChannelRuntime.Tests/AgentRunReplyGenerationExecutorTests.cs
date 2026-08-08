@@ -1100,6 +1100,8 @@ public sealed class AgentRunReplyGenerationExecutorTests
 
         continuation.ToolStepResult.Should().NotBeNull();
         continuation.ToolStepResult.ResultMessages.Should().ContainSingle();
+        continuation.ToolStepResult.AuthorizationOutcome.Should().Be(
+            AgentRunToolAuthorizationOutcome.DurableMatched);
         registeredTool.ExecuteCount.Should().Be(1);
     }
 
@@ -1141,7 +1143,50 @@ public sealed class AgentRunReplyGenerationExecutorTests
 
         continuation.ToolStepResult.Should().NotBeNull();
         continuation.ToolStepResult.ResultMessages.Should().ContainSingle();
+        continuation.ToolStepResult.AuthorizationOutcome.Should().Be(
+            AgentRunToolAuthorizationOutcome.DurableMatched);
         registeredTool.ExecuteCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task BuildApprovedToolStepContinuation_GenericSentinelApproval_ShouldNotAuthorizeConnectedEffect()
+    {
+        var connectedEffect = new EffectClassifiedTool("svc-lark__approval_create");
+        var executor = CreateToolEnabledExecutor(
+            connectedEffect,
+            new ToolCallProvider(connectedEffect.Name));
+        var llmWorkItem = BuildToolEnabledWorkItem();
+        var execution = await executor.BuildLlmStepExecutionAsync(
+            llmWorkItem,
+            CancellationToken.None);
+        var toolWorkItem = BuildDurablyAuthorizedToolStepWorkItem(
+            llmWorkItem,
+            execution.Continuation);
+        var genericApproval = new AgentRunPendingToolApprovalState
+        {
+            RunId = toolWorkItem.RunId,
+            CorrelationId = toolWorkItem.Request.CorrelationId,
+            Attempt = toolWorkItem.Attempt,
+            StepIndex = toolWorkItem.StepIndex,
+            ApprovalRequestId = "sentinel-request-uuid",
+            ToolRequestId = llmWorkItem.Request.Activity.Id,
+            ToolCallId = "generic-call",
+            ToolName = "generic-tool",
+            ArgumentsSha256 = AgentToolArgumentsDigest.ComputeSha256("{}"),
+            SubjectKind = "nyxid.approval-service",
+            SubjectId = "tool_approval",
+            Decision = AgentRunToolApprovalDecision.Approved,
+        };
+
+        var act = () => executor.BuildApprovedToolStepContinuationAsync(
+            toolWorkItem,
+            genericApproval,
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*no longer matches the suspended call*");
+        connectedEffect.ExecuteCount.Should().Be(0,
+            "a sentinel request UUID is scoped to its exact generic tool call, not svc-lark");
     }
 
     [Fact]
@@ -1171,6 +1216,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
     [Theory]
     [InlineData(DefinitionDrift.Description)]
     [InlineData(DefinitionDrift.ParametersSchema)]
+    [InlineData(DefinitionDrift.ApprovalMode)]
     public async Task BuildToolStepContinuation_WhenToolDefinitionDrifts_ShouldRejectBeforeToolExecution(
         DefinitionDrift drift)
     {
@@ -1183,6 +1229,14 @@ public sealed class AgentRunReplyGenerationExecutorTests
             llmWorkItem,
             CancellationToken.None);
         var toolWorkItem = BuildDurablyAuthorizedToolStepWorkItem(llmWorkItem, execution.Continuation);
+        if (drift == DefinitionDrift.ApprovalMode)
+        {
+            var authorization = toolWorkItem.StepState.PendingToolAuthorizations
+                .Should().ContainSingle().Subject;
+            authorization.HasRequiresApproval.Should().BeTrue(
+                "durable authorization stores the final approval decision, not a nullable provider hint");
+            authorization.RequiresApproval.Should().BeFalse();
+        }
         registeredTool.Apply(drift);
 
         var continuation = await executor.BuildToolStepContinuationAsync(
@@ -1732,6 +1786,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
     {
         Description,
         ParametersSchema,
+        ApprovalMode,
     }
 
     private sealed class DriftableDefinitionTool : IAgentTool
@@ -1748,9 +1803,10 @@ public sealed class AgentRunReplyGenerationExecutorTests
         public string Name => _name;
         public string Description { get; private set; }
         public string ParametersSchema { get; private set; } = "{}";
+        public ToolApprovalMode ApprovalMode { get; private set; } = ToolApprovalMode.NeverRequire;
 
         public AgentToolCallSafety GetCallSafety(string argumentsJson) => new(
-            RequiresApproval: false,
+            RequiresApproval: null,
             IsReadOnly: true,
             IsDestructive: false);
 
@@ -1765,6 +1821,12 @@ public sealed class AgentRunReplyGenerationExecutorTests
             if (drift == DefinitionDrift.Description)
             {
                 Description = "changed definition";
+                return;
+            }
+
+            if (drift == DefinitionDrift.ApprovalMode)
+            {
+                ApprovalMode = ToolApprovalMode.Auto;
                 return;
             }
 
@@ -1861,6 +1923,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
 
     private sealed class EffectClassifiedTool(string name) : IAgentTool
     {
+        public int ExecuteCount { get; private set; }
         public string Name => name;
         public string Description => name;
         public string ParametersSchema => "{}";
@@ -1891,8 +1954,11 @@ public sealed class AgentRunReplyGenerationExecutorTests
                 IsDestructive: true);
         }
 
-        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
-            Task.FromResult("{}");
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+        {
+            ExecuteCount++;
+            return Task.FromResult("{}");
+        }
     }
 
     private sealed class StaticResponseHandler(string body) : HttpMessageHandler

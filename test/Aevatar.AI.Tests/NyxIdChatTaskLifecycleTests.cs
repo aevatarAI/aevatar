@@ -741,6 +741,66 @@ public sealed class NyxIdChatTaskLifecycleTests
         Encoding.UTF8.GetString(decision.State.ToByteArray()).Should().NotContain(injected);
     }
 
+    [Fact]
+    public void PureReadToolSuccess_ShouldContinueWithoutAddingVerificationStep()
+    {
+        var state = ActiveState(NyxIdChatStepKind.Llm, "step-llm-alpha", "operation-llm-alpha");
+        var planned = NyxIdChatTaskLifecycle.ApplyOperationResult(
+            state,
+            new NyxIdChatOperationResultSignal
+            {
+                Key = state.ActiveTask.Steps.Single().Operation.Key.Clone(),
+                Llm = new NyxIdChatLLMOperationResult
+                {
+                    ToolCalls =
+                    {
+                        new NyxIdChatToolCall
+                        {
+                            CallId = "call-read-alpha",
+                            ToolName = "repository_read",
+                            ArgumentsJson = "{}",
+                            Safety = new NyxIdChatToolCallSafety
+                            {
+                                IsReadOnly = true,
+                                MayChangeExternalState = false,
+                            },
+                        },
+                    },
+                },
+            },
+            Now);
+        var readStep = planned.State.ActiveTask.Steps.Single(step =>
+            step.Kind == NyxIdChatStepKind.Tool);
+
+        var completedRead = NyxIdChatTaskLifecycle.ApplyOperationResult(
+            planned.State,
+            new NyxIdChatOperationResultSignal
+            {
+                Key = readStep.Operation.Key.Clone(),
+                Tool = new NyxIdChatToolOperationResult
+                {
+                    ResultJson = "{\"items\":[]}",
+                    Receipt = new AgentToolReceipt
+                    {
+                        CallId = "call-read-alpha",
+                        ToolName = "repository_read",
+                        Status = AgentToolReceiptStatus.Success,
+                        Effect = AgentToolReceiptEffect.ReadOnly,
+                    },
+                    ExternalEffect = NyxIdChatEffectEvidence.NotApplied,
+                },
+            },
+            Now);
+
+        completedRead.State.ActiveTask.Steps.Should().NotContain(step =>
+            step.Kind == NyxIdChatStepKind.Postcondition);
+        completedRead.State.ActiveTask.Steps.Single(step => step.StepId == readStep.StepId)
+            .Status.Should().Be(NyxIdChatStepStatus.Done);
+        completedRead.NextCommand.Should().NotBeNull();
+        completedRead.NextCommand!.InputCase.Should().Be(
+            NyxIdChatOperationDispatchCommand.InputOneofCase.Llm);
+    }
+
     private static NyxIdChatConversationGAgentState ActiveState(
         NyxIdChatStepKind kind,
         string stepId,

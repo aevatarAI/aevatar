@@ -173,6 +173,8 @@ public sealed class NyxIdChatControlCommandTests
         decision.NextCommand.Tool.CallId.Should().Be("call-effect-alpha");
         decision.NextCommand.Tool.IdempotencyKey.Should().Be(
             decision.NextCommand.Key.OperationId);
+        decision.NextCommand.Tool.RetryAuthorizationSourceKey.Should().BeEquivalentTo(
+            step.Operation.Key);
         decision.NextCommand.Key.OperationId.Should().NotBe("operation-alpha");
     }
 
@@ -203,6 +205,8 @@ public sealed class NyxIdChatControlCommandTests
             Arguments = JsonParser.Default.Parse<Struct>("{\"value\":\"alpha\"}"),
             OperationAdmission = ExactEffectAdmission(),
         };
+        state.AgentProfile = new AgentProfileSnapshot();
+        state.ActiveTurn.AgentProfileTurnAuthority = new AgentProfileTurnAuthorityState();
         step.AvailableActions = NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(step);
         state.ActiveTask.Gate = NyxIdChatPlanGateDecisions.BuildToolGate(
             state,
@@ -509,6 +513,61 @@ public sealed class NyxIdChatControlCommandTests
         decision.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Stopped);
         NyxIdChatNeedsYouDecisions.RefreshAttention(decision.State)
             .Attention.AttentionKind.Should().Be(NyxIdChatAttentionKind.None);
+    }
+
+    [Theory]
+    [InlineData(NyxIdChatControlKind.Stop)]
+    [InlineData(NyxIdChatControlKind.Steering)]
+    public void SameTurnControl_WhenStreamingProgressAdvancesStateVersion_ShouldStillFence(
+        NyxIdChatControlKind kind)
+    {
+        var state = FailedStepState(
+            NyxIdChatStepKind.Llm,
+            required: true,
+            safeToSkip: false,
+            retryInputRebuildable: true);
+        var step = state.ActiveTask.Steps.Single();
+        step.Status = NyxIdChatStepStatus.Running;
+        step.Operation.Phase = NyxIdChatOperationPhase.Running;
+        step.Operation.CompletedAt = null;
+        state.ActiveTask.FailureCode = string.Empty;
+        state.ActiveTask.SafeMessage = string.Empty;
+        state.ActiveTurn.FailureCode = string.Empty;
+        state.ActiveTurn.SafeMessage = string.Empty;
+
+        var decision = kind == NyxIdChatControlKind.Stop
+            ? NyxIdChatControlCommands.Stop(
+                state,
+                new NyxIdChatStopCommand
+                {
+                    ScopeId = "scope-alpha",
+                    ConversationActorId = "conversation-alpha",
+                    TurnId = "turn-alpha",
+                    StopRequestId = "stop-after-progress",
+                    ClientRequestId = "client-stop-after-progress",
+                    ExpectedStateVersion = 3,
+                },
+                stateVersion: 500,
+                Now)
+            : NyxIdChatControlCommands.Steer(
+                state,
+                new NyxIdChatSteeringCommand
+                {
+                    ScopeId = "scope-alpha",
+                    ConversationActorId = "conversation-alpha",
+                    TurnId = "turn-alpha",
+                    SteeringId = "steer-after-progress",
+                    ClientRequestId = "client-steer-after-progress",
+                    Instruction = "Use the new constraints.",
+                    ExpectedStateVersion = 3,
+                },
+                stateVersion: 500,
+                Now);
+
+        decision.ShouldCommit.Should().BeTrue();
+        decision.Result.Outcome.Should().Be(NyxIdChatControlOutcome.Uncancellable);
+        decision.Result.ReasonCode.Should().NotBe(NyxIdChatControlCommands.StateVersionMismatch);
+        decision.FencedState.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Stopped);
     }
 
     private static NyxIdChatRetryStepCommand RetryCommand() => new()

@@ -234,7 +234,7 @@ internal sealed class NyxIdConnectedServiceOperationTool :
                 argumentsJson,
                 MaxReadSourceBytes,
                 ct)
-            : await _proxy.ExecuteWithOutcomeAsync(
+            : await _proxy.ExecuteAdmittedEffectWithOutcomeAsync(
                 callId,
                 toolName,
                 argumentsJson,

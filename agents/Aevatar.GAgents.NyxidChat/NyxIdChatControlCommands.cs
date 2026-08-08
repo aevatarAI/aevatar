@@ -26,7 +26,8 @@ public sealed record NyxIdChatStepControlDecision(
     bool ShouldDispatch,
     NyxIdChatConversationGAgentState State,
     NyxIdChatStepControlResultState Result,
-    NyxIdChatOperationDispatchCommand? NextCommand);
+    NyxIdChatOperationDispatchCommand? NextCommand,
+    NyxIdChatTurnPlanGateAdmissionCommand? TurnAdmission = null);
 
 /// <summary>
 /// Pure actor-owned policy for stop and steering commands. It never performs
@@ -104,12 +105,16 @@ public static class NyxIdChatControlCommands
             var nextCommand = CanRedispatchRetry(state, replay)
                 ? BuildRetryDispatch(state, command, replay.OperationGeneration)
                 : null;
+            var replayStep = state.ActiveTask?.Steps.FirstOrDefault(candidate =>
+                string.Equals(candidate.StepId, replay.StepId, StringComparison.Ordinal) &&
+                candidate.Operation?.Key?.OperationGeneration == replay.OperationGeneration);
             return new NyxIdChatStepControlDecision(
                 ShouldCommit: false,
                 ShouldDispatch: nextCommand is not null,
                 state.Clone(),
                 replay.Clone(),
-                nextCommand);
+                nextCommand,
+                BuildRetryTurnAdmission(state, replayStep, now));
         }
 
         if (HasStepControlRequestIdentity(state, input))
@@ -147,6 +152,12 @@ public static class NyxIdChatControlCommands
         if (!actions.Retry || !step.RetryInputRebuildable || HasAcceptedFence(state))
             return RejectStepControl(state, input, StepActionUnavailable, StepActionUnavailableMessage, now);
 
+        var retryAuthorizationSourceKey = step.Kind == NyxIdChatStepKind.Tool
+            ? ResolveRetryAuthorizationSourceKey(state, step)
+            : null;
+        if (step.Kind == NyxIdChatStepKind.Tool && retryAuthorizationSourceKey is null)
+            return RejectStepControl(state, input, StepActionUnavailable, StepActionUnavailableMessage, now);
+
         var generation = step.Operation.Key.OperationGeneration + 1;
         var next = state.Clone();
         var retried = next.ActiveTask.Steps.First(candidate =>
@@ -172,6 +183,8 @@ public static class NyxIdChatControlCommands
         retried.SafeMessage = string.Empty;
         retried.ApprovalRequestId = string.Empty;
         retried.ApprovalObservation = null;
+        retried.RematerializeDurableAuthorization = retried.Kind == NyxIdChatStepKind.Tool;
+        retried.RetryAuthorizationSourceKey = retryAuthorizationSourceKey?.Clone();
         retried.Operation = new NyxIdChatOperationState
         {
             Key = key.Clone(),
@@ -204,6 +217,11 @@ public static class NyxIdChatControlCommands
                 requiresConfirmation: true);
             retried.Status = NyxIdChatStepStatus.Planned;
         }
+        var turnAdmission = requiresPlanConfirmation
+            ? BuildRetryTurnAdmission(next, retried, now)
+            : null;
+        if (requiresPlanConfirmation && turnAdmission is null)
+            return RejectStepControl(state, input, StepActionUnavailable, StepActionUnavailableMessage, now);
         retried.AvailableActions = NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(retried);
         retried.UpdatedAt = now.Clone();
         next.ActiveTask.Status = NyxIdChatTaskStatus.Active;
@@ -236,7 +254,8 @@ public static class NyxIdChatControlCommands
             result,
             requiresPlanConfirmation
                 ? null
-                : BuildRetryDispatch(next, command, generation));
+                : BuildRetryDispatch(next, command, generation),
+            turnAdmission);
     }
 
     public static NyxIdChatStepControlDecision Skip(
@@ -869,6 +888,66 @@ public static class NyxIdChatControlCommands
         return true;
     }
 
+    private static NyxIdChatOperationKey? ResolveRetryAuthorizationSourceKey(
+        NyxIdChatConversationGAgentState state,
+        NyxIdChatTaskStepState effectStep)
+    {
+        var effectOperation = effectStep.Operation;
+        var effectKey = effectOperation?.Key;
+        if (state.ActiveTask is null ||
+            effectOperation is null ||
+            effectKey is null ||
+            effectStep.ExternalEffect != NyxIdChatEffectEvidence.NotApplied)
+        {
+            return null;
+        }
+
+        var verification = state.ActiveTask.Steps
+            .Where(candidate =>
+                candidate.Kind == NyxIdChatStepKind.Postcondition &&
+                candidate.Status == NyxIdChatStepStatus.Done &&
+                candidate.Operation is
+                {
+                    Key: not null,
+                    Phase: NyxIdChatOperationPhase.Succeeded,
+                } &&
+                candidate.Operation.Key.OperationGeneration == effectKey.OperationGeneration &&
+                candidate.ExternalEffect == NyxIdChatEffectEvidence.NotApplied &&
+                candidate.DependsOn.Contains(effectStep.StepId))
+            .OrderByDescending(static candidate => candidate.Order)
+            .FirstOrDefault();
+        if (verification?.Operation?.Key is not null)
+            return verification.Operation.Key.Clone();
+
+        return (effectOperation.Phase is
+                    NyxIdChatOperationPhase.Failed or
+                    NyxIdChatOperationPhase.Cancelled) &&
+               effectOperation.CompletedAt is not null
+                ? effectKey.Clone()
+                : null;
+    }
+
+    private static NyxIdChatTurnPlanGateAdmissionCommand? BuildRetryTurnAdmission(
+        NyxIdChatConversationGAgentState state,
+        NyxIdChatTaskStepState? step,
+        Timestamp now)
+    {
+        if (step is not
+            {
+                Kind: NyxIdChatStepKind.Tool,
+                RematerializeDurableAuthorization: true,
+                RetryAuthorizationSourceKey: not null,
+            })
+        {
+            return null;
+        }
+
+        return NyxIdChatPlanGateDecisions.BuildTurnAdmission(
+            state,
+            step.RetryAuthorizationSourceKey,
+            now);
+    }
+
     private static bool CanRedispatchRetry(
         NyxIdChatConversationGAgentState state,
         NyxIdChatStepControlResultState result)
@@ -942,6 +1021,13 @@ public static class NyxIdChatControlCommands
                     Idempotent = false,
                     IdempotencyKey = step.Operation.Key.OperationId,
                     OperationAdmission = step.RetryToolInput.OperationAdmission.Clone(),
+                    AgentProfile = state.AgentProfile?.Clone(),
+                    AgentProfileTurnAuthority =
+                        state.ActiveTurn.AgentProfileTurnAuthority?.Clone(),
+                    RematerializeDurableAuthorization =
+                        step.RematerializeDurableAuthorization,
+                    RetryAuthorizationSourceKey =
+                        step.RetryAuthorizationSourceKey?.Clone(),
                 },
             };
         }

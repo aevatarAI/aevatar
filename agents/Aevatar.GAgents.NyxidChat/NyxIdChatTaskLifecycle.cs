@@ -655,9 +655,9 @@ public static class NyxIdChatTaskLifecycle
         if (step?.Operation?.Key is null)
             return null;
 
+        var readBack = step.Source?.Postcondition?.ToolReadBack;
         if (step.Kind == NyxIdChatStepKind.Postcondition &&
-            !NyxIdChatOperationAdmissionPolicy.IsValidReadBack(
-                step.Source?.Postcondition?.ToolReadBack))
+            !NyxIdChatOperationAdmissionPolicy.IsValidReadBack(readBack))
         {
             step.Status = NyxIdChatStepStatus.Uncertain;
             step.ExternalEffect = NyxIdChatEffectEvidence.MayHaveChanged;
@@ -684,8 +684,8 @@ public static class NyxIdChatTaskLifecycle
             command.ToolVerification = new NyxIdChatToolVerificationInput
             {
                 EffectStepId = completedToolKey.StepId,
-                ReadBack = step.Source.Postcondition.ToolReadBack.Clone(),
-                ProviderResourceId = step.Source.Postcondition.ProviderResourceId,
+                ReadBack = readBack!.Clone(),
+                ProviderResourceId = step.Source!.Postcondition.ProviderResourceId,
             };
         }
         else

@@ -218,6 +218,31 @@ function completedStream(
   ]);
 }
 
+function openSseResponse(frames: readonly unknown[]): {
+  close: () => void;
+  response: Response;
+} {
+  const encoder = new TextEncoder();
+  let close = () => {};
+  const response = {
+    body: new ReadableStream({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            frames
+              .map((frame) => `data: ${JSON.stringify(frame)}\n\n`)
+              .join(''),
+          ),
+        );
+        close = () => controller.close();
+      },
+    }),
+    ok: true,
+    status: 200,
+  } as Response;
+  return { close: () => close(), response };
+}
+
 function requestBodies(): Record<string, unknown>[] {
   return (authFetch as jest.Mock).mock.calls
     .filter(([path]) => path === '/api/chat')
@@ -343,6 +368,77 @@ describe('ChatPage canonical NyxID Assistant', () => {
     expect(first).not.toHaveProperty('sessionId');
     expect(first).not.toHaveProperty('workflow');
     expect(first).not.toHaveProperty('conversation');
+  });
+
+  it('enables actor-authorized stop after current state materializes during an active SSE', async () => {
+    const activeTurnId = 'turn-active';
+    const activePlan = taskPlan(
+      [
+        taskStep('step-active', {
+          operation: {
+            conversationActorId: 'conversation-alpha',
+            turnId: activeTurnId,
+            taskId: 'task-active',
+            stepId: 'step-active',
+            operationId: 'operation-step-active',
+            operationGeneration: 1,
+            kind: 'tool',
+            phase: 'running',
+          },
+        }),
+      ],
+      { taskId: 'task-active', turnId: activeTurnId },
+    );
+    (chatHistoryApi.loadConversationState as jest.Mock)
+      .mockResolvedValueOnce({ status: 'not_found' })
+      .mockResolvedValue(
+        activeTaskState(activePlan, 10, {
+          activeTurn: {
+            turnId: activeTurnId,
+            taskId: 'task-active',
+            status: 'active',
+          },
+        }),
+      );
+    const stream = openSseResponse([
+      runStarted('conversation-alpha', activeTurnId),
+      {
+        type: 'CUSTOM',
+        sequence: 10,
+        custom: { name: 'nyxid.task.snapshot', payload: activePlan },
+      },
+      {
+        type: 'TEXT_MESSAGE_CONTENT',
+        textMessageContent: { delta: 'Still working.' },
+      },
+    ]);
+    (authFetch as jest.Mock)
+      .mockResolvedValueOnce(stream.response)
+      .mockResolvedValueOnce({ ok: true, status: 202 });
+
+    renderWithQueryClient(<ChatPage />);
+    try {
+      await sendPrompt('Continue the active work');
+      await waitFor(() => expect(requestBodies()).toHaveLength(1));
+      const stop = await screen.findByRole('button', { name: 'Stop task' });
+      await waitFor(() => expect(stop).toBeEnabled());
+      expect(chatHistoryApi.loadConversationState).toHaveBeenCalledTimes(2);
+      fireEvent.click(stop);
+      await waitFor(() => expect(requestBodies()).toHaveLength(2));
+      expect(requestBodies()[1]).toEqual({
+        type: 'task.stop',
+        conversationId: 'conversation-alpha',
+        turnId: activeTurnId,
+        stopRequestId: expect.any(String),
+        clientRequestId: expect.any(String),
+        expectedStateVersion: 10,
+      });
+    } finally {
+      stream.close();
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: 'New Chat' })).toBeEnabled(),
+      );
+    }
   });
 
   it('routes Studio with distinct member, workflow, and published service identities', async () => {
@@ -804,8 +900,19 @@ describe('ChatPage canonical NyxID Assistant', () => {
     const original = taskStep('step-original', {
       description: 'Compare original candidates',
     });
+    const completedEvidence = taskStep('step-completed-search', {
+      order: 2,
+      kind: 'web',
+      status: 'done',
+      description: 'Completed search evidence: Marina Bay options',
+      source: { web: {} },
+      externalEffect: 'not_applied',
+      availableActions: undefined,
+      operation: null,
+    });
     const steered = taskPlan(
       [
+        completedEvidence,
         {
           ...original,
           status: 'cancelled',
@@ -814,7 +921,7 @@ describe('ChatPage canonical NyxID Assistant', () => {
           operation: null,
         },
         taskStep('step-steered', {
-          order: 2,
+          order: 3,
           description: 'Compare for 7 PM and a private room',
           addedBy: 'steering',
           addedInPlanRevision: 2,
@@ -826,7 +933,7 @@ describe('ChatPage canonical NyxID Assistant', () => {
           {
             planRevision: 1,
             revisionCause: 'initial',
-            addedStepIds: ['step-original'],
+            addedStepIds: ['step-original', 'step-completed-search'],
             cancelledStepIds: [],
           },
           {
@@ -907,7 +1014,10 @@ describe('ChatPage canonical NyxID Assistant', () => {
     };
     (chatHistoryApi.loadConversationState as jest.Mock)
       .mockResolvedValueOnce(
-        activeTaskState(taskPlan([original], { title: 'Dinner research' }), 10),
+        activeTaskState(
+          taskPlan([original, completedEvidence], { title: 'Dinner research' }),
+          10,
+        ),
       )
       .mockResolvedValueOnce(activeTaskState(steered, 11))
       .mockResolvedValueOnce(stoppedState)
@@ -962,6 +1072,11 @@ describe('ChatPage canonical NyxID Assistant', () => {
     expect(
       within(taskRow('Compare original candidates')).getByText('cancelled'),
     ).toBeInTheDocument();
+    expect(
+      within(
+        taskRow('Completed search evidence: Marina Bay options'),
+      ).getByText('done'),
+    ).toBeInTheDocument();
     const stop = screen.getByRole('button', { name: 'Stop task' });
     await waitFor(() => expect(stop).toBeEnabled());
     fireEvent.click(stop);
@@ -995,6 +1110,11 @@ describe('ChatPage canonical NyxID Assistant', () => {
       await screen.findByText('Partial research preserved.'),
     ).toBeInTheDocument();
     expect(screen.getAllByText('Task result')).toHaveLength(1);
+    expect(
+      within(
+        taskRow('Completed search evidence: Marina Bay options'),
+      ).getByText('done'),
+    ).toBeInTheDocument();
     expect(
       screen.queryByRole('button', { name: 'Stop task' }),
     ).not.toBeInTheDocument();
@@ -1107,8 +1227,43 @@ describe('ChatPage canonical NyxID Assistant', () => {
           },
         ],
         title: 'Reimbursement retry',
+        gate: {
+          mode: 'confirm',
+          status: 'satisfied',
+          requestId: 'plan-gate-retry-3',
+          taskId: 'task-alpha',
+          planId: 'plan-alpha',
+          planRevision: 3,
+          decidedAt: '2026-08-08T00:03:00Z',
+        },
       },
     );
+    const pendingRetryPlan = {
+      ...retryPlan,
+      activeOperationId: undefined,
+      gate: {
+        mode: 'confirm',
+        status: 'pending',
+        requestId: 'plan-gate-retry-3',
+        taskId: 'task-alpha',
+        planId: 'plan-alpha',
+        planRevision: 3,
+        reason: 'This retry changes the frozen operation generation.',
+      },
+      steps: (retryPlan.steps as Record<string, unknown>[]).map((step) =>
+        step.stepId === 'step-effect'
+          ? {
+              ...step,
+              status: 'planned',
+              availableActions: undefined,
+              operation: {
+                ...(step.operation as Record<string, unknown>),
+                phase: 'requested',
+              },
+            }
+          : step,
+      ),
+    };
     const retryStartedResult = {
       kind: 'retry',
       requestId: 'retry-alpha',
@@ -1120,7 +1275,39 @@ describe('ChatPage canonical NyxID Assistant', () => {
       operationGeneration: 2,
       outcome: 'retry_started',
     };
-    const retryState = activeTaskState(retryPlan, 22, {
+    const pendingRetryState = activeTaskState(pendingRetryPlan, 22, {
+      latestStepControlResult: retryStartedResult,
+      recentStepControlResults: [retryStartedResult],
+    });
+    const retryState = activeTaskState(retryPlan, 23, {
+      latestStepControlResult: retryStartedResult,
+      recentStepControlResults: [retryStartedResult],
+    });
+    const approvalRetryPlan = {
+      ...retryPlan,
+      activeOperationId: undefined,
+      steps: (retryPlan.steps as Record<string, unknown>[]).map((step) =>
+        step.stepId === 'step-effect'
+          ? {
+              ...step,
+              status: 'failed',
+              externalEffect: 'not_applied',
+              availableActions: { retry: true, skip: true },
+              approvalObservation: {
+                approvalRequestId: 'approval-generation-two',
+                decisionMode: 'per_request',
+                receiptStatus: 'approval_required',
+                observedAt: '2026-08-08T00:04:00Z',
+              },
+              operation: {
+                ...(step.operation as Record<string, unknown>),
+                phase: 'failed',
+              },
+            }
+          : step,
+      ),
+    };
+    const approvalRetryState = activeTaskState(approvalRetryPlan, 24, {
       latestStepControlResult: retryStartedResult,
       recentStepControlResults: [retryStartedResult],
     });
@@ -1171,8 +1358,36 @@ describe('ChatPage canonical NyxID Assistant', () => {
           21,
         ),
       )
-      .mockResolvedValue(retryState);
-    (authFetch as jest.Mock).mockResolvedValue({ ok: true, status: 202 });
+      .mockResolvedValueOnce(pendingRetryState)
+      .mockResolvedValueOnce(retryState)
+      .mockRejectedValueOnce(new Error('Current state is not visible yet.'))
+      .mockResolvedValueOnce(retryState)
+      .mockResolvedValueOnce(retryState)
+      .mockResolvedValue(approvalRetryState);
+    (authFetch as jest.Mock).mockImplementation(
+      (_path: string, request: RequestInit) => {
+        const body = JSON.parse(String(request.body));
+        return Promise.resolve(
+          body.type === 'text'
+            ? completedStream(
+                'Generation 2 is running.',
+                'conversation-alpha',
+                'turn-alpha',
+                [
+                  {
+                    type: 'CUSTOM',
+                    sequence: 23,
+                    custom: {
+                      name: 'nyxid.task.snapshot',
+                      payload: retryPlan,
+                    },
+                  },
+                ],
+              )
+            : ({ ok: true, status: 202 } as Response),
+        );
+      },
+    );
 
     const uncertainView = renderWithQueryClient(<ChatPage />);
     await openCanonicalConversation();
@@ -1222,6 +1437,12 @@ describe('ChatPage canonical NyxID Assistant', () => {
       screen.getByRole('button', { name: 'Retry Submit reimbursement' }),
     );
     expect(await screen.findByText(/generation 2/)).toBeInTheDocument();
+    expect(
+      within(taskRow('Submit reimbursement')).getByText('planned'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Confirm plan' }),
+    ).toBeInTheDocument();
     expect(requestBodies()).toEqual([
       {
         type: 'step.retry',
@@ -1236,18 +1457,184 @@ describe('ChatPage canonical NyxID Assistant', () => {
       },
     ]);
 
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm plan' }));
+    await waitFor(() =>
+      expect(
+        within(taskRow('Submit reimbursement')).getByText('running'),
+      ).toBeInTheDocument(),
+    );
+    expect(
+      screen.queryByRole('button', { name: 'Confirm plan' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('region', { name: 'NyxID approval observation' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Approve' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Reject' }),
+    ).not.toBeInTheDocument();
+    expect(requestBodies()).toEqual([
+      {
+        type: 'step.retry',
+        conversationId: 'conversation-alpha',
+        turnId: 'turn-alpha',
+        taskId: 'task-alpha',
+        stepId: 'step-effect',
+        retryRequestId: expect.any(String),
+        clientRequestId: expect.any(String),
+        expectedOperationGeneration: 1,
+        expectedStateVersion: 21,
+      },
+      {
+        type: 'plan.resolve',
+        conversationId: 'conversation-alpha',
+        taskId: 'task-alpha',
+        planId: 'plan-alpha',
+        requestId: 'plan-gate-retry-3',
+        clientRequestId: expect.any(String),
+        planRevision: 3,
+        confirmed: true,
+        expectedStateVersion: 22,
+      },
+    ]);
+
     reconciledView.unmount();
-    renderWithQueryClient(<ChatPage />);
+    const liveRetryView = renderWithQueryClient(<ChatPage />);
+    await sendPrompt('Observe the reimbursement retry');
+    expect(await screen.findByText(/generation 2/)).toBeInTheDocument();
+    expect(
+      within(taskRow('Submit reimbursement')).getByText('running'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('region', { name: 'NyxID approval observation' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Approve' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Reject' }),
+    ).not.toBeInTheDocument();
+
+    liveRetryView.unmount();
+    const retryReloadView = renderWithQueryClient(<ChatPage />);
     await openCanonicalConversation();
     expect(await screen.findByText(/generation 2/)).toBeInTheDocument();
     expect(screen.getByText('Plan revision 3')).toBeInTheDocument();
     expect(screen.getByText('retry_started')).toBeInTheDocument();
     expect(
-      screen.queryByRole('button', { name: 'Skip Submit reimbursement' }),
+      within(taskRow('Submit reimbursement')).getByText('running'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('region', { name: 'NyxID approval observation' }),
+    ).not.toBeInTheDocument();
+
+    retryReloadView.unmount();
+    renderWithQueryClient(<ChatPage />);
+    await openCanonicalConversation();
+    await screen.findAllByText('Submit reimbursement');
+    const retryApproval = within(taskRow('Submit reimbursement')).getByRole(
+      'region',
+      { name: 'NyxID approval observation' },
+    );
+    expect(retryApproval).toHaveTextContent('approval-generation-two');
+    expect(retryApproval).toHaveTextContent('per_request');
+    expect(retryApproval).toHaveTextContent('approval_required');
+    expect(
+      screen.getByRole('button', { name: 'Retry Submit reimbursement' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Skip Submit reimbursement' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Approve' }),
     ).not.toBeInTheDocument();
     expect(
-      screen.getByRole('button', { name: 'Stop task' }),
+      screen.queryByRole('button', { name: 'Reject' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('UC4 renders a below-threshold conditional write as skipped', async () => {
+    (chatHistoryApi.listConversationMetas as jest.Mock).mockResolvedValue([
+      serverConversation,
+    ]);
+    const belowThresholdPlan = taskPlan(
+      [
+        taskStep('step-threshold', {
+          kind: 'input',
+          status: 'done',
+          description: 'Use screening threshold 75',
+          source: { input: {} },
+          externalEffect: 'not_applied',
+          availableActions: undefined,
+          operation: null,
+        }),
+        taskStep('step-condition', {
+          order: 2,
+          kind: 'web',
+          status: 'done',
+          description: 'Candidate score 72 is below 75',
+          source: { web: {} },
+          externalEffect: 'not_applied',
+          availableActions: undefined,
+          operation: null,
+        }),
+        taskStep('step-write', {
+          order: 3,
+          status: 'skipped',
+          description: 'Write accepted candidate',
+          mayChangeExternalState: true,
+          externalEffect: 'not_applied',
+          availableActions: undefined,
+          operation: null,
+        }),
+        taskStep('step-verify', {
+          order: 4,
+          kind: 'postcondition',
+          status: 'skipped',
+          description: 'Read candidate row back',
+          source: { postcondition: { check: 'bitable.row.exists' } },
+          externalEffect: 'not_applied',
+          availableActions: undefined,
+          operation: null,
+        }),
+      ],
+      {
+        status: 'succeeded',
+        title: 'Candidate screening at 75',
+      },
+    );
+    (chatHistoryApi.loadConversationState as jest.Mock).mockResolvedValue(
+      currentState(
+        {
+          latestTurn: {
+            turnId: 'turn-alpha',
+            taskId: 'task-alpha',
+            status: 'succeeded',
+            safeMessage: 'Candidate did not meet the write threshold.',
+          },
+          activeTask: belowThresholdPlan,
+        },
+        29,
+      ),
+    );
+
+    renderWithQueryClient(<ChatPage />);
+    await openCanonicalConversation();
+
+    expect(
+      await screen.findByText('Candidate score 72 is below 75'),
     ).toBeInTheDocument();
+    const write = within(taskRow('Write accepted candidate'));
+    expect(write.getByText('skipped')).toBeInTheDocument();
+    expect(write.getByText('not_applied')).toBeInTheDocument();
+    expect(
+      screen.queryByText('Verified against bitable.row.exists'),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('region', { name: 'NyxID approval observation' }),
+    ).not.toBeInTheDocument();
   });
 
   it('UC4 preserves the 75 override across Tier-B stall, return, and verified reload', async () => {
@@ -1376,22 +1763,31 @@ describe('ChatPage canonical NyxID Assistant', () => {
         outcome: 'resolved',
       },
     });
+    const postReturnApprovalObservation = {
+      approvalRequestId: 'nyxid-approval-write-alpha',
+      decisionMode: 'per_request',
+      receiptStatus: 'approval_required',
+      observedAt: '2026-08-08T00:10:00Z',
+    };
     const returnedPlan = taskPlan(
       (waitingPlan.steps as Record<string, unknown>[]).map((step) =>
         step.stepId === 'step-write'
           ? {
               ...step,
-              status: 'running',
+              status: 'failed',
+              externalEffect: 'not_applied',
+              availableActions: { retry: true, skip: true },
+              approvalObservation: postReturnApprovalObservation,
               operation: {
                 conversationActorId: 'conversation-alpha',
                 turnId: 'turn-alpha',
                 taskId: 'task-alpha',
                 stepId: 'step-write',
                 operationId: 'operation-write',
-                operationGeneration: 2,
+                operationGeneration: 1,
                 kind: 'effect',
-                phase: 'running',
-                lastProgressAt: '2026-08-08T00:11:00Z',
+                phase: 'failed',
+                lastProgressAt: '2026-08-08T00:10:00Z',
               },
             }
           : step,
@@ -1408,6 +1804,17 @@ describe('ChatPage canonical NyxID Assistant', () => {
         outcome: 'resolved',
       },
     });
+    const terminalPlan = {
+      ...finalPlan,
+      steps: (finalPlan.steps as Record<string, unknown>[]).map((step) =>
+        step.stepId === 'step-write'
+          ? {
+              ...step,
+              approvalObservation: postReturnApprovalObservation,
+            }
+          : step,
+      ),
+    };
     const finalState = currentState(
       {
         latestTurn: {
@@ -1415,7 +1822,7 @@ describe('ChatPage canonical NyxID Assistant', () => {
           taskId: 'task-alpha',
           status: 'succeeded',
         },
-        activeTask: finalPlan,
+        activeTask: terminalPlan,
         latestInputResolution: {
           requestId: 'input-threshold',
           outcome: 'resolved',
@@ -1451,9 +1858,34 @@ describe('ChatPage canonical NyxID Assistant', () => {
         ),
       )
       .mockResolvedValueOnce(waitingState)
+      .mockRejectedValueOnce(new Error('Current state is not visible yet.'))
+      .mockResolvedValueOnce(returnedState)
       .mockResolvedValueOnce(returnedState)
       .mockResolvedValue(finalState);
-    (authFetch as jest.Mock).mockResolvedValue({ ok: true, status: 202 });
+    (authFetch as jest.Mock).mockImplementation(
+      (_path: string, request: RequestInit) => {
+        const body = JSON.parse(String(request.body));
+        return Promise.resolve(
+          body.type === 'text'
+            ? completedStream(
+                'NyxID returned an approval request.',
+                'conversation-alpha',
+                'turn-alpha',
+                [
+                  {
+                    type: 'CUSTOM',
+                    sequence: 32,
+                    custom: {
+                      name: 'nyxid.task.snapshot',
+                      payload: returnedPlan,
+                    },
+                  },
+                ],
+              )
+            : ({ ok: true, status: 202 } as Response),
+        );
+      },
+    );
 
     const firstView = renderWithQueryClient(<ChatPage />);
     await openCanonicalConversation();
@@ -1491,21 +1923,44 @@ describe('ChatPage canonical NyxID Assistant', () => {
     ]);
 
     firstView.unmount();
+    const liveReturnedView = renderWithQueryClient(<ChatPage />);
+    await sendPrompt('Observe the candidate screening return');
+    expect(
+      await screen.findByText('Candidate screening at 75'),
+    ).toBeInTheDocument();
+    const liveApprovalObservation = within(
+      taskRow('Write accepted candidate'),
+    ).getByRole('region', { name: 'NyxID approval observation' });
+    expect(liveApprovalObservation).toHaveTextContent(
+      'nyxid-approval-write-alpha',
+    );
+    expect(liveApprovalObservation).toHaveTextContent('approval_required');
+    expect(
+      screen.queryByRole('button', { name: 'Approve' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Reject' }),
+    ).not.toBeInTheDocument();
+
+    liveReturnedView.unmount();
     const returnedView = renderWithQueryClient(<ChatPage />);
     await openCanonicalConversation();
     expect(
       await screen.findByText('Candidate screening at 75'),
     ).toBeInTheDocument();
     expect(
-      within(taskRow('Write accepted candidate')).getByText('running'),
+      within(taskRow('Write accepted candidate')).getByText('failed'),
     ).toBeInTheDocument();
-    expect(screen.getByText(/generation 2/)).toBeInTheDocument();
+    expect(screen.getByText(/generation 1/)).toBeInTheDocument();
     expect(
       within(taskRow('Write accepted candidate')).queryByText('Stalled'),
     ).not.toBeInTheDocument();
-    expect(
-      screen.queryByText('NyxID request observed'),
-    ).not.toBeInTheDocument();
+    const approvalObservation = within(
+      taskRow('Write accepted candidate'),
+    ).getByRole('region', { name: 'NyxID approval observation' });
+    expect(approvalObservation).toHaveTextContent('NyxID request observed');
+    expect(approvalObservation).toHaveTextContent('nyxid-approval-write-alpha');
+    expect(approvalObservation).toHaveTextContent('approval_required');
     expect(
       screen.queryByRole('button', { name: 'Approve' }),
     ).not.toBeInTheDocument();
@@ -1534,9 +1989,13 @@ describe('ChatPage canonical NyxID Assistant', () => {
       screen.getByText('Verified against bitable.row.exists'),
     ).toBeInTheDocument();
     expect(screen.getAllByText('Task result')).toHaveLength(1);
-    expect(
-      screen.queryByText('NyxID request observed'),
-    ).not.toBeInTheDocument();
+    const terminalApprovalObservation = within(
+      taskRow('Write accepted candidate'),
+    ).getByRole('region', { name: 'NyxID approval observation' });
+    expect(terminalApprovalObservation).toHaveTextContent(
+      'nyxid-approval-write-alpha',
+    );
+    expect(terminalApprovalObservation).toHaveTextContent('approval_required');
     expect(
       within(taskRow('Write accepted candidate')).getByText('confirmed'),
     ).toBeInTheDocument();
@@ -1587,6 +2046,7 @@ describe('ChatPage canonical NyxID Assistant', () => {
             stepId: 'step-connect',
             actionRequestId: 'action-alpha',
             action: 'service.connect',
+            request: action,
             reports: [],
             postconditionResult: null,
           },
@@ -1679,6 +2139,23 @@ describe('ChatPage canonical NyxID Assistant', () => {
     (createNyxIdCatalogKey as jest.Mock).mockResolvedValue(
       'user-service-created',
     );
+    (chatHistoryApi.loadConversationState as jest.Mock).mockResolvedValue(
+      currentState({
+        pendingActions: [
+          {
+            schemaVersion: 4,
+            originTurnId: 'turn-alpha',
+            taskId: 'task-alpha',
+            stepId: 'step-connect',
+            actionRequestId: 'action-alpha',
+            action: 'service.connect',
+            request: action,
+            reports: [],
+            postconditionResult: null,
+          },
+        ],
+      }),
+    );
 
     renderWithQueryClient(<ChatPage />);
     await sendPrompt('Connect GitHub');
@@ -1720,6 +2197,23 @@ describe('ChatPage canonical NyxID Assistant', () => {
         ]),
       )
       .mockRejectedValueOnce(new Error('network unavailable'));
+    (chatHistoryApi.loadConversationState as jest.Mock).mockResolvedValue(
+      currentState({
+        pendingActions: [
+          {
+            schemaVersion: 4,
+            originTurnId: 'turn-alpha',
+            taskId: 'task-alpha',
+            stepId: 'step-connect',
+            actionRequestId: 'action-alpha',
+            action: 'service.connect',
+            request: action,
+            reports: [],
+            postconditionResult: null,
+          },
+        ],
+      }),
+    );
 
     renderWithQueryClient(<ChatPage />);
     await sendPrompt('Connect GitHub');

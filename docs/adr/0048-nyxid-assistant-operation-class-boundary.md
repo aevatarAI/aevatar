@@ -85,10 +85,13 @@ Tier A remains a future cross-repository option. It requires NyxID to expose a n
 - Accepted dispatch is not committed effect and not read-model visibility.
 - Pending action, running/waiting, stalled, post-return approval, and terminal outcome are actor-owned facts published through the existing committed-state projection pipeline.
 - The complete exact `AgentToolOperationAdmission` is persisted as a typed Protobuf actor checkpoint fact and restored before resumed execution; credential material is excluded and resolved again for the recovery request.
+- A confirmed plan gate is not executable authority until the exact admission is committed by the turn actor. The conversation actor retains a secret-free delivery outbox until that committed ACK arrives. Rejection, expiry, replacement, and ambiguous dispatch create a durable revoke outbox; the turn actor commits an exact revocation fence before acknowledging it, and delayed delivery cannot resurrect that admission.
+- Effect retry authority is derived only from the exact delivered operation whose committed evidence is `not_applied`. The checkpoint stores a credential-free authorization snapshot and exact tool-definition fingerprint, then rematerialization re-matches the current profile tool and complete admission contract. Operation generation, a stale plan receipt, or generic approval is never sufficient authority.
+- If operation dispatch throws after delivery may have begun, the conversation actor commits a secret-free pending delivery probe and cannot start recovery, read-back, or generation N+1. The turn actor either reports the exact committed operation and its effect-dispatch waterline, or first commits an exact delivery tombstone and then reports `not admitted`; a delayed command matching that tombstone cannot execute.
 - A successful effect receipt persists only its provider resource identity and safe typed receipt fields. Frozen verification uses that identity plus the admitted typed read-back contract; it never compares mutable content or reuses a raw provider response.
 - The recovery credential is a vault reference owned by the turn actor. It is retained and renewed while effect truth is unresolved, hydrated only for the frozen verification dispatch, and revoked only after a terminal `applied` or `not_applied` result. A bounded-list miss remains `unavailable`, because absence from one page is not proof of non-application.
 - Stop and steering physically cancel the exact in-flight execution session and commit a fence. A late effect result can refine truth only through the same frozen verification; it cannot resume or advance the superseded operation. A parked steering continuation is dispatched only after that committed verification removes the uncertainty.
-- LLM text and reasoning progress preserve source order but use bounded, timer-driven batches outside the conversation actor turn. The first delta is immediate; later deltas flush at 250 ms or 64 KiB UTF-8 so progress cannot saturate the actor inbox and starve controls.
+- LLM text and reasoning progress preserve source order but use bounded, timer-driven batches outside the conversation actor turn. The first delta is immediate; later deltas flush at one second or 64 KiB UTF-8, and terminal or cancellation forces the accepted tail to flush, so progress cannot saturate the actor inbox and starve controls.
 - Timers and remote callbacks publish typed internal events carrying the minimum correlation keys; they do not mutate task state directly.
 - Query paths read actor-scoped current-state read models and never prime, replay, or reconstruct an approval from transport text.
 - Tool result text, assistant prose, and Studio card presence are not completion evidence. Typed committed state and its authoritative version are.
@@ -106,6 +109,8 @@ The machine-readable matrix owned by [#3313](https://github.com/AevatarAI/aevata
 At minimum, fixtures must prove:
 
 - generic `tool_approval` approval never authorizes an exact connected service;
+- lost plan-admission delivery/ACK and revoke delivery/ACK recover from actor-owned outboxes without executing a rejected plan;
+- ambiguous operation delivery cannot begin conversation-owned reconciliation or admit generation N+1 before the turn actor has committed either exact admission or an exact delivery tombstone;
 - late effect success, cancellation, restart, and result-delivery loss all preserve the frozen verification payload and require committed read-back evidence before retry or steering can proceed;
 - an admitted Class-P operation cannot be dispatched with a changed selector, digest, or argument set;
 - R cannot-check, L handoff, and X decline never produce an effect receipt;

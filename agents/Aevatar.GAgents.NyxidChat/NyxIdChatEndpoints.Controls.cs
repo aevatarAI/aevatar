@@ -133,6 +133,7 @@ public static partial class NyxIdChatEndpoints
             LlmControl = control.ToPayload(),
             ToolContext = BuildControlToolContext(
                 normalizedScopeId,
+                normalizedActorId,
                 turnId,
                 requestId,
                 credentials!,
@@ -202,6 +203,7 @@ public static partial class NyxIdChatEndpoints
             LlmControl = control.ToPayload(),
             ToolContext = BuildControlToolContext(
                 identity.ScopeId,
+                identity.ActorId,
                 identity.TurnId,
                 identity.RequestId,
                 credentials!,
@@ -421,6 +423,7 @@ public static partial class NyxIdChatEndpoints
 
     private static AgentToolExecutionContextPayload BuildControlToolContext(
         string scopeId,
+        string conversationActorId,
         string turnId,
         string requestId,
         AgentToolCredentials credentials,
@@ -432,6 +435,7 @@ public static partial class NyxIdChatEndpoints
             Credentials = credentials,
             Caller = new AgentToolCallerContext(scopeId, scopeId, turnId),
             Channel = new AgentToolChannelContext("nyxid-chat", null, scopeId, null, null),
+            ExecutionOwner = AgentToolExecutionOwners.Actor(conversationActorId),
         };
         return control.ToToolContext(context).ToPayload();
     }

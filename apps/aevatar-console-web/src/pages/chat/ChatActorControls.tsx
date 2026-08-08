@@ -41,6 +41,8 @@ type Props = {
   projection: ChatActorProjection | null;
   actionJourneys?: ReadonlyMap<string, ChatActionJourney>;
   disabled?: boolean;
+  diagnosticWire?: unknown;
+  wireInspectorEnabled?: boolean;
   onInputResolve: (answer: ChatInputAnswer, input: ChatPendingInput) => void;
   onPlanResolve: (confirmed: boolean, gate: ChatPlanGate) => void;
   onStop: () => void;
@@ -73,6 +75,8 @@ export function ChatActorControls({
   projection,
   actionJourneys = new Map(),
   disabled = false,
+  diagnosticWire,
+  wireInspectorEnabled = false,
   onInputResolve,
   onPlanResolve,
   onStop,
@@ -117,6 +121,8 @@ export function ChatActorControls({
           projection={projection}
         />
       ) : null}
+
+      <CommittedResults projection={projection} />
 
       {pendingInput ? (
         <ControlCard
@@ -236,6 +242,10 @@ export function ChatActorControls({
       ))}
 
       {terminal ? <TerminalFact terminal={terminal} /> : null}
+
+      {wireInspectorEnabled && diagnosticWire !== undefined ? (
+        <WireInspector wire={diagnosticWire} />
+      ) : null}
 
       {active ? (
         <ControlCard
@@ -593,7 +603,6 @@ function TaskPlanLedger({
           );
         })}
       </ol>
-      <CommittedResults projection={projection} />
     </section>
   );
 }
@@ -896,6 +905,7 @@ function ActionCard({
   if (!request) {
     const report = action.reports?.at(-1);
     const verified = action.postconditionResult?.verified === true;
+    const waitingForPostcondition = report?.disposition === 'completed';
     return (
       <ControlCard
         title={
@@ -906,12 +916,14 @@ function ActionCard({
         <div style={{ color: '#475569', fontSize: 12 }}>
           {verified
             ? t('pages.chat.actorControls.actorVerified', 'Actor verified')
-            : report
+            : waitingForPostcondition
               ? `${String(report.disposition)} · ${t('pages.chat.actorControls.postconditionPending', 'postcondition pending')}`
-              : t(
-                  'pages.chat.actorControls.waitingForAction',
-                  'Waiting for the connection decision',
-                )}
+              : report
+                ? String(report.disposition)
+                : t(
+                    'pages.chat.actorControls.waitingForAction',
+                    'Waiting for the connection decision',
+                  )}
         </div>
         <div style={{ color: '#64748b', fontSize: 11 }}>
           {t(
@@ -942,6 +954,10 @@ function ActionCard({
           proof.disposition === report.disposition &&
           readUserServiceId(proof.resource) === expectedId)),
   );
+  const waitingForPostcondition = report?.disposition === 'completed';
+  const terminalWithoutPostcondition = Boolean(
+    report && report.disposition !== 'completed',
+  );
   const serviceName =
     'catalogService' in request.params
       ? request.params.catalogService.serviceSlug
@@ -967,13 +983,15 @@ function ActionCard({
         <div>
           {t('pages.chat.actorControls.actorVerified', 'Actor verified')}
         </div>
-      ) : report ? (
+      ) : waitingForPostcondition ? (
         <div>
           {`${String(report.disposition)} · ${t(
             'pages.chat.actorControls.reportedWaitingProof',
             'Reported; waiting for actor verification',
           )}`}
         </div>
+      ) : report ? (
+        <div>{String(report.disposition)}</div>
       ) : (
         <div>
           {t(
@@ -983,7 +1001,7 @@ function ActionCard({
         </div>
       )}
       {journey?.error ? <div role="alert">{journey.error}</div> : null}
-      {!verified ? (
+      {!verified && !terminalWithoutPostcondition ? (
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           {'catalogService' in request.params && !report ? (
             <>
@@ -1061,6 +1079,66 @@ function ActionCard({
       ) : null}
     </ControlCard>
   );
+}
+
+function WireInspector({ wire }: { wire: unknown }): React.ReactElement {
+  const [open, setOpen] = useState(false);
+  return (
+    <section
+      aria-label={t('pages.chat.actorControls.wireInspector', 'Wire inspector')}
+    >
+      <Button
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+        size="small"
+        type="text"
+      >
+        {open
+          ? t('pages.chat.actorControls.hideWire', 'Hide wire')
+          : t('pages.chat.actorControls.showWire', 'Show wire')}
+      </Button>
+      {open ? (
+        <pre
+          style={{
+            background: '#f8fafc',
+            border: '1px solid #d8dee8',
+            borderRadius: 6,
+            fontSize: 11,
+            margin: '6px 0 0',
+            maxHeight: 240,
+            overflow: 'auto',
+            padding: 10,
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+          }}
+        >
+          {JSON.stringify(redactWire(wire), null, 2)}
+        </pre>
+      ) : null}
+    </section>
+  );
+}
+
+const WIRE_SECRET_KEY =
+  /(?:^|[_-])(authorization|api[-_]?key|token|secret|password|credential|cookie|user[-_]?code|device[-_]?code)(?:$|[_-])/i;
+const WIRE_SECRET_VALUE =
+  /(Bearer\s+)[A-Za-z0-9._~+/-]+|nyx(?:id)?_[A-Za-z0-9_-]{8,}/gi;
+
+function redactWire(input: unknown): unknown {
+  if (Array.isArray(input)) return input.map(redactWire);
+  if (input && typeof input === 'object') {
+    return Object.fromEntries(
+      Object.entries(input).map(([key, value]) => [
+        key,
+        WIRE_SECRET_KEY.test(key) ? '[REDACTED]' : redactWire(value),
+      ]),
+    );
+  }
+  return typeof input === 'string'
+    ? input.replace(WIRE_SECRET_VALUE, (_match, bearerPrefix: string) =>
+        bearerPrefix ? `${bearerPrefix}[REDACTED]` : '[REDACTED]',
+      )
+    : input;
 }
 
 function reportMatchesRequest(

@@ -237,6 +237,12 @@ is a task step, never a phase hidden under another step.
 `retryInputRebuildable` and operation `idempotencyKey` are execution-control
 facts. They remain in actor-owned state and are deliberately excluded from the
 public TaskPlan, current-state read model, SSE frames, and browser decoder.
+An effect retry additionally carries an internal exact source-operation key and
+a credential-free durable-authorization rematerialization marker. The turn
+actor accepts it only when that exact prior delivered operation committed
+`not_applied`, then re-matches the current tool definition and complete
+admission contract. These fields are never browser authority and are not
+projected.
 
 `nyxid.task.step.changed.custom.payload` is always the complete typed envelope
 `taskId / planRevision / step / changeKind`. It never publishes a bare step.
@@ -248,6 +254,16 @@ step decoder for initial SSE, reconnect/reload, and step-change reduction. They
 must not rename fields, infer identities, or maintain a second lifecycle model.
 The checked-in v1 convergence fixtures compare these shapes field-for-field.
 
+Plan-gate delivery and revocation are committed actor protocols rather than
+transport assumptions. The conversation actor retains secret-free delivery or
+revoke outboxes until the turn actor acknowledges the corresponding committed
+admission or exact revocation fence. If operation delivery becomes ambiguous,
+the conversation commits a pending exact delivery probe and cannot start
+reconciliation, read-back, or a later generation. The turn actor answers only
+after it has either committed that operation or committed a tombstone that
+fences delayed delivery; the response includes the actor-owned effect-dispatch
+waterline.
+
 G9 v1 deliberately allows only one browser action in a blocked turn. Multiple
 service connections are separate sequential actions. On reload, the browser
 resumes from current-state `activeTask`, whose shape is identical to the live
@@ -257,10 +273,10 @@ Text, reasoning, tool-start, task, control, and terminal frames share the actor-
 
 NyxID LLM stream ingestion uses a bounded channel with capacity 32. The first
 delta is forwarded immediately; later text and reasoning deltas are committed
-in source order when either the fixed 250-millisecond batch deadline or the
-64-KiB UTF-8 payload ceiling is reached. Oversized content is split only at
-Unicode rune boundaries. Terminal and cancellation paths drain already
-accepted tail progress independently of request cancellation. This batching
+in source order when either the fixed one-second batch deadline or the 64-KiB
+UTF-8 payload ceiling is reached. Oversized content is split only at Unicode
+rune boundaries. Terminal and cancellation paths force a flush and drain
+already accepted tail progress independently of request cancellation. This batching
 cannot occupy the controller actor turn, so stop, steering, and step-control
 commands remain responsive while streaming continues.
 

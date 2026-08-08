@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using Aevatar.AGUI.Contracts;
 using Aevatar.AI.Abstractions;
 using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
@@ -70,7 +71,10 @@ public sealed class NyxIdChatStateEndpointTests
                 NyxIdChatConversationAguiFrameBuilder.TaskStepChangedEventName)
             ["custom"]!["payload"]!["step"]!.ToJsonString())!;
 
-        var dispatcher = new RecordingTaskStateWriteDispatcher();
+        var store = new InMemoryProjectionDocumentStore<
+            NyxIdChatConversationCurrentStateDocument,
+            string>(static document => document.ActorId);
+        var dispatcher = new StoreTaskStateWriteDispatcher(store);
         var projector = new NyxIdChatConversationCurrentStateProjector(
             dispatcher,
             new FixedProjectionClock(DateTimeOffset.Parse("2026-08-07T12:26:00Z")));
@@ -82,10 +86,7 @@ public sealed class NyxIdChatStateEndpointTests
             },
             WrapCommittedState(state));
 
-        dispatcher.Document.Should().NotBeNull();
-        var document = dispatcher.Document!;
-        var queryPort = new ProjectionNyxIdChatConversationStateQueryPort(
-            new SingleTaskStateDocumentReader(document));
+        var queryPort = new ProjectionNyxIdChatConversationStateQueryPort(store);
         var response = await ExecuteAsync(queryPort, string.Empty);
 
         response.StatusCode.Should().Be(StatusCodes.Status200OK);
@@ -591,44 +592,17 @@ public sealed class NyxIdChatStateEndpointTests
             ?? throw new InvalidOperationException("Repository root could not be resolved.");
     }
 
-    private sealed class RecordingTaskStateWriteDispatcher
+    private sealed class StoreTaskStateWriteDispatcher(
+        InMemoryProjectionDocumentStore<NyxIdChatConversationCurrentStateDocument, string> store)
         : IProjectionWriteDispatcher<NyxIdChatConversationCurrentStateDocument>
     {
-        public NyxIdChatConversationCurrentStateDocument? Document { get; private set; }
-
         public Task<ProjectionWriteResult> UpsertAsync(
             NyxIdChatConversationCurrentStateDocument readModel,
-            CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            Document = readModel.Clone();
-            return Task.FromResult(ProjectionWriteResult.Applied());
-        }
+            CancellationToken ct = default) => store.UpsertAsync(readModel, ct);
 
         public Task<ProjectionWriteResult> DeleteAsync(
             string id,
-            CancellationToken ct = default) =>
-            throw new NotSupportedException();
-    }
-
-    private sealed class SingleTaskStateDocumentReader(
-        NyxIdChatConversationCurrentStateDocument document)
-        : IProjectionDocumentReader<NyxIdChatConversationCurrentStateDocument, string>
-    {
-        public Task<NyxIdChatConversationCurrentStateDocument?> GetAsync(
-            string key,
-            CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult<NyxIdChatConversationCurrentStateDocument?>(
-                document.Clone());
-        }
-
-        public Task<ProjectionDocumentQueryResult<NyxIdChatConversationCurrentStateDocument>>
-            QueryAsync(
-                ProjectionDocumentQuery query,
-                CancellationToken ct = default) =>
-            throw new NotSupportedException();
+            CancellationToken ct = default) => store.DeleteAsync(id, ct);
     }
 
     private sealed class FixedProjectionClock(DateTimeOffset utcNow) : IProjectionClock
