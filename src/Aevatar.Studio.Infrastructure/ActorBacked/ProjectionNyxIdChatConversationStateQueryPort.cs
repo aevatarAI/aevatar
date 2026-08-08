@@ -300,7 +300,14 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
                     substep.Title,
                     substep.Status)).ToArray(),
             step.AddedInPlanRevision,
-            step.CancelledInPlanRevision);
+            step.CancelledInPlanRevision,
+            step.ApprovalObservation == null
+                ? null
+                : new NyxIdChatPostReturnApprovalObservationSnapshot(
+                    step.ApprovalObservation.ApprovalRequestId,
+                    step.ApprovalObservation.DecisionMode,
+                    step.ApprovalObservation.ReceiptStatus,
+                    ToDateTimeOffset(step.ApprovalObservation.ObservedAt)));
 
     private static NyxIdChatConversationStepSourceSnapshot? ToSource(
         NyxIdChatConversationStepSourceDocument? source) =>

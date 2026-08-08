@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -109,6 +110,7 @@ internal static class NyxIdChatTaskPlanWireMapper
             AddedInPlanRevision = step.AddedInPlanRevision,
             CancelledInPlanRevision = step.CancelledInPlanRevision,
             Estimate = step.Estimate?.Clone(),
+            ApprovalObservation = step.ApprovalObservation?.Clone(),
         };
         result.DependsOn.AddRange(step.DependsOn);
         result.Substeps.AddRange(step.Substeps.Select(static substep => substep.Clone()));
@@ -155,6 +157,7 @@ internal static class NyxIdChatTaskPlanWireMapper
             AddedInPlanRevision = step.AddedInPlanRevision,
             CancelledInPlanRevision = step.CancelledInPlanRevision,
             Estimate = FromSnapshot(step.Estimate),
+            ApprovalObservation = FromSnapshot(step.ApprovalObservation),
         };
         if (step.DependsOn is not null)
             result.DependsOn.AddRange(step.DependsOn);
@@ -376,6 +379,18 @@ internal static class NyxIdChatTaskPlanWireMapper
                 Seconds = estimate.Seconds,
             };
 
+    private static NyxIdChatPostReturnApprovalObservation? FromSnapshot(
+        NyxIdChatPostReturnApprovalObservationSnapshot? observation) =>
+        observation is null
+            ? null
+            : new NyxIdChatPostReturnApprovalObservation
+            {
+                ApprovalRequestId = observation.ApprovalRequestId,
+                DecisionMode = ParseApprovalDecisionMode(observation.DecisionMode),
+                ReceiptStatus = ParseReceiptStatus(observation.ReceiptStatus),
+                ObservedAt = ToTimestamp(observation.ObservedAt),
+            };
+
     private static Timestamp? ToTimestamp(DateTimeOffset? value) =>
         value.HasValue ? Timestamp.FromDateTimeOffset(value.Value) : null;
 
@@ -409,6 +424,21 @@ internal static class NyxIdChatTaskPlanWireMapper
         "confirmed" => NyxIdChatEffectEvidence.Confirmed,
         "may_have_changed" => NyxIdChatEffectEvidence.MayHaveChanged,
         _ => NyxIdChatEffectEvidence.Unspecified,
+    };
+
+    private static NyxIdApprovalDecisionMode ParseApprovalDecisionMode(string value) =>
+        value switch
+        {
+            "per_request" => NyxIdApprovalDecisionMode.PerRequest,
+            "grant" => NyxIdApprovalDecisionMode.Grant,
+            _ => NyxIdApprovalDecisionMode.Unknown,
+        };
+
+    private static AgentToolReceiptStatus ParseReceiptStatus(string value) => value switch
+    {
+        "approval_required" => AgentToolReceiptStatus.ApprovalRequired,
+        "denied" => AgentToolReceiptStatus.Denied,
+        _ => AgentToolReceiptStatus.Unspecified,
     };
 
     private static NyxIdChatStepKind ParseStepKind(string value) => value switch

@@ -73,6 +73,7 @@ Tier B therefore has the following binding behavior:
 - Aevatar starts the admitted effect as a long-running actor-owned tool operation.
 - Before NyxID returns, Aevatar may show only running/waiting and then threshold-derived stalled. It cannot claim that approval is pending and cannot render a reconstructible pre-effect approval card.
 - A typed approval fact may be committed only after NyxID returns error 7000/7001 with a non-empty `approval_request_id`.
+- NyxID approval mode is a separate typed value: `per_request`, `grant`, or `unknown`. Missing or invalid boundary data remains `unknown`; Aevatar local approval mode never fills that gap.
 - A later approve/deny decision and retry are best effort. A grant-mode decision may allow a new retry; a per-request retry may create a new request. The UI and actor protocol promise neither reuse nor successful resumption of the returned request.
 - No synthetic Aevatar approval, advisory card, or generic `tool_approval` decision is represented as NyxID exact-service authorization.
 
@@ -84,6 +85,10 @@ Tier A remains a future cross-repository option. It requires NyxID to expose a n
 - Accepted dispatch is not committed effect and not read-model visibility.
 - Pending action, running/waiting, stalled, post-return approval, and terminal outcome are actor-owned facts published through the existing committed-state projection pipeline.
 - The complete exact `AgentToolOperationAdmission` is persisted as a typed Protobuf actor checkpoint fact and restored before resumed execution; credential material is excluded and resolved again for the recovery request.
+- A successful effect receipt persists only its provider resource identity and safe typed receipt fields. Frozen verification uses that identity plus the admitted typed read-back contract; it never compares mutable content or reuses a raw provider response.
+- The recovery credential is a vault reference owned by the turn actor. It is retained and renewed while effect truth is unresolved, hydrated only for the frozen verification dispatch, and revoked only after a terminal `applied` or `not_applied` result. A bounded-list miss remains `unavailable`, because absence from one page is not proof of non-application.
+- Stop and steering physically cancel the exact in-flight execution session and commit a fence. A late effect result can refine truth only through the same frozen verification; it cannot resume or advance the superseded operation. A parked steering continuation is dispatched only after that committed verification removes the uncertainty.
+- LLM text and reasoning progress preserve source order but use bounded, timer-driven batches outside the conversation actor turn. The first delta is immediate; later deltas flush at 250 ms or 64 KiB UTF-8 so progress cannot saturate the actor inbox and starve controls.
 - Timers and remote callbacks publish typed internal events carrying the minimum correlation keys; they do not mutate task state directly.
 - Query paths read actor-scoped current-state read models and never prime, replay, or reconstruct an approval from transport text.
 - Tool result text, assistant prose, and Studio card presence are not completion evidence. Typed committed state and its authoritative version are.
@@ -101,6 +106,7 @@ The machine-readable matrix owned by [#3313](https://github.com/AevatarAI/aevata
 At minimum, fixtures must prove:
 
 - generic `tool_approval` approval never authorizes an exact connected service;
+- late effect success, cancellation, restart, and result-delivery loss all preserve the frozen verification payload and require committed read-back evidence before retry or steering can proceed;
 - an admitted Class-P operation cannot be dispatched with a changed selector, digest, or argument set;
 - R cannot-check, L handoff, and X decline never produce an effect receipt;
 - unknown registry verbs and incomplete Class-A artifact sets fail closed; and

@@ -174,6 +174,81 @@ public sealed class NyxIdChatControlCommandTests
         decision.NextCommand.Key.OperationId.Should().NotBe("operation-alpha");
     }
 
+    [Fact]
+    public void LateConnectedServiceApprovalReceipt_ShouldRefineOnlyTheFencedGeneration()
+    {
+        var state = FailedStepState(
+            NyxIdChatStepKind.Tool,
+            required: true,
+            safeToSkip: false,
+            retryInputRebuildable: true);
+        var step = state.ActiveTask.Steps.Single();
+        step.Status = NyxIdChatStepStatus.Uncertain;
+        step.MayChangeExternalState = true;
+        step.ExternalEffect = NyxIdChatEffectEvidence.MayHaveChanged;
+        step.Operation.Phase = NyxIdChatOperationPhase.Dispatched;
+        step.Operation.CompletedAt = null;
+        step.Source = new NyxIdChatStepSource
+        {
+            Tool = new NyxIdChatToolStepSource
+            {
+                ToolName = "repository_update",
+                OperationAdmission = new AgentToolOperationAdmissionPayload
+                {
+                    ServiceInstanceId = "m-alpha",
+                    ServiceSlug = "svc-alpha",
+                },
+            },
+        };
+        state.ActiveTask.Status = NyxIdChatTaskStatus.Stopped;
+        state.ActiveTurn.Status = NyxIdChatTurnStatus.Stopped;
+        state.LatestTurn = state.ActiveTurn.Clone();
+        state.ControlFence = new NyxIdChatControlFenceState
+        {
+            Kind = NyxIdChatControlKind.Stop,
+            TurnId = "turn-alpha",
+            TaskId = "task-alpha",
+            Outcome = NyxIdChatControlOutcome.Uncancellable,
+        };
+        var signal = new NyxIdChatOperationResultSignal
+        {
+            Key = step.Operation.Key.Clone(),
+            Tool = new NyxIdChatToolOperationResult
+            {
+                ExternalEffect = NyxIdChatEffectEvidence.NotStarted,
+                Receipt = new AgentToolReceipt
+                {
+                    CallId = "call-alpha",
+                    ToolName = "repository_update",
+                    Status = AgentToolReceiptStatus.ApprovalRequired,
+                    ApprovalRequestId = "approval-alpha",
+                    NyxIdApprovalDecisionMode = NyxIdApprovalDecisionMode.Unknown,
+                },
+            },
+        };
+
+        var decision = NyxIdChatControlCommands.ReconcileLateOperationEvidence(
+            state,
+            signal,
+            Now);
+
+        decision.IsFencedOperation.Should().BeTrue();
+        decision.ShouldCommit.Should().BeTrue();
+        decision.OperationPhase.Should().Be(NyxIdChatOperationPhase.Cancelled);
+        var refined = decision.State.ActiveTask.Steps.Single();
+        refined.Operation.Key.Should().BeEquivalentTo(step.Operation.Key);
+        refined.ApprovalRequestId.Should().Be("approval-alpha");
+        refined.ApprovalObservation.Should().NotBeNull();
+        refined.ApprovalObservation.ApprovalRequestId.Should().Be("approval-alpha");
+        refined.ApprovalObservation.DecisionMode.Should().Be(NyxIdApprovalDecisionMode.Unknown);
+        refined.ApprovalObservation.ReceiptStatus.Should()
+            .Be(AgentToolReceiptStatus.ApprovalRequired);
+        refined.ApprovalObservation.ObservedAt.Should().Be(Now);
+        decision.State.PendingApproval.Should().BeNull();
+        decision.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Stopped);
+        decision.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Stopped);
+    }
+
     [Theory]
     [InlineData(false, false)]
     [InlineData(true, true)]

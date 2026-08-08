@@ -364,6 +364,13 @@ public sealed class NyxIdChatTaskLifecycleTests
         original.RetryInputRebuildable.Should().BeTrue();
         original.RetryToolInput.Should().NotBeNull();
         original.ApprovalRequestId = "approval-original";
+        original.ApprovalObservation = new NyxIdChatPostReturnApprovalObservation
+        {
+            ApprovalRequestId = "approval-original",
+            DecisionMode = NyxIdApprovalDecisionMode.PerRequest,
+            ReceiptStatus = AgentToolReceiptStatus.ApprovalRequired,
+            ObservedAt = Now.Clone(),
+        };
         var retry = NyxIdChatControlCommands.Retry(
             reconciled,
             RetryToolCommand(original, "retry-per-request"),
@@ -374,6 +381,9 @@ public sealed class NyxIdChatTaskLifecycleTests
         retry.NextCommand!.Key.OperationGeneration.Should().Be(2);
         retry.State.ActiveTask.Steps.Single(step => step.StepId == toolStepId)
             .ApprovalRequestId.Should().BeEmpty("a retry cannot carry the prior decision request");
+        retry.State.ActiveTask.Steps.Single(step => step.StepId == toolStepId)
+            .ApprovalObservation.Should().BeNull(
+                "generation N+1 cannot inherit a generation N post-return fact");
 
         var reentry = NyxIdChatTaskLifecycle.ApplyOperationResult(
             retry.State,
@@ -386,6 +396,14 @@ public sealed class NyxIdChatTaskLifecycleTests
         step.Operation.Key.OperationGeneration.Should().Be(2);
         step.ApprovalRequestId.Should().Be("approval-per-request-fresh");
         step.ApprovalRequestId.Should().NotBe("approval-original");
+        step.ApprovalObservation.Should().NotBeNull();
+        step.ApprovalObservation.ApprovalRequestId.Should()
+            .Be("approval-per-request-fresh");
+        step.ApprovalObservation.DecisionMode.Should()
+            .Be(NyxIdApprovalDecisionMode.PerRequest);
+        step.ApprovalObservation.ReceiptStatus.Should()
+            .Be(AgentToolReceiptStatus.ApprovalRequired);
+        step.ApprovalObservation.ObservedAt.Should().Be(Now);
         step.Status.Should().Be(NyxIdChatStepStatus.Failed);
         step.ExternalEffect.Should().Be(NyxIdChatEffectEvidence.NotApplied);
         step.AvailableActions.Retry.Should().BeTrue();
@@ -516,6 +534,8 @@ public sealed class NyxIdChatTaskLifecycleTests
         decision.State.ActiveTask.ActiveOperationId.Should().BeEmpty();
         decision.State.ActiveTask.Steps[0].Status.Should().Be(NyxIdChatStepStatus.Waiting);
         decision.State.ActiveTask.Steps[0].ApprovalRequestId.Should().Be("approval-alpha");
+        decision.State.ActiveTask.Steps[0].ApprovalObservation.Should().BeNull(
+            "a local approval continuation is not a Tier-B connected-service observation");
         decision.State.PendingApproval.Should().NotBeNull();
         decision.State.PendingApproval.ApprovalRequestId.Should().Be("approval-alpha");
         decision.State.PendingApproval.TurnId.Should().Be("turn-alpha");
@@ -551,6 +571,61 @@ public sealed class NyxIdChatTaskLifecycleTests
         approval.NextCommand.Should().NotBeNull();
         approval.NextCommand!.InputCase.Should().Be(
             NyxIdChatOperationDispatchCommand.InputOneofCase.ToolApprovalContinuation);
+    }
+
+    [Theory]
+    [InlineData(AgentToolReceiptStatus.Denied, NyxIdApprovalDecisionMode.Grant, true)]
+    [InlineData(AgentToolReceiptStatus.Error, NyxIdApprovalDecisionMode.Unknown, false)]
+    public void ConnectedServiceReceipt_ShouldPersistOnlyTypedPostReturnApprovalFacts(
+        AgentToolReceiptStatus receiptStatus,
+        NyxIdApprovalDecisionMode decisionMode,
+        bool shouldObserve)
+    {
+        var state = ActiveState(NyxIdChatStepKind.Tool, "step-tool-alpha", "operation-tool-alpha");
+        state.ActiveTask.Steps[0].Source = new NyxIdChatStepSource
+        {
+            Tool = new NyxIdChatToolStepSource
+            {
+                ToolName = "repository_update",
+                OperationAdmission = new AgentToolOperationAdmissionPayload
+                {
+                    ServiceInstanceId = "m-alpha",
+                    ServiceSlug = "svc-alpha",
+                },
+            },
+        };
+        var signal = new NyxIdChatOperationResultSignal
+        {
+            Key = state.ActiveTask.Steps[0].Operation.Key.Clone(),
+            Tool = new NyxIdChatToolOperationResult
+            {
+                ExternalEffect = NyxIdChatEffectEvidence.NotApplied,
+                Receipt = new AgentToolReceipt
+                {
+                    CallId = "call-alpha",
+                    ToolName = "repository_update",
+                    Status = receiptStatus,
+                    ApprovalRequestId = "approval-alpha",
+                    NyxIdApprovalDecisionMode = decisionMode,
+                },
+            },
+        };
+
+        var decision = NyxIdChatTaskLifecycle.ApplyOperationResult(state, signal, Now);
+
+        var observation = decision.State.ActiveTask.Steps[0].ApprovalObservation;
+        if (!shouldObserve)
+        {
+            observation.Should().BeNull();
+            return;
+        }
+
+        observation.Should().NotBeNull();
+        observation!.ApprovalRequestId.Should().Be("approval-alpha");
+        observation.DecisionMode.Should().Be(decisionMode);
+        observation.ReceiptStatus.Should().Be(receiptStatus);
+        observation.ObservedAt.Should().Be(Now);
+        decision.State.PendingApproval.Should().BeNull();
     }
 
     [Fact]
@@ -923,6 +998,7 @@ public sealed class NyxIdChatTaskLifecycleTests
                 ToolName = "repository_update",
                 Status = AgentToolReceiptStatus.ApprovalRequired,
                 ApprovalRequestId = requestId,
+                NyxIdApprovalDecisionMode = NyxIdApprovalDecisionMode.PerRequest,
                 ErrorCode = "NYXID_APPROVAL_REQUIRED",
                 ErrorMessage = "NyxID created an approval request.",
             },

@@ -207,7 +207,14 @@ public sealed record NyxIdChatConversationStepSnapshot(
     NyxIdChatConversationStepEstimateSnapshot? Estimate = null,
     IReadOnlyList<NyxIdChatConversationSubstepSnapshot>? Substeps = null,
     int AddedInPlanRevision = 0,
-    int CancelledInPlanRevision = 0);
+    int CancelledInPlanRevision = 0,
+    NyxIdChatPostReturnApprovalObservationSnapshot? ApprovalObservation = null);
+
+public sealed record NyxIdChatPostReturnApprovalObservationSnapshot(
+    string ApprovalRequestId,
+    string DecisionMode,
+    string ReceiptStatus,
+    DateTimeOffset? ObservedAt);
 
 public sealed record NyxIdChatConversationStepEstimateSnapshot(
     string Kind,

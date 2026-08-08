@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
@@ -232,6 +233,15 @@ public sealed class NyxIdChatConversationCurrentStateProjector
             AddedBy = ToWireName(step.AddedBy),
             AddedInPlanRevision = step.AddedInPlanRevision,
             CancelledInPlanRevision = step.CancelledInPlanRevision,
+            ApprovalObservation = step.ApprovalObservation == null
+                ? null
+                : new NyxIdChatConversationPostReturnApprovalObservationDocument
+                {
+                    ApprovalRequestId = step.ApprovalObservation.ApprovalRequestId,
+                    DecisionMode = ToWireName(step.ApprovalObservation.DecisionMode),
+                    ReceiptStatus = ToWireName(step.ApprovalObservation.ReceiptStatus),
+                    ObservedAt = step.ApprovalObservation.ObservedAt?.Clone(),
+                },
             DependsOn = { step.DependsOn },
             Estimate = step.Estimate == null
                 ? null
@@ -666,6 +676,20 @@ public sealed class NyxIdChatConversationCurrentStateProjector
         NyxIdChatEffectEvidence.NotApplied => "not_applied",
         NyxIdChatEffectEvidence.Confirmed => "confirmed",
         NyxIdChatEffectEvidence.MayHaveChanged => "may_have_changed",
+        _ => string.Empty,
+    };
+
+    private static string ToWireName(NyxIdApprovalDecisionMode mode) => mode switch
+    {
+        NyxIdApprovalDecisionMode.PerRequest => "per_request",
+        NyxIdApprovalDecisionMode.Grant => "grant",
+        _ => "unknown",
+    };
+
+    private static string ToWireName(AgentToolReceiptStatus status) => status switch
+    {
+        AgentToolReceiptStatus.ApprovalRequired => "approval_required",
+        AgentToolReceiptStatus.Denied => "denied",
         _ => string.Empty,
     };
 

@@ -2,6 +2,7 @@ using System.Security.Claims;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Aevatar.AGUI.Contracts;
+using Aevatar.AI.Abstractions;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
@@ -115,6 +116,14 @@ public sealed class NyxIdChatStateEndpointTests
             .Should().BeFalse();
         currentTask["steps"]![0]!["operation"]!.AsObject().ContainsKey("idempotencyKey")
             .Should().BeFalse();
+        currentTask["steps"]![0]!["approvalObservation"]!["approvalRequestId"]!
+            .GetValue<string>().Should().Be("approval-alpha");
+        currentTask["steps"]![0]!["approvalObservation"]!["decisionMode"]!
+            .GetValue<string>().Should().Be("per_request");
+        currentTask["steps"]![0]!["approvalObservation"]!["receiptStatus"]!
+            .GetValue<string>().Should().Be("approval_required");
+        currentTask["steps"]![0]!["approvalObservation"]!["observedAt"]!
+            .GetValue<string>().Should().Be("2026-08-07T12:25:10.919334800Z");
     }
 
     [Fact]
@@ -424,6 +433,13 @@ public sealed class NyxIdChatStateEndpointTests
                     Operation = operation,
                     AvailableActions = new NyxIdChatAvailableActions(),
                     UpdatedAt = updatedAt.Clone(),
+                    ApprovalObservation = new NyxIdChatPostReturnApprovalObservation
+                    {
+                        ApprovalRequestId = "approval-alpha",
+                        DecisionMode = NyxIdApprovalDecisionMode.PerRequest,
+                        ReceiptStatus = AgentToolReceiptStatus.ApprovalRequired,
+                        ObservedAt = updatedAt.Clone(),
+                    },
                     RetryInputRebuildable = true,
                     AddedBy = NyxIdChatStepAddedBy.Initial,
                 },

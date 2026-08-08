@@ -409,6 +409,13 @@ message NyxIdChatConversationSubstepDocument {
   string status = 3;
 }
 
+message NyxIdChatConversationPostReturnApprovalObservationDocument {
+  string approval_request_id = 1;
+  string decision_mode = 2;
+  string receipt_status = 3;
+  google.protobuf.Timestamp observed_at = 4;
+}
+
 message NyxIdChatConversationStepDocument {
   string step_id = 1;
   int32 order = 2;
@@ -433,6 +440,7 @@ message NyxIdChatConversationStepDocument {
   repeated NyxIdChatConversationSubstepDocument substeps = 21;
   int32 added_in_plan_revision = 22;
   int32 cancelled_in_plan_revision = 23;
+  NyxIdChatConversationPostReturnApprovalObservationDocument approval_observation = 24;
 }
 
 message NyxIdChatConversationPlanGateDocument {

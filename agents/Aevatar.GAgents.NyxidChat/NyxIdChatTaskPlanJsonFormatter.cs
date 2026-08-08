@@ -108,6 +108,8 @@ internal static class NyxIdChatTaskPlanJsonFormatter
     {
         string[] prefixes =
         [
+            "NYX_ID_APPROVAL_DECISION_MODE_",
+            "AGENT_TOOL_RECEIPT_STATUS_",
             "NYX_ID_CHAT_CONTINUATION_ADMISSION_STATUS_",
             "NYX_ID_CHAT_STEP_CONTROL_KIND_",
             "NYX_ID_CHAT_ACTION_DISPOSITION_",

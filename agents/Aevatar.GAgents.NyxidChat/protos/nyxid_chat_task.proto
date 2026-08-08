@@ -393,6 +393,15 @@ message NyxIdChatOperationState {
   google.protobuf.Timestamp step_changed_due_at = 17;
 }
 
+// A Tier-B connected-service approval fact becomes knowable only after NyxID
+// returns. It never represents a pre-effect or locally decidable approval.
+message NyxIdChatPostReturnApprovalObservation {
+  string approval_request_id = 1;
+  aevatar.ai.NyxIdApprovalDecisionMode decision_mode = 2;
+  aevatar.ai.AgentToolReceiptStatus receipt_status = 3;
+  google.protobuf.Timestamp observed_at = 4;
+}
+
 message NyxIdChatTaskStepState {
   string step_id = 1;
   int32 order = 2;
@@ -424,6 +433,7 @@ message NyxIdChatTaskStepState {
   // Internal credential-free input used only for explicit generation retry.
   // Public projections deliberately omit this field.
   NyxIdChatRetryToolInputState retry_tool_input = 25;
+  NyxIdChatPostReturnApprovalObservation approval_observation = 26;
 }
 
 message NyxIdChatPlanRevisionRecord {
@@ -503,6 +513,7 @@ message NyxIdChatTaskPlanStep {
   repeated NyxIdChatSubstepState substeps = 21;
   int32 added_in_plan_revision = 22;
   int32 cancelled_in_plan_revision = 23;
+  NyxIdChatPostReturnApprovalObservation approval_observation = 24;
 }
 
 message NyxIdChatTaskPlan {

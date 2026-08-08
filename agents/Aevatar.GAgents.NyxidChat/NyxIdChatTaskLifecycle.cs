@@ -977,8 +977,17 @@ public static class NyxIdChatTaskLifecycle
 
         step.ApprovalRequestId = receipt.ApprovalRequestId;
         step.UpdatedAt = now.Clone();
-        if (step.Source?.Tool?.OperationAdmission is not null)
+        if (step.Source?.Tool?.OperationAdmission is not null &&
+            receipt.Status is AgentToolReceiptStatus.ApprovalRequired or
+                AgentToolReceiptStatus.Denied)
         {
+            step.ApprovalObservation = new NyxIdChatPostReturnApprovalObservation
+            {
+                ApprovalRequestId = receipt.ApprovalRequestId,
+                DecisionMode = receipt.NyxIdApprovalDecisionMode,
+                ReceiptStatus = receipt.Status,
+                ObservedAt = now.Clone(),
+            };
             state.PendingApproval = null;
             return;
         }

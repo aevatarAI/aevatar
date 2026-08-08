@@ -169,6 +169,7 @@ public static class NyxIdChatControlCommands
         retried.FailureCode = string.Empty;
         retried.SafeMessage = string.Empty;
         retried.ApprovalRequestId = string.Empty;
+        retried.ApprovalObservation = null;
         retried.Operation = new NyxIdChatOperationState
         {
             Key = key.Clone(),
@@ -347,6 +348,23 @@ public static class NyxIdChatControlCommands
         step.Operation.CompletedAt = now.Clone();
         step.UpdatedAt = now.Clone();
         step.AvailableActions = new NyxIdChatAvailableActions();
+        if (step.Source?.Tool?.OperationAdmission is not null &&
+            signal.Tool?.Receipt is
+            {
+                Status: AgentToolReceiptStatus.ApprovalRequired or
+                    AgentToolReceiptStatus.Denied,
+            } receipt &&
+            !string.IsNullOrWhiteSpace(receipt.ApprovalRequestId))
+        {
+            step.ApprovalRequestId = receipt.ApprovalRequestId;
+            step.ApprovalObservation = new NyxIdChatPostReturnApprovalObservation
+            {
+                ApprovalRequestId = receipt.ApprovalRequestId,
+                DecisionMode = receipt.NyxIdApprovalDecisionMode,
+                ReceiptStatus = receipt.Status,
+                ObservedAt = now.Clone(),
+            };
+        }
         if (evidence.Value.Phase != NyxIdChatOperationPhase.Uncertain &&
             next.ControlFence?.Kind == NyxIdChatControlKind.Steering &&
             next.ContinuationAdmission?.Status ==
