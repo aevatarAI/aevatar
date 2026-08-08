@@ -10,7 +10,7 @@ namespace Aevatar.AI.ToolProviders.Web.Tools;
 /// </summary>
 public sealed class ConditionEvaluateTool : IAgentTool
 {
-    public const string ToolName = "condition.evaluate";
+    public const string ToolName = "condition_evaluate";
 
     public string Name => ToolName;
 

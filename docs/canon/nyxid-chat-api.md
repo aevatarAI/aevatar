@@ -352,6 +352,8 @@ External-effect evidence is closed:
 
 The actor computes `retry`, `skip`, and `stop` availability. Retry requires rebuildable typed input plus proof that replay is safe: no effect occurred, or the exact logical operation is idempotent under a stable key. V1 does not persist tool arguments or capabilities, so an interrupted tool is never silently reconstructed. Skip requires an optional step or explicit safe-skip policy. UI code must not derive these actions independently.
 
+When an active task has a committed `failed`, `cancelled`, or `uncertain` step whose actor-authored actions allow `retry` or `skip`, the current SSE request ends with `RUN_FINISHED blocked`. This terminal closes only that stream observation: the durable task and turn remain `active`, and a caller may use the exact authenticated step control described below. Live reconciliation and durable replay both consume the committed actions; neither the HTTP boundary nor the UI derives recoverability.
+
 ### Tool recovery provenance
 
 An authorized NyxID operation may provide an optional

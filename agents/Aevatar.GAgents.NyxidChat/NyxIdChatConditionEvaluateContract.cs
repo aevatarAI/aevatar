@@ -9,7 +9,7 @@ internal sealed record NyxIdChatConditionProposal(
 
 internal static class NyxIdChatConditionEvaluateContract
 {
-    internal const string ToolName = "condition.evaluate";
+    internal const string ToolName = "condition_evaluate";
 
     internal static bool IsConditionEvaluate(NyxIdChatToolCall? call) =>
         call is not null &&

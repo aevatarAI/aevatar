@@ -209,9 +209,18 @@ internal static class NyxIdChatConversationAguiFrameBuilder
         }
         AppendOperationEvidence(frames, reconciled, turnId);
 
-        if (reconciled.RefinesExistingTerminal ||
-            (state.ActiveTurn.Status == NyxIdChatTurnStatus.Active &&
-             state.ActiveTask.Status == NyxIdChatTaskStatus.Active))
+        if (reconciled.RefinesExistingTerminal)
+        {
+            return frames;
+        }
+
+        var recoverableTerminal =
+            state.ActiveTurn.Status == NyxIdChatTurnStatus.Active &&
+            state.ActiveTask.Status == NyxIdChatTaskStatus.Active &&
+            HasRecoverableTerminalStep(state.ActiveTask);
+        if (state.ActiveTurn.Status == NyxIdChatTurnStatus.Active &&
+            state.ActiveTask.Status == NyxIdChatTaskStatus.Active &&
+            !recoverableTerminal)
         {
             return frames;
         }
@@ -221,8 +230,29 @@ internal static class NyxIdChatConversationAguiFrameBuilder
             Sequence = reconciled.ProgressSequence,
             TextMessageEnd = new TextMessageEndEvent { MessageId = turnId },
         });
-        frames.Add(BuildTerminal(actorId, turnId, state, reconciled.ProgressSequence));
+        frames.Add(recoverableTerminal
+            ? Finished(actorId, turnId, RunCompletionStatus.Blocked, reconciled.ProgressSequence)
+            : BuildTerminal(actorId, turnId, state, reconciled.ProgressSequence));
         return frames;
+    }
+
+    internal static bool IsRecoverableTerminalStep(
+        NyxIdChatStepStatus status,
+        bool retry,
+        bool skip) =>
+        (status == NyxIdChatStepStatus.Failed ||
+         status == NyxIdChatStepStatus.Cancelled ||
+         status == NyxIdChatStepStatus.Uncertain) &&
+        (retry || skip);
+
+    private static bool HasRecoverableTerminalStep(NyxIdChatTaskState task)
+    {
+        var step = task.Steps.FirstOrDefault(candidate =>
+            string.Equals(candidate.StepId, task.ActiveStepId, StringComparison.Ordinal));
+        return step is not null && IsRecoverableTerminalStep(
+            step.Status,
+            step.AvailableActions?.Retry == true,
+            step.AvailableActions?.Skip == true);
     }
 
     public static IReadOnlyList<AGUIEvent> BuildControlChanged(

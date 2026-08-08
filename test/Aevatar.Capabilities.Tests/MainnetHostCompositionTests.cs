@@ -845,7 +845,7 @@ public sealed class MainnetHostCompositionTests
             .Single()
             .DiscoverToolsAsync();
         var conditionTool = nyxIdChatConditionTools.Should().ContainSingle().Which;
-        conditionTool.Name.Should().Be("condition.evaluate");
+        conditionTool.Name.Should().Be("condition_evaluate");
         conditionTool.IsReadOnly.Should().BeTrue();
 
         var voice = registry.Resolve("voice.realtime");

@@ -1,3 +1,4 @@
+using Aevatar.AGUI.Contracts;
 using Aevatar.AI.Abstractions;
 using Aevatar.GAgents.NyxidChat;
 using FluentAssertions;
@@ -254,6 +255,21 @@ public sealed class NyxIdChatTaskTransitionPolicyTests
         decision.State.ActiveTask.FailureCode.Should().Be("MODEL_FAILED");
         decision.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Active);
         decision.State.ActiveTurn.FailureCode.Should().Be("MODEL_FAILED");
+
+        var frames = NyxIdChatConversationAguiFrameBuilder.BuildReconciled(
+            decision.State.ConversationActorId,
+            decision.State.ActiveTurn.TurnId,
+            new NyxIdChatOperationReconciledEvent
+            {
+                Result = signal,
+                Task = decision.State.ActiveTask.Clone(),
+                Turn = decision.State.ActiveTurn.Clone(),
+                ProgressSequence = 8,
+                State = decision.State.Clone(),
+            });
+        frames.Should().ContainSingle(frame =>
+                frame.EventCase == AGUIEvent.EventOneofCase.RunFinished)
+            .Which.RunFinished.Status.Should().Be(RunCompletionStatus.Blocked);
     }
 
     [Fact]

@@ -23,7 +23,8 @@ public sealed class NyxIdChatAskUserContractTests
         var tools = await new ConditionEvaluateAgentToolSource().DiscoverToolsAsync();
 
         var tool = tools.Should().ContainSingle().Which;
-        tool.Name.Should().Be("condition.evaluate");
+        tool.Name.Should().Be("condition_evaluate");
+        tool.Name.Should().MatchRegex("^[A-Za-z0-9_-]{1,64}$");
         tool.IsReadOnly.Should().BeTrue();
         using var schema = JsonDocument.Parse(tool.ParametersSchema);
         schema.RootElement.GetProperty("additionalProperties").GetBoolean().Should().BeFalse();

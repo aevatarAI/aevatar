@@ -160,6 +160,85 @@ public partial class NyxIdChatEndpointsCoverageTests
     }
 
     [Fact]
+    public async Task NyxIdChatDurableCompletionResolver_WithRecoverableFailedStep_ShouldReturnBlockedTerminal()
+    {
+        var stateQuery = new FixedNyxIdChatStateQueryPort(RecoverableFailureState());
+        var resolver = new NyxIdChatDurableCompletionResolver(stateQuery);
+
+        var result = await resolver.ResolveAsync(new NyxIdChatAcceptedReceipt(
+            "conversation-alpha",
+            "chat-command-alpha",
+            "chat-command-alpha",
+            "turn-chat-alpha",
+            "scope-alpha"));
+
+        result.HasTerminalCompletion.Should().BeTrue();
+        result.Completion.Should().Be(NyxIdChatCompletionStatus.Completed);
+        result.Completion.DurableTerminal.Should().NotBeNull();
+        result.Completion.DurableTerminal!.RunFinished.Status.Should()
+            .Be(RunCompletionStatus.Blocked);
+        stateQuery.Result.Snapshot!.ActiveTask!.Status.Should().Be("active");
+        stateQuery.Result.Snapshot.ActiveTask.Steps.Single().AvailableActions!.Retry.Should()
+            .BeTrue();
+    }
+
+    [Fact]
+    public async Task NyxIdChatDurableCompletionResolver_WithHistoricalRecoverableStep_ShouldRemainIncomplete()
+    {
+        var result = RecoverableFailureState();
+        var snapshot = result.Snapshot!;
+        var failedStep = snapshot.ActiveTask!.Steps.Single();
+        var activeStep = failedStep with
+        {
+            StepId = "step-beta",
+            Status = "running",
+            FailureCode = null,
+            SafeMessage = null,
+            AvailableActions = new NyxIdChatAvailableActionsSnapshot(false, false, false),
+            Operation = failedStep.Operation! with
+            {
+                StepId = "step-beta",
+                OperationId = "operation-beta",
+                Phase = "running",
+                TerminalCode = null,
+                SafeMessage = null,
+                CompletedAt = null,
+            },
+        };
+        var stateQuery = new FixedNyxIdChatStateQueryPort(
+            NyxIdChatConversationStateQueryResult.Current(snapshot with
+            {
+                ActiveTask = snapshot.ActiveTask with
+                {
+                    ActiveStepId = activeStep.StepId,
+                    FailureCode = null,
+                    SafeMessage = null,
+                    Steps = [failedStep, activeStep],
+                },
+                ActiveTurn = snapshot.ActiveTurn! with
+                {
+                    FailureCode = null,
+                    SafeMessage = null,
+                },
+                LatestTurn = snapshot.LatestTurn! with
+                {
+                    FailureCode = null,
+                    SafeMessage = null,
+                },
+            }));
+        var resolver = new NyxIdChatDurableCompletionResolver(stateQuery);
+
+        var observation = await resolver.ResolveAsync(new NyxIdChatAcceptedReceipt(
+            "conversation-alpha",
+            "chat-command-alpha",
+            "chat-command-alpha",
+            "turn-chat-alpha",
+            "scope-alpha"));
+
+        observation.HasTerminalCompletion.Should().BeFalse();
+    }
+
+    [Fact]
     public async Task HandleStreamMessageAsync_ActionContinueExactRetry_ShouldUsePayloadBoundCommandIdentity()
     {
         var actionInteraction = new StubNyxIdChatInteractionService<NyxIdActionContinuationCommand>
@@ -476,6 +555,72 @@ public partial class NyxIdChatEndpointsCoverageTests
                 null,
                 null,
                 null));
+
+    private static NyxIdChatConversationStateQueryResult RecoverableFailureState()
+    {
+        var result = OrdinaryTerminalState(
+            "conversation-alpha",
+            "scope-alpha",
+            "turn-chat-alpha",
+            "active");
+        var snapshot = result.Snapshot!;
+        var failedStep = new NyxIdChatConversationStepSnapshot(
+            StepId: "step-alpha",
+            Order: 1,
+            Kind: "llm",
+            Status: "failed",
+            Required: true,
+            Description: "Generate the assistant response.",
+            MayChangeExternalState: false,
+            ExternalEffect: "not_applied",
+            ApprovalRequestId: null,
+            ActionRequestId: null,
+            FailureCode: "NYXID_CHAT_OPERATION_EXECUTION_FAILED",
+            SafeMessage: "The operation could not be completed.",
+            SafeToSkip: false,
+            AvailableActions: new NyxIdChatAvailableActionsSnapshot(
+                Retry: true,
+                Skip: false,
+                Stop: false),
+            UpdatedAt: snapshot.UpdatedAt,
+            Operation: new NyxIdChatConversationOperationSnapshot(
+                ConversationActorId: snapshot.ActorId,
+                TurnId: "turn-chat-alpha",
+                TaskId: "task-alpha",
+                StepId: "step-alpha",
+                OperationId: "operation-alpha",
+                OperationGeneration: 1,
+                Kind: "llm",
+                Phase: "failed",
+                MayChangeExternalState: false,
+                Idempotent: false,
+                LatestProgressSequence: 0,
+                TerminalCode: "NYXID_CHAT_OPERATION_EXECUTION_FAILED",
+                SafeMessage: "The operation could not be completed.",
+                RequestedAt: snapshot.UpdatedAt,
+                DispatchedAt: snapshot.UpdatedAt,
+                CompletedAt: snapshot.UpdatedAt));
+        return NyxIdChatConversationStateQueryResult.Current(snapshot with
+        {
+            ActiveTask = snapshot.ActiveTask! with
+            {
+                ActiveStepId = failedStep.StepId,
+                FailureCode = failedStep.FailureCode,
+                SafeMessage = failedStep.SafeMessage,
+                Steps = [failedStep],
+            },
+            ActiveTurn = snapshot.ActiveTurn! with
+            {
+                FailureCode = failedStep.FailureCode,
+                SafeMessage = failedStep.SafeMessage,
+            },
+            LatestTurn = snapshot.LatestTurn! with
+            {
+                FailureCode = failedStep.FailureCode,
+                SafeMessage = failedStep.SafeMessage,
+            },
+        });
+    }
 
     private static NyxIdChatConversationStateQueryResult TerminalState(
         string actorId,
