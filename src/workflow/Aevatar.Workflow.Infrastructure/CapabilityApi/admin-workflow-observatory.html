@@ -1268,26 +1268,41 @@ function writeObservatoryRoute(patch){
   if(isEmbeddedInAdmin()) window.parent.postMessage({source:"aevatar-backend-console-suite",type:"observatory-route",query:route},location.origin);
   return route;
 }
-function observatoryRouteKey(route){
+/* The run list only depends on the filter fields (scope/status/origin/definition/schedule/from/to),
+   so its scroll position is keyed by those alone — selecting a run (which only changes run/tab)
+   must NOT reset the list scroll. The detail pane is keyed by run + tab, which are the fields that
+   determine its content. */
+function observatoryListKey(route){
   const r=route||{};
-  return ["scope","status","origin","definition","schedule","from","to","run","tab"]
+  return ["scope","status","origin","definition","schedule","from","to"]
     .map(key=>key+"="+encodeURIComponent(r[key]||"")).join("&");
 }
-function readObservatoryViewState(storage,key,route){
-  try {
-    const all=JSON.parse(storage.getItem(key)||"{}");
-    const value=all[observatoryRouteKey(route)]||{};
-    return {list:Math.max(0,Number(value.list)||0),detail:Math.max(0,Number(value.detail)||0)};
-  } catch(e){ return {list:0,detail:0}; }
+function observatoryDetailKey(route){
+  const r=route||{};
+  return "run=" + encodeURIComponent(r.run||"") + "&tab=" + encodeURIComponent(r.tab||"");
 }
-function writeObservatoryViewState(storage,key,route,position){
+function readObservatoryListState(storage,key,route){
+  try { const all=JSON.parse(storage.getItem(key)||"{}"); return Math.max(0,Number((all[observatoryListKey(route)]||{}).list)||0); }
+  catch(e){ return 0; }
+}
+function writeObservatoryListState(storage,key,route,position){
   try {
-    let all={};
-    try { all=JSON.parse(storage.getItem(key)||"{}")||{}; } catch(e){}
+    let all={}; try { all=JSON.parse(storage.getItem(key)||"{}")||{}; } catch(e){}
+    all[observatoryListKey(route)]={list:Math.max(0,Number(position)||0)};
+    storage.setItem(key,JSON.stringify(all));
+  } catch(e){}
+}
+function readObservatoryDetailState(storage,key,route){
+  try { const all=JSON.parse(storage.getItem(key+":detail")||"{}"); return Math.max(0,Number((all[observatoryDetailKey(route)]||{}).detail)||0); }
+  catch(e){ return 0; }
+}
+function writeObservatoryDetailState(storage,key,route,position){
+  try {
+    let all={}; try { all=JSON.parse(storage.getItem(key+":detail")||"{}")||{}; } catch(e){}
     const keys=Object.keys(all);
     if(keys.length>40) keys.slice(0,keys.length-40).forEach(existing=>delete all[existing]);
-    all[observatoryRouteKey(route)]={list:Math.max(0,Number(position&&position.list)||0),detail:Math.max(0,Number(position&&position.detail)||0)};
-    storage.setItem(key,JSON.stringify(all));
+    all[observatoryDetailKey(route)]={detail:Math.max(0,Number(position)||0)};
+    storage.setItem(key+":detail",JSON.stringify(all));
   } catch(e){}
 }
 function paneScrollPosition(pane,saved){
@@ -2798,15 +2813,17 @@ function render(){
   const app = $("#app");
   const oldList=app.querySelector(".runlist"),oldDetail=app.querySelector(".detail-pane");
   const previousRoute=renderedObservatoryRoute;
+  /* Persist the live scroll of the panes we are about to replace. The list is keyed by the filter
+     fields only (so selecting a run does not erase its saved position); the detail by run + tab. */
   if((oldList||oldDetail)&&previousRoute){
-    const previousSaved=readObservatoryViewState(sessionStorage,OBSERVATORY_VIEW_KEY,previousRoute);
-    writeObservatoryViewState(sessionStorage,OBSERVATORY_VIEW_KEY,previousRoute,{list:paneScrollPosition(oldList,previousSaved.list),detail:paneScrollPosition(oldDetail,previousSaved.detail)});
+    writeObservatoryListState(sessionStorage,OBSERVATORY_VIEW_KEY,previousRoute,paneScrollPosition(oldList,readObservatoryListState(sessionStorage,OBSERVATORY_VIEW_KEY,previousRoute)));
+    writeObservatoryDetailState(sessionStorage,OBSERVATORY_VIEW_KEY,previousRoute,paneScrollPosition(oldDetail,readObservatoryDetailState(sessionStorage,OBSERVATORY_VIEW_KEY,previousRoute)));
   }
   const route=readObservatoryRoute(location.search,location.hash);
-  const saved=readObservatoryViewState(sessionStorage,OBSERVATORY_VIEW_KEY,route);
-  const sameRoute=previousRoute&&observatoryRouteKey(previousRoute)===observatoryRouteKey(route);
-  const prevListScroll=pendingListScrollReset?0:(sameRoute?paneScrollPosition(oldList,saved.list):saved.list);
-  const prevDetailScroll=pendingDetailScrollReset?0:(sameRoute?paneScrollPosition(oldDetail,saved.detail):saved.detail);
+  const sameListKey=previousRoute&&observatoryListKey(previousRoute)===observatoryListKey(route);
+  const sameDetailKey=previousRoute&&observatoryDetailKey(previousRoute)===observatoryDetailKey(route);
+  const prevListScroll=pendingListScrollReset?0:(sameListKey?paneScrollPosition(oldList,readObservatoryListState(sessionStorage,OBSERVATORY_VIEW_KEY,route)):readObservatoryListState(sessionStorage,OBSERVATORY_VIEW_KEY,route));
+  const prevDetailScroll=pendingDetailScrollReset?0:(sameDetailKey?paneScrollPosition(oldDetail,readObservatoryDetailState(sessionStorage,OBSERVATORY_VIEW_KEY,route)):readObservatoryDetailState(sessionStorage,OBSERVATORY_VIEW_KEY,route));
   pendingListScrollReset = false;
   pendingDetailScrollReset = false;
   renderedObservatoryRoute=route;
@@ -2829,7 +2846,8 @@ function render(){
   app.appendChild(shell);
 
   applyPaneScrollState(app.querySelector(".runlist"),app.querySelector(".detail-pane"),{list:prevListScroll,detail:prevDetailScroll});
-  writeObservatoryViewState(sessionStorage,OBSERVATORY_VIEW_KEY,route,{list:prevListScroll,detail:prevDetailScroll});
+  writeObservatoryListState(sessionStorage,OBSERVATORY_VIEW_KEY,route,prevListScroll);
+  writeObservatoryDetailState(sessionStorage,OBSERVATORY_VIEW_KEY,route,prevDetailScroll);
 }
 
 /* ===========================================================================
@@ -3044,8 +3062,8 @@ document.addEventListener("keydown", event => {
 window.addEventListener("pagehide", () => {
   const list=document.querySelector(".runlist"),detail=document.querySelector(".detail-pane");
   const route=readObservatoryRoute(location.search,location.hash);
-  const saved=readObservatoryViewState(sessionStorage,OBSERVATORY_VIEW_KEY,route);
-  writeObservatoryViewState(sessionStorage,OBSERVATORY_VIEW_KEY,route,{list:paneScrollPosition(list,saved.list),detail:paneScrollPosition(detail,saved.detail)});
+  writeObservatoryListState(sessionStorage,OBSERVATORY_VIEW_KEY,route,paneScrollPosition(list,readObservatoryListState(sessionStorage,OBSERVATORY_VIEW_KEY,route)));
+  writeObservatoryDetailState(sessionStorage,OBSERVATORY_VIEW_KEY,route,paneScrollPosition(detail,readObservatoryDetailState(sessionStorage,OBSERVATORY_VIEW_KEY,route)));
 });
 (async function init(){
   try { await completeLoginIfCallback(); }
