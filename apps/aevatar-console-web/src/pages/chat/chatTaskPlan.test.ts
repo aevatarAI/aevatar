@@ -1,7 +1,4 @@
-import {
-  ChatTaskPlanProtocolError,
-  decodeChatTaskPlan,
-} from './chatTaskPlan';
+import { ChatTaskPlanProtocolError, decodeChatTaskPlan } from './chatTaskPlan';
 
 function taskPlanWithObservation(overrides: Record<string, unknown> = {}) {
   return {

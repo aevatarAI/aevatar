@@ -100,9 +100,7 @@ const nodeTestFiles = [
 ] as const;
 
 const browserIgnoredTestPatterns = nodeTestFiles.map((testPath) =>
-  testPath
-    .replace('<rootDir>/', '')
-    .replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+  testPath.replace('<rootDir>/', '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
 );
 
 const config: Record<string, unknown> = {
@@ -121,18 +119,21 @@ const config: Record<string, unknown> = {
         './tests/setupTests.jsx',
       ],
       setupFilesAfterEnv: [
-        ...((browserProjectConfig.setupFilesAfterEnv as string[] | undefined) || []),
+        ...((browserProjectConfig.setupFilesAfterEnv as string[] | undefined) ||
+          []),
         './tests/setupAfterEnv.ts',
       ],
       testEnvironmentOptions: {
-        ...(((browserProjectConfig.testEnvironmentOptions as Record<
+        ...((browserProjectConfig.testEnvironmentOptions as Record<
           string,
           unknown
-        >) || {})),
+        >) || {}),
         url: 'http://localhost:8000',
       },
       testPathIgnorePatterns: [
-        ...((browserProjectConfig.testPathIgnorePatterns as string[] | undefined) || []),
+        ...((browserProjectConfig.testPathIgnorePatterns as
+          | string[]
+          | undefined) || []),
         ...browserIgnoredTestPatterns,
       ],
     },
