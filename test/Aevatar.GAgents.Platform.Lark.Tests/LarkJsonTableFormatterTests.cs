@@ -58,7 +58,17 @@ public sealed class LarkJsonTableFormatterTests
         table.GetProperty("rows")[0].GetProperty("c1").GetString().ShouldBe("1. alpha\n2. beta");
         payload.PlainText.ShouldNotContain("{\"profile\"");
         payload.PlainText.ShouldNotContain("[\"alpha\"");
-        payload.PlainText.ShouldContain("tags: 1. alpha; 2. beta");
+        payload.PlainText.ShouldBe(
+            """
+            profile:
+                name: Ada
+            tags:
+                Item: 1
+                    Value: alpha
+
+                Item: 2
+                    Value: beta
+            """);
     }
 
     [Fact]
@@ -127,8 +137,28 @@ public sealed class LarkJsonTableFormatterTests
     {
         var payload = Compose("""{"output":"{\"name\":\"Ada\",\"role\":\"admin\"}"}""");
 
-        payload.PlainText.ShouldBe("output.name: Ada\noutput.role: admin");
+        payload.PlainText.ShouldBe(
+            """
+            output:
+                name: Ada
+                role: admin
+            """);
         payload.PlainText.ShouldNotContain("{\"name\"");
+    }
+
+    [Fact]
+    public void FormatAsKeyValueText_WhenJsonHasDeepNesting_ShouldIndentEachLevelByFourSpaces()
+    {
+        var text = LarkJsonTableFormatter.FormatAsKeyValueText(
+            """{"account":{"profile":{"address":{"city":"Singapore"}}}}""");
+
+        text.ShouldBe(
+            """
+            account:
+                profile:
+                    address:
+                        city: Singapore
+            """);
     }
 
     [Fact]
@@ -156,12 +186,12 @@ public sealed class LarkJsonTableFormatterTests
         text.ShouldBe(
             """
             Item: 1
-            name: Ada
-            role: admin
+                name: Ada
+                role: admin
 
             Item: 2
-            name: Lin
-            role: viewer
+                name: Lin
+                role: viewer
             """);
         text.ShouldNotContain("|");
         text.ShouldNotContain("{\"name\"");
