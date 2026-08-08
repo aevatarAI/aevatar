@@ -90,7 +90,9 @@ public sealed class StreamingAgentProfileTurnClassifierTests
         systemMessage.Should().Contain("final requested outcome")
             .And.Contain("not an intermediate prerequisite or discovery step")
             .And.Contain("external_handoff")
-            .And.Contain("read_only");
+            .And.Contain("read_only")
+            .And.Contain("unqualified request to connect an external service account")
+            .And.Contain("only when the user explicitly requests local CLI");
     }
 
     [Fact]

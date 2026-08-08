@@ -11,7 +11,7 @@
   "temperature": 0,
   "prompt_version": "StreamingAgentProfileTurnClassifier@0836a239bd9d4f654adbdf5b4ff1ce6e886a5125",
   "prompt_source": "agents/Aevatar.GAgents.NyxidChat/AgentProfiles/StreamingAgentProfileTurnClassifier.cs",
-  "prompt_text_sha256": "88f5465e7d9de93bb93428ab83191c81c6b1e0ce7ae3f25f49a0401ed89c2065",
+  "prompt_text_sha256": "78f18479312dcb724c8eb5ba8def16a3e2ebd46cc4368481fff60f56d77f1847",
   "dataset": "coverage-manifest.json rows with utterances",
   "expected_case_count": 134,
   "candidate_policy": "stable-hash-32.v2",

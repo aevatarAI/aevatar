@@ -4,6 +4,7 @@ import hashlib
 import json
 import math
 import re
+import subprocess
 from datetime import datetime
 from pathlib import Path
 
@@ -18,11 +19,18 @@ CLASSIFIER_SYSTEM_PROMPT_SEGMENTS = (
     "not an intermediate prerequisite or discovery step. ",
     "When an external_handoff intent directly fulfills that outcome and a read_only ",
     "intent only discovers a prerequisite, select the external_handoff intent. ",
+    "Treat an unqualified request to connect an external service account as a hosted ",
+    "service connection intent. Select a local or node credential-management intent ",
+    "only when the user explicitly requests local CLI, node credential, credential ",
+    "injection, or credential-management work. ",
     "Return only JSON with status 'matched' and intent_id, or status 'no_match'.",
 )
 CLASSIFIER_SYSTEM_PROMPT = "".join(CLASSIFIER_SYSTEM_PROMPT_SEGMENTS)
 HEX_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 FULL_GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
+PROMPT_VERSION = re.compile(r"^StreamingAgentProfileTurnClassifier@([0-9a-f]{40})$")
+CLAIMING_AVAILABILITIES = {"executable", "mounted", "shipped"}
+CLAIMING_OUTCOMES = {"browser_action", "authoritative_read", "protocol_control"}
 
 
 def canonical_json(value) -> str:
@@ -185,6 +193,43 @@ def resolve_evidence_path(contract_root: Path, relative_path, errors: list[str])
     return candidate
 
 
+def validate_prompt_version(
+    prompt_version,
+    prompt_path: Path,
+    repo_root: Path,
+    errors: list[str],
+) -> None:
+    match = PROMPT_VERSION.fullmatch(str(prompt_version))
+    if match is None:
+        errors.append("semantic prompt_version must pin a classifier source commit")
+        return
+    revision = match.group(1)
+    ancestor = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", revision, "HEAD"],
+        cwd=repo_root,
+        capture_output=True,
+        check=False,
+    )
+    if ancestor.returncode != 0:
+        errors.append("semantic prompt_version must name an ancestor of the evaluated checkout")
+        return
+    try:
+        relative_prompt = prompt_path.relative_to(repo_root).as_posix()
+    except ValueError:
+        errors.append("semantic prompt source must stay inside the repository")
+        return
+    source = subprocess.run(
+        ["git", "show", f"{revision}:{relative_prompt}"],
+        cwd=repo_root,
+        capture_output=True,
+        check=False,
+    )
+    if source.returncode != 0:
+        errors.append("semantic prompt_version source is unavailable")
+    elif sha256_bytes(source.stdout) != sha256_file(prompt_path):
+        errors.append("semantic prompt_version source does not match the current classifier source")
+
+
 def load_jsonl(path: Path, errors: list[str]) -> list[dict]:
     rows = []
     try:
@@ -290,6 +335,11 @@ def derive_case_observation(row: dict, case: dict, operation_contracts: dict[str
                 "availability": "recognized_but_unavailable",
                 "outcome_class": case["expected_outcome_class"],
             } and case["expected_outcome_class"] in {"honest_decline", "honest_cannot_check"}
+            if observed and (
+                observed["availability"] in CLAIMING_AVAILABILITIES
+                or observed["outcome_class"] in CLAIMING_OUTCOMES
+            ):
+                false_claim_count = 1
 
     observed_record = (
         {
@@ -442,6 +492,7 @@ def validate_semantic_evaluation(
         errors.append("semantic evaluation prompt source is missing")
         return
     prompt_source_text = prompt_path.read_text(encoding="utf-8")
+    validate_prompt_version(semantic.get("prompt_version"), prompt_path, repo_root, errors)
     if any(f'"{segment}"' not in prompt_source_text for segment in CLASSIFIER_SYSTEM_PROMPT_SEGMENTS):
         errors.append("semantic runner prompt does not match the pinned classifier source")
     prompt_text_sha256 = sha256_bytes(CLASSIFIER_SYSTEM_PROMPT.encode())

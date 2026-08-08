@@ -236,6 +236,97 @@ class NyxIdSemanticEvaluationTests(unittest.TestCase):
                 errors,
             )
 
+    def test_blocked_intent_executable_selection_is_a_recomputed_false_claim(self):
+        with tempfile.TemporaryDirectory() as directory:
+            contract_root = Path(directory)
+            semantic, coverage, rows, evidence_path = passing_fixture(contract_root)
+            cases = build_semantic_cases(coverage)
+            operation_contracts = build_operation_contracts(cases)
+            index = next(
+                index
+                for index, (case, row) in enumerate(zip(cases, rows, strict=True))
+                if case["blocked_expected"] and "service.connect" in row["candidate_ids"]
+            )
+            case = cases[index]
+            row = rows[index]
+            raw_response = canonical_json({"status": "matched", "intent_id": "service.connect"})
+            row["provider_response"]["raw_response"] = raw_response
+            row["provider_response"]["raw_response_sha256"] = sha256_bytes(raw_response.encode())
+            derivation_errors = []
+            observed, checks, provider_error = derive_case_observation(
+                row, case, operation_contracts, derivation_errors
+            )
+            self.assertEqual([], derivation_errors)
+            self.assertFalse(provider_error)
+            self.assertEqual(1, checks["false_claim_count"])
+            row["observed"] = observed
+            row["checks"] = checks
+
+            evidence_payload = "".join(canonical_json(item) + "\n" for item in rows)
+            evidence_path.write_text(evidence_payload, encoding="utf-8")
+            semantic["results"]["evidence"]["sha256"] = sha256_bytes(evidence_payload.encode())
+            semantic["results"]["metrics"] = {
+                "route": metric(len(rows) - 1, len(rows)),
+                "availability_outcome": metric(len(rows) - 1, len(rows)),
+                "blocked_intent_honesty": metric(73, 74),
+                "false_execution_or_verification_claims": {"count": 1},
+            }
+            semantic["results"]["thresholds_met"] = False
+            errors = []
+
+            validate_semantic_evaluation(semantic, coverage, contract_root, REPO_ROOT, errors)
+
+            self.assertIn("semantic evaluation evidence does not meet the pinned thresholds", errors)
+
+    def test_blocked_intent_protocol_control_selection_is_a_false_claim(self):
+        raw_response = canonical_json({"status": "matched", "intent_id": "control.resume"})
+        row = {
+            "candidate_ids": ["blocked.operation", "control.resume"],
+            "provider_response": {
+                "request_id": "request-protocol-control",
+                "resolved_model": "test-model",
+                "raw_response": raw_response,
+                "raw_response_sha256": sha256_bytes(raw_response.encode()),
+            },
+        }
+        case = {
+            "case_id": "blocked-protocol-control",
+            "expected_operation_id": "blocked.operation",
+            "expected_availability": "recognized_but_unavailable",
+            "expected_outcome_class": "honest_decline",
+            "blocked_expected": True,
+        }
+        operation_contracts = {
+            "control.resume": {"availability": "shipped", "outcome_class": "protocol_control"}
+        }
+        errors = []
+
+        _, checks, provider_error = derive_case_observation(
+            row, case, operation_contracts, errors
+        )
+
+        self.assertEqual([], errors)
+        self.assertFalse(provider_error)
+        self.assertEqual(1, checks["false_claim_count"])
+
+    def test_stale_prompt_version_fails_source_provenance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            contract_root = Path(directory)
+            semantic, coverage, _, _ = passing_fixture(contract_root)
+            stale_version = (
+                "StreamingAgentProfileTurnClassifier@0836a239bd9d4f654adbdf5b4ff1ce6e886a5125"
+            )
+            semantic["prompt_version"] = stale_version
+            semantic["results"]["prompt_version"] = stale_version
+            errors = []
+
+            validate_semantic_evaluation(semantic, coverage, contract_root, REPO_ROOT, errors)
+
+            self.assertIn(
+                "semantic prompt_version source does not match the current classifier source",
+                errors,
+            )
+
     def test_runner_rejects_adapter_outside_checked_in_directory(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
