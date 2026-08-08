@@ -90,6 +90,9 @@ public sealed class NyxIdAssistantOperationReadBackBinding
 
     public string ExpectedValueArgumentName { get; set; } = string.Empty;
 
+    /// <summary>RFC 6901 pointer to the provider resource ID in the effect response.</summary>
+    public string EffectResultIdentityJsonPointer { get; set; } = string.Empty;
+
     public string CheckName { get; set; } = string.Empty;
 }
 

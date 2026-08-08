@@ -30,6 +30,7 @@ internal static class NyxIdProxyReceiptFactory
                 toolName,
                 normalizedUserServiceId,
                 error.ApprovalRequestId,
+                error.ApprovalMode,
                 denied: false);
         }
         if (error.ErrorCode == 7001 &&
@@ -40,6 +41,7 @@ internal static class NyxIdProxyReceiptFactory
                 toolName,
                 normalizedUserServiceId,
                 error.ApprovalRequestId,
+                error.ApprovalMode,
                 denied: true);
         }
         if (error.IsAuthorizationRequired)
@@ -86,6 +88,7 @@ internal static class NyxIdProxyReceiptFactory
         string toolName,
         string? userServiceId,
         string? approvalRequestId,
+        string? approvalMode,
         bool denied)
     {
         var requestId = NormalizeApprovalRequestId(approvalRequestId);
@@ -101,6 +104,7 @@ internal static class NyxIdProxyReceiptFactory
                 ? AgentToolReceiptStatus.Denied
                 : AgentToolReceiptStatus.ApprovalRequired,
             ApprovalRequestId = requestId ?? string.Empty,
+            NyxIdApprovalDecisionMode = ParseApprovalDecisionMode(approvalMode),
             ErrorCode = code,
             ErrorMessage = message,
             ResultJson = BuildSafeResult(code, message),
@@ -108,6 +112,14 @@ internal static class NyxIdProxyReceiptFactory
         AttachUserServiceSubject(receipt, userServiceId);
         return receipt;
     }
+
+    private static NyxIdApprovalDecisionMode ParseApprovalDecisionMode(string? value) =>
+        value?.Trim().ToLowerInvariant() switch
+        {
+            "per_request" => NyxIdApprovalDecisionMode.PerRequest,
+            "grant" => NyxIdApprovalDecisionMode.Grant,
+            _ => NyxIdApprovalDecisionMode.Unknown,
+        };
 
     public static AgentToolReceipt? CreateSuccess(
         string callId,

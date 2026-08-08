@@ -77,6 +77,56 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
     }
 
     [Fact]
+    public void ToolVerification_ProviderResourceIdentity_DoesNotMatchOlderEqualContent()
+    {
+        var readBack = ExactReadBack();
+        readBack.Assertion.Match = AgentToolReadBackMatchPayload.ArrayContainsEquals;
+        readBack.Assertion.JsonPointer = "/data/items";
+        readBack.Assertion.ElementJsonPointer = "/message_id";
+        readBack.Assertion.ExpectedValue = null;
+        readBack.Assertion.ExpectedValueSource =
+            AgentToolReadBackExpectedValueSourcePayload.ProviderResourceId;
+        var readAdmission = AgentToolOperationAdmissionPayloadMapper.FromPayload(readBack.ReadOperation)!;
+        var projection = new JsonObject
+        {
+            ["kind"] = "connected_service_read_projection",
+            ["status"] = "succeeded",
+            ["provenance"] = new JsonObject
+            {
+                ["source_kind"] = "nyxid_connected_service",
+                ["operation_selector_digest"] = AgentToolOperationSelector.ComputeDigest(readAdmission),
+            },
+            ["data"] = new JsonObject
+            {
+                ["data"] = new JsonObject
+                {
+                    ["items"] = new JsonArray(
+                        JsonNode.Parse("""{"message_id":"om_old","body":{"content":"same"}}"""),
+                        JsonNode.Parse("""{"message_id":"om_expected","body":{"content":"different"}}""")),
+                },
+            },
+        }.ToJsonString();
+
+        NyxIdChatToolVerificationPort.TryEvaluate(
+                projection,
+                readBack.ReadOperation,
+                readBack.Assertion,
+                "om_expected",
+                out var matched)
+            .Should().BeTrue();
+        matched.Should().BeTrue();
+
+        NyxIdChatToolVerificationPort.TryEvaluate(
+                projection,
+                readBack.ReadOperation,
+                readBack.Assertion,
+                "om_missing",
+                out matched)
+            .Should().BeTrue();
+        matched.Should().BeFalse();
+    }
+
+    [Fact]
     public async Task Activation_WithRequestedPostcondition_ShouldOnlySignalSelfForRecovery()
     {
         const string actorId = "conversation-alpha";
@@ -1392,6 +1442,7 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         public List<NyxIdChatOperationDispatchCommand> Executions { get; } = [];
         public List<(string ActorId, NyxIdChatTurnOperationReconciliationInput Input)>
             Reconciliations { get; } = [];
+        public List<NyxIdChatOperationKey> Cancellations { get; } = [];
 
         public Task DispatchExecutionAsync(
             string turnActorId,
@@ -1417,6 +1468,13 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
             _ = correlationId;
             ct.ThrowIfCancellationRequested();
             Reconciliations.Add((turnActorId, input.Clone()));
+            return Task.CompletedTask;
+        }
+
+        public Task CancelExecutionAsync(NyxIdChatOperationKey key, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            Cancellations.Add(key.Clone());
             return Task.CompletedTask;
         }
     }

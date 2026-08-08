@@ -117,7 +117,10 @@ public sealed record NyxIdChatConversationStateSnapshot(
     string? TaskStatus = null,
     string? AttentionKind = null,
     DateTimeOffset? AttentionSince = null,
-    string? ActiveStepSummary = null);
+    string? ActiveStepSummary = null,
+    IReadOnlyList<NyxIdChatActionSnapshot>? RecentActions = null,
+    NyxIdChatStepControlResultSnapshot? LatestStepControlResult = null,
+    IReadOnlyList<NyxIdChatStepControlResultSnapshot>? RecentStepControlResults = null);
 
 public sealed record NyxIdChatConversationTurnSnapshot(
     string TurnId,
@@ -335,6 +338,25 @@ public sealed record NyxIdChatControlFenceSnapshot(
     string? SafeMessage,
     DateTimeOffset? CommittedAt);
 
+public sealed record NyxIdChatStepControlResultSnapshot(
+    string Kind,
+    string RequestId,
+    string ClientRequestId,
+    string TurnId,
+    string TaskId,
+    string StepId,
+    long ExpectedOperationGeneration,
+    long OperationGeneration,
+    string Outcome,
+    string? ReasonCode,
+    string? SafeMessage,
+    string CommandId,
+    string CorrelationId,
+    DateTimeOffset? CommittedAt,
+    long ExpectedStateVersion,
+    string ScopeId,
+    string ConversationActorId);
+
 public sealed record NyxIdChatContinuationAdmissionSnapshot(
     string Kind,
     string RequestId,
@@ -355,7 +377,36 @@ public sealed record NyxIdChatActionSnapshot(
     string Action,
     DateTimeOffset? RequestedAt,
     IReadOnlyList<NyxIdChatActionReportSnapshot> Reports,
-    NyxIdChatActionPostconditionSnapshot? PostconditionResult);
+    NyxIdChatActionPostconditionSnapshot? PostconditionResult,
+    NyxIdChatActionRequestSnapshot? Request = null);
+
+public sealed record NyxIdChatActionRequestSnapshot(
+    int SchemaVersion,
+    string ActorId,
+    string OriginTurnId,
+    string TaskId,
+    string StepId,
+    string ActionRequestId,
+    string Action,
+    NyxIdChatActionParamsSnapshot Params);
+
+public sealed record NyxIdChatActionParamsSnapshot(
+    NyxIdChatCatalogServiceConnectSnapshot? CatalogService = null,
+    NyxIdChatCustomServiceConnectSnapshot? CustomService = null);
+
+public sealed record NyxIdChatCatalogServiceConnectSnapshot(
+    string ServiceSlug,
+    IReadOnlyList<string> RequestedScopes,
+    string? ViaNodeId,
+    string? TargetOrgId);
+
+public sealed record NyxIdChatCustomServiceConnectSnapshot(
+    string Name,
+    string EndpointUrl,
+    string AuthMethod,
+    string? AuthKeyName,
+    string? ViaNodeId,
+    string? TargetOrgId);
 
 public sealed record NyxIdChatActionReportSnapshot(
     string ActionRequestId,

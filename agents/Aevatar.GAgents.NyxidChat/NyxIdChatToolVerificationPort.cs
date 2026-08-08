@@ -39,6 +39,9 @@ public sealed class NyxIdChatToolVerificationPort : INyxIdChatToolVerificationPo
         ArgumentNullException.ThrowIfNull(input);
         var contract = input.ReadBack;
         if (!NyxIdChatOperationAdmissionPolicy.IsValidReadBack(contract) ||
+            contract.Assertion.ExpectedValueSource ==
+                AgentToolReadBackExpectedValueSourcePayload.ProviderResourceId &&
+            string.IsNullOrWhiteSpace(input.ProviderResourceId) ||
             _toolFactory?.CreateRead(contract.ReadOperation) is not { } tool ||
             _executionPort is null)
         {
@@ -80,10 +83,17 @@ public sealed class NyxIdChatToolVerificationPort : INyxIdChatToolVerificationPo
                 outcome.ResultJson,
                 contract.ReadOperation,
                 contract.Assertion,
+                input.ProviderResourceId,
                 out var matched))
         {
             return Unavailable(input, FailedCode,
                 "The admitted verification read did not produce usable typed evidence.");
+        }
+
+        if (!matched && contract.Assertion.Match == AgentToolReadBackMatchPayload.ArrayContainsEquals)
+        {
+            return Unavailable(input, UnavailableCode,
+                "The bounded verification read did not contain the provider resource; absence is not proof of non-application.");
         }
 
         return new NyxIdChatToolVerificationResult
@@ -114,6 +124,14 @@ public sealed class NyxIdChatToolVerificationPort : INyxIdChatToolVerificationPo
         string resultJson,
         AgentToolOperationAdmissionPayload readOperation,
         AgentToolReadBackAssertionPayload assertion,
+        out bool matched) =>
+        TryEvaluate(resultJson, readOperation, assertion, string.Empty, out matched);
+
+    internal static bool TryEvaluate(
+        string resultJson,
+        AgentToolOperationAdmissionPayload readOperation,
+        AgentToolReadBackAssertionPayload assertion,
+        string providerResourceId,
         out bool matched)
     {
         matched = false;
@@ -127,18 +145,19 @@ public sealed class NyxIdChatToolVerificationPort : INyxIdChatToolVerificationPo
 
             var current = root["data"];
             var found = TryResolvePointer(current, assertion.JsonPointer, out var value);
+            var expectedValue = ResolveExpectedValue(assertion, providerResourceId);
             matched = assertion.Match switch
             {
                 AgentToolReadBackMatchPayload.Exists => found,
                 AgentToolReadBackMatchPayload.Absent => !found,
                 AgentToolReadBackMatchPayload.Equals => found &&
-                    EqualsExpected(value, assertion.ExpectedValue),
+                    EqualsExpected(value, expectedValue),
                 AgentToolReadBackMatchPayload.ArrayContainsEquals => found &&
                     value is JsonArray array &&
-                    assertion.ExpectedValue is not null &&
+                    expectedValue is not null &&
                     array.Any(element =>
                         TryResolvePointer(element, assertion.ElementJsonPointer, out var candidate) &&
-                        EqualsExpected(candidate, assertion.ExpectedValue)),
+                        EqualsExpected(candidate, expectedValue)),
                 _ => false,
             };
             return assertion.Match != AgentToolReadBackMatchPayload.Unspecified;
@@ -148,6 +167,15 @@ public sealed class NyxIdChatToolVerificationPort : INyxIdChatToolVerificationPo
             return false;
         }
     }
+
+    private static Google.Protobuf.WellKnownTypes.Value? ResolveExpectedValue(
+        AgentToolReadBackAssertionPayload assertion,
+        string providerResourceId) =>
+        assertion.ExpectedValueSource == AgentToolReadBackExpectedValueSourcePayload.ProviderResourceId
+            ? string.IsNullOrWhiteSpace(providerResourceId)
+                ? null
+                : Google.Protobuf.WellKnownTypes.Value.ForString(providerResourceId.Trim())
+            : assertion.ExpectedValue;
 
     private static bool EqualsExpected(
         JsonNode? actual,

@@ -79,7 +79,8 @@ internal sealed record NyxIdProxyError(
     int HttpStatus,
     string ErrorKey,
     int ErrorCode,
-    string? ApprovalRequestId = null)
+    string? ApprovalRequestId = null,
+    string? ApprovalMode = null)
 {
     public bool IsAuthorizationRequired =>
         HttpStatus == 401 &&
@@ -181,11 +182,13 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
 
         var requestId = TryGetString(body, "request_id") ??
                         TryGetString(body, "approval_request_id");
+        var approvalMode = TryGetString(body, "approval_mode");
         error = new NyxIdProxyError(
             httpStatus,
             errorKey,
             errorCode.Value,
-            requestId);
+            requestId,
+            approvalMode);
         return true;
     }
 

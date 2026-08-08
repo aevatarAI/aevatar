@@ -10,6 +10,7 @@ using Aevatar.GAgents.NyxidChat.AgentProfiles;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Threading.Channels;
 
 namespace Aevatar.GAgents.NyxidChat;
 
@@ -33,8 +34,261 @@ public sealed class NyxIdChatTransientExecutionSession
     internal NyxIdChatOperationKey? AuthorizationSourceKey { get; set; }
     internal AgentProfileTurnCatalog? TurnCatalog { get; set; }
     internal long ProgressSequence { get; set; }
+    internal NyxIdChatStreamingProgressBatcher? StreamingProgressBatcher { get; set; }
+
+    internal void ResetStreamingProgress()
+    {
+        StreamingProgressBatcher = null;
+    }
     internal bool TryMarkToolStartPublished(string callId) =>
         _publishedToolStartCallIds.Add(callId);
+}
+
+internal sealed class NyxIdChatStreamingProgressBatcher : IAsyncDisposable
+{
+    private const int CommandCapacity = 32;
+    private readonly Channel<BatchCommand> _commands =
+        System.Threading.Channels.Channel.CreateBounded<BatchCommand>(
+            new BoundedChannelOptions(CommandCapacity)
+            {
+                SingleReader = true,
+                SingleWriter = false,
+                FullMode = BoundedChannelFullMode.Wait,
+            });
+    private readonly NyxIdChatOperationKey _key;
+    private readonly NyxIdChatTransientExecutionSession _session;
+    private readonly Func<NyxIdChatOperationProgressSignal, CancellationToken, Task> _report;
+    private readonly TimeProvider _timeProvider;
+    private readonly Task _worker;
+
+    public NyxIdChatStreamingProgressBatcher(
+        NyxIdChatOperationKey key,
+        NyxIdChatTransientExecutionSession session,
+        Func<NyxIdChatOperationProgressSignal, CancellationToken, Task> report,
+        TimeProvider timeProvider)
+    {
+        _key = key.Clone();
+        _session = session;
+        _report = report;
+        _timeProvider = timeProvider;
+        _worker = RunAsync();
+    }
+
+    public Task QueueAsync(
+        NyxIdChatOperationProgressSignal.ProgressOneofCase kind,
+        string delta,
+        CancellationToken ct) => SubmitAsync(new BatchCommand(kind, delta, false), ct);
+
+    public Task FlushAsync(CancellationToken ct) =>
+        SubmitAsync(new BatchCommand(default, string.Empty, true), ct);
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_worker.IsCompleted)
+        {
+            await _worker.ConfigureAwait(false);
+            return;
+        }
+
+        await SubmitAsync(new BatchCommand(default, string.Empty, false, Stop: true),
+                CancellationToken.None)
+            .ConfigureAwait(false);
+        await _worker.ConfigureAwait(false);
+    }
+
+    private async Task SubmitAsync(BatchCommand command, CancellationToken ct)
+    {
+        await _commands.Writer.WriteAsync(command, ct).ConfigureAwait(false);
+        await command.Completion.Task.WaitAsync(ct).ConfigureAwait(false);
+    }
+
+    private async Task RunAsync()
+    {
+        var pending = new List<NyxIdChatStreamingProgressSegment>();
+        var pendingBytes = 0;
+        var publishedFirst = false;
+        DateTimeOffset? deadline = null;
+        Task<BatchCommand>? pendingRead = null;
+        while (true)
+        {
+            pendingRead ??= _commands.Reader.ReadAsync(CancellationToken.None).AsTask();
+            if (deadline is { } dueAt)
+            {
+                var delay = dueAt - _timeProvider.GetUtcNow();
+                if (delay <= TimeSpan.Zero)
+                {
+                    await FlushCoreAsync(pending).ConfigureAwait(false);
+                    pendingBytes = 0;
+                    deadline = null;
+                    continue;
+                }
+
+                var timer = Task.Delay(delay, _timeProvider, CancellationToken.None);
+                if (await Task.WhenAny(pendingRead, timer).ConfigureAwait(false) == timer)
+                {
+                    await timer.ConfigureAwait(false);
+                    await FlushCoreAsync(pending).ConfigureAwait(false);
+                    pendingBytes = 0;
+                    deadline = null;
+                    continue;
+                }
+            }
+
+            var command = await pendingRead.ConfigureAwait(false);
+            pendingRead = null;
+            try
+            {
+                if (command.Stop)
+                {
+                    await FlushCoreAsync(pending).ConfigureAwait(false);
+                    command.Completion.TrySetResult();
+                    return;
+                }
+
+                if (command.Flush)
+                {
+                    await FlushCoreAsync(pending).ConfigureAwait(false);
+                    pendingBytes = 0;
+                    deadline = null;
+                }
+                else
+                {
+                    foreach (var deltaPart in SplitByUtf8Bytes(
+                                 command.Delta,
+                                 NyxIdChatTurnOperationExecutor.StreamingProgressBatchBytes))
+                    {
+                        var partBytes = Encoding.UTF8.GetByteCount(deltaPart);
+                        if (!publishedFirst)
+                        {
+                            publishedFirst = true;
+                            await ReportSingleAsync(command.Kind, deltaPart).ConfigureAwait(false);
+                            continue;
+                        }
+
+                        if (pendingBytes > 0 &&
+                            pendingBytes + partBytes >
+                            NyxIdChatTurnOperationExecutor.StreamingProgressBatchBytes)
+                        {
+                            await FlushCoreAsync(pending).ConfigureAwait(false);
+                            pendingBytes = 0;
+                            deadline = null;
+                        }
+
+                        Append(pending, command.Kind, deltaPart);
+                        pendingBytes += partBytes;
+                        deadline ??= _timeProvider.GetUtcNow() +
+                                     NyxIdChatTurnOperationExecutor.StreamingProgressBatchInterval;
+                        if (pendingBytes >= NyxIdChatTurnOperationExecutor.StreamingProgressBatchBytes)
+                        {
+                            await FlushCoreAsync(pending).ConfigureAwait(false);
+                            pendingBytes = 0;
+                            deadline = null;
+                        }
+                    }
+                }
+
+                command.Completion.TrySetResult();
+            }
+            catch (Exception exception)
+            {
+                command.Completion.TrySetException(exception);
+                throw;
+            }
+        }
+    }
+
+    private async Task FlushCoreAsync(List<NyxIdChatStreamingProgressSegment> pending)
+    {
+        if (pending.Count == 0)
+            return;
+        var batch = new NyxIdChatStreamingProgressBatch();
+        batch.Segments.AddRange(pending);
+        pending.Clear();
+        await _report(new NyxIdChatOperationProgressSignal
+        {
+            Key = _key.Clone(),
+            Sequence = ++_session.ProgressSequence,
+            StreamingBatch = batch,
+        }, CancellationToken.None).ConfigureAwait(false);
+    }
+
+    private Task ReportSingleAsync(
+        NyxIdChatOperationProgressSignal.ProgressOneofCase kind,
+        string delta)
+    {
+        var signal = new NyxIdChatOperationProgressSignal
+        {
+            Key = _key.Clone(),
+            Sequence = ++_session.ProgressSequence,
+        };
+        if (kind == NyxIdChatOperationProgressSignal.ProgressOneofCase.Text)
+            signal.Text = new NyxIdChatTextProgress { Delta = delta };
+        else
+            signal.Reasoning = new NyxIdChatReasoningProgress { Delta = delta };
+        return _report(signal, CancellationToken.None);
+    }
+
+    private static IEnumerable<string> SplitByUtf8Bytes(string value, int maxBytes)
+    {
+        if (string.IsNullOrEmpty(value))
+            yield break;
+
+        var start = 0;
+        var bytes = 0;
+        for (var index = 0; index < value.Length;)
+        {
+            var rune = Rune.GetRuneAt(value, index);
+            if (bytes > 0 && bytes + rune.Utf8SequenceLength > maxBytes)
+            {
+                yield return value[start..index];
+                start = index;
+                bytes = 0;
+            }
+
+            bytes += rune.Utf8SequenceLength;
+            index += rune.Utf16SequenceLength;
+        }
+
+        if (start < value.Length)
+            yield return value[start..];
+    }
+
+    private static void Append(
+        List<NyxIdChatStreamingProgressSegment> pending,
+        NyxIdChatOperationProgressSignal.ProgressOneofCase kind,
+        string delta)
+    {
+        var last = pending.LastOrDefault();
+        if (kind == NyxIdChatOperationProgressSignal.ProgressOneofCase.Text)
+        {
+            if (last?.ProgressCase == NyxIdChatStreamingProgressSegment.ProgressOneofCase.Text)
+                last.Text.Delta += delta;
+            else
+                pending.Add(new NyxIdChatStreamingProgressSegment
+                {
+                    Text = new NyxIdChatTextProgress { Delta = delta },
+                });
+            return;
+        }
+
+        if (last?.ProgressCase == NyxIdChatStreamingProgressSegment.ProgressOneofCase.Reasoning)
+            last.Reasoning.Delta += delta;
+        else
+            pending.Add(new NyxIdChatStreamingProgressSegment
+            {
+                Reasoning = new NyxIdChatReasoningProgress { Delta = delta },
+            });
+    }
+
+    private sealed record BatchCommand(
+        NyxIdChatOperationProgressSignal.ProgressOneofCase Kind,
+        string Delta,
+        bool Flush,
+        bool Stop = false)
+    {
+        public TaskCompletionSource Completion { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
 }
 
 public sealed record NyxIdChatTurnOperationExecution(
@@ -71,12 +325,15 @@ public sealed class NyxIdChatTurnOperationExecutor
         "The action postcondition input was invalid.";
     private const string PrepareOperationSubstepId = "prepare-operation";
     private const string ExecuteOperationSubstepId = "execute-operation";
+    internal const int StreamingProgressBatchBytes = 64 * 1024;
+    internal static readonly TimeSpan StreamingProgressBatchInterval = TimeSpan.FromMilliseconds(250);
 
     private readonly IAgentRunReplyGenerationExecutorPort _generationExecutor;
     private readonly INyxIdActionPostconditionPort _actionPostconditionPort;
     private readonly AgentProfileTurnCatalogMaterializer? _turnCatalogMaterializer;
     private readonly INyxIdChatDelegationCredentialLifecyclePort _delegationCredentialLifecycle;
     private readonly INyxIdChatToolVerificationPort _toolVerificationPort;
+    private readonly TimeProvider _timeProvider;
 
     public NyxIdChatTurnOperationExecutor(
         IAgentRunReplyGenerationExecutorPort generationExecutor)
@@ -134,6 +391,23 @@ public sealed class NyxIdChatTurnOperationExecutor
         AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer,
         INyxIdChatDelegationCredentialLifecyclePort delegationCredentialLifecycle,
         INyxIdChatToolVerificationPort toolVerificationPort)
+        : this(
+            generationExecutor,
+            actionPostconditionPort,
+            turnCatalogMaterializer,
+            delegationCredentialLifecycle,
+            toolVerificationPort,
+            TimeProvider.System)
+    {
+    }
+
+    internal NyxIdChatTurnOperationExecutor(
+        IAgentRunReplyGenerationExecutorPort generationExecutor,
+        INyxIdActionPostconditionPort actionPostconditionPort,
+        AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer,
+        INyxIdChatDelegationCredentialLifecyclePort delegationCredentialLifecycle,
+        INyxIdChatToolVerificationPort toolVerificationPort,
+        TimeProvider timeProvider)
     {
         _generationExecutor = generationExecutor ?? throw new ArgumentNullException(nameof(generationExecutor));
         _actionPostconditionPort = actionPostconditionPort ??
@@ -143,6 +417,7 @@ public sealed class NyxIdChatTurnOperationExecutor
                                          throw new ArgumentNullException(nameof(delegationCredentialLifecycle));
         _toolVerificationPort = toolVerificationPort ??
                                 throw new ArgumentNullException(nameof(toolVerificationPort));
+        _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
     }
 
     public async Task<NyxIdChatTurnOperationExecution> ExecuteAsync(
@@ -204,7 +479,7 @@ public sealed class NyxIdChatTurnOperationExecutor
             });
         }
 
-        input.ToolContext = session.Request?.ToolContext?.Clone();
+        input.ToolContext ??= session.Request?.ToolContext?.Clone();
         var result = await _toolVerificationPort.VerifyAsync(command.Key, input, ct)
             .ConfigureAwait(false);
         return new NyxIdChatTurnOperationExecution(new NyxIdChatOperationResultSignal
@@ -292,6 +567,7 @@ public sealed class NyxIdChatTurnOperationExecutor
         Func<NyxIdChatOperationProgressSignal, CancellationToken, Task> reportProgressAsync,
         CancellationToken ct)
     {
+        session.ResetStreamingProgress();
         var isContinuation = command.Llm.ContinueSession;
         if (isContinuation && (session.StepState is null || session.Request is null))
         {
@@ -343,25 +619,42 @@ public sealed class NyxIdChatTurnOperationExecutor
             OverlayDirectInputParts(stepState, command.Llm.Request);
 
         var outputParts = new List<ChatContentPart>();
-        var execution = await _generationExecutor.BuildLlmStepExecutionAsync(
-                new AgentRunReplyStepExecutionRequest(
-                    runId,
-                    runActorId,
-                    attempt,
-                    stepState.NextStepIndex,
-                    request.Clone(),
-                    stepState.Clone(),
-                    (chunk, token) => HandleLlmChunkAsync(
-                        command.Key,
-                        chunk,
-                        outputParts,
-                        session,
-                        reportProgressAsync,
-                        token),
-                    session.TurnCatalog,
-                    AllowMultipleToolCalls: false),
-                ct)
-            .ConfigureAwait(false);
+        AgentRunLlmStepExecution execution;
+        await using (var batcher = new NyxIdChatStreamingProgressBatcher(
+                         command.Key,
+                         session,
+                         reportProgressAsync,
+                         _timeProvider))
+        {
+            session.StreamingProgressBatcher = batcher;
+            try
+            {
+                execution = await _generationExecutor.BuildLlmStepExecutionAsync(
+                        new AgentRunReplyStepExecutionRequest(
+                            runId,
+                            runActorId,
+                            attempt,
+                            stepState.NextStepIndex,
+                            request.Clone(),
+                            stepState.Clone(),
+                            (chunk, token) => HandleLlmChunkAsync(
+                                command.Key,
+                                chunk,
+                                outputParts,
+                                session,
+                                reportProgressAsync,
+                                token),
+                            session.TurnCatalog,
+                            AllowMultipleToolCalls: false),
+                        ct)
+                    .ConfigureAwait(false);
+                await batcher.FlushAsync(ct).ConfigureAwait(false);
+            }
+            finally
+            {
+                session.StreamingProgressBatcher = null;
+            }
+        }
 
         if (!IsValidLlmExecution(execution, runId, request, attempt, stepState.NextStepIndex))
         {
@@ -459,8 +752,8 @@ public sealed class NyxIdChatTurnOperationExecutor
                 "Prepare operation",
                 NyxIdChatSubstepStatus.Running,
                 session,
-                reportProgressAsync,
-                ct)
+                        reportProgressAsync,
+                        ct)
             .ConfigureAwait(false);
         if (await EnsureDelegationCredentialAsync(
                 command.Key,
@@ -602,9 +895,11 @@ public sealed class NyxIdChatTurnOperationExecutor
         if (string.IsNullOrWhiteSpace(receipt.ResultJson))
             receipt.ResultJson = resultJson;
 
-        if (receipt.Status == AgentToolReceiptStatus.ApprovalRequired)
+        if (receipt.Status is AgentToolReceiptStatus.ApprovalRequired or
+            AgentToolReceiptStatus.Denied)
         {
-            if (string.IsNullOrWhiteSpace(receipt.ApprovalRequestId))
+            if (string.IsNullOrWhiteSpace(receipt.ApprovalRequestId) ||
+                string.Equals(receipt.ApprovalRequestId.Trim(), "tool_approval", StringComparison.Ordinal))
             {
                 return Failure(
                     command.Key,
@@ -1285,7 +1580,7 @@ public sealed class NyxIdChatTurnOperationExecutor
         return next;
     }
 
-    private static async Task HandleLlmChunkAsync(
+    private async Task HandleLlmChunkAsync(
         NyxIdChatOperationKey key,
         LLMStreamChunk chunk,
         List<ChatContentPart> outputParts,
@@ -1295,9 +1590,10 @@ public sealed class NyxIdChatTurnOperationExecutor
     {
         if (!string.IsNullOrEmpty(chunk.DeltaContent))
         {
-            await ReportProgressAsync(
+            await QueueStreamingProgressAsync(
                     key,
-                    new NyxIdChatTextProgress { Delta = chunk.DeltaContent },
+                    NyxIdChatOperationProgressSignal.ProgressOneofCase.Text,
+                    chunk.DeltaContent,
                     session,
                     reportProgressAsync,
                     ct)
@@ -1305,9 +1601,10 @@ public sealed class NyxIdChatTurnOperationExecutor
         }
         if (!string.IsNullOrEmpty(chunk.DeltaReasoningContent))
         {
-            await ReportProgressAsync(
+            await QueueStreamingProgressAsync(
                     key,
-                    new NyxIdChatReasoningProgress { Delta = chunk.DeltaReasoningContent },
+                    NyxIdChatOperationProgressSignal.ProgressOneofCase.Reasoning,
+                    chunk.DeltaReasoningContent,
                     session,
                     reportProgressAsync,
                     ct)
@@ -1317,6 +1614,8 @@ public sealed class NyxIdChatTurnOperationExecutor
             outputParts.Add(ContentPartProtoMapper.ToProto(chunk.DeltaContentPart));
         if (chunk.ToolCallStarted?.ToolCall is { } started)
         {
+            await FlushStreamingProgressAsync(key, session, reportProgressAsync, ct)
+                .ConfigureAwait(false);
             await ReportToolStartedOnceAsync(
                     key,
                     new NyxIdChatToolProgress
@@ -1334,6 +1633,33 @@ public sealed class NyxIdChatTurnOperationExecutor
         }
     }
 
+    private async Task QueueStreamingProgressAsync(
+        NyxIdChatOperationKey key,
+        NyxIdChatOperationProgressSignal.ProgressOneofCase kind,
+        string delta,
+        NyxIdChatTransientExecutionSession session,
+        Func<NyxIdChatOperationProgressSignal, CancellationToken, Task> reportProgressAsync,
+        CancellationToken ct)
+    {
+        _ = key;
+        _ = reportProgressAsync;
+        var batcher = session.StreamingProgressBatcher ??
+                      throw new InvalidOperationException(
+                          "The streaming progress batcher is unavailable.");
+        await batcher.QueueAsync(kind, delta, ct).ConfigureAwait(false);
+    }
+
+    private static Task FlushStreamingProgressAsync(
+        NyxIdChatOperationKey key,
+        NyxIdChatTransientExecutionSession session,
+        Func<NyxIdChatOperationProgressSignal, CancellationToken, Task> reportProgressAsync,
+        CancellationToken ct)
+    {
+        _ = key;
+        _ = reportProgressAsync;
+        return session.StreamingProgressBatcher?.FlushAsync(ct) ?? Task.CompletedTask;
+    }
+
     private static Task ReportToolStartedOnceAsync(
         NyxIdChatOperationKey key,
         NyxIdChatToolProgress progress,
@@ -1343,32 +1669,6 @@ public sealed class NyxIdChatTurnOperationExecutor
         session.TryMarkToolStartPublished(progress.CallId)
             ? ReportProgressAsync(key, progress, session, reportProgressAsync, ct)
             : Task.CompletedTask;
-
-    private static Task ReportProgressAsync(
-        NyxIdChatOperationKey key,
-        NyxIdChatTextProgress progress,
-        NyxIdChatTransientExecutionSession session,
-        Func<NyxIdChatOperationProgressSignal, CancellationToken, Task> reportProgressAsync,
-        CancellationToken ct) =>
-        reportProgressAsync(new NyxIdChatOperationProgressSignal
-        {
-            Key = key.Clone(),
-            Sequence = ++session.ProgressSequence,
-            Text = progress,
-        }, ct);
-
-    private static Task ReportProgressAsync(
-        NyxIdChatOperationKey key,
-        NyxIdChatReasoningProgress progress,
-        NyxIdChatTransientExecutionSession session,
-        Func<NyxIdChatOperationProgressSignal, CancellationToken, Task> reportProgressAsync,
-        CancellationToken ct) =>
-        reportProgressAsync(new NyxIdChatOperationProgressSignal
-        {
-            Key = key.Clone(),
-            Sequence = ++session.ProgressSequence,
-            Reasoning = progress,
-        }, ct);
 
     private static Task ReportProgressAsync(
         NyxIdChatOperationKey key,

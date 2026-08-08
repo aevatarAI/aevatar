@@ -38,7 +38,9 @@ public sealed class AgentToolReceiptWireContractTests
                 (15, "managed_workflow_handoff"),
                 (16, "workflow_run_delivery"),
                 (17, "authorization_required"),
-                (18, "effect"));
+                (18, "effect"),
+                (19, "provider_resource_id"),
+                (20, "nyx_id_approval_decision_mode"));
         AgentToolReceipt.Descriptor.Fields.InFieldNumberOrder()
             .Select(field => field.Name)
             .Should()

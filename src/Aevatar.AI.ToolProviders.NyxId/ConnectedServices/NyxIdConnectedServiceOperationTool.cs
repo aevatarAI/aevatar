@@ -334,6 +334,9 @@ internal sealed class NyxIdConnectedServiceOperationTool :
             "NYXID_CONNECTED_SERVICE_EFFECT_UNVERIFIED",
             "The connected-service effect result could not be verified.",
             string.Empty);
+        if (receipt.Status == AgentToolReceiptStatus.Success)
+            receipt.ProviderResourceId = _readBackPlan?.ExtractProviderResourceId(receipt.ResultJson) ?? string.Empty;
+
         var result = new JsonObject
         {
             ["kind"] = EffectReceiptKind,

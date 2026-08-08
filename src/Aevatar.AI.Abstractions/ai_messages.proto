@@ -415,6 +415,12 @@ enum AgentToolReceiptEffect {
   AGENT_TOOL_RECEIPT_EFFECT_MUTATING = 2;
 }
 
+enum NyxIdApprovalDecisionMode {
+  NYX_ID_APPROVAL_DECISION_MODE_UNKNOWN = 0;
+  NYX_ID_APPROVAL_DECISION_MODE_PER_REQUEST = 1;
+  NYX_ID_APPROVAL_DECISION_MODE_GRANT = 2;
+}
+
 message NyxIdAuthorizationRequiredEvent {
   string service_slug = 1;
   optional string service_label = 2;
@@ -444,6 +450,12 @@ message AgentToolReceipt {
   WorkflowRunBackgroundDeliveryReceipt workflow_run_delivery = 16;
   NyxIdAuthorizationRequiredEvent authorization_required = 17;
   AgentToolReceiptEffect effect = 18;
+  // Opaque identity assigned by the external provider to the affected resource.
+  // Raw provider responses remain transient; reconciliation persists only this ID.
+  string provider_resource_id = 19;
+  // NyxID-owned approval semantics. This is intentionally separate from the
+  // local tool approval mode above; omitted boundary data remains unknown.
+  NyxIdApprovalDecisionMode nyx_id_approval_decision_mode = 20;
 }
 
 message ManagedWorkflowHandoffReceipt {

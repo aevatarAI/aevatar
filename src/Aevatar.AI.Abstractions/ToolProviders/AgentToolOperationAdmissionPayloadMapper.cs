@@ -96,6 +96,7 @@ public static class AgentToolOperationAdmissionPayloadMapper
                 JsonPointer = readBack.Assertion.JsonPointer ?? string.Empty,
                 ExpectedValue = readBack.Assertion.ExpectedValue?.Clone(),
                 ElementJsonPointer = readBack.Assertion.ElementJsonPointer ?? string.Empty,
+                ExpectedValueSource = ToExpectedValueSource(readBack.Assertion.ExpectedValueSource),
             },
             CheckName = readBack.CheckName ?? string.Empty,
         };
@@ -117,7 +118,8 @@ public static class AgentToolOperationAdmissionPayloadMapper
                 FromReadBackMatch(payload.Assertion.Match),
                 payload.Assertion.JsonPointer ?? string.Empty,
                 payload.Assertion.ExpectedValue?.Clone(),
-                payload.Assertion.ElementJsonPointer ?? string.Empty),
+                payload.Assertion.ElementJsonPointer ?? string.Empty,
+                FromExpectedValueSource(payload.Assertion.ExpectedValueSource)),
             payload.CheckName ?? string.Empty);
     }
 
@@ -137,6 +139,22 @@ public static class AgentToolOperationAdmissionPayloadMapper
         AgentToolReadBackMatchPayload.Equals => AgentToolReadBackMatch.Equals,
         AgentToolReadBackMatchPayload.ArrayContainsEquals => AgentToolReadBackMatch.ArrayContainsEquals,
         _ => AgentToolReadBackMatch.Unspecified,
+    };
+
+    private static AgentToolReadBackExpectedValueSourcePayload ToExpectedValueSource(
+        AgentToolReadBackExpectedValueSource value) => value switch
+    {
+        AgentToolReadBackExpectedValueSource.ProviderResourceId =>
+            AgentToolReadBackExpectedValueSourcePayload.ProviderResourceId,
+        _ => AgentToolReadBackExpectedValueSourcePayload.FrozenValue,
+    };
+
+    private static AgentToolReadBackExpectedValueSource FromExpectedValueSource(
+        AgentToolReadBackExpectedValueSourcePayload value) => value switch
+    {
+        AgentToolReadBackExpectedValueSourcePayload.ProviderResourceId =>
+            AgentToolReadBackExpectedValueSource.ProviderResourceId,
+        _ => AgentToolReadBackExpectedValueSource.FrozenValue,
     };
 
     private static AgentToolOperationParameterPayload ToParameter(AgentToolOperationParameter parameter) => new()

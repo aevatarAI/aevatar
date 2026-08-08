@@ -347,6 +347,15 @@ public static class NyxIdChatControlCommands
         step.Operation.CompletedAt = now.Clone();
         step.UpdatedAt = now.Clone();
         step.AvailableActions = new NyxIdChatAvailableActions();
+        if (evidence.Value.Phase != NyxIdChatOperationPhase.Uncertain &&
+            next.ControlFence?.Kind == NyxIdChatControlKind.Steering &&
+            next.ContinuationAdmission?.Status ==
+                NyxIdChatContinuationAdmissionStatus.AcceptedForLater)
+        {
+            next.ContinuationAdmission.Status = NyxIdChatContinuationAdmissionStatus.Accepted;
+            next.ContinuationAdmission.ReasonCode = SteeringAccepted;
+            next.ContinuationAdmission.SafeMessage = SteeringAcceptedMessage;
+        }
         next.ProgressSequence++;
         next.UpdatedAt = now.Clone();
 
@@ -399,18 +408,9 @@ public static class NyxIdChatControlCommands
                 now);
         }
 
-        if (!MatchesExpectedVersion(command.ExpectedStateVersion, stateVersion))
-        {
-            return Reject(
-                state,
-                NyxIdChatControlKind.Stop,
-                requestId,
-                command.ClientRequestId,
-                command.TurnId,
-                StateVersionMismatch,
-                StateVersionMismatchMessage,
-                now);
-        }
+        // Progress is an observation waterline, not a control fence. The exact turn
+        // identity above prevents cross-turn stale commands; same-turn progress must
+        // not make stop impossible while a model stream is active.
 
         if (HasAcceptedFence(state))
         {
@@ -501,18 +501,8 @@ public static class NyxIdChatControlCommands
                 now);
         }
 
-        if (!MatchesExpectedVersion(command.ExpectedStateVersion, stateVersion))
-        {
-            return Reject(
-                state,
-                NyxIdChatControlKind.Steering,
-                requestId,
-                command.ClientRequestId,
-                command.TurnId,
-                StateVersionMismatch,
-                StateVersionMismatchMessage,
-                now);
-        }
+        // Same-turn steering is fenced by the exact turn identity, not by unrelated
+        // progress commits that may occur between the state read and command delivery.
 
         if (state.ActiveTask?.Gate is
             {
@@ -1247,6 +1237,29 @@ public static class NyxIdChatControlCommands
         NyxIdChatTaskStepState step,
         NyxIdChatOperationResultSignal signal)
     {
+        if (signal.ResultCase == NyxIdChatOperationResultSignal.ResultOneofCase.Failure &&
+            string.Equals(
+                signal.Failure.FailureCode,
+                NyxIdChatTurnOperationDispatchPort.ExecutionCancelledCode,
+                StringComparison.Ordinal))
+        {
+            var effect = signal.Failure.ExternalEffect ==
+                         NyxIdChatEffectEvidence.MayHaveChanged
+                ? NyxIdChatEffectEvidence.MayHaveChanged
+                : signal.Failure.ExternalEffect is
+                    NyxIdChatEffectEvidence.NotApplied or
+                    NyxIdChatEffectEvidence.NotStarted
+                    ? signal.Failure.ExternalEffect
+                    : NyxIdChatEffectEvidence.NotStarted;
+            return new LateToolEvidence(
+                effect == NyxIdChatEffectEvidence.MayHaveChanged
+                    ? NyxIdChatOperationPhase.Uncertain
+                    : NyxIdChatOperationPhase.Cancelled,
+                effect,
+                signal.Failure.FailureCode,
+                signal.Failure.SafeMessage);
+        }
+
         if (step.Kind == NyxIdChatStepKind.Llm &&
             signal.ResultCase == NyxIdChatOperationResultSignal.ResultOneofCase.Llm)
         {

@@ -776,6 +776,7 @@ public class NyxIdConnectedServiceToolSourceTests
                 "api-lark-bot",
                 LarkMessageEffectEndpoint("runtime-effect-uuid"),
                 LarkMessagesReadEndpoint("runtime-read-uuid")));
+        handler.ProxyResponseBody = """{"code":0,"data":{"message_id":"om_provider_alpha"}}""";
         var source = CreateSource(
             handler,
             enableEffects: true,
@@ -797,8 +798,18 @@ public class NyxIdConnectedServiceToolSourceTests
         query["page_size"].NumberValue.Should().Be(50);
         frozen.ReadBack.Assertion.Match.Should().Be(AgentToolReadBackMatch.ArrayContainsEquals);
         frozen.ReadBack.Assertion.JsonPointer.Should().Be("/data/items");
-        frozen.ReadBack.Assertion.ElementJsonPointer.Should().Be("/body/content");
-        frozen.ReadBack.Assertion.ExpectedValue!.StringValue.Should().Be("{\"text\":\"m40-alpha\"}");
+        frozen.ReadBack.Assertion.ElementJsonPointer.Should().Be("/message_id");
+        frozen.ReadBack.Assertion.ExpectedValue.Should().BeNull();
+        frozen.ReadBack.Assertion.ExpectedValueSource.Should()
+            .Be(AgentToolReadBackExpectedValueSource.ProviderResourceId);
+
+        var outcome = await effect.ExecuteWithOutcomeAsync(
+            "call-effect",
+            effect.Name,
+            """{"query":{"receive_id_type":"chat_id"},"body":{"receive_id":"oc_alpha","msg_type":"text","content":"{\"text\":\"m40-alpha\"}"}}""");
+        outcome.Receipt!.ProviderResourceId.Should().Be("om_provider_alpha");
+        outcome.ResultJson.Should().NotContain("om_provider_alpha",
+            "the provider identity is durable receipt evidence, not model-visible result content");
 
         owner.ResolveOperationAdmission(
                 """{"query":{"receive_id_type":"open_id"},"body":{"receive_id":"ou_alpha","msg_type":"text","content":"{\"text\":\"m40-alpha\"}"}}""")
@@ -806,12 +817,20 @@ public class NyxIdConnectedServiceToolSourceTests
     }
 
     [Theory]
-    [InlineData(7000, "approval_required", AgentToolReceiptStatus.ApprovalRequired)]
-    [InlineData(7001, "approval_failed", AgentToolReceiptStatus.Denied)]
+    [InlineData(7000, "approval_required", AgentToolReceiptStatus.ApprovalRequired, null,
+        NyxIdApprovalDecisionMode.Unknown)]
+    [InlineData(7001, "approval_failed", AgentToolReceiptStatus.Denied, null,
+        NyxIdApprovalDecisionMode.Unknown)]
+    [InlineData(7000, "approval_required", AgentToolReceiptStatus.ApprovalRequired, "per_request",
+        NyxIdApprovalDecisionMode.PerRequest)]
+    [InlineData(7001, "approval_failed", AgentToolReceiptStatus.Denied, "grant",
+        NyxIdApprovalDecisionMode.Grant)]
     public async Task DynamicEffect_NyxIdApprovalResult_ProducesTypedObservationWithoutLocalGrant(
         int errorCode,
         string errorKey,
-        AgentToolReceiptStatus expectedStatus)
+        AgentToolReceiptStatus expectedStatus,
+        string? approvalMode,
+        NyxIdApprovalDecisionMode expectedDecisionMode)
     {
         var handler = new FakeNyxIdHandler();
         handler.KeysByToken["user-token"] = Keys(Instance("usvc-alpha", "api-shop", "svc-shop"));
@@ -819,9 +838,11 @@ public class NyxIdConnectedServiceToolSourceTests
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             McpService("usvc-alpha", "api-shop", EffectEndpoint("endpoint-create")));
         handler.ProxyStatusCode = HttpStatusCode.Forbidden;
-        handler.ProxyResponseBody = $$"""
-            {"error":"{{errorKey}}","error_code":{{errorCode}},"request_id":"approval-real-alpha"}
-            """;
+        var approvalModeJson = approvalMode is null
+            ? string.Empty
+            : $",\"approval_mode\":\"{approvalMode}\"";
+        handler.ProxyResponseBody =
+            $"{{\"error\":\"{errorKey}\",\"error_code\":{errorCode},\"request_id\":\"approval-real-alpha\"{approvalModeJson}}}";
         var source = CreateSource(handler, enableEffects: true);
 
         using var scope = PushContext("user-token");
@@ -835,6 +856,7 @@ public class NyxIdConnectedServiceToolSourceTests
         outcome.Receipt!.Status.Should().Be(expectedStatus);
         outcome.Receipt.ApprovalRequestId.Should().Be("approval-real-alpha");
         outcome.Receipt.ApprovalMode.Should().Be(AgentToolReceiptApprovalMode.Unspecified);
+        outcome.Receipt.NyxIdApprovalDecisionMode.Should().Be(expectedDecisionMode);
     }
 
     [Fact]
@@ -1214,12 +1236,11 @@ public class NyxIdConnectedServiceToolSourceTests
         EffectPathTemplate = "/open-apis/im/v1/messages",
         ReadHttpMethod = "GET",
         ReadPathTemplate = "/open-apis/im/v1/messages",
-        CheckName = "lark_message_content_visible_in_chat",
+        CheckName = "lark_provider_message_visible_in_chat",
         Match = AgentToolReadBackMatch.ArrayContainsEquals,
         JsonPointer = "/data/items",
-        ElementJsonPointer = "/body/content",
-        ExpectedValueLocation = NyxIdAssistantOperationArgumentLocation.Body,
-        ExpectedValueArgumentName = "content",
+        ElementJsonPointer = "/message_id",
+        EffectResultIdentityJsonPointer = "/data/message_id",
         EffectArgumentConstraints =
         [
             new NyxIdAssistantEffectArgumentConstraint

@@ -118,6 +118,8 @@ internal static class NyxIdChatOperationAdmissionPolicy
                (readBack.Assertion.Match is not (
                     AgentToolReadBackMatchPayload.Equals or
                     AgentToolReadBackMatchPayload.ArrayContainsEquals) ||
+                readBack.Assertion.ExpectedValueSource ==
+                    AgentToolReadBackExpectedValueSourcePayload.ProviderResourceId ||
                 readBack.Assertion.ExpectedValue is not null) &&
                (readBack.Assertion.Match != AgentToolReadBackMatchPayload.ArrayContainsEquals ||
                 !string.IsNullOrWhiteSpace(readBack.Assertion.JsonPointer) &&

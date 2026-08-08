@@ -307,6 +307,35 @@ public sealed class NyxIdChatNeedsYouContinuationTests
     }
 
     [Theory]
+    [InlineData(AgentToolReceiptStatus.Denied, "")]
+    [InlineData(AgentToolReceiptStatus.ApprovalRequired, "tool_approval")]
+    public async Task NyxIdDecisionWithoutRealRequestIdentity_ShouldFailClosed(
+        AgentToolReceiptStatus status,
+        string approvalRequestId)
+    {
+        var generation = new ApprovalGenerationExecutor(approvalRequestId, status);
+        var executor = new NyxIdChatTurnOperationExecutor(generation);
+        var session = new NyxIdChatTransientExecutionSession();
+        await executor.ExecuteAsync(
+            InitialLlmCommand(),
+            session,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        var execution = await executor.ExecuteAsync(
+            ToolCommand(),
+            session,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        execution.Result.ResultCase.Should().Be(
+            NyxIdChatOperationResultSignal.ResultOneofCase.Failure);
+        execution.Result.Failure.FailureCode.Should().Be(
+            NyxIdChatTurnOperationExecutor.ToolApprovalRequestIdRequiredCode);
+        generation.ToolExecutions.Should().Be(1);
+    }
+
+    [Theory]
     [InlineData(true)]
     [InlineData(false)]
     public async Task ApprovalContinuationWithoutReplacementCredentials_ShouldFailClosed(
@@ -697,7 +726,8 @@ public sealed class NyxIdChatNeedsYouContinuationTests
     }
 
     private sealed class ApprovalGenerationExecutor(
-        string approvalRequestId = "approval-alpha")
+        string approvalRequestId = "approval-alpha",
+        AgentToolReceiptStatus initialStatus = AgentToolReceiptStatus.ApprovalRequired)
         : GenerationExecutorBase
     {
         private static readonly AgentRunToolCall ToolCall = new()
@@ -746,7 +776,7 @@ public sealed class NyxIdChatNeedsYouContinuationTests
                     Grants.Add(approvalGrant);
                     AccessTokens.Add(executionContext.Credentials.NyxIdAccessToken);
                     var status = approvalGrant is null
-                        ? AgentToolReceiptStatus.ApprovalRequired
+                        ? initialStatus
                         : AgentToolReceiptStatus.Success;
                     var resultJson = approvalGrant is null
                         ? "{\"status\":\"approval_required\"}"

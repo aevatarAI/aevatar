@@ -367,12 +367,11 @@ public static class MainnetHostBuilderExtensions
                 EffectPathTemplate = "/open-apis/im/v1/messages",
                 ReadHttpMethod = "GET",
                 ReadPathTemplate = "/open-apis/im/v1/messages",
-                CheckName = "lark_message_content_visible_in_chat",
+                CheckName = "lark_provider_message_visible_in_chat",
                 Match = AgentToolReadBackMatch.ArrayContainsEquals,
                 JsonPointer = "/data/items",
-                ElementJsonPointer = "/body/content",
-                ExpectedValueLocation = NyxIdAssistantOperationArgumentLocation.Body,
-                ExpectedValueArgumentName = "content",
+                ElementJsonPointer = "/message_id",
+                EffectResultIdentityJsonPointer = "/data/message_id",
                 EffectArgumentConstraints =
                 [
                     new NyxIdAssistantEffectArgumentConstraint
@@ -449,11 +448,9 @@ public static class MainnetHostBuilderExtensions
                 "Aevatar:NyxId:Authority",
                 "Cli:App:NyxId:Authority",
                 "Aevatar:Authentication:Authority");
-            o.NyxIdSearchSlug = FirstConfiguredValue(
-                builder.Configuration,
-                "Aevatar:Web:NyxIdSearchSlug",
-                "Aevatar:Web:SearchSlug",
-                "Aevatar:WebSearch:NyxIdSlug") ?? "tavily-search";
+            // Mainnet Milestone 40 has one admitted search capability. Stale deployment
+            // overrides must not silently route the mounted web_search tool to another service.
+            o.NyxIdSearchSlug = "tavily-search";
             o.SearchApiBaseUrl = FirstConfiguredValue(
                 builder.Configuration,
                 "Aevatar:Web:SearchApiBaseUrl",

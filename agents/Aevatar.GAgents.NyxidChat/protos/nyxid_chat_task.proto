@@ -9,6 +9,7 @@ import "google/protobuf/timestamp.proto";
 import "google/protobuf/struct.proto";
 import "ToolProviders/agent_tool_admission.proto";
 import "Tools/tool_presentation.proto";
+import "Credentials/credential_secret_references.proto";
 
 message NyxIdDirectChatHistoryDispatchedEvent {
   string session_id = 1;
@@ -272,6 +273,7 @@ message NyxIdChatToolStepSource {
   // Server-only exact selector and contract snapshot. Public read models map
   // only the safe labels above and never expose this admission for assembly.
   aevatar.ai.tool_providers.AgentToolOperationAdmissionPayload operation_admission = 5;
+  string provider_resource_id = 6;
 }
 
 message NyxIdChatBrowserActionStepSource {
@@ -288,6 +290,7 @@ message NyxIdChatPostconditionStepSource {
   string check = 2;
   string effect_step_id = 3;
   aevatar.ai.tool_providers.AgentToolOperationReadBackPayload tool_read_back = 4;
+  string provider_resource_id = 5;
 }
 
 message NyxIdChatRetryToolInputState {
@@ -951,6 +954,10 @@ message NyxIdChatConversationGAgentState {
   NyxIdChatInputRequestCommand pending_input_request = 30;
   repeated NyxIdChatPlanResolutionState recent_plan_resolutions = 31;
   NyxIdChatPlanResolutionState latest_plan_resolution = 32;
+  // Server-sealed first-turn command retained only until canonical history
+  // initialization is admitted. Raw credentials never enter actor state.
+  aevatar.credentials.DurableCallerCredentialRef pending_creation_first_turn = 33;
+  string pending_creation_first_turn_id = 34;
 }
 
 message NyxIdChatHistoryInitializationOutbox {
@@ -983,6 +990,11 @@ message NyxIdChatHistoryInitializationRetryScheduledEvent {
   int32 attempt = 2;
   string failure_code = 3;
   google.protobuf.Timestamp scheduled_at = 4;
+}
+
+message NyxIdChatPendingCreationFirstTurnDispatchRequested {
+  string turn_id = 1;
+  string credential_ref = 2;
 }
 
 message NyxIdChatHistoryDeliveryReservationState {
@@ -1086,6 +1098,11 @@ message NyxIdChatTurnGAgentState {
   aevatar.ai.tool_providers.AgentToolOperationAdmissionPayload operation_admission = 17;
   google.protobuf.Timestamp reconciliation_started_at = 18;
   NyxIdChatTurnPlanGateAdmissionState plan_gate_admission = 19;
+  string provider_resource_id = 20;
+  aevatar.ai.AgentToolRecoveryContextPayload recovery_context = 21;
+  aevatar.credentials.DurableCallerCredentialRef recovery_credential = 22;
+  aevatar.ai.tool_providers.AgentToolOperationReadBackPayload recovery_read_back = 23;
+  string recovery_effect_step_id = 24;
 }
 
 message NyxIdChatTurnOperationAdmittedEvent {
@@ -1098,6 +1115,10 @@ message NyxIdChatTurnOperationAdmittedEvent {
   string idempotency_key = 7;
   aevatar.ai.tool_providers.AgentToolOperationAdmissionPayload operation_admission = 8;
   bool consumes_plan_gate_admission = 9;
+  aevatar.ai.AgentToolRecoveryContextPayload recovery_context = 10;
+  aevatar.credentials.DurableCallerCredentialRef recovery_credential = 11;
+  aevatar.ai.tool_providers.AgentToolOperationReadBackPayload recovery_read_back = 12;
+  string recovery_effect_step_id = 13;
 }
 
 message NyxIdChatTurnPlanGateAdmissionCommand {
@@ -1137,6 +1158,7 @@ message NyxIdChatTurnOperationCompletedEvent {
   string safe_message = 4;
   NyxIdChatEffectEvidence external_effect = 5;
   google.protobuf.Timestamp completed_at = 6;
+  string provider_resource_id = 7;
 }
 
 message NyxIdChatTurnOperationDeliveredEvent {
@@ -1171,6 +1193,7 @@ message NyxIdChatToolVerificationInput {
   string effect_step_id = 1;
   aevatar.ai.tool_providers.AgentToolOperationReadBackPayload read_back = 2;
   aevatar.ai.AgentToolExecutionContextPayload tool_context = 3;
+  string provider_resource_id = 4;
 }
 
 message NyxIdChatActionPostconditionInput {
@@ -1321,6 +1344,14 @@ message NyxIdChatRecoveryRequestedSignal {
   NyxIdChatRecoveryKind kind = 3;
 }
 
+// Durable pre-expiry renewal for a server-sealed recovery credential. The
+// signal carries no secret material and is rejected unless it still matches
+// the actor-owned operation and credential reference.
+message NyxIdChatRecoveryCredentialRenewalRequested {
+  NyxIdChatOperationKey key = 1;
+  string credential_ref = 2;
+}
+
 message NyxIdChatTurnOperationExecutionProgressSignal {
   NyxIdChatOperationProgressSignal progress = 1;
 }
@@ -1336,12 +1367,20 @@ message NyxIdChatTurnOperationExecutionCompletedSignal {
   NyxIdChatTurnOperationCompletionSource source = 2;
 }
 
+message NyxIdChatTurnOperationCancelCommand {
+  NyxIdChatOperationKey key = 1;
+}
+
 message NyxIdChatTurnOperationReconciliationInput {
   NyxIdChatOperationKey key = 1;
   aevatar.ai.tool_providers.AgentToolOperationAdmissionPayload operation_admission = 2;
   string idempotency_key = 3;
   NyxIdChatEffectEvidence effect_dispatch_waterline = 4;
   aevatar.ai.tool_providers.AgentToolOperationReadBackPayload read_back = 5;
+  string provider_resource_id = 6;
+  aevatar.ai.AgentToolRecoveryContextPayload recovery_context = 7;
+  aevatar.credentials.DurableCallerCredentialRef recovery_credential = 8;
+  string effect_step_id = 9;
 }
 
 message NyxIdChatTextProgress {
@@ -1350,6 +1389,20 @@ message NyxIdChatTextProgress {
 
 message NyxIdChatReasoningProgress {
   string delta = 1;
+}
+
+// Ordered presentation deltas that share one actor-owned progress commit.
+// Adjacent segments of the same kind may be coalesced, but text/reasoning
+// transitions remain explicit so projection cannot reorder the stream.
+message NyxIdChatStreamingProgressSegment {
+  oneof progress {
+    NyxIdChatTextProgress text = 1;
+    NyxIdChatReasoningProgress reasoning = 2;
+  }
+}
+
+message NyxIdChatStreamingProgressBatch {
+  repeated NyxIdChatStreamingProgressSegment segments = 1;
 }
 
 message NyxIdChatToolProgress {
@@ -1375,6 +1428,7 @@ message NyxIdChatOperationProgressSignal {
     NyxIdChatReasoningProgress reasoning = 11;
     NyxIdChatToolProgress tool_started = 12;
     NyxIdChatOperationPhaseProgress phase = 13;
+    NyxIdChatStreamingProgressBatch streaming_batch = 14;
   }
 }
 

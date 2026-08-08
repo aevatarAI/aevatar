@@ -58,10 +58,8 @@ internal sealed class NyxIdConnectedServiceReadBackPlan
                 binding.ArgumentBindings.Any(argument => TargetKey(argument) == required) ||
                 binding.LiteralReadArguments.Any(argument => TargetKey(argument) == required)) ||
             binding.Match is AgentToolReadBackMatch.Equals or AgentToolReadBackMatch.ArrayContainsEquals &&
-            !HasArgument(
-                effectOperation,
-                binding.ExpectedValueLocation,
-                binding.ExpectedValueArgumentName) ||
+            !UsesProviderResourceIdentity(binding) &&
+            !HasArgument(effectOperation, binding.ExpectedValueLocation, binding.ExpectedValueArgumentName) ||
             binding.Match == AgentToolReadBackMatch.ArrayContainsEquals &&
             (string.IsNullOrWhiteSpace(binding.JsonPointer) ||
              string.IsNullOrWhiteSpace(binding.ElementJsonPointer)))
@@ -128,17 +126,25 @@ internal sealed class NyxIdConnectedServiceReadBackPlan
         }
 
         Value? expectedValue = null;
+        var expectedValueSource = AgentToolReadBackExpectedValueSource.FrozenValue;
         if (_binding.Match is AgentToolReadBackMatch.Equals or AgentToolReadBackMatch.ArrayContainsEquals)
         {
-            if (!TryReadArgument(
-                    effectArguments,
-                    _binding.ExpectedValueLocation,
-                    _binding.ExpectedValueArgumentName,
-                    out var expectedNode))
+            if (UsesProviderResourceIdentity(_binding))
             {
-                return false;
+                expectedValueSource = AgentToolReadBackExpectedValueSource.ProviderResourceId;
             }
-            expectedValue = JsonParser.Default.Parse<Value>(expectedNode!.ToJsonString());
+            else
+            {
+                if (!TryReadArgument(
+                        effectArguments,
+                        _binding.ExpectedValueLocation,
+                        _binding.ExpectedValueArgumentName,
+                        out var expectedNode))
+                {
+                    return false;
+                }
+                expectedValue = JsonParser.Default.Parse<Value>(expectedNode!.ToJsonString());
+            }
         }
 
         var typedArguments = JsonParser.Default.Parse<Struct>(readArguments.ToJsonString());
@@ -149,9 +155,61 @@ internal sealed class NyxIdConnectedServiceReadBackPlan
                 _binding.Match,
                 _binding.JsonPointer ?? string.Empty,
                 expectedValue,
-                _binding.ElementJsonPointer ?? string.Empty),
+                _binding.ElementJsonPointer ?? string.Empty,
+                expectedValueSource),
             _binding.CheckName);
         return true;
+    }
+
+    public string? ExtractProviderResourceId(string? effectResultJson)
+    {
+        if (!UsesProviderResourceIdentity(_binding) || string.IsNullOrWhiteSpace(effectResultJson))
+            return null;
+
+        try
+        {
+            return TryResolvePointer(
+                       JsonNode.Parse(effectResultJson),
+                       _binding.EffectResultIdentityJsonPointer,
+                       out var value) &&
+                   value is JsonValue jsonValue &&
+                   jsonValue.TryGetValue<string>(out var resourceId) &&
+                   !string.IsNullOrWhiteSpace(resourceId)
+                ? resourceId.Trim()
+                : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static bool UsesProviderResourceIdentity(NyxIdAssistantOperationReadBackBinding binding) =>
+        !string.IsNullOrWhiteSpace(binding.EffectResultIdentityJsonPointer) &&
+        binding.EffectResultIdentityJsonPointer.StartsWith("/", StringComparison.Ordinal);
+
+    private static bool TryResolvePointer(JsonNode? root, string pointer, out JsonNode? value)
+    {
+        value = root;
+        if (root is null || !pointer.StartsWith("/", StringComparison.Ordinal))
+            return false;
+
+        foreach (var encoded in pointer.Split('/').Skip(1))
+        {
+            var segment = encoded.Replace("~1", "/", StringComparison.Ordinal)
+                .Replace("~0", "~", StringComparison.Ordinal);
+            if (value is JsonObject obj && obj.TryGetPropertyValue(segment, out value))
+                continue;
+            if (value is JsonArray array && int.TryParse(segment, out var index) &&
+                index >= 0 && index < array.Count)
+            {
+                value = array[index];
+                continue;
+            }
+            value = null;
+            return false;
+        }
+        return value is not null;
     }
 
     private static bool HasArgument(

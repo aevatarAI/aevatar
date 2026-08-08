@@ -115,6 +115,18 @@ The first text request omits `conversationId`. Mainnet derives a stable scope/cl
 }
 ```
 
+The create command commits registration and a vault reference for the pending
+first-turn command before any turn execution. The command payload, including
+its transient credential material, remains only in the secret vault; actor
+state and committed events contain the typed reference and turn identity. The
+controller first publishes the history-initialization self continuation, then
+publishes the pending-first-turn self continuation only after initialization
+commits. Both continuations re-enter the actor inbox and are recoverable after
+passivation. The vault entry has a fixed 30-minute retention window. If it is
+unavailable or expired when the continuation runs, the controller commits a
+typed unavailable finalization, clears the pending reference and turn identity,
+and revokes the vault entry idempotently instead of starting a partial turn.
+
 The server starts the SSE stream with authoritative `conversationId/actorId` and `turnId` context. Subsequent text requests include that exact `conversationId`; they reuse the controller and create a new server-authored turn. `clientRequestId` may be supplied in the body or `Idempotency-Key`; the body wins. An exact retry reuses committed admission/result semantics, while identity reuse with different content fails closed. The deprecated `sessionId` field is ignored.
 
 ```json
@@ -242,6 +254,15 @@ resumes from current-state `activeTask`, whose shape is identical to the live
 TaskPlan payload; it does not reconstruct a plan from action cards or text.
 
 Text, reasoning, tool-start, task, control, and terminal frames share the actor-owned progress sequence. `RUN_STARTED`, keepalive, and bounded endpoint-local setup failures are transport context and do not invent an actor sequence.
+
+NyxID LLM stream ingestion uses a bounded channel with capacity 32. The first
+delta is forwarded immediately; later text and reasoning deltas are committed
+in source order when either the fixed 250-millisecond batch deadline or the
+64-KiB UTF-8 payload ceiling is reached. Oversized content is split only at
+Unicode rune boundaries. Terminal and cancellation paths drain already
+accepted tail progress independently of request cancellation. This batching
+cannot occupy the controller actor turn, so stop, steering, and step-control
+commands remain responsive while streaming continues.
 
 Long-running executors relay genuine text, reasoning, tool-start, or phase
 observations whenever the underlying operation reports progress. The
@@ -610,7 +631,21 @@ Example `current` envelope:
 }
 ```
 
-The snapshot contains query-shaped safe data: active/latest/recent turns, ordered task steps and their typed sources, operation key/generation and phase, effect evidence, available actions, pending input, approval presentation, latest safe input/approval resolution facts, control fences, continuation admission, progress sequence, actor-authored attention, and actor version. A NyxID tool source may include the exact optional `readinessCapabilityId` described above. It excludes submitted answers and reasons, transient capabilities, raw LLM/tool results, credentials, and actor runtime internals.
+The snapshot contains query-shaped safe data: active/latest/recent turns,
+ordered task steps and their typed sources, operation key/generation and phase,
+effect evidence, available actions, pending input, approval presentation,
+latest safe input/approval resolution facts, typed `pendingActions` and bounded
+`recentActions`, control fences, continuation admission, progress sequence,
+actor-authored attention, and actor version. It also exposes
+`latestStepControlResult` and bounded `recentStepControlResults`; each result
+preserves the typed retry/skip kind, request and client identities, exact
+turn/task/step identity, expected and resulting operation generations,
+expected state version, outcome, safe reason, command/correlation identities,
+and commit time. These fields are copied from the same actor current-state
+fact and are not reconstructed by the query adapter. A NyxID tool source may
+include the exact optional `readinessCapabilityId` described above. The
+snapshot excludes submitted answers and reasons, transient capabilities, raw
+LLM/tool results, credentials, and actor runtime internals.
 
 The read model is eventually consistent and says so through its actor-derived `stateVersion`. Writes are monotonic overwrite: newer replaces older, byte-equivalent equal-version duplicates are idempotent, equal-version conflicts fail, and older versions cannot overwrite newer state. Query-time priming and replay are forbidden.
 
@@ -653,6 +688,7 @@ Recovery rules are conservative:
 - a turn actor that committed completion but lost result delivery does not reconstruct raw output or repeat I/O; it reports `NYXID_CHAT_OPERATION_RESULT_DELIVERY_LOST` and preserves its committed effect evidence;
 - a blocked browser action has no hidden continuation after restart;
 - actor-owned pending input and approval survive passivation and reload; reconnect reads them from the current-state read model rather than requiring the lost stream;
+- a pending creation first turn resumes only through its vault-backed typed self continuation; fixed-TTL expiry commits unavailable terminal cleanup and cannot fall back to an inline or reconstructed command;
 - late evidence after stop/steering may refine effect truth but cannot advance the old plan.
 
 The turn actor persists no raw LLM text, raw tool result, tool arguments, credential, or transient execution capability. Therefore recovery is deterministic and honest rather than a best-effort reconstruction of uncommitted output.

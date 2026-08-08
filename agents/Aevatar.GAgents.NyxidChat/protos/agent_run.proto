@@ -12,6 +12,7 @@ import "workflow_execution_messages.proto";
 import "nyxid_chat_task.proto";
 import "agent_profiles.proto";
 import "ToolProviders/agent_tool_admission.proto";
+import "google/protobuf/timestamp.proto";
 
 enum AgentRunStatus {
   AGENT_RUN_STATUS_UNSPECIFIED = 0;
@@ -1026,6 +1027,22 @@ message NyxIdChatConversationRegistrationUnavailableEvent {
   string reason = 4;
   string command_id = 5;
   string correlation_id = 6;
+}
+
+enum NyxIdChatPendingCreationFirstTurnOutcome {
+  NYX_ID_CHAT_PENDING_CREATION_FIRST_TURN_OUTCOME_UNSPECIFIED = 0;
+  NYX_ID_CHAT_PENDING_CREATION_FIRST_TURN_OUTCOME_STARTED = 1;
+  NYX_ID_CHAT_PENDING_CREATION_FIRST_TURN_OUTCOME_UNAVAILABLE = 2;
+}
+
+message NyxIdChatPendingCreationFirstTurnFinalizedEvent {
+  string conversation_actor_id = 1;
+  string turn_id = 2;
+  string credential_ref = 3;
+  NyxIdChatPendingCreationFirstTurnOutcome outcome = 4;
+  string failure_code = 5;
+  string safe_message = 6;
+  google.protobuf.Timestamp committed_at = 7;
 }
 
 message NyxIdChatConversationDeletionStartedEvent {

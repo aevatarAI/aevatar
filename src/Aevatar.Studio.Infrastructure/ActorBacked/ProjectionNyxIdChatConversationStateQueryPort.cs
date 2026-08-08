@@ -189,7 +189,10 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
             NullIfEmpty(document.TaskStatus),
             NullIfEmpty(document.AttentionKind),
             ToDateTimeOffset(document.AttentionSince),
-            NullIfEmpty(document.ActiveStepSummary));
+            NullIfEmpty(document.ActiveStepSummary),
+            document.RecentActions.Select(ToAction).ToArray(),
+            ToStepControlResult(document.LatestStepControlResult),
+            document.RecentStepControlResults.Select(result => ToStepControlResult(result)!).ToArray());
 
     private static NyxIdChatConversationTurnSnapshot? ToTurn(
         NyxIdChatConversationTurnDocument? turn) =>
@@ -453,6 +456,29 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
                 NullIfEmpty(admission.SafeMessage),
                 ToDateTimeOffset(admission.CommittedAt));
 
+    private static NyxIdChatStepControlResultSnapshot? ToStepControlResult(
+        NyxIdChatConversationStepControlResultDocument? result) =>
+        result == null
+            ? null
+            : new NyxIdChatStepControlResultSnapshot(
+                result.Kind,
+                result.RequestId,
+                result.ClientRequestId,
+                result.TurnId,
+                result.TaskId,
+                result.StepId,
+                result.ExpectedOperationGeneration,
+                result.OperationGeneration,
+                result.Outcome,
+                NullIfEmpty(result.ReasonCode),
+                NullIfEmpty(result.SafeMessage),
+                result.CommandId,
+                result.CorrelationId,
+                ToDateTimeOffset(result.CommittedAt),
+                result.ExpectedStateVersion,
+                result.ScopeId,
+                result.ConversationActorId);
+
     private static NyxIdChatActionSnapshot ToAction(
         NyxIdChatConversationActionDocument action) =>
         new(
@@ -464,7 +490,46 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
             action.Action,
             ToDateTimeOffset(action.RequestedAt),
             action.Reports.Select(ToActionReport).ToArray(),
-            ToPostcondition(action.PostconditionResult));
+            ToPostcondition(action.PostconditionResult),
+            ToActionRequest(action.Request));
+
+    private static NyxIdChatActionRequestSnapshot? ToActionRequest(
+        NyxIdChatConversationActionRequestDocument? request)
+    {
+        if (request?.Params is null)
+            return null;
+        var parameters = request.Params.ParamsCase switch
+        {
+            NyxIdChatConversationActionParamsDocument.ParamsOneofCase.CatalogService =>
+                new NyxIdChatActionParamsSnapshot(
+                    CatalogService: new NyxIdChatCatalogServiceConnectSnapshot(
+                        request.Params.CatalogService.ServiceSlug,
+                        request.Params.CatalogService.RequestedScopes.ToArray(),
+                        NullIfEmpty(request.Params.CatalogService.ViaNodeId),
+                        NullIfEmpty(request.Params.CatalogService.TargetOrgId))),
+            NyxIdChatConversationActionParamsDocument.ParamsOneofCase.CustomService =>
+                new NyxIdChatActionParamsSnapshot(
+                    CustomService: new NyxIdChatCustomServiceConnectSnapshot(
+                        request.Params.CustomService.Name,
+                        request.Params.CustomService.EndpointUrl,
+                        request.Params.CustomService.AuthMethod,
+                        NullIfEmpty(request.Params.CustomService.AuthKeyName),
+                        NullIfEmpty(request.Params.CustomService.ViaNodeId),
+                        NullIfEmpty(request.Params.CustomService.TargetOrgId))),
+            _ => null,
+        };
+        return parameters is null
+            ? null
+            : new NyxIdChatActionRequestSnapshot(
+                request.SchemaVersion,
+                request.ActorId,
+                request.OriginTurnId,
+                request.TaskId,
+                request.StepId,
+                request.ActionRequestId,
+                request.Action,
+                parameters);
+    }
 
     private static NyxIdChatActionReportSnapshot ToActionReport(
         NyxIdChatConversationActionReportDocument report) =>

@@ -19,6 +19,57 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
     private const string ActorId = "conversation-alpha";
 
     [Fact]
+    public async Task ProjectAsync_ShouldExposeReloadablePendingAndRecentActionRequests()
+    {
+        var dispatcher = new RecordingWriteDispatcher();
+        var projector = new NyxIdChatConversationCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-08-08T04:00:00Z")));
+        var state = BuildState();
+        state.ActiveTask.Gate = null;
+        var pending = state.PendingActions.Single();
+        pending.Params = new NyxIdAssistantActionParams
+        {
+            CatalogServiceConnect = new NyxIdCatalogServiceConnectParams
+            {
+                ServiceSlug = "github",
+                RequestedScopes = { "repo:read", "issues:write" },
+                ViaNodeId = "node-alpha",
+                TargetOrgId = "org-alpha",
+            },
+        };
+        var recent = pending.Clone();
+        recent.ActionRequestId = "action-recent";
+        recent.PostconditionResult = new NyxIdChatActionPostconditionResult
+        {
+            ActionRequestId = recent.ActionRequestId,
+            Disposition = NyxIdChatActionDisposition.Completed,
+            Verified = true,
+        };
+        state.RecentActions.Add(recent);
+
+        await projector.ProjectAsync(
+            NewContext(),
+            WrapCommitted(
+                new NyxIdChatActionRequestedEvent(),
+                state,
+                version: 18,
+                eventId: "event-alpha-18",
+                stateEventTimestamp: DateTimeOffset.Parse("2026-08-08T04:00:00Z")));
+
+        var document = dispatcher.Upserts.Should().ContainSingle().Subject;
+        var request = document.PendingActions.Should().ContainSingle().Which.Request;
+        request.ActorId.Should().Be(ActorId);
+        request.Action.Should().Be("service.connect");
+        request.Params.CatalogService.ServiceSlug.Should().Be("github");
+        request.Params.CatalogService.RequestedScopes.Should().Equal("repo:read", "issues:write");
+        request.Params.CatalogService.ViaNodeId.Should().Be("node-alpha");
+        request.Params.CatalogService.TargetOrgId.Should().Be("org-alpha");
+        document.RecentActions.Should().ContainSingle().Which.Request
+            .ActionRequestId.Should().Be("action-recent");
+    }
+
+    [Fact]
     public async Task ProjectAsync_ShouldCopySafeQueryStateAndAuthoritativeVersion()
     {
         var dispatcher = new RecordingWriteDispatcher();
@@ -47,6 +98,15 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
         document.UpdatedAt.ToDateTimeOffset().Should()
             .Be(DateTimeOffset.Parse("2026-07-25T06:15:00Z"));
         document.ProgressSequence.Should().Be(29);
+        document.LatestStepControlResult.Kind.Should().Be("retry");
+        document.LatestStepControlResult.RequestId.Should().Be("retry-alpha");
+        document.LatestStepControlResult.StepId.Should().Be("step-beta");
+        document.LatestStepControlResult.ExpectedOperationGeneration.Should().Be(2);
+        document.LatestStepControlResult.OperationGeneration.Should().Be(3);
+        document.LatestStepControlResult.Outcome.Should().Be("accepted");
+        document.LatestStepControlResult.ExpectedStateVersion.Should().Be(16);
+        document.RecentStepControlResults.Should().ContainSingle().Which.RequestId
+            .Should().Be("retry-alpha");
 
         document.ActiveTurn.TurnId.Should().Be("turn-alpha");
         document.ActiveTurn.TaskId.Should().Be("task-alpha");
@@ -635,6 +695,26 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
                 Outcome = NyxIdChatControlOutcome.Accepted,
                 CommittedAt = now.Clone(),
             },
+            LatestStepControlResult = new NyxIdChatStepControlResultState
+            {
+                Kind = NyxIdChatStepControlKind.Retry,
+                RequestId = "retry-alpha",
+                ClientRequestId = "client-retry-alpha",
+                TurnId = "turn-alpha",
+                TaskId = "task-alpha",
+                StepId = "step-beta",
+                ExpectedOperationGeneration = 2,
+                OperationGeneration = 3,
+                Outcome = NyxIdChatTransitionOutcome.Accepted,
+                ReasonCode = "NYXID_CHAT_STEP_RETRY_ACCEPTED",
+                SafeMessage = "Retry accepted.",
+                CommandId = "command-retry-alpha",
+                CorrelationId = "correlation-retry-alpha",
+                CommittedAt = now.Clone(),
+                ExpectedStateVersion = 16,
+                ScopeId = "scope-alpha",
+                ConversationActorId = ActorId,
+            },
             ContinuationAdmission = new NyxIdChatContinuationAdmissionState
             {
                 Kind = NyxIdChatContinuationKind.Steering,
@@ -698,6 +778,7 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
             SafeMessage = "Previous turn failed.",
             TerminalAt = now.Clone(),
         });
+        state.RecentStepControlResults.Add(state.LatestStepControlResult.Clone());
         state.ActiveTask.Steps.Add(new NyxIdChatTaskStepState
         {
             StepId = "step-beta",

@@ -1,7 +1,11 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.GAgents.NyxidChat;
 
@@ -23,6 +27,8 @@ public interface INyxIdChatTurnOperationDispatchSession
         NyxIdChatTurnOperationReconciliationInput input,
         string correlationId,
         CancellationToken ct);
+
+    Task CancelExecutionAsync(NyxIdChatOperationKey key, CancellationToken ct);
 }
 
 public interface INyxIdChatTurnOperationReconciliationPort
@@ -67,11 +73,42 @@ public sealed class AdmittedNyxIdChatTurnOperationReconciliationPort
     : INyxIdChatTurnOperationReconciliationPort
 {
     private readonly INyxIdChatToolVerificationPort _verificationPort;
+    private readonly ISecretVault? _secretVault;
+    private readonly INyxIdChatDelegationCredentialLifecyclePort _delegationCredentialLifecycle;
+    private readonly ILogger<AdmittedNyxIdChatTurnOperationReconciliationPort> _logger;
 
     public AdmittedNyxIdChatTurnOperationReconciliationPort(
         INyxIdChatToolVerificationPort verificationPort)
+        : this(
+            verificationPort,
+            null,
+            new NyxIdChatDelegationCredentialLifecyclePort(TimeProvider.System),
+            NullLogger<AdmittedNyxIdChatTurnOperationReconciliationPort>.Instance)
+    {
+    }
+
+    public AdmittedNyxIdChatTurnOperationReconciliationPort(
+        INyxIdChatToolVerificationPort verificationPort,
+        ISecretVault? secretVault,
+        INyxIdChatDelegationCredentialLifecyclePort delegationCredentialLifecycle)
+        : this(
+            verificationPort,
+            secretVault,
+            delegationCredentialLifecycle,
+            NullLogger<AdmittedNyxIdChatTurnOperationReconciliationPort>.Instance)
+    {
+    }
+
+    public AdmittedNyxIdChatTurnOperationReconciliationPort(
+        INyxIdChatToolVerificationPort verificationPort,
+        ISecretVault? secretVault,
+        INyxIdChatDelegationCredentialLifecyclePort delegationCredentialLifecycle,
+        ILogger<AdmittedNyxIdChatTurnOperationReconciliationPort> logger)
     {
         _verificationPort = verificationPort;
+        _secretVault = secretVault;
+        _delegationCredentialLifecycle = delegationCredentialLifecycle;
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     public async Task<NyxIdChatOperationResultSignal> ReconcileAsync(
@@ -79,22 +116,135 @@ public sealed class AdmittedNyxIdChatTurnOperationReconciliationPort
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(input);
-        if (input.Key is null || !NyxIdChatOperationAdmissionPolicy.IsValidReadBack(input.ReadBack))
+        if (input.Key is null ||
+            !NyxIdChatOperationAdmissionPolicy.IsValidReadBack(input.ReadBack) ||
+            !IsValidCredentialReference(input))
             return Uncertain(input.Key);
+
+        var resolved = await _secretVault!.ResolveAsync(new ResolveSecretRequest(
+            input.RecoveryCredential.Ref,
+            CredentialSecretPurposes.NyxIdChatRecoveryCredential,
+            input.RecoveryCredential.OwnerScopeKey,
+            input.RecoveryCredential.SubjectId,
+            "nyxid chat effect read-back recovery"), ct).ConfigureAwait(false);
+        if (!resolved.Resolved || !TryParseCredentials(resolved.Secret, out var credentials))
+            return Uncertain(input.Key);
+
+        if (credentials.NyxIdCredentialKind == AgentToolNyxIdCredentialKindPayload.ProxyDelegation)
+        {
+            var delegation = await _delegationCredentialLifecycle
+                .ResolveAsync(credentials.NyxIdAccessToken, ct)
+                .ConfigureAwait(false);
+            if (!delegation.Succeeded || string.IsNullOrWhiteSpace(delegation.AccessToken))
+                return Uncertain(input.Key);
+
+            credentials.NyxIdAccessToken = delegation.AccessToken;
+            if (delegation.Refreshed)
+            {
+                try
+                {
+                    await _secretVault.RotateAsync(new RotateSecretRequest(
+                        input.RecoveryCredential.Ref,
+                        CredentialSecretPurposes.NyxIdChatRecoveryCredential,
+                        input.RecoveryCredential.OwnerScopeKey,
+                        input.RecoveryCredential.SubjectId,
+                        Convert.ToBase64String(credentials.ToByteArray()),
+                        "rotate refreshed nyxid chat recovery credential"), ct).ConfigureAwait(false);
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException)
+                {
+                    _logger.LogWarning(
+                        exception,
+                        "NyxIdChat recovery credential rotation failed after delegation refresh: operation={OperationId}",
+                        input.Key.OperationId);
+                }
+            }
+        }
+
+        var context = AgentToolExecutionContextMapper.FromRecoveryPayload(input.RecoveryContext) with
+        {
+            Credentials = AgentToolExecutionContextMapper.FromPayload(
+                new AgentToolExecutionContextPayload { Credentials = credentials }).Credentials,
+        };
 
         var verification = await _verificationPort.VerifyAsync(
             input.Key,
             new NyxIdChatToolVerificationInput
             {
-                EffectStepId = input.Key.StepId,
+                EffectStepId = string.IsNullOrWhiteSpace(input.EffectStepId)
+                    ? input.Key.StepId
+                    : input.EffectStepId,
                 ReadBack = input.ReadBack.Clone(),
+                ProviderResourceId = input.ProviderResourceId,
+                ToolContext = context.ToPayload(),
             },
             ct).ConfigureAwait(false);
+        if (verification.Disposition is
+            NyxIdChatToolVerificationDisposition.Applied or
+            NyxIdChatToolVerificationDisposition.NotApplied)
+        {
+            try
+            {
+                await _secretVault.RevokeAsync(new RevokeSecretRequest(
+                    input.RecoveryCredential.Ref,
+                    CredentialSecretPurposes.NyxIdChatRecoveryCredential,
+                    input.RecoveryCredential.OwnerScopeKey,
+                    input.RecoveryCredential.SubjectId,
+                    "nyxid chat recovery reached terminal proof"), ct).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                _logger.LogWarning(
+                    exception,
+                    "NyxIdChat terminal recovery credential revocation failed: operation={OperationId}",
+                    input.Key.OperationId);
+            }
+        }
         return new NyxIdChatOperationResultSignal
         {
             Key = input.Key.Clone(),
             ToolVerification = verification,
         };
+    }
+
+    private bool IsValidCredentialReference(NyxIdChatTurnOperationReconciliationInput input) =>
+        _secretVault is not null &&
+        input.RecoveryContext is not null &&
+        input.RecoveryCredential is
+        {
+            Ref.Length: > 0,
+            OwnerScopeKey.Length: > 0,
+            SubjectId.Length: > 0,
+            SourceKind: DurableCallerCredentialSourceKind.NyxIdChat,
+        } credential &&
+        string.Equals(
+            credential.Purpose,
+            CredentialSecretPurposes.NyxIdChatRecoveryCredential,
+            StringComparison.Ordinal) &&
+        string.Equals(
+            credential.OwnerScopeKey,
+            $"nyxid-chat:{input.Key?.ConversationActorId}",
+            StringComparison.Ordinal) &&
+        string.Equals(
+            credential.SubjectId,
+            input.RecoveryContext.Caller?.OwnerSubject,
+            StringComparison.Ordinal);
+
+    private static bool TryParseCredentials(
+        string? encoded,
+        out AgentToolCredentialsPayload credentials)
+    {
+        credentials = null!;
+        try
+        {
+            credentials = AgentToolCredentialsPayload.Parser.ParseFrom(
+                Convert.FromBase64String(encoded ?? string.Empty));
+            return credentials is not null;
+        }
+        catch (Exception exception) when (exception is FormatException or InvalidProtocolBufferException)
+        {
+            return false;
+        }
     }
 
     private static NyxIdChatOperationResultSignal Uncertain(NyxIdChatOperationKey? key) => new()
@@ -114,6 +264,8 @@ public sealed class NyxIdChatTurnOperationDispatchPort
 {
     private const string ExecutionFailedCode = "NYXID_CHAT_OPERATION_EXECUTION_FAILED";
     private const string ExecutionFailedMessage = "The operation could not be completed.";
+    internal const string ExecutionCancelledCode = "NYXID_CHAT_OPERATION_CANCELLED";
+    private const string ExecutionCancelledMessage = "The operation was cancelled.";
 
     private readonly INyxIdChatTurnOperationExecutor _executor;
     private readonly INyxIdChatTurnOperationReconciliationPort _reconciliationPort;
@@ -143,6 +295,8 @@ public sealed class NyxIdChatTurnOperationDispatchPort
         NyxIdChatOperationDispatchCommand command,
         NyxIdChatTransientExecutionSession session,
         string correlationId,
+        ExecutionLease executionLease,
+        Action<ExecutionLease> releaseLease,
         CancellationToken ct)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(turnActorId);
@@ -156,7 +310,9 @@ public sealed class NyxIdChatTurnOperationDispatchPort
                 turnActorId,
                 frozenCommand,
                 session,
-                correlationId),
+                correlationId,
+                executionLease,
+                releaseLease),
             CancellationToken.None);
         return Task.CompletedTask;
     }
@@ -182,7 +338,9 @@ public sealed class NyxIdChatTurnOperationDispatchPort
         string turnActorId,
         NyxIdChatOperationDispatchCommand command,
         NyxIdChatTransientExecutionSession session,
-        string correlationId)
+        string correlationId,
+        ExecutionLease executionLease,
+        Action<ExecutionLease> releaseLease)
     {
         NyxIdChatOperationResultSignal result;
         try
@@ -199,9 +357,13 @@ public sealed class NyxIdChatTurnOperationDispatchPort
                         },
                         correlationId,
                         token),
-                    CancellationToken.None)
+                    executionLease.Token)
                 .ConfigureAwait(false);
             result = execution.Result?.Clone() ?? ExecutionFailure(command);
+        }
+        catch (OperationCanceledException) when (executionLease.IsCancellationRequested)
+        {
+            result = ExecutionCancelled(command);
         }
         catch (Exception exception)
         {
@@ -213,12 +375,19 @@ public sealed class NyxIdChatTurnOperationDispatchPort
             result = ExecutionFailure(command);
         }
 
-        await DispatchCompletionAsync(
-                turnActorId,
-                result,
-                NyxIdChatTurnOperationCompletionSource.Execution,
-                correlationId)
-            .ConfigureAwait(false);
+        try
+        {
+            await DispatchCompletionAsync(
+                    turnActorId,
+                    result,
+                    NyxIdChatTurnOperationCompletionSource.Execution,
+                    correlationId)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            releaseLease(executionLease);
+        }
     }
 
     private async Task ReconcileAndSignalAsync(
@@ -321,6 +490,20 @@ public sealed class NyxIdChatTurnOperationDispatchPort
         },
     };
 
+    private static NyxIdChatOperationResultSignal ExecutionCancelled(
+        NyxIdChatOperationDispatchCommand command) => new()
+    {
+        Key = command.Key?.Clone(),
+        Failure = new NyxIdChatOperationFailure
+        {
+            FailureCode = ExecutionCancelledCode,
+            SafeMessage = ExecutionCancelledMessage,
+            ExternalEffect = MayDispatchExternalEffect(command)
+                ? NyxIdChatEffectEvidence.MayHaveChanged
+                : NyxIdChatEffectEvidence.NotApplied,
+        },
+    };
+
     private static NyxIdChatOperationResultSignal ReconciliationFailure(
         NyxIdChatTurnOperationReconciliationInput input) => new()
     {
@@ -345,19 +528,29 @@ public sealed class NyxIdChatTurnOperationDispatchPort
     private sealed class Session(NyxIdChatTurnOperationDispatchPort owner)
         : INyxIdChatTurnOperationDispatchSession
     {
-        private readonly NyxIdChatTransientExecutionSession _executionSession = new();
+        private NyxIdChatTransientExecutionSession _executionSession = new();
+        private ExecutionLease? _activeLease;
 
         public Task DispatchExecutionAsync(
             string turnActorId,
             NyxIdChatOperationDispatchCommand command,
             string correlationId,
-            CancellationToken ct) =>
-            owner.DispatchExecutionAsync(
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (Volatile.Read(ref _activeLease) is not null)
+                _executionSession = new NyxIdChatTransientExecutionSession();
+            var lease = new ExecutionLease(command.Key, _executionSession);
+            Volatile.Write(ref _activeLease, lease);
+            return owner.DispatchExecutionAsync(
                 turnActorId,
                 command,
-                _executionSession,
+                lease.Session,
                 correlationId,
+                lease,
+                CompleteExecution,
                 ct);
+        }
 
         public Task DispatchReconciliationAsync(
             string turnActorId,
@@ -369,5 +562,64 @@ public sealed class NyxIdChatTurnOperationDispatchPort
                 input,
                 correlationId,
                 ct);
+
+        public Task CancelExecutionAsync(NyxIdChatOperationKey key, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            var lease = Volatile.Read(ref _activeLease);
+            if (lease is not null && KeysEqual(lease.Key, key))
+                lease.Cancel();
+            return Task.CompletedTask;
+        }
+
+        private void CompleteExecution(ExecutionLease lease)
+        {
+            Interlocked.CompareExchange(ref _activeLease, null, lease);
+            lease.Dispose();
+        }
+
+        private static bool KeysEqual(NyxIdChatOperationKey? left, NyxIdChatOperationKey? right) =>
+            left is not null && right is not null && left.Equals(right);
+    }
+
+
+    private sealed class ExecutionLease : IDisposable
+    {
+        private readonly object _sync = new();
+        private readonly CancellationTokenSource _cancellation = new();
+        private bool _disposed;
+
+        public ExecutionLease(
+            NyxIdChatOperationKey? key,
+            NyxIdChatTransientExecutionSession session)
+        {
+            Key = key?.Clone();
+            Session = session ?? throw new ArgumentNullException(nameof(session));
+        }
+
+        public NyxIdChatOperationKey? Key { get; }
+        public NyxIdChatTransientExecutionSession Session { get; }
+        public CancellationToken Token => _cancellation.Token;
+        public bool IsCancellationRequested => _cancellation.IsCancellationRequested;
+
+        public void Cancel()
+        {
+            lock (_sync)
+            {
+                if (!_disposed)
+                    _cancellation.Cancel();
+            }
+        }
+
+        public void Dispose()
+        {
+            lock (_sync)
+            {
+                if (_disposed)
+                    return;
+                _disposed = true;
+                _cancellation.Dispose();
+            }
+        }
     }
 }

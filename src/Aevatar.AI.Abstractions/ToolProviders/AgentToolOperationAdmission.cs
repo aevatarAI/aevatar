@@ -44,6 +44,12 @@ public enum AgentToolReadBackMatch
     ArrayContainsEquals = 4,
 }
 
+public enum AgentToolReadBackExpectedValueSource
+{
+    FrozenValue = 0,
+    ProviderResourceId = 1,
+}
+
 /// <summary>
 /// Typed assertion evaluated against the bounded data member of a connected-service read
 /// projection. <see cref="JsonPointer"/> uses RFC 6901 syntax.
@@ -52,7 +58,9 @@ public sealed record AgentToolReadBackAssertion(
     AgentToolReadBackMatch Match,
     string JsonPointer,
     Value? ExpectedValue = null,
-    string ElementJsonPointer = "");
+    string ElementJsonPointer = "",
+    AgentToolReadBackExpectedValueSource ExpectedValueSource =
+        AgentToolReadBackExpectedValueSource.FrozenValue);
 
 /// <summary>
 /// Server-sealed post-effect read. The nested admission must be an exact read-only operation

@@ -1,12 +1,16 @@
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.DependencyInjection;
 using System.Security.Cryptography;
 
 namespace Aevatar.GAgents.NyxidChat;
@@ -14,6 +18,8 @@ namespace Aevatar.GAgents.NyxidChat;
 [GAgent(NyxIdChatServiceDefaults.TurnGAgentKind)]
 public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
 {
+    internal static readonly TimeSpan RecoveryCredentialRetention = TimeSpan.FromMinutes(30);
+    private static readonly TimeSpan RecoveryCredentialRenewalRetryDelay = TimeSpan.FromSeconds(30);
     private const int DeliveredOperationHistoryLimit = 32;
     internal static readonly TimeSpan OperationCompletionWatchdogMargin = TimeSpan.FromSeconds(30);
     internal static readonly TimeSpan OperationResultDeliveryWatchdogDelay = TimeSpan.FromSeconds(30);
@@ -37,12 +43,23 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
     private readonly IActorDispatchPort _actorDispatchPort;
     private readonly TimeSpan _operationCompletionWatchdogDelay;
     private readonly TimeProvider _timeProvider;
+    private readonly ISecretVault? _secretVault;
 
     public NyxIdChatTurnGAgent(
         INyxIdChatTurnOperationDispatchPort operationDispatchPort,
         IActorDispatchPort actorDispatchPort,
         NyxIdToolOptions nyxIdToolOptions,
         TimeProvider timeProvider)
+        : this(operationDispatchPort, actorDispatchPort, nyxIdToolOptions, timeProvider, null)
+    {
+    }
+
+    public NyxIdChatTurnGAgent(
+        INyxIdChatTurnOperationDispatchPort operationDispatchPort,
+        IActorDispatchPort actorDispatchPort,
+        NyxIdToolOptions nyxIdToolOptions,
+        TimeProvider timeProvider,
+        ISecretVault? secretVault)
     {
         ArgumentNullException.ThrowIfNull(operationDispatchPort);
         _operationDispatchSession = operationDispatchPort.OpenSession() ??
@@ -53,6 +70,7 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
         _operationCompletionWatchdogDelay =
             nyxIdToolOptions.EffectiveMaxRequestDuration + OperationCompletionWatchdogMargin;
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
+        _secretVault = secretVault;
     }
 
     protected override NyxIdChatTurnGAgentState TransitionState(
@@ -82,8 +100,22 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
             }, ct);
         }
 
+        if (State.AdmittedOperation is not null && State.RecoveryCredential is not null &&
+            (!State.ResultDelivered ||
+             State.Phase == NyxIdChatOperationPhase.Uncertain && EffectMayHaveChanged(State) ||
+             AwaitingFrozenVerification(State)))
+        {
+            await ScheduleRecoveryCredentialRenewalAsync(
+                State.AdmittedOperation,
+                State.RecoveryCredential,
+                ct);
+        }
+
         if (State.AdmittedOperation is null || State.ResultDelivered)
             return;
+
+        if (State.CompletedAt is not null && IsTerminal(State.Phase))
+            await RevokeRecoveryCredentialAsync(State.RecoveryCredential, ct);
 
         var version = CurrentCommittedVersion();
         var signal = new NyxIdChatRecoveryRequestedSignal
@@ -138,7 +170,7 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
         ArgumentNullException.ThrowIfNull(command);
         if (!IsValid(command) ||
             !MatchesPlanGateAdmission(command) ||
-            IsDuplicateOrUnavailable(command.Key))
+            IsDuplicateOrUnavailable(command))
             return;
 
         var kind = ResolveKind(command);
@@ -149,7 +181,9 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
         var idempotent = command.Tool?.Idempotent == true;
         var idempotencyKey = ResolveIdempotencyKey(command);
         var operationAdmission = ResolveOperationAdmission(command);
-        await PersistDomainEventAsync(new NyxIdChatTurnOperationAdmittedEvent
+        await HydrateFrozenVerificationContextAsync(command);
+        var recovery = await PrepareRecoveryAdmissionAsync(command, operationAdmission);
+        var admitted = new NyxIdChatTurnOperationAdmittedEvent
         {
             Key = command.Key.Clone(),
             OperationKind = kind,
@@ -160,9 +194,25 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
             Idempotent = idempotent,
             IdempotencyKey = idempotencyKey,
             OperationAdmission = operationAdmission?.Clone(),
+            RecoveryEffectStepId = recovery.EffectStepId,
             ConsumesPlanGateAdmission = command.PlanGateContinuation is not null,
             AdmittedAt = admittedAt,
-        }, CancellationToken.None);
+        };
+        if (recovery.Context is not null)
+            admitted.RecoveryContext = recovery.Context;
+        if (recovery.Credential is not null)
+            admitted.RecoveryCredential = recovery.Credential;
+        if (recovery.ReadBack is not null)
+            admitted.RecoveryReadBack = recovery.ReadBack;
+        await PersistDomainEventAsync(admitted, CancellationToken.None);
+
+        if (State.RecoveryCredential is not null)
+        {
+            await ScheduleRecoveryCredentialRenewalAsync(
+                command.Key,
+                State.RecoveryCredential,
+                CancellationToken.None);
+        }
 
         if (NyxIdChatTurnOperationDispatchPort.MayDispatchExternalEffect(command))
         {
@@ -225,6 +275,22 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
             CancellationToken.None);
     }
 
+    [EventHandler]
+    public async Task HandleOperationCancelAsync(NyxIdChatTurnOperationCancelCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (command.Key is null ||
+            State.AdmittedOperation is null ||
+            State.ResultDelivered ||
+            IsTerminal(State.Phase) ||
+            !KeysEqual(State.AdmittedOperation, command.Key))
+        {
+            return;
+        }
+
+        await _operationDispatchSession.CancelExecutionAsync(command.Key, CancellationToken.None);
+    }
+
     [EventHandler(AllowSelfHandling = true)]
     public async Task HandleOperationExecutionCompletedAsync(
         NyxIdChatTurnOperationExecutionCompletedSignal signal)
@@ -265,7 +331,10 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
         }
 
         var completedUndelivered = State.CompletedAt is not null && IsTerminal(State.Phase);
-        if (!completedUndelivered && EffectMayHaveChanged(State))
+        if (!completedUndelivered &&
+            (EffectMayHaveChanged(State) ||
+             State.OperationKind == NyxIdChatStepKind.Postcondition &&
+             State.RecoveryReadBack is not null))
         {
             if (State.ReconciliationStartedAt is not null)
             {
@@ -288,7 +357,11 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
                         OperationAdmission = State.OperationAdmission?.Clone(),
                         IdempotencyKey = State.IdempotencyKey,
                         EffectDispatchWaterline = State.EffectDispatchWaterline,
-                        ReadBack = State.OperationAdmission?.ReadBack?.Clone(),
+                        ReadBack = State.RecoveryReadBack?.Clone(),
+                        ProviderResourceId = State.ProviderResourceId,
+                        RecoveryContext = State.RecoveryContext?.Clone(),
+                        RecoveryCredential = State.RecoveryCredential?.Clone(),
+                        EffectStepId = State.RecoveryEffectStepId,
                     },
                     ActiveInboundEnvelope?.Propagation?.CorrelationId ?? signal.Key.OperationId,
                     CancellationToken.None);
@@ -330,6 +403,70 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
         await CompleteAndDeliverAsync(result);
     }
 
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+    public async Task HandleRecoveryCredentialRenewalRequestedAsync(
+        NyxIdChatRecoveryCredentialRenewalRequested signal)
+    {
+        ArgumentNullException.ThrowIfNull(signal);
+        if (_secretVault is null ||
+            signal.Key is null ||
+            State.AdmittedOperation is null ||
+            State.RecoveryCredential is null ||
+            !KeysEqual(State.AdmittedOperation, signal.Key) ||
+            !string.Equals(
+                State.RecoveryCredential.Ref,
+                signal.CredentialRef,
+                StringComparison.Ordinal) ||
+            State.ResultDelivered &&
+            !(State.Phase == NyxIdChatOperationPhase.Uncertain && EffectMayHaveChanged(State)) &&
+            !AwaitingFrozenVerification(State))
+        {
+            return;
+        }
+
+        var credential = State.RecoveryCredential.Clone();
+        var resolved = await _secretVault.ResolveAsync(new ResolveSecretRequest(
+            credential.Ref,
+            CredentialSecretPurposes.NyxIdChatRecoveryCredential,
+            credential.OwnerScopeKey,
+            credential.SubjectId,
+            "renew nyxid chat recovery credential"), CancellationToken.None);
+        if (!resolved.Resolved || !TryParseRecoveryCredentials(resolved.Secret, out var credentials) ||
+            credentials.NyxIdCredentialKind != AgentToolNyxIdCredentialKindPayload.ProxyDelegation)
+        {
+            return;
+        }
+
+        var renewal = await Services.GetRequiredService<INyxIdChatDelegationCredentialLifecyclePort>()
+            .ResolveAsync(credentials.NyxIdAccessToken, CancellationToken.None);
+        if (renewal.Succeeded && !string.IsNullOrWhiteSpace(renewal.AccessToken))
+        {
+            credentials.NyxIdAccessToken = renewal.AccessToken;
+            if (renewal.Refreshed)
+            {
+                await _secretVault.RotateAsync(new RotateSecretRequest(
+                    credential.Ref,
+                    CredentialSecretPurposes.NyxIdChatRecoveryCredential,
+                    credential.OwnerScopeKey,
+                    credential.SubjectId,
+                    Convert.ToBase64String(credentials.ToByteArray()),
+                    "rotate renewed nyxid chat recovery credential"), CancellationToken.None);
+            }
+
+            await ScheduleRecoveryCredentialRenewalAsync(
+                signal.Key,
+                credential,
+                CancellationToken.None);
+            return;
+        }
+
+        await ScheduleSelfDurableTimeoutAsync(
+            $"{signal.Key.OperationId}:recovery-credential-renewal-retry:{_timeProvider.GetUtcNow().ToUnixTimeMilliseconds()}",
+            RecoveryCredentialRenewalRetryDelay,
+            signal.Clone(),
+            ct: CancellationToken.None);
+    }
+
     private Task ScheduleOperationCompletionWatchdogAsync(NyxIdChatOperationKey key)
     {
         var version = CurrentCommittedVersion();
@@ -354,6 +491,62 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
                 },
             },
             CancellationToken.None);
+    }
+
+    private async Task ScheduleRecoveryCredentialRenewalAsync(
+        NyxIdChatOperationKey key,
+        DurableCallerCredentialRef credential,
+        CancellationToken ct)
+    {
+        if (_secretVault is null)
+            return;
+
+        var resolved = await _secretVault.ResolveAsync(new ResolveSecretRequest(
+            credential.Ref,
+            CredentialSecretPurposes.NyxIdChatRecoveryCredential,
+            credential.OwnerScopeKey,
+            credential.SubjectId,
+            "schedule nyxid chat recovery credential renewal"), ct);
+        if (!resolved.Resolved ||
+            !TryParseRecoveryCredentials(resolved.Secret, out var credentials) ||
+            credentials.NyxIdCredentialKind != AgentToolNyxIdCredentialKindPayload.ProxyDelegation ||
+            !NyxIdDelegationTokenClaims.TryReadExpiry(
+                credentials.NyxIdAccessToken,
+                out var expiresAt))
+        {
+            return;
+        }
+
+        var due = expiresAt - _timeProvider.GetUtcNow() -
+                  NyxIdChatDelegationCredentialLifecyclePort.RefreshWindow;
+        if (due <= TimeSpan.Zero)
+            due = TimeSpan.FromMilliseconds(1);
+        await ScheduleSelfDurableTimeoutAsync(
+            $"{key.OperationId}:recovery-credential-renewal:{expiresAt.ToUnixTimeSeconds()}",
+            due,
+            new NyxIdChatRecoveryCredentialRenewalRequested
+            {
+                Key = key.Clone(),
+                CredentialRef = credential.Ref,
+            },
+            ct: ct);
+    }
+
+    private static bool TryParseRecoveryCredentials(
+        string? encoded,
+        out AgentToolCredentialsPayload credentials)
+    {
+        try
+        {
+            credentials = AgentToolCredentialsPayload.Parser.ParseFrom(
+                Convert.FromBase64String(encoded ?? string.Empty));
+            return true;
+        }
+        catch (Exception exception) when (exception is FormatException or InvalidProtocolBufferException)
+        {
+            credentials = new AgentToolCredentialsPayload();
+            return false;
+        }
     }
 
     private Task ScheduleOperationResultDeliveryWatchdogAsync(NyxIdChatOperationKey key)
@@ -394,8 +587,9 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
         },
     };
 
-    private bool IsDuplicateOrUnavailable(NyxIdChatOperationKey key)
+    private bool IsDuplicateOrUnavailable(NyxIdChatOperationDispatchCommand command)
     {
+        var key = command.Key;
         if (State.DeliveredOperations.Any(delivered => KeysEqual(delivered, key)))
             return true;
 
@@ -409,9 +603,35 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
             return true;
 
         if (State.Phase == NyxIdChatOperationPhase.Uncertain && EffectMayHaveChanged(State))
-            return true;
+            return !IsFrozenUncertainEffectVerification(command);
 
         return !SameTurn(State.AdmittedOperation, key);
+    }
+
+    private bool IsFrozenUncertainEffectVerification(NyxIdChatOperationDispatchCommand command)
+    {
+        var verification = command.ToolVerification;
+        return verification is not null &&
+               State.ResultDelivered &&
+               State.RecoveryContext is not null &&
+               State.RecoveryCredential is not null &&
+               State.RecoveryReadBack is not null &&
+               NyxIdChatOperationAdmissionPolicy.IsValidReadBack(State.RecoveryReadBack) &&
+               verification.ReadBack is not null &&
+               verification.ReadBack.Equals(State.RecoveryReadBack) &&
+               string.Equals(
+                   verification.EffectStepId,
+                   State.RecoveryEffectStepId,
+                   StringComparison.Ordinal) &&
+               string.Equals(
+                   verification.ProviderResourceId,
+                   State.ProviderResourceId,
+                   StringComparison.Ordinal) &&
+               SameTask(State.AdmittedOperation!, command.Key) &&
+               !string.Equals(
+                   State.AdmittedOperation!.OperationId,
+                   command.Key.OperationId,
+                   StringComparison.Ordinal);
     }
 
     private async Task DispatchProgressAsync(
@@ -442,7 +662,18 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
             SafeMessage = completion.SafeMessage,
             ExternalEffect = completion.ExternalEffect,
             CompletedAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
+            ProviderResourceId = result.Tool?.Receipt?.ProviderResourceId ?? string.Empty,
         }, CancellationToken.None);
+        var awaitsVerification = result.Tool?.Receipt?.Status == AgentToolReceiptStatus.Success &&
+                                 State.RecoveryCredential is not null &&
+                                 NyxIdChatOperationAdmissionPolicy.IsValidReadBack(
+                                     State.RecoveryReadBack);
+        if (!awaitsVerification &&
+            (completion.Phase != NyxIdChatOperationPhase.Uncertain ||
+             completion.ExternalEffect != NyxIdChatEffectEvidence.MayHaveChanged))
+        {
+            await RevokeRecoveryCredentialAsync(State.RecoveryCredential, CancellationToken.None);
+        }
         await ScheduleOperationResultDeliveryWatchdogAsync(result.Key);
         await DispatchResultAsync(result.Key.ConversationActorId, result);
         await PersistDomainEventAsync(new NyxIdChatTurnOperationDeliveredEvent
@@ -451,6 +682,44 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
             DeliveredAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
         }, CancellationToken.None);
     }
+
+    private async Task HydrateFrozenVerificationContextAsync(
+        NyxIdChatOperationDispatchCommand command)
+    {
+        if (command.ToolVerification is null ||
+            command.ToolVerification.ToolContext is not null ||
+            _secretVault is null ||
+            State.RecoveryContext is null ||
+            State.RecoveryCredential is null)
+        {
+            return;
+        }
+
+        var credential = State.RecoveryCredential;
+        var resolved = await _secretVault.ResolveAsync(new ResolveSecretRequest(
+            credential.Ref,
+            CredentialSecretPurposes.NyxIdChatRecoveryCredential,
+            credential.OwnerScopeKey,
+            credential.SubjectId,
+            "execute frozen nyxid chat effect verification"), CancellationToken.None);
+        if (!resolved.Resolved || !TryParseRecoveryCredentials(resolved.Secret, out var credentials))
+            return;
+
+        var credentialContext = AgentToolExecutionContextMapper.FromPayload(
+            new AgentToolExecutionContextPayload { Credentials = credentials });
+        var context = AgentToolExecutionContextMapper.FromRecoveryPayload(State.RecoveryContext) with
+        {
+            Credentials = credentialContext.Credentials,
+        };
+        command.ToolVerification.ToolContext = context.ToPayload();
+    }
+
+    private static bool AwaitingFrozenVerification(NyxIdChatTurnGAgentState state) =>
+        state.ResultDelivered &&
+        state.Phase == NyxIdChatOperationPhase.Succeeded &&
+        state.ExternalEffect == NyxIdChatEffectEvidence.Confirmed &&
+        state.RecoveryCredential is not null &&
+        NyxIdChatOperationAdmissionPolicy.IsValidReadBack(state.RecoveryReadBack);
 
     private async Task DispatchResultAsync(
         string conversationActorId,
@@ -462,6 +731,35 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
             result);
         await _actorDispatchPort
             .DispatchAsync(conversationActorId, envelope, CancellationToken.None);
+    }
+
+    private async Task RevokeRecoveryCredentialAsync(
+        DurableCallerCredentialRef? credential,
+        CancellationToken ct)
+    {
+        if (_secretVault is null || credential is null)
+            return;
+        try
+        {
+            await _secretVault.RevokeAsync(new RevokeSecretRequest(
+                credential.Ref,
+                CredentialSecretPurposes.NyxIdChatRecoveryCredential,
+                credential.OwnerScopeKey,
+                credential.SubjectId,
+                "nyxid chat operation reached terminal state"), ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            Logger.LogWarning(
+                exception,
+                "NyxIdChat terminal recovery credential revocation failed: turnActor={TurnActorId} operation={OperationId}",
+                Id,
+                State.AdmittedOperation?.OperationId);
+        }
     }
 
     private EventEnvelope CreateDirectEnvelope(string actorId, string envelopeId, IMessage payload) =>
@@ -549,6 +847,28 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
                     : NyxIdChatEffectEvidence.NotApplied);
         }
 
+        if (result.ToolVerification is not null)
+        {
+            return result.ToolVerification.Disposition switch
+            {
+                NyxIdChatToolVerificationDisposition.Applied => new OperationCompletion(
+                    NyxIdChatOperationPhase.Succeeded,
+                    result.ToolVerification.FailureCode,
+                    result.ToolVerification.SafeMessage,
+                    NyxIdChatEffectEvidence.Confirmed),
+                NyxIdChatToolVerificationDisposition.NotApplied => new OperationCompletion(
+                    NyxIdChatOperationPhase.Succeeded,
+                    result.ToolVerification.FailureCode,
+                    result.ToolVerification.SafeMessage,
+                    NyxIdChatEffectEvidence.NotApplied),
+                _ => new OperationCompletion(
+                    NyxIdChatOperationPhase.Uncertain,
+                    result.ToolVerification.FailureCode,
+                    result.ToolVerification.SafeMessage,
+                    NyxIdChatEffectEvidence.MayHaveChanged),
+            };
+        }
+
         return result.Llm is not null
             ? new OperationCompletion(
                 NyxIdChatOperationPhase.Succeeded,
@@ -579,6 +899,11 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
         next.Idempotent = evt.Idempotent;
         next.IdempotencyKey = evt.IdempotencyKey;
         next.OperationAdmission = evt.OperationAdmission?.Clone();
+        next.ProviderResourceId = string.Empty;
+        next.RecoveryContext = evt.RecoveryContext?.Clone();
+        next.RecoveryCredential = evt.RecoveryCredential?.Clone();
+        next.RecoveryReadBack = evt.RecoveryReadBack?.Clone();
+        next.RecoveryEffectStepId = evt.RecoveryEffectStepId;
         if (evt.ConsumesPlanGateAdmission)
             next.PlanGateAdmission = null;
         next.ReconciliationStartedAt = null;
@@ -660,6 +985,7 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
         next.TerminalCode = evt.TerminalCode;
         next.SafeMessage = evt.SafeMessage;
         next.ExternalEffect = evt.ExternalEffect;
+        next.ProviderResourceId = evt.ProviderResourceId;
         next.CompletedAt = evt.CompletedAt?.Clone();
         return next;
     }
@@ -774,11 +1100,99 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
         command.PlanGateContinuation?.IdempotencyKey ??
         string.Empty;
 
+    private async Task<RecoveryAdmission> PrepareRecoveryAdmissionAsync(
+        NyxIdChatOperationDispatchCommand command,
+        Aevatar.AI.Abstractions.ToolProviders.AgentToolOperationAdmissionPayload? operationAdmission)
+    {
+        var readBack = command.ToolVerification?.ReadBack?.Clone() ??
+                       operationAdmission?.ReadBack?.Clone();
+        var effectStepId = command.ToolVerification?.EffectStepId ?? command.Key.StepId;
+        if (!NyxIdChatOperationAdmissionPolicy.IsValidReadBack(readBack))
+            return new RecoveryAdmission(null, null, null, effectStepId);
+
+        if (command.ToolVerification is not null &&
+            State.RecoveryContext is not null &&
+            State.RecoveryCredential is not null)
+        {
+            return new RecoveryAdmission(
+                State.RecoveryContext.Clone(),
+                State.RecoveryCredential.Clone(),
+                readBack,
+                effectStepId);
+        }
+
+        var toolContext = command.Tool?.ToolContext ??
+                          command.ToolApprovalContinuation?.ToolContext ??
+                          command.PlanGateContinuation?.ToolContext;
+        if (_secretVault is null || toolContext?.Credentials is null)
+            return new RecoveryAdmission(null, null, readBack, effectStepId);
+
+        var context = Aevatar.AI.Abstractions.ToolProviders.AgentToolExecutionContextMapper
+            .FromPayload(toolContext);
+        var ownerSubject = context.Caller.OwnerSubject?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(ownerSubject) || !HasCredential(toolContext.Credentials))
+            return new RecoveryAdmission(
+                AgentToolExecutionContextMapper.ToRecoveryPayload(context),
+                null,
+                readBack,
+                effectStepId);
+
+        var ownerScopeKey = $"nyxid-chat:{command.Key.ConversationActorId}";
+        try
+        {
+            var stored = await _secretVault.PutAsync(new StoreSecretRequest(
+                CredentialSecretPurposes.NyxIdChatRecoveryCredential,
+                ownerScopeKey,
+                ownerSubject,
+                Convert.ToBase64String(toolContext.Credentials.ToByteArray()),
+                "nyxid chat effect read-back recovery",
+                _timeProvider.GetUtcNow() + RecoveryCredentialRetention));
+            return new RecoveryAdmission(
+                AgentToolExecutionContextMapper.ToRecoveryPayload(context),
+                new DurableCallerCredentialRef
+                {
+                    Ref = stored.Reference.Ref,
+                    Purpose = CredentialSecretPurposes.NyxIdChatRecoveryCredential,
+                    OwnerScopeKey = ownerScopeKey,
+                    SubjectId = ownerSubject,
+                    SourceKind = DurableCallerCredentialSourceKind.NyxIdChat,
+                },
+                readBack,
+                effectStepId);
+        }
+        catch (Exception exception)
+        {
+            Logger.LogWarning(
+                exception,
+                "NyxIdChat recovery credential storage failed: turnActor={TurnActorId} operation={OperationId}",
+                Id,
+                command.Key.OperationId);
+            return new RecoveryAdmission(
+                AgentToolExecutionContextMapper.ToRecoveryPayload(context),
+                null,
+                readBack,
+                effectStepId);
+        }
+    }
+
+    private static bool HasCredential(Aevatar.AI.Abstractions.AgentToolCredentialsPayload credentials) =>
+        !string.IsNullOrWhiteSpace(credentials.NyxIdAccessToken) ||
+        !string.IsNullOrWhiteSpace(credentials.NyxIdOrgToken) ||
+        !string.IsNullOrWhiteSpace(credentials.SenderNyxIdAccessToken) ||
+        !string.IsNullOrWhiteSpace(credentials.SourceReadableNyxIdAccessToken);
+
+    private sealed record RecoveryAdmission(
+        Aevatar.AI.Abstractions.AgentToolRecoveryContextPayload? Context,
+        DurableCallerCredentialRef? Credential,
+        Aevatar.AI.Abstractions.ToolProviders.AgentToolOperationReadBackPayload? ReadBack,
+        string EffectStepId);
+
     private static Aevatar.AI.Abstractions.ToolProviders.AgentToolOperationAdmissionPayload?
         ResolveOperationAdmission(NyxIdChatOperationDispatchCommand command) =>
         command.Tool?.OperationAdmission ??
         command.ToolApprovalContinuation?.OperationAdmission ??
-        command.PlanGateContinuation?.OperationAdmission;
+        command.PlanGateContinuation?.OperationAdmission ??
+        command.ToolVerification?.ReadBack?.ReadOperation;
 
     private static NyxIdChatStepKind ResolveKind(NyxIdChatOperationDispatchCommand command) =>
         command.InputCase switch
@@ -791,6 +1205,8 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
             NyxIdChatOperationDispatchCommand.InputOneofCase.PlanGateContinuation =>
                 NyxIdChatStepKind.Tool,
             NyxIdChatOperationDispatchCommand.InputOneofCase.ActionPostcondition =>
+                NyxIdChatStepKind.Postcondition,
+            NyxIdChatOperationDispatchCommand.InputOneofCase.ToolVerification =>
                 NyxIdChatStepKind.Postcondition,
             _ => NyxIdChatStepKind.Unspecified,
         };

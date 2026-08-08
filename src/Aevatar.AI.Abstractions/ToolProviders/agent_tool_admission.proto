@@ -147,6 +147,11 @@ enum AgentToolReadBackMatchPayload {
   AGENT_TOOL_READ_BACK_MATCH_PAYLOAD_ARRAY_CONTAINS_EQUALS = 4;
 }
 
+enum AgentToolReadBackExpectedValueSourcePayload {
+  AGENT_TOOL_READ_BACK_EXPECTED_VALUE_SOURCE_PAYLOAD_FROZEN_VALUE = 0;
+  AGENT_TOOL_READ_BACK_EXPECTED_VALUE_SOURCE_PAYLOAD_PROVIDER_RESOURCE_ID = 1;
+}
+
 message AgentToolReadBackAssertionPayload {
   AgentToolReadBackMatchPayload match = 1;
   // RFC 6901 pointer within the bounded read projection's data member.
@@ -154,6 +159,7 @@ message AgentToolReadBackAssertionPayload {
   google.protobuf.Value expected_value = 3;
   // RFC 6901 pointer within each array element for ARRAY_CONTAINS_EQUALS.
   string element_json_pointer = 4;
+  AgentToolReadBackExpectedValueSourcePayload expected_value_source = 5;
 }
 
 // Server-sealed read-back contract for proving whether an effect was applied.

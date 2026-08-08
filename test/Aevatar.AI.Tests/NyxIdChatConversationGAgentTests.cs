@@ -18,6 +18,8 @@ using Aevatar.Audit.Abstractions.Models;
 using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
@@ -93,6 +95,94 @@ public sealed class NyxIdChatConversationGAgentTests
         var recovered = CreateController(services, actorId);
         await recovered.ActivateAsync();
         recovered.State.OwnerSubject.Should().Be("owner-alpha");
+    }
+
+    [Fact]
+    public async Task CreateConversation_HistoryInitializationFailure_ShouldResumeFirstTurnOnceAfterRetry()
+    {
+        const string actorId = "nyxid-chat-first-turn-retry";
+        var operations = new List<string>();
+        var eventStore = new InMemoryEventStoreForTests();
+        var history = new RecordingChatHistoryCommandPort(operations)
+        {
+            InitializeException = new InvalidOperationException("history unavailable"),
+        };
+        var runtime = new RecordingActorRuntime(operations);
+        var dispatch = new RecordingActorDispatchPort(
+            operations,
+            static (_, _) => Task.CompletedTask);
+        using var services = BuildEventSourcingServices(eventStore, history);
+        var agent = new NyxIdChatConversationGAgent(
+            runtime,
+            dispatch,
+            new FixedTimeProvider(new DateTimeOffset(2026, 8, 8, 8, 0, 0, TimeSpan.Zero)))
+        {
+            Services = services,
+            EventSourcingBehaviorFactory = services.GetRequiredService<
+                IEventSourcingBehaviorFactory<NyxIdChatConversationGAgentState>>(),
+        };
+        AssignActorId(agent, actorId);
+        await agent.ActivateAsync();
+        var firstTurn = WithOwner(CreateStartTurnCommand(), "owner-alpha");
+        firstTurn.ConversationActorId = actorId;
+        var create = new NyxIdChatConversationCreateCommand
+        {
+            ScopeId = "scope-alpha",
+            CreatedLocally = true,
+            RequestedActorId = actorId,
+            FirstTurn = firstTurn,
+        };
+
+        await agent.HandleCreateConversationAsync(create);
+        var initialHistorySignal = dispatch.Calls
+            .Last(call => call.Envelope.Payload.Is(
+                NyxIdChatHistoryInitializationDispatchRequested.Descriptor))
+            .Envelope.Payload
+            .Unpack<NyxIdChatHistoryInitializationDispatchRequested>();
+        await agent.HandleHistoryInitializationDispatchRequestedAsync(initialHistorySignal);
+
+        agent.State.ActiveTurn.Should().BeNull();
+        agent.State.PendingHistoryInitialization.Should().NotBeNull();
+        agent.State.PendingCreationFirstTurn.Should().NotBeNull();
+        agent.State.ToString().Should().NotContain("runtime-token-alpha");
+        history.Reservations.Should().BeEmpty();
+        dispatch.OperationCalls.Should().BeEmpty();
+
+        history.InitializeException = null;
+        var pending = agent.State.PendingHistoryInitialization.Clone();
+        await agent.HandleHistoryInitializationDispatchRequestedAsync(
+            new NyxIdChatHistoryInitializationDispatchRequested
+            {
+                OperationId = pending.OperationId,
+                Attempt = pending.Attempt,
+            });
+        await DispatchPendingCreationFirstTurnAsync(agent, dispatch);
+
+        operations.Should().Equal(
+            "dispatch",
+            "history.initialize",
+            "history.initialize",
+            "dispatch",
+            "history.reserve",
+            "create",
+            "link",
+            "dispatch");
+        agent.State.ActiveTurn.TurnId.Should().Be("turn-alpha");
+        agent.State.PendingHistoryInitialization.Should().BeNull();
+        agent.State.PendingCreationFirstTurn.Should().BeNull();
+        history.Reservations.Should().ContainSingle();
+        dispatch.OperationCalls.Should().ContainSingle();
+
+        await agent.HandleHistoryInitializationDispatchRequestedAsync(
+            new NyxIdChatHistoryInitializationDispatchRequested
+            {
+                OperationId = pending.OperationId,
+                Attempt = pending.Attempt,
+            });
+        await agent.HandleCreateConversationAsync(create.Clone());
+
+        history.Reservations.Should().ContainSingle();
+        dispatch.OperationCalls.Should().ContainSingle();
     }
 
     [Fact]
@@ -586,6 +676,7 @@ public sealed class NyxIdChatConversationGAgentTests
                 AgentProfile = profile,
                 FirstTurn = WithOwner(CreateStartTurnCommand(), "owner-alpha"),
             }));
+        await DispatchPendingCreationFirstTurnAsync(agent, dispatch);
 
         agent.State.ActiveTurn.AgentProfileTurnAuthority.Should().NotBeNull();
         agent.State.ActiveTurn.AgentProfileTurnAuthority.ReconciliationKey.SessionId
@@ -634,6 +725,7 @@ public sealed class NyxIdChatConversationGAgentTests
                 AgentProfile = profile,
                 FirstTurn = start,
             }));
+        await DispatchPendingCreationFirstTurnAsync(agent, dispatch);
 
         agent.State.AgentProfile.Should().BeEquivalentTo(profile);
         agent.State.ActiveTurn.AgentProfileTurnAuthority.Should().BeNull();
@@ -734,6 +826,7 @@ public sealed class NyxIdChatConversationGAgentTests
                 AgentProfile = profile,
                 FirstTurn = start,
             }));
+        await DispatchPendingCreationFirstTurnAsync(agent, dispatch);
 
         var provider = new ServiceConnectToolCallProvider();
         var generationExecutor = new AgentRunReplyGenerationExecutor(
@@ -867,6 +960,7 @@ public sealed class NyxIdChatConversationGAgentTests
                 RequestedActorId = conversationActorId,
                 FirstTurn = start,
             }));
+        await DispatchPendingCreationFirstTurnAsync(agent, dispatch);
 
         var replyGenerator = new NyxIdConversationReplyGenerator(
             provider,
@@ -2739,6 +2833,38 @@ public sealed class NyxIdChatConversationGAgentTests
     }
 
     [Fact]
+    public async Task ProgressQueuedBeforeStopButDeliveredAfterFence_ShouldNotCommit()
+    {
+        const string actorId = "conversation-late-progress";
+        var eventStore = new InMemoryEventStoreForTests();
+        using var services = BuildEventSourcingServices(eventStore);
+        var agent = CreateController(services, actorId);
+        await agent.ActivateAsync();
+        var start = CreateStartTurnCommand();
+        start.ConversationActorId = actorId;
+        await agent.HandleEventAsync(CreateEnvelope(actorId, start));
+        var key = agent.State.ActiveTask.Steps.Single().Operation.Key.Clone();
+        var version = (await eventStore.GetEventsAsync(actorId))[^1].Version;
+
+        var stop = CreateStopCommand(version);
+        stop.ConversationActorId = actorId;
+        await agent.HandleEventAsync(CreateEnvelope(actorId, stop));
+        var afterFence = await eventStore.GetEventsAsync(actorId);
+        var stoppedProgressSequence = agent.State.ProgressSequence;
+
+        await agent.HandleOperationProgressAsync(new NyxIdChatOperationProgressSignal
+        {
+            Key = key,
+            Sequence = 1,
+            Text = new NyxIdChatTextProgress { Delta = "must-not-commit" },
+        });
+
+        (await eventStore.GetEventsAsync(actorId)).Should().HaveCount(afterFence.Count);
+        agent.State.ProgressSequence.Should().Be(stoppedProgressSequence);
+        agent.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Stopped);
+    }
+
+    [Fact]
     public async Task ChildPhaseProgress_ShouldCommitPresentationOnlySubstepsAndSubstepFrames()
     {
         const string actorId = "conversation-phase-alpha";
@@ -3556,7 +3682,7 @@ public sealed class NyxIdChatConversationGAgentTests
         agent.State.ActiveTurn.TurnId.Should().Be("turn-alpha",
             "the continuation must not advance inline in the steering actor turn");
         agent.State.ContinuationAdmission.Status.Should().Be(
-            NyxIdChatContinuationAdmissionStatus.AcceptedForLater);
+            NyxIdChatContinuationAdmissionStatus.Accepted);
         dispatch.StartTurnCalls.Should().ContainSingle();
         var selfDispatch = dispatch.StartTurnCalls.Single();
         selfDispatch.ActorId.Should().Be(conversationActorId);
@@ -4776,6 +4902,9 @@ public sealed class NyxIdChatConversationGAgentTests
             .AddSingleton<IAuditActorIdentityHasher, StableIdentityHasher>()
             .AddSingleton<IAgentToolAdmissionLedger>(AlwaysStartingAgentToolAdmissionLedger.Instance)
             .AddSingleton<IAgentToolExecutionPort, AdmittedAgentToolExecutor>()
+            .AddSingleton<ISecretVault>(new InMemorySecretVault(
+                new FixedTimeProvider(
+                    new DateTimeOffset(2020, 1, 1, 0, 0, 0, TimeSpan.Zero))))
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
         if (historyCommandPort is not null)
             services.AddSingleton(historyCommandPort);
@@ -5274,6 +5403,28 @@ public sealed class NyxIdChatConversationGAgentTests
         public Task UnlinkAsync(string childId, CancellationToken ct = default) => Task.CompletedTask;
     }
 
+    private static async Task DispatchPendingCreationFirstTurnAsync(
+        NyxIdChatConversationGAgent agent,
+        RecordingActorDispatchPort dispatch)
+    {
+        if (agent.State.PendingHistoryInitialization is not null)
+        {
+            var historySignal = dispatch.Calls
+                .Last(call => call.Envelope.Payload.Is(
+                    NyxIdChatHistoryInitializationDispatchRequested.Descriptor))
+                .Envelope.Payload
+                .Unpack<NyxIdChatHistoryInitializationDispatchRequested>();
+            await agent.HandleHistoryInitializationDispatchRequestedAsync(historySignal);
+        }
+
+        var signal = dispatch.Calls
+            .Last(call => call.Envelope.Payload.Is(
+                NyxIdChatPendingCreationFirstTurnDispatchRequested.Descriptor))
+            .Envelope.Payload
+            .Unpack<NyxIdChatPendingCreationFirstTurnDispatchRequested>();
+        await agent.HandlePendingCreationFirstTurnDispatchRequestedAsync(signal);
+    }
+
     private sealed class RecordingActorDispatchPort(
         List<string> operations,
         Func<string, EventEnvelope, Task> onDispatch,
@@ -5321,17 +5472,29 @@ public sealed class NyxIdChatConversationGAgentTests
 
     private sealed class RecordingChatHistoryCommandPort(
         List<string> operations,
-        Func<ChatHistoryTurnDeliveryReservation, Task>? onReserve = null)
+        Func<ChatHistoryTurnDeliveryReservation, Task>? onReserve = null,
+        Func<ChatHistoryConversationInitialization, Task>? onInitialize = null)
         : IChatHistoryCommandPort
     {
+        public Exception? InitializeException { get; set; }
         public Exception? ReserveException { get; set; }
         public Exception? NotifyException { get; set; }
+        public List<ChatHistoryConversationInitialization> Initializations { get; } = [];
         public List<ChatHistoryTurnDeliveryReservation> Reservations { get; } = [];
         public List<ChatHistoryTurnTerminalNotification> Notifications { get; } = [];
 
-        public Task InitializeConversationAsync(
+        public async Task InitializeConversationAsync(
             ChatHistoryConversationInitialization request,
-            CancellationToken ct = default) => Task.CompletedTask;
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            operations.Add("history.initialize");
+            Initializations.Add(request);
+            if (InitializeException is not null)
+                throw InitializeException;
+            if (onInitialize is not null)
+                await onInitialize(request);
+        }
 
         public async Task ReserveTurnDeliveryAsync(
             ChatHistoryTurnDeliveryReservation request,

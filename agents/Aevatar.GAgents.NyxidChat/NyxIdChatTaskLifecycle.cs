@@ -121,6 +121,10 @@ public static class NyxIdChatTaskLifecycle
                 NyxIdChatOperationResultSignal.ResultOneofCase.Tool &&
             normalizedSignal.Tool.Receipt?.Status == AgentToolReceiptStatus.Success)
         {
+            BindProviderResourceIdentity(
+                next,
+                operationKey.StepId,
+                normalizedSignal.Tool.Receipt.ProviderResourceId);
             successor = ActivatePlannedVerificationStep(next, normalizedSignal.Key, now);
         }
         else if (currentStep.Kind == NyxIdChatStepKind.Tool &&
@@ -613,6 +617,7 @@ public static class NyxIdChatTaskLifecycle
                         EffectStepId = toolStep.StepId,
                         Check = readBack?.CheckName ?? "verification_unavailable",
                         ToolReadBack = readBack?.Clone(),
+                        ProviderResourceId = toolStep.Source?.Tool?.ProviderResourceId ?? string.Empty,
                     },
                 }
                 : new NyxIdChatStepSource { Llm = new NyxIdChatLLMStepSource() },
@@ -680,6 +685,7 @@ public static class NyxIdChatTaskLifecycle
             {
                 EffectStepId = completedToolKey.StepId,
                 ReadBack = step.Source.Postcondition.ToolReadBack.Clone(),
+                ProviderResourceId = step.Source.Postcondition.ProviderResourceId,
             };
         }
         else
@@ -687,6 +693,25 @@ public static class NyxIdChatTaskLifecycle
             command.Llm = new NyxIdChatLLMOperationInput { ContinueSession = true };
         }
         return command;
+    }
+
+    private static void BindProviderResourceIdentity(
+        NyxIdChatConversationGAgentState state,
+        string effectStepId,
+        string providerResourceId)
+    {
+        var effectStep = state.ActiveTask?.Steps.FirstOrDefault(step =>
+            string.Equals(step.StepId, effectStepId, StringComparison.Ordinal));
+        if (effectStep?.Source?.Tool is null)
+            return;
+
+        effectStep.Source.Tool.ProviderResourceId = providerResourceId?.Trim() ?? string.Empty;
+        var verification = state.ActiveTask!.Steps.FirstOrDefault(step =>
+            step.Kind == NyxIdChatStepKind.Postcondition &&
+            step.DependsOn.Count == 1 &&
+            string.Equals(step.DependsOn[0], effectStepId, StringComparison.Ordinal));
+        if (verification?.Source?.Postcondition is not null)
+            verification.Source.Postcondition.ProviderResourceId = effectStep.Source.Tool.ProviderResourceId;
     }
 
     private static NyxIdChatOperationDispatchCommand? ReplanFailureRecoveryVerificationStep(
@@ -723,6 +748,40 @@ public static class NyxIdChatTaskLifecycle
             [reconciliation],
             [planned]);
         return ActivatePlannedVerificationStep(state, effectKey, now);
+    }
+
+    internal static NyxIdChatOperationDispatchCommand? PlanFencedEffectVerification(
+        NyxIdChatConversationGAgentState state,
+        NyxIdChatOperationKey effectKey,
+        Timestamp now)
+    {
+        var effectStep = FindCurrentStep(state, effectKey);
+        var readBack = effectStep?.Source?.Tool?.OperationAdmission?.ReadBack;
+        if (effectStep is null ||
+            !NyxIdChatOperationAdmissionPolicy.IsValidReadBack(readBack))
+        {
+            return null;
+        }
+
+        var verification = BuildVerificationStep(state, effectStep, now, failureRecovery: true);
+        verification.Status = NyxIdChatStepStatus.Running;
+        verification.Operation.Phase = NyxIdChatOperationPhase.Requested;
+        state.ActiveTask.Steps.Add(verification);
+        NyxIdChatPlanRevisions.CommitChange(
+            state.ActiveTask,
+            NyxIdChatPlanRevisionCause.FailureRecovery,
+            now,
+            [verification]);
+        return new NyxIdChatOperationDispatchCommand
+        {
+            Key = verification.Operation.Key.Clone(),
+            ToolVerification = new NyxIdChatToolVerificationInput
+            {
+                EffectStepId = effectStep.StepId,
+                ReadBack = readBack!.Clone(),
+                ProviderResourceId = effectStep.Source.Tool.ProviderResourceId,
+            },
+        };
     }
 
     private static void ApplyVerificationEvidence(

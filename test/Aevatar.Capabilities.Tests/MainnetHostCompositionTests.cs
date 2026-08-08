@@ -1049,7 +1049,10 @@ public sealed class MainnetHostCompositionTests
     public void AddAevatarMainnetHost_ShouldShipConnectedServiceEffects()
     {
         using var home = new TemporaryAevatarHomeScope();
-        var builder = CreateBuilder();
+        var builder = CreateBuilder(new Dictionary<string, string?>
+        {
+            ["Aevatar:Web:NyxIdSearchSlug"] = "api-firecrawl",
+        });
 
         builder.AddAevatarMainnetHost(options =>
         {
@@ -1059,6 +1062,7 @@ public sealed class MainnetHostCompositionTests
 
         using var app = builder.Build();
         var options = app.Services.GetRequiredService<NyxIdToolOptions>();
+        app.Services.GetRequiredService<WebToolOptions>().NyxIdSearchSlug.Should().Be("tavily-search");
         options.EnableAssistantConnectedServiceEffects.Should().BeTrue();
         var readBack = options.AssistantOperationReadBackBindings.Should().ContainSingle().Subject;
         readBack.CatalogServiceSlug.Should().Be("api-lark-bot");
@@ -1068,7 +1072,8 @@ public sealed class MainnetHostCompositionTests
         readBack.ReadPathTemplate.Should().Be("/open-apis/im/v1/messages");
         readBack.Match.Should().Be(AgentToolReadBackMatch.ArrayContainsEquals);
         readBack.JsonPointer.Should().Be("/data/items");
-        readBack.ElementJsonPointer.Should().Be("/body/content");
+        readBack.ElementJsonPointer.Should().Be("/message_id");
+        readBack.EffectResultIdentityJsonPointer.Should().Be("/data/message_id");
         readBack.EffectArgumentConstraints.Should().ContainSingle();
         readBack.LiteralReadArguments.Should().HaveCount(2);
     }

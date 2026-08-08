@@ -90,6 +90,13 @@ public sealed class ProjectionNyxIdChatConversationStateQueryPortTests
         result.Snapshot.PendingActions.Should().ContainSingle().Which.Reports
             .Should().ContainSingle().Which.Resource!.UserServiceId.Should()
             .Be("user-service-alpha");
+        var actionRequest = result.Snapshot.PendingActions.Single().Request;
+        actionRequest.Should().NotBeNull();
+        actionRequest!.Params.CatalogService.Should().NotBeNull();
+        actionRequest.Params.CatalogService!.ServiceSlug.Should().Be("github");
+        actionRequest.Params.CatalogService.RequestedScopes.Should().Equal("repo:read");
+        result.Snapshot.RecentActions.Should().ContainSingle().Which.Request!
+            .ActionRequestId.Should().Be("action-recent");
         result.Snapshot.PendingInput.Should().NotBeNull();
         result.Snapshot.PendingInput!.RequestId.Should().Be("input-alpha");
         result.Snapshot.PendingInput.Options.Select(static option => option.Label).Should()
@@ -99,6 +106,14 @@ public sealed class ProjectionNyxIdChatConversationStateQueryPortTests
         result.Snapshot.TaskStatus.Should().Be("active");
         result.Snapshot.AttentionKind.Should().Be("input");
         result.Snapshot.ActiveStepSummary.Should().Be("Choose a deployment region.");
+        result.Snapshot.LatestStepControlResult.Should().NotBeNull();
+        result.Snapshot.LatestStepControlResult!.RequestId.Should().Be("retry-alpha");
+        result.Snapshot.LatestStepControlResult.Kind.Should().Be("retry");
+        result.Snapshot.LatestStepControlResult.StepId.Should().Be("step-alpha");
+        result.Snapshot.LatestStepControlResult.OperationGeneration.Should().Be(3);
+        result.Snapshot.LatestStepControlResult.ExpectedStateVersion.Should().Be(10);
+        result.Snapshot.RecentStepControlResults.Should().ContainSingle().Which.RequestId
+            .Should().Be("retry-alpha");
         reader.Keys.Should().ContainSingle("conversation-alpha");
     }
 
@@ -427,6 +442,24 @@ public sealed class ProjectionNyxIdChatConversationStateQueryPortTests
                 TaskId = "task-alpha",
                 StepId = "step-alpha",
                 Action = "service.connect",
+                Request = new NyxIdChatConversationActionRequestDocument
+                {
+                    SchemaVersion = 4,
+                    ActorId = "conversation-alpha",
+                    OriginTurnId = "turn-alpha",
+                    TaskId = "task-alpha",
+                    StepId = "step-alpha",
+                    ActionRequestId = "action-alpha",
+                    Action = "service.connect",
+                    Params = new NyxIdChatConversationActionParamsDocument
+                    {
+                        CatalogService = new NyxIdChatConversationCatalogServiceConnectDocument
+                        {
+                            ServiceSlug = "github",
+                            RequestedScopes = { "repo:read" },
+                        },
+                    },
+                },
                 Reports =
                 {
                     new NyxIdChatConversationActionReportDocument
@@ -437,6 +470,79 @@ public sealed class ProjectionNyxIdChatConversationStateQueryPortTests
                         Resource = new NyxIdChatConversationResourceDocument
                         {
                             UserServiceId = "user-service-alpha",
+                        },
+                    },
+                },
+            },
+        },
+        LatestStepControlResult = new NyxIdChatConversationStepControlResultDocument
+        {
+            Kind = "retry",
+            RequestId = "retry-alpha",
+            ClientRequestId = "client-retry-alpha",
+            TurnId = "turn-alpha",
+            TaskId = "task-alpha",
+            StepId = "step-alpha",
+            ExpectedOperationGeneration = 2,
+            OperationGeneration = 3,
+            Outcome = "accepted",
+            ReasonCode = "NYXID_CHAT_STEP_RETRY_ACCEPTED",
+            SafeMessage = "Retry accepted.",
+            CommandId = "command-retry-alpha",
+            CorrelationId = "correlation-retry-alpha",
+            CommittedAt = Timestamp.FromDateTimeOffset(
+                DateTimeOffset.Parse("2026-07-25T06:10:00Z")),
+            ExpectedStateVersion = 10,
+            ScopeId = "scope-alpha",
+            ConversationActorId = "conversation-alpha",
+        },
+        RecentStepControlResults =
+        {
+            new NyxIdChatConversationStepControlResultDocument
+            {
+                Kind = "retry",
+                RequestId = "retry-alpha",
+                ClientRequestId = "client-retry-alpha",
+                TurnId = "turn-alpha",
+                TaskId = "task-alpha",
+                StepId = "step-alpha",
+                ExpectedOperationGeneration = 2,
+                OperationGeneration = 3,
+                Outcome = "accepted",
+                ReasonCode = "NYXID_CHAT_STEP_RETRY_ACCEPTED",
+                SafeMessage = "Retry accepted.",
+                CommandId = "command-retry-alpha",
+                CorrelationId = "correlation-retry-alpha",
+                ExpectedStateVersion = 10,
+                ScopeId = "scope-alpha",
+                ConversationActorId = "conversation-alpha",
+            },
+        },
+        RecentActions =
+        {
+            new NyxIdChatConversationActionDocument
+            {
+                SchemaVersion = 4,
+                ActionRequestId = "action-recent",
+                OriginTurnId = "turn-alpha",
+                TaskId = "task-alpha",
+                StepId = "step-alpha",
+                Action = "service.connect",
+                Request = new NyxIdChatConversationActionRequestDocument
+                {
+                    SchemaVersion = 4,
+                    ActorId = "conversation-alpha",
+                    OriginTurnId = "turn-alpha",
+                    TaskId = "task-alpha",
+                    StepId = "step-alpha",
+                    ActionRequestId = "action-recent",
+                    Action = "service.connect",
+                    Params = new NyxIdChatConversationActionParamsDocument
+                    {
+                        CatalogService = new NyxIdChatConversationCatalogServiceConnectDocument
+                        {
+                            ServiceSlug = "github",
+                            RequestedScopes = { "repo:read" },
                         },
                     },
                 },

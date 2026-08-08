@@ -58,6 +58,7 @@ internal static class NyxIdChatConversationAguiFrameBuilder
         if (progressed.Progress is null || progressed.ProgressSequence <= 0)
             return [];
 
+        var frames = new List<AGUIEvent>();
         var frame = progressed.Progress.ProgressCase switch
         {
             NyxIdChatOperationProgressSignal.ProgressOneofCase.Text => new AGUIEvent
@@ -88,13 +89,19 @@ internal static class NyxIdChatConversationAguiFrameBuilder
                 },
             },
             NyxIdChatOperationProgressSignal.ProgressOneofCase.Phase => null,
+            NyxIdChatOperationProgressSignal.ProgressOneofCase.StreamingBatch => null,
             _ => null,
         };
-        var frames = new List<AGUIEvent>();
         if (frame is not null)
         {
             frame.Sequence = progressed.ProgressSequence;
             frames.Add(frame);
+        }
+        else if (progressed.Progress.ProgressCase ==
+                 NyxIdChatOperationProgressSignal.ProgressOneofCase.StreamingBatch)
+        {
+            frames.AddRange(progressed.Progress.StreamingBatch.Segments.Select(segment =>
+                BuildStreamingSegmentFrame(turnId, progressed.ProgressSequence, segment)));
         }
 
         if (progressed.StepChangeKind != NyxIdChatStepChangeKind.Unspecified)
@@ -114,6 +121,33 @@ internal static class NyxIdChatConversationAguiFrameBuilder
 
         return frames;
     }
+
+    private static AGUIEvent BuildStreamingSegmentFrame(
+        string turnId,
+        long sequence,
+        NyxIdChatStreamingProgressSegment segment) =>
+        segment.ProgressCase switch
+        {
+            NyxIdChatStreamingProgressSegment.ProgressOneofCase.Text => new AGUIEvent
+            {
+                Sequence = sequence,
+                TextMessageContent = new TextMessageContentEvent
+                {
+                    MessageId = turnId,
+                    Delta = segment.Text.Delta,
+                },
+            },
+            NyxIdChatStreamingProgressSegment.ProgressOneofCase.Reasoning => new AGUIEvent
+            {
+                Sequence = sequence,
+                Custom = new CustomEvent
+                {
+                    Name = "aevatar.llm.reasoning",
+                    Payload = Any.Pack(segment.Reasoning),
+                },
+            },
+            _ => throw new InvalidOperationException("Streaming progress contains an empty segment."),
+        };
 
     public static IReadOnlyList<AGUIEvent> BuildProgressCadence(
         NyxIdChatOperationStepChangedCommittedEvent committed)
