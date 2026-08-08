@@ -382,7 +382,7 @@ public static class NyxIdChatTaskLifecycle
         var next = transition.State.Clone();
         StampReconciledState(next, operationKey, now);
         next.ActiveTask.SchemaVersion = Math.Max(next.ActiveTask.SchemaVersion, 5);
-        var conditionOrder = next.ActiveTask.Steps.Count + 1;
+        var conditionOrder = next.ActiveTask.Steps.Max(static step => step.Order) + 1;
         var conditionStepId = BuildStableIdentity(
             "step",
             next.ConversationActorId,
@@ -479,7 +479,17 @@ public static class NyxIdChatTaskLifecycle
         guardedStep.AvailableActions =
             NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(guardedStep);
 
+        NyxIdChatTaskStepState? skippedVerificationStep = null;
         var continuationOrder = guardedOrder + 1;
+        if (outcome == NyxIdChatConditionOutcome.False)
+        {
+            skippedVerificationStep = BuildSkippedGuardedVerificationStep(
+                next,
+                guardedStep,
+                continuationOrder,
+                now);
+            continuationOrder++;
+        }
         var continuationStepId = BuildStableIdentity(
             "step",
             next.ConversationActorId,
@@ -530,12 +540,17 @@ public static class NyxIdChatTaskLifecycle
 
         next.ActiveTask.Steps.Add(conditionStep);
         next.ActiveTask.Steps.Add(guardedStep);
+        if (skippedVerificationStep is not null)
+            next.ActiveTask.Steps.Add(skippedVerificationStep);
         next.ActiveTask.Steps.Add(continuationStep);
+        IReadOnlyList<NyxIdChatTaskStepState> addedSteps = skippedVerificationStep is null
+            ? [conditionStep, guardedStep, continuationStep]
+            : [conditionStep, guardedStep, skippedVerificationStep, continuationStep];
         NyxIdChatPlanRevisions.CommitChange(
             next.ActiveTask,
             NyxIdChatPlanRevisionCause.ScopeResolution,
             now,
-            [conditionStep, guardedStep, continuationStep]);
+            addedSteps);
         ActivateStep(next, continuationStep, now);
         FinalizeDerivedState(next, now);
         return new NyxIdChatTaskLifecycleDecision(
@@ -740,6 +755,44 @@ public static class NyxIdChatTaskLifecycle
         }
         step.UpdatedAt = now.Clone();
         step.AvailableActions = NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(step);
+    }
+
+    private static NyxIdChatTaskStepState BuildSkippedGuardedVerificationStep(
+        NyxIdChatConversationGAgentState state,
+        NyxIdChatTaskStepState guardedStep,
+        int order,
+        Timestamp now)
+    {
+        var step = new NyxIdChatTaskStepState
+        {
+            StepId = BuildStableIdentity(
+                "step",
+                state.ConversationActorId,
+                state.ActiveTurn.TurnId,
+                state.ActiveTask.TaskId,
+                guardedStep.StepId,
+                order.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                "guarded-tool-verification-skipped"),
+            Order = order,
+            Kind = NyxIdChatStepKind.Postcondition,
+            Status = NyxIdChatStepStatus.Skipped,
+            Required = true,
+            Description = "Skip read-back because the guarded external effect was not applied.",
+            Source = new NyxIdChatStepSource
+            {
+                Postcondition = new NyxIdChatPostconditionStepSource
+                {
+                    EffectStepId = guardedStep.StepId,
+                    Check = "guarded_effect_not_applied",
+                },
+            },
+            ExternalEffect = NyxIdChatEffectEvidence.NotApplied,
+            AddedBy = NyxIdChatStepAddedBy.Replan,
+            DependsOn = { guardedStep.StepId },
+            UpdatedAt = now.Clone(),
+        };
+        step.AvailableActions = NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(step);
+        return step;
     }
 
     private static bool TryResolveConditionGuard(
@@ -1084,9 +1137,7 @@ public static class NyxIdChatTaskLifecycle
         Timestamp now,
         bool failureRecovery = false)
     {
-        var order = failureRecovery
-            ? state.ActiveTask.Steps.Max(static step => step.Order) + 1
-            : toolStep.Order + 1;
+        var order = state.ActiveTask.Steps.Max(static step => step.Order) + 1;
         var requiresReadBack = toolStep.MayChangeExternalState;
         var readBack = toolStep.Source?.Tool?.OperationAdmission?.ReadBack;
         var stepId = BuildStableIdentity(

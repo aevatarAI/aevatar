@@ -211,6 +211,11 @@ export function decodeActorFrame(raw: unknown): ChatActorFrame {
     );
   }
   const payload = unpackAny(custom?.payload);
+  if (type === 'input_request') {
+    const pendingInput = decodePendingInput(payload);
+    if (!pendingInput) throw invalidNumericThreshold();
+    return { type, sequence, payload: pendingInput };
+  }
   return type === 'action_request'
     ? { type, sequence, request: validateActionRequest(payload) }
     : { type, sequence, payload };
@@ -249,7 +254,7 @@ export function reduceActorFrame(
       );
       break;
     case 'input_request':
-      next.pendingInput = frame.payload as ChatPendingInput;
+      next.pendingInput = decodePendingInput(frame.payload);
       break;
     case 'input_changed':
       next.latestInputResolution = cloneRecord(frame.payload);
@@ -364,9 +369,7 @@ export function applyCurrentStateResult(
         .filter((value): value is JsonRecord => Boolean(value))
         .map(cloneRecord)
     : [];
-  next.pendingInput = optionalRecord(
-    snapshot.pendingInput,
-  ) as ChatPendingInput | null;
+  next.pendingInput = decodePendingInput(snapshot.pendingInput);
   next.pendingApproval = normalizePendingApproval(snapshot.pendingApproval);
   next.controlFence = cloneNullableRecord(snapshot.controlFence);
   next.latestControlResult = cloneNullableRecord(snapshot.latestControlResult);
@@ -710,6 +713,37 @@ function normalizePendingApproval(input: unknown): ChatPendingApproval | null {
   };
 }
 
+function decodePendingInput(input: unknown): ChatPendingInput | null {
+  const value = optionalRecord(input);
+  if (!value) return null;
+  const numericThreshold = value.numericThreshold;
+  if (numericThreshold === undefined || numericThreshold === null) {
+    return cloneRecord(value) as ChatPendingInput;
+  }
+  const threshold = optionalRecord(numericThreshold);
+  const suggestedValue = threshold?.suggestedValue;
+  const minimumValue = threshold?.minimumValue;
+  const maximumValue = threshold?.maximumValue;
+  if (
+    !validSafeInteger(suggestedValue) ||
+    !validSafeInteger(minimumValue) ||
+    !validSafeInteger(maximumValue) ||
+    minimumValue > maximumValue ||
+    suggestedValue < minimumValue ||
+    suggestedValue > maximumValue
+  ) {
+    throw invalidNumericThreshold();
+  }
+  return {
+    ...cloneRecord(value),
+    numericThreshold: {
+      suggestedValue,
+      minimumValue,
+      maximumValue,
+    },
+  } as ChatPendingInput;
+}
+
 function actionIdentityMatches(
   summary: ChatActionSummary,
   request: ChatServiceConnectActionRequest,
@@ -773,6 +807,10 @@ function validVersion(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 
+function validSafeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value);
+}
+
 function readIdentity(value: unknown): string | null {
   if (typeof value !== 'string' || value.length < 1 || value.length > 256) {
     return null;
@@ -818,6 +856,13 @@ function unsafeUrl(): ChatActorProtocolError {
   return new ChatActorProtocolError(
     'NyxID action URL is unsafe.',
     'NYXID_URL_UNSAFE',
+  );
+}
+
+function invalidNumericThreshold(): ChatActorProtocolError {
+  return new ChatActorProtocolError(
+    'NyxID numeric threshold is invalid.',
+    'NYXID_INPUT_NUMERIC_THRESHOLD_INVALID',
   );
 }
 

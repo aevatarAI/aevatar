@@ -103,6 +103,112 @@ const actionRequest = {
 } as const;
 
 describe('chatActorState', () => {
+  it('decodes the same bounded numeric threshold from live frames and reloads', () => {
+    const pendingInput = {
+      requestId: 'input-threshold',
+      prompt: 'Choose the threshold',
+      options: [],
+      allowFreeText: true,
+      multiSelect: false,
+      numericThreshold: {
+        suggestedValue: 70,
+        minimumValue: 0,
+        maximumValue: 100,
+      },
+    };
+    const live = reduceActorFrame(
+      createChatActorProjection('conversation-alpha'),
+      decodeActorFrame({
+        sequence: 1,
+        custom: { name: 'nyxid.input.request', payload: pendingInput },
+      }),
+    );
+    const reload = applyCurrentStateResult(
+      createChatActorProjection('conversation-alpha'),
+      {
+        status: 'current',
+        stateVersion: 5,
+        snapshot: {
+          actorId: 'conversation-alpha',
+          scopeId: 'scope-alpha',
+          stateVersion: 5,
+          progressSequence: 1,
+          activeTurn: null,
+          latestTurn: null,
+          recentTerminalTurns: [],
+          activeTask: null,
+          pendingInput,
+          pendingApproval: null,
+          pendingActions: [],
+        },
+      },
+    ).projection;
+
+    expect(live.pendingInput).toEqual(pendingInput);
+    expect(reload.pendingInput).toEqual(pendingInput);
+  });
+
+  it.each([
+    { suggestedValue: 70.5, minimumValue: 0, maximumValue: 100 },
+    {
+      suggestedValue: Number.MAX_SAFE_INTEGER + 1,
+      minimumValue: 0,
+      maximumValue: Number.MAX_SAFE_INTEGER + 1,
+    },
+    { suggestedValue: 70, minimumValue: 80, maximumValue: 100 },
+    { suggestedValue: 101, minimumValue: 0, maximumValue: 100 },
+  ])('rejects an invalid live numeric threshold %#', (numericThreshold) => {
+    expect(() =>
+      decodeActorFrame({
+        sequence: 1,
+        custom: {
+          name: 'nyxid.input.request',
+          payload: {
+            requestId: 'input-threshold',
+            numericThreshold,
+          },
+        },
+      }),
+    ).toThrow(
+      expect.objectContaining({
+        code: 'NYXID_INPUT_NUMERIC_THRESHOLD_INVALID',
+      }),
+    );
+  });
+
+  it('rejects an invalid reloaded numeric threshold', () => {
+    expect(() =>
+      applyCurrentStateResult(createChatActorProjection('conversation-alpha'), {
+        status: 'current',
+        stateVersion: 5,
+        snapshot: {
+          actorId: 'conversation-alpha',
+          scopeId: 'scope-alpha',
+          stateVersion: 5,
+          progressSequence: 1,
+          activeTurn: null,
+          latestTurn: null,
+          recentTerminalTurns: [],
+          activeTask: null,
+          pendingInput: {
+            requestId: 'input-threshold',
+            numericThreshold: {
+              suggestedValue: 70,
+              minimumValue: 80,
+              maximumValue: 100,
+            },
+          },
+          pendingApproval: null,
+          pendingActions: [],
+        },
+      }),
+    ).toThrow(
+      expect.objectContaining({
+        code: 'NYXID_INPUT_NUMERIC_THRESHOLD_INVALID',
+      }),
+    );
+  });
+
   it('uses the same typed TaskPlan decoder for live frames and current-state reload', () => {
     const live = reduceActorFrame(
       createChatActorProjection('conversation-alpha'),

@@ -109,6 +109,15 @@ public sealed class NyxIdChatConditionalBranchTests
         guarded.ExternalEffect.Should().Be(NyxIdChatEffectEvidence.NotApplied);
         guarded.Operation.Should().BeNull();
         guarded.Guard.ConditionStepId.Should().Be(condition.StepId);
+        var readBack = decision.State.ActiveTask.Steps.Single(step =>
+            step.Kind == NyxIdChatStepKind.Postcondition);
+        readBack.Status.Should().Be(NyxIdChatStepStatus.Skipped);
+        readBack.ExternalEffect.Should().Be(NyxIdChatEffectEvidence.NotApplied);
+        readBack.Operation.Should().BeNull();
+        readBack.Source.Postcondition.EffectStepId.Should().Be(guarded.StepId);
+        readBack.DependsOn.Should().Equal(guarded.StepId);
+        decision.State.ActiveTask.Steps.Select(step => step.Order)
+            .Should().OnlyHaveUniqueItems();
         decision.NextCommand.Should().NotBeNull();
         decision.NextCommand!.InputCase.Should().Be(
             NyxIdChatOperationDispatchCommand.InputOneofCase.ConditionContinuation);
@@ -187,6 +196,14 @@ public sealed class NyxIdChatConditionalBranchTests
         exact.NextCommand!.InputCase.Should().Be(
             NyxIdChatOperationDispatchCommand.InputOneofCase.Tool);
         exact.NextCommand.Tool.ToolName.Should().Be("repository_update");
+        var verification = exact.State.ActiveTask.Steps.Single(step =>
+            step.Kind == NyxIdChatStepKind.Postcondition);
+        var continuation = exact.State.ActiveTask.Steps.Single(step =>
+            step.Source?.SourceCase == NyxIdChatStepSource.SourceOneofCase.Llm &&
+            step.AddedBy == NyxIdChatStepAddedBy.Replan);
+        verification.Order.Should().BeGreaterThan(continuation.Order);
+        exact.State.ActiveTask.Steps.Select(step => step.Order)
+            .Should().OnlyHaveUniqueItems();
     }
 
     [Fact]
