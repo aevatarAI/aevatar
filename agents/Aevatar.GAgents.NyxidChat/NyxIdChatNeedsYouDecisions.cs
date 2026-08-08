@@ -405,6 +405,8 @@ public static class NyxIdChatNeedsYouDecisions
             Kind = NyxIdChatStepKind.Tool,
             Phase = NyxIdChatOperationPhase.Requested,
             MayChangeExternalState = step.MayChangeExternalState,
+            Idempotent = !step.MayChangeExternalState,
+            IdempotencyKey = key.OperationId,
             RequestedAt = now.Clone(),
         };
         step.UpdatedAt = now.Clone();
@@ -419,6 +421,8 @@ public static class NyxIdChatNeedsYouDecisions
                 Approved = command.Approved,
                 ToolContext = command.ToolContext?.Clone(),
                 MayChangeExternalState = step.MayChangeExternalState,
+                IdempotencyKey = key.OperationId,
+                OperationAdmission = step.Source?.Tool?.OperationAdmission?.Clone(),
             },
         };
     }

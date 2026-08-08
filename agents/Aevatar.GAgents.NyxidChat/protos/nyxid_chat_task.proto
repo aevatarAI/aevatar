@@ -6,6 +6,7 @@ option csharp_namespace = "Aevatar.GAgents.NyxidChat";
 
 import "ai_messages.proto";
 import "google/protobuf/timestamp.proto";
+import "ToolProviders/agent_tool_admission.proto";
 import "Tools/tool_presentation.proto";
 
 message NyxIdDirectChatHistoryDispatchedEvent {
@@ -206,6 +207,8 @@ enum NyxIdChatRecoveryKind {
   NYX_ID_CHAT_RECOVERY_KIND_UNSPECIFIED = 0;
   NYX_ID_CHAT_RECOVERY_KIND_POSTCONDITION_REDISPATCH = 1;
   NYX_ID_CHAT_RECOVERY_KIND_INTERRUPTED_OPERATION_RECONCILIATION = 2;
+  NYX_ID_CHAT_RECOVERY_KIND_OPERATION_COMPLETION_WATCHDOG = 3;
+  NYX_ID_CHAT_RECOVERY_KIND_OPERATION_RESULT_DELIVERY_WATCHDOG = 4;
 }
 
 enum NyxIdAssistantActionKind {
@@ -264,6 +267,9 @@ message NyxIdChatToolStepSource {
   string service_slug = 2;
   string service_id = 3;
   optional string readiness_capability_id = 4;
+  // Server-only exact selector and contract snapshot. Public read models map
+  // only the safe labels above and never expose this admission for assembly.
+  aevatar.ai.tool_providers.AgentToolOperationAdmissionPayload operation_admission = 5;
 }
 
 message NyxIdChatBrowserActionStepSource {
@@ -1034,6 +1040,10 @@ message NyxIdChatTurnGAgentState {
   // recover conservatively because they predate the durable dispatch waterline.
   NyxIdChatEffectEvidence effect_dispatch_waterline = 13;
   google.protobuf.Timestamp effect_dispatch_started_at = 14;
+  bool idempotent = 15;
+  string idempotency_key = 16;
+  aevatar.ai.tool_providers.AgentToolOperationAdmissionPayload operation_admission = 17;
+  google.protobuf.Timestamp reconciliation_started_at = 18;
 }
 
 message NyxIdChatTurnOperationAdmittedEvent {
@@ -1042,9 +1052,17 @@ message NyxIdChatTurnOperationAdmittedEvent {
   google.protobuf.Timestamp admitted_at = 3;
   bool may_change_external_state = 4;
   NyxIdChatEffectEvidence effect_dispatch_waterline = 5;
+  bool idempotent = 6;
+  string idempotency_key = 7;
+  aevatar.ai.tool_providers.AgentToolOperationAdmissionPayload operation_admission = 8;
 }
 
 message NyxIdChatTurnEffectDispatchStartedEvent {
+  NyxIdChatOperationKey key = 1;
+  google.protobuf.Timestamp started_at = 2;
+}
+
+message NyxIdChatTurnOperationReconciliationStartedEvent {
   NyxIdChatOperationKey key = 1;
   google.protobuf.Timestamp started_at = 2;
 }
@@ -1083,6 +1101,7 @@ message NyxIdChatToolOperationInput {
   bool may_change_external_state = 5;
   bool idempotent = 6;
   string idempotency_key = 7;
+  aevatar.ai.tool_providers.AgentToolOperationAdmissionPayload operation_admission = 8;
 }
 
 message NyxIdChatActionPostconditionInput {
@@ -1111,6 +1130,8 @@ message NyxIdChatToolApprovalContinuationInput {
   bool approved = 2;
   aevatar.ai.AgentToolExecutionContextPayload tool_context = 3;
   bool may_change_external_state = 4;
+  string idempotency_key = 5;
+  aevatar.ai.tool_providers.AgentToolOperationAdmissionPayload operation_admission = 6;
 }
 
 // A plan confirmation carries no raw tool arguments. The turn actor must match
@@ -1125,6 +1146,8 @@ message NyxIdChatPlanGateContinuationInput {
   aevatar.ai.AgentToolExecutionContextPayload tool_context = 7;
   bool may_change_external_state = 8;
   string plan_id = 9;
+  string idempotency_key = 10;
+  aevatar.ai.tool_providers.AgentToolOperationAdmissionPayload operation_admission = 11;
 }
 
 message NyxIdChatOperationDispatchCommand {
@@ -1157,6 +1180,9 @@ message NyxIdChatToolCall {
   // Provider-authored NyxID identity provenance. The conversation actor copies
   // only its safe identity fields into the durable tool step source.
   aevatar.foundation.tools.NyxIdOperationRef nyx_id_provenance = 5;
+  // Exact provider-owned selector and contract. The model never authors this
+  // field; the server snapshots it beside the authorized runtime capability.
+  aevatar.ai.tool_providers.AgentToolOperationAdmissionPayload operation_admission = 6;
 }
 
 message NyxIdChatLLMOperationResult {
@@ -1206,6 +1232,28 @@ message NyxIdChatRecoveryRequestedSignal {
   NyxIdChatOperationKey key = 1;
   int64 expected_state_version = 2;
   NyxIdChatRecoveryKind kind = 3;
+}
+
+message NyxIdChatTurnOperationExecutionProgressSignal {
+  NyxIdChatOperationProgressSignal progress = 1;
+}
+
+enum NyxIdChatTurnOperationCompletionSource {
+  NYX_ID_CHAT_TURN_OPERATION_COMPLETION_SOURCE_UNSPECIFIED = 0;
+  NYX_ID_CHAT_TURN_OPERATION_COMPLETION_SOURCE_EXECUTION = 1;
+  NYX_ID_CHAT_TURN_OPERATION_COMPLETION_SOURCE_RECONCILIATION = 2;
+}
+
+message NyxIdChatTurnOperationExecutionCompletedSignal {
+  NyxIdChatOperationResultSignal result = 1;
+  NyxIdChatTurnOperationCompletionSource source = 2;
+}
+
+message NyxIdChatTurnOperationReconciliationInput {
+  NyxIdChatOperationKey key = 1;
+  aevatar.ai.tool_providers.AgentToolOperationAdmissionPayload operation_admission = 2;
+  string idempotency_key = 3;
+  NyxIdChatEffectEvidence effect_dispatch_waterline = 4;
 }
 
 message NyxIdChatTextProgress {

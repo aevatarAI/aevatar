@@ -356,6 +356,9 @@ public static class MainnetHostBuilderExtensions
             // Even when exposed, their contract always requires a durable actor-owned grant.
             if (bool.TryParse(builder.Configuration["Aevatar:NyxId:EnableSshExecTool"], out var enableSsh))
                 o.EnableSshExecTool = enableSsh;
+            // Milestone 40 ships actor-owned connected-service effects on Mainnet. Other hosts
+            // retain NyxIdToolOptions' fail-closed default until they provide the same durable facts.
+            o.EnableAssistantConnectedServiceEffects = true;
             o.EnableManagedCodexExecTool = builder.Configuration.GetValue<bool>(
                 $"{ManagedCodexOptions.SectionName}:Enabled");
             o.MaxRequestDurationSeconds = builder.Configuration.GetValue(

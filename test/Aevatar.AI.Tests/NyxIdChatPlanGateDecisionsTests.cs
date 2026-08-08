@@ -1,5 +1,6 @@
 using System.Text;
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.GAgents.NyxidChat;
 using FluentAssertions;
 using Google.Protobuf;
@@ -106,6 +107,33 @@ public sealed class NyxIdChatPlanGateDecisionsTests
         decision.NextCommand.PlanGateContinuation.ArgumentsSha256.Should()
             .Equal(gate.Admissions.Single().ArgumentsSha256);
         decision.State.RecentPlanResolutions.Should().ContainSingle();
+    }
+
+    [Fact]
+    public void ExactConfirm_ConnectedServiceEffect_ShouldCarryFrozenAdmissionAndIdempotency()
+    {
+        var admission = ExactWriteAdmission();
+        var state = NyxIdChatTaskLifecycle.ApplyOperationResult(
+            ActiveLlmState(),
+            ToolPlan(
+                "{\"repositoryId\":\"repo-alpha\"}",
+                requiresApproval: true,
+                operationAdmission: admission),
+            Now).State;
+        var gate = state.ActiveTask.Gate;
+
+        var decision = NyxIdChatPlanGateDecisions.Resolve(
+            state,
+            ResolveCommand(gate, confirmed: true),
+            currentStateVersion: 17,
+            Now);
+
+        decision.ShouldCommit.Should().BeTrue();
+        decision.NextCommand.Should().NotBeNull();
+        decision.NextCommand!.PlanGateContinuation.IdempotencyKey.Should()
+            .Be(decision.NextCommand.Key.OperationId);
+        decision.NextCommand.PlanGateContinuation.OperationAdmission.Should()
+            .BeEquivalentTo(admission);
     }
 
     [Fact]
@@ -237,7 +265,8 @@ public sealed class NyxIdChatPlanGateDecisionsTests
     private static NyxIdChatOperationResultSignal ToolPlan(
         string arguments,
         bool requiresApproval = false,
-        bool isReadOnly = false) => new()
+        bool isReadOnly = false,
+        AgentToolOperationAdmissionPayload? operationAdmission = null) => new()
     {
         Key = OperationKey("step-llm-alpha", "operation-llm-alpha"),
         Llm = new NyxIdChatLLMOperationResult
@@ -256,6 +285,7 @@ public sealed class NyxIdChatPlanGateDecisionsTests
                         RequiresApproval = requiresApproval,
                         MayChangeExternalState = !isReadOnly,
                     },
+                    OperationAdmission = operationAdmission?.Clone(),
                 },
             },
         },
@@ -317,5 +347,30 @@ public sealed class NyxIdChatPlanGateDecisionsTests
         StepId = stepId,
         OperationId = operationId,
         OperationGeneration = 1,
+    };
+
+    private static AgentToolOperationAdmissionPayload ExactWriteAdmission() => new()
+    {
+        ServiceInstanceId = "connected-service-alpha",
+        ServiceSlug = "service-slug-alpha",
+        PublishedEndpoint = new AgentToolPublishedEndpointIdentityPayload
+        {
+            EndpointId = "endpoint-alpha",
+        },
+        AuthorizationBasis = AgentToolOperationAuthorizationBasisPayload.PublishedContract,
+        HttpMethod = "PATCH",
+        PathTemplate = "/repositories/{repositoryId}",
+        ContractDigest = new string('b', 64),
+        CatalogDigest = $"sha256:{new string('a', 64)}",
+        ExecutionPolicy = new AgentToolOperationExecutionPolicyPayload
+        {
+            Risk = AgentToolOperationRiskPayload.Write,
+            Approval = AgentToolOperationApprovalPayload.Required,
+            EnforcementOwner = AgentToolOperationEnforcementOwnerPayload.Aevatar,
+            AllowedExecutionModes =
+            {
+                AgentToolOperationExecutionModePayload.Interactive,
+            },
+        },
     };
 }

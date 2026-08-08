@@ -322,6 +322,8 @@ public static class NyxIdChatPlanGateDecisions
                 ArgumentsSha256 = admission.ArgumentsSha256,
                 ToolContext = command.ToolContext?.Clone(),
                 MayChangeExternalState = step.MayChangeExternalState,
+                IdempotencyKey = step.Operation.Key.OperationId,
+                OperationAdmission = step.Source?.Tool?.OperationAdmission?.Clone(),
             },
         });
     }

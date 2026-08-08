@@ -46,7 +46,8 @@ public sealed record AgentRunAuthorizedToolCallSafety(
     string SideEffectKind,
     string ToolDefinitionFingerprint = "",
     ToolPresentationDescriptor? Presentation = null,
-    bool RequiresApproval = false);
+    bool RequiresApproval = false,
+    AgentToolOperationAdmissionPayload? OperationAdmission = null);
 
 public sealed class AgentRunAuthorizedToolStep
 {
@@ -168,9 +169,22 @@ public sealed class AgentRunAuthorizedToolStep
             string.Equals(pair.First.ArgumentsJson, pair.Second.ArgumentsJson, StringComparison.Ordinal));
     }
 
-    internal AgentRunAuthorizedToolStep WithChatOperation(NyxIdChatOperationKey key)
+    internal AgentRunAuthorizedToolStep WithChatOperation(
+        NyxIdChatOperationKey key,
+        string? idempotencyKey,
+        AgentToolOperationAdmissionPayload? operationAdmission)
     {
         ArgumentNullException.ThrowIfNull(key);
+        var restoredAdmission = operationAdmission is null
+            ? null
+            : AgentToolExecutionContextMapper.FromPayload(
+                new AgentToolExecutionContextPayload
+                {
+                    OperationAdmission = operationAdmission.Clone(),
+                }).OperationAdmission;
+        if (operationAdmission is not null && restoredAdmission is null)
+            throw new InvalidOperationException("The exact operation admission is invalid.");
+
         return new AgentRunAuthorizedToolStep(
             RunId,
             CorrelationId,
@@ -179,6 +193,12 @@ public sealed class AgentRunAuthorizedToolStep
             _toolCalls,
             _toolContext with
             {
+                Request = _toolContext.Request with
+                {
+                    OperationId = Normalize(key.OperationId),
+                    IdempotencyKey = Normalize(idempotencyKey),
+                },
+                OperationAdmission = restoredAdmission,
                 Chat = _toolContext.Chat with
                 {
                     TaskId = Normalize(key.TaskId),

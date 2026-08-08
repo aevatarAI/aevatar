@@ -170,6 +170,22 @@ public sealed class NyxIdChatServiceCollectionExtensionsTests
     }
 
     [Fact]
+    public void AddNyxIdChat_ShouldRegisterAsynchronousTurnOperationPorts()
+    {
+        var services = new ServiceCollection();
+
+        services.AddNyxIdChat(new ConfigurationBuilder().Build());
+
+        services.Should().ContainSingle(descriptor =>
+            descriptor.ServiceType == typeof(INyxIdChatTurnOperationDispatchPort) &&
+            descriptor.ImplementationType == typeof(NyxIdChatTurnOperationDispatchPort));
+        services.Should().ContainSingle(descriptor =>
+            descriptor.ServiceType == typeof(INyxIdChatTurnOperationReconciliationPort) &&
+            descriptor.ImplementationType ==
+            typeof(UnavailableNyxIdChatTurnOperationReconciliationPort));
+    }
+
+    [Fact]
     public async Task AddNyxIdChat_WithoutCatalogQuery_ShouldFailPostconditionClosed()
     {
         var services = new ServiceCollection();

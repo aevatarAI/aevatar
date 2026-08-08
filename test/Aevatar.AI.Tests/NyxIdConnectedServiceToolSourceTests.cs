@@ -302,6 +302,151 @@ public class NyxIdConnectedServiceToolSourceTests
     }
 
     [Fact]
+    public async Task DiscoverToolsAsync_MultipleOperationsExposeDistinctSafeModelLabels()
+    {
+        const string catalogDigest =
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = Keys(
+            Instance("usvc-alpha", "api-shop", "svc-alpha"),
+            Instance("usvc-beta", "api-billing", "svc-beta"));
+        handler.McpConfigByToken["user-token"] = McpCatalog(
+            catalogDigest,
+            LabeledMcpService(
+                "usvc-alpha",
+                "api-shop",
+                "Order <Shop>",
+                LabeledReadEndpoint("endpoint-alpha", "get_order")),
+            LabeledMcpService(
+                "usvc-beta",
+                "api-billing",
+                "Billing Portal",
+                LabeledReadEndpoint("endpoint-beta", "list_invoices")));
+        var source = CreateSource(handler);
+
+        using var scope = PushContext("user-token");
+        var tools = await source.DiscoverToolsAsync();
+
+        tools.Should().HaveCount(2);
+        tools.Select(static tool => tool.Description).Should().OnlyHaveUniqueItems();
+        tools.Select(static tool => tool.Description).Should().Contain(description =>
+            description.Contains("Order Shop", StringComparison.Ordinal) &&
+            description.Contains("get_order", StringComparison.Ordinal));
+        tools.Select(static tool => tool.Description).Should().Contain(description =>
+            description.Contains("Billing Portal", StringComparison.Ordinal) &&
+            description.Contains("list_invoices", StringComparison.Ordinal));
+        foreach (var modelVisibleDescriptor in tools.Select(static tool =>
+                     string.Join('\n', tool.Name, tool.Description, tool.ParametersSchema)))
+        {
+            modelVisibleDescriptor.Should()
+                .NotContain("usvc-alpha")
+                .And.NotContain("usvc-beta")
+                .And.NotContain("endpoint-alpha")
+                .And.NotContain("endpoint-beta")
+                .And.NotContain("api-shop")
+                .And.NotContain("api-billing")
+                .And.NotContain(catalogDigest);
+        }
+    }
+
+    [Theory]
+    [InlineData("GitHub usvc-alpha", "get_order", true, false)]
+    [InlineData("Connector api-shop", "get_order", true, false)]
+    [InlineData(
+        "Catalog sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "get_order",
+        true,
+        false)]
+    [InlineData("Shop", "Read endpoint-alpha records", false, true)]
+    [InlineData("Shop", "", false, true)]
+    public async Task DiscoverToolsAsync_LabelsContainingExactSelectors_UseGenericFallbacks(
+        string serviceName,
+        string endpointName,
+        bool genericService,
+        bool genericOperation)
+    {
+        const string catalogDigest =
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = Keys(
+            Instance("usvc-alpha", "api-shop", "svc-alpha"));
+        handler.McpConfigByToken["user-token"] = McpCatalog(
+            catalogDigest,
+            LabeledMcpService(
+                "usvc-alpha",
+                "api-shop",
+                serviceName,
+                LabeledReadEndpoint("endpoint-alpha", endpointName)));
+        var source = CreateSource(handler);
+
+        using var scope = PushContext("user-token");
+        var tool = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
+
+        if (genericService)
+            tool.Description.Should().Contain("connected service 'Connected service'");
+        if (genericOperation)
+            tool.Description.Should().Contain("Read 'Operation'");
+        var modelVisibleDescriptor = string.Join(
+            '\n',
+            tool.Name,
+            tool.Description,
+            tool.ParametersSchema);
+        modelVisibleDescriptor.Should()
+            .NotContain("usvc-alpha")
+            .And.NotContain("endpoint-alpha")
+            .And.NotContain("api-shop")
+            .And.NotContain($"sha256:{catalogDigest}");
+    }
+
+    [Fact]
+    public async Task DiscoverToolsAsync_LabelContainingContractDigest_UsesGenericFallback()
+    {
+        const string catalogDigest =
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        var baselineHandler = new FakeNyxIdHandler();
+        baselineHandler.KeysByToken["user-token"] = Keys(
+            Instance("usvc-alpha", "api-shop", "svc-alpha"));
+        baselineHandler.McpConfigByToken["user-token"] = McpCatalog(
+            catalogDigest,
+            LabeledMcpService(
+                "usvc-alpha",
+                "api-shop",
+                "Shop",
+                LabeledReadEndpoint("endpoint-alpha", "get_order")));
+
+        string contractDigest;
+        using (PushContext("user-token"))
+        {
+            var baseline = (await CreateSource(baselineHandler).DiscoverToolsAsync())
+                .Should().ContainSingle().Subject;
+            contractDigest = baseline.Should()
+                .BeAssignableTo<IAgentToolOperationAdmissionOwner>().Subject
+                .OperationAdmission.ContractDigest;
+        }
+
+        var adversarialHandler = new FakeNyxIdHandler();
+        adversarialHandler.KeysByToken["user-token"] = Keys(
+            Instance("usvc-alpha", "api-shop", "svc-alpha"));
+        adversarialHandler.McpConfigByToken["user-token"] = McpCatalog(
+            catalogDigest,
+            LabeledMcpService(
+                "usvc-alpha",
+                "api-shop",
+                "Shop",
+                LabeledReadEndpoint(
+                    "endpoint-alpha",
+                    $"Read contract {contractDigest}")));
+
+        using var scope = PushContext("user-token");
+        var tool = (await CreateSource(adversarialHandler).DiscoverToolsAsync())
+            .Should().ContainSingle().Subject;
+
+        tool.Description.Should().Contain("Read 'Operation'");
+        string.Join('\n', tool.Name, tool.Description, tool.ParametersSchema)
+            .Should().NotContain(contractDigest);
+    }
+
+    [Fact]
     public async Task DiscoverToolsAsync_SameExactServiceWithDifferentRouteSlug_FailsClosed()
     {
         var handler = new FakeNyxIdHandler();
@@ -769,6 +914,21 @@ public class NyxIdConnectedServiceToolSourceTests
         }
         """;
 
+    private static string LabeledMcpService(
+        string userServiceId,
+        string slug,
+        string serviceName,
+        params string[] endpoints) => $$"""
+        {
+          "service_id": "{{userServiceId}}",
+          "service_name": "{{serviceName}}",
+          "service_slug": "{{slug}}",
+          "is_user_service": true,
+          "is_generic_proxy": false,
+          "endpoints": [{{string.Join(',', endpoints)}}]
+        }
+        """;
+
     private static string ReadEndpoint(string endpointId) => $$"""
         {
           "endpoint_id": "{{endpointId}}",
@@ -777,6 +937,22 @@ public class NyxIdConnectedServiceToolSourceTests
           "path": "/orders/{orderId}",
           "parameters": [
             { "name": "orderId", "in": "path", "required": true, "schema": { "type": "string" } }
+          ],
+          "request_body_schema": null,
+          "request_content_type": null,
+          "request_body_required": false,
+          "response": { "content_types": ["application/json"], "binary_artifact": false }
+        }
+        """;
+
+    private static string LabeledReadEndpoint(string endpointId, string name) => $$"""
+        {
+          "endpoint_id": "{{endpointId}}",
+          "name": "{{name}}",
+          "method": "GET",
+          "path": "/records/{recordId}",
+          "parameters": [
+            { "name": "recordId", "in": "path", "required": true, "schema": { "type": "string" } }
           ],
           "request_body_schema": null,
           "request_content_type": null,

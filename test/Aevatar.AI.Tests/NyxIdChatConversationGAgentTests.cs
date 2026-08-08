@@ -352,10 +352,10 @@ public sealed class NyxIdChatConversationGAgentTests
     public void ResponsiveActors_ShouldDependOnNarrowRuntimeNeutralPorts()
     {
         var assembly = typeof(NyxIdChatStartTurnCommand).Assembly;
-        var executorPort = assembly.GetType(
-            "Aevatar.GAgents.NyxidChat.INyxIdChatTurnOperationExecutor");
+        var operationDispatchPort = assembly.GetType(
+            "Aevatar.GAgents.NyxidChat.INyxIdChatTurnOperationDispatchPort");
 
-        executorPort.Should().NotBeNull();
+        operationDispatchPort.Should().NotBeNull();
         typeof(NyxIdChatConversationGAgent).GetConstructor(
         [
             typeof(IActorRuntime),
@@ -364,8 +364,9 @@ public sealed class NyxIdChatConversationGAgentTests
         ]).Should().NotBeNull();
         typeof(NyxIdChatTurnGAgent).GetConstructor(
         [
-            executorPort!,
+            operationDispatchPort!,
             typeof(IActorDispatchPort),
+            typeof(NyxIdToolOptions),
             typeof(TimeProvider),
         ]).Should().NotBeNull();
     }
@@ -2624,7 +2625,34 @@ public sealed class NyxIdChatConversationGAgentTests
                             ConnectedServiceId = "connected-service-alpha",
                             ServiceSlug = "service-slug-alpha",
                             CatalogServiceSlug = "catalog-slug-alpha",
+                            OperationId = "endpoint-alpha",
                             ReadinessCapabilityId = "readiness-capability-alpha",
+                        },
+                        OperationAdmission = new AgentToolOperationAdmissionPayload
+                        {
+                            ServiceInstanceId = "connected-service-alpha",
+                            ServiceSlug = "service-slug-alpha",
+                            PublishedEndpoint = new AgentToolPublishedEndpointIdentityPayload
+                            {
+                                EndpointId = "endpoint-alpha",
+                            },
+                            AuthorizationBasis =
+                                AgentToolOperationAuthorizationBasisPayload.PublishedContract,
+                            HttpMethod = "PATCH",
+                            PathTemplate = "/repositories/{repositoryId}",
+                            ContractDigest = new string('b', 64),
+                            CatalogDigest = $"sha256:{new string('a', 64)}",
+                            ExecutionPolicy = new AgentToolOperationExecutionPolicyPayload
+                            {
+                                Risk = AgentToolOperationRiskPayload.Write,
+                                Approval = AgentToolOperationApprovalPayload.Required,
+                                EnforcementOwner =
+                                    AgentToolOperationEnforcementOwnerPayload.Aevatar,
+                                AllowedExecutionModes =
+                                {
+                                    AgentToolOperationExecutionModePayload.Interactive,
+                                },
+                            },
                         },
                     },
                 },

@@ -11,6 +11,7 @@ import "ai_messages.proto";
 import "workflow_execution_messages.proto";
 import "nyxid_chat_task.proto";
 import "agent_profiles.proto";
+import "ToolProviders/agent_tool_admission.proto";
 
 enum AgentRunStatus {
   AGENT_RUN_STATUS_UNSPECIFIED = 0;
@@ -246,6 +247,7 @@ message AgentRunPendingToolAuthorization {
   bool is_destructive = 5;
   string side_effect_kind = 6;
   string tool_definition_fingerprint = 7;
+  aevatar.ai.tool_providers.AgentToolOperationAdmissionPayload operation_admission = 8;
 }
 
 enum AgentRunToolResultViewStatus {

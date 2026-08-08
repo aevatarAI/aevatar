@@ -1035,6 +1035,23 @@ public sealed class MainnetHostCompositionTests
             .MaxRequestDurationSeconds.Should().Be(420);
     }
 
+    [Fact]
+    public void AddAevatarMainnetHost_ShouldShipConnectedServiceEffects()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder();
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        app.Services.GetRequiredService<NyxIdToolOptions>()
+            .EnableAssistantConnectedServiceEffects.Should().BeTrue();
+    }
+
     [Theory]
     [InlineData(NyxIdManagedWorkflowAdmissionMode.Shadow)]
     [InlineData(NyxIdManagedWorkflowAdmissionMode.Enforce)]

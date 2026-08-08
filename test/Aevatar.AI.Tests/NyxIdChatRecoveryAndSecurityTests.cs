@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Text;
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
@@ -328,14 +329,20 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
             operationKind,
             dispatchWaterline);
         using var services = BuildEventSourcingServices(eventStore);
-        var executor = new RecordingTurnOperationExecutor();
+        var operationDispatch = new RecordingTurnOperationDispatchPort();
         var dispatch = new RecordingActorDispatchPort();
         var publisher = new RecoveryRecordingEventPublisher();
-        var agent = CreateTurnActor(services, turnActorId, executor, dispatch, publisher);
+        var agent = CreateTurnActor(
+            services,
+            turnActorId,
+            operationDispatch,
+            dispatch,
+            publisher);
 
         await agent.ActivateAsync();
 
-        executor.Commands.Should().BeEmpty("activation must never replay provider or tool I/O");
+        operationDispatch.Executions.Should().BeEmpty(
+            "activation must never replay provider or tool I/O");
         dispatch.Calls.Should().BeEmpty(
             "activation recovery must use the current actor publisher");
         var publication = publisher.PublishCalls.Should().ContainSingle().Which;
@@ -352,7 +359,38 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
 
         await agent.HandleEventAsync(recoveryEnvelope);
 
-        executor.Commands.Should().BeEmpty();
+        operationDispatch.Executions.Should().BeEmpty();
+        if (expectedEffect == NyxIdChatEffectEvidence.MayHaveChanged)
+        {
+            var reconciliation = operationDispatch.Reconciliations
+                .Should().ContainSingle().Which;
+            reconciliation.Input.Key.Should().BeEquivalentTo(recovery.Key);
+            agent.State.ReconciliationStartedAt.Should().NotBeNull();
+            agent.State.ResultDelivered.Should().BeFalse();
+            dispatch.Calls.Should().BeEmpty();
+
+            await agent.HandleEventAsync(CreateEnvelope(
+                turnActorId,
+                new NyxIdChatTurnOperationExecutionCompletedSignal
+                {
+                    Source = NyxIdChatTurnOperationCompletionSource.Reconciliation,
+                    Result = new NyxIdChatOperationResultSignal
+                    {
+                        Key = recovery.Key.Clone(),
+                        Failure = new NyxIdChatOperationFailure
+                        {
+                            FailureCode = "NYXID_CHAT_OPERATION_OUTCOME_UNCERTAIN",
+                            SafeMessage = "The external operation could not be reconciled.",
+                            ExternalEffect = NyxIdChatEffectEvidence.MayHaveChanged,
+                        },
+                    },
+                }));
+        }
+        else
+        {
+            operationDispatch.Reconciliations.Should().BeEmpty();
+        }
+
         var delivery = dispatch.Calls.Should().ContainSingle().Which;
         delivery.ActorId.Should().Be("conversation-alpha");
         var result = delivery.Envelope.Payload.Unpack<NyxIdChatOperationResultSignal>();
@@ -364,7 +402,9 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         agent.State.Phase.Should().Be(expectedEffect == NyxIdChatEffectEvidence.MayHaveChanged
             ? NyxIdChatOperationPhase.Uncertain
             : NyxIdChatOperationPhase.Failed);
-        (await eventStore.GetEventsAsync(turnActorId)).Should().HaveCount(admittedEventCount + 2);
+        (await eventStore.GetEventsAsync(turnActorId)).Should().HaveCount(
+            admittedEventCount +
+            (expectedEffect == NyxIdChatEffectEvidence.MayHaveChanged ? 3 : 2));
     }
 
     [Fact]
@@ -374,14 +414,20 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         var eventStore = new InMemoryEventStoreForTests();
         await PersistCompletedUndeliveredTurnAsync(eventStore, turnActorId);
         using var services = BuildEventSourcingServices(eventStore);
-        var executor = new RecordingTurnOperationExecutor();
+        var operationDispatch = new RecordingTurnOperationDispatchPort();
         var dispatch = new RecordingActorDispatchPort();
         var publisher = new RecoveryRecordingEventPublisher();
-        var agent = CreateTurnActor(services, turnActorId, executor, dispatch, publisher);
+        var agent = CreateTurnActor(
+            services,
+            turnActorId,
+            operationDispatch,
+            dispatch,
+            publisher);
 
         await agent.ActivateAsync();
 
-        executor.Commands.Should().BeEmpty("recovery cannot reconstruct or repeat the original I/O");
+        operationDispatch.Executions.Should().BeEmpty(
+            "recovery cannot reconstruct or repeat the original I/O");
         dispatch.Calls.Should().BeEmpty(
             "activation recovery must use the current actor publisher");
         var recoveryEnvelope = CreateSelfEnvelope(
@@ -393,7 +439,8 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
 
         await agent.HandleEventAsync(recoveryEnvelope);
 
-        executor.Commands.Should().BeEmpty();
+        operationDispatch.Executions.Should().BeEmpty();
+        operationDispatch.Reconciliations.Should().BeEmpty();
         var result = dispatch.Calls.Should().ContainSingle().Which.Envelope.Payload
             .Unpack<NyxIdChatOperationResultSignal>();
         result.ResultCase.Should().Be(
@@ -980,13 +1027,14 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
     private static NyxIdChatTurnGAgent CreateTurnActor(
         ServiceProvider services,
         string actorId,
-        INyxIdChatTurnOperationExecutor executor,
+        INyxIdChatTurnOperationDispatchPort operationDispatch,
         IActorDispatchPort dispatch,
         IEventPublisher? publisher = null)
     {
         var agent = new NyxIdChatTurnGAgent(
-            executor,
+            operationDispatch,
             dispatch,
+            new NyxIdToolOptions(),
             new FixedTimeProvider(FixedNow))
         {
             Services = services,
@@ -1135,26 +1183,39 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         }
     }
 
-    private sealed class RecordingTurnOperationExecutor : INyxIdChatTurnOperationExecutor
+    private sealed class RecordingTurnOperationDispatchPort
+        : INyxIdChatTurnOperationDispatchPort,
+            INyxIdChatTurnOperationDispatchSession
     {
-        public List<NyxIdChatOperationDispatchCommand> Commands { get; } = [];
+        public List<NyxIdChatOperationDispatchCommand> Executions { get; } = [];
+        public List<(string ActorId, NyxIdChatTurnOperationReconciliationInput Input)>
+            Reconciliations { get; } = [];
 
-        public Task<NyxIdChatTurnOperationExecution> ExecuteAsync(
+        public Task DispatchExecutionAsync(
+            string turnActorId,
             NyxIdChatOperationDispatchCommand command,
-            NyxIdChatTransientExecutionSession session,
-            Func<NyxIdChatOperationProgressSignal, CancellationToken, Task> reportProgressAsync,
+            string correlationId,
             CancellationToken ct)
         {
-            _ = session;
-            _ = reportProgressAsync;
+            _ = turnActorId;
+            _ = correlationId;
             ct.ThrowIfCancellationRequested();
-            Commands.Add(command.Clone());
-            return Task.FromResult(new NyxIdChatTurnOperationExecution(
-                new NyxIdChatOperationResultSignal
-                {
-                    Key = command.Key.Clone(),
-                    Llm = new NyxIdChatLLMOperationResult(),
-                }));
+            Executions.Add(command.Clone());
+            return Task.CompletedTask;
+        }
+
+        public INyxIdChatTurnOperationDispatchSession OpenSession() => this;
+
+        public Task DispatchReconciliationAsync(
+            string turnActorId,
+            NyxIdChatTurnOperationReconciliationInput input,
+            string correlationId,
+            CancellationToken ct)
+        {
+            _ = correlationId;
+            ct.ThrowIfCancellationRequested();
+            Reconciliations.Add((turnActorId, input.Clone()));
+            return Task.CompletedTask;
         }
     }
 

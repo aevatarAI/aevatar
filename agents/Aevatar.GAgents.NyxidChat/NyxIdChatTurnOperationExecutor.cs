@@ -29,12 +29,10 @@ public sealed class NyxIdChatTransientExecutionSession
     internal AgentRunReplyStepState? StepState { get; set; }
     internal NeedsLlmReplyEvent? Request { get; set; }
     internal AgentRunAuthorizedToolStep? AuthorizedToolStep { get; set; }
+    internal IReadOnlyList<AgentRunAuthorizedToolCallSafety> AuthorizedToolCallSafeties { get; set; } = [];
     internal NyxIdChatOperationKey? AuthorizationSourceKey { get; set; }
     internal AgentProfileTurnCatalog? TurnCatalog { get; set; }
     internal long ProgressSequence { get; set; }
-    internal Func<NyxIdChatOperationKey, CancellationToken, Task>?
-        MarkEffectDispatchStartedAsync { get; set; }
-
     internal bool TryMarkToolStartPublished(string callId) =>
         _publishedToolStartCallIds.Add(callId);
 }
@@ -48,6 +46,8 @@ public sealed class NyxIdChatTurnOperationExecutor
     internal const string ToolCapabilityLostCode = "NYXID_CHAT_TOOL_CAPABILITY_LOST";
     internal const string ToolAuthorizationMismatchCode = "NYXID_CHAT_TOOL_AUTHORIZATION_MISMATCH";
     internal const string ToolReceiptRequiredCode = "NYXID_CHAT_TOOL_RECEIPT_REQUIRED";
+    internal const string ToolApprovalRequestIdRequiredCode =
+        "NYXID_CHAT_TOOL_APPROVAL_REQUEST_ID_REQUIRED";
     internal const string DelegationRefreshFailedCode = "NYXID_CHAT_DELEGATION_REFRESH_FAILED";
     private const string InvalidExecutionResultCode = "NYXID_CHAT_INVALID_EXECUTION_RESULT";
     private const string UnsupportedOperationCode = "NYXID_CHAT_OPERATION_NOT_SUPPORTED";
@@ -57,6 +57,8 @@ public sealed class NyxIdChatTurnOperationExecutor
         "The tool command did not match the exact authorized tool call.";
     private const string ToolReceiptRequiredMessage =
         "The effect-capable tool did not return the required outcome receipt.";
+    private const string ToolApprovalRequestIdRequiredMessage =
+        "The approval-required tool result did not identify the NyxID approval request.";
     private const string DelegationRefreshFailedMessage =
         "The delegated NyxID credential could not be refreshed.";
     private const string InvalidExecutionResultMessage =
@@ -319,6 +321,13 @@ public sealed class NyxIdChatTurnOperationExecutor
         session.StepState = ApplyLlmFacts(stepState, facts, execution.Continuation.StepIndex, outputParts);
         session.Request = request.Clone();
         session.AuthorizedToolStep = execution.AuthorizedToolStep;
+        session.AuthorizedToolCallSafeties = execution.AuthorizedToolCallSafeties?
+            .Select(static snapshot => snapshot with
+            {
+                Presentation = snapshot.Presentation?.Clone(),
+                OperationAdmission = snapshot.OperationAdmission?.Clone(),
+            })
+            .ToArray() ?? [];
         session.AuthorizationSourceKey = execution.AuthorizedToolStep is null
             ? null
             : command.Key.Clone();
@@ -368,9 +377,18 @@ public sealed class NyxIdChatTurnOperationExecutor
                 NyxIdChatEffectEvidence.NotStarted);
         }
 
+        var matchingAuthorizations = session.AuthorizedToolCallSafeties.Where(candidate =>
+            string.Equals(candidate.CallId, command.Tool.CallId, StringComparison.Ordinal) &&
+            string.Equals(candidate.ToolName, command.Tool.ToolName, StringComparison.Ordinal) &&
+            string.Equals(candidate.ArgumentsJson, command.Tool.ArgumentsJson, StringComparison.Ordinal))
+            .Take(2)
+            .ToArray();
+        var authorization = matchingAuthorizations.Length == 1
+            ? matchingAuthorizations[0]
+            : null;
         if (!SameTask(session.AuthorizationSourceKey, command.Key) ||
             session.StepState.PendingToolCalls.Count != 1 ||
-            !ToolCallMatches(session.StepState.PendingToolCalls[0], command.Tool))
+            !ToolCallMatches(session.StepState.PendingToolCalls[0], authorization, command.Tool))
         {
             return Failure(
                 command.Key,
@@ -415,12 +433,6 @@ public sealed class NyxIdChatTurnOperationExecutor
                 NyxIdChatEffectEvidence.NotStarted);
         }
 
-        if (command.Tool.MayChangeExternalState &&
-            session.MarkEffectDispatchStartedAsync is { } markEffectDispatchStartedAsync)
-        {
-            await markEffectDispatchStartedAsync(command.Key, ct).ConfigureAwait(false);
-        }
-
         await ReportToolStartedOnceAsync(
                 command.Key,
                 new NyxIdChatToolProgress
@@ -434,7 +446,10 @@ public sealed class NyxIdChatTurnOperationExecutor
             .ConfigureAwait(false);
 
         var capability = (authorizedToolStep ?? session.AuthorizedToolStep)
-            .WithChatOperation(command.Key);
+            .WithChatOperation(
+                command.Key,
+                command.Tool.IdempotencyKey,
+                command.Tool.OperationAdmission);
         var continuation = await _generationExecutor.BuildToolStepContinuationAsync(
                 workItem,
                 capability,
@@ -495,6 +510,15 @@ public sealed class NyxIdChatTurnOperationExecutor
 
         if (receipt.Status == AgentToolReceiptStatus.ApprovalRequired)
         {
+            if (string.IsNullOrWhiteSpace(receipt.ApprovalRequestId))
+            {
+                return Failure(
+                    command.Key,
+                    ToolApprovalRequestIdRequiredCode,
+                    ToolApprovalRequestIdRequiredMessage,
+                    NyxIdChatEffectEvidence.NotStarted);
+            }
+
             return new NyxIdChatTurnOperationExecution(new NyxIdChatOperationResultSignal
             {
                 Key = command.Key.Clone(),
@@ -679,6 +703,9 @@ public sealed class NyxIdChatTurnOperationExecutor
                         CallId = pending.Id,
                         ArgumentsJson = pending.ArgumentsJson,
                         MayChangeExternalState = approval.MayChangeExternalState,
+                        Idempotent = !approval.MayChangeExternalState,
+                        IdempotencyKey = approval.IdempotencyKey,
+                        OperationAdmission = approval.OperationAdmission?.Clone(),
                     },
                 },
                 session,
@@ -740,6 +767,9 @@ public sealed class NyxIdChatTurnOperationExecutor
                         CallId = pending.Id,
                         ArgumentsJson = pending.ArgumentsJson,
                         MayChangeExternalState = admission.MayChangeExternalState,
+                        Idempotent = !admission.MayChangeExternalState,
+                        IdempotencyKey = admission.IdempotencyKey,
+                        OperationAdmission = admission.OperationAdmission?.Clone(),
                     },
                 },
                 session,
@@ -931,6 +961,8 @@ public sealed class NyxIdChatTurnOperationExecutor
             result.NyxIdProvenance = SnapshotNyxIdIdentity(
                 snapshot.Presentation.NyxIdOperation);
         }
+        if (snapshot.OperationAdmission is not null)
+            result.OperationAdmission = snapshot.OperationAdmission.Clone();
         return result;
     }
 
@@ -941,6 +973,9 @@ public sealed class NyxIdChatTurnOperationExecutor
             ConnectedServiceId = source.ConnectedServiceId,
             ServiceSlug = source.ServiceSlug,
             CatalogServiceSlug = source.CatalogServiceSlug,
+            OperationId = source.OperationId,
+            HttpMethod = source.HttpMethod,
+            PathTemplate = source.PathTemplate,
         };
         if (source.HasReadinessCapabilityId &&
             !string.IsNullOrWhiteSpace(source.ReadinessCapabilityId))
@@ -1288,10 +1323,35 @@ public sealed class NyxIdChatTurnOperationExecutor
 
     private static bool ToolCallMatches(
         AgentRunToolCall authorized,
-        NyxIdChatToolOperationInput command) =>
-        string.Equals(authorized.Id, command.CallId, StringComparison.Ordinal) &&
-        string.Equals(authorized.Name, command.ToolName, StringComparison.Ordinal) &&
-        string.Equals(authorized.ArgumentsJson, command.ArgumentsJson, StringComparison.Ordinal);
+        AgentRunAuthorizedToolCallSafety? authorization,
+        NyxIdChatToolOperationInput command)
+    {
+        if (!string.Equals(authorized.Id, command.CallId, StringComparison.Ordinal) ||
+            !string.Equals(authorized.Name, command.ToolName, StringComparison.Ordinal) ||
+            !string.Equals(authorized.ArgumentsJson, command.ArgumentsJson, StringComparison.Ordinal) ||
+            authorization is null ||
+            !NyxIdChatOperationAdmissionPolicy.Matches(
+                authorization.OperationAdmission,
+                command.OperationAdmission))
+        {
+            return false;
+        }
+
+        if (command.OperationAdmission is null)
+            return true;
+
+        return NyxIdChatOperationAdmissionPolicy.IsValid(
+            command.OperationAdmission,
+            new NyxIdChatToolCallSafety
+            {
+                IsReadOnly = authorization.CallSafety.IsReadOnly,
+                IsDestructive = authorization.CallSafety.IsDestructive,
+                SideEffectKind = authorization.SideEffectKind,
+                MayChangeExternalState = !authorization.CallSafety.IsReadOnly ||
+                                         authorization.CallSafety.IsDestructive ||
+                                         !string.IsNullOrWhiteSpace(authorization.SideEffectKind),
+            });
+    }
 
     private static NyxIdChatEffectEvidence ResolveExternalEffect(
         NyxIdChatToolOperationInput command,
@@ -1313,6 +1373,7 @@ public sealed class NyxIdChatTurnOperationExecutor
     private static void ClearAuthorization(NyxIdChatTransientExecutionSession session)
     {
         session.AuthorizedToolStep = null;
+        session.AuthorizedToolCallSafeties = [];
         session.AuthorizationSourceKey = null;
     }
 

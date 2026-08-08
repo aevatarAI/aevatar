@@ -14,6 +14,7 @@ using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.AI.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Google.Protobuf;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.NyxidChat;
@@ -455,15 +456,17 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
 
             var argumentsJson = call.ArgumentsJson ?? string.Empty;
             var callSafety = tool.GetCallSafety(argumentsJson);
+            var operationAdmission = SnapshotOperationAdmission(tool);
             snapshots.Add(new AgentRunAuthorizedToolCallSafety(
                 call.Id ?? string.Empty,
                 call.Name ?? string.Empty,
                 argumentsJson,
                 callSafety,
                 tool.SideEffectKind ?? string.Empty,
-                BuildToolDefinitionFingerprint(tool, callSafety),
+                BuildToolDefinitionFingerprint(tool, callSafety, operationAdmission),
                 ToolPresentationDescriptors.Snapshot(tool, call.Name ?? string.Empty, argumentsJson),
-                ResolveRequiresApproval(tool, callSafety)));
+                ResolveRequiresApproval(tool, callSafety),
+                operationAdmission));
         }
 
         return snapshots;
@@ -526,6 +529,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             IsDestructive = source.CallSafety.IsDestructive,
             SideEffectKind = source.SideEffectKind ?? string.Empty,
             ToolDefinitionFingerprint = source.ToolDefinitionFingerprint ?? string.Empty,
+            OperationAdmission = source.OperationAdmission?.Clone(),
         };
 
     private async Task<LLMRequest> MaterializeFileRefMessagesAsync(LLMRequest request, CancellationToken ct)
@@ -919,6 +923,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         string argumentsJson)
     {
         var currentSafety = tool.GetCallSafety(argumentsJson);
+        var currentAdmission = SnapshotOperationAdmission(tool);
         return authorization.HasRequiresApproval == currentSafety.RequiresApproval.HasValue &&
                authorization.RequiresApproval == (currentSafety.RequiresApproval ?? false) &&
                authorization.IsReadOnly == currentSafety.IsReadOnly &&
@@ -926,7 +931,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                string.Equals(authorization.SideEffectKind, tool.SideEffectKind ?? string.Empty, StringComparison.Ordinal) &&
                string.Equals(
                    authorization.ToolDefinitionFingerprint,
-                   BuildToolDefinitionFingerprint(tool, currentSafety),
+                   BuildToolDefinitionFingerprint(tool, currentSafety, currentAdmission),
                    StringComparison.Ordinal);
     }
 
@@ -941,7 +946,10 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         return values.Length == 0 ? "(none)" : string.Join(',', values);
     }
 
-    private static string BuildToolDefinitionFingerprint(IAgentTool tool, AgentToolCallSafety callSafety)
+    private static string BuildToolDefinitionFingerprint(
+        IAgentTool tool,
+        AgentToolCallSafety callSafety,
+        AgentToolOperationAdmissionPayload? operationAdmission)
     {
         var canonical = string.Join('\n',
             tool.Name ?? string.Empty,
@@ -951,8 +959,23 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             callSafety.RequiresApproval.HasValue ? "1" : "0",
             callSafety.RequiresApproval == true ? "1" : "0",
             callSafety.IsReadOnly ? "1" : "0",
-            callSafety.IsDestructive ? "1" : "0");
+            callSafety.IsDestructive ? "1" : "0",
+            operationAdmission is null
+                ? string.Empty
+                : Convert.ToBase64String(operationAdmission.ToByteArray()));
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant();
+    }
+
+    private static AgentToolOperationAdmissionPayload? SnapshotOperationAdmission(IAgentTool tool)
+    {
+        if (tool is not IAgentToolOperationAdmissionOwner owner)
+            return null;
+
+        var payload = (AgentToolExecutionContext.Empty with
+        {
+            OperationAdmission = owner.OperationAdmission,
+        }).ToPayload();
+        return payload.OperationAdmission?.Clone();
     }
 
     private static AgentRunToolStepResult BuildUnauthorizedToolStepResult(IReadOnlyList<ToolCall> toolCalls)

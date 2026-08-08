@@ -273,6 +273,32 @@ public sealed class NyxIdChatNeedsYouContinuationTests
         reconciled.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Failed);
     }
 
+    [Fact]
+    public async Task ApprovalRequiredWithoutNyxIdRequestIdentity_ShouldFailClosed()
+    {
+        var generation = new ApprovalGenerationExecutor(approvalRequestId: string.Empty);
+        var executor = new NyxIdChatTurnOperationExecutor(generation);
+        var session = new NyxIdChatTransientExecutionSession();
+        await executor.ExecuteAsync(
+            InitialLlmCommand(),
+            session,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        var execution = await executor.ExecuteAsync(
+            ToolCommand(),
+            session,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        execution.Result.ResultCase.Should().Be(
+            NyxIdChatOperationResultSignal.ResultOneofCase.Failure);
+        execution.Result.Failure.FailureCode.Should().Be(
+            NyxIdChatTurnOperationExecutor.ToolApprovalRequestIdRequiredCode);
+        execution.Result.Failure.ExternalEffect.Should().Be(
+            NyxIdChatEffectEvidence.NotStarted);
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
@@ -640,7 +666,9 @@ public sealed class NyxIdChatNeedsYouContinuationTests
         }
     }
 
-    private sealed class ApprovalGenerationExecutor : GenerationExecutorBase
+    private sealed class ApprovalGenerationExecutor(
+        string approvalRequestId = "approval-alpha")
+        : GenerationExecutorBase
     {
         private static readonly AgentRunToolCall ToolCall = new()
         {
@@ -711,7 +739,7 @@ public sealed class NyxIdChatNeedsYouContinuationTests
                             {
                                 CallId = ToolCall.Id,
                                 ToolName = ToolCall.Name,
-                                ApprovalRequestId = "approval-alpha",
+                                ApprovalRequestId = approvalRequestId,
                                 Status = status,
                                 ResultJson = resultJson,
                                 IsDestructive = true,

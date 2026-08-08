@@ -200,6 +200,10 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<INyxIdChatDelegationCredentialLifecyclePort,
             NyxIdChatDelegationCredentialLifecyclePort>();
         services.TryAddSingleton<INyxIdChatTurnOperationExecutor, NyxIdChatTurnOperationExecutor>();
+        services.TryAddSingleton<INyxIdChatTurnOperationReconciliationPort,
+            UnavailableNyxIdChatTurnOperationReconciliationPort>();
+        services.TryAddSingleton<INyxIdChatTurnOperationDispatchPort,
+            NyxIdChatTurnOperationDispatchPort>();
         services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton<IAgentToolReceiptRenderer, AgentToolReceiptRenderer>();
         services.TryAddSingleton<ILarkCardReplyStreamRenderer, LarkCardReplyStreamRenderer>();

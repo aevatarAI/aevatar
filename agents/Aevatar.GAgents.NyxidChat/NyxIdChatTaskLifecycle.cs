@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgents.NyxidChat;
@@ -22,6 +23,7 @@ public static class NyxIdChatTaskLifecycle
 {
     public const string ToolSafetyRequired = "NYXID_CHAT_TOOL_SAFETY_REQUIRED";
     public const string ToolCallInvalid = "NYXID_CHAT_TOOL_CALL_INVALID";
+    public const string ToolAdmissionInvalid = "NYXID_CHAT_TOOL_ADMISSION_INVALID";
     public const string MultipleToolCallsUnsupported =
         "NYXID_CHAT_MULTIPLE_TOOL_CALLS_UNSUPPORTED";
     public const string InputRequestInvalid = "NYXID_CHAT_INPUT_REQUEST_INVALID";
@@ -30,6 +32,8 @@ public static class NyxIdChatTaskLifecycle
         "The authorized tool provider did not supply the required safety classification.";
     private const string ToolCallInvalidMessage =
         "The model returned an invalid typed tool call.";
+    private const string ToolAdmissionInvalidMessage =
+        "The connected-service operation admission was incomplete or inconsistent.";
     private const string MultipleToolCallsUnsupportedMessage =
         "This chat version can execute only one authorized tool call at a time.";
     private const string InputRequestInvalidMessage =
@@ -138,6 +142,20 @@ public static class NyxIdChatTaskLifecycle
         if (NyxIdChatAskUserContract.IsAskUser(toolCall))
             return ApplyLlmInputPlan(state, signal, operationKey, currentStep, toolCall, now);
 
+        if (NyxIdChatOperationAdmissionPolicy.IsConnectedServiceCall(toolCall) &&
+            !NyxIdChatOperationAdmissionPolicy.IsValid(
+                toolCall.OperationAdmission,
+                toolCall.Safety,
+                toolCall.NyxIdProvenance))
+        {
+            return FailClosed(
+                state,
+                operationKey,
+                ToolAdmissionInvalid,
+                ToolAdmissionInvalidMessage,
+                now);
+        }
+
         var transition = NyxIdChatTaskTransitionPolicy.ReconcileOperation(state, signal);
         if (transition.Outcome != NyxIdChatTransitionOutcome.Accepted)
             return FromTransition(transition, nextCommand: null);
@@ -196,6 +214,9 @@ public static class NyxIdChatTaskLifecycle
                 ToolName = toolCall.ToolName,
                 ArgumentsJson = toolCall.ArgumentsJson,
                 MayChangeExternalState = toolCall.Safety.MayChangeExternalState,
+                Idempotent = !toolCall.Safety.MayChangeExternalState,
+                IdempotencyKey = toolStep.Operation.IdempotencyKey,
+                OperationAdmission = toolCall.OperationAdmission?.Clone(),
             },
         };
         FinalizeDerivedState(next, now);
@@ -394,11 +415,23 @@ public static class NyxIdChatTaskLifecycle
             OperationId = operationId,
             OperationGeneration = 1,
         };
-        var toolSource = new NyxIdChatToolStepSource { ToolName = call.ToolName };
+        var toolSource = new NyxIdChatToolStepSource
+        {
+            ToolName = call.ToolName,
+            OperationAdmission = call.OperationAdmission?.Clone(),
+        };
+        if (call.OperationAdmission is { } admission)
+        {
+            toolSource.ServiceSlug = admission.ServiceSlug;
+            toolSource.ServiceId = admission.ServiceInstanceId;
+        }
         if (call.NyxIdProvenance is { } provenance)
         {
-            toolSource.ServiceSlug = provenance.ServiceSlug;
-            toolSource.ServiceId = provenance.ConnectedServiceId;
+            if (call.OperationAdmission is null)
+            {
+                toolSource.ServiceSlug = provenance.ServiceSlug;
+                toolSource.ServiceId = provenance.ConnectedServiceId;
+            }
             if (provenance.HasReadinessCapabilityId &&
                 !string.IsNullOrWhiteSpace(provenance.ReadinessCapabilityId))
             {
@@ -428,6 +461,8 @@ public static class NyxIdChatTaskLifecycle
                 Kind = NyxIdChatStepKind.Tool,
                 Phase = NyxIdChatOperationPhase.Requested,
                 MayChangeExternalState = call.Safety.MayChangeExternalState,
+                Idempotent = !call.Safety.MayChangeExternalState,
+                IdempotencyKey = operationId,
                 RequestedAt = now.Clone(),
             },
             UpdatedAt = now.Clone(),
