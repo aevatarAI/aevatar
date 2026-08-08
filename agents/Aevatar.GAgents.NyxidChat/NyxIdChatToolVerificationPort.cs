@@ -49,13 +49,9 @@ public sealed class NyxIdChatToolVerificationPort : INyxIdChatToolVerificationPo
                 "The admitted verification read is unavailable.");
         }
 
-        var callId = $"verify:{key.OperationId}:{key.OperationGeneration}";
-        var context = AgentToolExecutionContextMapper.FromPayload(input.ToolContext) with
+        var baseCallId = $"verify:{key.OperationId}:{key.OperationGeneration}";
+        var baseContext = AgentToolExecutionContextMapper.FromPayload(input.ToolContext) with
         {
-            Request = new AgentToolRequestIdentity(
-                key.OperationId,
-                callId,
-                key.OperationId),
             ExecutionOwner = AgentToolExecutionOwners.Actor(key.ConversationActorId),
             OperationAdmission = AgentToolOperationAdmissionPayloadMapper.FromPayload(
                 contract.ReadOperation),
@@ -68,44 +64,108 @@ public sealed class NyxIdChatToolVerificationPort : INyxIdChatToolVerificationPo
                 key.StepId,
                 null),
         };
-        var outcome = await _executionPort.ExecuteAsync(
-            new AgentToolExecutionRequest(
-                tool,
-                JsonFormatter.Default.Format(contract.Arguments),
-                context,
-                AgentToolApprovalContinuationMode.None,
-                ApprovalGrant: null),
-            ct).ConfigureAwait(false);
-        if (outcome.Kind is not (AgentToolExecutionOutcomeKind.Executed or
-                                AgentToolExecutionOutcomeKind.ExecutedAuditIncomplete) ||
-            outcome.Receipt.Status != AgentToolReceiptStatus.Success ||
-            !TryEvaluate(
-                outcome.ResultJson,
-                contract.ReadOperation,
-                contract.Assertion,
-                input.ProviderResourceId,
-                out var matched))
+        var arguments = contract.Arguments.Clone();
+        var seenPageTokens = new HashSet<string>(StringComparer.Ordinal);
+        var maxPages = contract.Pagination is null ? 1 : checked((int)contract.Pagination.MaxPages);
+        for (var page = 1; page <= maxPages; page++)
         {
-            return Unavailable(input, FailedCode,
-                "The admitted verification read did not produce usable typed evidence.");
+            var callId = page == 1 ? baseCallId : $"{baseCallId}:page:{page}";
+            var requestId = contract.Pagination is null
+                ? key.OperationId
+                : $"{key.OperationId}:read-page:{page}";
+            var context = baseContext with
+            {
+                Request = new AgentToolRequestIdentity(requestId, callId, key.OperationId),
+            };
+            var outcome = await _executionPort.ExecuteAsync(
+                new AgentToolExecutionRequest(
+                    tool,
+                    JsonFormatter.Default.Format(arguments),
+                    context,
+                    AgentToolApprovalContinuationMode.None,
+                    ApprovalGrant: null),
+                ct).ConfigureAwait(false);
+            if (outcome.Kind is not (AgentToolExecutionOutcomeKind.Executed or
+                                    AgentToolExecutionOutcomeKind.ExecutedAuditIncomplete) ||
+                outcome.Receipt.Status != AgentToolReceiptStatus.Success ||
+                !TryEvaluate(
+                    outcome.ResultJson,
+                    contract.ReadOperation,
+                    contract.Assertion,
+                    input.ProviderResourceId,
+                    out var matched))
+            {
+                return Unavailable(input, FailedCode,
+                    "The admitted verification read did not produce usable typed evidence.");
+            }
+
+            if (matched)
+                return Result(input, NyxIdChatToolVerificationDisposition.Applied);
+
+            if (contract.NotAppliedAssertion is not null)
+            {
+                if (!TryEvaluate(
+                        outcome.ResultJson,
+                        contract.ReadOperation,
+                        contract.NotAppliedAssertion,
+                        string.Empty,
+                        out var notAppliedMatched))
+                {
+                    return Unavailable(input, FailedCode,
+                        "The admitted verification read did not produce usable typed evidence.");
+                }
+                if (notAppliedMatched)
+                    return Result(input, NyxIdChatToolVerificationDisposition.NotApplied);
+            }
+
+            if (contract.Pagination is null)
+            {
+                return contract.NotAppliedAssertion is not null ||
+                       contract.Assertion.Match == AgentToolReadBackMatchPayload.ArrayContainsEquals
+                    ? Unavailable(input, UnavailableCode,
+                        "The verification read did not prove application or non-application.")
+                    : Result(input, NyxIdChatToolVerificationDisposition.NotApplied);
+            }
+
+            if (!TryReadPagination(
+                    outcome.ResultJson,
+                    contract.ReadOperation,
+                    contract.Pagination,
+                    out var hasMore,
+                    out var pageToken))
+            {
+                return Unavailable(input, UnavailableCode,
+                    "The verification pagination contract returned unusable typed evidence.");
+            }
+            if (!hasMore)
+                return Result(input, NyxIdChatToolVerificationDisposition.NotApplied);
+            if (page == maxPages ||
+                string.IsNullOrWhiteSpace(pageToken) ||
+                !seenPageTokens.Add(pageToken))
+            {
+                return Unavailable(input, UnavailableCode,
+                    "The exhaustive verification read did not reach a terminal page.");
+            }
+            if (!TryWritePaginationArgument(arguments, contract.Pagination, pageToken))
+            {
+                return Unavailable(input, UnavailableCode,
+                    "The verification continuation token could not be applied safely.");
+            }
         }
 
-        if (!matched && contract.Assertion.Match == AgentToolReadBackMatchPayload.ArrayContainsEquals)
-        {
-            return Unavailable(input, UnavailableCode,
-                "The bounded verification read did not contain the provider resource; absence is not proof of non-application.");
-        }
-
-        return new NyxIdChatToolVerificationResult
-        {
-            EffectStepId = input.EffectStepId,
-            Disposition = matched
-                ? NyxIdChatToolVerificationDisposition.Applied
-                : NyxIdChatToolVerificationDisposition.NotApplied,
-            ReadOperation = contract.ReadOperation.Clone(),
-            CheckName = contract.CheckName,
-        };
+        return Unavailable(input, UnavailableCode,
+            "The exhaustive verification read did not reach a terminal page.");
     }
+
+    private static NyxIdChatToolVerificationResult Result(
+        NyxIdChatToolVerificationInput input,
+        NyxIdChatToolVerificationDisposition disposition) => new()
+    {
+        EffectStepId = input.EffectStepId,
+        Disposition = disposition,
+        ReadOperation = input.ReadBack.ReadOperation.Clone(),
+        CheckName = input.ReadBack.CheckName,
+    };
 
     private static NyxIdChatToolVerificationResult Unavailable(
         NyxIdChatToolVerificationInput input,
@@ -137,13 +197,9 @@ public sealed class NyxIdChatToolVerificationPort : INyxIdChatToolVerificationPo
         matched = false;
         try
         {
-            var root = JsonNode.Parse(resultJson);
-            if (root?["kind"]?.GetValue<string>() != "connected_service_read_projection" ||
-                root["status"]?.GetValue<string>() != "succeeded" ||
-                !MatchesProvenance(root["provenance"], readOperation))
+            if (!TryReadProjectionData(resultJson, readOperation, out var current))
                 return false;
 
-            var current = root["data"];
             var found = TryResolvePointer(current, assertion.JsonPointer, out var value);
             var expectedValue = ResolveExpectedValue(assertion, providerResourceId);
             matched = assertion.Match switch
@@ -161,6 +217,91 @@ public sealed class NyxIdChatToolVerificationPort : INyxIdChatToolVerificationPo
                 _ => false,
             };
             return assertion.Match != AgentToolReadBackMatchPayload.Unspecified;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool TryReadPagination(
+        string resultJson,
+        AgentToolOperationAdmissionPayload readOperation,
+        AgentToolReadBackPaginationPayload pagination,
+        out bool hasMore,
+        out string pageToken)
+    {
+        hasMore = false;
+        pageToken = string.Empty;
+        if (!TryReadProjectionData(resultJson, readOperation, out var data) ||
+            !TryResolvePointer(data, pagination.HasMoreJsonPointer, out var hasMoreNode) ||
+            hasMoreNode is not JsonValue hasMoreValue ||
+            !hasMoreValue.TryGetValue<bool>(out hasMore))
+        {
+            return false;
+        }
+
+        if (!hasMore)
+            return true;
+
+        if (!TryResolvePointer(data, pagination.PageTokenJsonPointer, out var tokenNode) ||
+            tokenNode is not JsonValue tokenValue ||
+            !tokenValue.TryGetValue<string>(out var resolvedPageToken) ||
+            string.IsNullOrWhiteSpace(resolvedPageToken))
+        {
+            return false;
+        }
+
+        pageToken = resolvedPageToken;
+        return true;
+    }
+
+    private static bool TryWritePaginationArgument(
+        Google.Protobuf.WellKnownTypes.Struct arguments,
+        AgentToolReadBackPaginationPayload pagination,
+        string pageToken)
+    {
+        if (pagination.PageTokenLocation != AgentToolOperationParameterLocationPayload.Query ||
+            string.IsNullOrWhiteSpace(pagination.PageTokenArgumentName) ||
+            string.IsNullOrWhiteSpace(pageToken))
+        {
+            return false;
+        }
+
+        Google.Protobuf.WellKnownTypes.Struct query;
+        if (!arguments.Fields.TryGetValue("query", out var queryValue) ||
+            queryValue.KindCase != Google.Protobuf.WellKnownTypes.Value.KindOneofCase.StructValue)
+        {
+            query = new Google.Protobuf.WellKnownTypes.Struct();
+            arguments.Fields["query"] = Google.Protobuf.WellKnownTypes.Value.ForStruct(query);
+        }
+        else
+        {
+            query = queryValue.StructValue;
+        }
+        query.Fields[pagination.PageTokenArgumentName] =
+            Google.Protobuf.WellKnownTypes.Value.ForString(pageToken);
+        return true;
+    }
+
+    private static bool TryReadProjectionData(
+        string resultJson,
+        AgentToolOperationAdmissionPayload readOperation,
+        out JsonNode? data)
+    {
+        data = null;
+        try
+        {
+            var root = JsonNode.Parse(resultJson);
+            if (root?["kind"]?.GetValue<string>() != "connected_service_read_projection" ||
+                root["status"]?.GetValue<string>() != "succeeded" ||
+                !MatchesProvenance(root["provenance"], readOperation))
+            {
+                return false;
+            }
+
+            data = root["data"];
+            return data is not null;
         }
         catch
         {

@@ -62,6 +62,13 @@ public sealed record AgentToolReadBackAssertion(
     AgentToolReadBackExpectedValueSource ExpectedValueSource =
         AgentToolReadBackExpectedValueSource.FrozenValue);
 
+public sealed record AgentToolReadBackPagination(
+    string HasMoreJsonPointer,
+    string PageTokenJsonPointer,
+    AgentToolOperationParameterLocation PageTokenLocation,
+    string PageTokenArgumentName,
+    int MaxPages);
+
 /// <summary>
 /// Server-sealed post-effect read. The nested admission must be an exact read-only operation
 /// and must not itself carry another read-back contract.
@@ -70,7 +77,9 @@ public sealed record AgentToolOperationReadBack(
     AgentToolOperationAdmission ReadOperation,
     Struct Arguments,
     AgentToolReadBackAssertion Assertion,
-    string CheckName);
+    string CheckName,
+    AgentToolReadBackAssertion? NotAppliedAssertion = null,
+    AgentToolReadBackPagination? Pagination = null);
 
 public static class AgentToolOperationSelector
 {

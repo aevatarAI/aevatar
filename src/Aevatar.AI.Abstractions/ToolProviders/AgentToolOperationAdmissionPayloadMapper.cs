@@ -86,20 +86,27 @@ public static class AgentToolOperationAdmissionPayloadMapper
                 "An operation read-back cannot recursively carry another read-back contract.");
         }
 
-        return new AgentToolOperationReadBackPayload
+        var payload = new AgentToolOperationReadBackPayload
         {
             ReadOperation = ToPayload(readBack.ReadOperation),
             Arguments = readBack.Arguments?.Clone() ?? new Google.Protobuf.WellKnownTypes.Struct(),
-            Assertion = new AgentToolReadBackAssertionPayload
-            {
-                Match = ToReadBackMatch(readBack.Assertion.Match),
-                JsonPointer = readBack.Assertion.JsonPointer ?? string.Empty,
-                ExpectedValue = readBack.Assertion.ExpectedValue?.Clone(),
-                ElementJsonPointer = readBack.Assertion.ElementJsonPointer ?? string.Empty,
-                ExpectedValueSource = ToExpectedValueSource(readBack.Assertion.ExpectedValueSource),
-            },
+            Assertion = ToReadBackAssertion(readBack.Assertion),
             CheckName = readBack.CheckName ?? string.Empty,
         };
+        if (readBack.NotAppliedAssertion is not null)
+            payload.NotAppliedAssertion = ToReadBackAssertion(readBack.NotAppliedAssertion);
+        if (readBack.Pagination is not null)
+        {
+            payload.Pagination = new AgentToolReadBackPaginationPayload
+            {
+                HasMoreJsonPointer = readBack.Pagination.HasMoreJsonPointer ?? string.Empty,
+                PageTokenJsonPointer = readBack.Pagination.PageTokenJsonPointer ?? string.Empty,
+                PageTokenLocation = ToParameterLocation(readBack.Pagination.PageTokenLocation),
+                PageTokenArgumentName = readBack.Pagination.PageTokenArgumentName ?? string.Empty,
+                MaxPages = (uint)Math.Max(0, readBack.Pagination.MaxPages),
+            };
+        }
+        return payload;
     }
 
     private static AgentToolOperationReadBack? FromReadBack(AgentToolOperationReadBackPayload? payload)
@@ -114,14 +121,38 @@ public static class AgentToolOperationAdmissionPayloadMapper
         return new AgentToolOperationReadBack(
             readOperation,
             payload.Arguments?.Clone() ?? new Google.Protobuf.WellKnownTypes.Struct(),
-            new AgentToolReadBackAssertion(
-                FromReadBackMatch(payload.Assertion.Match),
-                payload.Assertion.JsonPointer ?? string.Empty,
-                payload.Assertion.ExpectedValue?.Clone(),
-                payload.Assertion.ElementJsonPointer ?? string.Empty,
-                FromExpectedValueSource(payload.Assertion.ExpectedValueSource)),
-            payload.CheckName ?? string.Empty);
+            FromReadBackAssertion(payload.Assertion),
+            payload.CheckName ?? string.Empty,
+            payload.NotAppliedAssertion is null
+                ? null
+                : FromReadBackAssertion(payload.NotAppliedAssertion),
+            payload.Pagination is null
+                ? null
+                : new AgentToolReadBackPagination(
+                    payload.Pagination.HasMoreJsonPointer ?? string.Empty,
+                    payload.Pagination.PageTokenJsonPointer ?? string.Empty,
+                    FromParameterLocation(payload.Pagination.PageTokenLocation),
+                    payload.Pagination.PageTokenArgumentName ?? string.Empty,
+                    checked((int)payload.Pagination.MaxPages)));
     }
+
+    private static AgentToolReadBackAssertionPayload ToReadBackAssertion(
+        AgentToolReadBackAssertion assertion) => new()
+    {
+        Match = ToReadBackMatch(assertion.Match),
+        JsonPointer = assertion.JsonPointer ?? string.Empty,
+        ExpectedValue = assertion.ExpectedValue?.Clone(),
+        ElementJsonPointer = assertion.ElementJsonPointer ?? string.Empty,
+        ExpectedValueSource = ToExpectedValueSource(assertion.ExpectedValueSource),
+    };
+
+    private static AgentToolReadBackAssertion FromReadBackAssertion(
+        AgentToolReadBackAssertionPayload assertion) => new(
+        FromReadBackMatch(assertion.Match),
+        assertion.JsonPointer ?? string.Empty,
+        assertion.ExpectedValue?.Clone(),
+        assertion.ElementJsonPointer ?? string.Empty,
+        FromExpectedValueSource(assertion.ExpectedValueSource));
 
     private static AgentToolReadBackMatchPayload ToReadBackMatch(AgentToolReadBackMatch value) => value switch
     {

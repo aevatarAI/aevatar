@@ -407,6 +407,82 @@ public static class MainnetHostBuilderExtensions
                     },
                 ],
             });
+            o.AssistantOperationReadBackBindings.Add(new NyxIdAssistantOperationReadBackBinding
+            {
+                CatalogServiceSlug = "api-lark-bot",
+                EffectHttpMethod = "POST",
+                EffectPathTemplate = "/open-apis/approval/v4/instances",
+                ReadHttpMethod = "GET",
+                ReadPathTemplate = "/open-apis/approval/v4/instances/{instance_id}",
+                CheckName = "lark_approval_instance_exists_by_caller_uuid",
+                Match = AgentToolReadBackMatch.Exists,
+                JsonPointer = "/data/instance_code",
+                EffectResultIdentityJsonPointer = "/data/instance_code",
+                ArgumentBindings =
+                [
+                    new NyxIdAssistantReadBackArgumentBinding
+                    {
+                        EffectLocation = NyxIdAssistantOperationArgumentLocation.Body,
+                        EffectArgumentName = "uuid",
+                        ReadLocation = NyxIdAssistantOperationArgumentLocation.Path,
+                        ReadArgumentName = "instance_id",
+                    },
+                ],
+                NotAppliedEvidence = new NyxIdAssistantReadBackNotAppliedEvidence
+                {
+                    JsonPointer = "/code",
+                    ExpectedValue = Value.ForNumber(1390003),
+                },
+            });
+            o.AssistantOperationReadBackBindings.Add(new NyxIdAssistantOperationReadBackBinding
+            {
+                CatalogServiceSlug = "api-lark-bot",
+                EffectHttpMethod = "POST",
+                EffectPathTemplate =
+                    "/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records",
+                ReadHttpMethod = "GET",
+                ReadPathTemplate =
+                    "/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records",
+                CheckName = "lark_bitable_record_exists_by_provider_identity",
+                Match = AgentToolReadBackMatch.ArrayContainsEquals,
+                JsonPointer = "/data/items",
+                ElementJsonPointer = "/record_id",
+                EffectResultIdentityJsonPointer = "/data/record/record_id",
+                ArgumentBindings =
+                [
+                    new NyxIdAssistantReadBackArgumentBinding
+                    {
+                        EffectLocation = NyxIdAssistantOperationArgumentLocation.Path,
+                        EffectArgumentName = "app_token",
+                        ReadLocation = NyxIdAssistantOperationArgumentLocation.Path,
+                        ReadArgumentName = "app_token",
+                    },
+                    new NyxIdAssistantReadBackArgumentBinding
+                    {
+                        EffectLocation = NyxIdAssistantOperationArgumentLocation.Path,
+                        EffectArgumentName = "table_id",
+                        ReadLocation = NyxIdAssistantOperationArgumentLocation.Path,
+                        ReadArgumentName = "table_id",
+                    },
+                ],
+                LiteralReadArguments =
+                [
+                    new NyxIdAssistantReadBackLiteralArgument
+                    {
+                        ReadLocation = NyxIdAssistantOperationArgumentLocation.Query,
+                        ReadArgumentName = "page_size",
+                        Value = Value.ForNumber(20),
+                    },
+                ],
+                Pagination = new NyxIdAssistantReadBackPagination
+                {
+                    HasMoreJsonPointer = "/data/has_more",
+                    PageTokenJsonPointer = "/data/page_token",
+                    PageTokenLocation = NyxIdAssistantOperationArgumentLocation.Query,
+                    PageTokenArgumentName = "page_token",
+                    MaxPages = 200,
+                },
+            });
             o.EnableManagedCodexExecTool = builder.Configuration.GetValue<bool>(
                 $"{ManagedCodexOptions.SectionName}:Enabled");
             o.MaxRequestDurationSeconds = builder.Configuration.GetValue(

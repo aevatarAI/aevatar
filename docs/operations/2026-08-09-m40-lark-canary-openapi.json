@@ -1,0 +1,1108 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Lark / Feishu Bot API - Aevatar M40 Canary",
+    "version": "m40-canary-v1",
+    "description": "Per-instance NyxID overlay for the Aevatar Milestone 40 canary. It preserves the reviewed catalog operations and adds the exact Lark Approval lifecycle and Bitable record cleanup operations used by the sanctioned canary targets. Paths are relative to the domain root; NyxID injects the tenant access token."
+  },
+  "servers": [
+    {
+      "url": "https://open.larksuite.com",
+      "description": "Lark (global)"
+    },
+    {
+      "url": "https://open.feishu.cn",
+      "description": "Feishu (China)"
+    }
+  ],
+  "paths": {
+    "/open-apis/im/v1/messages": {
+      "post": {
+        "operationId": "im_message_create",
+        "summary": "Send a message as the bot",
+        "description": "Sends a message to a user or chat. `content` is a JSON-encoded string matching `msg_type` (e.g. {\"text\":\"hello\"} for msg_type=text).",
+        "x-aevatar-tool": {
+          "name": "im_message_create",
+          "description": "Send a Lark/Feishu message to a user or chat as the bot.",
+          "readOnly": false,
+          "destructive": false,
+          "requiresApproval": true
+        },
+        "parameters": [
+          {
+            "name": "receive_id_type",
+            "in": "query",
+            "required": true,
+            "description": "Type of the receive_id value.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "open_id",
+                "union_id",
+                "user_id",
+                "email",
+                "chat_id"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "receive_id",
+                  "msg_type",
+                  "content"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "receive_id": {
+                    "type": "string",
+                    "description": "Receiver id matching receive_id_type."
+                  },
+                  "msg_type": {
+                    "type": "string",
+                    "description": "Message type, e.g. text, post, interactive, image."
+                  },
+                  "content": {
+                    "type": "string",
+                    "description": "JSON-encoded message content string matching msg_type."
+                  },
+                  "uuid": {
+                    "type": "string",
+                    "description": "Optional client-generated idempotency key."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Message sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "im_messages_list",
+        "summary": "List messages in a chat",
+        "x-aevatar-tool": {
+          "name": "im_messages_list",
+          "description": "List Lark/Feishu messages of a chat (container).",
+          "readOnly": true,
+          "destructive": false,
+          "requiresApproval": false
+        },
+        "parameters": [
+          {
+            "name": "container_id_type",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "chat"
+              ]
+            },
+            "description": "Currently only chat."
+          },
+          {
+            "name": "container_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Chat id (oc_...)."
+          },
+          {
+            "name": "start_time",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Unix seconds lower bound."
+          },
+          {
+            "name": "end_time",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Unix seconds upper bound."
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "page_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "ok",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/open-apis/approval/v4/instances": {
+      "post": {
+        "operationId": "lark_create_approval_instance",
+        "summary": "Create a Lark approval instance",
+        "x-aevatar-tool": {
+          "name": "lark_create_approval_instance",
+          "description": "Create an approval instance with a caller-owned UUID for exact reconciliation.",
+          "readOnly": false,
+          "destructive": false,
+          "requiresApproval": true
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "approval_code",
+                  "user_id",
+                  "form",
+                  "uuid"
+                ],
+                "properties": {
+                  "approval_code": {
+                    "type": "string",
+                    "description": "Approval definition code."
+                  },
+                  "user_id": {
+                    "type": "string",
+                    "description": "Initiator tenant user ID."
+                  },
+                  "form": {
+                    "type": "string",
+                    "description": "Compressed JSON array of approval form control values."
+                  },
+                  "uuid": {
+                    "type": "string",
+                    "description": "Caller-owned UUID used for idempotency and exact read-back."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Approval instance created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/open-apis/approval/v4/instances/query": {
+      "post": {
+        "operationId": "lark_query_approval_instances",
+        "summary": "Query Lark approval instances",
+        "x-aevatar-tool": {
+          "name": "lark_query_approval_instances",
+          "description": "Read a bounded page of approval instances for one exact approval definition.",
+          "readOnly": true,
+          "destructive": false,
+          "requiresApproval": false
+        },
+        "parameters": [
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "page_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "user_id_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "open_id",
+                "union_id",
+                "user_id"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "approval_code"
+                ],
+                "properties": {
+                  "approval_code": {
+                    "type": "string"
+                  },
+                  "user_id": {
+                    "type": "string"
+                  },
+                  "instance_code": {
+                    "type": "string"
+                  },
+                  "instance_status": {
+                    "type": "string",
+                    "enum": [
+                      "ALL",
+                      "PENDING",
+                      "RECALL",
+                      "REJECT",
+                      "DELETED",
+                      "APPROVED"
+                    ]
+                  },
+                  "instance_start_time_from": {
+                    "type": "string"
+                  },
+                  "instance_start_time_to": {
+                    "type": "string"
+                  },
+                  "locale": {
+                    "type": "string",
+                    "enum": [
+                      "zh-CN",
+                      "en-US",
+                      "ja-JP"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Approval instance page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/open-apis/approval/v4/instances/{instance_id}": {
+      "get": {
+        "operationId": "lark_get_approval_instance",
+        "summary": "Get a Lark approval instance",
+        "description": "The path identity accepts either the provider instance code or the caller UUID supplied at create time.",
+        "x-aevatar-tool": {
+          "name": "lark_get_approval_instance",
+          "description": "Read one exact approval instance by provider code or caller UUID.",
+          "readOnly": true,
+          "destructive": false,
+          "requiresApproval": false
+        },
+        "parameters": [
+          {
+            "name": "instance_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "locale",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "zh-CN",
+                "en-US",
+                "ja-JP"
+              ]
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "user_id_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "open_id",
+                "union_id",
+                "user_id"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Approval instance detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/open-apis/approval/v4/instances/cancel": {
+      "post": {
+        "operationId": "lark_cancel_approval_instance",
+        "summary": "Cancel a Lark approval instance",
+        "x-aevatar-tool": {
+          "name": "lark_cancel_approval_instance",
+          "description": "Cancel one exact pending approval instance.",
+          "readOnly": false,
+          "destructive": true,
+          "requiresApproval": true
+        },
+        "parameters": [
+          {
+            "name": "user_id_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "open_id",
+                "union_id",
+                "user_id"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "approval_code",
+                  "instance_code",
+                  "user_id"
+                ],
+                "properties": {
+                  "approval_code": {
+                    "type": "string"
+                  },
+                  "instance_code": {
+                    "type": "string"
+                  },
+                  "user_id": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Approval instance canceled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/open-apis/im/v1/chats": {
+      "get": {
+        "operationId": "im_chats_list",
+        "summary": "List chats the bot is in",
+        "description": "Lists group chats that the bot has joined; use the returned chat_id values with im_message_create.",
+        "x-aevatar-tool": {
+          "name": "im_chats_list",
+          "description": "List Lark/Feishu chats the bot has joined.",
+          "readOnly": true,
+          "destructive": false,
+          "requiresApproval": false
+        },
+        "parameters": [
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "page_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Chat list page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/open-apis/bitable/v1/apps/{app_token}/tables": {
+      "get": {
+        "operationId": "bitable_tables_list",
+        "summary": "List tables in a Bitable app",
+        "x-aevatar-tool": {
+          "name": "bitable_tables_list",
+          "description": "List tables of a Lark/Feishu Bitable app.",
+          "readOnly": true,
+          "destructive": false,
+          "requiresApproval": false
+        },
+        "parameters": [
+          {
+            "name": "app_token",
+            "in": "path",
+            "required": true,
+            "description": "Bitable app token.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "page_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Table list page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records": {
+      "get": {
+        "operationId": "bitable_records_list",
+        "summary": "List records in a Bitable table",
+        "x-aevatar-tool": {
+          "name": "bitable_records_list",
+          "description": "List records of a Lark/Feishu Bitable table.",
+          "readOnly": true,
+          "destructive": false,
+          "requiresApproval": false
+        },
+        "parameters": [
+          {
+            "name": "app_token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "table_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "view_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "required": false,
+            "description": "Bitable filter formula, e.g. CurrentValue.[Status] = \"Done\".",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "description": "JSON array of sort clauses, e.g. [\"Amount DESC\"].",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "page_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Record list page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "properties": {
+                    "code": {
+                      "type": "integer"
+                    },
+                    "msg": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "properties": {
+                        "has_more": {
+                          "type": "boolean"
+                        },
+                        "page_token": {
+                          "type": "string"
+                        },
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "additionalProperties": true,
+                            "properties": {
+                              "record_id": {
+                                "type": "string"
+                              },
+                              "fields": {
+                                "type": "object",
+                                "additionalProperties": true
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "bitable_record_create",
+        "summary": "Create a Bitable record",
+        "x-aevatar-tool": {
+          "name": "bitable_record_create",
+          "description": "Create a record in a Lark/Feishu Bitable table.",
+          "readOnly": false,
+          "destructive": false,
+          "requiresApproval": true
+        },
+        "parameters": [
+          {
+            "name": "app_token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "table_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "fields"
+                ],
+                "properties": {
+                  "fields": {
+                    "type": "object",
+                    "description": "Field name to value map.",
+                    "additionalProperties": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "ok",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records/search": {
+      "post": {
+        "operationId": "bitable_records_search",
+        "summary": "Search records in a Bitable table",
+        "description": "Structured record search with typed filter conditions; preferred over the list endpoint for complex queries.",
+        "x-aevatar-tool": {
+          "name": "bitable_records_search",
+          "description": "Search records of a Lark/Feishu Bitable table with structured filters.",
+          "readOnly": true,
+          "destructive": false,
+          "requiresApproval": false
+        },
+        "parameters": [
+          {
+            "name": "app_token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "table_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "page_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "view_id": {
+                    "type": "string"
+                  },
+                  "field_names": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "filter": {
+                    "type": "object",
+                    "description": "Structured filter with conjunction and conditions.",
+                    "additionalProperties": true
+                  },
+                  "sort": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  },
+                  "automatic_fields": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Record search page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/open-apis/im/v1/messages/{message_id}/reply": {
+      "post": {
+        "operationId": "im_message_reply",
+        "summary": "Reply to a message",
+        "x-aevatar-tool": {
+          "name": "im_message_reply",
+          "description": "Reply to a Lark/Feishu message in its thread.",
+          "readOnly": false,
+          "destructive": false,
+          "requiresApproval": true
+        },
+        "parameters": [
+          {
+            "name": "message_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "msg_type",
+                  "content"
+                ],
+                "properties": {
+                  "msg_type": {
+                    "type": "string",
+                    "description": "Message type, e.g. text, post, interactive."
+                  },
+                  "content": {
+                    "type": "string",
+                    "description": "JSON-encoded message content string matching msg_type."
+                  },
+                  "uuid": {
+                    "type": "string",
+                    "description": "Optional client-generated idempotency key."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "ok",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records/{record_id}": {
+      "put": {
+        "operationId": "bitable_record_update",
+        "summary": "Update a Bitable record",
+        "x-aevatar-tool": {
+          "name": "bitable_record_update",
+          "description": "Update a record in a Lark/Feishu Bitable table.",
+          "readOnly": false,
+          "destructive": false,
+          "requiresApproval": true
+        },
+        "parameters": [
+          {
+            "name": "app_token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "table_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "record_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "fields"
+                ],
+                "properties": {
+                  "fields": {
+                    "type": "object",
+                    "description": "Field name to value map.",
+                    "additionalProperties": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "ok",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "bitable_record_delete",
+        "summary": "Delete a Bitable record",
+        "x-aevatar-tool": {
+          "name": "bitable_record_delete",
+          "description": "Delete one exact Lark/Feishu Bitable record by provider record ID.",
+          "readOnly": false,
+          "destructive": true,
+          "requiresApproval": true
+        },
+        "parameters": [
+          {
+            "name": "app_token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "table_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "record_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "ignore_consistency_check",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Record deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/open-apis/docx/v1/documents/{document_id}/raw_content": {
+      "get": {
+        "operationId": "docx_raw_content",
+        "summary": "Read a document as plain text",
+        "x-aevatar-tool": {
+          "name": "docx_raw_content",
+          "description": "Read a Lark/Feishu Docs document as plain text.",
+          "readOnly": true,
+          "destructive": false,
+          "requiresApproval": false
+        },
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "lang",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "ok",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

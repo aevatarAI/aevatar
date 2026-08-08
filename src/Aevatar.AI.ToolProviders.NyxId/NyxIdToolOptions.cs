@@ -54,6 +54,26 @@ public sealed class NyxIdAssistantEffectArgumentConstraint
     public Value ExpectedValue { get; set; } = new();
 }
 
+public sealed class NyxIdAssistantReadBackNotAppliedEvidence
+{
+    public string JsonPointer { get; set; } = string.Empty;
+
+    public Value ExpectedValue { get; set; } = new();
+}
+
+public sealed class NyxIdAssistantReadBackPagination
+{
+    public string HasMoreJsonPointer { get; set; } = string.Empty;
+
+    public string PageTokenJsonPointer { get; set; } = string.Empty;
+
+    public NyxIdAssistantOperationArgumentLocation PageTokenLocation { get; set; }
+
+    public string PageTokenArgumentName { get; set; } = string.Empty;
+
+    public int MaxPages { get; set; }
+}
+
 /// <summary>
 /// Server-owned exact effect-to-read contract. Endpoint identities and argument mappings are
 /// configuration facts; the model supplies values only through the admitted effect schema.
@@ -92,6 +112,10 @@ public sealed class NyxIdAssistantOperationReadBackBinding
 
     /// <summary>RFC 6901 pointer to the provider resource ID in the effect response.</summary>
     public string EffectResultIdentityJsonPointer { get; set; } = string.Empty;
+
+    public NyxIdAssistantReadBackNotAppliedEvidence? NotAppliedEvidence { get; set; }
+
+    public NyxIdAssistantReadBackPagination? Pagination { get; set; }
 
     public string CheckName { get; set; } = string.Empty;
 }

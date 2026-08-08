@@ -851,10 +851,11 @@ public class NyxIdConnectedServiceToolSourceTests
             options,
             client,
             new NyxIdServiceInstanceClient(client));
-        IAgentToolExecutionPort executionPort = new AdmittedAgentToolExecutor(
+        IAgentToolExecutionPort innerExecutionPort = new AdmittedAgentToolExecutor(
             AlwaysStartingAgentToolAdmissionLedger.Instance,
             new AppendedVerificationAuditTrail(),
             new StableVerificationIdentityHasher());
+        var executionPort = new RecordingExecutionPort(innerExecutionPort);
 
         using var scope = PushContext("user-token");
         var effectTool = (await source.DiscoverToolsAsync()).Single(tool => !tool.IsReadOnly);
@@ -1004,6 +1005,104 @@ public class NyxIdConnectedServiceToolSourceTests
         completed.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Succeeded);
         completed.State.ActiveTask.Steps.Should().OnlyContain(step =>
             step.Status == NyxIdChatStepStatus.Done);
+    }
+
+    [Theory]
+    [InlineData("{\"code\":0,\"data\":{\"instance_code\":\"approval-alpha\"}}",
+        NyxIdChatToolVerificationDisposition.Applied)]
+    [InlineData("{\"code\":1390003,\"msg\":\"instance not found\"}",
+        NyxIdChatToolVerificationDisposition.NotApplied)]
+    [InlineData("{\"code\":999999,\"msg\":\"provider unavailable\"}",
+        NyxIdChatToolVerificationDisposition.Unavailable)]
+    public async Task ToolVerification_ApprovalExactRead_ShouldRequireTypedProviderEvidence(
+        string providerBody,
+        NyxIdChatToolVerificationDisposition expected)
+    {
+        var readBack = ApprovalReadBack();
+        var verification = await VerifyReadBackAsync(
+            readBack,
+            [providerBody],
+            providerResourceId: "approval-alpha");
+
+        verification.Result.Disposition.Should().Be(
+            expected,
+            "failure={0}; message={1}",
+            verification.Result.FailureCode,
+            verification.Result.SafeMessage + "; outcomes=" + string.Join(
+                " | ",
+                verification.Outcomes.Select(outcome =>
+                    $"{outcome.Kind}/{outcome.Receipt.Status}/{outcome.FailureCode}/{outcome.ResultJson}")));
+        verification.Handler.ProxyRequests.Should().ContainSingle();
+        verification.Handler.ProxyRequests.Single().Path.Should().EndWith(
+            "/open-apis/approval/v4/instances/approval-request-alpha");
+    }
+
+    [Fact]
+    public async Task ToolVerification_BitablePagination_ShouldContinueUntilProviderIdentityMatches()
+    {
+        var verification = await VerifyReadBackAsync(
+            BitableReadBack(),
+            [
+                """{"code":0,"data":{"has_more":true,"page_token":"page-alpha","items":[{"record_id":"rec-old"}]}}""",
+                """{"code":0,"data":{"has_more":false,"items":[{"record_id":"rec-target"}]}}""",
+            ],
+            providerResourceId: "rec-target");
+
+        verification.Result.Disposition.Should().Be(NyxIdChatToolVerificationDisposition.Applied);
+        verification.Handler.ProxyRequests.Should().HaveCount(2);
+        verification.Handler.ProxyRequests[0].Query.Should().NotContain("page_token");
+        verification.Handler.ProxyRequests[1].Query.Should().Contain("page_token=page-alpha");
+    }
+
+    [Fact]
+    public async Task ToolVerification_BitableTerminalPageWithoutIdentity_ShouldProveNotApplied()
+    {
+        var verification = await VerifyReadBackAsync(
+            BitableReadBack(),
+            [
+                """{"code":0,"data":{"has_more":true,"page_token":"page-alpha","items":[{"record_id":"rec-old"}]}}""",
+                """{"code":0,"data":{"has_more":false,"items":[{"record_id":"rec-other"}]}}""",
+            ],
+            providerResourceId: "rec-target");
+
+        verification.Result.Disposition.Should().Be(NyxIdChatToolVerificationDisposition.NotApplied);
+        verification.Handler.ProxyRequests.Should().HaveCount(2);
+    }
+
+    [Theory]
+    [InlineData("missing_token", 1)]
+    [InlineData("repeated_token", 2)]
+    [InlineData("max_pages", 2)]
+    public async Task ToolVerification_BitableUnterminatedPagination_ShouldRemainUnavailable(
+        string scenario,
+        int expectedRequests)
+    {
+        var responses = scenario switch
+        {
+            "missing_token" => new[]
+            {
+                """{"code":0,"data":{"has_more":true,"items":[]}}""",
+            },
+            "repeated_token" =>
+            [
+                """{"code":0,"data":{"has_more":true,"page_token":"page-alpha","items":[]}}""",
+                """{"code":0,"data":{"has_more":true,"page_token":"page-alpha","items":[]}}""",
+            ],
+            _ =>
+            [
+                """{"code":0,"data":{"has_more":true,"page_token":"page-alpha","items":[]}}""",
+                """{"code":0,"data":{"has_more":true,"page_token":"page-beta","items":[]}}""",
+            ],
+        };
+        var readBack = BitableReadBack(maxPages: scenario == "max_pages" ? 2 : 200);
+
+        var verification = await VerifyReadBackAsync(
+            readBack,
+            responses,
+            providerResourceId: "rec-target");
+
+        verification.Result.Disposition.Should().Be(NyxIdChatToolVerificationDisposition.Unavailable);
+        verification.Handler.ProxyRequests.Should().HaveCount(expectedRequests);
     }
 
     [Theory]
@@ -1599,7 +1698,222 @@ public class NyxIdConnectedServiceToolSourceTests
         }
         """;
 
-    private sealed record ProxyRequestRecord(string Method, string Path);
+    private static AgentToolOperationReadBackPayload ApprovalReadBack()
+    {
+        var readOperation = VerificationReadOperation(
+            "approval-read-endpoint",
+            "/open-apis/approval/v4/instances/{instance_id}",
+            [
+                new AgentToolOperationParameter(
+                    "instance_id",
+                    AgentToolOperationParameterLocation.Path,
+                    true,
+                    AgentToolOperationValueSchema.Text),
+            ]);
+        return new AgentToolOperationReadBackPayload
+        {
+            ReadOperation = AgentToolOperationAdmissionPayloadMapper.ToPayload(readOperation),
+            Arguments = new Struct
+            {
+                Fields =
+                {
+                    ["path_params"] = ProtoValue.ForStruct(new Struct
+                    {
+                        Fields =
+                        {
+                            ["instance_id"] = ProtoValue.ForString("approval-request-alpha"),
+                        },
+                    }),
+                },
+            },
+            Assertion = new AgentToolReadBackAssertionPayload
+            {
+                Match = AgentToolReadBackMatchPayload.Exists,
+                JsonPointer = "/data/instance_code",
+            },
+            NotAppliedAssertion = new AgentToolReadBackAssertionPayload
+            {
+                Match = AgentToolReadBackMatchPayload.Equals,
+                JsonPointer = "/code",
+                ExpectedValue = ProtoValue.ForNumber(1390003),
+            },
+            CheckName = "lark_approval_instance_exists_by_caller_uuid",
+        };
+    }
+
+    private static AgentToolOperationReadBackPayload BitableReadBack(int maxPages = 200)
+    {
+        var readOperation = VerificationReadOperation(
+            "bitable-read-endpoint",
+            "/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records",
+            [
+                new AgentToolOperationParameter(
+                    "app_token",
+                    AgentToolOperationParameterLocation.Path,
+                    true,
+                    AgentToolOperationValueSchema.Text),
+                new AgentToolOperationParameter(
+                    "table_id",
+                    AgentToolOperationParameterLocation.Path,
+                    true,
+                    AgentToolOperationValueSchema.Text),
+                new AgentToolOperationParameter(
+                    "page_size",
+                    AgentToolOperationParameterLocation.Query,
+                    false,
+                    new AgentToolOperationValueSchema(
+                        AgentToolOperationValueKind.Integer,
+                        [],
+                        new HashSet<string>(StringComparer.Ordinal),
+                        null,
+                        [],
+                        false)),
+                new AgentToolOperationParameter(
+                    "page_token",
+                    AgentToolOperationParameterLocation.Query,
+                    false,
+                    AgentToolOperationValueSchema.Text),
+            ]);
+        return new AgentToolOperationReadBackPayload
+        {
+            ReadOperation = AgentToolOperationAdmissionPayloadMapper.ToPayload(readOperation),
+            Arguments = new Struct
+            {
+                Fields =
+                {
+                    ["path_params"] = ProtoValue.ForStruct(new Struct
+                    {
+                        Fields =
+                        {
+                            ["app_token"] = ProtoValue.ForString("app-alpha"),
+                            ["table_id"] = ProtoValue.ForString("table-alpha"),
+                        },
+                    }),
+                    ["query"] = ProtoValue.ForStruct(new Struct
+                    {
+                        Fields =
+                        {
+                            ["page_size"] = ProtoValue.ForNumber(20),
+                        },
+                    }),
+                },
+            },
+            Assertion = new AgentToolReadBackAssertionPayload
+            {
+                Match = AgentToolReadBackMatchPayload.ArrayContainsEquals,
+                JsonPointer = "/data/items",
+                ElementJsonPointer = "/record_id",
+                ExpectedValueSource =
+                    AgentToolReadBackExpectedValueSourcePayload.ProviderResourceId,
+            },
+            Pagination = new AgentToolReadBackPaginationPayload
+            {
+                HasMoreJsonPointer = "/data/has_more",
+                PageTokenJsonPointer = "/data/page_token",
+                PageTokenLocation = AgentToolOperationParameterLocationPayload.Query,
+                PageTokenArgumentName = "page_token",
+                MaxPages = checked((uint)maxPages),
+            },
+            CheckName = "lark_bitable_record_exists_by_provider_identity",
+        };
+    }
+
+    private static AgentToolOperationAdmission VerificationReadOperation(
+        string endpointId,
+        string pathTemplate,
+        IReadOnlyList<AgentToolOperationParameter> parameters) => new(
+        "usvc-lark",
+        "api-lark-bot",
+        new AgentToolOperationIdentity.PublishedEndpoint(endpointId),
+        AgentToolOperationAuthorizationBasis.PublishedContract,
+        "GET",
+        pathTemplate,
+        new string('c', 64),
+        parameters,
+        null,
+        new AgentToolOperationResponsePolicy(true, false, ["application/json"]),
+        new AgentToolOperationExecutionPolicy(
+            AgentToolOperationRisk.ReadOnly,
+            AgentToolOperationApproval.None,
+            AgentToolOperationEnforcementOwner.Aevatar,
+            [AgentToolOperationExecutionMode.Interactive]),
+        $"sha256:{new string('a', 64)}");
+
+    private static async Task<VerificationRun> VerifyReadBackAsync(
+        AgentToolOperationReadBackPayload readBack,
+        IEnumerable<string> providerResponseBodies,
+        string providerResourceId)
+    {
+        NyxIdChatOperationAdmissionPolicy.IsValidReadBack(readBack).Should().BeTrue(
+            "the test must exercise execution of a valid server-sealed read-back");
+        var handler = new FakeNyxIdHandler();
+        foreach (var body in providerResponseBodies)
+            handler.ProxyResponseBodies.Enqueue(body);
+        handler.McpConfigByToken["user-token"] = McpCatalog(new string('a', 64));
+        var options = new NyxIdToolOptions
+        {
+            BaseUrl = "https://nyx.test",
+        };
+        var client = new NyxIdApiClient(options, new HttpClient(handler));
+        INyxIdAdmittedOperationToolFactory toolFactory = new NyxIdAdmittedOperationToolFactory(
+            client,
+            options,
+            NullLogger<NyxIdAdmittedOperationToolFactory>.Instance);
+        IAgentToolExecutionPort innerExecutionPort = new AdmittedAgentToolExecutor(
+            AlwaysStartingAgentToolAdmissionLedger.Instance,
+            new AppendedVerificationAuditTrail(),
+            new StableVerificationIdentityHasher());
+        var executionPort = new RecordingExecutionPort(innerExecutionPort);
+        var toolContext = (AgentToolExecutionContext.Empty with
+        {
+            Credentials = AgentToolCredentials.Empty with
+            {
+                NyxIdAccessToken = "user-token",
+            },
+        }).ToPayload();
+        var result = await new NyxIdChatToolVerificationPort(toolFactory, executionPort)
+            .VerifyAsync(
+                new NyxIdChatOperationKey
+                {
+                    ConversationActorId = "conversation-alpha",
+                    TurnId = "turn-alpha",
+                    TaskId = "task-alpha",
+                    StepId = "postcondition-alpha",
+                    OperationId = "verification-alpha",
+                    OperationGeneration = 1,
+                },
+                new NyxIdChatToolVerificationInput
+                {
+                    EffectStepId = "effect-alpha",
+                    ReadBack = readBack,
+                    ProviderResourceId = providerResourceId,
+                    ToolContext = toolContext,
+                },
+                CancellationToken.None);
+        return new VerificationRun(result, handler, executionPort.Outcomes);
+    }
+
+    private sealed record ProxyRequestRecord(string Method, string Path, string Query);
+
+    private sealed record VerificationRun(
+        NyxIdChatToolVerificationResult Result,
+        FakeNyxIdHandler Handler,
+        IReadOnlyList<AgentToolExecutionOutcome> Outcomes);
+
+    private sealed class RecordingExecutionPort(IAgentToolExecutionPort inner)
+        : IAgentToolExecutionPort
+    {
+        public List<AgentToolExecutionOutcome> Outcomes { get; } = [];
+
+        public async Task<AgentToolExecutionOutcome> ExecuteAsync(
+            AgentToolExecutionRequest request,
+            CancellationToken ct = default)
+        {
+            var outcome = await inner.ExecuteAsync(request, ct);
+            Outcomes.Add(outcome);
+            return outcome;
+        }
+    }
 
     private sealed record LogEntry(string Message, Exception? Exception);
 
@@ -1657,6 +1971,7 @@ public class NyxIdConnectedServiceToolSourceTests
         public List<string> RawOpenApiRequests { get; } = [];
         public List<string> ExactReads { get; } = [];
         public List<ProxyRequestRecord> ProxyRequests { get; } = [];
+        public Queue<string> ProxyResponseBodies { get; } = [];
         public int DiscoveryRequests { get; private set; }
         public int McpConfigRequests { get; private set; }
         public bool FailMcpConfig { get; init; }
@@ -1713,11 +2028,17 @@ public class NyxIdConnectedServiceToolSourceTests
             }
             if (path.StartsWith("/api/v1/proxy/", StringComparison.Ordinal))
             {
-                ProxyRequests.Add(new ProxyRequestRecord(request.Method.Method, path));
+                ProxyRequests.Add(new ProxyRequestRecord(
+                    request.Method.Method,
+                    path,
+                    request.RequestUri?.Query ?? string.Empty));
+                var responseBody = ProxyResponseBodies.Count == 0
+                    ? ProxyResponseBody
+                    : ProxyResponseBodies.Dequeue();
                 return Task.FromResult(new HttpResponseMessage(ProxyStatusCode)
                 {
                     Content = ProxyResponseContentFactory?.Invoke() ??
-                              new StringContent(ProxyResponseBody, Encoding.UTF8, "application/json"),
+                              new StringContent(responseBody, Encoding.UTF8, "application/json"),
                 });
             }
 

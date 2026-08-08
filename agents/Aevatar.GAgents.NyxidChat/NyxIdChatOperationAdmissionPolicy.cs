@@ -115,16 +115,44 @@ internal static class NyxIdChatOperationAdmissionPolicy
                     operation.CatalogDigest,
                     effectOperation.CatalogDigest,
                     StringComparison.Ordinal)) &&
-               (readBack.Assertion.Match is not (
-                    AgentToolReadBackMatchPayload.Equals or
-                    AgentToolReadBackMatchPayload.ArrayContainsEquals) ||
-                readBack.Assertion.ExpectedValueSource ==
-                    AgentToolReadBackExpectedValueSourcePayload.ProviderResourceId ||
-                readBack.Assertion.ExpectedValue is not null) &&
-               (readBack.Assertion.Match != AgentToolReadBackMatchPayload.ArrayContainsEquals ||
-                !string.IsNullOrWhiteSpace(readBack.Assertion.JsonPointer) &&
-                !string.IsNullOrWhiteSpace(readBack.Assertion.ElementJsonPointer));
+               IsValidAssertion(readBack.Assertion) &&
+               (readBack.Pagination is null ||
+                readBack.Assertion.Match == AgentToolReadBackMatchPayload.ArrayContainsEquals) &&
+               (readBack.NotAppliedAssertion is null ||
+                readBack.NotAppliedAssertion.Match == AgentToolReadBackMatchPayload.Equals &&
+                readBack.NotAppliedAssertion.ExpectedValueSource !=
+                    AgentToolReadBackExpectedValueSourcePayload.ProviderResourceId &&
+                readBack.NotAppliedAssertion.ExpectedValue is not null &&
+                !string.IsNullOrWhiteSpace(readBack.NotAppliedAssertion.JsonPointer)) &&
+               IsValidPagination(readBack.Pagination, operation);
     }
+
+    private static bool IsValidAssertion(AgentToolReadBackAssertionPayload assertion) =>
+        (assertion.Match is not (
+             AgentToolReadBackMatchPayload.Equals or
+             AgentToolReadBackMatchPayload.ArrayContainsEquals) ||
+         assertion.ExpectedValueSource ==
+             AgentToolReadBackExpectedValueSourcePayload.ProviderResourceId ||
+         assertion.ExpectedValue is not null) &&
+        (assertion.Match != AgentToolReadBackMatchPayload.ArrayContainsEquals ||
+         !string.IsNullOrWhiteSpace(assertion.JsonPointer) &&
+         !string.IsNullOrWhiteSpace(assertion.ElementJsonPointer));
+
+    private static bool IsValidPagination(
+        AgentToolReadBackPaginationPayload? pagination,
+        AgentToolOperationAdmissionPayload readOperation) =>
+        pagination is null ||
+        pagination.MaxPages is > 0 and <= 1000 &&
+        !string.IsNullOrWhiteSpace(pagination.HasMoreJsonPointer) &&
+        !string.IsNullOrWhiteSpace(pagination.PageTokenJsonPointer) &&
+        pagination.PageTokenLocation == AgentToolOperationParameterLocationPayload.Query &&
+        !string.IsNullOrWhiteSpace(pagination.PageTokenArgumentName) &&
+        readOperation.Parameters.Any(parameter =>
+            parameter.Location == pagination.PageTokenLocation &&
+            string.Equals(
+                parameter.Name,
+                pagination.PageTokenArgumentName,
+                StringComparison.Ordinal));
 
     private static bool IsCatalogDigest(string? value)
     {

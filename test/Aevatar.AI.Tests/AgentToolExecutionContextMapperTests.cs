@@ -663,6 +663,11 @@ public sealed class AgentToolExecutionContextMapperTests
                     AgentToolOperationParameterLocation.Path,
                     true,
                     AgentToolOperationValueSchema.Text),
+                new AgentToolOperationParameter(
+                    "page_token",
+                    AgentToolOperationParameterLocation.Query,
+                    false,
+                    AgentToolOperationValueSchema.Text),
             ],
             null,
             AgentToolOperationResponsePolicy.TextOnly,
@@ -725,10 +730,21 @@ public sealed class AgentToolExecutionContextMapperTests
                     },
                 },
                 new AgentToolReadBackAssertion(
+                    AgentToolReadBackMatch.ArrayContainsEquals,
+                    "/items",
+                    Google.Protobuf.WellKnownTypes.Value.ForString("created"),
+                    "/status"),
+                "order_created",
+                new AgentToolReadBackAssertion(
                     AgentToolReadBackMatch.Equals,
-                    "/status",
-                    Google.Protobuf.WellKnownTypes.Value.ForString("created")),
-                "order_created"));
+                    "/code",
+                    Google.Protobuf.WellKnownTypes.Value.ForNumber(1390003)),
+                new AgentToolReadBackPagination(
+                    "/has_more",
+                    "/page_token",
+                    AgentToolOperationParameterLocation.Query,
+                    "page_token",
+                    200)));
     }
 
     private static string FindRepositoryRoot()

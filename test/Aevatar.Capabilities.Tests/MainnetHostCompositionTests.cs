@@ -1099,7 +1099,9 @@ public sealed class MainnetHostCompositionTests
         webSearchHandler.RequestUri.Should().EndWith(
             "/api/v1/proxy/s/tavily-search/search");
         options.EnableAssistantConnectedServiceEffects.Should().BeTrue();
-        var readBack = options.AssistantOperationReadBackBindings.Should().ContainSingle().Subject;
+        options.AssistantOperationReadBackBindings.Should().HaveCount(3);
+        var readBack = options.AssistantOperationReadBackBindings.Single(binding =>
+            binding.EffectPathTemplate == "/open-apis/im/v1/messages");
         readBack.CatalogServiceSlug.Should().Be("api-lark-bot");
         readBack.EffectHttpMethod.Should().Be("POST");
         readBack.EffectPathTemplate.Should().Be("/open-apis/im/v1/messages");
@@ -1111,6 +1113,31 @@ public sealed class MainnetHostCompositionTests
         readBack.EffectResultIdentityJsonPointer.Should().Be("/data/message_id");
         readBack.EffectArgumentConstraints.Should().ContainSingle();
         readBack.LiteralReadArguments.Should().HaveCount(2);
+
+        var approvalReadBack = options.AssistantOperationReadBackBindings.Single(binding =>
+            binding.EffectPathTemplate == "/open-apis/approval/v4/instances");
+        approvalReadBack.ReadPathTemplate.Should().Be(
+            "/open-apis/approval/v4/instances/{instance_id}");
+        approvalReadBack.Match.Should().Be(AgentToolReadBackMatch.Exists);
+        approvalReadBack.JsonPointer.Should().Be("/data/instance_code");
+        approvalReadBack.ArgumentBindings.Should().ContainSingle().Which
+            .EffectArgumentName.Should().Be("uuid");
+        approvalReadBack.NotAppliedEvidence.Should().NotBeNull();
+        approvalReadBack.NotAppliedEvidence!.JsonPointer.Should().Be("/code");
+        approvalReadBack.NotAppliedEvidence.ExpectedValue.NumberValue.Should().Be(1390003);
+
+        var bitableReadBack = options.AssistantOperationReadBackBindings.Single(binding =>
+            binding.EffectPathTemplate.Contains("/bitable/", StringComparison.Ordinal));
+        bitableReadBack.Match.Should().Be(AgentToolReadBackMatch.ArrayContainsEquals);
+        bitableReadBack.JsonPointer.Should().Be("/data/items");
+        bitableReadBack.ElementJsonPointer.Should().Be("/record_id");
+        bitableReadBack.EffectResultIdentityJsonPointer.Should().Be("/data/record/record_id");
+        bitableReadBack.ArgumentBindings.Should().HaveCount(2);
+        bitableReadBack.Pagination.Should().NotBeNull();
+        bitableReadBack.Pagination!.HasMoreJsonPointer.Should().Be("/data/has_more");
+        bitableReadBack.Pagination.PageTokenJsonPointer.Should().Be("/data/page_token");
+        bitableReadBack.Pagination.PageTokenArgumentName.Should().Be("page_token");
+        bitableReadBack.Pagination.MaxPages.Should().Be(200);
     }
 
     [Theory]

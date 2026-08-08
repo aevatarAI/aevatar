@@ -163,6 +163,17 @@ message AgentToolReadBackAssertionPayload {
   AgentToolReadBackExpectedValueSourcePayload expected_value_source = 5;
 }
 
+// Bounded exhaustive pagination for a server-sealed read-back. The actor-owned
+// verifier advances only through the typed continuation token and treats a
+// malformed or unterminated sequence as unavailable evidence.
+message AgentToolReadBackPaginationPayload {
+  string has_more_json_pointer = 1;
+  string page_token_json_pointer = 2;
+  AgentToolOperationParameterLocationPayload page_token_location = 3;
+  string page_token_argument_name = 4;
+  uint32 max_pages = 5;
+}
+
 // Server-sealed read-back contract for proving whether an effect was applied.
 // The read operation must itself be a read-only admitted exact selector and may
 // not contain another read-back contract.
@@ -171,6 +182,10 @@ message AgentToolOperationReadBackPayload {
   google.protobuf.Struct arguments = 2;
   AgentToolReadBackAssertionPayload assertion = 3;
   string check_name = 4;
+  // Optional exact typed evidence that proves the effect was not applied.
+  // When present, a generic assertion miss is unavailable rather than absence.
+  AgentToolReadBackAssertionPayload not_applied_assertion = 5;
+  AgentToolReadBackPaginationPayload pagination = 6;
 }
 
 // Credential-free authorization fence captured from the exact model-visible
