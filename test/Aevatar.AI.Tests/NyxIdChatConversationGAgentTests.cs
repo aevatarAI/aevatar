@@ -3173,6 +3173,8 @@ public sealed class NyxIdChatConversationGAgentTests
             .EventData.Unpack<NyxIdChatControlFenceCommittedEvent>();
         committedFence.State.ControlFence.Should().NotBeNull(
             "the control commit must carry the durable execution fence");
+        committedFence.Fence.StepId.Should().NotBeNullOrWhiteSpace();
+        committedFence.Fence.StepId.Should().Be(committedFence.State.ControlFence.StepId);
         var committedAdmission = committed.Single(evt =>
                 evt.EventData.Is(NyxIdChatContinuationAdmissionCommittedEvent.Descriptor))
             .EventData.Unpack<NyxIdChatContinuationAdmissionCommittedEvent>();
@@ -3286,9 +3288,14 @@ public sealed class NyxIdChatConversationGAgentTests
         agent.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Active);
         agent.State.ActiveTask.TaskId.Should().Be(taskId);
         agent.State.ActiveTask.PlanRevision.Should().Be(planRevision + 1);
-        agent.State.ActiveTask.PlanRevisions.Should().BeEmpty(
-            "#3321 must commit steering provenance from exact decision identities");
-        agent.State.ActiveTask.PlanRevisionHistoryStart.Should().Be(0);
+        agent.State.ActiveTask.PlanRevisions.Should().HaveCount(2);
+        agent.State.ActiveTask.PlanRevisionHistoryStart.Should().Be(1);
+        agent.State.ActiveTask.PlanRevisions[^1].RevisionCause.Should()
+            .Be(NyxIdChatPlanRevisionCause.Steering);
+        agent.State.ActiveTask.PlanRevisions[^1].AddedStepIds.Should()
+            .ContainSingle(stepId => stepId != oldKey.StepId);
+        agent.State.ActiveTask.PlanRevisions[^1].CancelledStepIds.Should()
+            .ContainSingle().Which.Should().Be(oldKey.StepId);
         agent.State.ActiveTask.Steps.Should().HaveCount(2);
         agent.State.ActiveTask.Steps.Should().Contain(step =>
             step.Operation != null &&
@@ -3296,8 +3303,7 @@ public sealed class NyxIdChatConversationGAgentTests
             step.Operation.Key.TurnId == "turn-alpha" &&
             step.Status == NyxIdChatStepStatus.Cancelled);
         agent.State.ActiveTask.Steps.Single(step => step.StepId == oldKey.StepId)
-            .CancelledInPlanRevision.Should().Be(0,
-                "#3304 must not infer steering provenance from final cancelled state");
+            .CancelledInPlanRevision.Should().Be(planRevision + 1);
         agent.State.ActiveTask.Steps.Should().Contain(step =>
             step.Operation != null &&
             step.Operation.Key != null &&

@@ -581,6 +581,7 @@ message NyxIdChatControlFenceState {
   string reason_code = 8;
   string safe_message = 9;
   google.protobuf.Timestamp committed_at = 10;
+  string step_id = 11;
 }
 
 message NyxIdChatContinuationAdmissionState {

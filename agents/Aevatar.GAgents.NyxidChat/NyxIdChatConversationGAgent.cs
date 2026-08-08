@@ -1546,11 +1546,7 @@ public sealed class NyxIdChatConversationGAgent
             PlanId = string.IsNullOrWhiteSpace(command.PlanId)
                 ? previousTask?.PlanId ?? command.TaskId.Trim()
                 : command.PlanId.Trim(),
-            PlanRevision = previousTask is null
-                ? Math.Max(1, command.PlanRevision)
-                : command.AddedBy == NyxIdChatStepAddedBy.Steering
-                    ? Math.Max(previousTask.PlanRevision, command.PlanRevision)
-                    : previousTask.PlanRevision,
+            PlanRevision = previousTask?.PlanRevision ?? Math.Max(1, command.PlanRevision),
             PlanRevisionHistoryStart = previousTask?.PlanRevisionHistoryStart ?? 0,
             Title = string.IsNullOrWhiteSpace(previousTask?.Title)
                 ? "Complete the requested assistant task"
@@ -1581,11 +1577,13 @@ public sealed class NyxIdChatConversationGAgent
         }
         else
         {
-            // #3321 owns the exact steering revision decision. Until that
-            // command carries exact added/cancelled step identities, do not
-            // publish a partial revision history as if it were complete.
-            task.PlanRevisionHistoryStart = 0;
-            task.PlanRevisions.Clear();
+            var cancelledSteps = ResolveSteeringCancelledSteps(task);
+            NyxIdChatPlanRevisions.CommitChange(
+                task,
+                NyxIdChatPlanRevisionCause.Steering,
+                now,
+                [step],
+                cancelledSteps);
         }
 
         var next = new NyxIdChatConversationGAgentState
@@ -1629,6 +1627,32 @@ public sealed class NyxIdChatConversationGAgent
             next.ContinuationAdmission.Status = NyxIdChatContinuationAdmissionStatus.Started;
         }
         return next;
+    }
+
+    private IReadOnlyCollection<NyxIdChatTaskStepState> ResolveSteeringCancelledSteps(
+        NyxIdChatTaskState task)
+    {
+        var fence = State.ControlFence;
+        if (fence is null ||
+            fence.Kind != NyxIdChatControlKind.Steering ||
+            string.IsNullOrWhiteSpace(fence.StepId) ||
+            !string.Equals(fence.TaskId, task.TaskId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "A steering revision requires the committed fence step identity.");
+        }
+
+        var fencedStep = task.Steps.SingleOrDefault(candidate =>
+            string.Equals(candidate.StepId, fence.StepId, StringComparison.Ordinal));
+        if (fencedStep is null)
+        {
+            throw new InvalidOperationException(
+                "The committed steering fence step does not belong to the active task.");
+        }
+
+        return fencedStep.Status == NyxIdChatStepStatus.Cancelled
+            ? [fencedStep]
+            : [];
     }
 
     private static Aevatar.AI.Abstractions.ChatContentPart SanitizeInputPart(

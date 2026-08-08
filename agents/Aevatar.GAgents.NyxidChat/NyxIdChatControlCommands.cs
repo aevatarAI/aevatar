@@ -1004,6 +1004,7 @@ public static class NyxIdChatControlCommands
             ClientRequestId = Normalize(clientRequestId),
             TurnId = state.ActiveTurn?.TurnId ?? string.Empty,
             TaskId = state.ActiveTask?.TaskId ?? string.Empty,
+            StepId = state.ActiveTask?.ActiveStepId ?? string.Empty,
             OperationGeneration = ResolveOperationGeneration(state),
             Outcome = outcome,
             ReasonCode = reasonCode,
