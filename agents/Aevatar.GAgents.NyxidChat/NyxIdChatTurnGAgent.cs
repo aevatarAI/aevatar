@@ -49,17 +49,8 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
         INyxIdChatTurnOperationDispatchPort operationDispatchPort,
         IActorDispatchPort actorDispatchPort,
         NyxIdToolOptions nyxIdToolOptions,
-        TimeProvider timeProvider)
-        : this(operationDispatchPort, actorDispatchPort, nyxIdToolOptions, timeProvider, null)
-    {
-    }
-
-    public NyxIdChatTurnGAgent(
-        INyxIdChatTurnOperationDispatchPort operationDispatchPort,
-        IActorDispatchPort actorDispatchPort,
-        NyxIdToolOptions nyxIdToolOptions,
         TimeProvider timeProvider,
-        ISecretVault? secretVault)
+        ISecretVault? secretVault = null)
     {
         ArgumentNullException.ThrowIfNull(operationDispatchPort);
         _operationDispatchSession = operationDispatchPort.OpenSession() ??
