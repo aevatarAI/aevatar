@@ -247,6 +247,103 @@ describe('ChatActorControls', () => {
     );
   });
 
+  it('submits a typed numeric threshold from the actor control', () => {
+    const projection = projectionFixture();
+    projection.pendingInput = {
+      requestId: 'input-threshold',
+      prompt: 'Choose the screening threshold',
+      options: [],
+      allowFreeText: true,
+      multiSelect: false,
+      numericThreshold: {
+        suggestedValue: 70,
+        minimumValue: 0,
+        maximumValue: 100,
+      },
+    };
+    const handlers = callbacks();
+    render(<ChatActorControls projection={projection} {...handlers} />);
+
+    fireEvent.change(
+      screen.getByRole('spinbutton', { name: 'Numeric threshold' }),
+      {
+        target: { value: '75' },
+      },
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Submit answer' }));
+
+    expect(handlers.onInputResolve).toHaveBeenCalledWith(
+      { freeText: '75' },
+      expect.objectContaining({ requestId: 'input-threshold' }),
+    );
+    expect(screen.getByText('Suggested 70')).toBeInTheDocument();
+    expect(
+      screen.queryByText('Type the answer in the composer below.'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('renders committed condition and guarded-tool facts after reload', () => {
+    const condition = stepFixture({
+      stepId: 'step-condition',
+      order: 1,
+      kind: 'condition',
+      status: 'done',
+      description: 'Evaluate the candidate score',
+      source: {
+        kind: 'condition',
+        label: '80 >= 75',
+        condition: {
+          conditionId: 'condition-alpha',
+          sourceInputRequestId: 'input-threshold',
+          suggestedThreshold: 70,
+          effectiveThreshold: 75,
+          thresholdOrigin: 'user_override',
+          observedValue: 80,
+          comparison: 'gte',
+          outcome: 'true',
+          guardedToolName: 'bitable_record_create',
+        },
+      },
+      mayChangeExternalState: false,
+      externalEffect: 'not_applied',
+      availableActions: { retry: false, skip: false, stop: false },
+      dependsOn: ['step-input'],
+      substeps: [],
+      operation: null,
+    });
+    const guarded = stepFixture({
+      stepId: 'step-write',
+      order: 2,
+      status: 'planned',
+      description: 'Create the attestation row',
+      source: { kind: 'tool', label: 'bitable_record_create' },
+      guard: {
+        conditionStepId: 'step-condition',
+        requiredOutcome: 'true',
+      },
+      dependsOn: ['step-condition'],
+      operation: null,
+    });
+
+    render(
+      <ChatActorControls
+        projection={projectionFixture([condition, guarded])}
+        {...callbacks()}
+      />,
+    );
+
+    const facts = screen.getByRole('region', {
+      name: 'Committed condition facts',
+    });
+    expect(facts).toHaveTextContent('80 >= 75');
+    expect(facts).toHaveTextContent('true');
+    expect(facts).toHaveTextContent('user_override');
+    expect(facts).toHaveTextContent('bitable_record_create');
+    expect(
+      screen.getByText('Guard step-condition requires true'),
+    ).toBeInTheDocument();
+  });
+
   it('shows only actor-authored recovery controls and moves steering to the composer', () => {
     const retry = stepFixture({
       status: 'failed',

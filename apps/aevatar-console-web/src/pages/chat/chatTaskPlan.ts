@@ -28,7 +28,8 @@ export type ChatTaskStepKind =
   | 'postcondition'
   | 'input'
   | 'approval'
-  | 'web';
+  | 'web'
+  | 'condition';
 
 export type ChatPlanRevisionCause =
   | 'initial'
@@ -68,7 +69,30 @@ export type ChatTaskStepSource =
   | { readonly kind: 'postcondition'; readonly label: string }
   | { readonly kind: 'input'; readonly label: string }
   | { readonly kind: 'approval'; readonly label: string }
-  | { readonly kind: 'web'; readonly label: string };
+  | { readonly kind: 'web'; readonly label: string }
+  | {
+      readonly kind: 'condition';
+      readonly label: string;
+      readonly condition: ChatNumericCondition;
+    };
+
+export type ChatNumericCondition = {
+  readonly conditionId: string;
+  readonly sourceInputRequestId: string;
+  readonly suggestedThreshold: number;
+  readonly effectiveThreshold: number;
+  readonly thresholdOrigin: 'suggested' | 'user_override';
+  readonly observedValue: number;
+  readonly comparison: 'gte';
+  readonly outcome: 'true' | 'false';
+  readonly evaluatedAt?: string;
+  readonly guardedToolName: string;
+};
+
+export type ChatStepGuard = {
+  readonly conditionStepId: string;
+  readonly requiredOutcome: 'true' | 'false';
+};
 
 export type ChatTaskOperation = {
   readonly conversationActorId?: string;
@@ -117,6 +141,7 @@ export type ChatActorStep = {
   readonly substeps: readonly ChatTaskSubstep[];
   readonly operation?: ChatTaskOperation | null;
   readonly approvalObservation?: ChatApprovalObservation;
+  readonly guard?: ChatStepGuard;
   readonly actionRequestId?: string;
   readonly approvalRequestId?: string;
   readonly failureCode?: string;
@@ -197,6 +222,7 @@ const STEP_KINDS = [
   'input',
   'approval',
   'web',
+  'condition',
 ] as const;
 const EFFECTS = [
   'not_started',
@@ -298,6 +324,10 @@ export function decodeChatTaskStep(input: unknown): ChatActorStep {
     value.approvalObservation === null
       ? undefined
       : decodeApprovalObservation(value.approvalObservation);
+  const guard =
+    value.guard === undefined || value.guard === null
+      ? undefined
+      : decodeGuard(value.guard);
   return {
     stepId: identity(value.stepId, 'stepId'),
     order: safeInteger(value.order, 'step.order', 0),
@@ -340,6 +370,7 @@ export function decodeChatTaskStep(input: unknown): ChatActorStep {
     substeps: optionalArray(value.substeps).map(decodeSubstep),
     operation,
     ...(approvalObservation ? { approvalObservation } : {}),
+    ...(guard ? { guard } : {}),
     ...(optionalIdentity(value.actionRequestId)
       ? { actionRequestId: optionalIdentity(value.actionRequestId) }
       : {}),
@@ -355,6 +386,18 @@ export function decodeChatTaskStep(input: unknown): ChatActorStep {
     ...(typeof value.safeToSkip === 'boolean'
       ? { safeToSkip: value.safeToSkip }
       : {}),
+  };
+}
+
+function decodeGuard(input: unknown): ChatStepGuard {
+  const value = record(input, 'step guard');
+  return {
+    conditionStepId: identity(value.conditionStepId, 'guard.conditionStepId'),
+    requiredOutcome: closed(
+      value.requiredOutcome,
+      ['true', 'false'] as const,
+      'guard.requiredOutcome',
+    ),
   };
 }
 
@@ -528,9 +571,60 @@ function decodeSource(
       return { kind: 'input', label: 'User input' };
     case 'approval':
       return { kind: 'approval', label: 'Approval' };
+    case 'condition': {
+      const condition = decodeCondition(source.condition);
+      return {
+        kind: 'condition',
+        label: `${condition.observedValue} >= ${condition.effectiveThreshold}`,
+        condition,
+      };
+    }
     default:
       return { kind: 'web', label: 'Web' };
   }
+}
+
+function decodeCondition(input: unknown): ChatNumericCondition {
+  const value = record(input, 'source.condition.condition');
+  return {
+    conditionId: identity(value.conditionId, 'condition.conditionId'),
+    sourceInputRequestId: identity(
+      value.sourceInputRequestId,
+      'condition.sourceInputRequestId',
+    ),
+    suggestedThreshold: integer(
+      value.suggestedThreshold,
+      'condition.suggestedThreshold',
+    ),
+    effectiveThreshold: integer(
+      value.effectiveThreshold,
+      'condition.effectiveThreshold',
+    ),
+    thresholdOrigin: closed(
+      value.thresholdOrigin,
+      ['suggested', 'user_override'] as const,
+      'condition.thresholdOrigin',
+    ),
+    observedValue: integer(value.observedValue, 'condition.observedValue'),
+    comparison: closed(
+      value.comparison,
+      ['gte'] as const,
+      'condition.comparison',
+    ),
+    outcome: closed(
+      value.outcome,
+      ['true', 'false'] as const,
+      'condition.outcome',
+    ),
+    ...(optionalString(value.evaluatedAt)
+      ? { evaluatedAt: optionalString(value.evaluatedAt) }
+      : {}),
+    guardedToolName: boundedString(
+      value.guardedToolName,
+      'condition.guardedToolName',
+      256,
+    ),
+  };
 }
 
 function decodeOperation(input: unknown): ChatTaskOperation {
@@ -633,6 +727,11 @@ function optionalString(input: unknown): string | undefined {
 function safeInteger(input: unknown, label: string, minimum: number): number {
   if (!Number.isSafeInteger(input) || (input as number) < minimum)
     throw invalid(`${label} is invalid.`);
+  return input as number;
+}
+
+function integer(input: unknown, label: string): number {
+  if (!Number.isSafeInteger(input)) throw invalid(`${label} is invalid.`);
   return input as number;
 }
 

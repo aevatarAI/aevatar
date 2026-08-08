@@ -5,8 +5,8 @@ import {
   RedoOutlined,
   StopOutlined,
 } from '@ant-design/icons';
-import { Button, Tag, Tooltip } from 'antd';
-import React, { useState } from 'react';
+import { Button, InputNumber, Tag, Tooltip } from 'antd';
+import React, { useEffect, useState } from 'react';
 import { t } from '@/shared/i18n/messages';
 import type {
   ChatActionSummary,
@@ -88,6 +88,12 @@ export function ChatActorControls({
   onActionReport,
 }: Props): React.ReactElement | null {
   const [selectedOptionIds, setSelectedOptionIds] = useState<string[]>([]);
+  const [numericAnswer, setNumericAnswer] = useState<number | null>(null);
+  const pendingInput = projection?.pendingInput ?? null;
+  useEffect(() => {
+    setSelectedOptionIds([]);
+    setNumericAnswer(pendingInput?.numericThreshold?.suggestedValue ?? null);
+  }, [pendingInput?.requestId, pendingInput?.numericThreshold?.suggestedValue]);
   const steps = [...(projection?.steps.values() ?? [])];
   const canStop = steps.some((step) => step.availableActions?.stop === true);
   const active = projection?.activeTurn?.status === 'active';
@@ -108,7 +114,6 @@ export function ChatActorControls({
   );
   if (!projection || !hasControls) return null;
 
-  const pendingInput = projection.pendingInput;
   return (
     <section
       aria-label={t('pages.chat.actorControls.actorControls', 'Actor controls')}
@@ -154,7 +159,53 @@ export function ChatActorControls({
               {option.description ? ` — ${option.description}` : ''}
             </label>
           ))}
-          {pendingInput.allowFreeText ? (
+          {pendingInput.numericThreshold ? (
+            <div
+              style={{
+                alignItems: 'center',
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: 8,
+              }}
+            >
+              <InputNumber
+                aria-label={t(
+                  'pages.chat.actorControls.numericThreshold',
+                  'Numeric threshold',
+                )}
+                disabled={disabled}
+                max={pendingInput.numericThreshold.maximumValue}
+                min={pendingInput.numericThreshold.minimumValue}
+                onChange={(value) => setNumericAnswer(value)}
+                placeholder={String(
+                  pendingInput.numericThreshold.suggestedValue,
+                )}
+                precision={0}
+                style={{ width: 180 }}
+                value={numericAnswer}
+              />
+              <span style={{ color: '#64748b', fontSize: 12 }}>
+                {t(
+                  'pages.chat.actorControls.suggestedThreshold',
+                  'Suggested {value}',
+                  { value: pendingInput.numericThreshold.suggestedValue },
+                )}
+              </span>
+              <Button
+                disabled={disabled || numericAnswer === null}
+                onClick={() =>
+                  onInputResolve(
+                    { freeText: String(numericAnswer) },
+                    pendingInput,
+                  )
+                }
+                size="small"
+                type="primary"
+              >
+                {t('pages.chat.actorControls.submitAnswer', 'Submit answer')}
+              </Button>
+            </div>
+          ) : pendingInput.allowFreeText ? (
             <div style={{ color: '#64748b', fontSize: 12 }}>
               {t(
                 'pages.chat.actorControls.answerInComposer',
@@ -478,6 +529,28 @@ function TaskPlanLedger({
                       <span>{`~${step.estimate.seconds}s`}</span>
                     ) : null}
                   </div>
+                  {step.source.kind === 'condition' ? (
+                    <ConditionFacts step={step} />
+                  ) : null}
+                  {step.guard ? (
+                    <div
+                      style={{
+                        color: '#475569',
+                        fontSize: 11,
+                        marginTop: 5,
+                        overflowWrap: 'anywhere',
+                      }}
+                    >
+                      {t(
+                        'pages.chat.actorControls.conditionGuard',
+                        'Guard {conditionId} requires {outcome}',
+                        {
+                          conditionId: step.guard.conditionStepId,
+                          outcome: step.guard.requiredOutcome,
+                        },
+                      )}
+                    </div>
+                  ) : null}
                   {step.operation ? (
                     <>
                       <div
@@ -746,6 +819,39 @@ function EffectTag({
     >
       <Tag color={color}>{effect}</Tag>
     </Tooltip>
+  );
+}
+
+function ConditionFacts({
+  step,
+}: {
+  step: ChatActorStep;
+}): React.ReactElement | null {
+  if (step.source.kind !== 'condition') return null;
+  const condition = step.source.condition;
+  return (
+    <section
+      aria-label={t(
+        'pages.chat.actorControls.conditionFacts',
+        'Committed condition facts',
+      )}
+      style={{
+        color: '#475569',
+        display: 'flex',
+        flexWrap: 'wrap',
+        fontSize: 11,
+        gap: '4px 10px',
+        marginTop: 6,
+        overflowWrap: 'anywhere',
+      }}
+    >
+      <span>{`${condition.observedValue} >= ${condition.effectiveThreshold}`}</span>
+      <Tag color={condition.outcome === 'true' ? 'success' : 'default'}>
+        {condition.outcome}
+      </Tag>
+      <span>{condition.thresholdOrigin}</span>
+      <span>{condition.guardedToolName}</span>
+    </section>
   );
 }
 

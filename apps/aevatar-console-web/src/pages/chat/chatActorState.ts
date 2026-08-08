@@ -66,6 +66,11 @@ export type ChatPendingInput = JsonRecord & {
   options: readonly { optionId: string; label: string; description?: string }[];
   allowFreeText: boolean;
   multiSelect: boolean;
+  numericThreshold?: {
+    suggestedValue: number;
+    minimumValue: number;
+    maximumValue: number;
+  } | null;
 };
 
 export type ChatPendingApproval = JsonRecord & {
