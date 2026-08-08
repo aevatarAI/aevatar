@@ -1094,7 +1094,7 @@ public sealed class NyxIdChatConversationGAgent
             Status = NyxIdChatTaskStatus.Active,
             CreatedAt = now.Clone(),
             UpdatedAt = now.Clone(),
-            SchemaVersion = 4,
+            SchemaVersion = 5,
             ActorId = Id,
             PlanId = wireRequest.TaskId,
             PlanRevision = 1,
@@ -2776,7 +2776,7 @@ public sealed class NyxIdChatConversationGAgent
             ActiveOperationId = operationKey.OperationId,
             CreatedAt = previousTask?.CreatedAt?.Clone() ?? now.Clone(),
             UpdatedAt = now.Clone(),
-            SchemaVersion = 4,
+            SchemaVersion = 5,
             ActorId = Id,
             PlanId = string.IsNullOrWhiteSpace(command.PlanId)
                 ? previousTask?.PlanId ?? command.TaskId.Trim()

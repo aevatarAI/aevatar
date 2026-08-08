@@ -242,6 +242,13 @@ public sealed class NyxIdChatConversationCurrentStateProjector
                     ReceiptStatus = ToWireName(step.ApprovalObservation.ReceiptStatus),
                     ObservedAt = step.ApprovalObservation.ObservedAt?.Clone(),
                 },
+            Guard = step.Guard == null
+                ? null
+                : new NyxIdChatConversationStepGuardDocument
+                {
+                    ConditionStepId = step.Guard.ConditionStepId,
+                    RequiredOutcome = ToWireName(step.Guard.RequiredOutcome),
+                },
             DependsOn = { step.DependsOn },
             Estimate = step.Estimate == null
                 ? null
@@ -317,7 +324,31 @@ public sealed class NyxIdChatConversationCurrentStateProjector
                 {
                     Web = new NyxIdChatConversationWebStepSourceDocument(),
                 },
+            NyxIdChatStepSource.SourceOneofCase.Condition =>
+                new NyxIdChatConversationStepSourceDocument
+                {
+                    Condition = new NyxIdChatConversationConditionStepSourceDocument
+                    {
+                        Condition = ToCondition(source.Condition.Condition),
+                    },
+                },
             _ => null,
+        };
+
+    private static NyxIdChatConversationNumericConditionDocument ToCondition(
+        NyxIdChatNumericConditionState condition) =>
+        new()
+        {
+            ConditionId = condition.ConditionId,
+            SourceInputRequestId = condition.SourceInputRequestId,
+            SuggestedThreshold = condition.SuggestedThreshold,
+            EffectiveThreshold = condition.EffectiveThreshold,
+            ThresholdOrigin = ToWireName(condition.ThresholdOrigin),
+            ObservedValue = condition.ObservedValue,
+            Comparison = ToWireName(condition.Comparison),
+            Outcome = ToWireName(condition.Outcome),
+            EvaluatedAt = condition.EvaluatedAt?.Clone(),
+            GuardedToolName = condition.GuardedToolName,
         };
 
     private static NyxIdChatConversationToolStepSourceDocument ToToolSource(
@@ -415,6 +446,15 @@ public sealed class NyxIdChatConversationCurrentStateProjector
             AllowFreeText = input.AllowFreeText,
             MultiSelect = input.MultiSelect,
         };
+        if (input.NumericThreshold is not null)
+        {
+            document.NumericThreshold = new NyxIdChatConversationNumericThresholdInputDocument
+            {
+                SuggestedValue = input.NumericThreshold.SuggestedValue,
+                MinimumValue = input.NumericThreshold.MinimumValue,
+                MaximumValue = input.NumericThreshold.MaximumValue,
+            };
+        }
         document.Options.AddRange(input.Options.Select(static option =>
             new NyxIdChatConversationInputOptionDocument
             {
@@ -426,16 +466,29 @@ public sealed class NyxIdChatConversationCurrentStateProjector
     }
 
     private static NyxIdChatConversationInputResolutionDocument? ToInputResolution(
-        NyxIdChatInputResolutionState? resolution) =>
-        resolution is null
-            ? null
-            : new NyxIdChatConversationInputResolutionDocument
-            {
-                RequestId = resolution.RequestId,
-                ClientRequestId = resolution.ClientRequestId,
-                Outcome = ToWireName(resolution.Outcome),
-                CommittedAt = resolution.CommittedAt?.Clone(),
-            };
+        NyxIdChatInputResolutionState? resolution)
+    {
+        if (resolution is null)
+            return null;
+        var document = new NyxIdChatConversationInputResolutionDocument
+        {
+            RequestId = resolution.RequestId,
+            ClientRequestId = resolution.ClientRequestId,
+            Outcome = ToWireName(resolution.Outcome),
+            CommittedAt = resolution.CommittedAt?.Clone(),
+        };
+        if (resolution.NumericThreshold is not null)
+        {
+            document.NumericThreshold =
+                new NyxIdChatConversationNumericThresholdResolutionDocument
+                {
+                    SuggestedValue = resolution.NumericThreshold.SuggestedValue,
+                    EffectiveValue = resolution.NumericThreshold.EffectiveValue,
+                    Origin = ToWireName(resolution.NumericThreshold.Origin),
+                };
+        }
+        return document;
+    }
 
     private static NyxIdChatConversationApprovalResolutionDocument? ToApprovalResolution(
         NyxIdChatApprovalResolutionState? resolution) =>
@@ -702,6 +755,27 @@ public sealed class NyxIdChatConversationCurrentStateProjector
         NyxIdChatStepKind.Input => "input",
         NyxIdChatStepKind.Approval => "approval",
         NyxIdChatStepKind.Web => "web",
+        NyxIdChatStepKind.Condition => "condition",
+        _ => string.Empty,
+    };
+
+    private static string ToWireName(NyxIdChatConditionOutcome outcome) => outcome switch
+    {
+        NyxIdChatConditionOutcome.True => "true",
+        NyxIdChatConditionOutcome.False => "false",
+        _ => string.Empty,
+    };
+
+    private static string ToWireName(NyxIdChatThresholdOrigin origin) => origin switch
+    {
+        NyxIdChatThresholdOrigin.Suggested => "suggested",
+        NyxIdChatThresholdOrigin.UserOverride => "user_override",
+        _ => string.Empty,
+    };
+
+    private static string ToWireName(NyxIdChatIntegerComparison comparison) => comparison switch
+    {
+        NyxIdChatIntegerComparison.Gte => "gte",
         _ => string.Empty,
     };
 

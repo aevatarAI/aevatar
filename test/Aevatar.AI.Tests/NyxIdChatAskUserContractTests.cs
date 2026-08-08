@@ -18,6 +18,74 @@ public sealed class NyxIdChatAskUserContractTests
     }
 
     [Fact]
+    public async Task ConditionToolSource_ShouldExposeEffectFreeTypedProposal()
+    {
+        var tools = await new ConditionEvaluateAgentToolSource().DiscoverToolsAsync();
+
+        var tool = tools.Should().ContainSingle().Which;
+        tool.Name.Should().Be("condition.evaluate");
+        tool.IsReadOnly.Should().BeTrue();
+        using var schema = JsonDocument.Parse(tool.ParametersSchema);
+        schema.RootElement.GetProperty("additionalProperties").GetBoolean().Should().BeFalse();
+        schema.RootElement.GetProperty("properties").TryGetProperty("threshold", out _)
+            .Should().BeFalse();
+    }
+
+    [Fact]
+    public void TryParse_WhenNumericThresholdIsBounded_ShouldReturnTypedSpec()
+    {
+        var parsed = NyxIdChatAskUserContract.TryParse(
+            "input-alpha",
+            """
+            {
+              "question": "Choose the score threshold.",
+              "options": [],
+              "allow_free_text": true,
+              "numeric_threshold": {
+                "suggested_value": 70,
+                "minimum_value": 0,
+                "maximum_value": 100
+              }
+            }
+            """,
+            out var request);
+
+        parsed.Should().BeTrue();
+        request.NumericThreshold.Should().BeEquivalentTo(
+            new NyxIdChatNumericThresholdInputSpec
+            {
+                SuggestedValue = 70,
+                MinimumValue = 0,
+                MaximumValue = 100,
+            });
+    }
+
+    [Theory]
+    [InlineData(101, 0, 100)]
+    [InlineData(70, 80, 10)]
+    public void TryParse_WhenNumericThresholdBoundsAreInvalid_ShouldReject(
+        long suggested,
+        long minimum,
+        long maximum)
+    {
+        var arguments = JsonSerializer.Serialize(new
+        {
+            question = "Choose the score threshold.",
+            options = Array.Empty<object>(),
+            allow_free_text = true,
+            numeric_threshold = new
+            {
+                suggested_value = suggested,
+                minimum_value = minimum,
+                maximum_value = maximum,
+            },
+        });
+
+        NyxIdChatAskUserContract.TryParse("input-alpha", arguments, out _)
+            .Should().BeFalse();
+    }
+
+    [Fact]
     public void TryParse_WhenFreeTextOnly_ShouldAcceptZeroOptions()
     {
         var parsed = NyxIdChatAskUserContract.TryParse(

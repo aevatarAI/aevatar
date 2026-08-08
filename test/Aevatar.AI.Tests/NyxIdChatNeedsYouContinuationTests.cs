@@ -129,6 +129,70 @@ public sealed class NyxIdChatNeedsYouContinuationTests
     }
 
     [Fact]
+    public async Task ConditionContinuation_ShouldInjectActorEvaluatedResultAndContinueExactSession()
+    {
+        var generation = new ConditionGenerationExecutor();
+        var executor = new NyxIdChatTurnOperationExecutor(generation);
+        var session = new NyxIdChatTransientExecutionSession();
+        await executor.ExecuteAsync(
+            InitialLlmCommand(),
+            session,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        var execution = await executor.ExecuteAsync(
+            ConditionContinuation(),
+            session,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        execution.Result.ResultCase.Should().Be(
+            NyxIdChatOperationResultSignal.ResultOneofCase.Llm);
+        execution.Result.Llm.Content.Should().Be("continued after condition");
+        generation.LlmStates.Should().HaveCount(2);
+        var continued = generation.LlmStates[1];
+        continued.PendingToolCalls.Should().BeEmpty();
+        var toolMessage = continued.Messages.Should().ContainSingle(message =>
+            message.Role == "tool" && message.ToolCallId == "call-condition-alpha").Which;
+        using var response = JsonDocument.Parse(toolMessage.Content);
+        response.RootElement.GetProperty("type").GetString().Should()
+            .Be("condition_evaluate_response");
+        response.RootElement.GetProperty("outcome").GetBoolean().Should().BeTrue();
+        response.RootElement.GetProperty("effective_threshold").GetInt64().Should().Be(75);
+        response.RootElement.GetProperty("guarded_tool_name").GetString().Should()
+            .Be("repository_update");
+    }
+
+    [Fact]
+    public async Task ConditionContinuation_WhenActorFactsAreTampered_ShouldFailClosed()
+    {
+        var generation = new ConditionGenerationExecutor();
+        var executor = new NyxIdChatTurnOperationExecutor(generation);
+        var session = new NyxIdChatTransientExecutionSession();
+        await executor.ExecuteAsync(
+            InitialLlmCommand(),
+            session,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+        var continuation = ConditionContinuation();
+        continuation.ConditionContinuation.Condition.ObservedValue = 79;
+
+        var execution = await executor.ExecuteAsync(
+            continuation,
+            session,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        execution.Result.ResultCase.Should().Be(
+            NyxIdChatOperationResultSignal.ResultOneofCase.Failure);
+        execution.Result.Failure.FailureCode.Should().Be(
+            NyxIdChatTurnOperationExecutor.ToolCapabilityLostCode);
+        execution.Result.Failure.ExternalEffect.Should().Be(
+            NyxIdChatEffectEvidence.NotStarted);
+        generation.LlmStates.Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task InputContinuationWithoutReplacementCredentials_ShouldFailClosed()
     {
         var generation = new AskUserGenerationExecutor();
@@ -449,6 +513,28 @@ public sealed class NyxIdChatNeedsYouContinuationTests
         },
     };
 
+    private static NyxIdChatOperationDispatchCommand ConditionContinuation() => new()
+    {
+        Key = Key("step-condition-continuation", "operation-condition-continuation"),
+        ConditionContinuation = new NyxIdChatConditionContinuationInput
+        {
+            ToolCallId = "call-condition-alpha",
+            Condition = new NyxIdChatNumericConditionState
+            {
+                ConditionId = "condition-alpha",
+                SourceInputRequestId = "input-threshold",
+                SuggestedThreshold = 70,
+                EffectiveThreshold = 75,
+                ThresholdOrigin = NyxIdChatThresholdOrigin.UserOverride,
+                ObservedValue = 80,
+                Comparison = NyxIdChatIntegerComparison.Gte,
+                Outcome = NyxIdChatConditionOutcome.True,
+                EvaluatedAt = Now(),
+                GuardedToolName = "repository_update",
+            },
+        },
+    };
+
     private static NyxIdChatNeedsYouDecision<NyxIdChatApprovalResolutionState> ResolveApproval(
         bool approved) =>
         NyxIdChatNeedsYouDecisions.ResolveApproval(
@@ -717,6 +803,44 @@ public sealed class NyxIdChatNeedsYouContinuationTests
                     Id = "call-ask-user-alpha",
                     Name = "ask_user",
                     ArgumentsJson = "{}",
+                });
+            }
+            return Task.FromResult(new AgentRunLlmStepExecution(
+                LlmContinuation(request, result),
+                AuthorizedToolStep: null));
+        }
+    }
+
+    private sealed class ConditionGenerationExecutor : GenerationExecutorBase
+    {
+        public List<AgentRunReplyStepState> LlmStates { get; } = [];
+
+        public override Task<AgentRunLlmStepExecution> BuildLlmStepExecutionAsync(
+            AgentRunReplyStepExecutionRequest request,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            LlmStates.Add(request.StepState.Clone());
+            var firstRound = request.StepState.Round == 0;
+            var result = new AgentRunLlmStepResult
+            {
+                Content = firstRound ? "evaluate condition" : "continued after condition",
+                AccumulatedText = firstRound
+                    ? "evaluate condition"
+                    : "continued after condition",
+                FinishReason = firstRound ? "tool_calls" : "stop",
+                HasStreamedTextContent = true,
+            };
+            if (firstRound)
+            {
+                result.ToolCalls.Add(new AgentRunToolCall
+                {
+                    Id = "call-condition-alpha",
+                    Name = NyxIdChatConditionEvaluateContract.ToolName,
+                    ArgumentsJson =
+                        "{\"source_input_request_id\":\"input-threshold\"," +
+                        "\"observed_value\":80," +
+                        "\"guarded_tool_name\":\"repository_update\"}",
                 });
             }
             return Task.FromResult(new AgentRunLlmStepExecution(

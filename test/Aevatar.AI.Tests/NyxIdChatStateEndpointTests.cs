@@ -128,6 +128,151 @@ public sealed class NyxIdChatStateEndpointTests
     }
 
     [Fact]
+    public async Task GetState_ShouldReloadConditionGuardAndNumericThresholdFacts()
+    {
+        var evaluatedAt = Timestamp.FromDateTimeOffset(
+            DateTimeOffset.Parse("2026-08-09T08:00:00Z"));
+        var task = BuildConvergenceTask();
+        task.SchemaVersion = 5;
+        task.Steps[1].Guard = new NyxIdChatStepGuard
+        {
+            ConditionStepId = "step-condition",
+            RequiredOutcome = NyxIdChatConditionOutcome.True,
+        };
+        task.Steps.Insert(1, new NyxIdChatTaskStepState
+        {
+            StepId = "step-condition",
+            Order = 2,
+            Kind = NyxIdChatStepKind.Condition,
+            Status = NyxIdChatStepStatus.Done,
+            Required = true,
+            Description = "Check the candidate score.",
+            Source = new NyxIdChatStepSource
+            {
+                Condition = new NyxIdChatConditionStepSource
+                {
+                    Condition = new NyxIdChatNumericConditionState
+                    {
+                        ConditionId = "condition-alpha",
+                        SourceInputRequestId = "input-threshold",
+                        SuggestedThreshold = 70,
+                        EffectiveThreshold = 75,
+                        ThresholdOrigin = NyxIdChatThresholdOrigin.UserOverride,
+                        ObservedValue = 80,
+                        Comparison = NyxIdChatIntegerComparison.Gte,
+                        Outcome = NyxIdChatConditionOutcome.True,
+                        EvaluatedAt = evaluatedAt.Clone(),
+                        GuardedToolName = "repository_update",
+                    },
+                },
+            },
+            ExternalEffect = NyxIdChatEffectEvidence.NotApplied,
+        });
+        task.Steps[2].Order = 3;
+        task.Steps[2].DependsOn.Clear();
+        task.Steps[2].DependsOn.Add("step-condition");
+
+        var state = new NyxIdChatConversationGAgentState
+        {
+            ConversationActorId = "conversation-alpha",
+            ScopeId = "scope-alpha",
+            ActiveTurn = new NyxIdChatTurnState
+            {
+                TurnId = task.TurnId,
+                TaskId = task.TaskId,
+                Status = NyxIdChatTurnStatus.Active,
+            },
+            LatestTurn = new NyxIdChatTurnState
+            {
+                TurnId = task.TurnId,
+                TaskId = task.TaskId,
+                Status = NyxIdChatTurnStatus.Active,
+            },
+            ActiveTask = task,
+            PendingInput = new NyxIdChatPendingInputState
+            {
+                RequestId = "input-threshold-next",
+                TurnId = task.TurnId,
+                TaskId = task.TaskId,
+                StepId = "step-beta",
+                Prompt = "Choose the threshold.",
+                AllowFreeText = true,
+                NumericThreshold = new NyxIdChatNumericThresholdInputSpec
+                {
+                    SuggestedValue = 70,
+                    MinimumValue = 0,
+                    MaximumValue = 100,
+                },
+            },
+            LatestInputResolution = new NyxIdChatInputResolutionState
+            {
+                RequestId = "input-threshold",
+                ClientRequestId = "client-threshold",
+                Outcome = NyxIdChatNeedsYouResolutionOutcome.Accepted,
+                CommittedAt = evaluatedAt.Clone(),
+                NumericThreshold = new NyxIdChatNumericThresholdResolution
+                {
+                    SuggestedValue = 70,
+                    EffectiveValue = 75,
+                    Origin = NyxIdChatThresholdOrigin.UserOverride,
+                },
+            },
+        };
+
+        var store = new InMemoryProjectionDocumentStore<
+            NyxIdChatConversationCurrentStateDocument,
+            string>(static document => document.ActorId);
+        var projector = new NyxIdChatConversationCurrentStateProjector(
+            new StoreTaskStateWriteDispatcher(store),
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-08-09T08:01:00Z")));
+        await projector.ProjectAsync(
+            new StudioMaterializationContext
+            {
+                RootActorId = state.ConversationActorId,
+                ProjectionKind = "nyxid-chat-conversation",
+            },
+            WrapCommittedState(state));
+
+        var response = await ExecuteAsync(
+            new ProjectionNyxIdChatConversationStateQueryPort(store),
+            string.Empty);
+
+        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        var snapshot = JsonNode.Parse(response.Body)!["snapshot"]!;
+        snapshot["activeTask"]!["schemaVersion"]!.GetValue<int>().Should().Be(5);
+        var conditionStep = snapshot["activeTask"]!["steps"]![1]!;
+        conditionStep["kind"]!.GetValue<string>().Should().Be("condition");
+        var condition = conditionStep["source"]!["condition"]!["condition"]!;
+        condition["conditionId"]!.GetValue<string>().Should().Be("condition-alpha");
+        condition["sourceInputRequestId"]!.GetValue<string>().Should()
+            .Be("input-threshold");
+        condition["suggestedThreshold"]!.GetValue<long>().Should().Be(70);
+        condition["effectiveThreshold"]!.GetValue<long>().Should().Be(75);
+        condition["thresholdOrigin"]!.GetValue<string>().Should().Be("user_override");
+        condition["observedValue"]!.GetValue<long>().Should().Be(80);
+        condition["comparison"]!.GetValue<string>().Should().Be("gte");
+        condition["outcome"]!.GetValue<string>().Should().Be("true");
+        condition["guardedToolName"]!.GetValue<string>().Should()
+            .Be("repository_update");
+        var guarded = snapshot["activeTask"]!["steps"]![2]!;
+        guarded["guard"]!["conditionStepId"]!.GetValue<string>().Should()
+            .Be("step-condition");
+        guarded["guard"]!["requiredOutcome"]!.GetValue<string>().Should().Be("true");
+        snapshot["pendingInput"]!["numericThreshold"]!["suggestedValue"]!
+            .GetValue<long>().Should().Be(70);
+        snapshot["pendingInput"]!["numericThreshold"]!["minimumValue"]!
+            .GetValue<long>().Should().Be(0);
+        snapshot["pendingInput"]!["numericThreshold"]!["maximumValue"]!
+            .GetValue<long>().Should().Be(100);
+        snapshot["latestInputResolution"]!["numericThreshold"]!["suggestedValue"]!
+            .GetValue<long>().Should().Be(70);
+        snapshot["latestInputResolution"]!["numericThreshold"]!["effectiveValue"]!
+            .GetValue<long>().Should().Be(75);
+        snapshot["latestInputResolution"]!["numericThreshold"]!["origin"]!
+            .GetValue<string>().Should().Be("user_override");
+    }
+
+    [Fact]
     public async Task GetState_ShouldReturnCurrentSnapshotFromTypedQueryPort()
     {
         var activeTask = new NyxIdChatConversationTaskSnapshot(

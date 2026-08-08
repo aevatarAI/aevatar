@@ -752,6 +752,7 @@ public sealed class MainnetHostCompositionTests
             typeof(NyxIdConnectedServiceToolSource),
             typeof(WebSearchAgentToolSource),
             typeof(AskUserAgentToolSource),
+            typeof(ConditionEvaluateAgentToolSource),
             typeof(SkillsAgentToolSource),
             typeof(StartWorkflowToolSource),
             typeof(ObserveRunToolSource),
@@ -796,6 +797,7 @@ public sealed class MainnetHostCompositionTests
             typeof(NyxIdConnectedServiceToolSource),
             typeof(WebSearchAgentToolSource),
             typeof(AskUserAgentToolSource),
+            typeof(ConditionEvaluateAgentToolSource),
             typeof(SkillsAgentToolSource),
             typeof(StartWorkflowToolSource),
             typeof(ObserveRunToolSource),
@@ -819,6 +821,13 @@ public sealed class MainnetHostCompositionTests
             .DiscoverToolsAsync();
         nyxIdChatInputTools.Select(static tool => tool.Name).Should()
             .ContainSingle().Which.Should().Be("ask_user");
+        var nyxIdChatConditionTools = await nyxIdChatProfile.Sources
+            .OfType<ConditionEvaluateAgentToolSource>()
+            .Single()
+            .DiscoverToolsAsync();
+        var conditionTool = nyxIdChatConditionTools.Should().ContainSingle().Which;
+        conditionTool.Name.Should().Be("condition.evaluate");
+        conditionTool.IsReadOnly.Should().BeTrue();
 
         var voice = registry.Resolve("voice.realtime");
         voice.IsSuccess.Should().BeFalse();

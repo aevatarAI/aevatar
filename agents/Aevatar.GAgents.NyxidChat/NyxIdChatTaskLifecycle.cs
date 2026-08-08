@@ -32,6 +32,11 @@ public static class NyxIdChatTaskLifecycle
     public const string MultipleToolCallsUnsupported =
         "NYXID_CHAT_MULTIPLE_TOOL_CALLS_UNSUPPORTED";
     public const string InputRequestInvalid = "NYXID_CHAT_INPUT_REQUEST_INVALID";
+    public const string ConditionProposalInvalid = "NYXID_CHAT_CONDITION_PROPOSAL_INVALID";
+    public const string ConditionSourceStale = "NYXID_CHAT_CONDITION_SOURCE_STALE";
+    public const string ConditionGuardMismatch = "NYXID_CHAT_CONDITION_GUARD_MISMATCH";
+    public const string ConditionGuardedToolRequired =
+        "NYXID_CHAT_CONDITION_GUARDED_TOOL_REQUIRED";
 
     private const string ToolSafetyRequiredMessage =
         "The authorized tool provider did not supply the required safety classification.";
@@ -43,6 +48,14 @@ public static class NyxIdChatTaskLifecycle
         "This chat version can execute only one authorized tool call at a time.";
     private const string InputRequestInvalidMessage =
         "The assistant returned an invalid structured input request.";
+    private const string ConditionProposalInvalidMessage =
+        "The assistant returned an invalid typed condition proposal.";
+    private const string ConditionSourceStaleMessage =
+        "The condition did not reference the active committed numeric input.";
+    private const string ConditionGuardMismatchMessage =
+        "The proposed tool did not match the committed condition guard.";
+    private const string ConditionGuardedToolRequiredMessage =
+        "The true condition requires the exact guarded tool call.";
 
     public static NyxIdChatTaskLifecycleDecision ApplyOperationResult(
         NyxIdChatConversationGAgentState state,
@@ -96,6 +109,22 @@ public static class NyxIdChatTaskLifecycle
                 currentStep,
                 now,
                 planGateConfirmationThresholdSeconds);
+        }
+
+        if (signal.ResultCase == NyxIdChatOperationResultSignal.ResultOneofCase.Llm &&
+            TryResolveConditionGuard(state, currentStep, out var conditionStep, out var guardedStep))
+        {
+            if (conditionStep.Source.Condition.Condition.Outcome ==
+                NyxIdChatConditionOutcome.True)
+            {
+                return FailConditionGuard(
+                    state,
+                    operationKey,
+                    guardedStep,
+                    ConditionGuardedToolRequired,
+                    ConditionGuardedToolRequiredMessage,
+                    now);
+            }
         }
 
         var normalizedSignal = NormalizeToolResult(signal, currentStep);
@@ -201,6 +230,23 @@ public static class NyxIdChatTaskLifecycle
         if (NyxIdChatAskUserContract.IsAskUser(toolCall))
             return ApplyLlmInputPlan(state, signal, operationKey, currentStep, toolCall, now);
 
+        if (NyxIdChatConditionEvaluateContract.IsConditionEvaluate(toolCall))
+            return ApplyLlmConditionPlan(state, signal, operationKey, currentStep, toolCall, now);
+
+        if (TryResolveConditionGuard(state, currentStep, out var conditionStep, out var guardedStep))
+        {
+            return ApplyGuardedToolPlan(
+                state,
+                signal,
+                operationKey,
+                currentStep,
+                conditionStep,
+                guardedStep,
+                toolCall,
+                now,
+                planGateConfirmationThresholdSeconds);
+        }
+
         if (NyxIdChatOperationAdmissionPolicy.IsConnectedServiceCall(toolCall) &&
             !NyxIdChatOperationAdmissionPolicy.IsValid(
                 toolCall.OperationAdmission,
@@ -289,6 +335,468 @@ public static class NyxIdChatTaskLifecycle
             command);
     }
 
+    private static NyxIdChatTaskLifecycleDecision ApplyLlmConditionPlan(
+        NyxIdChatConversationGAgentState state,
+        NyxIdChatOperationResultSignal signal,
+        NyxIdChatOperationKey operationKey,
+        NyxIdChatTaskStepState currentStep,
+        NyxIdChatToolCall toolCall,
+        Timestamp now)
+    {
+        if (!NyxIdChatConditionEvaluateContract.TryParse(
+                toolCall.ArgumentsJson,
+                out var proposal))
+        {
+            return FailClosed(
+                state,
+                operationKey,
+                ConditionProposalInvalid,
+                ConditionProposalInvalidMessage,
+                now);
+        }
+
+        var inputStep = state.ActiveTask.Steps.SingleOrDefault(step =>
+            step.Kind == NyxIdChatStepKind.Input &&
+            step.Status == NyxIdChatStepStatus.Done &&
+            string.Equals(step.Source?.Input?.RequestId, proposal.SourceInputRequestId,
+                StringComparison.Ordinal));
+        var resolution = state.RecentInputResolutions.SingleOrDefault(candidate =>
+            string.Equals(candidate.RequestId, proposal.SourceInputRequestId,
+                StringComparison.Ordinal));
+        if (inputStep is null ||
+            resolution?.NumericThreshold is null ||
+            !currentStep.DependsOn.Contains(inputStep.StepId, StringComparer.Ordinal))
+        {
+            return FailClosed(
+                state,
+                operationKey,
+                ConditionSourceStale,
+                ConditionSourceStaleMessage,
+                now);
+        }
+
+        var transition = NyxIdChatTaskTransitionPolicy.ReconcileOperation(state, signal);
+        if (transition.Outcome != NyxIdChatTransitionOutcome.Accepted)
+            return FromTransition(transition, nextCommand: null);
+
+        var next = transition.State.Clone();
+        StampReconciledState(next, operationKey, now);
+        next.ActiveTask.SchemaVersion = Math.Max(next.ActiveTask.SchemaVersion, 5);
+        var conditionOrder = next.ActiveTask.Steps.Count + 1;
+        var conditionStepId = BuildStableIdentity(
+            "step",
+            next.ConversationActorId,
+            operationKey.TurnId,
+            operationKey.TaskId,
+            currentStep.StepId,
+            toolCall.CallId,
+            conditionOrder.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            "condition");
+        var conditionId = BuildStableIdentity(
+            "condition",
+            next.ConversationActorId,
+            operationKey.TurnId,
+            operationKey.TaskId,
+            conditionStepId,
+            proposal.SourceInputRequestId,
+            toolCall.CallId);
+        var outcome = proposal.ObservedValue >= resolution.NumericThreshold.EffectiveValue
+            ? NyxIdChatConditionOutcome.True
+            : NyxIdChatConditionOutcome.False;
+        var condition = new NyxIdChatNumericConditionState
+        {
+            ConditionId = conditionId,
+            SourceInputRequestId = proposal.SourceInputRequestId,
+            SuggestedThreshold = resolution.NumericThreshold.SuggestedValue,
+            EffectiveThreshold = resolution.NumericThreshold.EffectiveValue,
+            ThresholdOrigin = resolution.NumericThreshold.Origin,
+            ObservedValue = proposal.ObservedValue,
+            Comparison = NyxIdChatIntegerComparison.Gte,
+            Outcome = outcome,
+            EvaluatedAt = now.Clone(),
+            GuardedToolName = proposal.GuardedToolName,
+        };
+        var conditionStep = new NyxIdChatTaskStepState
+        {
+            StepId = conditionStepId,
+            Order = conditionOrder,
+            Kind = NyxIdChatStepKind.Condition,
+            Status = NyxIdChatStepStatus.Done,
+            Required = true,
+            Description = "Evaluate the committed numeric threshold condition.",
+            Source = new NyxIdChatStepSource
+            {
+                Condition = new NyxIdChatConditionStepSource
+                {
+                    Condition = condition.Clone(),
+                },
+            },
+            ExternalEffect = NyxIdChatEffectEvidence.NotApplied,
+            AddedBy = NyxIdChatStepAddedBy.Replan,
+            DependsOn = { inputStep.StepId, currentStep.StepId },
+            UpdatedAt = now.Clone(),
+        };
+        conditionStep.AvailableActions =
+            NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(conditionStep);
+
+        var guardedOrder = conditionOrder + 1;
+        var guardedStepId = BuildStableIdentity(
+            "step",
+            next.ConversationActorId,
+            operationKey.TurnId,
+            operationKey.TaskId,
+            conditionStepId,
+            proposal.GuardedToolName,
+            guardedOrder.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            "guarded-tool");
+        var guardedStep = new NyxIdChatTaskStepState
+        {
+            StepId = guardedStepId,
+            Order = guardedOrder,
+            Kind = NyxIdChatStepKind.Tool,
+            Status = outcome == NyxIdChatConditionOutcome.True
+                ? NyxIdChatStepStatus.Planned
+                : NyxIdChatStepStatus.Skipped,
+            Required = true,
+            Description = $"Run guarded tool {proposal.GuardedToolName}.",
+            Source = new NyxIdChatStepSource
+            {
+                Tool = new NyxIdChatToolStepSource { ToolName = proposal.GuardedToolName },
+            },
+            MayChangeExternalState = true,
+            ExternalEffect = outcome == NyxIdChatConditionOutcome.True
+                ? NyxIdChatEffectEvidence.NotStarted
+                : NyxIdChatEffectEvidence.NotApplied,
+            AddedBy = NyxIdChatStepAddedBy.Replan,
+            DependsOn = { conditionStepId },
+            Guard = new NyxIdChatStepGuard
+            {
+                ConditionStepId = conditionStepId,
+                RequiredOutcome = NyxIdChatConditionOutcome.True,
+            },
+            UpdatedAt = now.Clone(),
+        };
+        guardedStep.AvailableActions =
+            NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(guardedStep);
+
+        var continuationOrder = guardedOrder + 1;
+        var continuationStepId = BuildStableIdentity(
+            "step",
+            next.ConversationActorId,
+            operationKey.TurnId,
+            operationKey.TaskId,
+            conditionStepId,
+            toolCall.CallId,
+            continuationOrder.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            "condition-continuation");
+        var continuationKey = new NyxIdChatOperationKey
+        {
+            ConversationActorId = next.ConversationActorId,
+            TurnId = operationKey.TurnId,
+            TaskId = operationKey.TaskId,
+            StepId = continuationStepId,
+            OperationId = BuildStableIdentity(
+                "operation",
+                next.ConversationActorId,
+                operationKey.TurnId,
+                operationKey.TaskId,
+                continuationStepId,
+                "1"),
+            OperationGeneration = 1,
+        };
+        var continuationStep = new NyxIdChatTaskStepState
+        {
+            StepId = continuationStepId,
+            Order = continuationOrder,
+            Kind = NyxIdChatStepKind.Llm,
+            Status = NyxIdChatStepStatus.Running,
+            Required = true,
+            Description = "Continue from the committed condition outcome.",
+            Source = new NyxIdChatStepSource { Llm = new NyxIdChatLLMStepSource() },
+            ExternalEffect = NyxIdChatEffectEvidence.NotStarted,
+            AddedBy = NyxIdChatStepAddedBy.Replan,
+            DependsOn = { conditionStepId },
+            Operation = new NyxIdChatOperationState
+            {
+                Key = continuationKey.Clone(),
+                Kind = NyxIdChatStepKind.Llm,
+                Phase = NyxIdChatOperationPhase.Requested,
+                RequestedAt = now.Clone(),
+            },
+            UpdatedAt = now.Clone(),
+        };
+        continuationStep.AvailableActions =
+            NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(continuationStep);
+
+        next.ActiveTask.Steps.Add(conditionStep);
+        next.ActiveTask.Steps.Add(guardedStep);
+        next.ActiveTask.Steps.Add(continuationStep);
+        NyxIdChatPlanRevisions.CommitChange(
+            next.ActiveTask,
+            NyxIdChatPlanRevisionCause.ScopeResolution,
+            now,
+            [conditionStep, guardedStep, continuationStep]);
+        ActivateStep(next, continuationStep, now);
+        FinalizeDerivedState(next, now);
+        return new NyxIdChatTaskLifecycleDecision(
+            transition.Outcome,
+            transition.ReasonCode,
+            transition.SafeMessage,
+            next,
+            new NyxIdChatOperationDispatchCommand
+            {
+                Key = continuationKey,
+                ConditionContinuation = new NyxIdChatConditionContinuationInput
+                {
+                    ToolCallId = toolCall.CallId,
+                    Condition = condition.Clone(),
+                },
+            });
+    }
+
+    private static NyxIdChatTaskLifecycleDecision ApplyGuardedToolPlan(
+        NyxIdChatConversationGAgentState state,
+        NyxIdChatOperationResultSignal signal,
+        NyxIdChatOperationKey operationKey,
+        NyxIdChatTaskStepState currentStep,
+        NyxIdChatTaskStepState conditionStep,
+        NyxIdChatTaskStepState guardedStep,
+        NyxIdChatToolCall toolCall,
+        Timestamp now,
+        int planGateConfirmationThresholdSeconds)
+    {
+        var condition = conditionStep.Source.Condition.Condition;
+        if (condition.Outcome != NyxIdChatConditionOutcome.True ||
+            guardedStep.Status != NyxIdChatStepStatus.Planned ||
+            !string.Equals(toolCall.ToolName?.Trim(), condition.GuardedToolName,
+                StringComparison.Ordinal))
+        {
+            return FailConditionGuard(
+                state,
+                operationKey,
+                guardedStep,
+                ConditionGuardMismatch,
+                ConditionGuardMismatchMessage,
+                now);
+        }
+        if (toolCall.Safety is null)
+        {
+            return FailConditionGuard(
+                state,
+                operationKey,
+                guardedStep,
+                ToolSafetyRequired,
+                ToolSafetyRequiredMessage,
+                now);
+        }
+        if (NyxIdChatOperationAdmissionPolicy.IsConnectedServiceCall(toolCall) &&
+            !NyxIdChatOperationAdmissionPolicy.IsValid(
+                toolCall.OperationAdmission,
+                toolCall.Safety,
+                toolCall.NyxIdProvenance))
+        {
+            return FailConditionGuard(
+                state,
+                operationKey,
+                guardedStep,
+                ToolAdmissionInvalid,
+                ToolAdmissionInvalidMessage,
+                now);
+        }
+
+        var transition = NyxIdChatTaskTransitionPolicy.ReconcileOperation(state, signal);
+        if (transition.Outcome != NyxIdChatTransitionOutcome.Accepted)
+            return FromTransition(transition, nextCommand: null);
+        var next = transition.State.Clone();
+        StampReconciledState(next, operationKey, now);
+        var materialized = next.ActiveTask.Steps.Single(step =>
+            string.Equals(step.StepId, guardedStep.StepId, StringComparison.Ordinal));
+        MaterializeGuardedToolStep(next, materialized, toolCall, now);
+        var verificationStep = BuildVerificationStep(next, materialized, now);
+        next.ActiveTask.Steps.Add(verificationStep);
+        NyxIdChatPlanRevisions.CommitChange(
+            next.ActiveTask,
+            NyxIdChatPlanRevisionCause.ScopeResolution,
+            now,
+            [verificationStep]);
+
+        var requiresConfirmation = NyxIdChatPlanGateDecisions.RequiresConfirmation(
+            toolCall,
+            next.ActiveTask.Steps,
+            planGateConfirmationThresholdSeconds);
+        next.ActiveTask.Gate = NyxIdChatPlanGateDecisions.BuildToolGate(
+            next,
+            materialized,
+            toolCall,
+            requiresConfirmation);
+        if (!requiresConfirmation)
+            ActivateStep(next, materialized, now);
+        else
+        {
+            materialized.Status = NyxIdChatStepStatus.Planned;
+            materialized.Operation.Phase = NyxIdChatOperationPhase.Requested;
+            next.ActiveTask.Status = NyxIdChatTaskStatus.Active;
+            next.ActiveTask.ActiveStepId = materialized.StepId;
+            next.ActiveTask.ActiveOperationId = string.Empty;
+            next.ActiveTurn.Status = NyxIdChatTurnStatus.Active;
+        }
+        FinalizeDerivedState(next, now);
+
+        return new NyxIdChatTaskLifecycleDecision(
+            transition.Outcome,
+            transition.ReasonCode,
+            transition.SafeMessage,
+            next,
+            requiresConfirmation
+                ? null
+                : new NyxIdChatOperationDispatchCommand
+                {
+                    Key = materialized.Operation.Key.Clone(),
+                    Tool = new NyxIdChatToolOperationInput
+                    {
+                        CallId = toolCall.CallId,
+                        ToolName = toolCall.ToolName,
+                        ArgumentsJson = toolCall.ArgumentsJson,
+                        MayChangeExternalState = toolCall.Safety.MayChangeExternalState,
+                        Idempotent = !toolCall.Safety.MayChangeExternalState,
+                        IdempotencyKey = materialized.Operation.IdempotencyKey,
+                        OperationAdmission = toolCall.OperationAdmission?.Clone(),
+                    },
+                });
+    }
+
+    private static void MaterializeGuardedToolStep(
+        NyxIdChatConversationGAgentState state,
+        NyxIdChatTaskStepState step,
+        NyxIdChatToolCall call,
+        Timestamp now)
+    {
+        var operationId = BuildStableIdentity(
+            "operation",
+            state.ConversationActorId,
+            state.ActiveTurn.TurnId,
+            state.ActiveTask.TaskId,
+            step.StepId,
+            "1");
+        var source = new NyxIdChatToolStepSource
+        {
+            ToolName = call.ToolName,
+            OperationAdmission = call.OperationAdmission?.Clone(),
+        };
+        if (call.OperationAdmission is { } admission)
+        {
+            source.ServiceSlug = admission.ServiceSlug;
+            source.ServiceId = admission.ServiceInstanceId;
+        }
+        if (call.NyxIdProvenance is { } provenance)
+        {
+            if (call.OperationAdmission is null)
+            {
+                source.ServiceSlug = provenance.ServiceSlug;
+                source.ServiceId = provenance.ConnectedServiceId;
+            }
+            if (provenance.HasReadinessCapabilityId)
+                source.ReadinessCapabilityId = provenance.ReadinessCapabilityId;
+        }
+
+        step.Source = new NyxIdChatStepSource { Tool = source };
+        step.MayChangeExternalState = call.Safety.MayChangeExternalState;
+        step.ExternalEffect = NyxIdChatEffectEvidence.NotStarted;
+        step.Status = NyxIdChatStepStatus.Running;
+        step.Operation = new NyxIdChatOperationState
+        {
+            Key = new NyxIdChatOperationKey
+            {
+                ConversationActorId = state.ConversationActorId,
+                TurnId = state.ActiveTurn.TurnId,
+                TaskId = state.ActiveTask.TaskId,
+                StepId = step.StepId,
+                OperationId = operationId,
+                OperationGeneration = 1,
+            },
+            Kind = NyxIdChatStepKind.Tool,
+            Phase = NyxIdChatOperationPhase.Requested,
+            MayChangeExternalState = call.Safety.MayChangeExternalState,
+            Idempotent = !call.Safety.MayChangeExternalState,
+            IdempotencyKey = operationId,
+            RequestedAt = now.Clone(),
+        };
+        step.Estimate = new NyxIdChatStepEstimate
+        {
+            Kind = NyxIdChatStepEstimateKind.Duration,
+            Seconds = DefaultToolEstimateSeconds,
+        };
+        if (call.OperationAdmission is not null &&
+            TryParseArguments(call.ArgumentsJson, out var arguments))
+        {
+            step.RetryInputRebuildable = true;
+            step.RetryToolInput = new NyxIdChatRetryToolInputState
+            {
+                CallId = call.CallId,
+                ToolName = call.ToolName,
+                Arguments = arguments,
+                OperationAdmission = call.OperationAdmission.Clone(),
+            };
+        }
+        step.UpdatedAt = now.Clone();
+        step.AvailableActions = NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(step);
+    }
+
+    private static bool TryResolveConditionGuard(
+        NyxIdChatConversationGAgentState state,
+        NyxIdChatTaskStepState currentStep,
+        out NyxIdChatTaskStepState conditionStep,
+        out NyxIdChatTaskStepState guardedStep)
+    {
+        conditionStep = null!;
+        guardedStep = null!;
+        if (currentStep.Kind != NyxIdChatStepKind.Llm || currentStep.DependsOn.Count != 1)
+            return false;
+        conditionStep = state.ActiveTask.Steps.SingleOrDefault(step =>
+            string.Equals(step.StepId, currentStep.DependsOn[0], StringComparison.Ordinal) &&
+            step.Kind == NyxIdChatStepKind.Condition &&
+            step.Status == NyxIdChatStepStatus.Done &&
+            step.Source?.Condition?.Condition is not null)!;
+        if (conditionStep is null)
+            return false;
+        var conditionStepId = conditionStep.StepId;
+        guardedStep = state.ActiveTask.Steps.SingleOrDefault(step =>
+            step.Kind == NyxIdChatStepKind.Tool &&
+            string.Equals(step.Guard?.ConditionStepId, conditionStepId,
+                StringComparison.Ordinal) &&
+            step.Guard?.RequiredOutcome == NyxIdChatConditionOutcome.True)!;
+        return guardedStep is not null;
+    }
+
+    private static NyxIdChatTaskLifecycleDecision FailConditionGuard(
+        NyxIdChatConversationGAgentState state,
+        NyxIdChatOperationKey key,
+        NyxIdChatTaskStepState guardedStep,
+        string failureCode,
+        string safeMessage,
+        Timestamp now)
+    {
+        var decision = FailClosed(state, key, failureCode, safeMessage, now);
+        if (decision.Outcome != NyxIdChatTransitionOutcome.Accepted)
+            return decision;
+        var next = decision.State.Clone();
+        var guarded = next.ActiveTask.Steps.Single(step =>
+            string.Equals(step.StepId, guardedStep.StepId, StringComparison.Ordinal));
+        if (guarded.Status == NyxIdChatStepStatus.Planned)
+        {
+            guarded.Status = NyxIdChatStepStatus.Cancelled;
+            guarded.ExternalEffect = NyxIdChatEffectEvidence.NotApplied;
+            guarded.FailureCode = failureCode;
+            guarded.SafeMessage = safeMessage;
+            guarded.UpdatedAt = now.Clone();
+            guarded.AvailableActions =
+                NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(guarded);
+        }
+        NyxIdChatTaskTransitionPolicy.RefreshTaskOutcome(next);
+        FinalizeDerivedState(next, now);
+        return decision with { State = next };
+    }
+
     private static NyxIdChatTaskLifecycleDecision ApplyLlmInputPlan(
         NyxIdChatConversationGAgentState state,
         NyxIdChatOperationResultSignal signal,
@@ -374,6 +882,8 @@ public static class NyxIdChatTaskLifecycle
             AllowFreeText = input.AllowFreeText,
             MultiSelect = input.MultiSelect,
         };
+        if (input.NumericThreshold is not null)
+            request.NumericThreshold = input.NumericThreshold.Clone();
         request.Options.AddRange(input.Options.Select(static option => option.Clone()));
         next.PendingInputRequest = request.Clone();
         FinalizeDerivedState(next, now);

@@ -82,6 +82,24 @@ enum NyxIdChatStepKind {
   NYX_ID_CHAT_STEP_KIND_INPUT = 5;
   NYX_ID_CHAT_STEP_KIND_APPROVAL = 6;
   NYX_ID_CHAT_STEP_KIND_WEB = 7;
+  NYX_ID_CHAT_STEP_KIND_CONDITION = 8;
+}
+
+enum NyxIdChatIntegerComparison {
+  NYX_ID_CHAT_INTEGER_COMPARISON_UNSPECIFIED = 0;
+  NYX_ID_CHAT_INTEGER_COMPARISON_GTE = 1;
+}
+
+enum NyxIdChatConditionOutcome {
+  NYX_ID_CHAT_CONDITION_OUTCOME_UNSPECIFIED = 0;
+  NYX_ID_CHAT_CONDITION_OUTCOME_TRUE = 1;
+  NYX_ID_CHAT_CONDITION_OUTCOME_FALSE = 2;
+}
+
+enum NyxIdChatThresholdOrigin {
+  NYX_ID_CHAT_THRESHOLD_ORIGIN_UNSPECIFIED = 0;
+  NYX_ID_CHAT_THRESHOLD_ORIGIN_SUGGESTED = 1;
+  NYX_ID_CHAT_THRESHOLD_ORIGIN_USER_OVERRIDE = 2;
 }
 
 enum NyxIdChatPlanGateMode {
@@ -306,6 +324,28 @@ message NyxIdChatApprovalStepSource {
 
 message NyxIdChatWebStepSource {}
 
+message NyxIdChatNumericConditionState {
+  string condition_id = 1;
+  string source_input_request_id = 2;
+  int64 suggested_threshold = 3;
+  int64 effective_threshold = 4;
+  NyxIdChatThresholdOrigin threshold_origin = 5;
+  int64 observed_value = 6;
+  NyxIdChatIntegerComparison comparison = 7;
+  NyxIdChatConditionOutcome outcome = 8;
+  google.protobuf.Timestamp evaluated_at = 9;
+  string guarded_tool_name = 10;
+}
+
+message NyxIdChatConditionStepSource {
+  NyxIdChatNumericConditionState condition = 1;
+}
+
+message NyxIdChatStepGuard {
+  string condition_step_id = 1;
+  NyxIdChatConditionOutcome required_outcome = 2;
+}
+
 message NyxIdChatStepSource {
   oneof source {
     NyxIdChatLLMStepSource llm = 1;
@@ -315,6 +355,7 @@ message NyxIdChatStepSource {
     NyxIdChatInputStepSource input = 5;
     NyxIdChatApprovalStepSource approval = 6;
     NyxIdChatWebStepSource web = 7;
+    NyxIdChatConditionStepSource condition = 8;
   }
 }
 
@@ -441,6 +482,7 @@ message NyxIdChatTaskStepState {
   // Exact delivered Tool/Postcondition operation whose committed NotApplied
   // evidence authorizes this explicit retry.
   NyxIdChatOperationKey retry_authorization_source_key = 28;
+  NyxIdChatStepGuard guard = 29;
 }
 
 message NyxIdChatPlanRevisionRecord {
@@ -521,6 +563,7 @@ message NyxIdChatTaskPlanStep {
   int32 added_in_plan_revision = 22;
   int32 cancelled_in_plan_revision = 23;
   NyxIdChatPostReturnApprovalObservation approval_observation = 24;
+  NyxIdChatStepGuard guard = 25;
 }
 
 message NyxIdChatTaskPlan {
@@ -625,6 +668,18 @@ message NyxIdChatInputAnswer {
   }
 }
 
+message NyxIdChatNumericThresholdInputSpec {
+  int64 suggested_value = 1;
+  int64 minimum_value = 2;
+  int64 maximum_value = 3;
+}
+
+message NyxIdChatNumericThresholdResolution {
+  int64 suggested_value = 1;
+  int64 effective_value = 2;
+  NyxIdChatThresholdOrigin origin = 3;
+}
+
 message NyxIdChatPendingInputState {
   string request_id = 1;
   string turn_id = 2;
@@ -636,6 +691,7 @@ message NyxIdChatPendingInputState {
   bool allow_free_text = 8;
   bool multi_select = 9;
   string tool_call_id = 10;
+  NyxIdChatNumericThresholdInputSpec numeric_threshold = 11;
 }
 
 message NyxIdChatInputResolutionState {
@@ -644,6 +700,7 @@ message NyxIdChatInputResolutionState {
   NyxIdChatNeedsYouResolutionOutcome outcome = 3;
   bytes answer_sha256 = 4;
   google.protobuf.Timestamp committed_at = 5;
+  NyxIdChatNumericThresholdResolution numeric_threshold = 6;
 }
 
 message NyxIdChatApprovalResolutionState {
@@ -1316,6 +1373,11 @@ message NyxIdChatInputContinuationInput {
   aevatar.ai.AgentToolExecutionContextPayload tool_context = 5;
 }
 
+message NyxIdChatConditionContinuationInput {
+  string tool_call_id = 1;
+  NyxIdChatNumericConditionState condition = 2;
+}
+
 message NyxIdChatToolApprovalContinuationInput {
   string approval_request_id = 1;
   bool approved = 2;
@@ -1357,6 +1419,7 @@ message NyxIdChatOperationDispatchCommand {
     NyxIdChatToolApprovalContinuationInput tool_approval_continuation = 14;
     NyxIdChatPlanGateContinuationInput plan_gate_continuation = 15;
     NyxIdChatToolVerificationInput tool_verification = 16;
+    NyxIdChatConditionContinuationInput condition_continuation = 17;
   }
 }
 
@@ -1644,6 +1707,7 @@ message NyxIdChatInputRequestCommand {
   bool allow_free_text = 9;
   bool multi_select = 10;
   string tool_call_id = 11;
+  NyxIdChatNumericThresholdInputSpec numeric_threshold = 12;
 }
 
 message NyxIdChatInputResolveCommand {

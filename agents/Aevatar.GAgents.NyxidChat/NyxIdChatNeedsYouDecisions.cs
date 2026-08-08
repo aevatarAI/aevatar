@@ -28,6 +28,7 @@ public static class NyxIdChatNeedsYouDecisions
         ArgumentNullException.ThrowIfNull(now);
 
         var normalizedOptions = command.Options.Select(NormalizeOption).ToArray();
+        var numericThreshold = command.NumericThreshold?.Clone();
         if (!MatchesConversation(state, command.ScopeId, command.ConversationActorId) ||
             !MatchesActiveTask(state, command.TurnId, command.TaskId, command.StepId) ||
             string.IsNullOrWhiteSpace(command.RequestId) ||
@@ -38,7 +39,9 @@ public static class NyxIdChatNeedsYouDecisions
                 string.IsNullOrWhiteSpace(option.OptionId) ||
                 string.IsNullOrWhiteSpace(option.Label)) ||
             normalizedOptions.Select(static option => option.OptionId)
-                .Distinct(StringComparer.Ordinal).Count() != normalizedOptions.Length)
+                .Distinct(StringComparer.Ordinal).Count() != normalizedOptions.Length ||
+            !IsValidNumericThreshold(numericThreshold, command.AllowFreeText,
+                command.MultiSelect, normalizedOptions.Length))
         {
             return NoCommit<NyxIdChatPendingInputState>(state);
         }
@@ -55,6 +58,8 @@ public static class NyxIdChatNeedsYouDecisions
             MultiSelect = command.MultiSelect,
             ToolCallId = command.ToolCallId.Trim(),
         };
+        if (numericThreshold is not null)
+            pending.NumericThreshold = numericThreshold;
         pending.Options.AddRange(normalizedOptions);
 
         if (state.RecentInputResolutions.Any(result =>
@@ -115,7 +120,8 @@ public static class NyxIdChatNeedsYouDecisions
             string.IsNullOrWhiteSpace(command.ClientRequestId) ||
             state.PendingInput is not { } pending ||
             !string.Equals(pending.RequestId, command.RequestId?.Trim(), StringComparison.Ordinal) ||
-            !TryNormalizeAnswer(pending, command.Answer, out var normalizedAnswer))
+            !TryNormalizeAnswer(pending, command.Answer, out var normalizedAnswer) ||
+            !TryResolveNumericThreshold(pending, normalizedAnswer, out var numericResolution))
         {
             return NoCommit<NyxIdChatInputResolutionState>(state);
         }
@@ -128,6 +134,8 @@ public static class NyxIdChatNeedsYouDecisions
             AnswerSha256 = answerHash,
             CommittedAt = now.Clone(),
         };
+        if (numericResolution is not null)
+            resolution.NumericThreshold = numericResolution;
         var next = state.Clone();
         next.PendingInput = null;
         next.LatestInputResolution = resolution.Clone();
@@ -318,6 +326,50 @@ public static class NyxIdChatNeedsYouDecisions
             Selection = new NyxIdChatInputSelectionAnswer(),
         };
         normalized.Selection.OptionIds.AddRange(selected);
+        return true;
+    }
+
+    private static bool IsValidNumericThreshold(
+        NyxIdChatNumericThresholdInputSpec? spec,
+        bool allowFreeText,
+        bool multiSelect,
+        int optionCount) =>
+        spec is null ||
+        allowFreeText &&
+        !multiSelect &&
+        optionCount == 0 &&
+        spec.MinimumValue <= spec.MaximumValue &&
+        spec.SuggestedValue >= spec.MinimumValue &&
+        spec.SuggestedValue <= spec.MaximumValue;
+
+    private static bool TryResolveNumericThreshold(
+        NyxIdChatPendingInputState pending,
+        NyxIdChatInputAnswer answer,
+        out NyxIdChatNumericThresholdResolution? resolution)
+    {
+        resolution = null;
+        if (pending.NumericThreshold is null)
+            return true;
+        if (answer.AnswerCase != NyxIdChatInputAnswer.AnswerOneofCase.FreeText ||
+            !long.TryParse(
+                answer.FreeText,
+                System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var effective) ||
+            effective < pending.NumericThreshold.MinimumValue ||
+            effective > pending.NumericThreshold.MaximumValue)
+        {
+            return false;
+        }
+
+        resolution = new NyxIdChatNumericThresholdResolution
+        {
+            SuggestedValue = pending.NumericThreshold.SuggestedValue,
+            EffectiveValue = effective,
+            Origin = effective == pending.NumericThreshold.SuggestedValue
+                ? NyxIdChatThresholdOrigin.Suggested
+                : NyxIdChatThresholdOrigin.UserOverride,
+        };
         return true;
     }
 

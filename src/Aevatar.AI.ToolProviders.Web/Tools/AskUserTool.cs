@@ -60,6 +60,17 @@ public sealed class AskUserTool : IAgentTool
             "context": {
               "type": "string",
               "description": "Optional context to help the user understand why you're asking"
+            },
+            "numeric_threshold": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "suggested_value": { "type": "integer" },
+                "minimum_value": { "type": "integer" },
+                "maximum_value": { "type": "integer" }
+              },
+              "required": ["suggested_value", "minimum_value", "maximum_value"],
+              "description": "Optional bounded integer threshold. The user's answer remains authoritative."
             }
           },
           "required": ["question"]

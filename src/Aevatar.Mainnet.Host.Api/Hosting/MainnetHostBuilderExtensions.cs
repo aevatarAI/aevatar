@@ -513,6 +513,7 @@ public static class MainnetHostBuilderExtensions
                     CreateToolSource<NyxIdConnectedServiceToolSource>,
                     CreateToolSource<WebSearchAgentToolSource>,
                     CreateToolSource<AskUserAgentToolSource>,
+                    CreateToolSource<ConditionEvaluateAgentToolSource>,
                     CreateToolSource<SkillsAgentToolSource>,
                     CreateToolSource<StartWorkflowToolSource>,
                     CreateToolSource<ObserveRunToolSource>,

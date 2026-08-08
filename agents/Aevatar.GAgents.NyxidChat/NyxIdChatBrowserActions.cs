@@ -409,7 +409,7 @@ public static class NyxIdChatBrowserActions
         {
             TaskId = continuationTaskId,
             CreatedAt = now.Clone(),
-            SchemaVersion = 4,
+            SchemaVersion = 5,
             ActorId = next.ConversationActorId,
             PlanId = continuationTaskId,
             PlanRevision = 1,

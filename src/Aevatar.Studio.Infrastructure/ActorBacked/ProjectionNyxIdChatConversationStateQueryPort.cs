@@ -307,7 +307,12 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
                     step.ApprovalObservation.ApprovalRequestId,
                     step.ApprovalObservation.DecisionMode,
                     step.ApprovalObservation.ReceiptStatus,
-                    ToDateTimeOffset(step.ApprovalObservation.ObservedAt)));
+                    ToDateTimeOffset(step.ApprovalObservation.ObservedAt)),
+            step.Guard == null
+                ? null
+                : new NyxIdChatStepGuardSnapshot(
+                    step.Guard.ConditionStepId,
+                    step.Guard.RequiredOutcome));
 
     private static NyxIdChatConversationStepSourceSnapshot? ToSource(
         NyxIdChatConversationStepSourceDocument? source) =>
@@ -346,6 +351,20 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
             NyxIdChatConversationStepSourceDocument.SourceOneofCase.Web =>
                 new NyxIdChatConversationStepSourceSnapshot(
                     Web: new NyxIdChatWebStepSourceSnapshot()),
+            NyxIdChatConversationStepSourceDocument.SourceOneofCase.Condition =>
+                new NyxIdChatConversationStepSourceSnapshot(
+                    Condition: new NyxIdChatConditionStepSourceSnapshot(
+                        new NyxIdChatNumericConditionSnapshot(
+                            source.Condition.Condition.ConditionId,
+                            source.Condition.Condition.SourceInputRequestId,
+                            source.Condition.Condition.SuggestedThreshold,
+                            source.Condition.Condition.EffectiveThreshold,
+                            source.Condition.Condition.ThresholdOrigin,
+                            source.Condition.Condition.ObservedValue,
+                            source.Condition.Condition.Comparison,
+                            source.Condition.Condition.Outcome,
+                            ToDateTimeOffset(source.Condition.Condition.EvaluatedAt),
+                            source.Condition.Condition.GuardedToolName))),
             _ => null,
         };
 
@@ -409,7 +428,13 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
                         NullIfEmpty(option.Description))).ToArray(),
                 ToDateTimeOffset(input.AskedAt),
                 input.AllowFreeText,
-                input.MultiSelect);
+                input.MultiSelect,
+                input.NumericThreshold == null
+                    ? null
+                    : new NyxIdChatNumericThresholdInputSnapshot(
+                        input.NumericThreshold.SuggestedValue,
+                        input.NumericThreshold.MinimumValue,
+                        input.NumericThreshold.MaximumValue));
 
     private static NyxIdChatInputResolutionSnapshot? ToInputResolution(
         NyxIdChatConversationInputResolutionDocument? resolution) =>
@@ -419,7 +444,13 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
                 resolution.RequestId,
                 resolution.ClientRequestId,
                 resolution.Outcome,
-                ToDateTimeOffset(resolution.CommittedAt));
+                ToDateTimeOffset(resolution.CommittedAt),
+                resolution.NumericThreshold == null
+                    ? null
+                    : new NyxIdChatNumericThresholdResolutionSnapshot(
+                        resolution.NumericThreshold.SuggestedValue,
+                        resolution.NumericThreshold.EffectiveValue,
+                        resolution.NumericThreshold.Origin));
 
     private static NyxIdChatApprovalResolutionSnapshot? ToApprovalResolution(
         NyxIdChatConversationApprovalResolutionDocument? resolution) =>

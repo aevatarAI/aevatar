@@ -65,7 +65,15 @@ internal static class NyxIdChatTaskPlanJsonFormatter
     }
 
     private static bool IsBrowserNumberField(string propertyName) =>
-        propertyName is "operationGeneration" or "latestProgressSequence";
+        propertyName is
+            "operationGeneration" or
+            "latestProgressSequence" or
+            "suggestedThreshold" or
+            "effectiveThreshold" or
+            "observedValue" or
+            "suggestedValue" or
+            "minimumValue" or
+            "maximumValue";
 
     private static void NormalizeNyxIdEnumValues(JsonNode node)
     {
@@ -136,6 +144,9 @@ internal static class NyxIdChatTaskPlanJsonFormatter
             "NYX_ID_CHAT_ATTENTION_KIND_",
             "NYX_ID_CHAT_APPROVAL_REVERSIBILITY_",
             "NYX_ID_CHAT_NEEDS_YOU_RESOLUTION_OUTCOME_",
+            "NYX_ID_CHAT_INTEGER_COMPARISON_",
+            "NYX_ID_CHAT_CONDITION_OUTCOME_",
+            "NYX_ID_CHAT_THRESHOLD_ORIGIN_",
         ];
         foreach (var prefix in prefixes)
         {

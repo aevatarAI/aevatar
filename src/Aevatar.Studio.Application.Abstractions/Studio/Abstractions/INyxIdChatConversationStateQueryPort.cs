@@ -143,7 +143,7 @@ public sealed record NyxIdChatConversationTaskSnapshot(
     DateTimeOffset? CreatedAt,
     DateTimeOffset? UpdatedAt,
     IReadOnlyList<NyxIdChatConversationStepSnapshot> Steps,
-    int SchemaVersion = 4,
+    int SchemaVersion = 5,
     string? ActorId = null,
     string? PlanId = null,
     int PlanRevision = 1,
@@ -208,7 +208,12 @@ public sealed record NyxIdChatConversationStepSnapshot(
     IReadOnlyList<NyxIdChatConversationSubstepSnapshot>? Substeps = null,
     int AddedInPlanRevision = 0,
     int CancelledInPlanRevision = 0,
-    NyxIdChatPostReturnApprovalObservationSnapshot? ApprovalObservation = null);
+    NyxIdChatPostReturnApprovalObservationSnapshot? ApprovalObservation = null,
+    NyxIdChatStepGuardSnapshot? Guard = null);
+
+public sealed record NyxIdChatStepGuardSnapshot(
+    string ConditionStepId,
+    string RequiredOutcome);
 
 public sealed record NyxIdChatPostReturnApprovalObservationSnapshot(
     string ApprovalRequestId,
@@ -239,7 +244,9 @@ public sealed record NyxIdChatConversationStepSourceSnapshot(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     NyxIdChatApprovalStepSourceSnapshot? Approval = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    NyxIdChatWebStepSourceSnapshot? Web = null);
+    NyxIdChatWebStepSourceSnapshot? Web = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    NyxIdChatConditionStepSourceSnapshot? Condition = null);
 
 public sealed record NyxIdChatLLMStepSourceSnapshot(string Model);
 
@@ -263,6 +270,21 @@ public sealed record NyxIdChatInputStepSourceSnapshot(string? RequestId);
 public sealed record NyxIdChatApprovalStepSourceSnapshot(string? ApprovalRequestId);
 
 public sealed record NyxIdChatWebStepSourceSnapshot;
+
+public sealed record NyxIdChatConditionStepSourceSnapshot(
+    NyxIdChatNumericConditionSnapshot Condition);
+
+public sealed record NyxIdChatNumericConditionSnapshot(
+    string ConditionId,
+    string SourceInputRequestId,
+    long SuggestedThreshold,
+    long EffectiveThreshold,
+    string ThresholdOrigin,
+    long ObservedValue,
+    string Comparison,
+    string Outcome,
+    DateTimeOffset? EvaluatedAt,
+    string GuardedToolName);
 
 public sealed record NyxIdChatAvailableActionsSnapshot(
     bool Retry,
@@ -318,13 +340,25 @@ public sealed record NyxIdChatPendingInputSnapshot(
     IReadOnlyList<NyxIdChatInputOptionSnapshot> Options,
     DateTimeOffset? AskedAt,
     bool AllowFreeText,
-    bool MultiSelect);
+    bool MultiSelect,
+    NyxIdChatNumericThresholdInputSnapshot? NumericThreshold = null);
+
+public sealed record NyxIdChatNumericThresholdInputSnapshot(
+    long SuggestedValue,
+    long MinimumValue,
+    long MaximumValue);
 
 public sealed record NyxIdChatInputResolutionSnapshot(
     string RequestId,
     string ClientRequestId,
     string Outcome,
-    DateTimeOffset? CommittedAt);
+    DateTimeOffset? CommittedAt,
+    NyxIdChatNumericThresholdResolutionSnapshot? NumericThreshold = null);
+
+public sealed record NyxIdChatNumericThresholdResolutionSnapshot(
+    long SuggestedValue,
+    long EffectiveValue,
+    string Origin);
 
 public sealed record NyxIdChatApprovalResolutionSnapshot(
     string RequestId,

@@ -111,6 +111,7 @@ internal static class NyxIdChatTaskPlanWireMapper
             CancelledInPlanRevision = step.CancelledInPlanRevision,
             Estimate = step.Estimate?.Clone(),
             ApprovalObservation = step.ApprovalObservation?.Clone(),
+            Guard = step.Guard?.Clone(),
         };
         result.DependsOn.AddRange(step.DependsOn);
         result.Substeps.AddRange(step.Substeps.Select(static substep => substep.Clone()));
@@ -158,6 +159,13 @@ internal static class NyxIdChatTaskPlanWireMapper
             CancelledInPlanRevision = step.CancelledInPlanRevision,
             Estimate = FromSnapshot(step.Estimate),
             ApprovalObservation = FromSnapshot(step.ApprovalObservation),
+            Guard = step.Guard is null
+                ? null
+                : new NyxIdChatStepGuard
+                {
+                    ConditionStepId = step.Guard.ConditionStepId,
+                    RequiredOutcome = ParseConditionOutcome(step.Guard.RequiredOutcome),
+                },
         };
         if (step.DependsOn is not null)
             result.DependsOn.AddRange(step.DependsOn);
@@ -299,10 +307,54 @@ internal static class NyxIdChatTaskPlanWireMapper
             };
         }
 
+        if (source?.Condition is not null)
+        {
+            var condition = source.Condition.Condition;
+            return new NyxIdChatStepSource
+            {
+                Condition = new NyxIdChatConditionStepSource
+                {
+                    Condition = new NyxIdChatNumericConditionState
+                    {
+                        ConditionId = condition.ConditionId,
+                        SourceInputRequestId = condition.SourceInputRequestId,
+                        SuggestedThreshold = condition.SuggestedThreshold,
+                        EffectiveThreshold = condition.EffectiveThreshold,
+                        ThresholdOrigin = ParseThresholdOrigin(condition.ThresholdOrigin),
+                        ObservedValue = condition.ObservedValue,
+                        Comparison = ParseIntegerComparison(condition.Comparison),
+                        Outcome = ParseConditionOutcome(condition.Outcome),
+                        EvaluatedAt = ToTimestamp(condition.EvaluatedAt),
+                        GuardedToolName = condition.GuardedToolName,
+                    },
+                },
+            };
+        }
+
         return source?.Web is null
             ? null
             : new NyxIdChatStepSource { Web = new NyxIdChatWebStepSource() };
     }
+
+    private static NyxIdChatConditionOutcome ParseConditionOutcome(string? value) => value switch
+    {
+        "true" => NyxIdChatConditionOutcome.True,
+        "false" => NyxIdChatConditionOutcome.False,
+        _ => NyxIdChatConditionOutcome.Unspecified,
+    };
+
+    private static NyxIdChatThresholdOrigin ParseThresholdOrigin(string? value) => value switch
+    {
+        "suggested" => NyxIdChatThresholdOrigin.Suggested,
+        "user_override" => NyxIdChatThresholdOrigin.UserOverride,
+        _ => NyxIdChatThresholdOrigin.Unspecified,
+    };
+
+    private static NyxIdChatIntegerComparison ParseIntegerComparison(string? value) => value switch
+    {
+        "gte" => NyxIdChatIntegerComparison.Gte,
+        _ => NyxIdChatIntegerComparison.Unspecified,
+    };
 
     private static NyxIdChatAvailableActions? FromSnapshot(
         NyxIdChatAvailableActionsSnapshot? actions) =>
@@ -450,6 +502,7 @@ internal static class NyxIdChatTaskPlanWireMapper
         "input" => NyxIdChatStepKind.Input,
         "approval" => NyxIdChatStepKind.Approval,
         "web" => NyxIdChatStepKind.Web,
+        "condition" => NyxIdChatStepKind.Condition,
         _ => NyxIdChatStepKind.Unspecified,
     };
 

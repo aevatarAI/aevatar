@@ -8,7 +8,8 @@ internal sealed record NyxIdChatAskUserRequest(
     string Prompt,
     IReadOnlyList<NyxIdChatInputOption> Options,
     bool AllowFreeText,
-    bool MultiSelect);
+    bool MultiSelect,
+    NyxIdChatNumericThresholdInputSpec? NumericThreshold);
 
 internal static class NyxIdChatAskUserContract
 {
@@ -80,6 +81,13 @@ internal static class NyxIdChatAskUserContract
                                 allowFreeTextElement.ValueKind == JsonValueKind.True;
             var multiSelect = root.TryGetProperty("multi_select", out var multiSelectElement) &&
                               multiSelectElement.ValueKind == JsonValueKind.True;
+            if (!TryParseNumericThreshold(root, out var numericThreshold))
+                return false;
+            if (numericThreshold is not null &&
+                (!allowFreeText || multiSelect || options.Count != 0))
+            {
+                return false;
+            }
             if (options.Count == 0)
             {
                 if (!allowFreeText || multiSelect)
@@ -94,13 +102,47 @@ internal static class NyxIdChatAskUserContract
                 questionElement.GetString()!.Trim(),
                 options,
                 allowFreeText,
-                multiSelect);
+                multiSelect,
+                numericThreshold);
             return true;
         }
         catch (JsonException)
         {
             return false;
         }
+    }
+
+    private static bool TryParseNumericThreshold(
+        JsonElement root,
+        out NyxIdChatNumericThresholdInputSpec? spec)
+    {
+        spec = null;
+        if (!root.TryGetProperty("numeric_threshold", out var threshold))
+            return true;
+        if (threshold.ValueKind != JsonValueKind.Object ||
+            !threshold.TryGetProperty("suggested_value", out var suggested) ||
+            !threshold.TryGetProperty("minimum_value", out var minimum) ||
+            !threshold.TryGetProperty("maximum_value", out var maximum) ||
+            suggested.ValueKind != JsonValueKind.Number ||
+            minimum.ValueKind != JsonValueKind.Number ||
+            maximum.ValueKind != JsonValueKind.Number ||
+            !suggested.TryGetInt64(out var suggestedValue) ||
+            !minimum.TryGetInt64(out var minimumValue) ||
+            !maximum.TryGetInt64(out var maximumValue) ||
+            minimumValue > maximumValue ||
+            suggestedValue < minimumValue ||
+            suggestedValue > maximumValue)
+        {
+            return false;
+        }
+
+        spec = new NyxIdChatNumericThresholdInputSpec
+        {
+            SuggestedValue = suggestedValue,
+            MinimumValue = minimumValue,
+            MaximumValue = maximumValue,
+        };
+        return true;
     }
 
     private static string BuildOptionId(string requestId, int index, string label)

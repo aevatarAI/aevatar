@@ -485,6 +485,9 @@ public sealed class NyxIdChatTurnOperationExecutor
             NyxIdChatOperationDispatchCommand.InputOneofCase.InputContinuation =>
                 await ExecuteInputContinuationAsync(command, session, reportProgressAsync, ct)
                     .ConfigureAwait(false),
+            NyxIdChatOperationDispatchCommand.InputOneofCase.ConditionContinuation =>
+                await ExecuteConditionContinuationAsync(command, session, reportProgressAsync, ct)
+                    .ConfigureAwait(false),
             NyxIdChatOperationDispatchCommand.InputOneofCase.ToolApprovalContinuation =>
                 await ExecuteToolApprovalContinuationAsync(command, session, reportProgressAsync, ct)
                     .ConfigureAwait(false),
@@ -1088,6 +1091,98 @@ public sealed class NyxIdChatTurnOperationExecutor
                 reportProgressAsync,
                 ct)
             .ConfigureAwait(false);
+    }
+
+    private async Task<NyxIdChatTurnOperationExecution> ExecuteConditionContinuationAsync(
+        NyxIdChatOperationDispatchCommand command,
+        NyxIdChatTransientExecutionSession session,
+        Func<NyxIdChatOperationProgressSignal, CancellationToken, Task> reportProgressAsync,
+        CancellationToken ct)
+    {
+        var continuation = command.ConditionContinuation;
+        var pending = session.StepState?.PendingToolCalls.Count == 1
+            ? session.StepState.PendingToolCalls[0]
+            : null;
+        if (continuation?.Condition is not { } condition ||
+            session.Request is null ||
+            pending is null ||
+            !string.Equals(pending.Id, continuation.ToolCallId, StringComparison.Ordinal) ||
+            !string.Equals(pending.Name, NyxIdChatConditionEvaluateContract.ToolName,
+                StringComparison.Ordinal) ||
+            !NyxIdChatConditionEvaluateContract.TryParse(
+                pending.ArgumentsJson,
+                out var proposal) ||
+            !MatchesConditionProposal(condition, proposal))
+        {
+            return Failure(
+                command.Key,
+                ToolCapabilityLostCode,
+                ToolCapabilityLostMessage,
+                NyxIdChatEffectEvidence.NotStarted);
+        }
+
+        var resultJson = JsonSerializer.Serialize(new
+        {
+            type = "condition_evaluate_response",
+            condition_id = condition.ConditionId,
+            comparison = "gte",
+            outcome = condition.Outcome == NyxIdChatConditionOutcome.True,
+            observed_value = condition.ObservedValue,
+            effective_threshold = condition.EffectiveThreshold,
+            guarded_tool_name = condition.GuardedToolName,
+        });
+        var result = new AgentRunToolStepResult { AdvanceRound = true };
+        result.ResultMessages.Add(AgentRunReplyStepMappers.ToProto(
+            ToolCallLoop.BuildToolResultMessage(
+                continuation.ToolCallId,
+                NyxIdChatConditionEvaluateContract.ToolName,
+                resultJson)));
+        session.StepState = ApplyToolFacts(
+            session.StepState!,
+            result,
+            checked(session.StepState!.NextStepIndex + 1));
+        ClearAuthorization(session);
+
+        return await ExecuteLlmAsync(
+                new NyxIdChatOperationDispatchCommand
+                {
+                    Key = command.Key.Clone(),
+                    Llm = new NyxIdChatLLMOperationInput { ContinueSession = true },
+                },
+                session,
+                reportProgressAsync,
+                ct)
+            .ConfigureAwait(false);
+    }
+
+    private static bool MatchesConditionProposal(
+        NyxIdChatNumericConditionState condition,
+        NyxIdChatConditionProposal proposal)
+    {
+        if (string.IsNullOrWhiteSpace(condition.ConditionId) ||
+            condition.Comparison != NyxIdChatIntegerComparison.Gte ||
+            condition.Outcome is not
+                (NyxIdChatConditionOutcome.True or NyxIdChatConditionOutcome.False) ||
+            condition.ThresholdOrigin is not
+                (NyxIdChatThresholdOrigin.Suggested or NyxIdChatThresholdOrigin.UserOverride) ||
+            condition.EvaluatedAt is null ||
+            !string.Equals(condition.SourceInputRequestId, proposal.SourceInputRequestId,
+                StringComparison.Ordinal) ||
+            condition.ObservedValue != proposal.ObservedValue ||
+            !string.Equals(condition.GuardedToolName, proposal.GuardedToolName,
+                StringComparison.Ordinal) ||
+            (condition.ThresholdOrigin == NyxIdChatThresholdOrigin.Suggested &&
+             condition.EffectiveThreshold != condition.SuggestedThreshold) ||
+            (condition.ThresholdOrigin == NyxIdChatThresholdOrigin.UserOverride &&
+             condition.EffectiveThreshold == condition.SuggestedThreshold))
+        {
+            return false;
+        }
+
+        return condition.Outcome ==
+               (condition.ObservedValue >= condition.EffectiveThreshold
+                   ? NyxIdChatConditionOutcome.True
+                   : NyxIdChatConditionOutcome.False);
     }
 
     private async Task<NyxIdChatTurnOperationExecution> ExecuteToolApprovalContinuationAsync(

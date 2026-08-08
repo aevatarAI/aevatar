@@ -386,6 +386,28 @@ message NyxIdChatConversationApprovalStepSourceDocument {
 
 message NyxIdChatConversationWebStepSourceDocument {}
 
+message NyxIdChatConversationNumericConditionDocument {
+  string condition_id = 1;
+  string source_input_request_id = 2;
+  int64 suggested_threshold = 3;
+  int64 effective_threshold = 4;
+  string threshold_origin = 5;
+  int64 observed_value = 6;
+  string comparison = 7;
+  string outcome = 8;
+  google.protobuf.Timestamp evaluated_at = 9;
+  string guarded_tool_name = 10;
+}
+
+message NyxIdChatConversationConditionStepSourceDocument {
+  NyxIdChatConversationNumericConditionDocument condition = 1;
+}
+
+message NyxIdChatConversationStepGuardDocument {
+  string condition_step_id = 1;
+  string required_outcome = 2;
+}
+
 message NyxIdChatConversationStepSourceDocument {
   oneof source {
     NyxIdChatConversationLLMStepSourceDocument llm = 1;
@@ -395,6 +417,7 @@ message NyxIdChatConversationStepSourceDocument {
     NyxIdChatConversationInputStepSourceDocument input = 5;
     NyxIdChatConversationApprovalStepSourceDocument approval = 6;
     NyxIdChatConversationWebStepSourceDocument web = 7;
+    NyxIdChatConversationConditionStepSourceDocument condition = 8;
   }
 }
 
@@ -441,6 +464,7 @@ message NyxIdChatConversationStepDocument {
   int32 added_in_plan_revision = 22;
   int32 cancelled_in_plan_revision = 23;
   NyxIdChatConversationPostReturnApprovalObservationDocument approval_observation = 24;
+  NyxIdChatConversationStepGuardDocument guard = 25;
 }
 
 message NyxIdChatConversationPlanGateDocument {
@@ -531,6 +555,19 @@ message NyxIdChatConversationPendingInputDocument {
   google.protobuf.Timestamp asked_at = 7;
   bool allow_free_text = 8;
   bool multi_select = 9;
+  NyxIdChatConversationNumericThresholdInputDocument numeric_threshold = 10;
+}
+
+message NyxIdChatConversationNumericThresholdInputDocument {
+  int64 suggested_value = 1;
+  int64 minimum_value = 2;
+  int64 maximum_value = 3;
+}
+
+message NyxIdChatConversationNumericThresholdResolutionDocument {
+  int64 suggested_value = 1;
+  int64 effective_value = 2;
+  string origin = 3;
 }
 
 message NyxIdChatConversationInputResolutionDocument {
@@ -538,6 +575,7 @@ message NyxIdChatConversationInputResolutionDocument {
   string client_request_id = 2;
   string outcome = 3;
   google.protobuf.Timestamp committed_at = 4;
+  NyxIdChatConversationNumericThresholdResolutionDocument numeric_threshold = 5;
 }
 
 message NyxIdChatConversationApprovalResolutionDocument {

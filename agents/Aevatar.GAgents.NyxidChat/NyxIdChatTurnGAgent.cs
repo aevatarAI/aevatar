@@ -1471,6 +1471,8 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
         {
             NyxIdChatOperationDispatchCommand.InputOneofCase.Llm => NyxIdChatStepKind.Llm,
             NyxIdChatOperationDispatchCommand.InputOneofCase.InputContinuation => NyxIdChatStepKind.Llm,
+            NyxIdChatOperationDispatchCommand.InputOneofCase.ConditionContinuation =>
+                NyxIdChatStepKind.Llm,
             NyxIdChatOperationDispatchCommand.InputOneofCase.Tool => NyxIdChatStepKind.Tool,
             NyxIdChatOperationDispatchCommand.InputOneofCase.ToolApprovalContinuation =>
                 NyxIdChatStepKind.Tool,
