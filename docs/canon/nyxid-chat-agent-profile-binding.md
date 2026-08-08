@@ -59,8 +59,9 @@ unprofiled turn 直接使用同一 ceiling，不会回退为枚举所有 DI `IAg
 明确的 route tool set 变更。
 
 这个固定 tool set 只提供审查过的只读 NyxID management wrappers、readiness/browser-action
-handoff、单一 `ask_user` typed input，以及其他明确允许的 route-owned tools。`ask_user`
-通过只含该工具的窄 source 挂载；它不让 `web_search`、`web_fetch` 或完整
+handoff、单一 `web_search`、单一 `ask_user` typed input，以及其他明确允许的
+route-owned tools。生产 `web_search` 通过 `tavily-search` NyxID service binding 执行；
+它和 `ask_user` 分别通过只含一个工具的窄 source 挂载，不让 `web_fetch` 或完整
 `WebAgentToolSource` 进入 ceiling。声明 `ExcludeFromNyxIdChat` 的通用 proxy
 不会进入模型可调用面。声明 `RequiresHumanSession` 的 Class-R read 只有在当前 turn 携带
 可验证的 source-readable user bearer 时才会被提供；credential 缺失、类型错误或仅有

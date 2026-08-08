@@ -404,7 +404,7 @@ public static class MainnetHostBuilderExtensions
                 builder.Configuration,
                 "Aevatar:Web:NyxIdSearchSlug",
                 "Aevatar:Web:SearchSlug",
-                "Aevatar:WebSearch:NyxIdSlug");
+                "Aevatar:WebSearch:NyxIdSlug") ?? "tavily-search";
             o.SearchApiBaseUrl = FirstConfiguredValue(
                 builder.Configuration,
                 "Aevatar:Web:SearchApiBaseUrl",
@@ -462,10 +462,11 @@ public static class MainnetHostBuilderExtensions
                 [
                     CreateToolSource<NyxIdAssistantToolSource>,
                     CreateToolSource<NyxIdConnectedServiceToolSource>,
+                    CreateToolSource<WebSearchAgentToolSource>,
                     CreateToolSource<AskUserAgentToolSource>,
                     CreateToolSource<SkillsAgentToolSource>,
                 ],
-                "Pinned NyxID Assistant route: safe management reads, admitted request-local connected-service operations, readiness, typed user input, and explicit skill loading only.");
+                "Pinned NyxID Assistant route: safe management reads, admitted request-local connected-service operations, web search, readiness, typed user input, and explicit skill loading only.");
         });
 
         return builder;

@@ -14,7 +14,7 @@ Recaptured on 2026-08-08 for [Milestone 40](https://github.com/AevatarAI/aevatar
 
 | Evidence | Revision | Meaning |
 |---|---|---|
-| Frozen Gate 0 baseline | `origin/feature/integrate@6f979452853a6e3afdffeef085f7bbc550b9385e` | Inventory point for classifying every attached issue |
+| Frozen Gate 0 baseline | `origin/feature/integrate@6cf0da4cc53311e27dcc29887b60b330587bcf3c` | Inventory point for classifying every attached issue |
 | Principal implementation | [`53e20f9ba2bc6f883a887615a3e015ce4eac3caa`](https://github.com/AevatarAI/aevatar/commit/53e20f9ba2bc6f883a887615a3e015ce4eac3caa) | Task-plan, action registry, projection, and Studio source |
 | Wave 0 source | [`6a32bc32d`](https://github.com/AevatarAI/aevatar/commit/6a32bc32d), [`080bb5c28`](https://github.com/AevatarAI/aevatar/commit/080bb5c28), [`cce255a03`](https://github.com/AevatarAI/aevatar/commit/cce255a03), [`e8c5ccc94`](https://github.com/AevatarAI/aevatar/commit/e8c5ccc94) | Completion reads, closed catalog, delegated refresh, and admin-only exposure correction already on the production branch |
 
@@ -78,7 +78,7 @@ The GitHub milestone API returned 30 attached issues even though its aggregate `
 
 | Gate | Issue | Classification | Evidence, gap, and concrete disposition |
 |---|---|---|---|
-| 0 | [#3317 baseline](https://github.com/AevatarAI/aevatar/issues/3317) | `completed` | The only baseline is `origin/feature/integrate@6f9794528`; stewardship is `@eanz17` with target 2026-08-08. The complete issue classification and supersession decisions are recorded here. |
+| 0 | [#3317 baseline](https://github.com/AevatarAI/aevatar/issues/3317) | `completed` | The only baseline is `origin/feature/integrate@6cf0da4cc`; stewardship is `@eanz17` with target 2026-08-08. The complete issue classification and supersession decisions are recorded here. |
 | 0 | [#3315 contract correction](https://github.com/AevatarAI/aevatar/issues/3315) | `completed` | [ADR-0049](../adr/0049-nyxid-assistant-plan-gate-and-revision.md) pins strict separation, Tier B, the pre-plan Class-R exception, exact local admission, and typed revision provenance. #3302/#3304/#3324/#3321 implement and verify the accepted contract. |
 | 1 | [#3296 one chat trunk](https://github.com/AevatarAI/aevatar/issues/3296) | `missing` | The integration baseline still routes `/api/chat` by request shape between Workflow and Assistant runtimes. Introduce one HTTP-free canonical application facade; keep form/no-type only as a frozen compatibility adapter until its callers migrate. |
 | 1 | [#3297 R/A/P/L/X ADR](https://github.com/AevatarAI/aevatar/issues/3297) | `completed` | [ADR-0048](../adr/0048-nyxid-assistant-operation-class-boundary.md) is accepted on the integration baseline. Its exact Class-P consumer is #3320; the ADR alone does not ship execution. |

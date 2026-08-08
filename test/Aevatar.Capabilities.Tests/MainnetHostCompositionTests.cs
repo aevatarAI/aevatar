@@ -750,11 +750,13 @@ public sealed class MainnetHostCompositionTests
         nyxIdChatToolSources.Select(static source => source.GetType()).Should().Equal(
             typeof(NyxIdAssistantToolSource),
             typeof(NyxIdConnectedServiceToolSource),
+            typeof(WebSearchAgentToolSource),
             typeof(AskUserAgentToolSource),
             typeof(SkillsAgentToolSource));
         nyxIdChatToolSources.Should().NotContain(source => source is NyxIdAgentToolSource);
         nyxIdChatToolSources.Should().NotContain(source =>
             source is NyxIdConnectedServiceInventoryToolSource);
+        nyxIdChatToolSources.Should().ContainSingle(source => source is WebSearchAgentToolSource);
         nyxIdChatToolSources.Should().NotContain(source => source is WebAgentToolSource);
         var scheduleQueries = app.Services.GetRequiredService<IStudioMemberAutomationQueryPort>();
         var scheduleMutations = app.Services.GetRequiredService<IStudioMemberWorkflowSchedulePort>();
@@ -789,6 +791,7 @@ public sealed class MainnetHostCompositionTests
         nyxIdChatProfile.Sources.Select(static source => source.GetType()).Should().Equal(
             typeof(NyxIdAssistantToolSource),
             typeof(NyxIdConnectedServiceToolSource),
+            typeof(WebSearchAgentToolSource),
             typeof(AskUserAgentToolSource),
             typeof(SkillsAgentToolSource));
         nyxIdChatProfile.Sources.Should().NotContain(source => source is NyxIdAgentToolSource);
@@ -796,7 +799,14 @@ public sealed class MainnetHostCompositionTests
             source is NyxIdConnectedServiceToolSource);
         nyxIdChatProfile.Sources.Should().NotContain(source =>
             source is NyxIdConnectedServiceInventoryToolSource);
+        nyxIdChatProfile.Sources.Should().ContainSingle(source => source is WebSearchAgentToolSource);
         nyxIdChatProfile.Sources.Should().NotContain(source => source is WebAgentToolSource);
+        var nyxIdChatWebTools = await nyxIdChatProfile.Sources
+            .OfType<WebSearchAgentToolSource>()
+            .Single()
+            .DiscoverToolsAsync();
+        nyxIdChatWebTools.Select(static tool => tool.Name).Should()
+            .ContainSingle().Which.Should().Be("web_search");
         var nyxIdChatInputTools = await nyxIdChatProfile.Sources
             .OfType<AskUserAgentToolSource>()
             .Single()

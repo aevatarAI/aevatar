@@ -11,6 +11,18 @@ namespace Aevatar.AI.Tests;
 public sealed class WebSearchToolExecutionTests
 {
     [Fact]
+    public async Task WebSearchSource_ShouldExposeOnlyWebSearch()
+    {
+        var options = new WebToolOptions { SearchApiBaseUrl = "https://search.test" };
+        using var client = new WebApiClient(options, new HttpClient(new RecordingHttpMessageHandler(
+            _ => new HttpResponseMessage(HttpStatusCode.OK))));
+
+        var tools = await new WebSearchAgentToolSource(options, client).DiscoverToolsAsync();
+
+        tools.Select(static tool => tool.Name).Should().Equal("web_search");
+    }
+
+    [Fact]
     public async Task DiscoverToolsAsync_WhenSearchBackendIsNotConfigured_ShouldExposeSearchWithTypedBlocker()
     {
         var handler = new RecordingHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
@@ -220,6 +232,38 @@ public sealed class WebSearchToolExecutionTests
         var root = document.RootElement;
         root.GetProperty("query").GetString().Should().Be("lark send message docs");
         root.GetProperty("limit").GetInt32().Should().Be(3);
+    }
+
+    [Fact]
+    public async Task SearchAsync_WithTavilyNyxIdSlug_ShouldUseNyxIdSlugProxyAndMapResults()
+    {
+        var handler = new RecordingHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(
+                """{"results":[{"title":"Aevatar","url":"https://aevatar.ai","content":"Actor framework"}]}"""),
+        });
+        using var http = new HttpClient(handler);
+        var client = new WebApiClient(
+            new WebToolOptions
+            {
+                NyxIdBaseUrl = "https://nyxid.example.test",
+                NyxIdSearchSlug = "tavily-search",
+            },
+            http);
+
+        var result = await client.SearchAsync("token-6", "aevatar actor framework", 4, CancellationToken.None);
+
+        result.Error.Should().BeNull();
+        result.Results.Should().ContainSingle().Which.Should().Be(
+            new WebSearchResultItem("Aevatar", "https://aevatar.ai", "Actor framework"));
+        var request = handler.Requests.Should().ContainSingle().Subject;
+        request.Method.Should().Be(HttpMethod.Post);
+        request.RequestUri!.AbsoluteUri.Should().Be(
+            "https://nyxid.example.test/api/v1/proxy/s/tavily-search/search");
+        request.Headers.Authorization!.Parameter.Should().Be("token-6");
+        using var document = JsonDocument.Parse(await request.Content!.ReadAsStringAsync());
+        document.RootElement.GetProperty("query").GetString().Should().Be("aevatar actor framework");
+        document.RootElement.GetProperty("max_results").GetInt32().Should().Be(4);
     }
 
     private static WebSearchTool CreateTool(HttpClient http)
