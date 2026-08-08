@@ -9,6 +9,7 @@ using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 using Aevatar.Foundation.Abstractions.Tools;
 using FluentAssertions;
 using Microsoft.Extensions.Logging;
+using ProtoValue = Google.Protobuf.WellKnownTypes.Value;
 
 namespace Aevatar.AI.Tests;
 
@@ -687,7 +688,8 @@ public class NyxIdConnectedServiceToolSourceTests
 
         using var scope = PushContext("user-token");
         var tool = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
-        tool.GetCallSafety("{}").Should().Be(new AgentToolCallSafety(true, false, false));
+        tool.ApprovalMode.Should().Be(ToolApprovalMode.NeverRequire);
+        tool.GetCallSafety("{}").Should().Be(new AgentToolCallSafety(false, false, false));
         var outcome = await tool.ExecuteWithOutcomeAsync(
             "call-effect",
             tool.Name,
@@ -701,6 +703,138 @@ public class NyxIdConnectedServiceToolSourceTests
         outcome.Receipt.SubjectId.Should().Be("usvc-alpha");
         outcome.Receipt.ResultJson.Should().Be(outcome.ResultJson);
         handler.ProxyRequests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task DynamicEffect_ConfiguredReadBack_FreezesExactReadSelectorFromTypedArguments()
+    {
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = Keys(
+            InstanceWithCatalogSlug("usvc-alpha", "api-shop", "svc-shop", "catalog-shop"));
+        handler.McpConfigByToken["user-token"] = McpCatalog(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            McpService(
+                "usvc-alpha",
+                "api-shop",
+                EffectEndpoint("endpoint-create"),
+                ReadEndpoint("endpoint-read")));
+        var source = CreateSource(
+            handler,
+            enableEffects: true,
+            readBackBindings:
+            [
+                new NyxIdAssistantOperationReadBackBinding
+                {
+                    CatalogServiceSlug = "catalog-shop",
+                    EffectEndpointId = "endpoint-create",
+                    ReadEndpointId = "endpoint-read",
+                    CheckName = "created_order_exists",
+                    Match = AgentToolReadBackMatch.Equals,
+                    JsonPointer = "/id",
+                    ExpectedValueLocation = NyxIdAssistantOperationArgumentLocation.Body,
+                    ExpectedValueArgumentName = "name",
+                    ArgumentBindings =
+                    [
+                        new NyxIdAssistantReadBackArgumentBinding
+                        {
+                            EffectLocation = NyxIdAssistantOperationArgumentLocation.Body,
+                            EffectArgumentName = "name",
+                            ReadLocation = NyxIdAssistantOperationArgumentLocation.Path,
+                            ReadArgumentName = "orderId",
+                        },
+                    ],
+                },
+            ]);
+
+        using var scope = PushContext("user-token");
+        var effect = (await source.DiscoverToolsAsync()).Single(tool => !tool.IsReadOnly);
+        var owner = effect.Should().BeAssignableTo<IAgentToolOperationAdmissionOwner>().Subject;
+
+        owner.OperationAdmission.ReadBack.Should().BeNull();
+        var frozen = owner.ResolveOperationAdmission(
+            """{"body":{"name":"order-alpha"}}""");
+
+        frozen.ReadBack.Should().NotBeNull();
+        frozen.ReadBack!.ReadOperation.Identity.Should().Be(
+            new AgentToolOperationIdentity.PublishedEndpoint("endpoint-read"));
+        frozen.ReadBack.Arguments.Fields["path_params"].StructValue.Fields["orderId"]
+            .StringValue.Should().Be("order-alpha");
+        frozen.ReadBack.Assertion.ExpectedValue!.StringValue.Should().Be("order-alpha");
+        frozen.ReadBack.CheckName.Should().Be("created_order_exists");
+    }
+
+    [Fact]
+    public async Task DynamicEffect_ExactRouteReadBack_FreezesRuntimeEndpointAndArrayAssertion()
+    {
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = Keys(
+            InstanceWithCatalogSlug("usvc-lark", "api-lark-bot", "svc-lark", "api-lark-bot"));
+        handler.McpConfigByToken["user-token"] = McpCatalog(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            McpService(
+                "usvc-lark",
+                "api-lark-bot",
+                LarkMessageEffectEndpoint("runtime-effect-uuid"),
+                LarkMessagesReadEndpoint("runtime-read-uuid")));
+        var source = CreateSource(
+            handler,
+            enableEffects: true,
+            readBackBindings: [LarkMessageReadBackBinding()]);
+
+        using var scope = PushContext("user-token");
+        var effect = (await source.DiscoverToolsAsync()).Single(tool => !tool.IsReadOnly);
+        var owner = effect.Should().BeAssignableTo<IAgentToolOperationAdmissionOwner>().Subject;
+
+        var frozen = owner.ResolveOperationAdmission(
+            """{"query":{"receive_id_type":"chat_id"},"body":{"receive_id":"oc_alpha","msg_type":"text","content":"{\"text\":\"m40-alpha\"}"}}""");
+
+        frozen.ReadBack.Should().NotBeNull();
+        frozen.ReadBack!.ReadOperation.Identity.Should().Be(
+            new AgentToolOperationIdentity.PublishedEndpoint("runtime-read-uuid"));
+        var query = frozen.ReadBack.Arguments.Fields["query"].StructValue.Fields;
+        query["container_id"].StringValue.Should().Be("oc_alpha");
+        query["container_id_type"].StringValue.Should().Be("chat");
+        query["page_size"].NumberValue.Should().Be(50);
+        frozen.ReadBack.Assertion.Match.Should().Be(AgentToolReadBackMatch.ArrayContainsEquals);
+        frozen.ReadBack.Assertion.JsonPointer.Should().Be("/data/items");
+        frozen.ReadBack.Assertion.ElementJsonPointer.Should().Be("/body/content");
+        frozen.ReadBack.Assertion.ExpectedValue!.StringValue.Should().Be("{\"text\":\"m40-alpha\"}");
+
+        owner.ResolveOperationAdmission(
+                """{"query":{"receive_id_type":"open_id"},"body":{"receive_id":"ou_alpha","msg_type":"text","content":"{\"text\":\"m40-alpha\"}"}}""")
+            .ReadBack.Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData(7000, "approval_required", AgentToolReceiptStatus.ApprovalRequired)]
+    [InlineData(7001, "approval_failed", AgentToolReceiptStatus.Denied)]
+    public async Task DynamicEffect_NyxIdApprovalResult_ProducesTypedObservationWithoutLocalGrant(
+        int errorCode,
+        string errorKey,
+        AgentToolReceiptStatus expectedStatus)
+    {
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = Keys(Instance("usvc-alpha", "api-shop", "svc-shop"));
+        handler.McpConfigByToken["user-token"] = McpCatalog(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            McpService("usvc-alpha", "api-shop", EffectEndpoint("endpoint-create")));
+        handler.ProxyStatusCode = HttpStatusCode.Forbidden;
+        handler.ProxyResponseBody = $$"""
+            {"error":"{{errorKey}}","error_code":{{errorCode}},"request_id":"approval-real-alpha"}
+            """;
+        var source = CreateSource(handler, enableEffects: true);
+
+        using var scope = PushContext("user-token");
+        var effect = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
+        effect.ApprovalMode.Should().Be(ToolApprovalMode.NeverRequire);
+        var outcome = await effect.ExecuteWithOutcomeAsync(
+            "call-effect",
+            effect.Name,
+            """{"body":{"name":"order-alpha"}}""");
+
+        outcome.Receipt!.Status.Should().Be(expectedStatus);
+        outcome.Receipt.ApprovalRequestId.Should().Be("approval-real-alpha");
+        outcome.Receipt.ApprovalMode.Should().Be(AgentToolReceiptApprovalMode.Unspecified);
     }
 
     [Fact]
@@ -868,7 +1002,8 @@ public class NyxIdConnectedServiceToolSourceTests
         string? baseUrl = "https://nyx.test",
         ILogger<NyxIdConnectedServiceToolSource>? logger = null,
         bool enableEffects = false,
-        IReadOnlyList<NyxIdAssistantReadinessCapabilityBinding>? readinessBindings = null)
+        IReadOnlyList<NyxIdAssistantReadinessCapabilityBinding>? readinessBindings = null,
+        IReadOnlyList<NyxIdAssistantOperationReadBackBinding>? readBackBindings = null)
     {
         var options = new NyxIdToolOptions
         {
@@ -877,6 +1012,8 @@ public class NyxIdConnectedServiceToolSourceTests
         };
         if (readinessBindings is not null)
             options.AssistantReadinessCapabilityBindings = readinessBindings.ToList();
+        if (readBackBindings is not null)
+            options.AssistantOperationReadBackBindings = readBackBindings.ToList();
         var client = new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.test" },
             new HttpClient(handler));
@@ -1066,6 +1203,98 @@ public class NyxIdConnectedServiceToolSourceTests
           },
           "request_content_type": "application/json",
           "request_body_required": true,
+          "response": { "content_types": ["application/json"], "binary_artifact": false }
+        }
+        """;
+
+    private static NyxIdAssistantOperationReadBackBinding LarkMessageReadBackBinding() => new()
+    {
+        CatalogServiceSlug = "api-lark-bot",
+        EffectHttpMethod = "POST",
+        EffectPathTemplate = "/open-apis/im/v1/messages",
+        ReadHttpMethod = "GET",
+        ReadPathTemplate = "/open-apis/im/v1/messages",
+        CheckName = "lark_message_content_visible_in_chat",
+        Match = AgentToolReadBackMatch.ArrayContainsEquals,
+        JsonPointer = "/data/items",
+        ElementJsonPointer = "/body/content",
+        ExpectedValueLocation = NyxIdAssistantOperationArgumentLocation.Body,
+        ExpectedValueArgumentName = "content",
+        EffectArgumentConstraints =
+        [
+            new NyxIdAssistantEffectArgumentConstraint
+            {
+                EffectLocation = NyxIdAssistantOperationArgumentLocation.Query,
+                EffectArgumentName = "receive_id_type",
+                ExpectedValue = ProtoValue.ForString("chat_id"),
+            },
+        ],
+        ArgumentBindings =
+        [
+            new NyxIdAssistantReadBackArgumentBinding
+            {
+                EffectLocation = NyxIdAssistantOperationArgumentLocation.Body,
+                EffectArgumentName = "receive_id",
+                ReadLocation = NyxIdAssistantOperationArgumentLocation.Query,
+                ReadArgumentName = "container_id",
+            },
+        ],
+        LiteralReadArguments =
+        [
+            new NyxIdAssistantReadBackLiteralArgument
+            {
+                ReadLocation = NyxIdAssistantOperationArgumentLocation.Query,
+                ReadArgumentName = "container_id_type",
+                Value = ProtoValue.ForString("chat"),
+            },
+            new NyxIdAssistantReadBackLiteralArgument
+            {
+                ReadLocation = NyxIdAssistantOperationArgumentLocation.Query,
+                ReadArgumentName = "page_size",
+                Value = ProtoValue.ForNumber(50),
+            },
+        ],
+    };
+
+    private static string LarkMessageEffectEndpoint(string endpointId) => $$"""
+        {
+          "endpoint_id": "{{endpointId}}",
+          "name": "im_message_create",
+          "method": "POST",
+          "path": "/open-apis/im/v1/messages",
+          "parameters": [
+            { "name": "receive_id_type", "in": "query", "required": true, "schema": { "type": "string", "enum": ["chat_id", "open_id"] } }
+          ],
+          "request_body_schema": {
+            "type": "object",
+            "properties": {
+              "receive_id": { "type": "string" },
+              "msg_type": { "type": "string" },
+              "content": { "type": "string" }
+            },
+            "required": ["receive_id", "msg_type", "content"],
+            "additionalProperties": false
+          },
+          "request_content_type": "application/json",
+          "request_body_required": true,
+          "response": { "content_types": ["application/json"], "binary_artifact": false }
+        }
+        """;
+
+    private static string LarkMessagesReadEndpoint(string endpointId) => $$"""
+        {
+          "endpoint_id": "{{endpointId}}",
+          "name": "im_messages_list",
+          "method": "GET",
+          "path": "/open-apis/im/v1/messages",
+          "parameters": [
+            { "name": "container_id_type", "in": "query", "required": true, "schema": { "type": "string", "enum": ["chat"] } },
+            { "name": "container_id", "in": "query", "required": true, "schema": { "type": "string" } },
+            { "name": "page_size", "in": "query", "required": false, "schema": { "type": "integer" } }
+          ],
+          "request_body_schema": null,
+          "request_content_type": null,
+          "request_body_required": false,
           "response": { "content_types": ["application/json"], "binary_artifact": false }
         }
         """;

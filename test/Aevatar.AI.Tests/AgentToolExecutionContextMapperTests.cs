@@ -4,6 +4,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using FluentAssertions;
 using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.AI.Tests;
 
@@ -646,48 +647,89 @@ public sealed class AgentToolExecutionContextMapperTests
         source.Should().NotContain("HttpAuthorizationMetadataKey");
     }
 
-    private static AgentToolOperationAdmission ExactOperationAdmission() => new(
-        "usvc-alpha",
-        "api-shop",
-        new AgentToolOperationIdentity.PublishedEndpoint("endpoint-alpha"),
-        AgentToolOperationAuthorizationBasis.PublishedContract,
-        "POST",
-        "/orders/{orderId}",
-        "contract-digest-alpha",
-        [
-            new AgentToolOperationParameter(
-                "orderId",
-                AgentToolOperationParameterLocation.Path,
+    private static AgentToolOperationAdmission ExactOperationAdmission()
+    {
+        var readOperation = new AgentToolOperationAdmission(
+            "usvc-alpha",
+            "api-shop",
+            new AgentToolOperationIdentity.PublishedEndpoint("get-order"),
+            AgentToolOperationAuthorizationBasis.PublishedContract,
+            "GET",
+            "/orders/{orderId}",
+            "read-contract-digest-alpha",
+            [
+                new AgentToolOperationParameter(
+                    "orderId",
+                    AgentToolOperationParameterLocation.Path,
+                    true,
+                    AgentToolOperationValueSchema.Text),
+            ],
+            null,
+            AgentToolOperationResponsePolicy.TextOnly,
+            new AgentToolOperationExecutionPolicy(
+                AgentToolOperationRisk.ReadOnly,
+                AgentToolOperationApproval.None,
+                AgentToolOperationEnforcementOwner.Aevatar,
+                [AgentToolOperationExecutionMode.Interactive]),
+            "catalog-digest-alpha");
+
+        return new AgentToolOperationAdmission(
+            "usvc-alpha",
+            "api-shop",
+            new AgentToolOperationIdentity.PublishedEndpoint("endpoint-alpha"),
+            AgentToolOperationAuthorizationBasis.PublishedContract,
+            "POST",
+            "/orders/{orderId}",
+            "contract-digest-alpha",
+            [
+                new AgentToolOperationParameter(
+                    "orderId",
+                    AgentToolOperationParameterLocation.Path,
+                    true,
+                    AgentToolOperationValueSchema.Text),
+            ],
+            new AgentToolOperationRequestBody(
                 true,
-                AgentToolOperationValueSchema.Text),
-        ],
-        new AgentToolOperationRequestBody(
-            true,
-            "application/json",
-            new AgentToolOperationValueSchema(
-                AgentToolOperationValueKind.Object,
-                [
-                    new AgentToolOperationSchemaProperty(
-                        "lines",
-                        new AgentToolOperationValueSchema(
-                            AgentToolOperationValueKind.Array,
-                            [],
-                            new HashSet<string>(StringComparer.Ordinal),
-                            AgentToolOperationValueSchema.Text,
-                            [],
-                            false)),
-                ],
-                new HashSet<string>(["lines"], StringComparer.Ordinal),
-                null,
-                [],
-                false)),
-        new AgentToolOperationResponsePolicy(true, false, ["application/json"]),
-        new AgentToolOperationExecutionPolicy(
-            AgentToolOperationRisk.Write,
-            AgentToolOperationApproval.Required,
-            AgentToolOperationEnforcementOwner.Aevatar,
-            [AgentToolOperationExecutionMode.Interactive, AgentToolOperationExecutionMode.Durable]),
-        "catalog-digest-alpha");
+                "application/json",
+                new AgentToolOperationValueSchema(
+                    AgentToolOperationValueKind.Object,
+                    [
+                        new AgentToolOperationSchemaProperty(
+                            "lines",
+                            new AgentToolOperationValueSchema(
+                                AgentToolOperationValueKind.Array,
+                                [],
+                                new HashSet<string>(StringComparer.Ordinal),
+                                AgentToolOperationValueSchema.Text,
+                                [],
+                                false)),
+                    ],
+                    new HashSet<string>(["lines"], StringComparer.Ordinal),
+                    null,
+                    [],
+                    false)),
+            new AgentToolOperationResponsePolicy(true, false, ["application/json"]),
+            new AgentToolOperationExecutionPolicy(
+                AgentToolOperationRisk.Write,
+                AgentToolOperationApproval.Required,
+                AgentToolOperationEnforcementOwner.Aevatar,
+                [AgentToolOperationExecutionMode.Interactive, AgentToolOperationExecutionMode.Durable]),
+            "catalog-digest-alpha",
+            new AgentToolOperationReadBack(
+                readOperation,
+                new Struct
+                {
+                    Fields =
+                    {
+                        ["orderId"] = Google.Protobuf.WellKnownTypes.Value.ForString("order-alpha"),
+                    },
+                },
+                new AgentToolReadBackAssertion(
+                    AgentToolReadBackMatch.Equals,
+                    "/status",
+                    Google.Protobuf.WellKnownTypes.Value.ForString("created")),
+                "order_created"));
+    }
 
     private static string FindRepositoryRoot()
     {

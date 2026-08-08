@@ -14,13 +14,34 @@ internal static class NyxIdProxyReceiptFactory
         string? userServiceId,
         string? serviceLabel,
         string? resourceUri,
-        string resultJson)
+        string resultJson,
+        bool proxyRequestFailed = true)
     {
         var normalizedUserServiceId = NormalizeUserServiceId(userServiceId);
         if (!NyxIdApiClient.TryParseProxyError(resultJson, out var error) || error is null)
             return CreateSuccess(callId, toolName, normalizedUserServiceId, resultJson);
 
         var normalizedSlug = NormalizeSlug(serviceSlug);
+        if (error.ErrorCode == 7000 &&
+            string.Equals(error.ErrorKey, "approval_required", StringComparison.OrdinalIgnoreCase))
+        {
+            return CreateNyxIdApprovalReceipt(
+                callId,
+                toolName,
+                normalizedUserServiceId,
+                error.ApprovalRequestId,
+                denied: false);
+        }
+        if (error.ErrorCode == 7001 &&
+            string.Equals(error.ErrorKey, "approval_failed", StringComparison.OrdinalIgnoreCase))
+        {
+            return CreateNyxIdApprovalReceipt(
+                callId,
+                toolName,
+                normalizedUserServiceId,
+                error.ApprovalRequestId,
+                denied: true);
+        }
         if (error.IsAuthorizationRequired)
             return CreateAuthorizationRequired(
                 callId,
@@ -29,6 +50,9 @@ internal static class NyxIdProxyReceiptFactory
                 normalizedUserServiceId,
                 serviceLabel,
                 resourceUri);
+
+        if (!proxyRequestFailed)
+            return CreateSuccess(callId, toolName, normalizedUserServiceId, resultJson);
 
         var isServiceScopeForbidden = error.HttpStatus == 403 &&
                                       string.Equals(
@@ -55,6 +79,34 @@ internal static class NyxIdProxyReceiptFactory
             errorCode,
             safeMessage,
             BuildSafeResult(errorCode, safeMessage));
+    }
+
+    private static AgentToolReceipt CreateNyxIdApprovalReceipt(
+        string callId,
+        string toolName,
+        string? userServiceId,
+        string? approvalRequestId,
+        bool denied)
+    {
+        var requestId = NormalizeApprovalRequestId(approvalRequestId);
+        var code = denied ? "NYXID_APPROVAL_FAILED" : "NYXID_APPROVAL_REQUIRED";
+        var message = denied
+            ? "NyxID denied or timed out the approval request."
+            : "NyxID created an approval request; decide it on a NyxID surface.";
+        var receipt = new AgentToolReceipt
+        {
+            CallId = callId ?? string.Empty,
+            ToolName = toolName ?? string.Empty,
+            Status = denied
+                ? AgentToolReceiptStatus.Denied
+                : AgentToolReceiptStatus.ApprovalRequired,
+            ApprovalRequestId = requestId ?? string.Empty,
+            ErrorCode = code,
+            ErrorMessage = message,
+            ResultJson = BuildSafeResult(code, message),
+        };
+        AttachUserServiceSubject(receipt, userServiceId);
+        return receipt;
     }
 
     public static AgentToolReceipt? CreateSuccess(
@@ -150,6 +202,16 @@ internal static class NyxIdProxyReceiptFactory
     private static string? NormalizeUserServiceId(string? userServiceId)
     {
         var normalized = userServiceId?.Trim();
+        return !string.IsNullOrWhiteSpace(normalized) &&
+               normalized.Length <= 256 &&
+               normalized.All(static character => !char.IsControl(character))
+            ? normalized
+            : null;
+    }
+
+    private static string? NormalizeApprovalRequestId(string? approvalRequestId)
+    {
+        var normalized = approvalRequestId?.Trim();
         return !string.IsNullOrWhiteSpace(normalized) &&
                normalized.Length <= 256 &&
                normalized.All(static character => !char.IsControl(character))

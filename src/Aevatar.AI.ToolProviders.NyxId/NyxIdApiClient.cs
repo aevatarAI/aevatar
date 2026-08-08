@@ -78,7 +78,8 @@ internal sealed record NyxIdApiErrorEnvelope(
 internal sealed record NyxIdProxyError(
     int HttpStatus,
     string ErrorKey,
-    int ErrorCode)
+    int ErrorCode,
+    string? ApprovalRequestId = null)
 {
     public bool IsAuthorizationRequired =>
         HttpStatus == 401 &&
@@ -126,41 +127,66 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
         {
             using var outerDocument = JsonDocument.Parse(response);
             var outer = outerDocument.RootElement;
-            if (outer.ValueKind != JsonValueKind.Object ||
-                !outer.TryGetProperty("error", out var errorMarker) ||
-                errorMarker.ValueKind != JsonValueKind.True ||
-                !outer.TryGetProperty("status", out var statusProperty) ||
-                !statusProperty.TryGetInt32(out var status))
+            if (outer.ValueKind != JsonValueKind.Object)
             {
                 return false;
             }
 
-            var errorKey = string.Empty;
-            var errorCode = 0;
-            if (outer.TryGetProperty("body", out var bodyProperty) &&
+            if (outer.TryGetProperty("error", out var errorMarker) &&
+                errorMarker.ValueKind == JsonValueKind.True &&
+                outer.TryGetProperty("status", out var statusProperty) &&
+                statusProperty.TryGetInt32(out var status))
+            {
+                if (outer.TryGetProperty("body", out var bodyProperty) &&
                 bodyProperty.ValueKind == JsonValueKind.String &&
                 !string.IsNullOrWhiteSpace(bodyProperty.GetString()))
-            {
-                try
                 {
-                    using var bodyDocument = JsonDocument.Parse(bodyProperty.GetString()!);
-                    var bodyRoot = bodyDocument.RootElement;
-                    errorKey = TryGetString(bodyRoot, "error") ?? string.Empty;
-                    errorCode = TryGetInt(bodyRoot, "error_code") ?? 0;
+                    try
+                    {
+                        using var bodyDocument = JsonDocument.Parse(bodyProperty.GetString()!);
+                        if (TryParseProxyErrorBody(bodyDocument.RootElement, status, out error))
+                            return true;
+                    }
+                    catch (JsonException)
+                    {
+                        // The typed outer envelope still proves an upstream HTTP failure.
+                    }
                 }
-                catch (JsonException)
-                {
-                    // The typed outer envelope is sufficient to classify an upstream HTTP failure.
-                }
+
+                error = new NyxIdProxyError(status, string.Empty, 0);
+                return true;
             }
 
-            error = new NyxIdProxyError(status, errorKey, errorCode);
-            return true;
+            return TryParseProxyErrorBody(outer, 0, out error);
         }
         catch (JsonException)
         {
             return false;
         }
+    }
+
+    private static bool TryParseProxyErrorBody(
+        JsonElement body,
+        int httpStatus,
+        out NyxIdProxyError? error)
+    {
+        error = null;
+        if (body.ValueKind != JsonValueKind.Object)
+            return false;
+
+        var errorKey = TryGetString(body, "error");
+        var errorCode = TryGetInt(body, "error_code");
+        if (string.IsNullOrWhiteSpace(errorKey) || errorCode is null)
+            return false;
+
+        var requestId = TryGetString(body, "request_id") ??
+                        TryGetString(body, "approval_request_id");
+        error = new NyxIdProxyError(
+            httpStatus,
+            errorKey,
+            errorCode.Value,
+            requestId);
+        return true;
     }
 
     public NyxIdApiClient(

@@ -112,7 +112,8 @@ public sealed class StreamingToolExecutor
             {
                 callContext = callContext with
                 {
-                    OperationAdmission = admissionOwner.OperationAdmission,
+                    OperationAdmission = admissionOwner.ResolveOperationAdmission(
+                        frozenCall.ArgumentsJson),
                 };
             }
             AgentToolReplayPolicy replayPolicy;

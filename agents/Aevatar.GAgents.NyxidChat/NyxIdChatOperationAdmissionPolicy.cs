@@ -54,14 +54,15 @@ internal static class NyxIdChatOperationAdmissionPolicy
             return false;
         }
 
-        return admission.ExecutionPolicy.Risk switch
+        var validOperation = admission.ExecutionPolicy.Risk switch
         {
             AgentToolOperationRiskPayload.ReadOnly =>
                 admission.HttpMethod is "GET" or "HEAD" or "OPTIONS" &&
                 admission.ExecutionPolicy.Approval == AgentToolOperationApprovalPayload.None &&
                 safety.IsReadOnly &&
                 !safety.IsDestructive &&
-                !safety.MayChangeExternalState,
+                !safety.MayChangeExternalState &&
+                admission.ReadBack is null,
             AgentToolOperationRiskPayload.Write =>
                 admission.HttpMethod is "POST" or "PUT" or "PATCH" &&
                 admission.ExecutionPolicy.Approval == AgentToolOperationApprovalPayload.Required &&
@@ -70,6 +71,8 @@ internal static class NyxIdChatOperationAdmissionPolicy
                 safety.MayChangeExternalState,
             _ => false,
         };
+        return validOperation &&
+               (admission.ReadBack is null || IsValidReadBack(admission.ReadBack, admission));
     }
 
     public static bool Matches(
@@ -78,6 +81,48 @@ internal static class NyxIdChatOperationAdmissionPolicy
         expected is null
             ? actual is null
             : actual is not null && expected.Equals(actual);
+
+    public static bool IsValidReadBack(
+        AgentToolOperationReadBackPayload? readBack,
+        AgentToolOperationAdmissionPayload? effectOperation = null)
+    {
+        if (readBack?.ReadOperation is not { } operation ||
+            readBack.Arguments is null ||
+            readBack.Assertion is null ||
+            string.IsNullOrWhiteSpace(readBack.CheckName) ||
+            readBack.Assertion.Match == AgentToolReadBackMatchPayload.Unspecified ||
+            operation.ReadBack is not null)
+        {
+            return false;
+        }
+
+        var safety = new NyxIdChatToolCallSafety
+        {
+            IsReadOnly = true,
+            MayChangeExternalState = false,
+        };
+        return IsValid(operation, safety) &&
+               (effectOperation is null ||
+                string.Equals(
+                    operation.ServiceInstanceId,
+                    effectOperation.ServiceInstanceId,
+                    StringComparison.Ordinal) &&
+                string.Equals(
+                    operation.ServiceSlug,
+                    effectOperation.ServiceSlug,
+                    StringComparison.Ordinal) &&
+                string.Equals(
+                    operation.CatalogDigest,
+                    effectOperation.CatalogDigest,
+                    StringComparison.Ordinal)) &&
+               (readBack.Assertion.Match is not (
+                    AgentToolReadBackMatchPayload.Equals or
+                    AgentToolReadBackMatchPayload.ArrayContainsEquals) ||
+                readBack.Assertion.ExpectedValue is not null) &&
+               (readBack.Assertion.Match != AgentToolReadBackMatchPayload.ArrayContainsEquals ||
+                !string.IsNullOrWhiteSpace(readBack.Assertion.JsonPointer) &&
+                !string.IsNullOrWhiteSpace(readBack.Assertion.ElementJsonPointer));
+    }
 
     private static bool IsCatalogDigest(string? value)
     {

@@ -456,7 +456,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
 
             var argumentsJson = call.ArgumentsJson ?? string.Empty;
             var callSafety = tool.GetCallSafety(argumentsJson);
-            var operationAdmission = SnapshotOperationAdmission(tool);
+            var operationAdmission = SnapshotOperationAdmission(tool, argumentsJson);
             snapshots.Add(new AgentRunAuthorizedToolCallSafety(
                 call.Id ?? string.Empty,
                 call.Name ?? string.Empty,
@@ -923,7 +923,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         string argumentsJson)
     {
         var currentSafety = tool.GetCallSafety(argumentsJson);
-        var currentAdmission = SnapshotOperationAdmission(tool);
+        var currentAdmission = SnapshotOperationAdmission(tool, argumentsJson);
         return authorization.HasRequiresApproval == currentSafety.RequiresApproval.HasValue &&
                authorization.RequiresApproval == (currentSafety.RequiresApproval ?? false) &&
                authorization.IsReadOnly == currentSafety.IsReadOnly &&
@@ -966,14 +966,16 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant();
     }
 
-    private static AgentToolOperationAdmissionPayload? SnapshotOperationAdmission(IAgentTool tool)
+    private static AgentToolOperationAdmissionPayload? SnapshotOperationAdmission(
+        IAgentTool tool,
+        string argumentsJson)
     {
         if (tool is not IAgentToolOperationAdmissionOwner owner)
             return null;
 
         var payload = (AgentToolExecutionContext.Empty with
         {
-            OperationAdmission = owner.OperationAdmission,
+            OperationAdmission = owner.ResolveOperationAdmission(argumentsJson),
         }).ToPayload();
         return payload.OperationAdmission?.Clone();
     }

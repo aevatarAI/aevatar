@@ -76,6 +76,7 @@ public sealed class NyxIdChatTurnOperationExecutor
     private readonly INyxIdActionPostconditionPort _actionPostconditionPort;
     private readonly AgentProfileTurnCatalogMaterializer? _turnCatalogMaterializer;
     private readonly INyxIdChatDelegationCredentialLifecyclePort _delegationCredentialLifecycle;
+    private readonly INyxIdChatToolVerificationPort _toolVerificationPort;
 
     public NyxIdChatTurnOperationExecutor(
         IAgentRunReplyGenerationExecutorPort generationExecutor)
@@ -83,7 +84,8 @@ public sealed class NyxIdChatTurnOperationExecutor
             generationExecutor,
             new UnavailableNyxIdActionPostconditionPort(),
             null,
-            new NyxIdChatDelegationCredentialLifecyclePort(TimeProvider.System))
+            new NyxIdChatDelegationCredentialLifecyclePort(TimeProvider.System),
+            new NyxIdChatToolVerificationPort())
     {
     }
 
@@ -94,7 +96,8 @@ public sealed class NyxIdChatTurnOperationExecutor
             generationExecutor,
             actionPostconditionPort,
             null,
-            new NyxIdChatDelegationCredentialLifecyclePort(TimeProvider.System))
+            new NyxIdChatDelegationCredentialLifecyclePort(TimeProvider.System),
+            new NyxIdChatToolVerificationPort())
     {
     }
 
@@ -106,7 +109,8 @@ public sealed class NyxIdChatTurnOperationExecutor
             generationExecutor,
             actionPostconditionPort,
             turnCatalogMaterializer,
-            new NyxIdChatDelegationCredentialLifecyclePort(TimeProvider.System))
+            new NyxIdChatDelegationCredentialLifecyclePort(TimeProvider.System),
+            new NyxIdChatToolVerificationPort())
     {
     }
 
@@ -115,6 +119,21 @@ public sealed class NyxIdChatTurnOperationExecutor
         INyxIdActionPostconditionPort actionPostconditionPort,
         AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer,
         INyxIdChatDelegationCredentialLifecyclePort delegationCredentialLifecycle)
+        : this(
+            generationExecutor,
+            actionPostconditionPort,
+            turnCatalogMaterializer,
+            delegationCredentialLifecycle,
+            new NyxIdChatToolVerificationPort())
+    {
+    }
+
+    public NyxIdChatTurnOperationExecutor(
+        IAgentRunReplyGenerationExecutorPort generationExecutor,
+        INyxIdActionPostconditionPort actionPostconditionPort,
+        AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer,
+        INyxIdChatDelegationCredentialLifecyclePort delegationCredentialLifecycle,
+        INyxIdChatToolVerificationPort toolVerificationPort)
     {
         _generationExecutor = generationExecutor ?? throw new ArgumentNullException(nameof(generationExecutor));
         _actionPostconditionPort = actionPostconditionPort ??
@@ -122,6 +141,8 @@ public sealed class NyxIdChatTurnOperationExecutor
         _turnCatalogMaterializer = turnCatalogMaterializer;
         _delegationCredentialLifecycle = delegationCredentialLifecycle ??
                                          throw new ArgumentNullException(nameof(delegationCredentialLifecycle));
+        _toolVerificationPort = toolVerificationPort ??
+                                throw new ArgumentNullException(nameof(toolVerificationPort));
     }
 
     public async Task<NyxIdChatTurnOperationExecution> ExecuteAsync(
@@ -152,12 +173,45 @@ public sealed class NyxIdChatTurnOperationExecutor
             NyxIdChatOperationDispatchCommand.InputOneofCase.PlanGateContinuation =>
                 await ExecutePlanGateContinuationAsync(command, session, reportProgressAsync, ct)
                     .ConfigureAwait(false),
+            NyxIdChatOperationDispatchCommand.InputOneofCase.ToolVerification =>
+                await ExecuteToolVerificationAsync(command, session, ct).ConfigureAwait(false),
             _ => Failure(
                 command.Key,
                 UnsupportedOperationCode,
                 UnsupportedOperationMessage,
                 NyxIdChatEffectEvidence.NotStarted),
         };
+    }
+
+    private async Task<NyxIdChatTurnOperationExecution> ExecuteToolVerificationAsync(
+        NyxIdChatOperationDispatchCommand command,
+        NyxIdChatTransientExecutionSession session,
+        CancellationToken ct)
+    {
+        var input = command.ToolVerification?.Clone();
+        if (input?.ReadBack is null || string.IsNullOrWhiteSpace(input.EffectStepId))
+        {
+            return new NyxIdChatTurnOperationExecution(new NyxIdChatOperationResultSignal
+            {
+                Key = command.Key.Clone(),
+                ToolVerification = new NyxIdChatToolVerificationResult
+                {
+                    EffectStepId = input?.EffectStepId ?? string.Empty,
+                    Disposition = NyxIdChatToolVerificationDisposition.Unavailable,
+                    FailureCode = NyxIdChatToolVerificationPort.UnavailableCode,
+                    SafeMessage = "The typed verification contract was invalid.",
+                },
+            });
+        }
+
+        input.ToolContext = session.Request?.ToolContext?.Clone();
+        var result = await _toolVerificationPort.VerifyAsync(command.Key, input, ct)
+            .ConfigureAwait(false);
+        return new NyxIdChatTurnOperationExecution(new NyxIdChatOperationResultSignal
+        {
+            Key = command.Key.Clone(),
+            ToolVerification = result,
+        });
     }
 
     private async Task<NyxIdChatTurnOperationExecution> ExecuteActionPostconditionAsync(
@@ -1422,7 +1476,7 @@ public sealed class NyxIdChatTurnOperationExecutor
 
         return receipt.Status switch
         {
-            AgentToolReceiptStatus.Success => NyxIdChatEffectEvidence.Confirmed,
+            AgentToolReceiptStatus.Success => NyxIdChatEffectEvidence.MayHaveChanged,
             AgentToolReceiptStatus.ApprovalRequired or
                 AgentToolReceiptStatus.AuthorizationRequired => NyxIdChatEffectEvidence.NotStarted,
             AgentToolReceiptStatus.Denied => NyxIdChatEffectEvidence.NotApplied,

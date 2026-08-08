@@ -6,6 +6,7 @@ option csharp_namespace = "Aevatar.GAgents.NyxidChat";
 
 import "ai_messages.proto";
 import "google/protobuf/timestamp.proto";
+import "google/protobuf/struct.proto";
 import "ToolProviders/agent_tool_admission.proto";
 import "Tools/tool_presentation.proto";
 
@@ -285,6 +286,15 @@ message NyxIdChatInputStepSource {
 message NyxIdChatPostconditionStepSource {
   string action_request_id = 1;
   string check = 2;
+  string effect_step_id = 3;
+  aevatar.ai.tool_providers.AgentToolOperationReadBackPayload tool_read_back = 4;
+}
+
+message NyxIdChatRetryToolInputState {
+  string call_id = 1;
+  string tool_name = 2;
+  google.protobuf.Struct arguments = 3;
+  aevatar.ai.tool_providers.AgentToolOperationAdmissionPayload operation_admission = 4;
 }
 
 message NyxIdChatApprovalStepSource {
@@ -408,6 +418,9 @@ message NyxIdChatTaskStepState {
   repeated NyxIdChatSubstepState substeps = 22;
   int32 added_in_plan_revision = 23;
   int32 cancelled_in_plan_revision = 24;
+  // Internal credential-free input used only for explicit generation retry.
+  // Public projections deliberately omit this field.
+  NyxIdChatRetryToolInputState retry_tool_input = 25;
 }
 
 message NyxIdChatPlanRevisionRecord {
@@ -1154,6 +1167,12 @@ message NyxIdChatToolOperationInput {
   aevatar.ai.tool_providers.AgentToolOperationAdmissionPayload operation_admission = 8;
 }
 
+message NyxIdChatToolVerificationInput {
+  string effect_step_id = 1;
+  aevatar.ai.tool_providers.AgentToolOperationReadBackPayload read_back = 2;
+  aevatar.ai.AgentToolExecutionContextPayload tool_context = 3;
+}
+
 message NyxIdChatActionPostconditionInput {
   string action_request_id = 1;
   NyxIdAssistantActionKind action = 2;
@@ -1209,7 +1228,24 @@ message NyxIdChatOperationDispatchCommand {
     NyxIdChatInputContinuationInput input_continuation = 13;
     NyxIdChatToolApprovalContinuationInput tool_approval_continuation = 14;
     NyxIdChatPlanGateContinuationInput plan_gate_continuation = 15;
+    NyxIdChatToolVerificationInput tool_verification = 16;
   }
+}
+
+enum NyxIdChatToolVerificationDisposition {
+  NYX_ID_CHAT_TOOL_VERIFICATION_DISPOSITION_UNSPECIFIED = 0;
+  NYX_ID_CHAT_TOOL_VERIFICATION_DISPOSITION_APPLIED = 1;
+  NYX_ID_CHAT_TOOL_VERIFICATION_DISPOSITION_NOT_APPLIED = 2;
+  NYX_ID_CHAT_TOOL_VERIFICATION_DISPOSITION_UNAVAILABLE = 3;
+}
+
+message NyxIdChatToolVerificationResult {
+  string effect_step_id = 1;
+  NyxIdChatToolVerificationDisposition disposition = 2;
+  aevatar.ai.tool_providers.AgentToolOperationAdmissionPayload read_operation = 3;
+  string check_name = 4;
+  string failure_code = 5;
+  string safe_message = 6;
 }
 
 message NyxIdChatToolCallSafety {
@@ -1272,6 +1308,7 @@ message NyxIdChatOperationResultSignal {
     NyxIdChatToolOperationResult tool = 11;
     NyxIdChatActionPostconditionResult action_postcondition = 12;
     NyxIdChatOperationFailure failure = 13;
+    NyxIdChatToolVerificationResult tool_verification = 14;
   }
 }
 
@@ -1304,6 +1341,7 @@ message NyxIdChatTurnOperationReconciliationInput {
   aevatar.ai.tool_providers.AgentToolOperationAdmissionPayload operation_admission = 2;
   string idempotency_key = 3;
   NyxIdChatEffectEvidence effect_dispatch_waterline = 4;
+  aevatar.ai.tool_providers.AgentToolOperationReadBackPayload read_back = 5;
 }
 
 message NyxIdChatTextProgress {

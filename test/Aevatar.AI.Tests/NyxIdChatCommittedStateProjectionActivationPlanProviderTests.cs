@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.Audit.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Foundation.Abstractions;
@@ -118,6 +119,7 @@ public sealed class NyxIdChatCommittedStateProjectionActivationPlanProviderTests
     {
         using var provider = new ServiceCollection()
             .AddLogging()
+            .AddInMemoryAuditTrailForDevelopment()
             .AddAevatarRuntime()
             .AddNyxIdChat(new ConfigurationBuilder().Build())
             .BuildServiceProvider();

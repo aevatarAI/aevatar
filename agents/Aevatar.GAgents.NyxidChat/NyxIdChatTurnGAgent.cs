@@ -288,6 +288,7 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
                         OperationAdmission = State.OperationAdmission?.Clone(),
                         IdempotencyKey = State.IdempotencyKey,
                         EffectDispatchWaterline = State.EffectDispatchWaterline,
+                        ReadBack = State.OperationAdmission?.ReadBack?.Clone(),
                     },
                     ActiveInboundEnvelope?.Propagation?.CorrelationId ?? signal.Key.OperationId,
                     CancellationToken.None);

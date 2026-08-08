@@ -58,6 +58,57 @@ public sealed class UnavailableNyxIdChatTurnOperationReconciliationPort
     }
 }
 
+/// <summary>
+/// Production Tier-B recovery path. It executes only the read operation frozen
+/// in the original effect admission; missing credentials or proof stay honest
+/// uncertainty and never cause the effect to be dispatched again.
+/// </summary>
+public sealed class AdmittedNyxIdChatTurnOperationReconciliationPort
+    : INyxIdChatTurnOperationReconciliationPort
+{
+    private readonly INyxIdChatToolVerificationPort _verificationPort;
+
+    public AdmittedNyxIdChatTurnOperationReconciliationPort(
+        INyxIdChatToolVerificationPort verificationPort)
+    {
+        _verificationPort = verificationPort;
+    }
+
+    public async Task<NyxIdChatOperationResultSignal> ReconcileAsync(
+        NyxIdChatTurnOperationReconciliationInput input,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        if (input.Key is null || !NyxIdChatOperationAdmissionPolicy.IsValidReadBack(input.ReadBack))
+            return Uncertain(input.Key);
+
+        var verification = await _verificationPort.VerifyAsync(
+            input.Key,
+            new NyxIdChatToolVerificationInput
+            {
+                EffectStepId = input.Key.StepId,
+                ReadBack = input.ReadBack.Clone(),
+            },
+            ct).ConfigureAwait(false);
+        return new NyxIdChatOperationResultSignal
+        {
+            Key = input.Key.Clone(),
+            ToolVerification = verification,
+        };
+    }
+
+    private static NyxIdChatOperationResultSignal Uncertain(NyxIdChatOperationKey? key) => new()
+    {
+        Key = key?.Clone(),
+        Failure = new NyxIdChatOperationFailure
+        {
+            FailureCode = UnavailableNyxIdChatTurnOperationReconciliationPort.OutcomeUncertainCode,
+            SafeMessage = "The external operation may have changed state and could not be reconciled.",
+            ExternalEffect = NyxIdChatEffectEvidence.MayHaveChanged,
+        },
+    };
+}
+
 public sealed class NyxIdChatTurnOperationDispatchPort
     : INyxIdChatTurnOperationDispatchPort
 {

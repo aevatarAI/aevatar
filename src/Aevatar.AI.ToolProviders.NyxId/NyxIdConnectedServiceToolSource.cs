@@ -83,7 +83,13 @@ public sealed class NyxIdConnectedServiceToolSource : IAgentToolSource
                         bindingsById[service.UserServiceId].Instance,
                         NyxIdAssistantReadinessCapabilityRegistry.Resolve(
                             _options,
-                            bindingsById[service.UserServiceId].Instance.CatalogServiceSlug))))
+                            bindingsById[service.UserServiceId].Instance.CatalogServiceSlug),
+                        NyxIdAssistantOperationReadBackRegistry.Resolve(
+                            _options,
+                            service,
+                            endpoint,
+                            catalog.Source.ContentDigest,
+                            bindingsById[service.UserServiceId].Instance))))
                 .Where(static tool => tool is not null)
                 .Select(static tool => tool!)
                 .Where(static tool => !string.IsNullOrWhiteSpace(tool.Name))

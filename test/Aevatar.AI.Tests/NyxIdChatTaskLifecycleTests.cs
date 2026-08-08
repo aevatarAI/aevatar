@@ -80,8 +80,9 @@ public sealed class NyxIdChatTaskLifecycleTests
         toolStep.Operation.Key.TaskId.Should().Be("task-alpha");
         toolStep.Operation.Key.OperationGeneration.Should().Be(1);
         var verificationStep = decision.State.ActiveTask.Steps[2];
-        verificationStep.Kind.Should().Be(NyxIdChatStepKind.Llm);
+        verificationStep.Kind.Should().Be(NyxIdChatStepKind.Postcondition);
         verificationStep.Status.Should().Be(NyxIdChatStepStatus.Planned);
+        verificationStep.Source.Postcondition.Check.Should().Be("repository_exists");
         verificationStep.DependsOn.Should().Equal(toolStep.StepId);
         verificationStep.AddedInPlanRevision.Should().Be(2);
         decision.State.ActiveTask.ActiveStepId.Should().Be(toolStep.StepId);
@@ -130,6 +131,43 @@ public sealed class NyxIdChatTaskLifecycleTests
                 AgentToolOperationExecutionModePayload.Interactive,
             },
         },
+        ReadBack = ExactReadBack(),
+    };
+
+    private static AgentToolOperationReadBackPayload ExactReadBack() => new()
+    {
+        ReadOperation = new AgentToolOperationAdmissionPayload
+        {
+            ServiceInstanceId = "connected-service-alpha",
+            ServiceSlug = "service-slug-alpha",
+            PublishedEndpoint = new AgentToolPublishedEndpointIdentityPayload
+            {
+                EndpointId = "endpoint-read-alpha",
+            },
+            AuthorizationBasis = AgentToolOperationAuthorizationBasisPayload.PublishedContract,
+            HttpMethod = "GET",
+            PathTemplate = "/repositories/{repositoryId}",
+            ContractDigest = new string('c', 64),
+            CatalogDigest = $"sha256:{new string('a', 64)}",
+            ExecutionPolicy = new AgentToolOperationExecutionPolicyPayload
+            {
+                Risk = AgentToolOperationRiskPayload.ReadOnly,
+                Approval = AgentToolOperationApprovalPayload.None,
+                EnforcementOwner = AgentToolOperationEnforcementOwnerPayload.Aevatar,
+                AllowedExecutionModes =
+                {
+                    AgentToolOperationExecutionModePayload.Interactive,
+                },
+            },
+        },
+        Arguments = JsonParser.Default.Parse<Struct>("{\"repositoryId\":\"repo-alpha\"}"),
+        Assertion = new AgentToolReadBackAssertionPayload
+        {
+            Match = AgentToolReadBackMatchPayload.Equals,
+            JsonPointer = "/id",
+            ExpectedValue = Google.Protobuf.WellKnownTypes.Value.ForString("repo-alpha"),
+        },
+        CheckName = "repository_exists",
     };
 
     [Fact]
@@ -151,13 +189,16 @@ public sealed class NyxIdChatTaskLifecycleTests
     }
 
     [Fact]
-    public void ToolSuccess_ShouldRequestContinuationLlmAndKeepTaskActive()
+    public void ToolSuccess_ShouldRequestTypedVerificationAndKeepTaskActive()
     {
         var afterPlan = NyxIdChatTaskLifecycle.ApplyOperationResult(
             ActiveState(NyxIdChatStepKind.Llm, "step-llm-alpha", "operation-llm-alpha"),
-            LlmWithToolCall(),
+            LlmWithAdmittedToolCall(),
             Now).State;
         var toolStep = afterPlan.ActiveTask.Steps.Single(step => step.Kind == NyxIdChatStepKind.Tool);
+        NyxIdChatOperationAdmissionPolicy.IsValidReadBack(
+            toolStep.Source.Tool.OperationAdmission.ReadBack,
+            toolStep.Source.Tool.OperationAdmission).Should().BeTrue();
         var signal = new NyxIdChatOperationResultSignal
         {
             Key = toolStep.Operation.Key.Clone(),
@@ -184,12 +225,12 @@ public sealed class NyxIdChatTaskLifecycleTests
         decision.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Active);
         var completedTool = decision.State.ActiveTask.Steps.Single(step =>
             step.StepId == toolStep.StepId);
-        completedTool.Status.Should().Be(NyxIdChatStepStatus.Done);
-        completedTool.ExternalEffect.Should().Be(NyxIdChatEffectEvidence.Confirmed);
+        completedTool.Status.Should().Be(NyxIdChatStepStatus.Waiting);
+        completedTool.ExternalEffect.Should().Be(NyxIdChatEffectEvidence.MayHaveChanged);
         var continuation = decision.State.ActiveTask.Steps.Single(step =>
-            step.Kind == NyxIdChatStepKind.Llm &&
+            step.Kind == NyxIdChatStepKind.Postcondition &&
             step.DependsOn.Contains(toolStep.StepId));
-        continuation.Kind.Should().Be(NyxIdChatStepKind.Llm);
+        continuation.Kind.Should().Be(NyxIdChatStepKind.Postcondition);
         continuation.Status.Should().Be(NyxIdChatStepStatus.Running);
         continuation.Operation.Phase.Should().Be(NyxIdChatOperationPhase.Requested);
         continuation.AddedInPlanRevision.Should().Be(2);
@@ -199,16 +240,17 @@ public sealed class NyxIdChatTaskLifecycleTests
         decision.NextCommand.Should().NotBeNull();
         decision.NextCommand!.Key.Should().BeEquivalentTo(continuation.Operation.Key);
         decision.NextCommand.InputCase.Should().Be(
-            NyxIdChatOperationDispatchCommand.InputOneofCase.Llm);
-        decision.NextCommand.Llm.ContinueSession.Should().BeTrue();
+            NyxIdChatOperationDispatchCommand.InputOneofCase.ToolVerification);
+        decision.NextCommand.ToolVerification.EffectStepId.Should().Be(toolStep.StepId);
+        decision.NextCommand.ToolVerification.ReadBack.Should().BeEquivalentTo(ExactReadBack());
     }
 
     [Fact]
-    public void FinalLlm_ShouldSucceedMultiStepTaskWithoutAnotherDispatch()
+    public void PassingTypedVerification_ShouldSucceedMultiStepTaskWithoutAnotherDispatch()
     {
         var afterPlan = NyxIdChatTaskLifecycle.ApplyOperationResult(
             ActiveState(NyxIdChatStepKind.Llm, "step-llm-alpha", "operation-llm-alpha"),
-            LlmWithToolCall(),
+            LlmWithAdmittedToolCall(),
             Now).State;
         var toolStep = afterPlan.ActiveTask.Steps.Single(step =>
             step.Kind == NyxIdChatStepKind.Tool);
@@ -217,12 +259,23 @@ public sealed class NyxIdChatTaskLifecycleTests
             ToolSuccess(toolStep.Operation.Key),
             Now).State;
         var finalStep = afterTool.ActiveTask.Steps.Single(step =>
-            step.Kind == NyxIdChatStepKind.Llm &&
+            step.Kind == NyxIdChatStepKind.Postcondition &&
             step.DependsOn.Contains(toolStep.StepId));
+        finalStep.Source.Postcondition.EffectStepId.Should().Be(toolStep.StepId);
+        finalStep.Source.Postcondition.ToolReadBack.ReadOperation.Should()
+            .BeEquivalentTo(ExactReadBack().ReadOperation);
+        finalStep.Source.Postcondition.ToolReadBack.CheckName.Should()
+            .Be("repository_exists");
         var finalSignal = new NyxIdChatOperationResultSignal
         {
             Key = finalStep.Operation.Key.Clone(),
-            Llm = new NyxIdChatLLMOperationResult { Content = "Repository updated." },
+            ToolVerification = new NyxIdChatToolVerificationResult
+            {
+                EffectStepId = toolStep.StepId,
+                Disposition = NyxIdChatToolVerificationDisposition.Applied,
+                ReadOperation = ExactReadBack().ReadOperation.Clone(),
+                CheckName = "repository_exists",
+            },
         };
 
         var decision = NyxIdChatTaskLifecycle.ApplyOperationResult(afterTool, finalSignal, Now);
@@ -233,6 +286,152 @@ public sealed class NyxIdChatTaskLifecycleTests
         decision.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Succeeded);
         decision.State.ActiveTask.Steps.Select(step => step.Status).Should().OnlyContain(
             status => status == NyxIdChatStepStatus.Done);
+    }
+
+    [Fact]
+    public void EffectSuccessWithoutAdmittedReadBack_ShouldRemainHonestlyUncertain()
+    {
+        var admission = ExactWriteAdmission();
+        admission.ReadBack = null;
+        var planSignal = LlmWithToolCall();
+        planSignal.Llm.ToolCalls.Single().OperationAdmission = admission;
+        var planned = NyxIdChatTaskLifecycle.ApplyOperationResult(
+            ActiveState(NyxIdChatStepKind.Llm, "step-llm-alpha", "operation-llm-alpha"),
+            planSignal,
+            Now).State;
+        var tool = planned.ActiveTask.Steps.Single(step => step.Kind == NyxIdChatStepKind.Tool);
+
+        var decision = NyxIdChatTaskLifecycle.ApplyOperationResult(
+            planned,
+            ToolSuccess(tool.Operation.Key),
+            Now);
+
+        decision.NextCommand.Should().BeNull();
+        decision.State.ActiveTask.Status.Should().NotBe(NyxIdChatTaskStatus.Succeeded);
+        decision.State.ActiveTask.Steps.Single(step =>
+            step.Kind == NyxIdChatStepKind.Postcondition).Status.Should()
+            .Be(NyxIdChatStepStatus.Uncertain);
+        decision.State.ActiveTask.Steps.Single(step => step.Kind == NyxIdChatStepKind.Tool)
+            .ExternalEffect.Should().Be(NyxIdChatEffectEvidence.MayHaveChanged);
+    }
+
+    [Fact]
+    public void VerificationNotApplied_ShouldUnlockExplicitToolRetryWithoutChangingTaskIdentity()
+    {
+        var planned = NyxIdChatTaskLifecycle.ApplyOperationResult(
+            ActiveState(NyxIdChatStepKind.Llm, "step-llm-alpha", "operation-llm-alpha"),
+            LlmWithAdmittedToolCall(),
+            Now).State;
+        var tool = planned.ActiveTask.Steps.Single(step => step.Kind == NyxIdChatStepKind.Tool);
+        var afterTool = NyxIdChatTaskLifecycle.ApplyOperationResult(
+            planned,
+            ToolSuccess(tool.Operation.Key),
+            Now).State;
+        var verification = afterTool.ActiveTask.Steps.Single(step =>
+            step.Kind == NyxIdChatStepKind.Postcondition);
+
+        var decision = NyxIdChatTaskLifecycle.ApplyOperationResult(
+            afterTool,
+            new NyxIdChatOperationResultSignal
+            {
+                Key = verification.Operation.Key.Clone(),
+                ToolVerification = new NyxIdChatToolVerificationResult
+                {
+                    EffectStepId = tool.StepId,
+                    Disposition = NyxIdChatToolVerificationDisposition.NotApplied,
+                    ReadOperation = ExactReadBack().ReadOperation.Clone(),
+                    CheckName = "repository_exists",
+                    FailureCode = "EFFECT_NOT_FOUND",
+                    SafeMessage = "The read-back proved the effect was not applied.",
+                },
+            },
+            Now);
+
+        decision.State.ActiveTask.TaskId.Should().Be("task-alpha");
+        var reconciled = decision.State.ActiveTask.Steps.Single(step => step.StepId == tool.StepId);
+        reconciled.Status.Should().Be(NyxIdChatStepStatus.Failed);
+        reconciled.ExternalEffect.Should().Be(NyxIdChatEffectEvidence.NotApplied);
+        reconciled.AvailableActions.Retry.Should().BeTrue();
+    }
+
+    [Fact]
+    public void PerRequestRetry_AfterReconciliation_ShouldObserveFreshNyxIdRequestWithoutLocalGrant()
+    {
+        var (reconciled, toolStepId) = ReconciledNotAppliedToolState();
+        var original = reconciled.ActiveTask.Steps.Single(step => step.StepId == toolStepId);
+        reconciled.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Active);
+        original.AvailableActions.Retry.Should().BeTrue();
+        original.RetryInputRebuildable.Should().BeTrue();
+        original.RetryToolInput.Should().NotBeNull();
+        original.ApprovalRequestId = "approval-original";
+        var retry = NyxIdChatControlCommands.Retry(
+            reconciled,
+            RetryToolCommand(original, "retry-per-request"),
+            stateVersion: 11,
+            Now);
+
+        retry.ShouldDispatch.Should().BeTrue("retry decision was {0}", retry.Result.ReasonCode);
+        retry.NextCommand!.Key.OperationGeneration.Should().Be(2);
+        retry.State.ActiveTask.Steps.Single(step => step.StepId == toolStepId)
+            .ApprovalRequestId.Should().BeEmpty("a retry cannot carry the prior decision request");
+
+        var reentry = NyxIdChatTaskLifecycle.ApplyOperationResult(
+            retry.State,
+            NyxIdApprovalRequired(
+                retry.NextCommand.Key,
+                "approval-per-request-fresh"),
+            Now);
+
+        var step = reentry.State.ActiveTask.Steps.Single(candidate => candidate.StepId == toolStepId);
+        step.Operation.Key.OperationGeneration.Should().Be(2);
+        step.ApprovalRequestId.Should().Be("approval-per-request-fresh");
+        step.ApprovalRequestId.Should().NotBe("approval-original");
+        step.Status.Should().Be(NyxIdChatStepStatus.Failed);
+        step.ExternalEffect.Should().Be(NyxIdChatEffectEvidence.NotApplied);
+        step.AvailableActions.Retry.Should().BeTrue();
+        reentry.State.PendingApproval.Should().BeNull(
+            "the real NyxID request must be decided on a NyxID surface");
+    }
+
+    [Fact]
+    public void StillValidGrantRetry_AfterReconciliation_ShouldProceedWithoutSyntheticApproval()
+    {
+        var (reconciled, toolStepId) = ReconciledNotAppliedToolState();
+        var original = reconciled.ActiveTask.Steps.Single(step => step.StepId == toolStepId);
+        original.ApprovalRequestId = "approval-that-issued-grant";
+        var retry = NyxIdChatControlCommands.Retry(
+            reconciled,
+            RetryToolCommand(original, "retry-valid-grant"),
+            stateVersion: 11,
+            Now);
+
+        var afterEffect = NyxIdChatTaskLifecycle.ApplyOperationResult(
+            retry.State,
+            ToolSuccess(retry.NextCommand!.Key),
+            Now);
+        afterEffect.NextCommand.Should().NotBeNull();
+        var verification = afterEffect.NextCommand!;
+        var completed = NyxIdChatTaskLifecycle.ApplyOperationResult(
+            afterEffect.State,
+            new NyxIdChatOperationResultSignal
+            {
+                Key = verification.Key.Clone(),
+                ToolVerification = new NyxIdChatToolVerificationResult
+                {
+                    EffectStepId = toolStepId,
+                    Disposition = NyxIdChatToolVerificationDisposition.Applied,
+                    ReadOperation = ExactReadBack().ReadOperation.Clone(),
+                    CheckName = ExactReadBack().CheckName,
+                },
+            },
+            Now);
+
+        retry.NextCommand.Key.OperationGeneration.Should().Be(2);
+        completed.State.PendingApproval.Should().BeNull();
+        completed.State.ActiveTask.Steps.Single(step => step.StepId == toolStepId)
+            .ApprovalRequestId.Should().BeEmpty(
+                "a still-valid NyxID grant is consumed only by NyxID and creates no Aevatar grant");
+        completed.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Succeeded);
     }
 
     [Theory]
@@ -576,6 +775,23 @@ public sealed class NyxIdChatTaskLifecycleTests
         },
     };
 
+    private static NyxIdChatOperationResultSignal LlmWithAdmittedToolCall()
+    {
+        var signal = LlmWithToolCall();
+        var call = signal.Llm.ToolCalls.Single();
+        call.Safety.IsReadOnly = false;
+        call.Safety.IsDestructive = false;
+        call.NyxIdProvenance = new NyxIdOperationRef
+        {
+            ConnectedServiceId = "connected-service-alpha",
+            ServiceSlug = "service-slug-alpha",
+            CatalogServiceSlug = "catalog-slug-alpha",
+            OperationId = "endpoint-alpha",
+        };
+        call.OperationAdmission = ExactWriteAdmission();
+        return signal;
+    }
+
     private static NyxIdChatOperationResultSignal LlmWithConnectedServiceToolCall(
         NyxIdChatConversationGAgentState state) => new()
     {
@@ -621,6 +837,94 @@ public sealed class NyxIdChatTaskLifecycleTests
                 ToolName = "repository_update",
                 Status = AgentToolReceiptStatus.Success,
                 SideEffectKind = "repository.update",
+            },
+        },
+    };
+
+    private static (NyxIdChatConversationGAgentState State, string ToolStepId)
+        ReconciledNotAppliedToolState()
+    {
+        var planned = NyxIdChatTaskLifecycle.ApplyOperationResult(
+            ActiveState(NyxIdChatStepKind.Llm, "step-llm-alpha", "operation-llm-alpha"),
+            LlmWithAdmittedToolCall(),
+            Now).State;
+        var tool = planned.ActiveTask.Steps.Single(step => step.Kind == NyxIdChatStepKind.Tool);
+        var uncertain = NyxIdChatTaskLifecycle.ApplyOperationResult(
+            planned,
+            new NyxIdChatOperationResultSignal
+            {
+                Key = tool.Operation.Key.Clone(),
+                Failure = new NyxIdChatOperationFailure
+                {
+                    FailureCode = "TOOL_OUTCOME_UNKNOWN",
+                    SafeMessage = "The external outcome could not be confirmed.",
+                    ExternalEffect = NyxIdChatEffectEvidence.MayHaveChanged,
+                },
+            },
+            Now);
+        var reconciliation = uncertain.NextCommand ??
+                             throw new InvalidOperationException("Reconciliation was not planned.");
+        var reconciled = NyxIdChatTaskLifecycle.ApplyOperationResult(
+            uncertain.State,
+            new NyxIdChatOperationResultSignal
+            {
+                Key = reconciliation.Key.Clone(),
+                ToolVerification = new NyxIdChatToolVerificationResult
+                {
+                    EffectStepId = tool.StepId,
+                    Disposition = NyxIdChatToolVerificationDisposition.NotApplied,
+                    ReadOperation = ExactReadBack().ReadOperation.Clone(),
+                    CheckName = ExactReadBack().CheckName,
+                    FailureCode = "EFFECT_NOT_FOUND",
+                    SafeMessage = "The read-back proved the effect was not applied.",
+                },
+            },
+            Now).State;
+        reconciled.ActiveTask.PlanRevisions[^1].RevisionCause.Should().Be(
+            NyxIdChatPlanRevisionCause.FailureRecovery);
+        return (reconciled, tool.StepId);
+    }
+
+    private static NyxIdChatRetryStepCommand RetryToolCommand(
+        NyxIdChatTaskStepState step,
+        string requestId) => new()
+    {
+        ScopeId = "scope-alpha",
+        ConversationActorId = "conversation-alpha",
+        TurnId = "turn-alpha",
+        TaskId = "task-alpha",
+        StepId = step.StepId,
+        RetryRequestId = requestId,
+        ClientRequestId = $"client-{requestId}",
+        CommandId = $"command-{requestId}",
+        CorrelationId = $"correlation-{requestId}",
+        ExpectedOperationGeneration = step.Operation.Key.OperationGeneration,
+        ExpectedStateVersion = 11,
+        ToolContext = new AgentToolExecutionContextPayload
+        {
+            Credentials = new AgentToolCredentialsPayload
+            {
+                NyxIdAccessToken = "runtime-token-alpha",
+            },
+        },
+    };
+
+    private static NyxIdChatOperationResultSignal NyxIdApprovalRequired(
+        NyxIdChatOperationKey key,
+        string requestId) => new()
+    {
+        Key = key.Clone(),
+        Tool = new NyxIdChatToolOperationResult
+        {
+            ExternalEffect = NyxIdChatEffectEvidence.NotStarted,
+            Receipt = new AgentToolReceipt
+            {
+                CallId = "call-alpha",
+                ToolName = "repository_update",
+                Status = AgentToolReceiptStatus.ApprovalRequired,
+                ApprovalRequestId = requestId,
+                ErrorCode = "NYXID_APPROVAL_REQUIRED",
+                ErrorMessage = "NyxID created an approval request.",
             },
         },
     };

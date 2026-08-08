@@ -1299,6 +1299,15 @@ public sealed class NyxIdChatConversationGAgent
 
         if (terminalPrepared)
             await DispatchPendingHistoryTerminalAsync();
+
+        if (decision.NextCommand is null)
+            return;
+
+        await DispatchAuthorizedOperationAsync(
+            decision.NextCommand,
+            ActiveInboundEnvelope?.Propagation?.CorrelationId ??
+            decision.NextCommand.Key.OperationId,
+            now);
     }
 
     [EventHandler]

@@ -1,3 +1,6 @@
+using Aevatar.AI.Abstractions.ToolProviders;
+using Google.Protobuf.WellKnownTypes;
+
 namespace Aevatar.AI.ToolProviders.NyxId;
 
 public enum NyxIdManagedWorkflowAdmissionMode
@@ -11,6 +14,83 @@ public sealed class NyxIdAssistantReadinessCapabilityBinding
     public string CatalogServiceSlug { get; set; } = string.Empty;
 
     public string ReadinessCapabilityId { get; set; } = string.Empty;
+}
+
+public enum NyxIdAssistantOperationArgumentLocation
+{
+    Unspecified = 0,
+    Path = 1,
+    Query = 2,
+    Header = 3,
+    Body = 4,
+}
+
+public sealed class NyxIdAssistantReadBackArgumentBinding
+{
+    public NyxIdAssistantOperationArgumentLocation EffectLocation { get; set; }
+
+    public string EffectArgumentName { get; set; } = string.Empty;
+
+    public NyxIdAssistantOperationArgumentLocation ReadLocation { get; set; }
+
+    public string ReadArgumentName { get; set; } = string.Empty;
+}
+
+public sealed class NyxIdAssistantReadBackLiteralArgument
+{
+    public NyxIdAssistantOperationArgumentLocation ReadLocation { get; set; }
+
+    public string ReadArgumentName { get; set; } = string.Empty;
+
+    public Value Value { get; set; } = new();
+}
+
+public sealed class NyxIdAssistantEffectArgumentConstraint
+{
+    public NyxIdAssistantOperationArgumentLocation EffectLocation { get; set; }
+
+    public string EffectArgumentName { get; set; } = string.Empty;
+
+    public Value ExpectedValue { get; set; } = new();
+}
+
+/// <summary>
+/// Server-owned exact effect-to-read contract. Endpoint identities and argument mappings are
+/// configuration facts; the model supplies values only through the admitted effect schema.
+/// </summary>
+public sealed class NyxIdAssistantOperationReadBackBinding
+{
+    public string CatalogServiceSlug { get; set; } = string.Empty;
+
+    public string EffectEndpointId { get; set; } = string.Empty;
+
+    public string EffectHttpMethod { get; set; } = string.Empty;
+
+    public string EffectPathTemplate { get; set; } = string.Empty;
+
+    public string ReadEndpointId { get; set; } = string.Empty;
+
+    public string ReadHttpMethod { get; set; } = string.Empty;
+
+    public string ReadPathTemplate { get; set; } = string.Empty;
+
+    public List<NyxIdAssistantReadBackArgumentBinding> ArgumentBindings { get; set; } = [];
+
+    public List<NyxIdAssistantReadBackLiteralArgument> LiteralReadArguments { get; set; } = [];
+
+    public List<NyxIdAssistantEffectArgumentConstraint> EffectArgumentConstraints { get; set; } = [];
+
+    public AgentToolReadBackMatch Match { get; set; }
+
+    public string JsonPointer { get; set; } = string.Empty;
+
+    public string ElementJsonPointer { get; set; } = string.Empty;
+
+    public NyxIdAssistantOperationArgumentLocation ExpectedValueLocation { get; set; }
+
+    public string ExpectedValueArgumentName { get; set; } = string.Empty;
+
+    public string CheckName { get; set; } = string.Empty;
 }
 
 /// <summary>NyxID tool provider configuration.</summary>
@@ -73,6 +153,12 @@ public sealed class NyxIdToolOptions
             ReadinessCapabilityId = "api-github",
         },
     ];
+
+    /// <summary>
+    /// Closed effect-to-read bindings. A missing, ambiguous, or schema-incompatible entry leaves
+    /// the effect honestly unverifiable and never falls back to endpoint-name heuristics.
+    /// </summary>
+    public List<NyxIdAssistantOperationReadBackBinding> AssistantOperationReadBackBindings { get; set; } = [];
 
     public NyxIdManagedWorkflowAdmissionMode ManagedWorkflowAdmissionMode { get; set; } =
         NyxIdManagedWorkflowAdmissionMode.Shadow;

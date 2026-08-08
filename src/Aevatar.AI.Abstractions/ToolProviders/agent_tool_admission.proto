@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package aevatar.ai.tool_providers;
 
+import "google/protobuf/struct.proto";
+
 option csharp_namespace = "Aevatar.AI.Abstractions.ToolProviders";
 
 enum AgentToolExecutionOwnerKind {
@@ -137,6 +139,33 @@ message AgentToolOperationExecutionPolicyPayload {
   repeated AgentToolOperationExecutionModePayload allowed_execution_modes = 4;
 }
 
+enum AgentToolReadBackMatchPayload {
+  AGENT_TOOL_READ_BACK_MATCH_PAYLOAD_UNSPECIFIED = 0;
+  AGENT_TOOL_READ_BACK_MATCH_PAYLOAD_EXISTS = 1;
+  AGENT_TOOL_READ_BACK_MATCH_PAYLOAD_ABSENT = 2;
+  AGENT_TOOL_READ_BACK_MATCH_PAYLOAD_EQUALS = 3;
+  AGENT_TOOL_READ_BACK_MATCH_PAYLOAD_ARRAY_CONTAINS_EQUALS = 4;
+}
+
+message AgentToolReadBackAssertionPayload {
+  AgentToolReadBackMatchPayload match = 1;
+  // RFC 6901 pointer within the bounded read projection's data member.
+  string json_pointer = 2;
+  google.protobuf.Value expected_value = 3;
+  // RFC 6901 pointer within each array element for ARRAY_CONTAINS_EQUALS.
+  string element_json_pointer = 4;
+}
+
+// Server-sealed read-back contract for proving whether an effect was applied.
+// The read operation must itself be a read-only admitted exact selector and may
+// not contain another read-back contract.
+message AgentToolOperationReadBackPayload {
+  AgentToolOperationAdmissionPayload read_operation = 1;
+  google.protobuf.Struct arguments = 2;
+  AgentToolReadBackAssertionPayload assertion = 3;
+  string check_name = 4;
+}
+
 // Exact server-sealed operation admission persisted with an actor-owned tool intent.
 // Credential material is deliberately absent and must be resolved again for recovery.
 message AgentToolOperationAdmissionPayload {
@@ -155,4 +184,5 @@ message AgentToolOperationAdmissionPayload {
   AgentToolOperationResponsePolicyPayload response_policy = 11;
   AgentToolOperationExecutionPolicyPayload execution_policy = 12;
   string catalog_digest = 13;
+  AgentToolOperationReadBackPayload read_back = 14;
 }

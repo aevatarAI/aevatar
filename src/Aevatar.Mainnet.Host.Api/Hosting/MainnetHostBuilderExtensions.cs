@@ -82,6 +82,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Mainnet.Host.Api.Hosting;
 
@@ -359,6 +360,54 @@ public static class MainnetHostBuilderExtensions
             // Milestone 40 ships actor-owned connected-service effects on Mainnet. Other hosts
             // retain NyxIdToolOptions' fail-closed default until they provide the same durable facts.
             o.EnableAssistantConnectedServiceEffects = true;
+            o.AssistantOperationReadBackBindings.Add(new NyxIdAssistantOperationReadBackBinding
+            {
+                CatalogServiceSlug = "api-lark-bot",
+                EffectHttpMethod = "POST",
+                EffectPathTemplate = "/open-apis/im/v1/messages",
+                ReadHttpMethod = "GET",
+                ReadPathTemplate = "/open-apis/im/v1/messages",
+                CheckName = "lark_message_content_visible_in_chat",
+                Match = AgentToolReadBackMatch.ArrayContainsEquals,
+                JsonPointer = "/data/items",
+                ElementJsonPointer = "/body/content",
+                ExpectedValueLocation = NyxIdAssistantOperationArgumentLocation.Body,
+                ExpectedValueArgumentName = "content",
+                EffectArgumentConstraints =
+                [
+                    new NyxIdAssistantEffectArgumentConstraint
+                    {
+                        EffectLocation = NyxIdAssistantOperationArgumentLocation.Query,
+                        EffectArgumentName = "receive_id_type",
+                        ExpectedValue = Value.ForString("chat_id"),
+                    },
+                ],
+                ArgumentBindings =
+                [
+                    new NyxIdAssistantReadBackArgumentBinding
+                    {
+                        EffectLocation = NyxIdAssistantOperationArgumentLocation.Body,
+                        EffectArgumentName = "receive_id",
+                        ReadLocation = NyxIdAssistantOperationArgumentLocation.Query,
+                        ReadArgumentName = "container_id",
+                    },
+                ],
+                LiteralReadArguments =
+                [
+                    new NyxIdAssistantReadBackLiteralArgument
+                    {
+                        ReadLocation = NyxIdAssistantOperationArgumentLocation.Query,
+                        ReadArgumentName = "container_id_type",
+                        Value = Value.ForString("chat"),
+                    },
+                    new NyxIdAssistantReadBackLiteralArgument
+                    {
+                        ReadLocation = NyxIdAssistantOperationArgumentLocation.Query,
+                        ReadArgumentName = "page_size",
+                        Value = Value.ForNumber(50),
+                    },
+                ],
+            });
             o.EnableManagedCodexExecTool = builder.Configuration.GetValue<bool>(
                 $"{ManagedCodexOptions.SectionName}:Enabled");
             o.MaxRequestDurationSeconds = builder.Configuration.GetValue(

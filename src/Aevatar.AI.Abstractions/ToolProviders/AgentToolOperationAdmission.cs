@@ -1,3 +1,7 @@
+using System.Security.Cryptography;
+using System.Text;
+using Google.Protobuf.WellKnownTypes;
+
 namespace Aevatar.AI.Abstractions.ToolProviders;
 
 /// <summary>
@@ -18,7 +22,8 @@ public sealed record AgentToolOperationAdmission(
     AgentToolOperationRequestBody? RequestBody,
     AgentToolOperationResponsePolicy ResponsePolicy,
     AgentToolOperationExecutionPolicy ExecutionPolicy,
-    string CatalogDigest = "")
+    string CatalogDigest = "",
+    AgentToolOperationReadBack? ReadBack = null)
 {
     public IEnumerable<AgentToolOperationParameter> PathParameters =>
         Parameters.Where(static parameter => parameter.Location == AgentToolOperationParameterLocation.Path);
@@ -28,6 +33,56 @@ public sealed record AgentToolOperationAdmission(
 
     public IEnumerable<AgentToolOperationParameter> HeaderParameters =>
         Parameters.Where(static parameter => parameter.Location == AgentToolOperationParameterLocation.Header);
+}
+
+public enum AgentToolReadBackMatch
+{
+    Unspecified = 0,
+    Exists = 1,
+    Absent = 2,
+    Equals = 3,
+    ArrayContainsEquals = 4,
+}
+
+/// <summary>
+/// Typed assertion evaluated against the bounded data member of a connected-service read
+/// projection. <see cref="JsonPointer"/> uses RFC 6901 syntax.
+/// </summary>
+public sealed record AgentToolReadBackAssertion(
+    AgentToolReadBackMatch Match,
+    string JsonPointer,
+    Value? ExpectedValue = null,
+    string ElementJsonPointer = "");
+
+/// <summary>
+/// Server-sealed post-effect read. The nested admission must be an exact read-only operation
+/// and must not itself carry another read-back contract.
+/// </summary>
+public sealed record AgentToolOperationReadBack(
+    AgentToolOperationAdmission ReadOperation,
+    Struct Arguments,
+    AgentToolReadBackAssertion Assertion,
+    string CheckName);
+
+public static class AgentToolOperationSelector
+{
+    public static string ComputeDigest(AgentToolOperationAdmission admission)
+    {
+        ArgumentNullException.ThrowIfNull(admission);
+        var operationIdentity = admission.Identity switch
+        {
+            AgentToolOperationIdentity.PublishedEndpoint published => published.EndpointId,
+            AgentToolOperationIdentity.AuthoredRequest authored => authored.RequestContractDigest,
+            _ => string.Empty,
+        };
+        var material = string.Join('\n',
+            admission.ServiceInstanceId,
+            operationIdentity,
+            admission.CatalogDigest,
+            admission.ContractDigest);
+        return "sha256:" + Convert.ToHexStringLower(
+            SHA256.HashData(Encoding.UTF8.GetBytes(material)));
+    }
 }
 
 public abstract record AgentToolOperationIdentity

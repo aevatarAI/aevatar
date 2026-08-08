@@ -1,6 +1,8 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.GAgents.NyxidChat;
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.AI.Tests;
@@ -125,6 +127,51 @@ public sealed class NyxIdChatControlCommandTests
         decision.Result.ReasonCode.Should().Be(
             NyxIdChatControlCommands.StepActionUnavailable);
         decision.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Active);
+    }
+
+    [Fact]
+    public void RetryReconciledNotAppliedTool_ShouldEnterFreshGenerationWithoutAutomaticReplay()
+    {
+        var state = FailedStepState(
+            NyxIdChatStepKind.Tool,
+            required: true,
+            safeToSkip: false,
+            retryInputRebuildable: true);
+        var step = state.ActiveTask.Steps.Single();
+        step.MayChangeExternalState = true;
+        step.RetryToolInput = new NyxIdChatRetryToolInputState
+        {
+            CallId = "call-effect-alpha",
+            ToolName = "opaque-effect-tool",
+            Arguments = JsonParser.Default.Parse<Struct>("{\"value\":\"alpha\"}"),
+            OperationAdmission = new AgentToolOperationAdmissionPayload
+            {
+                ServiceInstanceId = "m-alpha",
+                ServiceSlug = "svc-alpha",
+                PublishedEndpoint = new AgentToolPublishedEndpointIdentityPayload
+                {
+                    EndpointId = "endpoint-effect-alpha",
+                },
+            },
+        };
+        step.AvailableActions = NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(step);
+
+        var decision = NyxIdChatControlCommands.Retry(
+            state,
+            RetryCommand(),
+            stateVersion: 3,
+            Now);
+
+        decision.ShouldCommit.Should().BeTrue();
+        decision.ShouldDispatch.Should().BeTrue();
+        decision.State.ActiveTask.TaskId.Should().Be("task-alpha");
+        decision.State.ActiveTask.Steps.Single().Operation.Key.OperationGeneration.Should().Be(2);
+        decision.NextCommand!.InputCase.Should().Be(
+            NyxIdChatOperationDispatchCommand.InputOneofCase.Tool);
+        decision.NextCommand.Tool.CallId.Should().Be("call-effect-alpha");
+        decision.NextCommand.Tool.IdempotencyKey.Should().Be(
+            decision.NextCommand.Key.OperationId);
+        decision.NextCommand.Key.OperationId.Should().NotBe("operation-alpha");
     }
 
     [Theory]

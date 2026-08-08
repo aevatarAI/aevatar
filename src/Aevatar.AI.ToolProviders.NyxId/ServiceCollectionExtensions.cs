@@ -49,6 +49,8 @@ public static class ServiceCollectionExtensions
         services.TryAddEnumerable(
             ServiceDescriptor.Transient<IAgentToolSource, NyxIdAgentToolSource>());
         services.TryAddTransient<NyxIdConnectedServiceInventoryToolSource>();
+        services.TryAddTransient<INyxIdAdmittedOperationToolFactory,
+            NyxIdAdmittedOperationToolFactory>();
 
         // Refactor (iter23/cluster-001-nyxid-tool-approval-polling):
         //   Old pattern: NyxID was registered as a generic local approval handler that blocked while polling.

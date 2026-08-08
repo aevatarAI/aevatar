@@ -500,11 +500,15 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
             ? AdmissionDriftError(authorityError.ErrorCode, authorityError.ErrorMessage)
             : response.Content;
         var receipt = response.Succeeded
-            ? NyxIdProxyReceiptFactory.CreateSuccess(
+            ? NyxIdProxyReceiptFactory.TryCreate(
                 callId,
                 toolName,
+                request.Slug,
                 request.ServiceId,
-                result)
+                serviceLabel: null,
+                request.Path,
+                result,
+                proxyRequestFailed: false)
             : authorityFailure is { } exactRouteFailure
                 ? NyxIdProxyReceiptFactory.CreateError(
                     callId,
@@ -520,7 +524,8 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
                 request.ServiceId,
                 serviceLabel: null,
                 request.Path,
-                response.Content);
+                response.Content,
+                proxyRequestFailed: true);
         return new AgentToolTerminalOutcome(result, receipt);
     }
 

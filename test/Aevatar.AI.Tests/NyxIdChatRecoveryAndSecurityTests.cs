@@ -1,6 +1,8 @@
 using System.Reflection;
 using System.Text;
+using System.Text.Json.Nodes;
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
@@ -28,6 +30,51 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
 {
     private static readonly DateTimeOffset FixedNow =
         new(2026, 7, 24, 8, 0, 0, TimeSpan.Zero);
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ToolVerification_ArrayContainsEquals_EvaluatesEveryBoundedListItem(bool includeMatch)
+    {
+        var readBack = ExactReadBack();
+        readBack.Assertion.Match = AgentToolReadBackMatchPayload.ArrayContainsEquals;
+        readBack.Assertion.JsonPointer = "/data/items";
+        readBack.Assertion.ElementJsonPointer = "/body/content";
+        readBack.Assertion.ExpectedValue = Google.Protobuf.WellKnownTypes.Value.ForString(
+            "{\"text\":\"m40-alpha\"}");
+        var readAdmission = AgentToolOperationAdmissionPayloadMapper.FromPayload(readBack.ReadOperation)!;
+        var matchingItem = includeMatch
+            ? """{"body":{"content":"{\"text\":\"m40-alpha\"}"}}"""
+            : """{"body":{"content":"{\"text\":\"different\"}"}}""";
+        var projection = new JsonObject
+        {
+            ["kind"] = "connected_service_read_projection",
+            ["status"] = "succeeded",
+            ["provenance"] = new JsonObject
+            {
+                ["source_kind"] = "nyxid_connected_service",
+                ["operation_selector_digest"] = AgentToolOperationSelector.ComputeDigest(readAdmission),
+            },
+            ["data"] = new JsonObject
+            {
+                ["code"] = 0,
+                ["data"] = new JsonObject
+                {
+                    ["items"] = new JsonArray(
+                        JsonNode.Parse("""{"body":{"content":"other"}}"""),
+                        JsonNode.Parse(matchingItem)),
+                },
+            },
+        }.ToJsonString();
+
+        NyxIdChatToolVerificationPort.TryEvaluate(
+                projection,
+                readBack.ReadOperation,
+                readBack.Assertion,
+                out var matched)
+            .Should().BeTrue();
+        matched.Should().Be(includeMatch);
+    }
 
     [Fact]
     public async Task Activation_WithRequestedPostcondition_ShouldOnlySignalSelfForRecovery()
@@ -214,6 +261,47 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         agent.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Failed);
         agent.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Failed);
         (await eventStore.GetEventsAsync(actorId)).Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task InterruptedAdmittedEffectRecovery_ShouldDispatchOnlyFrozenReadBack()
+    {
+        const string actorId = "conversation-alpha";
+        var eventStore = new InMemoryEventStoreForTests();
+        await PersistStateAsync(eventStore, actorId, CreateInterruptedAdmittedToolState());
+        var callbacks = new RecordingRuntimeCallbackScheduler();
+        using var services = BuildEventSourcingServices(eventStore, callbacks);
+        var runtime = new RecordingActorRuntime();
+        var dispatch = new RecordingActorDispatchPort();
+        var agent = CreateController(services, actorId, runtime, dispatch);
+        await agent.ActivateAsync();
+        var recoveryEnvelope = GetSingleRecoveryCallback(callbacks, actorId)
+            .TriggerEnvelope.Clone();
+
+        await agent.HandleEventAsync(recoveryEnvelope);
+
+        runtime.CreateCalls.Should().BeEmpty();
+        runtime.LinkCalls.Should().BeEmpty();
+        var recovery = dispatch.Calls.Should().ContainSingle().Which.Envelope.Payload
+            .Unpack<NyxIdChatOperationDispatchCommand>();
+        recovery.InputCase.Should().Be(
+            NyxIdChatOperationDispatchCommand.InputOneofCase.ToolVerification);
+        recovery.ToolVerification.EffectStepId.Should().Be("step-postcondition-alpha");
+        recovery.ToolVerification.ReadBack.Should().BeEquivalentTo(ExactReadBack());
+        recovery.Tool.Should().BeNull("recovery must never replay the effect operation");
+        agent.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Active);
+        agent.State.ActiveTask.Steps.Single(step => step.StepId == "step-postcondition-alpha")
+            .ExternalEffect.Should().Be(NyxIdChatEffectEvidence.MayHaveChanged);
+        var reconciliation = agent.State.ActiveTask.Steps.Single(step =>
+            step.Kind == NyxIdChatStepKind.Postcondition &&
+            step.Status == NyxIdChatStepStatus.Running);
+        reconciliation.Status.Should().Be(NyxIdChatStepStatus.Running);
+        reconciliation.Operation.Key.Should().BeEquivalentTo(recovery.Key);
+        agent.State.ActiveTask.PlanRevisions[^1].RevisionCause.Should().Be(
+            NyxIdChatPlanRevisionCause.FailureRecovery);
+        var events = await eventStore.GetEventsAsync(actorId);
+        events[^2].EventData.Is(NyxIdChatOperationReconciledEvent.Descriptor).Should().BeTrue();
+        events[^1].EventData.Is(NyxIdChatOperationDispatchedEvent.Descriptor).Should().BeTrue();
     }
 
     [Theory]
@@ -769,6 +857,120 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         step.Operation.MayChangeExternalState = true;
         return state;
     }
+
+    private static NyxIdChatConversationGAgentState CreateInterruptedAdmittedToolState()
+    {
+        var state = CreateInterruptedToolState();
+        var step = state.ActiveTask.Steps.Single();
+        step.RetryInputRebuildable = true;
+        step.Source.Tool.OperationAdmission = ExactWriteAdmission();
+        step.RetryToolInput = new NyxIdChatRetryToolInputState
+        {
+            CallId = "call-alpha",
+            ToolName = "tool-alpha",
+            Arguments = JsonParser.Default.Parse<Struct>("{\"body\":{\"id\":\"resource-alpha\"}}"),
+            OperationAdmission = ExactWriteAdmission(),
+        };
+        state.ActiveTask.Steps.Add(new NyxIdChatTaskStepState
+        {
+            StepId = "step-verification-alpha",
+            Order = 2,
+            Kind = NyxIdChatStepKind.Postcondition,
+            Status = NyxIdChatStepStatus.Planned,
+            Required = true,
+            Description = "Verify the external effect through its admitted read-back.",
+            Source = new NyxIdChatStepSource
+            {
+                Postcondition = new NyxIdChatPostconditionStepSource
+                {
+                    EffectStepId = step.StepId,
+                    Check = ExactReadBack().CheckName,
+                    ToolReadBack = ExactReadBack(),
+                },
+            },
+            DependsOn = { step.StepId },
+            ExternalEffect = NyxIdChatEffectEvidence.NotStarted,
+            Operation = new NyxIdChatOperationState
+            {
+                Key = new NyxIdChatOperationKey
+                {
+                    ConversationActorId = state.ConversationActorId,
+                    TurnId = state.ActiveTurn.TurnId,
+                    TaskId = state.ActiveTask.TaskId,
+                    StepId = "step-verification-alpha",
+                    OperationId = "operation-verification-alpha",
+                    OperationGeneration = 1,
+                },
+                Kind = NyxIdChatStepKind.Postcondition,
+                Phase = NyxIdChatOperationPhase.Requested,
+                RequestedAt = Timestamp.FromDateTimeOffset(FixedNow),
+            },
+            UpdatedAt = Timestamp.FromDateTimeOffset(FixedNow),
+        });
+        return state;
+    }
+
+    private static AgentToolOperationAdmissionPayload ExactWriteAdmission() => new()
+    {
+        ServiceInstanceId = "connected-service-alpha",
+        ServiceSlug = "service-alpha",
+        PublishedEndpoint = new AgentToolPublishedEndpointIdentityPayload
+        {
+            EndpointId = "endpoint-write-alpha",
+        },
+        AuthorizationBasis = AgentToolOperationAuthorizationBasisPayload.PublishedContract,
+        HttpMethod = "PATCH",
+        PathTemplate = "/resources/{resourceId}",
+        ContractDigest = new string('b', 64),
+        CatalogDigest = $"sha256:{new string('a', 64)}",
+        ExecutionPolicy = new AgentToolOperationExecutionPolicyPayload
+        {
+            Risk = AgentToolOperationRiskPayload.Write,
+            Approval = AgentToolOperationApprovalPayload.Required,
+            EnforcementOwner = AgentToolOperationEnforcementOwnerPayload.Aevatar,
+            AllowedExecutionModes =
+            {
+                AgentToolOperationExecutionModePayload.Interactive,
+            },
+        },
+        ReadBack = ExactReadBack(),
+    };
+
+    private static AgentToolOperationReadBackPayload ExactReadBack() => new()
+    {
+        ReadOperation = new AgentToolOperationAdmissionPayload
+        {
+            ServiceInstanceId = "connected-service-alpha",
+            ServiceSlug = "service-alpha",
+            PublishedEndpoint = new AgentToolPublishedEndpointIdentityPayload
+            {
+                EndpointId = "endpoint-read-alpha",
+            },
+            AuthorizationBasis = AgentToolOperationAuthorizationBasisPayload.PublishedContract,
+            HttpMethod = "GET",
+            PathTemplate = "/resources/{resourceId}",
+            ContractDigest = new string('c', 64),
+            CatalogDigest = $"sha256:{new string('a', 64)}",
+            ExecutionPolicy = new AgentToolOperationExecutionPolicyPayload
+            {
+                Risk = AgentToolOperationRiskPayload.ReadOnly,
+                Approval = AgentToolOperationApprovalPayload.None,
+                EnforcementOwner = AgentToolOperationEnforcementOwnerPayload.Aevatar,
+                AllowedExecutionModes =
+                {
+                    AgentToolOperationExecutionModePayload.Interactive,
+                },
+            },
+        },
+        Arguments = JsonParser.Default.Parse<Struct>("{\"path_params\":{\"resourceId\":\"resource-alpha\"}}"),
+        Assertion = new AgentToolReadBackAssertionPayload
+        {
+            Match = AgentToolReadBackMatchPayload.Equals,
+            JsonPointer = "/id",
+            ExpectedValue = Google.Protobuf.WellKnownTypes.Value.ForString("resource-alpha"),
+        },
+        CheckName = "resource_exists",
+    };
 
     private static NyxIdChatConversationGAgentState CreateBlockedBrowserActionState()
     {

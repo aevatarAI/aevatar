@@ -1,6 +1,6 @@
 namespace Aevatar.AI.Abstractions.ToolProviders;
 
-internal static class AgentToolOperationAdmissionPayloadMapper
+public static class AgentToolOperationAdmissionPayloadMapper
 {
     public static AgentToolOperationAdmissionPayload ToPayload(AgentToolOperationAdmission admission)
     {
@@ -37,6 +37,8 @@ internal static class AgentToolOperationAdmissionPayloadMapper
         payload.Parameters.AddRange(admission.Parameters.Select(ToParameter));
         if (admission.RequestBody is not null)
             payload.RequestBody = ToRequestBody(admission.RequestBody);
+        if (admission.ReadBack is not null)
+            payload.ReadBack = ToReadBack(admission.ReadBack);
         return payload;
     }
 
@@ -72,8 +74,70 @@ internal static class AgentToolOperationAdmissionPayloadMapper
             payload.RequestBody is null ? null : FromRequestBody(payload.RequestBody),
             FromResponsePolicy(payload.ResponsePolicy),
             FromExecutionPolicy(payload.ExecutionPolicy),
-            payload.CatalogDigest ?? string.Empty);
+            payload.CatalogDigest ?? string.Empty,
+            FromReadBack(payload.ReadBack));
     }
+
+    private static AgentToolOperationReadBackPayload ToReadBack(AgentToolOperationReadBack readBack)
+    {
+        if (readBack.ReadOperation.ReadBack is not null)
+        {
+            throw new InvalidOperationException(
+                "An operation read-back cannot recursively carry another read-back contract.");
+        }
+
+        return new AgentToolOperationReadBackPayload
+        {
+            ReadOperation = ToPayload(readBack.ReadOperation),
+            Arguments = readBack.Arguments?.Clone() ?? new Google.Protobuf.WellKnownTypes.Struct(),
+            Assertion = new AgentToolReadBackAssertionPayload
+            {
+                Match = ToReadBackMatch(readBack.Assertion.Match),
+                JsonPointer = readBack.Assertion.JsonPointer ?? string.Empty,
+                ExpectedValue = readBack.Assertion.ExpectedValue?.Clone(),
+                ElementJsonPointer = readBack.Assertion.ElementJsonPointer ?? string.Empty,
+            },
+            CheckName = readBack.CheckName ?? string.Empty,
+        };
+    }
+
+    private static AgentToolOperationReadBack? FromReadBack(AgentToolOperationReadBackPayload? payload)
+    {
+        if (payload?.ReadOperation is null || payload.Assertion is null)
+            return null;
+
+        var readOperation = FromPayload(payload.ReadOperation);
+        if (readOperation is null || readOperation.ReadBack is not null)
+            return null;
+
+        return new AgentToolOperationReadBack(
+            readOperation,
+            payload.Arguments?.Clone() ?? new Google.Protobuf.WellKnownTypes.Struct(),
+            new AgentToolReadBackAssertion(
+                FromReadBackMatch(payload.Assertion.Match),
+                payload.Assertion.JsonPointer ?? string.Empty,
+                payload.Assertion.ExpectedValue?.Clone(),
+                payload.Assertion.ElementJsonPointer ?? string.Empty),
+            payload.CheckName ?? string.Empty);
+    }
+
+    private static AgentToolReadBackMatchPayload ToReadBackMatch(AgentToolReadBackMatch value) => value switch
+    {
+        AgentToolReadBackMatch.Exists => AgentToolReadBackMatchPayload.Exists,
+        AgentToolReadBackMatch.Absent => AgentToolReadBackMatchPayload.Absent,
+        AgentToolReadBackMatch.Equals => AgentToolReadBackMatchPayload.Equals,
+        AgentToolReadBackMatch.ArrayContainsEquals => AgentToolReadBackMatchPayload.ArrayContainsEquals,
+        _ => AgentToolReadBackMatchPayload.Unspecified,
+    };
+
+    private static AgentToolReadBackMatch FromReadBackMatch(AgentToolReadBackMatchPayload value) => value switch
+    {
+        AgentToolReadBackMatchPayload.Exists => AgentToolReadBackMatch.Exists,
+        AgentToolReadBackMatchPayload.Absent => AgentToolReadBackMatch.Absent,
+        AgentToolReadBackMatchPayload.Equals => AgentToolReadBackMatch.Equals,
+        AgentToolReadBackMatchPayload.ArrayContainsEquals => AgentToolReadBackMatch.ArrayContainsEquals,
+        _ => AgentToolReadBackMatch.Unspecified,
+    };
 
     private static AgentToolOperationParameterPayload ToParameter(AgentToolOperationParameter parameter) => new()
     {

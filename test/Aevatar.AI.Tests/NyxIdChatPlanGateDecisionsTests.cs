@@ -40,7 +40,7 @@ public sealed class NyxIdChatPlanGateDecisionsTests
         admission.ArgumentsSha256.Should().Equal(NyxIdChatPlanGateDecisions.HashArguments(arguments));
         toolStep.Status.Should().Be(NyxIdChatStepStatus.Planned);
         planned.State.ActiveTask.Steps.Single(step =>
-                step.Kind == NyxIdChatStepKind.Llm &&
+                step.Kind == NyxIdChatStepKind.Postcondition &&
                 step.DependsOn.Contains(toolStep.StepId))
             .Status.Should().Be(NyxIdChatStepStatus.Planned);
 
@@ -239,7 +239,7 @@ public sealed class NyxIdChatPlanGateDecisionsTests
         toolStep.ExternalEffect.Should()
             .Be(NyxIdChatEffectEvidence.NotApplied);
         decision.State.ActiveTask.Steps.Single(step =>
-                step.Kind == NyxIdChatStepKind.Llm &&
+                step.Kind == NyxIdChatStepKind.Postcondition &&
                 step.DependsOn.Contains(toolStep.StepId))
             .Status.Should().Be(NyxIdChatStepStatus.Cancelled);
         decision.State.RecentTerminalTurns.Should().ContainSingle(summary =>
@@ -274,7 +274,7 @@ public sealed class NyxIdChatPlanGateDecisionsTests
         toolStep.Status.Should().Be(NyxIdChatStepStatus.Failed);
         toolStep.ExternalEffect.Should().Be(NyxIdChatEffectEvidence.NotApplied);
         decision.State.ActiveTask.Steps.Single(step =>
-                step.Kind == NyxIdChatStepKind.Llm &&
+                step.Kind == NyxIdChatStepKind.Postcondition &&
                 step.DependsOn.Contains(toolStep.StepId))
             .Status.Should().Be(NyxIdChatStepStatus.Cancelled);
         decision.State.RecentTerminalTurns.Should().ContainSingle(summary =>

@@ -182,7 +182,10 @@ public sealed class NyxIdChatServiceCollectionExtensionsTests
         services.Should().ContainSingle(descriptor =>
             descriptor.ServiceType == typeof(INyxIdChatTurnOperationReconciliationPort) &&
             descriptor.ImplementationType ==
-            typeof(UnavailableNyxIdChatTurnOperationReconciliationPort));
+            typeof(AdmittedNyxIdChatTurnOperationReconciliationPort));
+        services.Should().ContainSingle(descriptor =>
+            descriptor.ServiceType == typeof(INyxIdChatToolVerificationPort) &&
+            descriptor.ImplementationType == typeof(NyxIdChatToolVerificationPort));
     }
 
     [Fact]

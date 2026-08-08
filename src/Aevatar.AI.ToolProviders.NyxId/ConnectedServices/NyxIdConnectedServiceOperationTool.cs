@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -19,7 +18,8 @@ internal static class NyxIdConnectedServiceOperationToolFactory
         NyxIdMcpEndpoint endpoint,
         string catalogDigest,
         NyxIdServiceInstance serviceInstance,
-        string? readinessCapabilityId)
+        string? readinessCapabilityId,
+        NyxIdConnectedServiceReadBackPlan? readBackPlan = null)
     {
         ArgumentNullException.ThrowIfNull(proxy);
         ArgumentNullException.ThrowIfNull(service);
@@ -46,7 +46,8 @@ internal static class NyxIdConnectedServiceOperationToolFactory
             serviceInstance.Label,
             serviceInstance.CatalogServiceSlug,
             readinessCapabilityId,
-            serviceInstance.AccessTokenSource);
+            serviceInstance.AccessTokenSource,
+            readBackPlan);
     }
 }
 
@@ -99,6 +100,7 @@ internal sealed class NyxIdConnectedServiceOperationTool :
     private readonly string _serviceLabel;
     private readonly string _operationLabel;
     private readonly NyxIdServiceAccessTokenSource _accessTokenSource;
+    private readonly NyxIdConnectedServiceReadBackPlan? _readBackPlan;
 
     public NyxIdConnectedServiceOperationTool(
         NyxIdProxyTool proxy,
@@ -108,7 +110,8 @@ internal sealed class NyxIdConnectedServiceOperationTool :
         string connectionLabel,
         string catalogServiceSlug,
         string? readinessCapabilityId,
-        NyxIdServiceAccessTokenSource accessTokenSource)
+        NyxIdServiceAccessTokenSource accessTokenSource,
+        NyxIdConnectedServiceReadBackPlan? readBackPlan = null)
     {
         _proxy = proxy ?? throw new ArgumentNullException(nameof(proxy));
         OperationAdmission = admission ?? throw new ArgumentNullException(nameof(admission));
@@ -119,6 +122,7 @@ internal sealed class NyxIdConnectedServiceOperationTool :
         _serviceLabel = NormalizeModelLabel(serviceLabel, "Connected service", selectorSecrets);
         _operationLabel = NormalizeModelLabel(operationLabel, "Operation", selectorSecrets);
         _accessTokenSource = accessTokenSource;
+        _readBackPlan = readBackPlan;
         Name = BuildOpaqueName(admission);
         ParametersSchema = NyxIdConnectedServiceOperationSchema.Build(admission);
         Presentation = BuildPresentation(
@@ -138,7 +142,7 @@ internal sealed class NyxIdConnectedServiceOperationTool :
 
     public ToolPresentationDescriptor Presentation { get; }
 
-    public ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
+    public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
 
     public bool IsReadOnly =>
         OperationAdmission.ExecutionPolicy.Risk == AgentToolOperationRisk.ReadOnly;
@@ -183,9 +187,14 @@ internal sealed class NyxIdConnectedServiceOperationTool :
     }
 
     public AgentToolCallSafety GetCallSafety(string argumentsJson) => new(
-        RequiresApproval: IsReadOnly ? false : true,
+        RequiresApproval: false,
         IsReadOnly,
         IsDestructive: false);
+
+    public AgentToolOperationAdmission ResolveOperationAdmission(string argumentsJson) =>
+        _readBackPlan?.TryFreeze(argumentsJson, out var readBack) == true
+            ? OperationAdmission with { ReadBack = readBack }
+            : OperationAdmission;
 
     public AgentToolReplayPolicy ResolveReplayPolicy(string argumentsJson) =>
         IsReadOnly
@@ -359,21 +368,14 @@ internal sealed class NyxIdConnectedServiceOperationTool :
     private JsonObject BuildProvenance() => new()
     {
         ["source_kind"] = "nyxid_connected_service",
+        ["operation_selector_digest"] = AgentToolOperationSelector.ComputeDigest(OperationAdmission),
         ["service_label"] = _serviceLabel,
         ["operation_label"] = _operationLabel,
     };
 
     private static string BuildOpaqueName(AgentToolOperationAdmission admission)
     {
-        var endpointId = admission.Identity is AgentToolOperationIdentity.PublishedEndpoint published
-            ? published.EndpointId
-            : string.Empty;
-        var material = string.Join('\n',
-            admission.ServiceInstanceId,
-            endpointId,
-            admission.CatalogDigest,
-            admission.ContractDigest);
-        var digest = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(material)));
+        var digest = AgentToolOperationSelector.ComputeDigest(admission)["sha256:".Length..];
         return "nyxop_" + digest[..48];
     }
 

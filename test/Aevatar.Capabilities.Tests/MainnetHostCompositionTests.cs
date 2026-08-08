@@ -1058,8 +1058,19 @@ public sealed class MainnetHostCompositionTests
         });
 
         using var app = builder.Build();
-        app.Services.GetRequiredService<NyxIdToolOptions>()
-            .EnableAssistantConnectedServiceEffects.Should().BeTrue();
+        var options = app.Services.GetRequiredService<NyxIdToolOptions>();
+        options.EnableAssistantConnectedServiceEffects.Should().BeTrue();
+        var readBack = options.AssistantOperationReadBackBindings.Should().ContainSingle().Subject;
+        readBack.CatalogServiceSlug.Should().Be("api-lark-bot");
+        readBack.EffectHttpMethod.Should().Be("POST");
+        readBack.EffectPathTemplate.Should().Be("/open-apis/im/v1/messages");
+        readBack.ReadHttpMethod.Should().Be("GET");
+        readBack.ReadPathTemplate.Should().Be("/open-apis/im/v1/messages");
+        readBack.Match.Should().Be(AgentToolReadBackMatch.ArrayContainsEquals);
+        readBack.JsonPointer.Should().Be("/data/items");
+        readBack.ElementJsonPointer.Should().Be("/body/content");
+        readBack.EffectArgumentConstraints.Should().ContainSingle();
+        readBack.LiteralReadArguments.Should().HaveCount(2);
     }
 
     [Theory]

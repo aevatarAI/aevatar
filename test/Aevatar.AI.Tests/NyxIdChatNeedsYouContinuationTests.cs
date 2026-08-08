@@ -220,11 +220,14 @@ public sealed class NyxIdChatNeedsYouContinuationTests
             resolution.State,
             approved.Result,
             Now());
-        reconciled.State.ActiveTask.Steps.Single(step => step.Kind == NyxIdChatStepKind.Tool)
-            .Status.Should().Be(NyxIdChatStepStatus.Done);
-        reconciled.State.ActiveTask.Steps.Last().Kind.Should().Be(NyxIdChatStepKind.Llm);
-        reconciled.NextCommand!.InputCase.Should().Be(
-            NyxIdChatOperationDispatchCommand.InputOneofCase.Llm);
+        var effectStep = reconciled.State.ActiveTask.Steps.Single(step =>
+            step.Kind == NyxIdChatStepKind.Tool);
+        effectStep.Status.Should().Be(NyxIdChatStepStatus.Waiting);
+        effectStep.ExternalEffect.Should().Be(NyxIdChatEffectEvidence.MayHaveChanged);
+        var verificationStep = reconciled.State.ActiveTask.Steps.Last();
+        verificationStep.Kind.Should().Be(NyxIdChatStepKind.Postcondition);
+        verificationStep.Status.Should().Be(NyxIdChatStepStatus.Uncertain);
+        reconciled.NextCommand.Should().BeNull();
     }
 
     [Fact]
@@ -270,7 +273,7 @@ public sealed class NyxIdChatNeedsYouContinuationTests
         reconciled.State.ActiveTask.Steps.Single(step => step.Kind == NyxIdChatStepKind.Tool)
             .Status.Should().Be(NyxIdChatStepStatus.Cancelled);
         reconciled.State.ActiveTask.Steps.Single(step =>
-                step.Kind == NyxIdChatStepKind.Llm &&
+                step.Kind == NyxIdChatStepKind.Postcondition &&
                 step.DependsOn.Contains("step-tool-alpha"))
             .Status.Should().Be(NyxIdChatStepStatus.Cancelled);
         reconciled.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Failed);
@@ -556,18 +559,22 @@ public sealed class NyxIdChatNeedsYouContinuationTests
                 {
                     StepId = "step-verification-alpha",
                     Order = 2,
-                    Kind = NyxIdChatStepKind.Llm,
+                    Kind = NyxIdChatStepKind.Postcondition,
                     Status = NyxIdChatStepStatus.Planned,
                     Required = true,
                     DependsOn = { "step-tool-alpha" },
                     Source = new NyxIdChatStepSource
                     {
-                        Llm = new NyxIdChatLLMStepSource(),
+                        Postcondition = new NyxIdChatPostconditionStepSource
+                        {
+                            EffectStepId = "step-tool-alpha",
+                            Check = "verification_unavailable",
+                        },
                     },
                     Operation = new NyxIdChatOperationState
                     {
                         Key = Key("step-verification-alpha", "operation-verification-alpha"),
-                        Kind = NyxIdChatStepKind.Llm,
+                        Kind = NyxIdChatStepKind.Postcondition,
                         Phase = NyxIdChatOperationPhase.Requested,
                     },
                 },

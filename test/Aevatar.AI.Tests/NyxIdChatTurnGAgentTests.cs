@@ -1037,7 +1037,7 @@ public sealed class NyxIdChatTurnGAgentTests
         first.Result.Tool.Receipt.Status.Should().Be(AgentToolReceiptStatus.Success);
         first.Result.Tool.Receipt.CallId.Should().Be("call-alpha");
         first.Result.Tool.Receipt.ToolName.Should().Be("tool-alpha");
-        first.Result.Tool.ExternalEffect.Should().Be(NyxIdChatEffectEvidence.Confirmed);
+        first.Result.Tool.ExternalEffect.Should().Be(NyxIdChatEffectEvidence.MayHaveChanged);
         duplicate.Result.ResultCase.Should().Be(NyxIdChatOperationResultSignal.ResultOneofCase.Failure);
         duplicate.Result.Failure.FailureCode.Should().Be("NYXID_CHAT_TOOL_CAPABILITY_LOST");
         duplicate.Result.Failure.ExternalEffect.Should().Be(NyxIdChatEffectEvidence.NotStarted);

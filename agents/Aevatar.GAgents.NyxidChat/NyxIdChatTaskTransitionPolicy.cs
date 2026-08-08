@@ -177,8 +177,10 @@ public static class NyxIdChatTaskTransitionPolicy
 
         return new NyxIdChatAvailableActions
         {
-            Retry = step.Kind == NyxIdChatStepKind.Llm &&
+            Retry = step.Kind is (NyxIdChatStepKind.Llm or NyxIdChatStepKind.Tool) &&
                     step.RetryInputRebuildable &&
+                    (step.Kind != NyxIdChatStepKind.Tool ||
+                     step.RetryToolInput?.OperationAdmission is not null) &&
                     retryableStatus &&
                     effectAllowsRetry,
             Skip = recoverableStatus && (!step.Required || step.SafeToSkip),
@@ -365,6 +367,9 @@ public static class NyxIdChatTaskTransitionPolicy
             case NyxIdChatOperationResultSignal.ResultOneofCase.Failure:
                 result = ClassifyFailure(signal.Failure);
                 return true;
+            case NyxIdChatOperationResultSignal.ResultOneofCase.ToolVerification:
+                result = ClassifyToolVerification(signal.ToolVerification);
+                return true;
             default:
                 result = default;
                 return false;
@@ -377,6 +382,16 @@ public static class NyxIdChatTaskTransitionPolicy
         var receipt = tool.Receipt;
         return receipt?.Status switch
         {
+            AgentToolReceiptStatus.Success
+                when tool.ExternalEffect == NyxIdChatEffectEvidence.MayHaveChanged =>
+                new ClassifiedOperationResult(
+                    NyxIdChatStepStatus.Waiting,
+                    NyxIdChatOperationPhase.Succeeded,
+                    NyxIdChatEffectEvidence.MayHaveChanged,
+                    string.Empty,
+                    string.Empty,
+                    false,
+                    false),
             AgentToolReceiptStatus.Success => ClassifiedOperationResult.Success(
                 NormalizeEffect(tool.ExternalEffect, NyxIdChatEffectEvidence.NotApplied)),
             AgentToolReceiptStatus.ApprovalRequired or
@@ -457,6 +472,30 @@ public static class NyxIdChatTaskTransitionPolicy
                 failure.FailureCode,
                 failure.SafeMessage);
     }
+
+    private static ClassifiedOperationResult ClassifyToolVerification(
+        NyxIdChatToolVerificationResult verification) => verification.Disposition switch
+    {
+        NyxIdChatToolVerificationDisposition.Applied =>
+            ClassifiedOperationResult.Success(NyxIdChatEffectEvidence.Confirmed) with
+            {
+                RequiresVerifiedPostcondition = true,
+                PostconditionVerified = true,
+            },
+        NyxIdChatToolVerificationDisposition.NotApplied =>
+            ClassifiedOperationResult.Success(NyxIdChatEffectEvidence.NotApplied),
+        _ => new ClassifiedOperationResult(
+            NyxIdChatStepStatus.Uncertain,
+            NyxIdChatOperationPhase.Uncertain,
+            NyxIdChatEffectEvidence.MayHaveChanged,
+            verification.FailureCode,
+            verification.SafeMessage,
+            false,
+            false),
+    };
+
+    internal static void RefreshTaskOutcome(NyxIdChatConversationGAgentState state) =>
+        ApplyTaskOutcome(state);
 
     private static NyxIdChatEffectEvidence NormalizeEffect(
         NyxIdChatEffectEvidence effect,
