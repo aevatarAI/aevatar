@@ -326,6 +326,91 @@ message ExternalWorkflowCapabilityDiscoveryResult {
   repeated ExternalCapabilityDiscoveryDiagnostic diagnostics = 4;
 }
 
+message ServiceApiSkillDiscoveryInput {
+  ExternalCapabilityAuthorizationOwner caller_authority = 1;
+  string scope_id = 2;
+  string caller_id = 3;
+  string target_user_service_id = 4;
+  string service_slug_snapshot = 5;
+  string service_label_snapshot = 6;
+  string normalized_capability = 7;
+  repeated ExternalWorkflowCapabilityDescriptor descriptor_inventory = 8;
+  string managed_discovery_policy_version = 9;
+  string admission_policy_version = 10;
+  string capability_fingerprint = 11;
+}
+
+message ManagedCodexServiceApiSkillRankingInput {
+  ServiceApiSkillDiscoveryInput discovery_input = 1;
+  repeated ServiceApiSkillCatalogueCandidate catalogue_candidates = 2;
+  repeated ReliableServiceApiSkillCandidate excluded_candidates = 3;
+}
+
+message ServiceApiSkillCataloguePage {
+  int32 page = 1;
+  int32 page_size = 2;
+  int32 total = 3;
+  int32 total_pages = 4;
+  repeated ServiceApiSkillCatalogueCandidate candidates = 5;
+}
+
+message ServiceApiSkillCatalogueCandidate {
+  string guid = 1;
+  string canonical_name = 2;
+  string description = 3;
+}
+
+message ManagedCodexServiceApiSkillDiscoveryResult {
+  oneof result {
+    ReliableServiceApiSkillCandidate reliable_skill = 1;
+    NoReliableServiceApiSkill no_reliable_api_skill = 2;
+  }
+}
+
+message ReliableServiceApiSkillCandidate {
+  string canonical_name = 1;
+  string guid = 2;
+  string literal_version = 3;
+  string skill_hash = 4;
+  string publisher_id = 5;
+  AdmittedNyxIdRequestShape request_shape = 6;
+  repeated ExactOrnnApiSkillEvidence evidence = 7;
+}
+
+message NoReliableServiceApiSkill {
+  ServiceApiNoReliableSkillReason reason = 1;
+}
+
+enum ServiceApiNoReliableSkillReason {
+  SERVICE_API_NO_RELIABLE_SKILL_REASON_UNSPECIFIED = 0;
+  SERVICE_API_NO_RELIABLE_SKILL_REASON_NO_MATCHING_SKILL = 1;
+  SERVICE_API_NO_RELIABLE_SKILL_REASON_ALL_CANDIDATES_REJECTED = 2;
+  SERVICE_API_NO_RELIABLE_SKILL_REASON_EXACT_SKILL_READ_FAILED = 3;
+  SERVICE_API_NO_RELIABLE_SKILL_REASON_SKILL_IDENTITY_MISMATCH = 4;
+  SERVICE_API_NO_RELIABLE_SKILL_REASON_SKILL_INTEGRITY_MISMATCH = 5;
+  SERVICE_API_NO_RELIABLE_SKILL_REASON_REQUEST_SHAPE_UNSUPPORTED = 6;
+  SERVICE_API_NO_RELIABLE_SKILL_REASON_REQUEST_SHAPE_ADMISSION_REJECTED = 7;
+}
+
+message ExactOrnnApiSkillProvenance {
+  string canonical_name = 1;
+  string guid = 2;
+  string literal_version = 3;
+  string skill_hash = 4;
+  string publisher_id = 5;
+  repeated ExactOrnnApiSkillEvidence evidence = 6;
+}
+
+message ExactOrnnApiSkillEvidence {
+  string skill_file_path = 1;
+  string section = 2;
+  string operation_id = 3;
+}
+
+message AdmittedNyxIdRequestShape {
+  NyxIdRequestSelector selector = 1;
+}
+
 message ExternalCapabilityReadiness {
   ExternalCapabilityExecutionMode execution_mode = 1;
   ExternalCapabilityReadinessStatus status = 2;
