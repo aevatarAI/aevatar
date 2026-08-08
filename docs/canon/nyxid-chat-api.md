@@ -705,3 +705,9 @@ Callers must:
 14. never send `scopeId`, a secret, OAuth/device/user code, raw credential, or secret-bearing URL in action params or reports.
 
 Earlier schema v3 drafts that use action `id`, inner `payload`, only `completed/declined`, or a device user-code action are obsolete and must not be used to implement or test this contract.
+
+## Capability outcome order and honest fallback
+
+Assistant planning uses one fixed preference order per step: an admitted exact-instance NyxID connected-service operation; a typed `service.connect` browser action for a proven missing connection; an explicitly labeled Aevatar executor; then an honest stop with the nearest safe alternative. A failed Class-R read means only that the Assistant cannot check right now and never proves absence.
+
+Class-L operations are local handoffs. The response names the local prerequisite and exact copyable `nyxid ...` command, and never claims Aevatar executed it. Class-X operations are explicitly declined with their unsupported boundary and a trusted dashboard or exact local CLI alternative where one exists. Billing, platform administration, pre-authentication, channel-bot/event mutation, and oracle operations do not gain a chat tool or fabricated action card. The repository-owned conformance manifest is the command/outcome authority; `nyxid_channel_events` additionally self-declares exclusion from NyxID Assistant chat so an alternate tool source cannot leak it onto the surface.

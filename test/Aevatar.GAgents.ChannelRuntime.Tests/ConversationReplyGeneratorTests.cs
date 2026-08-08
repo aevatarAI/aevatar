@@ -1065,6 +1065,49 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
+    public async Task BuildStepPlanAsync_InNyxIdChatTurnWithGenericNyxIdSource_ShouldExcludeChannelEventMutation()
+    {
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.example" };
+        using var apiClient = new NyxIdApiClient(options, new HttpClient());
+        IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
+            new RecordingProviderFactory { Capabilities = MultimodalCapabilities },
+            BuiltInPromptFloorProvider,
+            nyxIdChatToolSources: [new NyxIdAgentToolSource(options, apiClient)]);
+        var toolContext = AgentToolExecutionContext.Empty with
+        {
+            Credentials = new AgentToolCredentials(
+                "source-readable-bearer",
+                null,
+                null,
+                AgentToolNyxIdCredentialKind.SourceReadableUserBearer),
+            Channel = new AgentToolChannelContext(
+                NyxIdChatServiceDefaults.ServiceId,
+                null,
+                "scope-alpha",
+                null,
+                null),
+        };
+
+        var plan = await generator.BuildStepPlanAsync(
+            new ChatActivity
+            {
+                Id = "turn-generic-source",
+                Conversation = new ConversationReference { CanonicalKey = "nyxid-chat-generic-source" },
+                Content = new MessageContent { Text = "push a channel event" },
+            },
+            new Dictionary<string, string>(),
+            Control(token: "source-readable-bearer"),
+            toolContext,
+            priorHistory: null,
+            attachmentContext: null,
+            forceDisableTools: false,
+            CancellationToken.None);
+
+        OfferedToolNames(plan).Should().Contain("nyxid_catalog");
+        OfferedToolNames(plan).Should().NotContain("nyxid_channel_events");
+    }
+
+    [Fact]
     public async Task BuildStepPlanAsync_InUnprofiledNyxIdChatTurnWithoutHumanSession_ShouldExposeExactPinnedNonHumanCatalog()
     {
         var options = new NyxIdToolOptions { BaseUrl = "https://nyx.example" };
@@ -1859,7 +1902,7 @@ public sealed class ConversationReplyGeneratorTests
         systemPrompt.Should().NotContain("chrono-ai-daily");
         // Kernel invariant still present alongside the configured relay callback URL. (Skill-discovery
         // how-to moved from the kernel into the System Skill Overlay in #2468.)
-        systemPrompt.Should().Contain("## CRITICAL: Action-First Behavior");
+        systemPrompt.Should().Contain("## Execution Phases");
     }
 
     [Fact]
@@ -1955,8 +1998,8 @@ public sealed class ConversationReplyGeneratorTests
         // Kernel anchor: a stable invariant heading the slimmed kernel still carries, asserting the
         // overlay is appended AFTER the kernel. (Capability how-to like skill-discovery moved out of
         // the kernel into the overlay in #2468, so it is no longer a valid kernel anchor.)
-        systemPrompt.Should().Contain("Action-First Behavior");
-        systemPrompt!.IndexOf("Action-First Behavior", StringComparison.Ordinal)
+        systemPrompt.Should().Contain("## Execution Phases");
+        systemPrompt!.IndexOf("## Execution Phases", StringComparison.Ordinal)
             .Should()
             .BeLessThan(systemPrompt.IndexOf("MANDATORY FLOOR", StringComparison.Ordinal));
         systemPrompt.IndexOf("MANDATORY FLOOR", StringComparison.Ordinal)

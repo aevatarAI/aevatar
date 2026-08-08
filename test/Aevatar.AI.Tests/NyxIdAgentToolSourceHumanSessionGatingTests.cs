@@ -59,6 +59,11 @@ public class NyxIdAgentToolSourceHumanSessionGatingTests
 
         tools.Select(t => t.Name).Should().Contain(HumanSessionOnlyTools);
         tools.Select(t => t.Name).Should().Contain(RelaySafeTools);
+
+        var channelEvents = tools.Single(tool => tool.Name == "nyxid_channel_events");
+        channelEvents.Should().BeAssignableTo<IAgentToolCapabilityDescriptor>()
+            .Which.Capabilities.Should().Contain(AgentToolCapabilities.ExcludeFromNyxIdChat,
+                "channel-event mutation is Class X on the Assistant surface even though it remains relay-safe");
     }
 
     private static bool DeclaresHumanSession(IAgentTool tool) =>

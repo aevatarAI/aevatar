@@ -151,6 +151,58 @@ public sealed class NyxIdConformanceManifestTests
         }
     }
 
+    [Theory]
+    [InlineData(
+        "node daemon start",
+        "L",
+        "local_handoff",
+        "copyable_cli_command",
+        "no_aevatar_execution_claim",
+        "nyxid node daemon start")]
+    [InlineData(
+        "billing usage",
+        "X",
+        "honest_decline",
+        "no_tool_exposed",
+        "no_effect_receipt",
+        null)]
+    [InlineData(
+        "channel-event push",
+        "X",
+        "honest_decline",
+        "no_tool_exposed",
+        "no_effect_receipt",
+        null)]
+    public void RepresentativeHonestyRows_ShouldPinCompleteOutcomeContracts(
+        string cliPath,
+        string operationClass,
+        string outcomeClass,
+        string mechanism,
+        string evidenceType,
+        string? handoffCommand)
+    {
+        using var coverageDocument = Load("coverage-manifest.json");
+        var row = coverageDocument.RootElement.GetProperty("rows")
+            .EnumerateArray()
+            .Single(candidate => candidate.GetProperty("cli_path").GetString() == cliPath);
+
+        row.GetProperty("operation_class").GetString().Should().Be(operationClass);
+        row.GetProperty("outcome_class").GetString().Should().Be(outcomeClass);
+        row.GetProperty("mechanism").GetString().Should().Be(mechanism);
+        row.GetProperty("evidence_type").GetString().Should().Be(evidenceType);
+        row.GetProperty("approval_authority").GetString().Should().NotBeNullOrWhiteSpace();
+
+        if (handoffCommand is not null)
+        {
+            row.GetProperty("handoff_command").GetString().Should().Be(handoffCommand);
+            row.GetProperty("utterances").EnumerateArray().Should().NotBeEmpty();
+        }
+        else
+        {
+            row.TryGetProperty("handoff_command", out _).Should().BeFalse();
+        }
+    }
+
     [Fact]
     public async Task ScriptedModel_ShouldFailClosedForUnknownOrToolCallingRoutes()
     {

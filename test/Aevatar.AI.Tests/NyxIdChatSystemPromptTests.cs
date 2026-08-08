@@ -133,6 +133,49 @@ public class NyxIdChatSystemPromptTests
     }
 
     [Fact]
+    public void Value_ShouldEnforceFourTierPreferenceAndGeneralizedCannotCheck()
+    {
+        var prompt = NyxIdChatSystemPrompt.Value.Content;
+
+        var exactOperation = prompt.IndexOf(
+            "admitted exact-instance NyxID connected-service operation",
+            StringComparison.Ordinal);
+        var browserAction = prompt.IndexOf(
+            "`service.connect` browser action",
+            StringComparison.Ordinal);
+        var aevatarExecutor = prompt.IndexOf(
+            "Aevatar-ecosystem tool or skill",
+            StringComparison.Ordinal);
+        var honestStop = prompt.IndexOf(
+            "If none is available, stop honestly",
+            StringComparison.Ordinal);
+
+        exactOperation.Should().BeGreaterThanOrEqualTo(0);
+        browserAction.Should().BeGreaterThan(exactOperation);
+        aevatarExecutor.Should().BeGreaterThan(browserAction);
+        honestStop.Should().BeGreaterThan(aevatarExecutor);
+        prompt.Should().Contain("cannot check right now");
+        prompt.Should().Contain("never proves that a connection, binding, resource, or record is absent");
+        prompt.Should().Contain("Claim absence only from a successful authoritative read");
+        prompt.Should().Contain("Never present an Aevatar executor as a NyxID connected service");
+    }
+
+    [Fact]
+    public void Value_ShouldKeepLocalHandoffsAndExcludedOperationsHonest()
+    {
+        var prompt = NyxIdChatSystemPrompt.Value.Content;
+
+        prompt.Should().Contain("Class-L operations run on the user's own machine");
+        prompt.Should().Contain("one exact copyable `nyxid ...` command");
+        prompt.Should().Contain("`start the node daemon` maps exactly to `nyxid node daemon start`");
+        prompt.Should().Contain("Do not claim that the command ran");
+        prompt.Should().Contain("Class-X operations are excluded from Assistant v1");
+        prompt.Should().Contain("Billing, platform administration, pre-authentication, channel-bot/event mutation, and oracle operations");
+        prompt.Should().Contain("Do not expose or fabricate a tool, browser action, approval card, or execution receipt");
+        prompt.Should().Contain("do not guess a verb, invent a URL, or turn a mutation into manual instructions");
+    }
+
+    [Fact]
     public void ComposedPrompt_ShouldUseFinalToolSchemasAsConnectedServiceAuthority()
     {
         var prompt = ComposedAgentPrompt();
