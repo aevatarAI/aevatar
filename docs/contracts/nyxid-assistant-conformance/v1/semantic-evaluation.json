@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "status": "not_run",
+  "owner_issue": "#3313",
+  "model": "gpt-5.4",
+  "model_route": "current authenticated NyxID Assistant default route",
+  "temperature": 0,
+  "prompt_version": "StreamingAgentProfileTurnClassifier@0836a239bd9d4f654adbdf5b4ff1ce6e886a5125",
+  "prompt_source": "agents/Aevatar.GAgents.NyxidChat/AgentProfiles/StreamingAgentProfileTurnClassifier.cs",
+  "dataset": "coverage-manifest.json rows with utterances",
+  "thresholds": {
+    "route_accuracy": 0.95,
+    "availability_outcome_accuracy": 1.0,
+    "blocked_intent_honesty": 1.0,
+    "false_execution_or_verification_claims": 0
+  },
+  "results": null,
+  "note": "This semantic evaluation is a separately recorded quality gate. Deterministic scripted-model fixtures remain the CI authority; authenticated production canaries belong to #3318."
+}

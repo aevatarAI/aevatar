@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "aevatar": {
+    "repository": "https://github.com/AevatarAI/aevatar.git",
+    "revision": "0836a239bd9d4f654adbdf5b4ff1ce6e886a5125",
+    "contract_files_sha256": "04f437f74cd6af8b01cc6a826cf8895a1c5bab7d5ba96f221815ffcb1f6abfe3",
+    "files": {
+      "agents/Aevatar.GAgents.NyxidChat/NyxIdActionPostconditionPort.cs": "82758c8726e51044c818a276db76032a382c792cd964df2c0d10e7ab4bd20155",
+      "agents/Aevatar.GAgents.NyxidChat/NyxIdAssistantActionRegistry.cs": "ed83f22bb95d01e4409a7e051748194a9595c93c276129d4ed38442ee4b0b53e",
+      "agents/Aevatar.GAgents.NyxidChat/NyxIdChatBrowserActions.cs": "2b7f9fa0d2e7bc16d158f33ccaa88372315c9c04d96ac027b75d67ed7bf6bd27",
+      "agents/Aevatar.GAgents.NyxidChat/NyxIdChatConversationAguiFrameBuilder.cs": "fbbe66e1186b45eca006a9a5ac4fbced8fb1ee3ae6735f3ed3da7d4c89546936",
+      "docs/adr/0048-nyxid-assistant-operation-class-boundary.md": "bb3ac537f3a2350f912401ba97fa64853c7da1cfe7136946a439f6798d82df75",
+      "src/Aevatar.AI.ToolProviders.NyxId/NyxIdAssistantToolSource.cs": "bd35a49d03852767a88daddaa45c7ca90e85ecec66ebef0402565fe318eb729f",
+      "src/Aevatar.Mainnet.Host.Api/Hosting/MainnetHostBuilderExtensions.cs": "b82cdb4b2c3fa556ba3596d83eff81591bad347122bf41a27e98f3c9566f940c"
+    }
+  },
+  "nyxid": {
+    "repository": "https://github.com/ChronoAIProject/NyxID.git",
+    "revision": "fa157bc4160c27922f49f8f498ccac755843a15a",
+    "tree": "2d597bda65f5a6ff6903c888c509756ba87807e9",
+    "cli_source": "cli/src/cli.rs",
+    "cli_source_sha256": "51dd82101d7671859351e9989e8d554b4aa1cb898a4e04d948df28aa37de0195",
+    "cargo_lock_sha256": "b79a3d446ff3a7bca5b50021120c699e6eb75c1c41f673ad4b8d604d2b20e7ce"
+  },
+  "support_contract": {
+    "repository": "https://gist.github.com/b4dd5182c5ac1efc2ad546ecb5f948f3.git",
+    "revision": "f45febb057a7182dab2495d4c739d2bb8d7026f5",
+    "english_source": "nyx-chat-aevatar-support-spec.md",
+    "english_source_sha256": "b404936dc7019fd7e2bf6bab03f75b24f755bd0c31c4194675af99f3dbcda0a0",
+    "note": "The prose contract's historical 211 count is design input, not generator authority."
+  },
+  "assistant_registry": {
+    "revision": "nyxid-assistant-actions.v4",
+    "nyxid_source": "backend/src/handlers/assistant_actions.rs",
+    "nyxid_source_sha256": "35650ae260404dc291e53e9efdbc4615833a67821d19dd727f45f16a9ffce372",
+    "checked_in_payload": "registry-v4.json",
+    "checked_in_payload_sha256": "5d63814c3c2947f65218e9d8ff5d9ec7d9abfc220a32a661cec845b6c189e947"
+  },
+  "generated_artifacts": {
+    "cli-leaves.json": "27ee6015977a88f30157cdbe8c51b68ca60f0a57c4c7248950906a990b7b7d13",
+    "coverage-manifest.json": "0b88ec0e63c349869fbe28542eb2baeae2daff70937eb8f0258f8f35d0bc3904"
+  }
+}

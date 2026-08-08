@@ -1,0 +1,782 @@
+{
+  "schema_version": 1,
+  "fixtures": [
+    {
+      "id": "unknown-root-member",
+      "payload": {
+        "schema_version": 4,
+        "revision": "nyxid-assistant-actions.v4",
+        "actions": [
+          {
+            "action": "service.connect",
+            "description": "Ask the user's browser to connect a service through NyxID. Use when a task needs a catalog service (by slug) or a custom HTTPS endpoint that the user has not connected yet. NyxID owns the entire journey - auth modality, consent copy, and credential storage - and reports back only completion or decline with a safe resource reference. Never ask the user for keys, tokens, or passwords in chat.",
+            "params_schema": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "catalogService"
+                  ],
+                  "properties": {
+                    "catalogService": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "serviceSlug"
+                      ],
+                      "properties": {
+                        "serviceSlug": {
+                          "type": "string"
+                        },
+                        "requestedScopes": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "viaNodeId": {
+                          "type": "string"
+                        },
+                        "targetOrgId": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "customService"
+                  ],
+                  "properties": {
+                    "customService": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "name",
+                        "endpointUrl",
+                        "authMethod"
+                      ],
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "endpointUrl": {
+                          "type": "string"
+                        },
+                        "authMethod": {
+                          "type": "string"
+                        },
+                        "authKeyName": {
+                          "type": "string"
+                        },
+                        "viaNodeId": {
+                          "type": "string"
+                        },
+                        "targetOrgId": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            },
+            "risk": "grant",
+            "tier": "v1",
+            "remember_eligible": true
+          }
+        ],
+        "future_root": {
+          "ignored": true
+        }
+      },
+      "expected": "accepted",
+      "known_action_present": true
+    },
+    {
+      "id": "unknown-member-on-known-descriptor",
+      "payload": {
+        "schema_version": 4,
+        "revision": "nyxid-assistant-actions.v4",
+        "actions": [
+          {
+            "action": "service.connect",
+            "description": "Ask the user's browser to connect a service through NyxID. Use when a task needs a catalog service (by slug) or a custom HTTPS endpoint that the user has not connected yet. NyxID owns the entire journey - auth modality, consent copy, and credential storage - and reports back only completion or decline with a safe resource reference. Never ask the user for keys, tokens, or passwords in chat.",
+            "params_schema": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "catalogService"
+                  ],
+                  "properties": {
+                    "catalogService": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "serviceSlug"
+                      ],
+                      "properties": {
+                        "serviceSlug": {
+                          "type": "string"
+                        },
+                        "requestedScopes": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "viaNodeId": {
+                          "type": "string"
+                        },
+                        "targetOrgId": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "customService"
+                  ],
+                  "properties": {
+                    "customService": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "name",
+                        "endpointUrl",
+                        "authMethod"
+                      ],
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "endpointUrl": {
+                          "type": "string"
+                        },
+                        "authMethod": {
+                          "type": "string"
+                        },
+                        "authKeyName": {
+                          "type": "string"
+                        },
+                        "viaNodeId": {
+                          "type": "string"
+                        },
+                        "targetOrgId": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            },
+            "risk": "grant",
+            "tier": "v1",
+            "remember_eligible": true,
+            "future_member": [
+              "ignored"
+            ]
+          }
+        ]
+      },
+      "expected": "accepted",
+      "known_action_present": true
+    },
+    {
+      "id": "unknown-verb",
+      "payload": {
+        "schema_version": 4,
+        "revision": "nyxid-assistant-actions.v4",
+        "actions": [
+          {
+            "action": "service.connect",
+            "description": "Ask the user's browser to connect a service through NyxID. Use when a task needs a catalog service (by slug) or a custom HTTPS endpoint that the user has not connected yet. NyxID owns the entire journey - auth modality, consent copy, and credential storage - and reports back only completion or decline with a safe resource reference. Never ask the user for keys, tokens, or passwords in chat.",
+            "params_schema": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "catalogService"
+                  ],
+                  "properties": {
+                    "catalogService": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "serviceSlug"
+                      ],
+                      "properties": {
+                        "serviceSlug": {
+                          "type": "string"
+                        },
+                        "requestedScopes": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "viaNodeId": {
+                          "type": "string"
+                        },
+                        "targetOrgId": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "customService"
+                  ],
+                  "properties": {
+                    "customService": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "name",
+                        "endpointUrl",
+                        "authMethod"
+                      ],
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "endpointUrl": {
+                          "type": "string"
+                        },
+                        "authMethod": {
+                          "type": "string"
+                        },
+                        "authKeyName": {
+                          "type": "string"
+                        },
+                        "viaNodeId": {
+                          "type": "string"
+                        },
+                        "targetOrgId": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            },
+            "risk": "grant",
+            "tier": "v1",
+            "remember_eligible": true
+          },
+          {
+            "action": "workflow.launch",
+            "description": "Future action ignored by this reader.",
+            "params_schema": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {}
+            },
+            "risk": "low",
+            "tier": "v1",
+            "remember_eligible": false
+          }
+        ]
+      },
+      "expected": "accepted",
+      "known_action_present": true
+    },
+    {
+      "id": "unknown-risk-enum",
+      "payload": {
+        "schema_version": 4,
+        "revision": "nyxid-assistant-actions.v4",
+        "actions": [
+          {
+            "action": "service.connect",
+            "description": "Ask the user's browser to connect a service through NyxID. Use when a task needs a catalog service (by slug) or a custom HTTPS endpoint that the user has not connected yet. NyxID owns the entire journey - auth modality, consent copy, and credential storage - and reports back only completion or decline with a safe resource reference. Never ask the user for keys, tokens, or passwords in chat.",
+            "params_schema": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "catalogService"
+                  ],
+                  "properties": {
+                    "catalogService": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "serviceSlug"
+                      ],
+                      "properties": {
+                        "serviceSlug": {
+                          "type": "string"
+                        },
+                        "requestedScopes": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "viaNodeId": {
+                          "type": "string"
+                        },
+                        "targetOrgId": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "customService"
+                  ],
+                  "properties": {
+                    "customService": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "name",
+                        "endpointUrl",
+                        "authMethod"
+                      ],
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "endpointUrl": {
+                          "type": "string"
+                        },
+                        "authMethod": {
+                          "type": "string"
+                        },
+                        "authKeyName": {
+                          "type": "string"
+                        },
+                        "viaNodeId": {
+                          "type": "string"
+                        },
+                        "targetOrgId": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            },
+            "risk": "future-risk",
+            "tier": "v1",
+            "remember_eligible": true
+          }
+        ]
+      },
+      "expected": "rejected",
+      "known_action_present": false,
+      "error_code": "NYXID_ACTION_REGISTRY_INVALID"
+    },
+    {
+      "id": "unknown-tier-enum",
+      "payload": {
+        "schema_version": 4,
+        "revision": "nyxid-assistant-actions.v4",
+        "actions": [
+          {
+            "action": "service.connect",
+            "description": "Ask the user's browser to connect a service through NyxID. Use when a task needs a catalog service (by slug) or a custom HTTPS endpoint that the user has not connected yet. NyxID owns the entire journey - auth modality, consent copy, and credential storage - and reports back only completion or decline with a safe resource reference. Never ask the user for keys, tokens, or passwords in chat.",
+            "params_schema": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "catalogService"
+                  ],
+                  "properties": {
+                    "catalogService": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "serviceSlug"
+                      ],
+                      "properties": {
+                        "serviceSlug": {
+                          "type": "string"
+                        },
+                        "requestedScopes": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "viaNodeId": {
+                          "type": "string"
+                        },
+                        "targetOrgId": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "customService"
+                  ],
+                  "properties": {
+                    "customService": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "name",
+                        "endpointUrl",
+                        "authMethod"
+                      ],
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "endpointUrl": {
+                          "type": "string"
+                        },
+                        "authMethod": {
+                          "type": "string"
+                        },
+                        "authKeyName": {
+                          "type": "string"
+                        },
+                        "viaNodeId": {
+                          "type": "string"
+                        },
+                        "targetOrgId": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            },
+            "risk": "grant",
+            "tier": "v99",
+            "remember_eligible": true
+          }
+        ]
+      },
+      "expected": "rejected",
+      "known_action_present": false,
+      "error_code": "NYXID_ACTION_TIER_UNSUPPORTED"
+    },
+    {
+      "id": "open-object-schema",
+      "payload": {
+        "schema_version": 4,
+        "revision": "nyxid-assistant-actions.v4",
+        "actions": [
+          {
+            "action": "service.connect",
+            "description": "Ask the user's browser to connect a service through NyxID. Use when a task needs a catalog service (by slug) or a custom HTTPS endpoint that the user has not connected yet. NyxID owns the entire journey - auth modality, consent copy, and credential storage - and reports back only completion or decline with a safe resource reference. Never ask the user for keys, tokens, or passwords in chat.",
+            "params_schema": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "required": [
+                    "catalogService"
+                  ],
+                  "properties": {
+                    "catalogService": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "serviceSlug"
+                      ],
+                      "properties": {
+                        "serviceSlug": {
+                          "type": "string"
+                        },
+                        "requestedScopes": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "viaNodeId": {
+                          "type": "string"
+                        },
+                        "targetOrgId": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "customService"
+                  ],
+                  "properties": {
+                    "customService": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "name",
+                        "endpointUrl",
+                        "authMethod"
+                      ],
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "endpointUrl": {
+                          "type": "string"
+                        },
+                        "authMethod": {
+                          "type": "string"
+                        },
+                        "authKeyName": {
+                          "type": "string"
+                        },
+                        "viaNodeId": {
+                          "type": "string"
+                        },
+                        "targetOrgId": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            },
+            "risk": "grant",
+            "tier": "v1",
+            "remember_eligible": true
+          }
+        ]
+      },
+      "expected": "rejected",
+      "known_action_present": false,
+      "error_code": "NYXID_ACTION_REGISTRY_INVALID"
+    },
+    {
+      "id": "forbidden-secret-schema-member",
+      "payload": {
+        "schema_version": 4,
+        "revision": "nyxid-assistant-actions.v4",
+        "actions": [
+          {
+            "action": "service.connect",
+            "description": "Ask the user's browser to connect a service through NyxID. Use when a task needs a catalog service (by slug) or a custom HTTPS endpoint that the user has not connected yet. NyxID owns the entire journey - auth modality, consent copy, and credential storage - and reports back only completion or decline with a safe resource reference. Never ask the user for keys, tokens, or passwords in chat.",
+            "params_schema": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "catalogService"
+                  ],
+                  "properties": {
+                    "catalogService": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "serviceSlug"
+                      ],
+                      "properties": {
+                        "serviceSlug": {
+                          "type": "string"
+                        },
+                        "requestedScopes": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "viaNodeId": {
+                          "type": "string"
+                        },
+                        "targetOrgId": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "access_token": {
+                      "type": "string"
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "customService"
+                  ],
+                  "properties": {
+                    "customService": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "name",
+                        "endpointUrl",
+                        "authMethod"
+                      ],
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "endpointUrl": {
+                          "type": "string"
+                        },
+                        "authMethod": {
+                          "type": "string"
+                        },
+                        "authKeyName": {
+                          "type": "string"
+                        },
+                        "viaNodeId": {
+                          "type": "string"
+                        },
+                        "targetOrgId": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            },
+            "risk": "grant",
+            "tier": "v1",
+            "remember_eligible": true
+          }
+        ]
+      },
+      "expected": "rejected",
+      "known_action_present": false,
+      "error_code": "NYXID_ACTION_SECRET_FIELD_FORBIDDEN"
+    },
+    {
+      "id": "destructive-remember-policy",
+      "payload": {
+        "schema_version": 4,
+        "revision": "nyxid-assistant-actions.v4",
+        "actions": [
+          {
+            "action": "service.connect",
+            "description": "Ask the user's browser to connect a service through NyxID. Use when a task needs a catalog service (by slug) or a custom HTTPS endpoint that the user has not connected yet. NyxID owns the entire journey - auth modality, consent copy, and credential storage - and reports back only completion or decline with a safe resource reference. Never ask the user for keys, tokens, or passwords in chat.",
+            "params_schema": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "catalogService"
+                  ],
+                  "properties": {
+                    "catalogService": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "serviceSlug"
+                      ],
+                      "properties": {
+                        "serviceSlug": {
+                          "type": "string"
+                        },
+                        "requestedScopes": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "viaNodeId": {
+                          "type": "string"
+                        },
+                        "targetOrgId": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "customService"
+                  ],
+                  "properties": {
+                    "customService": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "name",
+                        "endpointUrl",
+                        "authMethod"
+                      ],
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "endpointUrl": {
+                          "type": "string"
+                        },
+                        "authMethod": {
+                          "type": "string"
+                        },
+                        "authKeyName": {
+                          "type": "string"
+                        },
+                        "viaNodeId": {
+                          "type": "string"
+                        },
+                        "targetOrgId": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            },
+            "risk": "destructive",
+            "tier": "v1",
+            "remember_eligible": true
+          }
+        ]
+      },
+      "expected": "rejected",
+      "known_action_present": false,
+      "error_code": "NYXID_ACTION_REGISTRY_INVALID"
+    },
+    {
+      "id": "malformed-json",
+      "raw_payload": "{not-json",
+      "expected": "rejected",
+      "error_code": "NYXID_ACTION_REGISTRY_INVALID",
+      "known_action_present": false
+    }
+  ]
+}

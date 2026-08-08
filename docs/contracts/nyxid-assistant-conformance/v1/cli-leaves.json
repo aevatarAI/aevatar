@@ -1,0 +1,912 @@
+{
+  "schema_version": 1,
+  "command_name": "nyxid",
+  "top_level_count": 46,
+  "leaf_count": 226,
+  "leaves": [
+    {
+      "path": "admin invite-code create",
+      "about": "Create a new invite code"
+    },
+    {
+      "path": "admin invite-code deactivate",
+      "about": "Deactivate an invite code by ID"
+    },
+    {
+      "path": "admin invite-code list",
+      "about": "List all invite codes"
+    },
+    {
+      "path": "admin user list",
+      "about": "List platform users (paginated)"
+    },
+    {
+      "path": "admin user set-role",
+      "about": "Set a user's platform role (admin | operator | user)"
+    },
+    {
+      "path": "admin user show",
+      "about": "Show a single user's profile by ID"
+    },
+    {
+      "path": "ai-setup install",
+      "about": "Install persistent NyxID skills for an AI tool"
+    },
+    {
+      "path": "ai-setup status",
+      "about": "Show which AI skills are currently installed"
+    },
+    {
+      "path": "ai-setup update",
+      "about": "Update installed skills to the latest version"
+    },
+    {
+      "path": "api-key bind",
+      "about": "Bind a service to an agent key (uses the service's credential automatically)"
+    },
+    {
+      "path": "api-key create",
+      "about": "Create a new NyxID API key"
+    },
+    {
+      "path": "api-key delete",
+      "about": "Revoke a key"
+    },
+    {
+      "path": "api-key durable-create",
+      "about": "Provision a scheduled-invocation key and its durable grants"
+    },
+    {
+      "path": "api-key durable-grants",
+      "about": "List durable grants for a scheduled-invocation key"
+    },
+    {
+      "path": "api-key durable-plan",
+      "about": "Preview an exact v2 scope plan for scheduled durable writes"
+    },
+    {
+      "path": "api-key durable-reauthorize",
+      "about": "Replace active grants from a freshly confirmed v2 scope plan"
+    },
+    {
+      "path": "api-key durable-revoke",
+      "about": "Revoke one durable grant immediately"
+    },
+    {
+      "path": "api-key list",
+      "about": "List API keys"
+    },
+    {
+      "path": "api-key rotate",
+      "about": "Rotate a key"
+    },
+    {
+      "path": "api-key show",
+      "about": "Show key details"
+    },
+    {
+      "path": "api-key update",
+      "about": "Update key scope"
+    },
+    {
+      "path": "approval approve",
+      "about": "Approve a request"
+    },
+    {
+      "path": "approval deny",
+      "about": "Deny a request"
+    },
+    {
+      "path": "approval disable",
+      "about": "Disable approval protection globally"
+    },
+    {
+      "path": "approval enable",
+      "about": "Enable approval protection globally (requires notification channel)"
+    },
+    {
+      "path": "approval grants",
+      "about": "List approval grants"
+    },
+    {
+      "path": "approval list",
+      "about": "List approval requests"
+    },
+    {
+      "path": "approval revoke-grant",
+      "about": "Revoke an approval grant"
+    },
+    {
+      "path": "approval service-configs",
+      "about": "List per-service approval configurations"
+    },
+    {
+      "path": "approval set-config",
+      "about": "Set approval configuration for a service"
+    },
+    {
+      "path": "approval show",
+      "about": "Show approval request details"
+    },
+    {
+      "path": "billing topup",
+      "about": "Create a hosted wallet top-up checkout"
+    },
+    {
+      "path": "billing usage",
+      "about": "Show billing usage and estimated cost"
+    },
+    {
+      "path": "billing verify-topup-flow",
+      "about": "Verify the deployed Lago + Stripe wallet top-up flow"
+    },
+    {
+      "path": "billing wallet",
+      "about": "Show or provision the billing wallet"
+    },
+    {
+      "path": "catalog endpoints",
+      "about": "List API endpoints from a service's OpenAPI spec"
+    },
+    {
+      "path": "catalog list",
+      "about": "List available services from the catalog"
+    },
+    {
+      "path": "catalog show",
+      "about": "Show details for a catalog entry"
+    },
+    {
+      "path": "channel-bot delete",
+      "about": "Delete a bot"
+    },
+    {
+      "path": "channel-bot list",
+      "about": "List registered bots"
+    },
+    {
+      "path": "channel-bot register",
+      "about": "Register a new messaging platform bot"
+    },
+    {
+      "path": "channel-bot route create",
+      "about": "Create a conversation route"
+    },
+    {
+      "path": "channel-bot route delete",
+      "about": "Delete a conversation route"
+    },
+    {
+      "path": "channel-bot route list",
+      "about": "List conversation routes"
+    },
+    {
+      "path": "channel-bot route update",
+      "about": "Update a conversation route"
+    },
+    {
+      "path": "channel-bot show",
+      "about": "Show bot details"
+    },
+    {
+      "path": "channel-bot update",
+      "about": "Update an existing bot's label or platform verification material"
+    },
+    {
+      "path": "channel-bot verify",
+      "about": "Verify bot token and re-register webhook"
+    },
+    {
+      "path": "channel-event channel create",
+      "about": "Create a device channel (platform = \"device\")"
+    },
+    {
+      "path": "channel-event channel delete",
+      "about": "Delete a device channel by conversation ID"
+    },
+    {
+      "path": "channel-event channel list",
+      "about": "List device channels (platform = \"device\")"
+    },
+    {
+      "path": "channel-event push",
+      "about": "Push a device/analyzer event to an agent via the HTTP Event Gateway"
+    },
+    {
+      "path": "connect",
+      "about": "Create a hosted link for connecting a service credential"
+    },
+    {
+      "path": "developer-app create",
+      "about": "Create a developer OAuth client (OIDC app for downstream integrations)"
+    },
+    {
+      "path": "developer-app delete",
+      "about": "Delete a developer OAuth client (soft-delete)"
+    },
+    {
+      "path": "developer-app list",
+      "about": "List developer OAuth clients"
+    },
+    {
+      "path": "developer-app rotate-secret",
+      "about": "Rotate a confidential client's secret"
+    },
+    {
+      "path": "developer-app show",
+      "about": "Show developer OAuth client details"
+    },
+    {
+      "path": "developer-app update",
+      "about": "Update developer OAuth client metadata"
+    },
+    {
+      "path": "device approve",
+      "about": "Approve a device binding code and provision device credentials"
+    },
+    {
+      "path": "device factory-key",
+      "about": "Generate Ed25519 factory provisioning keys"
+    },
+    {
+      "path": "device onboard",
+      "about": "Provision a no-WiFi headless device and print a nyxprov QR payload"
+    },
+    {
+      "path": "doctor",
+      "about": "Run local CLI health checks"
+    },
+    {
+      "path": "endpoint delete",
+      "about": "Delete an endpoint"
+    },
+    {
+      "path": "endpoint list",
+      "about": "List user endpoints"
+    },
+    {
+      "path": "endpoint update",
+      "about": "Update an endpoint"
+    },
+    {
+      "path": "external-key add-gcp-service-account",
+      "about": "Register a Google Cloud service-account JSON key as a proxy credential"
+    },
+    {
+      "path": "external-key delete",
+      "about": "Delete an external credential"
+    },
+    {
+      "path": "external-key list",
+      "about": "List external API keys/credentials"
+    },
+    {
+      "path": "external-key rotate",
+      "about": "Rotate an external credential"
+    },
+    {
+      "path": "forgot-password",
+      "about": "Request a password reset email"
+    },
+    {
+      "path": "info",
+      "about": "Show CLI version and project links"
+    },
+    {
+      "path": "login",
+      "about": "Log in to NyxID (opens browser by default)"
+    },
+    {
+      "path": "logout",
+      "about": "Log out and clear stored token"
+    },
+    {
+      "path": "mcp config",
+      "about": "Generate MCP configuration for AI tools"
+    },
+    {
+      "path": "mfa setup",
+      "about": "Set up MFA — opens the wizard in your browser to render the QR code, collect the TOTP verification code, and display recovery codes once"
+    },
+    {
+      "path": "mfa status",
+      "about": "Show current MFA status"
+    },
+    {
+      "path": "mfa verify",
+      "about": "Verify a pending MFA setup with a TOTP code (scripted path). Prefer `nyxid mfa setup` — the wizard handles both halves of enrollment in one browser tab and never prints recovery codes to the terminal"
+    },
+    {
+      "path": "node agent-status",
+      "about": "Show node connection status (local)"
+    },
+    {
+      "path": "node agent-version",
+      "about": "Show node agent version"
+    },
+    {
+      "path": "node credentials accept",
+      "about": "Accept a pushed credential and store the secret locally"
+    },
+    {
+      "path": "node credentials add",
+      "about": "Add a credential for a service (prompts for the secret value securely)"
+    },
+    {
+      "path": "node credentials add-oauth",
+      "about": "Add an OAuth credential for a service (runs device code or authorization code flow)"
+    },
+    {
+      "path": "node credentials decline",
+      "about": "Decline a pushed credential without changing local credentials"
+    },
+    {
+      "path": "node credentials list",
+      "about": "List configured credentials"
+    },
+    {
+      "path": "node credentials pending",
+      "about": "List pushed credentials awaiting local acceptance"
+    },
+    {
+      "path": "node credentials remove",
+      "about": "Remove a credential for a service"
+    },
+    {
+      "path": "node credentials setup",
+      "about": "Auto-setup credentials for a service (fetches requirements from catalog)"
+    },
+    {
+      "path": "node daemon install",
+      "about": "Install the node agent as a background service (launchd on macOS, systemd on Linux)"
+    },
+    {
+      "path": "node daemon logs",
+      "about": "Show node agent logs"
+    },
+    {
+      "path": "node daemon restart",
+      "about": "Restart the background service"
+    },
+    {
+      "path": "node daemon start",
+      "about": "Start the installed background service"
+    },
+    {
+      "path": "node daemon status",
+      "about": "Show background service status"
+    },
+    {
+      "path": "node daemon stop",
+      "about": "Stop the running background service"
+    },
+    {
+      "path": "node daemon uninstall",
+      "about": "Uninstall the background service"
+    },
+    {
+      "path": "node delete",
+      "about": "Delete a node"
+    },
+    {
+      "path": "node docker build",
+      "about": "Build the node agent Docker image"
+    },
+    {
+      "path": "node docker logs",
+      "about": "Tail Docker container logs"
+    },
+    {
+      "path": "node docker restart",
+      "about": "Restart the node agent container"
+    },
+    {
+      "path": "node docker start",
+      "about": "Start a node agent container (mounts the profile's config directory)"
+    },
+    {
+      "path": "node docker status",
+      "about": "Show Docker container status"
+    },
+    {
+      "path": "node docker stop",
+      "about": "Stop and remove the node agent container"
+    },
+    {
+      "path": "node list",
+      "about": "List user's nodes"
+    },
+    {
+      "path": "node migrate",
+      "about": "Migrate secret storage from file to OS keychain (or vice versa)"
+    },
+    {
+      "path": "node openclaw connect",
+      "about": "Connect to an OpenClaw gateway"
+    },
+    {
+      "path": "node openclaw disconnect",
+      "about": "Disconnect from OpenClaw"
+    },
+    {
+      "path": "node openclaw status",
+      "about": "Show OpenClaw connection status"
+    },
+    {
+      "path": "node register",
+      "about": "Register this node with a NyxID server"
+    },
+    {
+      "path": "node register-token",
+      "about": "Generate a registration token"
+    },
+    {
+      "path": "node rekey",
+      "about": "Update the node's auth token and signing secret after a server-side rotation"
+    },
+    {
+      "path": "node rotate-token",
+      "about": "Rotate node auth token"
+    },
+    {
+      "path": "node show",
+      "about": "Show node details"
+    },
+    {
+      "path": "node ssh cert-host-key forget",
+      "about": "Remove a cert-mode target host-key pin so the next connection re-TOFUs"
+    },
+    {
+      "path": "node ssh cert-host-key list",
+      "about": "List cert-mode target host-key pins"
+    },
+    {
+      "path": "node ssh cert-host-key pin",
+      "about": "Set or replace an explicit cert-mode target host-key pin"
+    },
+    {
+      "path": "node ssh-credentials add",
+      "about": "Add a per-principal SSH private key"
+    },
+    {
+      "path": "node ssh-credentials list",
+      "about": "List configured SSH private keys"
+    },
+    {
+      "path": "node ssh-credentials prune",
+      "about": "Prune stale SSH private keys"
+    },
+    {
+      "path": "node ssh-credentials remove",
+      "about": "Remove one configured SSH private key entry"
+    },
+    {
+      "path": "node ssh-credentials set-algos",
+      "about": "Set or reset SSH algorithm allowlists for one credential"
+    },
+    {
+      "path": "node ssh-credentials show",
+      "about": "Show one configured SSH private key entry"
+    },
+    {
+      "path": "node ssh-credentials test",
+      "about": "Test a configured SSH private key with a no-op command"
+    },
+    {
+      "path": "node start",
+      "about": "Start the node agent (connect and serve)"
+    },
+    {
+      "path": "node transfer",
+      "about": "Transfer a node to a person or org owner"
+    },
+    {
+      "path": "node-credential cancel",
+      "about": "Cancel a pending credential push"
+    },
+    {
+      "path": "node-credential inject",
+      "about": "Inject a pending credential through remote credential encryption"
+    },
+    {
+      "path": "node-credential list",
+      "about": "List pending credential pushes for a node"
+    },
+    {
+      "path": "node-credential push",
+      "about": "Push credential setup metadata to a node operator"
+    },
+    {
+      "path": "notification settings",
+      "about": "Show current notification settings"
+    },
+    {
+      "path": "notification telegram-disconnect",
+      "about": "Disconnect Telegram account"
+    },
+    {
+      "path": "notification telegram-link",
+      "about": "Link a Telegram account"
+    },
+    {
+      "path": "notification update",
+      "about": "Update notification settings"
+    },
+    {
+      "path": "oauth bindings list",
+      "about": "List all active broker bindings owned by the current user"
+    },
+    {
+      "path": "oauth bindings revoke",
+      "about": "Revoke a binding by its hash (prefix match accepted)"
+    },
+    {
+      "path": "oauth bindings show",
+      "about": "Show details for a specific binding by its hash (prefix match accepted)"
+    },
+    {
+      "path": "openclaw setup",
+      "about": "Interactive OpenClaw setup"
+    },
+    {
+      "path": "oracle ask",
+      "about": "Ask a one-shot question and wait for the answer"
+    },
+    {
+      "path": "oracle attach",
+      "about": "Attach an existing ChatGPT conversation URL and import its transcript"
+    },
+    {
+      "path": "oracle cancel",
+      "about": "Cancel a queued or in-flight task"
+    },
+    {
+      "path": "oracle close-session",
+      "about": "Close a conversation (blocks further turns)"
+    },
+    {
+      "path": "oracle extract",
+      "about": "Extract readable main content from any web page"
+    },
+    {
+      "path": "oracle pool create",
+      "about": "Create a pool and print its one-time worker token"
+    },
+    {
+      "path": "oracle pool list",
+      "about": "List pools you can see"
+    },
+    {
+      "path": "oracle pool rotate-token",
+      "about": "Rotate the worker token (invalidates all paired tabs)"
+    },
+    {
+      "path": "oracle pool show",
+      "about": "Show one pool"
+    },
+    {
+      "path": "oracle pool update",
+      "about": "Update a pool's settings"
+    },
+    {
+      "path": "oracle result",
+      "about": "Fetch a task's current state (or its answer if done)"
+    },
+    {
+      "path": "oracle session",
+      "about": "Show a conversation transcript"
+    },
+    {
+      "path": "oracle sessions",
+      "about": "List your multi-turn conversations"
+    },
+    {
+      "path": "oracle status",
+      "about": "Show a pool's queue and active workers"
+    },
+    {
+      "path": "org create",
+      "about": "Create a new organization (you become the first admin)"
+    },
+    {
+      "path": "org delete",
+      "about": "Delete an organization (admin only). Refuses if the org still owns shared resources"
+    },
+    {
+      "path": "org invite cancel",
+      "about": "Cancel a pending invite (admin only)"
+    },
+    {
+      "path": "org invite create",
+      "about": "Issue a new one-time invite (admin only)"
+    },
+    {
+      "path": "org invite list",
+      "about": "List outstanding invites for an organization (admin only)"
+    },
+    {
+      "path": "org join",
+      "about": "Redeem an org invite link or nonce"
+    },
+    {
+      "path": "org list",
+      "about": "List organizations you are a member of"
+    },
+    {
+      "path": "org member add",
+      "about": "Add a member directly by user ID (admin only). Prefer `org invite create`"
+    },
+    {
+      "path": "org member list",
+      "about": "List members of an organization (must be a member)"
+    },
+    {
+      "path": "org member remove",
+      "about": "Remove a member from an organization (admin only)"
+    },
+    {
+      "path": "org member update",
+      "about": "Update a member's role or service scope (admin only)"
+    },
+    {
+      "path": "org role-scope clear",
+      "about": "Remove the role scope row, reverting the role to the default (full access). Equivalent to `set --full-access`, but the row is deleted rather than stored with null"
+    },
+    {
+      "path": "org role-scope list",
+      "about": "Show the default service scope for every org role (admin only)"
+    },
+    {
+      "path": "org role-scope set",
+      "about": "Set the default service scope for one role (admin only)"
+    },
+    {
+      "path": "org set-primary",
+      "about": "Set or clear your primary organization (proxy resolution tiebreaker)"
+    },
+    {
+      "path": "org show",
+      "about": "Show details of an organization (must be a member)"
+    },
+    {
+      "path": "org update",
+      "about": "Update an organization's metadata (admin only)"
+    },
+    {
+      "path": "pairing resume",
+      "about": "Poll an existing pairing (created by `--no-wait`) until it completes or expires; print the kind-specific success summary"
+    },
+    {
+      "path": "pool add-member",
+      "about": "Add a service member to a pool"
+    },
+    {
+      "path": "pool create",
+      "about": "Create a service pool"
+    },
+    {
+      "path": "pool delete",
+      "about": "Delete a service pool"
+    },
+    {
+      "path": "pool list",
+      "about": "List service pools"
+    },
+    {
+      "path": "pool remove-member",
+      "about": "Remove a service member from a pool"
+    },
+    {
+      "path": "pool set-strategy",
+      "about": "Set a pool's routing strategy"
+    },
+    {
+      "path": "pool show",
+      "about": "Show service pool details"
+    },
+    {
+      "path": "profile consents",
+      "about": "List OAuth consents"
+    },
+    {
+      "path": "profile delete",
+      "about": "Delete your account"
+    },
+    {
+      "path": "profile revoke-consent",
+      "about": "Revoke an OAuth consent"
+    },
+    {
+      "path": "profile update",
+      "about": "Update profile (name, etc.)"
+    },
+    {
+      "path": "provider disconnect",
+      "about": "Disconnect a personal or org-owned provider token"
+    },
+    {
+      "path": "proxy discover",
+      "about": "List proxyable services (service discovery)"
+    },
+    {
+      "path": "proxy request",
+      "about": "Send a request through the NyxID proxy"
+    },
+    {
+      "path": "public request",
+      "about": "Send a no-auth request to /public/s/{slug}/{path}"
+    },
+    {
+      "path": "register",
+      "about": "Register a new account"
+    },
+    {
+      "path": "repo",
+      "about": "Show the NyxID project repository URL"
+    },
+    {
+      "path": "reset-password",
+      "about": "Reset password using a reset token"
+    },
+    {
+      "path": "service add",
+      "about": "Add a service from catalog or custom endpoint"
+    },
+    {
+      "path": "service add-ssh",
+      "about": "Add an SSH service"
+    },
+    {
+      "path": "service convert-ssh",
+      "about": "Convert an SSH service between cert, node-key, and proxy-only modes"
+    },
+    {
+      "path": "service credentials",
+      "about": "Set OAuth client credentials for a service's provider"
+    },
+    {
+      "path": "service delete",
+      "about": "Delete a service"
+    },
+    {
+      "path": "service list",
+      "about": "List user's configured services"
+    },
+    {
+      "path": "service rotate-credential",
+      "about": "Rotate external credential for a service"
+    },
+    {
+      "path": "service route",
+      "about": "Change service routing (node or direct)"
+    },
+    {
+      "path": "service scopes",
+      "about": "Manage OAuth scopes on an existing connection (re-authorize with a new scope set). Opens the browser wizard seeded with the connection's current scopes; the upstream provider re-consents"
+    },
+    {
+      "path": "service show",
+      "about": "Show service details"
+    },
+    {
+      "path": "service update",
+      "about": "Update service configuration"
+    },
+    {
+      "path": "service-account create",
+      "about": "Create a service account (machine identity for `grant_type=client_credentials`)"
+    },
+    {
+      "path": "service-account delete",
+      "about": "Delete a service account (soft-delete + token revocation)"
+    },
+    {
+      "path": "service-account list",
+      "about": "List service accounts"
+    },
+    {
+      "path": "service-account revoke-tokens",
+      "about": "Revoke all active tokens for a service account"
+    },
+    {
+      "path": "service-account rotate-secret",
+      "about": "Rotate the service account's client secret (revokes existing tokens)"
+    },
+    {
+      "path": "service-account show",
+      "about": "Show service account details"
+    },
+    {
+      "path": "service-account update",
+      "about": "Update service account metadata"
+    },
+    {
+      "path": "session list",
+      "about": "List active sessions"
+    },
+    {
+      "path": "ssh config",
+      "about": "Print an OpenSSH config stanza"
+    },
+    {
+      "path": "ssh exec",
+      "about": "Execute a command on a remote host via SSH"
+    },
+    {
+      "path": "ssh issue-cert",
+      "about": "Issue a short-lived SSH certificate"
+    },
+    {
+      "path": "ssh proxy",
+      "about": "Open an SSH-over-WebSocket tunnel (ProxyCommand)"
+    },
+    {
+      "path": "ssh terminal",
+      "about": "Open an interactive SSH terminal"
+    },
+    {
+      "path": "status",
+      "about": "Show account overview (services, keys, nodes)"
+    },
+    {
+      "path": "telemetry disable",
+      "about": "Opt out: persist `{enabled=false, asked=true}` and clear the local anon UUID so a future re-enable starts fresh"
+    },
+    {
+      "path": "telemetry enable",
+      "about": "Opt in: persist `{enabled=true, asked=true}` to config"
+    },
+    {
+      "path": "telemetry status",
+      "about": "Print the resolved consent state and its source"
+    },
+    {
+      "path": "trigger create",
+      "about": "Create an inbound trigger"
+    },
+    {
+      "path": "trigger delete",
+      "about": "Delete a trigger"
+    },
+    {
+      "path": "trigger deliveries",
+      "about": "List webhook delivery records"
+    },
+    {
+      "path": "trigger list",
+      "about": "List triggers"
+    },
+    {
+      "path": "trigger redeliver",
+      "about": "Redeliver a retained webhook event"
+    },
+    {
+      "path": "trigger rotate-delivery-secret",
+      "about": "Rotate the outbound webhook signing secret"
+    },
+    {
+      "path": "trigger rotate-secret",
+      "about": "Rotate the inbound secret"
+    },
+    {
+      "path": "trigger show",
+      "about": "Show trigger details"
+    },
+    {
+      "path": "trigger update",
+      "about": "Update a trigger"
+    },
+    {
+      "path": "update",
+      "about": "Update the CLI and installed skills"
+    },
+    {
+      "path": "verify-email",
+      "about": "Verify email address with token"
+    },
+    {
+      "path": "whoami",
+      "about": "Show current user info"
+    }
+  ]
+}

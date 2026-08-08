@@ -255,6 +255,7 @@ check_workflow_core_interaction_boundary
 
 bash tools/ci/aevatar_oauth_client_es_acl_guard.sh
 bash tools/ci/static_service_activation_guard.sh || exit $?
+bash tools/ci/nyxid_conformance_guard.sh
 
 # Refactor (iter158/cluster-001): stream-RPC outcome abstractions were deleted in PR #1165.
 # Do not reintroduce stream subscribe + first-outcome wait abstractions as an RPC reply path.
