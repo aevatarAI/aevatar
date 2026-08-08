@@ -70,6 +70,135 @@ public sealed class ManagedServiceApiSkillDiscoveryServiceTests
         result.ReliableSkill.Guid.Should().Be("skill-b");
     }
 
+    [Fact]
+    public async Task DiscoverAsync_ShouldRejectUnsupportedPolicyBeforeReadingCatalogue()
+    {
+        var request = Request();
+        request.Input.ManagedDiscoveryPolicyVersion = "service_api_skill_discovery.v2";
+        var catalogue = new StubCataloguePort();
+        var service = new ManagedServiceApiSkillDiscoveryService(
+            catalogue,
+            new StubRanker((_, _) => throw new InvalidOperationException("Ranking should not run.")),
+            new StubVerifier(_ => throw new InvalidOperationException("Verification should not run.")));
+
+        Func<Task> act = async () => await service.DiscoverAsync(request);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*policy is unsupported*");
+        catalogue.RequestedPages.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_ShouldReturnNoMatchForEmptyCatalogue()
+    {
+        var catalogue = new StubCataloguePort(new ServiceApiSkillCataloguePage
+        {
+            Page = 1,
+            PageSize = 100,
+            Total = 0,
+            TotalPages = 0,
+        });
+        var service = new ManagedServiceApiSkillDiscoveryService(
+            catalogue,
+            new StubRanker((_, _) => throw new InvalidOperationException("Ranking should not run.")),
+            new StubVerifier(_ => throw new InvalidOperationException("Verification should not run.")));
+
+        var result = await service.DiscoverAsync(Request());
+
+        result.NoReliableApiSkill.Reason.Should().Be(ServiceApiNoReliableSkillReason.NoMatchingSkill);
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_ShouldRejectRankerResultWithoutOutcome()
+    {
+        var service = new ManagedServiceApiSkillDiscoveryService(
+            new StubCataloguePort(Page(1, 1, Candidate("skill-a", "alpha-service-api"))),
+            new StubRanker((_, _) => new ManagedCodexServiceApiSkillDiscoveryResult()),
+            new StubVerifier(_ => throw new InvalidOperationException("Verification should not run.")));
+
+        Func<Task> act = async () => await service.DiscoverAsync(Request());
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*ranking returned no result*");
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_ShouldReturnLastRejectionAfterAllCandidatesAreExcluded()
+    {
+        var service = new ManagedServiceApiSkillDiscoveryService(
+            new StubCataloguePort(Page(1, 1, Candidate("skill-a", "alpha-service-api"))),
+            new StubRanker((request, _) => Reliable(
+                request.CatalogueCandidates.Single().Guid,
+                request.CatalogueCandidates.Single().CanonicalName)),
+            new StubVerifier(_ => ExactServiceApiSkillVerificationResult.Rejected(
+                ServiceApiNoReliableSkillReason.RequestShapeAdmissionRejected)));
+
+        var result = await service.DiscoverAsync(Request());
+
+        result.NoReliableApiSkill.Reason.Should()
+            .Be(ServiceApiNoReliableSkillReason.RequestShapeAdmissionRejected);
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_ShouldRejectInvalidCataloguePagination()
+    {
+        var invalidPage = Page(1, 1, Candidate("skill-a", "alpha-service-api"));
+        invalidPage.Page = 2;
+        var service = new ManagedServiceApiSkillDiscoveryService(
+            new StubCataloguePort(invalidPage),
+            new StubRanker((_, _) => throw new InvalidOperationException("Ranking should not run.")),
+            new StubVerifier(_ => throw new InvalidOperationException("Verification should not run.")));
+
+        Func<Task> act = async () => await service.DiscoverAsync(Request());
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*catalogue pagination is invalid*");
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_ShouldRejectInvalidCatalogueCandidate()
+    {
+        var service = new ManagedServiceApiSkillDiscoveryService(
+            new StubCataloguePort(Page(1, 1, Candidate(" ", "alpha-service-api"))),
+            new StubRanker((_, _) => throw new InvalidOperationException("Ranking should not run.")),
+            new StubVerifier(_ => throw new InvalidOperationException("Verification should not run.")));
+
+        Func<Task> act = async () => await service.DiscoverAsync(Request());
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*invalid candidate inventory*");
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_ShouldRejectIncompleteAuthoritativeCatalogue()
+    {
+        var incompletePage = Page(1, 1, Candidate("skill-a", "alpha-service-api"));
+        incompletePage.Total = 2;
+        var service = new ManagedServiceApiSkillDiscoveryService(
+            new StubCataloguePort(incompletePage),
+            new StubRanker((_, _) => throw new InvalidOperationException("Ranking should not run.")),
+            new StubVerifier(_ => throw new InvalidOperationException("Verification should not run.")));
+
+        Func<Task> act = async () => await service.DiscoverAsync(Request());
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*did not exhaust the authoritative result set*");
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_ShouldRejectCandidateOutsideAuthoritativeCatalogue()
+    {
+        var service = new ManagedServiceApiSkillDiscoveryService(
+            new StubCataloguePort(Page(1, 1, Candidate("skill-a", "alpha-service-api"))),
+            new StubRanker((_, _) => Reliable("skill-outside", "outside-service-api")),
+            new StubVerifier(_ => throw new InvalidOperationException("Verification should not run.")));
+
+        Func<Task> act = async () => await service.DiscoverAsync(Request());
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*outside the authoritative catalogue inventory*");
+    }
+
     private static ManagedCodexServiceApiSkillDiscoveryRequest Request() =>
         new(
             new ExternalWorkflowCapabilityAccessContext(
@@ -170,8 +299,9 @@ public sealed class ManagedServiceApiSkillDiscoveryServiceTests
             ServiceApiSkillCataloguePageRequest request,
             CancellationToken cancellationToken = default)
         {
+            var responseIndex = RequestedPages.Count;
             RequestedPages.Add(request.Page);
-            return Task.FromResult(pages.Single(page => page.Page == request.Page).Clone());
+            return Task.FromResult(pages[responseIndex].Clone());
         }
     }
 

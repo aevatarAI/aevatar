@@ -1,8 +1,10 @@
 using System.Net;
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Text.Json.Nodes;
 using Aevatar.AI.Abstractions.CodexExecution;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.Ornn;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.Credentials.Testing;
@@ -51,13 +53,102 @@ public sealed class ManagedServiceApiSkillDiscoveryInfrastructureTests
     }
 
     [Fact]
+    public async Task CataloguePort_ShouldMapAuthoritativeOrnnPageThroughSourceBearer()
+    {
+        var handler = new CatalogueApiHandler("""
+            {
+              "data": {
+                "total": 2,
+                "totalPages": 2,
+                "page": 2,
+                "pageSize": 100,
+                "items": [
+                  {
+                    "guid": "skill-beta",
+                    "name": "beta-service-api",
+                    "description": "Beta Service API skill"
+                  }
+                ]
+              }
+            }
+            """);
+        var port = CreateCataloguePort(handler);
+
+        var result = await port.ReadPageAsync(new ServiceApiSkillCataloguePageRequest(
+            Access(),
+            "send a message",
+            2,
+            100));
+
+        result.Page.Should().Be(2);
+        result.PageSize.Should().Be(100);
+        result.Total.Should().Be(2);
+        result.TotalPages.Should().Be(2);
+        result.Candidates.Should().ContainSingle().Which.Should().BeEquivalentTo(
+            new ServiceApiSkillCatalogueCandidate
+            {
+                Guid = "skill-beta",
+                CanonicalName = "beta-service-api",
+                Description = "Beta Service API skill",
+            });
+        var request = handler.Requests.Should().ContainSingle().Subject;
+        request.Headers.Authorization.Should().NotBeNull();
+        request.Headers.Authorization!.Scheme.Should().Be("Bearer");
+        request.Headers.Authorization.Parameter.Should().Be("runtime-caller-credential");
+        request.RequestUri!.AbsoluteUri.Should().Be(
+            "https://nyx.example/api/v1/proxy/s/ornn-api/api/v1/skill-search?query=send%20a%20message&mode=keyword&scope=mixed&page=2&pageSize=100");
+    }
+
+    [Fact]
+    public async Task CataloguePort_ShouldRejectMissingSourceReadableBearer()
+    {
+        var handler = new CatalogueApiHandler("""{ "data": { "items": [] } }""");
+        var port = CreateCataloguePort(handler);
+
+        Func<Task> act = async () => await port.ReadPageAsync(new ServiceApiSkillCataloguePageRequest(
+            new ExternalWorkflowCapabilityAccessContext("scope-alpha", "caller-alpha"),
+            "send a message",
+            1,
+            100));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*source-readable NyxID caller credential*");
+        handler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CataloguePort_ShouldFailClosedWhenOrnnSearchReturnsError()
+    {
+        var handler = new CatalogueApiHandler(
+            """{ "error": "upstream failed" }""",
+            HttpStatusCode.InternalServerError);
+        var port = CreateCataloguePort(handler);
+
+        Func<Task> act = async () => await port.ReadPageAsync(new ServiceApiSkillCataloguePageRequest(
+            Access(),
+            "send a message",
+            1,
+            100));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("Ornn skill catalogue discovery failed.");
+    }
+
+    [Fact]
     public async Task ManagedExecutor_ShouldUseManagedSandboxAndStrictlyDecodeStdout()
     {
-        var codex = new StubCodexExecutionPort(CompletedManagedOutput());
+        var rankingInput = RankingInput();
+        rankingInput.DiscoveryInput.CallerId = " ";
+        rankingInput.DiscoveryInput.DescriptorInventory.AddRange(PromptDescriptors());
+        rankingInput.ExcludedCandidates.Add(Candidate());
+        var codex = new StubCodexExecutionPort(
+            CodexExecutionEvent.Started(),
+            CodexExecutionEvent.Output("ignored streaming output"),
+            CodexExecutionEvent.Completed(new CodexExecutionResult(CompletedManagedOutput())));
         var executor = new ManagedCodexServiceApiSkillDiscoveryExecutor([codex]);
 
         var result = await executor.DiscoverAsync(
-            new ManagedCodexServiceApiSkillRankingRequest(Access(), RankingInput()));
+            new ManagedCodexServiceApiSkillRankingRequest(Access(), rankingInput));
 
         result.ResultCase.Should().Be(ManagedCodexServiceApiSkillDiscoveryResult.ResultOneofCase.ReliableSkill);
         result.ReliableSkill.Guid.Should().Be(SkillGuid);
@@ -71,7 +162,139 @@ public sealed class ManagedServiceApiSkillDiscoveryInfrastructureTests
             "caller-alpha"));
         codex.LastRequest.Prompt.Should().Contain("service_api_skill_discovery.v1");
         codex.LastRequest.Prompt.Should().Contain("ornn-api");
+        codex.LastRequest.Prompt.Should().Contain("NyxIdOperation");
+        codex.LastRequest.Prompt.Should().Contain("NyxIdRequest");
+        codex.LastRequest.Prompt.Should().Contain("excluded_candidates");
         codex.LastRequest.Prompt.Should().NotContain("runtime-caller-credential");
+
+        var typedInputMarker = "Typed input:" + Environment.NewLine;
+        var typedInputStart = codex.LastRequest.Prompt.IndexOf(typedInputMarker, StringComparison.Ordinal);
+        typedInputStart.Should().BeGreaterThanOrEqualTo(0);
+        var typedInput = JsonNode.Parse(
+            codex.LastRequest.Prompt[(typedInputStart + typedInputMarker.Length)..])!.AsObject();
+        var descriptors = typedInput["descriptor_inventory"]!.AsArray();
+        descriptors.Should().HaveCount(3);
+        descriptors[0]!["nyx_id_operation"]!["endpoint_id"]!.GetValue<string>()
+            .Should().Be("send-message");
+        descriptors[1]!["nyx_id_request"]!["path_template"]!.GetValue<string>()
+            .Should().Be("/v1/messages/{message_id}");
+        descriptors[1]!["nyx_id_request"]!["query_parameters"]!.AsArray()
+            .Select(static item => item!.GetValue<string>())
+            .Should().Equal("hard");
+        var excluded = typedInput["excluded_candidates"]!.AsArray();
+        excluded.Should().ContainSingle();
+        excluded[0]!["guid"]!.GetValue<string>().Should().Be(SkillGuid);
+    }
+
+    [Fact]
+    public void ManagedExecutor_ShouldRequireExactlyOneManagedSandboxPort()
+    {
+        var nonManaged = new StubCodexExecutionPort(
+            CodexExecutionTarget.TargetOneofCase.PrivateSsh,
+            CodexExecutionEvent.Started());
+
+        var noManaged = () => new ManagedCodexServiceApiSkillDiscoveryExecutor([nonManaged]);
+        var multipleManaged = () => new ManagedCodexServiceApiSkillDiscoveryExecutor(
+            [new StubCodexExecutionPort(CompletedManagedOutput()), new StubCodexExecutionPort(CompletedManagedOutput())]);
+
+        noManaged.Should().Throw<InvalidOperationException>()
+            .WithMessage("Exactly one managed Codex execution port*");
+        multipleManaged.Should().Throw<InvalidOperationException>()
+            .WithMessage("Exactly one managed Codex execution port*");
+    }
+
+    [Fact]
+    public async Task ManagedExecutor_ShouldRejectMissingCompletion()
+    {
+        var executor = new ManagedCodexServiceApiSkillDiscoveryExecutor(
+            [new StubCodexExecutionPort(CodexExecutionEvent.Started())]);
+
+        Func<Task> act = async () => await executor.DiscoverAsync(
+            new ManagedCodexServiceApiSkillRankingRequest(Access(), RankingInput()));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*did not return a completion result*");
+    }
+
+    [Fact]
+    public async Task ManagedExecutor_ShouldRejectNullOrDuplicateCompletion()
+    {
+        var nullCompletion = new ManagedCodexServiceApiSkillDiscoveryExecutor(
+            [new StubCodexExecutionPort(new CodexExecutionEvent(CodexExecutionEventKind.Completed))]);
+        var duplicateCompletion = new ManagedCodexServiceApiSkillDiscoveryExecutor(
+            [new StubCodexExecutionPort(
+                CodexExecutionEvent.Completed(new CodexExecutionResult(CompletedManagedOutput())),
+                CodexExecutionEvent.Completed(new CodexExecutionResult(CompletedManagedOutput())))]);
+
+        Func<Task> nullAct = async () => await nullCompletion.DiscoverAsync(
+            new ManagedCodexServiceApiSkillRankingRequest(Access(), RankingInput()));
+        Func<Task> duplicateAct = async () => await duplicateCompletion.DiscoverAsync(
+            new ManagedCodexServiceApiSkillRankingRequest(Access(), RankingInput()));
+
+        await nullAct.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*invalid terminal stream*");
+        await duplicateAct.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*invalid terminal stream*");
+    }
+
+    [Fact]
+    public async Task ManagedExecutor_ShouldPropagateTypedManagedFailure()
+    {
+        var failure = new CodexExecutionFailure(
+            CodexExecutionFailureKind.CapacityUnavailable,
+            "managed-capacity-unavailable",
+            "Managed capacity is unavailable.");
+        var executor = new ManagedCodexServiceApiSkillDiscoveryExecutor(
+            [new StubCodexExecutionPort(CodexExecutionEvent.Failed(failure))]);
+
+        Func<Task> act = async () => await executor.DiscoverAsync(
+            new ManagedCodexServiceApiSkillRankingRequest(Access(), RankingInput()));
+
+        var exception = await act.Should().ThrowAsync<CodexExecutionException>();
+        exception.Which.Failure.Should().Be(failure);
+    }
+
+    [Fact]
+    public async Task ManagedExecutor_ShouldUseStableFailureWhenTerminalFailureOmitsDetails()
+    {
+        var executor = new ManagedCodexServiceApiSkillDiscoveryExecutor(
+            [new StubCodexExecutionPort(new CodexExecutionEvent(CodexExecutionEventKind.Failed))]);
+
+        Func<Task> act = async () => await executor.DiscoverAsync(
+            new ManagedCodexServiceApiSkillRankingRequest(Access(), RankingInput()));
+
+        var exception = await act.Should().ThrowAsync<CodexExecutionException>();
+        exception.Which.Failure.Code.Should().Be("managed_service_api_skill_discovery_failed");
+    }
+
+    [Fact]
+    public async Task ManagedExecutor_ShouldRejectUnsupportedStreamEvent()
+    {
+        var executor = new ManagedCodexServiceApiSkillDiscoveryExecutor(
+            [new StubCodexExecutionPort(new CodexExecutionEvent(CodexExecutionEventKind.Unspecified))]);
+
+        Func<Task> act = async () => await executor.DiscoverAsync(
+            new ManagedCodexServiceApiSkillRankingRequest(Access(), RankingInput()));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*unsupported event*");
+    }
+
+    [Fact]
+    public async Task ManagedExecutor_ShouldRejectMissingNativeCallerIdentity()
+    {
+        var input = RankingInput();
+        input.DiscoveryInput.CallerId = " ";
+        var executor = new ManagedCodexServiceApiSkillDiscoveryExecutor(
+            [new StubCodexExecutionPort(CompletedManagedOutput())]);
+
+        Func<Task> act = async () => await executor.DiscoverAsync(
+            new ManagedCodexServiceApiSkillRankingRequest(
+                new ExternalWorkflowCapabilityAccessContext("scope-alpha", " "),
+                input));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*native NyxID caller identity*");
     }
 
     [Fact]
@@ -222,6 +445,46 @@ public sealed class ManagedServiceApiSkillDiscoveryInfrastructureTests
         return input;
     }
 
+    private static IEnumerable<ExternalWorkflowCapabilityDescriptor> PromptDescriptors()
+    {
+        yield return new ExternalWorkflowCapabilityDescriptor
+        {
+            DisplayName = "Send by operation",
+            ReadOnly = false,
+            Selector = new ExternalWorkflowCapabilitySelector
+            {
+                NyxIdOperation = new NyxIdOperationSelector
+                {
+                    UserServiceId = TargetUserServiceId,
+                    EndpointId = "send-message",
+                },
+            },
+        };
+        yield return new ExternalWorkflowCapabilityDescriptor
+        {
+            DisplayName = "Send by request",
+            Destructive = true,
+            Selector = new ExternalWorkflowCapabilitySelector
+            {
+                NyxIdRequest = new NyxIdRequestSelector
+                {
+                    UserServiceId = TargetUserServiceId,
+                    Method = NyxIdRequestMethod.Delete,
+                    PathTemplate = "/v1/messages/{message_id}",
+                    QueryParameters = { "hard" },
+                    HeaderParameters = { "If-Match" },
+                    BodyMode = NyxIdRequestBodyMode.None,
+                    ResponseMode = NyxIdRequestResponseMode.Text,
+                    Risk = NyxIdOperationRisk.Destructive,
+                },
+            },
+        };
+        yield return new ExternalWorkflowCapabilityDescriptor
+        {
+            DisplayName = "Unselected descriptor",
+        };
+    }
+
     private static ReliableServiceApiSkillCandidate Candidate()
     {
         var candidate = new ReliableServiceApiSkillCandidate
@@ -325,21 +588,46 @@ public sealed class ManagedServiceApiSkillDiscoveryInfrastructureTests
         });
     }
 
-    private sealed class StubCodexExecutionPort(string output) : ICodexExecutionPort
+    private sealed class StubCodexExecutionPort : ICodexExecutionPort
     {
+        private readonly IReadOnlyList<CodexExecutionEvent> _events;
+
+        public StubCodexExecutionPort(string output)
+            : this(
+                CodexExecutionTarget.TargetOneofCase.ManagedSandbox,
+                CodexExecutionEvent.Started(),
+                CodexExecutionEvent.Completed(new CodexExecutionResult(output)))
+        {
+        }
+
+        public StubCodexExecutionPort(params CodexExecutionEvent[] events)
+            : this(CodexExecutionTarget.TargetOneofCase.ManagedSandbox, events)
+        {
+        }
+
+        public StubCodexExecutionPort(
+            CodexExecutionTarget.TargetOneofCase targetKind,
+            params CodexExecutionEvent[] events)
+        {
+            TargetKind = targetKind;
+            _events = events;
+        }
+
         public CodexExecutionRequest? LastRequest { get; private set; }
 
-        public CodexExecutionTarget.TargetOneofCase TargetKind =>
-            CodexExecutionTarget.TargetOneofCase.ManagedSandbox;
+        public CodexExecutionTarget.TargetOneofCase TargetKind { get; }
 
         public async IAsyncEnumerable<CodexExecutionEvent> ExecuteAsync(
             CodexExecutionRequest request,
             [EnumeratorCancellation] CancellationToken ct = default)
         {
             LastRequest = request;
-            yield return CodexExecutionEvent.Started();
-            await Task.Yield();
-            yield return CodexExecutionEvent.Completed(new CodexExecutionResult(output));
+            foreach (var item in _events)
+            {
+                ct.ThrowIfCancellationRequested();
+                await Task.Yield();
+                yield return item;
+            }
         }
     }
 
@@ -393,6 +681,44 @@ public sealed class ManagedServiceApiSkillDiscoveryInfrastructureTests
                 clone.Headers.TryAddWithoutValidation(header.Key, header.Value);
             return clone;
         }
+    }
+
+    private sealed class CatalogueApiHandler(
+        string content,
+        HttpStatusCode statusCode = HttpStatusCode.OK) : HttpMessageHandler
+    {
+        public List<HttpRequestMessage> Requests { get; } = [];
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            Requests.Add(CloneRequest(request));
+            return Task.FromResult(new HttpResponseMessage(statusCode)
+            {
+                Content = new StringContent(content, Encoding.UTF8, "application/json"),
+            });
+        }
+
+        private static HttpRequestMessage CloneRequest(HttpRequestMessage request)
+        {
+            var clone = new HttpRequestMessage(request.Method, request.RequestUri);
+            foreach (var header in request.Headers)
+                clone.Headers.TryAddWithoutValidation(header.Key, header.Value);
+            return clone;
+        }
+    }
+
+    private static OrnnServiceApiSkillCataloguePort CreateCataloguePort(CatalogueApiHandler handler)
+    {
+        var nyxIdClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
+            new HttpClient(handler),
+            null);
+        return new OrnnServiceApiSkillCataloguePort(
+            new OrnnSkillClient(
+                new OrnnOptions { NyxIdSlug = "ornn-api" },
+                nyxIdClient));
     }
 
     private static string DetailJson(string hash) =>
