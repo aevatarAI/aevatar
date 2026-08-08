@@ -47,6 +47,13 @@ public sealed class NyxIdToolOptions
     /// </summary>
     public bool EnableManagedCodexExecTool { get; set; }
 
+    /// <summary>
+    /// Enables request-local connected-service effect tools only after the host has durable,
+    /// actor-owned selector, dispatch, idempotency, and receipt persistence. Safe reads do not
+    /// depend on this rollout gate.
+    /// </summary>
+    public bool EnableAssistantConnectedServiceEffects { get; set; }
+
     public NyxIdManagedWorkflowAdmissionMode ManagedWorkflowAdmissionMode { get; set; } =
         NyxIdManagedWorkflowAdmissionMode.Shadow;
 

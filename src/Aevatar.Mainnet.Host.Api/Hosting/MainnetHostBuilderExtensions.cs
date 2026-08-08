@@ -458,10 +458,11 @@ public static class MainnetHostBuilderExtensions
                 AgentProfilePolicies.NyxIdChatRouteToolSet,
                 [
                     CreateToolSource<NyxIdAssistantToolSource>,
+                    CreateToolSource<NyxIdConnectedServiceToolSource>,
                     CreateToolSource<AskUserAgentToolSource>,
                     CreateToolSource<SkillsAgentToolSource>,
                 ],
-                "Pinned NyxID Assistant route: safe management reads, readiness, typed user input, and explicit skill loading only.");
+                "Pinned NyxID Assistant route: safe management reads, admitted request-local connected-service operations, readiness, typed user input, and explicit skill loading only.");
         });
 
         return builder;

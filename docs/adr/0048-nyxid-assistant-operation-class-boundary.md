@@ -43,11 +43,15 @@ The generic `nyxid_proxy` remains excluded from NyxID Assistant. Class-P tools a
 
 `user_service_id + endpoint_id + catalog_digest`
 
-Slug, HTTP method/path, display name, tool name, or model-supplied metadata cannot replace any member of the tuple. The final typed schema shown to the model and the terminal dispatch must refer to the same frozen admitted operation.
+Slug, HTTP method/path, display name, tool name, or model-supplied metadata cannot replace any member of the tuple. The request-local authority additionally freezes the canonical operation-contract digest, so a catalog revision and an operation-contract revision are checked independently. The final typed schema shown to the model and the terminal dispatch must refer to the same frozen admitted operation.
 
 R/A route tools and P admitted operation tools are distinct sets. A host or profile may compose both for one turn, but registration of one set never implies exposure of the other.
 
 Milestone 40 uses **request-local dynamic operation tools** as the only canonical model-visible Class-P selection contract. For every operation admitted by the server-owned exposure policy, Aevatar generates one bounded tool schema and one opaque request-local tool name. The server resolves that name to the frozen selector, catalog digest, schema, risk, and argument contract before dispatch; the model cannot provide or rewrite any selector member. A fixed `search_connected_service_operations` plus `invoke_connected_service_operation(candidate_ref)` pair is non-canonical for this milestone and must not be added as a parallel selection path.
+
+Milestone 40 owns a closed exposure policy rather than treating every MCP entry as model authority. A current exact service must also be active and credential-allowed in the caller's inventory. `GET/HEAD/OPTIONS` operations are exposed as safe reads without local approval; `POST/PUT/PATCH` are exposed only as non-destructive effects that enter the canonical approval port; `DELETE`, generic proxy entries, unknown risks, invalid schemas, and policy contradictions are not exposed. The policy is server-sealed and cannot be widened by prompt, profile text, tool arguments, or catalog labels.
+
+Read and effect outcomes remain different contracts. A read response becomes a maximum-16-KiB typed projection with bounded service/operation provenance labels and an explicit `untrusted_external_data_only` instruction boundary; the upstream body itself is not returned as an untyped tool result. An effect returns a typed receipt projection and the provider-owned `AgentToolReceipt`; provider response bodies are not evidence and are not forwarded as the effect result.
 
 ### Special controls that are not normal Class-A actions
 

@@ -67,11 +67,13 @@ Aevatar 记录真实 observation time 作为 freshness fact，但不把时间戳
 
 `nyxid_service_update.openapi_spec_url` 复用 NyxID 已发布的 exact UserService update wire：省略表示保持不变，非空字符串设置 override，空字符串 `""` 清除 override。设置或清除只改变 NyxID 权威的 effective contract，不让 Aevatar 成为 OpenAPI owner。
 
-NyxID `contract_version=1.0` 尚未发布等价于历史 `x-aevatar-tool` 的 typed current-turn exposure policy。Aevatar 因此 fail closed：不生成 operation tool，也不暴露 arbitrary method/path surface。生产路径不存在 `nyxid_service_request`、`nyxid_service_operation__*` 或 raw OpenAPI parser。workflow admission 通过不能自动扩大普通 turn exposure。
+NyxID `contract_version=1.0` 没有发布独立的 typed current-turn exposure policy。Milestone 40 因此采用 Aevatar-owned、server-sealed closed policy，而不是把 MCP catalog 整体当成授权：只有同时存在于本次 active、credential-allowed exact inventory 的 UserService 才进入候选；`GET/HEAD/OPTIONS` 作为 safe read 暴露，`POST/PUT/PATCH` 只作为必须经过统一 approval port 的 non-destructive effect 暴露，`DELETE`、generic proxy、unknown risk 和 policy/schema contradiction 全部 fail closed。生产路径仍不存在 model-visible generic proxy、raw method/path selector 或 raw OpenAPI parser；workflow admission 通过也不能自动扩大普通 turn exposure。
 
-当 typed exposure policy 落地后，Milestone 40 的唯一 model-visible Class-P contract 是 request-local dynamic operation tools：每个 server-admitted operation 对应一个 bounded schema 和 opaque request-local tool name，并在服务端映射回同一份冻结 selector/digest/risk/argument contract。`search_connected_service_operations + invoke_connected_service_operation(candidate_ref)` 不属于本里程碑，不得作为第二条选择链路并存。
+Milestone 40 的唯一 model-visible Class-P contract 是 request-local dynamic operation tools：每个 server-admitted operation 对应一个 bounded argument-only schema 和 opaque request-local tool name，并在服务端映射回同一份冻结 `user_service_id + endpoint_id + catalog_digest + canonical operation digest`、risk 与 argument contract。模型参数不得包含 service/endpoint/catalog selector。`search_connected_service_operations + invoke_connected_service_operation(candidate_ref)` 不属于本里程碑，不得作为第二条选择链路并存。
 
-current-turn discovery 仍 request-locally 读取并解析 MCP catalog，以验证 shared adapter 与记录 bounded diagnostics；MCP discovery 不可用时，四个只依赖 `/keys` authority 的管理工具仍可用。`/keys` discovery 本身失败、无 caller token、无有效实例或 identity conflict 时不暴露这些工具。
+current-turn discovery request-locally 读取并解析 MCP catalog，与 `/keys` exact inventory 求交后生成 operation tool，并只记录 bounded diagnostics/count。MCP 或 `/keys` discovery 不可用、无 caller token、无有效实例或 identity conflict 时，Class-P surface 为空；管理 surface 不作为 fallback。
+
+read operation 的 terminal 结果固定投影为 `connected_service_read_projection`：最多接收 16 KiB upstream text，携带 bounded service/operation provenance、`content_boundary=untrusted_external_data_only` 与 `instructions_allowed=false`，外部字符串始终只是 data。effect operation 固定投影为 `connected_service_effect_receipt` 并携带 provider-owned typed receipt；read projection 与 effect receipt 不共用结果 shape，upstream effect body 不进入模型或 durable result。
 
 ## 4. Workflow authoring 与 admission
 
@@ -114,7 +116,7 @@ Studio authoring 在 exact descriptor 缺失时不再把“当前不可运行”
 
 Dynamic exposure、workflow definition admission 与 runtime authorization 是三个独立 policy；authoring draft 位于这些授权 policy 之前，不授予执行权限：
 
-1. **Current-turn exposure**：缺 NyxID typed exposure policy，因此 operation 数量为零。
+1. **Current-turn exposure**：由上述 Aevatar-owned closed policy 对当前 exact MCP + inventory observation 做 request-local admission；catalog entry 本身不自动获得 exposure。
 2. **Workflow definition admission**：MCP resolves only `PublishedEndpoint`; exact inventory plus authenticated binder grant resolves `AuthoredRequest`.
 3. **Runtime authorization**：managed workflow accepts only its committed call-site proof and matching authored-request grant. Durable additionally requires exact-service catalog authorization plus the schedule operation-authorization gate; `READ_ONLY` remains limited to GET/HEAD/OPTIONS, while `WRITE` and `DESTRUCTIVE` requests keep their admitted risk in the proof.
 

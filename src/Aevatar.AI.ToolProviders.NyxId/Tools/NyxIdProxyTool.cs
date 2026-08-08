@@ -485,6 +485,16 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
             "runtime",
             TimeProvider.System.GetUtcNow(),
             TimeSpan.FromMinutes(5));
+        if (!string.IsNullOrWhiteSpace(admission.CatalogDigest) &&
+            !string.Equals(
+                catalog.Source.ContentDigest,
+                admission.CatalogDigest,
+                StringComparison.Ordinal))
+        {
+            return new NyxIdOperationRequestFailure(
+                "NYXID_OPERATION_CATALOG_DRIFT",
+                "The live NyxID operation catalog no longer matches the admitted revision.");
+        }
         var service = catalog.Services.SingleOrDefault(candidate =>
             string.Equals(candidate.UserServiceId, admission.ServiceInstanceId, StringComparison.Ordinal));
         if (service is null)

@@ -41,6 +41,15 @@ public interface IAgentToolOperationReconciler
         CancellationToken ct = default);
 }
 
+/// <summary>
+/// Request-local tools use this contract to seal the exact external operation admission that
+/// their opaque model-visible name resolves to. The caller supplies argument values only.
+/// </summary>
+public interface IAgentToolOperationAdmissionOwner
+{
+    AgentToolOperationAdmission OperationAdmission { get; }
+}
+
 /// <summary>Agent 可调用工具接口。LLM 通过 tool_call 触发执行。</summary>
 public interface IAgentTool
 {

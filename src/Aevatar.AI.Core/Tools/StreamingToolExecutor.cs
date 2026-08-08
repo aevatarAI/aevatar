@@ -106,8 +106,15 @@ public sealed class StreamingToolExecutor
         {
             ct.ThrowIfCancellationRequested();
             var frozenCall = CloneToolCall(toolCall);
-            var callContext = baseContext.WithCallId(frozenCall.Id);
             var tool = _tools.Get(frozenCall.Name);
+            var callContext = baseContext.WithCallId(frozenCall.Id);
+            if (tool is IAgentToolOperationAdmissionOwner admissionOwner)
+            {
+                callContext = callContext with
+                {
+                    OperationAdmission = admissionOwner.OperationAdmission,
+                };
+            }
             AgentToolReplayPolicy replayPolicy;
             using (AgentToolContextScope.Push(callContext))
             {

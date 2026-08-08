@@ -17,7 +17,8 @@ public sealed record AgentToolOperationAdmission(
     IReadOnlyList<AgentToolOperationParameter> Parameters,
     AgentToolOperationRequestBody? RequestBody,
     AgentToolOperationResponsePolicy ResponsePolicy,
-    AgentToolOperationExecutionPolicy ExecutionPolicy)
+    AgentToolOperationExecutionPolicy ExecutionPolicy,
+    string CatalogDigest = "")
 {
     public IEnumerable<AgentToolOperationParameter> PathParameters =>
         Parameters.Where(static parameter => parameter.Location == AgentToolOperationParameterLocation.Path);
