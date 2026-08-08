@@ -423,6 +423,8 @@ public class WorkflowDefinitionCatalogTests
         allowed.Should().NotContain("ssh_exec");
         allowed.Should().NotContain("codex_exec");
         allowed.Should().NotContain("code_execute");
+        allowed.Should().NotContain("ornn_search_skills");
+        allowed.Should().NotContain("use_skill");
     }
 
     [Fact]

@@ -84,7 +84,7 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
     /// <c>RoleDefinition.AgentToolScope</c>, intersected with any step scope by the execution kernel →
     /// <c>ToolVisibility</c>). It INCLUDES Studio team/member/draft creation, web authoring research, member workflow binding,
     /// Studio managed-runtime-safe Aevatar invocation, <c>aevatar_provision_workflow_schedule</c> + the observe tools and EXCLUDES
-    /// both the Lark <c>scheduled_agent_creator</c>, unmanaged workflow starts, and the hanging loose-definition tools
+    /// direct Ornn skill discovery, the Lark <c>scheduled_agent_creator</c>, unmanaged workflow starts, and the hanging loose-definition tools
     /// (<c>workflow_create_def</c>/<c>update</c>/<c>read</c>/<c>list_defs</c>);
     /// the allowlist is the lever that keeps those out of the studio surface entirely (prompt steering alone is
     /// unreliable while a tool is visible).
@@ -443,8 +443,6 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
               - list_external_workflow_capabilities
               - inspect_external_workflow_capability_readiness
               - preview_workflow_explicit_requests
-              - ornn_search_skills
-              - use_skill
             tool_sets:
               - nyxid.connected_services
         steps:
