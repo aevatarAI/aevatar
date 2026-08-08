@@ -4165,7 +4165,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
     }
 
     [Fact]
-    public async Task TransientVaultFailure_ShouldRemainRecoverableUntilExpiry()
+    public async Task TransientVaultFailure_ShouldAutomaticallyRetryAndStartExactlyOnce()
     {
         const string conversationActorId = "conversation-alpha";
         var now = new MutableTimeProvider(
@@ -4194,6 +4194,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
             arranged,
             conversationActorId);
         vault.FailResolution = true;
+        now.Advance(TimeSpan.FromMinutes(29) + TimeSpan.FromSeconds(58));
         var before = await eventStore.GetEventsAsync(conversationActorId);
 
         await agent.HandleEventAsync(signal);
@@ -4202,18 +4203,26 @@ public sealed partial class NyxIdChatConversationGAgentTests
         agent.State.PendingSteeringContinuation.Should().NotBeNull();
         agent.State.ContinuationAdmission.Status.Should().Be(
             NyxIdChatContinuationAdmissionStatus.Accepted);
-        var expiry = callbacks.TimeoutRequests.Last(request =>
+        var retry = callbacks.TimeoutRequests.Last(request =>
             request.TriggerEnvelope.Payload.Is(
-                NyxIdChatPendingSteeringContinuationExpired.Descriptor));
-        now.Advance(TimeSpan.FromMinutes(30));
-        await agent.HandleEventAsync(expiry.TriggerEnvelope);
+                NyxIdChatPendingSteeringContinuationDispatchRequested.Descriptor));
+        retry.DueTime.Should().Be(TimeSpan.FromMilliseconds(1999),
+            "retry cadence must not extend the committed absolute expiry");
+        vault.FailResolution = false;
+        now.Advance(retry.DueTime);
+
+        await agent.HandleEventAsync(retry.TriggerEnvelope);
+        await agent.HandleEventAsync(retry.TriggerEnvelope.Clone());
+        await agent.HandleEventAsync(signal.Clone());
+
         agent.State.PendingSteeringContinuation.Should().BeNull();
         agent.State.ContinuationAdmission.Status.Should().Be(
-            NyxIdChatContinuationAdmissionStatus.Rejected);
+            NyxIdChatContinuationAdmissionStatus.Started);
+        dispatch.OperationCalls.Should().HaveCount(4);
     }
 
     [Fact]
-    public async Task ActivationWithoutVault_ShouldKeepContinuationParkedUntilExpiry()
+    public async Task MissingVault_ShouldAutomaticallyRetryAfterVaultIsRestored()
     {
         const string conversationActorId = "conversation-alpha";
         var now = new MutableTimeProvider(
@@ -4262,22 +4271,30 @@ public sealed partial class NyxIdChatConversationGAgentTests
 
         (await eventStore.GetEventsAsync(conversationActorId)).Should().HaveCount(before.Count);
         recovered.State.PendingSteeringContinuation.Should().NotBeNull();
-        var expiry = recoveryCallbacks.TimeoutRequests.Last(request =>
+        var retry = recoveryCallbacks.TimeoutRequests.Last(request =>
             request.TriggerEnvelope.Payload.Is(
-                NyxIdChatPendingSteeringContinuationExpired.Descriptor));
-        now.Advance(TimeSpan.FromMinutes(30));
-        await recovered.HandleEventAsync(expiry.TriggerEnvelope);
+                NyxIdChatPendingSteeringContinuationDispatchRequested.Descriptor));
+        retry.DueTime.Should().Be(TimeSpan.FromSeconds(5));
+        recovered.Services = initialServices;
+
+        await recovered.HandleEventAsync(retry.TriggerEnvelope);
+        await recovered.HandleEventAsync(retry.TriggerEnvelope.Clone());
+
         recovered.State.PendingSteeringContinuation.Should().BeNull();
         recovered.State.ContinuationAdmission.Status.Should().Be(
-            NyxIdChatContinuationAdmissionStatus.Rejected);
+            NyxIdChatContinuationAdmissionStatus.Started);
+        recoveryDispatch.OperationCalls.Should().ContainSingle();
     }
 
     [Fact]
-    public async Task StartCommitFailure_ShouldLeaveVaultedContinuationRecoverable()
+    public async Task StartCommitFailure_ShouldAutomaticallyRetryAndStartExactlyOnce()
     {
         const string conversationActorId = "conversation-alpha";
         var eventStore = new FailTurnStartEventStore(new InMemoryEventStoreForTests());
-        using var services = BuildEventSourcingServices(eventStore);
+        var callbacks = new RecordingRuntimeCallbackScheduler();
+        using var services = BuildEventSourcingServices(
+            eventStore,
+            callbackScheduler: callbacks);
         var dispatch = new RecordingActorDispatchPort([], static (_, _) => Task.CompletedTask);
         var agent = CreateController(services, conversationActorId, dispatch);
         await agent.ActivateAsync();
@@ -4299,8 +4316,14 @@ public sealed partial class NyxIdChatConversationGAgentTests
         agent.State.PendingSteeringContinuation.Should().NotBeNull();
         agent.State.ContinuationAdmission.Status.Should().Be(
             NyxIdChatContinuationAdmissionStatus.Accepted);
+        var retry = callbacks.TimeoutRequests.Last(request =>
+            request.TriggerEnvelope.Payload.Is(
+                NyxIdChatPendingSteeringContinuationDispatchRequested.Descriptor));
+        retry.DueTime.Should().Be(TimeSpan.FromSeconds(5));
         eventStore.FailTurnStart = false;
 
+        await agent.HandleEventAsync(retry.TriggerEnvelope);
+        await agent.HandleEventAsync(retry.TriggerEnvelope.Clone());
         await agent.HandleEventAsync(signal.Clone());
 
         agent.State.PendingSteeringContinuation.Should().BeNull();
