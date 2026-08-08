@@ -8,9 +8,13 @@ namespace Aevatar.Capabilities.Tests;
 public sealed class MainnetChatEndpointsTests
 {
     [Theory]
-    [InlineData("{}", "Workflow")]
-    [InlineData("{\"prompt\":\"hello\"}", "Workflow")]
+    [InlineData("{}", "ExternalWorkflowCompatibility")]
+    [InlineData("{\"prompt\":\"hello\"}", "ExternalWorkflowCompatibility")]
+    [InlineData("{\"workflow\":\"direct\"}", "ExternalWorkflowCompatibility")]
+    [InlineData("{\"workflowYamls\":[\"name: inline\"]}", "ExternalWorkflowCompatibility")]
     [InlineData("{\"type\":\"text\"}", "Assistant")]
+    [InlineData("{\"type\":\"input.resolve\"}", "Assistant")]
+    [InlineData("{\"type\":\"text\",\"workflow\":\"studio\"}", "Assistant")]
     [InlineData("{\"type\":\"action.continue\"}", "Assistant")]
     [InlineData("{\"type\":\"approval.resolve\"}", "Assistant")]
     [InlineData("{\"type\":\"task.stop\"}", "Assistant")]
@@ -18,7 +22,7 @@ public sealed class MainnetChatEndpointsTests
     [InlineData("{\"type\":\"step.retry\"}", "Assistant")]
     [InlineData("{\"type\":\"step.skip\"}", "Assistant")]
     [InlineData("{\"type\":\"future.type\"}", "Unsupported")]
-    public async Task JsonDiscriminator_ShouldSelectOneExplicitSurface(
+    public async Task RequestShape_ShouldSelectOneExplicitBoundary(
         string json,
         string expected)
     {
@@ -29,7 +33,7 @@ public sealed class MainnetChatEndpointsTests
         var result = await MainnetChatEndpoints.ClassifyRequestAsync(http.Request);
 
         result.Kind.ToString().Should().Be(expected);
-        if (expected == "Workflow")
+        if (expected == "ExternalWorkflowCompatibility")
         {
             http.Request.Body.Position.Should().Be(0);
             using var reader = new StreamReader(http.Request.Body, leaveOpen: true);
@@ -38,7 +42,23 @@ public sealed class MainnetChatEndpointsTests
     }
 
     [Fact]
-    public async Task Multipart_ShouldRemainWorkflowChatWithoutReadingBody()
+    public async Task ExplicitStudioWorkflowJson_ShouldUseFrozenCompatibilityAdapter()
+    {
+        const string json = "{\"commandId\":\"cmd-1\",\"conversation\":{\"conversationId\":null},\"prompt\":\"hello\",\"sessionId\":\"session-1\",\"workflow\":\"studio\"}";
+        var http = new DefaultHttpContext();
+        http.Request.ContentType = "application/json; charset=utf-8";
+        http.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(json));
+
+        var result = await MainnetChatEndpoints.ClassifyRequestAsync(http.Request);
+
+        result.Kind.Should().Be(MainnetChatRequestKind.ExternalWorkflowCompatibility);
+        http.Request.Body.Position.Should().Be(0);
+        using var reader = new StreamReader(http.Request.Body, leaveOpen: true);
+        (await reader.ReadToEndAsync()).Should().Be(json);
+    }
+
+    [Fact]
+    public async Task Multipart_ShouldRemainInFrozenExternalCompatibilityAdapterWithoutReadingBody()
     {
         var http = new DefaultHttpContext();
         http.Request.ContentType = "multipart/form-data; boundary=test";
@@ -46,7 +66,7 @@ public sealed class MainnetChatEndpointsTests
 
         var result = await MainnetChatEndpoints.ClassifyRequestAsync(http.Request);
 
-        result.Kind.Should().Be(MainnetChatRequestKind.Workflow);
+        result.Kind.Should().Be(MainnetChatRequestKind.ExternalWorkflowCompatibility);
         http.Request.Body.Position.Should().Be(0);
     }
 
