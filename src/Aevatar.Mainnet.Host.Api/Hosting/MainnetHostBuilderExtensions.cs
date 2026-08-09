@@ -594,6 +594,7 @@ public static class MainnetHostBuilderExtensions
                     CreateToolSource<AskUserAgentToolSource>,
                     CreateToolSource<ConditionEvaluateAgentToolSource>,
                     CreateToolSource<SkillsAgentToolSource>,
+                    CreateToolSource<OrnnAgentToolSource>,
                     CreateToolSource<StartWorkflowToolSource>,
                     CreateToolSource<ObserveRunToolSource>,
                     CreateToolSource<ReadWorkflowRunArtifactToolSource>,

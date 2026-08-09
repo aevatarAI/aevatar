@@ -773,6 +773,7 @@ public sealed class MainnetHostCompositionTests
             typeof(AskUserAgentToolSource),
             typeof(ConditionEvaluateAgentToolSource),
             typeof(SkillsAgentToolSource),
+            typeof(OrnnAgentToolSource),
             typeof(StartWorkflowToolSource),
             typeof(ObserveRunToolSource),
             typeof(ReadWorkflowRunArtifactToolSource));
@@ -818,6 +819,7 @@ public sealed class MainnetHostCompositionTests
             typeof(AskUserAgentToolSource),
             typeof(ConditionEvaluateAgentToolSource),
             typeof(SkillsAgentToolSource),
+            typeof(OrnnAgentToolSource),
             typeof(StartWorkflowToolSource),
             typeof(ObserveRunToolSource),
             typeof(ReadWorkflowRunArtifactToolSource));
@@ -847,6 +849,11 @@ public sealed class MainnetHostCompositionTests
         var conditionTool = nyxIdChatConditionTools.Should().ContainSingle().Which;
         conditionTool.Name.Should().Be("condition_evaluate");
         conditionTool.IsReadOnly.Should().BeTrue();
+        var nyxIdChatOrnnTools = await nyxIdChatProfile.Sources
+            .OfType<OrnnAgentToolSource>()
+            .Single()
+            .DiscoverToolsAsync();
+        nyxIdChatOrnnTools.Select(static tool => tool.Name).Should().Contain("ornn_search_skills");
 
         var voice = registry.Resolve("voice.realtime");
         voice.IsSuccess.Should().BeFalse();
