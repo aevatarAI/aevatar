@@ -262,6 +262,7 @@ public sealed class AdmittedNyxIdChatTurnOperationReconciliationPort
 public sealed class NyxIdChatTurnOperationDispatchPort
     : INyxIdChatTurnOperationDispatchPort
 {
+    private const string NyxIdApprovalFailedCode = "NYXID_APPROVAL_FAILED";
     private const string ExecutionFailedCode = "NYXID_CHAT_OPERATION_EXECUTION_FAILED";
     private const string ExecutionFailedMessage = "The operation could not be completed.";
     internal const string ExecutionCancelledCode = "NYXID_CHAT_OPERATION_CANCELLED";
@@ -305,12 +306,17 @@ public sealed class NyxIdChatTurnOperationDispatchPort
         ct.ThrowIfCancellationRequested();
 
         var frozenCommand = command.Clone();
+        var canaryEffectFaultEligible = NyxIdChatCanaryEffectFaultDecisions.MatchesTurnDispatch(
+            frozenCommand.PlanGateContinuation?.CanaryEffectFault,
+            frozenCommand,
+            Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()));
         _ = Task.Run(
             () => ExecuteAndSignalAsync(
                 turnActorId,
                 frozenCommand,
                 session,
                 correlationId,
+                canaryEffectFaultEligible,
                 executionLease,
                 releaseLease),
             CancellationToken.None);
@@ -339,6 +345,7 @@ public sealed class NyxIdChatTurnOperationDispatchPort
         NyxIdChatOperationDispatchCommand command,
         NyxIdChatTransientExecutionSession session,
         string correlationId,
+        bool canaryEffectFaultEligible,
         ExecutionLease executionLease,
         Action<ExecutionLease> releaseLease)
     {
@@ -377,12 +384,42 @@ public sealed class NyxIdChatTurnOperationDispatchPort
 
         try
         {
-            await DispatchCompletionAsync(
-                    turnActorId,
-                    result,
-                    NyxIdChatTurnOperationCompletionSource.Execution,
-                    correlationId)
-                .ConfigureAwait(false);
+            if (canaryEffectFaultEligible &&
+                IsCanaryEffectFaultBoundaryResult(command, result))
+            {
+                try
+                {
+                    await DispatchCanaryEffectFaultAsync(
+                            turnActorId,
+                            command.PlanGateContinuation.CanaryEffectFault,
+                            result,
+                            correlationId)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception exception)
+                {
+                    _logger.LogWarning(
+                        exception,
+                        "NyxIdChat canary result-boundary dispatch failed; falling back to the normal denied completion: turnActor={TurnActorId} operation={OperationId}",
+                        turnActorId,
+                        command.Key.OperationId);
+                    await DispatchCompletionAsync(
+                            turnActorId,
+                            result,
+                            NyxIdChatTurnOperationCompletionSource.Execution,
+                            correlationId)
+                        .ConfigureAwait(false);
+                }
+            }
+            else
+            {
+                await DispatchCompletionAsync(
+                        turnActorId,
+                        result,
+                        NyxIdChatTurnOperationCompletionSource.Execution,
+                        correlationId)
+                    .ConfigureAwait(false);
+            }
         }
         finally
         {
@@ -436,6 +473,66 @@ public sealed class NyxIdChatTurnOperationDispatchPort
             correlationId,
             CancellationToken.None);
 
+    private Task DispatchCanaryEffectFaultAsync(
+        string turnActorId,
+        NyxIdChatCanaryEffectFaultDirective directive,
+        NyxIdChatOperationResultSignal deniedResult,
+        string correlationId) =>
+        DispatchCoreAsync(
+            turnActorId,
+            $"{deniedResult.Key.OperationId}:canary-effect-fault:{directive.ArmId}",
+            new NyxIdChatCanaryEffectFaultTriggeredSignal
+            {
+                ArmId = directive.ArmId,
+                DeniedResult = deniedResult.Clone(),
+                TriggeredAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
+            },
+            correlationId,
+            CancellationToken.None);
+
+    internal static bool IsCanaryEffectFaultBoundaryResult(
+        NyxIdChatOperationDispatchCommand? command,
+        NyxIdChatOperationResultSignal? result)
+    {
+        var continuation = command?.PlanGateContinuation;
+        var admission = continuation?.OperationAdmission;
+        var tool = result?.Tool;
+        var receipt = tool?.Receipt;
+        return command?.Key is not null &&
+               result?.Key is not null &&
+               command.Key.Equals(result.Key) &&
+               continuation?.CanaryEffectFault?.Key?.Equals(command.Key) == true &&
+               !string.IsNullOrWhiteSpace(continuation.ToolCallId) &&
+               !string.IsNullOrWhiteSpace(continuation.ToolName) &&
+               !string.IsNullOrWhiteSpace(admission?.ServiceInstanceId) &&
+               string.Equals(
+                   continuation.CanaryEffectFault.ServiceInstanceId,
+                   admission.ServiceInstanceId,
+                   StringComparison.Ordinal) &&
+               tool?.ExternalEffect == NyxIdChatEffectEvidence.NotApplied &&
+               receipt is
+               {
+                   Status: AgentToolReceiptStatus.Denied,
+                   Effect: AgentToolReceiptEffect.Mutating,
+                   NyxIdApprovalTerminalOutcome: NyxIdApprovalTerminalOutcome.Rejected,
+               } &&
+               receipt.NyxIdApprovalDecisionMode is
+                   NyxIdApprovalDecisionMode.Unspecified or
+                   NyxIdApprovalDecisionMode.PerRequest &&
+               string.Equals(
+                   receipt.ErrorCode,
+                   NyxIdApprovalFailedCode,
+                   StringComparison.Ordinal) &&
+               !string.IsNullOrWhiteSpace(receipt.ApprovalRequestId) &&
+               string.Equals(receipt.CallId, continuation.ToolCallId, StringComparison.Ordinal) &&
+               string.Equals(receipt.ToolName, continuation.ToolName, StringComparison.Ordinal) &&
+               string.Equals(receipt.SubjectKind, "nyxid.user-service", StringComparison.Ordinal) &&
+               string.Equals(
+                   receipt.SubjectId,
+                   admission.ServiceInstanceId,
+                   StringComparison.Ordinal);
+    }
+
     private async Task DispatchAsync(
         string actorId,
         string envelopeId,
@@ -445,25 +542,7 @@ public sealed class NyxIdChatTurnOperationDispatchPort
     {
         try
         {
-            await _actorDispatchPort.DispatchAsync(
-                    actorId,
-                    new EventEnvelope
-                    {
-                        Id = envelopeId,
-                        Timestamp = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
-                        Payload = Any.Pack(payload),
-                        Route = new EnvelopeRoute
-                        {
-                            Direct = new DirectRoute { TargetActorId = actorId },
-                        },
-                        Propagation = new EnvelopePropagation
-                        {
-                            CorrelationId = string.IsNullOrWhiteSpace(correlationId)
-                                ? payload.Descriptor.FullName
-                                : correlationId,
-                        },
-                    },
-                    ct)
+            await DispatchCoreAsync(actorId, envelopeId, payload, correlationId, ct)
                 .ConfigureAwait(false);
         }
         catch (Exception exception)
@@ -475,6 +554,32 @@ public sealed class NyxIdChatTurnOperationDispatchPort
                 envelopeId);
         }
     }
+
+    private Task DispatchCoreAsync(
+        string actorId,
+        string envelopeId,
+        IMessage payload,
+        string correlationId,
+        CancellationToken ct) =>
+        _actorDispatchPort.DispatchAsync(
+            actorId,
+            new EventEnvelope
+            {
+                Id = envelopeId,
+                Timestamp = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
+                Payload = Any.Pack(payload),
+                Route = new EnvelopeRoute
+                {
+                    Direct = new DirectRoute { TargetActorId = actorId },
+                },
+                Propagation = new EnvelopePropagation
+                {
+                    CorrelationId = string.IsNullOrWhiteSpace(correlationId)
+                        ? payload.Descriptor.FullName
+                        : correlationId,
+                },
+            },
+            ct);
 
     private static NyxIdChatOperationResultSignal ExecutionFailure(
         NyxIdChatOperationDispatchCommand command) => new()

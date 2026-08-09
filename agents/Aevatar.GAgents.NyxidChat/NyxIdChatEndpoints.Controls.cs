@@ -462,7 +462,6 @@ public static partial class NyxIdChatEndpoints
             !TryValidateControlIdentity(request.StepId, out var stepId) ||
             !TryValidateControlIdentity(request.OperationId, out var operationId) ||
             !TryValidateControlIdentity(request.ServiceInstanceId, out var serviceInstanceId) ||
-            string.IsNullOrWhiteSpace(request.CatalogDigest) ||
             request.OperationGeneration != 1 ||
             request.ExpectedStateVersion < 0 ||
             request.ExpiresAt <= DateTimeOffset.UtcNow)
@@ -497,7 +496,6 @@ public static partial class NyxIdChatEndpoints
                     OperationGeneration = request.OperationGeneration,
                 },
                 ServiceInstanceId = serviceInstanceId,
-                CatalogDigest = request.CatalogDigest.Trim(),
                 OwnerSubject = ownerSubject,
                 ExpiresAt = Timestamp.FromDateTimeOffset(request.ExpiresAt),
                 ExpectedStateVersion = request.ExpectedStateVersion,
@@ -761,7 +759,6 @@ public static partial class NyxIdChatEndpoints
         string? OperationId,
         long OperationGeneration,
         string? ServiceInstanceId,
-        string? CatalogDigest,
         DateTimeOffset ExpiresAt,
         long ExpectedStateVersion);
 }

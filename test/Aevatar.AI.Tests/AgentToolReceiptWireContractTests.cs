@@ -44,7 +44,12 @@ public sealed class AgentToolReceiptWireContractTests
                 (18, "effect"),
                 (19, "provider_resource_id"),
                 (20, "nyx_id_approval_decision_mode"),
-                (21, "mutation_stage"));
+                (21, "mutation_stage"),
+                (22, "nyx_id_approval_terminal_outcome"));
+        ((int)NyxIdApprovalTerminalOutcome.Unspecified).Should().Be(0);
+        ((int)NyxIdApprovalTerminalOutcome.Rejected).Should().Be(1);
+        ((int)NyxIdApprovalTerminalOutcome.Expired).Should().Be(2);
+        ((int)NyxIdApprovalTerminalOutcome.TimedOut).Should().Be(3);
         AgentToolReceipt.Descriptor.Fields.InFieldNumberOrder()
             .Select(field => field.Name)
             .Should()

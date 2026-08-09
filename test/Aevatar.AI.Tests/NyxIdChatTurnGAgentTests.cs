@@ -2605,6 +2605,21 @@ public sealed partial class NyxIdChatTurnGAgentTests
                     return Task.CompletedTask;
                 },
                 ct);
+            if (command.PlanGateContinuation?.CanaryEffectFault is { } directive &&
+                NyxIdChatTurnOperationDispatchPort.IsCanaryEffectFaultBoundaryResult(
+                    command,
+                    execution.Result))
+            {
+                _pendingSignals.Enqueue(new NyxIdChatCanaryEffectFaultTriggeredSignal
+                {
+                    ArmId = directive.ArmId,
+                    DeniedResult = execution.Result.Clone(),
+                    TriggeredAt = Timestamp.FromDateTimeOffset(
+                        new DateTimeOffset(2026, 7, 24, 8, 0, 2, TimeSpan.Zero)),
+                });
+                return;
+            }
+
             _pendingSignals.Enqueue(new NyxIdChatTurnOperationExecutionCompletedSignal
             {
                 Result = execution.Result.Clone(),

@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.GAgents.NyxidChat;
 using FluentAssertions;
@@ -30,6 +31,9 @@ public sealed class NyxIdChatCanaryEffectFaultDecisionsTests
         next.CanaryEffectFault.Status.Should().Be(NyxIdChatCanaryEffectFaultStatus.Armed);
         next.CanaryEffectFault.Directive.OwnerSubject.Should().Be("owner-alpha");
         next.CanaryEffectFault.Directive.Key.Should().BeEquivalentTo(command.Key);
+        next.CanaryEffectFault.Directive.CatalogDigest.Should().Be(
+            state.ActiveTask.Steps[0].Source.Tool.OperationAdmission.CatalogDigest,
+            "the actor seals its committed admission digest without a client echo");
 
         var reloaded = NyxIdChatConversationGAgentState.Parser.ParseFrom(next.ToByteArray());
         NyxIdChatCanaryEffectFaultDecisions.TryArm(
@@ -48,7 +52,6 @@ public sealed class NyxIdChatCanaryEffectFaultDecisionsTests
     [InlineData("conversation")]
     [InlineData("generation")]
     [InlineData("service")]
-    [InlineData("catalog")]
     [InlineData("version")]
     [InlineData("expired")]
     [InlineData("too_long")]
@@ -70,9 +73,6 @@ public sealed class NyxIdChatCanaryEffectFaultDecisionsTests
                 break;
             case "service":
                 command.ServiceInstanceId = string.Empty;
-                break;
-            case "catalog":
-                command.CatalogDigest = "sha256:not-a-digest";
                 break;
             case "version":
                 stateVersion = 18;
@@ -151,8 +151,11 @@ public sealed class NyxIdChatCanaryEffectFaultDecisionsTests
                     "connected-service-beta";
                 break;
             case "stored_catalog":
-                state.ActiveTask.Steps[0].Source.Tool.OperationAdmission.CatalogDigest =
-                    $"sha256:{new string('b', 64)}";
+                state.ActiveTask.Steps[0].Source.Tool.OperationAdmission.CatalogDigest = "invalid";
+                state.ActiveTask.Steps[0].Source.Tool.OperationAdmission.ReadBack
+                    .ReadOperation.CatalogDigest = "invalid";
+                state.ActiveTurnPlanGateAdmission.OperationAdmission =
+                    state.ActiveTask.Steps[0].Source.Tool.OperationAdmission.Clone();
                 break;
             case "stored_read_back":
                 state.ActiveTask.Steps[0].Source.Tool.OperationAdmission.ReadBack = null;
@@ -318,6 +321,15 @@ public sealed class NyxIdChatCanaryEffectFaultDecisionsTests
             Key = dispatch.Key.Clone(),
             TurnActorId = NyxIdChatTurnActorIds.ForTurn("conversation-alpha", "turn-alpha"),
             ConsumedAt = Timestamp.FromDateTimeOffset(Now.AddMinutes(1).AddSeconds(1)),
+            ServiceInstanceId = "connected-service-alpha",
+            ApprovalRequestId = "approval-7001-alpha",
+            ReceiptStatus = AgentToolReceiptStatus.Denied,
+            ApprovalDecisionMode = NyxIdApprovalDecisionMode.Unspecified,
+            ApprovalTerminalOutcome = NyxIdApprovalTerminalOutcome.Rejected,
+            ApprovalSubjectKind = "nyxid.user-service",
+            ApprovalSubjectId = "connected-service-alpha",
+            ApprovalCallId = "call-alpha",
+            ApprovalToolName = "tool-alpha",
         };
 
         NyxIdChatCanaryEffectFaultDecisions.TryMarkConsumed(
@@ -329,6 +341,17 @@ public sealed class NyxIdChatCanaryEffectFaultDecisionsTests
         consumed.CanaryEffectFault.Status.Should().Be(NyxIdChatCanaryEffectFaultStatus.Consumed);
         consumed.CanaryEffectFault.ConsumedAt.Should().Be(
             Timestamp.FromDateTimeOffset(Now.AddMinutes(1).AddSeconds(2)));
+        consumed.CanaryEffectFault.ApprovalRequestId.Should().Be("approval-7001-alpha");
+        consumed.CanaryEffectFault.ReceiptStatus.Should().Be(AgentToolReceiptStatus.Denied);
+        consumed.CanaryEffectFault.ApprovalDecisionMode.Should().Be(
+            NyxIdApprovalDecisionMode.Unspecified);
+        consumed.CanaryEffectFault.ApprovalTerminalOutcome.Should().Be(
+            NyxIdApprovalTerminalOutcome.Rejected);
+        var step = consumed.ActiveTask.Steps.Should().ContainSingle().Which;
+        step.ApprovalRequestId.Should().Be("approval-7001-alpha");
+        step.ApprovalObservation.Should().NotBeNull();
+        step.ApprovalObservation.TerminalOutcome.Should().Be(
+            NyxIdApprovalTerminalOutcome.Rejected);
         consumed.ProgressSequence.Should().Be(state.ProgressSequence + 1);
 
         var wrongTurn = signal.Clone();
@@ -365,6 +388,15 @@ public sealed class NyxIdChatCanaryEffectFaultDecisionsTests
             Key = dispatch.Key.Clone(),
             TurnActorId = NyxIdChatTurnActorIds.ForTurn("conversation-alpha", "turn-alpha"),
             ConsumedAt = Timestamp.FromDateTimeOffset(Now.AddMinutes(-10)),
+            ServiceInstanceId = "connected-service-alpha",
+            ApprovalRequestId = "approval-7001-alpha",
+            ReceiptStatus = AgentToolReceiptStatus.Denied,
+            ApprovalDecisionMode = NyxIdApprovalDecisionMode.PerRequest,
+            ApprovalTerminalOutcome = NyxIdApprovalTerminalOutcome.Rejected,
+            ApprovalSubjectKind = "nyxid.user-service",
+            ApprovalSubjectId = "connected-service-alpha",
+            ApprovalCallId = "call-alpha",
+            ApprovalToolName = "tool-alpha",
         };
 
         NyxIdChatCanaryEffectFaultDecisions.TryMarkConsumed(
@@ -375,6 +407,137 @@ public sealed class NyxIdChatCanaryEffectFaultDecisionsTests
             .Should().BeTrue();
         consumed.CanaryEffectFault.ConsumedAt.Should().Be(conversationNow);
     }
+
+    [Theory]
+    [InlineData(NyxIdApprovalDecisionMode.Unspecified)]
+    [InlineData(NyxIdApprovalDecisionMode.PerRequest)]
+    public void TryMarkConsumed_ShouldAcceptOnlyNonGrantRejectedApprovalEvidence(
+        NyxIdApprovalDecisionMode decisionMode)
+    {
+        var state = ForwardedState(out var dispatch);
+        var signal = ExactConsumedSignal(dispatch, decisionMode);
+
+        NyxIdChatCanaryEffectFaultDecisions.TryMarkConsumed(
+                state,
+                signal,
+                Timestamp.FromDateTimeOffset(Now.AddMinutes(1).AddSeconds(2)),
+                out var consumed)
+            .Should().BeTrue();
+
+        consumed.CanaryEffectFault.ApprovalDecisionMode.Should().Be(decisionMode);
+        consumed.CanaryEffectFault.ApprovalTerminalOutcome.Should().Be(
+            NyxIdApprovalTerminalOutcome.Rejected);
+        consumed.ActiveTask.Steps.Single().ApprovalObservation.DecisionMode.Should().Be(
+            decisionMode);
+    }
+
+    [Fact]
+    public void TryMarkConsumed_ShouldFailClosedWhenOperationKeyMatchesMultipleSteps()
+    {
+        var state = ForwardedState(out var dispatch);
+        state.ActiveTask.Steps.Add(state.ActiveTask.Steps.Single().Clone());
+        var signal = ExactConsumedSignal(dispatch, NyxIdApprovalDecisionMode.Unspecified);
+
+        var consumed = true;
+        Action act = () =>
+        {
+            consumed = NyxIdChatCanaryEffectFaultDecisions.TryMarkConsumed(
+                state,
+                signal,
+                Timestamp.FromDateTimeOffset(Now.AddMinutes(1).AddSeconds(2)),
+                out _);
+        };
+
+        act.Should().NotThrow();
+        consumed.Should().BeFalse();
+        state.CanaryEffectFault.Status.Should().Be(NyxIdChatCanaryEffectFaultStatus.Forwarded);
+    }
+
+    [Theory]
+    [InlineData("service")]
+    [InlineData("request_id")]
+    [InlineData("receipt_status")]
+    [InlineData("grant_mode")]
+    [InlineData("terminal_outcome")]
+    [InlineData("subject")]
+    [InlineData("call")]
+    [InlineData("tool")]
+    public void TryMarkConsumed_ShouldRejectIncompleteOrMismatchedApprovalEvidence(
+        string mismatch)
+    {
+        var state = ForwardedState(out var dispatch);
+        var signal = ExactConsumedSignal(dispatch, NyxIdApprovalDecisionMode.Unspecified);
+        switch (mismatch)
+        {
+            case "service":
+                signal.ServiceInstanceId = "connected-service-beta";
+                break;
+            case "request_id":
+                signal.ApprovalRequestId = string.Empty;
+                break;
+            case "receipt_status":
+                signal.ReceiptStatus = AgentToolReceiptStatus.ApprovalRequired;
+                break;
+            case "grant_mode":
+                signal.ApprovalDecisionMode = NyxIdApprovalDecisionMode.Grant;
+                break;
+            case "terminal_outcome":
+                signal.ApprovalTerminalOutcome = NyxIdApprovalTerminalOutcome.Expired;
+                break;
+            case "subject":
+                signal.ApprovalSubjectId = "connected-service-beta";
+                break;
+            case "call":
+                signal.ApprovalCallId = "call-beta";
+                break;
+            case "tool":
+                signal.ApprovalToolName = "tool-beta";
+                break;
+        }
+
+        NyxIdChatCanaryEffectFaultDecisions.TryMarkConsumed(
+                state,
+                signal,
+                Timestamp.FromDateTimeOffset(Now.AddMinutes(1).AddSeconds(2)),
+                out var unchanged)
+            .Should().BeFalse();
+        unchanged.Should().BeSameAs(state);
+        state.CanaryEffectFault.Status.Should().Be(NyxIdChatCanaryEffectFaultStatus.Forwarded);
+        state.ActiveTask.Steps.Single().ApprovalObservation.Should().BeNull();
+    }
+
+    private static NyxIdChatConversationGAgentState ForwardedState(
+        out NyxIdChatOperationDispatchCommand dispatch)
+    {
+        var state = Arm(ConversationState());
+        dispatch = EffectDispatch();
+        NyxIdChatCanaryEffectFaultDecisions.ForwardForPlanResolution(
+                state,
+                new NyxIdChatPlanResolveCommand { OwnerSubject = "owner-alpha" },
+                dispatch,
+                Timestamp.FromDateTimeOffset(Now.AddMinutes(1)))
+            .Should().NotBeNull();
+        return state;
+    }
+
+    private static NyxIdChatCanaryEffectFaultConsumedSignal ExactConsumedSignal(
+        NyxIdChatOperationDispatchCommand dispatch,
+        NyxIdApprovalDecisionMode decisionMode) => new()
+    {
+        ArmId = "arm-alpha",
+        Key = dispatch.Key.Clone(),
+        TurnActorId = NyxIdChatTurnActorIds.ForTurn("conversation-alpha", "turn-alpha"),
+        ConsumedAt = Timestamp.FromDateTimeOffset(Now.AddMinutes(1).AddSeconds(1)),
+        ServiceInstanceId = "connected-service-alpha",
+        ApprovalRequestId = "approval-7001-alpha",
+        ReceiptStatus = AgentToolReceiptStatus.Denied,
+        ApprovalDecisionMode = decisionMode,
+        ApprovalTerminalOutcome = NyxIdApprovalTerminalOutcome.Rejected,
+        ApprovalSubjectKind = "nyxid.user-service",
+        ApprovalSubjectId = "connected-service-alpha",
+        ApprovalCallId = "call-alpha",
+        ApprovalToolName = "tool-alpha",
+    };
 
     private static NyxIdChatConversationGAgentState Arm(NyxIdChatConversationGAgentState state)
     {
@@ -472,6 +635,13 @@ public sealed class NyxIdChatCanaryEffectFaultDecisionsTests
                     OperationAdmission = admission,
                 },
             },
+            RetryToolInput = new NyxIdChatRetryToolInputState
+            {
+                CallId = "call-alpha",
+                ToolName = "tool-alpha",
+                Arguments = new Struct(),
+                OperationAdmission = admission.Clone(),
+            },
         });
         return state;
     }
@@ -484,7 +654,6 @@ public sealed class NyxIdChatCanaryEffectFaultDecisionsTests
         ClientRequestId = "client-arm-alpha",
         Key = OperationKey(),
         ServiceInstanceId = "connected-service-alpha",
-        CatalogDigest = $"sha256:{new string('a', 64)}",
         OwnerSubject = "owner-alpha",
         ExpiresAt = Timestamp.FromDateTimeOffset(Now.AddMinutes(5)),
         ExpectedStateVersion = 17,

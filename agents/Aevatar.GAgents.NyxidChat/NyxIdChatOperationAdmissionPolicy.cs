@@ -80,7 +80,10 @@ internal static class NyxIdChatOperationAdmissionPolicy
         AgentToolOperationAdmissionPayload? actual) =>
         expected is null
             ? actual is null
-            : actual is not null && expected.Equals(actual);
+            : actual is not null &&
+              TryCanonicalize(expected, out var canonicalExpected) &&
+              TryCanonicalize(actual, out var canonicalActual) &&
+              canonicalExpected.Equals(canonicalActual);
 
     public static bool IsValidReadBack(
         AgentToolOperationReadBackPayload? readBack,
@@ -92,6 +95,22 @@ internal static class NyxIdChatOperationAdmissionPolicy
             string.IsNullOrWhiteSpace(readBack.CheckName) ||
             readBack.Assertion.Match == AgentToolReadBackMatchPayload.Unspecified ||
             operation.ReadBack is not null)
+        {
+            return false;
+        }
+
+        if (!AgentToolReadBackExpectedValueSourcePayloadCanonicalizer.TryGetCanonicalSource(
+                readBack.Assertion,
+                out _))
+        {
+            return false;
+        }
+
+        var notAppliedSource = AgentToolReadBackExpectedValueSourcePayload.Unspecified;
+        if (readBack.NotAppliedAssertion is not null &&
+            !AgentToolReadBackExpectedValueSourcePayloadCanonicalizer.TryGetCanonicalSource(
+                readBack.NotAppliedAssertion,
+                out notAppliedSource))
         {
             return false;
         }
@@ -120,23 +139,47 @@ internal static class NyxIdChatOperationAdmissionPolicy
                 readBack.Assertion.Match == AgentToolReadBackMatchPayload.ArrayContainsEquals) &&
                (readBack.NotAppliedAssertion is null ||
                 readBack.NotAppliedAssertion.Match == AgentToolReadBackMatchPayload.Equals &&
-                readBack.NotAppliedAssertion.ExpectedValueSource !=
-                    AgentToolReadBackExpectedValueSourcePayload.ProviderResourceId &&
+                notAppliedSource == AgentToolReadBackExpectedValueSourcePayload.FrozenValue &&
                 readBack.NotAppliedAssertion.ExpectedValue is not null &&
                 !string.IsNullOrWhiteSpace(readBack.NotAppliedAssertion.JsonPointer)) &&
                IsValidPagination(readBack.Pagination, operation);
     }
 
     private static bool IsValidAssertion(AgentToolReadBackAssertionPayload assertion) =>
-        (assertion.Match is not (
-             AgentToolReadBackMatchPayload.Equals or
-             AgentToolReadBackMatchPayload.ArrayContainsEquals) ||
-         assertion.ExpectedValueSource ==
-             AgentToolReadBackExpectedValueSourcePayload.ProviderResourceId ||
-         assertion.ExpectedValue is not null) &&
+        AgentToolReadBackExpectedValueSourcePayloadCanonicalizer.TryGetCanonicalSource(
+            assertion,
+            out _) &&
         (assertion.Match != AgentToolReadBackMatchPayload.ArrayContainsEquals ||
          !string.IsNullOrWhiteSpace(assertion.JsonPointer) &&
          !string.IsNullOrWhiteSpace(assertion.ElementJsonPointer));
+
+    private static bool TryCanonicalize(
+        AgentToolOperationAdmissionPayload admission,
+        out AgentToolOperationAdmissionPayload canonical)
+    {
+        canonical = admission.Clone();
+        if (canonical.ReadBack is null)
+            return true;
+
+        if (!AgentToolReadBackExpectedValueSourcePayloadCanonicalizer.TryCanonicalize(
+                canonical.ReadBack.Assertion,
+                out var assertion))
+        {
+            return false;
+        }
+        canonical.ReadBack.Assertion = assertion;
+
+        if (canonical.ReadBack.NotAppliedAssertion is null)
+            return true;
+        if (!AgentToolReadBackExpectedValueSourcePayloadCanonicalizer.TryCanonicalize(
+                canonical.ReadBack.NotAppliedAssertion,
+                out var notAppliedAssertion))
+        {
+            return false;
+        }
+        canonical.ReadBack.NotAppliedAssertion = notAppliedAssertion;
+        return true;
+    }
 
     private static bool IsValidPagination(
         AgentToolReadBackPaginationPayload? pagination,

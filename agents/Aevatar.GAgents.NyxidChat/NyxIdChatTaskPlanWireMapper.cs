@@ -110,13 +110,27 @@ internal static class NyxIdChatTaskPlanWireMapper
             AddedInPlanRevision = step.AddedInPlanRevision,
             CancelledInPlanRevision = step.CancelledInPlanRevision,
             Estimate = step.Estimate?.Clone(),
-            ApprovalObservation = step.ApprovalObservation?.Clone(),
+            ApprovalObservation = ToPublicApprovalObservation(step.ApprovalObservation),
             Guard = step.Guard?.Clone(),
         };
         result.DependsOn.AddRange(step.DependsOn);
         result.Substeps.AddRange(step.Substeps.Select(static substep => substep.Clone()));
         return result;
     }
+
+    private static NyxIdChatPostReturnApprovalObservation? ToPublicApprovalObservation(
+        NyxIdChatPostReturnApprovalObservation? observation) =>
+        observation is null
+            ? null
+            : new NyxIdChatPostReturnApprovalObservation
+            {
+                ApprovalRequestId = observation.ApprovalRequestId,
+                DecisionMode = observation.DecisionMode,
+                ReceiptStatus = observation.ReceiptStatus,
+                ObservedAt = observation.ObservedAt?.Clone(),
+                TerminalOutcome = observation.TerminalOutcome,
+                SubjectKind = observation.SubjectKind,
+            };
 
     public static NyxIdChatTaskPlanStepChanged FromState(NyxIdChatTaskStepChanged changed)
     {
@@ -255,6 +269,7 @@ internal static class NyxIdChatTaskPlanWireMapper
                 ToolName = source.Tool.ToolName,
                 ServiceSlug = source.Tool.ServiceSlug ?? string.Empty,
                 ServiceId = source.Tool.ServiceId ?? string.Empty,
+                ProviderResourceId = source.Tool.ProviderResourceId ?? string.Empty,
             };
             if (source.Tool.ReadinessCapabilityId is not null)
                 tool.ReadinessCapabilityId = source.Tool.ReadinessCapabilityId;
@@ -281,6 +296,7 @@ internal static class NyxIdChatTaskPlanWireMapper
                 {
                     ActionRequestId = source.Postcondition.ActionRequestId ?? string.Empty,
                     Check = source.Postcondition.Check ?? string.Empty,
+                    ProviderResourceId = source.Postcondition.ProviderResourceId ?? string.Empty,
                 },
             };
         }
@@ -441,6 +457,8 @@ internal static class NyxIdChatTaskPlanWireMapper
                 DecisionMode = ParseApprovalDecisionMode(observation.DecisionMode),
                 ReceiptStatus = ParseReceiptStatus(observation.ReceiptStatus),
                 ObservedAt = ToTimestamp(observation.ObservedAt),
+                TerminalOutcome = ParseApprovalTerminalOutcome(observation.TerminalOutcome),
+                SubjectKind = observation.SubjectKind ?? string.Empty,
             };
 
     private static Timestamp? ToTimestamp(DateTimeOffset? value) =>
@@ -491,6 +509,14 @@ internal static class NyxIdChatTaskPlanWireMapper
         "approval_required" => AgentToolReceiptStatus.ApprovalRequired,
         "denied" => AgentToolReceiptStatus.Denied,
         _ => AgentToolReceiptStatus.Unspecified,
+    };
+
+    private static NyxIdApprovalTerminalOutcome ParseApprovalTerminalOutcome(string? value) => value switch
+    {
+        "rejected" => NyxIdApprovalTerminalOutcome.Rejected,
+        "expired" => NyxIdApprovalTerminalOutcome.Expired,
+        "timed_out" => NyxIdApprovalTerminalOutcome.TimedOut,
+        _ => NyxIdApprovalTerminalOutcome.Unspecified,
     };
 
     private static NyxIdChatStepKind ParseStepKind(string value) => value switch

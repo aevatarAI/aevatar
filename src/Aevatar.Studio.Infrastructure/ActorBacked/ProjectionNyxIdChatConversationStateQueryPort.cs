@@ -325,7 +325,9 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
                     step.ApprovalObservation.ApprovalRequestId,
                     step.ApprovalObservation.DecisionMode,
                     step.ApprovalObservation.ReceiptStatus,
-                    ToDateTimeOffset(step.ApprovalObservation.ObservedAt)),
+                    ToDateTimeOffset(step.ApprovalObservation.ObservedAt),
+                    NullIfEmpty(step.ApprovalObservation.TerminalOutcome),
+                    NullIfEmpty(step.ApprovalObservation.SubjectKind)),
             step.Guard == null
                 ? null
                 : new NyxIdChatStepGuardSnapshot(
@@ -347,7 +349,8 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
                         NullIfEmpty(source.Tool.ServiceId),
                         source.Tool.HasReadinessCapabilityId
                             ? NullIfEmpty(source.Tool.ReadinessCapabilityId)
-                            : null)),
+                            : null,
+                        NullIfEmpty(source.Tool.ProviderResourceId))),
             NyxIdChatConversationStepSourceDocument.SourceOneofCase.BrowserAction =>
                 new NyxIdChatConversationStepSourceSnapshot(
                     BrowserAction: new NyxIdChatBrowserActionStepSourceSnapshot(
@@ -357,7 +360,8 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
                 new NyxIdChatConversationStepSourceSnapshot(
                     Postcondition: new NyxIdChatPostconditionStepSourceSnapshot(
                         NullIfEmpty(source.Postcondition.ActionRequestId),
-                        NullIfEmpty(source.Postcondition.Check))),
+                        NullIfEmpty(source.Postcondition.Check),
+                        NullIfEmpty(source.Postcondition.ProviderResourceId))),
             NyxIdChatConversationStepSourceDocument.SourceOneofCase.Input =>
                 new NyxIdChatConversationStepSourceSnapshot(
                     Input: new NyxIdChatInputStepSourceSnapshot(

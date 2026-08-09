@@ -342,7 +342,6 @@ public sealed class NyxIdChatControlEndpointsTests
             OperationGeneration = 1,
         });
         command.ServiceInstanceId.Should().Be("connected-service-alpha");
-        command.CatalogDigest.Should().Be($"sha256:{new string('a', 64)}");
         command.OwnerSubject.Should().Be(ShareOpsOwnerSubject);
         command.ExpectedStateVersion.Should().Be(23);
         command.CommandId.Should().NotBeNullOrWhiteSpace();
@@ -577,7 +576,6 @@ public sealed class NyxIdChatControlEndpointsTests
           "operationId": "operation-alpha",
           "operationGeneration": 1,
           "serviceInstanceId": "connected-service-alpha",
-          "catalogDigest": "sha256:{{new string('a', 64)}}",
           "expiresAt": "{{DateTimeOffset.UtcNow.AddMinutes(10):O}}",
           "expectedStateVersion": 23
         }

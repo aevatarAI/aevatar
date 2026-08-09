@@ -39,8 +39,10 @@ public sealed class NyxIdChatToolVerificationPort : INyxIdChatToolVerificationPo
         ArgumentNullException.ThrowIfNull(input);
         var contract = input.ReadBack;
         if (!NyxIdChatOperationAdmissionPolicy.IsValidReadBack(contract) ||
-            contract.Assertion.ExpectedValueSource ==
-                AgentToolReadBackExpectedValueSourcePayload.ProviderResourceId &&
+            !AgentToolReadBackExpectedValueSourcePayloadCanonicalizer.TryGetCanonicalSource(
+                contract.Assertion,
+                out var expectedValueSource) ||
+            expectedValueSource == AgentToolReadBackExpectedValueSourcePayload.ProviderResourceId &&
             string.IsNullOrWhiteSpace(input.ProviderResourceId) ||
             _toolFactory?.CreateRead(contract.ReadOperation) is not { } tool ||
             _executionPort is null)
@@ -197,11 +199,20 @@ public sealed class NyxIdChatToolVerificationPort : INyxIdChatToolVerificationPo
         matched = false;
         try
         {
+            if (!AgentToolReadBackExpectedValueSourcePayloadCanonicalizer.TryGetCanonicalSource(
+                    assertion,
+                    out var expectedValueSource))
+            {
+                return false;
+            }
             if (!TryReadProjectionData(resultJson, readOperation, out var current))
                 return false;
 
             var found = TryResolvePointer(current, assertion.JsonPointer, out var value);
-            var expectedValue = ResolveExpectedValue(assertion, providerResourceId);
+            var expectedValue = ResolveExpectedValue(
+                assertion,
+                expectedValueSource,
+                providerResourceId);
             matched = assertion.Match switch
             {
                 AgentToolReadBackMatchPayload.Exists => found,
@@ -311,8 +322,9 @@ public sealed class NyxIdChatToolVerificationPort : INyxIdChatToolVerificationPo
 
     private static Google.Protobuf.WellKnownTypes.Value? ResolveExpectedValue(
         AgentToolReadBackAssertionPayload assertion,
+        AgentToolReadBackExpectedValueSourcePayload expectedValueSource,
         string providerResourceId) =>
-        assertion.ExpectedValueSource == AgentToolReadBackExpectedValueSourcePayload.ProviderResourceId
+        expectedValueSource == AgentToolReadBackExpectedValueSourcePayload.ProviderResourceId
             ? string.IsNullOrWhiteSpace(providerResourceId)
                 ? null
                 : Google.Protobuf.WellKnownTypes.Value.ForString(providerResourceId.Trim())

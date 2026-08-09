@@ -411,6 +411,9 @@ public static class NyxIdChatControlCommands
                 DecisionMode = receipt.NyxIdApprovalDecisionMode,
                 ReceiptStatus = receipt.Status,
                 ObservedAt = now.Clone(),
+                TerminalOutcome = receipt.NyxIdApprovalTerminalOutcome,
+                SubjectKind = receipt.SubjectKind,
+                SubjectId = receipt.SubjectId,
             };
         }
         if (evidence.Value.Phase != NyxIdChatOperationPhase.Uncertain &&

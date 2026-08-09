@@ -207,7 +207,8 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddNyxIdChat(builder.Configuration);
         builder.Services.Replace(ServiceDescriptor.Singleton(
             NyxIdChatCanaryEffectFaultOptions.EnabledFor(
-                "ce646b72-dd49-4ea8-bc1e-8273672c102c")));
+                "ce646b72-dd49-4ea8-bc1e-8273672c102c",
+                "5d0d7b72-acff-49af-bb1b-9f30bbb7c102")));
         AddNyxIdChatAgentProfile(builder);
         builder.Services.AddStreamingProxy(builder.Configuration);
         builder.Services.AddChatbotClassifier();
@@ -594,12 +595,12 @@ public static class MainnetHostBuilderExtensions
                     CreateToolSource<AskUserAgentToolSource>,
                     CreateToolSource<ConditionEvaluateAgentToolSource>,
                     CreateToolSource<SkillsAgentToolSource>,
-                    CreateToolSource<OrnnAgentToolSource>,
+                    CreateToolSource<OrnnSearchAgentToolSource>,
                     CreateToolSource<StartWorkflowToolSource>,
                     CreateToolSource<ObserveRunToolSource>,
                     CreateToolSource<ReadWorkflowRunArtifactToolSource>,
                 ],
-                "Pinned NyxID Assistant route: safe management reads, admitted request-local connected-service operations, web search, readiness, typed user input, explicit skill loading, and managed workflow execution with typed observation.");
+                "Pinned NyxID Assistant route: safe management reads, admitted request-local connected-service operations, web and Ornn skill search, readiness, typed user input, explicit skill loading, and managed workflow execution with typed observation.");
         });
 
         return builder;

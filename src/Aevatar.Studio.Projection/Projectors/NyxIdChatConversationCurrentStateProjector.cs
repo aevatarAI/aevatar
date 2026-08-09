@@ -266,6 +266,8 @@ public sealed class NyxIdChatConversationCurrentStateProjector
                     DecisionMode = ToWireName(step.ApprovalObservation.DecisionMode),
                     ReceiptStatus = ToWireName(step.ApprovalObservation.ReceiptStatus),
                     ObservedAt = step.ApprovalObservation.ObservedAt?.Clone(),
+                    TerminalOutcome = ToWireName(step.ApprovalObservation.TerminalOutcome),
+                    SubjectKind = step.ApprovalObservation.SubjectKind,
                 },
             Guard = step.Guard == null
                 ? null
@@ -326,6 +328,7 @@ public sealed class NyxIdChatConversationCurrentStateProjector
                     {
                         ActionRequestId = source.Postcondition.ActionRequestId,
                         Check = source.Postcondition.Check,
+                        ProviderResourceId = source.Postcondition.ProviderResourceId,
                     },
                 },
             NyxIdChatStepSource.SourceOneofCase.Input =>
@@ -384,6 +387,7 @@ public sealed class NyxIdChatConversationCurrentStateProjector
             ToolName = source.ToolName,
             ServiceSlug = source.ServiceSlug,
             ServiceId = source.ServiceId,
+            ProviderResourceId = source.ProviderResourceId,
         };
         if (source.HasReadinessCapabilityId)
             document.ReadinessCapabilityId = source.ReadinessCapabilityId;
@@ -762,6 +766,14 @@ public sealed class NyxIdChatConversationCurrentStateProjector
         NyxIdApprovalDecisionMode.PerRequest => "per_request",
         NyxIdApprovalDecisionMode.Grant => "grant",
         _ => "unknown",
+    };
+
+    private static string ToWireName(NyxIdApprovalTerminalOutcome outcome) => outcome switch
+    {
+        NyxIdApprovalTerminalOutcome.Rejected => "rejected",
+        NyxIdApprovalTerminalOutcome.Expired => "expired",
+        NyxIdApprovalTerminalOutcome.TimedOut => "timed_out",
+        _ => string.Empty,
     };
 
     private static string ToWireName(AgentToolReceiptStatus status) => status switch

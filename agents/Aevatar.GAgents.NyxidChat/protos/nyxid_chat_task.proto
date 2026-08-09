@@ -299,6 +299,14 @@ message NyxIdChatCanaryEffectFaultState {
   google.protobuf.Timestamp armed_at = 3;
   google.protobuf.Timestamp consumed_at = 4;
   google.protobuf.Timestamp forwarded_at = 5;
+  string approval_request_id = 6;
+  aevatar.ai.AgentToolReceiptStatus receipt_status = 7;
+  aevatar.ai.NyxIdApprovalDecisionMode approval_decision_mode = 8;
+  aevatar.ai.NyxIdApprovalTerminalOutcome approval_terminal_outcome = 9;
+  string approval_subject_kind = 10;
+  string approval_subject_id = 11;
+  string approval_call_id = 12;
+  string approval_tool_name = 13;
 }
 
 message NyxIdChatAvailableActions {
@@ -470,6 +478,9 @@ message NyxIdChatPostReturnApprovalObservation {
   aevatar.ai.NyxIdApprovalDecisionMode decision_mode = 2;
   aevatar.ai.AgentToolReceiptStatus receipt_status = 3;
   google.protobuf.Timestamp observed_at = 4;
+  aevatar.ai.NyxIdApprovalTerminalOutcome terminal_outcome = 5;
+  string subject_kind = 6;
+  string subject_id = 7;
 }
 
 message NyxIdChatTaskStepState {
@@ -1258,6 +1269,14 @@ message NyxIdChatTurnGAgentState {
   NyxIdChatCanaryEffectFaultDirective canary_effect_fault = 27;
   bool canary_effect_fault_consumed = 28;
   google.protobuf.Timestamp canary_effect_fault_consumed_at = 29;
+  string canary_effect_fault_approval_request_id = 30;
+  aevatar.ai.AgentToolReceiptStatus canary_effect_fault_receipt_status = 31;
+  aevatar.ai.NyxIdApprovalDecisionMode canary_effect_fault_approval_decision_mode = 32;
+  aevatar.ai.NyxIdApprovalTerminalOutcome canary_effect_fault_approval_terminal_outcome = 33;
+  string canary_effect_fault_approval_subject_kind = 34;
+  string canary_effect_fault_approval_subject_id = 35;
+  string canary_effect_fault_tool_call_id = 36;
+  string canary_effect_fault_tool_name = 37;
 }
 
 message NyxIdChatTurnOperationAdmittedEvent {
@@ -1275,6 +1294,8 @@ message NyxIdChatTurnOperationAdmittedEvent {
   aevatar.ai.tool_providers.AgentToolOperationReadBackPayload recovery_read_back = 12;
   string recovery_effect_step_id = 13;
   NyxIdChatCanaryEffectFaultDirective canary_effect_fault = 14;
+  string canary_effect_fault_tool_call_id = 15;
+  string canary_effect_fault_tool_name = 16;
 }
 
 message NyxIdChatTurnPlanGateAdmissionCommand {
@@ -1326,9 +1347,28 @@ message NyxIdChatPlanGateCapabilityExpiredSignal {
 }
 
 message NyxIdChatTurnEffectDispatchStartedEvent {
+  reserved 3;
+  reserved "consumed_canary_effect_fault_arm_id";
   NyxIdChatOperationKey key = 1;
   google.protobuf.Timestamp started_at = 2;
-  string consumed_canary_effect_fault_arm_id = 3;
+}
+
+// The authoritative turn consumes the canary only after infrastructure has
+// observed a real NyxID per-request denial that proves the provider mutation
+// was not applied. The denial result itself is intentionally not completed to
+// the turn through the normal result path.
+message NyxIdChatTurnCanaryEffectFaultTriggeredEvent {
+  NyxIdChatOperationKey key = 1;
+  string arm_id = 2;
+  string approval_request_id = 3;
+  google.protobuf.Timestamp triggered_at = 4;
+  aevatar.ai.AgentToolReceiptStatus receipt_status = 5;
+  aevatar.ai.NyxIdApprovalDecisionMode approval_decision_mode = 6;
+  aevatar.ai.NyxIdApprovalTerminalOutcome approval_terminal_outcome = 7;
+  string approval_subject_kind = 8;
+  string approval_subject_id = 9;
+  string approval_call_id = 10;
+  string approval_tool_name = 11;
 }
 
 message NyxIdChatTurnOperationReconciliationStartedEvent {
@@ -1572,6 +1612,15 @@ message NyxIdChatTurnOperationExecutionCompletedSignal {
   NyxIdChatTurnOperationCompletionSource source = 2;
 }
 
+// Infrastructure-only result-boundary signal. It replaces the normal
+// execution-completed signal only for an exact, typed NyxID per-request
+// denial with external_effect=not_applied.
+message NyxIdChatCanaryEffectFaultTriggeredSignal {
+  string arm_id = 1;
+  NyxIdChatOperationResultSignal denied_result = 2;
+  google.protobuf.Timestamp triggered_at = 3;
+}
+
 message NyxIdChatTurnOperationCancelCommand {
   NyxIdChatOperationKey key = 1;
 }
@@ -1789,13 +1838,14 @@ message NyxIdChatPlanResolveCommand {
 }
 
 message NyxIdChatCanaryEffectFaultArmCommand {
+  reserved 7;
+  reserved "catalog_digest";
   string scope_id = 1;
   string conversation_actor_id = 2;
   string arm_id = 3;
   string client_request_id = 4;
   NyxIdChatOperationKey key = 5;
   string service_instance_id = 6;
-  string catalog_digest = 7;
   string owner_subject = 8;
   google.protobuf.Timestamp expires_at = 9;
   int64 expected_state_version = 10;
@@ -1851,6 +1901,15 @@ message NyxIdChatCanaryEffectFaultConsumedSignal {
   NyxIdChatOperationKey key = 2;
   string turn_actor_id = 3;
   google.protobuf.Timestamp consumed_at = 4;
+  string service_instance_id = 5;
+  string approval_request_id = 6;
+  aevatar.ai.AgentToolReceiptStatus receipt_status = 7;
+  aevatar.ai.NyxIdApprovalDecisionMode approval_decision_mode = 8;
+  aevatar.ai.NyxIdApprovalTerminalOutcome approval_terminal_outcome = 9;
+  string approval_subject_kind = 10;
+  string approval_subject_id = 11;
+  string approval_call_id = 12;
+  string approval_tool_name = 13;
 }
 
 message NyxIdChatOperationDeliveryProbeDispatchRequested {

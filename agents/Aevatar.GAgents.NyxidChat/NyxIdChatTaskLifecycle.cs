@@ -1565,6 +1565,9 @@ public static class NyxIdChatTaskLifecycle
                 DecisionMode = receipt.NyxIdApprovalDecisionMode,
                 ReceiptStatus = receipt.Status,
                 ObservedAt = now.Clone(),
+                TerminalOutcome = receipt.NyxIdApprovalTerminalOutcome,
+                SubjectKind = receipt.SubjectKind,
+                SubjectId = receipt.SubjectId,
             };
             state.PendingApproval = null;
             return;

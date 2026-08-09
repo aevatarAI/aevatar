@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgents.NyxidChat;
@@ -20,7 +21,7 @@ internal static class NyxIdChatCanaryEffectFaultDecisions
 
         if (IsExactReplay(state.CanaryEffectFault, command))
             return false;
-        if (!IsValidArm(state, command, stateVersion, now) ||
+        if (!IsValidArm(state, command, stateVersion, now, out var catalogDigest) ||
             state.CanaryEffectFault is
             {
                 Status: NyxIdChatCanaryEffectFaultStatus.Armed,
@@ -38,7 +39,7 @@ internal static class NyxIdChatCanaryEffectFaultDecisions
                 ClientRequestId = command.ClientRequestId.Trim(),
                 Key = command.Key.Clone(),
                 ServiceInstanceId = command.ServiceInstanceId.Trim(),
-                CatalogDigest = command.CatalogDigest.Trim(),
+                CatalogDigest = catalogDigest,
                 OwnerSubject = command.OwnerSubject.Trim(),
                 ExpiresAt = command.ExpiresAt.Clone(),
             },
@@ -109,13 +110,45 @@ internal static class NyxIdChatCanaryEffectFaultDecisions
         next = state;
         var fault = state.CanaryEffectFault;
         var directive = fault?.Directive;
+        var exactSteps = state.ActiveTask?.Steps
+            .Where(candidate => candidate.Operation?.Key?.Equals(directive?.Key) == true)
+            .Take(2)
+            .ToArray() ?? [];
+        var exactStep = exactSteps.Length == 1 ? exactSteps[0] : null;
+        var exactStepIndex = exactStep is null
+            ? -1
+            : state.ActiveTask!.Steps.IndexOf(exactStep);
         if (fault?.Status != NyxIdChatCanaryEffectFaultStatus.Forwarded ||
             directive?.Key is null ||
             signal.Key is null ||
             signal.ConsumedAt is null ||
             fault.ForwardedAt is null ||
+            directive.Key.OperationGeneration != 1 ||
+            exactStep?.Source?.Tool?.OperationAdmission is not { } stepAdmission ||
+            exactStep.RetryToolInput is not { } retryInput ||
+            exactStepIndex < 0 ||
             !string.Equals(directive.ArmId, signal.ArmId, StringComparison.Ordinal) ||
             !directive.Key.Equals(signal.Key) ||
+            !string.Equals(signal.ServiceInstanceId, directive.ServiceInstanceId,
+                StringComparison.Ordinal) ||
+            !string.Equals(stepAdmission.ServiceInstanceId, directive.ServiceInstanceId,
+                StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(signal.ApprovalRequestId) ||
+            signal.ReceiptStatus != AgentToolReceiptStatus.Denied ||
+            signal.ApprovalDecisionMode is not (
+                NyxIdApprovalDecisionMode.Unspecified or
+                NyxIdApprovalDecisionMode.PerRequest) ||
+            signal.ApprovalTerminalOutcome != NyxIdApprovalTerminalOutcome.Rejected ||
+            !string.Equals(signal.ApprovalSubjectKind, "nyxid.user-service",
+                StringComparison.Ordinal) ||
+            !string.Equals(signal.ApprovalSubjectId, directive.ServiceInstanceId,
+                StringComparison.Ordinal) ||
+            !string.Equals(signal.ApprovalCallId, retryInput.CallId,
+                StringComparison.Ordinal) ||
+            !string.Equals(signal.ApprovalToolName, retryInput.ToolName,
+                StringComparison.Ordinal) ||
+            !string.Equals(signal.ApprovalToolName, exactStep.Source.Tool.ToolName,
+                StringComparison.Ordinal) ||
             !string.Equals(
                 signal.TurnActorId,
                 NyxIdChatTurnActorIds.ForTurn(
@@ -129,6 +162,27 @@ internal static class NyxIdChatCanaryEffectFaultDecisions
         next = state.Clone();
         next.CanaryEffectFault.Status = NyxIdChatCanaryEffectFaultStatus.Consumed;
         next.CanaryEffectFault.ConsumedAt = now.Clone();
+        next.CanaryEffectFault.ApprovalRequestId = signal.ApprovalRequestId;
+        next.CanaryEffectFault.ReceiptStatus = signal.ReceiptStatus;
+        next.CanaryEffectFault.ApprovalDecisionMode = signal.ApprovalDecisionMode;
+        next.CanaryEffectFault.ApprovalTerminalOutcome = signal.ApprovalTerminalOutcome;
+        next.CanaryEffectFault.ApprovalSubjectKind = signal.ApprovalSubjectKind;
+        next.CanaryEffectFault.ApprovalSubjectId = signal.ApprovalSubjectId;
+        next.CanaryEffectFault.ApprovalCallId = signal.ApprovalCallId;
+        next.CanaryEffectFault.ApprovalToolName = signal.ApprovalToolName;
+        var nextStep = next.ActiveTask.Steps[exactStepIndex];
+        nextStep.ApprovalRequestId = signal.ApprovalRequestId;
+        nextStep.ApprovalObservation = new NyxIdChatPostReturnApprovalObservation
+        {
+            ApprovalRequestId = signal.ApprovalRequestId,
+            DecisionMode = signal.ApprovalDecisionMode,
+            ReceiptStatus = signal.ReceiptStatus,
+            ObservedAt = now.Clone(),
+            TerminalOutcome = signal.ApprovalTerminalOutcome,
+            SubjectKind = signal.ApprovalSubjectKind,
+            SubjectId = signal.ApprovalSubjectId,
+        };
+        nextStep.UpdatedAt = now.Clone();
         next.ProgressSequence = checked(Math.Max(0, next.ProgressSequence) + 1);
         next.UpdatedAt = now.Clone();
         return true;
@@ -164,8 +218,10 @@ internal static class NyxIdChatCanaryEffectFaultDecisions
         NyxIdChatConversationGAgentState state,
         NyxIdChatCanaryEffectFaultArmCommand command,
         long stateVersion,
-        Timestamp now)
+        Timestamp now,
+        out string catalogDigest)
     {
+        catalogDigest = string.Empty;
         var expiresAt = command.ExpiresAt?.ToDateTimeOffset();
         var nowValue = now.ToDateTimeOffset();
         return command.ExpectedStateVersion == stateVersion &&
@@ -174,7 +230,6 @@ internal static class NyxIdChatCanaryEffectFaultDecisions
                !string.IsNullOrWhiteSpace(command.ScopeId) &&
                !string.IsNullOrWhiteSpace(command.ConversationActorId) &&
                !string.IsNullOrWhiteSpace(command.ServiceInstanceId) &&
-               IsCatalogDigest(command.CatalogDigest) &&
                !string.IsNullOrWhiteSpace(command.OwnerSubject) &&
                command.Key is not null &&
                HasCompleteKey(command.Key) &&
@@ -187,13 +242,15 @@ internal static class NyxIdChatCanaryEffectFaultDecisions
                string.Equals(state.OwnerSubject, command.OwnerSubject.Trim(), StringComparison.Ordinal) &&
                expiresAt > nowValue &&
                expiresAt <= nowValue + MaximumArmLifetime &&
-               MatchesPendingEffect(state, command);
+               MatchesPendingEffect(state, command, out catalogDigest);
     }
 
     private static bool MatchesPendingEffect(
         NyxIdChatConversationGAgentState state,
-        NyxIdChatCanaryEffectFaultArmCommand command)
+        NyxIdChatCanaryEffectFaultArmCommand command,
+        out string catalogDigest)
     {
+        catalogDigest = string.Empty;
         var task = state.ActiveTask;
         var gate = task?.Gate;
         var key = command.Key;
@@ -239,7 +296,7 @@ internal static class NyxIdChatCanaryEffectFaultDecisions
             return false;
 
         var operation = stepTool.OperationAdmission;
-        return gateAdmission.Key?.Equals(key) == true &&
+        var matches = gateAdmission.Key?.Equals(key) == true &&
                string.IsNullOrWhiteSpace(gateAdmission.ActionRequestId) &&
                !string.IsNullOrWhiteSpace(gateAdmission.ToolCallId) &&
                !string.IsNullOrWhiteSpace(gateAdmission.ToolName) &&
@@ -267,9 +324,11 @@ internal static class NyxIdChatCanaryEffectFaultDecisions
                operation?.ReadBack is not null &&
                string.Equals(operation.ServiceInstanceId, command.ServiceInstanceId.Trim(),
                    StringComparison.Ordinal) &&
-               string.Equals(operation.CatalogDigest, command.CatalogDigest.Trim(),
-                   StringComparison.Ordinal) &&
+               IsCatalogDigest(operation.CatalogDigest) &&
                NyxIdChatOperationAdmissionPolicy.IsValid(operation, EffectSafety(true));
+        if (matches)
+            catalogDigest = operation!.CatalogDigest;
+        return matches;
     }
 
     private static NyxIdChatToolCallSafety EffectSafety(bool mayChangeExternalState) => new()
@@ -290,8 +349,6 @@ internal static class NyxIdChatCanaryEffectFaultDecisions
                    StringComparison.Ordinal) &&
                directive.Key?.Equals(command.Key) == true &&
                string.Equals(directive.ServiceInstanceId, command.ServiceInstanceId?.Trim(),
-                   StringComparison.Ordinal) &&
-               string.Equals(directive.CatalogDigest, command.CatalogDigest?.Trim(),
                    StringComparison.Ordinal) &&
                string.Equals(directive.OwnerSubject, command.OwnerSubject?.Trim(),
                    StringComparison.Ordinal) &&

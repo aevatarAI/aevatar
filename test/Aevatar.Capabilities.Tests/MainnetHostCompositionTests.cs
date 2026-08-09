@@ -143,7 +143,7 @@ public sealed class MainnetHostCompositionTests
     }
 
     [Fact]
-    public void AddAevatarMainnetHost_ShouldAllowCanaryEffectFaultOnlyForShareOpsOwner()
+    public void AddAevatarMainnetHost_ShouldAllowCanaryEffectFaultOnlyForReviewedOwners()
     {
         using var home = new TemporaryAevatarHomeScope();
         var builder = CreateBuilder();
@@ -158,7 +158,8 @@ public sealed class MainnetHostCompositionTests
 
         options.Enabled.Should().BeTrue();
         options.AllowedOwnerSubjects.Should().Equal(
-            "ce646b72-dd49-4ea8-bc1e-8273672c102c");
+            "ce646b72-dd49-4ea8-bc1e-8273672c102c",
+            "5d0d7b72-acff-49af-bb1b-9f30bbb7c102");
     }
 
     [Fact]
@@ -773,7 +774,7 @@ public sealed class MainnetHostCompositionTests
             typeof(AskUserAgentToolSource),
             typeof(ConditionEvaluateAgentToolSource),
             typeof(SkillsAgentToolSource),
-            typeof(OrnnAgentToolSource),
+            typeof(OrnnSearchAgentToolSource),
             typeof(StartWorkflowToolSource),
             typeof(ObserveRunToolSource),
             typeof(ReadWorkflowRunArtifactToolSource));
@@ -819,7 +820,7 @@ public sealed class MainnetHostCompositionTests
             typeof(AskUserAgentToolSource),
             typeof(ConditionEvaluateAgentToolSource),
             typeof(SkillsAgentToolSource),
-            typeof(OrnnAgentToolSource),
+            typeof(OrnnSearchAgentToolSource),
             typeof(StartWorkflowToolSource),
             typeof(ObserveRunToolSource),
             typeof(ReadWorkflowRunArtifactToolSource));
@@ -830,6 +831,7 @@ public sealed class MainnetHostCompositionTests
             source is NyxIdConnectedServiceInventoryToolSource);
         nyxIdChatProfile.Sources.Should().ContainSingle(source => source is WebSearchAgentToolSource);
         nyxIdChatProfile.Sources.Should().NotContain(source => source is WebAgentToolSource);
+        nyxIdChatProfile.Sources.Should().NotContain(source => source is OrnnAgentToolSource);
         var nyxIdChatWebTools = await nyxIdChatProfile.Sources
             .OfType<WebSearchAgentToolSource>()
             .Single()
@@ -850,10 +852,13 @@ public sealed class MainnetHostCompositionTests
         conditionTool.Name.Should().Be("condition_evaluate");
         conditionTool.IsReadOnly.Should().BeTrue();
         var nyxIdChatOrnnTools = await nyxIdChatProfile.Sources
-            .OfType<OrnnAgentToolSource>()
+            .OfType<OrnnSearchAgentToolSource>()
             .Single()
             .DiscoverToolsAsync();
-        nyxIdChatOrnnTools.Select(static tool => tool.Name).Should().Contain("ornn_search_skills");
+        nyxIdChatOrnnTools.Select(static tool => tool.Name).Should().Equal("ornn_search_skills");
+        nyxIdChatOrnnTools.Should().NotContain(tool =>
+            tool.Name == "ornn_publish_skill" ||
+            tool.Name == "ornn_update_skill");
 
         var voice = registry.Resolve("voice.realtime");
         voice.IsSuccess.Should().BeFalse();

@@ -329,6 +329,7 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
                 ServiceId = "connected-service-alpha",
                 ServiceSlug = "service-slug-alpha",
                 ReadinessCapabilityId = "readiness-capability-alpha",
+                ProviderResourceId = "repository-alpha",
             },
         };
 
@@ -347,6 +348,7 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
         source.ServiceId.Should().Be("connected-service-alpha");
         source.ServiceSlug.Should().Be("service-slug-alpha");
         source.ReadinessCapabilityId.Should().Be("readiness-capability-alpha");
+        source.ProviderResourceId.Should().Be("repository-alpha");
     }
 
     [Fact]
@@ -364,6 +366,7 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
             {
                 ActionRequestId = "action-alpha",
                 Check = "service.connected",
+                ProviderResourceId = "connected-service-resource-alpha",
             },
         };
 
@@ -380,6 +383,7 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
             .Single(item => item.StepId == "step-alpha").Source.Postcondition;
         source.ActionRequestId.Should().Be("action-alpha");
         source.Check.Should().Be("service.connected");
+        source.ProviderResourceId.Should().Be("connected-service-resource-alpha");
     }
 
     [Fact]

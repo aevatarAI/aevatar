@@ -23,7 +23,7 @@ evidence.
 
 | Responsibility | Owner | Required action |
 | --- | --- | --- |
-| Canary operator | `@eanz17` using `share-ops@aelf.io` | Run setup, Studio interaction, typed state checks, and cleanup. |
+| Canary operator | `@eanz17`; NyxID subject `5d0d7b72-acff-49af-bb1b-9f30bbb7c102` | Run setup, Studio interaction, typed state checks, and cleanup. |
 | Identity reset | `@eanz17` | Establish the asserted connected or disconnected start state before each UC. |
 | Lark write cleanup | `@eanz17` | Cancel the exact Approval instance and delete the exact Bitable row created by the run. |
 | NyxID approval cleanup | `@eanz17` | Keep the service in `per_request`, revoke any unexpected grant, and resolve or expire every request from the run. |
@@ -38,9 +38,10 @@ deleting only the Aevatar conversation.
 
 ```text
 NyxID profile:                share-ops
-NyxID account:                share-ops@aelf.io
-Lark UserService ID:          f681818b-f625-4aef-82f7-8bfd92e426b8
-Lark endpoint ID:             1d87990f-958c-44c2-9514-2474d24f3b1a
+NyxID canonical subject:      5d0d7b72-acff-49af-bb1b-9f30bbb7c102
+NyxID canonical email:        eancuznaivy@gmail.com
+Lark personal UserService ID: 41b9a19b-3aa8-4be8-a424-b3821b0951e4
+Lark endpoint ID:             d6c2ee39-f2b1-460c-ae1f-5ce93037935b
 Lark service slug:            api-lark-bot
 
 Approval definition:          Email access request
@@ -61,9 +62,16 @@ Canary timestamp field:        Reviewed At
 ```
 
 The Bitable row uses a unique `Attestation Key` beginning with `m40-canary-`.
-`Control` is `candidate-screening`, `Owner` is `share-ops@aelf.io`, `Status` is
+`Control` is `candidate-screening`, `Owner` is `eancuznaivy@gmail.com`, `Status` is
 `accepted`, `Sequence` carries the candidate score, and `Reviewed At` carries
 the run timestamp. Do not write to any other table or Approval definition.
+
+The organization-owned UserService
+`f681818b-f625-4aef-82f7-8bfd92e426b8` is historical context only. It is not a
+target for this run and must not be updated, used for approval policy changes,
+or treated as cleanup ownership. Authentication and canary authorization use
+the stable NyxID subject above; email text is descriptive and is not an
+authorization key.
 
 ## Fixed Approval Policy
 
@@ -81,10 +89,11 @@ The selected policy is NyxID Tier B with strict separation:
 - no Aevatar approval card may be fabricated before NyxID returns a typed
   request identity or terminal outcome.
 
-The operator must snapshot the existing organization policy before changing it.
-The permanent safe state for this canary service is the rule set below. A switch
-to `per_request` revokes active grants and cancels stale grant-mode requests in
-NyxID; verify both effects instead of assuming them from the update receipt.
+The operator must snapshot the existing personal UserService policy before
+changing it. The permanent safe state for this personal canary service is the
+rule set below. A switch to `per_request` revokes active grants and cancels stale
+grant-mode requests in NyxID; verify both effects instead of assuming them from
+the update receipt.
 
 ```bash
 set +x
@@ -92,8 +101,10 @@ set -euo pipefail
 umask 077
 
 export M40_NYXID_PROFILE="share-ops"
-export M40_ORG="ChronoAI"
-export M40_LARK_USER_SERVICE_ID="f681818b-f625-4aef-82f7-8bfd92e426b8"
+export M40_NYXID_SUBJECT="5d0d7b72-acff-49af-bb1-9f30bbb7c102"
+export M40_NYXID_EMAIL="eancuznaivy@gmail.com"
+export M40_LARK_USER_SERVICE_ID="41b9a19b-3aa8-4be8-a424-b3821b0951e4"
+export M40_LARK_ENDPOINT_ID="d6c2ee39-f2b1-460c-ae1f-5ce93037935b"
 export M40_LARK_SLUG="api-lark-bot"
 export M40_BASE_APP_TOKEN="TxGrbUmPQa8Lkus2z9UlEuffgUc"
 export M40_BASE_TABLE_ID="tblLH7cSI4IWX7kF"
@@ -103,7 +114,11 @@ export M40_APPROVAL_USER_ID="ee689459"
 M40_TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/aevatar-m40-canary.XXXXXX")"
 chmod 700 "$M40_TMP_DIR"
 
-nyxid whoami --profile "$M40_NYXID_PROFILE"
+nyxid whoami \
+  --profile "$M40_NYXID_PROFILE" \
+  --output json > "$M40_TMP_DIR/whoami.json"
+test "$(jq -r '.id // ""' "$M40_TMP_DIR/whoami.json")" = "$M40_NYXID_SUBJECT"
+test "$(jq -r '.email // ""' "$M40_TMP_DIR/whoami.json")" = "$M40_NYXID_EMAIL"
 git fetch origin feature/integrate
 M40_AEVATAR_SHA="$(git rev-parse origin/feature/integrate)"
 test "$(git rev-parse HEAD)" = "$M40_AEVATAR_SHA"
@@ -112,7 +127,21 @@ M40_CANARY_SPEC_URL="https://raw.githubusercontent.com/aevatarAI/aevatar/${M40_A
 nyxid service show "$M40_LARK_USER_SERVICE_ID" \
   --profile "$M40_NYXID_PROFILE" \
   --output json > "$M40_TMP_DIR/lark-service-before.json"
+jq -e \
+  --arg user_service_id "$M40_LARK_USER_SERVICE_ID" \
+  --arg endpoint_id "$M40_LARK_ENDPOINT_ID" \
+  --arg slug "$M40_LARK_SLUG" \
+  '.id == $user_service_id and
+   .endpoint_id == $endpoint_id and
+   .slug == $slug and
+   .credential_source.type == "personal" and
+   .status == "active" and
+   .connected == true' \
+  "$M40_TMP_DIR/lark-service-before.json" > /dev/null
 M40_PREVIOUS_SPEC_URL="$(jq -r '.openapi_spec_url // ""' "$M40_TMP_DIR/lark-service-before.json")"
+M40_LARK_EFFECTIVE_SERVICE_ID="$(
+  jq -er '.catalog_service_id // .id' "$M40_TMP_DIR/lark-service-before.json"
+)"
 
 nyxid service update "$M40_LARK_USER_SERVICE_ID" \
   --openapi-spec-url "$M40_CANARY_SPEC_URL" \
@@ -121,20 +150,28 @@ nyxid service update "$M40_LARK_USER_SERVICE_ID" \
 nyxid service show "$M40_LARK_USER_SERVICE_ID" \
   --profile "$M40_NYXID_PROFILE" \
   --output json > "$M40_TMP_DIR/lark-service-mounted.json"
-test "$(jq -r '.openapi_spec_url // ""' "$M40_TMP_DIR/lark-service-mounted.json")" = \
-  "$M40_CANARY_SPEC_URL"
+jq -e \
+  --arg user_service_id "$M40_LARK_USER_SERVICE_ID" \
+  --arg endpoint_id "$M40_LARK_ENDPOINT_ID" \
+  --arg spec_url "$M40_CANARY_SPEC_URL" \
+  '.id == $user_service_id and
+   .endpoint_id == $endpoint_id and
+   .credential_source.type == "personal" and
+   .openapi_spec_url == $spec_url' \
+  "$M40_TMP_DIR/lark-service-mounted.json" > /dev/null
 
 nyxid approval service-configs \
-  --org "$M40_ORG" \
   --profile "$M40_NYXID_PROFILE" \
   --output json > "$M40_TMP_DIR/approval-config-before.json"
 nyxid approval grants \
-  --org "$M40_ORG" \
   --profile "$M40_NYXID_PROFILE" \
   --output json > "$M40_TMP_DIR/grants-before.json"
+jq -e \
+  --arg service_id "$M40_LARK_EFFECTIVE_SERVICE_ID" \
+  '[.grants[] | select(.service_id == $service_id)] | length == 0' \
+  "$M40_TMP_DIR/grants-before.json" > /dev/null
 
 nyxid approval set-config "$M40_LARK_USER_SERVICE_ID" \
-  --org "$M40_ORG" \
   --profile "$M40_NYXID_PROFILE" \
   --require-approval true \
   --approval-mode per_request \
@@ -146,13 +183,40 @@ nyxid approval set-config "$M40_LARK_USER_SERVICE_ID" \
   --output json > "$M40_TMP_DIR/approval-config-set.json"
 
 nyxid approval service-configs \
-  --org "$M40_ORG" \
   --profile "$M40_NYXID_PROFILE" \
   --output json > "$M40_TMP_DIR/approval-config-after.json"
 nyxid approval grants \
-  --org "$M40_ORG" \
   --profile "$M40_NYXID_PROFILE" \
   --output json > "$M40_TMP_DIR/grants-after.json"
+jq -e \
+  --arg user_service_id "$M40_LARK_USER_SERVICE_ID" \
+  --arg service_id "$M40_LARK_EFFECTIVE_SERVICE_ID" \
+  '[.configs[] |
+    select(.user_service_id == $user_service_id and
+           .service_id == $service_id and
+           .approval_required == true and
+           .approval_mode == "per_request" and
+           .default_effect == "auto_allow" and
+           .rules == [
+             {effect: "require_approval", methods: ["POST"], mode: "per_request",
+              resource_pattern: "/open-apis/approval/v4/instances", verbs: []},
+             {effect: "require_approval", methods: ["POST"], mode: "per_request",
+              resource_pattern: "/open-apis/approval/v4/instances/cancel", verbs: []},
+             {effect: "require_approval", methods: ["POST"], mode: "per_request",
+              resource_pattern: "/open-apis/bitable/v1/apps/TxGrbUmPQa8Lkus2z9UlEuffgUc/tables/tblLH7cSI4IWX7kF/records", verbs: []},
+             {effect: "require_approval", methods: ["DELETE"], mode: "per_request",
+              resource_pattern: "/open-apis/bitable/v1/apps/TxGrbUmPQa8Lkus2z9UlEuffgUc/tables/tblLH7cSI4IWX7kF/records/*", verbs: []}
+           ])] | length == 1' \
+  "$M40_TMP_DIR/approval-config-after.json" > /dev/null
+jq -e \
+  --arg service_id "$M40_LARK_EFFECTIVE_SERVICE_ID" \
+  '[.grants[] | select(.service_id == $service_id)] | length == 0' \
+  "$M40_TMP_DIR/grants-after.json" > /dev/null
+jq -S \
+  --arg user_service_id "$M40_LARK_USER_SERVICE_ID" \
+  '[.configs[] | select(.user_service_id == $user_service_id)]' \
+  "$M40_TMP_DIR/approval-config-after.json" \
+  > "$M40_TMP_DIR/approval-config-expected.json"
 ```
 
 Stop unless the read-back identifies the same UserService, mode is
@@ -182,9 +246,9 @@ Kubernetes use is read-only: `get`, `describe`, and `logs`. Do not `exec`,
 
 ### UC1a: disconnected start
 
-1. Assert the team account has no personal `api-github` UserService. Delete only
-   a disposable personal connection owned by `share-ops`; never delete an
-   organization-owned or another user's service.
+1. Assert the authenticated owner has no personal `api-github` UserService.
+   Delete only a disposable personal connection owned by the exact canonical
+   subject above; never delete an organization-owned or another user's service.
 2. Assert a fresh service inventory still reports no personal GitHub binding.
 3. Start a new Studio conversation requesting GitHub connection and a read-only
    repository inspection.
@@ -199,8 +263,8 @@ UC1a does not depend on a prior UC and does not connect GitHub.
 
 ### UC1b: connected and ready start
 
-1. Independently connect the team account's disposable personal GitHub service
-   through the NyxID OAuth flow. Record only UserService ID, endpoint ID, slug,
+1. Independently connect the authenticated owner's disposable personal GitHub
+   service through the NyxID OAuth flow. Record only UserService ID, endpoint ID, slug,
    granted scope names, and readiness; never record tokens or OAuth codes.
 2. Assert the exact personal UserService is active and the required read scope
    is present before opening Studio.
@@ -227,23 +291,31 @@ or ambiguous request mutation is forbidden.
 
 Acceptance sequence:
 
-1. Generation 1 becomes `uncertain` with `externalEffect=may_have_changed`.
-   Retry is unavailable.
-2. The actor adds a read-only reconciliation step in the same task and a higher
+1. Generation 1 creates a real NyxID per-request approval. Record its exact
+   request ID, reject that request on a NyxID surface before its timeout, and
+   read `GET /api/v1/approvals/requests/{request_id}/status` with the same
+   requester authority. Require the typed status to be exactly `rejected`;
+   `expired`, `pending`, a missing request, or an unreadable status fails UC3.
+2. Aevatar captures the same request ID with receipt status `denied`, decision
+   mode `per_request` or `unknown`, and terminal outcome `rejected`. Generation
+   1 then becomes `uncertain` with `externalEffect=may_have_changed`; retry is
+   unavailable. The production policy read-back above, not a missing field in
+   the NyxID 7001 body, proves the effective decision mode is `per_request`.
+3. The actor adds a read-only reconciliation step in the same task and a higher
    plan revision.
-3. Exact typed reconciliation calls
+4. Exact typed reconciliation calls
    `GET /open-apis/approval/v4/instances/{instance_id}` with the caller UUID
    supplied to create. Only Lark provider code `1390003` proves `not_applied`;
    a timeout, malformed response, or any other miss is `unavailable`.
-4. The actor exposes `retry`; retry passes the plan gate again and enters
+5. The actor exposes `retry`; retry passes the plan gate again and enters
    generation 2.
-5. Generation 2 produces a fresh NyxID approval request. Approve it on a NyxID
+6. Generation 2 produces a fresh NyxID approval request. Approve it on a NyxID
    surface. No Aevatar pre-return approval card is permitted.
-6. The create operation returns a provider-generated instance code; an exact
+7. The create operation returns a provider-generated instance code; an exact
    GET verifies the instance. The task succeeds with `externalEffect=confirmed`.
-7. Reload reproduces both generations, reconciliation, captured approval facts,
+8. Reload reproduces both generations, reconciliation, captured approval facts,
    verified instance, and one terminal.
-8. Cancel the exact instance and require an exact GET to report the provider's
+9. Cancel the exact instance and require an exact GET to report the provider's
    canceled/`RECALL` status.
 
 Do not run UC3 until the narrow one-shot fault mechanism is present on the exact
@@ -253,14 +325,19 @@ injection does not satisfy this production step.
 Before resolving the generation-1 plan gate, read the exact conversation
 `/state` document. Select its single planned effect step and record the
 conversation actor ID, active turn ID, task ID, step ID, operation ID,
-`operationGeneration=1`, admitted UserService ID, admitted catalog digest, and
+`operationGeneration=1`, admitted UserService ID, and
 top-level `stateVersion`. Do not derive, edit, or reuse any of these values.
-Using the authenticated `share-ops` owner only, POST those exact values plus a
-fresh `armId`, `clientRequestId`, and an expiry no more than 15 minutes ahead to:
+Using only the authenticated canonical subject above, POST those exact values
+plus a fresh `armId`, `clientRequestId`, and an expiry no more than 15 minutes
+ahead to:
 
 ```text
 /api/scopes/{scopeId}/nyxid-chat/conversations/{conversationActorId}:arm-effect-fault-canary
 ```
+
+The request does not carry `catalogDigest`. The conversation actor must read the
+exact committed step admission, validate its digest, and seal that digest into
+the private one-shot directive atomically with the arm transition.
 
 The accepted receipt is only dispatch evidence. Poll `/state` and require the
 same `armId`, exact operation key, and increasing actor `stateVersion` while the
@@ -317,9 +394,14 @@ known IDs and timestamps. LLM prose is never effect or cleanup evidence.
 ## Restore The Service Overlay
 
 After every created Approval and Bitable record has passed exact cleanup,
-restore the snapshotted per-instance spec. An empty prior value is restored by
-explicitly clearing the override. Re-read the UserService and start no further
-canary turn until the prior value is visible.
+restore the snapshotted personal UserService spec. An empty prior value is
+restored by explicitly clearing the override. Re-read that exact UserService
+and start no further canary turn until its prior value is visible. Do not mutate
+the historical organization-owned UserService during setup or restore.
+Only the OpenAPI overlay is restored: the personal service approval policy must
+remain at the exact `per_request` configuration established above, with no
+active grants. The final sorted policy comparison and grant query below prove
+that post-cleanup state.
 
 ```bash
 if [ -n "$M40_PREVIOUS_SPEC_URL" ]; then
@@ -337,8 +419,34 @@ fi
 nyxid service show "$M40_LARK_USER_SERVICE_ID" \
   --profile "$M40_NYXID_PROFILE" \
   --output json > "$M40_TMP_DIR/lark-service-restored.json"
-test "$(jq -r '.openapi_spec_url // ""' "$M40_TMP_DIR/lark-service-restored.json")" = \
-  "$M40_PREVIOUS_SPEC_URL"
+jq -e \
+  --arg user_service_id "$M40_LARK_USER_SERVICE_ID" \
+  --arg endpoint_id "$M40_LARK_ENDPOINT_ID" \
+  --arg spec_url "$M40_PREVIOUS_SPEC_URL" \
+  '.id == $user_service_id and
+   .endpoint_id == $endpoint_id and
+   .credential_source.type == "personal" and
+   (.openapi_spec_url // "") == $spec_url' \
+  "$M40_TMP_DIR/lark-service-restored.json" > /dev/null
+
+nyxid approval service-configs \
+  --profile "$M40_NYXID_PROFILE" \
+  --output json > "$M40_TMP_DIR/approval-config-final.json"
+nyxid approval grants \
+  --profile "$M40_NYXID_PROFILE" \
+  --output json > "$M40_TMP_DIR/grants-final.json"
+jq -S \
+  --arg user_service_id "$M40_LARK_USER_SERVICE_ID" \
+  '[.configs[] | select(.user_service_id == $user_service_id)]' \
+  "$M40_TMP_DIR/approval-config-final.json" \
+  > "$M40_TMP_DIR/approval-config-final-target.json"
+cmp \
+  "$M40_TMP_DIR/approval-config-expected.json" \
+  "$M40_TMP_DIR/approval-config-final-target.json"
+jq -e \
+  --arg service_id "$M40_LARK_EFFECTIVE_SERVICE_ID" \
+  '[.grants[] | select(.service_id == $service_id)] | length == 0' \
+  "$M40_TMP_DIR/grants-final.json" > /dev/null
 ```
 
 ## Completion Gate

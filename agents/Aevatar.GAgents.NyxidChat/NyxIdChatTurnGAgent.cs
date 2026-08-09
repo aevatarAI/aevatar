@@ -78,6 +78,7 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
             .On<NyxIdChatTurnPlanGateAdmissionRevokedEvent>(ApplyPlanGateAdmissionRevoked)
             .On<NyxIdChatTurnOperationDeliveryFencedEvent>(ApplyOperationDeliveryFenced)
             .On<NyxIdChatTurnEffectDispatchStartedEvent>(ApplyEffectDispatchStarted)
+            .On<NyxIdChatTurnCanaryEffectFaultTriggeredEvent>(ApplyCanaryEffectFaultTriggered)
             .On<NyxIdChatTurnOperationReconciliationStartedEvent>(ApplyReconciliationStarted)
             .On<NyxIdChatTurnOperationCompletedEvent>(ApplyCompleted)
             .On<NyxIdChatTurnOperationDeliveredEvent>(ApplyDelivered)
@@ -278,7 +279,11 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
         if (recovery.ReadBack is not null)
             admitted.RecoveryReadBack = recovery.ReadBack;
         if (canaryEffectFault is not null)
+        {
             admitted.CanaryEffectFault = canaryEffectFault;
+            admitted.CanaryEffectFaultToolCallId = command.PlanGateContinuation!.ToolCallId;
+            admitted.CanaryEffectFaultToolName = command.PlanGateContinuation.ToolName;
+        }
         await PersistDomainEventAsync(admitted, CancellationToken.None);
 
         if (State.RecoveryCredential is not null)
@@ -296,21 +301,7 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
                 Key = command.Key.Clone(),
                 StartedAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
             };
-            if (State.CanaryEffectFault is not null)
-                dispatchStarted.ConsumedCanaryEffectFaultArmId = State.CanaryEffectFault.ArmId;
             await PersistDomainEventAsync(dispatchStarted, CancellationToken.None);
-        }
-
-        if (State.CanaryEffectFaultConsumed)
-        {
-            await TryDispatchCanaryEffectFaultConsumedAsync(CancellationToken.None);
-            await CompleteAndDeliverAsync(CanaryEffectFaultResult(command.Key));
-            await DispatchOperationDeliveryStatusAsync(
-                command.Key,
-                admitted: true,
-                State.EffectDispatchWaterline,
-                CancellationToken.None);
-            return;
         }
 
         try
@@ -442,6 +433,34 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
             State.AdmittedOperation,
             signal.Result,
             EffectMayHaveChanged(State)));
+    }
+
+    [EventHandler(AllowSelfHandling = true)]
+    public async Task HandleCanaryEffectFaultTriggeredAsync(
+        NyxIdChatCanaryEffectFaultTriggeredSignal signal)
+    {
+        ArgumentNullException.ThrowIfNull(signal);
+        if (!IsValidCanaryEffectFaultTriggered(signal))
+            return;
+
+        var triggeredAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow());
+        var receipt = signal.DeniedResult.Tool.Receipt;
+        await PersistDomainEventAsync(new NyxIdChatTurnCanaryEffectFaultTriggeredEvent
+        {
+            Key = signal.DeniedResult.Key.Clone(),
+            ArmId = signal.ArmId,
+            ApprovalRequestId = receipt.ApprovalRequestId,
+            TriggeredAt = triggeredAt,
+            ReceiptStatus = receipt.Status,
+            ApprovalDecisionMode = receipt.NyxIdApprovalDecisionMode,
+            ApprovalTerminalOutcome = receipt.NyxIdApprovalTerminalOutcome,
+            ApprovalSubjectKind = receipt.SubjectKind,
+            ApprovalSubjectId = receipt.SubjectId,
+            ApprovalCallId = receipt.CallId,
+            ApprovalToolName = receipt.ToolName,
+        }, CancellationToken.None);
+        await TryDispatchCanaryEffectFaultConsumedAsync(CancellationToken.None);
+        await CompleteAndDeliverAsync(CanaryEffectFaultResult(signal.DeniedResult.Key));
     }
 
     [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
@@ -1054,7 +1073,16 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
         next.RecoveryReadBack = evt.RecoveryReadBack?.Clone();
         next.RecoveryEffectStepId = evt.RecoveryEffectStepId;
         next.CanaryEffectFault = evt.CanaryEffectFault?.Clone();
+        next.CanaryEffectFaultToolCallId = evt.CanaryEffectFaultToolCallId;
+        next.CanaryEffectFaultToolName = evt.CanaryEffectFaultToolName;
         next.CanaryEffectFaultConsumed = false;
+        next.CanaryEffectFaultConsumedAt = null;
+        next.CanaryEffectFaultApprovalRequestId = string.Empty;
+        next.CanaryEffectFaultReceiptStatus = AgentToolReceiptStatus.Unspecified;
+        next.CanaryEffectFaultApprovalDecisionMode = NyxIdApprovalDecisionMode.Unspecified;
+        next.CanaryEffectFaultApprovalTerminalOutcome = NyxIdApprovalTerminalOutcome.Unspecified;
+        next.CanaryEffectFaultApprovalSubjectKind = string.Empty;
+        next.CanaryEffectFaultApprovalSubjectId = string.Empty;
         if (evt.ConsumesPlanGateAdmission)
             next.PlanGateAdmission = null;
         next.ReconciliationStartedAt = null;
@@ -1149,16 +1177,53 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
         var next = current.Clone();
         next.EffectDispatchWaterline = NyxIdChatEffectEvidence.MayHaveChanged;
         next.EffectDispatchStartedAt = evt.StartedAt?.Clone();
-        next.CanaryEffectFaultConsumed =
-            next.CanaryEffectFault is not null &&
-            !string.IsNullOrWhiteSpace(evt.ConsumedCanaryEffectFaultArmId) &&
-            string.Equals(
-                next.CanaryEffectFault.ArmId,
-                evt.ConsumedCanaryEffectFaultArmId,
-                StringComparison.Ordinal);
-        next.CanaryEffectFaultConsumedAt = next.CanaryEffectFaultConsumed
-            ? evt.StartedAt?.Clone()
-            : null;
+        return next;
+    }
+
+    private static NyxIdChatTurnGAgentState ApplyCanaryEffectFaultTriggered(
+        NyxIdChatTurnGAgentState current,
+        NyxIdChatTurnCanaryEffectFaultTriggeredEvent evt)
+    {
+        if (current.CanaryEffectFault is null ||
+            current.CanaryEffectFaultConsumed ||
+            evt.Key is null ||
+            !KeysEqual(current.AdmittedOperation, evt.Key) ||
+            !current.CanaryEffectFault.Key.Equals(evt.Key) ||
+            !string.Equals(current.CanaryEffectFault.ArmId, evt.ArmId, StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(evt.ApprovalRequestId) ||
+            evt.ReceiptStatus != AgentToolReceiptStatus.Denied ||
+            evt.ApprovalTerminalOutcome != NyxIdApprovalTerminalOutcome.Rejected ||
+            evt.ApprovalDecisionMode is not (
+                NyxIdApprovalDecisionMode.Unspecified or
+                NyxIdApprovalDecisionMode.PerRequest) ||
+            !string.Equals(evt.ApprovalSubjectKind, "nyxid.user-service", StringComparison.Ordinal) ||
+            !string.Equals(
+                evt.ApprovalSubjectId,
+                current.CanaryEffectFault.ServiceInstanceId,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                evt.ApprovalCallId,
+                current.CanaryEffectFaultToolCallId,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                evt.ApprovalToolName,
+                current.CanaryEffectFaultToolName,
+                StringComparison.Ordinal) ||
+            evt.TriggeredAt is null)
+        {
+            return current;
+        }
+
+        var next = current.Clone();
+        next.CanaryEffectFaultConsumed = true;
+        next.CanaryEffectFaultConsumedAt = evt.TriggeredAt.Clone();
+        next.CanaryEffectFaultApprovalRequestId = evt.ApprovalRequestId;
+        next.CanaryEffectFaultReceiptStatus = evt.ReceiptStatus;
+        next.CanaryEffectFaultApprovalDecisionMode = evt.ApprovalDecisionMode;
+        next.CanaryEffectFaultApprovalTerminalOutcome = evt.ApprovalTerminalOutcome;
+        next.CanaryEffectFaultApprovalSubjectKind = evt.ApprovalSubjectKind;
+        next.CanaryEffectFaultApprovalSubjectId = evt.ApprovalSubjectId;
+        next.EffectDispatchWaterline = NyxIdChatEffectEvidence.MayHaveChanged;
         return next;
     }
 
@@ -1209,6 +1274,58 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
         while (next.DeliveredOperations.Count > DeliveredOperationHistoryLimit)
             next.DeliveredOperations.RemoveAt(0);
         return next;
+    }
+
+    private bool IsValidCanaryEffectFaultTriggered(
+        NyxIdChatCanaryEffectFaultTriggeredSignal signal)
+    {
+        var directive = State.CanaryEffectFault;
+        var deniedResult = signal.DeniedResult;
+        return directive?.Key is not null &&
+               State.AdmittedOperation is not null &&
+               !State.CanaryEffectFaultConsumed &&
+               !State.ResultDelivered &&
+               !IsTerminal(State.Phase) &&
+               State.MayChangeExternalState &&
+               State.EffectDispatchWaterline == NyxIdChatEffectEvidence.MayHaveChanged &&
+               State.EffectDispatchStartedAt is not null &&
+               signal.TriggeredAt is not null &&
+               string.Equals(directive.ArmId, signal.ArmId, StringComparison.Ordinal) &&
+               directive.Key.Equals(State.AdmittedOperation) &&
+               directive.Key.Equals(deniedResult?.Key) &&
+               IsCanaryApprovalObservation(
+                   directive,
+                   State.CanaryEffectFaultToolCallId,
+                   State.CanaryEffectFaultToolName,
+                   deniedResult);
+    }
+
+    private static bool IsCanaryApprovalObservation(
+        NyxIdChatCanaryEffectFaultDirective directive,
+        string expectedCallId,
+        string expectedToolName,
+        NyxIdChatOperationResultSignal? deniedResult)
+    {
+        var tool = deniedResult?.Tool;
+        var receipt = tool?.Receipt;
+        return tool?.ExternalEffect == NyxIdChatEffectEvidence.NotApplied &&
+               receipt is
+               {
+                   Status: AgentToolReceiptStatus.Denied,
+                   Effect: AgentToolReceiptEffect.Mutating,
+                   NyxIdApprovalTerminalOutcome: NyxIdApprovalTerminalOutcome.Rejected,
+                   ApprovalRequestId.Length: > 0,
+               } &&
+               receipt.NyxIdApprovalDecisionMode is
+                   NyxIdApprovalDecisionMode.Unspecified or
+                   NyxIdApprovalDecisionMode.PerRequest &&
+               string.Equals(receipt.ErrorCode, "NYXID_APPROVAL_FAILED", StringComparison.Ordinal) &&
+               !string.IsNullOrWhiteSpace(expectedCallId) &&
+               !string.IsNullOrWhiteSpace(expectedToolName) &&
+               string.Equals(receipt.CallId, expectedCallId, StringComparison.Ordinal) &&
+               string.Equals(receipt.ToolName, expectedToolName, StringComparison.Ordinal) &&
+               string.Equals(receipt.SubjectKind, "nyxid.user-service", StringComparison.Ordinal) &&
+               string.Equals(receipt.SubjectId, directive.ServiceInstanceId, StringComparison.Ordinal);
     }
 
     private static bool IsValid(NyxIdChatOperationDispatchCommand command) =>
@@ -1413,6 +1530,15 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
             Key = directive.Key.Clone(),
             TurnActorId = Id,
             ConsumedAt = State.CanaryEffectFaultConsumedAt.Clone(),
+            ServiceInstanceId = directive.ServiceInstanceId,
+            ApprovalRequestId = State.CanaryEffectFaultApprovalRequestId,
+            ReceiptStatus = State.CanaryEffectFaultReceiptStatus,
+            ApprovalDecisionMode = State.CanaryEffectFaultApprovalDecisionMode,
+            ApprovalTerminalOutcome = State.CanaryEffectFaultApprovalTerminalOutcome,
+            ApprovalSubjectKind = State.CanaryEffectFaultApprovalSubjectKind,
+            ApprovalSubjectId = State.CanaryEffectFaultApprovalSubjectId,
+            ApprovalCallId = State.CanaryEffectFaultToolCallId,
+            ApprovalToolName = State.CanaryEffectFaultToolName,
         };
         var envelope = CreateDirectEnvelope(
             directive.Key.ConversationActorId,

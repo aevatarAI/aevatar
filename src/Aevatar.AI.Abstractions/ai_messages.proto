@@ -427,6 +427,13 @@ enum NyxIdApprovalDecisionMode {
   NYX_ID_APPROVAL_DECISION_MODE_GRANT = 2;
 }
 
+enum NyxIdApprovalTerminalOutcome {
+  NYX_ID_APPROVAL_TERMINAL_OUTCOME_UNSPECIFIED = 0;
+  NYX_ID_APPROVAL_TERMINAL_OUTCOME_REJECTED = 1;
+  NYX_ID_APPROVAL_TERMINAL_OUTCOME_EXPIRED = 2;
+  NYX_ID_APPROVAL_TERMINAL_OUTCOME_TIMED_OUT = 3;
+}
+
 message NyxIdAuthorizationRequiredEvent {
   string service_slug = 1;
   optional string service_label = 2;
@@ -463,6 +470,7 @@ message AgentToolReceipt {
   // local tool approval mode above; omitted boundary data remains unknown.
   NyxIdApprovalDecisionMode nyx_id_approval_decision_mode = 20;
   AgentToolReceiptMutationStage mutation_stage = 21;
+  NyxIdApprovalTerminalOutcome nyx_id_approval_terminal_outcome = 22;
 }
 
 message ManagedWorkflowHandoffReceipt {

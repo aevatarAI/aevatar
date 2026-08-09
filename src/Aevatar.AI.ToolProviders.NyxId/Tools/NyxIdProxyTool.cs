@@ -551,7 +551,66 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
                 request.Path,
                 response.Content,
                 proxyRequestFailed: true);
+        if (IsExactApprovalFailedReceipt(receipt))
+        {
+            receipt!.NyxIdApprovalTerminalOutcome = await ReadApprovalTerminalOutcomeAsync(
+                token,
+                receipt.ApprovalRequestId,
+                ct);
+        }
         return new AgentToolTerminalOutcome(result, receipt);
+    }
+
+    private static bool IsExactApprovalFailedReceipt(AgentToolReceipt? receipt) =>
+        receipt is
+        {
+            Status: AgentToolReceiptStatus.Denied,
+            ApprovalRequestId.Length: > 0,
+        } &&
+        string.Equals(
+            receipt.ErrorCode,
+            "NYXID_APPROVAL_FAILED",
+            StringComparison.Ordinal);
+
+    private async Task<NyxIdApprovalTerminalOutcome> ReadApprovalTerminalOutcomeAsync(
+        string requesterToken,
+        string approvalRequestId,
+        CancellationToken ct)
+    {
+        try
+        {
+            var response = await _client.GetApprovalStatusAsync(
+                requesterToken,
+                approvalRequestId,
+                ct);
+            using var document = JsonDocument.Parse(response);
+            if (document.RootElement.ValueKind != JsonValueKind.Object ||
+                !document.RootElement.TryGetProperty("status", out var status) ||
+                status.ValueKind != JsonValueKind.String)
+            {
+                return NyxIdApprovalTerminalOutcome.Unspecified;
+            }
+
+            return status.GetString() switch
+            {
+                "rejected" => NyxIdApprovalTerminalOutcome.Rejected,
+                "expired" => NyxIdApprovalTerminalOutcome.Expired,
+                "pending" => NyxIdApprovalTerminalOutcome.TimedOut,
+                _ => NyxIdApprovalTerminalOutcome.Unspecified,
+            };
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(
+                exception,
+                "[nyxid_proxy] Approval status readback failed. requestId={RequestId}",
+                approvalRequestId);
+            return NyxIdApprovalTerminalOutcome.Unspecified;
+        }
     }
 
     private async Task<NyxIdOperationRequestFailure?> RevalidateAdmittedOperationAsync(

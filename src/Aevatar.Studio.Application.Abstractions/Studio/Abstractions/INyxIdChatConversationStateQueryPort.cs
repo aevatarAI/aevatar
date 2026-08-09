@@ -233,7 +233,9 @@ public sealed record NyxIdChatPostReturnApprovalObservationSnapshot(
     string ApprovalRequestId,
     string DecisionMode,
     string ReceiptStatus,
-    DateTimeOffset? ObservedAt);
+    DateTimeOffset? ObservedAt,
+    string? TerminalOutcome = null,
+    string? SubjectKind = null);
 
 public sealed record NyxIdChatConversationStepEstimateSnapshot(
     string Kind,
@@ -269,7 +271,9 @@ public sealed record NyxIdChatToolStepSourceSnapshot(
     string? ServiceSlug,
     string? ServiceId,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    string? ReadinessCapabilityId);
+    string? ReadinessCapabilityId,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? ProviderResourceId = null);
 
 public sealed record NyxIdChatBrowserActionStepSourceSnapshot(
     string Action,
@@ -277,7 +281,9 @@ public sealed record NyxIdChatBrowserActionStepSourceSnapshot(
 
 public sealed record NyxIdChatPostconditionStepSourceSnapshot(
     string? ActionRequestId,
-    string? Check);
+    string? Check,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? ProviderResourceId = null);
 
 public sealed record NyxIdChatInputStepSourceSnapshot(string? RequestId);
 

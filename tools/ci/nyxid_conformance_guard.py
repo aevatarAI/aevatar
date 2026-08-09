@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -28,10 +29,37 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--nyxid-root", type=Path)
     parser.add_argument("--gist-root", type=Path)
+    parser.add_argument(
+        "--refresh-aevatar-revision",
+        metavar="REVISION",
+        help="rewrite the Aevatar source pin from the named commit and exit",
+    )
     args = parser.parse_args()
     errors = []
 
     sources = load_json(CONTRACT_ROOT / "sources.json")
+    if args.refresh_aevatar_revision:
+        refresh_aevatar_pin(
+            REPO_ROOT,
+            sources,
+            args.refresh_aevatar_revision,
+            errors,
+        )
+        if errors:
+            print("NyxID conformance pin refresh failed:")
+            for error in errors[:MAX_DIAGNOSTICS]:
+                print(f"  - {error}")
+            return 1
+        (CONTRACT_ROOT / "sources.json").write_text(
+            json.dumps(sources, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        print(
+            "Refreshed Aevatar conformance pin from revision "
+            f"{sources['aevatar']['revision']}."
+        )
+        return 0
+
     leaves = load_json(CONTRACT_ROOT / "cli-leaves.json")
     coverage = load_json(CONTRACT_ROOT / "coverage-manifest.json")
     registry = load_json(CONTRACT_ROOT / "registry-v4.json")
@@ -67,24 +95,7 @@ def main() -> int:
 
 def validate_local_digests(sources, errors):
     aevatar = sources["aevatar"]
-    digest_lines = []
-    for relative_path, expected in sorted(aevatar["files"].items()):
-        path = REPO_ROOT / relative_path
-        if not path.is_file():
-            errors.append(f"pinned Aevatar source is missing: {relative_path}")
-            continue
-        actual = sha256(path)
-        if actual != expected:
-            errors.append(
-                f"Aevatar source drift: {relative_path} expected {expected[:12]}, got {actual[:12]}"
-            )
-        digest_lines.append(f"{actual}  {relative_path}\n")
-    aggregate = hashlib.sha256("".join(digest_lines).encode()).hexdigest()
-    if aggregate != aevatar["contract_files_sha256"]:
-        errors.append(
-            "Aevatar contract aggregate drift: "
-            f"expected {aevatar['contract_files_sha256'][:12]}, got {aggregate[:12]}"
-        )
+    validate_aevatar_digests(REPO_ROOT, aevatar, errors)
 
     for relative_path, expected in sources["generated_artifacts"].items():
         path = CONTRACT_ROOT / relative_path
@@ -97,6 +108,88 @@ def validate_local_digests(sources, errors):
     payload = CONTRACT_ROOT / registry_pin["checked_in_payload"]
     if sha256(payload) != registry_pin["checked_in_payload_sha256"]:
         errors.append("checked-in assistant registry payload digest drift")
+
+
+def validate_aevatar_digests(repo_root, aevatar, errors):
+    revision = aevatar.get("revision", "")
+    if not re.fullmatch(r"[0-9a-f]{40}", revision):
+        errors.append("pinned Aevatar revision must be a full lowercase commit SHA")
+        return
+    if not git_commit_exists(repo_root, revision, errors, "Aevatar revision"):
+        return
+    head_revision = resolve_git_commit(repo_root, "HEAD", errors, "Aevatar HEAD")
+    if head_revision is None:
+        return
+    if not git_is_ancestor(repo_root, revision, head_revision):
+        errors.append("pinned Aevatar revision must be an ancestor of current HEAD")
+
+    digest_lines = []
+    for relative_path, expected in sorted(aevatar["files"].items()):
+        content = git_blob(
+            repo_root,
+            revision,
+            relative_path,
+            errors,
+            "pinned Aevatar source",
+        )
+        if content is None:
+            continue
+        head_content = git_blob(
+            repo_root,
+            head_revision,
+            relative_path,
+            errors,
+            "current Aevatar HEAD source",
+        )
+        if head_content is not None and head_content != content:
+            errors.append(
+                "Aevatar HEAD source differs from declared revision: "
+                f"{relative_path}"
+            )
+        actual = hashlib.sha256(content).hexdigest()
+        if actual != expected:
+            errors.append(
+                "Aevatar declared-tree source drift: "
+                f"{relative_path} expected {expected[:12]}, got {actual[:12]}"
+            )
+        digest_lines.append(f"{actual}  {relative_path}\n")
+    aggregate = hashlib.sha256("".join(digest_lines).encode()).hexdigest()
+    if aggregate != aevatar["contract_files_sha256"]:
+        errors.append(
+            "Aevatar contract aggregate drift: "
+            f"expected {aevatar['contract_files_sha256'][:12]}, got {aggregate[:12]}"
+        )
+
+
+def refresh_aevatar_pin(repo_root, sources, requested_revision, errors):
+    revision = resolve_git_commit(repo_root, requested_revision, errors, "Aevatar revision")
+    if revision is None:
+        return
+
+    aevatar = sources["aevatar"]
+    refreshed_files = {}
+    digest_lines = []
+    for relative_path in sorted(aevatar["files"]):
+        content = git_blob(
+            repo_root,
+            revision,
+            relative_path,
+            errors,
+            "pinned Aevatar source",
+        )
+        if content is None:
+            continue
+        digest = hashlib.sha256(content).hexdigest()
+        refreshed_files[relative_path] = digest
+        digest_lines.append(f"{digest}  {relative_path}\n")
+
+    if errors:
+        return
+    aevatar["revision"] = revision
+    aevatar["files"] = refreshed_files
+    aevatar["contract_files_sha256"] = hashlib.sha256(
+        "".join(digest_lines).encode()
+    ).hexdigest()
 
 
 def validate_leaf_coverage(leaves, coverage, registry, errors):
@@ -296,6 +389,56 @@ def git_output(root, *arguments, errors, label):
         errors.append(f"cannot read {label}: {result.stderr.strip()[-200:]}")
         return None
     return result.stdout.strip()
+
+
+def resolve_git_commit(root, revision, errors, label):
+    result = subprocess.run(
+        ["git", "rev-parse", "--verify", f"{revision}^{{commit}}"],
+        cwd=root,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        errors.append(f"cannot read {label}: {result.stderr.strip()[-200:]}")
+        return None
+    return result.stdout.strip()
+
+
+def git_commit_exists(root, revision, errors, label):
+    resolved = resolve_git_commit(root, revision, errors, label)
+    if resolved is None:
+        return False
+    if resolved != revision:
+        errors.append(f"{label} did not resolve to the declared commit SHA")
+        return False
+    return True
+
+
+def git_is_ancestor(root, ancestor, descendant):
+    result = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+        cwd=root,
+        capture_output=True,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def git_blob(root, revision, relative_path, errors, label):
+    result = subprocess.run(
+        ["git", "cat-file", "blob", f"{revision}:{relative_path}"],
+        cwd=root,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        diagnostic = result.stderr.decode(errors="replace").strip()[-200:]
+        errors.append(
+            f"{label} is missing from {revision[:12]}: {relative_path}: {diagnostic}"
+        )
+        return None
+    return result.stdout
 
 
 if __name__ == "__main__":

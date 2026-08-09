@@ -37,6 +37,33 @@ public sealed class NyxIdChatStateEndpointTests
     public async Task GetState_ActiveTask_ShouldExactlyMatchLiveTaskPlanAndStepChanged()
     {
         var task = BuildConvergenceTask();
+        task.Steps[0].Kind = NyxIdChatStepKind.Tool;
+        task.Steps[0].Operation.Kind = NyxIdChatStepKind.Tool;
+        task.Steps[0].Source = new NyxIdChatStepSource
+        {
+            Tool = new NyxIdChatToolStepSource
+            {
+                ToolName = "repository_update",
+                ServiceSlug = "service-slug-alpha",
+                ServiceId = "connected-service-alpha",
+                ReadinessCapabilityId = "readiness-capability-alpha",
+                ProviderResourceId = "repository-alpha",
+            },
+        };
+        task.Steps[1].Kind = NyxIdChatStepKind.Postcondition;
+        task.Steps[1].Source = new NyxIdChatStepSource
+        {
+            Postcondition = new NyxIdChatPostconditionStepSource
+            {
+                ActionRequestId = "action-alpha",
+                Check = "repository.updated",
+                ProviderResourceId = "repository-alpha",
+            },
+        };
+        task.Steps[0].ApprovalObservation.TerminalOutcome =
+            NyxIdApprovalTerminalOutcome.Rejected;
+        task.Steps[0].ApprovalObservation.SubjectKind = "nyxid.user-service";
+        task.Steps[0].ApprovalObservation.SubjectId = "user-service-sensitive-alpha";
         var state = new NyxIdChatConversationGAgentState
         {
             ConversationActorId = "conversation-alpha",
@@ -125,6 +152,19 @@ public sealed class NyxIdChatStateEndpointTests
             .GetValue<string>().Should().Be("approval_required");
         currentTask["steps"]![0]!["approvalObservation"]!["observedAt"]!
             .GetValue<string>().Should().Be("2026-08-07T12:25:10.919334800Z");
+        var liveApproval = liveTask["steps"]![0]!["approvalObservation"]!.AsObject();
+        liveApproval["terminalOutcome"]!.GetValue<string>().Should().Be(
+            "NYX_ID_APPROVAL_TERMINAL_OUTCOME_REJECTED");
+        liveApproval["subjectKind"]!.GetValue<string>().Should().Be("nyxid.user-service");
+        liveApproval.ContainsKey("subjectId").Should().BeFalse();
+        liveTask.ToJsonString().Should().NotContain("user-service-sensitive-alpha");
+        var reloadedApproval = currentTask["steps"]![0]!["approvalObservation"]!.AsObject();
+        reloadedApproval.ContainsKey("subjectId").Should().BeFalse();
+        currentTask.ToJsonString().Should().NotContain("user-service-sensitive-alpha");
+        currentTask["steps"]![0]!["source"]!["tool"]!["providerResourceId"]!
+            .GetValue<string>().Should().Be("repository-alpha");
+        currentTask["steps"]![1]!["source"]!["postcondition"]!["providerResourceId"]!
+            .GetValue<string>().Should().Be("repository-alpha");
     }
 
     [Fact]
@@ -308,7 +348,8 @@ public sealed class NyxIdChatStateEndpointTests
                             "repository_update",
                             "service-slug-alpha",
                             "connected-service-alpha",
-                            "readiness-capability-alpha"))),
+                            "readiness-capability-alpha",
+                            "repository-alpha"))),
                 new NyxIdChatConversationStepSnapshot(
                     "step-beta",
                     2,
@@ -413,6 +454,8 @@ public sealed class NyxIdChatStateEndpointTests
         toolSource.GetProperty("serviceSlug").GetString().Should().Be("service-slug-alpha");
         toolSource.GetProperty("readinessCapabilityId").GetString().Should()
             .Be("readiness-capability-alpha");
+        toolSource.GetProperty("providerResourceId").GetString().Should()
+            .Be("repository-alpha");
         toolSource.TryGetProperty("readiness_capability_id", out _).Should().BeFalse();
         var sourceWithoutReadiness = json.RootElement
             .GetProperty("snapshot")

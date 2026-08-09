@@ -62,6 +62,10 @@ public static class AgentToolOperationAdmissionPayloadMapper
         if (identity is null)
             return null;
 
+        var readBack = FromReadBack(payload.ReadBack);
+        if (payload.ReadBack is not null && readBack is null)
+            return null;
+
         return new AgentToolOperationAdmission(
             payload.ServiceInstanceId ?? string.Empty,
             payload.ServiceSlug ?? string.Empty,
@@ -75,7 +79,7 @@ public static class AgentToolOperationAdmissionPayloadMapper
             FromResponsePolicy(payload.ResponsePolicy),
             FromExecutionPolicy(payload.ExecutionPolicy),
             payload.CatalogDigest ?? string.Empty,
-            FromReadBack(payload.ReadBack));
+            readBack);
     }
 
     private static AgentToolOperationReadBackPayload ToReadBack(AgentToolOperationReadBack readBack)
@@ -114,6 +118,22 @@ public static class AgentToolOperationAdmissionPayloadMapper
         if (payload?.ReadOperation is null || payload.Assertion is null)
             return null;
 
+        if (!AgentToolReadBackExpectedValueSourcePayloadCanonicalizer.TryCanonicalize(
+                payload.Assertion,
+                out var assertion))
+        {
+            return null;
+        }
+
+        AgentToolReadBackAssertionPayload? notAppliedAssertion = null;
+        if (payload.NotAppliedAssertion is not null &&
+            !AgentToolReadBackExpectedValueSourcePayloadCanonicalizer.TryCanonicalize(
+                payload.NotAppliedAssertion,
+                out notAppliedAssertion))
+        {
+            return null;
+        }
+
         var readOperation = FromPayload(payload.ReadOperation);
         if (readOperation is null || readOperation.ReadBack is not null)
             return null;
@@ -121,11 +141,9 @@ public static class AgentToolOperationAdmissionPayloadMapper
         return new AgentToolOperationReadBack(
             readOperation,
             payload.Arguments?.Clone() ?? new Google.Protobuf.WellKnownTypes.Struct(),
-            FromReadBackAssertion(payload.Assertion),
+            FromReadBackAssertion(assertion),
             payload.CheckName ?? string.Empty,
-            payload.NotAppliedAssertion is null
-                ? null
-                : FromReadBackAssertion(payload.NotAppliedAssertion),
+            notAppliedAssertion is null ? null : FromReadBackAssertion(notAppliedAssertion),
             payload.Pagination is null
                 ? null
                 : new AgentToolReadBackPagination(
@@ -137,14 +155,15 @@ public static class AgentToolOperationAdmissionPayloadMapper
     }
 
     private static AgentToolReadBackAssertionPayload ToReadBackAssertion(
-        AgentToolReadBackAssertion assertion) => new()
-    {
-        Match = ToReadBackMatch(assertion.Match),
-        JsonPointer = assertion.JsonPointer ?? string.Empty,
-        ExpectedValue = assertion.ExpectedValue?.Clone(),
-        ElementJsonPointer = assertion.ElementJsonPointer ?? string.Empty,
-        ExpectedValueSource = ToExpectedValueSource(assertion.ExpectedValueSource),
-    };
+        AgentToolReadBackAssertion assertion) =>
+        AgentToolReadBackExpectedValueSourcePayloadCanonicalizer.CanonicalizeForWrite(new()
+        {
+            Match = ToReadBackMatch(assertion.Match),
+            JsonPointer = assertion.JsonPointer ?? string.Empty,
+            ExpectedValue = assertion.ExpectedValue?.Clone(),
+            ElementJsonPointer = assertion.ElementJsonPointer ?? string.Empty,
+            ExpectedValueSource = ToExpectedValueSource(assertion.ExpectedValueSource),
+        });
 
     private static AgentToolReadBackAssertion FromReadBackAssertion(
         AgentToolReadBackAssertionPayload assertion) => new(

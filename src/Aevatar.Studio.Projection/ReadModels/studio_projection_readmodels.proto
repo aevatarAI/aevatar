@@ -364,6 +364,7 @@ message NyxIdChatConversationToolStepSourceDocument {
   string service_slug = 2;
   string service_id = 3;
   optional string readiness_capability_id = 4;
+  string provider_resource_id = 5;
 }
 
 message NyxIdChatConversationBrowserActionStepSourceDocument {
@@ -374,6 +375,7 @@ message NyxIdChatConversationBrowserActionStepSourceDocument {
 message NyxIdChatConversationPostconditionStepSourceDocument {
   string action_request_id = 1;
   string check = 2;
+  string provider_resource_id = 3;
 }
 
 message NyxIdChatConversationInputStepSourceDocument {
@@ -437,6 +439,10 @@ message NyxIdChatConversationPostReturnApprovalObservationDocument {
   string decision_mode = 2;
   string receipt_status = 3;
   google.protobuf.Timestamp observed_at = 4;
+  string terminal_outcome = 5;
+  string subject_kind = 6;
+  reserved 7;
+  reserved "subject_id";
 }
 
 message NyxIdChatConversationStepDocument {

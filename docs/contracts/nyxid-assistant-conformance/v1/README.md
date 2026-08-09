@@ -1,5 +1,24 @@
 # NyxID Assistant semantic evaluation
 
+## Aevatar source pin
+
+The conformance guard reads every `aevatar.files` entry from the Git tree named
+by `aevatar.revision`; uncommitted working-tree content is not source evidence.
+The declared revision must be an ancestor of the current `HEAD`, and every
+managed source blob at `HEAD` must still equal the declared blob. This prevents
+a later committed source change from bypassing the pin by leaving
+`sources.json` untouched.
+After committing the exact Aevatar source revision to evaluate, refresh the
+revision, per-file digests, and aggregate mechanically:
+
+```bash
+python3 tools/ci/nyxid_conformance_guard.py \
+  --refresh-aevatar-revision '<full-source-commit-sha>'
+bash tools/ci/nyxid_conformance_guard.sh
+```
+
+Commit the resulting `sources.json` update only after the guard passes.
+
 `semantic-evaluation.json` is the checked-in release-gate record. The conformance guard fails while its
 status is not `passed`, while results are absent, or when the recorded aggregate cannot be reproduced
 from the case evidence.

@@ -99,12 +99,40 @@ public sealed partial class NyxIdChatConversationGAgentTests
                 Key = CanaryOperationKey(),
                 TurnActorId = NyxIdChatTurnActorIds.ForTurn(actorId, "turn-alpha"),
                 ConsumedAt = Timestamp.FromDateTimeOffset(CanaryNow.AddMinutes(-5)),
+                ServiceInstanceId = "connected-service-alpha",
+                ApprovalRequestId = "approval-7001-alpha",
+                ReceiptStatus = AgentToolReceiptStatus.Denied,
+                ApprovalDecisionMode = NyxIdApprovalDecisionMode.Unspecified,
+                ApprovalTerminalOutcome = NyxIdApprovalTerminalOutcome.Rejected,
+                ApprovalSubjectKind = "nyxid.user-service",
+                ApprovalSubjectId = "connected-service-alpha",
+                ApprovalCallId = "call-alpha",
+                ApprovalToolName = "tool-alpha",
             }));
 
         forwardedReload.State.CanaryEffectFault.Status.Should().Be(
             NyxIdChatCanaryEffectFaultStatus.Consumed);
         forwardedReload.State.CanaryEffectFault.ConsumedAt.ToDateTimeOffset().Should().Be(
             CanaryNow.AddSeconds(2));
+        forwardedReload.State.CanaryEffectFault.ApprovalRequestId.Should().Be(
+            "approval-7001-alpha");
+        forwardedReload.State.CanaryEffectFault.ReceiptStatus.Should().Be(
+            AgentToolReceiptStatus.Denied);
+        forwardedReload.State.CanaryEffectFault.ApprovalDecisionMode.Should().Be(
+            NyxIdApprovalDecisionMode.Unspecified);
+        forwardedReload.State.CanaryEffectFault.ApprovalTerminalOutcome.Should().Be(
+            NyxIdApprovalTerminalOutcome.Rejected);
+        var consumedStep = forwardedReload.State.ActiveTask.Steps.Should().ContainSingle().Which;
+        consumedStep.ApprovalRequestId.Should().Be("approval-7001-alpha");
+        consumedStep.ApprovalObservation.Should().NotBeNull();
+        consumedStep.ApprovalObservation.ApprovalRequestId.Should().Be("approval-7001-alpha");
+        consumedStep.ApprovalObservation.ReceiptStatus.Should().Be(AgentToolReceiptStatus.Denied);
+        consumedStep.ApprovalObservation.DecisionMode.Should().Be(
+            NyxIdApprovalDecisionMode.Unspecified);
+        consumedStep.ApprovalObservation.TerminalOutcome.Should().Be(
+            NyxIdApprovalTerminalOutcome.Rejected);
+        consumedStep.ApprovalObservation.SubjectKind.Should().Be("nyxid.user-service");
+        consumedStep.ApprovalObservation.SubjectId.Should().Be("connected-service-alpha");
 
         var consumedReload = CreateController(
             services,
@@ -115,6 +143,12 @@ public sealed partial class NyxIdChatConversationGAgentTests
             NyxIdChatCanaryEffectFaultStatus.Consumed);
         consumedReload.State.CanaryEffectFault.ConsumedAt.Should().Be(
             forwardedReload.State.CanaryEffectFault.ConsumedAt);
+        consumedReload.State.CanaryEffectFault.ApprovalRequestId.Should().Be(
+            "approval-7001-alpha");
+        var reloadedStep = consumedReload.State.ActiveTask.Steps.Should().ContainSingle().Which;
+        reloadedStep.ApprovalRequestId.Should().Be("approval-7001-alpha");
+        reloadedStep.ApprovalObservation.TerminalOutcome.Should().Be(
+            NyxIdApprovalTerminalOutcome.Rejected);
     }
 
     private static NyxIdChatConversationGAgentState CanaryConversationState()
@@ -194,6 +228,13 @@ public sealed partial class NyxIdChatConversationGAgentTests
                     OperationAdmission = admission,
                 },
             },
+            RetryToolInput = new NyxIdChatRetryToolInputState
+            {
+                CallId = "call-alpha",
+                ToolName = "tool-alpha",
+                Arguments = new Struct(),
+                OperationAdmission = admission.Clone(),
+            },
         });
         return state;
     }
@@ -207,7 +248,6 @@ public sealed partial class NyxIdChatConversationGAgentTests
         ClientRequestId = "client-arm-alpha",
         Key = CanaryOperationKey(),
         ServiceInstanceId = "connected-service-alpha",
-        CatalogDigest = $"sha256:{new string('a', 64)}",
         OwnerSubject = "owner-alpha",
         ExpiresAt = Timestamp.FromDateTimeOffset(CanaryNow.AddMinutes(5)),
         ExpectedStateVersion = expectedStateVersion,
