@@ -328,7 +328,9 @@ public sealed class ManagedCodexExecutionCoordinatorTests
             },
             ChronoSandboxUserServiceId = "us-sandbox",
             ChronoLlmUserServiceId = "us-llm",
+            OrnnApiUserServiceId = "us-ornn",
             ChronoSandboxServiceSlug = ManagedCodexOptions.ChronoSandboxServiceSlug,
+            OrnnApiServiceSlug = ManagedCodexOptions.OrnnApiServiceSlug,
             ExpiresAt = Timestamp.FromDateTimeOffset(expiresAt),
             Status = ManagedCodexCredentialStatus.Active,
         };

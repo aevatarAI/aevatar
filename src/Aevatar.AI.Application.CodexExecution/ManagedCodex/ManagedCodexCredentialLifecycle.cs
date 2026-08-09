@@ -104,7 +104,6 @@ public sealed class ManagedCodexCredentialLifecycle(
         ManagedCodexNyxIdEligibility Eligibility,
         ManagedCodexNyxIdApiKey? Remote,
         SecretReference? RemoteReference,
-        bool UpdateRemotePolicy,
         IReadOnlyList<string> ApiKeyIdsToRevoke);
 
     private sealed record ReadinessRepairOutcome(
@@ -672,6 +671,7 @@ public sealed class ManagedCodexCredentialLifecycle(
             reference,
             eligibility.ChronoSandboxUserServiceId,
             eligibility.ChronoLlmUserServiceId,
+            eligibility.OrnnApiUserServiceId,
             expiresAt);
         var obsoleteCredentialCleanups = BuildObservedObsoleteCleanups(
             owner,
@@ -796,14 +796,24 @@ public sealed class ManagedCodexCredentialLifecycle(
         ManagedCodexNyxIdIssuedApiKey issued;
         if (activeKeys.Count == 1)
         {
-            ValidatePersistedKey(
-                activeKeys[0],
-                eligibility,
-                expiresAt);
-            issued = await _nyxIdPort.RotateApiKeyAsync(
-                bearerToken,
-                current.Credential.ApiKeyId,
-                mutationCt).ConfigureAwait(false);
+            if (HasExactApiKeyPolicy(activeKeys[0], eligibility))
+            {
+                ValidatePersistedKey(
+                    activeKeys[0],
+                    eligibility,
+                    expiresAt);
+                issued = await _nyxIdPort.RotateApiKeyAsync(
+                    bearerToken,
+                    current.Credential.ApiKeyId,
+                    mutationCt).ConfigureAwait(false);
+            }
+            else
+            {
+                issued = await _nyxIdPort.CreateApiKeyAsync(
+                    bearerToken,
+                    IssueRequest(eligibility, expiresAt),
+                    mutationCt).ConfigureAwait(false);
+            }
         }
         else
         {
@@ -902,6 +912,7 @@ public sealed class ManagedCodexCredentialLifecycle(
             newReference,
             eligibility.ChronoSandboxUserServiceId,
             eligibility.ChronoLlmUserServiceId,
+            eligibility.OrnnApiUserServiceId,
             expiresAt);
         var obsoleteCredentialCleanups = BuildObservedObsoleteCleanups(
             owner,
@@ -1095,14 +1106,7 @@ public sealed class ManagedCodexCredentialLifecycle(
                     var exactPolicy = HasExactApiKeyPolicy(projectedRemote, eligibility);
                     var exactDescriptor =
                         IsReady(currentCredential, owner, _timeProvider.GetUtcNow()) &&
-                        string.Equals(
-                            currentCredential.ChronoSandboxUserServiceId,
-                            eligibility.ChronoSandboxUserServiceId,
-                            StringComparison.Ordinal) &&
-                        string.Equals(
-                            currentCredential.ChronoLlmUserServiceId,
-                            eligibility.ChronoLlmUserServiceId,
-                            StringComparison.Ordinal);
+                        DescriptorServiceBindingMatches(currentCredential, eligibility);
                     var obsoleteApiKeyIds = activeKeys
                         .Where(key => !string.Equals(
                             key.Id,
@@ -1123,7 +1127,6 @@ public sealed class ManagedCodexCredentialLifecycle(
                             eligibility,
                             projectedRemote,
                             currentCredential.SecretReference.Clone(),
-                            false,
                             [])
                         : new ReadinessRepairPlan(
                             ReadinessRepairKind.ReconcileCurrent,
@@ -1131,7 +1134,6 @@ public sealed class ManagedCodexCredentialLifecycle(
                             eligibility,
                             projectedRemote,
                             currentCredential.SecretReference.Clone(),
-                            !exactPolicy,
                             obsoleteApiKeyIds);
                 }
             }
@@ -1265,7 +1267,6 @@ public sealed class ManagedCodexCredentialLifecycle(
                 eligibility,
                 remote,
                 reference,
-                !HasExactApiKeyPolicy(remote, eligibility),
                 []);
     }
 
@@ -1279,7 +1280,6 @@ public sealed class ManagedCodexCredentialLifecycle(
             eligibility,
             null,
             null,
-            false,
             apiKeyIdsToRevoke
                 .Where(static value => !string.IsNullOrWhiteSpace(value))
                 .Select(static value => value.Trim())
@@ -1345,6 +1345,26 @@ public sealed class ManagedCodexCredentialLifecycle(
         return outcome;
     }
 
+    private static bool DescriptorServiceBindingMatches(
+        ManagedCodexCredentialDescriptor credential,
+        ManagedCodexNyxIdEligibility eligibility) =>
+        string.Equals(
+            credential.ChronoSandboxUserServiceId,
+            eligibility.ChronoSandboxUserServiceId,
+            StringComparison.Ordinal) &&
+        string.Equals(
+            credential.ChronoLlmUserServiceId,
+            eligibility.ChronoLlmUserServiceId,
+            StringComparison.Ordinal) &&
+        string.Equals(
+            credential.OrnnApiUserServiceId,
+            eligibility.OrnnApiUserServiceId,
+            StringComparison.Ordinal) &&
+        string.Equals(
+            credential.OrnnApiServiceSlug,
+            ManagedCodexOptions.OrnnApiServiceSlug,
+            StringComparison.Ordinal);
+
     private async Task<ReadinessRepairOutcome> AdoptRemoteCredentialAsync(
         string bearerToken,
         ExternalSubjectRef owner,
@@ -1352,24 +1372,7 @@ public sealed class ManagedCodexCredentialLifecycle(
         CancellationToken ct)
     {
         var remote = repair.Remote!;
-        if (repair.UpdateRemotePolicy)
-        {
-            await _nyxIdPort.UpdateApiKeyPolicyAsync(
-                bearerToken,
-                remote.Id,
-                PolicyUpdateRequest(repair.Eligibility),
-                ct).ConfigureAwait(false);
-            remote = await RequirePersistedIssuedKeyAsync(
-                bearerToken,
-                remote.Id,
-                repair.Eligibility,
-                remote.ExpiresAt!.Value,
-                ct).ConfigureAwait(false);
-        }
-        else
-        {
-            ValidatePersistedKey(remote, repair.Eligibility, remote.ExpiresAt);
-        }
+        ValidatePersistedKey(remote, repair.Eligibility, remote.ExpiresAt);
 
         var descriptor = BuildDescriptor(
             owner,
@@ -1377,6 +1380,7 @@ public sealed class ManagedCodexCredentialLifecycle(
             repair.RemoteReference!,
             repair.Eligibility.ChronoSandboxUserServiceId,
             repair.Eligibility.ChronoLlmUserServiceId,
+            repair.Eligibility.OrnnApiUserServiceId,
             remote.ExpiresAt!.Value);
         if (IsCommandableCurrent(repair.Current, owner))
         {
@@ -1586,6 +1590,7 @@ public sealed class ManagedCodexCredentialLifecycle(
             reference,
             eligibility.ChronoSandboxUserServiceId,
             eligibility.ChronoLlmUserServiceId,
+            eligibility.OrnnApiUserServiceId,
             expiresAt);
     }
 
@@ -1750,16 +1755,13 @@ public sealed class ManagedCodexCredentialLifecycle(
         if (HasExactServiceIds(
                 key.AllowedServiceIds,
                 eligibility.ChronoSandboxUserServiceId,
-                eligibility.ChronoLlmUserServiceId))
+                eligibility.ChronoLlmUserServiceId,
+                eligibility.OrnnApiUserServiceId))
         {
             return true;
         }
 
-        return key.AllowedServiceIds is { Count: 1 } &&
-               string.Equals(
-                   key.AllowedServiceIds[0],
-                   eligibility.ChronoSandboxUserServiceId,
-                   StringComparison.Ordinal);
+        return false;
     }
 
     private void ValidateReadinessRequest(
@@ -2003,6 +2005,7 @@ public sealed class ManagedCodexCredentialLifecycle(
             [
                 eligibility.ChronoSandboxUserServiceId,
                 eligibility.ChronoLlmUserServiceId,
+                eligibility.OrnnApiUserServiceId,
             ],
             false,
             [],
@@ -2017,6 +2020,7 @@ public sealed class ManagedCodexCredentialLifecycle(
             [
                 eligibility.ChronoSandboxUserServiceId,
                 eligibility.ChronoLlmUserServiceId,
+                eligibility.OrnnApiUserServiceId,
             ],
             false,
             []);
@@ -2098,6 +2102,7 @@ public sealed class ManagedCodexCredentialLifecycle(
             reference,
             eligibility.ChronoSandboxUserServiceId,
             eligibility.ChronoLlmUserServiceId,
+            eligibility.OrnnApiUserServiceId,
             activeKey.ExpiresAt!.Value);
         using var recording = outcomeDeadline.BeginRecording();
         var admission = await CommitProvisionedForReconciliationAsync(
@@ -2161,6 +2166,7 @@ public sealed class ManagedCodexCredentialLifecycle(
             reference,
             eligibility.ChronoSandboxUserServiceId,
             eligibility.ChronoLlmUserServiceId,
+            eligibility.OrnnApiUserServiceId,
             activeKey.ExpiresAt!.Value);
         using var recording = outcomeDeadline.BeginRecording();
         var admission = await CommitRotatedForReconciliationAsync(
@@ -2201,11 +2207,9 @@ public sealed class ManagedCodexCredentialLifecycle(
 
         if (!HasExactApiKeyPolicy(remote, eligibility))
         {
-            await _nyxIdPort.UpdateApiKeyPolicyAsync(
-                bearerToken,
-                currentApiKeyId,
-                PolicyUpdateRequest(eligibility),
-                ct).ConfigureAwait(false);
+            throw Failure(
+                "managed_api_key_update_invalid",
+                "The managed Codex key selected for policy repair does not already have exact authority.");
         }
 
         var keys = await GetActiveManagedKeysAsync(bearerToken, ct)
@@ -2233,6 +2237,7 @@ public sealed class ManagedCodexCredentialLifecycle(
             reference,
             eligibility.ChronoSandboxUserServiceId,
             eligibility.ChronoLlmUserServiceId,
+            eligibility.OrnnApiUserServiceId,
             persisted.ExpiresAt!.Value);
         await CommitPolicyReconciledForReconciliationAsync(
             currentApiKeyId,
@@ -2927,6 +2932,7 @@ public sealed class ManagedCodexCredentialLifecycle(
         SecretReference reference,
         string chronoSandboxUserServiceId,
         string chronoLlmUserServiceId,
+        string ornnApiUserServiceId,
         DateTimeOffset expiresAt) =>
         new()
         {
@@ -2935,7 +2941,9 @@ public sealed class ManagedCodexCredentialLifecycle(
             SecretReference = reference.Clone(),
             ChronoSandboxUserServiceId = chronoSandboxUserServiceId,
             ChronoLlmUserServiceId = chronoLlmUserServiceId,
+            OrnnApiUserServiceId = ornnApiUserServiceId,
             ChronoSandboxServiceSlug = ManagedCodexOptions.ChronoSandboxServiceSlug,
+            OrnnApiServiceSlug = ManagedCodexOptions.OrnnApiServiceSlug,
             ExpiresAt = Timestamp.FromDateTimeOffset(expiresAt.ToUniversalTime()),
             Status = ManagedCodexCredentialStatus.Active,
         };
@@ -3004,19 +3012,21 @@ public sealed class ManagedCodexCredentialLifecycle(
         HasExactServiceIds(
             key.AllowedServiceIds,
             eligibility.ChronoSandboxUserServiceId,
-            eligibility.ChronoLlmUserServiceId) &&
+            eligibility.ChronoLlmUserServiceId,
+            eligibility.OrnnApiUserServiceId) &&
         !key.AllowAllNodes &&
         key.AllowedNodeIds is { Count: 0 };
 
     private static bool HasExactServiceIds(
         IReadOnlyList<string> actual,
         string sandboxId,
-        string llmId)
+        string llmId,
+        string ornnId)
     {
         var expected = new HashSet<string>(
-            [sandboxId, llmId],
+            [sandboxId, llmId, ornnId],
             StringComparer.Ordinal);
-        return expected.Count == 2 &&
+        return expected.Count == 3 &&
                actual is not null &&
                actual.Count == expected.Count &&
                actual.All(expected.Contains) &&

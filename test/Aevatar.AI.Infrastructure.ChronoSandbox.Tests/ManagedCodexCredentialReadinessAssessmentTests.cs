@@ -181,8 +181,11 @@ public sealed class ManagedCodexCredentialReadinessAssessmentTests
     [InlineData(ServiceBindingFault.BlankApiKeyId)]
     [InlineData(ServiceBindingFault.BlankSandboxUserServiceId)]
     [InlineData(ServiceBindingFault.BlankLlmUserServiceId)]
+    [InlineData(ServiceBindingFault.BlankOrnnApiUserServiceId)]
     [InlineData(ServiceBindingFault.EqualUserServiceIds)]
+    [InlineData(ServiceBindingFault.EqualOrnnApiUserServiceId)]
     [InlineData(ServiceBindingFault.WrongSandboxSlug)]
+    [InlineData(ServiceBindingFault.WrongOrnnApiSlug)]
     public void Assess_WhenServiceBindingIsInvalid_ReturnsServiceBindingInvalid(
         ServiceBindingFault fault)
     {
@@ -198,12 +201,22 @@ public sealed class ManagedCodexCredentialReadinessAssessmentTests
             case ServiceBindingFault.BlankLlmUserServiceId:
                 snapshot.Credential.ChronoLlmUserServiceId = " ";
                 break;
+            case ServiceBindingFault.BlankOrnnApiUserServiceId:
+                snapshot.Credential.OrnnApiUserServiceId = " ";
+                break;
             case ServiceBindingFault.EqualUserServiceIds:
                 snapshot.Credential.ChronoLlmUserServiceId =
                     snapshot.Credential.ChronoSandboxUserServiceId;
                 break;
+            case ServiceBindingFault.EqualOrnnApiUserServiceId:
+                snapshot.Credential.OrnnApiUserServiceId =
+                    snapshot.Credential.ChronoLlmUserServiceId;
+                break;
             case ServiceBindingFault.WrongSandboxSlug:
                 snapshot.Credential.ChronoSandboxServiceSlug = "sandbox-alias";
+                break;
+            case ServiceBindingFault.WrongOrnnApiSlug:
+                snapshot.Credential.OrnnApiServiceSlug = "ornn-alias";
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(fault), fault, null);
@@ -268,7 +281,9 @@ public sealed class ManagedCodexCredentialReadinessAssessmentTests
                 },
                 ChronoSandboxUserServiceId = "us-sandbox",
                 ChronoLlmUserServiceId = "us-llm",
+                OrnnApiUserServiceId = "us-ornn",
                 ChronoSandboxServiceSlug = ManagedCodexOptions.ChronoSandboxServiceSlug,
+                OrnnApiServiceSlug = "ornn-api",
                 ExpiresAt = Timestamp.FromDateTimeOffset(expiresAt),
                 Status = ManagedCodexCredentialStatus.Active,
             },
@@ -308,7 +323,10 @@ public sealed class ManagedCodexCredentialReadinessAssessmentTests
         BlankApiKeyId,
         BlankSandboxUserServiceId,
         BlankLlmUserServiceId,
+        BlankOrnnApiUserServiceId,
         EqualUserServiceIds,
+        EqualOrnnApiUserServiceId,
         WrongSandboxSlug,
+        WrongOrnnApiSlug,
     }
 }
