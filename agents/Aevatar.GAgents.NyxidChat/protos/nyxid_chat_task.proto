@@ -2036,6 +2036,11 @@ message NyxIdChatLateOperationEvidenceCommittedEvent {
   int64 progress_sequence = 7;
   google.protobuf.Timestamp committed_at = 8;
   NyxIdChatConversationGAgentState state = 9;
+  // Typed, credential-free terminal consumed after a control fence already
+  // fixed the task/turn outcome. This is a receipt fact only: it must not
+  // rewrite that business terminal. For ActionPostcondition the parent stores
+  // an honest fenced-result failure; sanitized child Failure is preserved.
+  NyxIdChatOperationFailure consumed_postcondition_failure = 10;
 }
 
 message NyxIdChatControlFenceCommittedEvent {

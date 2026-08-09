@@ -2889,13 +2889,41 @@ public sealed partial class NyxIdChatConversationGAgentTests
             NyxIdChatTurnOperationResultAcknowledgedSignal.Descriptor)).Should().Be(2,
             "an exact redelivery still needs an acknowledgement");
 
+        var nextTurn = CreateStartTurnCommand();
+        nextTurn.ConversationActorId = conversationActorId;
+        nextTurn.TurnId = "turn-after-service-connect";
+        nextTurn.TaskId = "task-after-service-connect";
+        nextTurn.ClientRequestId = "client-after-service-connect";
+        nextTurn.CommandId = "command-after-service-connect";
+        nextTurn.CorrelationId = "correlation-after-service-connect";
+        await agent.HandleEventAsync(CreateEnvelope(conversationActorId, nextTurn));
+        agent.State.ActiveTurn.TurnId.Should().Be(nextTurn.TurnId);
+        agent.State.ResultAcknowledgementFences.Should().ContainSingle(fence =>
+            fence.Key.Equals(key));
+        var afterNextTurn = await eventStore.GetEventsAsync(conversationActorId);
+
+        await agent.HandleOperationResultAsync(result.Clone());
+
+        (await eventStore.GetEventsAsync(conversationActorId)).Should().HaveCount(
+            afterNextTurn.Count,
+            "an old child replay after the next turn only retransmits its durable acknowledgement");
+        var replayAcknowledgements = dispatch.Calls
+            .Where(call => call.Envelope.Payload.Is(
+                NyxIdChatTurnOperationResultAcknowledgedSignal.Descriptor))
+            .Select(call => call.Envelope.Payload
+                .Unpack<NyxIdChatTurnOperationResultAcknowledgedSignal>())
+            .ToArray();
+        replayAcknowledgements.Should().HaveCount(3);
+        replayAcknowledgements[^1].ResultSha256.ToByteArray().Should()
+            .Equal(SHA256.HashData(result.ToByteArray()));
+
         var nextGeneration = result.Clone();
         nextGeneration.Key.OperationGeneration++;
         await agent.HandleOperationResultAsync(nextGeneration);
 
-        (await eventStore.GetEventsAsync(conversationActorId)).Should().HaveCount(before + 1);
+        (await eventStore.GetEventsAsync(conversationActorId)).Should().HaveCount(afterNextTurn.Count);
         dispatch.Calls.Count(call => call.Envelope.Payload.Is(
-            NyxIdChatTurnOperationResultAcknowledgedSignal.Descriptor)).Should().Be(2,
+            NyxIdChatTurnOperationResultAcknowledgedSignal.Descriptor)).Should().Be(3,
             "the same operation id from another generation must not match the committed fence");
     }
 

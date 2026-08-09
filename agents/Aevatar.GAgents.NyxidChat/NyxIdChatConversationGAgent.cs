@@ -46,6 +46,10 @@ public sealed class NyxIdChatConversationGAgent
         "NYXID_CHAT_POSTCONDITION_RESULT_REJECTED";
     private const string PostconditionResultRejectedMessage =
         "The NyxID action postcondition result was rejected.";
+    private const string FencedPostconditionResultConsumedCode =
+        "NYXID_CHAT_POSTCONDITION_RESULT_CONSUMED_AFTER_CONTROL_FENCE";
+    private const string FencedPostconditionResultConsumedMessage =
+        "The NyxID postcondition result arrived after the task was stopped.";
 
     public static string ProjectionKind => "nyxid-chat-conversation";
 
@@ -2485,7 +2489,7 @@ public sealed class NyxIdChatConversationGAgent
             return;
         }
 
-        if (!TryResolveCurrentOperation(signal.Key, out _))
+        if (!TryResolveCurrentOperation(signal.Key, out var currentOperation))
             return;
 
         var acknowledgementRequired = RequiresResultAcknowledgement(State, signal);
@@ -2501,7 +2505,16 @@ public sealed class NyxIdChatConversationGAgent
         if (lateEvidence.IsFencedOperation && !fencedVerification)
         {
             if (!lateEvidence.ShouldCommit)
+            {
+                if (acknowledgementRequired)
+                {
+                    await CommitFencedPostconditionResultConsumptionAsync(
+                        signal,
+                        currentOperation,
+                        now);
+                }
                 return;
+            }
 
             var lateState = lateEvidence.State;
             NyxIdChatOperationDispatchCommand? verification = null;
@@ -2973,6 +2986,8 @@ public sealed class NyxIdChatConversationGAgent
             State.PendingActions.Select(static action => action.Clone()));
         next.RecentActions.AddRange(
             State.RecentActions.Select(static action => action.Clone()));
+        next.ResultAcknowledgementFences.AddRange(
+            State.ResultAcknowledgementFences.Select(static fence => fence.Clone()));
         if (State.ContinuationAdmission is not null &&
             string.Equals(
                 State.ContinuationAdmission.ContinuationTurnId,
@@ -5366,6 +5381,31 @@ public sealed class NyxIdChatConversationGAgent
         await _actorDispatchPort.DispatchAsync(turnActorId, envelope, ct);
     }
 
+    private async Task CommitFencedPostconditionResultConsumptionAsync(
+        NyxIdChatOperationResultSignal result,
+        NyxIdChatOperationState currentOperation,
+        Timestamp committedAt)
+    {
+        var failure = BuildFencedPostconditionFailure(result);
+        var next = State.Clone();
+        next.ProgressSequence = checked(State.ProgressSequence + 1);
+        next.UpdatedAt = committedAt.Clone();
+        RememberResultAcknowledgementFence(next, result);
+        await PersistDomainEventAsync(new NyxIdChatLateOperationEvidenceCommittedEvent
+        {
+            Key = result.Key.Clone(),
+            OperationPhase = currentOperation.Phase,
+            ExternalEffect = failure.ExternalEffect,
+            TerminalCode = failure.FailureCode,
+            SafeMessage = failure.SafeMessage,
+            ProgressSequence = next.ProgressSequence,
+            CommittedAt = committedAt.Clone(),
+            State = next,
+            ConsumedPostconditionFailure = failure,
+        }, CancellationToken.None);
+        await DispatchOperationResultAcknowledgementAsync(result, CancellationToken.None);
+    }
+
     private static void RememberResultAcknowledgementFence(
         NyxIdChatConversationGAgentState state,
         NyxIdChatOperationResultSignal result)
@@ -5445,6 +5485,22 @@ public sealed class NyxIdChatConversationGAgent
                 ExternalEffect = NyxIdChatEffectEvidence.NotApplied,
             },
         };
+
+    private static NyxIdChatOperationFailure BuildFencedPostconditionFailure(
+        NyxIdChatOperationResultSignal result) =>
+        result.ResultCase == NyxIdChatOperationResultSignal.ResultOneofCase.Failure
+            ? new NyxIdChatOperationFailure
+            {
+                FailureCode = result.Failure.FailureCode,
+                SafeMessage = result.Failure.SafeMessage,
+                ExternalEffect = result.Failure.ExternalEffect,
+            }
+            : new NyxIdChatOperationFailure
+            {
+                FailureCode = FencedPostconditionResultConsumedCode,
+                SafeMessage = FencedPostconditionResultConsumedMessage,
+                ExternalEffect = NyxIdChatEffectEvidence.NotApplied,
+            };
 
     private static bool KeysEqual(NyxIdChatOperationKey? left, NyxIdChatOperationKey? right) =>
         left is not null &&

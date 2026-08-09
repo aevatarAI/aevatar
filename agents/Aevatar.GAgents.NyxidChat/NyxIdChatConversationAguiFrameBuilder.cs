@@ -509,7 +509,8 @@ internal static class NyxIdChatConversationAguiFrameBuilder
         long sequence)
     {
         ArgumentNullException.ThrowIfNull(committed);
-        if (committed.Key is null ||
+        if (committed.ConsumedPostconditionFailure is not null ||
+            committed.Key is null ||
             committed.State?.ActiveTask is null ||
             committed.State.ActiveTurn is null ||
             sequence <= 0)

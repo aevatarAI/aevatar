@@ -1828,6 +1828,47 @@ public sealed class NyxIdChatProjectionSessionTests
             "the stop fence already emitted the origin turn terminal");
     }
 
+    [Fact]
+    public async Task Projector_FencedPostconditionReceipt_ShouldPublishNoBusinessFrames()
+    {
+        var hub = new RecordingSessionEventHub();
+        var projector = new NyxIdChatSessionEventProjector(hub);
+        var context = ControllerContext();
+        var state = ControllerState(NyxIdChatTaskStatus.Stopped, NyxIdChatTurnStatus.Stopped);
+        var step = state.ActiveTask.Steps.Single();
+        step.Kind = NyxIdChatStepKind.Postcondition;
+        step.Status = NyxIdChatStepStatus.Cancelled;
+        step.Operation.Kind = NyxIdChatStepKind.Postcondition;
+        state.ProgressSequence = 10;
+
+        await projector.ProjectAsync(
+            context,
+            CommittedEnvelope(
+                context.RootActorId,
+                new NyxIdChatLateOperationEvidenceCommittedEvent
+                {
+                    Key = step.Operation.Key.Clone(),
+                    OperationPhase = step.Operation.Phase,
+                    ExternalEffect = NyxIdChatEffectEvidence.NotApplied,
+                    TerminalCode = "NYXID_CHAT_POSTCONDITION_RESULT_CONSUMED_AFTER_CONTROL_FENCE",
+                    SafeMessage = "The result arrived after the task was stopped.",
+                    ProgressSequence = state.ProgressSequence,
+                    State = state,
+                    ConsumedPostconditionFailure = new NyxIdChatOperationFailure
+                    {
+                        FailureCode =
+                            "NYXID_CHAT_POSTCONDITION_RESULT_CONSUMED_AFTER_CONTROL_FENCE",
+                        SafeMessage = "The result arrived after the task was stopped.",
+                        ExternalEffect = NyxIdChatEffectEvidence.NotApplied,
+                    },
+                },
+                stateVersion: 22),
+            CancellationToken.None);
+
+        hub.Published.Should().BeEmpty(
+            "a receipt-only late postcondition fact must not repeat task, step, or terminal frames");
+    }
+
     [Theory]
     [InlineData(NyxIdChatStepControlKind.Retry, NyxIdChatTaskStatus.Active,
         NyxIdChatTurnStatus.Active, NyxIdChatStepStatus.Running, false)]

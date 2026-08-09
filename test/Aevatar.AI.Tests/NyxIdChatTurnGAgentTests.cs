@@ -196,11 +196,15 @@ public sealed partial class NyxIdChatTurnGAgentTests
                 Any.Pack(new NyxIdChatTurnOperationDeliveredEvent()).TypeUrl);
     }
 
-    [Fact]
-    public async Task PostconditionResult_ShouldRemainPendingUntilExactParentAcknowledgement()
+    [Theory]
+    [InlineData(NyxIdChatOperationResultSignal.ResultOneofCase.ActionPostcondition)]
+    [InlineData(NyxIdChatOperationResultSignal.ResultOneofCase.ToolVerification)]
+    [InlineData(NyxIdChatOperationResultSignal.ResultOneofCase.Failure)]
+    public async Task PostconditionResult_ShouldRemainPendingUntilExactParentAcknowledgement(
+        NyxIdChatOperationResultSignal.ResultOneofCase resultCase)
     {
         var command = PostconditionCommand(NyxIdChatActionDisposition.Completed);
-        var result = CreatePostconditionResult(command.Key);
+        var result = CreatePostconditionResult(command.Key, resultCase);
         var executor = new RecordingOperationExecutor(_ => result.Clone());
         var eventStore = new InMemoryEventStoreForTests();
         var callbacks = new RecordingRuntimeCallbackScheduler();
@@ -258,11 +262,15 @@ public sealed partial class NyxIdChatTurnGAgentTests
                 Any.Pack(new NyxIdChatTurnOperationDeliveredEvent()).TypeUrl);
     }
 
-    [Fact]
-    public async Task PostconditionDeliveryWatchdog_AfterRestart_ShouldRedispatchWithoutExecution()
+    [Theory]
+    [InlineData(NyxIdChatOperationResultSignal.ResultOneofCase.ActionPostcondition)]
+    [InlineData(NyxIdChatOperationResultSignal.ResultOneofCase.ToolVerification)]
+    [InlineData(NyxIdChatOperationResultSignal.ResultOneofCase.Failure)]
+    public async Task PostconditionDeliveryWatchdog_AfterRestart_ShouldRedispatchWithoutExecution(
+        NyxIdChatOperationResultSignal.ResultOneofCase resultCase)
     {
         var command = PostconditionCommand(NyxIdChatActionDisposition.Completed);
-        var result = CreatePostconditionResult(command.Key);
+        var result = CreatePostconditionResult(command.Key, resultCase);
         var executor = new RecordingOperationExecutor(_ => result.Clone());
         var eventStore = new InMemoryEventStoreForTests();
         var callbacks = new RecordingRuntimeCallbackScheduler();
@@ -297,6 +305,127 @@ public sealed partial class NyxIdChatTurnGAgentTests
             .Should().ContainSingle(item =>
                 item.EventData.Is(
                     NyxIdChatTurnOperationResultRedeliveryAttemptedEvent.Descriptor));
+    }
+
+    [Theory]
+    [InlineData(NyxIdChatOperationResultSignal.ResultOneofCase.ActionPostcondition)]
+    [InlineData(NyxIdChatOperationResultSignal.ResultOneofCase.Failure)]
+    public async Task FencedPostconditionResult_ShouldCommitReceiptAndDeliverChildWithoutRewritingParentTerminal(
+        NyxIdChatOperationResultSignal.ResultOneofCase resultCase)
+    {
+        const string conversationActorId = "conversation-fenced-postcondition";
+        const string turnId = "turn-fenced-postcondition";
+        var turnActorId = NyxIdChatTurnActorIds.ForTurn(conversationActorId, turnId);
+        var key = CreateKey("step-postcondition", "operation-postcondition", 1);
+        key.ConversationActorId = conversationActorId;
+        key.TurnId = turnId;
+        key.TaskId = "task-fenced-postcondition";
+        var result = CreatePostconditionResult(key, resultCase);
+        var eventStore = new InMemoryEventStoreForTests();
+        var parentState = CreateFencedPostconditionConversationState(key);
+        await eventStore.AppendAsync(
+            conversationActorId,
+            [
+                new StateEvent
+                {
+                    EventId = "fenced-postcondition-state",
+                    AgentId = conversationActorId,
+                    Version = 1,
+                    Timestamp = parentState.UpdatedAt.Clone(),
+                    EventType = NyxIdChatTurnStartedEvent.Descriptor.FullName,
+                    EventData = Any.Pack(new NyxIdChatTurnStartedEvent
+                    {
+                        State = parentState.Clone(),
+                    }),
+                },
+            ],
+            expectedVersion: 0);
+        var actorDispatch = new DeterministicActorDispatchPort();
+        using var services = BuildActorCompositionServices(eventStore);
+        var conversation = new NyxIdChatConversationGAgent(
+            new ImmediateActorRuntime(),
+            actorDispatch,
+            new FixedTimeProvider(new DateTimeOffset(2026, 8, 10, 5, 0, 0, TimeSpan.Zero)))
+        {
+            Services = services,
+            EventSourcingBehaviorFactory = services.GetRequiredService<
+                IEventSourcingBehaviorFactory<NyxIdChatConversationGAgentState>>(),
+        };
+        typeof(GAgentBase)
+            .GetMethod("SetId", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(conversation, [conversationActorId]);
+        await conversation.ActivateAsync();
+        var beforeTask = conversation.State.ActiveTask.ToByteString();
+        var beforeTurn = conversation.State.ActiveTurn.ToByteString();
+        var beforeFence = conversation.State.ControlFence.ToByteString();
+        var beforeOperation = conversation.State.ActiveTask.Steps.Single()
+            .Operation.ToByteString();
+
+        var executor = new RecordingOperationExecutor(_ => result.Clone());
+        var operationDispatch = new RecordingOperationDispatchPort(executor);
+        var turn = CreateAgent(
+            services,
+            operationDispatch,
+            actorDispatch,
+            actorId: turnActorId);
+        await turn.ActivateAsync();
+        var command = PostconditionCommand(NyxIdChatActionDisposition.Completed);
+        command.Key = key.Clone();
+        await turn.HandleEventAsync(CreateEnvelope(turnActorId, command));
+        await operationDispatch.DeliverPendingSignalsAsync(turn);
+        turn.State.ResultDelivered.Should().BeFalse();
+        turn.State.PendingResult.Should().BeEquivalentTo(result);
+
+        var resultEnvelope = actorDispatch.TakeSingle(
+            conversationActorId,
+            static envelope => envelope.Payload.Is(NyxIdChatOperationResultSignal.Descriptor));
+        await conversation.HandleEventAsync(resultEnvelope);
+
+        var committed = (await eventStore.GetEventsAsync(conversationActorId))[^1]
+            .EventData.Unpack<NyxIdChatLateOperationEvidenceCommittedEvent>();
+        committed.ConsumedPostconditionFailure.Should().NotBeNull();
+        committed.ConsumedPostconditionFailure.FailureCode.Should().Be(
+            resultCase == NyxIdChatOperationResultSignal.ResultOneofCase.Failure
+                ? "POSTCONDITION_FAILED"
+                : "NYXID_CHAT_POSTCONDITION_RESULT_CONSUMED_AFTER_CONTROL_FENCE");
+        committed.State.ActiveTask.ToByteString().Should().Equal(beforeTask);
+        committed.State.ActiveTurn.ToByteString().Should().Equal(beforeTurn);
+        committed.State.ControlFence.ToByteString().Should().Equal(beforeFence);
+        committed.State.ActiveTask.Steps.Single().Operation.ToByteString().Should()
+            .Equal(beforeOperation);
+        committed.ProgressSequence.Should().Be(parentState.ProgressSequence + 1);
+        committed.State.ResultAcknowledgementFences.Should().ContainSingle();
+        var acknowledgementEnvelope = actorDispatch.TakeSingle(
+            turnActorId,
+            static envelope => envelope.Payload.Is(
+                NyxIdChatTurnOperationResultAcknowledgedSignal.Descriptor));
+        var acknowledgement = acknowledgementEnvelope.Payload
+            .Unpack<NyxIdChatTurnOperationResultAcknowledgedSignal>();
+        acknowledgement.ResultSha256.ToByteArray().Should()
+            .Equal(SHA256.HashData(result.ToByteArray()));
+        await turn.HandleEventAsync(acknowledgementEnvelope);
+        turn.State.ResultDelivered.Should().BeTrue();
+        turn.State.PendingResult.Should().BeNull();
+
+        var recovered = new NyxIdChatConversationGAgent(
+            new ImmediateActorRuntime(),
+            new RecordingDispatchPort(),
+            new FixedTimeProvider(new DateTimeOffset(2026, 8, 10, 5, 0, 0, TimeSpan.Zero)))
+        {
+            Services = services,
+            EventSourcingBehaviorFactory = services.GetRequiredService<
+                IEventSourcingBehaviorFactory<NyxIdChatConversationGAgentState>>(),
+        };
+        typeof(GAgentBase)
+            .GetMethod("SetId", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(recovered, [conversationActorId]);
+        await recovered.ActivateAsync();
+        recovered.State.ActiveTask.ToByteString().Should().Equal(beforeTask);
+        recovered.State.ActiveTurn.ToByteString().Should().Equal(beforeTurn);
+        recovered.State.ControlFence.ToByteString().Should().Equal(beforeFence);
+        recovered.State.ActiveTask.Steps.Single().Operation.ToByteString().Should()
+            .Equal(beforeOperation);
+        recovered.State.ResultAcknowledgementFences.Should().ContainSingle();
     }
 
     [Fact]
@@ -2743,23 +2872,107 @@ public sealed partial class NyxIdChatTurnGAgentTests
     };
 
     private static NyxIdChatOperationResultSignal CreatePostconditionResult(
-        NyxIdChatOperationKey key) => new()
+        NyxIdChatOperationKey key,
+        NyxIdChatOperationResultSignal.ResultOneofCase resultCase =
+            NyxIdChatOperationResultSignal.ResultOneofCase.ActionPostcondition)
     {
-        Key = key.Clone(),
-        ActionPostcondition = new NyxIdChatActionPostconditionResult
+        var result = new NyxIdChatOperationResultSignal { Key = key.Clone() };
+        switch (resultCase)
         {
-            ActionRequestId = "action-alpha",
-            Disposition = NyxIdChatActionDisposition.Completed,
-            Verified = true,
-            Resource = new NyxIdChatSafeResourceRef
-            {
-                UserService = new NyxIdChatUserServiceRef
+            case NyxIdChatOperationResultSignal.ResultOneofCase.ActionPostcondition:
+                result.ActionPostcondition = new NyxIdChatActionPostconditionResult
                 {
-                    UserServiceId = "service-alpha",
-                },
+                    ActionRequestId = "action-alpha",
+                    Disposition = NyxIdChatActionDisposition.Completed,
+                    Verified = true,
+                    Resource = new NyxIdChatSafeResourceRef
+                    {
+                        UserService = new NyxIdChatUserServiceRef
+                        {
+                            UserServiceId = "service-alpha",
+                        },
+                    },
+                };
+                break;
+            case NyxIdChatOperationResultSignal.ResultOneofCase.ToolVerification:
+                result.ToolVerification = new NyxIdChatToolVerificationResult
+                {
+                    EffectStepId = "step-effect-alpha",
+                    Disposition = NyxIdChatToolVerificationDisposition.NotApplied,
+                };
+                break;
+            case NyxIdChatOperationResultSignal.ResultOneofCase.Failure:
+                result.Failure = new NyxIdChatOperationFailure
+                {
+                    FailureCode = "POSTCONDITION_FAILED",
+                    SafeMessage = "The postcondition failed.",
+                    ExternalEffect = NyxIdChatEffectEvidence.NotApplied,
+                };
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(resultCase), resultCase, null);
+        }
+
+        return result;
+    }
+
+    private static NyxIdChatConversationGAgentState CreateFencedPostconditionConversationState(
+        NyxIdChatOperationKey key)
+    {
+        var committedAt = Timestamp.FromDateTimeOffset(
+            new DateTimeOffset(2026, 8, 10, 4, 59, 0, TimeSpan.Zero));
+        var state = new NyxIdChatConversationGAgentState
+        {
+            ConversationActorId = key.ConversationActorId,
+            ScopeId = "scope-alpha",
+            ActiveTurn = new NyxIdChatTurnState
+            {
+                TurnId = key.TurnId,
+                TaskId = key.TaskId,
+                Status = NyxIdChatTurnStatus.Stopped,
+                TerminalAt = committedAt.Clone(),
             },
-        },
-    };
+            ActiveTask = new NyxIdChatTaskState
+            {
+                ActorId = key.ConversationActorId,
+                TurnId = key.TurnId,
+                TaskId = key.TaskId,
+                PlanId = "plan-fenced-postcondition",
+                Status = NyxIdChatTaskStatus.Stopped,
+            },
+            ControlFence = new NyxIdChatControlFenceState
+            {
+                Kind = NyxIdChatControlKind.Stop,
+                RequestId = "stop-fenced-postcondition",
+                ClientRequestId = "client-stop-fenced-postcondition",
+                TurnId = key.TurnId,
+                TaskId = key.TaskId,
+                StepId = key.StepId,
+                OperationGeneration = key.OperationGeneration,
+                Outcome = NyxIdChatControlOutcome.Uncancellable,
+                CommittedAt = committedAt.Clone(),
+            },
+            ProgressSequence = 7,
+            UpdatedAt = committedAt.Clone(),
+        };
+        state.LatestTurn = state.ActiveTurn.Clone();
+        state.ActiveTask.Steps.Add(new NyxIdChatTaskStepState
+        {
+            StepId = key.StepId,
+            Order = 1,
+            Kind = NyxIdChatStepKind.Postcondition,
+            Status = NyxIdChatStepStatus.Cancelled,
+            Required = true,
+            Operation = new NyxIdChatOperationState
+            {
+                Key = key.Clone(),
+                Kind = NyxIdChatStepKind.Postcondition,
+                Phase = NyxIdChatOperationPhase.Dispatched,
+                DispatchedAt = committedAt.Clone(),
+            },
+        });
+        return state;
+    }
 
     private static NyxIdChatTurnGAgent CreateAgent(
         ServiceProvider services,
