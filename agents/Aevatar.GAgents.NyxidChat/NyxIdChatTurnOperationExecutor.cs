@@ -1326,9 +1326,6 @@ public sealed class NyxIdChatTurnOperationExecutor
         var pending = !durableRetry && session.StepState?.PendingToolCalls.Count == 1
             ? session.StepState.PendingToolCalls[0]
             : null;
-        var argumentsJson = durableRetry
-            ? JsonFormatter.Default.Format(admission!.RetryArguments)
-            : pending?.ArgumentsJson;
         if (admission is null ||
             string.IsNullOrWhiteSpace(admission.GateRequestId) ||
             string.IsNullOrWhiteSpace(admission.PlanId) ||
@@ -1343,8 +1340,19 @@ public sealed class NyxIdChatTurnOperationExecutor
                                pending is null)) ||
             !string.Equals(command.Key.TaskId, admission.TaskId, StringComparison.Ordinal) ||
             (!durableRetry && !string.Equals(pending!.Id, admission.ToolCallId, StringComparison.Ordinal)) ||
-            (!durableRetry && !string.Equals(pending!.Name, admission.ToolName, StringComparison.Ordinal)) ||
-            admission.ArgumentsSha256.IsEmpty ||
+            (!durableRetry && !string.Equals(pending!.Name, admission.ToolName, StringComparison.Ordinal)))
+        {
+            return Failure(
+                command.Key,
+                ToolAuthorizationMismatchCode,
+                ToolAuthorizationMismatchMessage,
+                NyxIdChatEffectEvidence.NotStarted);
+        }
+
+        var argumentsJson = durableRetry
+            ? JsonFormatter.Default.Format(admission.RetryArguments)
+            : pending!.ArgumentsJson;
+        if (admission.ArgumentsSha256.IsEmpty ||
             string.IsNullOrWhiteSpace(argumentsJson) ||
             !CryptographicOperations.FixedTimeEquals(
                 SHA256.HashData(Encoding.UTF8.GetBytes(argumentsJson)),

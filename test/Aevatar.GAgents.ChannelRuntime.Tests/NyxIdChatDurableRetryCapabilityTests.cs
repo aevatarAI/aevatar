@@ -218,6 +218,45 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
     }
 
     [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task DurableRetryMalformedContinuation_ShouldFailClosedBeforeExternalExecution(
+        bool removeArguments)
+    {
+        var tool = new RetryEffectTool();
+        var executor = CreateTurnExecutor(tool);
+        var (state, _) = await BuildReconciledNotAppliedStateAsync(executor, tool);
+        var effect = state.ActiveTask.Steps.Single(step => step.Kind == NyxIdChatStepKind.Tool);
+        var retry = NyxIdChatControlCommands.Retry(
+            state,
+            BuildRetryCommand(effect, "valid-grant-token", expectedStateVersion: 37),
+            stateVersion: 37,
+            Now);
+        var confirmed = NyxIdChatPlanGateDecisions.Resolve(
+            retry.State,
+            BuildPlanConfirmation(retry.State, "valid-grant-token", expectedStateVersion: 38),
+            currentStateVersion: 38,
+            Now);
+        var command = confirmed.NextCommand!.Clone();
+        if (removeArguments)
+            command.PlanGateContinuation.RetryArguments = null;
+        else
+            command.PlanGateContinuation.ToolContext = null;
+
+        var result = await executor.ExecuteAsync(
+            command,
+            new NyxIdChatTransientExecutionSession(),
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        result.Result.Failure.Should().NotBeNull();
+        result.Result.Failure.FailureCode.Should().Be(
+            NyxIdChatTurnOperationExecutor.ToolAuthorizationMismatchCode);
+        result.Result.Failure.ExternalEffect.Should().Be(NyxIdChatEffectEvidence.NotStarted);
+        tool.ExecutionTokens.Should().Equal("uncertain-token");
+    }
+
+    [Theory]
     [InlineData("expired-grant-token")]
     [InlineData("revoked-grant-token")]
     [InlineData("scope-mismatched-grant-token")]
