@@ -1949,12 +1949,11 @@ public sealed class NyxIdChatTurnOperationExecutor
     {
         var profile = input.AgentProfile;
         var authority = input.AgentProfileTurnAuthority;
-        if (profile is null && authority is null)
+        if (input.Intent == NyxIdChatTurnIntent.ServiceConnect &&
+            !IsProfileSelectedServiceConnect(authority))
         {
-            if (input.Intent == NyxIdChatTurnIntent.Unspecified)
-                return null;
-            if (input.Intent != NyxIdChatTurnIntent.ServiceConnect ||
-                _turnCatalogMaterializer is null)
+            if (_turnCatalogMaterializer is null ||
+                (profile is null) != (authority is null))
             {
                 return RestrictedEmptyCatalog();
             }
@@ -1963,11 +1962,15 @@ public sealed class NyxIdChatTurnOperationExecutor
                 .ToToolContext(AgentToolExecutionContextMapper.FromPayload(request.ToolContext));
             try
             {
-                return await _turnCatalogMaterializer.MaterializeBuiltInIntentAsync(
+                var builtInCatalog = await _turnCatalogMaterializer.MaterializeBuiltInIntentAsync(
                         input.Intent,
                         builtInToolContext,
                         ct)
                     .ConfigureAwait(false);
+                return AgentProfileTurnCatalogMaterializer.NarrowToBuiltInIntent(
+                    input.Intent,
+                    builtInCatalog,
+                    authority?.AuthorityCeilingToolNames);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -1982,6 +1985,11 @@ public sealed class NyxIdChatTurnOperationExecutor
                 return RestrictedEmptyCatalog();
             }
         }
+
+        if (profile is null && authority is null)
+            return input.Intent == NyxIdChatTurnIntent.Unspecified
+                ? null
+                : RestrictedEmptyCatalog();
         if (profile is null || authority is null || _turnCatalogMaterializer is null)
             return RestrictedEmptyCatalog();
 
@@ -1989,7 +1997,7 @@ public sealed class NyxIdChatTurnOperationExecutor
             .ToToolContext(AgentToolExecutionContextMapper.FromPayload(request.ToolContext));
         try
         {
-            return (await _turnCatalogMaterializer.MaterializeCommittedAsync(
+            var catalog = (await _turnCatalogMaterializer.MaterializeCommittedAsync(
                     profile,
                     authority,
                     toolContext.Credentials.NyxIdAccessToken,
@@ -1997,6 +2005,12 @@ public sealed class NyxIdChatTurnOperationExecutor
                     toolContext,
                     ct)
                 .ConfigureAwait(false)).Catalog;
+            return input.Intent == NyxIdChatTurnIntent.ServiceConnect
+                ? AgentProfileTurnCatalogMaterializer.NarrowToBuiltInIntent(
+                    input.Intent,
+                    catalog,
+                    authority.AuthorityCeilingToolNames)
+                : catalog;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -2007,6 +2021,13 @@ public sealed class NyxIdChatTurnOperationExecutor
             return RestrictedEmptyCatalog();
         }
     }
+
+    private static bool IsProfileSelectedServiceConnect(
+        AgentProfileTurnAuthorityState? authority) =>
+        string.Equals(
+            authority?.CandidateRoute?.IntentId,
+            NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
+            StringComparison.Ordinal);
 
     private static AgentProfileTurnCatalog RestrictedEmptyCatalog() =>
         new(

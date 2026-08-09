@@ -13,13 +13,17 @@ public interface INyxIdChatTurnIntentClassifier
 public sealed class NyxIdChatTurnIntentClassifier : INyxIdChatTurnIntentClassifier
 {
     internal const string ServiceConnectIntentId = "service_connect";
+    internal const string ServiceConnectRoutingDescription =
+        "Connect, add, or authorize a hosted external service account and verify that connection.";
     private static readonly TimeSpan ClassificationTimeout = TimeSpan.FromSeconds(2);
-    private static readonly AgentProfileTurnClassificationCandidate[] Candidates =
-    [
+    internal static AgentProfileTurnClassificationCandidate ServiceConnectCandidate { get; } =
         new(
             ServiceConnectIntentId,
-            "Connect, add, or authorize a hosted external service account and verify that connection.",
-            AgentProfileSideEffectClass.ExternalHandoff),
+            ServiceConnectRoutingDescription,
+            AgentProfileSideEffectClass.ExternalHandoff);
+    private static readonly AgentProfileTurnClassificationCandidate[] Candidates =
+    [
+        ServiceConnectCandidate,
     ];
 
     private readonly IAgentProfileTurnClassifier _classifier;

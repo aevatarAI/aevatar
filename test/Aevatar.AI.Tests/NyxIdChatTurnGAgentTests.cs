@@ -1973,6 +1973,158 @@ public sealed partial class NyxIdChatTurnGAgentTests
             "nyxid_require_service");
     }
 
+    [Theory]
+    [InlineData("general_nyxid_assistant")]
+    [InlineData(NyxIdChatTurnIntentClassifier.ServiceConnectIntentId)]
+    public async Task OperationExecutor_ProfiledServiceConnectIntent_ShouldNarrowToAdmissionTools(
+        string candidateIntentId)
+    {
+        IAgentTool[] tools =
+        [
+            new NamedProfileTool("use_skill"),
+            new NamedProfileTool("nyxid_services"),
+            new NamedProfileTool("nyxid_catalog"),
+            new NamedProfileTool("nyxid_require_service"),
+            new NamedProfileTool("github_get_current_user"),
+        ];
+        var profile = AgentProfileSnapshotCodec.Seal(new AgentProfileSnapshot
+        {
+            ProfileId = "profile-mainnet-general",
+            ProfileVersion = "profile-v1",
+            AgentKind = NyxIdChatServiceDefaults.GAgentKind,
+            PolicyRevision = "policy-v1",
+            RouteToolSetRef = AgentProfilePolicies.NyxIdChatRouteToolSet,
+            MaximumToolPolicy = new AgentProfileToolPolicy
+            {
+                ToolNames =
+                {
+                    "use_skill",
+                    "nyxid_services",
+                    "nyxid_catalog",
+                    "nyxid_require_service",
+                    "github_get_current_user",
+                },
+            },
+            ActivationMode = AgentProfileActivationMode.Enforced,
+        });
+        var authority = new AgentProfileTurnAuthorityState
+        {
+            ReconciliationKey = new AgentProfileTurnReconciliationKey
+            {
+                SessionId = "turn-alpha",
+                Attempt = 1,
+            },
+            CandidateRoute = new AgentProfileTurnCandidateRouteIdentity
+            {
+                ProfileId = profile.ProfileId,
+                ProfileVersion = profile.ProfileVersion,
+                PolicyRevision = profile.PolicyRevision,
+                IntentId = candidateIntentId,
+            },
+            AuthorityKind = AgentProfileTurnAuthorityKind.Selected,
+        };
+        authority.AuthorityCeilingToolNames.Add(tools.Select(static tool => tool.Name));
+        var generationExecutor = new CapabilityGeneratingReplyExecutor();
+        var executor = new NyxIdChatTurnOperationExecutor(
+            generationExecutor,
+            new UnavailableNyxIdActionPostconditionPort(),
+            new AgentProfileTurnCatalogMaterializer(
+                new BuiltInIntentToolSetRegistry(tools),
+                new NoMatchProfileClassifier()));
+
+        await executor.ExecuteAsync(
+            new NyxIdChatOperationDispatchCommand
+            {
+                Key = CreateKey(),
+                Llm = new NyxIdChatLLMOperationInput
+                {
+                    Intent = NyxIdChatTurnIntent.ServiceConnect,
+                    AgentProfile = profile,
+                    AgentProfileTurnAuthority = authority,
+                    Request = new ChatRequestEvent
+                    {
+                        Prompt = "Connect GitHub and verify the connection",
+                        SessionId = "turn-alpha",
+                    },
+                },
+            },
+            new NyxIdChatTransientExecutionSession(),
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        generationExecutor.LastTurnCatalog.Should().NotBeNull();
+        generationExecutor.LastTurnCatalog!.FinalAllowedToolNames.Should().BeEquivalentTo(
+            "nyxid_catalog",
+            "nyxid_require_service");
+        generationExecutor.LastTurnCatalog.RouteOwnedTools.Keys.Should().BeEquivalentTo(
+            "nyxid_catalog",
+            "nyxid_require_service");
+        generationExecutor.LastTurnCatalog.FinalAllowedToolNames.Should().NotContain(
+            ["use_skill", "nyxid_services", "github_get_current_user"]);
+    }
+
+    [Fact]
+    public async Task OperationExecutor_ProfiledServiceConnectOverrideWithoutRequireAuthority_ShouldFailClosed()
+    {
+        IAgentTool[] tools =
+        [
+            new NamedProfileTool("nyxid_catalog"),
+            new NamedProfileTool("nyxid_require_service"),
+        ];
+        var profile = AgentProfileSnapshotCodec.Seal(new AgentProfileSnapshot
+        {
+            ProfileId = "profile-mainnet-general",
+            ProfileVersion = "profile-v1",
+            AgentKind = NyxIdChatServiceDefaults.GAgentKind,
+            PolicyRevision = "policy-v1",
+            RouteToolSetRef = AgentProfilePolicies.NyxIdChatRouteToolSet,
+            ActivationMode = AgentProfileActivationMode.Enforced,
+        });
+        var authority = new AgentProfileTurnAuthorityState
+        {
+            CandidateRoute = new AgentProfileTurnCandidateRouteIdentity
+            {
+                ProfileId = profile.ProfileId,
+                ProfileVersion = profile.ProfileVersion,
+                PolicyRevision = profile.PolicyRevision,
+                IntentId = "general_nyxid_assistant",
+            },
+            AuthorityKind = AgentProfileTurnAuthorityKind.Selected,
+            AuthorityCeilingToolNames = { "nyxid_catalog" },
+        };
+        var generationExecutor = new CapabilityGeneratingReplyExecutor();
+        var executor = new NyxIdChatTurnOperationExecutor(
+            generationExecutor,
+            new UnavailableNyxIdActionPostconditionPort(),
+            new AgentProfileTurnCatalogMaterializer(
+                new BuiltInIntentToolSetRegistry(tools),
+                new NoMatchProfileClassifier()));
+
+        await executor.ExecuteAsync(
+            new NyxIdChatOperationDispatchCommand
+            {
+                Key = CreateKey(),
+                Llm = new NyxIdChatLLMOperationInput
+                {
+                    Intent = NyxIdChatTurnIntent.ServiceConnect,
+                    AgentProfile = profile,
+                    AgentProfileTurnAuthority = authority,
+                    Request = new ChatRequestEvent
+                    {
+                        Prompt = "Connect GitHub and verify the connection",
+                        SessionId = "turn-alpha",
+                    },
+                },
+            },
+            new NyxIdChatTransientExecutionSession(),
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        generationExecutor.LastTurnCatalog.Should().NotBeNull();
+        generationExecutor.LastTurnCatalog!.FinalAllowedToolNames.Should().BeEmpty();
+        generationExecutor.LastTurnCatalog.RouteOwnedTools.Should().BeEmpty();
+    }
+
     [Fact]
     public async Task OperationExecutor_ServiceConnectIntentWithoutMaterializer_ShouldFailClosed()
     {

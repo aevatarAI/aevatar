@@ -757,6 +757,113 @@ public sealed partial class NyxIdChatConversationGAgentTests
     }
 
     [Fact]
+    public async Task StartTurn_EnforcedGeneralProfile_ShouldMergeServerServiceConnectCandidateInOneClassification()
+    {
+        const string conversationActorId = "conversation-profile-general-connect-intent";
+        const string generalIntentId = "general_nyxid_assistant";
+        const string prompt = "Connect GitHub and verify the connection";
+        IAgentTool[] routeTools =
+        [
+            new CanonicalProfileTool("use_skill"),
+            new CanonicalProfileTool("nyxid_services"),
+            new CanonicalProfileTool("nyxid_catalog"),
+            new CanonicalProfileTool("nyxid_require_service"),
+            new CanonicalProfileTool("github_get_current_user"),
+        ];
+        var profileClassifier = new FixedProfileClassifier(
+            NyxIdChatTurnIntentClassifier.ServiceConnectIntentId);
+        var materializer = new AgentProfileTurnCatalogMaterializer(
+            new FixedToolSetRegistry("profile.route", new FixedToolSource(routeTools)),
+            profileClassifier);
+        var serverClassifier = new RecordingTurnIntentClassifier(NyxIdChatTurnIntent.Unspecified);
+        var profile = new AgentProfileSnapshot
+        {
+            ProfileId = "profile-mainnet-general",
+            ProfileVersion = "profile-v1",
+            AgentKind = NyxIdChatServiceDefaults.GAgentKind,
+            PolicyRevision = "policy-v1",
+            RouteToolSetRef = "profile.route",
+            MaximumToolPolicy = new AgentProfileToolPolicy(),
+            RecoveryToolPolicy = new AgentProfileToolPolicy
+            {
+                ToolNames = { "nyxid_catalog", "nyxid_require_service" },
+            },
+            ClassifierTimeoutMs = 1_000,
+            ActivationMode = AgentProfileActivationMode.Enforced,
+        };
+        profile.MaximumToolPolicy.ToolNames.Add(routeTools.Select(static tool => tool.Name));
+        profile.Members.Add(new AgentProfileSkillMember
+        {
+            IntentId = generalIntentId,
+            RoutingDescription = "Handle ordinary NyxID assistant requests.",
+            SkillRef = new ExactRemoteSkillRef
+            {
+                Guid = "general-nyxid-skill",
+                LiteralVersion = "1.0",
+            },
+            TaskToolPolicy = new AgentProfileToolPolicy
+            {
+                ToolNames =
+                {
+                    "use_skill",
+                    "nyxid_services",
+                    "nyxid_catalog",
+                    "nyxid_require_service",
+                    "github_get_current_user",
+                },
+            },
+            SideEffectClass = AgentProfileSideEffectClass.ExternalHandoff,
+        });
+        profile = AgentProfileSnapshotCodec.Seal(profile);
+        var eventStore = new InMemoryEventStoreForTests();
+        var dispatch = new RecordingActorDispatchPort([], static (_, _) => Task.CompletedTask);
+        using var services = BuildEventSourcingServices(
+            eventStore,
+            registryCommandPort: new RecordingGAgentActorRegistryCommandPort());
+        var agent = CreateController(
+            services,
+            conversationActorId,
+            dispatch,
+            materializer,
+            turnIntentClassifier: serverClassifier);
+        await agent.ActivateAsync();
+        var start = WithOwner(CreateStartTurnCommand(), "owner-alpha");
+        start.ConversationActorId = conversationActorId;
+        start.Prompt = prompt;
+
+        await agent.HandleEventAsync(CreateEnvelope(
+            conversationActorId,
+            new NyxIdChatConversationCreateCommand
+            {
+                ScopeId = start.ScopeId,
+                CreatedLocally = true,
+                RequestedActorId = conversationActorId,
+                AgentProfile = profile,
+                FirstTurn = start,
+            }));
+        await DispatchPendingCreationFirstTurnAsync(agent, dispatch);
+
+        var classification = profileClassifier.Requests.Should().ContainSingle().Which;
+        classification.Candidates.Should().Contain(candidate =>
+            candidate.IntentId == generalIntentId);
+        classification.Candidates.Should().Contain(candidate =>
+            candidate.IntentId == NyxIdChatTurnIntentClassifier.ServiceConnectIntentId &&
+            candidate.SideEffectClass == AgentProfileSideEffectClass.ExternalHandoff);
+        serverClassifier.UserMessages.Should().BeEmpty();
+        agent.State.ActiveTurn.AgentProfileTurnAuthority.CandidateRoute.IntentId.Should()
+            .Be(NyxIdChatTurnIntentClassifier.ServiceConnectIntentId);
+        agent.State.ActiveTurn.AgentProfileTurnAuthority.SelectedExactSkillRef.Should().BeNull();
+        agent.State.ActiveTurn.AgentProfileTurnAuthority.AuthorityCeilingToolNames.Should()
+            .BeEquivalentTo("nyxid_catalog", "nyxid_require_service");
+        agent.State.ActiveTurn.Intent.Should().Be(NyxIdChatTurnIntent.ServiceConnect);
+        var command = dispatch.OperationCalls.Should().ContainSingle().Which.Envelope.Payload
+            .Unpack<NyxIdChatOperationDispatchCommand>();
+        command.Llm.Intent.Should().Be(NyxIdChatTurnIntent.ServiceConnect);
+        command.Llm.AgentProfileTurnAuthority.CandidateRoute.IntentId.Should()
+            .Be(NyxIdChatTurnIntentClassifier.ServiceConnectIntentId);
+    }
+
+    [Fact]
     public async Task StartTurn_WithBoundProfile_ShouldCommitAndDispatchTurnAuthority()
     {
         const string conversationActorId = "conversation-alpha";
@@ -1021,9 +1128,11 @@ public sealed partial class NyxIdChatConversationGAgentTests
         provider.Requests.Should().HaveCount(2);
         foreach (var llmRequest in provider.Requests)
         {
-            llmRequest.Tools.Should().HaveCount(routeTools.Length);
-            foreach (var tool in routeTools)
-                llmRequest.Tools.Should().Contain(candidate => ReferenceEquals(candidate, tool));
+            llmRequest.Tools.Should().HaveCount(2);
+            llmRequest.Tools.Should().Contain(candidate => ReferenceEquals(candidate, catalogService));
+            llmRequest.Tools.Should().Contain(candidate => ReferenceEquals(candidate, requireService));
+            llmRequest.Tools.Should().NotContain(static tool =>
+                tool.Name == "nyxid_service_inventory");
         }
         provider.Requests[0].Messages.Single(static message => message.Role == "system").Content.Should()
             .Contain("Selected intent: service_connect")

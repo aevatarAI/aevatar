@@ -3003,7 +3003,7 @@ public sealed class NyxIdChatConversationGAgent
         {
             var toolContext = LLMControlContextMapper.FromPayload(command.LlmControl)
                 .ToToolContext(BuildActorOwnedToolContext(command.ToolContext));
-            return (await _turnCatalogMaterializer.PrepareAsync(
+            return (await _turnCatalogMaterializer.PrepareNyxIdChatAsync(
                     profile,
                     command.TurnId.Trim(),
                     command.Prompt ?? string.Empty,
