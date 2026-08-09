@@ -327,12 +327,19 @@ Acceptance sequence:
    a timeout, malformed response, or any other miss is `unavailable`.
 5. The actor exposes `retry`; retry passes the plan gate again and enters
    generation 2.
-6. Generation 2 produces a fresh NyxID approval request. Approve it on a NyxID
-   surface. No Aevatar pre-return approval card is permitted.
+6. Generation 2 produces a fresh NyxID approval request. Record its exact ID
+   from the NyxID decision surface, prove it differs from generation 1, and
+   approve it there. No Aevatar pre-return approval card is permitted. Under
+   Tier B, an approved synchronous proxy call returns only the downstream
+   success response, so the Aevatar step must leave `approvalRequestId` and
+   `approvalObservation` absent instead of inheriting generation 1 or guessing
+   the NyxID-owned generation-2 identity.
 7. The create operation returns a provider-generated instance code; an exact
    GET verifies the instance. The task succeeds with `externalEffect=confirmed`.
-8. Reload reproduces both generations, reconciliation, captured approval facts,
-   verified instance, and one terminal.
+8. Reload reproduces both generations, the generation-1 returned approval fact,
+   the absent generation-2 Aevatar approval fact, reconciliation, the verified
+   instance, and one terminal. The exact generation-2 request ID remains part
+   of the NyxID decision evidence and cleanup manifest.
 9. Cancel the exact instance and require an exact GET to report the provider's
    canceled/`RECALL` status.
 

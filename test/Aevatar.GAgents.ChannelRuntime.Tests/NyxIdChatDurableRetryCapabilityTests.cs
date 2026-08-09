@@ -507,6 +507,8 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
 
         execution.Result.Failure.Should().BeNull(execution.Result.Failure?.ToString());
         execution.Result.Tool.Receipt.Status.Should().Be(AgentToolReceiptStatus.Success);
+        execution.Result.Tool.Receipt.ApprovalRequestId.Should().BeEmpty(
+            "Tier B cannot observe the request identity when NyxID synchronously returns the downstream success");
         confirmed.NextCommand!.Key.OperationGeneration.Should().Be(2);
         tool.PerRequestApprovalIds.Should().Equal("approval-generation-2");
         tool.ExecutionTokens.Should().Equal("uncertain-token", retryToken);
@@ -551,6 +553,9 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
         completedEffect.Operation.Key.OperationGeneration.Should().Be(2);
         completedEffect.Status.Should().Be(NyxIdChatStepStatus.Done);
         completedEffect.ExternalEffect.Should().Be(NyxIdChatEffectEvidence.Confirmed);
+        completedEffect.ApprovalRequestId.Should().BeEmpty(
+            "the actor must not inherit generation one or fabricate the NyxID-owned generation-two request identity");
+        completedEffect.ApprovalObservation.Should().BeNull();
         Encoding.UTF8.GetString(completed.State.ToByteArray()).Should().NotContain(retryToken);
     }
 
