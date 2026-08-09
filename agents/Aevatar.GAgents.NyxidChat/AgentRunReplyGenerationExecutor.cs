@@ -1260,37 +1260,55 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
     }
 
     // Re-supplies runtime credentials onto the token-less per-step control/tool-context read from the
-    // persisted (stripped) step-state. Reproduces BuildGenerationContextAsync's derivation from the
-    // transient request: owner token from the Activity user token, sender token re-minted from the
-    // retained binding identity (choice A — re-mint per step keeps the persisted waterline free of
-    // bearer tokens and hands each step a fresh short-lived sender token). On the owner-fallback step
-    // the run actor has cleared the Activity token and the sender binding, so the owner token comes
-    // from request.LlmControl (the bot-owner token it re-supplied) and no sender token is minted.
+    // persisted (stripped) step-state. The transient request carries the typed credential set, the
+    // Activity user token may override its owner token, and sender authority is re-minted from the
+    // retained binding identity. On the owner-fallback step the run actor has cleared the Activity
+    // token and sender binding, so request.LlmControl supplies the bot-owner token.
     private async Task<(LLMControlContext Control, AgentToolExecutionContext ToolContext)> ReSupplyRuntimeCredentialsAsync(
         NeedsLlmReplyEvent request,
         LLMControlContext stepControl,
         AgentToolExecutionContext planToolContext,
         CancellationToken ct)
     {
+        var requestCredentials = AgentToolExecutionContextMapper
+            .FromPayload(request.ToolContext)
+            .Credentials;
+        planToolContext = planToolContext with
+        {
+            Credentials = planToolContext.Credentials with
+            {
+                NyxIdAccessToken = NormalizeOptional(requestCredentials.NyxIdAccessToken) ??
+                                   planToolContext.Credentials.NyxIdAccessToken,
+                NyxIdOrgToken = NormalizeOptional(requestCredentials.NyxIdOrgToken) ??
+                                planToolContext.Credentials.NyxIdOrgToken,
+                SenderNyxIdAccessToken = NormalizeOptional(requestCredentials.SenderNyxIdAccessToken) ??
+                                         planToolContext.Credentials.SenderNyxIdAccessToken,
+                NyxIdCredentialKind = requestCredentials.NyxIdCredentialKind ==
+                                      AgentToolNyxIdCredentialKind.Unspecified
+                    ? planToolContext.Credentials.NyxIdCredentialKind
+                    : requestCredentials.NyxIdCredentialKind,
+                SourceReadableNyxIdAccessToken = NormalizeOptional(
+                                                     requestCredentials.SourceReadableNyxIdAccessToken) ??
+                                                 planToolContext.Credentials.SourceReadableNyxIdAccessToken,
+            },
+        };
         var requestControl = LLMControlContextMapper.FromPayload(request.LlmControl);
         requestControl = await ApplySenderTokenAsync(request, planToolContext, requestControl, ct).ConfigureAwait(false);
         requestControl = OverlayActivityUserToken(request, requestControl);
 
         var control = stepControl with
         {
-            NyxIdAccessToken = requestControl.NyxIdAccessToken,
-            NyxIdOrgToken = requestControl.NyxIdOrgToken,
-            SenderNyxIdAccessToken = requestControl.SenderNyxIdAccessToken,
+            NyxIdAccessToken = NormalizeOptional(requestControl.NyxIdAccessToken) ??
+                               planToolContext.Credentials.NyxIdAccessToken ??
+                               stepControl.NyxIdAccessToken,
+            NyxIdOrgToken = NormalizeOptional(requestControl.NyxIdOrgToken) ??
+                            planToolContext.Credentials.NyxIdOrgToken ??
+                            stepControl.NyxIdOrgToken,
+            SenderNyxIdAccessToken = NormalizeOptional(requestControl.SenderNyxIdAccessToken) ??
+                                     planToolContext.Credentials.SenderNyxIdAccessToken ??
+                                     stepControl.SenderNyxIdAccessToken,
         };
-        var toolContext = planToolContext with
-        {
-            Credentials = planToolContext.Credentials with
-            {
-                NyxIdAccessToken = requestControl.NyxIdAccessToken,
-                NyxIdOrgToken = requestControl.NyxIdOrgToken,
-                SenderNyxIdAccessToken = requestControl.SenderNyxIdAccessToken,
-            },
-        };
+        var toolContext = control.ToToolContext(planToolContext);
         return (control, toolContext);
     }
 

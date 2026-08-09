@@ -1106,6 +1106,153 @@ public sealed class AgentRunReplyGenerationExecutorTests
     }
 
     [Fact]
+    public async Task BuildToolStepContinuation_WithOnlyTransientPlanCredential_ShouldRebuildCredentialGatedCatalog()
+    {
+        const string planToken = "fresh-plan-token";
+        var registeredTool = new CredentialCapturingTool("connected_effect");
+        var executor = CreateCredentialGatedExecutor(
+            registeredTool,
+            new ToolCallProvider(registeredTool.Name),
+            planToken);
+        var llmWorkItem = BuildToolEnabledWorkItem();
+        var planContext = BuildCredentialContext(planToken);
+        llmWorkItem.StepState.ToolContext = planContext.ToPayload();
+        llmWorkItem.Request.ToolContext = planContext.ToPayload();
+        llmWorkItem.Request.LlmControl = new LLMControlContextPayload
+        {
+            NyxIdAccessToken = planToken,
+        };
+        var execution = await executor.BuildLlmStepExecutionAsync(
+            llmWorkItem,
+            CancellationToken.None);
+        var toolWorkItem = BuildDurablyAuthorizedToolStepWorkItem(llmWorkItem, execution.Continuation);
+        toolWorkItem = toolWorkItem with
+        {
+            StepState = AgentRunReplyStepCredentials.StripRuntimeCredentials(toolWorkItem.StepState),
+        };
+        toolWorkItem.Request.LlmControl = null;
+
+        var continuation = await executor.BuildToolStepContinuationAsync(
+            toolWorkItem,
+            authorizedToolStep: null,
+            CancellationToken.None);
+
+        continuation.ToolStepResult.AuthorizationOutcome.Should().Be(
+            AgentRunToolAuthorizationOutcome.DurableMatched);
+        registeredTool.ExecutionTokens.Should().Equal(planToken);
+    }
+
+    [Fact]
+    public async Task BuildToolStepContinuation_AfterPersistedStateStrip_ShouldRestoreSupplementalSourceCredential()
+    {
+        const string executionToken = "fresh-proxy-token";
+        const string sourceToken = "fresh-source-readable-token";
+        var registeredTool = new CredentialCapturingTool("connected_effect");
+        var executor = CreateCredentialGatedExecutor(
+            registeredTool,
+            new ToolCallProvider(registeredTool.Name),
+            executionToken,
+            sourceToken);
+        var llmWorkItem = BuildToolEnabledWorkItem();
+        var requestContext = BuildCredentialContext(
+            executionToken,
+            AgentToolNyxIdCredentialKind.ProxyDelegation,
+            sourceToken);
+        llmWorkItem.StepState.ToolContext = requestContext.ToPayload();
+        llmWorkItem.Request.ToolContext = requestContext.ToPayload();
+        llmWorkItem.Request.LlmControl = new LLMControlContextPayload
+        {
+            NyxIdAccessToken = executionToken,
+        };
+        var execution = await executor.BuildLlmStepExecutionAsync(
+            llmWorkItem,
+            CancellationToken.None);
+        var toolWorkItem = BuildDurablyAuthorizedToolStepWorkItem(llmWorkItem, execution.Continuation);
+        toolWorkItem = toolWorkItem with
+        {
+            StepState = AgentRunReplyStepCredentials.StripRuntimeCredentials(toolWorkItem.StepState),
+        };
+
+        var continuation = await executor.BuildToolStepContinuationAsync(
+            toolWorkItem,
+            authorizedToolStep: null,
+            CancellationToken.None);
+
+        continuation.ToolStepResult.AuthorizationOutcome.Should().Be(
+            AgentRunToolAuthorizationOutcome.DurableMatched);
+        registeredTool.ExecutionCredentials.Should().ContainSingle().Which.Should().Be(
+            (executionToken, AgentToolNyxIdCredentialKind.ProxyDelegation, sourceToken));
+        toolWorkItem.StepState.ToolContext.Credentials.NyxIdAccessToken.Should().BeEmpty();
+        toolWorkItem.StepState.ToolContext.Credentials.SourceReadableNyxIdAccessToken.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task BuildToolStepContinuation_WithRuntimeCredential_ShouldOverrideTransientPlanCredential()
+    {
+        const string planToken = "stale-plan-token";
+        const string runtimeToken = "fresh-runtime-token";
+        var registeredTool = new CredentialCapturingTool("connected_effect");
+        var executor = CreateCredentialGatedExecutor(
+            registeredTool,
+            new ToolCallProvider(registeredTool.Name),
+            runtimeToken);
+        var llmWorkItem = BuildToolEnabledWorkItem();
+        llmWorkItem.StepState.ToolContext = BuildCredentialContext(planToken).ToPayload();
+        llmWorkItem.Request.ToolContext = BuildCredentialContext(planToken).ToPayload();
+        llmWorkItem.Request.LlmControl = new LLMControlContextPayload
+        {
+            NyxIdAccessToken = runtimeToken,
+        };
+        var execution = await executor.BuildLlmStepExecutionAsync(
+            llmWorkItem,
+            CancellationToken.None);
+        var toolWorkItem = BuildDurablyAuthorizedToolStepWorkItem(llmWorkItem, execution.Continuation);
+
+        var continuation = await executor.BuildToolStepContinuationAsync(
+            toolWorkItem,
+            authorizedToolStep: null,
+            CancellationToken.None);
+
+        continuation.ToolStepResult.AuthorizationOutcome.Should().Be(
+            AgentRunToolAuthorizationOutcome.DurableMatched);
+        registeredTool.ExecutionTokens.Should().Equal(runtimeToken);
+    }
+
+    [Fact]
+    public async Task BuildToolStepContinuation_WithPreservedPlanCredentialAndDefinitionDrift_ShouldFailClosed()
+    {
+        const string planToken = "fresh-plan-token";
+        var registeredTool = new CredentialCapturingTool("connected_effect");
+        var executor = CreateCredentialGatedExecutor(
+            registeredTool,
+            new ToolCallProvider(registeredTool.Name),
+            planToken);
+        var llmWorkItem = BuildToolEnabledWorkItem();
+        var planContext = BuildCredentialContext(planToken);
+        llmWorkItem.StepState.ToolContext = planContext.ToPayload();
+        llmWorkItem.Request.ToolContext = planContext.ToPayload();
+        llmWorkItem.Request.LlmControl = new LLMControlContextPayload
+        {
+            NyxIdAccessToken = planToken,
+        };
+        var execution = await executor.BuildLlmStepExecutionAsync(
+            llmWorkItem,
+            CancellationToken.None);
+        var toolWorkItem = BuildDurablyAuthorizedToolStepWorkItem(llmWorkItem, execution.Continuation);
+        toolWorkItem.Request.LlmControl = null;
+        registeredTool.DriftDefinition();
+
+        var continuation = await executor.BuildToolStepContinuationAsync(
+            toolWorkItem,
+            authorizedToolStep: null,
+            CancellationToken.None);
+
+        continuation.ToolStepResult.AuthorizationOutcome.Should().Be(
+            AgentRunToolAuthorizationOutcome.Rejected);
+        registeredTool.ExecutionTokens.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task BuildApprovedToolStepContinuation_WhenCallbackActivityDiffers_ShouldUseOriginalToolRequestIdentity()
     {
         var registeredTool = new CountingTool("use_skill");
@@ -1454,6 +1601,22 @@ public sealed class AgentRunReplyGenerationExecutorTests
             NullLogger<AgentRunReplyGenerationExecutor>.Instance);
     }
 
+    private static AgentRunReplyGenerationExecutor CreateCredentialGatedExecutor(
+        CredentialCapturingTool tool,
+        ILLMProvider provider,
+        string expectedExecutionToken,
+        string? expectedCatalogToken = null) =>
+        new(
+            Substitute.For<IActorDispatchPort>(),
+            new CredentialGatedStepPlanReplyGenerator(
+                tool,
+                provider,
+                expectedExecutionToken,
+                expectedCatalogToken ?? expectedExecutionToken),
+            interactiveReplyCollector: null,
+            relayOptions: null,
+            NullLogger<AgentRunReplyGenerationExecutor>.Instance);
+
     private static AgentRunReplyStepExecutionRequest BuildFinalNoToolsWorkItem(params AgentToolReceipt[] receipts)
     {
         var request = new NeedsLlmReplyEvent
@@ -1532,6 +1695,20 @@ public sealed class AgentRunReplyGenerationExecutorTests
             ExternalMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["tool_safety_mode"] = mode.ToString(),
+            },
+        };
+
+    private static AgentToolExecutionContext BuildCredentialContext(
+        string token,
+        AgentToolNyxIdCredentialKind credentialKind = AgentToolNyxIdCredentialKind.SourceReadableUserBearer,
+        string? sourceReadableToken = null) =>
+        AgentToolExecutionContext.Empty with
+        {
+            Credentials = AgentToolCredentials.Empty with
+            {
+                NyxIdAccessToken = token,
+                NyxIdCredentialKind = credentialKind,
+                SourceReadableNyxIdAccessToken = sourceReadableToken,
             },
         };
 
@@ -1765,6 +1942,38 @@ public sealed class AgentRunReplyGenerationExecutorTests
             ExecuteCount++;
             return Task.FromResult("{}");
         }
+    }
+
+    private sealed class CredentialCapturingTool : IAgentTool
+    {
+        private readonly string _name;
+        private string _description;
+
+        public CredentialCapturingTool(string name)
+        {
+            _name = name;
+            _description = name;
+        }
+
+        public List<string> ExecutionTokens { get; } = [];
+        public List<(string ExecutionToken, AgentToolNyxIdCredentialKind CredentialKind,
+            string SourceReadableToken)> ExecutionCredentials { get; } = [];
+        public string Name => _name;
+        public string Description => _description;
+        public string ParametersSchema => "{}";
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+        {
+            var credentials = AgentToolRequestContext.Current?.Credentials ?? AgentToolCredentials.Empty;
+            ExecutionTokens.Add(credentials.NyxIdAccessToken ?? string.Empty);
+            ExecutionCredentials.Add((
+                credentials.NyxIdAccessToken ?? string.Empty,
+                credentials.NyxIdCredentialKind,
+                credentials.SourceReadableNyxIdAccessToken ?? string.Empty));
+            return Task.FromResult("{}");
+        }
+
+        public void DriftDefinition() => _description = "changed definition";
     }
 
     private sealed class ApprovalRequiredTool(string name) : IAgentTool
@@ -2005,6 +2214,76 @@ public sealed class AgentRunReplyGenerationExecutorTests
             CancellationToken ct,
             AgentProfileTurnCatalog? turnCatalog = null) =>
             Task.FromResult(plan);
+
+        public Task<ConversationReplyResult> GenerateReplyAsync(
+            ChatActivity activity,
+            IReadOnlyDictionary<string, string> metadata,
+            LLMControlContext? llmControl,
+            AgentToolExecutionContext? toolContext,
+            IStreamingReplySink? streamingSink,
+            CancellationToken ct) =>
+            throw new NotSupportedException("Per-step tests drive BuildLlmStepExecutionAsync only.");
+
+        public Task<ConversationReplyResult> GenerateReplyAsync(
+            ChatActivity activity,
+            IReadOnlyDictionary<string, string> metadata,
+            IStreamingReplySink? streamingSink,
+            CancellationToken ct) =>
+            throw new NotSupportedException("Per-step tests drive BuildLlmStepExecutionAsync only.");
+    }
+
+    private sealed class CredentialGatedStepPlanReplyGenerator(
+        IAgentTool tool,
+        ILLMProvider provider,
+        string expectedExecutionToken,
+        string expectedCatalogToken) : IAgentRunStepConversationReplyGenerator
+    {
+        public Task<AgentRunReplyStepPlan> BuildStepPlanAsync(
+            ChatActivity activity,
+            IReadOnlyDictionary<string, string> metadata,
+            LLMControlContext? llmControl,
+            AgentToolExecutionContext? toolContext,
+            IReadOnlyList<ConversationHistoryEntry>? priorHistory,
+            ChatAttachmentInputContext? attachmentContext,
+            bool forceDisableTools,
+            CancellationToken ct,
+            AgentProfileTurnCatalog? turnCatalog = null)
+        {
+            var tools = new ToolManager();
+            if (!forceDisableTools &&
+                string.Equals(
+                    toolContext?.Credentials.NyxIdAccessToken,
+                    expectedExecutionToken,
+                    StringComparison.Ordinal) &&
+                string.Equals(
+                    AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(toolContext?.Credentials),
+                    expectedCatalogToken,
+                    StringComparison.Ordinal))
+            {
+                tools.Register(tool);
+            }
+
+            var runtime = new ChatRuntime(
+                () => provider,
+                new ChatHistory(),
+                new ToolCallLoop(
+                    tools,
+                    toolExecutionPort: new ChannelConversationTurnRunnerTests.TestAgentToolExecutionPort()),
+                hooks: null,
+                requestBuilder: _ => new LLMRequest
+                {
+                    Messages = [],
+                    Tools = tools.GetAll(),
+                    ToolContext = toolContext ?? AgentToolExecutionContext.Empty,
+                });
+            return Task.FromResult(new AgentRunReplyStepPlan(
+                runtime.CreateStepExecutor(turnCatalog: null),
+                new Dictionary<string, string>(),
+                llmControl ?? LLMControlContext.Empty,
+                toolContext ?? AgentToolExecutionContext.Empty,
+                InitialMessages: [],
+                MaxToolRounds: 1));
+        }
 
         public Task<ConversationReplyResult> GenerateReplyAsync(
             ChatActivity activity,
