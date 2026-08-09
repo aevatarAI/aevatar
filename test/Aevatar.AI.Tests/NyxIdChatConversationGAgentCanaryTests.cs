@@ -91,24 +91,52 @@ public sealed partial class NyxIdChatConversationGAgentTests
         forwardedReload.State.CanaryEffectFault.Status.Should().Be(
             NyxIdChatCanaryEffectFaultStatus.Forwarded);
 
+        var eventsBeforeAmbiguousResult = (await eventStore.GetEventsAsync(actorId)).Count;
         await forwardedReload.HandleEventAsync(CreateEnvelope(
             actorId,
-            new NyxIdChatCanaryEffectFaultConsumedSignal
+            new NyxIdChatOperationResultSignal
             {
-                ArmId = "arm-alpha",
                 Key = CanaryOperationKey(),
-                TurnActorId = NyxIdChatTurnActorIds.ForTurn(actorId, "turn-alpha"),
-                ConsumedAt = Timestamp.FromDateTimeOffset(CanaryNow.AddMinutes(-5)),
-                ServiceInstanceId = "connected-service-alpha",
-                ApprovalRequestId = "approval-7001-alpha",
-                ReceiptStatus = AgentToolReceiptStatus.Denied,
-                ApprovalDecisionMode = NyxIdApprovalDecisionMode.Unspecified,
-                ApprovalTerminalOutcome = NyxIdApprovalTerminalOutcome.Rejected,
-                ApprovalSubjectKind = "nyxid.user-service",
-                ApprovalSubjectId = "connected-service-alpha",
-                ApprovalCallId = "call-alpha",
-                ApprovalToolName = "tool-alpha",
+                Failure = new NyxIdChatOperationFailure
+                {
+                    FailureCode = NyxIdChatTurnGAgent.CanaryEffectFaultCode,
+                    SafeMessage = "The external operation may have changed state and requires exact read-back.",
+                    ExternalEffect = NyxIdChatEffectEvidence.MayHaveChanged,
+                },
             }));
+
+        forwardedReload.State.CanaryEffectFault.Status.Should().Be(
+            NyxIdChatCanaryEffectFaultStatus.Forwarded,
+            "the result can become durable before the consumed acknowledgement retry arrives");
+        var ambiguousReconciliation = (await eventStore.GetEventsAsync(actorId))
+            .Skip(eventsBeforeAmbiguousResult)
+            .Where(item => item.EventData.Is(NyxIdChatOperationReconciledEvent.Descriptor))
+            .Select(item => item.EventData.Unpack<NyxIdChatOperationReconciledEvent>())
+            .Should().ContainSingle().Which;
+        ambiguousReconciliation.Result.Failure.FailureCode.Should().Be(
+            NyxIdChatTurnGAgent.CanaryEffectFaultCode);
+        ambiguousReconciliation.Result.Failure.ExternalEffect.Should().Be(
+            NyxIdChatEffectEvidence.MayHaveChanged);
+        firstDispatch.OperationCalls.Should().ContainSingle(
+            "processing the ambiguous result must not execute the effect again");
+
+        var consumedSignal = new NyxIdChatCanaryEffectFaultConsumedSignal
+        {
+            ArmId = "arm-alpha",
+            Key = CanaryOperationKey(),
+            TurnActorId = NyxIdChatTurnActorIds.ForTurn(actorId, "turn-alpha"),
+            ConsumedAt = Timestamp.FromDateTimeOffset(CanaryNow.AddMinutes(-5)),
+            ServiceInstanceId = "connected-service-alpha",
+            ApprovalRequestId = "approval-7001-alpha",
+            ReceiptStatus = AgentToolReceiptStatus.Denied,
+            ApprovalDecisionMode = NyxIdApprovalDecisionMode.Unspecified,
+            ApprovalTerminalOutcome = NyxIdApprovalTerminalOutcome.Rejected,
+            ApprovalSubjectKind = "nyxid.user-service",
+            ApprovalSubjectId = "connected-service-alpha",
+            ApprovalCallId = "call-alpha",
+            ApprovalToolName = "tool-alpha",
+        };
+        await forwardedReload.HandleEventAsync(CreateEnvelope(actorId, consumedSignal));
 
         forwardedReload.State.CanaryEffectFault.Status.Should().Be(
             NyxIdChatCanaryEffectFaultStatus.Consumed);
@@ -133,6 +161,12 @@ public sealed partial class NyxIdChatConversationGAgentTests
             NyxIdApprovalTerminalOutcome.Rejected);
         consumedStep.ApprovalObservation.SubjectKind.Should().Be("nyxid.user-service");
         consumedStep.ApprovalObservation.SubjectId.Should().Be("connected-service-alpha");
+        var eventsAfterConsumed = (await eventStore.GetEventsAsync(actorId)).Count;
+
+        await forwardedReload.HandleEventAsync(CreateEnvelope(actorId, consumedSignal.Clone()));
+
+        (await eventStore.GetEventsAsync(actorId)).Should().HaveCount(eventsAfterConsumed,
+            "a duplicate reminder or activation retry must not commit consumption twice");
 
         var consumedReload = CreateController(
             services,
@@ -149,6 +183,8 @@ public sealed partial class NyxIdChatConversationGAgentTests
         reloadedStep.ApprovalRequestId.Should().Be("approval-7001-alpha");
         reloadedStep.ApprovalObservation.TerminalOutcome.Should().Be(
             NyxIdApprovalTerminalOutcome.Rejected);
+        firstDispatch.OperationCalls.Should().ContainSingle(
+            "the delayed acknowledgement is an idempotent state transition, not a redispatch");
     }
 
     private static NyxIdChatConversationGAgentState CanaryConversationState()

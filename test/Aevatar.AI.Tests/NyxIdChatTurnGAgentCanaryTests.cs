@@ -35,7 +35,8 @@ public sealed partial class NyxIdChatTurnGAgentTests
 
             return Task.CompletedTask;
         });
-        using var services = BuildEventSourcingServices(eventStore);
+        var callbackScheduler = new RecordingRuntimeCallbackScheduler();
+        using var services = BuildEventSourcingServices(eventStore, callbackScheduler);
         var agent = CreateAgent(services, operationDispatch, actorDispatch);
         await agent.ActivateAsync();
         var initial = new NyxIdChatOperationDispatchCommand
@@ -134,11 +135,32 @@ public sealed partial class NyxIdChatTurnGAgentTests
         failure.ResultCase.Should().Be(NyxIdChatOperationResultSignal.ResultOneofCase.Failure);
         failure.Failure.FailureCode.Should().Be(NyxIdChatTurnGAgent.CanaryEffectFaultCode);
         failure.Failure.ExternalEffect.Should().Be(NyxIdChatEffectEvidence.MayHaveChanged);
-        var consumed = actorDispatch.Calls
+        var firstConsumedAttempt = actorDispatch.Calls
             .Where(call => call.Envelope.Payload.Is(
                 NyxIdChatCanaryEffectFaultConsumedSignal.Descriptor))
             .Select(call => call.Envelope.Payload.Unpack<NyxIdChatCanaryEffectFaultConsumedSignal>())
             .Should().ContainSingle().Which;
+        var retry = callbackScheduler.TimeoutRequests
+            .Where(request => request.TriggerEnvelope.Payload.Is(
+                NyxIdChatCanaryEffectFaultConsumedRetryRequested.Descriptor))
+            .Should().ContainSingle().Which;
+        retry.CallbackId.Should().Be("arm-alpha:canary-effect-fault-consumed-retry");
+        retry.DueTime.Should().Be(NyxIdChatTurnGAgent.CanaryEffectFaultConsumedRetryDelay);
+        retry.TriggerEnvelope.Payload.Is(
+            NyxIdChatCanaryEffectFaultConsumedRetryRequested.Descriptor).Should().BeTrue();
+        var retrySignal = retry.TriggerEnvelope.Payload
+            .Unpack<NyxIdChatCanaryEffectFaultConsumedRetryRequested>();
+        retrySignal.ArmId.Should().Be("arm-alpha");
+        retrySignal.Key.Should().BeEquivalentTo(continuation.Key);
+
+        await agent.HandleEventAsync(retry.TriggerEnvelope);
+
+        var consumed = actorDispatch.Calls
+            .Where(call => call.Envelope.Payload.Is(
+                NyxIdChatCanaryEffectFaultConsumedSignal.Descriptor))
+            .Select(call => call.Envelope.Payload.Unpack<NyxIdChatCanaryEffectFaultConsumedSignal>())
+            .Should().HaveCount(2).And.Subject.Last();
+        consumed.Should().BeEquivalentTo(firstConsumedAttempt);
         consumed.ArmId.Should().Be("arm-alpha");
         consumed.Key.Should().BeEquivalentTo(continuation.Key);
         consumed.TurnActorId.Should().Be("turn-actor-alpha");

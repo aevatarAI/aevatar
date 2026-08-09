@@ -143,7 +143,7 @@ public sealed class MainnetHostCompositionTests
     }
 
     [Fact]
-    public void AddAevatarMainnetHost_ShouldAllowCanaryEffectFaultOnlyForReviewedOwners()
+    public void AddAevatarMainnetHost_ShouldAllowCanaryEffectFaultOnlyForCanonicalShareOpsOwner()
     {
         using var home = new TemporaryAevatarHomeScope();
         var builder = CreateBuilder();
@@ -158,7 +158,6 @@ public sealed class MainnetHostCompositionTests
 
         options.Enabled.Should().BeTrue();
         options.AllowedOwnerSubjects.Should().Equal(
-            "ce646b72-dd49-4ea8-bc1e-8273672c102c",
             "5d0d7b72-acff-49af-bb1b-9f30bbb7c102");
     }
 

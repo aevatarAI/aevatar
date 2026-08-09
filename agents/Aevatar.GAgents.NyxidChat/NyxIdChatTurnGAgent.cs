@@ -23,6 +23,7 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
     private const int DeliveredOperationHistoryLimit = 32;
     internal static readonly TimeSpan OperationCompletionWatchdogMargin = TimeSpan.FromSeconds(30);
     internal static readonly TimeSpan OperationResultDeliveryWatchdogDelay = TimeSpan.FromSeconds(30);
+    internal static readonly TimeSpan CanaryEffectFaultConsumedRetryDelay = TimeSpan.FromSeconds(5);
     private const string DispatchFailedCode = "NYXID_CHAT_OPERATION_DISPATCH_FAILED";
     private const string DispatchFailedMessage = "The operation could not be accepted for execution.";
     private const string ResultKeyMismatchCode = "NYXID_CHAT_OPERATION_RESULT_KEY_MISMATCH";
@@ -461,6 +462,24 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
         }, CancellationToken.None);
         await TryDispatchCanaryEffectFaultConsumedAsync(CancellationToken.None);
         await CompleteAndDeliverAsync(CanaryEffectFaultResult(signal.DeniedResult.Key));
+    }
+
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+    public async Task HandleCanaryEffectFaultConsumedRetryAsync(
+        NyxIdChatCanaryEffectFaultConsumedRetryRequested signal)
+    {
+        ArgumentNullException.ThrowIfNull(signal);
+        var directive = State.CanaryEffectFault;
+        if (!State.CanaryEffectFaultConsumed ||
+            directive?.Key is null ||
+            signal.Key is null ||
+            !string.Equals(directive.ArmId, signal.ArmId, StringComparison.Ordinal) ||
+            !directive.Key.Equals(signal.Key))
+        {
+            return;
+        }
+
+        await TryDispatchCanaryEffectFaultConsumedAsync(CancellationToken.None);
     }
 
     [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
@@ -1560,6 +1579,43 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
             Logger.LogWarning(
                 exception,
                 "NyxIdChat canary consumption acknowledgement failed: turnActor={TurnActorId} operation={OperationId}",
+                Id,
+                directive.Key.OperationId);
+            await TryScheduleCanaryEffectFaultConsumedRetryAsync(directive);
+        }
+    }
+
+    private async Task TryScheduleCanaryEffectFaultConsumedRetryAsync(
+        NyxIdChatCanaryEffectFaultDirective directive)
+    {
+        try
+        {
+            await ScheduleSelfDurableTimeoutAsync(
+                $"{directive.ArmId}:canary-effect-fault-consumed-retry",
+                CanaryEffectFaultConsumedRetryDelay,
+                new NyxIdChatCanaryEffectFaultConsumedRetryRequested
+                {
+                    ArmId = directive.ArmId,
+                    Key = directive.Key.Clone(),
+                },
+                new EventEnvelopePublishOptions
+                {
+                    Propagation = new EventEnvelopePropagationOverrides
+                    {
+                        CorrelationId = directive.Key.OperationId,
+                    },
+                    Delivery = new EventEnvelopeDeliveryOptions
+                    {
+                        OperationId = $"{directive.ArmId}:canary-effect-fault-consumed-retry",
+                    },
+                },
+                CancellationToken.None);
+        }
+        catch (Exception exception)
+        {
+            Logger.LogWarning(
+                exception,
+                "NyxIdChat canary consumption acknowledgement retry could not be scheduled: turnActor={TurnActorId} operation={OperationId}",
                 Id,
                 directive.Key.OperationId);
         }

@@ -1912,6 +1912,14 @@ message NyxIdChatCanaryEffectFaultConsumedSignal {
   string approval_tool_name = 13;
 }
 
+// Durable actor-owned continuation for a consumed canary acknowledgement that
+// was not accepted by the conversation transport. The turn revalidates the
+// exact arm and operation against committed state before retrying delivery.
+message NyxIdChatCanaryEffectFaultConsumedRetryRequested {
+  string arm_id = 1;
+  NyxIdChatOperationKey key = 2;
+}
+
 message NyxIdChatOperationDeliveryProbeDispatchRequested {
   NyxIdChatOperationKey key = 1;
   int64 expected_state_version = 2;

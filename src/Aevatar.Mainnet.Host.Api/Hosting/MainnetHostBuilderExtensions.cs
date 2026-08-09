@@ -207,7 +207,6 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddNyxIdChat(builder.Configuration);
         builder.Services.Replace(ServiceDescriptor.Singleton(
             NyxIdChatCanaryEffectFaultOptions.EnabledFor(
-                "ce646b72-dd49-4ea8-bc1e-8273672c102c",
                 "5d0d7b72-acff-49af-bb1b-9f30bbb7c102")));
         AddNyxIdChatAgentProfile(builder);
         builder.Services.AddStreamingProxy(builder.Configuration);
