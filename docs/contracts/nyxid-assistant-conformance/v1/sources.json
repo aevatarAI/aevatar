@@ -34,7 +34,7 @@
     "nyxid_source": "backend/src/handlers/assistant_actions.rs",
     "nyxid_source_sha256": "35650ae260404dc291e53e9efdbc4615833a67821d19dd727f45f16a9ffce372",
     "checked_in_payload": "registry-v4.json",
-    "checked_in_payload_sha256": "5d63814c3c2947f65218e9d8ff5d9ec7d9abfc220a32a661cec845b6c189e947"
+    "checked_in_payload_sha256": "d2f9a618cd694038454292a79fe131d4a58042b9cdb0405e927db2c351a0718f"
   },
   "generated_artifacts": {
     "cli-leaves.json": "27ee6015977a88f30157cdbe8c51b68ca60f0a57c4c7248950906a990b7b7d13",
