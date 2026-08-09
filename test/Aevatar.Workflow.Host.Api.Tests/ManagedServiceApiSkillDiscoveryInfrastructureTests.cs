@@ -43,13 +43,43 @@ public sealed class ManagedServiceApiSkillDiscoveryInfrastructureTests
             descriptor.ImplementationType == typeof(ManagedCodexServiceApiSkillDiscoveryExecutor));
         services.Should().Contain(static descriptor =>
             descriptor.ServiceType == typeof(IExactServiceApiSkillVerifier) &&
-            descriptor.ImplementationType == typeof(ManagedCodexExactOrnnApiSkillVerifier));
+            descriptor.ImplementationFactory != null);
         services.Should().Contain(static descriptor =>
             descriptor.ServiceType == typeof(IServiceApiSkillCataloguePort) &&
-            descriptor.ImplementationType == typeof(OrnnServiceApiSkillCataloguePort));
+            descriptor.ImplementationFactory != null);
         services.Should().Contain(static descriptor =>
             descriptor.ServiceType == typeof(IManagedCodexServiceApiSkillDiscoveryPort) &&
-            descriptor.ImplementationType == typeof(ManagedServiceApiSkillDiscoveryService));
+            descriptor.ImplementationType == typeof(DeferredManagedServiceApiSkillDiscoveryPort));
+        services.Should().Contain(static descriptor =>
+            descriptor.ServiceType == typeof(IServiceApiCapabilityFallbackPort) &&
+            descriptor.ImplementationType == typeof(UnavailableServiceApiCapabilityFallbackPort));
+        services.Should().Contain(static descriptor =>
+            descriptor.ServiceType == typeof(IServiceApiWorkflowCapabilityDiscoveryPort) &&
+            descriptor.ImplementationType == typeof(ServiceApiWorkflowCapabilityResolutionService));
+    }
+
+    [Fact]
+    public void AddManagedServiceApiWorkflowCapabilityDiscovery_ShouldDeferCredentialDependenciesUntilDiscovery()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<ExternalWorkflowCapabilityReadinessService>();
+        services.AddSingleton<IExternalWorkflowCapabilityListPort>(static provider =>
+            provider.GetRequiredService<ExternalWorkflowCapabilityReadinessService>());
+        services.AddSingleton<IExternalWorkflowCapabilityReadinessPort>(static provider =>
+            provider.GetRequiredService<ExternalWorkflowCapabilityReadinessService>());
+
+        services.AddManagedServiceApiWorkflowCapabilityDiscovery();
+
+        services.Should().Contain(static descriptor =>
+            descriptor.ServiceType == typeof(IServiceApiWorkflowCapabilityDiscoveryPort) &&
+            descriptor.ImplementationType == typeof(ServiceApiWorkflowCapabilityResolutionService));
+        using var provider = services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateOnBuild = true,
+            ValidateScopes = true,
+        });
+        provider.GetRequiredService<IServiceApiWorkflowCapabilityDiscoveryPort>()
+            .Should().NotBeNull();
     }
 
     [Fact]

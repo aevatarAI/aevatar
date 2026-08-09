@@ -663,13 +663,67 @@ public class BindingToolsTests
             new BindingToolOptions(),
             externalCapabilityListPort: new StubExternalWorkflowCapabilityListPort(
                 new ExternalWorkflowCapabilityDiscoveryResult()),
-            externalCapabilityReadinessPort: new StubExternalWorkflowCapabilityReadinessPort());
+            externalCapabilityReadinessPort: new StubExternalWorkflowCapabilityReadinessPort(),
+            serviceApiCapabilityDiscoveryPort: new StubServiceApiWorkflowCapabilityDiscoveryPort());
 
         var tools = await source.DiscoverToolsAsync();
 
-        tools.Should().HaveCount(2);
+        tools.Should().HaveCount(3);
         tools.Should().ContainSingle(tool => tool is ListExternalWorkflowCapabilitiesTool);
         tools.Should().ContainSingle(tool => tool is InspectExternalWorkflowCapabilityReadinessTool);
+        tools.Should().ContainSingle(tool => tool is DiscoverServiceApiWorkflowCapabilityTool);
+    }
+
+    [Fact]
+    public async Task DiscoverServiceApiWorkflowCapabilityTool_ShouldUseTypedAuthorityAndAuthoringSelectors()
+    {
+        var discovery = new StubServiceApiWorkflowCapabilityDiscoveryPort();
+        var tool = new DiscoverServiceApiWorkflowCapabilityTool(discovery);
+        AgentToolRequestContext.Current = CapabilityContext(
+            "scope-alpha",
+            "caller-alpha",
+            "caller-secret",
+            "organization-secret");
+
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "target_user_service_id": "usvc-alpha",
+                  "service_slug_snapshot": "example-messaging",
+                  "service_label_snapshot": "Example Messaging",
+                  "requested_capability": "Send a message",
+                  "admission_policy_version": "explicit-request-admission.v1",
+                  "execution_mode": "interactive",
+                  "workflow_id": "wf-alpha",
+                  "member_id": "m-alpha",
+                  "published_service_id": "svc-alpha"
+                }
+                """);
+
+            discovery.Request.Should().NotBeNull();
+            discovery.Request!.Access.ScopeId.Should().Be("scope-alpha");
+            discovery.Request.Access.CallerId.Should().Be("caller-alpha");
+            discovery.Request.CallerAuthority.OwnerSubject.Should().Be("caller-alpha");
+            discovery.Request.WorkflowId.Should().Be("wf-alpha");
+            discovery.Request.MemberId.Should().Be("m-alpha");
+            discovery.Request.PublishedServiceId.Should().Be("svc-alpha");
+            using var document = JsonDocument.Parse(result);
+            var selector = document.RootElement
+                .GetProperty("resolution")
+                .GetProperty("nyxid_operation")
+                .GetProperty("descriptor")
+                .GetProperty("selector");
+            selector.GetProperty("nyxid_operation")
+                .GetProperty("user_service_id").GetString().Should().Be("usvc-alpha");
+            result.Should().NotContain("nyx_id_operation");
+            result.Should().NotContain("caller-secret");
+            result.Should().NotContain("organization-secret");
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
     }
 
     #endregion
@@ -1522,6 +1576,37 @@ public class BindingToolsTests
             };
             return Task.FromResult(readiness);
         }
+    }
+
+    private sealed class StubServiceApiWorkflowCapabilityDiscoveryPort :
+        IServiceApiWorkflowCapabilityDiscoveryPort
+    {
+        public DiscoverServiceApiWorkflowCapabilityRequest? Request { get; private set; }
+
+        public Task<ServiceApiWorkflowCapabilityDiscoveryResult> DiscoverAsync(
+            DiscoverServiceApiWorkflowCapabilityRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            Request = request;
+            var descriptor = Descriptor(NyxIdSelector("usvc-alpha", "send-message"), "Send a message");
+            return Task.FromResult(new ServiceApiWorkflowCapabilityDiscoveryResult
+            {
+                Resolution = new ServiceApiCapabilityResolution
+                {
+                    NyxidOperation = new ResolvedNyxIdOperation
+                    {
+                        Selector = descriptor.Selector.NyxIdOperation.Clone(),
+                        Descriptor_ = descriptor,
+                    },
+                },
+            });
+        }
+
+        public Task<ServiceApiWorkflowCapabilityDiscoveryResult> RetryAfterRemediationAsync(
+            ExternalWorkflowCapabilityAccessContext access,
+            ServiceApiCapabilityResolutionRetry retry,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
     }
 
     private static ExternalWorkflowCapabilityDescriptor Descriptor(

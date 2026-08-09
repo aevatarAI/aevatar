@@ -91,11 +91,19 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<
             IManagedCodexServiceApiSkillDiscoveryExecutor,
             ManagedCodexServiceApiSkillDiscoveryExecutor>();
-        services.TryAddSingleton<IServiceApiSkillCataloguePort, OrnnServiceApiSkillCataloguePort>();
-        services.TryAddSingleton<IExactServiceApiSkillVerifier, ManagedCodexExactOrnnApiSkillVerifier>();
+        services.TryAddSingleton<IServiceApiSkillCataloguePort>(static provider =>
+            ActivatorUtilities.CreateInstance<OrnnServiceApiSkillCataloguePort>(provider));
+        services.TryAddSingleton<IExactServiceApiSkillVerifier>(static provider =>
+            ActivatorUtilities.CreateInstance<ManagedCodexExactOrnnApiSkillVerifier>(provider));
         services.TryAddTransient<
             IManagedCodexServiceApiSkillDiscoveryPort,
-            Aevatar.Workflow.Application.ExternalCapabilities.ManagedServiceApiSkillDiscoveryService>();
+            DeferredManagedServiceApiSkillDiscoveryPort>();
+        services.TryAddSingleton<
+            IServiceApiCapabilityFallbackPort,
+            UnavailableServiceApiCapabilityFallbackPort>();
+        services.TryAddTransient<
+            IServiceApiWorkflowCapabilityDiscoveryPort,
+            Aevatar.Workflow.Application.ExternalCapabilities.ServiceApiWorkflowCapabilityResolutionService>();
         return services;
     }
 
