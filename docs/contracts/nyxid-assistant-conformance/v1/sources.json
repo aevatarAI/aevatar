@@ -3,7 +3,7 @@
   "aevatar": {
     "repository": "https://github.com/AevatarAI/aevatar.git",
     "revision": "32b04a38b2fdfb1a166bd862edf169875a118144",
-    "contract_files_sha256": "48421f1c2e822f03dd1d045efc92fa895017b8d9dd78eacd4b43006ec9eb5f65",
+    "contract_files_sha256": "1a6db6da684158da7d0a12a68275215974ef1a17fb11a908af57d5eafef47642",
     "files": {
       "agents/Aevatar.GAgents.NyxidChat/NyxIdActionPostconditionPort.cs": "82758c8726e51044c818a276db76032a382c792cd964df2c0d10e7ab4bd20155",
       "agents/Aevatar.GAgents.NyxidChat/NyxIdAssistantActionRegistry.cs": "ed83f22bb95d01e4409a7e051748194a9595c93c276129d4ed38442ee4b0b53e",
@@ -11,7 +11,7 @@
       "agents/Aevatar.GAgents.NyxidChat/NyxIdChatConversationAguiFrameBuilder.cs": "dc46421cb43de11411387046f4b676f9e9d7c239caa4075e5d3400257b3d3ace",
       "docs/adr/0048-nyxid-assistant-operation-class-boundary.md": "30c9de6c6e77a7aee14f0eb4a2f74bd15b8874bcfed88ba957cdd8213b9114eb",
       "src/Aevatar.AI.ToolProviders.NyxId/NyxIdAssistantToolSource.cs": "bd35a49d03852767a88daddaa45c7ca90e85ecec66ebef0402565fe318eb729f",
-      "src/Aevatar.Mainnet.Host.Api/Hosting/MainnetHostBuilderExtensions.cs": "f67bc865f65ea8cf77af07071e367c935a9b544e6d51e621bd0f61be8ca7e84d"
+      "src/Aevatar.Mainnet.Host.Api/Hosting/MainnetHostBuilderExtensions.cs": "0bb92436bc29accfdc3f8351ba06512863ff0c6183a869a2ecde47d36f5094dc"
     }
   },
   "nyxid": {

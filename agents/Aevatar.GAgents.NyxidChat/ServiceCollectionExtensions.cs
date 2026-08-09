@@ -25,9 +25,10 @@ using Aevatar.GAgents.Channel.Abstractions.Slash;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
-using Aevatar.GAgents.NyxidChat.LlmSelection;
 using Aevatar.GAgents.NyxidChat.AgentProfiles;
+using Aevatar.GAgents.NyxidChat.LlmSelection;
 using Aevatar.GAgents.NyxidChat.Slash;
+using Aevatar.GAgents.NyxidChat.Voice;
 using Aevatar.GAgents.NyxidChat.WorkflowDraftRun;
 using Aevatar.GAgents.NyxidChat.WorkflowRunDelivery;
 using Aevatar.AGUI.Contracts;
@@ -52,6 +53,7 @@ public static class ServiceCollectionExtensions
         RuntimeHelpers.RunClassConstructor(typeof(NyxIdChatConversationGAgent).TypeHandle);
         RuntimeHelpers.RunClassConstructor(typeof(NyxIdChatTurnGAgent).TypeHandle);
         RuntimeHelpers.RunClassConstructor(typeof(NyxIdChatGAgent).TypeHandle);
+        RuntimeHelpers.RunClassConstructor(typeof(NyxIdVoiceGAgent).TypeHandle);
         RuntimeHelpers.RunClassConstructor(typeof(AgentRunGAgent).TypeHandle);
         RuntimeHelpers.RunClassConstructor(typeof(ChannelWorkflowDraftRunGAgent).TypeHandle);
         RuntimeHelpers.RunClassConstructor(typeof(WorkflowRunDeliveryGAgent).TypeHandle);
@@ -105,6 +107,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IChannelRelayProxyResponseClassifier, MissingChannelRelayProxyResponseClassifier>();
         services.TryAddSingleton<NyxIdChatLifecycleFacade>();
         services.TryAddSingleton<INyxIdChatControlCommandPort, NyxIdChatControlCommandPort>();
+        services.TryAddSingleton<INyxIdVoiceAgentCommandService, NyxIdVoiceAgentCommandService>();
         AddNyxIdLifecycleCommands(services);
 
         // ─── Channel LLM reply run dispatch ───

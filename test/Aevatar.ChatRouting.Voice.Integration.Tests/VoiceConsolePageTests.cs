@@ -90,18 +90,23 @@ public sealed class VoiceConsolePageTests
             "a feature token from another signed-in account must never be reused");
     }
 
-    // The zero-config first connect calls ONLY pre-existing audited endpoints:
-    // GET chat-route-policy (pre-flight), POST nyxid-chat/conversations (create the default
-    // conversation agent), PUT chat-route-policy/rules/voice-default (bind voice to it), and
-    // the two GETs polled until the 202-accepted commands materialize.
+    // The zero-config first connect uses the capability-specific voice-agent command endpoint,
+    // then writes the route and polls the policy + capability read models.
     [Fact]
     public void EmbeddedAsset_ProvisionsVoiceRoute_ThroughExistingAuditedEndpoints()
     {
         var html = ReadEmbeddedAsset();
 
         html.Should().Contain("/chat-route-policy");
-        html.Should().Contain("/nyxid-chat/conversations");
+        html.Should().Contain("/voice-agents");
+        html.Should().NotContain("/nyxid-chat/conversations",
+            "the ordinary nyxid.chat conversation actor does not own voice capability state");
         html.Should().Contain("VOICE_ROUTE_RULE_ID = \"voice-default\"");
+        html.Should().Contain("DEFAULT_VOICE_AGENT_KIND = \"nyxid.voice\"");
+        html.Should().Contain("voiceModuleName: moduleName");
+        html.Should().Contain("创建专用语音 agent");
+        html.Should().NotContain("创建默认会话",
+            "the console now provisions a dedicated voice agent rather than a chat conversation");
 
         // protobuf-JSON body of UpsertChatRouteRuleRequested — the same shape the admin
         // endpoint parses; owner_scope is server-stamped so the page must not send it.
@@ -111,11 +116,14 @@ public sealed class VoiceConsolePageTests
         html.Should().NotContain("ownerScope", "owner_scope is server-stamped from the URL scope");
 
         // 202-accepted honesty: both writes are dispatched commands, so the page polls the
-        // readmodels (policy resolves the new actor + conversation registry lists it) before dialing.
-        html.Should().Contain("等待路由与会话物化");
+        // policy and voice capability read models before dialing.
+        html.Should().Contain("等待路由与语音能力物化");
+        html.Should().Contain("capability.initialized");
 
-        // Compensation: a failed rule write must not strand the just-created conversation.
-        html.Should().Contain("orphan conversation cleanup");
+        // Compensation: a failed rule write must not strand the just-created voice actor.
+        html.Should().Contain("orphan voice agent cleanup");
+        html.Should().Contain("actorKind===\"nyxid.chat\"",
+            "the page must repair voice-default rules created by the broken conversation path");
     }
 
     [Fact]
