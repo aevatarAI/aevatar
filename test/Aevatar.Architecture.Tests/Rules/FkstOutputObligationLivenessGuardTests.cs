@@ -23,6 +23,10 @@ public class FkstOutputObligationLivenessGuardTests
         Assert.Contains(
             "state-output-obligation-timeout obligation fixture drains idempotently.",
             result.Output);
+        Assert.Contains("produced_obligations=1", result.Output);
+        Assert.Contains("first_pass_emitted_effects=1", result.Output);
+        Assert.Contains("second_pass_emitted_effects=0", result.Output);
+        Assert.Contains("pending_obligations=0", result.Output);
     }
 
     private static async Task<CommandResult> RunBashAsync(string scriptPath, string fixturePath)
