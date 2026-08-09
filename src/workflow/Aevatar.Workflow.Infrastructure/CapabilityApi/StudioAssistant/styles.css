@@ -5113,3 +5113,134 @@ body:has(.settings-dialog[open]) #servicesButton,
     width: calc(100% - 28px);
   }
 }
+
+/* Admin Studio design pass: gradient brand glyph, elevated primary actions,
+   softer session rows, and a raised composer so the assistant surface matches
+   the admin workbench visual language. Presentation only — no markup, class,
+   or behavior contract changes. */
+
+.brand-zone::before {
+  content: "";
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  border-radius: 7px;
+  background:
+    radial-gradient(circle at 68% 30%, rgba(255, 255, 255, 0.55) 0 2.5px, transparent 3px),
+    linear-gradient(135deg, #4d7cff, #6a5cff);
+  box-shadow:
+    0 3px 8px -2px rgba(47, 92, 246, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+
+.site-header {
+  box-shadow: 0 1px 2px rgba(14, 21, 38, 0.04);
+}
+
+.new-chat-button {
+  background: linear-gradient(135deg, #3f6dff, #2c4fe6);
+  box-shadow:
+    0 2px 8px -1px rgba(47, 92, 246, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  transition: filter 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+.new-chat-button:hover {
+  filter: brightness(1.06);
+  box-shadow:
+    0 4px 14px -2px rgba(47, 92, 246, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  transform: translateY(-1px);
+}
+
+.new-chat-button:active {
+  transform: translateY(0);
+}
+
+.group-label,
+.eyebrow,
+.section-title {
+  letter-spacing: 0.07em;
+}
+
+.session-item,
+.history-row {
+  border-radius: 0 var(--radius) var(--radius) 0;
+  transition: background 140ms ease, border-color 140ms ease;
+}
+
+.session-item.active,
+.history-row.active {
+  border-left-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.session-item.active .session-icon {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+  background: var(--panel);
+  color: var(--accent);
+}
+
+.status-dot.ok {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 18%, transparent);
+}
+
+.status-dot.error {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--error) 16%, transparent);
+}
+
+.assistant-emblem {
+  border-color: transparent;
+  background: linear-gradient(135deg, #4d7cff, #6a5cff);
+  box-shadow:
+    0 6px 16px -4px rgba(47, 92, 246, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.3);
+  color: #fff;
+}
+
+.empty-state h1 {
+  background: linear-gradient(120deg, #0e1526 30%, #2f5cf6 85%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  letter-spacing: -0.01em;
+}
+
+.quick-actions button {
+  transition: background 140ms ease, color 140ms ease;
+}
+
+.quick-actions button:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.composer {
+  border-color: var(--border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow);
+  padding: 14px;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.composer:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  box-shadow: var(--shadow), 0 0 0 3px var(--accent-soft);
+}
+
+.send-button {
+  border-color: transparent;
+  background: linear-gradient(135deg, #3f6dff, #2c4fe6);
+  box-shadow: 0 2px 8px -1px rgba(47, 92, 246, 0.35);
+  transition: filter 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+.send-button:hover:not(:disabled) {
+  filter: brightness(1.07);
+  box-shadow: 0 4px 12px -2px rgba(47, 92, 246, 0.45);
+}
+
+.send-button:disabled {
+  box-shadow: none;
+  opacity: 0.45;
+}

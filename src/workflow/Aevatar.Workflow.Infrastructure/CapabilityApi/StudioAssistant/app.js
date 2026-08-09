@@ -1781,8 +1781,8 @@ async function refreshRuntimeData() {
 function updateConfigUi() {
   const surface = surfaceLabels[state.config.surface];
   const transport = transportLabels[state.config.transport] || state.config.transport;
-  dom.sidebarSurface.textContent = surface;
-  dom.sidebarTransport.textContent = transport;
+  if (dom.sidebarSurface) dom.sidebarSurface.textContent = surface;
+  if (dom.sidebarTransport) dom.sidebarTransport.textContent = transport;
   dom.routeTransportValue.textContent = transport;
   dom.routeSurfaceValue.textContent = surfacePaths[state.config.surface];
   dom.routeLabel.textContent = state.config.surface === "workflow"
@@ -1886,7 +1886,7 @@ function applyHealthRouteState({ includeAevatar = !state.activeController } = {}
 
 function setConnectionStatus(status, text) {
   dom.connectionDot.className = `status-dot ${status}`;
-  dom.sidebarRuntimeDot.className = `status-dot ${status}`;
+  if (dom.sidebarRuntimeDot) dom.sidebarRuntimeDot.className = `status-dot ${status}`;
   dom.connectionText.textContent = text;
   dom.routeClientState.textContent = status === "ok" ? "ready" : status;
   const routeClass = status === "ok" ? "ok" : status === "error" ? "error" : status === "checking" ? "active" : "";
