@@ -180,6 +180,12 @@ public static partial class NyxIdChatEndpoints
         var accessToken = credentials?.NyxIdAccessToken;
         if (string.IsNullOrWhiteSpace(accessToken))
             return Results.Unauthorized();
+        if (!AevatarPrincipalSubjectResolver.TryResolveNyxIdSubject(
+                http.User,
+                out var ownerSubject))
+        {
+            return Results.Unauthorized();
+        }
         var admissionError = await AuthorizeConversationAsync(
             admissionPort,
             identity.ScopeId,
@@ -202,14 +208,15 @@ public static partial class NyxIdChatEndpoints
             ClientRequestId = identity.ClientRequestId,
             CommandId = commandId,
             CorrelationId = correlationId,
+            OwnerSubject = ownerSubject,
             ExpectedOperationGeneration = request.ExpectedOperationGeneration,
             ExpectedStateVersion = request.ExpectedStateVersion,
             LlmControl = control.ToPayload(),
-            ToolContext = BuildControlToolContext(
+            ToolContext = BuildAuthenticatedOwnerControlToolContext(
                 identity.ScopeId,
                 identity.ActorId,
-                identity.TurnId,
                 identity.RequestId,
+                ownerSubject,
                 credentials!,
                 control),
         }, ct).ConfigureAwait(false);
@@ -427,28 +434,12 @@ public static partial class NyxIdChatEndpoints
             ExpectedStateVersion = request.ExpectedStateVersion,
             CommandId = commandId,
             CorrelationId = correlationId,
-            ToolContext = (AgentToolExecutionContext.Empty with
-            {
-                Request = new AgentToolRequestIdentity(identity.RequestId, null),
-                Credentials = credentials!,
-                Caller = new AgentToolCallerContext(
-                    identity.ScopeId,
-                    ownerSubject,
-                    identity.RequestId,
-                    identity.ScopeId),
-                Channel = new AgentToolChannelContext(
-                    NyxIdChatServiceDefaults.ServiceId,
-                    ownerSubject,
-                    identity.ScopeId,
-                    null,
-                    null),
-                NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
-                    "nyxid",
-                    string.Empty,
-                    ownerSubject,
-                    "proxy"),
-                ExecutionOwner = AgentToolExecutionOwners.Actor(identity.ActorId),
-            }).ToPayload(),
+            ToolContext = BuildAuthenticatedOwnerControlToolContext(
+                identity.ScopeId,
+                identity.ActorId,
+                identity.RequestId,
+                ownerSubject,
+                credentials!),
         }, ct).ConfigureAwait(false);
         return AcceptedControl(http, identity.ScopeId, identity.ActorId, receipt);
     }
@@ -542,6 +533,39 @@ public static partial class NyxIdChatEndpoints
             ExecutionOwner = AgentToolExecutionOwners.Actor(conversationActorId),
         };
         return control.ToToolContext(context).ToPayload();
+    }
+
+    private static AgentToolExecutionContextPayload BuildAuthenticatedOwnerControlToolContext(
+        string scopeId,
+        string conversationActorId,
+        string requestId,
+        string ownerSubject,
+        AgentToolCredentials credentials,
+        LLMControlContext? control = null)
+    {
+        var context = AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity(requestId, null),
+            Credentials = credentials,
+            Caller = new AgentToolCallerContext(
+                scopeId,
+                ownerSubject,
+                requestId,
+                scopeId),
+            Channel = new AgentToolChannelContext(
+                NyxIdChatServiceDefaults.ServiceId,
+                null,
+                scopeId,
+                null,
+                null),
+            NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                "nyxid",
+                string.Empty,
+                ownerSubject,
+                "proxy"),
+            ExecutionOwner = AgentToolExecutionOwners.Actor(conversationActorId),
+        };
+        return (control ?? LLMControlContext.Empty).ToToolContext(context).ToPayload();
     }
 
     private static AgentToolExecutionContextPayload ToToolContextPayload(AgentToolCredentials credentials) =>

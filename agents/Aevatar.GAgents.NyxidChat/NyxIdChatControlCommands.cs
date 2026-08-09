@@ -157,6 +157,16 @@ public static class NyxIdChatControlCommands
             : null;
         if (step.Kind == NyxIdChatStepKind.Tool && retryAuthorizationSourceKey is null)
             return RejectStepControl(state, input, StepActionUnavailable, StepActionUnavailableMessage, now);
+        if (step.Kind == NyxIdChatStepKind.Tool &&
+            !NyxIdChatDurableRetryAuthority.TrySeal(
+                state,
+                command.OwnerSubject,
+                command.RetryRequestId,
+                command.ToolContext,
+                out _))
+        {
+            return RejectStepControl(state, input, StepActionUnavailable, StepActionUnavailableMessage, now);
+        }
 
         var generation = step.Operation.Key.OperationGeneration + 1;
         var next = state.Clone();
@@ -1009,7 +1019,13 @@ public static class NyxIdChatControlCommands
         if (step.Kind == NyxIdChatStepKind.Tool)
         {
             if (step.RetryToolInput?.Arguments is null ||
-                step.RetryToolInput.OperationAdmission is null)
+                step.RetryToolInput.OperationAdmission is null ||
+                !NyxIdChatDurableRetryAuthority.TrySeal(
+                    state,
+                    command.OwnerSubject,
+                    command.RetryRequestId,
+                    command.ToolContext,
+                    out var sealedToolContext))
                 return null;
             return new NyxIdChatOperationDispatchCommand
             {
@@ -1019,7 +1035,7 @@ public static class NyxIdChatControlCommands
                     CallId = step.RetryToolInput.CallId,
                     ToolName = step.RetryToolInput.ToolName,
                     ArgumentsJson = JsonFormatter.Default.Format(step.RetryToolInput.Arguments),
-                    ToolContext = command.ToolContext?.Clone(),
+                    ToolContext = sealedToolContext,
                     MayChangeExternalState = step.MayChangeExternalState,
                     Idempotent = false,
                     IdempotencyKey = step.Operation.Key.OperationId,

@@ -266,7 +266,7 @@ public sealed class NyxIdChatControlEndpointsTests
             AgentToolNyxIdCredentialKindPayload.ProxyDelegation);
         command.ToolContext.Request.RequestId.Should().Be("plan-gate-alpha");
         command.ToolContext.Channel.Platform.Should().Be(NyxIdChatServiceDefaults.ServiceId);
-        command.ToolContext.Channel.SenderId.Should().Be("owner-alpha");
+        command.ToolContext.Channel.SenderId.Should().BeEmpty();
         command.ToolContext.Channel.RegistrationScopeId.Should().Be("scope-alpha");
         command.ToolContext.Caller.ScopeId.Should().Be("scope-alpha");
         command.ToolContext.Caller.OwnerScopeId.Should().Be("scope-alpha");
@@ -460,7 +460,9 @@ public sealed class NyxIdChatControlEndpointsTests
             ValidRetryBody(generation: 2),
             new RecordingAdmissionPort(),
             dispatch,
-            accessToken: "retry-runtime-token-alpha");
+            accessToken: "retry-runtime-token-alpha",
+            authenticatedScopeId: "scope-alpha",
+            authenticatedOwnerSubject: "owner-alpha");
 
         response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
         response.Body.Should().NotContain("retry-runtime-token-alpha");
@@ -471,11 +473,13 @@ public sealed class NyxIdChatControlEndpointsTests
         command.TaskId.Should().Be("task-alpha");
         command.StepId.Should().Be("step-alpha");
         command.RetryRequestId.Should().Be("retry-alpha");
+        command.OwnerSubject.Should().Be("owner-alpha");
         command.ExpectedOperationGeneration.Should().Be(2);
         command.ExpectedStateVersion.Should().Be(11);
         command.LlmControl.NyxIdAccessToken.Should().Be("retry-runtime-token-alpha");
         command.ToolContext.Credentials.NyxIdAccessToken.Should().Be(
             "retry-runtime-token-alpha");
+        command.ToolContext.Channel.SenderId.Should().BeEmpty();
     }
 
     [Fact]
@@ -488,7 +492,9 @@ public sealed class NyxIdChatControlEndpointsTests
             ValidRetryBody(generation: 2),
             new RecordingAdmissionPort(),
             dispatch,
-            accessToken: "retry-runtime-token-alpha");
+            accessToken: "retry-runtime-token-alpha",
+            authenticatedScopeId: "scope-alpha",
+            authenticatedOwnerSubject: "owner-alpha");
 
         response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
         var command = dispatch.Dispatches.Should().ContainSingle().Which.Envelope.Payload

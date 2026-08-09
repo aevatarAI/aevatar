@@ -1270,15 +1270,35 @@ public sealed partial class NyxIdChatConversationGAgentTests
         ClientRequestId = "client-retry-effect-alpha",
         CommandId = "command-retry-effect-alpha",
         CorrelationId = "correlation-retry-effect-alpha",
+        OwnerSubject = "owner-alpha",
         ExpectedOperationGeneration = step.Operation.Key.OperationGeneration,
         ExpectedStateVersion = stateVersion,
-        ToolContext = new AgentToolExecutionContextPayload
+        ToolContext = (AgentToolExecutionContext.Empty with
         {
-            Credentials = new AgentToolCredentialsPayload
-            {
-                NyxIdAccessToken = "retry-capability-alpha",
-            },
-        },
+            Request = new AgentToolRequestIdentity("retry-effect-alpha", null),
+            Credentials = new AgentToolCredentials(
+                "retry-capability-alpha",
+                null,
+                null,
+                AgentToolNyxIdCredentialKind.SourceReadableUserBearer),
+            Caller = new AgentToolCallerContext(
+                "scope-alpha",
+                "owner-alpha",
+                "retry-effect-alpha",
+                "scope-alpha"),
+            Channel = new AgentToolChannelContext(
+                NyxIdChatServiceDefaults.ServiceId,
+                null,
+                "scope-alpha",
+                null,
+                null),
+            NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                "nyxid",
+                string.Empty,
+                "owner-alpha",
+                "proxy"),
+            ExecutionOwner = AgentToolExecutionOwners.Actor(actorId),
+        }).ToPayload(),
     };
 
     private static NyxIdChatPlanResolveCommand MatrixPlanResolveCommand(
@@ -1313,7 +1333,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
                 "scope-alpha"),
             Channel = new AgentToolChannelContext(
                 NyxIdChatServiceDefaults.ServiceId,
-                "owner-alpha",
+                null,
                 "scope-alpha",
                 null,
                 null),

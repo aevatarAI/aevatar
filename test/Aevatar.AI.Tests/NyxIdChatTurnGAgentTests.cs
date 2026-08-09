@@ -2490,7 +2490,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
         context.Caller.ScopeId.Should().Be("scope-alpha");
         context.Caller.OwnerSubject.Should().Be("owner-alpha");
         context.Channel.Platform.Should().Be(NyxIdChatServiceDefaults.ServiceId);
-        context.Channel.SenderId.Should().Be("owner-alpha");
+        context.Channel.SenderId.Should().BeNull();
         context.Channel.RegistrationScopeId.Should().Be("scope-alpha");
         context.ExecutionOwner.Kind.Should().Be(AgentToolExecutionOwnerKind.Actor);
         context.ExecutionOwner.OwnerId.Should().Be("conversation-alpha");
@@ -3173,7 +3173,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
                 token,
                 null,
                 null,
-                AgentToolNyxIdCredentialKind.ProxyDelegation),
+                AgentToolNyxIdCredentialKind.SourceReadableUserBearer),
             Caller = new AgentToolCallerContext(
                 "scope-alpha",
                 "owner-alpha",
@@ -3181,7 +3181,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
                 "scope-alpha"),
             Channel = new AgentToolChannelContext(
                 NyxIdChatServiceDefaults.ServiceId,
-                "owner-alpha",
+                null,
                 "scope-alpha",
                 null,
                 null),

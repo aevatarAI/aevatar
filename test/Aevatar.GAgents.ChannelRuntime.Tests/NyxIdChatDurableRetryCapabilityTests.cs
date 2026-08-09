@@ -1,3 +1,4 @@
+using System.Net;
 using System.Runtime.CompilerServices;
 using System.Text;
 using Aevatar.AI.Abstractions;
@@ -6,7 +7,13 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Tools;
+using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
+using Aevatar.Audit;
+using Aevatar.Audit.Abstractions.Identity;
+using Aevatar.Audit.Abstractions.Models;
+using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
@@ -24,6 +31,80 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
 {
     private static readonly Timestamp Now = Timestamp.FromDateTimeOffset(
         new DateTimeOffset(2026, 8, 8, 8, 0, 0, TimeSpan.Zero));
+
+    private const string DurableRetryArguments =
+        """{"body":{"approval_code":"approval-alpha","user_id":"user-alpha","form":"[]","uuid":"canary-uuid-alpha"}}""";
+
+    private const string DurableRetryServiceInventory = """
+        {
+          "keys": [
+            {
+              "id": "usvc-lark",
+              "slug": "api-lark-bot",
+              "label": "Lark canary",
+              "catalog_service_id": "svc-lark",
+              "catalog_service_slug": "api-lark-bot",
+              "endpoint_id": "instance-endpoint-alpha",
+              "endpoint_url": "https://lark.test",
+              "is_active": true,
+              "credential_source": { "type": "personal" }
+            }
+          ]
+        }
+        """;
+
+    private const string DurableRetryMcpCatalog = """
+        {
+          "contract_version": "1.0",
+          "catalog_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "user_id": "nyx-user-alpha",
+          "services": [
+            {
+              "service_id": "usvc-lark",
+              "service_name": "Lark",
+              "service_slug": "api-lark-bot",
+              "is_user_service": true,
+              "is_generic_proxy": false,
+              "endpoints": [
+                {
+                  "endpoint_id": "lark-create-approval",
+                  "name": "lark_create_approval_instance",
+                  "method": "POST",
+                  "path": "/open-apis/approval/v4/instances",
+                  "parameters": [],
+                  "request_body_schema": {
+                    "type": "object",
+                    "properties": {
+                      "approval_code": { "type": "string" },
+                      "user_id": { "type": "string" },
+                      "form": { "type": "string" },
+                      "uuid": { "type": "string" }
+                    },
+                    "required": ["approval_code", "user_id", "form", "uuid"],
+                    "additionalProperties": false
+                  },
+                  "request_content_type": "application/json",
+                  "request_body_required": true,
+                  "response": { "content_types": ["application/json"], "binary_artifact": false }
+                },
+                {
+                  "endpoint_id": "lark-get-approval",
+                  "name": "lark_get_approval_instance",
+                  "method": "GET",
+                  "path": "/open-apis/approval/v4/instances/{instance_id}",
+                  "parameters": [
+                    { "name": "instance_id", "in": "path", "required": true, "schema": { "type": "string" } }
+                  ],
+                  "request_body_schema": null,
+                  "request_content_type": null,
+                  "request_body_required": false,
+                  "response": { "content_types": ["application/json"], "binary_artifact": false }
+                }
+              ]
+            }
+          ]
+        }
+        """;
 
     [Theory]
     [InlineData("fresh-per-request-token", AgentToolReceiptStatus.ApprovalRequired)]
@@ -82,6 +163,94 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
             "the original transient capability was consumed before the fresh-session retry");
         Encoding.UTF8.GetString(retry.State.ToByteArray()).Should().NotContain(retryToken);
         retry.State.ToString().Should().NotContain(retryToken);
+    }
+
+    [Fact]
+    public async Task ConfirmedEffectRetry_WithRematerializedConnectedServiceTool_ShouldPreserveNyxIdApprovalRequest()
+    {
+        const string firstToken = "generation-one-token";
+        const string retryToken = "generation-two-token";
+        var handler = new DurableRetryNyxIdHandler();
+        handler.CatalogsByToken[firstToken] = DurableRetryMcpCatalog;
+        handler.CatalogsByToken[retryToken] = DurableRetryMcpCatalog;
+        handler.KeysByToken[firstToken] = DurableRetryServiceInventory;
+        handler.KeysByToken[retryToken] = DurableRetryServiceInventory;
+        handler.ProxyResponses.Enqueue(new DurableRetryProxyResponse(
+            HttpStatusCode.BadGateway,
+            """{"error":"upstream_result_lost","error_code":9000}"""));
+
+        var options = new NyxIdToolOptions
+        {
+            BaseUrl = "https://nyx.test",
+            EnableAssistantConnectedServiceEffects = true,
+            AssistantOperationReadBackBindings = [DurableRetryApprovalReadBackBinding()],
+        };
+        var client = new NyxIdApiClient(options, new HttpClient(handler));
+        var source = new CountingToolSource(new NyxIdConnectedServiceToolSource(
+            options,
+            client,
+            new NyxIdServiceInstanceClient(client)));
+        IAgentTool initialTool;
+        using (AgentToolContextScope.Push(
+                   AgentToolExecutionContextMapper.FromPayload(ToolContext(firstToken))))
+        {
+            initialTool = (await source.DiscoverToolsAsync())
+                .Single(tool => !tool.IsReadOnly);
+        }
+        initialTool.GetType().Name.Should().Be("NyxIdConnectedServiceOperationTool");
+
+        var executionPort = new RecordingExecutionPort(new AdmittedAgentToolExecutor(
+            new AlwaysStartingAdmissionLedger(),
+            new AppendedAuditTrail(),
+            new StableIdentityHasher()));
+        var executor = CreateTurnExecutor(
+            initialTool,
+            new SourceToolSetRegistry("profile.route", source),
+            executionPort,
+            DurableRetryArguments);
+        var state = await BuildReconciledNotAppliedStateAsync(
+            executor,
+            initialTool,
+            firstToken,
+            () => executionPort.FormatOutcomes());
+        handler.ProxyResponses.Enqueue(new DurableRetryProxyResponse(
+            HttpStatusCode.Forbidden,
+            """{"error":"approval_required","error_code":7000,"request_id":"approval-generation-2-real","approval_mode":"per_request"}"""));
+        var effect = state.ActiveTask.Steps.Single(step => step.Kind == NyxIdChatStepKind.Tool);
+        var retry = NyxIdChatControlCommands.Retry(
+            state,
+            BuildRetryCommand(effect, retryToken, expectedStateVersion: 70),
+            stateVersion: 70,
+            Now);
+        var confirmed = NyxIdChatPlanGateDecisions.Resolve(
+            retry.State,
+            BuildPlanConfirmation(
+                retry.State,
+                retryToken,
+                expectedStateVersion: 71),
+            currentStateVersion: 71,
+            Now);
+        confirmed.NextCommand.Should().NotBeNull();
+
+        var discoveriesBeforeRetry = source.DiscoveryCount;
+        var execution = await executor.ExecuteAsync(
+            confirmed.NextCommand!,
+            new NyxIdChatTransientExecutionSession(),
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        execution.Result.Failure.Should().BeNull(
+            "the raw execution outcomes were {0}",
+            executionPort.FormatOutcomes());
+        execution.Result.Tool.Receipt.Status.Should().Be(AgentToolReceiptStatus.ApprovalRequired);
+        execution.Result.Tool.Receipt.ApprovalRequestId.Should().Be("approval-generation-2-real");
+        execution.Result.Tool.Receipt.ApprovalRequestId.Should().NotBe("tool_approval");
+        execution.Result.Tool.Receipt.NyxIdApprovalDecisionMode.Should().Be(
+            NyxIdApprovalDecisionMode.PerRequest);
+        source.DiscoveryCount.Should().BeGreaterThan(discoveriesBeforeRetry,
+            "the fresh retry session must rematerialize the connected-service catalog");
+        handler.ProxyRequests.Should().Be(2,
+            "both generations must cross the real NyxID proxy ingress");
     }
 
     [Fact]
@@ -435,6 +604,51 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
         tool.ExecutionTokens.Should().Equal("uncertain-token", "valid-grant-token");
     }
 
+    [Theory]
+    [InlineData("command-owner")]
+    [InlineData("channel-sender")]
+    [InlineData("execution-owner")]
+    public async Task DirectEffectRetry_WithTamperedAuthority_ShouldFailClosedBeforeGenerationAdvance(
+        string tamper)
+    {
+        var tool = new RetryEffectTool();
+        var executor = CreateTurnExecutor(tool);
+        var (state, _) = await BuildReconciledNotAppliedStateAsync(executor, tool);
+        state.ActiveTask.Gate.Mode = NyxIdChatPlanGateMode.Auto;
+        state.ActiveTask.Gate.Status = NyxIdChatPlanGateStatus.Satisfied;
+        var toolStep = state.ActiveTask.Steps.Single(step => step.Kind == NyxIdChatStepKind.Tool);
+        var command = BuildRetryCommand(toolStep, "valid-grant-token", expectedStateVersion: 45);
+        switch (tamper)
+        {
+            case "command-owner":
+                command.OwnerSubject = "owner-foreign";
+                break;
+            case "channel-sender":
+                command.ToolContext.Channel.SenderId = "owner-alpha";
+                break;
+            case "execution-owner":
+                command.ToolContext.ExecutionOwner.OwnerId = "conversation-foreign";
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(tamper), tamper, null);
+        }
+
+        var decision = NyxIdChatControlCommands.Retry(
+            state,
+            command,
+            stateVersion: 45,
+            Now);
+
+        decision.ShouldCommit.Should().BeTrue("the rejected control outcome is durably recorded");
+        decision.ShouldDispatch.Should().BeFalse();
+        decision.NextCommand.Should().BeNull();
+        decision.Result.Outcome.Should().Be(NyxIdChatTransitionOutcome.Rejected);
+        decision.Result.ReasonCode.Should().Be(NyxIdChatControlCommands.StepActionUnavailable);
+        decision.State.ActiveTask.Steps.Single(step => step.Kind == NyxIdChatStepKind.Tool)
+            .Operation.Key.OperationGeneration.Should().Be(1);
+        tool.ExecutionTokens.Should().Equal("uncertain-token");
+    }
+
     [Fact]
     public async Task ConfirmedEffectRetry_WhenCurrentCatalogRevokesTool_ShouldFailClosed()
     {
@@ -553,7 +767,10 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
         var provider = new ExactToolCallProvider(tool.Name);
         var generationExecutor = new AgentRunReplyGenerationExecutor(
             Substitute.For<IActorDispatchPort>(),
-            new RebuildingStepPlanReplyGenerator(tool, provider),
+            new RebuildingStepPlanReplyGenerator(
+                tool,
+                provider,
+                staticToolAvailable: () => tool.IsBaseRouteAvailable),
             interactiveReplyCollector: null,
             relayOptions: null,
             NullLogger<AgentRunReplyGenerationExecutor>.Instance);
@@ -563,14 +780,43 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
         return new NyxIdChatTurnOperationExecutor(
             generationExecutor,
             new UnavailableNyxIdActionPostconditionPort(),
-            materializer);
+            materializer,
+            new AcceptingDelegationCredentialLifecycle());
+    }
+
+    private static NyxIdChatTurnOperationExecutor CreateTurnExecutor(
+        IAgentTool tool,
+        IToolSetRegistry registry,
+        IAgentToolExecutionPort executionPort,
+        string argumentsJson)
+    {
+        var provider = new ExactToolCallProvider(tool.Name, argumentsJson);
+        var generationExecutor = new AgentRunReplyGenerationExecutor(
+            Substitute.For<IActorDispatchPort>(),
+            new RebuildingStepPlanReplyGenerator(
+                tool,
+                provider,
+                executionPort),
+            interactiveReplyCollector: null,
+            relayOptions: null,
+            NullLogger<AgentRunReplyGenerationExecutor>.Instance);
+        var materializer = new AgentProfileTurnCatalogMaterializer(
+            registry,
+            new NoMatchClassifier());
+        return new NyxIdChatTurnOperationExecutor(
+            generationExecutor,
+            new UnavailableNyxIdActionPostconditionPort(),
+            materializer,
+            new AcceptingDelegationCredentialLifecycle());
     }
 
     private static async Task<(NyxIdChatConversationGAgentState State,
         NyxIdChatTransientExecutionSession OriginalSession)> BuildReconciledNotAppliedStateAsync(
         NyxIdChatTurnOperationExecutor executor,
-        RetryEffectTool tool,
-        bool profiled = true)
+        IAgentTool tool,
+        bool profiled = true,
+        string initialToken = "uncertain-token",
+        Func<string>? executionDiagnostics = null)
     {
         var llmKey = Key("step-llm", "operation-llm", generation: 1);
         var initialState = ActiveLlmState(llmKey, tool.Name, profiled);
@@ -582,7 +828,7 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
                 Prompt = "Create the approval record.",
                 SessionId = "turn-alpha",
                 ScopeId = "scope-alpha",
-                ToolContext = ToolContext("uncertain-token"),
+                ToolContext = ToolContext(initialToken),
             },
         };
         if (initialState.AgentProfile is not null)
@@ -612,7 +858,7 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
         planned.State.ActiveTask.Gate.Status.Should().Be(NyxIdChatPlanGateStatus.Pending);
         var firstConfirmation = NyxIdChatPlanGateDecisions.Resolve(
             planned.State,
-            BuildPlanConfirmation(planned.State, "uncertain-token", expectedStateVersion: 10),
+            BuildPlanConfirmation(planned.State, initialToken, expectedStateVersion: 10),
             currentStateVersion: 10,
             Now);
         var firstToolResult = await executor.ExecuteAsync(
@@ -620,9 +866,12 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
             session,
             static (_, _) => Task.CompletedTask,
             CancellationToken.None);
-        firstToolResult.Result.Failure.Should().BeNull(firstToolResult.Result.Failure?.ToString());
+        firstToolResult.Result.Failure.Should().BeNull(
+            "the raw execution outcomes were {0}",
+            executionDiagnostics?.Invoke() ?? "not recorded");
         firstToolResult.Result.Tool.Receipt.Status.Should().Be(AgentToolReceiptStatus.Error);
-        tool.ExecutionTokens.Should().Equal("uncertain-token");
+        if (tool is RetryEffectTool retryEffectTool)
+            retryEffectTool.ExecutionTokens.Should().Equal(initialToken);
 
         var uncertain = NyxIdChatTaskLifecycle.ApplyOperationResult(
             firstConfirmation.State,
@@ -656,6 +905,49 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
         return (reconciled.State, session);
     }
 
+    private static async Task<NyxIdChatConversationGAgentState> BuildReconciledNotAppliedStateAsync(
+        NyxIdChatTurnOperationExecutor executor,
+        IAgentTool tool,
+        string initialToken,
+        Func<string>? executionDiagnostics = null)
+    {
+        var (state, _) = await BuildReconciledNotAppliedStateAsync(
+            executor,
+            tool,
+            profiled: true,
+            initialToken: initialToken,
+            executionDiagnostics);
+        return state;
+    }
+
+    private static NyxIdAssistantOperationReadBackBinding DurableRetryApprovalReadBackBinding() => new()
+    {
+        CatalogServiceSlug = "api-lark-bot",
+        EffectHttpMethod = "POST",
+        EffectPathTemplate = "/open-apis/approval/v4/instances",
+        ReadHttpMethod = "GET",
+        ReadPathTemplate = "/open-apis/approval/v4/instances/{instance_id}",
+        CheckName = "lark_approval_instance_exists_by_caller_uuid",
+        Match = AgentToolReadBackMatch.Exists,
+        JsonPointer = "/data/instance_code",
+        EffectResultIdentityJsonPointer = "/data/instance_code",
+        ArgumentBindings =
+        [
+            new NyxIdAssistantReadBackArgumentBinding
+            {
+                EffectLocation = NyxIdAssistantOperationArgumentLocation.Body,
+                EffectArgumentName = "uuid",
+                ReadLocation = NyxIdAssistantOperationArgumentLocation.Path,
+                ReadArgumentName = "instance_id",
+            },
+        ],
+        NotAppliedEvidence = new NyxIdAssistantReadBackNotAppliedEvidence
+        {
+            JsonPointer = "/code",
+            ExpectedValue = Google.Protobuf.WellKnownTypes.Value.ForNumber(1390003),
+        },
+    };
+
     private static NyxIdChatRetryStepCommand BuildRetryCommand(
         NyxIdChatTaskStepState step,
         string token,
@@ -670,9 +962,10 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
         ClientRequestId = $"client-retry-{expectedStateVersion}",
         CommandId = $"command-retry-{expectedStateVersion}",
         CorrelationId = $"correlation-retry-{expectedStateVersion}",
+        OwnerSubject = "owner-alpha",
         ExpectedOperationGeneration = step.Operation.Key.OperationGeneration,
         ExpectedStateVersion = expectedStateVersion,
-        ToolContext = ToolContext(token),
+        ToolContext = ToolContext(token, $"retry-{expectedStateVersion}"),
     };
 
     private static NyxIdChatPlanResolveCommand BuildPlanConfirmation(
@@ -681,6 +974,7 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
         long expectedStateVersion) => new()
     {
         ScopeId = state.ScopeId,
+        OwnerSubject = state.OwnerSubject,
         ConversationActorId = state.ConversationActorId,
         TaskId = state.ActiveTask.TaskId,
         PlanId = state.ActiveTask.PlanId,
@@ -691,19 +985,36 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
         ExpectedStateVersion = expectedStateVersion,
         CommandId = $"command-confirm-{expectedStateVersion}",
         CorrelationId = $"correlation-confirm-{expectedStateVersion}",
-        ToolContext = ToolContext(token),
+        ToolContext = ToolContext(token, state.ActiveTask.Gate.RequestId),
     };
 
-    private static AgentToolExecutionContextPayload ToolContext(string token) =>
+    private static AgentToolExecutionContextPayload ToolContext(
+        string token,
+        string? requestId = null) =>
         (AgentToolExecutionContext.Empty with
         {
-            Caller = new AgentToolCallerContext("scope-alpha", "owner-alpha", null, null),
+            Request = new AgentToolRequestIdentity(requestId, null),
+            Caller = new AgentToolCallerContext(
+                "scope-alpha",
+                "owner-alpha",
+                requestId,
+                "scope-alpha"),
+            Channel = new AgentToolChannelContext(
+                NyxIdChatServiceDefaults.ServiceId,
+                null,
+                "scope-alpha",
+                null,
+                null),
             Credentials = AgentToolCredentials.Empty with
             {
                 NyxIdAccessToken = token,
                 NyxIdCredentialKind = AgentToolNyxIdCredentialKind.SourceReadableUserBearer,
-                SourceReadableNyxIdAccessToken = token,
             },
+            NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                "nyxid",
+                string.Empty,
+                "owner-alpha",
+                "proxy"),
             ExecutionOwner = new AgentToolExecutionOwner
             {
                 Kind = AgentToolExecutionOwnerKind.Actor,
@@ -842,8 +1153,10 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
     };
 
     private sealed class RebuildingStepPlanReplyGenerator(
-        RetryEffectTool tool,
-        ILLMProvider provider) : IAgentRunStepConversationReplyGenerator
+        IAgentTool tool,
+        ILLMProvider provider,
+        IAgentToolExecutionPort? toolExecutionPort = null,
+        Func<bool>? staticToolAvailable = null) : IAgentRunStepConversationReplyGenerator
     {
         public Task<AgentRunReplyStepPlan> BuildStepPlanAsync(
             ChatActivity activity,
@@ -857,12 +1170,18 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
             AgentProfileTurnCatalog? turnCatalog = null)
         {
             var tools = new ToolManager();
-            if (!forceDisableTools && tool.IsBaseRouteAvailable)
-                tools.Register(tool);
+            if (!forceDisableTools && (staticToolAvailable?.Invoke() ?? true))
+            {
+                tools.Register(turnCatalog is null
+                    ? [tool]
+                    : turnCatalog.RouteOwnedTools.Values);
+            }
             var runtime = new ChatRuntime(
                 () => provider,
                 new ChatHistory(),
-                new ToolCallLoop(tools, toolExecutionPort: new PassthroughExecutionPort()),
+                new ToolCallLoop(
+                    tools,
+                    toolExecutionPort: toolExecutionPort ?? new PassthroughExecutionPort()),
                 hooks: null,
                 requestBuilder: _ => new LLMRequest
                 {
@@ -915,6 +1234,34 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
                     GetRegisteredNames()));
     }
 
+    private sealed class SourceToolSetRegistry(
+        string name,
+        IAgentToolSource source) : IToolSetRegistry
+    {
+        public IReadOnlyList<string> GetRegisteredNames() => [name];
+
+        public ToolSetResolveResult Resolve(string? requestedName) =>
+            string.Equals(requestedName, name, StringComparison.Ordinal)
+                ? ToolSetResolveResult.Success(name, [source])
+                : ToolSetResolveResult.Failure(new ToolSetResolveError(
+                    ToolSetResolveError.UnknownNameCode,
+                    requestedName ?? string.Empty,
+                    "missing",
+                    GetRegisteredNames()));
+    }
+
+    private sealed class CountingToolSource(IAgentToolSource inner) : IAgentToolSource
+    {
+        public int DiscoveryCount { get; private set; }
+
+        public async Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(
+            CancellationToken ct = default)
+        {
+            DiscoveryCount++;
+            return await inner.DiscoverToolsAsync(ct);
+        }
+    }
+
     private sealed class PassthroughExecutionPort : IAgentToolExecutionPort
     {
         public async Task<AgentToolExecutionOutcome> ExecuteAsync(
@@ -956,7 +1303,23 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
             Task.FromResult(AgentProfileTurnClassificationResult.NoMatch());
     }
 
-    private sealed class ExactToolCallProvider(string toolName) : ILLMProvider
+    private sealed class AcceptingDelegationCredentialLifecycle
+        : INyxIdChatDelegationCredentialLifecyclePort
+    {
+        public Task<NyxIdChatDelegationCredentialResolution> ResolveAsync(
+            string delegationToken,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(new NyxIdChatDelegationCredentialResolution(
+                true,
+                delegationToken));
+        }
+    }
+
+    private sealed class ExactToolCallProvider(
+        string toolName,
+        string argumentsJson = "{\"approvalCode\":\"canary\"}") : ILLMProvider
     {
         public string Name => "exact-tool-call-provider";
 
@@ -970,11 +1333,108 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
                 {
                     Id = "call-effect",
                     Name = toolName,
-                    ArgumentsJson = "{\"approvalCode\":\"canary\"}",
+                    ArgumentsJson = argumentsJson,
                 },
             };
             await Task.Yield();
         }
+    }
+
+    private sealed record DurableRetryProxyResponse(
+        HttpStatusCode StatusCode,
+        string Body);
+
+    private sealed class DurableRetryNyxIdHandler : HttpMessageHandler
+    {
+        public Dictionary<string, string> KeysByToken { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, string> CatalogsByToken { get; } = new(StringComparer.Ordinal);
+        public Queue<DurableRetryProxyResponse> ProxyResponses { get; } = new();
+        public int ProxyRequests { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            var token = request.Headers.Authorization?.Parameter ?? string.Empty;
+            var path = request.RequestUri?.AbsolutePath ?? string.Empty;
+            if (path == "/api/v1/keys")
+                return Task.FromResult(Json(KeysByToken.GetValueOrDefault(token, "{\"keys\":[]}")));
+            if (path == "/api/v1/mcp/config")
+                return Task.FromResult(Json(CatalogsByToken.GetValueOrDefault(token, "{}")));
+            if (path.StartsWith("/api/v1/proxy/", StringComparison.Ordinal))
+            {
+                ProxyRequests++;
+                var response = ProxyResponses.Dequeue();
+                return Task.FromResult(Json(response.Body, response.StatusCode));
+            }
+
+            return Task.FromResult(Json("{}", HttpStatusCode.NotFound));
+        }
+
+        private static HttpResponseMessage Json(
+            string body,
+            HttpStatusCode statusCode = HttpStatusCode.OK) => new(statusCode)
+        {
+            Content = new StringContent(body, Encoding.UTF8, "application/json"),
+        };
+    }
+
+    private sealed class RecordingExecutionPort(IAgentToolExecutionPort inner)
+        : IAgentToolExecutionPort
+    {
+        private readonly List<string> _outcomes = [];
+
+        public async Task<AgentToolExecutionOutcome> ExecuteAsync(
+            AgentToolExecutionRequest request,
+            CancellationToken ct = default)
+        {
+            var safety = request.Tool.GetCallSafety(request.ArgumentsJson);
+            var outcome = await inner.ExecuteAsync(request, ct);
+            _outcomes.Add(
+                $"tool={request.Tool.GetType().Name} " +
+                $"approvalMode={request.Tool.ApprovalMode} " +
+                $"requiresApproval={safety.RequiresApproval} " +
+                $"kind={outcome.Kind} status={outcome.Receipt?.Status} " +
+                $"approvalRequestId={outcome.Receipt?.ApprovalRequestId} " +
+                $"nyxIdApprovalMode={outcome.Receipt?.NyxIdApprovalDecisionMode} " +
+                $"errorCode={outcome.Receipt?.ErrorCode} " +
+                $"result={outcome.ResultJson}");
+            return outcome;
+        }
+
+        public string FormatOutcomes() => string.Join(" | ", _outcomes);
+    }
+
+    private sealed class AlwaysStartingAdmissionLedger : IAgentToolAdmissionLedger
+    {
+        public Task<AgentToolAdmissionResult> TryStartAsync(
+            AgentToolAdmissionFact fact,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(new AgentToolAdmissionResult(
+                AgentToolAdmissionStatus.Started));
+        }
+    }
+
+    private sealed class AppendedAuditTrail : IAuditTrailAppender
+    {
+        public Task<AuditTrailAppendResult> AppendAsync(
+            AuditRecord record,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(AuditTrailAppendResult.Appended(record.AuditId));
+    }
+
+    private sealed class StableIdentityHasher : IAuditActorIdentityHasher
+    {
+        public AuditActorIdentity Hash(string canonicalActorKey) =>
+            new("actor-hash", "key-1");
+
+        public bool Verify(
+            string canonicalActorKey,
+            string auditActorId,
+            string identityKeyId) => true;
     }
 
     private sealed class RetryEffectTool : IAgentTool, IAgentToolOperationAdmissionOwner

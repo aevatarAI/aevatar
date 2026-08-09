@@ -183,7 +183,7 @@ public sealed class NyxIdChatPlanGateDecisionsTests
         context.Caller.OwnerSubject.Should().Be(state.OwnerSubject);
         context.Caller.ResponseId.Should().Be(command.RequestId);
         context.Channel.Platform.Should().Be(NyxIdChatServiceDefaults.ServiceId);
-        context.Channel.SenderId.Should().Be(state.OwnerSubject);
+        context.Channel.SenderId.Should().BeEmpty();
         context.Channel.RegistrationScopeId.Should().Be(state.ScopeId);
         context.ExecutionOwner.Kind.Should().Be(AgentToolExecutionOwnerKind.Actor);
         context.ExecutionOwner.OwnerId.Should().Be(state.ConversationActorId);
@@ -569,7 +569,7 @@ public sealed class NyxIdChatPlanGateDecisionsTests
                 "scope-alpha"),
             Channel = new AgentToolChannelContext(
                 NyxIdChatServiceDefaults.ServiceId,
-                "owner-alpha",
+                null,
                 "scope-alpha",
                 null,
                 null),

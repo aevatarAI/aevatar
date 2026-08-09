@@ -1395,7 +1395,7 @@ public sealed class NyxIdChatTaskLifecycleTests
                         state.ScopeId),
                     Channel = new AgentToolChannelContext(
                         NyxIdChatServiceDefaults.ServiceId,
-                        state.OwnerSubject,
+                        null,
                         state.ScopeId,
                         null,
                         null),
@@ -1424,15 +1424,35 @@ public sealed class NyxIdChatTaskLifecycleTests
         ClientRequestId = $"client-{requestId}",
         CommandId = $"command-{requestId}",
         CorrelationId = $"correlation-{requestId}",
+        OwnerSubject = "owner-alpha",
         ExpectedOperationGeneration = step.Operation.Key.OperationGeneration,
         ExpectedStateVersion = 11,
-        ToolContext = new AgentToolExecutionContextPayload
+        ToolContext = (AgentToolExecutionContext.Empty with
         {
-            Credentials = new AgentToolCredentialsPayload
-            {
-                NyxIdAccessToken = "runtime-token-alpha",
-            },
-        },
+            Request = new AgentToolRequestIdentity(requestId, null),
+            Credentials = new AgentToolCredentials(
+                "runtime-token-alpha",
+                null,
+                null,
+                AgentToolNyxIdCredentialKind.SourceReadableUserBearer),
+            Caller = new AgentToolCallerContext(
+                "scope-alpha",
+                "owner-alpha",
+                requestId,
+                "scope-alpha"),
+            Channel = new AgentToolChannelContext(
+                NyxIdChatServiceDefaults.ServiceId,
+                null,
+                "scope-alpha",
+                null,
+                null),
+            NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                "nyxid",
+                string.Empty,
+                "owner-alpha",
+                "proxy"),
+            ExecutionOwner = AgentToolExecutionOwners.Actor("conversation-alpha"),
+        }).ToPayload(),
     };
 
     private static NyxIdChatOperationResultSignal NyxIdApprovalRequired(

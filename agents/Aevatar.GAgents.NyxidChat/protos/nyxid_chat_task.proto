@@ -1815,6 +1815,7 @@ message NyxIdChatRetryStepCommand {
   // values are absent from state and committed step-control events.
   aevatar.ai.AgentToolExecutionContextPayload tool_context = 12;
   aevatar.ai.LLMControlContextPayload llm_control = 13;
+  string owner_subject = 14;
 }
 
 message NyxIdChatSkipStepCommand {

@@ -781,7 +781,7 @@ public sealed class NyxIdChatTurnOperationExecutor
                     NyxIdChatEffectEvidence.NotStarted);
             }
 
-            if (!HasValidDurableRetryAuthority(command.Key, toolInput.ToolContext))
+            if (!NyxIdChatDurableRetryAuthority.IsValid(command.Key, toolInput.ToolContext))
             {
                 ClearAuthorization(session);
                 return Failure(
@@ -1639,7 +1639,7 @@ public sealed class NyxIdChatTurnOperationExecutor
             string.IsNullOrWhiteSpace(authorization.ToolDefinitionFingerprint) ||
             admission is null ||
             input.ToolContext is null ||
-            !HasValidDurableRetryAuthority(command.Key, input.ToolContext))
+            !NyxIdChatDurableRetryAuthority.IsValid(command.Key, input.ToolContext))
         {
             return false;
         }
@@ -1742,40 +1742,6 @@ public sealed class NyxIdChatTurnOperationExecutor
                 OperationAdmission: admission.Clone()),
         ];
         return true;
-    }
-
-    private static bool HasValidDurableRetryAuthority(
-        NyxIdChatOperationKey key,
-        AgentToolExecutionContextPayload? payload)
-    {
-        if (payload is null || string.IsNullOrWhiteSpace(key.ConversationActorId))
-            return false;
-
-        var context = AgentToolExecutionContextMapper.FromPayload(payload);
-        var requestId = context.Request.RequestId;
-        var scopeId = context.Caller.ScopeId;
-        var ownerSubject = context.Caller.OwnerSubject;
-        return !string.IsNullOrWhiteSpace(requestId) &&
-               (!string.IsNullOrWhiteSpace(context.Credentials.NyxIdAccessToken) ||
-                !string.IsNullOrWhiteSpace(context.Credentials.NyxIdOrgToken)) &&
-               !string.IsNullOrWhiteSpace(scopeId) &&
-               !string.IsNullOrWhiteSpace(ownerSubject) &&
-               string.Equals(context.Caller.OwnerScopeId, scopeId, StringComparison.Ordinal) &&
-               string.Equals(context.Caller.ResponseId, requestId, StringComparison.Ordinal) &&
-               string.Equals(
-                   context.Channel.Platform,
-                   NyxIdChatServiceDefaults.ServiceId,
-                   StringComparison.Ordinal) &&
-               string.Equals(context.Channel.SenderId, ownerSubject, StringComparison.Ordinal) &&
-               string.Equals(context.Channel.RegistrationScopeId, scopeId, StringComparison.Ordinal) &&
-               string.Equals(context.NyxIdAuthority.Platform, "nyxid", StringComparison.Ordinal) &&
-               string.Equals(context.NyxIdAuthority.ExternalUserId, ownerSubject, StringComparison.Ordinal) &&
-               string.Equals(context.NyxIdAuthority.Scope, "proxy", StringComparison.Ordinal) &&
-               context.ExecutionOwner.Kind == AgentToolExecutionOwnerKind.Actor &&
-               string.Equals(
-                   context.ExecutionOwner.OwnerId,
-                   key.ConversationActorId,
-                   StringComparison.Ordinal);
     }
 
     private static NeedsLlmReplyEvent BuildDurableToolReplyRequest(
