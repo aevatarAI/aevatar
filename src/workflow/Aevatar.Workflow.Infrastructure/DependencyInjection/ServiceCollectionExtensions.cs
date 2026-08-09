@@ -97,7 +97,7 @@ public static class ServiceCollectionExtensions
             ActivatorUtilities.CreateInstance<ManagedCodexExactOrnnApiSkillVerifier>(provider));
         services.TryAddTransient<
             IManagedCodexServiceApiSkillDiscoveryPort,
-            DeferredManagedServiceApiSkillDiscoveryPort>();
+            Aevatar.Workflow.Infrastructure.ExternalCapabilities.DeferredManagedServiceApiSkillDiscoveryPort>();
         services.TryAddSingleton<
             IServiceApiCapabilityFallbackPort,
             UnavailableServiceApiCapabilityFallbackPort>();
