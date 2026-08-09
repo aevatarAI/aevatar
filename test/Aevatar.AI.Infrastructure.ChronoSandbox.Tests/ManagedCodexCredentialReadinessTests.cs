@@ -426,6 +426,53 @@ public sealed class ManagedCodexCredentialReadinessTests
     }
 
     [Fact]
+    public async Task EnsureReadyAsync_WhenReplacementSecretReferenceWouldReuseCurrentReference_RejectsBeforeVaultWriteOrCurrentCleanup()
+    {
+        var projected = ReadyDescriptor();
+        projected.SecretReference.Ref = DeterministicSecretRef(Owner("user-a"), "key-replacement");
+        _query.ResolveAsync(Owner("user-a"), Arg.Any<CancellationToken>())
+            .Returns(Snapshot(projected, stateVersion: 3));
+        _nyxId.ListApiKeysAsync("user-bearer", Arg.Any<CancellationToken>())
+            .Returns(
+                Keys(Key("key-a", ["us-sandbox", "us-llm"])),
+                Keys(Key("key-replacement", ["us-sandbox", "us-llm", "us-ornn"])));
+        _nyxId.CreateApiKeyAsync(
+                "user-bearer",
+                Arg.Any<ManagedCodexNyxIdApiKeyIssueRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(IssuedKey("key-replacement"));
+        PublishConfirmedCredential(stateVersion: 4);
+
+        var act = () => _lifecycle.EnsureReadyAsync(
+            Owner("user-a"),
+            "user-bearer",
+            ManagedCodexCredentialReadinessMode.ForceRemoteValidation);
+
+        (await act.Should()
+            .ThrowAsync<ManagedCodexCredentialLifecycleException>())
+            .Which.Code.Should().Be("managed_api_key_issue_invalid");
+        await _nyxId.Received(1).CreateApiKeyAsync(
+            "user-bearer",
+            Arg.Any<ManagedCodexNyxIdApiKeyIssueRequest>(),
+            Arg.Any<CancellationToken>());
+        await _nyxId.DidNotReceive().UpdateApiKeyPolicyAsync(
+            Arg.Any<string>(),
+            Arg.Any<string>(),
+            Arg.Any<ManagedCodexNyxIdApiKeyPolicyUpdateRequest>(),
+            Arg.Any<CancellationToken>());
+        await _nyxId.DidNotReceive().RevokeApiKeyAsync(
+            "user-bearer",
+            "key-a",
+            Arg.Any<CancellationToken>());
+        await _vault.DidNotReceiveWithAnyArgs().PutAsync(default!, default);
+        await _vault.DidNotReceiveWithAnyArgs().RevokeAsync(default!, default);
+        await _commands.DidNotReceiveWithAnyArgs()
+            .CommitRotatedAsync(default!, default!, default!, default!, default);
+        await _commands.DidNotReceiveWithAnyArgs()
+            .QueueCleanupAsync(default!, default!, default);
+    }
+
+    [Fact]
     public async Task EnsureReadyAsync_WhenCredentialExpired_CreatesFreshCredential()
     {
         var expired = ReadyDescriptor();

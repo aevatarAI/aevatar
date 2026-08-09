@@ -1822,6 +1822,87 @@ public sealed class ManagedCodexCredentialLifecycleTests
     }
 
     [Fact]
+    public async Task RotateAsync_WhenReauthorizationReturnsCurrentKeyId_RejectsBeforeVaultWriteOrCurrentCleanup()
+    {
+        var current = Descriptor("key-current", "sec-current", version: 1);
+        current.OrnnApiUserServiceId = string.Empty;
+        current.OrnnApiServiceSlug = string.Empty;
+        var expiresAt = current.ExpiresAt.ToDateTimeOffset();
+        var replacement = IssuedKey(current.ApiKeyId, expiresAt);
+        var query = Substitute.For<IManagedCodexCredentialQueryPort>();
+        query.ResolveAsync(
+                Arg.Any<ExternalSubjectRef>(),
+                Arg.Any<CancellationToken>())
+            .Returns(new ManagedCodexCredentialSnapshot
+            {
+                Credential = current.Clone(),
+                StateVersion = 4,
+                LastEventId = "event-4",
+            });
+        var nyxId = Substitute.For<IManagedCodexNyxIdCredentialPort>();
+        nyxId.GetCurrentUserIdAsync("user-bearer", Arg.Any<CancellationToken>())
+            .Returns("user-a");
+        nyxId.ListUserServicesAsync("user-bearer", Arg.Any<CancellationToken>())
+            .Returns(EligibleServices());
+        nyxId.ListApiKeysAsync("user-bearer", Arg.Any<CancellationToken>())
+            .Returns(
+                [RemoteKey(current.ApiKeyId, expiresAt, ["us-sandbox", "us-llm"])],
+                [replacement.Key]);
+        nyxId.CreateApiKeyAsync(
+                "user-bearer",
+                Arg.Any<ManagedCodexNyxIdApiKeyIssueRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(replacement);
+        var vault = Substitute.For<ISecretVault>();
+        var commands = Substitute.For<IManagedCodexCredentialCommandPort>();
+        var lifecycle = CreateLifecycle(
+            new RoutingHandler(),
+            vault,
+            commands,
+            query,
+            mutationLease: new InMemoryManagedCodexCredentialMutationLease(),
+            nyxIdPort: nyxId);
+        vault.PutAsync(
+                Arg.Any<StoreSecretRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(call => new StoreSecretResult(Reference(
+                call.Arg<StoreSecretRequest>(),
+                call.Arg<StoreSecretRequest>().RequestedRef!,
+                version: 1)));
+        commands.CommitRotatedAsync(
+                current.ApiKeyId,
+                Arg.Any<ManagedCodexCredentialDescriptor>(),
+                Arg.Any<ManagedCodexCredentialCleanup>(),
+                Arg.Any<IReadOnlyList<ManagedCodexCredentialCleanup>>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Admission());
+
+        var act = () => lifecycle.RotateAsync("user-bearer", "user-a");
+
+        (await act.Should()
+            .ThrowAsync<ManagedCodexCredentialLifecycleException>())
+            .Which.Code.Should().Be("managed_api_key_issue_invalid");
+        await nyxId.Received(1).CreateApiKeyAsync(
+            "user-bearer",
+            Arg.Any<ManagedCodexNyxIdApiKeyIssueRequest>(),
+            Arg.Any<CancellationToken>());
+        await nyxId.DidNotReceive().RotateApiKeyAsync(
+            Arg.Any<string>(),
+            Arg.Any<string>(),
+            Arg.Any<CancellationToken>());
+        await nyxId.DidNotReceive().RevokeApiKeyAsync(
+            "user-bearer",
+            current.ApiKeyId,
+            Arg.Any<CancellationToken>());
+        await vault.DidNotReceiveWithAnyArgs().PutAsync(default!, default);
+        await vault.DidNotReceiveWithAnyArgs().RevokeAsync(default!, default);
+        await commands.DidNotReceiveWithAnyArgs()
+            .CommitRotatedAsync(default!, default!, default!, default!, default);
+        await commands.DidNotReceiveWithAnyArgs()
+            .QueueCleanupAsync(default!, default!, default);
+    }
+
+    [Fact]
     public async Task RotateAsync_WhenPersistedRelistContainsMalformedManagedKey_CompensatesExactIssuedKeyBeforeVaultOrActorMutation()
     {
         var current = Descriptor("key-current", "sec-current", version: 1);

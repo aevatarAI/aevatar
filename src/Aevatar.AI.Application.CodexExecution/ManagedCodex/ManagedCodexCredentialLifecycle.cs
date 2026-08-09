@@ -822,6 +822,7 @@ public sealed class ManagedCodexCredentialLifecycle(
                 IssueRequest(eligibility, expiresAt),
                 mutationCt).ConfigureAwait(false);
         }
+        ValidateReplacementIsDistinct(current.Credential, issued.Key.Id);
 
         ManagedCodexNyxIdApiKey persistedKey;
         try
@@ -861,6 +862,7 @@ public sealed class ManagedCodexCredentialLifecycle(
 
         var actorId = ManagedCodexCredentialActorIdentity.From(owner);
         var requestedRef = SecretRefFor(actorId, persistedKey.Id);
+        ValidateReplacementIsDistinct(current.Credential, persistedKey.Id, requestedRef);
         StoreSecretResult stored;
         try
         {
@@ -1407,20 +1409,24 @@ public sealed class ManagedCodexCredentialLifecycle(
         OutcomeDeadline outcomeDeadline,
         CancellationToken ct)
     {
+        var current = IsCommandableCurrent(repair.Current, owner)
+            ? repair.Current!
+            : null;
         var descriptor = await CreateFreshCredentialDescriptorAsync(
             bearerToken,
             owner,
             repair.Eligibility,
+            current,
             outcomeDeadline,
             ct).ConfigureAwait(false);
         var obsoleteCleanups = BuildObservedObsoleteCleanups(
             owner,
             repair.ApiKeyIdsToRevoke,
             descriptor);
-        if (IsCommandableCurrent(repair.Current, owner))
+        if (current is not null)
         {
             _ = await CommitRotatedForReconciliationAsync(
-                repair.Current!,
+                current,
                 descriptor,
                 obsoleteCleanups,
                 ct).ConfigureAwait(false);
@@ -1476,6 +1482,7 @@ public sealed class ManagedCodexCredentialLifecycle(
         string bearerToken,
         ExternalSubjectRef owner,
         ManagedCodexNyxIdEligibility eligibility,
+        ManagedCodexCredentialDescriptor? current,
         OutcomeDeadline outcomeDeadline,
         CancellationToken ct)
     {
@@ -1485,6 +1492,7 @@ public sealed class ManagedCodexCredentialLifecycle(
             bearerToken,
             IssueRequest(eligibility, requestedExpiresAt),
             ct).ConfigureAwait(false);
+        ValidateReplacementIsDistinct(current, issued.Key.Id);
         ManagedCodexNyxIdApiKey persistedKey;
         try
         {
@@ -1524,6 +1532,7 @@ public sealed class ManagedCodexCredentialLifecycle(
         var actorId = ManagedCodexCredentialActorIdentity.From(owner);
         var expiresAt = persistedKey.ExpiresAt!.Value;
         var requestedRef = SecretRefFor(actorId, persistedKey.Id);
+        ValidateReplacementIsDistinct(current, persistedKey.Id, requestedRef);
         StoreSecretResult stored;
         try
         {
@@ -2610,6 +2619,32 @@ public sealed class ManagedCodexCredentialLifecycle(
                 StringComparison.Ordinal),
             RequestedAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
         };
+
+    private static void ValidateReplacementIsDistinct(
+        ManagedCodexCredentialDescriptor? current,
+        string? apiKeyId,
+        string? secretRef = null)
+    {
+        if (current is null)
+            return;
+
+        if (SameNonBlankTrimmed(current.ApiKeyId, apiKeyId) ||
+            SameNonBlankTrimmed(current.SecretReference?.Ref, secretRef))
+        {
+            throw Failure(
+                "managed_api_key_issue_invalid",
+                "NyxID returned a managed Codex replacement that is not distinct from the current credential.");
+        }
+    }
+
+    private static bool SameNonBlankTrimmed(string? left, string? right)
+    {
+        var normalizedLeft = left?.Trim();
+        var normalizedRight = right?.Trim();
+        return !string.IsNullOrWhiteSpace(normalizedLeft) &&
+               !string.IsNullOrWhiteSpace(normalizedRight) &&
+               string.Equals(normalizedLeft, normalizedRight, StringComparison.Ordinal);
+    }
 
     private static string SecretRefFor(string ownerScopeKey, string apiKeyId)
     {
