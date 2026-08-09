@@ -79,13 +79,14 @@ public sealed class NyxIdChatNeedsYouContinuationTests
         using var response = JsonDocument.Parse(toolMessage.Content);
         var root = response.RootElement;
         root.GetProperty("type").GetString().Should().Be("ask_user_response");
+        root.GetProperty("source_input_request_id").GetString().Should().Be("input-alpha");
         root.GetProperty("selected_options").EnumerateArray()
             .Select(static option => option.GetProperty("option_id").GetString())
             .Should().Equal("option-singapore", "option-frankfurt");
     }
 
     [Fact]
-    public async Task InputContinuation_ShouldInjectExactFreeTextOnlyIntoTransientToolResult()
+    public async Task InputContinuation_ShouldInjectExactFreeTextAndSourceIdentityIntoTransientToolResult()
     {
         const string rawAnswer =
             "Singapore; budget SGD 200; launch 2026-08-20. Keep defaults editable.";
@@ -124,8 +125,124 @@ public sealed class NyxIdChatNeedsYouContinuationTests
             message.Role == "tool" && message.ToolCallId == "call-ask-user-alpha").Which;
         using var response = JsonDocument.Parse(toolMessage.Content);
         response.RootElement.GetProperty("type").GetString().Should().Be("ask_user_response");
+        response.RootElement.GetProperty("source_input_request_id").GetString().Should()
+            .Be("input-free-text");
         response.RootElement.GetProperty("free_text").GetString().Should().Be(rawAnswer);
         response.RootElement.TryGetProperty("selected_options", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task NumericInputContinuation_ShouldDriveExactActorConditionProposal()
+    {
+        var generation = new ThresholdConditionGenerationExecutor();
+        var executor = new NyxIdChatTurnOperationExecutor(generation);
+        var session = new NyxIdChatTransientExecutionSession();
+        await executor.ExecuteAsync(
+            InitialLlmCommand(),
+            session,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+        var resolution = ResolveNumericInput();
+
+        var execution = await executor.ExecuteAsync(
+            resolution.NextCommand!,
+            session,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        execution.Result.ResultCase.Should().Be(
+            NyxIdChatOperationResultSignal.ResultOneofCase.Llm);
+        var conditionCall = execution.Result.Llm.ToolCalls.Should().ContainSingle().Which;
+        conditionCall.ToolName.Should().Be(NyxIdChatConditionEvaluateContract.ToolName);
+        NyxIdChatConditionEvaluateContract.TryParse(
+            conditionCall.ArgumentsJson,
+            out var proposal).Should().BeTrue();
+        proposal.SourceInputRequestId.Should().Be("input-threshold");
+        generation.SourceInputRequestId.Should().Be("input-threshold");
+
+        var condition = NyxIdChatTaskLifecycle.ApplyOperationResult(
+            resolution.State,
+            execution.Result,
+            Now());
+
+        condition.Outcome.Should().Be(NyxIdChatTransitionOutcome.Accepted);
+        condition.NextCommand.Should().NotBeNull();
+        condition.NextCommand!.InputCase.Should().Be(
+            NyxIdChatOperationDispatchCommand.InputOneofCase.ConditionContinuation);
+        condition.NextCommand.ConditionContinuation.Condition.SourceInputRequestId.Should()
+            .Be("input-threshold");
+        condition.NextCommand.ConditionContinuation.Condition.EffectiveThreshold.Should().Be(75);
+        NyxIdChatTurnOperationDispatchPort.MayDispatchExternalEffect(condition.NextCommand)
+            .Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task InputContinuationWithoutRequestIdentity_ShouldFailClosed()
+    {
+        var generation = new AskUserGenerationExecutor();
+        var executor = new NyxIdChatTurnOperationExecutor(generation);
+        var session = new NyxIdChatTransientExecutionSession();
+        await executor.ExecuteAsync(
+            InitialLlmCommand(),
+            session,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        var execution = await executor.ExecuteAsync(
+            new NyxIdChatOperationDispatchCommand
+            {
+                Key = Key("step-input-missing-identity", "operation-input-missing-identity"),
+                InputContinuation = new NyxIdChatInputContinuationInput
+                {
+                    RequestId = " ",
+                    ToolCallId = "call-ask-user-alpha",
+                    Answer = new NyxIdChatInputAnswer { FreeText = "75" },
+                    ToolContext = ReplacementToolContext("refreshed-input-token"),
+                },
+            },
+            session,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        execution.Result.ResultCase.Should().Be(
+            NyxIdChatOperationResultSignal.ResultOneofCase.Failure);
+        execution.Result.Failure.FailureCode.Should().Be(
+            NyxIdChatTurnOperationExecutor.ToolCapabilityLostCode);
+        execution.Result.Failure.ExternalEffect.Should().Be(
+            NyxIdChatEffectEvidence.NotStarted);
+        generation.LlmStates.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task NumericInputContinuationWithWrongSourceIdentity_ShouldFailClosedInActorLifecycle()
+    {
+        var generation = new ThresholdConditionGenerationExecutor();
+        var executor = new NyxIdChatTurnOperationExecutor(generation);
+        var session = new NyxIdChatTransientExecutionSession();
+        await executor.ExecuteAsync(
+            InitialLlmCommand(),
+            session,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+        var resolution = ResolveNumericInput();
+        resolution.NextCommand!.InputContinuation.RequestId = "input-other";
+
+        var execution = await executor.ExecuteAsync(
+            resolution.NextCommand,
+            session,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+        var rejected = NyxIdChatTaskLifecycle.ApplyOperationResult(
+            resolution.State,
+            execution.Result,
+            Now());
+
+        generation.SourceInputRequestId.Should().Be("input-other");
+        rejected.ReasonCode.Should().Be(NyxIdChatTaskLifecycle.ConditionSourceStale);
+        rejected.NextCommand.Should().BeNull();
+        rejected.State.ActiveTask.Steps.Should().NotContain(step =>
+            step.Kind == NyxIdChatStepKind.Condition);
+        rejected.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Failed);
     }
 
     [Fact]
@@ -631,6 +748,76 @@ public sealed class NyxIdChatNeedsYouContinuationTests
             Now());
     }
 
+    private static NyxIdChatNeedsYouDecision<NyxIdChatInputResolutionState> ResolveNumericInput()
+    {
+        var state = new NyxIdChatConversationGAgentState
+        {
+            ScopeId = "scope-alpha",
+            ConversationActorId = "conversation-alpha",
+            ActiveTurn = new NyxIdChatTurnState
+            {
+                TurnId = "turn-alpha",
+                TaskId = "task-alpha",
+                Status = NyxIdChatTurnStatus.Active,
+            },
+            ActiveTask = new NyxIdChatTaskState
+            {
+                TurnId = "turn-alpha",
+                TaskId = "task-alpha",
+                Status = NyxIdChatTaskStatus.Active,
+                ActiveStepId = "step-input-threshold",
+                Steps =
+                {
+                    new NyxIdChatTaskStepState
+                    {
+                        StepId = "step-input-threshold",
+                        Order = 1,
+                        Kind = NyxIdChatStepKind.Input,
+                        Status = NyxIdChatStepStatus.Waiting,
+                        Required = true,
+                        Source = new NyxIdChatStepSource
+                        {
+                            Input = new NyxIdChatInputStepSource
+                            {
+                                RequestId = "input-threshold",
+                            },
+                        },
+                    },
+                },
+            },
+            PendingInput = new NyxIdChatPendingInputState
+            {
+                RequestId = "input-threshold",
+                TurnId = "turn-alpha",
+                TaskId = "task-alpha",
+                StepId = "step-input-threshold",
+                ToolCallId = "call-ask-user-alpha",
+                Prompt = "Choose the threshold.",
+                AllowFreeText = true,
+                NumericThreshold = new NyxIdChatNumericThresholdInputSpec
+                {
+                    SuggestedValue = 70,
+                    MinimumValue = 0,
+                    MaximumValue = 100,
+                },
+            },
+        };
+        return NyxIdChatNeedsYouDecisions.ResolveInput(
+            state,
+            new NyxIdChatInputResolveCommand
+            {
+                ScopeId = "scope-alpha",
+                ConversationActorId = "conversation-alpha",
+                RequestId = "input-threshold",
+                ClientRequestId = "client-input-threshold",
+                Answer = new NyxIdChatInputAnswer { FreeText = "75" },
+                ExpectedStateVersion = 10,
+                ToolContext = ReplacementToolContext("refreshed-input-threshold-token"),
+            },
+            currentStateVersion: 10,
+            Now());
+    }
+
     private static NyxIdChatConversationGAgentState ApprovalWaitingState() => new()
     {
         ScopeId = "scope-alpha",
@@ -808,6 +995,69 @@ public sealed class NyxIdChatNeedsYouContinuationTests
             return Task.FromResult(new AgentRunLlmStepExecution(
                 LlmContinuation(request, result),
                 AuthorizedToolStep: null));
+        }
+    }
+
+    private sealed class ThresholdConditionGenerationExecutor : GenerationExecutorBase
+    {
+        public string SourceInputRequestId { get; private set; } = string.Empty;
+
+        public override Task<AgentRunLlmStepExecution> BuildLlmStepExecutionAsync(
+            AgentRunReplyStepExecutionRequest request,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            var firstRound = request.StepState.Round == 0;
+            var result = new AgentRunLlmStepResult
+            {
+                Content = firstRound ? "choose threshold" : "evaluate threshold",
+                AccumulatedText = firstRound ? "choose threshold" : "evaluate threshold",
+                FinishReason = "tool_calls",
+                HasStreamedTextContent = true,
+            };
+            var call = new AgentRunToolCall
+            {
+                Id = firstRound ? "call-ask-user-alpha" : "call-condition-threshold",
+                Name = firstRound
+                    ? NyxIdChatAskUserContract.ToolName
+                    : NyxIdChatConditionEvaluateContract.ToolName,
+                ArgumentsJson = "{}",
+            };
+            if (!firstRound)
+            {
+                var inputResult = request.StepState.Messages.Should().ContainSingle(message =>
+                    message.Role == "tool" &&
+                    message.ToolCallId == "call-ask-user-alpha").Which;
+                using var response = JsonDocument.Parse(inputResult.Content);
+                SourceInputRequestId = response.RootElement
+                    .GetProperty("source_input_request_id")
+                    .GetString()!;
+                call.ArgumentsJson = JsonSerializer.Serialize(new
+                {
+                    source_input_request_id = SourceInputRequestId,
+                    observed_value = 80,
+                    guarded_tool_name = "repository_update",
+                });
+            }
+            result.ToolCalls.Add(call);
+            var safety = firstRound
+                ? null
+                : new[]
+                {
+                    new AgentRunAuthorizedToolCallSafety(
+                        call.Id,
+                        call.Name,
+                        call.ArgumentsJson,
+                        new AgentToolCallSafety(
+                            RequiresApproval: false,
+                            IsReadOnly: true,
+                            IsDestructive: false),
+                        SideEffectKind: string.Empty),
+                };
+            return Task.FromResult(new AgentRunLlmStepExecution(
+                LlmContinuation(request, result),
+                AuthorizedToolStep: null,
+                safety));
         }
     }
 

@@ -1070,6 +1070,10 @@ public sealed class NyxIdChatTurnOperationExecutor
     {
         var input = command.InputContinuation;
         if (input?.Answer is null ||
+            string.IsNullOrWhiteSpace(input.RequestId) ||
+            input.Answer.AnswerCase is not
+                (NyxIdChatInputAnswer.AnswerOneofCase.FreeText or
+                 NyxIdChatInputAnswer.AnswerOneofCase.Selection) ||
             session.StepState is null ||
             session.Request is null ||
             session.StepState.PendingToolCalls.Count != 1 ||
@@ -1417,11 +1421,13 @@ public sealed class NyxIdChatTurnOperationExecutor
             NyxIdChatInputAnswer.AnswerOneofCase.FreeText => JsonSerializer.Serialize(new
             {
                 type = "ask_user_response",
+                source_input_request_id = input.RequestId,
                 free_text = input.Answer.FreeText,
             }),
             NyxIdChatInputAnswer.AnswerOneofCase.Selection => JsonSerializer.Serialize(new
             {
                 type = "ask_user_response",
+                source_input_request_id = input.RequestId,
                 selected_options = input.SelectedOptions.Select(static option => new
                 {
                     option_id = option.OptionId,
