@@ -42,7 +42,10 @@ public sealed class NyxIdChatConversationGAgent
         TimeSpan.FromSeconds(5);
     internal static readonly TimeSpan OperationStepChangedCadence = TimeSpan.FromSeconds(30);
     internal static readonly TimeSpan OperationStallThreshold = TimeSpan.FromSeconds(120);
-    private const int ResultAcknowledgementFenceLimit = 64;
+    private const string PostconditionResultRejectedCode =
+        "NYXID_CHAT_POSTCONDITION_RESULT_REJECTED";
+    private const string PostconditionResultRejectedMessage =
+        "The NyxID action postcondition result was rejected.";
 
     public static string ProjectionKind => "nyxid-chat-conversation";
 
@@ -2485,6 +2488,8 @@ public sealed class NyxIdChatConversationGAgent
         if (!TryResolveCurrentOperation(signal.Key, out _))
             return;
 
+        var acknowledgementRequired = RequiresResultAcknowledgement(State, signal);
+        var committedSignal = signal;
         var now = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow());
         var lateEvidence = NyxIdChatControlCommands.ReconcileLateOperationEvidence(
             State,
@@ -2509,7 +2514,8 @@ public sealed class NyxIdChatConversationGAgent
                     now);
             }
             lateState = NyxIdChatNeedsYouDecisions.RefreshAttention(lateState);
-            RememberResultAcknowledgementFence(lateState, signal);
+            if (acknowledgementRequired)
+                RememberResultAcknowledgementFence(lateState, signal);
             await PersistDomainEventAsync(new NyxIdChatLateOperationEvidenceCommittedEvent
             {
                 Key = signal.Key.Clone(),
@@ -2522,7 +2528,8 @@ public sealed class NyxIdChatConversationGAgent
                 CommittedAt = now.Clone(),
                 State = lateState,
             }, CancellationToken.None);
-            await DispatchOperationResultAcknowledgementAsync(signal, CancellationToken.None);
+            if (acknowledgementRequired)
+                await DispatchOperationResultAcknowledgementAsync(signal, CancellationToken.None);
             if (CanDispatchPendingSteeringContinuation(State))
                 await DispatchPendingSteeringContinuationAsync(CancellationToken.None);
             if (verification is not null)
@@ -2547,35 +2554,42 @@ public sealed class NyxIdChatConversationGAgent
                 State,
                 signal,
                 now);
-            if (!actionDecision.ShouldCommit)
-                return;
-
-            var actionState = NyxIdChatNeedsYouDecisions.RefreshAttention(actionDecision.State);
-            var actionTerminalPrepared = PrepareHistoryTerminalOutbox(actionState);
-            RememberResultAcknowledgementFence(actionState, signal);
-
-            await PersistDomainEventAsync(new NyxIdChatOperationReconciledEvent
+            if (actionDecision.ShouldCommit)
             {
-                Result = BuildDurableResultEvidence(signal),
-                Task = actionState.ActiveTask.Clone(),
-                Turn = actionState.ActiveTurn.Clone(),
-                ProgressSequence = actionState.ProgressSequence,
-                State = actionState,
-            }, CancellationToken.None);
-            await DispatchOperationResultAcknowledgementAsync(signal, CancellationToken.None);
+                var actionState = NyxIdChatNeedsYouDecisions.RefreshAttention(actionDecision.State);
+                var actionTerminalPrepared = PrepareHistoryTerminalOutbox(actionState);
+                if (acknowledgementRequired)
+                    RememberResultAcknowledgementFence(actionState, signal);
 
-            if (actionTerminalPrepared)
-                await DispatchPendingHistoryTerminalAsync();
+                await PersistDomainEventAsync(new NyxIdChatOperationReconciledEvent
+                {
+                    Result = BuildDurableResultEvidence(signal),
+                    Task = actionState.ActiveTask.Clone(),
+                    Turn = actionState.ActiveTurn.Clone(),
+                    ProgressSequence = actionState.ProgressSequence,
+                    State = actionState,
+                }, CancellationToken.None);
+                if (acknowledgementRequired)
+                    await DispatchOperationResultAcknowledgementAsync(signal, CancellationToken.None);
 
-            if (!actionDecision.ShouldDispatch || actionDecision.NextCommand is null)
+                if (actionTerminalPrepared)
+                    await DispatchPendingHistoryTerminalAsync();
+
+                if (!actionDecision.ShouldDispatch || actionDecision.NextCommand is null)
+                    return;
+
+                await DispatchAuthorizedOperationAsync(
+                        actionDecision.NextCommand,
+                        ActiveInboundEnvelope?.Propagation?.CorrelationId ??
+                        signal.Key.OperationId,
+                        now);
                 return;
+            }
 
-            await DispatchAuthorizedOperationAsync(
-                    actionDecision.NextCommand,
-                    ActiveInboundEnvelope?.Propagation?.CorrelationId ??
-                    signal.Key.OperationId,
-                    now);
-            return;
+            committedSignal = BuildRejectedPostconditionResult(
+                signal,
+                actionDecision.ReasonCode,
+                actionDecision.SafeMessage);
         }
 
         if (signal.Tool?.Receipt is
@@ -2623,14 +2637,30 @@ public sealed class NyxIdChatConversationGAgent
                         ExternalEffect = NyxIdChatEffectEvidence.NotApplied,
                     },
                 };
+                committedSignal = signal;
             }
         }
 
         var decision = NyxIdChatTaskLifecycle.ApplyOperationResult(
             State,
-            signal,
+            committedSignal,
             now,
             _planGateConfirmationThresholdSeconds);
+        if (decision.Outcome != NyxIdChatTransitionOutcome.Accepted &&
+            acknowledgementRequired &&
+            committedSignal.ResultCase !=
+            NyxIdChatOperationResultSignal.ResultOneofCase.Failure)
+        {
+            committedSignal = BuildRejectedPostconditionResult(
+                signal,
+                decision.ReasonCode,
+                decision.SafeMessage);
+            decision = NyxIdChatTaskLifecycle.ApplyOperationResult(
+                State,
+                committedSignal,
+                now,
+                _planGateConfirmationThresholdSeconds);
+        }
         if (decision.Outcome != NyxIdChatTransitionOutcome.Accepted)
             return;
 
@@ -2656,9 +2686,9 @@ public sealed class NyxIdChatConversationGAgent
         }
         nextState.ProgressSequence = State.ProgressSequence + 1;
         nextState.UpdatedAt = now.Clone();
-        var terminalText = signal.ResultCase ==
+        var terminalText = committedSignal.ResultCase ==
                            NyxIdChatOperationResultSignal.ResultOneofCase.Llm
-            ? signal.Llm.Content
+            ? committedSignal.Llm.Content
             : null;
         var terminalPrepared = !fencedVerification &&
                                PrepareHistoryTerminalOutbox(nextState, terminalText);
@@ -2672,18 +2702,20 @@ public sealed class NyxIdChatConversationGAgent
                 planGateAdmission.Admission.Clone();
             PreparePlanGateAdmissionDelivery(nextState, planGateAdmission);
         }
-        RememberResultAcknowledgementFence(nextState, signal);
+        if (acknowledgementRequired)
+            RememberResultAcknowledgementFence(nextState, signal);
 
         await PersistDomainEventAsync(new NyxIdChatOperationReconciledEvent
         {
-            Result = BuildDurableResultEvidence(signal),
+            Result = BuildDurableResultEvidence(committedSignal),
             Task = nextState.ActiveTask.Clone(),
             Turn = nextState.ActiveTurn.Clone(),
             ProgressSequence = nextState.ProgressSequence,
             State = nextState,
             RefinesExistingTerminal = fencedVerification,
         }, CancellationToken.None);
-        await DispatchOperationResultAcknowledgementAsync(signal, CancellationToken.None);
+        if (acknowledgementRequired)
+            await DispatchOperationResultAcknowledgementAsync(signal, CancellationToken.None);
         if (planGateAdmission is not null)
         {
             await DispatchPendingPlanGateAdmissionDeliveryAsync(CancellationToken.None);
@@ -5303,11 +5335,8 @@ public sealed class NyxIdChatConversationGAgent
         NyxIdChatOperationResultSignal result,
         CancellationToken ct)
     {
-        if (result.ResultCase !=
-            NyxIdChatOperationResultSignal.ResultOneofCase.ActionPostcondition)
-        {
+        if (!IsCredentialFreePostconditionTerminal(result))
             return;
-        }
 
         var key = result.Key ?? throw new InvalidOperationException(
             "A committed operation result acknowledgement requires an operation key.");
@@ -5341,11 +5370,8 @@ public sealed class NyxIdChatConversationGAgent
         NyxIdChatConversationGAgentState state,
         NyxIdChatOperationResultSignal result)
     {
-        if (result.ResultCase !=
-            NyxIdChatOperationResultSignal.ResultOneofCase.ActionPostcondition)
-        {
+        if (!RequiresResultAcknowledgement(state, result))
             return;
-        }
 
         var digest = ComputeResultDigest(result);
         if (state.ResultAcknowledgementFences.Any(fence =>
@@ -5363,17 +5389,13 @@ public sealed class NyxIdChatConversationGAgent
                 Key = result.Key.Clone(),
                 ResultSha256 = ByteString.CopyFrom(digest),
             });
-        while (state.ResultAcknowledgementFences.Count > ResultAcknowledgementFenceLimit)
-            state.ResultAcknowledgementFences.RemoveAt(0);
     }
 
     private static bool HasResultAcknowledgementFence(
         NyxIdChatConversationGAgentState state,
         NyxIdChatOperationResultSignal result)
     {
-        if (result.Key is null ||
-            result.ResultCase !=
-            NyxIdChatOperationResultSignal.ResultOneofCase.ActionPostcondition)
+        if (result.Key is null || !IsCredentialFreePostconditionTerminal(result))
             return false;
 
         var digest = ComputeResultDigest(result);
@@ -5384,8 +5406,45 @@ public sealed class NyxIdChatConversationGAgent
                 digest));
     }
 
+    private static bool RequiresResultAcknowledgement(
+        NyxIdChatConversationGAgentState state,
+        NyxIdChatOperationResultSignal result) =>
+        result.Key is not null &&
+        IsCredentialFreePostconditionTerminal(result) &&
+        state.ActiveTask?.Steps.Any(step =>
+            step.Kind == NyxIdChatStepKind.Postcondition &&
+            KeysEqual(step.Operation?.Key, result.Key)) == true;
+
+    private static bool IsCredentialFreePostconditionTerminal(
+        NyxIdChatOperationResultSignal result) =>
+        result.ResultCase is
+            NyxIdChatOperationResultSignal.ResultOneofCase.ActionPostcondition or
+            NyxIdChatOperationResultSignal.ResultOneofCase.ToolVerification or
+            NyxIdChatOperationResultSignal.ResultOneofCase.Failure;
+
     private static byte[] ComputeResultDigest(NyxIdChatOperationResultSignal result) =>
         SHA256.HashData(result.ToByteArray());
+
+    private static NyxIdChatOperationResultSignal BuildRejectedPostconditionResult(
+        NyxIdChatOperationResultSignal result,
+        string reasonCode,
+        string safeMessage) =>
+        new()
+        {
+            Key = result.Key?.Clone(),
+            Failure = new NyxIdChatOperationFailure
+            {
+                FailureCode = string.IsNullOrWhiteSpace(reasonCode)
+                    ? PostconditionResultRejectedCode
+                    : reasonCode,
+                SafeMessage = string.IsNullOrWhiteSpace(safeMessage)
+                    ? string.IsNullOrWhiteSpace(result.ActionPostcondition?.SafeMessage)
+                        ? PostconditionResultRejectedMessage
+                        : result.ActionPostcondition.SafeMessage
+                    : safeMessage,
+                ExternalEffect = NyxIdChatEffectEvidence.NotApplied,
+            },
+        };
 
     private static bool KeysEqual(NyxIdChatOperationKey? left, NyxIdChatOperationKey? right) =>
         left is not null &&

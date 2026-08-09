@@ -1110,9 +1110,11 @@ message NyxIdChatConversationGAgentState {
   // Owner-only, one-shot canary fact. The actor is the sole authority; only a
   // safe status projection leaves this state boundary.
   NyxIdChatCanaryEffectFaultState canary_effect_fault = 42;
-  // Bounded exact-result fences. A committed parent result can acknowledge a
-  // child redelivery without re-running reconciliation, while a different
-  // payload or operation generation remains fenced out.
+  // Exact committed-result receipts. They are retained until an explicit
+  // child delivery-confirmation protocol can prove that replay authority is no
+  // longer needed. Each receipt is credential-free (typed postcondition
+  // terminal identity plus a SHA-256 digest); correctness must not depend on
+  // evicting an older receipt from a long-lived conversation actor.
   repeated NyxIdChatOperationResultAcknowledgementFence result_acknowledgement_fences = 43;
 }
 
@@ -1302,10 +1304,11 @@ message NyxIdChatTurnGAgentState {
   string canary_effect_fault_approval_subject_id = 35;
   string canary_effect_fault_tool_call_id = 36;
   string canary_effect_fault_tool_name = 37;
-  // Durable ActionPostcondition-only result outbox. This typed result contains
-  // no provider raw response, tool arguments, LLM text, or credentials. The
-  // child clears it only after the authoritative conversation actor confirms
-  // that this exact result committed.
+  // Durable postcondition result outbox. Only ActionPostcondition,
+  // ToolVerification, and sanitized Failure variants are admitted; provider
+  // raw responses, tool arguments, LLM text, and credentials are forbidden.
+  // The child clears it only after the authoritative conversation actor
+  // confirms that this exact result committed.
   NyxIdChatOperationResultSignal pending_result = 38;
   int32 result_delivery_attempt = 39;
 }
@@ -1415,7 +1418,7 @@ message NyxIdChatTurnOperationCompletedEvent {
   NyxIdChatEffectEvidence external_effect = 5;
   google.protobuf.Timestamp completed_at = 6;
   string provider_resource_id = 7;
-  // Populated only for the credential-free ActionPostcondition result that
+  // Populated only for a credential-free postcondition terminal result that
   // must survive accepted-but-uncommitted parent delivery.
   NyxIdChatOperationResultSignal result = 8;
 }

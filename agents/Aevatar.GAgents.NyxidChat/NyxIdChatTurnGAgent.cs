@@ -893,8 +893,8 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
             ProviderResourceId = result.Tool?.Receipt?.ProviderResourceId ?? string.Empty,
         };
         var requiresParentCommitAcknowledgement =
-            result.ResultCase ==
-            NyxIdChatOperationResultSignal.ResultOneofCase.ActionPostcondition;
+            State.OperationKind == NyxIdChatStepKind.Postcondition &&
+            IsCredentialFreePostconditionTerminal(result);
         if (requiresParentCommitAcknowledgement)
             completed.Result = result.Clone();
         await PersistDomainEventAsync(completed, CancellationToken.None);
@@ -1118,6 +1118,13 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
                 DispatchFailedMessage,
                 NyxIdChatEffectEvidence.NotApplied);
     }
+
+    private static bool IsCredentialFreePostconditionTerminal(
+        NyxIdChatOperationResultSignal result) =>
+        result.ResultCase is
+            NyxIdChatOperationResultSignal.ResultOneofCase.ActionPostcondition or
+            NyxIdChatOperationResultSignal.ResultOneofCase.ToolVerification or
+            NyxIdChatOperationResultSignal.ResultOneofCase.Failure;
 
     private static NyxIdChatTurnGAgentState ApplyAdmitted(
         NyxIdChatTurnGAgentState current,

@@ -840,6 +840,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
                 },
             }));
         await originalOperationDispatch.DeliverPendingSignalsAsync(original);
+        await AcknowledgePendingResultAsync(original);
         original.State.ResultDelivered.Should().BeTrue();
         original.State.OperationKind.Should().Be(NyxIdChatStepKind.Postcondition);
         original.State.ExternalEffect.Should().Be(NyxIdChatEffectEvidence.NotApplied);
@@ -912,6 +913,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
                 },
             }));
         await operationDispatch.DeliverPendingSignalsAsync(original);
+        await AcknowledgePendingResultAsync(original);
         original.State.ResultDelivered.Should().BeTrue();
         original.State.ExternalEffect.Should().Be(NyxIdChatEffectEvidence.NotApplied);
 
@@ -1072,6 +1074,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
                 },
             }));
         await operationDispatch.DeliverPendingSignalsAsync(original);
+        await AcknowledgePendingResultAsync(original);
 
         var arguments = JsonParser.Default.Parse<Struct>("{\"value\":1}");
         var continuation = PlanGateContinuation(
@@ -2798,6 +2801,18 @@ public sealed partial class NyxIdChatTurnGAgentTests
             OperationId = operationId,
             OperationGeneration = generation,
         };
+
+    private static Task AcknowledgePendingResultAsync(NyxIdChatTurnGAgent agent)
+    {
+        var result = agent.State.PendingResult ?? throw new InvalidOperationException(
+            "The turn must retain a pending postcondition result before acknowledgement.");
+        return agent.HandleOperationResultAcknowledgedAsync(
+            new NyxIdChatTurnOperationResultAcknowledgedSignal
+            {
+                Key = result.Key.Clone(),
+                ResultSha256 = ByteString.CopyFrom(SHA256.HashData(result.ToByteArray())),
+            });
+    }
 
     private static async Task ExecutePlanGateInitialLlmAsync(
         NyxIdChatTurnOperationExecutor executor,
