@@ -1125,9 +1125,14 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             if (!IsCurrentStepResult(command.RunId, command.CorrelationId, command.Attempt, command.StepIndex))
                 return;
 
+            var toolStepResult = RestoreApprovedToolReceiptIdentity(
+                State.GenerationStep!,
+                State.PendingToolApproval,
+                command.ToolStepResult!,
+                command.StepIndex);
             var hasPendingApproval = TryBuildPendingToolApproval(
                 State.GenerationStep!,
-                command.ToolStepResult!,
+                toolStepResult,
                 out var pendingApproval,
                 out var identityFailure);
             if (hasPendingApproval)
@@ -1147,7 +1152,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                 return;
             }
 
-            if (command.ToolStepResult!.ToolReceipts.Any(static receipt =>
+            if (toolStepResult.ToolReceipts.Any(static receipt =>
                     receipt.Status == AgentToolReceiptStatus.ApprovalRequired))
             {
                 _logger.LogWarning(
@@ -1160,8 +1165,8 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                 return;
             }
 
-            workflowRunDelivery = TryResolveWorkflowRunDelivery(command.ToolStepResult!);
-            await PersistStepStateAsync(ApplyToolStepResult(State.GenerationStep!, command.ToolStepResult!, command.StepIndex));
+            workflowRunDelivery = TryResolveWorkflowRunDelivery(toolStepResult);
+            await PersistStepStateAsync(ApplyToolStepResult(State.GenerationStep!, toolStepResult, command.StepIndex));
         }
         else if (!IsCurrentStepRequest(command.RunId, command.CorrelationId, command.Attempt, command.StepIndex))
         {
@@ -1777,6 +1782,59 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         if (result.AdvanceRound)
             next.Round++;
         return next;
+    }
+
+    private static AgentRunToolStepResult RestoreApprovedToolReceiptIdentity(
+        AgentRunReplyStepState current,
+        AgentRunPendingToolApprovalState? pending,
+        AgentRunToolStepResult result,
+        int completedStepIndex)
+    {
+        if (pending is not { Decision: AgentRunToolApprovalDecision.Approved } ||
+            string.IsNullOrWhiteSpace(pending.ApprovalRequestId) ||
+            !string.Equals(pending.RunId, current.RunId, StringComparison.Ordinal) ||
+            !string.Equals(pending.CorrelationId, current.CorrelationId, StringComparison.Ordinal) ||
+            pending.Attempt != current.Attempt ||
+            pending.StepIndex != current.NextStepIndex ||
+            completedStepIndex != pending.StepIndex + 1 ||
+            current.PendingToolCalls.Count != 1)
+        {
+            return result;
+        }
+
+        var call = current.PendingToolCalls[0];
+        if (!string.Equals(call.Id, pending.ToolCallId, StringComparison.Ordinal) ||
+            !string.Equals(call.Name, pending.ToolName, StringComparison.Ordinal) ||
+            !string.Equals(
+                AgentToolArgumentsDigest.ComputeSha256(call.ArgumentsJson ?? string.Empty),
+                pending.ArgumentsSha256,
+                StringComparison.Ordinal))
+        {
+            return result;
+        }
+
+        var matchingReceiptIndex = -1;
+        for (var index = 0; index < result.ToolReceipts.Count; index++)
+        {
+            var receipt = result.ToolReceipts[index];
+            if (receipt.Status != AgentToolReceiptStatus.Success ||
+                !string.Equals(receipt.CallId, pending.ToolCallId, StringComparison.Ordinal) ||
+                !string.Equals(receipt.ToolName, pending.ToolName, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (matchingReceiptIndex >= 0)
+                return result;
+            matchingReceiptIndex = index;
+        }
+
+        if (matchingReceiptIndex < 0)
+            return result;
+
+        var restored = result.Clone();
+        restored.ToolReceipts[matchingReceiptIndex].ApprovalRequestId = pending.ApprovalRequestId;
+        return restored;
     }
 
     private WorkflowRunBackgroundDeliveryReceipt? TryResolveWorkflowRunDelivery(
