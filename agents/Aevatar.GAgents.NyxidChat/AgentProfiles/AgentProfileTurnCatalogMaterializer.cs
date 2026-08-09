@@ -460,22 +460,40 @@ public sealed class AgentProfileTurnCatalogMaterializer
             return null;
         }
 
-        var hasProfileServiceConnectMember = profile.Members.Any(member =>
-            string.Equals(
-                member.IntentId,
-                NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
-                StringComparison.Ordinal));
-        var builtInServiceConnectMember = includeBuiltInServiceConnectIntent &&
-                                          !hasProfileServiceConnectMember
-            ? CreateBuiltInServiceConnectMember()
-            : null;
-        var maximumProfileCandidates = builtInServiceConnectMember is null ? 32 : 31;
-        var candidates = profile.Members
-            .Take(maximumProfileCandidates)
-            .Concat(builtInServiceConnectMember is null
-                ? []
-                : [builtInServiceConnectMember])
-            .ToArray();
+        if (includeBuiltInServiceConnectIntent)
+        {
+            var serviceConnectMember = profile.Members.FirstOrDefault(member =>
+                                           string.Equals(
+                                               member.IntentId,
+                                               NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
+                                               StringComparison.Ordinal)) ??
+                                       CreateBuiltInServiceConnectMember();
+            var serviceConnectResult = await ClassifyAsync(
+                userMessage,
+                [NyxIdChatTurnIntentClassifier.ServiceConnectCandidate],
+                profile.ClassifierTimeoutMs,
+                ct);
+            if (serviceConnectResult.Status == AgentProfileTurnClassificationStatus.Matched &&
+                string.Equals(
+                    serviceConnectResult.IntentId,
+                    NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
+                    StringComparison.Ordinal))
+            {
+                diagnostics.Add(new AgentProfileTurnDiagnostic(
+                    AgentProfileTurnDiagnosticCode.ClassifierMatched,
+                    serviceConnectMember.IntentId));
+                return serviceConnectMember;
+            }
+            if (serviceConnectResult.Status != AgentProfileTurnClassificationStatus.NoMatch)
+            {
+                diagnostics.Add(new AgentProfileTurnDiagnostic(
+                    AgentProfileTurnDiagnosticCode.ClassifierFailed,
+                    serviceConnectResult.FailureCode ?? "service_connect_classifier_failed"));
+                return null;
+            }
+        }
+
+        var candidates = profile.Members.Take(32).ToArray();
         if (candidates.Length == 0 || profile.ClassifierTimeoutMs <= 0)
         {
             diagnostics.Add(new AgentProfileTurnDiagnostic(
@@ -484,29 +502,16 @@ public sealed class AgentProfileTurnCatalogMaterializer
             return null;
         }
 
-        AgentProfileTurnClassificationResult result;
-        try
-        {
-            result = await _classifier.ClassifyAsync(
-                new AgentProfileTurnClassificationRequest(
-                    userMessage ?? string.Empty,
-                    candidates
-                        .Select(static member => new AgentProfileTurnClassificationCandidate(
-                            member.IntentId,
-                            member.RoutingDescription,
-                            member.SideEffectClass))
-                        .ToArray(),
-                    TimeSpan.FromMilliseconds(profile.ClassifierTimeoutMs)),
-                ct);
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception)
-        {
-            result = AgentProfileTurnClassificationResult.Failed("classifier_exception");
-        }
+        var result = await ClassifyAsync(
+            userMessage,
+            candidates
+                .Select(static member => new AgentProfileTurnClassificationCandidate(
+                    member.IntentId,
+                    member.RoutingDescription,
+                    member.SideEffectClass))
+                .ToArray(),
+            profile.ClassifierTimeoutMs,
+            ct);
 
         if (result.Status == AgentProfileTurnClassificationStatus.NoMatch)
         {
@@ -538,6 +543,34 @@ public sealed class AgentProfileTurnCatalogMaterializer
             AgentProfileTurnDiagnosticCode.ClassifierMatched,
             member.IntentId));
         return member;
+    }
+
+    private async Task<AgentProfileTurnClassificationResult> ClassifyAsync(
+        string userMessage,
+        IReadOnlyList<AgentProfileTurnClassificationCandidate> candidates,
+        int timeoutMs,
+        CancellationToken ct)
+    {
+        if (timeoutMs <= 0)
+            return AgentProfileTurnClassificationResult.Failed("classifier_not_configured");
+
+        try
+        {
+            return await _classifier.ClassifyAsync(
+                new AgentProfileTurnClassificationRequest(
+                    userMessage ?? string.Empty,
+                    candidates,
+                    TimeSpan.FromMilliseconds(timeoutMs)),
+                ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            return AgentProfileTurnClassificationResult.Failed("classifier_exception");
+        }
     }
 
     private static AgentProfileSkillMember CreateBuiltInServiceConnectMember() =>

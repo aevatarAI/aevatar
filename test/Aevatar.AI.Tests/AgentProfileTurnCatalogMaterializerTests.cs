@@ -106,6 +106,34 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
     }
 
     [Fact]
+    public async Task PrepareNyxIdChatAsync_ServiceConnectNoMatch_ShouldContinueWithProfileClassification()
+    {
+        var tools = NewTools("recovery", "task", "extra");
+        var classifier = new SequencedClassifier(
+            AgentProfileTurnClassificationResult.NoMatch(),
+            AgentProfileTurnClassificationResult.Matched("intent-alpha"));
+
+        var preparation = await NewMaterializer(
+                RegistryWithRoute(tools),
+                classifier,
+                fetcher: null)
+            .PrepareNyxIdChatAsync(
+                SealProfile(BuildProfile()),
+                "session-a",
+                "Run the alpha report",
+                tools,
+                ToolContext(),
+                CancellationToken.None);
+
+        preparation.Authority.CandidateRoute!.IntentId.Should().Be("intent-alpha");
+        classifier.Requests.Should().HaveCount(2);
+        classifier.Requests[0].Candidates.Should().ContainSingle().Which.IntentId.Should()
+            .Be(NyxIdChatTurnIntentClassifier.ServiceConnectIntentId);
+        classifier.Requests[1].Candidates.Should().ContainSingle().Which.IntentId.Should()
+            .Be("intent-alpha");
+    }
+
+    [Fact]
     public async Task PrepareAsync_ShouldFreezeCandidateRefAndCanonicalCeilingWithoutExactFetch()
     {
         var tools = NewTools("recovery", "task", "extra");
@@ -1679,6 +1707,23 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
             return _exception is not null
                 ? Task.FromException<AgentProfileTurnClassificationResult>(_exception)
                 : Task.FromResult(_result!);
+        }
+    }
+
+    private sealed class SequencedClassifier(
+        params AgentProfileTurnClassificationResult[] results) : IAgentProfileTurnClassifier
+    {
+        private readonly Queue<AgentProfileTurnClassificationResult> _results = new(results);
+
+        public List<AgentProfileTurnClassificationRequest> Requests { get; } = [];
+
+        public Task<AgentProfileTurnClassificationResult> ClassifyAsync(
+            AgentProfileTurnClassificationRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Requests.Add(request);
+            return Task.FromResult(_results.Dequeue());
         }
     }
 

@@ -757,7 +757,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
     }
 
     [Fact]
-    public async Task StartTurn_EnforcedGeneralProfile_ShouldMergeServerServiceConnectCandidateInOneClassification()
+    public async Task StartTurn_EnforcedGeneralProfile_ShouldClassifyServerServiceConnectBeforeBroadProfileIntent()
     {
         const string conversationActorId = "conversation-profile-general-connect-intent";
         const string generalIntentId = "general_nyxid_assistant";
@@ -770,8 +770,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
             new CanonicalProfileTool("nyxid_require_service"),
             new CanonicalProfileTool("github_get_current_user"),
         ];
-        var profileClassifier = new FixedProfileClassifier(
-            NyxIdChatTurnIntentClassifier.ServiceConnectIntentId);
+        var profileClassifier = new ServerIntentFirstProfileClassifier(generalIntentId);
         var materializer = new AgentProfileTurnCatalogMaterializer(
             new FixedToolSetRegistry("profile.route", new FixedToolSource(routeTools)),
             profileClassifier);
@@ -844,11 +843,8 @@ public sealed partial class NyxIdChatConversationGAgentTests
         await DispatchPendingCreationFirstTurnAsync(agent, dispatch);
 
         var classification = profileClassifier.Requests.Should().ContainSingle().Which;
-        classification.Candidates.Should().Contain(candidate =>
-            candidate.IntentId == generalIntentId);
-        classification.Candidates.Should().Contain(candidate =>
-            candidate.IntentId == NyxIdChatTurnIntentClassifier.ServiceConnectIntentId &&
-            candidate.SideEffectClass == AgentProfileSideEffectClass.ExternalHandoff);
+        classification.Candidates.Should().ContainSingle().Which.Should().BeEquivalentTo(
+            NyxIdChatTurnIntentClassifier.ServiceConnectCandidate);
         serverClassifier.UserMessages.Should().BeEmpty();
         agent.State.ActiveTurn.AgentProfileTurnAuthority.CandidateRoute.IntentId.Should()
             .Be(NyxIdChatTurnIntentClassifier.ServiceConnectIntentId);
@@ -6519,6 +6515,29 @@ public sealed partial class NyxIdChatConversationGAgentTests
             ct.ThrowIfCancellationRequested();
             Requests.Add(request);
             return Task.FromResult(AgentProfileTurnClassificationResult.Matched(intentId));
+        }
+    }
+
+    private sealed class ServerIntentFirstProfileClassifier(string broadIntentId)
+        : IAgentProfileTurnClassifier
+    {
+        public List<AgentProfileTurnClassificationRequest> Requests { get; } = [];
+
+        public Task<AgentProfileTurnClassificationResult> ClassifyAsync(
+            AgentProfileTurnClassificationRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Requests.Add(request);
+            var onlyServiceConnect = request.Candidates.Count == 1 &&
+                                     string.Equals(
+                                         request.Candidates[0].IntentId,
+                                         NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
+                                         StringComparison.Ordinal);
+            return Task.FromResult(AgentProfileTurnClassificationResult.Matched(
+                onlyServiceConnect
+                    ? NyxIdChatTurnIntentClassifier.ServiceConnectIntentId
+                    : broadIntentId));
         }
     }
 
