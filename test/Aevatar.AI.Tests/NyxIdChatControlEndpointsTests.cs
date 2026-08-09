@@ -244,7 +244,9 @@ public sealed class NyxIdChatControlEndpointsTests
             """,
             new RecordingAdmissionPort(),
             dispatch,
-            accessToken: "fresh-plan-token-alpha");
+            accessToken: "fresh-plan-token-alpha",
+            authenticatedScopeId: "scope-alpha",
+            authenticatedOwnerSubject: "owner-alpha");
 
         response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
         response.Body.Should().NotContain("fresh-plan-token-alpha");
@@ -262,6 +264,14 @@ public sealed class NyxIdChatControlEndpointsTests
         command.ToolContext.Credentials.NyxIdAccessToken.Should().Be("fresh-plan-token-alpha");
         command.ToolContext.Credentials.NyxIdCredentialKind.Should().Be(
             AgentToolNyxIdCredentialKindPayload.ProxyDelegation);
+        command.ToolContext.Request.RequestId.Should().Be("plan-gate-alpha");
+        command.ToolContext.Channel.Platform.Should().Be(NyxIdChatServiceDefaults.ServiceId);
+        command.ToolContext.Channel.RegistrationScopeId.Should().Be("scope-alpha");
+        command.ToolContext.Caller.ScopeId.Should().Be("scope-alpha");
+        command.ToolContext.Caller.OwnerSubject.Should().Be("owner-alpha");
+        command.ToolContext.Caller.ResponseId.Should().Be("plan-gate-alpha");
+        command.ToolContext.ExecutionOwner.Kind.Should().Be(AgentToolExecutionOwnerKind.Actor);
+        command.ToolContext.ExecutionOwner.OwnerId.Should().Be("conversation-alpha");
     }
 
     [Fact]

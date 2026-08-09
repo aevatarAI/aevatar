@@ -424,11 +424,19 @@ public static partial class NyxIdChatEndpoints
             CorrelationId = correlationId,
             ToolContext = (AgentToolExecutionContext.Empty with
             {
+                Request = new AgentToolRequestIdentity(identity.RequestId, null),
                 Credentials = credentials!,
                 Caller = new AgentToolCallerContext(
                     identity.ScopeId,
                     ownerSubject,
                     identity.RequestId),
+                Channel = new AgentToolChannelContext(
+                    NyxIdChatServiceDefaults.ServiceId,
+                    null,
+                    identity.ScopeId,
+                    null,
+                    null),
+                ExecutionOwner = AgentToolExecutionOwners.Actor(identity.ActorId),
             }).ToPayload(),
         }, ct).ConfigureAwait(false);
         return AcceptedControl(http, identity.ScopeId, identity.ActorId, receipt);
