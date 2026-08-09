@@ -94,9 +94,9 @@ attests only the native user ID; an unattested tenant must never create a second
 credential actor or Vault owner scope for the same user.
 
 Eligibility is a typed policy. `Allowlist` admits only configured NyxID user
-IDs. `All` admits native NyxID users whose personal `chrono-sandbox` and usable
-`chrono-llm-public` UserServices already exist; Aevatar does not create missing
-UserServices. Enabling managed Codex also requires the explicit typed
+IDs. `All` admits native NyxID users whose personal `chrono-sandbox`, usable
+`chrono-llm-public`, and usable `ornn-api` UserServices already exist; Aevatar
+does not create missing UserServices. Enabling managed Codex also requires the explicit typed
 `RolloutBoundary=InternalOnly` startup acknowledgement. No public rollout
 boundary is supported while delegation still uses `proxy:*`.
 
@@ -106,11 +106,17 @@ The issued key must have exactly:
 - `allow_all_services=false`
 - `allowed_service_ids` equal, order-independently, to that user's directly
   owned active `chrono-sandbox` UserService ID and usable
-  `chrono-llm-public` UserService ID
+  `chrono-llm-public` UserService ID and usable `ornn-api` UserService ID
 - `allow_all_nodes=false` and no node grants
 - a finite configured expiry
 
-No extra service grant is accepted. NyxID's `chrono-sandbox` UserService must
+No extra service grant is accepted. Adding `ornn-api` to an already active
+two-service managed credential is replacement-generation reauthorization:
+Aevatar creates and verifies a new key/secret generation, commits that
+replacement descriptor plus typed cleanup intents to the credential Actor, and
+only then retries Actor-owned cleanup of the old NyxID key and Vault reference.
+It never widens the active key in place through `UpdateApiKeyPolicyAsync`.
+NyxID's `chrono-sandbox` UserService must
 set `forward_access_token=false`, `inject_delegation_token=true`, and the
 temporary internal-canary `delegation_token_scope=proxy:*`. Aevatar validates
 these settings during explicit provisioning, reconciliation, and rotation.
