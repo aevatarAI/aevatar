@@ -1203,7 +1203,7 @@ function nowStamp(){ var d=new Date(); return pad2(d.getHours())+':'+pad2(d.getM
 
 /* =====================================================================
    ① 全景看板 Fleet —— 真实跨组织（nyxid 账号）数据
-   组织 = nyxid 管理员用户名册中的全部账号（不以最近运行记录反推组织是否存在）
+   组织 = nyxid 管理员用户名册中的全部账号；名册不可用时降级为运行窗口中的去重 scopeId
    组织名 = nyxid 用户显示名：浏览器直连 nyx-api 列出全部用户后按 id 映射（CORS 开放，Bearer=accessToken）
    活跃/成败/最近活动 = 把 observatory 最近运行窗口按 scopeId 分组聚合
    用户名册中零运行的组织也展示无活动卡片；不使用 /api/cqrs/scopes（那是投影 actor id，非组织）
@@ -1213,7 +1213,8 @@ var FLEET_COMPANIES=[];          /* 已映射的组织行（内部形态，compa
 var FLEET_RUN_WINDOW=500;        /* observatory 单次允许的最大窗口；组织列表本身不依赖该窗口 */
 var FLEET_RUNS_BY_SCOPE={};      /* scopeId -> 该组织在当前窗口的真实 run 列表（已映射） */
 var NYX_USERS={};                /* nyxid userId -> {display_name,email,avatar_url,isAdmin} */
-var NYX_USERS_LOADED=false;      /* 用户名册是否已完整加载；失败保持 false，便于用户直接重试 */
+var NYX_USERS_ATTEMPTED=false;   /* 当前页面周期是否已尝试；手动刷新时重置 */
+var FLEET_DIRECTORY_STATUS='pending'; /* pending | ready | forbidden | disabled | error */
 var FLEET_LOADED=false, FLEET_ERR=null, FLEET_FORBIDDEN=false, FLEET_LOADING=false, FLEET_STAMP=0;
 /* 与 COMPANIES 别名保持一致，沿用既有 render 代码对全局名的引用 */
 var COMPANIES=FLEET_COMPANIES;
@@ -1324,14 +1325,17 @@ function mapFleetCompanies(runs){
 }
 function loadFleet(rerender){
   FLEET_ERR=null; FLEET_FORBIDDEN=false; FLEET_LOADING=true; if(rerender) rerender();
-  /* nyxid 名册（全量组织事实源）与跨组织 runs 并行拉取；名册不完整时明确报错。 */
-  var nyxStep=NYX_USERS_LOADED?Promise.resolve({skipped:true}):loadNyxUsers().then(function(r){ NYX_USERS_LOADED=!!(r&&r.ok); return r; });
+  /* NyxID 名册是可选增强：Aevatar 平台管理员不一定是 NyxID is_admin，403 不得阻断跨组织运行看板。 */
+  var nyxStep=NYX_USERS_ATTEMPTED?Promise.resolve({skipped:true}):loadNyxUsers().then(function(r){
+    NYX_USERS_ATTEMPTED=true;
+    FLEET_DIRECTORY_STATUS=(r&&r.ok)?'ready':((r&&r.forbidden)?'forbidden':((r&&r.disabled)?'disabled':'error'));
+    if(!(r&&r.ok)) NYX_USERS={};
+    return r;
+  });
   var runsStep=adminJson('/api/workflow/observatory/runs?scope=__all__&take='+FLEET_RUN_WINDOW);
   return Promise.all([nyxStep,runsStep]).then(function(results){
-    var nyxRes=results[0], runsRes=results[1];
-    if((nyxRes&&nyxRes.forbidden)||(runsRes&&runsRes.forbidden)){ FLEET_FORBIDDEN=true; return; }
-    if(nyxRes&&nyxRes.disabled) throw new Error('NyxID 用户名册未配置');
-    if(nyxRes&&nyxRes.error) throw new Error('NyxID 用户名册加载失败：'+nyxRes.error);
+    var runsRes=results[1];
+    if(runsRes&&runsRes.forbidden){ FLEET_FORBIDDEN=true; return; }
     var runs=mapFleetRuns(Array.isArray(runsRes)?runsRes:((runsRes&&runsRes.items)||[]));
     FLEET_COMPANIES=mapFleetCompanies(runs); COMPANIES=FLEET_COMPANIES;
   }).catch(function(e){ FLEET_ERR=(e&&(e.body||e.message))||'看板加载失败'; })
@@ -2041,16 +2045,26 @@ function liveOrStamp(live){
   if(live) return '<span class="live-badge"><i class="live-dot"></i>live</span>';
   return '<span class="stamp">更新于 <span class="num" data-stamp>'+nowStamp()+'</span></span>';
 }
+function fleetDirectoryNotice(){
+  if(FLEET_DIRECTORY_STATUS==='ready'||FLEET_DIRECTORY_STATUS==='pending') return '';
+  var reason=FLEET_DIRECTORY_STATUS==='forbidden'
+    ? '当前账号是 Aevatar 平台管理员，但不具备 NyxID 用户名册管理权限。'
+    :(FLEET_DIRECTORY_STATUS==='disabled'?'NyxID 用户名册未配置。':'NyxID 用户名册暂时无法读取。');
+  return '<div class="alert" style="margin-bottom:12px">'+ICON.warn+'<span class="grow">'+reason+
+    '当前按跨组织运行窗口降级展示，零运行账号和用户名可能缺失。</span></div>';
+}
 
 /* ============================== L0 集团总览 ============================== */
 function viewL0(){
   if(!ACCOUNT||!ACCOUNT.admin) return {html:moduleSubHeader('fleet','')+'<div class="view-scroll">'+auth403('全景看板汇总全部组织的运行态，仅平台管理员可见。')+'</div>', mount:bindFleet};
   if(!FLEET_LOADED) return {html:moduleSubHeader('fleet','')+'<div class="view-scroll">'+fleetSkeleton()+'</div>', mount:bindFleet};
-  if(FLEET_FORBIDDEN) return {html:moduleSubHeader('fleet','')+'<div class="view-scroll">'+auth403('需要平台管理员权限读取 NyxID 组织名册和跨组织运行态。')+'</div>', mount:bindFleet};
+  if(FLEET_FORBIDDEN) return {html:moduleSubHeader('fleet','')+'<div class="view-scroll">'+auth403('需要平台管理员权限读取跨组织运行态（observatory __all__）。')+'</div>', mount:bindFleet};
   if(FLEET_ERR) return {html:moduleSubHeader('fleet','')+'<div class="view-scroll"><div class="alert">'+ICON.warn+'<span class="grow">看板加载失败：'+esc(FLEET_ERR)+'</span><button class="btn" data-act="fleetReload">重试</button></div></div>', mount:bindFleet};
   var t=kpiTotals();
+  var directoryReady=FLEET_DIRECTORY_STATUS==='ready';
   var kpi=
-    metricCard({label:'全部组织 (orgs)',icon:ICON.building,value:t.scopes,sub:'NyxID 用户名册'})+
+    metricCard({label:(directoryReady?'全部组织':'运行组织')+' (orgs)',icon:ICON.building,value:t.scopes,
+      sub:directoryReady?'NyxID 用户名册':'observatory 窗口 scope'})+
     metricCard({label:'此刻在飞 Run',icon:ICON.bolt,value:t.active,cls:'running',live:true})+
     metricCard({label:'运行窗口总数',icon:ICON.refresh,value:t.runs,sub:'observatory 最近 '+FLEET_RUN_WINDOW+' 条'})+
     metricCard({label:'失败 / 超时 Run',icon:ICON.warn,value:t.fail,cls:t.fail>0?'danger':'',sub:'跨 '+COMPANIES.filter(function(c){return c.fail>0;}).length+' 个组织'})+
@@ -2073,6 +2087,7 @@ function viewL0(){
 
   var body=
     '<div class="view-scroll">'+
+      fleetDirectoryNotice()+
       '<div class="kpi-bar">'+kpi+'</div>'+
       '<div class="toolbar">'+
         '<div class="chip-row">'+
@@ -2080,12 +2095,15 @@ function viewL0(){
           chip('active','只看在飞','#2563eb',STATE.l0Filter==='active',COMPANIES.filter(function(c){return c.active>0;}).length)+
         '</div>'+
         '<div class="grow"></div>'+
-        '<span class="inline-refresh" style="margin-right:6px"><i class="live-dot" style="background:var(--success)"></i> NyxID 全量组织 · observatory 运行窗口 '+srcBadge('ready')+'</span>'+
+        '<span class="inline-refresh" style="margin-right:6px"><i class="live-dot" style="background:var(--success)"></i> '+
+          (directoryReady?'NyxID 全量组织':'observatory 运行组织')+' · observatory 运行窗口 '+srcBadge(directoryReady?'ready':'approx')+'</span>'+
         '<button class="ibtn" data-act="fleetReload">'+ICON.refresh+' 刷新</button>'+
         '<button class="sortbtn" data-act="l0sort"><span class="lbl">排序</span><span class="val">'+sortLabel+'</span></button>'+
       '</div>'+
       '<div class="card-wall">'+cards+'</div>'+
-      '<div class="src-legend-bar"><div class="panel-title" style="margin-bottom:12px">数据来源 · 组织 = NyxID 全量用户名册，零运行账号也会展示；运行态 = observatory 最近 '+FLEET_RUN_WINDOW+' 条跨组织窗口；去重 workflow 计数为 ~近似；成本 / 员工花名册 / 数据流交接图无统一事实源，已降级为 预览，不展示伪造值</div>'+srcLegendRows()+'</div>'+
+      '<div class="src-legend-bar"><div class="panel-title" style="margin-bottom:12px">数据来源 · 组织 = '+
+        (directoryReady?'NyxID 全量用户名册，零运行账号也会展示':'observatory 窗口内的去重 scopeId（NyxID 名册不可用）')+
+        '；运行态 = observatory 最近 '+FLEET_RUN_WINDOW+' 条跨组织窗口；去重 workflow 计数为 ~近似；成本 / 员工花名册 / 数据流交接图无统一事实源，已降级为 预览，不展示伪造值</div>'+srcLegendRows()+'</div>'+
     '</div>';
   return {html:body, mount:bindFleet};
 }
@@ -2105,7 +2123,7 @@ function bindFleet(root){
      这里只接管板内 fleetReload 刷新（不重复绑定 document 级委托）。 */
   root.addEventListener('click',function(ev){
     var act=ev.target.closest('[data-act]'); if(!act) return;
-    if(act.getAttribute('data-act')==='fleetReload'){ FLEET_LOADED=false; FLEET_ERR=null; _fleetRemount(); loadFleet(_fleetRemount); }
+    if(act.getAttribute('data-act')==='fleetReload'){ FLEET_LOADED=false; FLEET_ERR=null; NYX_USERS_ATTEMPTED=false; _fleetRemount(); loadFleet(_fleetRemount); }
   });
 }
 
@@ -4340,7 +4358,7 @@ function closeSrcPop(){ if(_srcPopEl){ _srcPopEl.remove(); _srcPopEl=null; } }
    数据模块静默拉新（SWR，不闪骨架屏）；嵌入套件页重载对应 iframe；不再假装刷新。 */
 function refreshActiveModule(){
   var module=curParts()[0]||defaultModule();
-  if(module==='fleet'){ if(!FLEET_LOADING) loadFleet(_fleetRemount); toast('正在刷新全景看板'); return; }
+  if(module==='fleet'){ if(!FLEET_LOADING){ NYX_USERS_ATTEMPTED=false; loadFleet(_fleetRemount); } toast('正在刷新全景看板'); return; }
   if(module==='status'){ loadStatus(function(){ var b=document.getElementById('status-root'); if(b) replaceViewHtml(b,statusBody()); }); toast('正在刷新系统状态'); return; }
   if(module==='schedules'){ loadSchedules(function(){ var b=document.getElementById('schedules-root'); if(b) replaceViewHtml(b,schedulesBody()); }); toast('正在刷新排班'); return; }
   if(module==='audit'){ loadAuditTrail(false); toast('正在刷新审计日志'); return; }

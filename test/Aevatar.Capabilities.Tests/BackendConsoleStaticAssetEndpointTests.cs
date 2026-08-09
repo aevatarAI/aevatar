@@ -165,6 +165,53 @@ public sealed class BackendConsoleStaticAssetEndpointTests
     }
 
     [Fact]
+    public async Task AdminShell_Fleet_ShouldNotBlockPlatformAdminWhenNyxIdDirectoryForbids()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+            const start = html.indexOf('function loadFleet(rerender){');
+            const end = html.indexOf('/* 集团 KPI', start);
+            assert.notEqual(start, -1, 'fleet loader must exist');
+            assert.notEqual(end, -1, 'fleet KPI must follow loader');
+
+            const calls = [];
+            const context = {
+              Promise, Date, calls,
+              FLEET_ERR:null, FLEET_FORBIDDEN:false, FLEET_LOADING:false, FLEET_LOADED:false, FLEET_STAMP:0,
+              FLEET_DIRECTORY_STATUS:'pending', FLEET_RUN_WINDOW:500, FLEET_COMPANIES:[], COMPANIES:[],
+              NYX_USERS_ATTEMPTED:false, NYX_USERS:{'stale-user':{}},
+              loadNyxUsers(){ return Promise.resolve({forbidden:true}); },
+              adminJson(url){ calls.push(url); return Promise.resolve([{scope:'scope-active'}]); },
+              mapFleetRuns(runs){ return runs; },
+              mapFleetCompanies(runs){ return runs.map(run => ({id:run.scope})); }
+            };
+            vm.createContext(context);
+            vm.runInContext(html.slice(start, end), context);
+
+            (async () => {
+              await context.loadFleet();
+              assert.equal(context.FLEET_FORBIDDEN, false, 'NyxID directory denial must not deny the board');
+              assert.equal(context.FLEET_ERR, null);
+              assert.equal(context.FLEET_LOADED, true);
+              assert.equal(context.FLEET_DIRECTORY_STATUS, 'forbidden');
+              assert.deepEqual(Object.keys(context.NYX_USERS), [], 'stale directory entries must be discarded');
+              assert.equal(context.FLEET_COMPANIES.length, 1);
+              assert.equal(context.FLEET_COMPANIES[0].id, 'scope-active');
+              assert.deepEqual(calls, ['/api/workflow/observatory/runs?scope=__all__&take=500']);
+            })().catch(error => { console.error(error); process.exitCode = 1; });
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
     public async Task AdminShell_AuditRefresh_ShouldReloadOnEntryAndGlobalRefresh()
     {
         await using var app = await CreateAppAsync();
