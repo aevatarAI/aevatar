@@ -51,6 +51,9 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         {
             html.Should().Contain("var NYX_API=BACKEND_CONSOLE_CONFIG.nyxidApi");
             html.Should().Contain("fetch(NYX_API+'/api/v1/admin/users");
+            html.Should().Contain("var FLEET_RUN_WINDOW=500;");
+            html.Should().Contain("Object.keys(NYX_USERS).forEach(function(sid){ scopeIds[sid]=1; });");
+            html.Should().Contain("/api/workflow/observatory/runs?scope=__all__&take='+FLEET_RUN_WINDOW");
             html.Should().NotContain("var NYX_AUTHORITY=BACKEND_CONSOLE_CONFIG.authority");
             // ADR-0018: only the deliberately narrowed voice-realtime purpose keeps
             // explicit resources; the session login sends none.
@@ -105,6 +108,60 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             html.Should().Contain("requestAdminShellTokenRefresh(");
             html.Should().Contain("rejectedAccessToken");
         }
+    }
+
+    [Fact]
+    public async Task AdminShell_Fleet_ShouldIncludeNyxIdUsersWithoutRuns()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+            const start = html.indexOf('function mapFleetCompanies(runs){');
+            const end = html.indexOf('function loadFleet(rerender){', start);
+            assert.notEqual(start, -1, 'fleet mapper must exist');
+            assert.notEqual(end, -1, 'fleet loader must follow mapper');
+
+            const context = {
+              NYX_USERS: {
+                'scope-active': {display_name:'Active Org',email:'active@example.test'},
+                'scope-idle': {display_name:'Idle Org',email:'idle@example.test'}
+              },
+              FLEET_RUNS_BY_SCOPE: {},
+              fleetRunActive(status){ return status === 'running'; },
+              fleetRunFailed(status){ return status === 'failed' || status === 'timed_out'; },
+              fleetRunSuccess(status){ return status === 'completed'; },
+              fleetHealth(total, failed){ return total ? (failed ? 'red' : 'green') : 'grey'; },
+              fleetAgoMins(){ return null; },
+              fleetAgo(){ return '—'; },
+              fleetOrgProfile(scopeId){
+                const user = context.NYX_USERS[scopeId];
+                return {name:user.display_name,email:user.email,avatar:null,isAdmin:false};
+              }
+            };
+            vm.createContext(context);
+            vm.runInContext(html.slice(start, end), context);
+
+            const companies = context.mapFleetCompanies([{
+              id:'run-active',name:'workflow-active',status:'completed',scope:'scope-active',
+              updatedAtUtc:'2026-08-09T00:00:00Z'
+            }]);
+            assert.equal(companies.length, 2);
+            const active = companies.find(company => company.id === 'scope-active');
+            const idle = companies.find(company => company.id === 'scope-idle');
+            assert.equal(active.runsTotal, 1);
+            assert.equal(active.isEmpty, false);
+            assert.equal(idle.runsTotal, 0);
+            assert.equal(idle.isEmpty, true);
+            assert.deepEqual(Object.keys(context.FLEET_RUNS_BY_SCOPE), ['scope-active']);
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
     }
 
     [Fact]

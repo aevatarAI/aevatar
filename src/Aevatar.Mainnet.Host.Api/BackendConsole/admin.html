@@ -1203,16 +1203,17 @@ function nowStamp(){ var d=new Date(); return pad2(d.getHours())+':'+pad2(d.getM
 
 /* =====================================================================
    ① 全景看板 Fleet —— 真实跨组织（nyxid 账号）数据
-   组织 = observatory GET /runs?scope=__all__ 里出现的 *去重 scopeId*（即 nyxid 用户 UUID）
+   组织 = nyxid 管理员用户名册中的全部账号（不以最近运行记录反推组织是否存在）
    组织名 = nyxid 用户显示名：浏览器直连 nyx-api 列出全部用户后按 id 映射（CORS 开放，Bearer=accessToken）
-   活跃/成败/最近活动 = 把 __all__ runs 按 scopeId 分组聚合
-   仅展示“有运行记录”的组织（避免空 0/0/0 卡片）；不使用 /api/cqrs/scopes（那是投影 actor id，非组织）
+   活跃/成败/最近活动 = 把 observatory 最近运行窗口按 scopeId 分组聚合
+   用户名册中零运行的组织也展示无活动卡片；不使用 /api/cqrs/scopes（那是投影 actor id，非组织）
    无后端来源字段（成本/sparkline/员工花名册/交接图）诚实降级为 ~近似 或 预览，不伪造
    ===================================================================== */
 var FLEET_COMPANIES=[];          /* 已映射的组织行（内部形态，companyCard/viewL0 直接消费） */
-var FLEET_RUNS_BY_SCOPE={};      /* scopeId -> 该组织的真实 run 列表（已映射） */
+var FLEET_RUN_WINDOW=500;        /* observatory 单次允许的最大窗口；组织列表本身不依赖该窗口 */
+var FLEET_RUNS_BY_SCOPE={};      /* scopeId -> 该组织在当前窗口的真实 run 列表（已映射） */
 var NYX_USERS={};                /* nyxid userId -> {display_name,email,avatar_url,isAdmin} */
-var NYX_USERS_LOADED=false;      /* 用户名册是否已尝试加载（即便 403 也置 true，避免重复打 nyx-api） */
+var NYX_USERS_LOADED=false;      /* 用户名册是否已完整加载；失败保持 false，便于用户直接重试 */
 var FLEET_LOADED=false, FLEET_ERR=null, FLEET_FORBIDDEN=false, FLEET_LOADING=false, FLEET_STAMP=0;
 /* 与 COMPANIES 别名保持一致，沿用既有 render 代码对全局名的引用 */
 var COMPANIES=FLEET_COMPANIES;
@@ -1271,14 +1272,18 @@ function loadNyxUsers(){
         return {ok:true,pageSize:users.length,total:(j.total!=null?j.total:users.length)};
       });
   }
-  /* 首页取回 total 后，其余页并行拉取（上限 20 页兜底）：整册时延 ≈ 两轮往返，而非页数×往返 */
+  /* 首页取回 total 后，其余页并行拉取：全景组织名册不能因人数较多而静默截断。 */
   return fetchPage(1).then(function(first){
     if(first && first.forbidden) return {forbidden:true};
     if(!first || first.error) return first||{error:'empty'};
-    var pages=Math.min(20,Math.ceil(first.total/per));
-    if(first.pageSize<per || pages<=1){ NYX_USERS=acc; return {ok:true,count:Object.keys(acc).length}; }
+    var pages=Math.ceil(first.total/per);
+    if(pages<=1){ NYX_USERS=acc; return {ok:true,count:Object.keys(acc).length}; }
     var rest=[]; for(var p=2;p<=pages;p++) rest.push(fetchPage(p));
-    return Promise.all(rest).then(function(){ NYX_USERS=acc; return {ok:true,count:Object.keys(acc).length}; });
+    return Promise.all(rest).then(function(results){
+      var failed=results.filter(function(r){ return !r||r.forbidden||r.error; })[0];
+      if(failed) return failed;
+      NYX_USERS=acc; return {ok:true,count:Object.keys(acc).length};
+    });
   }).catch(function(){ return {error:'nyx-users-fetch-failed'}; });
 }
 /* 组织资料（名称/邮箱/头像）：优先 nyxid 名册，回退短 id */
@@ -1286,13 +1291,15 @@ function fleetOrgProfile(scopeId){
   var u=NYX_USERS[String(scopeId)];
   return { name:(u&&u.display_name)||nyxShortId(scopeId), email:(u&&u.email)||null,
     avatar:(u&&u.avatar_url)||null, isAdmin:!!(u&&u.isAdmin) }; }
-/* 把按 scopeId 分组的真实 runs -> 组织内部形态。组织来源 = runs 里出现的去重 scopeId（有 run 才建卡）。 */
+/* 组织来源 = nyxid 全量用户；runs 仅补充当前窗口的运行统计。
+   合并 run scope 是为了在用户名册短暂落后时仍不丢失已有运行事实。 */
 function mapFleetCompanies(runs){
-  var byScope={};
-  (runs||[]).forEach(function(r){ var sid=r.scope||'(unknown)'; (byScope[sid]=byScope[sid]||[]).push(r); });
+  var byScope={}, scopeIds={};
+  Object.keys(NYX_USERS).forEach(function(sid){ scopeIds[sid]=1; });
+  (runs||[]).forEach(function(r){ var sid=r.scope||'(unknown)'; scopeIds[sid]=1; (byScope[sid]=byScope[sid]||[]).push(r); });
   FLEET_RUNS_BY_SCOPE=byScope;
-  return Object.keys(byScope).map(function(sid){
-    var rs=byScope[sid];
+  return Object.keys(scopeIds).map(function(sid){
+    var rs=byScope[sid]||[];
     var active=rs.filter(function(r){return fleetRunActive(r.status);}).length;
     var fail=rs.filter(function(r){return fleetRunFailed(r.status);}).length;
     var success=rs.filter(function(r){return fleetRunSuccess(r.status);}).length;
@@ -1317,12 +1324,14 @@ function mapFleetCompanies(runs){
 }
 function loadFleet(rerender){
   FLEET_ERR=null; FLEET_FORBIDDEN=false; FLEET_LOADING=true; if(rerender) rerender();
-  /* nyxid 名册（组织显示名；403/失败用短 id 兜底，不阻断看板）与跨组织 runs 并行拉取。 */
-  var nyxStep=NYX_USERS_LOADED?Promise.resolve({skipped:true}):loadNyxUsers().then(function(r){ NYX_USERS_LOADED=true; return r; });
-  var runsStep=adminJson('/api/workflow/observatory/runs?scope=__all__');
+  /* nyxid 名册（全量组织事实源）与跨组织 runs 并行拉取；名册不完整时明确报错。 */
+  var nyxStep=NYX_USERS_LOADED?Promise.resolve({skipped:true}):loadNyxUsers().then(function(r){ NYX_USERS_LOADED=!!(r&&r.ok); return r; });
+  var runsStep=adminJson('/api/workflow/observatory/runs?scope=__all__&take='+FLEET_RUN_WINDOW);
   return Promise.all([nyxStep,runsStep]).then(function(results){
-    var runsRes=results[1];
-    if(runsRes && runsRes.forbidden){ FLEET_FORBIDDEN=true; return; }
+    var nyxRes=results[0], runsRes=results[1];
+    if((nyxRes&&nyxRes.forbidden)||(runsRes&&runsRes.forbidden)){ FLEET_FORBIDDEN=true; return; }
+    if(nyxRes&&nyxRes.disabled) throw new Error('NyxID 用户名册未配置');
+    if(nyxRes&&nyxRes.error) throw new Error('NyxID 用户名册加载失败：'+nyxRes.error);
     var runs=mapFleetRuns(Array.isArray(runsRes)?runsRes:((runsRes&&runsRes.items)||[]));
     FLEET_COMPANIES=mapFleetCompanies(runs); COMPANIES=FLEET_COMPANIES;
   }).catch(function(e){ FLEET_ERR=(e&&(e.body||e.message))||'看板加载失败'; })
@@ -2037,15 +2046,15 @@ function liveOrStamp(live){
 function viewL0(){
   if(!ACCOUNT||!ACCOUNT.admin) return {html:moduleSubHeader('fleet','')+'<div class="view-scroll">'+auth403('全景看板汇总全部组织的运行态，仅平台管理员可见。')+'</div>', mount:bindFleet};
   if(!FLEET_LOADED) return {html:moduleSubHeader('fleet','')+'<div class="view-scroll">'+fleetSkeleton()+'</div>', mount:bindFleet};
-  if(FLEET_FORBIDDEN) return {html:moduleSubHeader('fleet','')+'<div class="view-scroll">'+auth403('需要平台管理员权限读取跨组织运行态（observatory __all__）。')+'</div>', mount:bindFleet};
+  if(FLEET_FORBIDDEN) return {html:moduleSubHeader('fleet','')+'<div class="view-scroll">'+auth403('需要平台管理员权限读取 NyxID 组织名册和跨组织运行态。')+'</div>', mount:bindFleet};
   if(FLEET_ERR) return {html:moduleSubHeader('fleet','')+'<div class="view-scroll"><div class="alert">'+ICON.warn+'<span class="grow">看板加载失败：'+esc(FLEET_ERR)+'</span><button class="btn" data-act="fleetReload">重试</button></div></div>', mount:bindFleet};
   var t=kpiTotals();
   var kpi=
-    metricCard({label:'活跃组织 (orgs)',icon:ICON.building,value:t.scopes,sub:'有运行记录的 nyxid 账号'})+
+    metricCard({label:'全部组织 (orgs)',icon:ICON.building,value:t.scopes,sub:'NyxID 用户名册'})+
     metricCard({label:'此刻在飞 Run',icon:ICON.bolt,value:t.active,cls:'running',live:true})+
-    metricCard({label:'近窗运行总数',icon:ICON.refresh,value:t.runs,sub:'observatory __all__'})+
+    metricCard({label:'运行窗口总数',icon:ICON.refresh,value:t.runs,sub:'observatory 最近 '+FLEET_RUN_WINDOW+' 条'})+
     metricCard({label:'失败 / 超时 Run',icon:ICON.warn,value:t.fail,cls:t.fail>0?'danger':'',sub:'跨 '+COMPANIES.filter(function(c){return c.fail>0;}).length+' 个组织'})+
-    metricCard({label:'活跃 workflow',icon:ICON.people,value:t.workflows,sub:'近窗出现的去重 workflow',approx:true});
+    metricCard({label:'活跃 workflow',icon:ICON.people,value:t.workflows,sub:'窗口内出现的去重 workflow',approx:true});
 
   /* sort + filter */
   var list=COMPANIES.slice();
@@ -2071,12 +2080,12 @@ function viewL0(){
           chip('active','只看在飞','#2563eb',STATE.l0Filter==='active',COMPANIES.filter(function(c){return c.active>0;}).length)+
         '</div>'+
         '<div class="grow"></div>'+
-        '<span class="inline-refresh" style="margin-right:6px"><i class="live-dot" style="background:var(--success)"></i> observatory __all__ · 组织名 nyxid '+srcBadge('ready')+'</span>'+
+        '<span class="inline-refresh" style="margin-right:6px"><i class="live-dot" style="background:var(--success)"></i> NyxID 全量组织 · observatory 运行窗口 '+srcBadge('ready')+'</span>'+
         '<button class="ibtn" data-act="fleetReload">'+ICON.refresh+' 刷新</button>'+
         '<button class="sortbtn" data-act="l0sort"><span class="lbl">排序</span><span class="val">'+sortLabel+'</span></button>'+
       '</div>'+
       '<div class="card-wall">'+cards+'</div>'+
-      '<div class="src-legend-bar"><div class="panel-title" style="margin-bottom:12px">数据来源 · 组织 = 有运行记录的 nyxid 账号（observatory __all__ 的去重 scopeId），名称取自 nyxid 用户名册；运行态为现成；去重 workflow 计数为 ~近似；成本 / 员工花名册 / 数据流交接图无统一事实源，已降级为 预览，不展示伪造值</div>'+srcLegendRows()+'</div>'+
+      '<div class="src-legend-bar"><div class="panel-title" style="margin-bottom:12px">数据来源 · 组织 = NyxID 全量用户名册，零运行账号也会展示；运行态 = observatory 最近 '+FLEET_RUN_WINDOW+' 条跨组织窗口；去重 workflow 计数为 ~近似；成本 / 员工花名册 / 数据流交接图无统一事实源，已降级为 预览，不展示伪造值</div>'+srcLegendRows()+'</div>'+
     '</div>';
   return {html:body, mount:bindFleet};
 }
@@ -2312,7 +2321,7 @@ var NAV=[
   {group:'接入',   items:['channels','voice']}
 ];
 var MODULE_META={
-  fleet:{name:'全景看板', auth:'admin', icon:NAV_ICON.fleet, live:true, desc:'跨组织运行态总览 · 组织 = 近窗有运行记录的 NyxID 账号'},
+  fleet:{name:'全景看板', auth:'admin', icon:NAV_ICON.fleet, live:true, desc:'NyxID 全量组织 · 跨组织运行态总览'},
   status:{name:'系统状态', auth:'public', icon:NAV_ICON.status, live:true, desc:'平台各子系统健康检查与依赖状态'},
   observatory:{name:'运行观测台', auth:'login', icon:NAV_ICON.obs, live:true, desc:'每次 Run 的逐步 trace / DAG / 产出与用量'},
   cqrs:{name:'投影管道 CQRS', auth:'platform-admin', icon:NAV_ICON.cqrs, desc:'Command → Event → ReadModel 投影链路观测'},
