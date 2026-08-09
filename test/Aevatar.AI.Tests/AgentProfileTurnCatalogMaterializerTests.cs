@@ -53,6 +53,7 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
         var request = inner.LastRequest!;
         request.RequestId.Should().Be("turn-connect");
         request.LlmControl.Should().BeSameAs(llmControl);
+        request.Timeout.Should().Be(TimeSpan.FromSeconds(15));
         request.UserMessage.Should().Be("Connect GitHub and verify the connection");
         request.Candidates.Should().ContainSingle().Which.Should().BeEquivalentTo(
             new AgentProfileTurnClassificationCandidate(

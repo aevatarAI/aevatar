@@ -9,7 +9,7 @@
   "provider_user_service_id": "4061b904-62de-4cee-9125-5e3ec8365afd",
   "expected_resolved_model": "gpt-5.4-2026-03-05",
   "temperature": 0,
-  "prompt_version": "StreamingAgentProfileTurnClassifier@7c1038082a6575cb741a5ec4e408afdfb3d51f32",
+  "prompt_version": "StreamingAgentProfileTurnClassifier@8d15ef5727ab933cd5fa9244181bcb23b798cfc9",
   "prompt_source": "agents/Aevatar.GAgents.NyxidChat/AgentProfiles/StreamingAgentProfileTurnClassifier.cs",
   "prompt_text_sha256": "78f18479312dcb724c8eb5ba8def16a3e2ebd46cc4368481fff60f56d77f1847",
   "dataset": "coverage-manifest.json rows with utterances",
@@ -24,10 +24,10 @@
   },
   "results": {
     "protocol": "nyxid-semantic-evaluation.v1",
-    "run_id": "2026-08-09-m40-semantic-r3-24b0327f",
-    "started_at": "2026-08-08T20:39:50.871Z",
-    "completed_at": "2026-08-08T20:44:12.827Z",
-    "aevatar_revision": "24b0327f1ef122aec86b1783b8df082cb4f40a2b",
+    "run_id": "2026-08-10-m40-semantic-r4-8d15ef57",
+    "started_at": "2026-08-09T19:20:42.488Z",
+    "completed_at": "2026-08-09T19:24:53.754Z",
+    "aevatar_revision": "8d15ef5727ab933cd5fa9244181bcb23b798cfc9",
     "provider": "chrono-llm-public",
     "provider_adapter": {
       "path": "tools/nyxid-conformance/provider-adapters/nyxid-proxy-chat-completions.py",
@@ -39,8 +39,8 @@
     "provider_user_service_id": "4061b904-62de-4cee-9125-5e3ec8365afd",
     "expected_resolved_model": "gpt-5.4-2026-03-05",
     "temperature": 0.0,
-    "prompt_version": "StreamingAgentProfileTurnClassifier@7c1038082a6575cb741a5ec4e408afdfb3d51f32",
-    "prompt_source_sha256": "0301ecb67c97c172a49a14217e89d67cb0c84e8c48bfb1514e839bb1eb549600",
+    "prompt_version": "StreamingAgentProfileTurnClassifier@8d15ef5727ab933cd5fa9244181bcb23b798cfc9",
+    "prompt_source_sha256": "420c2b6cc354684994b7a15d98c43e2824da4254a49ef031af0918adaa58c138",
     "prompt_text_sha256": "78f18479312dcb724c8eb5ba8def16a3e2ebd46cc4368481fff60f56d77f1847",
     "coverage_manifest_sha256": "0b88ec0e63c349869fbe28542eb2baeae2daff70937eb8f0258f8f35d0bc3904",
     "dataset_sha256": "dcb72a950b901578a184e269a790f2328da19354065d82055f5616d247c5075a",
@@ -53,9 +53,9 @@
       "backoff_seconds": 1.0
     },
     "evidence": {
-      "path": "evidence/2026-08-09-m40-semantic-r3-24b0327f.jsonl",
+      "path": "evidence/2026-08-10-m40-semantic-r4-8d15ef57.jsonl",
       "format": "jsonl",
-      "sha256": "00d45989ee9f76a99f6efe4ab4973a2cb617ece64fded0c9335bb1eee43d0556",
+      "sha256": "86886dae3fcf467e41ffdf7eb9e24e10bfc12e8ff16b9aae0e4b5c9cb6c5bb0c",
       "case_count": 134
     },
     "metrics": {
