@@ -100,7 +100,7 @@ public static class ServiceCollectionExtensions
             Aevatar.Workflow.Infrastructure.ExternalCapabilities.DeferredManagedServiceApiSkillDiscoveryPort>();
         services.TryAddSingleton<
             IServiceApiCapabilityFallbackPort,
-            UnavailableServiceApiCapabilityFallbackPort>();
+            Aevatar.Workflow.Infrastructure.ExternalCapabilities.UnavailableServiceApiCapabilityFallbackPort>();
         services.TryAddTransient<
             IServiceApiWorkflowCapabilityDiscoveryPort,
             Aevatar.Workflow.Application.ExternalCapabilities.ServiceApiWorkflowCapabilityResolutionService>();
