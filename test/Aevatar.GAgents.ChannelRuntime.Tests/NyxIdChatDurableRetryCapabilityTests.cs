@@ -169,12 +169,14 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
     public async Task ConfirmedEffectRetry_WithRematerializedConnectedServiceTool_ShouldPreserveNyxIdApprovalRequest()
     {
         const string firstToken = "generation-one-token";
-        const string retryToken = "generation-two-token";
+        const string nearExpiryToken = "near-expiry-token";
+        const string refreshedToken = "refreshed-token";
         var handler = new DurableRetryNyxIdHandler();
         handler.CatalogsByToken[firstToken] = DurableRetryMcpCatalog;
-        handler.CatalogsByToken[retryToken] = DurableRetryMcpCatalog;
+        handler.CatalogsByToken[refreshedToken] = DurableRetryMcpCatalog;
         handler.KeysByToken[firstToken] = DurableRetryServiceInventory;
-        handler.KeysByToken[retryToken] = DurableRetryServiceInventory;
+        handler.KeysByToken[refreshedToken] = DurableRetryServiceInventory;
+        handler.AllowedProxyTokens.UnionWith([firstToken, refreshedToken]);
         handler.ProxyResponses.Enqueue(new DurableRetryProxyResponse(
             HttpStatusCode.BadGateway,
             """{"error":"upstream_result_lost","error_code":9000}"""));
@@ -203,11 +205,15 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
             new AlwaysStartingAdmissionLedger(),
             new AppendedAuditTrail(),
             new StableIdentityHasher()));
+        var credentialLifecycle = new RefreshingDelegationCredentialLifecycle(
+            nearExpiryToken,
+            refreshedToken);
         var executor = CreateTurnExecutor(
             initialTool,
             new SourceToolSetRegistry("profile.route", source),
             executionPort,
-            DurableRetryArguments);
+            DurableRetryArguments,
+            credentialLifecycle);
         var state = await BuildReconciledNotAppliedStateAsync(
             executor,
             initialTool,
@@ -219,15 +225,20 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
         var effect = state.ActiveTask.Steps.Single(step => step.Kind == NyxIdChatStepKind.Tool);
         var retry = NyxIdChatControlCommands.Retry(
             state,
-            BuildRetryCommand(effect, retryToken, expectedStateVersion: 70),
+            BuildRetryCommand(
+                effect,
+                nearExpiryToken,
+                expectedStateVersion: 70,
+                credentialKind: AgentToolNyxIdCredentialKind.ProxyDelegation),
             stateVersion: 70,
             Now);
         var confirmed = NyxIdChatPlanGateDecisions.Resolve(
             retry.State,
             BuildPlanConfirmation(
                 retry.State,
-                retryToken,
-                expectedStateVersion: 71),
+                nearExpiryToken,
+                expectedStateVersion: 71,
+                credentialKind: AgentToolNyxIdCredentialKind.ProxyDelegation),
             currentStateVersion: 71,
             Now);
         confirmed.NextCommand.Should().NotBeNull();
@@ -251,6 +262,11 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
             "the fresh retry session must rematerialize the connected-service catalog");
         handler.ProxyRequests.Should().Be(2,
             "both generations must cross the real NyxID proxy ingress");
+        credentialLifecycle.DelegationTokens.Should().Equal(nearExpiryToken);
+        handler.CatalogRequestTokens.Should().Contain(refreshedToken);
+        handler.CatalogRequestTokens.Should().NotContain(nearExpiryToken);
+        handler.ProxyRequestTokens.Should().Contain(refreshedToken);
+        handler.ProxyRequestTokens.Should().NotContain(nearExpiryToken);
     }
 
     [Fact]
@@ -788,7 +804,8 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
         IAgentTool tool,
         IToolSetRegistry registry,
         IAgentToolExecutionPort executionPort,
-        string argumentsJson)
+        string argumentsJson,
+        INyxIdChatDelegationCredentialLifecyclePort? credentialLifecycle = null)
     {
         var provider = new ExactToolCallProvider(tool.Name, argumentsJson);
         var generationExecutor = new AgentRunReplyGenerationExecutor(
@@ -807,7 +824,7 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
             generationExecutor,
             new UnavailableNyxIdActionPostconditionPort(),
             materializer,
-            new AcceptingDelegationCredentialLifecycle());
+            credentialLifecycle ?? new AcceptingDelegationCredentialLifecycle());
     }
 
     private static async Task<(NyxIdChatConversationGAgentState State,
@@ -951,7 +968,9 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
     private static NyxIdChatRetryStepCommand BuildRetryCommand(
         NyxIdChatTaskStepState step,
         string token,
-        long expectedStateVersion) => new()
+        long expectedStateVersion,
+        AgentToolNyxIdCredentialKind credentialKind =
+            AgentToolNyxIdCredentialKind.SourceReadableUserBearer) => new()
     {
         ScopeId = "scope-alpha",
         ConversationActorId = "conversation-alpha",
@@ -965,13 +984,15 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
         OwnerSubject = "owner-alpha",
         ExpectedOperationGeneration = step.Operation.Key.OperationGeneration,
         ExpectedStateVersion = expectedStateVersion,
-        ToolContext = ToolContext(token, $"retry-{expectedStateVersion}"),
+        ToolContext = ToolContext(token, $"retry-{expectedStateVersion}", credentialKind),
     };
 
     private static NyxIdChatPlanResolveCommand BuildPlanConfirmation(
         NyxIdChatConversationGAgentState state,
         string token,
-        long expectedStateVersion) => new()
+        long expectedStateVersion,
+        AgentToolNyxIdCredentialKind credentialKind =
+            AgentToolNyxIdCredentialKind.SourceReadableUserBearer) => new()
     {
         ScopeId = state.ScopeId,
         OwnerSubject = state.OwnerSubject,
@@ -985,12 +1006,14 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
         ExpectedStateVersion = expectedStateVersion,
         CommandId = $"command-confirm-{expectedStateVersion}",
         CorrelationId = $"correlation-confirm-{expectedStateVersion}",
-        ToolContext = ToolContext(token, state.ActiveTask.Gate.RequestId),
+        ToolContext = ToolContext(token, state.ActiveTask.Gate.RequestId, credentialKind),
     };
 
     private static AgentToolExecutionContextPayload ToolContext(
         string token,
-        string? requestId = null) =>
+        string? requestId = null,
+        AgentToolNyxIdCredentialKind credentialKind =
+            AgentToolNyxIdCredentialKind.SourceReadableUserBearer) =>
         (AgentToolExecutionContext.Empty with
         {
             Request = new AgentToolRequestIdentity(requestId, null),
@@ -1008,7 +1031,7 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
             Credentials = AgentToolCredentials.Empty with
             {
                 NyxIdAccessToken = token,
-                NyxIdCredentialKind = AgentToolNyxIdCredentialKind.SourceReadableUserBearer,
+                NyxIdCredentialKind = credentialKind,
             },
             NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
                 "nyxid",
@@ -1317,6 +1340,32 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
         }
     }
 
+    private sealed class RefreshingDelegationCredentialLifecycle(
+        string expectedToken,
+        string refreshedToken) : INyxIdChatDelegationCredentialLifecyclePort
+    {
+        public List<string> DelegationTokens { get; } = [];
+
+        public Task<NyxIdChatDelegationCredentialResolution> ResolveAsync(
+            string delegationToken,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            DelegationTokens.Add(delegationToken);
+            return Task.FromResult(string.Equals(
+                delegationToken,
+                expectedToken,
+                StringComparison.Ordinal)
+                ? new NyxIdChatDelegationCredentialResolution(
+                    true,
+                    refreshedToken,
+                    Refreshed: true)
+                : new NyxIdChatDelegationCredentialResolution(
+                    false,
+                    Detail: "unexpected_delegation_token"));
+        }
+    }
+
     private sealed class ExactToolCallProvider(
         string toolName,
         string argumentsJson = "{\"approvalCode\":\"canary\"}") : ILLMProvider
@@ -1348,6 +1397,9 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
     {
         public Dictionary<string, string> KeysByToken { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, string> CatalogsByToken { get; } = new(StringComparer.Ordinal);
+        public HashSet<string> AllowedProxyTokens { get; } = new(StringComparer.Ordinal);
+        public List<string> CatalogRequestTokens { get; } = [];
+        public List<string> ProxyRequestTokens { get; } = [];
         public Queue<DurableRetryProxyResponse> ProxyResponses { get; } = new();
         public int ProxyRequests { get; private set; }
 
@@ -1359,12 +1411,29 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
             var token = request.Headers.Authorization?.Parameter ?? string.Empty;
             var path = request.RequestUri?.AbsolutePath ?? string.Empty;
             if (path == "/api/v1/keys")
-                return Task.FromResult(Json(KeysByToken.GetValueOrDefault(token, "{\"keys\":[]}")));
+            {
+                CatalogRequestTokens.Add(token);
+                return Task.FromResult(KeysByToken.TryGetValue(token, out var keys)
+                    ? Json(keys)
+                    : Json("{\"error\":\"invalid_token\"}", HttpStatusCode.Unauthorized));
+            }
             if (path == "/api/v1/mcp/config")
-                return Task.FromResult(Json(CatalogsByToken.GetValueOrDefault(token, "{}")));
+            {
+                CatalogRequestTokens.Add(token);
+                return Task.FromResult(CatalogsByToken.TryGetValue(token, out var catalog)
+                    ? Json(catalog)
+                    : Json("{\"error\":\"invalid_token\"}", HttpStatusCode.Unauthorized));
+            }
             if (path.StartsWith("/api/v1/proxy/", StringComparison.Ordinal))
             {
                 ProxyRequests++;
+                ProxyRequestTokens.Add(token);
+                if (!AllowedProxyTokens.Contains(token))
+                {
+                    return Task.FromResult(Json(
+                        "{\"error\":\"invalid_token\"}",
+                        HttpStatusCode.Unauthorized));
+                }
                 var response = ProxyResponses.Dequeue();
                 return Task.FromResult(Json(response.Body, response.StatusCode));
             }

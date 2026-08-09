@@ -791,6 +791,27 @@ public sealed class NyxIdChatTurnOperationExecutor
                     NyxIdChatEffectEvidence.NotStarted);
             }
 
+            if (!TryRestoreDurableRetrySession(command, session))
+            {
+                ClearAuthorization(session);
+                return Failure(
+                    command.Key,
+                    ToolAuthorizationMismatchCode,
+                    ToolAuthorizationMismatchMessage,
+                    NyxIdChatEffectEvidence.NotStarted);
+            }
+
+            if (await EnsureDelegationCredentialAsync(
+                    command.Key,
+                    session,
+                    session.Request!,
+                    ct)
+                .ConfigureAwait(false) is { } durableCredentialFailure)
+            {
+                return durableCredentialFailure;
+            }
+            toolInput.ToolContext = session.Request!.ToolContext!.Clone();
+
             if (hasAgentProfile)
             {
                 var turnCatalog = await MaterializeDurableRetryTurnCatalogAsync(toolInput, ct)
@@ -814,16 +835,6 @@ public sealed class NyxIdChatTurnOperationExecutor
                 session.TurnCatalog = null;
             }
         }
-        if (durableRetry && !TryRestoreDurableRetrySession(command, session))
-        {
-            ClearAuthorization(session);
-            return Failure(
-                command.Key,
-                ToolAuthorizationMismatchCode,
-                ToolAuthorizationMismatchMessage,
-                NyxIdChatEffectEvidence.NotStarted);
-        }
-
         if ((!durableRetry && session.AuthorizedToolStep is null) ||
             session.StepState is null ||
             session.Request is null ||
@@ -865,7 +876,8 @@ public sealed class NyxIdChatTurnOperationExecutor
                         reportProgressAsync,
                         ct)
             .ConfigureAwait(false);
-        if (await EnsureDelegationCredentialAsync(
+        if (!durableRetry &&
+            await EnsureDelegationCredentialAsync(
                 command.Key,
                 session,
                 session.Request,

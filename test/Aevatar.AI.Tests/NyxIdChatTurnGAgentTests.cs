@@ -2460,13 +2460,14 @@ public sealed partial class NyxIdChatTurnGAgentTests
     {
         var registry = new CountingProfileToolSetRegistry();
         var generationExecutor = new ApprovalRequiredDurableReplyExecutor();
+        var credentialLifecycle = new AcceptingDelegationCredentialLifecycle();
         var executor = new NyxIdChatTurnOperationExecutor(
             generationExecutor,
             new UnavailableNyxIdActionPostconditionPort(),
             new AgentProfileTurnCatalogMaterializer(
                 registry,
                 new NoMatchProfileClassifier()),
-            new AcceptingDelegationCredentialLifecycle());
+            credentialLifecycle);
         var command = DurableGenerationTwoPlanGateContinuation();
 
         var execution = await executor.ExecuteAsync(
@@ -2494,6 +2495,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
         context.Channel.RegistrationScopeId.Should().Be("scope-alpha");
         context.ExecutionOwner.Kind.Should().Be(AgentToolExecutionOwnerKind.Actor);
         context.ExecutionOwner.OwnerId.Should().Be("conversation-alpha");
+        credentialLifecycle.DelegationTokens.Should().Equal("fresh-plan-token");
     }
 
     [Theory]
@@ -3173,7 +3175,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
                 token,
                 null,
                 null,
-                AgentToolNyxIdCredentialKind.SourceReadableUserBearer),
+                AgentToolNyxIdCredentialKind.ProxyDelegation),
             Caller = new AgentToolCallerContext(
                 "scope-alpha",
                 "owner-alpha",
@@ -3727,11 +3729,14 @@ public sealed partial class NyxIdChatTurnGAgentTests
     private sealed class AcceptingDelegationCredentialLifecycle
         : INyxIdChatDelegationCredentialLifecyclePort
     {
+        public List<string> DelegationTokens { get; } = [];
+
         public Task<NyxIdChatDelegationCredentialResolution> ResolveAsync(
             string delegationToken,
             CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
+            DelegationTokens.Add(delegationToken);
             return Task.FromResult(new NyxIdChatDelegationCredentialResolution(
                 true,
                 delegationToken));
