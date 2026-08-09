@@ -295,6 +295,7 @@ message ExternalWorkflowCapabilityDescriptor {
   bool destructive = 4;
   ExternalCapabilitySourceStamp source = 5;
   ExternalWorkflowCapabilitySelector selector = 6;
+  string capability_key = 7;
 }
 
 enum ExternalCapabilityDiscoveryDiagnosticCode {

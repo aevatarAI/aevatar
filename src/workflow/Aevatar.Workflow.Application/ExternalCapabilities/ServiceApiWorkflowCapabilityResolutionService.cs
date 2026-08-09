@@ -350,30 +350,16 @@ public sealed partial class ServiceApiWorkflowCapabilityResolutionService(
 
     private static bool DescriptorCapabilityMatches(
         ServiceApiSkillDiscoveryInput input,
-        ExternalWorkflowCapabilityDescriptor descriptor) =>
-        DescriptorCapabilityCandidates(descriptor)
-            .Select(NormalizeDescriptorCapability)
-            .Where(static normalized => normalized.Length > 0)
-            .Any(normalized =>
-                string.Equals(normalized, input.NormalizedCapability, StringComparison.Ordinal) &&
-                string.Equals(
-                    ExternalWorkflowCapabilityContractDigest.Compute(normalized),
-                    input.CapabilityFingerprint,
-                    StringComparison.Ordinal));
-
-    private static IEnumerable<string> DescriptorCapabilityCandidates(
         ExternalWorkflowCapabilityDescriptor descriptor)
     {
-        yield return descriptor.DisplayName;
-        var separatorIndex = descriptor.DisplayName.LastIndexOf("/", StringComparison.Ordinal);
-        if (separatorIndex >= 0 && separatorIndex + 1 < descriptor.DisplayName.Length)
-            yield return descriptor.DisplayName[(separatorIndex + 1)..];
+        var normalized = NormalizeCapabilityKey(descriptor.CapabilityKey);
+        return normalized.Length > 0 &&
+               string.Equals(normalized, input.NormalizedCapability, StringComparison.Ordinal) &&
+               string.Equals(
+                   ExternalWorkflowCapabilityContractDigest.Compute(normalized),
+                   input.CapabilityFingerprint,
+                   StringComparison.Ordinal);
     }
-
-    private static string NormalizeDescriptorCapability(string? value) =>
-        string.IsNullOrWhiteSpace(value)
-            ? string.Empty
-            : WhitespacePattern().Replace(value.Trim(), " ").ToLowerInvariant();
 
     private static ServiceApiWorkflowCapabilityDiscoveryResult ResolvedOperation(
         ExternalWorkflowCapabilityDescriptor descriptor) =>
@@ -462,10 +448,14 @@ public sealed partial class ServiceApiWorkflowCapabilityResolutionService(
 
     private static string NormalizeCapability(string? value)
     {
-        var normalized = WhitespacePattern().Replace(value?.Trim() ?? string.Empty, " ")
-            .ToLowerInvariant();
+        var normalized = NormalizeCapabilityKey(value);
         return Require(normalized, "requested_capability");
     }
+
+    private static string NormalizeCapabilityKey(string? value) =>
+        string.IsNullOrWhiteSpace(value)
+            ? string.Empty
+            : WhitespacePattern().Replace(value.Trim(), " ").ToLowerInvariant();
 
     private static string Require(string? value, string name) =>
         string.IsNullOrWhiteSpace(value)

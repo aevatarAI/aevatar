@@ -563,6 +563,7 @@ internal static class NyxIdMcpOperationCatalog
             },
         },
         DisplayName = $"{service.ServiceName} / {endpoint.Name}",
+        CapabilityKey = endpoint.EndpointId,
         ReadOnly = endpoint.IsReadOnly,
         Destructive = endpoint.IsDestructive,
         Source = service.Source.Clone(),

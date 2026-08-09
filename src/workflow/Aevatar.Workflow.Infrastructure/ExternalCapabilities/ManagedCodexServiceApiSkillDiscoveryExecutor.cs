@@ -127,6 +127,7 @@ internal sealed class ManagedCodexServiceApiSkillDiscoveryExecutor :
                 capability_fingerprint = discovery.CapabilityFingerprint,
                 descriptor_inventory = discovery.DescriptorInventory.Select(static descriptor => new
                 {
+                    capability_key = descriptor.CapabilityKey,
                     display_name = descriptor.DisplayName,
                     read_only = descriptor.ReadOnly,
                     destructive = descriptor.Destructive,

@@ -67,6 +67,32 @@ public sealed class ServiceApiWorkflowCapabilityResolutionServiceTests
     }
 
     [Fact]
+    public async Task DiscoverAsync_ShouldResolveDescriptorByTypedCapabilityKeyWhenDisplayNameDiffers()
+    {
+        var exactDescriptor = Descriptor(
+            TargetUserServiceId,
+            "send-message",
+            "Example Messaging / Archive message");
+        var managed = new StubManagedPort(ReliableManagedResult(RequestSelector()));
+        var service = new ServiceApiWorkflowCapabilityResolutionService(
+            new StubListPort(
+                Descriptor(TargetUserServiceId, "list-messages", "Example Messaging / List messages"),
+                exactDescriptor),
+            managed,
+            new MatchingReadinessPort(),
+            new StubFallbackPort(FallbackExhausted()));
+
+        var result = await service.DiscoverAsync(Request("send-message"));
+
+        result.ResultCase.Should()
+            .Be(ServiceApiWorkflowCapabilityDiscoveryResult.ResultOneofCase.Resolution);
+        result.Resolution.ResultCase.Should()
+            .Be(ServiceApiCapabilityResolution.ResultOneofCase.NyxidOperation);
+        result.Resolution.NyxidOperation.Selector.EndpointId.Should().Be("send-message");
+        managed.Calls.Should().Be(0);
+    }
+
+    [Fact]
     public async Task DiscoverAsync_ShouldNotResolveSingleUnrelatedExactDescriptor()
     {
         var unrelatedDescriptor = Descriptor(
@@ -82,6 +108,31 @@ public sealed class ServiceApiWorkflowCapabilityResolutionServiceTests
             new StubFallbackPort(FallbackExhausted()));
 
         var result = await service.DiscoverAsync(Request());
+
+        result.ResultCase.Should()
+            .Be(ServiceApiWorkflowCapabilityDiscoveryResult.ResultOneofCase.Resolution);
+        result.Resolution.ResultCase.Should()
+            .Be(ServiceApiCapabilityResolution.ResultOneofCase.NyxidRequest);
+        result.Resolution.NyxidRequest.RequestShape.Selector.Should().BeEquivalentTo(selector);
+        managed.Calls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_ShouldNotResolveDescriptorByDisplayNameWhenTypedCapabilityKeyDiffers()
+    {
+        var displayProxyDescriptor = Descriptor(
+            TargetUserServiceId,
+            "archive-message",
+            "Example Messaging / send-message");
+        var selector = RequestSelector();
+        var managed = new StubManagedPort(ReliableManagedResult(selector));
+        var service = new ServiceApiWorkflowCapabilityResolutionService(
+            new StubListPort(displayProxyDescriptor),
+            managed,
+            new MatchingReadinessPort(),
+            new StubFallbackPort(FallbackExhausted()));
+
+        var result = await service.DiscoverAsync(Request("send-message"));
 
         result.ResultCase.Should()
             .Be(ServiceApiWorkflowCapabilityDiscoveryResult.ResultOneofCase.Resolution);
@@ -121,9 +172,9 @@ public sealed class ServiceApiWorkflowCapabilityResolutionServiceTests
             .Be("explicit-request-admission.v1");
         managed.LastRequest.Should().NotBeNull();
         var discoveryInput = managed.LastRequest!.Input;
-        discoveryInput.NormalizedCapability.Should().Be("send a message");
+        discoveryInput.NormalizedCapability.Should().Be("send-message");
         discoveryInput.CapabilityFingerprint.Should().Be(
-            ExternalWorkflowCapabilityContractDigest.Compute("send a message"));
+            ExternalWorkflowCapabilityContractDigest.Compute("send-message"));
         discoveryInput.WorkflowId.Should().Be("wf-alpha");
         discoveryInput.MemberId.Should().Be("m-alpha");
         discoveryInput.PublishedServiceId.Should().Be("svc-alpha");
@@ -233,7 +284,7 @@ public sealed class ServiceApiWorkflowCapabilityResolutionServiceTests
         retryInput.PublishedServiceId.Should().Be("svc-alpha");
         retryInput.DescriptorInventory.Should().ContainSingle();
         retryInput.CapabilityFingerprint.Should().Be(
-            ExternalWorkflowCapabilityContractDigest.Compute("send a message"));
+            ExternalWorkflowCapabilityContractDigest.Compute("send-message"));
     }
 
     [Fact]
@@ -308,7 +359,8 @@ public sealed class ServiceApiWorkflowCapabilityResolutionServiceTests
             .WithMessage("Caller authority does not match the authenticated caller identity.");
     }
 
-    private static DiscoverServiceApiWorkflowCapabilityRequest Request() =>
+    private static DiscoverServiceApiWorkflowCapabilityRequest Request(
+        string requestedCapability = "send-message") =>
         new(
             Access(),
             new ExternalCapabilityAuthorizationOwner
@@ -320,7 +372,7 @@ public sealed class ServiceApiWorkflowCapabilityResolutionServiceTests
             TargetUserServiceId,
             "example-messaging",
             "Example Messaging",
-            "  Send   a MESSAGE  ",
+            requestedCapability,
             "service_api_skill_discovery.v1",
             "explicit-request-admission.v1",
             ExternalCapabilityExecutionMode.Interactive,
@@ -338,6 +390,7 @@ public sealed class ServiceApiWorkflowCapabilityResolutionServiceTests
         new()
         {
             DisplayName = displayName,
+            CapabilityKey = endpointId,
             Selector = new ExternalWorkflowCapabilitySelector
             {
                 NyxIdOperation = new NyxIdOperationSelector

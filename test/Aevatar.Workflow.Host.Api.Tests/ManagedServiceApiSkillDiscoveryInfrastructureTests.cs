@@ -204,6 +204,8 @@ public sealed class ManagedServiceApiSkillDiscoveryInfrastructureTests
             codex.LastRequest.Prompt[(typedInputStart + typedInputMarker.Length)..])!.AsObject();
         var descriptors = typedInput["descriptor_inventory"]!.AsArray();
         descriptors.Should().HaveCount(3);
+        descriptors[0]!["capability_key"]!.GetValue<string>()
+            .Should().Be("send-message");
         descriptors[0]!["nyx_id_operation"]!["endpoint_id"]!.GetValue<string>()
             .Should().Be("send-message");
         descriptors[1]!["nyx_id_request"]!["path_template"]!.GetValue<string>()
@@ -480,6 +482,7 @@ public sealed class ManagedServiceApiSkillDiscoveryInfrastructureTests
         yield return new ExternalWorkflowCapabilityDescriptor
         {
             DisplayName = "Send by operation",
+            CapabilityKey = "send-message",
             ReadOnly = false,
             Selector = new ExternalWorkflowCapabilitySelector
             {
