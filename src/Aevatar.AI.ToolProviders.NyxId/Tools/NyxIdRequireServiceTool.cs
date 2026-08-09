@@ -14,6 +14,7 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
     private const string CatalogUnavailableCode = "NYXID_REQUIRE_SERVICE_CATALOG_UNAVAILABLE";
     private const string ContextUnavailableCode = "NYXID_REQUIRE_SERVICE_CONTEXT_UNAVAILABLE";
     private const string ResultInvalidCode = "NYXID_REQUIRE_SERVICE_RESULT_INVALID";
+    private const string InventoryInvalidCode = "NYXID_REQUIRE_SERVICE_INVENTORY_INVALID";
     private const string ScopesInvalidCode = "NYXID_REQUIRE_SERVICE_SCOPES_INVALID";
     private const string ScopesRequiredCode = "NYXID_REQUIRE_SERVICE_SCOPES_REQUIRED";
     private const string CatalogIdentityInvalidMessage =
@@ -115,6 +116,7 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
         {
             blocked = registrationRequired,
             service_slug = serviceSlug,
+            user_service_id = readiness.UserServiceId ?? string.Empty,
             readiness_status = readiness.Status.ToString(),
             reason_code = blocker?.Code ?? string.Empty,
             safe_message = blocker?.SafeMessage ?? string.Empty,
@@ -156,23 +158,44 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
     {
         var tokens = ResolveManagementReadTokens(access);
         var sourceUnavailable = tokens.Count == 0;
+        var matchingServices = new Dictionary<string, NyxIdUserServiceKey>(StringComparer.Ordinal);
+        var inventoryConflict = false;
         foreach (var token in tokens)
         {
             var response = await _client.ListServicesAsync(token, ct);
-            if (!TryReadServiceSlugs(response, out var serviceSlugs))
+            var inventory = NyxIdApiAccessResponseParser.ParseUserServiceKeys(response);
+            if (!inventory.Succeeded)
             {
                 sourceUnavailable = true;
                 continue;
             }
 
-            if (serviceSlugs.Contains(serviceSlug))
-                return new ServiceRegistrationReadiness(ExternalCapabilityReadinessStatus.Ready, null);
+            foreach (var service in inventory.Value!.Services.Where(service =>
+                         string.Equals(
+                             service.CatalogServiceSlug ?? service.Slug,
+                             serviceSlug,
+                             StringComparison.Ordinal) &&
+                         service.IsActive &&
+                         service.Connected &&
+                         service.CredentialStatus == NyxIdUserServiceCredentialStatus.Active &&
+                         service.CredentialSource.Allowed))
+            {
+                if (matchingServices.TryGetValue(service.Id, out var existing) &&
+                    existing != service)
+                {
+                    inventoryConflict = true;
+                    continue;
+                }
+
+                matchingServices[service.Id] = service;
+            }
         }
 
         if (sourceUnavailable)
         {
             return new ServiceRegistrationReadiness(
                 ExternalCapabilityReadinessStatus.SourceStale,
+                null,
                 new ExternalCapabilityBlocker
                 {
                     Status = ExternalCapabilityReadinessStatus.SourceStale,
@@ -181,8 +204,31 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
                 });
         }
 
+        if (!inventoryConflict && matchingServices.Count == 1)
+        {
+            return new ServiceRegistrationReadiness(
+                ExternalCapabilityReadinessStatus.Ready,
+                matchingServices.Values.Single().Id,
+                null);
+        }
+
+        if (inventoryConflict || matchingServices.Count > 1)
+        {
+            return new ServiceRegistrationReadiness(
+                ExternalCapabilityReadinessStatus.SourceStale,
+                null,
+                new ExternalCapabilityBlocker
+                {
+                    Status = ExternalCapabilityReadinessStatus.SourceStale,
+                    Code = InventoryInvalidCode,
+                    SafeMessage =
+                        "NyxID service readiness did not identify one exact caller-visible UserService.",
+                });
+        }
+
         return new ServiceRegistrationReadiness(
             ExternalCapabilityReadinessStatus.ServiceRegistrationRequired,
+            null,
             new ExternalCapabilityBlocker
             {
                 Status = ExternalCapabilityReadinessStatus.ServiceRegistrationRequired,
@@ -282,43 +328,6 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
         }
     }
 
-    private static bool TryReadServiceSlugs(
-        string response,
-        out HashSet<string> serviceSlugs)
-    {
-        serviceSlugs = new HashSet<string>(StringComparer.Ordinal);
-        try
-        {
-            using var document = JsonDocument.Parse(response);
-            var root = document.RootElement;
-            if (NyxIdUserServiceListJson.IsErrorEnvelope(root, out _) ||
-                !NyxIdUserServiceListJson.HasServiceCollection(root))
-            {
-                return false;
-            }
-
-            foreach (var entry in NyxIdUserServiceListJson.EnumerateServiceEntries(root))
-            {
-                var slug = NormalizeSlug(NyxIdUserServiceListJson.ReadString(
-                    entry,
-                    "slug",
-                    "catalog_service_slug",
-                    "catalogServiceSlug",
-                    "service_slug",
-                    "serviceSlug"));
-                if (slug is null)
-                    return false;
-                serviceSlugs.Add(slug);
-            }
-
-            return true;
-        }
-        catch (JsonException)
-        {
-            return false;
-        }
-    }
-
     public AgentToolReceipt? CreateResultReceipt(
         string callId,
         string toolName,
@@ -349,6 +358,7 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
                 out var blocked,
                 out var status,
                 out var verifiedSlug,
+                out var userServiceId,
                 out var reasonCode,
                 out var safeMessage) ||
             !string.Equals(requestedSlug, verifiedSlug, StringComparison.Ordinal))
@@ -363,12 +373,23 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
 
         if (status == ExternalCapabilityReadinessStatus.Ready && !blocked)
         {
+            if (string.IsNullOrWhiteSpace(userServiceId))
+            {
+                return ErrorReceipt(
+                    callId,
+                    toolName,
+                    ResultInvalidCode,
+                    ResultInvalidMessage,
+                    ErrorResult(ResultInvalidCode, ResultInvalidMessage));
+            }
+
             return new AgentToolReceipt
             {
                 CallId = callId ?? string.Empty,
                 ToolName = string.IsNullOrWhiteSpace(toolName) ? Name : toolName,
                 Status = AgentToolReceiptStatus.Success,
                 ResultJson = resultJson,
+                ProviderResourceId = userServiceId,
             };
         }
 
@@ -556,12 +577,14 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
         out bool blocked,
         out ExternalCapabilityReadinessStatus status,
         out string serviceSlug,
+        out string userServiceId,
         out string reasonCode,
         out string safeMessage)
     {
         blocked = false;
         status = ExternalCapabilityReadinessStatus.Unspecified;
         serviceSlug = string.Empty;
+        userServiceId = string.Empty;
         reasonCode = string.Empty;
         safeMessage = string.Empty;
         try
@@ -575,6 +598,8 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
                 statusElement.ValueKind != JsonValueKind.String ||
                 !root.TryGetProperty("service_slug", out var slug) ||
                 slug.ValueKind != JsonValueKind.String ||
+                !root.TryGetProperty("user_service_id", out var resourceId) ||
+                resourceId.ValueKind != JsonValueKind.String ||
                 !root.TryGetProperty("reason_code", out var reason) ||
                 reason.ValueKind != JsonValueKind.String ||
                 !root.TryGetProperty("safe_message", out var message) ||
@@ -591,9 +616,11 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
             blocked = blockedElement.GetBoolean();
             status = parsedStatus;
             serviceSlug = NormalizeSlug(slug.GetString()) ?? string.Empty;
+            userServiceId = Normalize(resourceId.GetString()) ?? string.Empty;
             reasonCode = Normalize(reason.GetString()) ?? string.Empty;
             safeMessage = Normalize(message.GetString()) ?? string.Empty;
-            return serviceSlug.Length > 0;
+            return serviceSlug.Length > 0 &&
+                   (status != ExternalCapabilityReadinessStatus.Ready || userServiceId.Length > 0);
         }
         catch (JsonException)
         {
@@ -648,6 +675,7 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
 
     private sealed record ServiceRegistrationReadiness(
         ExternalCapabilityReadinessStatus Status,
+        string? UserServiceId,
         ExternalCapabilityBlocker? Blocker);
 
     private sealed record CatalogVerification(

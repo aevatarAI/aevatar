@@ -97,6 +97,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<StreamingAgentProfileTurnClassifier>();
         services.TryAddSingleton<IAgentProfileTurnClassifier>(sp =>
             sp.GetRequiredService<StreamingAgentProfileTurnClassifier>());
+        services.TryAddSingleton<INyxIdChatTurnIntentClassifier, NyxIdChatTurnIntentClassifier>();
         services.TryAddSingleton(sp => new AgentProfileTurnCatalogMaterializer(
             sp.GetRequiredService<IToolSetRegistry>(),
             sp.GetRequiredService<IAgentProfileTurnClassifier>(),

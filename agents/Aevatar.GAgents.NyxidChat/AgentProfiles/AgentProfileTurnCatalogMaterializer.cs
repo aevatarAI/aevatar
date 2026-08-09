@@ -7,6 +7,7 @@ using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.ChatRouting.Abstractions;
+using Aevatar.GAgentService.Abstractions.AgentProfiles;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -14,6 +15,13 @@ namespace Aevatar.GAgents.NyxidChat.AgentProfiles;
 
 public sealed class AgentProfileTurnCatalogMaterializer
 {
+    private static readonly IReadOnlySet<string> ServiceConnectToolNames =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "nyxid_catalog",
+            "nyxid_require_service",
+        };
+
     private readonly IToolSetRegistry _toolSetRegistry;
     private readonly IAgentProfileTurnClassifier _classifier;
     private readonly IExactRemoteSkillFetcher? _exactRemoteSkillFetcher;
@@ -314,6 +322,45 @@ public sealed class AgentProfileTurnCatalogMaterializer
             selectedLayer,
             diagnostics,
             SelectTools(routeTools.Tools, eligible));
+    }
+
+    public async Task<AgentProfileTurnCatalog> MaterializeBuiltInIntentAsync(
+        NyxIdChatTurnIntent intent,
+        AgentToolExecutionContext toolContext,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(toolContext);
+        if (intent != NyxIdChatTurnIntent.ServiceConnect)
+            return RestrictedEmptyCatalog();
+
+        var diagnostics = new List<AgentProfileTurnDiagnostic>();
+        var routeTools = await DiscoverToolSetAsync(
+            AgentProfilePolicies.NyxIdChatRouteToolSet,
+            toolContext,
+            AgentProfileTurnDiagnosticCode.RouteToolSetUnavailable,
+            diagnostics,
+            ct);
+        if (routeTools.HadFailure)
+            return RestrictedEmptyCatalog(diagnostics);
+
+        var selectedTools = routeTools.Tools
+            .Where(pair => ServiceConnectToolNames.Contains(pair.Key) &&
+                           toolContext.ToolVisibility.Allows(pair.Key))
+            .ToDictionary(static pair => pair.Key, static pair => pair.Value, StringComparer.OrdinalIgnoreCase);
+        if (selectedTools.Count != ServiceConnectToolNames.Count ||
+            !ServiceConnectToolNames.All(selectedTools.ContainsKey))
+        {
+            return RestrictedEmptyCatalog(diagnostics);
+        }
+
+        return new AgentProfileTurnCatalog(
+            ServiceConnectToolNames,
+            profilePromptLayer: null,
+            selectedSkillPromptLayer: null,
+            NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
+            NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
+            diagnostics,
+            selectedTools.Values);
     }
 
     private async Task<AgentProfileSkillMember?> SelectCandidateAsync(
@@ -943,6 +990,16 @@ public sealed class AgentProfileTurnCatalogMaterializer
                 message.Length > normalizedAlias.Length &&
                 char.IsWhiteSpace(message[normalizedAlias.Length]));
     }
+
+    private static AgentProfileTurnCatalog RestrictedEmptyCatalog(
+        IReadOnlyList<AgentProfileTurnDiagnostic>? diagnostics = null) =>
+        new(
+            [],
+            profilePromptLayer: null,
+            selectedSkillPromptLayer: null,
+            selectedIntentId: null,
+            candidateIntentId: null,
+            diagnostics);
 
     private sealed record ToolPolicyResolution(IReadOnlySet<string> Names, bool HadFailure);
 

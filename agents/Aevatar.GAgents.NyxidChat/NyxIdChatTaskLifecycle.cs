@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Google.Protobuf;
@@ -37,6 +38,18 @@ public static class NyxIdChatTaskLifecycle
     public const string ConditionGuardMismatch = "NYXID_CHAT_CONDITION_GUARD_MISMATCH";
     public const string ConditionGuardedToolRequired =
         "NYXID_CHAT_CONDITION_GUARDED_TOOL_REQUIRED";
+    public const string ServiceConnectCatalogRequired =
+        "NYXID_CHAT_SERVICE_CONNECT_CATALOG_REQUIRED";
+    public const string ServiceConnectToolInvalid =
+        "NYXID_CHAT_SERVICE_CONNECT_TOOL_INVALID";
+    public const string ServiceConnectPostconditionRequired =
+        "NYXID_CHAT_SERVICE_CONNECT_POSTCONDITION_REQUIRED";
+    public const string ServiceConnectPostconditionEvidenceMismatch =
+        "NYXID_CHAT_SERVICE_CONNECT_POSTCONDITION_EVIDENCE_MISMATCH";
+
+    private const string NyxIdCatalogToolName = "nyxid_catalog";
+    private const string NyxIdRequireServiceToolName = "nyxid_require_service";
+    private const string ServiceConnectedCheck = "service.connected";
 
     private const string ToolSafetyRequiredMessage =
         "The authorized tool provider did not supply the required safety classification.";
@@ -99,6 +112,19 @@ public static class NyxIdChatTaskLifecycle
                 NextCommand: null);
         }
 
+        if (signal.ResultCase ==
+                NyxIdChatOperationResultSignal.ResultOneofCase.ActionPostcondition &&
+            IsServiceConnectedPostcondition(currentStep) &&
+            !MatchesServiceConnectedPostcondition(currentStep, signal.ActionPostcondition))
+        {
+            return new NyxIdChatTaskLifecycleDecision(
+                NyxIdChatTransitionOutcome.Rejected,
+                ServiceConnectPostconditionEvidenceMismatch,
+                "The service connection evidence did not match the frozen UserService identity.",
+                state.Clone(),
+                NextCommand: null);
+        }
+
         if (signal.ResultCase == NyxIdChatOperationResultSignal.ResultOneofCase.Llm &&
             signal.Llm.ToolCalls.Count > 0)
         {
@@ -109,6 +135,18 @@ public static class NyxIdChatTaskLifecycle
                 currentStep,
                 now,
                 planGateConfirmationThresholdSeconds);
+        }
+
+        if (signal.ResultCase == NyxIdChatOperationResultSignal.ResultOneofCase.Llm &&
+            IsServiceConnectIntent(state) &&
+            !HasVerifiedServiceConnectedPostcondition(state))
+        {
+            return FailClosed(
+                state,
+                operationKey,
+                ServiceConnectPostconditionRequired,
+                "The service connection must be verified through its typed postcondition.",
+                now);
         }
 
         if (signal.ResultCase == NyxIdChatOperationResultSignal.ResultOneofCase.Llm &&
@@ -247,6 +285,48 @@ public static class NyxIdChatTaskLifecycle
                 planGateConfirmationThresholdSeconds);
         }
 
+        NyxIdCatalogServiceConnectParams? serviceConnectPostcondition = null;
+        if (IsServiceConnectIntent(state))
+        {
+            if (!IsServiceConnectTool(toolCall.ToolName))
+            {
+                return FailClosed(
+                    state,
+                    operationKey,
+                    ServiceConnectToolInvalid,
+                    "The admitted service-connect turn selected an unauthorized tool.",
+                    now);
+            }
+
+            if (string.Equals(
+                    toolCall.ToolName,
+                    NyxIdRequireServiceToolName,
+                    StringComparison.Ordinal))
+            {
+                if (!HasCompletedCatalogStep(state))
+                {
+                    return FailClosed(
+                        state,
+                        operationKey,
+                        ServiceConnectCatalogRequired,
+                        "The exact NyxID catalog entry must be observed before checking service readiness.",
+                        now);
+                }
+
+                if (!TryParseServiceConnectPostcondition(
+                        toolCall.ArgumentsJson,
+                        out serviceConnectPostcondition))
+                {
+                    return FailClosed(
+                        state,
+                        operationKey,
+                        ToolCallInvalid,
+                        ToolCallInvalidMessage,
+                        now);
+                }
+            }
+        }
+
         if (NyxIdChatOperationAdmissionPolicy.IsConnectedServiceCall(toolCall) &&
             !NyxIdChatOperationAdmissionPolicy.IsValid(
                 toolCall.OperationAdmission,
@@ -272,6 +352,11 @@ public static class NyxIdChatTaskLifecycle
             currentStep,
             toolCall,
             now);
+        if (serviceConnectPostcondition is not null)
+        {
+            toolStep.Source.Tool.ServiceConnectPostcondition =
+                serviceConnectPostcondition.Clone();
+        }
         var verificationStep = BuildVerificationStep(next, toolStep, now);
         next.ActiveTask.Steps.Add(toolStep);
         next.ActiveTask.Steps.Add(verificationStep);
@@ -324,6 +409,7 @@ public static class NyxIdChatTaskLifecycle
                 Idempotent = !toolCall.Safety.MayChangeExternalState,
                 IdempotencyKey = toolStep.Operation.IdempotencyKey,
                 OperationAdmission = toolCall.OperationAdmission?.Clone(),
+                Intent = next.ActiveTurn.Intent,
             },
         };
         FinalizeDerivedState(next, now);
@@ -1233,6 +1319,11 @@ public static class NyxIdChatTaskLifecycle
             step.Operation.Kind = NyxIdChatStepKind.Llm;
         }
 
+        else if (TryPlanServiceConnectedPostcondition(state, step, completedToolKey, now))
+        {
+            return null;
+        }
+
         var readBack = step.Source?.Postcondition?.ToolReadBack;
         if (step.Kind == NyxIdChatStepKind.Postcondition &&
             !NyxIdChatOperationAdmissionPolicy.IsValidReadBack(readBack))
@@ -1268,9 +1359,264 @@ public static class NyxIdChatTaskLifecycle
         }
         else
         {
-            command.Llm = new NyxIdChatLLMOperationInput { ContinueSession = true };
+            command.Llm = new NyxIdChatLLMOperationInput
+            {
+                ContinueSession = true,
+                Intent = state.ActiveTurn.Intent,
+            };
         }
         return command;
+    }
+
+    private static bool TryPlanServiceConnectedPostcondition(
+        NyxIdChatConversationGAgentState state,
+        NyxIdChatTaskStepState continuationStep,
+        NyxIdChatOperationKey completedToolKey,
+        Timestamp now)
+    {
+        var toolStep = state.ActiveTask.Steps.SingleOrDefault(candidate =>
+            string.Equals(candidate.StepId, completedToolKey.StepId, StringComparison.Ordinal));
+        var serviceConnect = toolStep?.Source?.Tool?.ServiceConnectPostcondition;
+        var providerResourceId = toolStep?.Source?.Tool?.ProviderResourceId?.Trim();
+        if (!IsServiceConnectIntent(state) ||
+            !string.Equals(
+                toolStep?.Source?.Tool?.ToolName,
+                NyxIdRequireServiceToolName,
+                StringComparison.Ordinal) ||
+            serviceConnect is null ||
+            string.IsNullOrWhiteSpace(providerResourceId))
+        {
+            return false;
+        }
+
+        var actionRequestId = BuildStableIdentity(
+            "action-postcondition",
+            state.ConversationActorId,
+            completedToolKey.TurnId,
+            completedToolKey.TaskId,
+            completedToolKey.StepId,
+            providerResourceId);
+        continuationStep.Required = false;
+        continuationStep.Status = NyxIdChatStepStatus.Cancelled;
+        continuationStep.ExternalEffect = NyxIdChatEffectEvidence.NotApplied;
+        continuationStep.Operation.Phase = NyxIdChatOperationPhase.Cancelled;
+        continuationStep.Operation.CompletedAt = now.Clone();
+        continuationStep.UpdatedAt = now.Clone();
+        continuationStep.AvailableActions =
+            NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(continuationStep);
+
+        var order = state.ActiveTask.Steps.Max(static candidate => candidate.Order) + 1;
+        var stepId = BuildStableIdentity(
+            "step",
+            state.ConversationActorId,
+            completedToolKey.TurnId,
+            completedToolKey.TaskId,
+            completedToolKey.StepId,
+            providerResourceId,
+            "service-connected-postcondition");
+        var operationId = BuildStableIdentity(
+            "operation",
+            state.ConversationActorId,
+            completedToolKey.TurnId,
+            completedToolKey.TaskId,
+            stepId,
+            "1");
+        var postconditionStep = new NyxIdChatTaskStepState
+        {
+            StepId = stepId,
+            Order = order,
+            Kind = NyxIdChatStepKind.Postcondition,
+            Status = NyxIdChatStepStatus.Planned,
+            Required = true,
+            Description = "Verify the exact connected service from its typed read model.",
+            Source = new NyxIdChatStepSource
+            {
+                Postcondition = new NyxIdChatPostconditionStepSource
+                {
+                    ActionRequestId = actionRequestId,
+                    EffectStepId = completedToolKey.StepId,
+                    Check = ServiceConnectedCheck,
+                    ProviderResourceId = providerResourceId,
+                },
+            },
+            ExternalEffect = NyxIdChatEffectEvidence.NotStarted,
+            AddedBy = NyxIdChatStepAddedBy.Replan,
+            DependsOn = { completedToolKey.StepId },
+            Operation = new NyxIdChatOperationState
+            {
+                Key = new NyxIdChatOperationKey
+                {
+                    ConversationActorId = state.ConversationActorId,
+                    TurnId = completedToolKey.TurnId,
+                    TaskId = completedToolKey.TaskId,
+                    StepId = stepId,
+                    OperationId = operationId,
+                    OperationGeneration = 1,
+                },
+                Kind = NyxIdChatStepKind.Postcondition,
+                Phase = NyxIdChatOperationPhase.Requested,
+                RequestedAt = now.Clone(),
+            },
+            Estimate = new NyxIdChatStepEstimate
+            {
+                Kind = NyxIdChatStepEstimateKind.Duration,
+                Seconds = DefaultVerificationEstimateSeconds,
+            },
+            UpdatedAt = now.Clone(),
+        };
+        postconditionStep.AvailableActions =
+            NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(postconditionStep);
+        var input = new NyxIdChatActionPostconditionInput
+        {
+            ScopeId = state.ScopeId,
+            OwnerSubject = state.OwnerSubject,
+            OriginTurnId = completedToolKey.TurnId,
+            ActionRequestId = actionRequestId,
+            Action = NyxIdAssistantActionKind.ServiceConnect,
+            ReportedDisposition = NyxIdChatActionDisposition.Completed,
+            ResourceHint = new NyxIdChatSafeResourceRef
+            {
+                UserService = new NyxIdChatUserServiceRef
+                {
+                    UserServiceId = providerResourceId,
+                },
+            },
+            Params = new NyxIdAssistantActionParams
+            {
+                CatalogServiceConnect = serviceConnect.Clone(),
+            },
+        };
+
+        state.ActiveTask.Steps.Add(postconditionStep);
+        NyxIdChatPlanRevisions.CommitChange(
+            state.ActiveTask,
+            NyxIdChatPlanRevisionCause.ScopeResolution,
+            now,
+            [postconditionStep],
+            [continuationStep]);
+        state.ActiveTask.Gate = NyxIdChatPlanGateDecisions.BuildPostconditionGate(
+            state,
+            postconditionStep,
+            input);
+        state.ActiveTask.Status = NyxIdChatTaskStatus.Active;
+        state.ActiveTask.ActiveStepId = postconditionStep.StepId;
+        state.ActiveTask.ActiveOperationId = string.Empty;
+        state.ActiveTask.UpdatedAt = now.Clone();
+        state.ActiveTurn.Status = NyxIdChatTurnStatus.Active;
+        state.ActiveTurn.FailureCode = string.Empty;
+        state.ActiveTurn.SafeMessage = string.Empty;
+        state.ActiveTurn.TerminalAt = null;
+        return true;
+    }
+
+    private static bool IsServiceConnectIntent(NyxIdChatConversationGAgentState state) =>
+        state.ActiveTurn?.Intent == NyxIdChatTurnIntent.ServiceConnect;
+
+    private static bool IsServiceConnectTool(string? toolName) =>
+        string.Equals(toolName, NyxIdCatalogToolName, StringComparison.Ordinal) ||
+        string.Equals(toolName, NyxIdRequireServiceToolName, StringComparison.Ordinal);
+
+    private static bool HasCompletedCatalogStep(NyxIdChatConversationGAgentState state) =>
+        state.ActiveTask?.Steps.Any(step =>
+            step.Kind == NyxIdChatStepKind.Tool &&
+            step.Status == NyxIdChatStepStatus.Done &&
+            string.Equals(
+                step.Source?.Tool?.ToolName,
+                NyxIdCatalogToolName,
+                StringComparison.Ordinal)) == true;
+
+    private static bool HasVerifiedServiceConnectedPostcondition(
+        NyxIdChatConversationGAgentState state) =>
+        state.ActiveTask?.Steps.Any(step =>
+            step.Kind == NyxIdChatStepKind.Postcondition &&
+            step.Status == NyxIdChatStepStatus.Done &&
+            step.ExternalEffect == NyxIdChatEffectEvidence.Confirmed &&
+            string.Equals(
+                step.Source?.Postcondition?.Check,
+                ServiceConnectedCheck,
+                StringComparison.Ordinal)) == true;
+
+    private static bool IsServiceConnectedPostcondition(NyxIdChatTaskStepState step) =>
+        step.Kind == NyxIdChatStepKind.Postcondition &&
+        string.Equals(
+            step.Source?.Postcondition?.Check,
+            ServiceConnectedCheck,
+            StringComparison.Ordinal);
+
+    private static bool MatchesServiceConnectedPostcondition(
+        NyxIdChatTaskStepState step,
+        NyxIdChatActionPostconditionResult result)
+    {
+        var frozen = step.Source?.Postcondition;
+        if (frozen is null ||
+            string.IsNullOrWhiteSpace(frozen.ActionRequestId) ||
+            string.IsNullOrWhiteSpace(frozen.ProviderResourceId) ||
+            !string.Equals(
+                frozen.ActionRequestId,
+                result.ActionRequestId,
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var reportedUserServiceId = result.Resource?.UserService?.UserServiceId?.Trim();
+        if (!string.IsNullOrWhiteSpace(reportedUserServiceId) &&
+            !string.Equals(
+                frozen.ProviderResourceId,
+                reportedUserServiceId,
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return !result.Verified ||
+               result.Disposition != NyxIdChatActionDisposition.Completed ||
+               string.Equals(
+                   frozen.ProviderResourceId,
+                   reportedUserServiceId,
+                   StringComparison.Ordinal);
+    }
+
+    private static bool TryParseServiceConnectPostcondition(
+        string? argumentsJson,
+        out NyxIdCatalogServiceConnectParams postcondition)
+    {
+        postcondition = new NyxIdCatalogServiceConnectParams();
+        try
+        {
+            using var document = JsonDocument.Parse(argumentsJson ?? string.Empty);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                !root.TryGetProperty("service_slug", out var slugElement) ||
+                slugElement.ValueKind != JsonValueKind.String ||
+                !root.TryGetProperty("requested_scopes", out var scopesElement) ||
+                scopesElement.ValueKind != JsonValueKind.Array)
+            {
+                return false;
+            }
+
+            var serviceSlug = slugElement.GetString()?.Trim();
+            if (string.IsNullOrWhiteSpace(serviceSlug))
+                return false;
+
+            postcondition.ServiceSlug = serviceSlug;
+            foreach (var scopeElement in scopesElement.EnumerateArray())
+            {
+                if (scopeElement.ValueKind != JsonValueKind.String ||
+                    string.IsNullOrWhiteSpace(scopeElement.GetString()))
+                {
+                    return false;
+                }
+
+                postcondition.RequestedScopes.Add(scopeElement.GetString()!.Trim());
+            }
+
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     private static void BindProviderResourceIdentity(

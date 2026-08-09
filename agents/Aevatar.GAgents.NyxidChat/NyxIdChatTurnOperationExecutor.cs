@@ -1950,7 +1950,38 @@ public sealed class NyxIdChatTurnOperationExecutor
         var profile = input.AgentProfile;
         var authority = input.AgentProfileTurnAuthority;
         if (profile is null && authority is null)
-            return null;
+        {
+            if (input.Intent == NyxIdChatTurnIntent.Unspecified)
+                return null;
+            if (input.Intent != NyxIdChatTurnIntent.ServiceConnect ||
+                _turnCatalogMaterializer is null)
+            {
+                return RestrictedEmptyCatalog();
+            }
+
+            var builtInToolContext = LLMControlContextMapper.FromPayload(request.LlmControl)
+                .ToToolContext(AgentToolExecutionContextMapper.FromPayload(request.ToolContext));
+            try
+            {
+                return await _turnCatalogMaterializer.MaterializeBuiltInIntentAsync(
+                        input.Intent,
+                        builtInToolContext,
+                        ct)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                _logger.LogWarning(
+                    exception,
+                    "Built-in NyxID chat intent catalog materialization failed closed. intent={Intent}",
+                    input.Intent);
+                return RestrictedEmptyCatalog();
+            }
+        }
         if (profile is null || authority is null || _turnCatalogMaterializer is null)
             return RestrictedEmptyCatalog();
 

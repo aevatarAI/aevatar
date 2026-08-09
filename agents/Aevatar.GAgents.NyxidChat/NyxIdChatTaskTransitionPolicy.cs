@@ -525,6 +525,7 @@ public static class NyxIdChatTaskTransitionPolicy
     private static void ApplyTaskOutcome(NyxIdChatConversationGAgentState state)
     {
         var requiredFailure = state.ActiveTask.Steps.FirstOrDefault(step =>
+            step.CancelledInPlanRevision == 0 &&
             step.Required && step.Status is
                 NyxIdChatStepStatus.Failed or
                 NyxIdChatStepStatus.Cancelled or
@@ -542,6 +543,7 @@ public static class NyxIdChatTaskTransitionPolicy
         }
 
         var recoverableStep = state.ActiveTask.Steps.FirstOrDefault(step =>
+            step.CancelledInPlanRevision == 0 &&
             step.Status is
                 NyxIdChatStepStatus.Failed or
                 NyxIdChatStepStatus.Cancelled or

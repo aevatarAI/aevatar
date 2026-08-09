@@ -231,6 +231,154 @@ public sealed class NyxIdChatPlanGateDecisionsTests
     }
 
     [Fact]
+    public void DirectPostconditionGate_ShouldFreezeExactTypedAdmission()
+    {
+        var fixture = DirectPostconditionState();
+
+        var gate = NyxIdChatPlanGateDecisions.BuildPostconditionGate(
+            fixture.State,
+            fixture.Step,
+            fixture.Input);
+
+        gate.Mode.Should().Be(NyxIdChatPlanGateMode.Confirm);
+        gate.Status.Should().Be(NyxIdChatPlanGateStatus.Pending);
+        gate.RequestId.Should().StartWith("plan-gate-");
+        gate.TaskId.Should().Be("task-alpha");
+        gate.PlanId.Should().Be("plan-alpha");
+        gate.PlanRevision.Should().Be(3);
+        var admission = gate.Admissions.Should().ContainSingle().Which;
+        admission.Key.Should().BeEquivalentTo(fixture.Step.Operation.Key);
+        admission.ActionRequestId.Should().Be(fixture.Input.ActionRequestId);
+        admission.Action.Should().Be(NyxIdAssistantActionKind.ServiceConnect);
+        admission.ActionParamsSha256.Should().Equal(
+            NyxIdChatPlanGateDecisions.HashActionParams(fixture.Input.Params));
+        admission.ActionPostcondition.Should().BeEquivalentTo(fixture.Input);
+        fixture.State.PendingActions.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ExactConfirm_DirectPostcondition_ShouldActivateWithoutPendingBrowserAction()
+    {
+        var fixture = DirectPostconditionState();
+        fixture.State.ActiveTask.Gate = NyxIdChatPlanGateDecisions.BuildPostconditionGate(
+            fixture.State,
+            fixture.Step,
+            fixture.Input);
+
+        var decision = NyxIdChatPlanGateDecisions.Resolve(
+            fixture.State,
+            ResolveCommand(fixture.State.ActiveTask.Gate, confirmed: true),
+            currentStateVersion: 17,
+            Now);
+
+        decision.ShouldCommit.Should().BeTrue();
+        decision.NextCommand.Should().NotBeNull();
+        decision.NextCommand!.InputCase.Should().Be(
+            NyxIdChatOperationDispatchCommand.InputOneofCase.ActionPostcondition);
+        decision.NextCommand.Key.Should().BeEquivalentTo(fixture.Step.Operation.Key);
+        decision.NextCommand.ActionPostcondition.Should().BeEquivalentTo(fixture.Input);
+        decision.State.PendingActions.Should().BeEmpty();
+        var active = decision.State.ActiveTask.Steps.Single();
+        active.Status.Should().Be(NyxIdChatStepStatus.Running);
+        active.Operation.Phase.Should().Be(NyxIdChatOperationPhase.Requested);
+        decision.State.ActiveTask.ActiveStepId.Should().Be(active.StepId);
+        decision.State.ActiveTask.ActiveOperationId.Should().Be(
+            active.Operation.Key.OperationId);
+    }
+
+    [Theory]
+    [InlineData("operation-key")]
+    [InlineData("postcondition")]
+    [InlineData("action-kind")]
+    [InlineData("action-request-id")]
+    [InlineData("user-service-id")]
+    [InlineData("typed-params")]
+    [InlineData("params-hash")]
+    public void DirectPostconditionConfirm_TamperedAdmission_ShouldNotAdvance(string tamper)
+    {
+        var fixture = DirectPostconditionState();
+        fixture.State.ActiveTask.Gate = NyxIdChatPlanGateDecisions.BuildPostconditionGate(
+            fixture.State,
+            fixture.Step,
+            fixture.Input);
+        var admission = fixture.State.ActiveTask.Gate.Admissions.Single();
+        switch (tamper)
+        {
+            case "operation-key":
+                admission.Key.OperationId = "operation-foreign";
+                break;
+            case "postcondition":
+                admission.ActionPostcondition = null;
+                break;
+            case "action-kind":
+                admission.Action = NyxIdAssistantActionKind.ServiceReauthorize;
+                admission.ActionPostcondition.Action =
+                    NyxIdAssistantActionKind.ServiceReauthorize;
+                break;
+            case "action-request-id":
+                admission.ActionRequestId = "action-foreign";
+                admission.ActionPostcondition.ActionRequestId = "action-foreign";
+                break;
+            case "user-service-id":
+                admission.ActionPostcondition.ResourceHint.UserService.UserServiceId =
+                    "user-service-foreign";
+                break;
+            case "typed-params":
+                admission.ActionPostcondition.Params.CustomServiceConnect =
+                    new NyxIdCustomServiceConnectParams
+                    {
+                        Name = "foreign",
+                        EndpointUrl = "https://example.invalid",
+                    };
+                admission.ActionParamsSha256 = NyxIdChatPlanGateDecisions.HashActionParams(
+                    admission.ActionPostcondition.Params);
+                break;
+            case "params-hash":
+                admission.ActionParamsSha256 = ByteString.CopyFrom(new byte[32]);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(tamper), tamper, null);
+        }
+
+        var decision = NyxIdChatPlanGateDecisions.Resolve(
+            fixture.State,
+            ResolveCommand(fixture.State.ActiveTask.Gate, confirmed: true),
+            currentStateVersion: 17,
+            Now);
+
+        decision.ShouldCommit.Should().BeFalse();
+        decision.NextCommand.Should().BeNull();
+        decision.State.ActiveTask.Steps.Single().Status.Should().Be(
+            NyxIdChatStepStatus.Planned);
+    }
+
+    [Fact]
+    public void Reject_DirectPostcondition_ShouldCancelWithoutPendingBrowserAction()
+    {
+        var fixture = DirectPostconditionState();
+        fixture.State.ActiveTask.Gate = NyxIdChatPlanGateDecisions.BuildPostconditionGate(
+            fixture.State,
+            fixture.Step,
+            fixture.Input);
+
+        var decision = NyxIdChatPlanGateDecisions.Resolve(
+            fixture.State,
+            ResolveCommand(fixture.State.ActiveTask.Gate, confirmed: false),
+            currentStateVersion: 17,
+            Now);
+
+        decision.ShouldCommit.Should().BeTrue();
+        decision.NextCommand.Should().BeNull();
+        var cancelled = decision.State.ActiveTask.Steps.Single();
+        cancelled.Status.Should().Be(NyxIdChatStepStatus.Cancelled);
+        cancelled.Operation.Phase.Should().Be(NyxIdChatOperationPhase.Cancelled);
+        cancelled.ExternalEffect.Should().Be(NyxIdChatEffectEvidence.NotApplied);
+        decision.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Stopped);
+        decision.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Stopped);
+        decision.State.PendingActions.Should().BeEmpty();
+    }
+
+    [Fact]
     public void StaleOrWrongPlanConfirm_ShouldNotAdvance()
     {
         var state = PendingPlanState();
@@ -439,12 +587,12 @@ public sealed class NyxIdChatPlanGateDecisionsTests
         bool requiresApproval = false,
         bool isReadOnly = false,
         AgentToolOperationAdmissionPayload? operationAdmission = null) => new()
-    {
-        Key = OperationKey("step-llm-alpha", "operation-llm-alpha"),
-        Llm = new NyxIdChatLLMOperationResult
         {
-            Content = "I will run the disclosed operation after the plan gate.",
-            ToolCalls =
+            Key = OperationKey("step-llm-alpha", "operation-llm-alpha"),
+            Llm = new NyxIdChatLLMOperationResult
+            {
+                Content = "I will run the disclosed operation after the plan gate.",
+                ToolCalls =
             {
                 new NyxIdChatToolCall
                 {
@@ -460,8 +608,8 @@ public sealed class NyxIdChatPlanGateDecisionsTests
                     OperationAdmission = operationAdmission?.Clone(),
                 },
             },
-        },
-    };
+            },
+        };
 
     private static NyxIdChatConversationGAgentState ActiveLlmState()
     {
@@ -510,6 +658,97 @@ public sealed class NyxIdChatPlanGateDecisionsTests
             ProgressSequence = 4,
             UpdatedAt = Now.Clone(),
         };
+    }
+
+    private static (
+        NyxIdChatConversationGAgentState State,
+        NyxIdChatTaskStepState Step,
+        NyxIdChatActionPostconditionInput Input) DirectPostconditionState()
+    {
+        var key = OperationKey(
+            "step-service-connect-postcondition",
+            "operation-service-connect-postcondition");
+        var step = new NyxIdChatTaskStepState
+        {
+            StepId = key.StepId,
+            Order = 3,
+            Kind = NyxIdChatStepKind.Postcondition,
+            Status = NyxIdChatStepStatus.Planned,
+            Required = true,
+            Source = new NyxIdChatStepSource
+            {
+                Postcondition = new NyxIdChatPostconditionStepSource
+                {
+                    ActionRequestId = "action-service-connect-alpha",
+                    EffectStepId = "step-require-service-alpha",
+                    Check = "service.connected",
+                    ProviderResourceId = "user-service-alpha",
+                },
+            },
+            Operation = new NyxIdChatOperationState
+            {
+                Key = key,
+                Kind = NyxIdChatStepKind.Postcondition,
+                Phase = NyxIdChatOperationPhase.Requested,
+            },
+        };
+        step.DependsOn.Add("step-require-service-alpha");
+        var task = new NyxIdChatTaskState
+        {
+            TaskId = key.TaskId,
+            TurnId = key.TurnId,
+            Status = NyxIdChatTaskStatus.Active,
+            ActiveStepId = step.StepId,
+            PlanId = "plan-alpha",
+            PlanRevision = 3,
+            CreatedAt = Now.Clone(),
+            UpdatedAt = Now.Clone(),
+        };
+        task.Steps.Add(step);
+        var turn = new NyxIdChatTurnState
+        {
+            TurnId = key.TurnId,
+            TaskId = key.TaskId,
+            Status = NyxIdChatTurnStatus.Active,
+            Intent = NyxIdChatTurnIntent.ServiceConnect,
+            CreatedAt = Now.Clone(),
+        };
+        var state = new NyxIdChatConversationGAgentState
+        {
+            ConversationActorId = key.ConversationActorId,
+            ScopeId = "scope-alpha",
+            OwnerSubject = "owner-alpha",
+            ActiveTurn = turn,
+            LatestTurn = turn.Clone(),
+            ActiveTask = task,
+            ProgressSequence = 4,
+            UpdatedAt = Now.Clone(),
+        };
+        var input = new NyxIdChatActionPostconditionInput
+        {
+            ScopeId = state.ScopeId,
+            OwnerSubject = state.OwnerSubject,
+            OriginTurnId = key.TurnId,
+            ActionRequestId = step.Source.Postcondition.ActionRequestId,
+            Action = NyxIdAssistantActionKind.ServiceConnect,
+            ReportedDisposition = NyxIdChatActionDisposition.Completed,
+            ResourceHint = new NyxIdChatSafeResourceRef
+            {
+                UserService = new NyxIdChatUserServiceRef
+                {
+                    UserServiceId = step.Source.Postcondition.ProviderResourceId,
+                },
+            },
+            Params = new NyxIdAssistantActionParams
+            {
+                CatalogServiceConnect = new NyxIdCatalogServiceConnectParams
+                {
+                    ServiceSlug = "api-github",
+                    RequestedScopes = { "repo" },
+                },
+            },
+        };
+        return (state, step, input);
     }
 
     private static NyxIdChatOperationKey OperationKey(string stepId, string operationId) => new()

@@ -102,7 +102,9 @@ public sealed record NyxIdUserServiceKey(
     NyxIdUserServiceCredentialStatus CredentialStatus,
     string? NodeId,
     NyxIdUserServiceNodeStatus NodeStatus,
-    NyxIdUserServiceCredentialSource CredentialSource);
+    NyxIdUserServiceCredentialSource CredentialSource,
+    string? CatalogServiceSlug,
+    bool Connected);
 
 public sealed record NyxIdUserServiceKeys(IReadOnlyList<NyxIdUserServiceKey> Services);
 
@@ -308,7 +310,9 @@ public static class NyxIdApiAccessResponseParser
                 ParseCredentialSource(RequireProperty(
                     serviceElement,
                     "credential_source",
-                    JsonValueKind.Object))));
+                    JsonValueKind.Object)),
+                ReadOptionalNormalizedString(serviceElement, "catalog_service_slug"),
+                RequireBoolean(serviceElement, "connected")));
         }
 
         return new NyxIdUserServiceKeys(services);

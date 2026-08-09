@@ -145,7 +145,7 @@ public sealed class ToolProviderHttpClientRegistrationTests
     [Fact]
     public async Task NyxIdRequireServiceTool_ShouldCreateDeterministicAuthorizationReceipt()
     {
-        var handler = new StubUserServiceListHandler("""{ "keys": [{ "id": "us-other-alpha", "slug": "api-slack" }] }""")
+        var handler = new StubUserServiceListHandler("""{ "keys": [{ "id": "us-other-alpha", "slug": "api-slack", "status": "active", "is_active": true, "connected": true, "credential_source": { "type": "personal" } }] }""")
         {
             CatalogResponseJson =
                 """{"slug":"catalog-finops-alpha","scope_catalog":[{"scope":"repo"},{"scope":"read:org"}]}""",
@@ -434,7 +434,7 @@ public sealed class ToolProviderHttpClientRegistrationTests
     [Fact]
     public async Task NyxIdRequireServiceTool_ShouldCreateSuccessReceipt_WhenServiceIsAlreadyVisible()
     {
-        var handler = new StubUserServiceListHandler("""{ "keys": [{ "id": "us-github-alpha", "slug": "api-github" }] }""");
+        var handler = new StubUserServiceListHandler("""{ "keys": [{ "id": "us-github-alpha", "slug": "github-personal", "catalog_service_slug": "api-github", "status": "active", "is_active": true, "connected": true, "credential_source": { "type": "personal" } }] }""");
         var tool = CreateRequireServiceTool(handler);
         const string arguments = """{"service_slug":"api-github","requested_scopes":[]}""";
 
@@ -449,12 +449,80 @@ public sealed class ToolProviderHttpClientRegistrationTests
             receipt.Should().NotBeNull();
             receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
             receipt.ResultJson.Should().Be(result);
+            receipt.ProviderResourceId.Should().Be("us-github-alpha");
             receipt.AuthorizationRequired.Should().BeNull();
         }
         finally
         {
             AgentToolRequestContext.Current = previous;
         }
+    }
+
+    [Fact]
+    public async Task NyxIdRequireServiceTool_ShouldFailClosed_WhenConnectedCatalogMatchIsAmbiguous()
+    {
+        var handler = new StubUserServiceListHandler("""
+            {
+              "keys": [
+                {
+                  "id": "us-github-alpha",
+                  "slug": "github-alpha",
+                  "catalog_service_slug": "api-github",
+                  "status": "active",
+                  "is_active": true,
+                  "connected": true,
+                  "credential_source": { "type": "personal" }
+                },
+                {
+                  "id": "us-github-beta",
+                  "slug": "github-beta",
+                  "catalog_service_slug": "api-github",
+                  "status": "active",
+                  "is_active": true,
+                  "connected": true,
+                  "credential_source": { "type": "personal" }
+                }
+              ]
+            }
+            """);
+        var tool = CreateRequireServiceTool(handler);
+        const string arguments = """{"service_slug":"api-github","requested_scopes":[]}""";
+
+        var previous = AgentToolRequestContext.Current;
+        AgentToolRequestContext.Current = CapabilityContext();
+        try
+        {
+            var result = await tool.ExecuteAsync(arguments);
+            var receipt = tool.CreateResultReceipt("call-ambiguous", tool.Name, arguments, result);
+
+            result.Should().Contain("NYXID_REQUIRE_SERVICE_INVENTORY_INVALID");
+            receipt.Should().NotBeNull();
+            receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+            receipt.ProviderResourceId.Should().BeEmpty();
+            receipt.AuthorizationRequired.Should().BeNull();
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = previous;
+        }
+    }
+
+    [Fact]
+    public void NyxIdRequireServiceTool_ShouldRejectReadyResultWithoutExactUserServiceId()
+    {
+        var tool = CreateRequireServiceTool(new StubUserServiceListHandler("""{ "keys": [] }"""));
+        const string arguments = """{"service_slug":"api-github","requested_scopes":[]}""";
+
+        var receipt = tool.CreateResultReceipt(
+            "call-missing-id",
+            tool.Name,
+            arguments,
+            """{"blocked":false,"service_slug":"api-github","user_service_id":"","readiness_status":"Ready","reason_code":"","safe_message":""}""");
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ErrorCode.Should().Be("NYXID_REQUIRE_SERVICE_RESULT_INVALID");
+        receipt.ProviderResourceId.Should().BeEmpty();
     }
 
     [Fact]

@@ -35,6 +35,14 @@ enum NyxIdChatTurnStatus {
   NYX_ID_CHAT_TURN_STATUS_BLOCKED = 5;
 }
 
+// Server-classified product intent committed with the turn. This admission is
+// independent of optional Agent Profile routing and narrows the runtime tool
+// surface; it never carries a provider slug or other guessed resource identity.
+enum NyxIdChatTurnIntent {
+  NYX_ID_CHAT_TURN_INTENT_UNSPECIFIED = 0;
+  NYX_ID_CHAT_TURN_INTENT_SERVICE_CONNECT = 1;
+}
+
 enum NyxIdChatTaskStatus {
   NYX_ID_CHAT_TASK_STATUS_UNSPECIFIED = 0;
   NYX_ID_CHAT_TASK_STATUS_ACTIVE = 1;
@@ -328,6 +336,9 @@ message NyxIdChatToolStepSource {
   // only the safe labels above and never expose this admission for assembly.
   aevatar.ai.tool_providers.AgentToolOperationAdmissionPayload operation_admission = 5;
   string provider_resource_id = 6;
+  // Frozen typed expectation produced only for nyxid_require_service under a
+  // committed service-connect turn admission.
+  NyxIdCatalogServiceConnectParams service_connect_postcondition = 7;
 }
 
 message NyxIdChatBrowserActionStepSource {
@@ -403,6 +414,10 @@ message NyxIdChatPlanOperationAdmission {
   string action_request_id = 5;
   NyxIdAssistantActionKind action = 6;
   bytes action_params_sha256 = 7;
+  // Credential-free, actor-authored postcondition input. This is distinct from
+  // a browser action admission and is dispatched only after the exact plan
+  // revision is confirmed.
+  NyxIdChatActionPostconditionInput action_postcondition = 8;
 }
 
 message NyxIdChatPlanGate {
@@ -658,6 +673,7 @@ message NyxIdChatTurnState {
   // Payload-bound request identity used to distinguish exact retries from
   // conflicting reuse of the same client request id.
   string command_id = 12;
+  NyxIdChatTurnIntent intent = 13;
 }
 
 message NyxIdChatTurnSummary {
@@ -1401,6 +1417,7 @@ message NyxIdChatLLMOperationInput {
   // from this typed pair; it never side-reads conversation actor state.
   aevatar.ai.AgentProfileSnapshot agent_profile = 3;
   aevatar.ai.AgentProfileTurnAuthorityState agent_profile_turn_authority = 4;
+  NyxIdChatTurnIntent intent = 5;
 }
 
 message NyxIdChatToolOperationInput {
@@ -1419,6 +1436,7 @@ message NyxIdChatToolOperationInput {
   // evidence authorized this explicit generation retry. The turn actor checks
   // this source before the executor may rematerialize a durable capability.
   NyxIdChatOperationKey retry_authorization_source_key = 12;
+  NyxIdChatTurnIntent intent = 13;
 }
 
 message NyxIdChatToolVerificationInput {

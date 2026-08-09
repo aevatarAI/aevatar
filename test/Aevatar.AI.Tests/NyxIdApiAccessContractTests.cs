@@ -149,6 +149,7 @@ public sealed class NyxIdApiAccessContractTests
                 {
                   "id": "service-direct",
                   "slug": "api-github",
+                  "catalog_service_slug": "api-github",
                   "label": "GitHub",
                   "catalog_service_name": "GitHub API",
                   "status": "active",
@@ -199,7 +200,9 @@ public sealed class NyxIdApiAccessContractTests
                 null,
                 NyxIdUserServiceNodeStatus.NotBound,
                 new NyxIdUserServiceCredentialSource(
-                    NyxIdUserServiceCredentialSourceKind.Personal)),
+                    NyxIdUserServiceCredentialSourceKind.Personal),
+                "api-github",
+                true),
             new NyxIdUserServiceKey(
                 "service-node",
                 "api-linear",
@@ -215,7 +218,9 @@ public sealed class NyxIdApiAccessContractTests
                     "Alpha",
                     null,
                     NyxIdOrganizationRole.Member,
-                    true)));
+                    true),
+                null,
+                true));
     }
 
     [Theory]

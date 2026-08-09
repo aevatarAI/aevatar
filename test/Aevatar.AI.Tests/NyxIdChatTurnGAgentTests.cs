@@ -14,6 +14,7 @@ using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.Tools;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.GAgentService.Abstractions.AgentProfiles;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat;
@@ -1927,6 +1928,81 @@ public sealed partial class NyxIdChatTurnGAgentTests
     }
 
     [Fact]
+    public async Task OperationExecutor_UnprofiledServiceConnectIntent_ShouldMaterializeOnlyAdmissionTools()
+    {
+        IAgentTool[] tools =
+        [
+            new NamedProfileTool("nyxid_catalog"),
+            new NamedProfileTool("nyxid_require_service"),
+            new NamedProfileTool("nyxid_services"),
+        ];
+        var registry = new BuiltInIntentToolSetRegistry(tools);
+        var generationExecutor = new CapabilityGeneratingReplyExecutor();
+        var executor = new NyxIdChatTurnOperationExecutor(
+            generationExecutor,
+            new UnavailableNyxIdActionPostconditionPort(),
+            new AgentProfileTurnCatalogMaterializer(
+                registry,
+                new NoMatchProfileClassifier()));
+
+        await executor.ExecuteAsync(
+            new NyxIdChatOperationDispatchCommand
+            {
+                Key = CreateKey(),
+                Llm = new NyxIdChatLLMOperationInput
+                {
+                    Intent = NyxIdChatTurnIntent.ServiceConnect,
+                    Request = new ChatRequestEvent
+                    {
+                        Prompt = "Connect GitHub and verify the connection",
+                        SessionId = "turn-alpha",
+                    },
+                },
+            },
+            new NyxIdChatTransientExecutionSession(),
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        registry.RequestedNames.Should().Equal(AgentProfilePolicies.NyxIdChatRouteToolSet);
+        generationExecutor.LastTurnCatalog.Should().NotBeNull();
+        generationExecutor.LastTurnCatalog!.FinalAllowedToolNames.Should().BeEquivalentTo(
+            "nyxid_catalog",
+            "nyxid_require_service");
+        generationExecutor.LastTurnCatalog.RouteOwnedTools.Keys.Should().BeEquivalentTo(
+            "nyxid_catalog",
+            "nyxid_require_service");
+    }
+
+    [Fact]
+    public async Task OperationExecutor_ServiceConnectIntentWithoutMaterializer_ShouldFailClosed()
+    {
+        var generationExecutor = new CapabilityGeneratingReplyExecutor();
+        var executor = new NyxIdChatTurnOperationExecutor(generationExecutor);
+
+        await executor.ExecuteAsync(
+            new NyxIdChatOperationDispatchCommand
+            {
+                Key = CreateKey(),
+                Llm = new NyxIdChatLLMOperationInput
+                {
+                    Intent = NyxIdChatTurnIntent.ServiceConnect,
+                    Request = new ChatRequestEvent
+                    {
+                        Prompt = "Connect GitHub and verify the connection",
+                        SessionId = "turn-alpha",
+                    },
+                },
+            },
+            new NyxIdChatTransientExecutionSession(),
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        generationExecutor.LastTurnCatalog.Should().NotBeNull();
+        generationExecutor.LastTurnCatalog!.FinalAllowedToolNames.Should().BeEmpty();
+        generationExecutor.LastTurnCatalog.RouteOwnedTools.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task OperationExecutor_ProfiledRetryWithFreshSession_ShouldNotRematerializeCapability()
     {
         var registry = new CountingProfileToolSetRegistry();
@@ -3081,15 +3157,56 @@ public sealed partial class NyxIdChatTurnGAgentTests
         }
     }
 
+    private sealed class BuiltInIntentToolSetRegistry(IReadOnlyList<IAgentTool> tools)
+        : IToolSetRegistry
+    {
+        public List<string> RequestedNames { get; } = [];
+
+        public IReadOnlyList<string> GetRegisteredNames() =>
+            [AgentProfilePolicies.NyxIdChatRouteToolSet];
+
+        public ToolSetResolveResult Resolve(string? name)
+        {
+            RequestedNames.Add(name ?? string.Empty);
+            return string.Equals(name, AgentProfilePolicies.NyxIdChatRouteToolSet, StringComparison.Ordinal)
+                ? ToolSetResolveResult.Success(
+                    AgentProfilePolicies.NyxIdChatRouteToolSet,
+                    [new ToolListSource(tools)])
+                : ToolSetResolveResult.Failure(new ToolSetResolveError(
+                    ToolSetResolveError.UnknownNameCode,
+                    name ?? string.Empty,
+                    "missing",
+                    GetRegisteredNames()));
+        }
+    }
+
     private sealed class SingleToolSource(IAgentTool tool) : IAgentToolSource
     {
         public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<IAgentTool>>([tool]);
     }
 
+    private sealed class ToolListSource(IReadOnlyList<IAgentTool> tools) : IAgentToolSource
+    {
+        public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(tools);
+        }
+    }
+
     private sealed class ProfileTool : IAgentTool
     {
         public string Name => "tool-alpha";
+        public string Description => Name;
+        public string ParametersSchema => "{}";
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult("{}");
+    }
+
+    private sealed class NamedProfileTool(string name) : IAgentTool
+    {
+        public string Name => name;
         public string Description => Name;
         public string ParametersSchema => "{}";
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>

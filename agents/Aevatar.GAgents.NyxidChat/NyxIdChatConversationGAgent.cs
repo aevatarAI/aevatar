@@ -48,13 +48,14 @@ public sealed class NyxIdChatConversationGAgent
     private readonly IActorDispatchPort _actorDispatchPort;
     private readonly TimeProvider _timeProvider;
     private readonly AgentProfileTurnCatalogMaterializer? _turnCatalogMaterializer;
+    private readonly INyxIdChatTurnIntentClassifier? _turnIntentClassifier;
     private readonly int _planGateConfirmationThresholdSeconds;
 
     public NyxIdChatConversationGAgent(
         IActorRuntime actorRuntime,
         IActorDispatchPort actorDispatchPort,
         TimeProvider timeProvider)
-        : this(actorRuntime, actorDispatchPort, timeProvider, null, null)
+        : this(actorRuntime, actorDispatchPort, timeProvider, null, null, null)
     {
     }
 
@@ -63,7 +64,7 @@ public sealed class NyxIdChatConversationGAgent
         IActorDispatchPort actorDispatchPort,
         TimeProvider timeProvider,
         AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer)
-        : this(actorRuntime, actorDispatchPort, timeProvider, turnCatalogMaterializer, null)
+        : this(actorRuntime, actorDispatchPort, timeProvider, turnCatalogMaterializer, null, null)
     {
     }
 
@@ -72,12 +73,14 @@ public sealed class NyxIdChatConversationGAgent
         IActorDispatchPort actorDispatchPort,
         TimeProvider timeProvider,
         AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer,
-        NyxIdChatPlanGateOptions? planGateOptions)
+        NyxIdChatPlanGateOptions? planGateOptions,
+        INyxIdChatTurnIntentClassifier? turnIntentClassifier = null)
     {
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         _turnCatalogMaterializer = turnCatalogMaterializer;
+        _turnIntentClassifier = turnIntentClassifier;
         _planGateConfirmationThresholdSeconds = planGateOptions?.ConfirmationThresholdSeconds ??
                                                 NyxIdChatPlanGateOptions.DefaultConfirmationThresholdSeconds;
         if (_planGateConfirmationThresholdSeconds <= 0)
@@ -1568,6 +1571,7 @@ public sealed class NyxIdChatConversationGAgent
 
         var now = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow());
         var turnAuthority = await PrepareAgentProfileTurnAuthorityAsync(command);
+        var intent = await ClassifyTurnIntentAsync(command, turnAuthority);
         var operationKey = new NyxIdChatOperationKey
         {
             ConversationActorId = Id,
@@ -1578,7 +1582,7 @@ public sealed class NyxIdChatConversationGAgent
             OperationGeneration = 1,
         };
         var next = NyxIdChatNeedsYouDecisions.RefreshAttention(
-            BuildStartedState(command, operationKey, turnAuthority, now));
+            BuildStartedState(command, operationKey, turnAuthority, intent, now));
         next.HistoryDeliveryReservation = BuildHistoryDeliveryReservation(command);
 
         await PersistDomainEventAsync(new NyxIdChatTurnStartedEvent
@@ -1620,6 +1624,7 @@ public sealed class NyxIdChatConversationGAgent
                 Request = BuildTransientChatRequest(command),
                 AgentProfile = turnAuthority is null ? null : State.AgentProfile?.Clone(),
                 AgentProfileTurnAuthority = turnAuthority?.Clone(),
+                Intent = intent,
             },
         };
         await DispatchFirstOperationAsync(
@@ -2522,7 +2527,11 @@ public sealed class NyxIdChatConversationGAgent
         }
 
         if (signal.ResultCase ==
-            NyxIdChatOperationResultSignal.ResultOneofCase.ActionPostcondition)
+                NyxIdChatOperationResultSignal.ResultOneofCase.ActionPostcondition &&
+            State.PendingActions.Any(action => string.Equals(
+                action.ActionRequestId,
+                signal.ActionPostcondition.ActionRequestId,
+                StringComparison.Ordinal)))
         {
             var actionDecision = NyxIdChatBrowserActions.ReconcilePostcondition(
                 State,
@@ -2766,6 +2775,7 @@ public sealed class NyxIdChatConversationGAgent
         NyxIdChatStartTurnCommand command,
         NyxIdChatOperationKey operationKey,
         AgentProfileTurnAuthorityState? turnAuthority,
+        NyxIdChatTurnIntent intent,
         Timestamp now)
     {
         var previousTask = command.AddedBy != NyxIdChatStepAddedBy.Initial &&
@@ -2786,6 +2796,7 @@ public sealed class NyxIdChatConversationGAgent
             Prompt = command.Prompt,
             CreatedAt = now.Clone(),
             AgentProfileTurnAuthority = turnAuthority?.Clone(),
+            Intent = intent,
         };
         turn.InputParts.AddRange(command.InputParts.Select(SanitizeInputPart));
 
@@ -3010,6 +3021,39 @@ public sealed class NyxIdChatConversationGAgent
             return RestrictedEmptyAuthority(
                 command.TurnId,
                 AgentProfileTurnDegradationReason.MaterializationFailed);
+        }
+    }
+
+    private async Task<NyxIdChatTurnIntent> ClassifyTurnIntentAsync(
+        NyxIdChatStartTurnCommand command,
+        AgentProfileTurnAuthorityState? turnAuthority)
+    {
+        if (turnAuthority is not null)
+        {
+            return string.Equals(
+                turnAuthority.CandidateRoute?.IntentId,
+                NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
+                StringComparison.Ordinal)
+                ? NyxIdChatTurnIntent.ServiceConnect
+                : NyxIdChatTurnIntent.Unspecified;
+        }
+
+        if (_turnIntentClassifier is null)
+            return NyxIdChatTurnIntent.Unspecified;
+
+        try
+        {
+            return await _turnIntentClassifier.ClassifyAsync(
+                command.Prompt ?? string.Empty,
+                CancellationToken.None);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            Logger.LogWarning(
+                exception,
+                "NyxID chat turn intent classification failed. turn={TurnId}",
+                command.TurnId);
+            return NyxIdChatTurnIntent.Unspecified;
         }
     }
 
