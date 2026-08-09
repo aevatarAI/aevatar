@@ -334,18 +334,46 @@ public sealed partial class ServiceApiWorkflowCapabilityResolutionService(
                 string.Equals(
                     descriptor.Selector.NyxIdOperation.UserServiceId,
                     input.TargetUserServiceId,
-                    StringComparison.Ordinal))
+                    StringComparison.Ordinal) &&
+                DescriptorCapabilityMatches(input, descriptor))
             .OrderBy(static descriptor => descriptor.Selector.NyxIdOperation.EndpointId, StringComparer.Ordinal)
             .Take(2)
             .ToArray();
         if (matches.Length > 1)
         {
             throw new InvalidOperationException(
-                "Multiple exact NyxID operation descriptors match the target UserService.");
+                "Multiple exact NyxID operation descriptors match the requested capability.");
         }
 
         return matches.Length == 1 ? matches[0].Clone() : null;
     }
+
+    private static bool DescriptorCapabilityMatches(
+        ServiceApiSkillDiscoveryInput input,
+        ExternalWorkflowCapabilityDescriptor descriptor) =>
+        DescriptorCapabilityCandidates(descriptor)
+            .Select(NormalizeDescriptorCapability)
+            .Where(static normalized => normalized.Length > 0)
+            .Any(normalized =>
+                string.Equals(normalized, input.NormalizedCapability, StringComparison.Ordinal) &&
+                string.Equals(
+                    ExternalWorkflowCapabilityContractDigest.Compute(normalized),
+                    input.CapabilityFingerprint,
+                    StringComparison.Ordinal));
+
+    private static IEnumerable<string> DescriptorCapabilityCandidates(
+        ExternalWorkflowCapabilityDescriptor descriptor)
+    {
+        yield return descriptor.DisplayName;
+        var separatorIndex = descriptor.DisplayName.LastIndexOf("/", StringComparison.Ordinal);
+        if (separatorIndex >= 0 && separatorIndex + 1 < descriptor.DisplayName.Length)
+            yield return descriptor.DisplayName[(separatorIndex + 1)..];
+    }
+
+    private static string NormalizeDescriptorCapability(string? value) =>
+        string.IsNullOrWhiteSpace(value)
+            ? string.Empty
+            : WhitespacePattern().Replace(value.Trim(), " ").ToLowerInvariant();
 
     private static ServiceApiWorkflowCapabilityDiscoveryResult ResolvedOperation(
         ExternalWorkflowCapabilityDescriptor descriptor) =>

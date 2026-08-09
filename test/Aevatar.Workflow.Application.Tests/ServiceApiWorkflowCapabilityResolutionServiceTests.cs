@@ -40,22 +40,55 @@ public sealed class ServiceApiWorkflowCapabilityResolutionServiceTests
     }
 
     [Fact]
-    public async Task DiscoverAsync_ShouldRejectAmbiguousExactDescriptorsWithoutManagedDiscovery()
+    public async Task DiscoverAsync_ShouldResolveTheCapabilityMatchedDescriptorAmongSameServiceEndpoints()
     {
+        var exactDescriptor = Descriptor(
+            TargetUserServiceId,
+            "send-message",
+            "Example Messaging / Send a message");
         var managed = new StubManagedPort(ReliableManagedResult(RequestSelector()));
         var service = new ServiceApiWorkflowCapabilityResolutionService(
             new StubListPort(
-                Descriptor(TargetUserServiceId, "send-message"),
-                Descriptor(TargetUserServiceId, "send-rich-message")),
+                Descriptor(TargetUserServiceId, "list-messages", "Example Messaging / List messages"),
+                exactDescriptor,
+                Descriptor(TargetUserServiceId, "delete-message", "Example Messaging / Delete message")),
             managed,
-            new StubReadinessPort(ReadyRequestReadiness(RequestSelector())),
+            new StubReadinessPort(ReadyOperationReadiness(exactDescriptor)),
             new StubFallbackPort(FallbackExhausted()));
 
-        var act = () => service.DiscoverAsync(Request());
+        var result = await service.DiscoverAsync(Request());
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("Multiple exact NyxID operation descriptors match the target UserService.");
+        result.ResultCase.Should()
+            .Be(ServiceApiWorkflowCapabilityDiscoveryResult.ResultOneofCase.Resolution);
+        result.Resolution.ResultCase.Should()
+            .Be(ServiceApiCapabilityResolution.ResultOneofCase.NyxidOperation);
+        result.Resolution.NyxidOperation.Selector.EndpointId.Should().Be("send-message");
         managed.Calls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_ShouldNotResolveSingleUnrelatedExactDescriptor()
+    {
+        var unrelatedDescriptor = Descriptor(
+            TargetUserServiceId,
+            "list-messages",
+            "Example Messaging / List messages");
+        var selector = RequestSelector();
+        var managed = new StubManagedPort(ReliableManagedResult(selector));
+        var service = new ServiceApiWorkflowCapabilityResolutionService(
+            new StubListPort(unrelatedDescriptor),
+            managed,
+            new MatchingReadinessPort(),
+            new StubFallbackPort(FallbackExhausted()));
+
+        var result = await service.DiscoverAsync(Request());
+
+        result.ResultCase.Should()
+            .Be(ServiceApiWorkflowCapabilityDiscoveryResult.ResultOneofCase.Resolution);
+        result.Resolution.ResultCase.Should()
+            .Be(ServiceApiCapabilityResolution.ResultOneofCase.NyxidRequest);
+        result.Resolution.NyxidRequest.RequestShape.Selector.Should().BeEquivalentTo(selector);
+        managed.Calls.Should().Be(1);
     }
 
     [Fact]
@@ -300,10 +333,11 @@ public sealed class ServiceApiWorkflowCapabilityResolutionServiceTests
 
     private static ExternalWorkflowCapabilityDescriptor Descriptor(
         string userServiceId,
-        string endpointId) =>
+        string endpointId,
+        string displayName = "Send a message") =>
         new()
         {
-            DisplayName = "Send a message",
+            DisplayName = displayName,
             Selector = new ExternalWorkflowCapabilitySelector
             {
                 NyxIdOperation = new NyxIdOperationSelector
@@ -518,6 +552,27 @@ public sealed class ServiceApiWorkflowCapabilityResolutionServiceTests
         {
             Requests.Add(request);
             return Task.FromResult(_readiness.Dequeue().Clone());
+        }
+    }
+
+    private sealed class MatchingReadinessPort : IExternalWorkflowCapabilityReadinessPort
+    {
+        public Task<ExternalCapabilityReadiness> InspectAsync(
+            InspectExternalWorkflowCapabilityReadinessRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            var readiness = request.Selector.SelectorCase switch
+            {
+                ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdOperation =>
+                    ReadyOperationReadiness(new ExternalWorkflowCapabilityDescriptor
+                    {
+                        Selector = request.Selector.Clone(),
+                    }),
+                ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdRequest =>
+                    ReadyRequestReadiness(request.Selector.NyxIdRequest),
+                _ => throw new InvalidOperationException("Unsupported selector."),
+            };
+            return Task.FromResult(readiness);
         }
     }
 
