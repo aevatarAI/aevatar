@@ -262,6 +262,9 @@ public sealed class NyxIdChatNeedsYouContinuationTests
 
         approved.Result.Tool.Receipt.Status.Should().Be(AgentToolReceiptStatus.Success);
         approved.Result.Tool.Receipt.CallId.Should().Be("call-danger-alpha");
+        approved.Result.Tool.Receipt.ApprovalRequestId.Should().Be("approval-alpha");
+        approved.Result.Tool.Receipt.ProviderResourceId.Should().Be("provider-resource-alpha");
+        approved.Result.Key.OperationGeneration.Should().Be(2);
         var toolStarts = progress.Where(signal =>
             signal.ProgressCase ==
             NyxIdChatOperationProgressSignal.ProgressOneofCase.ToolStarted).ToArray();
@@ -286,6 +289,9 @@ public sealed class NyxIdChatNeedsYouContinuationTests
             Now());
         var effectStep = reconciled.State.ActiveTask.Steps.Single(step =>
             step.Kind == NyxIdChatStepKind.Tool);
+        effectStep.Operation.Key.OperationGeneration.Should().Be(2);
+        effectStep.ApprovalRequestId.Should().Be("approval-alpha");
+        effectStep.Source.Tool.ProviderResourceId.Should().Be("provider-resource-alpha");
         effectStep.Status.Should().Be(NyxIdChatStepStatus.Waiting);
         effectStep.ExternalEffect.Should().Be(NyxIdChatEffectEvidence.MayHaveChanged);
         var verificationStep = reconciled.State.ActiveTask.Steps.Last();
@@ -923,10 +929,15 @@ public sealed class NyxIdChatNeedsYouContinuationTests
                             {
                                 CallId = ToolCall.Id,
                                 ToolName = ToolCall.Name,
-                                ApprovalRequestId = approvalRequestId,
+                                ApprovalRequestId = approvalGrant is null
+                                    ? approvalRequestId
+                                    : string.Empty,
                                 Status = status,
                                 ResultJson = resultJson,
                                 IsDestructive = true,
+                                ProviderResourceId = approvalGrant is null
+                                    ? string.Empty
+                                    : "provider-resource-alpha",
                             },
                         },
                     });

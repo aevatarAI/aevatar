@@ -1310,7 +1310,7 @@ public sealed class NyxIdChatTurnOperationExecutor
         }
 
         var pending = session.StepState.PendingToolCalls[0];
-        return await ExecuteToolAsync(
+        var execution = await ExecuteToolAsync(
                 new NyxIdChatOperationDispatchCommand
                 {
                     Key = command.Key.Clone(),
@@ -1330,6 +1330,9 @@ public sealed class NyxIdChatTurnOperationExecutor
                 ct,
                 approvedCapability)
             .ConfigureAwait(false);
+        if (execution.Result.Tool?.Receipt?.Status == AgentToolReceiptStatus.Success)
+            execution.Result.Tool.Receipt.ApprovalRequestId = approval.ApprovalRequestId;
+        return execution;
     }
 
     private async Task<NyxIdChatTurnOperationExecution> ExecutePlanGateContinuationAsync(
