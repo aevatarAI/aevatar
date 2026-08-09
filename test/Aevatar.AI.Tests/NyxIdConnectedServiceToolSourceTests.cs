@@ -899,16 +899,24 @@ public class NyxIdConnectedServiceToolSourceTests
                 },
             },
             now);
-        planned.NextCommand.Should().NotBeNull();
-        var effectCommand = planned.NextCommand!;
+        planned.NextCommand.Should().BeNull();
+        planned.State.ActiveTask.Gate.Mode.Should().Be(NyxIdChatPlanGateMode.Confirm);
+        planned.State.ActiveTask.Gate.Status.Should().Be(NyxIdChatPlanGateStatus.Pending);
+        var confirmed = ConfirmPendingPlan(planned.State, now);
+        confirmed.ShouldCommit.Should().BeTrue();
+        confirmed.NextCommand.Should().NotBeNull();
+        var effectCommand = confirmed.NextCommand!;
         effectCommand.InputCase.Should().Be(
-            NyxIdChatOperationDispatchCommand.InputOneofCase.Tool);
+            NyxIdChatOperationDispatchCommand.InputOneofCase.PlanGateContinuation);
+        var effectAdmission = effectCommand.PlanGateContinuation;
+        effectAdmission.ArgumentsSha256.Should().Equal(
+            NyxIdChatPlanGateDecisions.HashArguments(arguments));
 
         var effectContext = AgentToolExecutionContext.Empty with
         {
             Request = new AgentToolRequestIdentity(
                 "request-effect-alpha",
-                effectCommand.Tool.CallId) with
+                effectAdmission.ToolCallId) with
             {
                 OperationId = effectCommand.Key.OperationId,
             },
@@ -918,7 +926,7 @@ public class NyxIdConnectedServiceToolSourceTests
             },
             ExecutionOwner = AgentToolExecutionOwners.Actor("conversation-alpha"),
             OperationAdmission = AgentToolOperationAdmissionPayloadMapper.FromPayload(
-                effectCommand.Tool.OperationAdmission),
+                effectAdmission.OperationAdmission),
             InvocationSurface = AgentToolInvocationSurface.HumanSession,
             Chat = new AgentChatInvocationContext(
                 AgentChatInvocationSurface.NyxIdAssistant,
@@ -931,7 +939,7 @@ public class NyxIdConnectedServiceToolSourceTests
         var effectOutcome = await executionPort.ExecuteAsync(
             new AgentToolExecutionRequest(
                 effectTool,
-                effectCommand.Tool.ArgumentsJson,
+                arguments,
                 effectContext,
                 AgentToolApprovalContinuationMode.None,
                 ApprovalGrant: null));
@@ -942,7 +950,7 @@ public class NyxIdConnectedServiceToolSourceTests
         effectOutcome.ResultJson.Should().NotContain("om_provider_alpha");
 
         var afterEffect = NyxIdChatTaskLifecycle.ApplyOperationResult(
-            planned.State,
+            confirmed.State,
             new NyxIdChatOperationResultSignal
             {
                 Key = effectCommand.Key.Clone(),
@@ -1394,6 +1402,7 @@ public class NyxIdConnectedServiceToolSourceTests
             ActiveOperationId = key.OperationId,
             CreatedAt = now.Clone(),
             UpdatedAt = now.Clone(),
+            PlanId = "plan-alpha",
             PlanRevision = 1,
             PlanRevisionHistoryStart = 1,
         };
@@ -1427,6 +1436,37 @@ public class NyxIdConnectedServiceToolSourceTests
             ProgressSequence = 1,
             UpdatedAt = now.Clone(),
         };
+    }
+
+    private static NyxIdChatPlanResolutionDecision ConfirmPendingPlan(
+        NyxIdChatConversationGAgentState state,
+        Timestamp now)
+    {
+        const long stateVersion = 17;
+        var gate = state.ActiveTask.Gate;
+        return NyxIdChatPlanGateDecisions.Resolve(
+            state,
+            new NyxIdChatPlanResolveCommand
+            {
+                ScopeId = state.ScopeId,
+                ConversationActorId = state.ConversationActorId,
+                TaskId = gate.TaskId,
+                PlanId = gate.PlanId,
+                PlanRevision = gate.PlanRevision,
+                RequestId = gate.RequestId,
+                ClientRequestId = "confirm-dynamic-effect-plan",
+                Confirmed = true,
+                ExpectedStateVersion = stateVersion,
+                ToolContext = new AgentToolExecutionContextPayload
+                {
+                    Credentials = new AgentToolCredentialsPayload
+                    {
+                        NyxIdAccessToken = "user-token",
+                    },
+                },
+            },
+            currentStateVersion: stateVersion,
+            now);
     }
 
     private static string Instance(

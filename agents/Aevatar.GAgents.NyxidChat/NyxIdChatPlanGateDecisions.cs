@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
@@ -32,7 +33,12 @@ public static class NyxIdChatPlanGateDecisions
         if (call.Safety is null)
             return true;
 
-        return call.Safety.RequiresApproval ||
+        return call.OperationAdmission?.ExecutionPolicy is
+                   {
+                       Risk: AgentToolOperationRiskPayload.Write,
+                       Approval: AgentToolOperationApprovalPayload.Required,
+                   } ||
+               call.Safety.RequiresApproval ||
                call.Safety.IsDestructive ||
                ExceedsEstimatedDurationThreshold(plannedSteps, thresholdSeconds);
     }

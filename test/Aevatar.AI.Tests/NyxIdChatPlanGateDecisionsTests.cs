@@ -51,11 +51,30 @@ public sealed class NyxIdChatPlanGateDecisionsTests
     }
 
     [Fact]
-    public void ReadOnlyTool_ShouldAutoAdmitAndDispatchImmediately()
+    public void WriteRequiredPolicy_ShouldRequireConfirmationWithoutDispatch_WhenSafetyApprovalIsFalse()
     {
         var planned = NyxIdChatTaskLifecycle.ApplyOperationResult(
             ActiveLlmState(),
-            ToolPlan("{}", isReadOnly: true),
+            ToolPlan(
+                "{\"repositoryId\":\"repo-alpha\"}",
+                operationAdmission: ExactWriteAdmission()),
+            Now);
+
+        planned.NextCommand.Should().BeNull();
+        planned.State.ActiveTask.Gate.Mode.Should().Be(NyxIdChatPlanGateMode.Confirm);
+        planned.State.ActiveTask.Gate.Status.Should().Be(NyxIdChatPlanGateStatus.Pending);
+        planned.State.PendingApproval.Should().BeNull();
+    }
+
+    [Fact]
+    public void ReadOnlyNonePolicyTool_ShouldAutoAdmitAndDispatchImmediately()
+    {
+        var planned = NyxIdChatTaskLifecycle.ApplyOperationResult(
+            ActiveLlmState(),
+            ToolPlan(
+                "{}",
+                isReadOnly: true,
+                operationAdmission: ExactReadAdmission()),
             Now);
 
         planned.State.ActiveTask.Gate.Mode.Should().Be(NyxIdChatPlanGateMode.Auto);
@@ -424,4 +443,13 @@ public sealed class NyxIdChatPlanGateDecisionsTests
             },
         },
     };
+
+    private static AgentToolOperationAdmissionPayload ExactReadAdmission()
+    {
+        var admission = ExactWriteAdmission();
+        admission.HttpMethod = "GET";
+        admission.ExecutionPolicy.Risk = AgentToolOperationRiskPayload.ReadOnly;
+        admission.ExecutionPolicy.Approval = AgentToolOperationApprovalPayload.None;
+        return admission;
+    }
 }

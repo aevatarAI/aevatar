@@ -18,6 +18,7 @@ public sealed class NyxIdChatTaskLifecycleTests
     public void LlmToolCall_ShouldCommitNextToolWaterlineFromTypedSafety()
     {
         var state = ActiveState(NyxIdChatStepKind.Llm, "step-llm-alpha", "operation-llm-alpha");
+        state.ActiveTask.PlanId = "plan-alpha";
         var original = state.Clone();
         var signal = new NyxIdChatOperationResultSignal
         {
@@ -53,10 +54,18 @@ public sealed class NyxIdChatTaskLifecycleTests
             },
         };
 
-        var decision = NyxIdChatTaskLifecycle.ApplyOperationResult(state, signal, Now);
+        var planned = NyxIdChatTaskLifecycle.ApplyOperationResult(state, signal, Now);
 
-        decision.Outcome.Should().Be(NyxIdChatTransitionOutcome.Accepted);
+        planned.Outcome.Should().Be(NyxIdChatTransitionOutcome.Accepted);
         state.Should().BeEquivalentTo(original, "lifecycle derivation must not mutate committed actor state");
+        planned.NextCommand.Should().BeNull();
+        planned.State.ActiveTask.Gate.Mode.Should().Be(NyxIdChatPlanGateMode.Confirm);
+        planned.State.ActiveTask.Gate.Status.Should().Be(NyxIdChatPlanGateStatus.Pending);
+        var decision = ConfirmPendingPlan(
+            planned.State,
+            stateVersion: 17,
+            clientRequestId: "confirm-write-plan-alpha");
+        decision.ShouldCommit.Should().BeTrue();
         decision.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Active);
         decision.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Active);
         decision.State.ActiveTask.Steps.Should().HaveCount(3);
@@ -97,14 +106,15 @@ public sealed class NyxIdChatTaskLifecycleTests
         decision.NextCommand.Should().NotBeNull();
         decision.NextCommand!.Key.Should().BeEquivalentTo(toolStep.Operation.Key);
         decision.NextCommand.InputCase.Should().Be(
-            NyxIdChatOperationDispatchCommand.InputOneofCase.Tool);
-        decision.NextCommand.Tool.CallId.Should().Be("call-alpha");
-        decision.NextCommand.Tool.ToolName.Should().Be("repository_update");
-        decision.NextCommand.Tool.ArgumentsJson.Should().Be("{\"repositoryId\":\"repo-alpha\"}");
-        decision.NextCommand.Tool.MayChangeExternalState.Should().BeTrue();
-        decision.NextCommand.Tool.IdempotencyKey.Should().Be(
+            NyxIdChatOperationDispatchCommand.InputOneofCase.PlanGateContinuation);
+        decision.NextCommand.PlanGateContinuation.ToolCallId.Should().Be("call-alpha");
+        decision.NextCommand.PlanGateContinuation.ToolName.Should().Be("repository_update");
+        decision.NextCommand.PlanGateContinuation.ArgumentsSha256.Should().Equal(
+            NyxIdChatPlanGateDecisions.HashArguments("{\"repositoryId\":\"repo-alpha\"}"));
+        decision.NextCommand.PlanGateContinuation.MayChangeExternalState.Should().BeTrue();
+        decision.NextCommand.PlanGateContinuation.IdempotencyKey.Should().Be(
             decision.NextCommand.Key.OperationId);
-        decision.NextCommand.Tool.OperationAdmission.Should().BeEquivalentTo(
+        decision.NextCommand.PlanGateContinuation.OperationAdmission.Should().BeEquivalentTo(
             ExactWriteAdmission());
     }
 
@@ -418,8 +428,16 @@ public sealed class NyxIdChatTaskLifecycleTests
             stateVersion: 11,
             Now);
 
-        retry.ShouldDispatch.Should().BeTrue("retry decision was {0}", retry.Result.ReasonCode);
-        retry.NextCommand!.Key.OperationGeneration.Should().Be(2);
+        retry.ShouldDispatch.Should().BeFalse("write retries require a fresh plan decision");
+        retry.NextCommand.Should().BeNull();
+        retry.State.ActiveTask.Gate.Status.Should().Be(NyxIdChatPlanGateStatus.Pending);
+        var confirmed = ConfirmPendingPlan(
+            retry.State,
+            stateVersion: 12,
+            clientRequestId: "confirm-retry-per-request");
+        confirmed.ShouldCommit.Should().BeTrue();
+        confirmed.NextCommand.Should().NotBeNull();
+        confirmed.NextCommand!.Key.OperationGeneration.Should().Be(2);
         retry.State.ActiveTask.Steps.Single(step => step.StepId == toolStepId)
             .ApprovalRequestId.Should().BeEmpty("a retry cannot carry the prior decision request");
         retry.State.ActiveTask.Steps.Single(step => step.StepId == toolStepId)
@@ -427,9 +445,9 @@ public sealed class NyxIdChatTaskLifecycleTests
                 "generation N+1 cannot inherit a generation N post-return fact");
 
         var reentry = NyxIdChatTaskLifecycle.ApplyOperationResult(
-            retry.State,
+            confirmed.State,
             NyxIdApprovalRequired(
-                retry.NextCommand.Key,
+                confirmed.NextCommand.Key,
                 "approval-per-request-fresh"),
             Now);
 
@@ -463,10 +481,18 @@ public sealed class NyxIdChatTaskLifecycleTests
             RetryToolCommand(original, "retry-valid-grant"),
             stateVersion: 11,
             Now);
+        retry.ShouldDispatch.Should().BeFalse("write retries require a fresh plan decision");
+        retry.State.ActiveTask.Gate.Status.Should().Be(NyxIdChatPlanGateStatus.Pending);
+        var confirmed = ConfirmPendingPlan(
+            retry.State,
+            stateVersion: 12,
+            clientRequestId: "confirm-retry-valid-grant");
+        confirmed.ShouldCommit.Should().BeTrue();
+        confirmed.NextCommand.Should().NotBeNull();
 
         var afterEffect = NyxIdChatTaskLifecycle.ApplyOperationResult(
-            retry.State,
-            ToolSuccess(retry.NextCommand!.Key),
+            confirmed.State,
+            ToolSuccess(confirmed.NextCommand!.Key),
             Now);
         afterEffect.NextCommand.Should().NotBeNull();
         var verification = afterEffect.NextCommand!;
@@ -485,7 +511,7 @@ public sealed class NyxIdChatTaskLifecycleTests
             },
             Now);
 
-        retry.NextCommand.Key.OperationGeneration.Should().Be(2);
+        confirmed.NextCommand.Key.OperationGeneration.Should().Be(2);
         completed.State.PendingApproval.Should().BeNull();
         completed.State.ActiveTask.Steps.Single(step => step.StepId == toolStepId)
             .ApprovalRequestId.Should().BeEmpty(
@@ -1020,10 +1046,25 @@ public sealed class NyxIdChatTaskLifecycleTests
     private static (NyxIdChatConversationGAgentState State, string ToolStepId)
         ReconciledNotAppliedToolState()
     {
-        var planned = NyxIdChatTaskLifecycle.ApplyOperationResult(
-            ActiveState(NyxIdChatStepKind.Llm, "step-llm-alpha", "operation-llm-alpha"),
+        var initial = ActiveState(
+            NyxIdChatStepKind.Llm,
+            "step-llm-alpha",
+            "operation-llm-alpha");
+        initial.ActiveTask.PlanId = "plan-alpha";
+        initial.AgentProfile = new AgentProfileSnapshot();
+        initial.ActiveTurn.AgentProfileTurnAuthority = new AgentProfileTurnAuthorityState();
+        var pendingPlan = NyxIdChatTaskLifecycle.ApplyOperationResult(
+            initial,
             LlmWithAdmittedToolCall(),
-            Now).State;
+            Now);
+        pendingPlan.State.ActiveTask.Gate.Status.Should().Be(NyxIdChatPlanGateStatus.Pending);
+        var confirmedPlan = ConfirmPendingPlan(
+            pendingPlan.State,
+            stateVersion: 10,
+            clientRequestId: "confirm-reconciliation-plan");
+        confirmedPlan.ShouldCommit.Should().BeTrue();
+        confirmedPlan.NextCommand.Should().NotBeNull();
+        var planned = confirmedPlan.State;
         var tool = planned.ActiveTask.Steps.Single(step => step.Kind == NyxIdChatStepKind.Tool);
         var uncertain = NyxIdChatTaskLifecycle.ApplyOperationResult(
             planned,
@@ -1059,6 +1100,37 @@ public sealed class NyxIdChatTaskLifecycleTests
         reconciled.ActiveTask.PlanRevisions[^1].RevisionCause.Should().Be(
             NyxIdChatPlanRevisionCause.FailureRecovery);
         return (reconciled, tool.StepId);
+    }
+
+    private static NyxIdChatPlanResolutionDecision ConfirmPendingPlan(
+        NyxIdChatConversationGAgentState state,
+        long stateVersion,
+        string clientRequestId)
+    {
+        var gate = state.ActiveTask.Gate;
+        return NyxIdChatPlanGateDecisions.Resolve(
+            state,
+            new NyxIdChatPlanResolveCommand
+            {
+                ScopeId = state.ScopeId,
+                ConversationActorId = state.ConversationActorId,
+                TaskId = gate.TaskId,
+                PlanId = gate.PlanId,
+                PlanRevision = gate.PlanRevision,
+                RequestId = gate.RequestId,
+                ClientRequestId = clientRequestId,
+                Confirmed = true,
+                ExpectedStateVersion = stateVersion,
+                ToolContext = new AgentToolExecutionContextPayload
+                {
+                    Credentials = new AgentToolCredentialsPayload
+                    {
+                        NyxIdAccessToken = "runtime-token-alpha",
+                    },
+                },
+            },
+            currentStateVersion: stateVersion,
+            Now);
     }
 
     private static NyxIdChatRetryStepCommand RetryToolCommand(
