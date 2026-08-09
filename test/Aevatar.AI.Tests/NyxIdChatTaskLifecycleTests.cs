@@ -610,6 +610,10 @@ public sealed class NyxIdChatTaskLifecycleTests
         decision.State.PendingApproval.StepId.Should().Be("step-tool-alpha");
         decision.State.PendingApproval.ToolName.Should().Be("repository_delete");
         decision.State.PendingApproval.AskedAt.Should().Be(Now);
+        decision.State.PendingApproval.ExpiresAt.Should().Be(
+            Timestamp.FromDateTimeOffset(
+                Now.ToDateTimeOffset() + NyxIdChatTaskLifecycle.ToolApprovalExpiryWindow),
+            "the actor stamps the local approval deadline when it parks the approval");
         decision.State.PendingApproval.Presentation.Action.Should().Be("repository_delete");
         decision.State.PendingApproval.Presentation.Target.Should().Be("repository_delete");
         decision.State.PendingApproval.Presentation.ActorLabel.Should()

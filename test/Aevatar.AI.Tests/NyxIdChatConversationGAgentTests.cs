@@ -4694,6 +4694,167 @@ public sealed partial class NyxIdChatConversationGAgentTests
     }
 
     [Fact]
+    public async Task PendingToolApproval_ShouldExpireAsDenialThroughDurableSelfTimeout()
+    {
+        const string conversationActorId = "conversation-alpha";
+        var now = new MutableTimeProvider(
+            new DateTimeOffset(2026, 7, 24, 8, 0, 0, TimeSpan.Zero));
+        var callbacks = new RecordingRuntimeCallbackScheduler();
+        var eventStore = new InMemoryEventStoreForTests();
+        using var services = BuildEventSourcingServices(
+            eventStore,
+            callbackScheduler: callbacks);
+        var dispatch = new RecordingActorDispatchPort([], static (_, _) => Task.CompletedTask);
+        var agent = CreateController(
+            services,
+            conversationActorId,
+            actorDispatchPort: dispatch,
+            timeProvider: now);
+        await agent.ActivateAsync();
+
+        agent.State.OwnerSubject = "owner-alpha";
+        await agent.HandleEventAsync(CreateEnvelope(
+            conversationActorId,
+            WithOwner(CreateStartTurnCommand(), "owner-alpha")));
+        var llmKey = agent.State.ActiveTask.Steps.Single().Operation.Key.Clone();
+        await agent.HandleEventAsync(CreateEnvelope(
+            conversationActorId,
+            new NyxIdChatOperationResultSignal
+            {
+                Key = llmKey,
+                Llm = new NyxIdChatLLMOperationResult
+                {
+                    ToolCalls =
+                    {
+                        new NyxIdChatToolCall
+                        {
+                            CallId = "call-danger-alpha",
+                            ToolName = "repository_delete",
+                            ArgumentsJson = "{\"repositoryId\":\"repo-alpha\"}",
+                            Safety = new NyxIdChatToolCallSafety
+                            {
+                                IsDestructive = true,
+                                SideEffectKind = "repository.delete",
+                            },
+                        },
+                    },
+                },
+            }));
+        agent.State.ActiveTask.Gate.Mode.Should().Be(NyxIdChatPlanGateMode.Confirm);
+        var admissionCommand = dispatch.Calls
+            .Last(call => call.Envelope.Payload.Is(
+                NyxIdChatTurnPlanGateAdmissionCommand.Descriptor))
+            .Envelope.Payload.Unpack<NyxIdChatTurnPlanGateAdmissionCommand>();
+        await agent.HandleEventAsync(CreateEnvelope(
+            conversationActorId,
+            new NyxIdChatTurnPlanGateAdmissionCommittedSignal
+            {
+                Admission = admissionCommand.Admission.Clone(),
+            }));
+        var gate = agent.State.ActiveTask.Gate.Clone();
+        var committed = await eventStore.GetEventsAsync(conversationActorId);
+        await agent.HandleEventAsync(CreateEnvelope(
+            conversationActorId,
+            new NyxIdChatPlanResolveCommand
+            {
+                ScopeId = agent.State.ScopeId,
+                ConversationActorId = conversationActorId,
+                TaskId = gate.TaskId,
+                PlanId = gate.PlanId,
+                PlanRevision = gate.PlanRevision,
+                RequestId = gate.RequestId,
+                ClientRequestId = $"confirm-{gate.RequestId}",
+                CommandId = $"command-confirm-{gate.RequestId}",
+                CorrelationId = $"correlation-confirm-{gate.RequestId}",
+                Confirmed = true,
+                ExpectedStateVersion = committed[^1].Version,
+                OwnerSubject = agent.State.OwnerSubject,
+                ToolContext = new AgentToolExecutionContextPayload
+                {
+                    Caller = new AgentToolCallerContextPayload
+                    {
+                        ScopeId = agent.State.ScopeId,
+                        OwnerSubject = agent.State.OwnerSubject,
+                        ResponseId = gate.RequestId,
+                    },
+                    Credentials = new AgentToolCredentialsPayload
+                    {
+                        NyxIdAccessToken = "runtime-token-alpha",
+                    },
+                },
+            }));
+        agent.State.ActiveTask.Gate.Status.Should().Be(NyxIdChatPlanGateStatus.Satisfied);
+        var toolKey = agent.State.ActiveTask.Steps
+            .Single(step => step.Kind == NyxIdChatStepKind.Tool)
+            .Operation.Key.Clone();
+
+        await agent.HandleEventAsync(CreateEnvelope(
+            conversationActorId,
+            new NyxIdChatOperationResultSignal
+            {
+                Key = toolKey,
+                Tool = new NyxIdChatToolOperationResult
+                {
+                    ExternalEffect = NyxIdChatEffectEvidence.NotStarted,
+                    Receipt = new Aevatar.AI.Abstractions.AgentToolReceipt
+                    {
+                        CallId = "call-danger-alpha",
+                        ToolName = "repository_delete",
+                        Status = Aevatar.AI.Abstractions.AgentToolReceiptStatus.ApprovalRequired,
+                        ApprovalRequestId = "approval-alpha",
+                        IsDestructive = true,
+                    },
+                },
+            }));
+
+        agent.State.PendingApproval.Should().NotBeNull();
+        agent.State.PendingApproval.ExpiresAt.Should().Be(Timestamp.FromDateTimeOffset(
+            now.GetUtcNow() + NyxIdChatTaskLifecycle.ToolApprovalExpiryWindow));
+        var expiry = callbacks.TimeoutRequests.Last(request =>
+            request.TriggerEnvelope.Payload.Is(
+                NyxIdChatToolApprovalExpiredSignal.Descriptor));
+        expiry.DueTime.Should().Be(NyxIdChatTaskLifecycle.ToolApprovalExpiryWindow);
+
+        now.Advance(NyxIdChatTaskLifecycle.ToolApprovalExpiryWindow);
+        await agent.HandleEventAsync(expiry.TriggerEnvelope);
+
+        agent.State.PendingApproval.Should().BeNull();
+        agent.State.LatestApprovalResolution.Outcome.Should().Be(
+            NyxIdChatNeedsYouResolutionOutcome.Expired);
+        agent.State.LatestApprovalResolution.Approved.Should().BeFalse();
+        var cancelledStep = agent.State.ActiveTask.Steps
+            .Single(step => step.Kind == NyxIdChatStepKind.Tool);
+        cancelledStep.Status.Should().Be(NyxIdChatStepStatus.Cancelled);
+        cancelledStep.FailureCode.Should().Be(NyxIdChatTaskLifecycle.ApprovalExpired);
+        agent.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Failed);
+        agent.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Failed);
+        agent.State.ActiveTurn.FailureCode.Should().Be(NyxIdChatTaskLifecycle.ApprovalExpired);
+        dispatch.OperationCalls.Should().NotContain(call =>
+            call.Envelope.Payload.Unpack<NyxIdChatOperationDispatchCommand>().InputCase ==
+            NyxIdChatOperationDispatchCommand.InputOneofCase.ToolApprovalContinuation);
+
+        var versionAfterExpiry = (await eventStore.GetEventsAsync(conversationActorId))[^1].Version;
+        await agent.HandleEventAsync(CreateEnvelope(
+            conversationActorId,
+            new NyxIdChatApprovalResolveCommand
+            {
+                ScopeId = agent.State.ScopeId,
+                ConversationActorId = conversationActorId,
+                RequestId = "approval-alpha",
+                ClientRequestId = "client-late-approve",
+                Approved = true,
+                ExpectedStateVersion = versionAfterExpiry,
+            }));
+
+        (await eventStore.GetEventsAsync(conversationActorId))[^1].Version
+            .Should().Be(versionAfterExpiry,
+                "a late approve against the committed expiry cannot advance actor state");
+        dispatch.OperationCalls.Should().NotContain(call =>
+            call.Envelope.Payload.Unpack<NyxIdChatOperationDispatchCommand>().InputCase ==
+            NyxIdChatOperationDispatchCommand.InputOneofCase.ToolApprovalContinuation);
+    }
+
+    [Fact]
     public async Task WrongPendingSteeringSignal_ShouldNotDestroyCurrentContinuation()
     {
         const string conversationActorId = "conversation-alpha";

@@ -883,6 +883,7 @@ public sealed class NyxIdChatConversationCurrentStateProjector
     private static string ToWireName(NyxIdChatNeedsYouResolutionOutcome outcome) => outcome switch
     {
         NyxIdChatNeedsYouResolutionOutcome.Accepted => "accepted",
+        NyxIdChatNeedsYouResolutionOutcome.Expired => "expired",
         _ => string.Empty,
     };
 

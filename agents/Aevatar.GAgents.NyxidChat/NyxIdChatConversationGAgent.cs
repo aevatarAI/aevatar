@@ -191,6 +191,9 @@ public sealed class NyxIdChatConversationGAgent
         if (State.PendingSteeringContinuation is not null)
             await SchedulePendingSteeringContinuationExpiryAsync(ct);
 
+        if (State.PendingApproval is not null)
+            await ScheduleToolApprovalExpiryAsync(ct);
+
         if (State.PendingPlanGateAdmissionRevocation is not null)
             await SchedulePlanGateAdmissionRevocationAsync(ActivationRecoveryDelay, ct);
         else if (State.PendingPlanGateAdmissionDelivery is not null)
@@ -1919,11 +1922,20 @@ public sealed class NyxIdChatConversationGAgent
         if (!decision.ShouldCommit || decision.Resolution is null)
             return;
 
+        // A resolve at or after the deadline commits an expiry denial that
+        // terminalizes the turn in the same decision, so the terminal history
+        // outbox must be prepared here; live approvals keep the turn active
+        // and this stays a no-op.
+        var nextState = NyxIdChatNeedsYouDecisions.RefreshAttention(decision.State);
+        var terminalPrepared = PrepareHistoryTerminalOutbox(nextState);
         await PersistDomainEventAsync(new NyxIdChatApprovalResolutionCommittedEvent
         {
             Resolution = decision.Resolution.Clone(),
-            State = NyxIdChatNeedsYouDecisions.RefreshAttention(decision.State),
+            State = nextState,
         }, CancellationToken.None);
+
+        if (terminalPrepared)
+            await DispatchPendingHistoryTerminalAsync();
 
         if (decision.NextCommand is not null)
         {
@@ -1932,6 +1944,72 @@ public sealed class NyxIdChatConversationGAgent
                 command.CorrelationId,
                 Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()));
         }
+    }
+
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+    public async Task HandleToolApprovalExpiredAsync(NyxIdChatToolApprovalExpiredSignal signal)
+    {
+        ArgumentNullException.ThrowIfNull(signal);
+        var pending = State.PendingApproval;
+        if (pending is null ||
+            !string.Equals(
+                pending.ApprovalRequestId,
+                signal.ApprovalRequestId,
+                StringComparison.Ordinal) ||
+            pending.ExpiresAt is null ||
+            signal.ExpectedExpiresAt is null ||
+            !pending.ExpiresAt.Equals(signal.ExpectedExpiresAt))
+        {
+            return;
+        }
+
+        if (_timeProvider.GetUtcNow() < signal.ExpectedExpiresAt.ToDateTimeOffset())
+        {
+            await ScheduleToolApprovalExpiryAsync(CancellationToken.None);
+            return;
+        }
+
+        var decision = NyxIdChatNeedsYouDecisions.ExpireApproval(
+            State,
+            signal,
+            Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()));
+        if (!decision.ShouldCommit || decision.Resolution is null)
+            return;
+
+        var nextState = NyxIdChatNeedsYouDecisions.RefreshAttention(decision.State);
+        var terminalPrepared = PrepareHistoryTerminalOutbox(nextState);
+        await PersistDomainEventAsync(new NyxIdChatApprovalResolutionCommittedEvent
+        {
+            Resolution = decision.Resolution.Clone(),
+            State = nextState,
+        }, CancellationToken.None);
+
+        if (terminalPrepared)
+            await DispatchPendingHistoryTerminalAsync();
+    }
+
+    private Task ScheduleToolApprovalExpiryAsync(CancellationToken ct)
+    {
+        var pending = State.PendingApproval;
+        if (pending is null ||
+            string.IsNullOrWhiteSpace(pending.ApprovalRequestId) ||
+            pending.ExpiresAt is null)
+        {
+            return Task.CompletedTask;
+        }
+
+        var delay = pending.ExpiresAt.ToDateTimeOffset() - _timeProvider.GetUtcNow();
+        if (delay < ActivationRecoveryDelay)
+            delay = ActivationRecoveryDelay;
+        return ScheduleSelfDurableTimeoutAsync(
+            BuildStableIdentity("tool-approval-expiry", Id, pending.ApprovalRequestId),
+            delay,
+            new NyxIdChatToolApprovalExpiredSignal
+            {
+                ApprovalRequestId = pending.ApprovalRequestId,
+                ExpectedExpiresAt = pending.ExpiresAt.Clone(),
+            },
+            ct: ct);
     }
 
     [EventHandler]
@@ -2736,6 +2814,9 @@ public sealed class NyxIdChatConversationGAgent
 
         if (terminalPrepared)
             await DispatchPendingHistoryTerminalAsync();
+
+        if (State.PendingApproval is not null)
+            await ScheduleToolApprovalExpiryAsync(CancellationToken.None);
 
         if (fencedVerification && CanDispatchPendingSteeringContinuation(State))
             await DispatchPendingSteeringContinuationAsync(CancellationToken.None);

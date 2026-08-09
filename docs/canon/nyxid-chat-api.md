@@ -472,7 +472,7 @@ An accepted dispatch returns `202 Accepted` with `requestId`, `commandId`, `corr
 
 The actor persists only the answer fingerprint and safe resolution facts. Raw free text, selected option IDs, fresh NyxID credentials, and the resulting tool message exist only in the transient continuation. If that turn capability was lost through passivation, or if the continuation cannot be accepted for dispatch, the operation fails closed and terminalizes the task; it is never left as an orphaned waiting or running step.
 
-Pending approval carries the exact `requestId / turnId / taskId / stepId / toolName / askedAt` correlation plus optional `expiresAt` when an authoritative approval source supplies an expiry, and a safe `presentation`:
+Pending approval carries the exact `requestId / turnId / taskId / stepId / toolName / askedAt` correlation plus `expiresAt`, the deadline the owning actor stamps when it parks the approval (`askedAt` plus the fixed local approval window), and a safe `presentation`:
 
 - `action` and `target` describe the proposed operation without arguments or credentials;
 - `actorLabel` identifies the presenting assistant;
@@ -494,6 +494,8 @@ These are separate products and identities:
 `approval.resolve` includes `conversationId`, `clientRequestId`, the actor-owned approval `requestId`, required explicit boolean `approved`, optional safe `reason`, and `expectedStateVersion`. Omitting `approved` returns `400 APPROVAL_DECISION_REQUIRED`. The request must carry fresh NyxID authentication; neither the original turn credential nor an approval card grants execution authority. An accepted dispatch returns the same transport-only `202` receipt shape as `input.resolve`; business commit and read-model visibility are observed through `nyxid.approval.changed` or the current-state query. The first matching decision wins, an exact duplicate is idempotent, and unknown requests, stale versions, or conflicting decisions do not advance actor state.
 
 Approval advances the exact waiting tool step to operation generation `N+1` and re-enters the real tool execution path with an exact grant bound to execution owner, approval request, tool request, tool name, call ID, and arguments digest. Denial does not execute the tool again; it produces a typed denied receipt and terminalizes the required step. The actor persists only the decision fingerprint and safe resolution facts, not the submitted reason or credentials. If the transient authorized tool capability has been lost, the continuation fails closed and terminalizes the task instead of reconstructing arguments or authority from durable state.
+
+Expiry always fails closed as denial, never as approval. At or after `expiresAt`, a resolve — including an explicit `approved=true` — cannot approve: the actor commits a system-authored `expired` resolution that cancels the exact waiting tool step with `NYXID_CHAT_APPROVAL_EXPIRED` and dispatches no approval continuation, so no effect can execute. The same commit is driven proactively by a durable self timeout fenced on the exact `requestId` and stamped deadline, so an unattended pending approval terminalizes instead of waiting forever, and `nyxid.approval.changed` reports the `expired` outcome. Admitted connected-service (Class-P) operations never park a local pending approval, so this deadline governs only actor-owned local tool approvals; pending approvals persisted before the deadline existed carry no `expiresAt` and resolve without it.
 
 ## NyxID browser-action handoff: schema v4
 

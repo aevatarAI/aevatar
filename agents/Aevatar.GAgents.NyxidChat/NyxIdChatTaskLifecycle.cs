@@ -33,6 +33,7 @@ public static class NyxIdChatTaskLifecycle
     public const string MultipleToolCallsUnsupported =
         "NYXID_CHAT_MULTIPLE_TOOL_CALLS_UNSUPPORTED";
     public const string InputRequestInvalid = "NYXID_CHAT_INPUT_REQUEST_INVALID";
+    public const string ApprovalExpired = "NYXID_CHAT_APPROVAL_EXPIRED";
     public const string ConditionProposalInvalid = "NYXID_CHAT_CONDITION_PROPOSAL_INVALID";
     public const string ConditionSourceStale = "NYXID_CHAT_CONDITION_SOURCE_STALE";
     public const string ConditionGuardMismatch = "NYXID_CHAT_CONDITION_GUARD_MISMATCH";
@@ -69,6 +70,13 @@ public static class NyxIdChatTaskLifecycle
         "The proposed tool did not match the committed condition guard.";
     private const string ConditionGuardedToolRequiredMessage =
         "The true condition requires the exact guarded tool call.";
+    internal const string ApprovalExpiredMessage =
+        "The tool approval expired before a decision was committed.";
+
+    // Deadline the actor stamps on every local pending tool approval it parks.
+    // The actor is the authoritative source for actor-owned approvals; admitted
+    // connected-service operations never park a local pending approval.
+    public static readonly TimeSpan ToolApprovalExpiryWindow = TimeSpan.FromMinutes(10);
 
     public static NyxIdChatTaskLifecycleDecision ApplyOperationResult(
         NyxIdChatConversationGAgentState state,
@@ -1934,6 +1942,8 @@ public static class NyxIdChatTaskLifecycle
                 ? previousStep.Source?.Tool?.ToolName ?? string.Empty
                 : receipt.ToolName,
             AskedAt = now.Clone(),
+            ExpiresAt = Timestamp.FromDateTimeOffset(
+                now.ToDateTimeOffset() + ToolApprovalExpiryWindow),
             Presentation = new NyxIdChatApprovalPresentation
             {
                 Action = string.IsNullOrWhiteSpace(receipt.SideEffectKind)
@@ -1988,6 +1998,52 @@ public static class NyxIdChatTaskLifecycle
             ({ Length: > 0 }, _) => kind,
             _ => receipt.ToolName?.Trim() ?? string.Empty,
         };
+    }
+
+    // Expiry is a denial: the exact waiting tool step cancels without a new
+    // operation generation, so no approval continuation and no effect can
+    // dispatch from an elapsed deadline.
+    internal static void ExpirePendingApproval(
+        NyxIdChatConversationGAgentState state,
+        NyxIdChatPendingApprovalState pending,
+        Timestamp now)
+    {
+        var step = state.ActiveTask?.Steps.FirstOrDefault(candidate =>
+            string.Equals(candidate.StepId, pending.StepId, StringComparison.Ordinal) &&
+            candidate.Kind == NyxIdChatStepKind.Tool &&
+            candidate.Status == NyxIdChatStepStatus.Waiting &&
+            string.Equals(
+                candidate.ApprovalRequestId,
+                pending.ApprovalRequestId,
+                StringComparison.Ordinal));
+        if (step is not null)
+        {
+            step.Status = NyxIdChatStepStatus.Cancelled;
+            step.ExternalEffect = NyxIdChatEffectEvidence.NotApplied;
+            step.FailureCode = ApprovalExpired;
+            step.SafeMessage = ApprovalExpiredMessage;
+            if (step.Operation is not null)
+            {
+                step.Operation.Phase = NyxIdChatOperationPhase.Cancelled;
+                step.Operation.TerminalCode = ApprovalExpired;
+                step.Operation.SafeMessage = ApprovalExpiredMessage;
+                step.Operation.CompletedAt = now.Clone();
+            }
+
+            step.UpdatedAt = now.Clone();
+            step.AvailableActions = NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(step);
+        }
+
+        state.PendingApproval = null;
+        if (state.ActiveTask is null || state.ActiveTurn is null)
+        {
+            state.UpdatedAt = now.Clone();
+            return;
+        }
+
+        NyxIdChatTaskTransitionPolicy.RefreshTaskOutcome(state);
+        state.ActiveTask.UpdatedAt = now.Clone();
+        FinalizeDerivedState(state, now);
     }
 
     private static void ActivateStep(

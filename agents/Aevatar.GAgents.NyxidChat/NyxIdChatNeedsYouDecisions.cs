@@ -17,6 +17,7 @@ public sealed record NyxIdChatNeedsYouDecision<TResolution>(
 public static class NyxIdChatNeedsYouDecisions
 {
     private const int ResolutionHistoryLimit = 32;
+    private const string ApprovalExpiryClientRequestId = "nyxid-chat-approval-expiry";
 
     public static NyxIdChatNeedsYouDecision<NyxIdChatPendingInputState> RequestInput(
         NyxIdChatConversationGAgentState state,
@@ -186,6 +187,9 @@ public static class NyxIdChatNeedsYouDecisions
             return NoCommit<NyxIdChatApprovalResolutionState>(state);
         }
 
+        if (HasApprovalExpired(pending, now))
+            return CommitExpiredApproval(state, pending, now);
+
         var resolution = new NyxIdChatApprovalResolutionState
         {
             RequestId = pending.ApprovalRequestId,
@@ -205,6 +209,63 @@ public static class NyxIdChatNeedsYouDecisions
         if (nextCommand is null)
             return NoCommit<NyxIdChatApprovalResolutionState>(state);
         return new(true, false, next, resolution, nextCommand);
+    }
+
+    public static NyxIdChatNeedsYouDecision<NyxIdChatApprovalResolutionState> ExpireApproval(
+        NyxIdChatConversationGAgentState state,
+        NyxIdChatToolApprovalExpiredSignal signal,
+        Timestamp now)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentNullException.ThrowIfNull(signal);
+        ArgumentNullException.ThrowIfNull(now);
+
+        if (state.PendingApproval is not { } pending ||
+            !string.Equals(
+                pending.ApprovalRequestId,
+                signal.ApprovalRequestId,
+                StringComparison.Ordinal) ||
+            pending.ExpiresAt is null ||
+            signal.ExpectedExpiresAt is null ||
+            !pending.ExpiresAt.Equals(signal.ExpectedExpiresAt) ||
+            !HasApprovalExpired(pending, now))
+        {
+            return NoCommit<NyxIdChatApprovalResolutionState>(state);
+        }
+
+        return CommitExpiredApproval(state, pending, now);
+    }
+
+    private static bool HasApprovalExpired(
+        NyxIdChatPendingApprovalState pending,
+        Timestamp now) =>
+        pending.ExpiresAt is not null &&
+        now.ToDateTimeOffset() >= pending.ExpiresAt.ToDateTimeOffset();
+
+    // Expiry always fails closed: the committed resolution is a system-authored
+    // denial regardless of any late caller decision, and it never carries an
+    // approval continuation, so no effect can dispatch.
+    private static NyxIdChatNeedsYouDecision<NyxIdChatApprovalResolutionState> CommitExpiredApproval(
+        NyxIdChatConversationGAgentState state,
+        NyxIdChatPendingApprovalState pending,
+        Timestamp now)
+    {
+        var resolution = new NyxIdChatApprovalResolutionState
+        {
+            RequestId = pending.ApprovalRequestId,
+            ClientRequestId = ApprovalExpiryClientRequestId,
+            Outcome = NyxIdChatNeedsYouResolutionOutcome.Expired,
+            Approved = false,
+            DecisionSha256 = Hash(ApprovalExpiryClientRequestId),
+            CommittedAt = now.Clone(),
+        };
+        var next = state.Clone();
+        next.LatestApprovalResolution = resolution.Clone();
+        AppendBounded(next.RecentApprovalResolutions, resolution);
+        next.ProgressSequence = checked(Math.Max(0, next.ProgressSequence) + 1);
+        next.UpdatedAt = now.Clone();
+        NyxIdChatTaskLifecycle.ExpirePendingApproval(next, pending, now);
+        return new(true, false, next, resolution);
     }
 
     public static NyxIdChatConversationGAgentState RefreshAttention(

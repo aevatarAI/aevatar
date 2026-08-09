@@ -177,6 +177,7 @@ enum NyxIdChatApprovalReversibility {
 enum NyxIdChatNeedsYouResolutionOutcome {
   NYX_ID_CHAT_NEEDS_YOU_RESOLUTION_OUTCOME_UNSPECIFIED = 0;
   NYX_ID_CHAT_NEEDS_YOU_RESOLUTION_OUTCOME_ACCEPTED = 1;
+  NYX_ID_CHAT_NEEDS_YOU_RESOLUTION_OUTCOME_EXPIRED = 2;
 }
 
 enum NyxIdChatOperationPhase {
@@ -1174,6 +1175,13 @@ message NyxIdChatPendingSteeringContinuationExpired {
   string turn_id = 1;
   string credential_ref = 2;
   google.protobuf.Timestamp expected_expires_at = 3;
+}
+
+// Actor-owned durable self signal: the local tool approval deadline elapsed.
+// The expected deadline fences stale callbacks from a superseded approval.
+message NyxIdChatToolApprovalExpiredSignal {
+  string approval_request_id = 1;
+  google.protobuf.Timestamp expected_expires_at = 2;
 }
 
 message NyxIdChatHistoryDeliveryReservationState {
