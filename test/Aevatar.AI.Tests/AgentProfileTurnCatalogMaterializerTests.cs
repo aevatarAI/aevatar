@@ -33,14 +33,26 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
             AgentProfileTurnClassificationResult.Matched(
                 NyxIdChatTurnIntentClassifier.ServiceConnectIntentId));
         var classifier = new NyxIdChatTurnIntentClassifier(inner);
+        var llmControl = new LLMControlContext(
+            "caller-token",
+            null,
+            null,
+            null,
+            null,
+            null,
+            null);
 
         var intent = await classifier.ClassifyAsync(
+            "turn-connect",
             "Connect GitHub and verify the connection",
+            llmControl,
             CancellationToken.None);
 
         intent.Should().Be(NyxIdChatTurnIntent.ServiceConnect);
         inner.LastRequest.Should().NotBeNull();
         var request = inner.LastRequest!;
+        request.RequestId.Should().Be("turn-connect");
+        request.LlmControl.Should().BeSameAs(llmControl);
         request.UserMessage.Should().Be("Connect GitHub and verify the connection");
         request.Candidates.Should().ContainSingle().Which.Should().BeEquivalentTo(
             new AgentProfileTurnClassificationCandidate(
@@ -123,6 +135,7 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
                 "Run the alpha report",
                 tools,
                 ToolContext(),
+                llmControl: null,
                 CancellationToken.None);
 
         preparation.Authority.CandidateRoute!.IntentId.Should().Be("intent-alpha");

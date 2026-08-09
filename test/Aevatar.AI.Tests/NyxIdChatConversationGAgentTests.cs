@@ -656,10 +656,18 @@ public sealed partial class NyxIdChatConversationGAgentTests
         var start = CreateStartTurnCommand();
         start.ConversationActorId = conversationActorId;
         start.Prompt = "Connect GitHub and verify the connection";
+        start.LlmControl = new LLMControlContextPayload
+        {
+            NyxIdAccessToken = "caller-token",
+            ModelOverride = "model-a",
+        };
 
         await agent.HandleEventAsync(CreateEnvelope(conversationActorId, start));
 
         classifier.UserMessages.Should().Equal("Connect GitHub and verify the connection");
+        classifier.RequestIds.Should().Equal("turn-alpha");
+        classifier.LlmControls.Should().ContainSingle().Which.Should().BeEquivalentTo(
+            LLMControlContextMapper.FromPayload(start.LlmControl));
         agent.State.ActiveTurn.Intent.Should().Be(NyxIdChatTurnIntent.ServiceConnect);
         var command = dispatch.OperationCalls.Should().ContainSingle().Which.Envelope.Payload
             .Unpack<NyxIdChatOperationDispatchCommand>();
@@ -6544,14 +6552,20 @@ public sealed partial class NyxIdChatConversationGAgentTests
     private sealed class RecordingTurnIntentClassifier(NyxIdChatTurnIntent result)
         : INyxIdChatTurnIntentClassifier
     {
+        public List<string> RequestIds { get; } = [];
         public List<string> UserMessages { get; } = [];
+        public List<LLMControlContext?> LlmControls { get; } = [];
 
         public Task<NyxIdChatTurnIntent> ClassifyAsync(
+            string requestId,
             string userMessage,
+            LLMControlContext? llmControl,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            RequestIds.Add(requestId);
             UserMessages.Add(userMessage);
+            LlmControls.Add(llmControl);
             return Task.FromResult(result);
         }
     }

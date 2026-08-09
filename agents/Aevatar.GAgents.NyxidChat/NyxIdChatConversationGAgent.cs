@@ -3003,12 +3003,14 @@ public sealed class NyxIdChatConversationGAgent
         {
             var toolContext = LLMControlContextMapper.FromPayload(command.LlmControl)
                 .ToToolContext(BuildActorOwnedToolContext(command.ToolContext));
+            var llmControl = LLMControlContextMapper.FromPayload(command.LlmControl);
             return (await _turnCatalogMaterializer.PrepareNyxIdChatAsync(
                     profile,
                     command.TurnId.Trim(),
                     command.Prompt ?? string.Empty,
                     registeredTools: [],
                     toolContext,
+                    llmControl,
                     CancellationToken.None))
                 .Authority;
         }
@@ -3044,7 +3046,9 @@ public sealed class NyxIdChatConversationGAgent
         try
         {
             return await _turnIntentClassifier.ClassifyAsync(
+                command.TurnId.Trim(),
                 command.Prompt ?? string.Empty,
+                LLMControlContextMapper.FromPayload(command.LlmControl),
                 CancellationToken.None);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)

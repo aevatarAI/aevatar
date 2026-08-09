@@ -1,6 +1,7 @@
 using System.Text;
 using System.Security.Cryptography;
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Prompting;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.AgentProfiles;
@@ -59,6 +60,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
             registeredTools,
             toolContext,
             includeBuiltInServiceConnectIntent: false,
+            llmControl: null,
             ct);
 
     internal Task<AgentProfileTurnAuthorityPreparation> PrepareNyxIdChatAsync(
@@ -67,6 +69,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
         string userMessage,
         IReadOnlyList<IAgentTool> registeredTools,
         AgentToolExecutionContext toolContext,
+        LLMControlContext? llmControl,
         CancellationToken ct = default) =>
         PrepareCoreAsync(
             profile,
@@ -75,6 +78,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
             registeredTools,
             toolContext,
             includeBuiltInServiceConnectIntent: true,
+            llmControl,
             ct);
 
     private async Task<AgentProfileTurnAuthorityPreparation> PrepareCoreAsync(
@@ -84,6 +88,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
         IReadOnlyList<IAgentTool> registeredTools,
         AgentToolExecutionContext toolContext,
         bool includeBuiltInServiceConnectIntent,
+        LLMControlContext? llmControl,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(profile);
@@ -157,6 +162,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
             userMessage,
             diagnostics,
             includeBuiltInServiceConnectIntent,
+            llmControl,
             ct);
         if (candidate is null)
         {
@@ -440,6 +446,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
         string userMessage,
         List<AgentProfileTurnDiagnostic> diagnostics,
         bool includeBuiltInServiceConnectIntent,
+        LLMControlContext? llmControl,
         CancellationToken ct)
     {
         var aliasMatches = profile.Members
@@ -472,6 +479,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
                 userMessage,
                 [NyxIdChatTurnIntentClassifier.ServiceConnectCandidate],
                 profile.ClassifierTimeoutMs,
+                llmControl,
                 ct);
             if (serviceConnectResult.Status == AgentProfileTurnClassificationStatus.Matched &&
                 string.Equals(
@@ -511,6 +519,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
                     member.SideEffectClass))
                 .ToArray(),
             profile.ClassifierTimeoutMs,
+            llmControl,
             ct);
 
         if (result.Status == AgentProfileTurnClassificationStatus.NoMatch)
@@ -549,6 +558,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
         string userMessage,
         IReadOnlyList<AgentProfileTurnClassificationCandidate> candidates,
         int timeoutMs,
+        LLMControlContext? llmControl,
         CancellationToken ct)
     {
         if (timeoutMs <= 0)
@@ -560,7 +570,8 @@ public sealed class AgentProfileTurnCatalogMaterializer
                 new AgentProfileTurnClassificationRequest(
                     userMessage ?? string.Empty,
                     candidates,
-                    TimeSpan.FromMilliseconds(timeoutMs)),
+                    TimeSpan.FromMilliseconds(timeoutMs),
+                    llmControl),
                 ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)

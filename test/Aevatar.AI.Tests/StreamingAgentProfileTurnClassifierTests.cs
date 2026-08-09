@@ -18,8 +18,20 @@ public sealed class StreamingAgentProfileTurnClassifierTests
             new LLMStreamChunk { DeltaContent = "\"intent_id\":\"intent-a\"}" },
         ]);
         var classifier = new StreamingAgentProfileTurnClassifier(new StubProviderFactory(provider));
+        var llmControl = new LLMControlContext(
+            "caller-token",
+            null,
+            null,
+            "model-a",
+            "/api/v1/proxy/s/route-a",
+            null,
+            null);
 
-        var result = await classifier.ClassifyAsync(NewRequest());
+        var result = await classifier.ClassifyAsync(NewRequest() with
+        {
+            LlmControl = llmControl,
+            RequestId = "turn-alpha",
+        });
 
         result.Should().Be(AgentProfileTurnClassificationResult.Matched("intent-a"));
         provider.CallCount.Should().Be(1);
@@ -28,6 +40,9 @@ public sealed class StreamingAgentProfileTurnClassifierTests
         request.ResponseFormat.Should().NotBeNull();
         request.MaxTokens.Should().Be(128);
         request.Temperature.Should().Be(0);
+        request.RequestId.Should().Be("turn-alpha");
+        request.LlmControl.Should().BeSameAs(llmControl);
+        request.RoutingContext.Should().BeEquivalentTo(llmControl.ToRoutingContext());
     }
 
     [Fact]
