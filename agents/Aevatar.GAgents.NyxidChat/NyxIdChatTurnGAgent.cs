@@ -82,6 +82,7 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
             .On<NyxIdChatTurnCanaryEffectFaultTriggeredEvent>(ApplyCanaryEffectFaultTriggered)
             .On<NyxIdChatTurnOperationReconciliationStartedEvent>(ApplyReconciliationStarted)
             .On<NyxIdChatTurnOperationCompletedEvent>(ApplyCompleted)
+            .On<NyxIdChatTurnOperationResultRedeliveryAttemptedEvent>(ApplyResultRedeliveryAttempted)
             .On<NyxIdChatTurnOperationDeliveredEvent>(ApplyDelivered)
             .OrCurrent();
 
@@ -436,6 +437,31 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
             EffectMayHaveChanged(State)));
     }
 
+    [EventHandler]
+    public async Task HandleOperationResultAcknowledgedAsync(
+        NyxIdChatTurnOperationResultAcknowledgedSignal signal)
+    {
+        ArgumentNullException.ThrowIfNull(signal);
+        if (signal.Key is null ||
+            State.AdmittedOperation is null ||
+            State.PendingResult is null ||
+            State.ResultDelivered ||
+            !KeysEqual(State.AdmittedOperation, signal.Key) ||
+            !KeysEqual(State.PendingResult.Key, signal.Key) ||
+            !CryptographicOperations.FixedTimeEquals(
+                SHA256.HashData(State.PendingResult.ToByteArray()),
+                signal.ResultSha256.Span))
+        {
+            return;
+        }
+
+        await PersistDomainEventAsync(new NyxIdChatTurnOperationDeliveredEvent
+        {
+            Key = signal.Key.Clone(),
+            DeliveredAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
+        }, CancellationToken.None);
+    }
+
     [EventHandler(AllowSelfHandling = true)]
     public async Task HandleCanaryEffectFaultTriggeredAsync(
         NyxIdChatCanaryEffectFaultTriggeredSignal signal)
@@ -506,6 +532,21 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
         }
 
         var completedUndelivered = State.CompletedAt is not null && IsTerminal(State.Phase);
+        if (completedUndelivered &&
+            State.PendingResult?.Key is not null &&
+            KeysEqual(State.PendingResult.Key, signal.Key))
+        {
+            await PersistDomainEventAsync(new NyxIdChatTurnOperationResultRedeliveryAttemptedEvent
+            {
+                Key = signal.Key.Clone(),
+                Attempt = checked(State.ResultDeliveryAttempt + 1),
+                AttemptedAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
+            }, CancellationToken.None);
+            await ScheduleOperationResultDeliveryWatchdogAsync(signal.Key);
+            await DispatchResultAsync(signal.Key.ConversationActorId, State.PendingResult.Clone());
+            return;
+        }
+
         if (!completedUndelivered &&
             (EffectMayHaveChanged(State) ||
              State.OperationKind == NyxIdChatStepKind.Postcondition &&
@@ -841,7 +882,7 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
     private async Task CompleteAndDeliverAsync(NyxIdChatOperationResultSignal result)
     {
         var completion = ClassifyCompletion(result);
-        await PersistDomainEventAsync(new NyxIdChatTurnOperationCompletedEvent
+        var completed = new NyxIdChatTurnOperationCompletedEvent
         {
             Key = result.Key.Clone(),
             Phase = completion.Phase,
@@ -850,7 +891,13 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
             ExternalEffect = completion.ExternalEffect,
             CompletedAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
             ProviderResourceId = result.Tool?.Receipt?.ProviderResourceId ?? string.Empty,
-        }, CancellationToken.None);
+        };
+        var requiresParentCommitAcknowledgement =
+            result.ResultCase ==
+            NyxIdChatOperationResultSignal.ResultOneofCase.ActionPostcondition;
+        if (requiresParentCommitAcknowledgement)
+            completed.Result = result.Clone();
+        await PersistDomainEventAsync(completed, CancellationToken.None);
         var awaitsVerification = result.Tool?.Receipt?.Status == AgentToolReceiptStatus.Success &&
                                  State.RecoveryCredential is not null &&
                                  NyxIdChatOperationAdmissionPolicy.IsValidReadBack(
@@ -863,11 +910,14 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
         }
         await ScheduleOperationResultDeliveryWatchdogAsync(result.Key);
         await DispatchResultAsync(result.Key.ConversationActorId, result);
-        await PersistDomainEventAsync(new NyxIdChatTurnOperationDeliveredEvent
+        if (!requiresParentCommitAcknowledgement)
         {
-            Key = result.Key.Clone(),
-            DeliveredAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
-        }, CancellationToken.None);
+            await PersistDomainEventAsync(new NyxIdChatTurnOperationDeliveredEvent
+            {
+                Key = result.Key.Clone(),
+                DeliveredAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
+            }, CancellationToken.None);
+        }
     }
 
     private async Task HydrateFrozenVerificationContextAsync(
@@ -1106,6 +1156,8 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
             next.PlanGateAdmission = null;
         next.ReconciliationStartedAt = null;
         next.ResultDelivered = false;
+        next.PendingResult = null;
+        next.ResultDeliveryAttempt = 0;
         next.AdmittedAt = evt.AdmittedAt?.Clone();
         next.CompletedAt = null;
         next.DeliveredAt = null;
@@ -1275,6 +1327,25 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
         next.ExternalEffect = evt.ExternalEffect;
         next.ProviderResourceId = evt.ProviderResourceId;
         next.CompletedAt = evt.CompletedAt?.Clone();
+        next.PendingResult = evt.Result?.Clone();
+        next.ResultDeliveryAttempt = evt.Result is null ? 0 : 1;
+        return next;
+    }
+
+    private static NyxIdChatTurnGAgentState ApplyResultRedeliveryAttempted(
+        NyxIdChatTurnGAgentState current,
+        NyxIdChatTurnOperationResultRedeliveryAttemptedEvent evt)
+    {
+        if (!KeysEqual(current.AdmittedOperation, evt.Key) ||
+            current.PendingResult is null ||
+            current.ResultDelivered ||
+            evt.Attempt <= current.ResultDeliveryAttempt)
+        {
+            return current;
+        }
+
+        var next = current.Clone();
+        next.ResultDeliveryAttempt = evt.Attempt;
         return next;
     }
 
@@ -1288,6 +1359,7 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
         var next = current.Clone();
         next.ResultDelivered = true;
         next.DeliveredAt = evt.DeliveredAt?.Clone();
+        next.PendingResult = null;
         if (!next.DeliveredOperations.Any(delivered => KeysEqual(delivered, evt.Key)))
             next.DeliveredOperations.Add(evt.Key.Clone());
         while (next.DeliveredOperations.Count > DeliveredOperationHistoryLimit)

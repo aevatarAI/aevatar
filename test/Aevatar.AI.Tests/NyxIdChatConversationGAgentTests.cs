@@ -2896,12 +2896,15 @@ public sealed partial class NyxIdChatConversationGAgentTests
         });
         var eventStore = new InMemoryEventStoreForTests();
         await PersistTestStateAsync(eventStore, conversationActorId, 1, state);
+        var dispatch = new RecordingActorDispatchPort(
+            [],
+            static (_, _) => Task.CompletedTask);
         using var services = BuildEventSourcingServices(eventStore);
-        var agent = CreateController(services, conversationActorId);
+        var agent = CreateController(services, conversationActorId, dispatch);
         await agent.ActivateAsync();
         var before = (await eventStore.GetEventsAsync(conversationActorId)).Count;
 
-        await agent.HandleOperationResultAsync(new NyxIdChatOperationResultSignal
+        var result = new NyxIdChatOperationResultSignal
         {
             Key = key,
             ActionPostcondition = new NyxIdChatActionPostconditionResult
@@ -2917,15 +2920,38 @@ public sealed partial class NyxIdChatConversationGAgentTests
                     },
                 },
             },
-        });
+        };
+        await agent.HandleOperationResultAsync(result);
 
         var committed = await eventStore.GetEventsAsync(conversationActorId);
         committed.Should().HaveCount(before + 1);
         committed[^1].EventData.Is(NyxIdChatOperationReconciledEvent.Descriptor).Should().BeTrue();
+        var firstAcknowledgement = dispatch.Calls.Should().ContainSingle(call =>
+                call.Envelope.Payload.Is(
+                    NyxIdChatTurnOperationResultAcknowledgedSignal.Descriptor))
+            .Which.Envelope.Payload.Unpack<NyxIdChatTurnOperationResultAcknowledgedSignal>();
+        firstAcknowledgement.Key.Should().BeEquivalentTo(key);
         agent.State.PendingActions.Should().BeEmpty();
         agent.State.ActiveTask.Steps.Single().Status.Should().Be(NyxIdChatStepStatus.Done);
         agent.State.ActiveTask.Steps.Single().Operation.Phase.Should()
             .Be(NyxIdChatOperationPhase.Succeeded);
+
+        await agent.HandleOperationResultAsync(result.Clone());
+
+        (await eventStore.GetEventsAsync(conversationActorId)).Should().HaveCount(before + 1,
+            "an exact redelivery must not reconcile twice");
+        dispatch.Calls.Count(call => call.Envelope.Payload.Is(
+            NyxIdChatTurnOperationResultAcknowledgedSignal.Descriptor)).Should().Be(2,
+            "an exact redelivery still needs an acknowledgement");
+
+        var nextGeneration = result.Clone();
+        nextGeneration.Key.OperationGeneration++;
+        await agent.HandleOperationResultAsync(nextGeneration);
+
+        (await eventStore.GetEventsAsync(conversationActorId)).Should().HaveCount(before + 1);
+        dispatch.Calls.Count(call => call.Envelope.Payload.Is(
+            NyxIdChatTurnOperationResultAcknowledgedSignal.Descriptor)).Should().Be(2,
+            "the same operation id from another generation must not match the committed fence");
     }
 
     [Fact]

@@ -1110,6 +1110,15 @@ message NyxIdChatConversationGAgentState {
   // Owner-only, one-shot canary fact. The actor is the sole authority; only a
   // safe status projection leaves this state boundary.
   NyxIdChatCanaryEffectFaultState canary_effect_fault = 42;
+  // Bounded exact-result fences. A committed parent result can acknowledge a
+  // child redelivery without re-running reconciliation, while a different
+  // payload or operation generation remains fenced out.
+  repeated NyxIdChatOperationResultAcknowledgementFence result_acknowledgement_fences = 43;
+}
+
+message NyxIdChatOperationResultAcknowledgementFence {
+  NyxIdChatOperationKey key = 1;
+  bytes result_sha256 = 2;
 }
 
 message NyxIdChatPlanGateAdmissionRevocationOutbox {
@@ -1293,6 +1302,12 @@ message NyxIdChatTurnGAgentState {
   string canary_effect_fault_approval_subject_id = 35;
   string canary_effect_fault_tool_call_id = 36;
   string canary_effect_fault_tool_name = 37;
+  // Durable ActionPostcondition-only result outbox. This typed result contains
+  // no provider raw response, tool arguments, LLM text, or credentials. The
+  // child clears it only after the authoritative conversation actor confirms
+  // that this exact result committed.
+  NyxIdChatOperationResultSignal pending_result = 38;
+  int32 result_delivery_attempt = 39;
 }
 
 message NyxIdChatTurnOperationAdmittedEvent {
@@ -1400,11 +1415,25 @@ message NyxIdChatTurnOperationCompletedEvent {
   NyxIdChatEffectEvidence external_effect = 5;
   google.protobuf.Timestamp completed_at = 6;
   string provider_resource_id = 7;
+  // Populated only for the credential-free ActionPostcondition result that
+  // must survive accepted-but-uncommitted parent delivery.
+  NyxIdChatOperationResultSignal result = 8;
 }
 
 message NyxIdChatTurnOperationDeliveredEvent {
   NyxIdChatOperationKey key = 1;
   google.protobuf.Timestamp delivered_at = 2;
+}
+
+message NyxIdChatTurnOperationResultRedeliveryAttemptedEvent {
+  NyxIdChatOperationKey key = 1;
+  int32 attempt = 2;
+  google.protobuf.Timestamp attempted_at = 3;
+}
+
+message NyxIdChatTurnOperationResultAcknowledgedSignal {
+  NyxIdChatOperationKey key = 1;
+  bytes result_sha256 = 2;
 }
 
 message NyxIdChatLLMOperationInput {

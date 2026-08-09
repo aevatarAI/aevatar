@@ -16,6 +16,7 @@ using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using System.Security.Cryptography;
 
 namespace Aevatar.GAgents.NyxidChat;
 
@@ -41,6 +42,7 @@ public sealed class NyxIdChatConversationGAgent
         TimeSpan.FromSeconds(5);
     internal static readonly TimeSpan OperationStepChangedCadence = TimeSpan.FromSeconds(30);
     internal static readonly TimeSpan OperationStallThreshold = TimeSpan.FromSeconds(120);
+    private const int ResultAcknowledgementFenceLimit = 64;
 
     public static string ProjectionKind => "nyxid-chat-conversation";
 
@@ -2474,6 +2476,12 @@ public sealed class NyxIdChatConversationGAgent
     public async Task HandleOperationResultAsync(NyxIdChatOperationResultSignal signal)
     {
         ArgumentNullException.ThrowIfNull(signal);
+        if (HasResultAcknowledgementFence(State, signal))
+        {
+            await DispatchOperationResultAcknowledgementAsync(signal, CancellationToken.None);
+            return;
+        }
+
         if (!TryResolveCurrentOperation(signal.Key, out _))
             return;
 
@@ -2501,6 +2509,7 @@ public sealed class NyxIdChatConversationGAgent
                     now);
             }
             lateState = NyxIdChatNeedsYouDecisions.RefreshAttention(lateState);
+            RememberResultAcknowledgementFence(lateState, signal);
             await PersistDomainEventAsync(new NyxIdChatLateOperationEvidenceCommittedEvent
             {
                 Key = signal.Key.Clone(),
@@ -2513,6 +2522,7 @@ public sealed class NyxIdChatConversationGAgent
                 CommittedAt = now.Clone(),
                 State = lateState,
             }, CancellationToken.None);
+            await DispatchOperationResultAcknowledgementAsync(signal, CancellationToken.None);
             if (CanDispatchPendingSteeringContinuation(State))
                 await DispatchPendingSteeringContinuationAsync(CancellationToken.None);
             if (verification is not null)
@@ -2542,6 +2552,7 @@ public sealed class NyxIdChatConversationGAgent
 
             var actionState = NyxIdChatNeedsYouDecisions.RefreshAttention(actionDecision.State);
             var actionTerminalPrepared = PrepareHistoryTerminalOutbox(actionState);
+            RememberResultAcknowledgementFence(actionState, signal);
 
             await PersistDomainEventAsync(new NyxIdChatOperationReconciledEvent
             {
@@ -2551,6 +2562,7 @@ public sealed class NyxIdChatConversationGAgent
                 ProgressSequence = actionState.ProgressSequence,
                 State = actionState,
             }, CancellationToken.None);
+            await DispatchOperationResultAcknowledgementAsync(signal, CancellationToken.None);
 
             if (actionTerminalPrepared)
                 await DispatchPendingHistoryTerminalAsync();
@@ -2584,6 +2596,7 @@ public sealed class NyxIdChatConversationGAgent
 
                 var actionState = NyxIdChatNeedsYouDecisions.RefreshAttention(actionDecision.State);
                 var authorizationTerminalPrepared = PrepareHistoryTerminalOutbox(actionState);
+                RememberResultAcknowledgementFence(actionState, signal);
 
                 await PersistDomainEventAsync(new NyxIdChatActionRequestedEvent
                 {
@@ -2592,6 +2605,7 @@ public sealed class NyxIdChatConversationGAgent
                     OriginTurn = actionState.ActiveTurn.Clone(),
                     State = actionState,
                 }, CancellationToken.None);
+                await DispatchOperationResultAcknowledgementAsync(signal, CancellationToken.None);
 
                 if (authorizationTerminalPrepared)
                     await DispatchPendingHistoryTerminalAsync();
@@ -2658,6 +2672,7 @@ public sealed class NyxIdChatConversationGAgent
                 planGateAdmission.Admission.Clone();
             PreparePlanGateAdmissionDelivery(nextState, planGateAdmission);
         }
+        RememberResultAcknowledgementFence(nextState, signal);
 
         await PersistDomainEventAsync(new NyxIdChatOperationReconciledEvent
         {
@@ -2668,6 +2683,7 @@ public sealed class NyxIdChatConversationGAgent
             State = nextState,
             RefinesExistingTerminal = fencedVerification,
         }, CancellationToken.None);
+        await DispatchOperationResultAcknowledgementAsync(signal, CancellationToken.None);
         if (planGateAdmission is not null)
         {
             await DispatchPendingPlanGateAdmissionDeliveryAsync(CancellationToken.None);
@@ -5282,6 +5298,94 @@ public sealed class NyxIdChatConversationGAgent
                 .Select(static part => Convert.ToHexStringLower(
                     System.Security.Cryptography.SHA256.HashData(part.ToByteArray())))
                 .ToArray());
+
+    private async Task DispatchOperationResultAcknowledgementAsync(
+        NyxIdChatOperationResultSignal result,
+        CancellationToken ct)
+    {
+        if (result.ResultCase !=
+            NyxIdChatOperationResultSignal.ResultOneofCase.ActionPostcondition)
+        {
+            return;
+        }
+
+        var key = result.Key ?? throw new InvalidOperationException(
+            "A committed operation result acknowledgement requires an operation key.");
+        var digest = ComputeResultDigest(result);
+        var turnActorId = NyxIdChatTurnActorIds.ForTurn(Id, key.TurnId);
+        var generation = key.OperationGeneration.ToString(
+            System.Globalization.CultureInfo.InvariantCulture);
+        var envelope = new EventEnvelope
+        {
+            Id = $"{key.OperationId}:result-ack:{generation}:{Convert.ToHexStringLower(digest)[..16]}",
+            Timestamp = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
+            Payload = Any.Pack(new NyxIdChatTurnOperationResultAcknowledgedSignal
+            {
+                Key = key.Clone(),
+                ResultSha256 = ByteString.CopyFrom(digest),
+            }),
+            Route = new EnvelopeRoute
+            {
+                Direct = new DirectRoute { TargetActorId = turnActorId },
+            },
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = ActiveInboundEnvelope?.Propagation?.CorrelationId ??
+                                key.OperationId,
+            },
+        };
+        await _actorDispatchPort.DispatchAsync(turnActorId, envelope, ct);
+    }
+
+    private static void RememberResultAcknowledgementFence(
+        NyxIdChatConversationGAgentState state,
+        NyxIdChatOperationResultSignal result)
+    {
+        if (result.ResultCase !=
+            NyxIdChatOperationResultSignal.ResultOneofCase.ActionPostcondition)
+        {
+            return;
+        }
+
+        var digest = ComputeResultDigest(result);
+        if (state.ResultAcknowledgementFences.Any(fence =>
+                KeysEqual(fence.Key, result.Key) &&
+                CryptographicOperations.FixedTimeEquals(
+                    fence.ResultSha256.Span,
+                    digest)))
+        {
+            return;
+        }
+
+        state.ResultAcknowledgementFences.Add(
+            new NyxIdChatOperationResultAcknowledgementFence
+            {
+                Key = result.Key.Clone(),
+                ResultSha256 = ByteString.CopyFrom(digest),
+            });
+        while (state.ResultAcknowledgementFences.Count > ResultAcknowledgementFenceLimit)
+            state.ResultAcknowledgementFences.RemoveAt(0);
+    }
+
+    private static bool HasResultAcknowledgementFence(
+        NyxIdChatConversationGAgentState state,
+        NyxIdChatOperationResultSignal result)
+    {
+        if (result.Key is null ||
+            result.ResultCase !=
+            NyxIdChatOperationResultSignal.ResultOneofCase.ActionPostcondition)
+            return false;
+
+        var digest = ComputeResultDigest(result);
+        return state.ResultAcknowledgementFences.Any(fence =>
+            KeysEqual(fence.Key, result.Key) &&
+            CryptographicOperations.FixedTimeEquals(
+                fence.ResultSha256.Span,
+                digest));
+    }
+
+    private static byte[] ComputeResultDigest(NyxIdChatOperationResultSignal result) =>
+        SHA256.HashData(result.ToByteArray());
 
     private static bool KeysEqual(NyxIdChatOperationKey? left, NyxIdChatOperationKey? right) =>
         left is not null &&
