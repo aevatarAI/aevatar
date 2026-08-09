@@ -302,7 +302,7 @@ public sealed class AgentToolAdmissionLedgerTests
         currentAttempt.Status.Should().Be(AgentToolAdmissionStatus.Started);
     }
 
-    [Fact]
+    [PinnedRedisFact]
     public async Task GarnetStore_WithPinnedRedis_ShouldRoundTripBinaryAndExpireKey()
     {
         await using var server = await PinnedRedisServer.StartAsync();
@@ -322,7 +322,7 @@ public sealed class AgentToolAdmissionLedgerTests
         retention.Should().BePositive().And.BeLessThanOrEqualTo(TimeSpan.FromHours(24));
     }
 
-    [Fact]
+    [PinnedRedisFact]
     public async Task DistributedLedger_WithPinnedRedis_ShouldAtomicallyStartOnceThenRejectDuplicatesAndConflict()
     {
         await using var server = await PinnedRedisServer.StartAsync();
@@ -343,7 +343,7 @@ public sealed class AgentToolAdmissionLedgerTests
         conflict.Status.Should().Be(AgentToolAdmissionStatus.Conflict);
     }
 
-    [Fact]
+    [PinnedRedisFact]
     public async Task GarnetStore_WhenCallerCancels_ShouldPropagateWithoutWriting()
     {
         await using var server = await PinnedRedisServer.StartAsync();
@@ -553,5 +553,34 @@ public sealed class AgentToolAdmissionLedgerTests
             listener.Start();
             return ((IPEndPoint)listener.LocalEndpoint).Port;
         }
+    }
+}
+
+internal sealed class PinnedRedisFactAttribute : FactAttribute
+{
+    private const string ConnectionStringEnvironmentVariable =
+        "AGENT_TOOL_ADMISSION_REDIS_CONNECTION_STRING";
+
+    public PinnedRedisFactAttribute()
+    {
+        if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(ConnectionStringEnvironmentVariable)) &&
+            !RedisServerIsOnPath())
+        {
+            Skip =
+                "Set AGENT_TOOL_ADMISSION_REDIS_CONNECTION_STRING or put redis-server 7.2.3 on PATH to run pinned Redis admission ledger tests.";
+        }
+    }
+
+    private static bool RedisServerIsOnPath()
+    {
+        var path = Environment.GetEnvironmentVariable("PATH");
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+
+        return path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+            .Select(directory => Path.Combine(directory, "redis-server"))
+            .Any(File.Exists);
     }
 }
