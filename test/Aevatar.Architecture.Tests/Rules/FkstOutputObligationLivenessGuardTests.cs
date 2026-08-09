@@ -27,6 +27,20 @@ public class FkstOutputObligationLivenessGuardTests
         Assert.Contains("verified_effect_package=github-proxy", result.Output);
         Assert.Contains("verified_owner_test=restart_timeout_obligations_test", result.Output);
         Assert.Contains("verified_reconciler_test=timeout_reconcile_cas_parity_test", result.Output);
+        Assert.Contains("verified_from_state=impl-failed", result.Output);
+        Assert.Contains("verified_source_test=liveness_timeout_attempt_issue_test", result.Output);
+        Assert.Contains(
+            "verified_source_case=test_impl_failed_retry_limit_replay_decline_climbs_to_timeout_reconcile_without_seeded_timeout_markers",
+            result.Output);
+        Assert.Contains(
+            "verified_incident_source_case=test_incident_impl_failed_timeout_source_is_redriven_from_fixture",
+            result.Output);
+        Assert.Contains(
+            "verified_incident_reconciler_case=test_incident_impl_failed_timeout_reconcile_skips_stale_terminal_drop",
+            result.Output);
+        Assert.Contains(
+            "verified_incident_terminal_case=test_incident_blocked_output_obligation_drains_once_from_fixture",
+            result.Output);
         Assert.Contains("verified_effect_test=integration_issue_create_test", result.Output);
     }
 

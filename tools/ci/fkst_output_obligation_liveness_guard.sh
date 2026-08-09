@@ -49,6 +49,13 @@ action="$(extract_attr "$timeout_line" "action")"
 reason_class="$(extract_attr "$timeout_line" "reason_class")"
 source_ref_kind="$(extract_attr "$timeout_line" "source_ref_kind")"
 source_ref="$(extract_attr "$timeout_line" "source_ref")"
+from_state="$(extract_attr "$timeout_line" "from_state")"
+from_version="$(extract_attr "$timeout_line" "from_version")"
+age_minutes="$(extract_attr "$timeout_line" "age_minutes")"
+budget_minutes="$(extract_attr "$timeout_line" "budget_minutes")"
+attempt="$(extract_attr "$timeout_line" "attempt")"
+attempt_limit="$(extract_attr "$timeout_line" "attempt_limit")"
+driving_queue="$(extract_attr "$timeout_line" "driving_queue")"
 
 [[ "$state" == "blocked" ]] || fail "expected blocked state, found '$state'"
 [[ "$action" == "drop" ]] || fail "expected timeout reconcile action drop, found '$action'"
@@ -60,10 +67,40 @@ source_ref="$(extract_attr "$timeout_line" "source_ref")"
   fail "expected external source_ref_kind, found '$source_ref_kind'"
 [[ "$source_ref" == *"#issue/"* ]] ||
   fail "expected issue source_ref, found '$source_ref'"
+[[ -n "$from_state" ]] || fail "fixture timeout-reconcile marker lacks from_state"
+[[ -n "$from_version" ]] || fail "fixture timeout-reconcile marker lacks from_version"
+[[ "$from_state" == "impl-failed" ]] ||
+  fail "expected incident predecessor from_state impl-failed, found '$from_state'"
+[[ "$attempt" =~ ^[0-9]+$ ]] || fail "expected numeric attempt, found '$attempt'"
+[[ "$attempt_limit" =~ ^[0-9]+$ ]] || fail "expected numeric attempt_limit, found '$attempt_limit'"
+[[ "$age_minutes" =~ ^[0-9]+$ ]] || fail "expected numeric age_minutes, found '$age_minutes'"
+[[ "$budget_minutes" =~ ^[0-9]+$ ]] || fail "expected numeric budget_minutes, found '$budget_minutes'"
+[[ "$attempt" == "$attempt_limit" ]] ||
+  fail "expected timeout attempt to equal attempt_limit, found attempt=$attempt limit=$attempt_limit"
+(( 10#$age_minutes >= 10#$budget_minutes )) ||
+  fail "expected age_minutes to meet or exceed budget_minutes, found age=$age_minutes budget=$budget_minutes"
+[[ "$driving_queue" == "devloop_ready" ]] ||
+  fail "expected incident driving_queue devloop_ready, found '$driving_queue'"
+[[ "$version" == "$from_version/timeout-reconcile/$from_state/$attempt" ]] ||
+  fail "terminal version is not derived from from_version/from_state/attempt"
 
 source_repository="${source_ref%%#*}"
 [[ "$source_repository" == */* ]] ||
   fail "expected owner/repository source_ref prefix, found '$source_ref'"
+
+export FKST_INCIDENT_STATE="$state"
+export FKST_INCIDENT_PROPOSAL="$proposal"
+export FKST_INCIDENT_TERMINAL_VERSION="$version"
+export FKST_INCIDENT_REASON_CLASS="$reason_class"
+export FKST_INCIDENT_SOURCE_REF="$source_ref"
+export FKST_INCIDENT_SOURCE_REPOSITORY="$source_repository"
+export FKST_INCIDENT_FROM_STATE="$from_state"
+export FKST_INCIDENT_FROM_VERSION="$from_version"
+export FKST_INCIDENT_AGE_MINUTES="$age_minutes"
+export FKST_INCIDENT_BUDGET_MINUTES="$budget_minutes"
+export FKST_INCIDENT_ATTEMPT="$attempt"
+export FKST_INCIDENT_ATTEMPT_LIMIT="$attempt_limit"
+export FKST_INCIDENT_DRIVING_QUEUE="$driving_queue"
 
 lock_fields="$(
   python3 -B - "$lock_file" <<'PY'
@@ -247,6 +284,317 @@ return {
   test_timeout_reconcile_source_is_pre_cas_no_longer_over_budget = suite.test_timeout_reconcile_source_is_pre_cas_no_longer_over_budget,
 }'
 
+source_wrapper='local suite = require("tests.liveness_timeout_attempt_owner_path")
+local base_ids = require("devloop.base_ids")
+local conv_attempts = require("devloop.convergence.attempts")
+local devloop_base = require("devloop.base")
+local devloop_logging = require("devloop.logging")
+local entity_lib = require("devloop.entity")
+local entity_read_mocks = require("tests.entity_read_mock_helpers")
+local reconcile_department = require("departments.reconcile.main")
+local h = require("tests.devloop_helpers")
+
+local t = h.t
+local core = h.core
+local opts = h.opts
+
+local function required_env(name)
+  local value = os.getenv(name)
+  assert(value, name)
+  return value
+end
+
+local incident = {
+  state = required_env("FKST_INCIDENT_STATE"),
+  proposal = required_env("FKST_INCIDENT_PROPOSAL"),
+  terminal_version = required_env("FKST_INCIDENT_TERMINAL_VERSION"),
+  reason_class = required_env("FKST_INCIDENT_REASON_CLASS"),
+  source_ref = required_env("FKST_INCIDENT_SOURCE_REF"),
+  source_repository = required_env("FKST_INCIDENT_SOURCE_REPOSITORY"),
+  from_state = required_env("FKST_INCIDENT_FROM_STATE"),
+  from_version = required_env("FKST_INCIDENT_FROM_VERSION"),
+  age_minutes = tonumber(required_env("FKST_INCIDENT_AGE_MINUTES")),
+  budget_minutes = tonumber(required_env("FKST_INCIDENT_BUDGET_MINUTES")),
+  attempt = tonumber(required_env("FKST_INCIDENT_ATTEMPT")),
+  attempt_limit = tonumber(required_env("FKST_INCIDENT_ATTEMPT_LIMIT")),
+  driving_queue = required_env("FKST_INCIDENT_DRIVING_QUEUE"),
+}
+
+local repo, issue_number_text = base_ids.parse_proposal_id(incident.proposal)
+local issue_number = tonumber(issue_number_text)
+local source_ref = entity_lib.issue_source_ref(repo, issue_number_text)
+
+local function assert_incident_shape()
+  t.eq(incident.state, "blocked", "incident terminal state")
+  t.eq(incident.from_state, "impl-failed", "incident predecessor state")
+  t.eq(incident.reason_class, "state-output-obligation-timeout", "incident reason class")
+  t.eq(incident.driving_queue, "devloop_ready", "incident driving queue")
+  t.eq(incident.source_repository, repo, "incident source repository")
+  t.eq(incident.source_ref, source_ref.ref, "incident source ref")
+  t.eq(incident.terminal_version,
+    incident.from_version .. "/timeout-reconcile/" .. incident.from_state .. "/" .. tostring(incident.attempt),
+    "incident terminal version derives from predecessor")
+  t.eq(incident.attempt, incident.attempt_limit, "incident attempt reached limit")
+  t.is_true(incident.age_minutes >= incident.budget_minutes, "incident exceeded output-obligation budget")
+  t.is_true(issue_number ~= nil, "incident issue number parses")
+end
+
+local function encode_json_string(value)
+  return h.encode_json_string(value)
+end
+
+local function mock_repo()
+  t.mock_command(devloop_base.read_env_command("FKST_GITHUB_REPO"), {
+    stdout = repo,
+    stderr = "",
+    exit_code = 0,
+  })
+end
+
+local function mock_issue_list(updated_at)
+  t.mock_command(core.gh_issue_list_observe_cmd(repo), {
+    stdout = "[{\"number\":" .. tostring(issue_number) .. ",\"state\":\"open\",\"updated_at\":\""
+      .. encode_json_string(updated_at or "2026-06-03T01:02:03Z") .. "\"}]\n",
+    stderr = "",
+    exit_code = 0,
+  })
+end
+
+local function mock_empty_pr_list()
+  t.mock_command(core.gh_pr_list_observe_cmd(repo), {
+    stdout = "[]\n",
+    stderr = "",
+    exit_code = 0,
+  })
+end
+
+local function issue_comment(body, created_at)
+  return {
+    body = body,
+    author_login = "fkst-test-bot",
+    created_at = created_at or "2026-06-03T00:00:00Z",
+  }
+end
+
+local function state_comment(state_name, state_version, created_at)
+  return issue_comment(core.state_marker(incident.proposal, state_name, state_version), created_at)
+end
+
+local function mock_issue_state(labels, comments, updated_at)
+  entity_read_mocks.mock_issue_read_forms(t, {
+    repo = repo,
+    number = issue_number,
+    title = "Incident issue",
+    body = "",
+    state = "OPEN",
+    updated_at = updated_at or "2026-06-03T01:02:03Z",
+    labels = labels,
+    comments = comments,
+    assignees = { "fkst-test-bot" },
+    times = 1,
+  })
+  entity_read_mocks.mock_issue_view_selector(t, {
+    repo = repo,
+    number = issue_number,
+    title = "Incident issue",
+    body = "",
+    state = "OPEN",
+    updated_at = updated_at or "2026-06-03T01:02:03Z",
+    labels = labels,
+    comments = comments,
+    assignees = { "fkst-test-bot" },
+    author_login = "fkst-test-bot",
+  }, "title,updatedAt,labels,comments,state,author", 1)
+end
+
+local function run_liveness_scan(name)
+  return h.run_department("departments/liveness_scan/main.lua", {
+    queue = "devloop_liveness_tick",
+    payload = { schema = "github-devloop.tick.v1" },
+    ts = "2026-06-03T01:32:03Z",
+  }, opts(name))
+end
+
+local function find_raise(result, queue)
+  return h.find_raise(result.raises, queue)
+end
+
+local function incident_timeout_attempt_comments(state_name, state_version, include_impl_failure)
+  local comments = {
+    state_comment(state_name, state_version, "2026-06-01T00:00:00Z"),
+  }
+  if include_impl_failure then
+    table.insert(comments, issue_comment(core.impl_failure_marker(
+      incident.proposal,
+      state_version,
+      "codex-failed",
+      core._max_impl_auto_retry_attempts
+    )))
+  end
+  for round = 1, incident.attempt - 1 do
+    table.insert(comments, issue_comment(conv_attempts.timeout_attempt_marker(
+      incident.proposal,
+      state_version,
+      state_name,
+      round,
+      source_ref
+    )))
+  end
+  return comments
+end
+
+local function capture_cas(run)
+  local decisions = {}
+  local original = devloop_logging.log_cas_decision
+  devloop_logging.log_cas_decision = function(dept, proposal_id, current, from_state, to_state, outcome, reason)
+    table.insert(decisions, {
+      dept = dept,
+      proposal_id = proposal_id,
+      current = current,
+      from_state = from_state,
+      to_state = to_state,
+      outcome = outcome,
+      reason = reason,
+    })
+    return original(dept, proposal_id, current, from_state, to_state, outcome, reason)
+  end
+  local ok, result = pcall(run)
+  devloop_logging.log_cas_decision = original
+  if not ok then
+    error(result, 0)
+  end
+  return result, decisions
+end
+
+local function timeout_reconcile_event()
+  return {
+    queue = "devloop_timeout_reconcile",
+    payload = {
+      schema = "github-devloop.timeout-reconcile.v1",
+      proposal_id = incident.proposal,
+      state = incident.from_state,
+      issue_version = incident.from_version,
+      round = incident.attempt,
+      dedup_key = "timeout-reconcile:" .. incident.terminal_version,
+      source_ref = source_ref,
+    },
+  }
+end
+
+local function run_reconcile_event(event)
+  local raises = {}
+  local original_raise = raise
+  raise = function(queue, payload)
+    table.insert(raises, { queue = queue, payload = payload })
+  end
+  local ok, failure = pcall(reconcile_department.pipeline, event)
+  raise = original_raise
+  return {
+    exit_code = ok and 0 or 1,
+    error = ok and nil or tostring(failure),
+    raises = raises,
+  }
+end
+
+local function assert_no_terminal_reconcile_raise(result)
+  t.eq(find_raise(result, "devloop_timeout_reconcile"), nil)
+  t.eq(find_raise(result, "devloop_ready"), nil)
+end
+
+return {
+  test_incident_impl_failed_timeout_source_is_redriven_from_fixture = function()
+    assert_incident_shape()
+    local comments = incident_timeout_attempt_comments(incident.from_state, incident.from_version, true)
+    mock_repo()
+    mock_issue_list("2026-06-03T01:02:03Z")
+    mock_issue_state({ "fkst-dev:enabled", "fkst-dev:impl-failed" }, comments, "2026-06-03T01:02:03Z")
+    mock_empty_pr_list()
+
+    local result = run_liveness_scan("incident-impl-failed-timeout-source")
+    t.eq(result.exit_code, 0)
+    assert_no_terminal_reconcile_raise(result)
+    local attempt = find_raise(result, "github-proxy.github_issue_comment_request")
+    t.is_true(attempt ~= nil, "incident impl-failed timeout attempt is emitted")
+    t.is_true(attempt.payload.body:find(conv_attempts.timeout_attempt_marker(
+      incident.proposal,
+      incident.from_version,
+      incident.from_state,
+      incident.attempt,
+      source_ref
+    ), 1, true) ~= nil)
+  end,
+
+  test_incident_impl_failed_timeout_reconcile_skips_stale_terminal_drop = function()
+    assert_incident_shape()
+    local comments = incident_timeout_attempt_comments(incident.from_state, incident.from_version, true)
+    h.mock_bot_env()
+    mock_repo()
+    mock_issue_state({ "fkst-dev:enabled", "fkst-dev:impl-failed" }, comments, "2026-06-03T01:02:03Z")
+
+    local result, decisions = capture_cas(function()
+      return run_reconcile_event(timeout_reconcile_event())
+    end)
+
+    t.eq(result.exit_code, 0)
+    t.eq(#result.raises, 0)
+    local matched = false
+    for _, decision in ipairs(decisions) do
+      if decision.dept == "reconcile"
+        and decision.proposal_id == incident.proposal
+        and decision.from_state == incident.from_state
+        and decision.to_state == "blocked"
+        and decision.outcome == "skip-stale(no-longer-over-budget)" then
+        matched = true
+      end
+    end
+    t.is_true(matched, "incident timeout reconciler consumes impl-failed terminal shape")
+  end,
+
+  test_incident_blocked_output_obligation_drains_once_from_fixture = function()
+    assert_incident_shape()
+    local comments = incident_timeout_attempt_comments("blocked", incident.terminal_version, false)
+    mock_repo()
+    mock_issue_list("2026-06-03T01:03:03Z")
+    mock_issue_state({ "fkst-dev:enabled", "fkst-dev:blocked" }, comments, "2026-06-03T01:03:03Z")
+    mock_empty_pr_list()
+
+    local first = run_liveness_scan("incident-blocked-output-obligation")
+    t.eq(first.exit_code, 0)
+    t.eq(find_raise(first, "github-devloop-decompose.devloop_decompose"), nil)
+    t.eq(find_raise(first, "devloop_timeout_reconcile"), nil)
+    local exhausted = find_raise(first, "github-proxy.github_issue_comment_request")
+    t.is_true(exhausted ~= nil, "incident blocked output obligation emits terminal stop")
+    local exhausted_marker = conv_attempts.decompose_exhausted_marker(
+      incident.proposal,
+      incident.terminal_version,
+      incident.attempt,
+      source_ref
+    )
+    t.is_true(exhausted.payload.body:find(exhausted_marker, 1, true) ~= nil)
+
+    local exhausted_body = conv_attempts.build_decompose_exhausted_comment_request({
+      kind = "issue",
+      repo = repo,
+      number = issue_number,
+    }, incident.proposal, {
+      state = "blocked",
+      version = incident.terminal_version,
+    }, source_ref, incident.attempt).body
+    table.insert(comments, issue_comment(exhausted_body))
+    mock_repo()
+    mock_issue_list("2026-06-03T01:04:03Z")
+    mock_issue_state({ "fkst-dev:enabled", "fkst-dev:blocked" }, comments, "2026-06-03T01:04:03Z")
+    mock_empty_pr_list()
+
+    local second = run_liveness_scan("incident-blocked-output-obligation-second")
+    t.eq(second.exit_code, 0)
+    t.eq(#second.raises, 0)
+  end,
+
+  test_impl_failed_retry_limit_replay_decline_climbs_to_timeout_reconcile_without_seeded_timeout_markers =
+    suite.test_impl_failed_retry_limit_replay_decline_climbs_to_timeout_reconcile_without_seeded_timeout_markers,
+}'
+
 effect_wrapper='local suite = require("tests.integration_issue_create_owner_path")
 return {
   test_issue_create_parent_ledger_marker_skips_create = suite.test_issue_create_request_parent_ledger_marker_skips_create,
@@ -260,6 +608,14 @@ run_selected_test \
   "selected_timeout_obligations_test.lua" \
   "test_timeout_obligations_link_expected_decisions_and_payloads_to_frozen_parity" \
   "$owner_wrapper"
+
+run_selected_test \
+  "github-devloop" \
+  "liveness_timeout_attempt_issue_test.lua" \
+  "liveness_timeout_attempt_owner_path.lua" \
+  "selected_incident_timeout_source_test.lua" \
+  "test_incident_impl_failed_timeout_source_is_redriven_from_fixture" \
+  "$source_wrapper"
 
 run_selected_test \
   "github-devloop" \
@@ -285,6 +641,14 @@ locked_fkst_package_rev=$lock_rev
 output_obligation=$obligation_key
 verified_owner_package=github-devloop
 verified_owner_test=restart_timeout_obligations_test
+verified_from_state=$from_state
+verified_from_version=$from_version
+verified_terminal_version=$version
+verified_source_test=liveness_timeout_attempt_issue_test
+verified_source_case=test_impl_failed_retry_limit_replay_decline_climbs_to_timeout_reconcile_without_seeded_timeout_markers
+verified_incident_source_case=test_incident_impl_failed_timeout_source_is_redriven_from_fixture
+verified_incident_reconciler_case=test_incident_impl_failed_timeout_reconcile_skips_stale_terminal_drop
+verified_incident_terminal_case=test_incident_blocked_output_obligation_drains_once_from_fixture
 verified_reconciler_test=timeout_reconcile_cas_parity_test
 verified_effect_package=github-proxy
 verified_effect_test=integration_issue_create_test
