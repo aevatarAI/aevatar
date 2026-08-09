@@ -14,11 +14,15 @@ namespace Aevatar.AI.Tests;
 public sealed partial class NyxIdChatConversationGAgentTests
 {
     [Fact]
-    public async Task UC3ReconcileRetry_WithValidGrant_ShouldCommitGenerationTwoAndVerifySuccess()
+    public async Task UC3UnprofiledReconcileRetry_WithValidGrant_ShouldCommitGenerationTwoAndVerifySuccess()
     {
         const string actorId = "conversation-uc3-grant";
         var eventStore = new InMemoryEventStoreForTests();
-        await PersistTestStateAsync(eventStore, actorId, 1, CreateRetryMatrixState(actorId));
+        var initialState = CreateRetryMatrixState(actorId);
+        initialState.AgentProfile = null;
+        initialState.ActiveTurn.AgentProfileTurnAuthority = null;
+        initialState.LatestTurn.AgentProfileTurnAuthority = null;
+        await PersistTestStateAsync(eventStore, actorId, 1, initialState);
         var dispatch = new RecordingActorDispatchPort([], static (_, _) => Task.CompletedTask);
         using var services = BuildEventSourcingServices(eventStore);
         var agent = CreateController(services, actorId, dispatch);
@@ -81,6 +85,8 @@ public sealed partial class NyxIdChatConversationGAgentTests
         retryDispatch.Key.OperationGeneration.Should().Be(2);
         retryDispatch.PlanGateContinuation.OperationAdmission.ServiceInstanceId.Should()
             .Be("svc-lark");
+        retryDispatch.PlanGateContinuation.AgentProfile.Should().BeNull();
+        retryDispatch.PlanGateContinuation.AgentProfileTurnAuthority.Should().BeNull();
         retryDispatch.PlanGateContinuation.ToolContext.Credentials.NyxIdAccessToken.Should().Be(
             "retry-capability-alpha");
         agent.State.ToString().Should().NotContain("retry-capability-alpha");

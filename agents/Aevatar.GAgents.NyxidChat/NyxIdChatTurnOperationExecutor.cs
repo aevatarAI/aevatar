@@ -768,11 +768,10 @@ public sealed class NyxIdChatTurnOperationExecutor
         var durableRetry = toolInput.RematerializeDurableAuthorization;
         if (durableRetry)
         {
-            var turnCatalog = await MaterializeDurableRetryTurnCatalogAsync(toolInput, ct)
-                .ConfigureAwait(false);
-            if (turnCatalog is null ||
-                !turnCatalog.FinalAllowedToolNames.Contains(toolInput.ToolName) ||
-                !turnCatalog.RouteOwnedTools.ContainsKey(toolInput.ToolName))
+            var hasAgentProfile = toolInput.AgentProfile is not null;
+            var hasAgentProfileTurnAuthority =
+                toolInput.AgentProfileTurnAuthority is not null;
+            if (hasAgentProfile != hasAgentProfileTurnAuthority)
             {
                 ClearAuthorization(session);
                 return Failure(
@@ -782,7 +781,28 @@ public sealed class NyxIdChatTurnOperationExecutor
                     NyxIdChatEffectEvidence.NotStarted);
             }
 
-            session.TurnCatalog = turnCatalog;
+            if (hasAgentProfile)
+            {
+                var turnCatalog = await MaterializeDurableRetryTurnCatalogAsync(toolInput, ct)
+                    .ConfigureAwait(false);
+                if (turnCatalog is null ||
+                    !turnCatalog.FinalAllowedToolNames.Contains(toolInput.ToolName) ||
+                    !turnCatalog.RouteOwnedTools.ContainsKey(toolInput.ToolName))
+                {
+                    ClearAuthorization(session);
+                    return Failure(
+                        command.Key,
+                        ToolAuthorizationMismatchCode,
+                        ToolAuthorizationMismatchMessage,
+                        NyxIdChatEffectEvidence.NotStarted);
+                }
+
+                session.TurnCatalog = turnCatalog;
+            }
+            else
+            {
+                session.TurnCatalog = null;
+            }
         }
         if (durableRetry && !TryRestoreDurableRetrySession(command, session))
         {
@@ -1298,9 +1318,11 @@ public sealed class NyxIdChatTurnOperationExecutor
     {
         var admission = command.PlanGateContinuation;
         var durableRetry = admission?.RematerializeDurableAuthorization == true;
+        var hasMatchingDurableRetryAuthority =
+            (admission?.AgentProfile is null) ==
+            (admission?.AgentProfileTurnAuthority is null);
         var hasDurableRetryInput = admission?.RetryArguments is not null &&
-                                   admission.AgentProfile is not null &&
-                                   admission.AgentProfileTurnAuthority is not null;
+                                   hasMatchingDurableRetryAuthority;
         var pending = !durableRetry && session.StepState?.PendingToolCalls.Count == 1
             ? session.StepState.PendingToolCalls[0]
             : null;

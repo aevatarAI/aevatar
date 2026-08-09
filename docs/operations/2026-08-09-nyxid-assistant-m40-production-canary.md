@@ -42,12 +42,13 @@ NyxID canonical subject:      5d0d7b72-acff-49af-bb1b-9f30bbb7c102
 NyxID canonical email:        eancuznaivy@gmail.com
 Lark personal UserService ID: 41b9a19b-3aa8-4be8-a424-b3821b0951e4
 Lark endpoint ID:             d6c2ee39-f2b1-460c-ae1f-5ce93037935b
+Lark policy service ID:       698404b0-8919-4848-9f4a-c61af64461c4
 Lark service slug:            api-lark-bot
 
 Approval definition:          Email access request
 Approval code:                9C330885-C70A-4A5D-913A-CBA9A142FFD4
 Approval textarea widget:     widget17163600360780001
-Approval link widget:         widget17163600454870001
+Approval input widget:        widget17163600454870001
 Approval submitter user ID:   ee689459
 
 Bitable app token:            TxGrbUmPQa8Lkus2z9UlEuffgUc
@@ -105,6 +106,7 @@ export M40_NYXID_SUBJECT="5d0d7b72-acff-49af-bb1-9f30bbb7c102"
 export M40_NYXID_EMAIL="eancuznaivy@gmail.com"
 export M40_LARK_USER_SERVICE_ID="41b9a19b-3aa8-4be8-a424-b3821b0951e4"
 export M40_LARK_ENDPOINT_ID="d6c2ee39-f2b1-460c-ae1f-5ce93037935b"
+export M40_LARK_POLICY_SERVICE_ID="698404b0-8919-4848-9f4a-c61af64461c4"
 export M40_LARK_SLUG="api-lark-bot"
 export M40_BASE_APP_TOKEN="TxGrbUmPQa8Lkus2z9UlEuffgUc"
 export M40_BASE_TABLE_ID="tblLH7cSI4IWX7kF"
@@ -130,18 +132,17 @@ nyxid service show "$M40_LARK_USER_SERVICE_ID" \
 jq -e \
   --arg user_service_id "$M40_LARK_USER_SERVICE_ID" \
   --arg endpoint_id "$M40_LARK_ENDPOINT_ID" \
+  --arg service_id "$M40_LARK_POLICY_SERVICE_ID" \
   --arg slug "$M40_LARK_SLUG" \
   '.id == $user_service_id and
    .endpoint_id == $endpoint_id and
+   .catalog_service_id == $service_id and
    .slug == $slug and
    .credential_source.type == "personal" and
    .status == "active" and
    .connected == true' \
   "$M40_TMP_DIR/lark-service-before.json" > /dev/null
 M40_PREVIOUS_SPEC_URL="$(jq -r '.openapi_spec_url // ""' "$M40_TMP_DIR/lark-service-before.json")"
-M40_LARK_EFFECTIVE_SERVICE_ID="$(
-  jq -er '.catalog_service_id // .id' "$M40_TMP_DIR/lark-service-before.json"
-)"
 
 nyxid service update "$M40_LARK_USER_SERVICE_ID" \
   --openapi-spec-url "$M40_CANARY_SPEC_URL" \
@@ -153,9 +154,11 @@ nyxid service show "$M40_LARK_USER_SERVICE_ID" \
 jq -e \
   --arg user_service_id "$M40_LARK_USER_SERVICE_ID" \
   --arg endpoint_id "$M40_LARK_ENDPOINT_ID" \
+  --arg service_id "$M40_LARK_POLICY_SERVICE_ID" \
   --arg spec_url "$M40_CANARY_SPEC_URL" \
   '.id == $user_service_id and
    .endpoint_id == $endpoint_id and
+   .catalog_service_id == $service_id and
    .credential_source.type == "personal" and
    .openapi_spec_url == $spec_url' \
   "$M40_TMP_DIR/lark-service-mounted.json" > /dev/null
@@ -167,7 +170,7 @@ nyxid approval grants \
   --profile "$M40_NYXID_PROFILE" \
   --output json > "$M40_TMP_DIR/grants-before.json"
 jq -e \
-  --arg service_id "$M40_LARK_EFFECTIVE_SERVICE_ID" \
+  --arg service_id "$M40_LARK_POLICY_SERVICE_ID" \
   '[.grants[] | select(.service_id == $service_id)] | length == 0' \
   "$M40_TMP_DIR/grants-before.json" > /dev/null
 
@@ -181,6 +184,13 @@ nyxid approval set-config "$M40_LARK_USER_SERVICE_ID" \
   --rule 'effect=require_approval;methods=POST;path=/open-apis/bitable/v1/apps/TxGrbUmPQa8Lkus2z9UlEuffgUc/tables/tblLH7cSI4IWX7kF/records;mode=per_request' \
   --rule 'effect=require_approval;methods=DELETE;path=/open-apis/bitable/v1/apps/TxGrbUmPQa8Lkus2z9UlEuffgUc/tables/tblLH7cSI4IWX7kF/records/*;mode=per_request' \
   --output json > "$M40_TMP_DIR/approval-config-set.json"
+jq -e \
+  --arg service_id "$M40_LARK_POLICY_SERVICE_ID" \
+  '.service_id == $service_id and
+   .approval_required == true and
+   .approval_mode == "per_request" and
+   .default_effect == "auto_allow"' \
+  "$M40_TMP_DIR/approval-config-set.json" > /dev/null
 
 nyxid approval service-configs \
   --profile "$M40_NYXID_PROFILE" \
@@ -189,11 +199,9 @@ nyxid approval grants \
   --profile "$M40_NYXID_PROFILE" \
   --output json > "$M40_TMP_DIR/grants-after.json"
 jq -e \
-  --arg user_service_id "$M40_LARK_USER_SERVICE_ID" \
-  --arg service_id "$M40_LARK_EFFECTIVE_SERVICE_ID" \
+  --arg service_id "$M40_LARK_POLICY_SERVICE_ID" \
   '[.configs[] |
-    select(.user_service_id == $user_service_id and
-           .service_id == $service_id and
+    select(.service_id == $service_id and
            .approval_required == true and
            .approval_mode == "per_request" and
            .default_effect == "auto_allow" and
@@ -209,19 +217,23 @@ jq -e \
            ])] | length == 1' \
   "$M40_TMP_DIR/approval-config-after.json" > /dev/null
 jq -e \
-  --arg service_id "$M40_LARK_EFFECTIVE_SERVICE_ID" \
+  --arg service_id "$M40_LARK_POLICY_SERVICE_ID" \
   '[.grants[] | select(.service_id == $service_id)] | length == 0' \
   "$M40_TMP_DIR/grants-after.json" > /dev/null
 jq -S \
-  --arg user_service_id "$M40_LARK_USER_SERVICE_ID" \
-  '[.configs[] | select(.user_service_id == $user_service_id)]' \
+  --arg service_id "$M40_LARK_POLICY_SERVICE_ID" \
+  '[.configs[] | select(.service_id == $service_id)]' \
   "$M40_TMP_DIR/approval-config-after.json" \
   > "$M40_TMP_DIR/approval-config-expected.json"
 ```
 
-Stop unless the read-back identifies the same UserService, mode is
-`per_request`, the four exact rules are present, the default is `auto_allow`,
-and the active grant set for the service is empty.
+Stop unless the exact personal UserService maps to the expected endpoint and
+catalog policy service, that exact UserService was the `set-config` selector,
+the receipt and config read-back identify the expected catalog policy service,
+mode is `per_request`, the four exact rules are present, the default is
+`auto_allow`, and the active grant set for that catalog policy service is empty.
+`service-configs` may surface a sibling `user_service_id` for a catalog-owned
+policy, so that joined field is not used as policy ownership evidence.
 
 ## Deployment Gate
 
@@ -252,11 +264,14 @@ Kubernetes use is read-only: `get`, `describe`, and `logs`. Do not `exec`,
 2. Assert a fresh service inventory still reports no personal GitHub binding.
 3. Start a new Studio conversation requesting GitHub connection and a read-only
    repository inspection.
-4. Require one `service.connect` action with a real `actionRequestId`, waiting
+4. Read the committed state, record the exact task and plan revision, resolve
+   its plan gate exactly once, and require both the accepted resolution receipt
+   and the committed satisfied resolution before continuing.
+5. Require one `service.connect` action with a real `actionRequestId`, waiting
    step, exact requested scopes, and exactly one terminal frame.
-5. Reload before continuing. The same task, step, action identity, gate, and
+6. Reload before continuing. The same task, step, action identity, gate, and
    waiting state must rehydrate without duplication.
-6. Stop and delete the disposable Aevatar conversation. Re-read state and
+7. Stop and delete the disposable Aevatar conversation. Re-read state and
    transcript until both are `404 not_found`.
 
 UC1a does not depend on a prior UC and does not connect GitHub.
@@ -269,11 +284,14 @@ UC1a does not depend on a prior UC and does not connect GitHub.
 2. Assert the exact personal UserService is active and the required read scope
    is present before opening Studio.
 3. Start a new Studio conversation requesting GitHub connection verification.
-4. Require the actor-owned postcondition `service.connected`, a verified
+4. Read the committed state, record the exact task and plan revision, resolve
+   its plan gate exactly once, and require both the accepted resolution receipt
+   and the committed satisfied resolution before continuing.
+5. Require the actor-owned postcondition `service.connected`, a verified
    resource identity, succeeded task, and exactly one terminal frame.
-5. Reload and require the same terminal task and action/postcondition identity
+6. Reload and require the same terminal task and action/postcondition identity
    exactly once.
-6. Delete the disposable conversation. Delete the disposable personal GitHub
+7. Delete the disposable conversation. Delete the disposable personal GitHub
    connection only after every later UC that needs it has finished, then assert
    it is absent.
 
@@ -436,15 +454,15 @@ nyxid approval grants \
   --profile "$M40_NYXID_PROFILE" \
   --output json > "$M40_TMP_DIR/grants-final.json"
 jq -S \
-  --arg user_service_id "$M40_LARK_USER_SERVICE_ID" \
-  '[.configs[] | select(.user_service_id == $user_service_id)]' \
+  --arg service_id "$M40_LARK_POLICY_SERVICE_ID" \
+  '[.configs[] | select(.service_id == $service_id)]' \
   "$M40_TMP_DIR/approval-config-final.json" \
   > "$M40_TMP_DIR/approval-config-final-target.json"
 cmp \
   "$M40_TMP_DIR/approval-config-expected.json" \
   "$M40_TMP_DIR/approval-config-final-target.json"
 jq -e \
-  --arg service_id "$M40_LARK_EFFECTIVE_SERVICE_ID" \
+  --arg service_id "$M40_LARK_POLICY_SERVICE_ID" \
   '[.grants[] | select(.service_id == $service_id)] | length == 0' \
   "$M40_TMP_DIR/grants-final.json" > /dev/null
 ```

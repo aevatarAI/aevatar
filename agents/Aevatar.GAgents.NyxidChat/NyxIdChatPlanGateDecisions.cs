@@ -471,7 +471,11 @@ public static class NyxIdChatPlanGateDecisions
             candidate.Status == NyxIdChatStepStatus.Planned &&
             candidate.Operation?.Key is not null &&
             KeysEqual(candidate.Operation.Key, admission.Key));
-        if (step is null ||
+        var hasAgentProfile = state.AgentProfile is not null;
+        var hasAgentProfileTurnAuthority =
+            state.ActiveTurn?.AgentProfileTurnAuthority is not null;
+        if (state.ActiveTurn is null ||
+            step is null ||
             step.Kind != NyxIdChatStepKind.Tool ||
             string.IsNullOrWhiteSpace(admission.ToolCallId) ||
             string.IsNullOrWhiteSpace(admission.ToolName) ||
@@ -479,8 +483,7 @@ public static class NyxIdChatPlanGateDecisions
             step.RematerializeDurableAuthorization &&
             (step.RetryAuthorizationSourceKey is null ||
              step.RetryToolInput?.Arguments is null ||
-             state.AgentProfile is null ||
-             state.ActiveTurn?.AgentProfileTurnAuthority is null))
+             hasAgentProfile != hasAgentProfileTurnAuthority))
         {
             return (false, null);
         }
