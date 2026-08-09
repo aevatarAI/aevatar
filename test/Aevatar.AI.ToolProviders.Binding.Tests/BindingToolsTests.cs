@@ -687,12 +687,21 @@ public class BindingToolsTests
 
         try
         {
+            tool.ParametersSchema.Should().Contain("\"capability_key\"");
+            tool.ParametersSchema.Should().NotContain("\"requested_capability\"");
+            typeof(DiscoverServiceApiWorkflowCapabilityRequest)
+                .GetProperties()
+                .Select(static property => property.Name)
+                .Should()
+                .Contain("CapabilityKey")
+                .And.NotContain("RequestedCapability");
+
             var result = await tool.ExecuteAsync("""
                 {
                   "target_user_service_id": "usvc-alpha",
                   "service_slug_snapshot": "example-messaging",
                   "service_label_snapshot": "Example Messaging",
-                  "requested_capability": "Send a message",
+                  "capability_key": "send-message",
                   "admission_policy_version": "explicit-request-admission.v1",
                   "execution_mode": "interactive",
                   "workflow_id": "wf-alpha",
@@ -705,6 +714,7 @@ public class BindingToolsTests
             discovery.Request!.Access.ScopeId.Should().Be("scope-alpha");
             discovery.Request.Access.CallerId.Should().Be("caller-alpha");
             discovery.Request.CallerAuthority.OwnerSubject.Should().Be("caller-alpha");
+            discovery.Request.CapabilityKey.Should().Be("send-message");
             discovery.Request.WorkflowId.Should().Be("wf-alpha");
             discovery.Request.MemberId.Should().Be("m-alpha");
             discovery.Request.PublishedServiceId.Should().Be("svc-alpha");
@@ -1616,6 +1626,7 @@ public class BindingToolsTests
         {
             Selector = selector,
             DisplayName = displayName,
+            CapabilityKey = selector.NyxIdOperation?.EndpointId ?? string.Empty,
             ReadOnly = true,
         };
 

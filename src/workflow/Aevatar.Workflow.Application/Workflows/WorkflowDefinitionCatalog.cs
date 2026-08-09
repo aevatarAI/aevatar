@@ -186,7 +186,7 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
                 use `nyxid_catalog` or `nyxid_require_service` only to check availability/readiness when
                 needed. Never ask the user for credentials, tokens, owner, scope, or channel.
               - For workflow Service API authoring, call `discover_service_api_workflow_capability` once with the exact
-                selected UserService identity, requested capability, execution mode, and current workflow/member/service
+                selected UserService identity, producer capability key, execution mode, and current workflow/member/service
                 identities. Application owns descriptor priority, managed discovery, fallback routing, readiness, and
                 correlation. Do not reproduce or reorder those decisions with other tools or prompt reasoning.
               - Consume only the returned typed capability resolution. An `nyxid_operation` resolution authors the exact

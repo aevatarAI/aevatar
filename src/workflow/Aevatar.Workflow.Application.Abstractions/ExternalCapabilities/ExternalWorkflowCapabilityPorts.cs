@@ -54,7 +54,7 @@ public sealed record DiscoverServiceApiWorkflowCapabilityRequest(
     string TargetUserServiceId,
     string ServiceSlugSnapshot,
     string ServiceLabelSnapshot,
-    string RequestedCapability,
+    string CapabilityKey,
     string ManagedDiscoveryPolicyVersion,
     string AdmissionPolicyVersion,
     ExternalCapabilityExecutionMode ExecutionMode,

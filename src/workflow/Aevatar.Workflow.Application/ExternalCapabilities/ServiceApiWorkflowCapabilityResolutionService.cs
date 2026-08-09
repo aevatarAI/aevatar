@@ -21,7 +21,7 @@ public sealed partial class ServiceApiWorkflowCapabilityResolutionService(
         if (request.ExecutionMode == ExternalCapabilityExecutionMode.Unspecified)
             throw new InvalidOperationException("Service API capability execution mode is required.");
 
-        var normalizedCapability = NormalizeCapability(request.RequestedCapability);
+        var normalizedCapabilityKey = NormalizeRequiredCapabilityKey(request.CapabilityKey);
         var inventory = await capabilityListPort.ListAsync(
                 new ListExternalWorkflowCapabilitiesRequest(request.Access),
                 cancellationToken)
@@ -34,14 +34,14 @@ public sealed partial class ServiceApiWorkflowCapabilityResolutionService(
             TargetUserServiceId = Require(request.TargetUserServiceId, "target_user_service_id"),
             ServiceSlugSnapshot = request.ServiceSlugSnapshot?.Trim() ?? string.Empty,
             ServiceLabelSnapshot = request.ServiceLabelSnapshot?.Trim() ?? string.Empty,
-            NormalizedCapability = normalizedCapability,
+            NormalizedCapabilityKey = normalizedCapabilityKey,
             ManagedDiscoveryPolicyVersion = Require(
                 request.ManagedDiscoveryPolicyVersion,
                 "managed_discovery_policy_version"),
             AdmissionPolicyVersion = Require(
                 request.AdmissionPolicyVersion,
                 "admission_policy_version"),
-            CapabilityFingerprint = ExternalWorkflowCapabilityContractDigest.Compute(normalizedCapability),
+            CapabilityFingerprint = ExternalWorkflowCapabilityContractDigest.Compute(normalizedCapabilityKey),
             WorkflowId = request.WorkflowId?.Trim() ?? string.Empty,
             MemberId = request.MemberId?.Trim() ?? string.Empty,
             PublishedServiceId = request.PublishedServiceId?.Trim() ?? string.Empty,
@@ -342,7 +342,7 @@ public sealed partial class ServiceApiWorkflowCapabilityResolutionService(
         if (matches.Length > 1)
         {
             throw new InvalidOperationException(
-                "Multiple exact NyxID operation descriptors match the requested capability.");
+                "Multiple exact NyxID operation descriptors match the capability key.");
         }
 
         return matches.Length == 1 ? matches[0].Clone() : null;
@@ -354,7 +354,7 @@ public sealed partial class ServiceApiWorkflowCapabilityResolutionService(
     {
         var normalized = NormalizeCapabilityKey(descriptor.CapabilityKey);
         return normalized.Length > 0 &&
-               string.Equals(normalized, input.NormalizedCapability, StringComparison.Ordinal) &&
+               string.Equals(normalized, input.NormalizedCapabilityKey, StringComparison.Ordinal) &&
                string.Equals(
                    ExternalWorkflowCapabilityContractDigest.Compute(normalized),
                    input.CapabilityFingerprint,
@@ -381,16 +381,16 @@ public sealed partial class ServiceApiWorkflowCapabilityResolutionService(
         Require(input.ScopeId, "scope_id");
         Require(input.CallerId, "caller_id");
         Require(input.TargetUserServiceId, "target_user_service_id");
-        var normalized = NormalizeCapability(input.NormalizedCapability);
-        if (!string.Equals(normalized, input.NormalizedCapability, StringComparison.Ordinal))
-            throw new InvalidOperationException("normalized_capability is not canonical.");
+        var normalized = NormalizeRequiredCapabilityKey(input.NormalizedCapabilityKey);
+        if (!string.Equals(normalized, input.NormalizedCapabilityKey, StringComparison.Ordinal))
+            throw new InvalidOperationException("normalized_capability_key is not canonical.");
         if (!string.Equals(
                 input.CapabilityFingerprint,
                 ExternalWorkflowCapabilityContractDigest.Compute(normalized),
                 StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
-                "capability_fingerprint does not match normalized_capability.");
+                "capability_fingerprint does not match normalized_capability_key.");
         }
         if (!Sha256HexPattern().IsMatch(input.CapabilityFingerprint))
             throw new InvalidOperationException("capability_fingerprint is invalid.");
@@ -446,10 +446,10 @@ public sealed partial class ServiceApiWorkflowCapabilityResolutionService(
         }
     }
 
-    private static string NormalizeCapability(string? value)
+    private static string NormalizeRequiredCapabilityKey(string? value)
     {
         var normalized = NormalizeCapabilityKey(value);
-        return Require(normalized, "requested_capability");
+        return Require(normalized, "capability_key");
     }
 
     private static string NormalizeCapabilityKey(string? value) =>

@@ -16,7 +16,7 @@ Capability resolution and executable readiness are separate decisions:
 
 `ServiceApiWorkflowCapabilityResolutionService` owns one deterministic path:
 
-1. Canonicalize the requested capability and compute its fingerprint.
+1. Canonicalize the producer capability key and compute its fingerprint.
 2. Read the current typed external capability descriptor inventory.
 3. Select the single exact NyxID operation descriptor for the target UserService when one exists.
 4. Otherwise invoke managed Service API skill discovery and exact Ornn verification.
@@ -48,7 +48,7 @@ The handoff contains:
 
 - The typed `ExternalCapabilityReadiness`, exact selected selector, blockers, and remediation actions.
 - Any trusted remediation locator produced by the authoritative readiness source.
-- A typed retry contract containing the original normalized capability, fingerprint, descriptor
+- A typed retry contract containing the original normalized capability key, fingerprint, descriptor
   inventory, policy versions, caller authority, target UserService, and distinct `workflow_id`,
   `member_id`, and `published_service_id` values.
 

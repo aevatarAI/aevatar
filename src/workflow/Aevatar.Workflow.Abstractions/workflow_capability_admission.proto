@@ -334,7 +334,7 @@ message ServiceApiSkillDiscoveryInput {
   string target_user_service_id = 4;
   string service_slug_snapshot = 5;
   string service_label_snapshot = 6;
-  string normalized_capability = 7;
+  string normalized_capability_key = 7;
   repeated ExternalWorkflowCapabilityDescriptor descriptor_inventory = 8;
   string managed_discovery_policy_version = 9;
   string admission_policy_version = 10;

@@ -202,6 +202,9 @@ public sealed class ManagedServiceApiSkillDiscoveryInfrastructureTests
         typedInputStart.Should().BeGreaterThanOrEqualTo(0);
         var typedInput = JsonNode.Parse(
             codex.LastRequest.Prompt[(typedInputStart + typedInputMarker.Length)..])!.AsObject();
+        typedInput["normalized_capability_key"]!.GetValue<string>()
+            .Should().Be("send-message");
+        typedInput.ContainsKey("normalized_capability").Should().BeFalse();
         var descriptors = typedInput["descriptor_inventory"]!.AsArray();
         descriptors.Should().HaveCount(3);
         descriptors[0]!["capability_key"]!.GetValue<string>()
@@ -456,7 +459,7 @@ public sealed class ManagedServiceApiSkillDiscoveryInfrastructureTests
             TargetUserServiceId = TargetUserServiceId,
             ServiceSlugSnapshot = "example-messaging",
             ServiceLabelSnapshot = "Example Messaging",
-            NormalizedCapability = "send a message to a conversation",
+            NormalizedCapabilityKey = "send-message",
             ManagedDiscoveryPolicyVersion = "service_api_skill_discovery.v1",
             AdmissionPolicyVersion = "explicit-request-admission.v1",
             CapabilityFingerprint = CapabilityFingerprint,

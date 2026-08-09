@@ -27,7 +27,7 @@ public sealed class DiscoverServiceApiWorkflowCapabilityTool(
             "target_user_service_id": { "type": "string" },
             "service_slug_snapshot": { "type": "string" },
             "service_label_snapshot": { "type": "string" },
-            "requested_capability": { "type": "string" },
+            "capability_key": { "type": "string" },
             "admission_policy_version": { "type": "string" },
             "execution_mode": {
               "type": "string",
@@ -41,7 +41,7 @@ public sealed class DiscoverServiceApiWorkflowCapabilityTool(
             "target_user_service_id",
             "service_slug_snapshot",
             "service_label_snapshot",
-            "requested_capability",
+            "capability_key",
             "admission_policy_version",
             "execution_mode"
           ],
@@ -70,7 +70,7 @@ public sealed class DiscoverServiceApiWorkflowCapabilityTool(
                     Require(args, "target_user_service_id"),
                     Require(args, "service_slug_snapshot"),
                     Require(args, "service_label_snapshot"),
-                    Require(args, "requested_capability"),
+                    Require(args, "capability_key"),
                     ManagedDiscoveryPolicyVersion,
                     Require(args, "admission_policy_version"),
                     executionMode,

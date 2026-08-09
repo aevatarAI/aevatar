@@ -172,7 +172,7 @@ public sealed class ServiceApiWorkflowCapabilityResolutionServiceTests
             .Be("explicit-request-admission.v1");
         managed.LastRequest.Should().NotBeNull();
         var discoveryInput = managed.LastRequest!.Input;
-        discoveryInput.NormalizedCapability.Should().Be("send-message");
+        discoveryInput.NormalizedCapabilityKey.Should().Be("send-message");
         discoveryInput.CapabilityFingerprint.Should().Be(
             ExternalWorkflowCapabilityContractDigest.Compute("send-message"));
         discoveryInput.WorkflowId.Should().Be("wf-alpha");
@@ -360,7 +360,7 @@ public sealed class ServiceApiWorkflowCapabilityResolutionServiceTests
     }
 
     private static DiscoverServiceApiWorkflowCapabilityRequest Request(
-        string requestedCapability = "send-message") =>
+        string capabilityKey = "send-message") =>
         new(
             Access(),
             new ExternalCapabilityAuthorizationOwner
@@ -372,7 +372,7 @@ public sealed class ServiceApiWorkflowCapabilityResolutionServiceTests
             TargetUserServiceId,
             "example-messaging",
             "Example Messaging",
-            requestedCapability,
+            capabilityKey,
             "service_api_skill_discovery.v1",
             "explicit-request-admission.v1",
             ExternalCapabilityExecutionMode.Interactive,

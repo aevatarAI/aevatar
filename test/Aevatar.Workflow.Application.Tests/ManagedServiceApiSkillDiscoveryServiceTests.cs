@@ -218,7 +218,7 @@ public sealed class ManagedServiceApiSkillDiscoveryServiceTests
                 TargetUserServiceId = "usvc-alpha",
                 ServiceSlugSnapshot = "example-service",
                 ServiceLabelSnapshot = "Example Service",
-                NormalizedCapability = "send a message",
+                NormalizedCapabilityKey = "send-message",
                 ManagedDiscoveryPolicyVersion = "service_api_skill_discovery.v1",
                 AdmissionPolicyVersion = "explicit-request-admission.v1",
                 CapabilityFingerprint = new string('a', 64),
