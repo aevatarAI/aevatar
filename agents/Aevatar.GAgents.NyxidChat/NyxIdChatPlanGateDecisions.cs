@@ -488,6 +488,13 @@ public static class NyxIdChatPlanGateDecisions
             return (false, null);
         }
 
+        var sealedToolContext = command.ToolContext?.Clone();
+        if (step.RematerializeDurableAuthorization &&
+            !TrySealDurableRetryToolContext(state, command, out sealedToolContext))
+        {
+            return (false, null);
+        }
+
         step.Status = NyxIdChatStepStatus.Running;
         step.Operation.Phase = NyxIdChatOperationPhase.Requested;
         step.Operation.RequestedAt = now.Clone();
@@ -510,7 +517,7 @@ public static class NyxIdChatPlanGateDecisions
             ToolCallId = admission.ToolCallId,
             ToolName = admission.ToolName,
             ArgumentsSha256 = admission.ArgumentsSha256,
-            ToolContext = command.ToolContext?.Clone(),
+            ToolContext = sealedToolContext,
             MayChangeExternalState = step.MayChangeExternalState,
             IdempotencyKey = step.Operation.Key.OperationId,
             OperationAdmission = step.Source?.Tool?.OperationAdmission?.Clone(),
@@ -530,6 +537,67 @@ public static class NyxIdChatPlanGateDecisions
             Key = step.Operation.Key.Clone(),
             PlanGateContinuation = continuation,
         });
+    }
+
+    private static bool TrySealDurableRetryToolContext(
+        NyxIdChatConversationGAgentState state,
+        NyxIdChatPlanResolveCommand command,
+        out Aevatar.AI.Abstractions.AgentToolExecutionContextPayload? sealedContext)
+    {
+        sealedContext = null;
+        var scopeId = state.ScopeId?.Trim();
+        var actorId = state.ConversationActorId?.Trim();
+        var ownerSubject = state.OwnerSubject?.Trim();
+        var requestId = command.RequestId?.Trim();
+        if (scopeId is null or "" ||
+            actorId is null or "" ||
+            ownerSubject is null or "" ||
+            requestId is null or "" ||
+            command.ToolContext is null ||
+            !string.Equals(command.OwnerSubject?.Trim(), ownerSubject, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var supplied = AgentToolExecutionContextMapper.FromPayload(command.ToolContext);
+        if ((string.IsNullOrWhiteSpace(supplied.Credentials.NyxIdAccessToken) &&
+             string.IsNullOrWhiteSpace(supplied.Credentials.NyxIdOrgToken)) ||
+            !string.Equals(supplied.Request.RequestId, requestId, StringComparison.Ordinal) ||
+            !string.Equals(supplied.Caller.ScopeId, scopeId, StringComparison.Ordinal) ||
+            !string.Equals(supplied.Caller.OwnerScopeId, scopeId, StringComparison.Ordinal) ||
+            !string.Equals(supplied.Caller.OwnerSubject, ownerSubject, StringComparison.Ordinal) ||
+            !string.Equals(supplied.Caller.ResponseId, requestId, StringComparison.Ordinal) ||
+            !string.Equals(
+                supplied.Channel.Platform,
+                NyxIdChatServiceDefaults.ServiceId,
+                StringComparison.Ordinal) ||
+            !string.Equals(supplied.Channel.SenderId, ownerSubject, StringComparison.Ordinal) ||
+            !string.Equals(supplied.Channel.RegistrationScopeId, scopeId, StringComparison.Ordinal) ||
+            supplied.ExecutionOwner.Kind != AgentToolExecutionOwnerKind.Actor ||
+            !string.Equals(supplied.ExecutionOwner.OwnerId, actorId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        sealedContext = (AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity(requestId, null),
+            Credentials = supplied.Credentials,
+            Caller = new AgentToolCallerContext(scopeId, ownerSubject, requestId, scopeId),
+            Channel = new AgentToolChannelContext(
+                NyxIdChatServiceDefaults.ServiceId,
+                ownerSubject,
+                scopeId,
+                null,
+                null),
+            NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                "nyxid",
+                string.Empty,
+                ownerSubject,
+                "proxy"),
+            ExecutionOwner = AgentToolExecutionOwners.Actor(actorId),
+        }).ToPayload();
+        return true;
     }
 
     private static void RejectPlan(

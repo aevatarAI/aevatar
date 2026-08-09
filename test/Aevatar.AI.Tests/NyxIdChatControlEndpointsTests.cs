@@ -266,12 +266,47 @@ public sealed class NyxIdChatControlEndpointsTests
             AgentToolNyxIdCredentialKindPayload.ProxyDelegation);
         command.ToolContext.Request.RequestId.Should().Be("plan-gate-alpha");
         command.ToolContext.Channel.Platform.Should().Be(NyxIdChatServiceDefaults.ServiceId);
+        command.ToolContext.Channel.SenderId.Should().Be("owner-alpha");
         command.ToolContext.Channel.RegistrationScopeId.Should().Be("scope-alpha");
         command.ToolContext.Caller.ScopeId.Should().Be("scope-alpha");
+        command.ToolContext.Caller.OwnerScopeId.Should().Be("scope-alpha");
         command.ToolContext.Caller.OwnerSubject.Should().Be("owner-alpha");
         command.ToolContext.Caller.ResponseId.Should().Be("plan-gate-alpha");
+        command.ToolContext.NyxIdAuthority.Platform.Should().Be("nyxid");
+        command.ToolContext.NyxIdAuthority.ExternalUserId.Should().Be("owner-alpha");
+        command.ToolContext.NyxIdAuthority.Scope.Should().Be("proxy");
         command.ToolContext.ExecutionOwner.Kind.Should().Be(AgentToolExecutionOwnerKind.Actor);
         command.ToolContext.ExecutionOwner.OwnerId.Should().Be("conversation-alpha");
+    }
+
+    [Fact]
+    public async Task PlanResolve_ShouldRejectMissingNyxIdSubjectBeforeAdmissionOrDispatch()
+    {
+        var admission = new RecordingAdmissionPort();
+        var dispatch = new RecordingDispatchPort();
+        var routeValues = ConversationRouteValues();
+        routeValues["taskId"] = "task-alpha";
+
+        var response = await ExecuteAsync(
+            PlanResolveRoute,
+            routeValues,
+            """
+            {
+              "requestId": "plan-gate-alpha",
+              "clientRequestId": "client-plan-alpha",
+              "planId": "plan-alpha",
+              "planRevision": 3,
+              "confirmed": true,
+              "expectedStateVersion": 23
+            }
+            """,
+            admission,
+            dispatch,
+            authenticatedScopeId: "scope-alpha");
+
+        response.StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
+        admission.Targets.Should().BeEmpty();
+        dispatch.Dispatches.Should().BeEmpty();
     }
 
     [Fact]

@@ -164,6 +164,73 @@ public sealed class NyxIdChatPlanGateDecisionsTests
     }
 
     [Fact]
+    public void DurableRetryConfirm_ShouldSealActorOwnedToolAuthority()
+    {
+        var state = DurableRetryPlanState();
+        var command = ResolveCommand(state.ActiveTask.Gate, confirmed: true);
+
+        var decision = NyxIdChatPlanGateDecisions.Resolve(
+            state,
+            command,
+            currentStateVersion: 17,
+            Now);
+
+        decision.ShouldCommit.Should().BeTrue();
+        var context = decision.NextCommand!.PlanGateContinuation.ToolContext;
+        context.Request.RequestId.Should().Be(command.RequestId);
+        context.Caller.ScopeId.Should().Be(state.ScopeId);
+        context.Caller.OwnerScopeId.Should().Be(state.ScopeId);
+        context.Caller.OwnerSubject.Should().Be(state.OwnerSubject);
+        context.Caller.ResponseId.Should().Be(command.RequestId);
+        context.Channel.Platform.Should().Be(NyxIdChatServiceDefaults.ServiceId);
+        context.Channel.SenderId.Should().Be(state.OwnerSubject);
+        context.Channel.RegistrationScopeId.Should().Be(state.ScopeId);
+        context.ExecutionOwner.Kind.Should().Be(AgentToolExecutionOwnerKind.Actor);
+        context.ExecutionOwner.OwnerId.Should().Be(state.ConversationActorId);
+    }
+
+    [Theory]
+    [InlineData("caller-owner")]
+    [InlineData("channel-sender")]
+    [InlineData("channel-scope")]
+    [InlineData("channel-platform")]
+    [InlineData("execution-owner")]
+    public void DurableRetryConfirm_WithTamperedAuthority_ShouldFailClosed(string tamper)
+    {
+        var state = DurableRetryPlanState();
+        var command = ResolveCommand(state.ActiveTask.Gate, confirmed: true);
+        switch (tamper)
+        {
+            case "caller-owner":
+                command.ToolContext.Caller.OwnerSubject = "owner-foreign";
+                break;
+            case "channel-sender":
+                command.ToolContext.Channel.SenderId = "owner-foreign";
+                break;
+            case "channel-scope":
+                command.ToolContext.Channel.RegistrationScopeId = "scope-foreign";
+                break;
+            case "channel-platform":
+                command.ToolContext.Channel.Platform = "foreign-platform";
+                break;
+            case "execution-owner":
+                command.ToolContext.ExecutionOwner.OwnerId = "conversation-foreign";
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(tamper), tamper, null);
+        }
+
+        var decision = NyxIdChatPlanGateDecisions.Resolve(
+            state,
+            command,
+            currentStateVersion: 17,
+            Now);
+
+        decision.ShouldCommit.Should().BeFalse();
+        decision.NextCommand.Should().BeNull();
+    }
+
+    [Fact]
     public void StaleOrWrongPlanConfirm_ShouldNotAdvance()
     {
         var state = PendingPlanState();
@@ -308,6 +375,23 @@ public sealed class NyxIdChatPlanGateDecisionsTests
             ToolPlan("{\"repositoryId\":\"repo-alpha\"}", requiresApproval: true),
             Now).State;
 
+    private static NyxIdChatConversationGAgentState DurableRetryPlanState()
+    {
+        var state = PendingPlanState();
+        var step = state.ActiveTask.Steps.Single(candidate =>
+            candidate.Kind == NyxIdChatStepKind.Tool);
+        var sourceKey = step.Operation.Key.Clone();
+        step.Operation.Key.OperationGeneration = 2;
+        state.ActiveTask.Gate.Admissions.Single().Key = step.Operation.Key.Clone();
+        step.RematerializeDurableAuthorization = true;
+        step.RetryAuthorizationSourceKey = sourceKey;
+        step.RetryToolInput = new NyxIdChatRetryToolInputState
+        {
+            Arguments = JsonParser.Default.Parse<Struct>("{\"repositoryId\":\"repo-alpha\"}"),
+        };
+        return state;
+    }
+
     private static NyxIdChatPlanResolveCommand ResolveCommand(
         NyxIdChatPlanGate gate,
         bool confirmed) => new()
@@ -321,15 +405,33 @@ public sealed class NyxIdChatPlanGateDecisionsTests
         ClientRequestId = confirmed ? "confirm-alpha" : "reject-alpha",
         Confirmed = confirmed,
         ExpectedStateVersion = 17,
-        ToolContext = new AgentToolExecutionContextPayload
+        OwnerSubject = "owner-alpha",
+        ToolContext = (AgentToolExecutionContext.Empty with
         {
-            Credentials = new AgentToolCredentialsPayload
-            {
-                NyxIdAccessToken = "fresh-user-token",
-                NyxIdCredentialKind =
-                    AgentToolNyxIdCredentialKindPayload.SourceReadableUserBearer,
-            },
-        },
+            Request = new AgentToolRequestIdentity(gate.RequestId, null),
+            Credentials = new AgentToolCredentials(
+                "fresh-user-token",
+                null,
+                null,
+                AgentToolNyxIdCredentialKind.SourceReadableUserBearer),
+            Caller = new AgentToolCallerContext(
+                "scope-alpha",
+                "owner-alpha",
+                gate.RequestId,
+                "scope-alpha"),
+            Channel = new AgentToolChannelContext(
+                NyxIdChatServiceDefaults.ServiceId,
+                "owner-alpha",
+                "scope-alpha",
+                null,
+                null),
+            NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                "nyxid",
+                string.Empty,
+                "owner-alpha",
+                "proxy"),
+            ExecutionOwner = AgentToolExecutionOwners.Actor("conversation-alpha"),
+        }).ToPayload(),
     };
 
     private static NyxIdChatOperationResultSignal ToolPlan(
@@ -401,6 +503,7 @@ public sealed class NyxIdChatPlanGateDecisionsTests
         {
             ConversationActorId = "conversation-alpha",
             ScopeId = "scope-alpha",
+            OwnerSubject = "owner-alpha",
             ActiveTurn = turn,
             LatestTurn = turn.Clone(),
             ActiveTask = task,

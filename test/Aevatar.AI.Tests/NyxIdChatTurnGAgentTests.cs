@@ -1992,6 +1992,94 @@ public sealed partial class NyxIdChatTurnGAgentTests
     }
 
     [Fact]
+    public async Task OperationExecutor_DurableGenerationTwoApprovalRequired_ShouldPreserveExactAuthority()
+    {
+        var registry = new CountingProfileToolSetRegistry();
+        var generationExecutor = new ApprovalRequiredDurableReplyExecutor();
+        var executor = new NyxIdChatTurnOperationExecutor(
+            generationExecutor,
+            new UnavailableNyxIdActionPostconditionPort(),
+            new AgentProfileTurnCatalogMaterializer(
+                registry,
+                new NoMatchProfileClassifier()),
+            new AcceptingDelegationCredentialLifecycle());
+        var command = DurableGenerationTwoPlanGateContinuation();
+
+        var execution = await executor.ExecuteAsync(
+            command,
+            new NyxIdChatTransientExecutionSession(),
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        registry.ResolveCount.Should().Be(1);
+        generationExecutor.ToolExecutions.Should().Be(1);
+        execution.Result.ResultCase.Should().Be(
+            NyxIdChatOperationResultSignal.ResultOneofCase.Tool);
+        execution.Result.Tool.Receipt.Status.Should().Be(AgentToolReceiptStatus.ApprovalRequired);
+        execution.Result.Tool.Receipt.ApprovalRequestId.Should().Be("approval-generation-two");
+        execution.Result.Tool.Receipt.CallId.Should().Be("call-alpha");
+        execution.Result.Tool.Receipt.ToolName.Should().Be("tool-alpha");
+
+        var context = AgentToolExecutionContextMapper.FromPayload(
+            generationExecutor.ExecutedStepState!.ToolContext);
+        context.Request.RequestId.Should().Be(command.Key.OperationId);
+        context.Caller.ScopeId.Should().Be("scope-alpha");
+        context.Caller.OwnerSubject.Should().Be("owner-alpha");
+        context.Channel.Platform.Should().Be(NyxIdChatServiceDefaults.ServiceId);
+        context.Channel.SenderId.Should().Be("owner-alpha");
+        context.Channel.RegistrationScopeId.Should().Be("scope-alpha");
+        context.ExecutionOwner.Kind.Should().Be(AgentToolExecutionOwnerKind.Actor);
+        context.ExecutionOwner.OwnerId.Should().Be("conversation-alpha");
+    }
+
+    [Theory]
+    [InlineData("caller")]
+    [InlineData("channel")]
+    [InlineData("execution-owner")]
+    public async Task OperationExecutor_DurableGenerationTwoTamperedAuthority_ShouldFailBeforeCatalogOrTool(
+        string tamper)
+    {
+        var registry = new CountingProfileToolSetRegistry();
+        var generationExecutor = new ApprovalRequiredDurableReplyExecutor();
+        var executor = new NyxIdChatTurnOperationExecutor(
+            generationExecutor,
+            new UnavailableNyxIdActionPostconditionPort(),
+            new AgentProfileTurnCatalogMaterializer(
+                registry,
+                new NoMatchProfileClassifier()));
+        var command = DurableGenerationTwoPlanGateContinuation();
+        switch (tamper)
+        {
+            case "caller":
+                command.PlanGateContinuation.ToolContext.Caller.OwnerSubject = "owner-foreign";
+                break;
+            case "channel":
+                command.PlanGateContinuation.ToolContext.Channel.SenderId = "owner-foreign";
+                break;
+            case "execution-owner":
+                command.PlanGateContinuation.ToolContext.ExecutionOwner.OwnerId = "conversation-foreign";
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(tamper), tamper, null);
+        }
+
+        var execution = await executor.ExecuteAsync(
+            command,
+            new NyxIdChatTransientExecutionSession(),
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        registry.ResolveCount.Should().Be(0);
+        generationExecutor.ToolExecutions.Should().Be(0);
+        execution.Result.ResultCase.Should().Be(
+            NyxIdChatOperationResultSignal.ResultOneofCase.Failure);
+        execution.Result.Failure.FailureCode.Should().Be(
+            NyxIdChatTurnOperationExecutor.ToolAuthorizationMismatchCode);
+        execution.Result.Failure.ExternalEffect.Should().Be(
+            NyxIdChatEffectEvidence.NotStarted);
+    }
+
+    [Fact]
     public async Task OperationExecutor_ExactToolCapability_ShouldExecuteOnceAndMapTypedReceipt()
     {
         var generationExecutor = new StreamingCapabilityReplyExecutor();
@@ -2402,6 +2490,70 @@ public sealed partial class NyxIdChatTurnGAgentTests
         },
     };
 
+    private static NyxIdChatOperationDispatchCommand DurableGenerationTwoPlanGateContinuation()
+    {
+        var arguments = JsonParser.Default.Parse<Struct>("{\"value\":1}");
+        var operationAdmission = ExactWriteAdmission();
+        operationAdmission.DurableAuthorization = new AgentToolDurableAuthorizationSnapshotPayload
+        {
+            HasRequiresApproval = true,
+            RequiresApproval = true,
+            IsReadOnly = false,
+            IsDestructive = false,
+            SideEffectKind = "tool-alpha.update",
+            ToolDefinitionFingerprint = "sha256:tool-alpha-v1",
+        };
+        var profile = AgentProfileSnapshotCodec.Seal(new AgentProfileSnapshot
+        {
+            ProfileId = "profile-alpha",
+            ProfileVersion = "profile-v1",
+            AgentKind = NyxIdChatServiceDefaults.GAgentKind,
+            PolicyRevision = "policy-v1",
+            RouteToolSetRef = "profile.route",
+            MaximumToolPolicy = new AgentProfileToolPolicy
+            {
+                ToolNames = { "tool-alpha" },
+            },
+            RecoveryToolPolicy = new AgentProfileToolPolicy
+            {
+                ToolNames = { "tool-alpha" },
+            },
+            ActivationMode = AgentProfileActivationMode.Enforced,
+        });
+        return new NyxIdChatOperationDispatchCommand
+        {
+            Key = CreateKey("step-tool-alpha", "operation-tool-alpha", 2),
+            PlanGateContinuation = new NyxIdChatPlanGateContinuationInput
+            {
+                GateRequestId = "plan-gate-alpha",
+                TaskId = "task-alpha",
+                PlanId = "plan-alpha",
+                PlanRevision = 3,
+                ToolCallId = "call-alpha",
+                ToolName = "tool-alpha",
+                ArgumentsSha256 = NyxIdChatPlanGateDecisions.HashArguments(
+                    JsonFormatter.Default.Format(arguments)),
+                ToolContext = DurableToolContext("plan-gate-alpha", "fresh-plan-token"),
+                MayChangeExternalState = true,
+                IdempotencyKey = "operation-tool-alpha",
+                OperationAdmission = operationAdmission,
+                RetryArguments = arguments,
+                AgentProfile = profile,
+                AgentProfileTurnAuthority = new AgentProfileTurnAuthorityState
+                {
+                    ReconciliationKey = new AgentProfileTurnReconciliationKey
+                    {
+                        SessionId = "turn-alpha",
+                        Attempt = 1,
+                    },
+                    AuthorityKind = AgentProfileTurnAuthorityKind.Recovery,
+                    AuthorityCeilingToolNames = { "tool-alpha" },
+                },
+                RematerializeDurableAuthorization = true,
+            },
+        };
+    }
+
     private static NyxIdChatTurnPlanGateAdmissionCommand CreatePlanGateAdmission(
         NyxIdChatOperationKey sourceOperationKey,
         NyxIdChatOperationDispatchCommand continuation) => new()
@@ -2433,6 +2585,34 @@ public sealed partial class NyxIdChatTurnGAgentTests
                 AgentToolNyxIdCredentialKindPayload.SourceReadableUserBearer,
         },
     };
+
+    private static AgentToolExecutionContextPayload DurableToolContext(string requestId, string token) =>
+        (AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity(requestId, null),
+            Credentials = new AgentToolCredentials(
+                token,
+                null,
+                null,
+                AgentToolNyxIdCredentialKind.ProxyDelegation),
+            Caller = new AgentToolCallerContext(
+                "scope-alpha",
+                "owner-alpha",
+                requestId,
+                "scope-alpha"),
+            Channel = new AgentToolChannelContext(
+                NyxIdChatServiceDefaults.ServiceId,
+                "owner-alpha",
+                "scope-alpha",
+                null,
+                null),
+            NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                "nyxid",
+                string.Empty,
+                "owner-alpha",
+                "proxy"),
+            ExecutionOwner = AgentToolExecutionOwners.Actor("conversation-alpha"),
+        }).ToPayload();
 
     private static ServiceProvider BuildEventSourcingServices(
         IEventStore eventStore,
@@ -2769,6 +2949,66 @@ public sealed partial class NyxIdChatTurnGAgentTests
         }
     }
 
+    private sealed class ApprovalRequiredDurableReplyExecutor
+        : IAgentRunReplyGenerationExecutorPort
+    {
+        public int ToolExecutions { get; private set; }
+
+        public AgentRunReplyStepState? ExecutedStepState { get; private set; }
+
+        public Task<AgentRunReplyStepState> BuildInitialStepStateAsync(
+            AgentRunReplyGenerationExecutionRequest request,
+            CancellationToken ct) => throw new NotSupportedException();
+
+        public Task<AgentRunLlmStepExecution> BuildLlmStepExecutionAsync(
+            AgentRunReplyStepExecutionRequest request,
+            CancellationToken ct) => throw new NotSupportedException();
+
+        public Task<AgentRunNextToolStepRequestedEvent> BuildToolStepContinuationAsync(
+            AgentRunReplyStepExecutionRequest request,
+            AgentRunAuthorizedToolStep? authorizedToolStep,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            request.AllowDurableToolAuthorization.Should().BeTrue();
+            authorizedToolStep.Should().BeNull();
+            ToolExecutions++;
+            ExecutedStepState = request.StepState.Clone();
+            var call = request.StepState.PendingToolCalls.Should().ContainSingle().Which;
+            var result = new AgentRunToolStepResult
+            {
+                AdvanceRound = true,
+                AuthorizationOutcome = AgentRunToolAuthorizationOutcome.DurableMatched,
+            };
+            result.ResultMessages.Add(new AgentRunChatMessage
+            {
+                Role = "tool",
+                ToolCallId = call.Id,
+                Content = "{\"error\":\"approval_required\"}",
+            });
+            result.ToolReceipts.Add(new AgentToolReceipt
+            {
+                CallId = call.Id,
+                ToolName = call.Name,
+                Status = AgentToolReceiptStatus.ApprovalRequired,
+                ApprovalRequestId = "approval-generation-two",
+                NyxIdApprovalDecisionMode = NyxIdApprovalDecisionMode.PerRequest,
+                SubjectKind = "user",
+                SubjectId = "owner-alpha",
+            });
+            return Task.FromResult(new AgentRunNextToolStepRequestedEvent
+            {
+                RunId = request.RunId,
+                CorrelationId = request.Request.CorrelationId,
+                TargetActorId = request.Request.TargetActorId,
+                Attempt = request.Attempt,
+                StepIndex = request.StepIndex + 1,
+                Request = request.Request.Clone(),
+                ToolStepResult = result,
+            });
+        }
+    }
+
     private sealed class TinyDeltaReplyExecutor(MutableTimeProvider clock)
         : IAgentRunReplyGenerationExecutorPort
     {
@@ -2862,6 +3102,20 @@ public sealed partial class NyxIdChatTurnGAgentTests
             AgentProfileTurnClassificationRequest request,
             CancellationToken ct = default) =>
             Task.FromResult(AgentProfileTurnClassificationResult.NoMatch());
+    }
+
+    private sealed class AcceptingDelegationCredentialLifecycle
+        : INyxIdChatDelegationCredentialLifecyclePort
+    {
+        public Task<NyxIdChatDelegationCredentialResolution> ResolveAsync(
+            string delegationToken,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(new NyxIdChatDelegationCredentialResolution(
+                true,
+                delegationToken));
+        }
     }
 
     private sealed class StreamingCapabilityReplyExecutor(

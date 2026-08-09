@@ -397,6 +397,12 @@ public static partial class NyxIdChatEndpoints
         var credentials = ExtractNyxIdCredentials(http);
         if (string.IsNullOrWhiteSpace(credentials?.NyxIdAccessToken))
             return Results.Unauthorized();
+        if (!AevatarPrincipalSubjectResolver.TryResolveNyxIdSubject(
+                http.User,
+                out var ownerSubject))
+        {
+            return Results.Unauthorized();
+        }
         var admissionError = await AuthorizeConversationAsync(
             admissionPort,
             identity.ScopeId,
@@ -407,7 +413,6 @@ public static partial class NyxIdChatEndpoints
             return admissionError;
 
         var (commandId, correlationId) = CreateControlTraceIdentity();
-        AevatarPrincipalSubjectResolver.TryResolveNyxIdSubject(http.User, out var ownerSubject);
         var receipt = await commandPort.DispatchPlanResolveAsync(new NyxIdChatPlanResolveCommand
         {
             ScopeId = identity.ScopeId,
@@ -429,13 +434,19 @@ public static partial class NyxIdChatEndpoints
                 Caller = new AgentToolCallerContext(
                     identity.ScopeId,
                     ownerSubject,
-                    identity.RequestId),
+                    identity.RequestId,
+                    identity.ScopeId),
                 Channel = new AgentToolChannelContext(
                     NyxIdChatServiceDefaults.ServiceId,
-                    null,
+                    ownerSubject,
                     identity.ScopeId,
                     null,
                     null),
+                NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                    "nyxid",
+                    string.Empty,
+                    ownerSubject,
+                    "proxy"),
                 ExecutionOwner = AgentToolExecutionOwners.Actor(identity.ActorId),
             }).ToPayload(),
         }, ct).ConfigureAwait(false);

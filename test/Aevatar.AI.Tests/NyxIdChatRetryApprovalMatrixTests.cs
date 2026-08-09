@@ -1292,18 +1292,38 @@ public sealed partial class NyxIdChatConversationGAgentTests
         PlanId = gate.PlanId,
         PlanRevision = gate.PlanRevision,
         RequestId = gate.RequestId,
+        OwnerSubject = "owner-alpha",
         ClientRequestId = $"confirm-retry-{gate.PlanRevision}",
         CommandId = $"command-confirm-retry-{gate.PlanRevision}",
         CorrelationId = $"correlation-confirm-retry-{gate.PlanRevision}",
         Confirmed = true,
         ExpectedStateVersion = stateVersion,
-        ToolContext = new AgentToolExecutionContextPayload
+        ToolContext = (AgentToolExecutionContext.Empty with
         {
-            Credentials = new AgentToolCredentialsPayload
-            {
-                NyxIdAccessToken = "retry-capability-alpha",
-            },
-        },
+            Request = new AgentToolRequestIdentity(gate.RequestId, null),
+            Credentials = new AgentToolCredentials(
+                "retry-capability-alpha",
+                null,
+                null,
+                AgentToolNyxIdCredentialKind.SourceReadableUserBearer),
+            Caller = new AgentToolCallerContext(
+                "scope-alpha",
+                "owner-alpha",
+                gate.RequestId,
+                "scope-alpha"),
+            Channel = new AgentToolChannelContext(
+                NyxIdChatServiceDefaults.ServiceId,
+                "owner-alpha",
+                "scope-alpha",
+                null,
+                null),
+            NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                "nyxid",
+                string.Empty,
+                "owner-alpha",
+                "proxy"),
+            ExecutionOwner = AgentToolExecutionOwners.Actor(actorId),
+        }).ToPayload(),
     };
 
     private static Task AcknowledgeMatrixPlanGateAdmissionAsync(

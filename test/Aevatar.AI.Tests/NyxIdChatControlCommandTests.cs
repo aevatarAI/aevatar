@@ -606,16 +606,36 @@ public sealed class NyxIdChatControlCommandTests
         PlanId = gate.PlanId,
         PlanRevision = gate.PlanRevision,
         RequestId = gate.RequestId,
+        OwnerSubject = "owner-alpha",
         ClientRequestId = $"confirm-{gate.PlanRevision}",
         Confirmed = true,
         ExpectedStateVersion = expectedStateVersion,
-        ToolContext = new AgentToolExecutionContextPayload
+        ToolContext = (AgentToolExecutionContext.Empty with
         {
-            Credentials = new AgentToolCredentialsPayload
-            {
-                NyxIdAccessToken = "retry-runtime-token-alpha",
-            },
-        },
+            Request = new AgentToolRequestIdentity(gate.RequestId, null),
+            Credentials = new AgentToolCredentials(
+                "retry-runtime-token-alpha",
+                null,
+                null,
+                AgentToolNyxIdCredentialKind.SourceReadableUserBearer),
+            Caller = new AgentToolCallerContext(
+                "scope-alpha",
+                "owner-alpha",
+                gate.RequestId,
+                "scope-alpha"),
+            Channel = new AgentToolChannelContext(
+                NyxIdChatServiceDefaults.ServiceId,
+                "owner-alpha",
+                "scope-alpha",
+                null,
+                null),
+            NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                "nyxid",
+                string.Empty,
+                "owner-alpha",
+                "proxy"),
+            ExecutionOwner = AgentToolExecutionOwners.Actor("conversation-alpha"),
+        }).ToPayload(),
     };
 
     private static AgentToolOperationAdmissionPayload ExactEffectAdmission() => new()
@@ -653,6 +673,7 @@ public sealed class NyxIdChatControlCommandTests
         {
             ConversationActorId = "conversation-alpha",
             ScopeId = "scope-alpha",
+            OwnerSubject = "owner-alpha",
             ActiveTurn = new NyxIdChatTurnState
             {
                 TurnId = "turn-alpha",

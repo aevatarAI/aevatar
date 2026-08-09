@@ -927,6 +927,7 @@ public sealed class NyxIdChatTaskLifecycleTests
         {
             ConversationActorId = "conversation-alpha",
             ScopeId = "scope-alpha",
+            OwnerSubject = "owner-alpha",
             ActiveTurn = new NyxIdChatTurnState
             {
                 TurnId = "turn-alpha",
@@ -1118,16 +1119,36 @@ public sealed class NyxIdChatTaskLifecycleTests
                 PlanId = gate.PlanId,
                 PlanRevision = gate.PlanRevision,
                 RequestId = gate.RequestId,
+                OwnerSubject = state.OwnerSubject,
                 ClientRequestId = clientRequestId,
                 Confirmed = true,
                 ExpectedStateVersion = stateVersion,
-                ToolContext = new AgentToolExecutionContextPayload
+                ToolContext = (AgentToolExecutionContext.Empty with
                 {
-                    Credentials = new AgentToolCredentialsPayload
-                    {
-                        NyxIdAccessToken = "runtime-token-alpha",
-                    },
-                },
+                    Request = new AgentToolRequestIdentity(gate.RequestId, null),
+                    Credentials = new AgentToolCredentials(
+                        "runtime-token-alpha",
+                        null,
+                        null,
+                        AgentToolNyxIdCredentialKind.SourceReadableUserBearer),
+                    Caller = new AgentToolCallerContext(
+                        state.ScopeId,
+                        state.OwnerSubject,
+                        gate.RequestId,
+                        state.ScopeId),
+                    Channel = new AgentToolChannelContext(
+                        NyxIdChatServiceDefaults.ServiceId,
+                        state.OwnerSubject,
+                        state.ScopeId,
+                        null,
+                        null),
+                    NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                        "nyxid",
+                        string.Empty,
+                        state.OwnerSubject,
+                        "proxy"),
+                    ExecutionOwner = AgentToolExecutionOwners.Actor(state.ConversationActorId),
+                }).ToPayload(),
             },
             currentStateVersion: stateVersion,
             Now);
