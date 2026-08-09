@@ -1691,6 +1691,52 @@ public sealed class StudioMemberGAgentStateTests
     }
 
     [Fact]
+    public async Task ScheduleProvisioning_WhenResolvedOneShotTimingExpired_ShouldRefreshBeforeAttempt()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var expiredFireAt = now.AddSeconds(-5);
+        var state = NewScheduleProvisioningMember(now.AddMinutes(-1), includeProvisioning: true);
+        state.LastBinding = new StudioMemberBindingContract
+        {
+            PublishedServiceId = "member-m-1",
+            RevisionId = "rev-1",
+            ImplementationKind = StudioMemberImplementationKind.Workflow,
+            BoundAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(-10)),
+        };
+        state.WorkflowScheduleProvisioning.AttemptCount = 1;
+        state.WorkflowScheduleProvisioning.Status = StudioMemberWorkflowScheduleProvisioningStatus.RetryPending;
+        state.WorkflowScheduleProvisioning.ResolvedOneShotFireAtUtc = Timestamp.FromDateTimeOffset(expiredFireAt);
+        var eventSourcing = new RecordingEventSourcing(state, _agent.Apply);
+        var schedulePort = new RecordingScheduleProvisioningPort();
+        var agent = NewHandlerAgent(
+            state,
+            eventSourcing,
+            new RecordingEventPublisher(),
+            schedulePort,
+            new RecordingRuntimeCallbackScheduler());
+
+        await agent.HandleWorkflowScheduleProvisioningAttemptRequested(
+            new StudioMemberWorkflowScheduleProvisioningAttemptRequested
+            {
+                ProvisioningId = "provisioning-1",
+                ObservedAttempt = 1,
+            });
+
+        var execution = schedulePort.Executions.Should().ContainSingle().Which;
+        execution.Attempt.Should().Be(2);
+        execution.OneShotFireAt.Should().NotBeNull();
+        execution.OneShotFireAt.Should().BeAfter(now);
+        execution.OneShotFireAt.Should().NotBe(expiredFireAt);
+        eventSourcing.RaisedEvents
+            .OfType<StudioMemberWorkflowScheduleProvisioningTimingResolved>()
+            .Should()
+            .ContainSingle()
+            .Which.OneShotFireAtUtc.ToDateTimeOffset()
+            .Should()
+            .Be(execution.OneShotFireAt.Value);
+    }
+
+    [Fact]
     public async Task ScheduleProvisioning_WhenBindingFails_ShouldTerminateWithoutExecution()
     {
         var now = DateTimeOffset.UtcNow;

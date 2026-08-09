@@ -258,6 +258,287 @@ public sealed class ServiceApiWorkflowCapabilityResolutionServiceTests
     }
 
     [Fact]
+    public async Task DiscoverAsync_ShouldRejectMissingExecutionModeBeforeReadingInventory()
+    {
+        var list = new StubListPort(Descriptor(TargetUserServiceId, "send-message"));
+        var service = new ServiceApiWorkflowCapabilityResolutionService(
+            list,
+            new StubManagedPort(ReliableManagedResult(RequestSelector())),
+            new MatchingReadinessPort(),
+            new StubFallbackPort(FallbackExhausted()));
+
+        Func<Task> act = async () => await service.DiscoverAsync(Request() with
+        {
+            ExecutionMode = ExternalCapabilityExecutionMode.Unspecified,
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("Service API capability execution mode is required.");
+        list.Calls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_ShouldRejectDuplicateExactOperationDescriptors()
+    {
+        var service = new ServiceApiWorkflowCapabilityResolutionService(
+            new StubListPort(
+                Descriptor(TargetUserServiceId, "send-message"),
+                Descriptor(TargetUserServiceId, "send-message")),
+            new StubManagedPort(ReliableManagedResult(RequestSelector())),
+            new MatchingReadinessPort(),
+            new StubFallbackPort(FallbackExhausted()));
+
+        Func<Task> act = async () => await service.DiscoverAsync(Request());
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("Multiple exact NyxID operation descriptors match the capability key.");
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_ShouldRejectReadinessForDifferentSelector()
+    {
+        var exactDescriptor = Descriptor(TargetUserServiceId, "send-message");
+        var mismatchedReadiness = ReadyOperationReadiness(exactDescriptor);
+        mismatchedReadiness.SelectedSelector = Descriptor(TargetUserServiceId, "archive-message").Selector;
+        var service = new ServiceApiWorkflowCapabilityResolutionService(
+            new StubListPort(exactDescriptor),
+            new StubManagedPort(ReliableManagedResult(RequestSelector())),
+            new StubReadinessPort(mismatchedReadiness),
+            new StubFallbackPort(FallbackExhausted()));
+
+        Func<Task> act = async () => await service.DiscoverAsync(Request());
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("External capability readiness does not match the resolved selector.");
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_ShouldRejectBlockedReadinessWithoutExecutableHandoff()
+    {
+        var exactDescriptor = Descriptor(TargetUserServiceId, "send-message");
+        var blockedWithoutRemediation = new ExternalCapabilityReadiness
+        {
+            ExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+            Status = ExternalCapabilityReadinessStatus.CredentialConnectionRequired,
+            SelectedSelector = exactDescriptor.Selector.Clone(),
+        };
+        var service = new ServiceApiWorkflowCapabilityResolutionService(
+            new StubListPort(exactDescriptor),
+            new StubManagedPort(ReliableManagedResult(RequestSelector())),
+            new StubReadinessPort(blockedWithoutRemediation),
+            new StubFallbackPort(FallbackExhausted()));
+
+        Func<Task> act = async () => await service.DiscoverAsync(Request());
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("External capability readiness did not provide an executable remediation handoff.");
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_ShouldRejectManagedDiscoveryResultWithoutTypedOutcome()
+    {
+        var service = new ServiceApiWorkflowCapabilityResolutionService(
+            new StubListPort(),
+            new StubManagedPort(new ManagedCodexServiceApiSkillDiscoveryResult()),
+            new MatchingReadinessPort(),
+            new StubFallbackPort(FallbackExhausted()));
+
+        Func<Task> act = async () => await service.DiscoverAsync(Request());
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("Managed Service API skill discovery returned no typed result.");
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_ShouldRejectReliableSkillWithoutRequestShape()
+    {
+        var managedResult = ReliableManagedResult(RequestSelector());
+        managedResult.ReliableSkill.RequestShape = null;
+        var service = new ServiceApiWorkflowCapabilityResolutionService(
+            new StubListPort(),
+            new StubManagedPort(managedResult),
+            new MatchingReadinessPort(),
+            new StubFallbackPort(FallbackExhausted()));
+
+        Func<Task> act = async () => await service.DiscoverAsync(Request());
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("Verified Service API skill returned no admitted request shape.");
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_ShouldRejectReliableSkillForDifferentUserService()
+    {
+        var selector = RequestSelector();
+        selector.UserServiceId = "usvc-beta";
+        var service = new ServiceApiWorkflowCapabilityResolutionService(
+            new StubListPort(),
+            new StubManagedPort(ReliableManagedResult(selector)),
+            new MatchingReadinessPort(),
+            new StubFallbackPort(FallbackExhausted()));
+
+        Func<Task> act = async () => await service.DiscoverAsync(Request());
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("Verified Service API skill returned a request shape for a different UserService.");
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_ShouldRejectReadyReliableSkillWhenReadinessOmitsAdmittedRequest()
+    {
+        var selector = RequestSelector();
+        var readiness = ReadyRequestReadiness(selector);
+        readiness.SelectedCapability = new ExternalWorkflowCapabilityRef
+        {
+            NyxIdUserService = new NyxIdUserServiceCapabilityRef
+            {
+                UserServiceId = TargetUserServiceId,
+                EndpointId = "send-message",
+            },
+        };
+        var service = new ServiceApiWorkflowCapabilityResolutionService(
+            new StubListPort(),
+            new StubManagedPort(ReliableManagedResult(selector)),
+            new StubReadinessPort(readiness),
+            new StubFallbackPort(FallbackExhausted()));
+
+        Func<Task> act = async () => await service.DiscoverAsync(Request());
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("External capability readiness returned no admitted NyxID request contract.");
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_ShouldRejectNoReliableSkillWithoutReason()
+    {
+        var fallback = new StubFallbackPort(FallbackExhausted());
+        var service = new ServiceApiWorkflowCapabilityResolutionService(
+            new StubListPort(),
+            new StubManagedPort(new ManagedCodexServiceApiSkillDiscoveryResult
+            {
+                NoReliableApiSkill = new NoReliableServiceApiSkill(),
+            }),
+            new MatchingReadinessPort(),
+            fallback);
+
+        Func<Task> act = async () => await service.DiscoverAsync(Request());
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("Managed Service API skill discovery returned an invalid no-reliable result.");
+        fallback.Calls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_ShouldRejectInvalidFallbackTerminalResolution()
+    {
+        var service = new ServiceApiWorkflowCapabilityResolutionService(
+            new StubListPort(),
+            new StubManagedPort(new ManagedCodexServiceApiSkillDiscoveryResult
+            {
+                NoReliableApiSkill = new NoReliableServiceApiSkill
+                {
+                    Reason = ServiceApiNoReliableSkillReason.NoMatchingSkill,
+                },
+            }),
+            new MatchingReadinessPort(),
+            new StubFallbackPort(new ServiceApiWorkflowCapabilityDiscoveryResult()));
+
+        Func<Task> act = async () => await service.DiscoverAsync(Request());
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("Service API capability fallback returned an invalid terminal resolution.");
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_ShouldRejectUnauthorizedFallbackRequestResolution()
+    {
+        var selector = RequestSelector();
+        var fallbackResolution = FallbackRequest(selector);
+        fallbackResolution.Resolution.NyxidRequest.UserServiceId = "usvc-beta";
+        var service = new ServiceApiWorkflowCapabilityResolutionService(
+            new StubListPort(),
+            new StubManagedPort(new ManagedCodexServiceApiSkillDiscoveryResult
+            {
+                NoReliableApiSkill = new NoReliableServiceApiSkill
+                {
+                    Reason = ServiceApiNoReliableSkillReason.NoMatchingSkill,
+                },
+            }),
+            new MatchingReadinessPort(),
+            new StubFallbackPort(fallbackResolution));
+
+        Func<Task> act = async () => await service.DiscoverAsync(Request());
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("Service API capability fallback returned an unauthorized request resolution.");
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_ShouldResolveAuthorizedOfficialWebFallbackRequest()
+    {
+        var selector = RequestSelector();
+        var service = new ServiceApiWorkflowCapabilityResolutionService(
+            new StubListPort(),
+            new StubManagedPort(new ManagedCodexServiceApiSkillDiscoveryResult
+            {
+                NoReliableApiSkill = new NoReliableServiceApiSkill
+                {
+                    Reason = ServiceApiNoReliableSkillReason.NoMatchingSkill,
+                },
+            }),
+            new MatchingReadinessPort(),
+            new StubFallbackPort(FallbackRequest(selector)));
+
+        var result = await service.DiscoverAsync(Request());
+
+        result.ResultCase.Should()
+            .Be(ServiceApiWorkflowCapabilityDiscoveryResult.ResultOneofCase.Resolution);
+        result.Resolution.ResultCase.Should()
+            .Be(ServiceApiCapabilityResolution.ResultOneofCase.NyxidRequest);
+        result.Resolution.NyxidRequest.ContractSourceCase.Should()
+            .Be(ResolvedNyxIdRequest.ContractSourceOneofCase.OfficialWeb);
+        result.Resolution.NyxidRequest.UserServiceId.Should().Be(TargetUserServiceId);
+        result.Resolution.NyxidRequest.RequestShape.Selector.Should().BeEquivalentTo(selector);
+        result.Resolution.NyxidRequest.AdmissionPolicyVersion.Should()
+            .Be("explicit-request-admission.v1");
+    }
+
+    [Fact]
+    public async Task RetryAfterRemediationAsync_ShouldRejectCorruptedCapabilityFingerprint()
+    {
+        var retry = new ServiceApiCapabilityResolutionRetry
+        {
+            ExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+            DiscoveryInput = new ServiceApiSkillDiscoveryInput
+            {
+                CallerAuthority = new ExternalCapabilityAuthorizationOwner
+                {
+                    Authority = "nyxid",
+                    OwnerKind = ExternalCapabilityAuthorizationOwnerKind.Personal,
+                    OwnerSubject = "caller-alpha",
+                },
+                ScopeId = "scope-alpha",
+                CallerId = "caller-alpha",
+                TargetUserServiceId = TargetUserServiceId,
+                NormalizedCapabilityKey = "send-message",
+                ManagedDiscoveryPolicyVersion = "service_api_skill_discovery.v1",
+                AdmissionPolicyVersion = "explicit-request-admission.v1",
+                CapabilityFingerprint = new string('b', 64),
+            },
+        };
+        var service = new ServiceApiWorkflowCapabilityResolutionService(
+            new StubListPort(),
+            new StubManagedPort(ReliableManagedResult(RequestSelector())),
+            new MatchingReadinessPort(),
+            new StubFallbackPort(FallbackExhausted()));
+
+        Func<Task> act = async () => await service.RetryAfterRemediationAsync(Access(), retry);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("capability_fingerprint does not match normalized_capability_key.");
+    }
+
+    [Fact]
     public async Task DiscoverAsync_ShouldProduceTypedExecutableReadinessHandoff()
     {
         var exactDescriptor = Descriptor(TargetUserServiceId, "send-message");
