@@ -89,6 +89,23 @@ export interface ScopeWorkflowDetail {
   source: ScopeWorkflowSource | null;
 }
 
+export interface ScopeWorkflowArchiveCommandHandle {
+  stage: string;
+  targetActorId: string;
+  commandId: string;
+  correlationId: string;
+}
+
+export interface ScopeWorkflowArchiveAcceptedResult {
+  scopeId: string;
+  workflowId: string;
+  deploymentId: string;
+  commandHandle: ScopeWorkflowArchiveCommandHandle;
+  readModelUrl: string;
+  acceptanceStage: string;
+  propagationStage: string;
+}
+
 export interface ScopeScriptSummary {
   scopeId: string;
   scriptId: string;

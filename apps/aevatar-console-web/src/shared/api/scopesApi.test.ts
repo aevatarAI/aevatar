@@ -217,4 +217,43 @@ describe('scopesApi workflow catalogue', () => {
       expect.objectContaining({ headers: expect.any(Headers) }),
     );
   });
+
+  it('archives a workflow through the scope-owned command boundary', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 202,
+      json: async () => ({
+        scopeId: 'scope alpha',
+        workflowId: 'wf/alpha',
+        deploymentId: 'dep-alpha',
+        commandHandle: {
+          stage: 'deactivate_deployment',
+          targetActorId: 'deployment-actor-alpha',
+          commandId: 'cmd-archive-alpha',
+          correlationId: 'corr-archive-alpha',
+        },
+        readModelUrl: '/api/scopes/scope%20alpha/workflows/wf%2Falpha',
+        acceptanceStage: 'accepted',
+        propagationStage: 'readmodel_propagating',
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      scopesApi.archiveWorkflow('scope alpha', 'wf/alpha'),
+    ).resolves.toMatchObject({
+      scopeId: 'scope alpha',
+      workflowId: 'wf/alpha',
+      deploymentId: 'dep-alpha',
+      commandHandle: {
+        stage: 'deactivate_deployment',
+        commandId: 'cmd-archive-alpha',
+      },
+      acceptanceStage: 'accepted',
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/scopes/scope%20alpha/workflows/wf%2Falpha:archive',
+      expect.objectContaining({ method: 'POST', headers: expect.any(Headers) }),
+    );
+  });
 });

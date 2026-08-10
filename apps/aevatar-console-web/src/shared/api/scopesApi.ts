@@ -3,6 +3,7 @@ import type {
   ScopeScriptDetail,
   ScopeScriptSource,
   ScopeScriptSummary,
+  ScopeWorkflowArchiveAcceptedResult,
   ScopeWorkflowCatalogueActionCapability,
   ScopeWorkflowCatalogueCommittedFacts,
   ScopeWorkflowCatalogueQuery,
@@ -501,6 +502,66 @@ const decodeScopeWorkflowSummaries: Decoder<ScopeWorkflowSummary[]> = (value) =>
 const decodeScopeWorkflowDetails: Decoder<ScopeWorkflowDetail[]> = (value) =>
   expectArray(value, 'ScopeWorkflowDetail[]', decodeScopeWorkflowDetail);
 
+const decodeScopeWorkflowArchiveAcceptedResult: Decoder<
+  ScopeWorkflowArchiveAcceptedResult
+> = (value, label = 'ScopeWorkflowArchiveAcceptedResult') => {
+  const record = expectRecord(value, label);
+  const commandHandle = expectRecord(
+    record.commandHandle ?? record.CommandHandle,
+    `${label}.commandHandle`,
+  );
+  return {
+    scopeId: readString(record, ['scopeId', 'ScopeId'], `${label}.scopeId`),
+    workflowId: readString(
+      record,
+      ['workflowId', 'WorkflowId'],
+      `${label}.workflowId`,
+    ),
+    deploymentId: readString(
+      record,
+      ['deploymentId', 'DeploymentId'],
+      `${label}.deploymentId`,
+    ),
+    commandHandle: {
+      stage: readString(
+        commandHandle,
+        ['stage', 'Stage'],
+        `${label}.commandHandle.stage`,
+      ),
+      targetActorId: readString(
+        commandHandle,
+        ['targetActorId', 'TargetActorId'],
+        `${label}.commandHandle.targetActorId`,
+      ),
+      commandId: readString(
+        commandHandle,
+        ['commandId', 'CommandId'],
+        `${label}.commandHandle.commandId`,
+      ),
+      correlationId: readString(
+        commandHandle,
+        ['correlationId', 'CorrelationId'],
+        `${label}.commandHandle.correlationId`,
+      ),
+    },
+    readModelUrl: readString(
+      record,
+      ['readModelUrl', 'ReadModelUrl'],
+      `${label}.readModelUrl`,
+    ),
+    acceptanceStage: readString(
+      record,
+      ['acceptanceStage', 'AcceptanceStage'],
+      `${label}.acceptanceStage`,
+    ),
+    propagationStage: readString(
+      record,
+      ['propagationStage', 'PropagationStage'],
+      `${label}.propagationStage`,
+    ),
+  };
+};
+
 const decodeScopeScriptSummaries: Decoder<ScopeScriptSummary[]> = (value) =>
   expectArray(value, 'ScopeScriptSummary[]', decodeScopeScriptSummary);
 
@@ -547,6 +608,19 @@ export const scopesApi = {
         scopeId,
       )}/workflows/${encodeURIComponent(workflowId)}`,
       decodeScopeWorkflowDetail,
+    );
+  },
+
+  archiveWorkflow(
+    scopeId: string,
+    workflowId: string,
+  ): Promise<ScopeWorkflowArchiveAcceptedResult> {
+    return requestJson(
+      `/api/scopes/${encodeURIComponent(scopeId)}/workflows/${encodeURIComponent(
+        workflowId,
+      )}:archive`,
+      decodeScopeWorkflowArchiveAcceptedResult,
+      { method: 'POST' },
     );
   },
 

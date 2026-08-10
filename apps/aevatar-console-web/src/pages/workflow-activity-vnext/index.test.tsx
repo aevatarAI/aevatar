@@ -275,6 +275,7 @@ jest.mock('@/shared/studio/explicitRequestConfirmation', () => ({
 
 jest.mock('@/shared/api/scopesApi', () => ({
   scopesApi: {
+    archiveWorkflow: jest.fn(),
     getWorkflowDetail: jest.fn(),
     listWorkflows: jest.fn(),
     queryWorkflowCatalogue: jest.fn(),
@@ -410,6 +411,7 @@ const mockCreateWorkflowRevisionIdentityCandidate = jest.requireMock(
   '@/shared/studio/explicitRequestConfirmation',
 ).createWorkflowRevisionIdentityCandidate as jest.Mock;
 const mockScopesApi = jest.requireMock('@/shared/api/scopesApi').scopesApi as {
+  archiveWorkflow: jest.Mock;
   getWorkflowDetail: jest.Mock;
   listWorkflows: jest.Mock;
   queryWorkflowCatalogue: jest.Mock;
@@ -448,6 +450,20 @@ describe('Workflow Activity vNext catalogue', () => {
     mockScopesApi.queryWorkflowCatalogue.mockResolvedValue(
       createCatalogueResponse([]),
     );
+    mockScopesApi.archiveWorkflow.mockResolvedValue({
+      scopeId: 'scope-alpha',
+      workflowId: 'wf-alpha',
+      deploymentId: 'dep-alpha',
+      commandHandle: {
+        stage: 'deactivate_deployment',
+        targetActorId: 'deployment-manager-alpha',
+        commandId: 'cmd-archive-alpha',
+        correlationId: 'corr-archive-alpha',
+      },
+      readModelUrl: '/api/scopes/scope-alpha/workflows/wf-alpha',
+      acceptanceStage: 'accepted',
+      propagationStage: 'readmodel_propagating',
+    });
     mockServicesApi.deactivateDeployment.mockResolvedValue({
       targetActorId: 'deployment-manager-alpha',
       commandId: 'cmd-archive-alpha',
@@ -947,6 +963,107 @@ describe('Workflow Activity vNext catalogue', () => {
     );
   });
 
+  it('shows Delete draft without Archive for a draft-only workflow', async () => {
+    mockScopesApi.queryWorkflowCatalogue.mockResolvedValue(
+      createCatalogueResponse([
+        createCatalogueRow({ workflowId: 'wf-draft', name: 'Draft workflow' }),
+      ]),
+    );
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    const row = (await screen.findByText('Draft workflow')).closest('tr');
+    fireEvent.click(
+      within(row as HTMLElement).getByRole('button', {
+        name: 'More actions for Draft workflow in Workspace',
+      }),
+    );
+    expect(
+      await screen.findByRole('menuitem', { name: 'Delete draft' }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: 'Archive' })).toBeNull();
+  });
+
+  it('shows Archive without Delete draft for a published workflow that still has a draft', async () => {
+    mockScopesApi.queryWorkflowCatalogue.mockResolvedValue(
+      createCatalogueResponse([
+        createCatalogueRow({
+          workflowId: 'wf-published-draft',
+          name: 'Published draft workflow',
+          committed: {
+            serviceKey: 'opaque-service-key',
+            workflowName: 'published_draft',
+            actorId: 'm-alpha',
+            activeRevisionId: 'rev-alpha',
+            deploymentId: 'dep-alpha',
+            deploymentStatus: 'Active',
+          },
+          hasDraftSource: true,
+        }),
+      ]),
+    );
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    const row = (await screen.findByText('Published draft workflow')).closest(
+      'tr',
+    );
+    fireEvent.click(
+      within(row as HTMLElement).getByRole('button', {
+        name: 'More actions for Published draft workflow in Workspace',
+      }),
+    );
+    expect(
+      await screen.findByRole('menuitem', { name: 'Archive' }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: 'Delete draft' })).toBeNull();
+  });
+
+  it('shows Archive without Delete draft for a published-only workflow', async () => {
+    mockScopesApi.queryWorkflowCatalogue.mockResolvedValue(
+      createCatalogueResponse([
+        createCatalogueRow({
+          workflowId: 'wf-published',
+          name: 'Published workflow',
+          committed: {
+            serviceKey: 'opaque-service-key',
+            workflowName: 'published',
+            actorId: 'm-alpha',
+            activeRevisionId: 'rev-alpha',
+            deploymentId: 'dep-alpha',
+            deploymentStatus: 'Active',
+          },
+          hasDraftSource: false,
+          capabilities: {
+            open: { available: true, unavailableReason: null },
+            activity: { available: true, unavailableReason: null },
+            rename: {
+              available: false,
+              unavailableReason: 'draft_source_missing',
+            },
+            delete: {
+              available: false,
+              unavailableReason: 'draft_source_missing',
+            },
+          },
+        }),
+      ]),
+    );
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    const row = (await screen.findByText('Published workflow')).closest('tr');
+    fireEvent.click(
+      within(row as HTMLElement).getByRole('button', {
+        name: 'More actions for Published workflow in Workspace',
+      }),
+    );
+    expect(
+      await screen.findByRole('menuitem', { name: 'Archive' }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: 'Delete draft' })).toBeNull();
+  });
+
   it('refreshes the catalogue after a successful rename', async () => {
     const originalYaml = 'name: support_triage\nroles: []\nsteps: []\n';
     const renamedYaml = 'name: APAC support triage\nroles: []\nsteps: []\n';
@@ -1046,7 +1163,7 @@ describe('Workflow Activity vNext catalogue', () => {
     expect(mockScopesApi.queryWorkflowCatalogue).toHaveBeenCalledTimes(2);
   });
 
-  it('resolves archive identity and observes the exact row across catalogue pages', async () => {
+  it('archives by workflow identity and observes the exact row across catalogue pages', async () => {
     const activeCommitted = {
       serviceKey: 'svc-alpha',
       workflowName: 'workflow_alpha',
@@ -1060,26 +1177,6 @@ describe('Workflow Activity vNext catalogue', () => {
       deploymentStatus: 'Deactivated',
     };
     let archived = false;
-    mockScopesApi.getWorkflowDetail.mockResolvedValue({
-      available: true,
-      scopeId: 'scope-alpha',
-      workflow: {
-        scopeId: 'scope-alpha',
-        workflowId: 'wf-alpha',
-        displayName: 'Workflow Alpha',
-        serviceKey: 'opaque-service-key',
-        workflowName: 'workflow_alpha',
-        actorId: 'actor-alpha',
-        activeRevisionId: 'rev-alpha',
-        deploymentId: 'dep-authoritative',
-        deploymentStatus: 'Active',
-        updatedAt: '2026-08-04T10:00:00Z',
-        publishedServiceId: 'svc-alpha',
-        serviceAppId: 'workflow-app',
-        serviceNamespace: 'workflow-namespace',
-      },
-      source: null,
-    });
     mockScopesApi.queryWorkflowCatalogue.mockImplementation(
       (input: { cursor?: string; query?: string }) => {
         if (input.query === 'wf-alpha' && input.cursor !== 'archive-page-2') {
@@ -1145,15 +1242,12 @@ describe('Workflow Activity vNext catalogue', () => {
       take: 100,
     });
     expect(mockScopesApi.listWorkflows).not.toHaveBeenCalled();
-    expect(mockServicesApi.deactivateDeployment).toHaveBeenCalledWith(
-      'svc-alpha',
-      'dep-authoritative',
-      {
-        tenantId: 'scope-alpha',
-        appId: 'workflow-app',
-        namespace: 'workflow-namespace',
-      },
+    expect(mockScopesApi.archiveWorkflow).toHaveBeenCalledWith(
+      'scope-alpha',
+      'wf-alpha',
     );
+    expect(mockScopesApi.getWorkflowDetail).not.toHaveBeenCalled();
+    expect(mockServicesApi.deactivateDeployment).not.toHaveBeenCalled();
     expect(await screen.findByText('Archived')).toBeInTheDocument();
     expect(mockConsoleToast.success).toHaveBeenCalledWith('Workflow archived');
   });
