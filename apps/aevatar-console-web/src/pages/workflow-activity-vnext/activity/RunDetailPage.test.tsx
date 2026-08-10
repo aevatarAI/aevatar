@@ -233,6 +233,12 @@ describe('Workflow Activity vNext run detail recovery', () => {
     expect(
       within(confirmation).getByText('Investigate checkout latency'),
     ).toBeInTheDocument();
+    expect(
+      within(confirmation).queryByText(
+        "This starts a new run. The original run won't change.",
+      ),
+    ).not.toBeInTheDocument();
+    expect(confirmation.querySelector('.ant-alert-info')).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'Confirm retry' }));
 
