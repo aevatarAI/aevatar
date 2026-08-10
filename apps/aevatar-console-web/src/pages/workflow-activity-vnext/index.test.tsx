@@ -1304,9 +1304,7 @@ describe('Workflow Activity vNext settings', () => {
   it('renders the same authoritative identity in the shell and Account while keeping support values secondary', async () => {
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
-    expect(
-      (await screen.findAllByText('System default')).length,
-    ).toBeGreaterThan(0);
+    await screen.findByRole('combobox', { name: 'Preferred service' });
     const accountLink = screen.getByRole('link', { name: 'Account' });
     expect(accountLink).toHaveAttribute(
       'href',
@@ -1470,20 +1468,6 @@ describe('Workflow Activity vNext settings', () => {
     expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled();
   });
 
-  it('explains service and model inheritance for System default', async () => {
-    renderWithQueryClient(<WorkflowActivityVNextPage />);
-
-    await screen.findByRole('combobox', { name: 'Preferred service' });
-    expect(screen.getAllByText('System default').length).toBeGreaterThan(0);
-    expect(screen.getByText('Default model')).toBeInTheDocument();
-    expect(
-      screen.getByText('Uses the system-selected service and model.'),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByRole('combobox', { name: 'Default model' }),
-    ).not.toBeInTheDocument();
-  });
-
   it('keeps dirty save actions outside the scrolling AI defaults panel', async () => {
     mockStudioApi.getUserLlmSettings.mockResolvedValue({
       savedSelection: null,
@@ -1554,7 +1538,7 @@ describe('Workflow Activity vNext settings', () => {
     expect(mockStudioApi.saveUserLlmSettings).not.toHaveBeenCalled();
   });
 
-  it('only offers services that publish at least one model', async () => {
+  it('only offers backend services that publish at least one model', async () => {
     mockStudioApi.getUserLlmSettings.mockResolvedValue({
       savedSelection: null,
       savedRouteLabel: 'System default',
@@ -1631,6 +1615,7 @@ describe('Workflow Activity vNext settings', () => {
     });
     fireEvent.mouseDown(routeSelect);
     expect(await screen.findByText('Service alpha')).toBeInTheDocument();
+    expect(screen.queryByText('System default')).not.toBeInTheDocument();
     expect(screen.queryByText('Gateway')).not.toBeInTheDocument();
     expect(screen.queryByText('Storage alpha')).not.toBeInTheDocument();
   });
