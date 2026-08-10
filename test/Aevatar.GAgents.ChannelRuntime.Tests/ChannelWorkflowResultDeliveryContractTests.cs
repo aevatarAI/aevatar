@@ -600,6 +600,8 @@ public sealed class ChannelWorkflowResultDeliveryContractTests
                 runOrigin: null,
                 scheduleId: null,
                 workflowId: null,
+                revisionId: null,
+                definitionVersion: 0,
                 capabilityAdmissionPlan: null,
                 expectedExecutionMode: command.ExpectedExecutionMode,
                 ct: ct);
