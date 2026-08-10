@@ -71,6 +71,12 @@ internal static class ManagedCodexCredentialEndpoints
             execution_ready = readiness.ExecutionReady,
             execution_readiness_reason = readiness.Reason,
             expires_at_unix_ms = credential.ExpiresAt?.ToDateTimeOffset().ToUnixTimeMilliseconds(),
+            chrono_sandbox_user_service_id = credential.ChronoSandboxUserServiceId,
+            chrono_sandbox_service_slug = credential.ChronoSandboxServiceSlug,
+            chrono_llm_user_service_id = credential.ChronoLlmUserServiceId,
+            chrono_llm_service_slug = ManagedCodexOptions.ChronoLlmServiceSlug,
+            ornn_api_user_service_id = credential.OrnnApiUserServiceId,
+            ornn_api_service_slug = credential.OrnnApiServiceSlug,
             state_version = snapshot.StateVersion,
             cleanup_pending = snapshot.PendingRevocations.Count,
         });

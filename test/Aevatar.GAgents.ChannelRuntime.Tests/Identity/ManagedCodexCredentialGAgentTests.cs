@@ -867,7 +867,9 @@ public sealed class ManagedCodexCredentialGAgentTests : IAsyncLifetime
             },
             ChronoSandboxUserServiceId = "user-service-sandbox",
             ChronoLlmUserServiceId = "user-service-llm",
+            OrnnApiUserServiceId = "user-service-ornn",
             ChronoSandboxServiceSlug = "chrono-sandbox",
+            OrnnApiServiceSlug = "ornn-api",
             ExpiresAt = Timestamp.FromDateTimeOffset(ExpiresAt),
             Status = ManagedCodexCredentialStatus.Active,
         };
