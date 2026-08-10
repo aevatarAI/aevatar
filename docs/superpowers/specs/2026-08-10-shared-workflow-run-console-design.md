@@ -25,6 +25,28 @@ The reusable presentation components live under `shared/workflows`:
 The existing Studio components remain thin adapters so their public behavior
 does not change. The vNext editor consumes the shared components directly.
 
+## Workspace And Dock Layout
+
+On desktop, the Canvas/YAML surface and Run Input panel share one bounded
+workspace height. Additional Published Run controls such as Files scroll inside
+the panel body instead of increasing the workspace height; the primary Start
+action remains anchored at the bottom of the panel.
+
+The divider before the Run Input panel is a keyboard-accessible horizontal-size
+control. The divider above Logs is a keyboard-accessible vertical-size control.
+Both use the same width, height, clamping, pointer cleanup, and keyboard-step
+contract as Team Member Workflow Studio. Minimum dimensions preserve a usable
+canvas and maximum dimensions stay within the available editor viewport. The
+stored dimensions are re-clamped when either observed container changes size.
+
+Logs is a persistent bottom dock. It is collapsed before a run, can be expanded
+or collapsed independently of clearing execution data, and automatically
+expands when the user starts a new run. Manual collapse during a run is
+respected until the next explicit Start action; later SSE frames do not force
+the dock open again. The toggle exposes its controlled relationship and moves
+keyboard focus to the replacement control after each layout transition. Mobile
+layout stacks the surfaces and does not expose the fine-grained drag handles.
+
 ## Data Contracts
 
 Draft Studio and Published Run SSE frames are normalized into
@@ -62,9 +84,10 @@ parts; the transport change does not change the published service identity.
 An observed non-terminal Activity run is refreshed while it remains accepted,
 pending, running, or waiting. Terminal snapshots stop refreshing.
 
-Clearing Logs only hides the current local console presentation. It does not
-delete Activity history or mutate the authoritative run. Closing the run input
-panel leaves Logs visible, and reopening the panel preserves the current input.
+Collapsing Logs only changes layout. Clearing Logs discards the current local
+console presentation but does not delete Activity history or mutate the
+authoritative run. Closing the run input panel leaves the Logs dock available,
+and reopening the panel preserves the current input.
 
 ## Verification
 
@@ -78,4 +101,9 @@ Focused tests cover:
 - omission of definition nodes that have no execution facts;
 - Activity step, output, and failure adaptation into the shared Logs console;
 - refresh of non-terminal Activity runs and persistence of Logs when the input
-  panel closes.
+  panel closes;
+- bounded Published Run height with an internally scrolling body and anchored
+  Start action;
+- keyboard and pointer resizing for the Run Input and Logs dividers;
+- collapsed-by-default Logs, Start-triggered expansion, and manual collapse
+  that remains respected for the active run.

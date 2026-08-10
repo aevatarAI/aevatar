@@ -4493,6 +4493,15 @@ describe('TeamMemberWorkflowStudioPage', () => {
     const consoleResizeHandle = screen.getByRole('separator', {
       name: 'Resize run console',
     });
+    const studioMain = screen.getByTestId('team-member-workflow-studio');
+    Object.defineProperty(studioMain, 'clientHeight', {
+      configurable: true,
+      value: 600,
+    });
+    fireEvent(window, new Event('resize'));
+    await waitFor(() => {
+      expect(consoleResizeHandle).toHaveAttribute('aria-valuemax', '360');
+    });
     expect(consoleResizeHandle).toHaveAttribute(
       'aria-orientation',
       'horizontal',

@@ -3748,6 +3748,150 @@ describe('Workflow Activity vNext editor', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('bounds and resizes the published run panel beside the canvas', async () => {
+    await renderPublishedWorkflowPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Run' }));
+
+    const runPanel = await screen.findByRole('complementary', {
+      name: 'Published run panel',
+    });
+    const resizeHandle = screen.getByRole('separator', {
+      name: 'Resize published run panel',
+    });
+    expect(runPanel).toHaveStyle({ height: '100%', width: '420px' });
+    expect(resizeHandle).toHaveAttribute('aria-orientation', 'vertical');
+    expect(resizeHandle).toHaveAttribute('aria-valuemin', '320');
+    expect(resizeHandle).toHaveAttribute('aria-valuemax', '640');
+    expect(resizeHandle).toHaveAttribute('aria-valuenow', '420');
+
+    fireEvent.keyDown(resizeHandle, { key: 'ArrowLeft' });
+    expect(runPanel).toHaveStyle({ width: '444px' });
+    expect(resizeHandle).toHaveAttribute('aria-valuenow', '444');
+
+    const workspace = document.querySelector('.wa-vnext__run-workspace');
+    expect(workspace).toBeInstanceOf(HTMLElement);
+    Object.defineProperty(workspace, 'clientWidth', {
+      configurable: true,
+      value: 700,
+    });
+    fireEvent(window, new Event('resize'));
+
+    await waitFor(() => {
+      expect(runPanel).toHaveStyle({ width: '340px' });
+      expect(resizeHandle).toHaveAttribute('aria-valuemax', '340');
+      expect(resizeHandle).toHaveAttribute('aria-valuenow', '340');
+    });
+  });
+
+  it('keeps Logs collapsed across later SSE frames and restores toggle focus', async () => {
+    const encoder = new TextEncoder();
+    let streamController:
+      | ReadableStreamDefaultController<Uint8Array>
+      | undefined;
+    mockRuntimeRunsApi.streamChat.mockResolvedValue({
+      body: new ReadableStream({
+        start(controller) {
+          streamController = controller;
+        },
+      }),
+      ok: true,
+    } as Response);
+    await renderPublishedWorkflowPage();
+
+    const initiallyCollapsedToggle = screen.getByRole('button', {
+      name: 'Expand workflow logs',
+    });
+    expect(initiallyCollapsedToggle).toHaveAttribute('aria-expanded', 'false');
+    expect(initiallyCollapsedToggle).toHaveAttribute(
+      'aria-controls',
+      'workflow-published-run-console',
+    );
+    expect(
+      screen.queryByRole('complementary', { name: 'Workflow run console' }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Run' }));
+    fireEvent.change(
+      await screen.findByRole('textbox', { name: 'Published run input' }),
+      { target: { value: 'Review order 42' } },
+    );
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Start published run' }),
+    );
+
+    await act(async () => {
+      streamController?.enqueue(
+        encoder.encode(
+          'data: {"runStarted":{"runId":"run-resizable-alpha"}}\n\n',
+        ),
+      );
+    });
+
+    const logs = await screen.findByRole('complementary', {
+      name: 'Workflow run console',
+    });
+    const resizeHandle = screen.getByRole('separator', {
+      name: 'Resize workflow run console',
+    });
+    expect(logs).toHaveStyle({ height: '310px' });
+    expect(resizeHandle).toHaveAttribute('aria-orientation', 'horizontal');
+    expect(resizeHandle).toHaveAttribute('aria-valuenow', '310');
+
+    fireEvent.keyDown(resizeHandle, { key: 'ArrowUp' });
+    expect(logs).toHaveStyle({ height: '334px' });
+    expect(resizeHandle).toHaveAttribute('aria-valuenow', '334');
+
+    const collapseToggle = within(logs).getByRole('button', {
+      name: 'Collapse workflow logs',
+    });
+    expect(collapseToggle).toHaveAttribute('aria-expanded', 'true');
+    expect(collapseToggle).toHaveAttribute(
+      'aria-controls',
+      'workflow-published-run-console',
+    );
+    collapseToggle.focus();
+    fireEvent.click(collapseToggle);
+
+    const expandToggle = screen.getByRole('button', {
+      name: 'Expand workflow logs',
+    });
+    await waitFor(() => expect(expandToggle).toHaveFocus());
+    expect(
+      screen.queryByRole('complementary', { name: 'Workflow run console' }),
+    ).not.toBeInTheDocument();
+
+    await act(async () => {
+      streamController?.enqueue(
+        encoder.encode(
+          'data: {"custom":{"name":"aevatar.step.request","payload":{"input":"Review order 42","stepId":"step-live","stepType":"llm_call"}}}\n\n',
+        ),
+      );
+      streamController?.enqueue(
+        encoder.encode(
+          'data: {"runFinished":{"runId":"run-resizable-alpha"}}\n\n',
+        ),
+      );
+    });
+    expect(
+      screen.queryByRole('complementary', { name: 'Workflow run console' }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(expandToggle);
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: 'Collapse workflow logs' }),
+      ).toHaveFocus(),
+    );
+    expect(
+      await screen.findByTestId('workflow-execution-log-row-node-step-live'),
+    ).toBeInTheDocument();
+
+    await act(async () => {
+      streamController?.close();
+    });
+  });
+
   it('locks Run again when the published workflow is edited', async () => {
     await renderPublishedWorkflowPage();
 

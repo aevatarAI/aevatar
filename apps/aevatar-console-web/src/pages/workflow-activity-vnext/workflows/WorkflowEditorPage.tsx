@@ -6,6 +6,7 @@ import {
   PlusOutlined,
   RocketOutlined,
   SaveOutlined,
+  UpOutlined,
 } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
 import { Alert, Button, Input, Modal, Segmented, Space, Tooltip } from 'antd';
@@ -24,9 +25,11 @@ import {
   isTerminalActivityRunStatus,
 } from '@/shared/workflows/activityExecution';
 import { adaptExecutionDetailToLogs } from '@/shared/workflows/executionDetail';
+import { useWorkflowPanelResize } from '@/shared/workflows/useWorkflowPanelResize';
 import WorkflowExecutionLogsPanel, {
   type WorkflowExecutionLogsModel,
 } from '@/shared/workflows/WorkflowExecutionLogsPanel';
+import WorkflowPanelResizeHandle from '@/shared/workflows/WorkflowPanelResizeHandle';
 import WorkflowRunInputPanel from '@/shared/workflows/WorkflowRunInputPanel';
 import { useConsoleLocation } from '../hooks/useConsoleLocation';
 import {
@@ -46,6 +49,8 @@ import WorkflowActivityVNextShell from '../WorkflowActivityVNextShell';
 import WorkflowNodeInspector, {
   type WorkflowNodeInspectorHandle,
 } from './WorkflowNodeInspector';
+
+const PUBLISHED_RUN_CONSOLE_ID = 'workflow-published-run-console';
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -137,6 +142,7 @@ const WorkflowEditorPage: React.FC<{
     React.useState<number | null>(null);
   const [runPanelOpen, setRunPanelOpen] = React.useState(false);
   const [runConsoleVisible, setRunConsoleVisible] = React.useState(false);
+  const [runConsoleExpanded, setRunConsoleExpanded] = React.useState(false);
   const [activeRunLogIndex, setActiveRunLogIndex] = React.useState<
     number | null
   >(null);
@@ -145,17 +151,49 @@ const WorkflowEditorPage: React.FC<{
   const [hasUnappliedNodeChanges, setHasUnappliedNodeChanges] =
     React.useState(false);
   const workflowNameRef = React.useRef<React.ElementRef<typeof Input>>(null);
+  const collapseRunConsoleButtonRef =
+    React.useRef<React.ElementRef<typeof Button>>(null);
+  const expandRunConsoleButtonRef =
+    React.useRef<React.ElementRef<typeof Button>>(null);
+  const pendingRunConsoleFocusRef = React.useRef<'collapse' | 'expand' | null>(
+    null,
+  );
+  const workflowMainRef = React.useRef<HTMLElement | null>(null);
+  const runWorkspaceRef = React.useRef<HTMLDivElement | null>(null);
   const saveStatusRef = React.useRef<HTMLSpanElement>(null);
   const inspectorRef = React.useRef<WorkflowNodeInspectorHandle>(null);
   const publicationGenerationRef = React.useRef(0);
   const publicationInFlightRef = React.useRef(false);
   const shownPublicationToastKeysRef = React.useRef(new Set<string>());
+  const {
+    executionPanelHandleProps,
+    executionPanelHeight,
+    sidePanelHandleProps,
+    sidePanelWidth,
+  } = useWorkflowPanelResize({
+    editorRegionRef: runWorkspaceRef,
+    executionPanelMaxHeight: 640,
+    executionPanelMaxHeightRatio: 0.72,
+    initialExecutionPanelHeight: 310,
+    mainRef: workflowMainRef,
+  });
   const runRequested = new URLSearchParams(location.search).get('run') === '1';
   const editorWriteLocked = editor.saving || editor.structuralMutationPending;
   const publication = useWorkflowPublication(publicationReceipt);
   const publicationPhase = publicationReceipt
     ? publication.phase
     : publicationStage;
+  React.useEffect(() => {
+    const pendingFocus = pendingRunConsoleFocusRef.current;
+    if (!pendingFocus) return;
+    pendingRunConsoleFocusRef.current = null;
+    if (pendingFocus === 'collapse') {
+      collapseRunConsoleButtonRef.current?.focus();
+      return;
+    }
+    expandRunConsoleButtonRef.current?.focus();
+  }, [runConsoleExpanded]);
+
   React.useEffect(() => {
     let toastIntent: 'error' | 'success' | null = null;
     let toastMessage: string | null = null;
@@ -292,6 +330,7 @@ const WorkflowEditorPage: React.FC<{
       setNodeLibraryOpen(false);
       setRunPanelOpen(false);
       setRunConsoleVisible(false);
+      setRunConsoleExpanded(false);
       setActiveRunLogIndex(null);
       setActiveEditorRoute({
         scopeId: nextScopeId,
@@ -854,21 +893,63 @@ const WorkflowEditorPage: React.FC<{
     <WorkflowActivityVNextShell
       activeSection="workflows"
       footer={
-        runExecution || runConsoleError ? (
-          <WorkflowExecutionLogsPanel
-            activeLogIndex={activeRunLogIndex}
-            clearDisabled={runBusy}
-            error={runConsoleError}
-            execution={runExecution}
-            height={310}
-            onClear={() => {
-              setRunConsoleVisible(false);
-              setActiveRunLogIndex(null);
-            }}
-            onSelectLog={setActiveRunLogIndex}
-            workflowNodes={runWorkflowNodes}
-          />
-        ) : undefined
+        runConsoleExpanded && (runExecution || runConsoleError) ? (
+          <div className="wa-vnext__logs-dock wa-vnext__logs-dock--expanded">
+            <WorkflowPanelResizeHandle
+              ariaLabel={t(
+                'workflowActivityVNext.editor.resizeRunConsole',
+                'Resize workflow run console',
+              )}
+              className="wa-vnext__panel-resize-handle"
+              orientation="horizontal"
+              {...executionPanelHandleProps}
+            />
+            <WorkflowExecutionLogsPanel
+              activeLogIndex={activeRunLogIndex}
+              clearDisabled={runBusy}
+              collapseButtonRef={collapseRunConsoleButtonRef}
+              collapseControlsId={PUBLISHED_RUN_CONSOLE_ID}
+              error={runConsoleError}
+              execution={runExecution}
+              height={executionPanelHeight}
+              id={PUBLISHED_RUN_CONSOLE_ID}
+              onClear={() => {
+                setRunConsoleVisible(false);
+                setRunConsoleExpanded(false);
+                setActiveRunLogIndex(null);
+              }}
+              onCollapse={() => {
+                pendingRunConsoleFocusRef.current = 'expand';
+                setRunConsoleExpanded(false);
+              }}
+              onSelectLog={setActiveRunLogIndex}
+              workflowNodes={runWorkflowNodes}
+            />
+          </div>
+        ) : (
+          <div className="wa-vnext__logs-dock-bar">
+            <strong>
+              {t('teamMemberWorkflowStudio.executionPanel.logs', 'Logs')}
+            </strong>
+            <Button
+              aria-label={t(
+                'workflowActivityVNext.editor.expandRunConsole',
+                'Expand workflow logs',
+              )}
+              aria-controls={PUBLISHED_RUN_CONSOLE_ID}
+              aria-expanded={false}
+              disabled={!runConsoleVisible}
+              icon={<UpOutlined />}
+              onClick={() => {
+                pendingRunConsoleFocusRef.current = 'collapse';
+                setRunConsoleExpanded(true);
+              }}
+              ref={expandRunConsoleButtonRef}
+              size="small"
+              type="text"
+            />
+          </div>
+        )
       }
       heading={
         <Input
@@ -947,6 +1028,7 @@ const WorkflowEditorPage: React.FC<{
             ))}
         </>
       }
+      mainRef={workflowMainRef}
       onNavigate={requestNavigation}
       scopeId={activeScopeId}
       title={
@@ -1126,7 +1208,7 @@ const WorkflowEditorPage: React.FC<{
           ))}
         </div>
       ) : null}
-      <div className="wa-vnext__run-workspace">
+      <div className="wa-vnext__run-workspace" ref={runWorkspaceRef}>
         {mode === 'canvas' ? (
           <WorkflowStudioEditorSurface
             ariaLabel={t(
@@ -1177,7 +1259,7 @@ const WorkflowEditorPage: React.FC<{
             style={{
               border: '1px solid var(--wa-line)',
               flex: '1 1 auto',
-              height: 'min(620px, calc(100dvh - 248px))',
+              height: '100%',
               minHeight: 440,
               minWidth: 0,
             }}
@@ -1213,13 +1295,24 @@ const WorkflowEditorPage: React.FC<{
             onChange={(event) => editor.updateYaml(event.target.value)}
             style={{
               border: '1px solid var(--wa-line)',
-              height: 'min(620px, calc(100dvh - 248px))',
+              height: '100%',
               minHeight: 440,
               resize: 'none',
             }}
             value={editor.yaml}
           />
         )}
+        {runPanelOpen && publishedInvocationTarget ? (
+          <WorkflowPanelResizeHandle
+            ariaLabel={t(
+              'workflowActivityVNext.editor.resizePublishedRunPanel',
+              'Resize published run panel',
+            )}
+            className="wa-vnext__panel-resize-handle"
+            orientation="vertical"
+            {...sidePanelHandleProps}
+          />
+        ) : null}
         <WorkflowRunInputPanel
           canRun={
             !runBusy &&
@@ -1236,11 +1329,13 @@ const WorkflowEditorPage: React.FC<{
                   'Enter an input or attach a file to start this published workflow run.',
                 )
           }
+          height="100%"
           inputDisabled={runBusy || editorWriteLocked}
           onClose={() => setRunPanelOpen(false)}
           onRun={() => {
             if (!publishedInvocationTarget) return;
             setRunConsoleVisible(true);
+            setRunConsoleExpanded(true);
             setActiveRunLogIndex(null);
             void editor.run(publishedInvocationTarget);
           }}
@@ -1255,6 +1350,7 @@ const WorkflowEditorPage: React.FC<{
             onFilesAdd: editor.addRunFiles,
             onFileRemove: editor.removeRunFile,
           }}
+          width={sidePanelWidth}
         />
       </div>
       <Modal

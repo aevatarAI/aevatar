@@ -30,6 +30,7 @@ type PublishedRunVariant = {
 type WorkflowRunInputPanelProps = {
   readonly canRun: boolean;
   readonly disabledReason?: string;
+  readonly height?: React.CSSProperties['height'];
   readonly inputDisabled?: boolean;
   readonly onClose: () => void;
   readonly onRun: () => void;
@@ -160,6 +161,7 @@ function getAttachmentKey(file: File): string {
 const WorkflowRunInputPanel: React.FC<WorkflowRunInputPanelProps> = ({
   canRun,
   disabledReason,
+  height,
   inputDisabled = false,
   onClose,
   onRun,
@@ -208,6 +210,7 @@ const WorkflowRunInputPanel: React.FC<WorkflowRunInputPanelProps> = ({
           ? 'Close draft run panel'
           : 'Close published run panel',
       )}
+      height={height}
       onClose={onClose}
       title={
         <span style={{ alignItems: 'center', display: 'inline-flex', gap: 8 }}>

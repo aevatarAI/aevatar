@@ -30,6 +30,7 @@ type ShellProps = {
   readonly footer?: React.ReactNode;
   readonly headerActions?: React.ReactNode;
   readonly heading?: React.ReactNode;
+  readonly mainRef?: React.Ref<HTMLElement>;
   readonly onNavigate?: (target: string) => void;
   readonly scopeId: string;
   readonly title: string;
@@ -114,6 +115,7 @@ const WorkflowActivityVNextShell: React.FC<ShellProps> = ({
   footer,
   headerActions,
   heading,
+  mainRef,
   onNavigate,
   scopeId,
   title,
@@ -188,6 +190,7 @@ const WorkflowActivityVNextShell: React.FC<ShellProps> = ({
       </aside>
       <main
         className={`wa-vnext__main${footer ? ' wa-vnext__main--with-footer' : ''}`}
+        ref={mainRef}
       >
         {footer ? (
           <div className="wa-vnext__main-scroll">{mainBody}</div>

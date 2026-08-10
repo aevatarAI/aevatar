@@ -4,6 +4,7 @@ import {
   CloseCircleOutlined,
   CloseOutlined,
   CopyOutlined,
+  DownOutlined,
   LoadingOutlined,
   PauseCircleOutlined,
 } from '@ant-design/icons';
@@ -42,10 +43,14 @@ type WorkflowExecutionLogsPanelProps = {
   readonly activeLogIndex?: number | null;
   readonly ariaLabel?: string;
   readonly clearDisabled?: boolean;
+  readonly collapseButtonRef?: React.Ref<React.ElementRef<typeof Button>>;
+  readonly collapseControlsId?: string;
   readonly error?: string;
   readonly execution: WorkflowExecutionLogsModel | null;
   readonly height?: number;
+  readonly id?: string;
   readonly onClear?: () => void;
+  readonly onCollapse?: () => void;
   readonly onSelectLog?: (index: number | null) => void;
   readonly workflowNodes?: readonly WorkflowExecutionNodeSnapshot[];
 };
@@ -939,10 +944,14 @@ const WorkflowExecutionLogsPanel: React.FC<WorkflowExecutionLogsPanelProps> = ({
     'Workflow run console',
   ),
   clearDisabled = false,
+  collapseButtonRef,
+  collapseControlsId,
   error,
   execution,
   height = 210,
+  id,
   onClear,
+  onCollapse,
   onSelectLog,
   workflowNodes,
 }) => {
@@ -1027,6 +1036,7 @@ const WorkflowExecutionLogsPanel: React.FC<WorkflowExecutionLogsPanelProps> = ({
   return (
     <aside
       aria-label={ariaLabel}
+      id={id}
       style={{
         background: '#ffffff',
         borderTop: '1px solid #dbe3ee',
@@ -1163,6 +1173,28 @@ const WorkflowExecutionLogsPanel: React.FC<WorkflowExecutionLogsPanelProps> = ({
                     type="text"
                   />
                 </Tooltip>
+                {onCollapse ? (
+                  <Tooltip
+                    title={t(
+                      'shared.workflowExecutionLogs.collapse',
+                      'Collapse workflow logs',
+                    )}
+                  >
+                    <Button
+                      aria-label={t(
+                        'shared.workflowExecutionLogs.collapse',
+                        'Collapse workflow logs',
+                      )}
+                      aria-controls={collapseControlsId}
+                      aria-expanded={true}
+                      icon={<DownOutlined />}
+                      onClick={onCollapse}
+                      ref={collapseButtonRef}
+                      size="small"
+                      type="text"
+                    />
+                  </Tooltip>
+                ) : null}
                 <Tooltip
                   title={t(
                     'teamMemberWorkflowStudio.executionPanel.clear',

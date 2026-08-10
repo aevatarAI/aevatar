@@ -9,6 +9,7 @@ type WorkflowSidePanelProps = {
   readonly children: React.ReactNode;
   readonly closeAriaLabel?: string;
   readonly closeDisabled?: boolean;
+  readonly height?: React.CSSProperties['height'];
   readonly onClose: () => void;
   readonly subtitle?: React.ReactNode;
   readonly title: React.ReactNode;
@@ -30,6 +31,7 @@ const WorkflowSidePanel: React.FC<WorkflowSidePanelProps> = ({
   children,
   closeAriaLabel,
   closeDisabled = false,
+  height,
   onClose,
   subtitle,
   title,
@@ -44,6 +46,7 @@ const WorkflowSidePanel: React.FC<WorkflowSidePanelProps> = ({
       display: 'flex',
       flex: `0 0 ${width}px`,
       flexDirection: 'column',
+      height,
       minHeight: 0,
       overflow: 'hidden',
       position: 'relative',

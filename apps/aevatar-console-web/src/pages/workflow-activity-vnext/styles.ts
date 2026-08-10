@@ -242,8 +242,12 @@ export const workflowActivityVNextCss = `
 .wa-vnext__editor-surface { min-height: 500px; overflow: hidden; position: relative; }
 .wa-vnext__editor-add { left: 16px; position: absolute; top: 16px; z-index: 5; }
 .wa-vnext__editor-yaml { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; width: 100%; }
-.wa-vnext__run-workspace { display: flex; min-height: 440px; min-width: 0; overflow: hidden; width: 100%; }
+.wa-vnext__run-workspace { display: flex; height: min(620px, calc(100dvh - 248px)); min-height: 440px; min-width: 0; overflow: hidden; width: 100%; }
 .wa-vnext__run-workspace > .wa-vnext__editor-yaml { flex: 1 1 auto; min-width: 0; width: auto; }
+.wa-vnext__logs-dock { background: var(--wa-surface); min-width: 0; }
+.wa-vnext__logs-dock--expanded { display: flex; flex-direction: column; }
+.wa-vnext__logs-dock-bar { align-items: center; background: var(--wa-surface); border-top: 1px solid var(--wa-line); display: flex; height: 44px; justify-content: space-between; padding: 0 14px; }
+.wa-vnext__logs-dock-bar strong { color: var(--wa-ink); font-size: 13px; }
 .wa-vnext__run-panel { margin-top: 16px; }
 .wa-vnext__run-panel-content { width: 100%; }
 .wa-vnext__run-input-field { display: grid; gap: 6px; }
@@ -371,8 +375,10 @@ export const workflowActivityVNextCss = `
   .wa-vnext__editor-toolbar { align-items: stretch; flex-direction: row; flex-wrap: wrap; overflow: visible; }
   .wa-vnext__editor-toolbar > * { flex: 1 1 100%; }
   .wa-vnext__editor-toolbar-meta { display: grid; gap: 8px; grid-template-columns: max-content minmax(0, 1fr); width: 100%; }
-  .wa-vnext__run-workspace { display: grid; grid-template-columns: minmax(0, 1fr); min-height: 0; overflow: visible; }
-  .wa-vnext__run-workspace > aside { max-width: 100%; }
+  .wa-vnext__run-workspace { display: grid; grid-template-columns: minmax(0, 1fr); height: auto; min-height: 0; overflow: visible; }
+  .wa-vnext__run-workspace > section:first-child, .wa-vnext__run-workspace > .wa-vnext__editor-yaml { height: min(620px, calc(100dvh - 248px)) !important; min-height: 440px !important; }
+  .wa-vnext__run-workspace > aside { height: auto !important; max-width: 100%; width: 100% !important; }
+  .wa-vnext__panel-resize-handle { display: none; }
   .wa-vnext__editor-mode-control { grid-column: 1 / -1; width: 100%; }
   .wa-vnext__editor-mode-control .ant-segmented-group { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; }
   .wa-vnext__editor-mode-control .ant-segmented-item { min-width: 0; }
