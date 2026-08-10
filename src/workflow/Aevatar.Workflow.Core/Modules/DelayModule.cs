@@ -87,6 +87,7 @@ public sealed class DelayModule : IEventModule<IWorkflowExecutionContext>
             {
                 Input = request.Input ?? string.Empty,
                 CallbackId = BuildDelayCallbackId(runId, stepId, ResolveOriginEnvelopeId(envelope)),
+                StepId = stepId,
             };
             await SaveStateAsync(state, ctx, ct);
 

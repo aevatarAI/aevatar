@@ -193,6 +193,13 @@ public sealed class WorkflowExecutionCurrentStateProjector
             return state.CompensationOriginFailedStepId;
         if (!string.IsNullOrWhiteSpace(state.DeadLetterFailedCompensationStepId))
             return state.DeadLetterFailedCompensationStepId;
+
+        foreach (var executionState in state.ExecutionStates.Values)
+        {
+            if (executionState?.Is(WorkflowExecutionKernelState.Descriptor) == true)
+                return executionState.Unpack<WorkflowExecutionKernelState>().CurrentStepId?.Trim() ?? string.Empty;
+        }
+
         return string.Empty;
     }
 
@@ -258,7 +265,7 @@ public sealed class WorkflowExecutionCurrentStateProjector
                     var pending = delayState.Pending
                         .OrderBy(static item => item.Key, StringComparer.Ordinal)
                         .First();
-                    return Waiting(pending.Value.CallbackId, "delay", pending.Value.Input);
+                    return Waiting(ResolveDelayWaitingStepId(pending.Key, pending.Value), "delay", pending.Value.Input);
                 }
             }
         }
@@ -267,6 +274,16 @@ public sealed class WorkflowExecutionCurrentStateProjector
         {
             Availability = "unavailable",
         };
+    }
+
+    private static string ResolveDelayWaitingStepId(string pendingKey, PendingDelayState pending)
+    {
+        var stepId = pending.StepId?.Trim();
+        if (!string.IsNullOrWhiteSpace(stepId))
+            return stepId;
+
+        var separatorIndex = pendingKey.LastIndexOf(':');
+        return separatorIndex >= 0 ? pendingKey[(separatorIndex + 1)..].Trim() : string.Empty;
     }
 
     private static WorkflowRunActivityWaitingReadModel Waiting(string? stepId, string waitingKind, string? prompt) =>

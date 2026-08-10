@@ -69,7 +69,14 @@ public sealed class WorkflowRunObservatoryQueryService
         if (normalizedScopeId.Length == 0)
             return new WorkflowActivityRunFeedPage();
 
-        var page = await PageActivityRunsAsync(filter, normalizedScopeId, ct);
+        var take = ResolveActivityTake(filter);
+        var page = await PageActivityRunsAsync(
+            filter,
+            normalizedScopeId,
+            take,
+            filter.Cursor,
+            filter.IncludeTotalCount,
+            ct);
 
         // Implement (issue #3250):
         //   Behavior: Activity rows expose backend-owned facts from the materialized current-state document.
@@ -82,7 +89,8 @@ public sealed class WorkflowRunObservatoryQueryService
                           string.Equals(row.Status, statusFilter, StringComparison.OrdinalIgnoreCase))
             .ToList();
 
-        return ToActivityRunFeedPage(page, rows);
+        var hasMore = await HasNextActivityPageAsync(filter, normalizedScopeId, page.NextCursor, statusFilter, ct);
+        return ToActivityRunFeedPage(page, rows, hasMore);
     }
 
     // 06-20-observatory-admin-cross-scope (G3/G4): cross-scope overview. No ScopeId in the query => the projection
@@ -116,7 +124,14 @@ public sealed class WorkflowRunObservatoryQueryService
     {
         ArgumentNullException.ThrowIfNull(filter);
 
-        var page = await PageActivityRunsAsync(filter, scopeId: null, ct);
+        var take = ResolveActivityTake(filter);
+        var page = await PageActivityRunsAsync(
+            filter,
+            scopeId: null,
+            take,
+            filter.Cursor,
+            filter.IncludeTotalCount,
+            ct);
 
         var statusFilter = filter.Status?.Trim();
         var rows = page.Items
@@ -125,7 +140,8 @@ public sealed class WorkflowRunObservatoryQueryService
                           string.Equals(row.Status, statusFilter, StringComparison.OrdinalIgnoreCase))
             .ToList();
 
-        return ToActivityRunFeedPage(page, rows);
+        var hasMore = await HasNextActivityPageAsync(filter, scopeId: null, page.NextCursor, statusFilter, ct);
+        return ToActivityRunFeedPage(page, rows, hasMore);
     }
 
     public async Task<ObservatoryRunDetail?> GetRunAsync(
@@ -171,10 +187,11 @@ public sealed class WorkflowRunObservatoryQueryService
     private async Task<WorkflowActorCurrentStatePage> PageActivityRunsAsync(
         WorkflowActivityRunFeedFilter filter,
         string? scopeId,
-        CancellationToken ct)
-    {
-        var take = Math.Clamp(filter.Take <= 0 ? DefaultRunListTake : filter.Take, 1, MaxRunListTake);
-        return await _currentStateQueryPort.PageWorkflowActorCurrentStatesAsync(
+        int take,
+        string? cursor,
+        bool includeTotalCount,
+        CancellationToken ct) =>
+        await _currentStateQueryPort.PageWorkflowActorCurrentStatesAsync(
             new WorkflowActorCurrentStateListQuery
             {
                 Take = take,
@@ -186,20 +203,48 @@ public sealed class WorkflowRunObservatoryQueryService
                 WorkflowId = filter.WorkflowId?.Trim() ?? string.Empty,
                 UpdatedFromUtc = filter.FromUtc,
                 UpdatedToUtc = filter.ToUtc,
-                Cursor = filter.Cursor,
-                IncludeTotalCount = filter.IncludeTotalCount,
+                Cursor = cursor,
+                IncludeTotalCount = includeTotalCount,
             },
             ct);
+
+    private async Task<bool> HasNextActivityPageAsync(
+        WorkflowActivityRunFeedFilter filter,
+        string? scopeId,
+        string? cursor,
+        string? statusFilter,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(cursor))
+            return false;
+
+        var page = await PageActivityRunsAsync(
+            filter,
+            scopeId,
+            take: 1,
+            cursor,
+            includeTotalCount: false,
+            ct);
+
+        return page.Items
+            .Where(snapshot => scopeId == null || string.Equals(snapshot.ScopeId, scopeId, StringComparison.Ordinal))
+            .Select(ToActivityRunFeedRow)
+            .Any(row => string.IsNullOrEmpty(statusFilter) ||
+                        string.Equals(row.Status, statusFilter, StringComparison.OrdinalIgnoreCase));
     }
+
+    private static int ResolveActivityTake(WorkflowActivityRunFeedFilter filter) =>
+        Math.Clamp(filter.Take <= 0 ? DefaultRunListTake : filter.Take, 1, MaxRunListTake);
 
     private static WorkflowActivityRunFeedPage ToActivityRunFeedPage(
         WorkflowActorCurrentStatePage source,
-        IReadOnlyList<WorkflowActivityRunFeedRow> rows) =>
+        IReadOnlyList<WorkflowActivityRunFeedRow> rows,
+        bool hasMore) =>
         new()
         {
             Items = rows,
-            NextCursor = string.IsNullOrWhiteSpace(source.NextCursor) ? null : source.NextCursor,
-            HasMore = !string.IsNullOrWhiteSpace(source.NextCursor),
+            NextCursor = hasMore && !string.IsNullOrWhiteSpace(source.NextCursor) ? source.NextCursor : null,
+            HasMore = hasMore,
             TotalCount = source.TotalCount,
         };
 

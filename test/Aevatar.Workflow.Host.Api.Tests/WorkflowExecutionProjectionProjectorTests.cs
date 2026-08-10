@@ -1130,6 +1130,94 @@ public sealed class WorkflowExecutionProjectionProjectorTests
     }
 
     [Fact]
+    public async Task WorkflowExecutionCurrentStateProjector_ShouldExposeActivityFailureAndDelayStepIds()
+    {
+        var dispatcher = new RecordingWriteDispatcher<WorkflowExecutionCurrentStateDocument>();
+        var projector = new WorkflowExecutionCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-08-10T09:00:00+00:00")));
+        var state = new WorkflowRunState
+        {
+            RunId = "run-activity",
+            ScopeId = "scope-activity",
+            Status = "failed",
+            FinalError = "step failed",
+        };
+        state.ExecutionStates["workflow_execution_kernel"] = Any.Pack(new WorkflowExecutionKernelState
+        {
+            CurrentStepId = "ordinary_failed_step",
+        });
+        state.ExecutionStates["delay"] = Any.Pack(new DelayModuleState
+        {
+            Pending =
+            {
+                ["run-activity:delay_step"] = new PendingDelayState
+                {
+                    StepId = "delay_step",
+                    CallbackId = "delay-step:run-activity:delay_step:envelope-alpha",
+                    Input = "wait before retry",
+                },
+            },
+        });
+
+        await projector.ProjectAsync(
+            CreateContext(),
+            WrapCommitted(
+                new WorkflowCompletedEvent
+                {
+                    Success = false,
+                },
+                state));
+
+        var document = dispatcher.Upserts.Should().ContainSingle().Subject;
+        document.ActivityFirstFailure.Availability.Should().Be("available");
+        document.ActivityFirstFailure.StepId.Should().Be("ordinary_failed_step");
+        document.ActivityWaiting.Availability.Should().Be("available");
+        document.ActivityWaiting.WaitingKind.Should().Be("delay");
+        document.ActivityWaiting.StepId.Should().Be("delay_step");
+    }
+
+    [Fact]
+    public async Task WorkflowExecutionCurrentStateProjector_ShouldResolveLegacyDelayStepIdFromPendingKey()
+    {
+        var dispatcher = new RecordingWriteDispatcher<WorkflowExecutionCurrentStateDocument>();
+        var projector = new WorkflowExecutionCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-08-10T09:00:00+00:00")));
+        var state = new WorkflowRunState
+        {
+            RunId = "run-legacy-delay",
+            ScopeId = "scope-activity",
+            Status = "running",
+        };
+        state.ExecutionStates["delay"] = Any.Pack(new DelayModuleState
+        {
+            Pending =
+            {
+                ["run-legacy-delay:delay_step"] = new PendingDelayState
+                {
+                    CallbackId = "delay-step:run-legacy-delay:delay_step:envelope-alpha",
+                    Input = "legacy wait",
+                },
+            },
+        });
+
+        await projector.ProjectAsync(
+            CreateContext(),
+            WrapCommitted(
+                new WorkflowCompletedEvent
+                {
+                    Success = false,
+                },
+                state));
+
+        var document = dispatcher.Upserts.Should().ContainSingle().Subject;
+        document.ActivityWaiting.Availability.Should().Be("available");
+        document.ActivityWaiting.WaitingKind.Should().Be("delay");
+        document.ActivityWaiting.StepId.Should().Be("delay_step");
+    }
+
+    [Fact]
     public async Task WorkflowExecutionCurrentStateProjector_WhenEnvelopeIsNotCommittedState_ShouldSkipWrite()
     {
         var dispatcher = new RecordingWriteDispatcher<WorkflowExecutionCurrentStateDocument>();

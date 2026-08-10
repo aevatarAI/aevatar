@@ -372,7 +372,7 @@ internal static class ElasticsearchProjectionDocumentStorePayloadSupport
         }
         catch (Exception ex) when (ex is FormatException or JsonException or InvalidOperationException)
         {
-            throw new InvalidOperationException("Invalid Elasticsearch projection document query cursor.", ex);
+            throw new ProjectionDocumentQueryCursorException("Invalid Elasticsearch projection document query cursor.", ex);
         }
     }
 

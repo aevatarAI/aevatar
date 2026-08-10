@@ -7,6 +7,7 @@ using Aevatar.Audit.Abstractions.Models;
 using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.Authentication.Abstractions;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Observatory;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using FluentAssertions;
@@ -148,6 +149,28 @@ public sealed class WorkflowRunObservatoryEndpointsAdminTests
         observatory.LastActivityFilter.Take.Should().Be(25);
         adminQuery.ListAllActivityCalls.Should().Be(0);
         authorizer.Calls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ListActivityRuns_MalformedCursor_ReturnsBadRequest()
+    {
+        var observatory = new FakeObservatory
+        {
+            ActivityException = new ProjectionDocumentQueryCursorException("Malformed cursor."),
+        };
+        var http = BuildHttpContext(OwnScope, bearer: "tok");
+
+        var result = await WorkflowRunObservatoryEndpoints.ListActivityRuns(
+            http,
+            observatory,
+            new FakeAdminQuery(),
+            new FakeAuthorizer(elevated: false),
+            NullLoggerFactory.Instance,
+            cursor: "not-a-valid-cursor");
+        var (status, body) = await ExecuteWithBodyAsync(result, http);
+
+        status.Should().Be(400);
+        body.Should().Contain("malformed_cursor");
     }
 
     [Fact]
@@ -657,6 +680,7 @@ public sealed class WorkflowRunObservatoryEndpointsAdminTests
         public ObservatoryRunDetail? Detail { get; init; }
         public WorkflowActivityRunFeedFilter? LastActivityFilter { get; private set; }
         public WorkflowActivityRunFeedPage ActivityPage { get; init; } = new();
+        public Exception? ActivityException { get; init; }
 
         public Task<IReadOnlyList<ObservatoryRunSummary>> ListRunsForScopeAsync(string scopeId, ObservatoryRunListFilter filter, CancellationToken ct = default)
         {
@@ -668,6 +692,8 @@ public sealed class WorkflowRunObservatoryEndpointsAdminTests
         {
             ActivityListScopes.Add(scopeId);
             LastActivityFilter = filter;
+            if (ActivityException is not null)
+                throw ActivityException;
             return Task.FromResult(ActivityPage);
         }
 

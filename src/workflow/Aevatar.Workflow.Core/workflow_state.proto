@@ -393,6 +393,7 @@ message PendingDelayState
   WorkflowRuntimeCallbackLeaseState lease = 1;
   string input = 2;
   string callback_id = 3;
+  string step_id = 4;
 }
 
 message DelayModuleState

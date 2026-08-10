@@ -3,6 +3,7 @@ using Aevatar.Audit.Hosting.EndpointAudit;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.BackendConsole.Hosting;
 using Aevatar.Capabilities;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Observatory;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -256,18 +257,25 @@ public static class WorkflowRunObservatoryEndpoints
             IncludeTotalCount = includeTotalCount,
         };
 
-        if (!IsCrossScope(scope, ownScopeId))
-            return Results.Json(await observatory.ListActivityRunsForScopeAsync(ownScopeId, filter, ct));
+        try
+        {
+            if (!IsCrossScope(scope, ownScopeId))
+                return Results.Json(await observatory.ListActivityRunsForScopeAsync(ownScopeId, filter, ct));
 
-        var (denied, _, _) = await AuthorizeCrossScopeAsync(
-            http, ownScopeId, scope!, runId: null, action: "activity-list", authorizer, loggerFactory, ct);
-        if (denied is not null)
-            return denied;
+            var (denied, _, _) = await AuthorizeCrossScopeAsync(
+                http, ownScopeId, scope!, runId: null, action: "activity-list", authorizer, loggerFactory, ct);
+            if (denied is not null)
+                return denied;
 
-        var page = string.Equals(scope, AllScopesToken, StringComparison.Ordinal)
-            ? await adminQuery.ListAllActivityRunsAsync(filter, ct)
-            : await observatory.ListActivityRunsForScopeAsync(scope!, filter, ct);
-        return Results.Json(page);
+            var page = string.Equals(scope, AllScopesToken, StringComparison.Ordinal)
+                ? await adminQuery.ListAllActivityRunsAsync(filter, ct)
+                : await observatory.ListActivityRunsForScopeAsync(scope!, filter, ct);
+            return Results.Json(page);
+        }
+        catch (ProjectionDocumentQueryCursorException) when (!string.IsNullOrWhiteSpace(cursor))
+        {
+            return Results.BadRequest(new { error = "malformed_cursor" });
+        }
     }
 
     internal static async Task<IResult> GetRun(
