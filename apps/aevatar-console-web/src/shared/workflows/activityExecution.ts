@@ -1,3 +1,4 @@
+import { t } from '@/shared/i18n/messages';
 import type { WorkflowActivityRunDetail } from '@/shared/models/workflowActivity';
 import type {
   ExecutionLogItem,
@@ -64,7 +65,7 @@ export function buildActivityExecutionTrace(
       previewText: preview(run.input),
       stepId: null,
       timestamp: run.summary.startedAtUtc,
-      title: 'Run started',
+      title: t('shared.studio.execution.run.started', 'Run started'),
       tone: 'run',
       eventType: 'RUN_STARTED',
     });
@@ -156,7 +157,7 @@ export function buildActivityExecutionTrace(
       previewText: preview(run.finalOutput),
       stepId: null,
       timestamp: run.summary.updatedAtUtc,
-      title: 'Run finished',
+      title: t('shared.studio.execution.run.finished', 'Run finished'),
       tone: 'run',
       eventType: 'RUN_FINISHED',
     });
@@ -171,7 +172,7 @@ export function buildActivityExecutionTrace(
       previewText: preview(run.finalError),
       stepId: null,
       timestamp: run.summary.updatedAtUtc,
-      title: 'Run failed',
+      title: t('shared.studio.execution.run.failed', 'Run failed'),
       tone: 'failed',
       eventType: 'RUN_ERROR',
     });
@@ -188,7 +189,7 @@ export function buildActivityExecutionTrace(
       previewText: preview(payloadText),
       stepId: null,
       timestamp: run.summary.updatedAtUtc,
-      title: 'Token usage',
+      title: t('shared.workflowExecutionLogs.tokenUsage', 'Token usage'),
       tone: 'run',
       eventType: 'ACTIVITY_USAGE',
     });

@@ -143,11 +143,20 @@ const workflowActivityVNextMessages = {
     'Sign in again to check this publication.',
   'workflowActivityVNext.editor.checkLatestStatus': 'Check latest status',
   'workflowActivityVNext.editor.currentStep': 'Current step',
+  'workflowActivityVNext.editor.expandRunConsole': 'Expand workflow logs',
   'workflowActivityVNext.editor.failureSummary': 'Failure summary',
   'workflowActivityVNext.editor.fullDetailsNotice':
     'Open run details for the full timeline, diagnostics, and recovery actions.',
   'workflowActivityVNext.editor.openRunDetails': 'Open run details',
   'workflowActivityVNext.editor.outputSummary': 'Output summary',
+  'workflowActivityVNext.editor.publishedRunPanel.inputRequired':
+    'Enter an input or attach a file to start this published workflow run.',
+  'workflowActivityVNext.editor.publishedRunPanel.removeEmptyFile':
+    'Remove empty file {name} before starting the published run.',
+  'workflowActivityVNext.editor.resizePublishedRunPanel':
+    'Resize published run panel',
+  'workflowActivityVNext.editor.resizeRunConsole':
+    'Resize workflow run console',
   'workflowActivityVNext.editor.runAgain': 'Run again',
   'workflowActivityVNext.editor.runFailed': 'Run failed',
   'workflowActivityVNext.editor.runInput': 'Input',
@@ -155,7 +164,8 @@ const workflowActivityVNextMessages = {
     'For example: Review order 42',
   'workflowActivityVNext.editor.runInputHelp':
     'This workflow accepts one text input. For example: Review order 42.',
-  'workflowActivityVNext.editor.runInputRequired': 'Input is required.',
+  'workflowActivityVNext.editor.runInputRequired':
+    'Input or an attached file is required.',
   'workflowActivityVNext.editor.runInputRequiredTag': 'Required',
   'workflowActivityVNext.editor.runPanel': 'Test run',
   'workflowActivityVNext.editor.runResult': 'Run result',

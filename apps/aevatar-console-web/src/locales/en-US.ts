@@ -759,6 +759,9 @@ const enUSMessages = {
   'shared.studio.nodeConfiguration.workflowCall.workflow.label': 'Workflow',
   'shared.studio.nodeConfiguration.workflowCall.workflow.placeholder':
     'child_workflow',
+  'shared.workflowExecutionLogs.collapse': 'Collapse workflow logs',
+  'shared.workflowExecutionLogs.consoleAria': 'Workflow run console',
+  'shared.workflowExecutionLogs.tokenUsage': 'Token usage',
   'teams.members.actions.build': 'Build',
   'teams.members.actions.clearEntry': 'Clear entry member',
   'teams.members.actions.create': 'Create member',
