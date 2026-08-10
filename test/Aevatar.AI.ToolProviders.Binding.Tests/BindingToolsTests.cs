@@ -736,6 +736,92 @@ public class BindingToolsTests
         }
     }
 
+    [Fact]
+    public async Task DiscoverServiceApiWorkflowCapabilityTool_ShouldEmitAuthoringNyxIdRequestShape()
+    {
+        var requestSelector = new NyxIdRequestSelector
+        {
+            UserServiceId = "usvc-alpha",
+            Method = NyxIdRequestMethod.Post,
+            PathTemplate = "/open-apis/im/v1/messages",
+            BodyMode = NyxIdRequestBodyMode.Json,
+            BodyRequired = true,
+            ResponseMode = NyxIdRequestResponseMode.Text,
+            Risk = NyxIdOperationRisk.Write,
+        };
+        requestSelector.QueryParameters.Add("receive_id_type");
+        requestSelector.HeaderParameters.Add("X-Tenant");
+        var discovery = new StubServiceApiWorkflowCapabilityDiscoveryPort(
+            new ServiceApiWorkflowCapabilityDiscoveryResult
+            {
+                Resolution = new ServiceApiCapabilityResolution
+                {
+                    NyxidRequest = new ResolvedNyxIdRequest
+                    {
+                        OrnnSkill = new ExactOrnnApiSkillProvenance
+                        {
+                            CanonicalName = "example-messaging-service-api",
+                            Guid = "d47a95c5-db2a-4f00-9057-27f674566bd5",
+                        },
+                        UserServiceId = "usvc-alpha",
+                        RequestShape = new AdmittedNyxIdRequestShape
+                        {
+                            Selector = requestSelector,
+                        },
+                        AdmissionPolicyVersion = "explicit-request-admission.v1",
+                    },
+                },
+            });
+        var tool = new DiscoverServiceApiWorkflowCapabilityTool(discovery);
+        AgentToolRequestContext.Current = CapabilityContext(
+            "scope-alpha",
+            "caller-alpha",
+            "caller-secret",
+            "organization-secret");
+
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "target_user_service_id": "usvc-alpha",
+                  "service_slug_snapshot": "example-messaging",
+                  "service_label_snapshot": "Example Messaging",
+                  "capability_key": "send-message",
+                  "admission_policy_version": "explicit-request-admission.v1",
+                  "execution_mode": "interactive"
+                }
+                """);
+
+            using var document = JsonDocument.Parse(result);
+            var request = document.RootElement
+                .GetProperty("resolution")
+                .GetProperty("nyxid_request")
+                .GetProperty("request_shape")
+                .GetProperty("selector")
+                .GetProperty("nyxid_request");
+            request.GetProperty("user_service_id").GetString().Should().Be("usvc-alpha");
+            request.GetProperty("method").GetString().Should().Be("POST");
+            request.GetProperty("path_template").GetString().Should().Be("/open-apis/im/v1/messages");
+            request.GetProperty("query_parameters").EnumerateArray()
+                .Select(static item => item.GetString()).Should().Equal("receive_id_type");
+            request.GetProperty("header_parameters").EnumerateArray()
+                .Select(static item => item.GetString()).Should().Equal("X-Tenant");
+            request.GetProperty("body_mode").GetString().Should().Be("json");
+            request.GetProperty("body_required").GetBoolean().Should().BeTrue();
+            request.GetProperty("response_mode").GetString().Should().Be("text");
+            result.Should().NotContain("NYX_ID_REQUEST_METHOD_POST");
+            result.Should().NotContain("NYX_ID_REQUEST_BODY_MODE_JSON");
+            result.Should().NotContain("NYX_ID_REQUEST_RESPONSE_MODE_TEXT");
+            result.Should().NotContain("nyx_id_request");
+            result.Should().NotContain("caller-secret");
+            result.Should().NotContain("organization-secret");
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
     #endregion
 
     #region BindingStatusTool
@@ -1588,7 +1674,8 @@ public class BindingToolsTests
         }
     }
 
-    private sealed class StubServiceApiWorkflowCapabilityDiscoveryPort :
+    private sealed class StubServiceApiWorkflowCapabilityDiscoveryPort(
+        ServiceApiWorkflowCapabilityDiscoveryResult? result = null) :
         IServiceApiWorkflowCapabilityDiscoveryPort
     {
         public DiscoverServiceApiWorkflowCapabilityRequest? Request { get; private set; }
@@ -1598,6 +1685,9 @@ public class BindingToolsTests
             CancellationToken cancellationToken = default)
         {
             Request = request;
+            if (result is not null)
+                return Task.FromResult(result.Clone());
+
             var descriptor = Descriptor(NyxIdSelector("usvc-alpha", "send-message"), "Send a message");
             return Task.FromResult(new ServiceApiWorkflowCapabilityDiscoveryResult
             {

@@ -78,9 +78,7 @@ public sealed class DiscoverServiceApiWorkflowCapabilityTool(
                     args.Str("member_id")?.Trim() ?? string.Empty,
                     args.Str("published_service_id")?.Trim() ?? string.Empty),
                 ct);
-            var node = ExternalWorkflowCapabilityToolSupport.ToProtoJsonNode(result);
-            NormalizeAuthoringAliases(node);
-            return node?.ToJsonString() ?? JsonDefaults.Error("empty capability resolution");
+            return FormatDiscoveryResult(result);
         }
         catch (OperationCanceledException)
         {
@@ -133,6 +131,44 @@ public sealed class DiscoverServiceApiWorkflowCapabilityTool(
             _ => ExternalCapabilityExecutionMode.Unspecified,
         };
         return executionMode != ExternalCapabilityExecutionMode.Unspecified;
+    }
+
+    private static string FormatDiscoveryResult(ServiceApiWorkflowCapabilityDiscoveryResult result)
+    {
+        var node = ExternalWorkflowCapabilityToolSupport.ToProtoJsonNode(result);
+        if (node is null)
+            return JsonDefaults.Error("empty capability resolution");
+
+        NormalizeAuthoringAliases(node);
+        NormalizeNyxIdRequestResolutionShape(result, node);
+        return node.ToJsonString();
+    }
+
+    private static void NormalizeNyxIdRequestResolutionShape(
+        ServiceApiWorkflowCapabilityDiscoveryResult result,
+        JsonNode node)
+    {
+        if (result.ResultCase != ServiceApiWorkflowCapabilityDiscoveryResult.ResultOneofCase.Resolution ||
+            result.Resolution?.ResultCase != ServiceApiCapabilityResolution.ResultOneofCase.NyxidRequest)
+        {
+            return;
+        }
+
+        var selector = result.Resolution.NyxidRequest.RequestShape?.Selector;
+        var authoringSelector = ExternalWorkflowCapabilityToolSupport.BuildAuthoringSelectorNode(
+            selector is null
+                ? null
+                : new ExternalWorkflowCapabilitySelector { NyxIdRequest = selector.Clone() });
+        if (authoringSelector is null ||
+            node is not JsonObject root ||
+            root["resolution"] is not JsonObject resolution ||
+            resolution["nyxid_request"] is not JsonObject request ||
+            request["request_shape"] is not JsonObject requestShape)
+        {
+            return;
+        }
+
+        requestShape["selector"] = authoringSelector;
     }
 
     private static void NormalizeAuthoringAliases(JsonNode? node)
