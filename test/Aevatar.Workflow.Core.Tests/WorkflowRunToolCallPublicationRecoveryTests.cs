@@ -234,6 +234,7 @@ public sealed class WorkflowRunToolCallPublicationRecoveryTests
             null,
             null,
             null,
+            null,
             ExternalCapabilityExecutionMode.Interactive);
 
     private static void SetAgentId(GAgentBase agent, string agentId)
