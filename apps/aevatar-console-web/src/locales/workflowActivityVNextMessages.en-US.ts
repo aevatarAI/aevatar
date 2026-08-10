@@ -97,6 +97,8 @@ const workflowActivityVNextMessages = {
     'Publish this workflow before running it.',
   'workflowActivityVNext.editor.publishLatestBeforeRun':
     'Save and publish the latest changes before running.',
+  'workflowActivityVNext.editor.publicationStatusAria':
+    'Workflow publication status',
   'workflowActivityVNext.editor.publishUnavailable':
     "Publishing isn't available for this workflow yet.",
   'workflowActivityVNext.editor.publishedRunDrawer': 'Run published workflow',
@@ -112,11 +114,6 @@ const workflowActivityVNextMessages = {
     'Apply or discard node configuration before publishing.',
   'workflowActivityVNext.publish.blocked': 'Publish blocked · {count} issues',
   'workflowActivityVNext.publish.blockedOne': 'Publish blocked · 1 issue',
-  'workflowActivityVNext.publish.checkAgain': 'Check again',
-  'workflowActivityVNext.publish.delayed':
-    'Publication is taking longer to appear',
-  'workflowActivityVNext.publish.delayedDescription':
-    'Check again for the latest publishing status.',
   'workflowActivityVNext.publish.failed': "Publication couldn't be confirmed",
   'workflowActivityVNext.publish.failedDescription':
     'Resolve the error or try publishing again.',
@@ -127,6 +124,7 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.publish.publishing': 'Publishing',
   'workflowActivityVNext.publish.revisionId': 'Revision ID',
   'workflowActivityVNext.publish.readinessIssues': 'Publish readiness issues',
+  'workflowActivityVNext.publish.success': 'Workflow published',
   'workflowActivityVNext.publish.resolvePublication':
     'Resolve the current publication status before publishing again.',
   'workflowActivityVNext.publish.saveBeforePublishing':
@@ -282,8 +280,6 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.nav.settings': 'Settings',
   'workflowActivityVNext.nav.workflows': 'Workflows',
   'workflowActivityVNext.new.back': 'Back to workflows',
-  'workflowActivityVNext.new.backingAuthorityDescription':
-    'System-managed authority for one Workflow.',
   'workflowActivityVNext.new.changeMethod': 'Change method',
   'workflowActivityVNext.new.chooserAria': 'Workflow creation methods',
   'workflowActivityVNext.new.createBlank': 'Create and open',

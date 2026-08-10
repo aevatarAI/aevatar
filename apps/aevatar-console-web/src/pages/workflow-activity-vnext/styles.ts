@@ -369,7 +369,7 @@ export const workflowActivityVNextCss = `
   .wa-vnext__editor-toolbar { align-items: stretch; flex-direction: row; flex-wrap: wrap; overflow: visible; }
   .wa-vnext__editor-toolbar > * { flex: 1 1 100%; }
   .wa-vnext__editor-toolbar-meta { display: grid; gap: 8px; grid-template-columns: max-content minmax(0, 1fr); width: 100%; }
-  .wa-vnext__editor-mode-control { width: 100%; }
+  .wa-vnext__editor-mode-control { grid-column: 1 / -1; width: 100%; }
   .wa-vnext__editor-mode-control .ant-segmented-group { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; }
   .wa-vnext__editor-mode-control .ant-segmented-item { min-width: 0; }
   .wa-vnext__editor-mode-control .ant-segmented-item-label { display: flex; justify-content: center; min-width: 0; }

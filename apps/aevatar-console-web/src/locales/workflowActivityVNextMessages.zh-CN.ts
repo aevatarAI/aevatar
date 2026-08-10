@@ -100,6 +100,7 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
       '请先发布此工作流，再运行。',
     'workflowActivityVNext.editor.publishLatestBeforeRun':
       '请先保存并发布最新更改，再运行。',
+    'workflowActivityVNext.editor.publicationStatusAria': '工作流发布状态',
     'workflowActivityVNext.editor.publishUnavailable': '此工作流暂时无法发布。',
     'workflowActivityVNext.editor.publishedRunDrawer': '运行已发布工作流',
     'workflowActivityVNext.editor.publishedTargetUnavailable':
@@ -114,10 +115,6 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
       '发布前请应用或放弃节点配置更改。',
     'workflowActivityVNext.publish.blocked': '发布受阻 · {count} 个问题',
     'workflowActivityVNext.publish.blockedOne': '发布受阻 · 1 个问题',
-    'workflowActivityVNext.publish.checkAgain': '再次检查',
-    'workflowActivityVNext.publish.delayed': '发布状态显示所需时间较长',
-    'workflowActivityVNext.publish.delayedDescription':
-      '请再次检查最新发布状态。',
     'workflowActivityVNext.publish.failed': '无法确认发布状态',
     'workflowActivityVNext.publish.failedDescription':
       '请处理错误或再次尝试发布。',
@@ -128,6 +125,7 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.publish.publishing': '正在发布',
     'workflowActivityVNext.publish.revisionId': '版本 ID',
     'workflowActivityVNext.publish.readinessIssues': '发布就绪问题',
+    'workflowActivityVNext.publish.success': '工作流已发布',
     'workflowActivityVNext.publish.resolvePublication':
       '再次发布前请先处理当前发布状态。',
     'workflowActivityVNext.publish.saveBeforePublishing':
@@ -265,8 +263,6 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.nav.settings': '设置',
     'workflowActivityVNext.nav.workflows': '工作流',
     'workflowActivityVNext.new.back': '返回工作流列表',
-    'workflowActivityVNext.new.backingAuthorityDescription':
-      '每个工作流专用的系统管理权限资源。',
     'workflowActivityVNext.new.changeMethod': '更换创建方式',
     'workflowActivityVNext.new.chooserAria': '工作流创建方式',
     'workflowActivityVNext.new.createBlank': '创建并打开',

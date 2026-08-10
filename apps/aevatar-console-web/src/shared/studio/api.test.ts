@@ -1425,7 +1425,7 @@ describe('studioApi host-session requests', () => {
     });
   });
 
-  it('publishes a workflow to its backend-owned service identity', async () => {
+  it('publishes a workflow from an accepted upsert receipt without requiring a service identity', async () => {
     persistAuthSession({
       tokens: {
         accessToken: 'access-token',
@@ -1475,6 +1475,7 @@ describe('studioApi host-session requests', () => {
         revisionId: 'rev-alpha',
       }),
     );
+    expect(result).not.toHaveProperty('publishedServiceId');
     const [input, init] = fetchMock.mock.calls[0] as [
       string,
       RequestInit | undefined,

@@ -1,35 +1,30 @@
 import { useQuery } from '@tanstack/react-query';
-import React from 'react';
-import { studioApi } from '@/shared/studio/api';
-import type { StudioMemberBindingRunStatusResponse } from '@/shared/studio/models';
+import { scopesApi } from '@/shared/api/scopesApi';
+import type { ScopeWorkflowDetail } from '@/shared/models/scopes';
 
 export const WORKFLOW_PUBLICATION_OBSERVATION_DELAYS_MS = [
   0, 300, 700, 1200, 2000,
 ] as const;
 
-const ACTIVE_BINDING_RUN_STATUSES = new Set([
-  'accepted',
-  'admission_pending',
-  'admitted',
-  'platform_binding_pending',
-  'member_notification_pending',
+export const WORKFLOW_PUBLICATION_RETRY_INTERVAL_MS = 1500;
+
+const DELAYED_WORKFLOW_CONFLICT_CODES = new Set([
+  'USER_WORKFLOW_NOT_READY',
+  'USER_WORKFLOW_STALE',
 ]);
 
 export type WorkflowPublicationReceipt = {
   readonly scopeId: string;
   readonly workflowId: string;
-  readonly memberId: string;
-  readonly bindingRunId: string;
   readonly revisionId: string;
 };
 
 export type WorkflowPublicationObservationInput = {
   readonly delaysMs?: readonly number[];
-  readonly readBindingRun: (
+  readonly readWorkflow: (
     scopeId: string,
-    memberId: string,
-    bindingRunId: string,
-  ) => Promise<StudioMemberBindingRunStatusResponse>;
+    workflowId: string,
+  ) => Promise<ScopeWorkflowDetail>;
   readonly receipt: WorkflowPublicationReceipt;
   readonly wait?: (delayMs: number) => Promise<void>;
 };
@@ -38,7 +33,7 @@ export type WorkflowPublicationObservationResult =
   | {
       readonly kind: 'observed';
       readonly publishedServiceId: string;
-      readonly run: StudioMemberBindingRunStatusResponse;
+      readonly workflow: ScopeWorkflowDetail;
     }
   | { readonly kind: 'delayed' };
 
@@ -68,29 +63,72 @@ function statusOf(error: unknown): number | undefined {
   return undefined;
 }
 
-function assertAcceptedBindingRunIdentity(
-  receipt: WorkflowPublicationReceipt,
-  run: StudioMemberBindingRunStatusResponse,
-): void {
+function codeOf(error: unknown): string | undefined {
   if (
-    run.scopeId !== receipt.scopeId ||
-    run.memberId !== receipt.memberId ||
-    run.bindingRunId !== receipt.bindingRunId
+    error &&
+    typeof error === 'object' &&
+    'code' in error &&
+    typeof error.code === 'string'
   ) {
-    throw new Error(
-      'The observed binding run does not match the accepted publication.',
-    );
+    return error.code.trim();
+  }
+
+  return undefined;
+}
+
+function isDelayedWorkflowRead(error: unknown): boolean {
+  const status = statusOf(error);
+  return (
+    status === 404 ||
+    status === 408 ||
+    status === 425 ||
+    status === 429 ||
+    (status !== undefined && status >= 500 && status < 600) ||
+    (status === 409 && DELAYED_WORKFLOW_CONFLICT_CODES.has(codeOf(error) ?? ''))
+  );
+}
+
+function assertAcceptedWorkflowIdentity(
+  receipt: WorkflowPublicationReceipt,
+  workflow: ScopeWorkflowDetail,
+): void {
+  if (workflow.scopeId !== receipt.scopeId) {
+    throw new Error('The observed workflow does not match the accepted scope.');
+  }
+  if (workflow.workflow) {
+    if (workflow.workflow.scopeId !== receipt.scopeId) {
+      throw new Error(
+        'The observed workflow does not match the accepted scope.',
+      );
+    }
+    if (workflow.workflow.workflowId !== receipt.workflowId) {
+      throw new Error(
+        'The observed workflow does not match the accepted workflow.',
+      );
+    }
   }
 }
 
-function readBindingRunFailureMessage(
-  run: StudioMemberBindingRunStatusResponse,
-): string {
+function matchesAcceptedPublication(
+  receipt: WorkflowPublicationReceipt,
+  workflow: ScopeWorkflowDetail,
+): boolean {
   return (
-    run.failure?.message?.trim() ||
-    run.failure?.code.trim() ||
-    'The accepted workflow publication failed.'
+    workflow.available === true &&
+    workflow.scopeId === receipt.scopeId &&
+    workflow.workflow?.scopeId === receipt.scopeId &&
+    workflow.workflow.workflowId === receipt.workflowId &&
+    workflow.workflow.activeRevisionId === receipt.revisionId
   );
+}
+
+function normalizePublishedServiceId(
+  publishedServiceId: string | null | undefined,
+): string | null {
+  const normalized = publishedServiceId?.trim();
+  return normalized && normalized.toLowerCase() !== 'default'
+    ? normalized
+    : null;
 }
 
 export async function observeWorkflowPublication(
@@ -102,39 +140,30 @@ export async function observeWorkflowPublication(
   for (const delayMs of delays) {
     if (delayMs > 0) await wait(delayMs);
 
-    let run: StudioMemberBindingRunStatusResponse;
+    let workflow: ScopeWorkflowDetail;
     try {
-      run = await input.readBindingRun(
+      workflow = await input.readWorkflow(
         input.receipt.scopeId,
-        input.receipt.memberId,
-        input.receipt.bindingRunId,
+        input.receipt.workflowId,
       );
     } catch (error) {
-      if (statusOf(error) === 404) continue;
+      if (isDelayedWorkflowRead(error)) continue;
       throw error;
     }
 
-    assertAcceptedBindingRunIdentity(input.receipt, run);
+    assertAcceptedWorkflowIdentity(input.receipt, workflow);
+    if (!matchesAcceptedPublication(input.receipt, workflow)) continue;
 
-    if (run.status === 'failed' || run.status === 'rejected') {
-      throw new Error(readBindingRunFailureMessage(run));
-    }
-    if (ACTIVE_BINDING_RUN_STATUSES.has(run.status)) continue;
-    if (run.status !== 'succeeded') continue;
+    const publishedServiceId = normalizePublishedServiceId(
+      workflow.workflow?.publishedServiceId,
+    );
+    if (!publishedServiceId) continue;
 
-    const publishedServiceId = run.result?.publishedServiceId.trim() ?? '';
-    if (!publishedServiceId) {
-      throw new Error(
-        'The succeeded binding run did not provide a published service identity.',
-      );
-    }
-    if (run.result?.revisionId !== input.receipt.revisionId) {
-      throw new Error(
-        'The succeeded binding run does not match the accepted revision.',
-      );
-    }
-
-    return { kind: 'observed', publishedServiceId, run };
+    return {
+      kind: 'observed',
+      publishedServiceId,
+      workflow,
+    };
   }
 
   return { kind: 'delayed' };
@@ -169,8 +198,7 @@ export function useWorkflowPublication(
       'workflow-activity-vnext',
       'workflow-publication',
       receipt?.scopeId ?? '',
-      receipt?.memberId ?? '',
-      receipt?.bindingRunId ?? '',
+      receipt?.workflowId ?? '',
       receipt?.revisionId ?? '',
     ],
     queryFn: () => {
@@ -180,10 +208,15 @@ export function useWorkflowPublication(
 
       return observeWorkflowPublication({
         receipt,
-        readBindingRun: (scopeId, memberId, bindingRunId) =>
-          studioApi.getMemberBindingRun(scopeId, memberId, bindingRunId),
+        readWorkflow: (scopeId, workflowId) =>
+          scopesApi.getWorkflowDetail(scopeId, workflowId),
       });
     },
+    refetchInterval: (observationQuery) =>
+      observationQuery.state.data?.kind === 'delayed'
+        ? WORKFLOW_PUBLICATION_RETRY_INTERVAL_MS
+        : false,
+    refetchIntervalInBackground: true,
     retry: false,
   });
   const phase = resolveWorkflowPublicationPhase({
@@ -194,24 +227,13 @@ export function useWorkflowPublication(
     isPending: query.isPending,
   });
 
-  const retry = React.useCallback(async () => {
-    if (!enabled) return null;
-    const result = await query.refetch();
-    return result.data ?? null;
-  }, [enabled, query]);
-
   return {
     error: query.error,
     phase,
-    receipt,
     publishedServiceId:
       phase === 'observed' && query.data?.kind === 'observed'
         ? query.data.publishedServiceId
-        : '',
-    retry,
-    run:
-      phase === 'observed' && query.data?.kind === 'observed'
-        ? query.data.run
         : null,
+    receipt,
   } as const;
 }
