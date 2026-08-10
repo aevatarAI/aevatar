@@ -789,12 +789,12 @@ describe('TeamMemberWorkflowStudioPage', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Run' }));
     const draftRunPanel = await screen.findByLabelText('Draft run panel');
     expect(
-      within(draftRunPanel).getByTestId('draft-run-file-drop-zone'),
+      within(draftRunPanel).getByTestId('workflow-run-file-drop-zone'),
     ).toBeTruthy();
     expect(within(draftRunPanel).getByText('No files attached')).toBeTruthy();
     const image = new File(['image-bytes'], 'draft.png', { type: 'image/png' });
     fireEvent.change(
-      within(draftRunPanel).getByTestId('draft-run-file-input'),
+      within(draftRunPanel).getByTestId('workflow-run-file-input'),
       {
         target: { files: [image] },
       },

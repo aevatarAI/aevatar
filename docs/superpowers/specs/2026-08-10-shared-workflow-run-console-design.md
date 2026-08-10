@@ -12,10 +12,10 @@ node/event console users already understand.
 
 The reusable presentation components live under `shared/workflows`:
 
-- `WorkflowRunInputPanel` owns the right-side run input layout and primary run
-  action. Its explicit `draft` variant supports attachments; its `published`
-  variant does not render an attachment control because the published chat
-  invocation contract accepts text only.
+- `WorkflowRunInputPanel` owns the right-side run input layout, attachments,
+  and primary run action. Its explicit `draft` and `published` variants share
+  the same file selection, drag-and-drop, removal, and file-only execution
+  behavior while keeping their labels and invocation ownership distinct.
 - `WorkflowExecutionLogsPanel` owns the Logs header, Nodes/Events overview,
   node input/output details, copy actions, and clear action. It accepts a
   normalized execution model and does not know how execution facts were
@@ -40,6 +40,9 @@ the normalized Activity trace replaces that provisional presentation.
 The published invocation target remains the exact backend-provided
 `publishedServiceId`. The editor does not display, derive, or interchange
 `workflowId`, `revisionId`, and `publishedServiceId` in the run input surface.
+Published runs without files use the JSON chat stream request. Runs with files
+use the same service chat stream endpoint with multipart `payload` and `file`
+parts; the transport change does not change the published service identity.
 
 ## Refresh And Clear Semantics
 

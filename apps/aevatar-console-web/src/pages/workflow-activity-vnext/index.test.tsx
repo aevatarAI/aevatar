@@ -306,6 +306,7 @@ jest.mock('@/shared/api/runtimeRunsApi', () => ({
   runtimeRunsApi: {
     streamChat: jest.fn(),
     streamDraftRun: jest.fn(),
+    streamEndpoint: jest.fn(),
   },
 }));
 
@@ -458,6 +459,7 @@ const mockRuntimeRunsApi = jest.requireMock('@/shared/api/runtimeRunsApi')
   .runtimeRunsApi as {
   streamChat: jest.Mock;
   streamDraftRun: jest.Mock;
+  streamEndpoint: jest.Mock;
 };
 const mockWorkflowActivityApi = jest.requireMock(
   '@/shared/api/workflowActivityApi',
@@ -3792,6 +3794,47 @@ describe('Workflow Activity vNext editor', () => {
     expect(mockRuntimeRunsApi.streamDraftRun).not.toHaveBeenCalled();
   });
 
+  it('uploads published run files through the exact published service', async () => {
+    arrangeObservedWorkflowPublication();
+    mockRuntimeRunsApi.streamEndpoint.mockResolvedValue(createSseResponse([]));
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+    await publishObservedWorkflow();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run' }));
+    const runPanel = await screen.findByRole('complementary', {
+      name: 'Published run panel',
+    });
+    expect(
+      within(runPanel).getByTestId('workflow-run-file-drop-zone'),
+    ).toBeInTheDocument();
+    const image = new File(['image-bytes'], 'invoice.png', {
+      type: 'image/png',
+    });
+    fireEvent.change(within(runPanel).getByTestId('workflow-run-file-input'), {
+      target: { files: [image] },
+    });
+    expect(
+      await within(runPanel).findByText('invoice.png'),
+    ).toBeInTheDocument();
+
+    const startRun = within(runPanel).getByRole('button', {
+      name: 'Start published run',
+    });
+    expect(startRun).toBeEnabled();
+    fireEvent.click(startRun);
+
+    await waitFor(() =>
+      expect(mockRuntimeRunsApi.streamEndpoint).toHaveBeenCalledWith(
+        'scope-alpha',
+        { endpointId: 'chat', files: [image], prompt: '' },
+        expect.any(AbortSignal),
+        { serviceId: 'svc-alpha' },
+      ),
+    );
+    expect(mockRuntimeRunsApi.streamChat).not.toHaveBeenCalled();
+    expect(mockRuntimeRunsApi.streamDraftRun).not.toHaveBeenCalled();
+  });
+
   it('opens the shared Logs console from authoritative Activity run data', async () => {
     mockWorkflowActivityApi.getRun.mockResolvedValue(
       createEditorRunDetail({
@@ -3876,7 +3919,7 @@ describe('Workflow Activity vNext editor', () => {
     } as unknown as Response);
   });
 
-  it('requires the current string input contract before invoking a published workflow', async () => {
+  it('requires text or a file before invoking a published workflow', async () => {
     mockRuntimeRunsApi.streamChat.mockResolvedValue(createSseResponse([]));
 
     await renderPublishedWorkflowPage();
@@ -3891,7 +3934,9 @@ describe('Workflow Activity vNext editor', () => {
 
     expect(startRun).toBeDisabled();
     expect(
-      screen.getByText('Enter an input to start this published workflow run.'),
+      screen.getByText(
+        'Enter an input or attach a file to start this published workflow run.',
+      ),
     ).toBeInTheDocument();
     fireEvent.change(input, { target: { value: 'Review order 42' } });
     expect(startRun).toBeEnabled();

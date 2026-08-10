@@ -19,8 +19,12 @@ type DraftRunVariant = {
 };
 
 type PublishedRunVariant = {
+  readonly acceptedFileTypes?: string;
+  readonly files: readonly File[];
   readonly inputError?: string;
   readonly kind: 'published';
+  readonly onFilesAdd: (files: readonly File[]) => void;
+  readonly onFileRemove: (index: number) => void;
 };
 
 type WorkflowRunInputPanelProps = {
@@ -168,7 +172,7 @@ const WorkflowRunInputPanel: React.FC<WorkflowRunInputPanelProps> = ({
 }) => {
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
   const inputLocked = pending || inputDisabled;
-  const draftVariant = variant.kind === 'draft' ? variant : null;
+  const fileVariant = variant;
   const inputError = variant.kind === 'published' ? variant.inputError : '';
 
   if (!open) {
@@ -177,7 +181,7 @@ const WorkflowRunInputPanel: React.FC<WorkflowRunInputPanelProps> = ({
 
   const addFiles = (nextFiles: readonly File[]) => {
     if (nextFiles.length > 0) {
-      draftVariant?.onFilesAdd(nextFiles);
+      fileVariant.onFilesAdd(nextFiles);
     }
   };
 
@@ -290,137 +294,136 @@ const WorkflowRunInputPanel: React.FC<WorkflowRunInputPanelProps> = ({
           ) : null}
         </section>
 
-        {draftVariant ? (
-          <section
-            style={{
-              display: 'grid',
-              gap: 10,
-            }}
-          >
-            <div style={{ display: 'grid', gap: 4 }}>
-              <Typography.Text strong>
-                {t(
-                  'teamMemberWorkflowStudio.draftRunPanel.filesLabel',
-                  'Files',
-                )}
-              </Typography.Text>
-              <Typography.Text style={{ color: '#64748b' }}>
-                {t(
-                  'teamMemberWorkflowStudio.draftRunPanel.filesHint',
-                  'Attach files for this draft run.',
-                )}
-              </Typography.Text>
-            </div>
-            <input
-              ref={fileInputRef}
-              aria-label={t(
-                'teamMemberWorkflowStudio.draftRunPanel.attachFilesInput',
-                'Attach files',
-              )}
-              accept={
-                draftVariant.acceptedFileTypes ?? DEFAULT_ACCEPTED_FILE_TYPES
-              }
-              data-testid="draft-run-file-input"
-              multiple
-              onChange={(event) => {
-                addFiles(Array.from(event.target.files ?? []));
-                event.currentTarget.value = '';
-              }}
-              style={{ display: 'none' }}
-              type="file"
-            />
-            <div
-              data-testid="draft-run-file-drop-zone"
-              onDragOver={(event) => {
-                event.preventDefault();
-                event.dataTransfer.dropEffect = inputLocked ? 'none' : 'copy';
-              }}
-              onDrop={(event) => {
-                event.preventDefault();
-                if (!inputLocked) {
-                  addFiles(Array.from(event.dataTransfer.files ?? []));
-                }
-              }}
-              style={fileDropZoneStyle}
-            >
-              <div style={attachmentToolbarStyle}>
-                <Tooltip
-                  title={t(
-                    'teamMemberWorkflowStudio.draftRunPanel.attachFiles',
-                    'Attach files',
-                  )}
-                >
-                  <Button
-                    aria-label={t(
-                      'teamMemberWorkflowStudio.draftRunPanel.attachFilesButton',
-                      'Add files',
-                    )}
-                    disabled={inputLocked}
-                    icon={<PaperClipOutlined />}
-                    onClick={() => fileInputRef.current?.click()}
-                  >
-                    {t(
-                      'teamMemberWorkflowStudio.draftRunPanel.addFiles',
-                      'Add files',
-                    )}
-                  </Button>
-                </Tooltip>
-                <Typography.Text style={{ color: '#64748b', fontSize: 12 }}>
-                  {t(
-                    'teamMemberWorkflowStudio.draftRunPanel.dropFiles',
-                    'Drop files here',
-                  )}
-                </Typography.Text>
-              </div>
-              <div style={attachmentListStyle}>
-                {draftVariant.files.length === 0 ? (
-                  <span style={attachmentEmptyStyle}>
-                    {t(
-                      'teamMemberWorkflowStudio.draftRunPanel.noFilesAttached',
-                      'No files attached',
-                    )}
-                  </span>
-                ) : (
-                  draftVariant.files.map((file, index) => (
-                    <span
-                      key={getAttachmentKey(file)}
-                      data-testid="draft-run-file-chip"
-                      style={attachmentChipStyle}
-                    >
-                      {getFileIcon(file)}
-                      <Tooltip
-                        title={`${file.name} · ${file.type || 'file'} · ${formatFileSize(file.size)}`}
-                      >
-                        <span style={attachmentNameStyle}>{file.name}</span>
-                      </Tooltip>
-                      <span style={attachmentMetaStyle}>
-                        {formatFileSize(file.size)}
-                      </span>
-                      <Button
-                        aria-label={t(
-                          'teamMemberWorkflowStudio.draftRunPanel.removeFile',
-                          'Remove {name}',
-                          { name: file.name },
-                        )}
-                        disabled={inputLocked}
-                        icon={<CloseOutlined />}
-                        onClick={() => draftVariant.onFileRemove(index)}
-                        size="small"
-                        type="text"
-                      />
-                    </span>
-                  ))
-                )}
-              </div>
-            </div>
-            <Typography.Text style={{ color: '#64748b', fontSize: 12 }}>
+        <section
+          style={{
+            display: 'grid',
+            gap: 10,
+          }}
+        >
+          <div style={{ display: 'grid', gap: 4 }}>
+            <Typography.Text strong>
+              {t('teamMemberWorkflowStudio.draftRunPanel.filesLabel', 'Files')}
+            </Typography.Text>
+            <Typography.Text style={{ color: '#64748b' }}>
               {t(
-                'teamMemberWorkflowStudio.draftRunPanel.filesLimitHint',
-                'Images, documents, audio, video, CSV, and text files up to 10 MB.',
+                variant.kind === 'draft'
+                  ? 'teamMemberWorkflowStudio.draftRunPanel.filesHint'
+                  : 'workflowActivityVNext.editor.publishedRunPanel.filesHint',
+                variant.kind === 'draft'
+                  ? 'Attach files for this draft run.'
+                  : 'Attach files for this published workflow run.',
               )}
             </Typography.Text>
-          </section>
-        ) : null}
+          </div>
+          <input
+            ref={fileInputRef}
+            aria-label={t(
+              'teamMemberWorkflowStudio.draftRunPanel.attachFilesInput',
+              'Attach files',
+            )}
+            accept={
+              fileVariant.acceptedFileTypes ?? DEFAULT_ACCEPTED_FILE_TYPES
+            }
+            data-testid="workflow-run-file-input"
+            multiple
+            onChange={(event) => {
+              addFiles(Array.from(event.target.files ?? []));
+              event.currentTarget.value = '';
+            }}
+            style={{ display: 'none' }}
+            type="file"
+          />
+          <div
+            data-testid="workflow-run-file-drop-zone"
+            onDragOver={(event) => {
+              event.preventDefault();
+              event.dataTransfer.dropEffect = inputLocked ? 'none' : 'copy';
+            }}
+            onDrop={(event) => {
+              event.preventDefault();
+              if (!inputLocked) {
+                addFiles(Array.from(event.dataTransfer.files ?? []));
+              }
+            }}
+            style={fileDropZoneStyle}
+          >
+            <div style={attachmentToolbarStyle}>
+              <Tooltip
+                title={t(
+                  'teamMemberWorkflowStudio.draftRunPanel.attachFiles',
+                  'Attach files',
+                )}
+              >
+                <Button
+                  aria-label={t(
+                    'teamMemberWorkflowStudio.draftRunPanel.attachFilesButton',
+                    'Add files',
+                  )}
+                  disabled={inputLocked}
+                  icon={<PaperClipOutlined />}
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  {t(
+                    'teamMemberWorkflowStudio.draftRunPanel.addFiles',
+                    'Add files',
+                  )}
+                </Button>
+              </Tooltip>
+              <Typography.Text style={{ color: '#64748b', fontSize: 12 }}>
+                {t(
+                  'teamMemberWorkflowStudio.draftRunPanel.dropFiles',
+                  'Drop files here',
+                )}
+              </Typography.Text>
+            </div>
+            <div style={attachmentListStyle}>
+              {fileVariant.files.length === 0 ? (
+                <span style={attachmentEmptyStyle}>
+                  {t(
+                    'teamMemberWorkflowStudio.draftRunPanel.noFilesAttached',
+                    'No files attached',
+                  )}
+                </span>
+              ) : (
+                fileVariant.files.map((file, index) => (
+                  <span
+                    key={getAttachmentKey(file)}
+                    data-testid="workflow-run-file-chip"
+                    style={attachmentChipStyle}
+                  >
+                    {getFileIcon(file)}
+                    <Tooltip
+                      title={`${file.name} · ${file.type || 'file'} · ${formatFileSize(file.size)}`}
+                    >
+                      <span style={attachmentNameStyle}>{file.name}</span>
+                    </Tooltip>
+                    <span style={attachmentMetaStyle}>
+                      {formatFileSize(file.size)}
+                    </span>
+                    <Button
+                      aria-label={t(
+                        'teamMemberWorkflowStudio.draftRunPanel.removeFile',
+                        'Remove {name}',
+                        { name: file.name },
+                      )}
+                      disabled={inputLocked}
+                      icon={<CloseOutlined />}
+                      onClick={() => fileVariant.onFileRemove(index)}
+                      size="small"
+                      type="text"
+                    />
+                  </span>
+                ))
+              )}
+            </div>
+          </div>
+          <Typography.Text style={{ color: '#64748b', fontSize: 12 }}>
+            {t(
+              'teamMemberWorkflowStudio.draftRunPanel.filesLimitHint',
+              'Images, documents, audio, video, CSV, and text files up to 10 MB.',
+            )}
+          </Typography.Text>
+        </section>
       </div>
 
       <div

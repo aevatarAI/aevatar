@@ -49,6 +49,7 @@ export type WorkflowPublishedInvocationTarget = {
 };
 
 export type PublishedRunSnapshot = {
+  readonly files: readonly File[];
   readonly input: string;
   readonly target: WorkflowPublishedInvocationTarget;
 };
@@ -157,6 +158,7 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
     null,
   );
   const [saveError, setSaveError] = React.useState('');
+  const [runFiles, setRunFiles] = React.useState<File[]>([]);
   const [runInput, setRunInput] = React.useState('');
   const [runInputError, setRunInputError] = React.useState('');
   const [lastRunSnapshot, setLastRunSnapshot] =
@@ -382,6 +384,7 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
       setFailedNodeType(null);
       setCanvasMutationError('');
       setSaveError('');
+      setRunFiles([]);
       setRunInput('');
       setRunInputError('');
       setLastRunSnapshot(null);
@@ -820,13 +823,26 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
         return;
       }
       const normalizedInput = (snapshot?.input ?? runInput).trim();
-      if (!normalizedInput) {
+      const submittedFiles = snapshot?.files ?? runFiles;
+      if (!normalizedInput && submittedFiles.length === 0) {
         setRunInputError(
           t(
             'workflowActivityVNext.editor.runInputRequired',
-            'Input is required.',
+            'Input or an attached file is required.',
           ),
         );
+        return;
+      }
+      const emptyFile = submittedFiles.find((file) => file.size <= 0);
+      if (emptyFile) {
+        setRunError(
+          t(
+            'workflowActivityVNext.editor.publishedRunPanel.removeEmptyFile',
+            'Remove empty file {name} before starting the published run.',
+            { name: emptyFile.name || 'this file' },
+          ),
+        );
+        setRunPhase('failed');
         return;
       }
       const generation = ++runGenerationRef.current;
@@ -839,22 +855,38 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
       setRunInputError('');
       sseRunIdRef.current = '';
       setSseRunId('');
-      if (snapshot) setRunInput(snapshot.input);
+      if (snapshot) {
+        setRunFiles([...snapshot.files]);
+        setRunInput(snapshot.input);
+      }
       const ownsRun = () =>
         runGenerationRef.current === generation &&
         runControllerRef.current === controller &&
         !controller.signal.aborted;
       try {
         const submittedSnapshot: PublishedRunSnapshot = {
+          files: [...submittedFiles],
           input: normalizedInput,
           target,
         };
-        const response = await runtimeRunsApi.streamChat(
-          scopeId,
-          { prompt: submittedSnapshot.input },
-          controller.signal,
-          { serviceId: target.publishedServiceId },
-        );
+        const response =
+          submittedSnapshot.files.length > 0
+            ? await runtimeRunsApi.streamEndpoint(
+                scopeId,
+                {
+                  endpointId: 'chat',
+                  files: submittedSnapshot.files,
+                  prompt: submittedSnapshot.input,
+                },
+                controller.signal,
+                { serviceId: target.publishedServiceId },
+              )
+            : await runtimeRunsApi.streamChat(
+                scopeId,
+                { prompt: submittedSnapshot.input },
+                controller.signal,
+                { serviceId: target.publishedServiceId },
+              );
         if (!ownsRun()) return;
         setLastRunSnapshot(submittedSnapshot);
         setRunPhase('accepted');
@@ -894,6 +926,7 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
     },
     [
       routeWorkflowId,
+      runFiles,
       runInput,
       runObservationUnresolved,
       runPhase,
@@ -938,6 +971,7 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
     retryNodeInsertion,
     run,
     runError,
+    runFiles,
     runInput,
     runInputError,
     lastRunSnapshot,
@@ -970,6 +1004,17 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
       setSelectedEdgeId('');
       setSelectedNodeId(nodeId);
       setSelectedStepConfigurationError('');
+    },
+    addRunFiles: (files: readonly File[]) => {
+      if (files.length > 0) {
+        setRunFiles((current) => [...current, ...files]);
+        setRunInputError('');
+      }
+    },
+    removeRunFile: (index: number) => {
+      setRunFiles((current) =>
+        current.filter((_, itemIndex) => itemIndex !== index),
+      );
     },
     setRunInput: (next: string) => {
       setRunInput(next);

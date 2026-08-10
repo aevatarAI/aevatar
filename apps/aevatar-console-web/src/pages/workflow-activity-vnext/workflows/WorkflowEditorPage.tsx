@@ -1239,15 +1239,15 @@ const WorkflowEditorPage: React.FC<{
             !observedRunInProgress &&
             Boolean(publishedInvocationTarget) &&
             editor.canRun &&
-            Boolean(editor.runInput.trim()) &&
+            Boolean(editor.runInput.trim() || editor.runFiles.length > 0) &&
             !editorWriteLocked
           }
           disabledReason={
-            editor.runInput.trim()
+            editor.runInput.trim() || editor.runFiles.length > 0
               ? undefined
               : t(
                   'workflowActivityVNext.editor.publishedRunPanel.inputRequired',
-                  'Enter an input to start this published workflow run.',
+                  'Enter an input or attach a file to start this published workflow run.',
                 )
           }
           inputDisabled={runBusy || editorWriteLocked || observedRunInProgress}
@@ -1262,7 +1262,13 @@ const WorkflowEditorPage: React.FC<{
           open={runPanelOpen && publishedInvocationTarget !== null}
           pending={editor.runPhase === 'submitting'}
           runMessage={editor.runInput}
-          variant={{ inputError: editor.runInputError, kind: 'published' }}
+          variant={{
+            files: editor.runFiles,
+            inputError: editor.runInputError,
+            kind: 'published',
+            onFilesAdd: editor.addRunFiles,
+            onFileRemove: editor.removeRunFile,
+          }}
         />
       </div>
       <Modal
