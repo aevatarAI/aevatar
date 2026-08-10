@@ -511,15 +511,23 @@ public sealed class NyxIdAssistantActionRegistry
         };
     }
 
-    private static NyxIdAssistantActionParams ParseKeyCreate(JsonElement root)
+    internal static NyxIdAssistantActionParams ParseKeyCreate(JsonElement root)
     {
         EnsureOnlyProperties(root, "name", "platform", "allowedServiceIds");
+        var allowedServiceIds = ReadStringArray(root, "allowedServiceIds", 128, 256);
+        if (allowedServiceIds.Count == 0)
+        {
+            throw Error(
+                ParamsInvalid,
+                "Key creation requires at least one exact allowed service identity.");
+        }
+
         var value = new NyxIdKeyCreateParams
         {
             Name = ReadRequiredString(root, "name", 256),
             Platform = ReadRequiredString(root, "platform", 128),
         };
-        value.AllowedServiceIds.AddRange(ReadStringArray(root, "allowedServiceIds", 128, 256));
+        value.AllowedServiceIds.AddRange(allowedServiceIds);
         return new NyxIdAssistantActionParams { KeyCreate = value };
     }
 

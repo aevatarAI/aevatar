@@ -199,11 +199,10 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ChannelNyxIdConnectedServiceInventoryToolSource>();
         services.TryAddSingleton<IAgentRunReplyGenerationExecutorPort, AgentRunReplyGenerationExecutor>();
         services.TryAddSingleton<INyxIdActionPostconditionPort>(sp =>
-            sp.GetService<INyxIdAuthorizationCatalogQueryPort>() is { } catalogQueryPort
-                ? new NyxIdActionPostconditionPort(
-                    catalogQueryPort,
-                    sp.GetRequiredService<TimeProvider>())
-                : new UnavailableNyxIdActionPostconditionPort());
+            new NyxIdActionPostconditionPort(
+                sp.GetService<INyxIdAuthorizationCatalogQueryPort>(),
+                sp.GetService<INyxIdActionEvidenceReadPort>(),
+                sp.GetRequiredService<TimeProvider>()));
         services.TryAddSingleton<INyxIdChatDelegationCredentialLifecyclePort,
             NyxIdChatDelegationCredentialLifecyclePort>();
         services.TryAddSingleton<INyxIdChatTurnOperationExecutor, NyxIdChatTurnOperationExecutor>();

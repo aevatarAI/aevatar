@@ -122,6 +122,7 @@ public static class ServiceCollectionExtensions
             services.AddSingleton<NyxIdApiAccessRegistrationMarker>();
         }
         services.TryAddSingleton<INyxIdApiClientFactory, HttpClientFactoryNyxIdApiClientFactory>();
+        services.TryAddSingleton<INyxIdActionEvidenceReadPort, NyxIdActionEvidenceReadPort>();
         return services;
     }
 

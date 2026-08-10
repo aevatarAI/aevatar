@@ -1496,6 +1496,9 @@ message NyxIdChatActionPostconditionInput {
   string origin_turn_id = 6;
   NyxIdChatActionDisposition reported_disposition = 7;
   NyxIdAssistantActionParams params = 8;
+  // Authoritative action-request time captured by the conversation actor.
+  // Provider evidence predating this value cannot prove the requested effect.
+  google.protobuf.Timestamp requested_at = 9;
 }
 
 // Transient continuation payloads. Raw user input and credentials are carried

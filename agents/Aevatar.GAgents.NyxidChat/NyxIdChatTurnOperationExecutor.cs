@@ -481,7 +481,7 @@ public sealed class NyxIdChatTurnOperationExecutor
             NyxIdChatOperationDispatchCommand.InputOneofCase.Tool =>
                 await ExecuteToolAsync(command, session, reportProgressAsync, ct).ConfigureAwait(false),
             NyxIdChatOperationDispatchCommand.InputOneofCase.ActionPostcondition =>
-                await ExecuteActionPostconditionAsync(command, ct).ConfigureAwait(false),
+                await ExecuteActionPostconditionAsync(command, session, ct).ConfigureAwait(false),
             NyxIdChatOperationDispatchCommand.InputOneofCase.InputContinuation =>
                 await ExecuteInputContinuationAsync(command, session, reportProgressAsync, ct)
                     .ConfigureAwait(false),
@@ -537,6 +537,7 @@ public sealed class NyxIdChatTurnOperationExecutor
 
     private async Task<NyxIdChatTurnOperationExecution> ExecuteActionPostconditionAsync(
         NyxIdChatOperationDispatchCommand command,
+        NyxIdChatTransientExecutionSession session,
         CancellationToken ct)
     {
         var input = command.ActionPostcondition;
@@ -560,7 +561,7 @@ public sealed class NyxIdChatTurnOperationExecutor
         }
 
         var result = await _actionPostconditionPort
-            .VerifyAsync(input.Clone(), ct)
+            .VerifyAsync(input.Clone(), session.Request?.ToolContext?.Clone(), ct)
             .ConfigureAwait(false);
         if (result is null ||
             !string.Equals(

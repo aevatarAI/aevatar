@@ -1,6 +1,9 @@
-using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
+using Aevatar.AI.Abstractions;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.GAgents.NyxidChat;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.AI.Tests;
 
@@ -146,19 +149,87 @@ public sealed class NyxIdActionPostconditionPortTests
     }
 
     [Fact]
-    public async Task VerifyAsync_ServiceReauthorizeWithoutGrantedScopeEvidence_ShouldFailClosed()
+    public async Task VerifyAsync_ServiceReauthorizeExactProviderEvidence_ShouldVerify()
     {
         var input = ReauthorizeInput();
-        input.ResourceHint = null;
         var query = new StubCatalogQueryPort(ReadySnapshot());
-        var port = CreatePort(query);
+        var evidence = new StubActionEvidenceReadPort
+        {
+            UserService = AuthorizedService(),
+        };
+        var port = CreatePort(query, evidence);
 
-        var result = await port.VerifyAsync(input);
+        var result = await port.VerifyAsync(input, ReadContext());
 
         query.Owners.Should().BeEmpty();
+        evidence.UserServiceReads.Should().ContainSingle().Which.Should().Be("service-alpha");
+        evidence.BearerTokens.Should().ContainSingle().Which.Should().Be("bearer-secret");
+        result.Verified.Should().BeTrue();
+        result.Resource.UserService.UserServiceId.Should().Be("service-alpha");
+        result.ToString().Should().NotContain("bearer-secret");
+    }
+
+    [Fact]
+    public async Task VerifyAsync_ServiceReauthorizeMissingRequestedScope_ShouldMismatch()
+    {
+        var evidence = new StubActionEvidenceReadPort
+        {
+            UserService = AuthorizedService() with { GrantedScopes = ["read:user"] },
+        };
+        var port = CreatePort(new StubCatalogQueryPort(ReadySnapshot()), evidence);
+
+        var result = await port.VerifyAsync(ReauthorizeInput(), ReadContext());
+
         result.Verified.Should().BeFalse();
-        result.FailureCode.Should().Be(NyxIdActionPostconditionPort.UnsupportedCode);
-        result.Resource.Should().BeNull();
+        result.FailureCode.Should().Be(NyxIdActionPostconditionPort.MismatchCode);
+    }
+
+    [Theory]
+    [InlineData(NyxIdOAuthConnectionStatus.Expired)]
+    [InlineData(NyxIdOAuthConnectionStatus.Unspecified)]
+    public async Task VerifyAsync_ServiceReauthorizeWithoutActiveOAuthConnection_ShouldMismatch(
+        NyxIdOAuthConnectionStatus connectionStatus)
+    {
+        var evidence = new StubActionEvidenceReadPort
+        {
+            UserService = AuthorizedService() with { OAuthConnectionStatus = connectionStatus },
+        };
+        var port = CreatePort(new StubCatalogQueryPort(ReadySnapshot()), evidence);
+
+        var result = await port.VerifyAsync(ReauthorizeInput(), ReadContext());
+
+        result.Verified.Should().BeFalse();
+        result.FailureCode.Should().Be(NyxIdActionPostconditionPort.MismatchCode);
+    }
+
+    [Fact]
+    public async Task VerifyAsync_ServiceReauthorizeMissingAuthorizationTimestamp_ShouldBeStale()
+    {
+        var evidence = new StubActionEvidenceReadPort
+        {
+            UserService = AuthorizedService() with { LastAuthorizedAtUtc = null },
+        };
+        var port = CreatePort(new StubCatalogQueryPort(ReadySnapshot()), evidence);
+
+        var result = await port.VerifyAsync(ReauthorizeInput(), ReadContext());
+
+        result.Verified.Should().BeFalse();
+        result.FailureCode.Should().Be(NyxIdActionPostconditionPort.StaleCode);
+    }
+
+    [Fact]
+    public async Task VerifyAsync_ServiceReauthorizeEvidenceBeforeRequest_ShouldBeStale()
+    {
+        var evidence = new StubActionEvidenceReadPort
+        {
+            UserService = AuthorizedService() with { LastAuthorizedAtUtc = Now.AddMinutes(-3) },
+        };
+        var port = CreatePort(new StubCatalogQueryPort(ReadySnapshot()), evidence);
+
+        var result = await port.VerifyAsync(ReauthorizeInput(), ReadContext());
+
+        result.Verified.Should().BeFalse();
+        result.FailureCode.Should().Be(NyxIdActionPostconditionPort.StaleCode);
     }
 
     [Fact]
@@ -195,31 +266,206 @@ public sealed class NyxIdActionPostconditionPortTests
     }
 
     [Fact]
-    public async Task VerifyAsync_UnsupportedAction_ShouldFailClosedWithoutCatalogRead()
+    public async Task VerifyAsync_KeyCreateExactProviderEvidence_ShouldVerify()
     {
         var query = new StubCatalogQueryPort(ReadySnapshot());
-        var input = CatalogInput();
-        input.Action = NyxIdAssistantActionKind.KeyCreate;
-        input.Params = new NyxIdAssistantActionParams
+        var evidence = new StubActionEvidenceReadPort
         {
-            KeyCreate = new NyxIdKeyCreateParams
-            {
-                Name = "Key Alpha",
-                Platform = "api",
-            },
+            AgentApiKey = AgentKey(),
         };
-        var port = CreatePort(query);
+        var port = CreatePort(query, evidence);
 
-        var result = await port.VerifyAsync(input);
+        var result = await port.VerifyAsync(KeyCreateInput(), ReadContext());
 
         query.Owners.Should().BeEmpty();
+        evidence.AgentKeyReads.Should().ContainSingle().Which.Should().Be("key-alpha");
+        result.Verified.Should().BeTrue();
+        result.Resource.Key.KeyId.Should().Be("key-alpha");
+    }
+
+    [Fact]
+    public async Task VerifyAsync_KeyCreatePlatformMismatch_ShouldFailClosed()
+    {
+        var evidence = new StubActionEvidenceReadPort
+        {
+            AgentApiKey = AgentKey() with { Platform = "claude-code" },
+        };
+        var port = CreatePort(new StubCatalogQueryPort(ReadySnapshot()), evidence);
+
+        var result = await port.VerifyAsync(KeyCreateInput(), ReadContext());
+
         result.Verified.Should().BeFalse();
-        result.FailureCode.Should().Be(NyxIdActionPostconditionPort.UnsupportedCode);
+        result.FailureCode.Should().Be(NyxIdActionPostconditionPort.MismatchCode);
+    }
+
+    [Theory]
+    [InlineData("scope")]
+    [InlineData("all-services")]
+    [InlineData("all-nodes")]
+    [InlineData("node")]
+    public async Task VerifyAsync_KeyCreateBroaderThanRequested_ShouldFailClosed(string variant)
+    {
+        var key = AgentKey();
+        key = variant switch
+        {
+            "scope" => key with { Scopes = ["proxy", "write"] },
+            "all-services" => key with { AllowAllServices = true },
+            "all-nodes" => key with { AllowAllNodes = true },
+            "node" => key with { AllowedNodeIds = ["node-alpha"] },
+            _ => throw new InvalidOperationException(),
+        };
+        var evidence = new StubActionEvidenceReadPort { AgentApiKey = key };
+        var port = CreatePort(new StubCatalogQueryPort(ReadySnapshot()), evidence);
+
+        var result = await port.VerifyAsync(KeyCreateInput(), ReadContext());
+
+        result.Verified.Should().BeFalse();
+        result.FailureCode.Should().Be(NyxIdActionPostconditionPort.MismatchCode);
+    }
+
+    [Fact]
+    public async Task VerifyAsync_KeyCreateWithoutExactServiceScope_ShouldRejectBeforeRead()
+    {
+        var input = KeyCreateInput();
+        input.Params.KeyCreate.AllowedServiceIds.Clear();
+        var evidence = new StubActionEvidenceReadPort { AgentApiKey = AgentKey() };
+        var port = CreatePort(new StubCatalogQueryPort(ReadySnapshot()), evidence);
+
+        var result = await port.VerifyAsync(input, ReadContext());
+
+        result.Verified.Should().BeFalse();
+        result.FailureCode.Should().Be(NyxIdActionPostconditionPort.InvalidInputCode);
+        evidence.AgentKeyReads.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task VerifyAsync_KeyCreateEvidenceBeforeRequest_ShouldBeStale()
+    {
+        var evidence = new StubActionEvidenceReadPort
+        {
+            AgentApiKey = AgentKey() with { CreatedAtUtc = Now.AddMinutes(-3) },
+        };
+        var port = CreatePort(new StubCatalogQueryPort(ReadySnapshot()), evidence);
+
+        var result = await port.VerifyAsync(KeyCreateInput(), ReadContext());
+
+        result.Verified.Should().BeFalse();
+        result.FailureCode.Should().Be(NyxIdActionPostconditionPort.StaleCode);
+    }
+
+    [Fact]
+    public async Task VerifyAsync_KeyRotateWithoutProviderLineage_ShouldRemainUncertain()
+    {
+        var evidence = new StubActionEvidenceReadPort
+        {
+            AgentApiKey = AgentKey("key-beta"),
+        };
+        var port = CreatePort(new StubCatalogQueryPort(ReadySnapshot()), evidence);
+
+        var result = await port.VerifyAsync(KeyRotateInput(), ReadContext());
+
+        result.Verified.Should().BeFalse();
+        result.Disposition.Should().Be(NyxIdChatActionDisposition.Completed);
+        result.FailureCode.Should().Be(NyxIdActionPostconditionPort.LineageUnavailableCode);
+        result.Resource.Key.KeyId.Should().Be("key-beta");
+    }
+
+    [Fact]
+    public async Task VerifyAsync_KeyRotateExactVersionedLineage_ShouldVerify()
+    {
+        var evidence = new StubActionEvidenceReadPort
+        {
+            AgentApiKey = AgentKey("key-beta") with
+            {
+                VersionEvidence = new NyxIdApiKeyVersionEvidence(
+                    "key-alpha",
+                    2,
+                    Now.AddMinutes(-1)),
+            },
+        };
+        var port = CreatePort(new StubCatalogQueryPort(ReadySnapshot()), evidence);
+
+        var result = await port.VerifyAsync(KeyRotateInput(), ReadContext());
+
+        result.Verified.Should().BeTrue();
+        result.Resource.Key.KeyId.Should().Be("key-beta");
+    }
+
+    [Fact]
+    public async Task VerifyAsync_KeyRotateLineageBeforeRequest_ShouldBeStale()
+    {
+        var evidence = new StubActionEvidenceReadPort
+        {
+            AgentApiKey = AgentKey("key-beta") with
+            {
+                VersionEvidence = new NyxIdApiKeyVersionEvidence(
+                    "key-alpha",
+                    2,
+                    Now.AddMinutes(-3)),
+            },
+        };
+        var port = CreatePort(new StubCatalogQueryPort(ReadySnapshot()), evidence);
+
+        var result = await port.VerifyAsync(KeyRotateInput(), ReadContext());
+
+        result.Verified.Should().BeFalse();
+        result.FailureCode.Should().Be(NyxIdActionPostconditionPort.StaleCode);
+    }
+
+    [Fact]
+    public async Task VerifyAsync_KeyRotateOldSuccessorUpdatedAfterRequest_ShouldBeStale()
+    {
+        var evidence = new StubActionEvidenceReadPort
+        {
+            AgentApiKey = AgentKey("key-beta") with
+            {
+                CreatedAtUtc = Now.AddMinutes(-3),
+                VersionEvidence = new NyxIdApiKeyVersionEvidence(
+                    "key-alpha",
+                    3,
+                    Now.AddMinutes(-1)),
+            },
+        };
+        var port = CreatePort(new StubCatalogQueryPort(ReadySnapshot()), evidence);
+
+        var result = await port.VerifyAsync(KeyRotateInput(), ReadContext());
+
+        result.Verified.Should().BeFalse();
+        result.FailureCode.Should().Be(NyxIdActionPostconditionPort.StaleCode);
+    }
+
+    [Fact]
+    public async Task VerifyAsync_ProviderActionWithoutRequestedAt_ShouldRejectBeforeRead()
+    {
+        var input = KeyCreateInput();
+        input.RequestedAt = null;
+        var evidence = new StubActionEvidenceReadPort { AgentApiKey = AgentKey() };
+        var port = CreatePort(new StubCatalogQueryPort(ReadySnapshot()), evidence);
+
+        var result = await port.VerifyAsync(input, ReadContext());
+
+        result.Verified.Should().BeFalse();
+        result.FailureCode.Should().Be(NyxIdActionPostconditionPort.InvalidInputCode);
+        evidence.AgentKeyReads.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task VerifyAsync_ProviderActionWithoutTransientAuthority_ShouldNotRead()
+    {
+        var evidence = new StubActionEvidenceReadPort { AgentApiKey = AgentKey() };
+        var port = CreatePort(new StubCatalogQueryPort(ReadySnapshot()), evidence);
+
+        var result = await port.VerifyAsync(KeyCreateInput());
+
+        result.Verified.Should().BeFalse();
+        result.FailureCode.Should().Be(NyxIdActionPostconditionPort.UnavailableCode);
+        evidence.AgentKeyReads.Should().BeEmpty();
     }
 
     private static NyxIdActionPostconditionPort CreatePort(
-        INyxIdAuthorizationCatalogQueryPort query) =>
-        new(query, new FixedTimeProvider(Now));
+        INyxIdAuthorizationCatalogQueryPort query,
+        INyxIdActionEvidenceReadPort? evidence = null) =>
+        new(query, evidence, new FixedTimeProvider(Now));
 
     private static NyxIdChatActionPostconditionInput CatalogInput() => new()
     {
@@ -253,6 +499,7 @@ public sealed class NyxIdActionPostconditionPortTests
         ActionRequestId = "action-alpha",
         Action = NyxIdAssistantActionKind.ServiceReauthorize,
         ReportedDisposition = NyxIdChatActionDisposition.Completed,
+        RequestedAt = Timestamp.FromDateTimeOffset(Now.AddMinutes(-2)),
         ResourceHint = new NyxIdChatSafeResourceRef
         {
             UserService = new NyxIdChatUserServiceRef
@@ -269,6 +516,85 @@ public sealed class NyxIdActionPostconditionPortTests
             },
         },
     };
+
+    private static NyxIdChatActionPostconditionInput KeyCreateInput() => new()
+    {
+        ScopeId = "scope-alpha",
+        OwnerSubject = "owner-alpha",
+        OriginTurnId = "turn-origin-alpha",
+        ActionRequestId = "action-alpha",
+        Action = NyxIdAssistantActionKind.KeyCreate,
+        ReportedDisposition = NyxIdChatActionDisposition.Completed,
+        RequestedAt = Timestamp.FromDateTimeOffset(Now.AddMinutes(-2)),
+        ResourceHint = new NyxIdChatSafeResourceRef
+        {
+            Key = new NyxIdChatKeyRef { KeyId = "key-alpha" },
+        },
+        Params = new NyxIdAssistantActionParams
+        {
+            KeyCreate = new NyxIdKeyCreateParams
+            {
+                Name = "Key Alpha",
+                Platform = "codex",
+                AllowedServiceIds = { "service-alpha", "service-beta" },
+            },
+        },
+    };
+
+    private static NyxIdChatActionPostconditionInput KeyRotateInput() => new()
+    {
+        ScopeId = "scope-alpha",
+        OwnerSubject = "owner-alpha",
+        OriginTurnId = "turn-origin-alpha",
+        ActionRequestId = "action-alpha",
+        Action = NyxIdAssistantActionKind.KeyRotate,
+        ReportedDisposition = NyxIdChatActionDisposition.Completed,
+        RequestedAt = Timestamp.FromDateTimeOffset(Now.AddMinutes(-2)),
+        ResourceHint = new NyxIdChatSafeResourceRef
+        {
+            Key = new NyxIdChatKeyRef { KeyId = "key-beta" },
+        },
+        Params = new NyxIdAssistantActionParams
+        {
+            KeyRotate = new NyxIdKeyRotateParams { KeyId = "key-alpha" },
+        },
+    };
+
+    private static AgentToolExecutionContextPayload ReadContext() => new()
+    {
+        Caller = new AgentToolCallerContextPayload
+        {
+            ScopeId = "scope-alpha",
+            OwnerSubject = "owner-alpha",
+        },
+        Credentials = new AgentToolCredentialsPayload
+        {
+            NyxIdAccessToken = "bearer-secret",
+            NyxIdCredentialKind = AgentToolNyxIdCredentialKindPayload.SourceReadableUserBearer,
+        },
+    };
+
+    private static NyxIdUserServiceAuthorizationEvidence AuthorizedService() => new(
+        "service-alpha",
+        "credential-alpha",
+        true,
+        NyxIdUserServiceCredentialStatus.Active,
+        NyxIdOAuthConnectionStatus.Active,
+        ["read:user", "repo"],
+        Now.AddMinutes(-1));
+
+    private static NyxIdAgentApiKeyEvidence AgentKey(string keyId = "key-alpha") => new(
+        keyId,
+        "Key Alpha",
+        ["proxy"],
+        "codex",
+        true,
+        ["service-beta", "service-alpha"],
+        false,
+        [],
+        false,
+        Now.AddMinutes(-1),
+        null);
 
     private static AuthorizationOwnerIdentity PersonalOwner() => new()
     {
@@ -299,13 +625,13 @@ public sealed class NyxIdActionPostconditionPortTests
     private static NyxIdAuthorizationServiceEvidence Service(
         string userServiceId,
         string serviceSlug) => new()
-    {
-        UserServiceId = userServiceId,
-        ServiceSlug = serviceSlug,
-        DisplayName = serviceSlug,
-        Access = NyxIdAuthorizationAccess.Permitted,
-        ResourceOwner = PersonalOwner(),
-    };
+        {
+            UserServiceId = userServiceId,
+            ServiceSlug = serviceSlug,
+            DisplayName = serviceSlug,
+            Access = NyxIdAuthorizationAccess.Permitted,
+            ResourceOwner = PersonalOwner(),
+        };
 
     private sealed class StubCatalogQueryPort(
         NyxIdAuthorizationCatalogSnapshot? snapshot)
@@ -320,6 +646,41 @@ public sealed class NyxIdActionPostconditionPortTests
             ct.ThrowIfCancellationRequested();
             Owners.Add(owner.Clone());
             return Task.FromResult(snapshot);
+        }
+    }
+
+    private sealed class StubActionEvidenceReadPort : INyxIdActionEvidenceReadPort
+    {
+        public NyxIdUserServiceAuthorizationEvidence? UserService { get; init; }
+        public NyxIdAgentApiKeyEvidence? AgentApiKey { get; init; }
+        public List<string> UserServiceReads { get; } = [];
+        public List<string> AgentKeyReads { get; } = [];
+        public List<string> BearerTokens { get; } = [];
+
+        public Task<NyxIdApiAccessResult<NyxIdUserServiceAuthorizationEvidence>>
+            GetUserServiceAuthorizationAsync(
+                string bearerToken,
+                string userServiceId,
+                CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            BearerTokens.Add(bearerToken);
+            UserServiceReads.Add(userServiceId);
+            return Task.FromResult(new NyxIdApiAccessResult<
+                NyxIdUserServiceAuthorizationEvidence>(UserService, null));
+        }
+
+        public Task<NyxIdApiAccessResult<NyxIdAgentApiKeyEvidence>> GetAgentApiKeyAsync(
+            string bearerToken,
+            string keyId,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            BearerTokens.Add(bearerToken);
+            AgentKeyReads.Add(keyId);
+            return Task.FromResult(new NyxIdApiAccessResult<NyxIdAgentApiKeyEvidence>(
+                AgentApiKey,
+                null));
         }
     }
 

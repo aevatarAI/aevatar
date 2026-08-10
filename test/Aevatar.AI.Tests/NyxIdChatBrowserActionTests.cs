@@ -420,6 +420,8 @@ public sealed class NyxIdChatBrowserActionTests
         decision.NextCommand.ActionPostcondition.ScopeId.Should().Be("scope-alpha");
         decision.NextCommand.ActionPostcondition.OwnerSubject.Should().Be("owner-alpha");
         decision.NextCommand.ActionPostcondition.OriginTurnId.Should().Be("turn-alpha");
+        decision.NextCommand.ActionPostcondition.RequestedAt.Should().Be(
+            blocked.PendingActions.Single().RequestedAt);
         decision.NextCommand.ActionPostcondition.ReportedDisposition.Should().Be(
             NyxIdChatActionDisposition.Completed);
         decision.NextCommand.ActionPostcondition.Params.ParamsCase.Should().Be(

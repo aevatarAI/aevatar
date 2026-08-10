@@ -2766,15 +2766,34 @@ public sealed partial class NyxIdChatTurnGAgentTests
             new CapabilityGeneratingReplyExecutor(),
             port);
         var command = PostconditionCommand(NyxIdChatActionDisposition.Completed);
+        var session = new NyxIdChatTransientExecutionSession
+        {
+            Request = new NeedsLlmReplyEvent
+            {
+                ToolContext = new AgentToolExecutionContextPayload
+                {
+                    Credentials = new AgentToolCredentialsPayload
+                    {
+                        NyxIdAccessToken = "transient-secret",
+                        NyxIdCredentialKind =
+                            AgentToolNyxIdCredentialKindPayload.SourceReadableUserBearer,
+                    },
+                },
+            },
+        };
 
         var execution = await executor.ExecuteAsync(
             command,
-            new NyxIdChatTransientExecutionSession(),
+            session,
             static (_, _) => Task.CompletedTask,
             CancellationToken.None);
 
         port.Inputs.Should().ContainSingle().Which.Should().BeEquivalentTo(
             command.ActionPostcondition);
+        port.TransientToolContexts.Should().ContainSingle()
+            .Which.Credentials.NyxIdAccessToken.Should().Be("transient-secret");
+        command.ToString().Should().NotContain("transient-secret");
+        execution.Result.ToString().Should().NotContain("transient-secret");
         execution.Result.Key.Should().BeEquivalentTo(command.Key);
         execution.Result.ActionPostcondition.Verified.Should().BeTrue();
         execution.Result.ActionPostcondition.Resource.UserService.UserServiceId.Should().Be(
@@ -3416,6 +3435,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
     private sealed class RecordingActionPostconditionPort : INyxIdActionPostconditionPort
     {
         public List<NyxIdChatActionPostconditionInput> Inputs { get; } = [];
+        public List<AgentToolExecutionContextPayload> TransientToolContexts { get; } = [];
 
         public NyxIdChatActionPostconditionResult Result { get; set; } = new()
         {
@@ -3428,10 +3448,13 @@ public sealed partial class NyxIdChatTurnGAgentTests
 
         public Task<NyxIdChatActionPostconditionResult> VerifyAsync(
             NyxIdChatActionPostconditionInput input,
+            AgentToolExecutionContextPayload? transientToolContext = null,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             Inputs.Add(input.Clone());
+            if (transientToolContext is not null)
+                TransientToolContexts.Add(transientToolContext.Clone());
             return Task.FromResult(Result.Clone());
         }
     }

@@ -250,6 +250,27 @@ public sealed class NyxIdAssistantActionRegistryTests
     }
 
     [Fact]
+    public void ParseKeyCreate_ShouldRequireAtLeastOneExactAllowedServiceIdentity()
+    {
+        using var valid = JsonDocument.Parse(
+            """{"name":"agent-alpha","platform":"codex","allowedServiceIds":["us-github-alpha"]}""");
+
+        var parsed = NyxIdAssistantActionRegistry.ParseKeyCreate(valid.RootElement);
+
+        parsed.ParamsCase.Should().Be(NyxIdAssistantActionParams.ParamsOneofCase.KeyCreate);
+        parsed.KeyCreate.Name.Should().Be("agent-alpha");
+        parsed.KeyCreate.Platform.Should().Be("codex");
+        parsed.KeyCreate.AllowedServiceIds.Should().Equal("us-github-alpha");
+
+        using var allServices = JsonDocument.Parse(
+            """{"name":"agent-alpha","platform":"codex","allowedServiceIds":[]}""");
+        Action parseAllServices = () =>
+            NyxIdAssistantActionRegistry.ParseKeyCreate(allServices.RootElement);
+        parseAllServices.Should().Throw<NyxIdAssistantActionRegistryException>()
+            .Which.Code.Should().Be("NYXID_ACTION_PARAMS_INVALID");
+    }
+
+    [Fact]
     public void ServiceReauthorize_ShouldRemainFailClosedAtExecutableGate()
     {
         var registry = NyxIdAssistantActionRegistry.Load(

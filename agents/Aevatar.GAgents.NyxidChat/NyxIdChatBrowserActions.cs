@@ -831,6 +831,7 @@ public static class NyxIdChatBrowserActions
                 ReportedDisposition = report?.Disposition ?? NyxIdChatActionDisposition.Unspecified,
                 ResourceHint = report?.Resource?.Clone(),
                 Params = request.Params?.Clone(),
+                RequestedAt = request.RequestedAt?.Clone(),
             },
         };
 

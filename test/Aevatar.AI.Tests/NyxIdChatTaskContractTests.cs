@@ -500,6 +500,8 @@ public sealed class NyxIdChatTaskContractTests
             .Should().NotBeNull();
         NyxIdChatActionPostconditionInput.Descriptor.FindFieldByName("params")
             .Should().NotBeNull();
+        NyxIdChatActionPostconditionInput.Descriptor.FindFieldByName("requested_at")
+            .Should().NotBeNull();
         NyxIdChatConversationGAgentState.Descriptor.FindFieldByName("recent_actions")
             .Should().NotBeNull();
         NyxIdChatActionContinueCommand.Descriptor.FindFieldByName("continuation_turn_id")
