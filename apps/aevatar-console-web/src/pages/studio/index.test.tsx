@@ -6277,20 +6277,21 @@ describe('StudioPage', () => {
       expect(screen.getByText('candidate:workspace-demo')).toBeTruthy();
     });
 
-    await act(async () => {
-      fireEvent.click(
-        screen.getByRole('button', { name: 'Bind current member' }),
-      );
-    });
+    jest.useFakeTimers();
+    try {
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole('button', { name: 'Bind current member' }),
+        );
+        await jest.runAllTimersAsync();
+      });
 
-    await waitFor(
-      () => {
-        expect(studioApi.getMemberBindingRun).toHaveBeenCalledTimes(8);
-      },
-      { timeout: 10_000 },
-    );
-    expect(screen.getByText('service:no-service')).toBeTruthy();
-    expect(screen.getByText('candidate:workspace-demo')).toBeTruthy();
+      expect(studioApi.getMemberBindingRun).toHaveBeenCalledTimes(8);
+      expect(screen.getByText('service:no-service')).toBeTruthy();
+      expect(screen.getByText('candidate:workspace-demo')).toBeTruthy();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('includes readmodel freshness in pending member binding notices', () => {
