@@ -143,18 +143,26 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
       '请重新登录后检查此发布状态。',
     'workflowActivityVNext.editor.checkLatestStatus': '检查最新状态',
     'workflowActivityVNext.editor.currentStep': '当前步骤',
+    'workflowActivityVNext.editor.expandRunConsole': '展开工作流日志',
     'workflowActivityVNext.editor.failureSummary': '失败摘要',
     'workflowActivityVNext.editor.fullDetailsNotice':
       '打开运行详情可查看完整时间线、诊断信息和恢复操作。',
     'workflowActivityVNext.editor.openRunDetails': '打开运行详情',
     'workflowActivityVNext.editor.outputSummary': '输出摘要',
+    'workflowActivityVNext.editor.publishedRunPanel.inputRequired':
+      '请输入内容或添加附件后再启动已发布的工作流。',
+    'workflowActivityVNext.editor.publishedRunPanel.removeEmptyFile':
+      '启动已发布运行前，请移除空文件 {name}。',
+    'workflowActivityVNext.editor.resizePublishedRunPanel':
+      '调整已发布运行面板大小',
+    'workflowActivityVNext.editor.resizeRunConsole': '调整工作流运行控制台大小',
     'workflowActivityVNext.editor.runAgain': '再次运行',
     'workflowActivityVNext.editor.runFailed': '运行失败',
     'workflowActivityVNext.editor.runInput': '输入',
     'workflowActivityVNext.editor.runInputExample': '例如：审核订单 42',
     'workflowActivityVNext.editor.runInputHelp':
       '此工作流接受一个文本输入。例如：审核订单 42。',
-    'workflowActivityVNext.editor.runInputRequired': '请输入内容。',
+    'workflowActivityVNext.editor.runInputRequired': '请输入内容或添加附件。',
     'workflowActivityVNext.editor.runInputRequiredTag': '必填',
     'workflowActivityVNext.editor.runPanel': '测试运行',
     'workflowActivityVNext.editor.runResult': '运行结果',

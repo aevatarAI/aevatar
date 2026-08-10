@@ -720,6 +720,9 @@ const zhCNMessages = {
   'shared.studio.nodeConfiguration.workflowCall.workflow.label': 'Workflow',
   'shared.studio.nodeConfiguration.workflowCall.workflow.placeholder':
     'child_workflow',
+  'shared.workflowExecutionLogs.collapse': '收起工作流日志',
+  'shared.workflowExecutionLogs.consoleAria': '工作流运行控制台',
+  'shared.workflowExecutionLogs.tokenUsage': '令牌用量',
   'teams.members.actions.build': '构建',
   'teams.members.actions.clearEntry': '清除入口成员',
   'teams.members.actions.create': '创建成员',

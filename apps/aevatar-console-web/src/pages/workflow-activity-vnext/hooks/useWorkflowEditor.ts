@@ -1,6 +1,10 @@
-import { AGUIEventType } from '@aevatar-react-sdk/types';
+import { type AGUIEvent, AGUIEventType } from '@aevatar-react-sdk/types';
 import { useQuery } from '@tanstack/react-query';
 import React from 'react';
+import {
+  applyRuntimeEvent,
+  createRuntimeEventAccumulator,
+} from '@/shared/agui/runtimeEventSemantics';
 import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
 import { t } from '@/shared/i18n/messages';
@@ -16,15 +20,19 @@ import {
   removeSteps,
   suggestBranchLabelForStep,
 } from '@/shared/studio/document';
+import { createStudioExecutionFrame } from '@/shared/studio/execution';
 import {
   buildStudioGraphElements,
   buildStudioWorkflowLayout,
 } from '@/shared/studio/graph';
 import type {
+  StudioExecutionDetail,
+  StudioExecutionFrame,
   StudioValidationFinding,
   StudioWorkflowDocument,
   StudioWorkflowFile,
 } from '@/shared/studio/models';
+import { createStreamingExecutionDetail } from '@/shared/workflows/executionDetail';
 import { buildWorkflowActivityEditorHref } from '../navigation';
 import { hasBlockingFindings } from '../workflows/workflowCreation';
 import { useDraftMaterialization } from './useDraftMaterialization';
@@ -49,6 +57,7 @@ export type WorkflowPublishedInvocationTarget = {
 };
 
 export type PublishedRunSnapshot = {
+  readonly files: readonly File[];
   readonly input: string;
   readonly target: WorkflowPublishedInvocationTarget;
 };
@@ -86,10 +95,16 @@ function readSseRunId(event: unknown): string {
   if (
     record.type !== AGUIEventType.RUN_STARTED &&
     record.type !== AGUIEventType.RUN_FINISHED &&
-    record.type !== AGUIEventType.RUN_ERROR
+    record.type !== AGUIEventType.RUN_ERROR &&
+    record.type !== 'RUN_STOPPED'
   )
     return '';
   return typeof record.runId === 'string' ? record.runId.trim() : '';
+}
+
+function isSseRunFinished(event: unknown): boolean {
+  if (!event || typeof event !== 'object') return false;
+  return (event as Record<string, unknown>).type === AGUIEventType.RUN_FINISHED;
 }
 
 function isSseRunError(event: unknown): event is Record<string, unknown> {
@@ -98,8 +113,29 @@ function isSseRunError(event: unknown): event is Record<string, unknown> {
   return record.type === AGUIEventType.RUN_ERROR;
 }
 
+function isSseRunStopped(event: unknown): boolean {
+  if (!event || typeof event !== 'object') return false;
+  return (event as Record<string, unknown>).type === 'RUN_STOPPED';
+}
+
 function readSseRunError(event: Record<string, unknown>): string {
   return typeof event.message === 'string' ? event.message.trim() : '';
+}
+
+function createPublishedRunExecutionFrame(
+  event: AGUIEvent,
+): StudioExecutionFrame {
+  if (!isSseRunStopped(event)) return createStudioExecutionFrame(event);
+  const record = event as unknown as Record<string, unknown>;
+  return createStudioExecutionFrame({
+    type: AGUIEventType.CUSTOM,
+    timestamp: record.timestamp,
+    name: 'aevatar.run.stopped',
+    payload: {
+      reason: record.reason,
+      runId: record.runId,
+    },
+  } as AGUIEvent);
 }
 
 function readRunInputError(error: unknown): string {
@@ -157,10 +193,14 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
     null,
   );
   const [saveError, setSaveError] = React.useState('');
+  const [runFiles, setRunFiles] = React.useState<File[]>([]);
   const [runInput, setRunInput] = React.useState('');
   const [runInputError, setRunInputError] = React.useState('');
   const [lastRunSnapshot, setLastRunSnapshot] =
     React.useState<PublishedRunSnapshot | null>(null);
+  const [liveRunExecution, setLiveRunExecution] =
+    React.useState<StudioExecutionDetail | null>(null);
+  const [runRequestActive, setRunRequestActive] = React.useState(false);
   const [runPhase, setRunPhase] = React.useState<PublishedRunPhase>('idle');
   const [runError, setRunError] = React.useState('');
   const [sseRunId, setSseRunId] = React.useState('');
@@ -186,10 +226,6 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
     null,
   );
   const runObservation = useRunObservation(scopeId, sseRunId);
-  const runObservationUnresolved = Boolean(
-    sseRunId && runObservation.phase !== 'observed',
-  );
-  const runAwaitingIdentification = runPhase === 'stream_ended' && !sseRunId;
   const receiptPending =
     materialization.phase === 'accepted' ||
     materialization.phase === 'observing' ||
@@ -361,6 +397,7 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
       runControllerRef.current?.abort();
       runControllerRef.current = null;
       runInFlightRef.current = false;
+      setRunRequestActive(false);
       pendingMaterializationRef.current = null;
       loadedSignatureRef.current = '';
       loadedRouteWorkflowIdRef.current = '';
@@ -382,9 +419,12 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
       setFailedNodeType(null);
       setCanvasMutationError('');
       setSaveError('');
+      setRunFiles([]);
       setRunInput('');
       setRunInputError('');
       setLastRunSnapshot(null);
+      setLiveRunExecution(null);
+      setRunRequestActive(false);
       setRunPhase('idle');
       setRunError('');
       sseRunIdRef.current = '';
@@ -798,9 +838,7 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
         savingRef.current ||
         structuralMutationPendingRef.current ||
         runPhase === 'submitting' ||
-        runPhase === 'accepted' ||
-        runObservationUnresolved ||
-        runAwaitingIdentification
+        runPhase === 'accepted'
       )
         return;
       const activeWorkflowId = workflow?.workflowId ?? routeWorkflowId;
@@ -820,49 +858,125 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
         return;
       }
       const normalizedInput = (snapshot?.input ?? runInput).trim();
-      if (!normalizedInput) {
+      const submittedFiles = snapshot?.files ?? runFiles;
+      if (!normalizedInput && submittedFiles.length === 0) {
         setRunInputError(
           t(
             'workflowActivityVNext.editor.runInputRequired',
-            'Input is required.',
+            'Input or an attached file is required.',
           ),
         );
         return;
       }
+      const emptyFile = submittedFiles.find((file) => file.size <= 0);
+      if (emptyFile) {
+        setRunError(
+          t(
+            'workflowActivityVNext.editor.publishedRunPanel.removeEmptyFile',
+            'Remove empty file {name} before starting the published run.',
+            { name: emptyFile.name || 'this file' },
+          ),
+        );
+        setRunPhase('failed');
+        return;
+      }
       const generation = ++runGenerationRef.current;
       const controller = new AbortController();
+      const liveAccumulator = createRuntimeEventAccumulator();
+      const liveFrames: StudioExecutionFrame[] = [];
+      const liveStartedAtUtc = new Date().toISOString();
+      const liveExecutionId = [
+        'published-run',
+        target.publishedServiceId,
+        generation,
+      ].join(':');
+      const buildLiveExecution = (
+        status: string,
+        completedAtUtc: string | null = null,
+        error: string | null = null,
+      ) =>
+        createStreamingExecutionDetail({
+          accumulator: liveAccumulator,
+          completedAtUtc,
+          error,
+          executionId: liveExecutionId,
+          frames: liveFrames,
+          prompt: normalizedInput,
+          serviceId: target.publishedServiceId,
+          startedAtUtc: liveStartedAtUtc,
+          status,
+          workflowName: workflow?.name || workflowTitle,
+        });
       runControllerRef.current?.abort();
       runControllerRef.current = controller;
       runInFlightRef.current = true;
+      setRunRequestActive(true);
       setRunPhase('submitting');
       setRunError('');
       setRunInputError('');
+      setLiveRunExecution(buildLiveExecution('running'));
       sseRunIdRef.current = '';
       setSseRunId('');
-      if (snapshot) setRunInput(snapshot.input);
+      if (snapshot) {
+        setRunFiles([...snapshot.files]);
+        setRunInput(snapshot.input);
+      }
       const ownsRun = () =>
         runGenerationRef.current === generation &&
         runControllerRef.current === controller &&
         !controller.signal.aborted;
       try {
         const submittedSnapshot: PublishedRunSnapshot = {
+          files: [...submittedFiles],
           input: normalizedInput,
           target,
         };
-        const response = await runtimeRunsApi.streamChat(
-          scopeId,
-          { prompt: submittedSnapshot.input },
-          controller.signal,
-          { serviceId: target.publishedServiceId },
-        );
+        const response =
+          submittedSnapshot.files.length > 0
+            ? await runtimeRunsApi.streamEndpoint(
+                scopeId,
+                {
+                  endpointId: 'chat',
+                  files: submittedSnapshot.files,
+                  prompt: submittedSnapshot.input,
+                },
+                controller.signal,
+                { serviceId: target.publishedServiceId },
+              )
+            : await runtimeRunsApi.streamChat(
+                scopeId,
+                { prompt: submittedSnapshot.input },
+                controller.signal,
+                { serviceId: target.publishedServiceId },
+              );
         if (!ownsRun()) return;
         setLastRunSnapshot(submittedSnapshot);
         setRunPhase('accepted');
         let sawRunError = false;
+        let sawRunFinished = false;
+        let sawRunStopped = false;
         for await (const event of parseBackendSSEStream(response, {
           signal: controller.signal,
         })) {
           if (!ownsRun()) return;
+          applyRuntimeEvent(liveAccumulator, event);
+          liveFrames.push(createPublishedRunExecutionFrame(event));
+          sawRunFinished = sawRunFinished || isSseRunFinished(event);
+          sawRunStopped = sawRunStopped || isSseRunStopped(event);
+          const liveStatus = liveAccumulator.errorText
+            ? 'failed'
+            : sawRunStopped
+              ? 'stopped'
+              : sawRunFinished
+                ? 'succeeded'
+                : 'running';
+          setLiveRunExecution(
+            buildLiveExecution(
+              liveStatus,
+              liveStatus === 'running' ? null : new Date().toISOString(),
+              liveAccumulator.errorText || null,
+            ),
+          );
           const reportedRunId = readSseRunId(event);
           if (reportedRunId && !sseRunIdRef.current) {
             sseRunIdRef.current = reportedRunId;
@@ -875,11 +989,28 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
             setRunPhase('failed');
           }
         }
-        if (ownsRun() && !sawRunError) setRunPhase('stream_ended');
+        if (ownsRun() && !sawRunError) {
+          const liveStatus = sawRunStopped
+            ? 'stopped'
+            : sawRunFinished
+              ? 'succeeded'
+              : 'running';
+          setLiveRunExecution(
+            buildLiveExecution(
+              liveStatus,
+              liveStatus === 'running' ? null : new Date().toISOString(),
+            ),
+          );
+          setRunPhase('stream_ended');
+        }
       } catch (error) {
         if (ownsRun()) {
+          const message = toErrorMessage(error);
           setRunInputError(readRunInputError(error));
-          setRunError(toErrorMessage(error));
+          setLiveRunExecution(
+            buildLiveExecution('failed', new Date().toISOString(), message),
+          );
+          setRunError(message);
           setRunPhase('failed');
         }
       } finally {
@@ -889,16 +1020,19 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
         ) {
           runInFlightRef.current = false;
           runControllerRef.current = null;
+          setRunRequestActive(false);
         }
       }
     },
     [
       routeWorkflowId,
+      runFiles,
       runInput,
-      runObservationUnresolved,
       runPhase,
       scopeId,
+      workflow?.name,
       workflow?.workflowId,
+      workflowTitle,
     ],
   );
 
@@ -938,12 +1072,13 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
     retryNodeInsertion,
     run,
     runError,
+    runFiles,
     runInput,
     runInputError,
     lastRunSnapshot,
+    liveRunExecution,
     runObservation,
-    runObservationUnresolved,
-    runAwaitingIdentification,
+    runRequestActive,
     runPhase,
     runAgain,
     save,
@@ -970,6 +1105,17 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
       setSelectedEdgeId('');
       setSelectedNodeId(nodeId);
       setSelectedStepConfigurationError('');
+    },
+    addRunFiles: (files: readonly File[]) => {
+      if (files.length > 0) {
+        setRunFiles((current) => [...current, ...files]);
+        setRunInputError('');
+      }
+    },
+    removeRunFile: (index: number) => {
+      setRunFiles((current) =>
+        current.filter((_, itemIndex) => itemIndex !== index),
+      );
     },
     setRunInput: (next: string) => {
       setRunInput(next);

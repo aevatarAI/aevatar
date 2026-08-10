@@ -789,12 +789,12 @@ describe('TeamMemberWorkflowStudioPage', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Run' }));
     const draftRunPanel = await screen.findByLabelText('Draft run panel');
     expect(
-      within(draftRunPanel).getByTestId('draft-run-file-drop-zone'),
+      within(draftRunPanel).getByTestId('workflow-run-file-drop-zone'),
     ).toBeTruthy();
     expect(within(draftRunPanel).getByText('No files attached')).toBeTruthy();
     const image = new File(['image-bytes'], 'draft.png', { type: 'image/png' });
     fireEvent.change(
-      within(draftRunPanel).getByTestId('draft-run-file-input'),
+      within(draftRunPanel).getByTestId('workflow-run-file-input'),
       {
         target: { files: [image] },
       },
@@ -4493,6 +4493,15 @@ describe('TeamMemberWorkflowStudioPage', () => {
     const consoleResizeHandle = screen.getByRole('separator', {
       name: 'Resize run console',
     });
+    const studioMain = screen.getByTestId('team-member-workflow-studio');
+    Object.defineProperty(studioMain, 'clientHeight', {
+      configurable: true,
+      value: 600,
+    });
+    fireEvent(window, new Event('resize'));
+    await waitFor(() => {
+      expect(consoleResizeHandle).toHaveAttribute('aria-valuemax', '360');
+    });
     expect(consoleResizeHandle).toHaveAttribute(
       'aria-orientation',
       'horizontal',
@@ -4875,21 +4884,17 @@ describe('TeamMemberWorkflowStudioPage', () => {
       within(consolePanel).getByLabelText('Log details'),
     ).toHaveTextContent('RUN_STARTED');
     fireEvent.click(within(consolePanel).getByRole('radio', { name: 'Nodes' }));
-    const pendingTriageRow = within(consolePanel).getByTestId(
-      'workflow-execution-log-row-node-triage',
-    );
-    const pendingGuardRow = within(consolePanel).getByTestId(
-      'workflow-execution-log-row-node-guard',
-    );
-    expect(pendingTriageRow).toHaveTextContent('Pending');
-    expect(pendingGuardRow).toHaveTextContent('Pending');
-    expect(pendingTriageRow).toBeDisabled();
-    expect(pendingGuardRow).toBeDisabled();
-    expect(pendingTriageRow).toHaveStyle({ height: '80px', minHeight: '80px' });
-    expect(pendingGuardRow).toHaveStyle({ height: '80px', minHeight: '80px' });
     expect(
-      within(consolePanel).getByLabelText('Log details'),
-    ).toHaveTextContent('Select a log entry');
+      within(consolePanel).queryByTestId(
+        'workflow-execution-log-row-node-triage',
+      ),
+    ).toBeNull();
+    expect(
+      within(consolePanel).queryByTestId(
+        'workflow-execution-log-row-node-guard',
+      ),
+    ).toBeNull();
+    expect(consolePanel).toHaveTextContent(/Steps\s*0/);
 
     const confirmSpy = jest
       .spyOn(window, 'confirm')
@@ -4900,9 +4905,11 @@ describe('TeamMemberWorkflowStudioPage', () => {
       expect(screen.getByText('nodes:1')).toBeTruthy();
     });
     expect(
-      within(consolePanel).getByTestId('workflow-execution-log-row-node-guard'),
-    ).toHaveTextContent('Pending');
-    expect(consolePanel).toHaveTextContent(/Steps\s*2/);
+      within(consolePanel).queryByTestId(
+        'workflow-execution-log-row-node-guard',
+      ),
+    ).toBeNull();
+    expect(consolePanel).toHaveTextContent(/Steps\s*0/);
     confirmSpy.mockRestore();
 
     await act(async () => {
@@ -4925,8 +4932,10 @@ describe('TeamMemberWorkflowStudioPage', () => {
     expect(runningTriageRow).toHaveTextContent('Running');
     expect(runningTriageRow).toBeEnabled();
     expect(
-      within(consolePanel).getByTestId('workflow-execution-log-row-node-guard'),
-    ).toHaveTextContent('Pending');
+      within(consolePanel).queryByTestId(
+        'workflow-execution-log-row-node-guard',
+      ),
+    ).toBeNull();
     expect(runningTriageRow).not.toHaveTextContent('Run the workflow');
     fireEvent.click(runningTriageRow);
     expect(
@@ -4939,11 +4948,8 @@ describe('TeamMemberWorkflowStudioPage', () => {
       key: 'ArrowDown',
     });
     expect(runningTriageRow).toHaveAttribute('aria-pressed', 'true');
-    expect(
-      within(consolePanel).getByTestId('workflow-execution-log-row-node-guard'),
-    ).toBeDisabled();
     expect(consolePanel).toHaveTextContent(/Events\s*2/);
-    expect(consolePanel).toHaveTextContent(/Steps\s*2/);
+    expect(consolePanel).toHaveTextContent(/Steps\s*1/);
 
     await act(async () => {
       stream.emit({
@@ -5029,7 +5035,7 @@ describe('TeamMemberWorkflowStudioPage', () => {
     expect(
       within(consolePanel).getByLabelText('Log details'),
     ).toHaveTextContent('Second pass output');
-    expect(consolePanel).toHaveTextContent(/Steps\s*2/);
+    expect(consolePanel).toHaveTextContent(/Steps\s*1/);
 
     await act(async () => {
       stream.emit({
@@ -5094,16 +5100,16 @@ describe('TeamMemberWorkflowStudioPage', () => {
     });
     const secondRunConsole = await screen.findByLabelText('Draft run console');
     expect(
-      within(secondRunConsole).getByTestId(
+      within(secondRunConsole).queryByTestId(
         'workflow-execution-log-row-node-triage',
       ),
-    ).toHaveTextContent('Pending');
+    ).toBeNull();
     expect(
       within(secondRunConsole).queryByTestId(
         'workflow-execution-log-row-node-guard',
       ),
     ).toBeNull();
-    expect(secondRunConsole).toHaveTextContent(/Steps\s*1/);
+    expect(secondRunConsole).toHaveTextContent(/Steps\s*0/);
   });
 
   it('starts a failed draft run from the draft run panel and keeps the error visible', async () => {
@@ -5176,8 +5182,11 @@ describe('TeamMemberWorkflowStudioPage', () => {
     });
     expect(resultPanel).toHaveTextContent('failed');
     expect(
-      within(resultPanel).getByTestId('workflow-execution-log-row-node-triage'),
-    ).toHaveTextContent('Pending');
+      within(resultPanel).queryByTestId(
+        'workflow-execution-log-row-node-triage',
+      ),
+    ).toBeNull();
+    expect(resultPanel).toHaveTextContent(/Steps\s*0/);
     expect(screen.queryByTestId('member-run-summary')).toBeNull();
     expect(resultPanel).not.toHaveTextContent('Member run');
     expect(runtimeRunsApi.streamChat).not.toHaveBeenCalled();

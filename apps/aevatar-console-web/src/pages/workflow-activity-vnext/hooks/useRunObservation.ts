@@ -124,6 +124,16 @@ export function useRunObservation(scopeId: string, runId: string) {
         read: (nextScopeId, nextRunId) =>
           workflowActivityApi.getRun(nextScopeId, nextRunId),
       }),
+    refetchInterval: (currentQuery) => {
+      const result = currentQuery.state.data;
+      if (result?.kind !== 'observed') return false;
+
+      return ['accepted', 'pending', 'running', 'waiting'].includes(
+        result.run.summary.status.toLowerCase(),
+      )
+        ? 1000
+        : false;
+    },
     retry: false,
   });
 
