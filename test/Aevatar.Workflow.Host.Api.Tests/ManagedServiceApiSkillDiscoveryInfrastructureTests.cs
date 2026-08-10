@@ -43,13 +43,112 @@ public sealed class ManagedServiceApiSkillDiscoveryInfrastructureTests
             descriptor.ImplementationType == typeof(ManagedCodexServiceApiSkillDiscoveryExecutor));
         services.Should().Contain(static descriptor =>
             descriptor.ServiceType == typeof(IExactServiceApiSkillVerifier) &&
-            descriptor.ImplementationType == typeof(ManagedCodexExactOrnnApiSkillVerifier));
+            descriptor.ImplementationFactory != null);
         services.Should().Contain(static descriptor =>
             descriptor.ServiceType == typeof(IServiceApiSkillCataloguePort) &&
-            descriptor.ImplementationType == typeof(OrnnServiceApiSkillCataloguePort));
+            descriptor.ImplementationFactory != null);
         services.Should().Contain(static descriptor =>
             descriptor.ServiceType == typeof(IManagedCodexServiceApiSkillDiscoveryPort) &&
-            descriptor.ImplementationType == typeof(ManagedServiceApiSkillDiscoveryService));
+            descriptor.ImplementationType == typeof(DeferredManagedServiceApiSkillDiscoveryPort));
+        services.Should().Contain(static descriptor =>
+            descriptor.ServiceType == typeof(IServiceApiCapabilityFallbackPort) &&
+            descriptor.ImplementationType == typeof(UnavailableServiceApiCapabilityFallbackPort));
+        services.Should().Contain(static descriptor =>
+            descriptor.ServiceType == typeof(IServiceApiWorkflowCapabilityDiscoveryPort) &&
+            descriptor.ImplementationType == typeof(ServiceApiWorkflowCapabilityResolutionService));
+    }
+
+    [Fact]
+    public void AddManagedServiceApiWorkflowCapabilityDiscovery_ShouldDeferCredentialDependenciesUntilDiscovery()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<ExternalWorkflowCapabilityReadinessService>();
+        services.AddSingleton<IExternalWorkflowCapabilityListPort>(static provider =>
+            provider.GetRequiredService<ExternalWorkflowCapabilityReadinessService>());
+        services.AddSingleton<IExternalWorkflowCapabilityReadinessPort>(static provider =>
+            provider.GetRequiredService<ExternalWorkflowCapabilityReadinessService>());
+
+        services.AddManagedServiceApiWorkflowCapabilityDiscovery();
+
+        services.Should().Contain(static descriptor =>
+            descriptor.ServiceType == typeof(IServiceApiWorkflowCapabilityDiscoveryPort) &&
+            descriptor.ImplementationType == typeof(ServiceApiWorkflowCapabilityResolutionService));
+        using var provider = services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateOnBuild = true,
+            ValidateScopes = true,
+        });
+        provider.GetRequiredService<IServiceApiWorkflowCapabilityDiscoveryPort>()
+            .Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task DeferredManagedDiscoveryPort_ShouldResolveManagedServiceFromAsyncScope()
+    {
+        var observer = new DeferredManagedDiscoveryObserver();
+        var services = new ServiceCollection();
+        services.AddSingleton(observer);
+        services.AddScoped<DeferredManagedDiscoveryScopeProbe>();
+        services.AddScoped<IServiceApiSkillCataloguePort, DeferredManagedDiscoveryCataloguePort>();
+        services.AddScoped<IManagedCodexServiceApiSkillDiscoveryExecutor, DeferredManagedDiscoveryRanker>();
+        services.AddScoped<IExactServiceApiSkillVerifier, DeferredManagedDiscoveryVerifier>();
+        await using var provider = services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateScopes = true,
+        });
+        var port = new DeferredManagedServiceApiSkillDiscoveryPort(
+            provider.GetRequiredService<IServiceScopeFactory>());
+
+        var result = await port.DiscoverAsync(new ManagedCodexServiceApiSkillDiscoveryRequest(
+            Access(),
+            Input()));
+
+        result.ResultCase.Should()
+            .Be(ManagedCodexServiceApiSkillDiscoveryResult.ResultOneofCase.ReliableSkill);
+        result.ReliableSkill.Guid.Should().Be(SkillGuid);
+        observer.CatalogueProbeId.Should().NotBeNullOrWhiteSpace();
+        observer.RankerProbeId.Should().Be(observer.CatalogueProbeId);
+        observer.VerifierProbeId.Should().Be(observer.CatalogueProbeId);
+        observer.ScopeDisposed.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task UnavailableFallbackPort_ShouldReturnFallbackUnavailableResolution()
+    {
+        var port = new UnavailableServiceApiCapabilityFallbackPort();
+
+        var result = await port.ResolveAsync(FallbackRequest());
+
+        result.ResultCase.Should()
+            .Be(ServiceApiWorkflowCapabilityDiscoveryResult.ResultOneofCase.Resolution);
+        result.Resolution.ResultCase.Should()
+            .Be(ServiceApiCapabilityResolution.ResultOneofCase.FallbackExhausted);
+        result.Resolution.FallbackExhausted.Reason.Should()
+            .Be(ServiceApiFallbackExhaustedReason.FallbackUnavailable);
+        result.Resolution.FallbackExhausted.SafeMessage.Should()
+            .Be("No admitted Service API fallback contract is available.");
+    }
+
+    [Fact]
+    public async Task UnavailableFallbackPort_ShouldHonorCancellationBeforeReturningResolution()
+    {
+        var port = new UnavailableServiceApiCapabilityFallbackPort();
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        Func<Task> act = async () => await port.ResolveAsync(FallbackRequest(), cts.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Fact]
+    public async Task UnavailableFallbackPort_ShouldRejectMissingRequest()
+    {
+        var port = new UnavailableServiceApiCapabilityFallbackPort();
+
+        Func<Task> act = async () => await port.ResolveAsync(null!);
+
+        await act.Should().ThrowAsync<ArgumentNullException>();
     }
 
     [Fact]
@@ -172,8 +271,13 @@ public sealed class ManagedServiceApiSkillDiscoveryInfrastructureTests
         typedInputStart.Should().BeGreaterThanOrEqualTo(0);
         var typedInput = JsonNode.Parse(
             codex.LastRequest.Prompt[(typedInputStart + typedInputMarker.Length)..])!.AsObject();
+        typedInput["normalized_capability_key"]!.GetValue<string>()
+            .Should().Be("send-message");
+        typedInput.ContainsKey("normalized_capability").Should().BeFalse();
         var descriptors = typedInput["descriptor_inventory"]!.AsArray();
         descriptors.Should().HaveCount(3);
+        descriptors[0]!["capability_key"]!.GetValue<string>()
+            .Should().Be("send-message");
         descriptors[0]!["nyx_id_operation"]!["endpoint_id"]!.GetValue<string>()
             .Should().Be("send-message");
         descriptors[1]!["nyx_id_request"]!["path_template"]!.GetValue<string>()
@@ -424,7 +528,7 @@ public sealed class ManagedServiceApiSkillDiscoveryInfrastructureTests
             TargetUserServiceId = TargetUserServiceId,
             ServiceSlugSnapshot = "example-messaging",
             ServiceLabelSnapshot = "Example Messaging",
-            NormalizedCapability = "send a message to a conversation",
+            NormalizedCapabilityKey = "send-message",
             ManagedDiscoveryPolicyVersion = "service_api_skill_discovery.v1",
             AdmissionPolicyVersion = "explicit-request-admission.v1",
             CapabilityFingerprint = CapabilityFingerprint,
@@ -445,11 +549,22 @@ public sealed class ManagedServiceApiSkillDiscoveryInfrastructureTests
         return input;
     }
 
+    private static ResolveServiceApiCapabilityFallbackRequest FallbackRequest() =>
+        new(
+            Access(),
+            Input(),
+            new NoReliableServiceApiSkill
+            {
+                Reason = ServiceApiNoReliableSkillReason.NoMatchingSkill,
+            },
+            ExternalCapabilityExecutionMode.Interactive);
+
     private static IEnumerable<ExternalWorkflowCapabilityDescriptor> PromptDescriptors()
     {
         yield return new ExternalWorkflowCapabilityDescriptor
         {
             DisplayName = "Send by operation",
+            CapabilityKey = "send-message",
             ReadOnly = false,
             Selector = new ExternalWorkflowCapabilitySelector
             {
@@ -483,6 +598,89 @@ public sealed class ManagedServiceApiSkillDiscoveryInfrastructureTests
         {
             DisplayName = "Unselected descriptor",
         };
+    }
+
+    private sealed class DeferredManagedDiscoveryObserver
+    {
+        public string? CatalogueProbeId { get; set; }
+
+        public string? RankerProbeId { get; set; }
+
+        public string? VerifierProbeId { get; set; }
+
+        public bool ScopeDisposed { get; set; }
+    }
+
+    private sealed class DeferredManagedDiscoveryScopeProbe(DeferredManagedDiscoveryObserver observer) : IDisposable
+    {
+        public string Id { get; } = Guid.NewGuid().ToString("N");
+
+        public void Dispose()
+        {
+            observer.ScopeDisposed = true;
+        }
+    }
+
+    private sealed class DeferredManagedDiscoveryCataloguePort(
+        DeferredManagedDiscoveryScopeProbe probe,
+        DeferredManagedDiscoveryObserver observer) : IServiceApiSkillCataloguePort
+    {
+        public Task<ServiceApiSkillCataloguePage> ReadPageAsync(
+            ServiceApiSkillCataloguePageRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            observer.CatalogueProbeId = probe.Id;
+            var page = new ServiceApiSkillCataloguePage
+            {
+                Page = 1,
+                PageSize = 100,
+                Total = 1,
+                TotalPages = 1,
+            };
+            page.Candidates.Add(new ServiceApiSkillCatalogueCandidate
+            {
+                Guid = SkillGuid,
+                CanonicalName = "example-messaging-service-api",
+                Description = "Example messaging Service API skill.",
+            });
+            return Task.FromResult(page);
+        }
+    }
+
+    private sealed class DeferredManagedDiscoveryRanker(
+        DeferredManagedDiscoveryScopeProbe probe,
+        DeferredManagedDiscoveryObserver observer) : IManagedCodexServiceApiSkillDiscoveryExecutor
+    {
+        public Task<ManagedCodexServiceApiSkillDiscoveryResult> DiscoverAsync(
+            ManagedCodexServiceApiSkillRankingRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            observer.RankerProbeId = probe.Id;
+            return Task.FromResult(new ManagedCodexServiceApiSkillDiscoveryResult
+            {
+                ReliableSkill = Candidate(),
+            });
+        }
+    }
+
+    private sealed class DeferredManagedDiscoveryVerifier(
+        DeferredManagedDiscoveryScopeProbe probe,
+        DeferredManagedDiscoveryObserver observer) : IExactServiceApiSkillVerifier
+    {
+        public Task<ExactServiceApiSkillVerificationResult> VerifyAsync(
+            ExactServiceApiSkillVerificationRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            observer.VerifierProbeId = probe.Id;
+            return Task.FromResult(ExactServiceApiSkillVerificationResult.Verified(new ExactOrnnApiSkillProvenance
+            {
+                Guid = request.Candidate.Guid,
+                CanonicalName = request.Candidate.CanonicalName,
+                LiteralVersion = request.Candidate.LiteralVersion,
+                SkillHash = request.Candidate.SkillHash,
+                PublisherId = request.Candidate.PublisherId,
+            }));
+        }
     }
 
     private static ReliableServiceApiSkillCandidate Candidate()

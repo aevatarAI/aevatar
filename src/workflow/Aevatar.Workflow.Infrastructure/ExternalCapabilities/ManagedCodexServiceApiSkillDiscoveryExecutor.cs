@@ -121,12 +121,13 @@ internal sealed class ManagedCodexServiceApiSkillDiscoveryExecutor :
                 target_user_service_id = discovery.TargetUserServiceId,
                 service_slug_snapshot = discovery.ServiceSlugSnapshot,
                 service_label_snapshot = discovery.ServiceLabelSnapshot,
-                normalized_capability = discovery.NormalizedCapability,
+                normalized_capability_key = discovery.NormalizedCapabilityKey,
                 managed_discovery_policy_version = discovery.ManagedDiscoveryPolicyVersion,
                 admission_policy_version = discovery.AdmissionPolicyVersion,
                 capability_fingerprint = discovery.CapabilityFingerprint,
                 descriptor_inventory = discovery.DescriptorInventory.Select(static descriptor => new
                 {
+                    capability_key = descriptor.CapabilityKey,
                     display_name = descriptor.DisplayName,
                     read_only = descriptor.ReadOnly,
                     destructive = descriptor.Destructive,

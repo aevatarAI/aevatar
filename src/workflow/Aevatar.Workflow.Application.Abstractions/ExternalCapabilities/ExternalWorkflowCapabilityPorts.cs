@@ -48,6 +48,20 @@ public sealed record InspectExternalWorkflowCapabilityReadinessRequest(
     ExternalWorkflowCapabilitySelector Selector,
     ExternalCapabilityExecutionMode ExecutionMode);
 
+public sealed record DiscoverServiceApiWorkflowCapabilityRequest(
+    ExternalWorkflowCapabilityAccessContext Access,
+    ExternalCapabilityAuthorizationOwner CallerAuthority,
+    string TargetUserServiceId,
+    string ServiceSlugSnapshot,
+    string ServiceLabelSnapshot,
+    string CapabilityKey,
+    string ManagedDiscoveryPolicyVersion,
+    string AdmissionPolicyVersion,
+    ExternalCapabilityExecutionMode ExecutionMode,
+    string WorkflowId = "",
+    string MemberId = "",
+    string PublishedServiceId = "");
+
 public sealed record ManagedCodexServiceApiSkillDiscoveryRequest(
     ExternalWorkflowCapabilityAccessContext Access,
     ServiceApiSkillDiscoveryInput Input);
@@ -66,6 +80,12 @@ public sealed record ExactServiceApiSkillVerificationRequest(
     ExternalWorkflowCapabilityAccessContext Access,
     ServiceApiSkillDiscoveryInput Input,
     ReliableServiceApiSkillCandidate Candidate);
+
+public sealed record ResolveServiceApiCapabilityFallbackRequest(
+    ExternalWorkflowCapabilityAccessContext Access,
+    ServiceApiSkillDiscoveryInput Input,
+    NoReliableServiceApiSkill NoReliableApiSkill,
+    ExternalCapabilityExecutionMode ExecutionMode);
 
 public sealed class ExactServiceApiSkillVerificationResult
 {
@@ -283,6 +303,18 @@ public interface IExternalWorkflowCapabilityReadinessPort
         CancellationToken cancellationToken = default);
 }
 
+public interface IServiceApiWorkflowCapabilityDiscoveryPort
+{
+    Task<ServiceApiWorkflowCapabilityDiscoveryResult> DiscoverAsync(
+        DiscoverServiceApiWorkflowCapabilityRequest request,
+        CancellationToken cancellationToken = default);
+
+    Task<ServiceApiWorkflowCapabilityDiscoveryResult> RetryAfterRemediationAsync(
+        ExternalWorkflowCapabilityAccessContext access,
+        ServiceApiCapabilityResolutionRetry retry,
+        CancellationToken cancellationToken = default);
+}
+
 public interface IManagedCodexServiceApiSkillDiscoveryExecutor
 {
     Task<ManagedCodexServiceApiSkillDiscoveryResult> DiscoverAsync(
@@ -308,6 +340,13 @@ public interface IExactServiceApiSkillVerifier
 {
     Task<ExactServiceApiSkillVerificationResult> VerifyAsync(
         ExactServiceApiSkillVerificationRequest request,
+        CancellationToken cancellationToken = default);
+}
+
+public interface IServiceApiCapabilityFallbackPort
+{
+    Task<ServiceApiWorkflowCapabilityDiscoveryResult> ResolveAsync(
+        ResolveServiceApiCapabilityFallbackRequest request,
         CancellationToken cancellationToken = default);
 }
 

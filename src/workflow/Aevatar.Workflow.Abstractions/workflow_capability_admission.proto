@@ -295,6 +295,7 @@ message ExternalWorkflowCapabilityDescriptor {
   bool destructive = 4;
   ExternalCapabilitySourceStamp source = 5;
   ExternalWorkflowCapabilitySelector selector = 6;
+  string capability_key = 7;
 }
 
 enum ExternalCapabilityDiscoveryDiagnosticCode {
@@ -333,11 +334,14 @@ message ServiceApiSkillDiscoveryInput {
   string target_user_service_id = 4;
   string service_slug_snapshot = 5;
   string service_label_snapshot = 6;
-  string normalized_capability = 7;
+  string normalized_capability_key = 7;
   repeated ExternalWorkflowCapabilityDescriptor descriptor_inventory = 8;
   string managed_discovery_policy_version = 9;
   string admission_policy_version = 10;
   string capability_fingerprint = 11;
+  string workflow_id = 12;
+  string member_id = 13;
+  string published_service_id = 14;
 }
 
 message ManagedCodexServiceApiSkillRankingInput {
@@ -390,6 +394,67 @@ enum ServiceApiNoReliableSkillReason {
   SERVICE_API_NO_RELIABLE_SKILL_REASON_SKILL_INTEGRITY_MISMATCH = 5;
   SERVICE_API_NO_RELIABLE_SKILL_REASON_REQUEST_SHAPE_UNSUPPORTED = 6;
   SERVICE_API_NO_RELIABLE_SKILL_REASON_REQUEST_SHAPE_ADMISSION_REJECTED = 7;
+}
+
+message ServiceApiCapabilityResolution {
+  oneof result {
+    ResolvedNyxIdOperation nyxid_operation = 1;
+    ResolvedNyxIdRequest nyxid_request = 2;
+    ServiceApiFallbackExhausted fallback_exhausted = 3;
+  }
+}
+
+message ServiceApiWorkflowCapabilityDiscoveryResult {
+  oneof result {
+    ServiceApiCapabilityResolution resolution = 1;
+    ServiceApiCapabilityReadinessHandoff readiness_required = 2;
+  }
+}
+
+message ServiceApiCapabilityReadinessHandoff {
+  ExternalCapabilityReadiness readiness = 1;
+  ServiceApiCapabilityResolutionRetry retry = 2;
+}
+
+message ServiceApiCapabilityResolutionRetry {
+  ServiceApiSkillDiscoveryInput discovery_input = 1;
+  ExternalCapabilityExecutionMode execution_mode = 2;
+}
+
+message ResolvedNyxIdOperation {
+  NyxIdOperationSelector selector = 1;
+  ExternalWorkflowCapabilityDescriptor descriptor = 2;
+}
+
+message ResolvedNyxIdRequest {
+  oneof contract_source {
+    ExactOrnnApiSkillProvenance ornn_skill = 1;
+    OfficialWebContractProvenance official_web = 2;
+  }
+
+  string user_service_id = 10;
+  AdmittedNyxIdRequestShape request_shape = 11;
+  string admission_policy_version = 12;
+}
+
+message OfficialWebContractProvenance {
+  string canonical_url = 1;
+  string source_title = 2;
+  string fetched_content_digest = 3;
+}
+
+message ServiceApiFallbackExhausted {
+  ServiceApiFallbackExhaustedReason reason = 1;
+  string safe_message = 2;
+}
+
+enum ServiceApiFallbackExhaustedReason {
+  SERVICE_API_FALLBACK_EXHAUSTED_REASON_UNSPECIFIED = 0;
+  SERVICE_API_FALLBACK_EXHAUSTED_REASON_OFFICIAL_DOCUMENTATION_NOT_FOUND = 1;
+  SERVICE_API_FALLBACK_EXHAUSTED_REASON_OFFICIAL_HTTP_CONTRACT_NOT_ESTABLISHED = 2;
+  SERVICE_API_FALLBACK_EXHAUSTED_REASON_WEB_RESEARCH_FAILED = 3;
+  SERVICE_API_FALLBACK_EXHAUSTED_REASON_WEB_REQUEST_SHAPE_ADMISSION_REJECTED = 4;
+  SERVICE_API_FALLBACK_EXHAUSTED_REASON_FALLBACK_UNAVAILABLE = 5;
 }
 
 message ExactOrnnApiSkillProvenance {

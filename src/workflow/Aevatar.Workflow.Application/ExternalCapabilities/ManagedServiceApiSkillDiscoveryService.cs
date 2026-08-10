@@ -113,7 +113,7 @@ public sealed class ManagedServiceApiSkillDiscoveryService :
             var page = await _catalogue.ReadPageAsync(
                     new ServiceApiSkillCataloguePageRequest(
                         request.Access,
-                        request.Input.NormalizedCapability,
+                        request.Input.NormalizedCapabilityKey,
                         pageNumber,
                         CataloguePageSize),
                     cancellationToken)

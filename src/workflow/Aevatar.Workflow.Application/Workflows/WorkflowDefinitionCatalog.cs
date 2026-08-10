@@ -185,72 +185,27 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
               - Use `nyxid_services` only to select or inspect the exact connected service instance, and
                 use `nyxid_catalog` or `nyxid_require_service` only to check availability/readiness when
                 needed. Never ask the user for credentials, tokens, owner, scope, or channel.
-              - Follow this mandatory NyxID workflow authoring state machine. Do not skip or reorder its
-                data-dependent tool calls.
-              - In `descriptor_discovery`, call `list_external_workflow_capabilities`. If a matching exact descriptor
-                is returned, choose one structured operation descriptor and copy that descriptor's exact `selector` object
-                as the step-level `capability` value. The list tool's `selector` uses workflow YAML field names
-                (`nyxid_operation` / `nyxid_request`). For an exact NyxID operation descriptor this authors
-                step-level `capability.nyxid_operation`. Do not author protobuf JSON spellings `nyx_id_operation` or `nyx_id_request` in workflow YAML.
-                If contract details or point-in-time readiness are needed before writing runtime arguments, call
-                `inspect_external_workflow_capability_readiness` with that exact selector and the intended execution mode;
-                use the returned capability only as read-only contract guidance. Do not reconstruct the selector from
-                display text. Do not generate or guess selector identities or server-owned proof fields. Set capability
-                resolution to `exact_operation_resolved`. Do not author `capability.nyxid_request` when an exact descriptor exists.
-              - No matching exact descriptor is a fallback trigger, not a blocker. The next tool call MUST be
-                `nyxid_services` with `action: "list"`. Before capability resolution reaches
-                `exact_operation_resolved`, `fallback_request_resolved`, or `fallback_exhausted`, do not create a Team,
-                member, or workflow draft, and do not produce a final answer.
-                Only after `descriptor_discovery` returns no matching exact descriptor may the workflow enter the `nyxid_request` fallback branch.
-              - In `service_selection`, select the matching connected UserService from that list, then call
-                `nyxid_services` with `action: "show"` and that exact service `id`. Do not treat a service label, slug,
-                catalog id, endpoint id, or documentation URL as a UserService id. If several services remain equally
-                plausible, ask the user to choose; do not guess.
-              - After the exact connected UserService is shown, call `web_search` for official documentation for the
-                requested operation. Search snippets and unofficial examples are not an HTTP contract. From the
-                official result, call `web_fetch` to read the documentation. If `web_fetch` returns a redirect, call
-                `web_fetch` again with its exact `redirect_url`. A transient search or fetch failure is not evidence
-                that no contract exists; retry it once before using the unresolved branch.
-              - Only in this descriptor-miss fallback branch, after the exact connected UserService is shown and the
-                official HTTP contract is established, copy the exact UserService id into
-                `capability.nyxid_request.user_service_id` and author step-level
-                `capability.nyxid_request` with the exact `user_service_id` and method, path_template,
-                query_parameters, header_parameters, body_mode, body_required, and response_mode. Use only the
-                supported values declared by the workflow schema, and use empty query/header lists when the operation
-                declares none. Pair the capability with a `tool_call` to `nyxid_proxy`. Runtime arguments may contain
-                only values for the authored request's declared `path_params`, `query`, `headers`, and `body` slots;
-                do not put service identity, method, path_template, credentials, proof fields, or response_mode in
-                runtime arguments. Official documentation is authoring evidence only; it does not provide credentials,
-                admission, operation proof, permission, or authority.
-                Do not invent selector identities, operation proof, credentials, or server-owned proof fields.
-                Then set capability resolution to `fallback_request_resolved`.
-              - Only these outcomes set `fallback_exhausted`: `nyxid_services` list completed and no matching connected
-                UserService exists; the selected connected UserService is unavailable after `show`; or `web_search`
-                and `web_fetch` inspected official documentation but still could not establish the exact HTTP contract.
-                Merely receiving no exact descriptor, omitting `show`, or reading only search snippets does not set
-                `fallback_exhausted`.
-              - Exact `capability.nyxid_operation` branch: after Team ownership is resolved and capability resolution is
-                `exact_operation_resolved`, call `aevatar_create_member_workflow_draft` with the authored YAML. Then
-                call `aevatar_bind_member_workflow` with the same workflow YAML, the returned exact `workflow_id`, and
-                the intended execution mode. Do not call `preview_workflow_explicit_requests` for this exact-operation branch,
-                and do not pass explicit request confirmations. If exact-operation bind or readiness rejects the workflow,
-                report that blocker instead of switching to `capability.nyxid_request`.
-              - Fallback `capability.nyxid_request` branch: only after descriptor discovery missed a matching exact descriptor,
-                after Team ownership is resolved and capability resolution is `fallback_request_resolved`, call
-                `aevatar_create_member_workflow_draft` with the authored YAML. Then call
-                `preview_workflow_explicit_requests` with the returned exact `workflow_id`, the same complete workflow
-                YAML, and `execution_mode: "durable"` for a requested schedule or `interactive` otherwise. Use the
-                returned exact `revision_id`, then call `aevatar_bind_member_workflow` with the same workflow YAML and
-                execution mode and pass the preview confirmations unchanged. Keep `member_id`, `workflow_id`, and
-                `revision_id` distinct; do not derive one identity from another. Only the descriptor-miss fallback branch calls `preview_workflow_explicit_requests`.
-              - Only when no matching connected UserService exists or official documentation cannot establish the exact
-                HTTP contract after the mandatory fallback reaches `fallback_exhausted`, save an unresolved workflow
-                draft without the external step capability. Report the returned distinct `member_id`, `workflow_id`,
-                canonical Studio URL, `runnable=false`, Accepted/projection-pending state, and
-                `NYXID_OPERATION_SELECTION_REQUIRED`. Do not bind, schedule, provision, or run that unresolved draft.
-              - When an exact NyxID operation descriptor exists, persist its authoring selector as step-level
-                `capability.nyxid_operation` beside a `tool_call` to `nyxid_proxy`. Runtime arguments may contain only `path_params`, `query`,
-                `headers`, `body`, and `response_mode`; routing and operation proof are resolved at bind.
+              - For workflow Service API authoring, call `discover_service_api_workflow_capability` once with the exact
+                selected UserService identity, producer capability key, execution mode, and current workflow/member/service
+                identities. Application owns descriptor priority, managed discovery, fallback routing, readiness, and
+                correlation. Do not reproduce or reorder those decisions with other tools or prompt reasoning.
+              - Consume only the returned typed capability resolution. An `nyxid_operation` resolution authors the exact
+                returned selector as step-level `capability.nyxid_operation`. An `nyxid_request` resolution authors the
+                admitted request selector as step-level `capability.nyxid_request` and pairs it with `nyxid_proxy`.
+                Do not author protobuf JSON spellings `nyx_id_operation` or `nyx_id_request` in workflow YAML.
+                Do not generate or guess selector identities or server-owned proof fields. Runtime arguments may contain only
+                `path_params`, `query`, `headers`, `body`, and `response_mode` values allowed by the admitted request.
+              - A typed readiness handoff is blocking. Surface its blocker and trusted remediation action, stop authoring,
+                and let the authorized lifecycle complete remediation. Do not claim success, change identity, or continue
+                as executable. The lifecycle retry must reuse the handoff's authoritative resolution context.
+              - A `fallback_exhausted` resolution is terminal for this capability. Create an unresolved draft only when
+                the user still wants the draft, and preserve the typed blocker instead of inventing a substitute service.
+              - After an `nyxid_operation` resolution, call `aevatar_create_member_workflow_draft`, then
+                `aevatar_bind_member_workflow`; do not call `preview_workflow_explicit_requests` for this branch.
+                After an `nyxid_request` resolution, call `aevatar_create_member_workflow_draft`, then
+                `preview_workflow_explicit_requests`, then `aevatar_bind_member_workflow`, passing the exact confirmation
+                contract unchanged. Keep `member_id`, `workflow_id`, and `published_service_id` distinct; do not derive
+                one identity from another.
               - Use host `connector_call` only for host/deployment-owned connectors that are explicitly
                 configured as connector capabilities. Do not treat every public service as a host connector.
               - If no NyxID connected service, catalog capability, host connector, or workflow-callable
@@ -393,9 +348,9 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
               10. Specialized provider or skill-discovery tools are not the default path for external service calls.
                  For workflow runtime integrations, author the descriptor-provided NyxID workflow selector and internal
                  proof-bound `tool_call` adapter when a matching service and operation contract exist. Do not create a provider-specific prompt rule or runtime-tool mapping for one named service; service-specific behavior must come from discovered connected-service/catalog/host connector/runtime tool schemas.
-                 Use specialized provider or skill-discovery tools only for current-turn discovery or authoring
-                 support when their scope is explicitly requested, not as a substitute for a generic workflow
-                 runtime capability. Only the descriptor-miss fallback may author `capability.nyxid_request` plus `nyxid_proxy` as the workflow-callable service path. Do not use that fallback when `list_external_workflow_capabilities` returned a matching exact descriptor. If no such path or runtime tool contract exists, create the unresolved draft and report its blocker; do not substitute a separately published skill.
+                 Use specialized provider or skill-discovery tools only for unrelated current-turn tasks, not as a
+                 substitute for the typed Service API capability resolution. If no typed resolution exists, create the
+                 unresolved draft and report its blocker; do not substitute a separately published skill.
 
               Hard rules:
               - The deliverable is either an editable, explicitly non-runnable draft when neither an exact external
@@ -440,11 +395,8 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
               - nyxid_llm_status
               - nyxid_services
               - nyxid_require_service
-              - list_external_workflow_capabilities
-              - inspect_external_workflow_capability_readiness
+              - discover_service_api_workflow_capability
               - preview_workflow_explicit_requests
-              - ornn_search_skills
-              - use_skill
             tool_sets:
               - nyxid.connected_services
         steps:
