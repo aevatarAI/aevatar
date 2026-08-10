@@ -85,9 +85,15 @@ describe('adaptActivityRunToExecutionLogs', () => {
   });
 
   it('treats a timed-out Activity run as terminal', () => {
-    const run = createRun();
-    run.summary.status = 'timed_out';
-    run.summary.success = false;
+    const completedRun = createRun();
+    const run: WorkflowActivityRunDetail = {
+      ...completedRun,
+      summary: {
+        ...completedRun.summary,
+        status: 'timed_out',
+        success: false,
+      },
+    };
 
     const execution = adaptActivityRunToExecutionLogs(run);
 
