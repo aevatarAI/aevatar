@@ -4133,6 +4133,56 @@ describe('Workflow Activity vNext editor', () => {
     } as unknown as Response);
   });
 
+  it('clears the published run console without aborting an active run', async () => {
+    let streamController:
+      | ReadableStreamDefaultController<Uint8Array>
+      | undefined;
+    let runSignal: AbortSignal | undefined;
+    mockRuntimeRunsApi.streamChat.mockImplementation(
+      (_scopeId, _request, signal) => {
+        runSignal = signal;
+        return Promise.resolve({
+          body: new ReadableStream({
+            start(controller) {
+              streamController = controller;
+            },
+          }),
+          ok: true,
+        } as Response);
+      },
+    );
+
+    await renderPublishedWorkflowPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Run' }));
+    fireEvent.change(
+      await screen.findByRole('textbox', { name: 'Published run input' }),
+      { target: { value: 'Review order 42' } },
+    );
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Start published run' }),
+    );
+
+    const logs = await screen.findByRole('complementary', {
+      name: 'Workflow run console',
+    });
+    const clearLogs = within(logs).getByRole('button', {
+      name: 'Clear logs',
+    });
+    expect(clearLogs).toBeEnabled();
+    fireEvent.click(clearLogs);
+
+    expect(
+      screen.queryByRole('complementary', { name: 'Workflow run console' }),
+    ).not.toBeInTheDocument();
+    expect(runSignal?.aborted).toBe(false);
+    expect(mockRuntimeRunsApi.streamChat).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      streamController?.close();
+    });
+  });
+
   it('requires text or a file before invoking a published workflow', async () => {
     mockRuntimeRunsApi.streamChat.mockResolvedValue(createSseResponse([]));
 

@@ -42,7 +42,6 @@ export type WorkflowExecutionLogsModel = {
 type WorkflowExecutionLogsPanelProps = {
   readonly activeLogIndex?: number | null;
   readonly ariaLabel?: string;
-  readonly clearDisabled?: boolean;
   readonly collapseButtonRef?: React.Ref<React.ElementRef<typeof Button>>;
   readonly collapseControlsId?: string;
   readonly error?: string;
@@ -943,7 +942,6 @@ const WorkflowExecutionLogsPanel: React.FC<WorkflowExecutionLogsPanelProps> = ({
     'shared.workflowExecutionLogs.consoleAria',
     'Workflow run console',
   ),
-  clearDisabled = false,
   collapseButtonRef,
   collapseControlsId,
   error,
@@ -1206,7 +1204,6 @@ const WorkflowExecutionLogsPanel: React.FC<WorkflowExecutionLogsPanelProps> = ({
                       'teamMemberWorkflowStudio.executionPanel.clear',
                       'Clear logs',
                     )}
-                    disabled={clearDisabled}
                     icon={<CloseOutlined />}
                     onClick={onClear}
                     size="small"
