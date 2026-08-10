@@ -1946,6 +1946,35 @@ describe('Workflow Activity vNext editor', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('enables Save workflow only while the loaded workflow has unsaved changes', async () => {
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    const workflowName = await screen.findByRole('textbox', {
+      name: 'Workflow name',
+    });
+    const saveWorkflowButton = screen.getByRole('button', {
+      name: 'Save workflow',
+    });
+    expect(
+      screen.getByRole('status', { name: 'Workflow save status' }),
+    ).toHaveTextContent('Saved at 2026-08-04 10:00:00 UTC');
+    expect(saveWorkflowButton).toBeDisabled();
+
+    fireEvent.change(workflowName, {
+      target: { value: 'Committed source updated' },
+    });
+    expect(saveWorkflowButton).toBeEnabled();
+    fireEvent.click(saveWorkflowButton);
+
+    await waitFor(() =>
+      expect(mockStudioApi.saveWorkflow).toHaveBeenCalledTimes(1),
+    );
+    await waitFor(() => expect(saveWorkflowButton).toBeDisabled());
+    expect(
+      screen.getByRole('status', { name: 'Workflow save status' }),
+    ).toHaveTextContent('Saved at 2026-08-04 10:01:00 UTC');
+  });
+
   it('publishes a saved workflow in one click and waits for observed evidence before showing Published', async () => {
     mockLocation =
       '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-draft-alpha';
@@ -3580,6 +3609,9 @@ describe('Workflow Activity vNext editor', () => {
       await screen.findByRole('button', { name: 'Insert LLM call node' }),
     ).toBeVisible();
 
+    fireEvent.change(screen.getByLabelText('Workflow name'), {
+      target: { value: 'Committed source updated' },
+    });
     fireEvent.click(screen.getByRole('button', { name: 'Save workflow' }));
 
     await waitFor(() =>

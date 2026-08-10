@@ -978,6 +978,7 @@ const WorkflowEditorPage: React.FC<{
           />
           <Button
             disabled={
+              !editor.dirty ||
               editorWriteLocked ||
               editor.receiptPending ||
               hasUnappliedNodeChanges
