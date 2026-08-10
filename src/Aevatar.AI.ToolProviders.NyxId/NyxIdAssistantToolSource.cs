@@ -56,6 +56,7 @@ public sealed class NyxIdAssistantToolSource : IAgentToolSource
             ReadOnly(new NyxIdMfaTool(_client), ["status"], "status"),
             ReadOnly(new NyxIdServicesTool(_client), ["list", "show"], "list", "id"),
             ReadOnly(new NyxIdApiKeysTool(_client), ["list", "show"], "list", "id", "org"),
+            new NyxIdDurableGrantsTool(_client),
             ReadOnly(new NyxIdNodesTool(_client), ["list", "show"], "list", "id"),
             new NyxIdNodeCredentialsTool(_client),
             new NyxIdServicePoolsTool(_client),

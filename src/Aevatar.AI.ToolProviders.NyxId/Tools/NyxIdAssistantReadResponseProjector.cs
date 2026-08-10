@@ -48,6 +48,40 @@ internal static partial class NyxIdAssistantReadResponseProjector
     public static string ProjectPendingNodeCredentials(string json) =>
         ProjectCollectionResponse(json, "pending_credentials", ProjectPendingCredential);
 
+    public static string ProjectDurableGrants(string json, string expectedApiKeyId)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            if (TryProjectError(document.RootElement, out var error))
+                return error;
+            if (document.RootElement.ValueKind != JsonValueKind.Object ||
+                !document.RootElement.TryGetProperty("grants", out var grants) ||
+                grants.ValueKind != JsonValueKind.Array)
+            {
+                return InvalidResponseJson;
+            }
+
+            var projected = new List<DurableGrantProjection>();
+            var grantIds = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var grant in grants.EnumerateArray())
+            {
+                if (!TryProjectDurableGrant(grant, expectedApiKeyId, out var receipt) ||
+                    !grantIds.Add(receipt.Id))
+                {
+                    return InvalidResponseJson;
+                }
+                projected.Add(receipt);
+            }
+
+            return ProjectDurableGrantList(projected);
+        }
+        catch (JsonException)
+        {
+            return InvalidResponseJson;
+        }
+    }
+
     public static string ProjectServicePools(string json, bool isList)
     {
         try
@@ -329,6 +363,229 @@ internal static partial class NyxIdAssistantReadResponseProjector
 
     private static Dictionary<string, object?> ProjectPendingCredential(JsonElement item) =>
         ProjectProperties(item, PendingCredentialProperties);
+
+    private static bool TryProjectDurableGrant(
+        JsonElement source,
+        string expectedApiKeyId,
+        out DurableGrantProjection receipt)
+    {
+        receipt = default!;
+        if (source.ValueKind != JsonValueKind.Object ||
+            !TryReadRequiredString(source, "id", out var id) ||
+            !TryReadRequiredString(source, "api_key_id", out var apiKeyId) ||
+            !string.Equals(apiKeyId, expectedApiKeyId, StringComparison.Ordinal) ||
+            !TryReadRequiredString(source, "user_service_id", out var userServiceId) ||
+            !TryReadRequiredString(source, "endpoint_id", out var endpointId) ||
+            !TryReadRequiredString(source, "method", out var method) ||
+            method is not ("POST" or "PUT" or "PATCH") ||
+            !TryReadRequiredString(source, "normalized_path_template", out var pathTemplate) ||
+            !TryReadRequiredString(source, "contract_digest", out var contractDigest) ||
+            !Sha256DigestRegex().IsMatch(contractDigest) ||
+            !TryReadRequiredTimestamp(source, "valid_from", out var validFrom) ||
+            !TryReadRequiredTimestamp(source, "expires_at", out var expiresAt) ||
+            expiresAt <= validFrom ||
+            !TryReadDurableGrantCounters(
+                source,
+                out var totalLimit,
+                out var totalUsed,
+                out var windowUsed,
+                out var stateVersion) ||
+            !TryReadRequiredString(source, "replay_policy", out var replayPolicy) ||
+            replayPolicy is not ("non_replayable" or "downstream_idempotency_key") ||
+            !TryReadOptionalTimestamp(source, "revoked_at", out var revokedAt) ||
+            !TryReadOptionalString(source, "reauthorized_from", out var reauthorizedFrom) ||
+            !TryReadRequiredTimestamp(source, "created_at", out var createdAt))
+        {
+            return false;
+        }
+
+        receipt = new DurableGrantProjection(
+            id,
+            apiKeyId,
+            userServiceId,
+            endpointId,
+            method,
+            pathTemplate,
+            contractDigest,
+            validFrom,
+            expiresAt,
+            totalLimit,
+            totalUsed,
+            windowUsed,
+            replayPolicy,
+            revokedAt,
+            stateVersion,
+            reauthorizedFrom,
+            createdAt);
+        return true;
+    }
+
+    private static bool TryReadDurableGrantCounters(
+        JsonElement source,
+        out long totalLimit,
+        out long totalUsed,
+        out long windowUsed,
+        out long stateVersion)
+    {
+        totalLimit = 0;
+        totalUsed = 0;
+        windowUsed = 0;
+        stateVersion = 0;
+        return TryReadRequiredNonNegativeInteger(source, "total_limit", out totalLimit) &&
+               totalLimit > 0 &&
+               TryReadRequiredNonNegativeInteger(source, "total_used", out totalUsed) &&
+               totalUsed <= totalLimit &&
+               TryReadRequiredNonNegativeInteger(source, "window_used", out windowUsed) &&
+               TryReadRequiredPositiveInteger(source, "state_version", out stateVersion);
+    }
+
+    private static string ProjectDurableGrantList(
+        IReadOnlyCollection<DurableGrantProjection> projected)
+    {
+        var returned = new List<DurableGrantProjection>();
+        string result = SerializeDurableGrantList(returned, projected.Count);
+        foreach (var grant in projected.Take(MaxAssistantListItems))
+        {
+            returned.Add(grant);
+            var candidate = SerializeDurableGrantList(returned, projected.Count);
+            if (Encoding.UTF8.GetByteCount(candidate) > MaxAssistantProjectionBytes)
+            {
+                returned.RemoveAt(returned.Count - 1);
+                break;
+            }
+            result = candidate;
+        }
+
+        return result;
+    }
+
+    private static string SerializeDurableGrantList(
+        IReadOnlyCollection<DurableGrantProjection> returned,
+        int total) =>
+        JsonSerializer.Serialize(new DurableGrantListProjection(
+            returned,
+            total,
+            returned.Count,
+            returned.Count < total));
+
+    private static bool TryReadRequiredString(
+        JsonElement source,
+        string property,
+        out string value)
+    {
+        value = string.Empty;
+        if (!source.TryGetProperty(property, out var element) ||
+            element.ValueKind != JsonValueKind.String ||
+            string.IsNullOrWhiteSpace(element.GetString()))
+        {
+            return false;
+        }
+        value = element.GetString()!;
+        return string.Equals(value, value.Trim(), StringComparison.Ordinal) &&
+               value.Length <= 2048 &&
+               !value.Any(char.IsControl);
+    }
+
+    private static bool TryReadOptionalString(
+        JsonElement source,
+        string property,
+        out string? value)
+    {
+        value = null;
+        if (!source.TryGetProperty(property, out var element) || element.ValueKind == JsonValueKind.Null)
+            return true;
+        if (element.ValueKind != JsonValueKind.String)
+            return false;
+        value = element.GetString();
+        return value is not null &&
+               string.Equals(value, value.Trim(), StringComparison.Ordinal) &&
+               value.Length <= 2048 &&
+               !value.Any(char.IsControl);
+    }
+
+    private static bool TryReadRequiredTimestamp(
+        JsonElement source,
+        string property,
+        out DateTimeOffset value)
+    {
+        value = default;
+        return TryReadRequiredString(source, property, out var text) &&
+               Rfc3339TimestampRegex().IsMatch(text) &&
+               DateTimeOffset.TryParse(
+                   text,
+                   System.Globalization.CultureInfo.InvariantCulture,
+                   System.Globalization.DateTimeStyles.RoundtripKind,
+                   out value);
+    }
+
+    private static bool TryReadOptionalTimestamp(
+        JsonElement source,
+        string property,
+        out DateTimeOffset? value)
+    {
+        value = null;
+        if (!source.TryGetProperty(property, out var element) || element.ValueKind == JsonValueKind.Null)
+            return true;
+        if (element.ValueKind != JsonValueKind.String ||
+            element.GetString() is not { } text ||
+            !Rfc3339TimestampRegex().IsMatch(text) ||
+            !DateTimeOffset.TryParse(
+                text,
+                System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.RoundtripKind,
+                out var parsed))
+        {
+            return false;
+        }
+        value = parsed;
+        return true;
+    }
+
+    private static bool TryReadRequiredNonNegativeInteger(
+        JsonElement source,
+        string property,
+        out long value)
+    {
+        value = 0;
+        return source.TryGetProperty(property, out var element) &&
+               element.ValueKind == JsonValueKind.Number &&
+               element.TryGetInt64(out value) &&
+               value >= 0;
+    }
+
+    private static bool TryReadRequiredPositiveInteger(
+        JsonElement source,
+        string property,
+        out long value) =>
+        TryReadRequiredNonNegativeInteger(source, property, out value) && value > 0;
+
+    private sealed record DurableGrantListProjection(
+        [property: System.Text.Json.Serialization.JsonPropertyName("grants")]
+        IReadOnlyCollection<DurableGrantProjection> Grants,
+        [property: System.Text.Json.Serialization.JsonPropertyName("total")] int Total,
+        [property: System.Text.Json.Serialization.JsonPropertyName("returned")] int Returned,
+        [property: System.Text.Json.Serialization.JsonPropertyName("truncated")] bool Truncated);
+
+    private sealed record DurableGrantProjection(
+        [property: System.Text.Json.Serialization.JsonPropertyName("id")] string Id,
+        [property: System.Text.Json.Serialization.JsonPropertyName("api_key_id")] string ApiKeyId,
+        [property: System.Text.Json.Serialization.JsonPropertyName("user_service_id")] string UserServiceId,
+        [property: System.Text.Json.Serialization.JsonPropertyName("endpoint_id")] string EndpointId,
+        [property: System.Text.Json.Serialization.JsonPropertyName("method")] string Method,
+        [property: System.Text.Json.Serialization.JsonPropertyName("normalized_path_template")] string NormalizedPathTemplate,
+        [property: System.Text.Json.Serialization.JsonPropertyName("contract_digest")] string ContractDigest,
+        [property: System.Text.Json.Serialization.JsonPropertyName("valid_from")] DateTimeOffset ValidFrom,
+        [property: System.Text.Json.Serialization.JsonPropertyName("expires_at")] DateTimeOffset ExpiresAt,
+        [property: System.Text.Json.Serialization.JsonPropertyName("total_limit")] long TotalLimit,
+        [property: System.Text.Json.Serialization.JsonPropertyName("total_used")] long TotalUsed,
+        [property: System.Text.Json.Serialization.JsonPropertyName("window_used")] long WindowUsed,
+        [property: System.Text.Json.Serialization.JsonPropertyName("replay_policy")] string ReplayPolicy,
+        [property: System.Text.Json.Serialization.JsonPropertyName("revoked_at")]
+        DateTimeOffset? RevokedAt,
+        [property: System.Text.Json.Serialization.JsonPropertyName("state_version")] long StateVersion,
+        [property: System.Text.Json.Serialization.JsonPropertyName("reauthorized_from")]
+        string? ReauthorizedFrom,
+        [property: System.Text.Json.Serialization.JsonPropertyName("created_at")] DateTimeOffset CreatedAt);
 
     private static Dictionary<string, object?> ProjectServicePool(JsonElement item)
     {
@@ -638,4 +895,12 @@ internal static partial class NyxIdAssistantReadResponseProjector
 
     [GeneratedRegex("^[0-9a-f]{64}$", RegexOptions.CultureInvariant)]
     private static partial Regex OAuthBindingSelectorRegex();
+
+    [GeneratedRegex("^sha256:[0-9a-f]{64}$", RegexOptions.CultureInvariant)]
+    private static partial Regex Sha256DigestRegex();
+
+    [GeneratedRegex(
+        @"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$",
+        RegexOptions.CultureInvariant)]
+    private static partial Regex Rfc3339TimestampRegex();
 }

@@ -42,7 +42,7 @@
     "prompt_version": "StreamingAgentProfileTurnClassifier@8d15ef5727ab933cd5fa9244181bcb23b798cfc9",
     "prompt_source_sha256": "420c2b6cc354684994b7a15d98c43e2824da4254a49ef031af0918adaa58c138",
     "prompt_text_sha256": "78f18479312dcb724c8eb5ba8def16a3e2ebd46cc4368481fff60f56d77f1847",
-    "coverage_manifest_sha256": "0b88ec0e63c349869fbe28542eb2baeae2daff70937eb8f0258f8f35d0bc3904",
+    "coverage_manifest_sha256": "26c80dc309acd7bead7c461f2b21eb65df1bbfdec83bf3065ad76f39443c6c5f",
     "dataset_sha256": "dcb72a950b901578a184e269a790f2328da19354065d82055f5616d247c5075a",
     "case_count": 134,
     "candidate_policy": "stable-hash-32.v2",

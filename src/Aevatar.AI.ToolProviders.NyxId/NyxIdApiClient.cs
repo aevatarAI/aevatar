@@ -1202,6 +1202,19 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
     public Task<string> GetApiKeyAsync(string token, string id, CancellationToken ct) =>
         GetAsync(token, $"/api/v1/api-keys/{Uri.EscapeDataString(id)}", ct);
 
+    public Task<string> ListDurableGrantsAsync(
+        string token,
+        string apiKeyId,
+        bool includeRevoked,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(apiKeyId);
+        var path = $"/api/v1/api-keys/{Uri.EscapeDataString(apiKeyId.Trim())}/durable-grants";
+        if (includeRevoked)
+            path += "?include_revoked=true";
+        return GetAsync(token, path, ct);
+    }
+
     public Task<string> RotateApiKeyAsync(string token, string id, CancellationToken ct) =>
         PostAsync(token, $"/api/v1/api-keys/{Uri.EscapeDataString(id)}/rotate", "{}", ct);
 

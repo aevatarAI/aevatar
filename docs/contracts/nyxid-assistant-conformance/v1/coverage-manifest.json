@@ -223,14 +223,15 @@
       "operation_id": "api_key.durable_grants",
       "description": "List durable grants for a scheduled-invocation key",
       "operation_class": "R",
-      "outcome_class": "honest_cannot_check",
-      "mechanism": "no_mounted_read_adapter",
-      "availability": "recognized_but_unavailable",
-      "availability_predicate": "a narrow typed read adapter is mounted",
+      "outcome_class": "authoritative_read",
+      "mechanism": "typed_aevatar_rest_read",
+      "availability": "mounted",
+      "availability_predicate": "nyxid_durable_grants is mounted on the NyxID Assistant route",
       "approval_authority": "none",
-      "evidence_type": "none",
-      "status": "blocked",
-      "owning_issue": "#3308"
+      "evidence_type": "typed_tool_receipt",
+      "status": "shipped",
+      "owning_issue": "#3374",
+      "mounted_tool": "nyxid_durable_grants"
     },
     {
       "cli_path": "api-key durable-plan",
