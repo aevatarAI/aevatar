@@ -894,7 +894,7 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
         state.PendingActions.Add(new NyxIdChatActionRequestState
         {
             SchemaVersion = 4,
-            RegistryRevision = "nyxid-assistant-actions.v4",
+            RegistryRevision = "nyxid-assistant-actions.v5",
             ConversationActorId = ActorId,
             OriginTurnId = "turn-alpha",
             TaskId = "task-alpha",

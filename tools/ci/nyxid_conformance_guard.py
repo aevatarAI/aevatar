@@ -62,7 +62,7 @@ def main() -> int:
 
     leaves = load_json(CONTRACT_ROOT / "cli-leaves.json")
     coverage = load_json(CONTRACT_ROOT / "coverage-manifest.json")
-    registry = load_json(CONTRACT_ROOT / "registry-v4.json")
+    registry = load_json(CONTRACT_ROOT / "registry-v5.json")
     tolerant = load_json(CONTRACT_ROOT / "tolerant-reader-fixtures.json")
     adversarial = load_json(CONTRACT_ROOT / "adversarial-fixtures.json")
     semantic = load_json(CONTRACT_ROOT / "semantic-evaluation.json")
@@ -104,10 +104,45 @@ def validate_local_digests(sources, errors):
         elif sha256(path) != expected:
             errors.append(f"generated conformance artifact drift: {relative_path}")
 
-    registry_pin = sources["assistant_registry"]
-    payload = CONTRACT_ROOT / registry_pin["checked_in_payload"]
-    if sha256(payload) != registry_pin["checked_in_payload_sha256"]:
+    validate_assistant_registry_digests(
+        CONTRACT_ROOT,
+        sources["assistant_registry"],
+        errors,
+    )
+
+
+def validate_assistant_registry_digests(contract_root, registry_pin, errors):
+    payload = contract_root / registry_pin["checked_in_payload"]
+    if not payload.is_file():
+        errors.append("checked-in assistant registry payload is missing")
+    elif sha256(payload) != registry_pin["checked_in_payload_sha256"]:
         errors.append("checked-in assistant registry payload digest drift")
+
+    transition_payloads = registry_pin.get("transition_payloads", {})
+    accepted_revisions = registry_pin.get("accepted_revisions", [])
+    if set(accepted_revisions) != set(transition_payloads):
+        errors.append("assistant registry transition revisions do not match their payload pins")
+    current_revision = registry_pin.get("revision")
+    if current_revision not in accepted_revisions:
+        errors.append("current assistant registry revision is not transition-accepted")
+    current_transition = transition_payloads.get(current_revision)
+    if current_transition is not None and (
+        current_transition.get("checked_in_payload") != registry_pin.get("checked_in_payload")
+        or current_transition.get("checked_in_payload_sha256")
+        != registry_pin.get("checked_in_payload_sha256")
+    ):
+        errors.append("current assistant registry payload does not match its transition pin")
+
+    for revision, transition_pin in transition_payloads.items():
+        transition_payload = contract_root / transition_pin["checked_in_payload"]
+        if not transition_payload.is_file():
+            errors.append(f"assistant registry transition payload is missing: {revision}")
+            continue
+        if sha256(transition_payload) != transition_pin["checked_in_payload_sha256"]:
+            errors.append(f"assistant registry transition payload digest drift: {revision}")
+            continue
+        if load_json(transition_payload).get("revision") != revision:
+            errors.append(f"assistant registry transition payload revision mismatch: {revision}")
 
 
 def validate_aevatar_digests(repo_root, aevatar, errors):

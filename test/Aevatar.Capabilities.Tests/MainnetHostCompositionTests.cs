@@ -1832,7 +1832,7 @@ public sealed class MainnetHostCompositionTests
         private const string RegistryJson = """
             {
               "schema_version": 4,
-              "revision": "nyxid-assistant-actions.v4",
+              "revision": "nyxid-assistant-actions.v5",
               "actions": [
                 {
                   "action": "service.connect",
@@ -1885,6 +1885,60 @@ public sealed class MainnetHostCompositionTests
                   "risk": "grant",
                   "tier": "v1",
                   "remember_eligible": true
+                },
+                {
+                  "action": "service.reauthorize",
+                  "description": "Reauthorize a connected service through the NyxID browser journey.",
+                  "params_schema": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["userServiceId", "requestedScopes"],
+                    "properties": {
+                      "userServiceId": {"type": "string"},
+                      "requestedScopes": {
+                        "type": "array",
+                        "items": {"type": "string"}
+                      }
+                    }
+                  },
+                  "risk": "grant",
+                  "tier": "v1",
+                  "remember_eligible": false
+                },
+                {
+                  "action": "key.create",
+                  "description": "Create a scoped API key through the NyxID browser journey.",
+                  "params_schema": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["name", "platform", "allowedServiceIds"],
+                    "properties": {
+                      "name": {"type": "string"},
+                      "platform": {"type": "string"},
+                      "allowedServiceIds": {
+                        "type": "array",
+                        "items": {"type": "string"}
+                      }
+                    }
+                  },
+                  "risk": "grant",
+                  "tier": "v1",
+                  "remember_eligible": false
+                },
+                {
+                  "action": "key.rotate",
+                  "description": "Rotate an API key through the NyxID browser journey.",
+                  "params_schema": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["keyId"],
+                    "properties": {
+                      "keyId": {"type": "string"}
+                    }
+                  },
+                  "risk": "grant",
+                  "tier": "v1",
+                  "remember_eligible": false
                 }
               ]
             }

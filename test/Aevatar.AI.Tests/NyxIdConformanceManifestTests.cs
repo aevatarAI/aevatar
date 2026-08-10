@@ -22,6 +22,25 @@ public sealed class NyxIdConformanceManifestTests
         "v1");
 
     [Fact]
+    public void TransitionRegistries_ShouldKeepOnlyImplementedActionsExecutable()
+    {
+        var legacy = NyxIdAssistantActionRegistry.Load(
+            File.ReadAllText(Path.Combine(ContractRoot, "registry-v4.json")));
+        var target = NyxIdAssistantActionRegistry.Load(
+            File.ReadAllText(Path.Combine(ContractRoot, "registry-v5.json")));
+
+        legacy.RegistryRevision.Should().Be("nyxid-assistant-actions.v4");
+        target.RegistryRevision.Should().Be("nyxid-assistant-actions.v5");
+        foreach (var registry in new[] { legacy, target })
+        {
+            registry.TryGetDefinition("service.connect", out _).Should().BeTrue();
+            registry.TryGetDefinition("service.reauthorize", out _).Should().BeFalse();
+            registry.TryGetDefinition("key.create", out _).Should().BeFalse();
+            registry.TryGetDefinition("key.rotate", out _).Should().BeFalse();
+        }
+    }
+
+    [Fact]
     public void CoverageManifest_ShouldHaveExactlyOneCompleteOutcomeRowPerGeneratedLeaf()
     {
         using var leavesDocument = Load("cli-leaves.json");
@@ -73,7 +92,7 @@ public sealed class NyxIdConformanceManifestTests
             .Select(static tool => tool.Name)
             .ToHashSet(StringComparer.Ordinal);
         var registry = NyxIdAssistantActionRegistry.Load(
-            File.ReadAllText(Path.Combine(ContractRoot, "registry-v4.json")));
+            File.ReadAllText(Path.Combine(ContractRoot, "registry-v5.json")));
 
         var shippedReads = rows.Where(static row =>
             row.GetProperty("operation_class").GetString() == "R" &&

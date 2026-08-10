@@ -872,7 +872,7 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         state.PendingActions.Add(new NyxIdChatActionRequestState
         {
             SchemaVersion = 4,
-            RegistryRevision = "nyxid-assistant-actions.v4",
+            RegistryRevision = "nyxid-assistant-actions.v5",
             ConversationActorId = state.ConversationActorId,
             OriginTurnId = report.OriginTurnId,
             TaskId = key.TaskId,

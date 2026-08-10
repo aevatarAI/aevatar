@@ -279,6 +279,101 @@ public sealed class NyxIdChatBrowserActionTests
     }
 
     [Fact]
+    public void CommitRequest_ShouldAcceptLegacyRevisionDuringRegistryTransition()
+    {
+        var state = AuthorizationWaitingState();
+        var request = NyxIdChatBrowserActions.RequestAuthorization(
+            state,
+            AuthorizationRequiredSignal(state),
+            Registry(),
+            Now).Request;
+        request.RegistryRevision = NyxIdAssistantActionRegistry.LegacyRegistryRevision;
+
+        var decision = NyxIdChatBrowserActions.CommitRequest(state, request, Now);
+
+        decision.ShouldCommit.Should().BeTrue();
+        decision.Outcome.Should().Be(NyxIdChatTransitionOutcome.Accepted);
+        decision.Request.RegistryRevision.Should().Be(
+            NyxIdAssistantActionRegistry.LegacyRegistryRevision);
+        decision.Request.Action.Should().Be(NyxIdAssistantActionKind.ServiceConnect);
+    }
+
+    [Fact]
+    public void CompletedReport_ShouldRejectResourceVariantThatDoesNotMatchAction()
+    {
+        var blocked = BlockedActionState();
+        var command = ContinueCommand(
+            blocked.PendingActions.Single().ActionRequestId,
+            NyxIdChatActionDisposition.Completed);
+        command.Actions[0].Resource = new NyxIdChatSafeResourceRef
+        {
+            Key = new NyxIdChatKeyRef { KeyId = "key-alpha" },
+        };
+
+        var decision = NyxIdChatBrowserActions.Continue(blocked, command, Now);
+
+        decision.ShouldCommit.Should().BeFalse();
+        decision.ShouldDispatch.Should().BeFalse();
+        decision.Outcome.Should().Be(NyxIdChatTransitionOutcome.Rejected);
+        decision.ReasonCode.Should().Be(NyxIdChatBrowserActions.ActionContinuationInvalid);
+    }
+
+    [Fact]
+    public void WaveOneActions_ShouldBindToExactlyOneSafeResourceVariant()
+    {
+        var userService = new NyxIdChatSafeResourceRef
+        {
+            UserService = new NyxIdChatUserServiceRef { UserServiceId = "us-alpha" },
+        };
+        var key = new NyxIdChatSafeResourceRef
+        {
+            Key = new NyxIdChatKeyRef { KeyId = "key-alpha" },
+        };
+
+        foreach (var action in new[]
+                 {
+                     NyxIdAssistantActionKind.ServiceConnect,
+                     NyxIdAssistantActionKind.ServiceReauthorize,
+                 })
+        {
+            NyxIdChatBrowserActions.ResourceMatchesAction(
+                    action,
+                    NyxIdChatActionDisposition.Completed,
+                    userService)
+                .Should().BeTrue();
+            NyxIdChatBrowserActions.ResourceMatchesAction(
+                    action,
+                    NyxIdChatActionDisposition.Completed,
+                    key)
+                .Should().BeFalse();
+        }
+
+        foreach (var action in new[]
+                 {
+                     NyxIdAssistantActionKind.KeyCreate,
+                     NyxIdAssistantActionKind.KeyRotate,
+                 })
+        {
+            NyxIdChatBrowserActions.ResourceMatchesAction(
+                    action,
+                    NyxIdChatActionDisposition.Completed,
+                    key)
+                .Should().BeTrue();
+            NyxIdChatBrowserActions.ResourceMatchesAction(
+                    action,
+                    NyxIdChatActionDisposition.Completed,
+                    userService)
+                .Should().BeFalse();
+        }
+
+        NyxIdChatBrowserActions.ResourceMatchesAction(
+                NyxIdAssistantActionKind.KeyCreate,
+                NyxIdChatActionDisposition.Completed,
+                resource: null)
+            .Should().BeFalse();
+    }
+
+    [Fact]
     public void CompletedReport_ShouldStartNewContinuationTurnWithTypedPostcondition()
     {
         var blocked = BlockedActionState();
@@ -661,6 +756,42 @@ public sealed class NyxIdChatBrowserActionTests
             .Status.Should().Be(NyxIdChatStepStatus.Done);
         decision.State.RecentActions.Should().ContainSingle(action =>
             action.PostconditionResult.Verified);
+    }
+
+    [Fact]
+    public void VerifiedPostcondition_ShouldRejectResourceVariantThatDoesNotMatchAction()
+    {
+        var blocked = BlockedActionState();
+        var admitted = NyxIdChatBrowserActions.Continue(
+            blocked,
+            ContinueCommand(
+                blocked.PendingActions.Single().ActionRequestId,
+                NyxIdChatActionDisposition.Completed),
+            Now);
+        var signal = new NyxIdChatOperationResultSignal
+        {
+            Key = admitted.NextCommand!.Key.Clone(),
+            ActionPostcondition = new NyxIdChatActionPostconditionResult
+            {
+                ActionRequestId = blocked.PendingActions.Single().ActionRequestId,
+                Disposition = NyxIdChatActionDisposition.Completed,
+                Verified = true,
+                Resource = new NyxIdChatSafeResourceRef
+                {
+                    Key = new NyxIdChatKeyRef { KeyId = "key-alpha" },
+                },
+            },
+        };
+
+        var decision = NyxIdChatBrowserActions.ReconcilePostcondition(
+            admitted.State,
+            signal,
+            Now);
+
+        decision.ShouldCommit.Should().BeFalse();
+        decision.ShouldDispatch.Should().BeFalse();
+        decision.Outcome.Should().Be(NyxIdChatTransitionOutcome.Rejected);
+        decision.ReasonCode.Should().Be(NyxIdChatBrowserActions.ActionContinuationInvalid);
     }
 
     [Fact]

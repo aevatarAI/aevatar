@@ -8,15 +8,22 @@ namespace Aevatar.AI.Tests;
 
 public sealed class NyxIdAssistantActionRegistryTests
 {
-    private const string SupportedRevision = "nyxid-assistant-actions.v4";
+    private const string LegacyRevision = "nyxid-assistant-actions.v4";
+    private const string SupportedRevision = "nyxid-assistant-actions.v5";
 
     [Fact]
     public void Load_ShouldPinSchemaVersionAndRevision()
     {
-        var registry = NyxIdAssistantActionRegistry.Load(RegistryJson());
+        var registry = NyxIdAssistantActionRegistry.Load(
+            RegistryJsonWithWaveOneActions());
 
         registry.SchemaVersion.Should().Be(4);
         registry.RegistryRevision.Should().Be(SupportedRevision);
+
+        var legacy = NyxIdAssistantActionRegistry.Load(
+            RegistryJson(revision: LegacyRevision));
+        legacy.RegistryRevision.Should().Be(LegacyRevision);
+        legacy.TryGetDefinition("service.connect", out _).Should().BeTrue();
 
         Action act = () => NyxIdAssistantActionRegistry.Load(
             RegistryJson(schemaVersion: 3));
@@ -27,6 +34,11 @@ public sealed class NyxIdAssistantActionRegistryTests
             RegistryJson(revision: "nyxid-assistant-actions.future"));
         act.Should().Throw<NyxIdAssistantActionRegistryException>()
             .Which.Code.Should().Be("NYXID_ACTION_REGISTRY_REVISION_UNSUPPORTED");
+
+        act = () => NyxIdAssistantActionRegistry.Load(
+            RegistryJson(revision: SupportedRevision));
+        act.Should().Throw<NyxIdAssistantActionRegistryException>()
+            .Which.Code.Should().Be("NYXID_ACTION_REGISTRY_INVALID");
     }
 
     [Fact]
@@ -37,6 +49,47 @@ public sealed class NyxIdAssistantActionRegistryTests
 
         registry.TryGetDefinition("service.connect", out _).Should().BeTrue();
         registry.TryGetDefinition("workflow.launch", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Load_ShouldPinWaveOneSchemasAndKeepUnimplementedActionsClosed()
+    {
+        var registry = NyxIdAssistantActionRegistry.Load(
+            RegistryJsonWithWaveOneActions());
+
+        registry.TryGetDefinition("service.connect", out _).Should().BeTrue();
+        registry.TryGetDefinition("service.reauthorize", out _).Should().BeFalse();
+        registry.TryGetDefinition("key.create", out _).Should().BeFalse();
+        registry.TryGetDefinition("key.rotate", out _).Should().BeFalse();
+
+        var legacy = NyxIdAssistantActionRegistry.Load(
+            RegistryJsonWithWaveOneActions(revision: LegacyRevision));
+        legacy.TryGetDefinition("service.connect", out _).Should().BeTrue();
+        legacy.TryGetDefinition("service.reauthorize", out _).Should().BeFalse();
+        legacy.TryGetDefinition("key.create", out _).Should().BeFalse();
+        legacy.TryGetDefinition("key.rotate", out _).Should().BeFalse();
+
+        Action staleReauthorizeSchema = () => NyxIdAssistantActionRegistry.Load(
+            RegistryJsonWithWaveOneActions(
+                serviceReauthorizeSchema: StaleServiceReauthorizeSchema));
+        staleReauthorizeSchema.Should().Throw<NyxIdAssistantActionRegistryException>()
+            .Which.Code.Should().Be("NYXID_ACTION_REGISTRY_INVALID");
+
+        Action relaxedKeyCreateSchema = () => NyxIdAssistantActionRegistry.Load(
+            RegistryJsonWithWaveOneActions(
+                keyCreateSchema: RelaxedKeyCreateSchema));
+        relaxedKeyCreateSchema.Should().Throw<NyxIdAssistantActionRegistryException>()
+            .Which.Code.Should().Be("NYXID_ACTION_REGISTRY_INVALID");
+
+        Action callerRememberPolicy = () => NyxIdAssistantActionRegistry.Load(
+            RegistryJsonWithWaveOneActions(keyCreateRememberEligible: true));
+        callerRememberPolicy.Should().Throw<NyxIdAssistantActionRegistryException>()
+            .Which.Code.Should().Be("NYXID_ACTION_REGISTRY_INVALID");
+
+        Action rememberedReauthorization = () => NyxIdAssistantActionRegistry.Load(
+            RegistryJsonWithWaveOneActions(serviceReauthorizeRememberEligible: true));
+        rememberedReauthorization.Should().Throw<NyxIdAssistantActionRegistryException>()
+            .Which.Code.Should().Be("NYXID_ACTION_REGISTRY_INVALID");
     }
 
     [Fact]
@@ -200,7 +253,7 @@ public sealed class NyxIdAssistantActionRegistryTests
     public void ServiceReauthorize_ShouldRemainFailClosedAtExecutableGate()
     {
         var registry = NyxIdAssistantActionRegistry.Load(
-            RegistryJsonWithServiceReauthorize());
+            RegistryJsonWithWaveOneActions());
 
         registry.TryGetDefinition("service.reauthorize", out _).Should().BeFalse();
         Action validate = () => registry.ValidateRequest(
@@ -232,23 +285,30 @@ public sealed class NyxIdAssistantActionRegistryTests
     [Fact]
     public async Task StartupService_ShouldFetchAndValidateRegistryOnce()
     {
-        var source = new RecordingRegistrySource(RegistryJson());
-        var snapshot = new NyxIdAssistantActionRegistrySnapshot();
-        var service = new NyxIdAssistantActionRegistryStartupService(source, snapshot);
+        foreach (var (payload, revision) in new[]
+                 {
+                     (RegistryJson(), LegacyRevision),
+                     (RegistryJsonWithWaveOneActions(), SupportedRevision),
+                 })
+        {
+            var source = new RecordingRegistrySource(payload);
+            var snapshot = new NyxIdAssistantActionRegistrySnapshot();
+            var service = new NyxIdAssistantActionRegistryStartupService(source, snapshot);
 
-        await service.StartAsync(CancellationToken.None);
+            await service.StartAsync(CancellationToken.None);
 
-        source.FetchCount.Should().Be(1);
-        snapshot.GetRequired().SchemaVersion.Should().Be(4);
-        snapshot.GetRequired().RegistryRevision.Should().Be(SupportedRevision);
-        await service.StopAsync(CancellationToken.None);
-        source.FetchCount.Should().Be(1);
+            source.FetchCount.Should().Be(1);
+            snapshot.GetRequired().SchemaVersion.Should().Be(4);
+            snapshot.GetRequired().RegistryRevision.Should().Be(revision);
+            await service.StopAsync(CancellationToken.None);
+            source.FetchCount.Should().Be(1);
+        }
     }
 
     [Fact]
     public async Task HttpSource_ShouldFetchCanonicalPublicRouteWithoutCredentials()
     {
-        var handler = new RecordingHandler(RegistryJson());
+        var handler = new RecordingHandler(RegistryJsonWithWaveOneActions());
         var client = new HttpClient(handler);
         var source = new NyxIdAssistantActionRegistryHttpSource(
             new StubHttpClientFactory(client),
@@ -266,7 +326,7 @@ public sealed class NyxIdAssistantActionRegistryTests
 
     private static string RegistryJson(
         int schemaVersion = 4,
-        string revision = SupportedRevision,
+        string revision = LegacyRevision,
         string action = "service.connect",
         string tier = "v1",
         string paramsSchema = ServiceConnectSchema,
@@ -349,6 +409,18 @@ public sealed class NyxIdAssistantActionRegistryTests
         {
           "type": "object",
           "additionalProperties": false,
+          "required": ["userServiceId", "requestedScopes"],
+          "properties": {
+            "userServiceId": {"type": "string"},
+            "requestedScopes": {"type": "array", "items": {"type": "string"}}
+          }
+        }
+        """;
+
+    private const string StaleServiceReauthorizeSchema = """
+        {
+          "type": "object",
+          "additionalProperties": false,
           "required": ["userServiceId"],
           "properties": {
             "userServiceId": {"type": "string"},
@@ -357,10 +429,52 @@ public sealed class NyxIdAssistantActionRegistryTests
         }
         """;
 
-    private static string RegistryJsonWithServiceReauthorize() => $$"""
+    private const string KeyCreateSchema = """
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "platform", "allowedServiceIds"],
+          "properties": {
+            "name": {"type": "string"},
+            "platform": {"type": "string"},
+            "allowedServiceIds": {"type": "array", "items": {"type": "string"}}
+          }
+        }
+        """;
+
+    private const string RelaxedKeyCreateSchema = """
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "platform"],
+          "properties": {
+            "name": {"type": "string"},
+            "platform": {"type": "string"},
+            "allowedServiceIds": {"type": "array", "items": {"type": "string"}}
+          }
+        }
+        """;
+
+    private const string KeyRotateSchema = """
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["keyId"],
+          "properties": {
+            "keyId": {"type": "string"}
+          }
+        }
+        """;
+
+    private static string RegistryJsonWithWaveOneActions(
+        string serviceReauthorizeSchema = ServiceReauthorizeSchema,
+        string keyCreateSchema = KeyCreateSchema,
+        bool keyCreateRememberEligible = false,
+        bool serviceReauthorizeRememberEligible = false,
+        string revision = SupportedRevision) => $$"""
         {
           "schema_version": 4,
-          "revision": "{{SupportedRevision}}",
+          "revision": "{{revision}}",
           "actions": [
             {
               "action": "service.connect",
@@ -373,10 +487,26 @@ public sealed class NyxIdAssistantActionRegistryTests
             {
               "action": "service.reauthorize",
               "description": "Reauthorize a connected service.",
-              "params_schema": {{ServiceReauthorizeSchema}},
+              "params_schema": {{serviceReauthorizeSchema}},
               "risk": "grant",
               "tier": "v1",
-              "remember_eligible": true
+              "remember_eligible": {{serviceReauthorizeRememberEligible.ToString().ToLowerInvariant()}}
+            },
+            {
+              "action": "key.create",
+              "description": "Create a scoped API key.",
+              "params_schema": {{keyCreateSchema}},
+              "risk": "grant",
+              "tier": "v1",
+              "remember_eligible": {{keyCreateRememberEligible.ToString().ToLowerInvariant()}}
+            },
+            {
+              "action": "key.rotate",
+              "description": "Rotate an API key.",
+              "params_schema": {{KeyRotateSchema}},
+              "risk": "grant",
+              "tier": "v1",
+              "remember_eligible": false
             }
           ]
         }
@@ -385,7 +515,7 @@ public sealed class NyxIdAssistantActionRegistryTests
     private static string RegistryJsonWithManifestOnlyAction() => $$"""
         {
           "schema_version": 4,
-          "revision": "{{SupportedRevision}}",
+          "revision": "{{LegacyRevision}}",
           "actions": [
             {
               "action": "service.connect",
@@ -410,7 +540,7 @@ public sealed class NyxIdAssistantActionRegistryTests
     private static string RegistryJsonWithUnknownAction() => $$"""
         {
           "schema_version": 4,
-          "revision": "{{SupportedRevision}}",
+          "revision": "{{LegacyRevision}}",
           "actions": [
             {
               "action": "service.connect",

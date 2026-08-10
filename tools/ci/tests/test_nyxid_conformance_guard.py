@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import hashlib
+import json
 import subprocess
 import sys
 import tempfile
@@ -14,6 +15,7 @@ sys.path.insert(0, str(CI_ROOT))
 
 from nyxid_conformance_guard import (  # noqa: E402
     refresh_aevatar_pin,
+    validate_assistant_registry_digests,
     validate_aevatar_digests,
 )
 
@@ -59,7 +61,7 @@ class NyxIdConformanceGuardTests(unittest.TestCase):
             },
             "generated_artifacts": {},
             "assistant_registry": {
-                "checked_in_payload": "registry-v4.json",
+                "checked_in_payload": "registry-v5.json",
                 "checked_in_payload_sha256": "unused",
             },
         }
@@ -133,6 +135,92 @@ class NyxIdConformanceGuardTests(unittest.TestCase):
             self.digest,
             sources["aevatar"]["files"]["src/contract.txt"],
         )
+
+    def test_transition_revisions_must_match_payload_pins(self):
+        contract_root = Path(self.directory.name) / "contracts"
+        registry = self.write_transition_payloads(contract_root)
+        registry["transition_payloads"].pop("nyxid-assistant-actions.v4")
+        errors = []
+
+        validate_assistant_registry_digests(contract_root, registry, errors)
+
+        self.assertIn(
+            "assistant registry transition revisions do not match their payload pins",
+            errors,
+        )
+
+    def test_transition_payload_revision_mismatch_fails(self):
+        contract_root = Path(self.directory.name) / "contracts"
+        registry = self.write_transition_payloads(contract_root)
+        v4_payload = contract_root / "registry-v4.json"
+        v4_payload.write_text(
+            json.dumps({"revision": "nyxid-assistant-actions.wrong"}),
+            encoding="utf-8",
+        )
+        registry["transition_payloads"]["nyxid-assistant-actions.v4"][
+            "checked_in_payload_sha256"
+        ] = hashlib.sha256(v4_payload.read_bytes()).hexdigest()
+        errors = []
+
+        validate_assistant_registry_digests(contract_root, registry, errors)
+
+        self.assertIn(
+            "assistant registry transition payload revision mismatch: "
+            "nyxid-assistant-actions.v4",
+            errors,
+        )
+
+    def test_transition_payload_digest_drift_and_missing_payload_fail(self):
+        contract_root = Path(self.directory.name) / "contracts"
+        registry = self.write_transition_payloads(contract_root)
+        registry["transition_payloads"]["nyxid-assistant-actions.v4"][
+            "checked_in_payload_sha256"
+        ] = "0" * 64
+        registry["transition_payloads"]["nyxid-assistant-actions.v5"][
+            "checked_in_payload"
+        ] = "missing-v5.json"
+        errors = []
+
+        validate_assistant_registry_digests(contract_root, registry, errors)
+
+        self.assertIn(
+            "assistant registry transition payload digest drift: "
+            "nyxid-assistant-actions.v4",
+            errors,
+        )
+        self.assertIn(
+            "assistant registry transition payload is missing: "
+            "nyxid-assistant-actions.v5",
+            errors,
+        )
+
+    @staticmethod
+    def write_transition_payloads(contract_root: Path):
+        contract_root.mkdir()
+        revisions = [
+            "nyxid-assistant-actions.v4",
+            "nyxid-assistant-actions.v5",
+        ]
+        transition_payloads = {}
+        for revision in revisions:
+            name = f"registry-v{revision.rsplit('v', 1)[1]}.json"
+            payload = contract_root / name
+            payload.write_text(json.dumps({"revision": revision}), encoding="utf-8")
+            transition_payloads[revision] = {
+                "checked_in_payload": name,
+                "checked_in_payload_sha256": hashlib.sha256(
+                    payload.read_bytes()
+                ).hexdigest(),
+            }
+        return {
+            "revision": "nyxid-assistant-actions.v5",
+            "accepted_revisions": revisions,
+            "checked_in_payload": "registry-v5.json",
+            "checked_in_payload_sha256": transition_payloads[
+                "nyxid-assistant-actions.v5"
+            ]["checked_in_payload_sha256"],
+            "transition_payloads": transition_payloads,
+        }
 
 
 if __name__ == "__main__":

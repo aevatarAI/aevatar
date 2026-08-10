@@ -357,7 +357,8 @@ public static class NyxIdChatBrowserActions
         if (command.Actions.Any(report =>
                 !pendingById.TryGetValue(report.ActionRequestId, out var pending) ||
                 !string.Equals(pending.OriginTurnId, command.OriginTurnId, StringComparison.Ordinal) ||
-                !string.Equals(pending.ConversationActorId, command.ConversationActorId, StringComparison.Ordinal)))
+                !string.Equals(pending.ConversationActorId, command.ConversationActorId, StringComparison.Ordinal) ||
+                !ResourceMatchesAction(pending.Action, report.Disposition, report.Resource)))
         {
             return RejectContinuation(state, ActionContinuationInvalid);
         }
@@ -518,7 +519,8 @@ public static class NyxIdChatBrowserActions
             step?.Operation?.Key is null ||
             !KeysEqual(step.Operation.Key, signal.Key) ||
             step.Kind != NyxIdChatStepKind.Postcondition ||
-            request is null)
+            request is null ||
+            !PostconditionResourceMatchesAction(request.Action, result))
         {
             return RejectContinuation(state, ActionContinuationInvalid);
         }
@@ -956,11 +958,9 @@ public static class NyxIdChatBrowserActions
         state.ActiveTurn is not null &&
         state.ActiveTask is not null &&
         request.SchemaVersion == NyxIdAssistantActionRegistry.SupportedSchemaVersion &&
-        string.Equals(
+        NyxIdAssistantActionRegistry.IsActionExecutable(
             request.RegistryRevision,
-            NyxIdAssistantActionRegistry.SupportedRegistryRevision,
-            StringComparison.Ordinal) &&
-        request.Action == NyxIdAssistantActionKind.ServiceConnect &&
+            request.Action) &&
         request.Params?.ParamsCase is
             NyxIdAssistantActionParams.ParamsOneofCase.CatalogServiceConnect or
             NyxIdAssistantActionParams.ParamsOneofCase.CustomServiceConnect &&
@@ -1024,6 +1024,37 @@ public static class NyxIdChatBrowserActions
             NyxIdChatSafeResourceRef.ResourceOneofCase.Device => ValidId(resource.Device.DeviceId),
             _ => false,
         };
+
+    internal static bool ResourceMatchesAction(
+        NyxIdAssistantActionKind action,
+        NyxIdChatActionDisposition disposition,
+        NyxIdChatSafeResourceRef? resource)
+    {
+        if (resource is null ||
+            resource.ResourceCase == NyxIdChatSafeResourceRef.ResourceOneofCase.None)
+        {
+            return disposition != NyxIdChatActionDisposition.Completed;
+        }
+
+        return action switch
+        {
+            NyxIdAssistantActionKind.ServiceConnect or
+            NyxIdAssistantActionKind.ServiceReauthorize =>
+                resource.ResourceCase == NyxIdChatSafeResourceRef.ResourceOneofCase.UserService,
+            NyxIdAssistantActionKind.KeyCreate or
+            NyxIdAssistantActionKind.KeyRotate =>
+                resource.ResourceCase == NyxIdChatSafeResourceRef.ResourceOneofCase.Key,
+            _ => false,
+        };
+    }
+
+    private static bool PostconditionResourceMatchesAction(
+        NyxIdAssistantActionKind action,
+        NyxIdChatActionPostconditionResult result) =>
+        (!result.Verified &&
+         (result.Resource is null ||
+          result.Resource.ResourceCase == NyxIdChatSafeResourceRef.ResourceOneofCase.None)) ||
+        ResourceMatchesAction(action, result.Disposition, result.Resource);
 
     private static bool ValidId(string value) =>
         !string.IsNullOrWhiteSpace(value) &&
