@@ -13,7 +13,6 @@ import { useInfiniteQuery } from '@tanstack/react-query';
 import { Button, Dropdown, Input, Modal, Popover, Select, Space } from 'antd';
 import React from 'react';
 import { scopesApi } from '@/shared/api/scopesApi';
-import { servicesApi } from '@/shared/api/servicesApi';
 import { t } from '@/shared/i18n/messages';
 import type {
   ScopeWorkflowCatalogueRow,
@@ -383,31 +382,7 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
 
     try {
       if (!accepted) {
-        const detail = await scopesApi.getWorkflowDetail(
-          scopeId,
-          target.workflowId,
-        );
-        const published = detail.workflow;
-        if (
-          !detail.available ||
-          !published ||
-          published.workflowId !== target.workflowId ||
-          !published.publishedServiceId.trim() ||
-          !published.serviceAppId.trim() ||
-          !published.serviceNamespace.trim() ||
-          !published.deploymentId.trim()
-        ) {
-          throw new Error('Published workflow identity is unavailable');
-        }
-        await servicesApi.deactivateDeployment(
-          published.publishedServiceId,
-          published.deploymentId,
-          {
-            tenantId: scopeId,
-            appId: published.serviceAppId,
-            namespace: published.serviceNamespace,
-          },
-        );
+        await scopesApi.archiveWorkflow(scopeId, target.workflowId);
         accepted = true;
         setArchiveSubmitted(true);
       }
@@ -707,6 +682,8 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                 const description = row.description.trim();
                 const isArchived = isWorkflowArchived(row);
                 const isPublished = Boolean(row.activeRevisionId);
+                const canDeleteDraft =
+                  row.capabilities.delete.available && !row.hasCommittedSource;
                 const workflowName = (
                   <span className="wa-vnext__title">{row.name}</span>
                 );
@@ -869,11 +846,10 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                                   'Copy workflow reference',
                                 ),
                               },
-                              ...(row.capabilities.delete.available ||
-                              canArchiveWorkflow(row)
+                              ...(canDeleteDraft || canArchiveWorkflow(row)
                                 ? [{ type: 'divider' as const }]
                                 : []),
-                              ...(row.capabilities.delete.available
+                              ...(canDeleteDraft
                                 ? [
                                     {
                                       danger: true,
