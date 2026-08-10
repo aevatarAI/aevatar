@@ -19,7 +19,11 @@ import { studioApi } from '@/shared/studio/api';
 import { buildWorkflowExecutionNodeSnapshots } from '@/shared/studio/execution';
 import { createWorkflowRevisionIdentityCandidate } from '@/shared/studio/explicitRequestConfirmation';
 import { useConsoleToast } from '@/shared/ui/ConsoleToast';
-import { adaptActivityRunToExecutionLogs } from '@/shared/workflows/activityExecution';
+import {
+  adaptActivityRunToExecutionLogs,
+  isTerminalActivityRunStatus,
+} from '@/shared/workflows/activityExecution';
+import { adaptExecutionDetailToLogs } from '@/shared/workflows/executionDetail';
 import WorkflowExecutionLogsPanel, {
   type WorkflowExecutionLogsModel,
 } from '@/shared/workflows/WorkflowExecutionLogsPanel';
@@ -655,42 +659,25 @@ const WorkflowEditorPage: React.FC<{
     );
   }
 
-  const runBusy =
-    editor.runPhase === 'submitting' ||
-    editor.runPhase === 'accepted' ||
-    editor.runObservationUnresolved ||
-    editor.runAwaitingIdentification;
+  const runBusy = editor.runRequestActive;
   const observedRun = editor.runObservation.run;
-  const observedRunInProgress = Boolean(
-    observedRun &&
-      ['accepted', 'pending', 'running', 'waiting'].includes(
-        observedRun.summary.status.toLowerCase(),
-      ),
+  const liveRunExecution = adaptExecutionDetailToLogs(editor.liveRunExecution);
+  const observedRunExecution = observedRun
+    ? adaptActivityRunToExecutionLogs(observedRun)
+    : null;
+  const observedRunTerminal = Boolean(
+    observedRun && isTerminalActivityRunStatus(observedRun.summary.status),
   );
   const runExecution: WorkflowExecutionLogsModel | null = runConsoleVisible
-    ? observedRun
-      ? adaptActivityRunToExecutionLogs(observedRun)
-      : {
-          completedAtUtc: null,
-          eventCount: 0,
-          outputText: '',
-          startedAtUtc: null,
-          status: 'running',
-          trace: {
-            defaultLogIndex: null,
-            latestStepId: null,
-            logs: [],
-            stepStates: new Map(),
-            traversedEdges: new Set(),
-          },
-          workflowName: editor.workflowTitle,
-        }
+    ? observedRunTerminal
+      ? observedRunExecution
+      : liveRunExecution || observedRunExecution
     : null;
   const runWorkflowNodes = editor.document
     ? buildWorkflowExecutionNodeSnapshots(editor.document)
     : [];
   const runConsoleError =
-    runConsoleVisible && editor.runPhase === 'failed' && !observedRun
+    runConsoleVisible && editor.runPhase === 'failed' && !observedRunTerminal
       ? editor.runError ||
         t('workflowActivityVNext.editor.runFailed', 'Run failed')
       : undefined;
@@ -1236,7 +1223,6 @@ const WorkflowEditorPage: React.FC<{
         <WorkflowRunInputPanel
           canRun={
             !runBusy &&
-            !observedRunInProgress &&
             Boolean(publishedInvocationTarget) &&
             editor.canRun &&
             Boolean(editor.runInput.trim() || editor.runFiles.length > 0) &&
@@ -1250,7 +1236,7 @@ const WorkflowEditorPage: React.FC<{
                   'Enter an input or attach a file to start this published workflow run.',
                 )
           }
-          inputDisabled={runBusy || editorWriteLocked || observedRunInProgress}
+          inputDisabled={runBusy || editorWriteLocked}
           onClose={() => setRunPanelOpen(false)}
           onRun={() => {
             if (!publishedInvocationTarget) return;

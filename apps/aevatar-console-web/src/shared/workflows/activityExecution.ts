@@ -215,9 +215,7 @@ export function adaptActivityRunToExecutionLogs(
   run: WorkflowActivityRunDetail,
 ): WorkflowExecutionLogsModel {
   const trace = buildActivityExecutionTrace(run);
-  const terminal = ['completed', 'failed', 'cancelled', 'stopped'].includes(
-    run.summary.status.toLowerCase(),
-  );
+  const terminal = isTerminalActivityRunStatus(run.summary.status);
 
   return {
     completedAtUtc: terminal ? run.summary.updatedAtUtc : null,
@@ -228,4 +226,17 @@ export function adaptActivityRunToExecutionLogs(
     trace,
     workflowName: run.summary.workflowName,
   };
+}
+
+export function isTerminalActivityRunStatus(status: string): boolean {
+  return [
+    'completed',
+    'succeeded',
+    'failed',
+    'timed_out',
+    'timedout',
+    'canceled',
+    'cancelled',
+    'stopped',
+  ].includes(status.trim().toLowerCase());
 }

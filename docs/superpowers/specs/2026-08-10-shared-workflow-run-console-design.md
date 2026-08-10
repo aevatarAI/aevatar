@@ -27,15 +27,28 @@ does not change. The vNext editor consumes the shared components directly.
 
 ## Data Contracts
 
-Draft Studio execution frames are adapted with `buildExecutionTrace`. Published
-workflow runs are adapted from `WorkflowActivityRunDetail` by
+Draft Studio and Published Run SSE frames are normalized into
+`StudioExecutionDetail` and adapted with the same `buildExecutionTrace` path.
+Published workflow history is adapted from `WorkflowActivityRunDetail` by
 `adaptActivityRunToExecutionLogs`.
 
-The Activity read model remains the only durable source for published run
-status, steps, output, failure, and usage. SSE is used only to discover the
-stable run ID. While Activity materialization is pending, the console shows the
-current workflow definition as pending nodes. Once the read model is observed,
-the normalized Activity trace replaces that provisional presentation.
+The current browser SSE session owns real-time status, steps, output, and
+failure facts for the command the user just issued. Activity remains the
+durable authoritative historical read model, but an eventually consistent
+non-terminal Activity snapshot cannot overwrite fresher live completion facts.
+Once Activity materializes a terminal run, its normalized trace replaces the
+live session presentation.
+
+The run action is busy only while the current SSE request is active, including
+the interval after a terminal event arrives but before the stream closes. A
+stale accepted, pending, running, or waiting Activity snapshot does not keep the
+action disabled after that request ends.
+
+Live terminal status requires an explicit `RUN_FINISHED`, `RUN_ERROR`, or
+`RUN_STOPPED` fact. A clean stream end without one does not invent success.
+Workflow definition membership is ordering context, not execution evidence:
+nodes without matching runtime or Activity step facts are omitted rather than
+labeled Pending.
 
 The published invocation target remains the exact backend-provided
 `publishedServiceId`. The editor does not display, derive, or interchange
@@ -60,7 +73,9 @@ Focused tests cover:
 - preservation of Studio draft attachments and its existing Logs behavior;
 - exact published-service invocation and input validation;
 - absence of publication IDs from the shared run panel;
-- pending definition nodes before Activity evidence exists;
+- release of the published run action when the current SSE stream ends;
+- live completion facts taking precedence over stale non-terminal Activity;
+- omission of definition nodes that have no execution facts;
 - Activity step, output, and failure adaptation into the shared Logs console;
 - refresh of non-terminal Activity runs and persistence of Logs when the input
   panel closes.

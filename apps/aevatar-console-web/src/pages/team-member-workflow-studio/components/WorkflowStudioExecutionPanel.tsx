@@ -1,11 +1,9 @@
 import React from 'react';
 import { t } from '@/shared/i18n/messages';
 import type { WorkflowExecutionNodeSnapshot } from '@/shared/studio/execution';
-import { buildExecutionTrace } from '@/shared/studio/execution';
 import type { StudioExecutionDetail } from '@/shared/studio/models';
-import WorkflowExecutionLogsPanel, {
-  type WorkflowExecutionLogsModel,
-} from '@/shared/workflows/WorkflowExecutionLogsPanel';
+import { adaptExecutionDetailToLogs } from '@/shared/workflows/executionDetail';
+import WorkflowExecutionLogsPanel from '@/shared/workflows/WorkflowExecutionLogsPanel';
 
 type WorkflowStudioExecutionPanelProps = {
   readonly activeLogIndex?: number | null;
@@ -18,29 +16,13 @@ type WorkflowStudioExecutionPanelProps = {
   readonly workflowNodes?: readonly WorkflowExecutionNodeSnapshot[];
 };
 
-function adaptStudioExecution(
-  detail: StudioExecutionDetail | null,
-): WorkflowExecutionLogsModel | null {
-  if (!detail) return null;
-
-  const trace = buildExecutionTrace(detail);
-  if (!trace) return null;
-
-  return {
-    completedAtUtc: detail.completedAtUtc,
-    eventCount: detail.frames.length,
-    outputText: detail.output ?? '',
-    startedAtUtc: detail.startedAtUtc,
-    status: detail.status,
-    trace,
-    workflowName: detail.workflowName,
-  };
-}
-
 const WorkflowStudioExecutionPanel: React.FC<
   WorkflowStudioExecutionPanelProps
 > = ({ detail, ...props }) => {
-  const execution = React.useMemo(() => adaptStudioExecution(detail), [detail]);
+  const execution = React.useMemo(
+    () => adaptExecutionDetailToLogs(detail),
+    [detail],
+  );
   return (
     <WorkflowExecutionLogsPanel
       {...props}

@@ -53,7 +53,7 @@ type WorkflowExecutionLogsPanelProps = {
 type OverviewMode = 'nodes' | 'events';
 type DetailPanelState = 'both' | 'input' | 'output';
 type OverviewEntryType = 'node' | 'run' | 'event';
-type ExecutionOverviewStatus = ExecutionLogStatus | 'pending';
+type ExecutionOverviewStatus = ExecutionLogStatus;
 
 type ExecutionOverviewEntry = {
   readonly category: NonNullable<ExecutionLogItem['category']>;
@@ -142,7 +142,6 @@ const categoryColors: Record<
 
 const statusColors: Record<ExecutionOverviewStatus, string> = {
   error: 'red',
-  pending: 'default',
   recorded: 'default',
   running: 'processing',
   success: 'green',
@@ -233,11 +232,6 @@ function readStatusLabel(status: ExecutionOverviewStatus): string {
         'teamMemberWorkflowStudio.executionPanel.status.recorded',
         'Recorded',
       );
-    case 'pending':
-      return t(
-        'teamMemberWorkflowStudio.executionPanel.status.pending',
-        'Pending',
-      );
     case 'success':
       return t(
         'teamMemberWorkflowStudio.executionPanel.status.success',
@@ -262,8 +256,6 @@ function renderStatusIcon(status: ExecutionOverviewStatus): React.ReactNode {
       return <CloseCircleOutlined style={{ color: '#dc2626' }} />;
     case 'recorded':
       return <CheckCircleOutlined style={{ color: '#64748b' }} />;
-    case 'pending':
-      return <ClockCircleOutlined style={{ color: '#94a3b8' }} />;
     case 'success':
       return <CheckCircleOutlined style={{ color: '#16a34a' }} />;
     case 'waiting':
@@ -513,30 +505,6 @@ function buildNodeOverviewEntries(
       orderedEntries.push(...matchingEntries);
       return;
     }
-
-    orderedEntries.push({
-      category: 'step',
-      completedAt: '',
-      entryId: `node:${stepId}:pending`,
-      eventCount: 0,
-      eventType: '',
-      inputText: '',
-      interactionText: '',
-      logIndex: -1,
-      logIndexes: [],
-      meta: [node.stepType, node.targetRole].filter(Boolean).join(' · '),
-      outputText: '',
-      payloadText: '',
-      pendingText: '',
-      previewText: '',
-      rawText: '',
-      rowType: 'node',
-      startedAt: '',
-      status: 'pending',
-      stepId,
-      subtitle: [node.subtitle, node.targetRole].filter(Boolean).join(' · '),
-      title: node.title || stepId,
-    });
   });
 
   orderedEntries.push(
@@ -1075,7 +1043,7 @@ const WorkflowExecutionLogsPanel: React.FC<WorkflowExecutionLogsPanelProps> = ({
           display: 'contents',
         }}
       >
-        {error ? (
+        {error && !execution ? (
           <div style={{ padding: '10px 14px' }}>
             <Alert message={error} showIcon type="error" />
           </div>
@@ -1214,6 +1182,11 @@ const WorkflowExecutionLogsPanel: React.FC<WorkflowExecutionLogsPanelProps> = ({
                   />
                 </Tooltip>
               </div>
+              {error ? (
+                <div style={{ flexBasis: '100%' }}>
+                  <Alert message={error} showIcon type="error" />
+                </div>
+              ) : null}
             </div>
 
             <div

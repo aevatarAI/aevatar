@@ -3835,7 +3835,7 @@ describe('Workflow Activity vNext editor', () => {
     expect(mockRuntimeRunsApi.streamDraftRun).not.toHaveBeenCalled();
   });
 
-  it('opens the shared Logs console from authoritative Activity run data', async () => {
+  it('keeps live completion facts ahead of a stale running Activity projection', async () => {
     mockWorkflowActivityApi.getRun.mockResolvedValue(
       createEditorRunDetail({
         runId: 'run-observed-alpha',
@@ -3844,7 +3844,19 @@ describe('Workflow Activity vNext editor', () => {
       }),
     );
     mockRuntimeRunsApi.streamChat.mockResolvedValue(
-      createSseResponse([{ runStarted: { runId: 'run-observed-alpha' } }]),
+      createSseResponse([
+        {
+          runStarted: { runId: 'run-observed-alpha' },
+          timestamp: 1786356000000,
+        },
+        {
+          runFinished: {
+            result: { output: 'Weekly report is ready.' },
+            runId: 'run-observed-alpha',
+          },
+          timestamp: 1786356001000,
+        },
+      ]),
     );
 
     await renderPublishedWorkflowPage();
@@ -3863,13 +3875,15 @@ describe('Workflow Activity vNext editor', () => {
     });
     expect(within(logs).getByText('Logs')).toBeInTheDocument();
     await waitFor(() => {
-      expect(within(logs).getByText('step-alpha')).toBeInTheDocument();
-      expect(within(logs).getByText('Pending')).toBeInTheDocument();
-      expect(within(logs).getAllByText('step-verify').length).toBeGreaterThan(
-        0,
-      );
-      expect(within(logs).getAllByText('Running').length).toBeGreaterThan(0);
+      expect(within(logs).getByText('Run finished')).toBeInTheDocument();
+      expect(within(logs).getByText('succeeded')).toBeInTheDocument();
     });
+    fireEvent.click(within(logs).getByText('Run finished'));
+    expect(
+      await within(logs).findByText(/Weekly report is ready\./),
+    ).toBeInTheDocument();
+    expect(within(logs).queryByText('Pending')).not.toBeInTheDocument();
+    expect(within(logs).queryByText('step-verify')).not.toBeInTheDocument();
     expect(mockWorkflowActivityApi.getRun).toHaveBeenCalledWith(
       'scope-alpha',
       'run-observed-alpha',
@@ -4078,7 +4092,7 @@ describe('Workflow Activity vNext editor', () => {
     ]);
   });
 
-  it('keeps an unidentified published run from being submitted again after live updates end', async () => {
+  it('releases the published run action when live updates end without a run id', async () => {
     mockRuntimeRunsApi.streamChat.mockResolvedValue(createSseResponse([]));
 
     await renderPublishedWorkflowPage();
@@ -4097,14 +4111,13 @@ describe('Workflow Activity vNext editor', () => {
     const startRun = await screen.findByRole('button', {
       name: 'Start published run',
     });
-    await waitFor(() => expect(startRun).toBeDisabled());
+    await waitFor(() => expect(startRun).toBeEnabled());
     expect(
       screen.queryByText(
         'Live updates ended. Open Activity to check the latest status.',
       ),
     ).not.toBeInTheDocument();
     expect(document.querySelector('.ant-alert-info')).toBeNull();
-    fireEvent.click(startRun);
     expect(mockRuntimeRunsApi.streamChat).toHaveBeenCalledTimes(1);
   });
 
@@ -4220,12 +4233,12 @@ describe('Workflow Activity vNext editor', () => {
     expect(mockRuntimeRunsApi.streamChat).toHaveBeenCalledTimes(1);
   });
 
-  it('renders run logs only after the SSE run id is observed by Activity', async () => {
+  it('replaces live logs when terminal Activity is observed', async () => {
     mockWorkflowActivityApi.getRun.mockResolvedValue(
       createEditorRunDetail({
         runId: 'run-observed-alpha',
         stateVersion: 7,
-        status: 'running',
+        status: 'completed',
       }),
     );
     mockRuntimeRunsApi.streamChat.mockResolvedValue(
@@ -4332,8 +4345,69 @@ describe('Workflow Activity vNext editor', () => {
   });
 
   it('keeps a stream run error as an execution failure even when no message is supplied', async () => {
+    const encoder = new TextEncoder();
+    let streamController:
+      | ReadableStreamDefaultController<Uint8Array>
+      | undefined;
+    mockRuntimeRunsApi.streamChat.mockResolvedValue({
+      body: new ReadableStream({
+        start(controller) {
+          streamController = controller;
+        },
+      }),
+      ok: true,
+    } as Response);
+
+    await renderPublishedWorkflowPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Run' }));
+    fireEvent.change(
+      await screen.findByRole('textbox', { name: 'Published run input' }),
+      {
+        target: { value: 'Review order 42' },
+      },
+    );
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Start published run' }),
+    );
+
+    await act(async () => {
+      streamController?.enqueue(encoder.encode('data: {"runError":{}}\n\n'));
+    });
+    expect(await screen.findByText('Run failed')).toBeInTheDocument();
+    const startRun = screen.getByRole('button', {
+      name: 'Start published run',
+    });
+    expect(startRun).toBeDisabled();
+    expect(
+      screen.queryByText(
+        'Live updates ended. Open Activity to check the latest status.',
+      ),
+    ).not.toBeInTheDocument();
+    await act(async () => {
+      streamController?.close();
+    });
+    await waitFor(() => expect(startRun).toBeEnabled());
+  });
+
+  it('keeps a stopped live run ahead of stale running Activity', async () => {
+    mockWorkflowActivityApi.getRun.mockResolvedValue(
+      createEditorRunDetail({
+        runId: 'run-stopped-alpha',
+        stateVersion: 9,
+        status: 'running',
+      }),
+    );
     mockRuntimeRunsApi.streamChat.mockResolvedValue(
-      createSseResponse([{ runError: {} }]),
+      createSseResponse([
+        { runStarted: { runId: 'run-stopped-alpha' } },
+        {
+          runStopped: {
+            reason: 'Stopped by operator.',
+            runId: 'run-stopped-alpha',
+          },
+        },
+      ]),
     );
 
     await renderPublishedWorkflowPage();
@@ -4349,12 +4423,95 @@ describe('Workflow Activity vNext editor', () => {
       await screen.findByRole('button', { name: 'Start published run' }),
     );
 
-    expect(await screen.findByText('Run failed')).toBeInTheDocument();
-    expect(
-      screen.queryByText(
-        'Live updates ended. Open Activity to check the latest status.',
+    const logs = await screen.findByRole('complementary', {
+      name: 'Workflow run console',
+    });
+    const stoppedLog = await within(logs).findByText('Run stopped');
+    expect(within(logs).getByText('stopped')).toBeInTheDocument();
+    fireEvent.click(stoppedLog);
+    expect(within(logs).getByLabelText('Log details')).toHaveTextContent(
+      'Stopped by operator.',
+    );
+    expect(within(logs).queryByText('succeeded')).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(mockWorkflowActivityApi.getRun).toHaveBeenCalledWith(
+        'scope-alpha',
+        'run-stopped-alpha',
       ),
-    ).not.toBeInTheDocument();
+    );
+  });
+
+  it('keeps a live transport failure visible ahead of running Activity', async () => {
+    mockWorkflowActivityApi.getRun.mockResolvedValue(
+      createEditorRunDetail({
+        runId: 'run-disconnected-alpha',
+        stateVersion: 10,
+        status: 'running',
+      }),
+    );
+    const encoder = new TextEncoder();
+    let streamController:
+      | ReadableStreamDefaultController<Uint8Array>
+      | undefined;
+    mockRuntimeRunsApi.streamChat.mockResolvedValue({
+      body: new ReadableStream({
+        start(controller) {
+          streamController = controller;
+        },
+      }),
+      ok: true,
+    } as Response);
+
+    await renderPublishedWorkflowPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Run' }));
+    fireEvent.change(
+      await screen.findByRole('textbox', { name: 'Published run input' }),
+      {
+        target: { value: 'Review order 42' },
+      },
+    );
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Start published run' }),
+    );
+
+    await act(async () => {
+      streamController?.enqueue(
+        encoder.encode(
+          'data: {"runStarted":{"runId":"run-disconnected-alpha"}}\n\n',
+        ),
+      );
+    });
+    await waitFor(() =>
+      expect(mockWorkflowActivityApi.getRun).toHaveBeenCalledWith(
+        'scope-alpha',
+        'run-disconnected-alpha',
+      ),
+    );
+    await act(async () => {
+      streamController?.enqueue(
+        encoder.encode(
+          'data: {"custom":{"name":"aevatar.step.request","payload":{"input":"Review order 42","stepId":"step-live","stepType":"llm_call"}}}\n\n',
+        ),
+      );
+    });
+    const logs = await screen.findByRole('complementary', {
+      name: 'Workflow run console',
+    });
+    await within(logs).findByTestId(
+      'workflow-execution-log-row-node-step-live',
+    );
+
+    await act(async () => {
+      streamController?.error(new Error('Published run stream disconnected.'));
+    });
+
+    expect(
+      within(logs).getByText('Published run stream disconnected.'),
+    ).toBeInTheDocument();
+    expect(
+      within(logs).getByTestId('workflow-execution-log-row-node-step-live'),
+    ).toBeInTheDocument();
   });
 
   it('observes the exact failed run when its SSE error includes a run id', async () => {

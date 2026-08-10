@@ -1,5 +1,8 @@
 import type { WorkflowActivityRunDetail } from '@/shared/models/workflowActivity';
-import { adaptActivityRunToExecutionLogs } from './activityExecution';
+import {
+  adaptActivityRunToExecutionLogs,
+  isTerminalActivityRunStatus,
+} from './activityExecution';
 
 function createRun(): WorkflowActivityRunDetail {
   return {
@@ -79,5 +82,16 @@ describe('adaptActivityRunToExecutionLogs', () => {
         expect.objectContaining({ stepId: 'step-verify', tone: 'completed' }),
       ]),
     );
+  });
+
+  it('treats a timed-out Activity run as terminal', () => {
+    const run = createRun();
+    run.summary.status = 'timed_out';
+    run.summary.success = false;
+
+    const execution = adaptActivityRunToExecutionLogs(run);
+
+    expect(isTerminalActivityRunStatus(run.summary.status)).toBe(true);
+    expect(execution.completedAtUtc).toBe(run.summary.updatedAtUtc);
   });
 });
