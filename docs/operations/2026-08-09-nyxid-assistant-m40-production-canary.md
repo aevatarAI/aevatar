@@ -1,6 +1,6 @@
 ---
 title: "NyxID Assistant Milestone 40 Production Canary"
-status: active
+status: completed
 owner: platform
 ---
 
@@ -9,15 +9,181 @@ owner: platform
 ## Purpose
 
 This runbook is the production acceptance procedure for GitHub issue #3318 and
-Milestone 40. It proves UC1a, UC1b, UC2, UC3, and UC4 against the exact Aevatar
-revision deployed from `origin/feature/integrate`. `dev` is not a source,
+Milestone 40. It proves UC1a, UC1b, UC2, UC3, and UC4 against exact Aevatar
+revisions deployed from `origin/feature/integrate`. `dev` is not a source,
 delivery, deployment, comparison, or acceptance branch for this run.
 
-UC2 is already accepted on
-`origin/feature/integrate@87daa99e641533f25ea0ddc67396e1a0dc52bd59`.
-Every remaining UC must record its own exact deployed full SHA. A branch name,
-image short tag, HTTP 2xx, assistant sentence, or visible card is not completion
-evidence.
+Authenticated production evidence is accepted for UC1a, UC1b, UC2, UC3, and
+UC4. Every disposable conversation, provider record, Approval instance, grant,
+and OAuth connection created by the run has exact cleanup evidence, so the
+runbook is completed.
+
+## Production Evidence Ledger
+
+| Use case | Status | Exact source | Production acceptance summary |
+| --- | --- | --- | --- |
+| UC1a | Accepted | `origin/feature/integrate@4c3b33ad272807430ca3ba6bc753f849f8c8fe5b` | A disconnected start produced one durable `service_connect` action, preserved it across reload, created no GitHub connection, and cleaned up the conversation. |
+| UC1b | Accepted | `origin/feature/integrate@4c3b33ad272807430ca3ba6bc753f849f8c8fe5b` | A connected-ready start produced one confirmed actor-owned `service.connected` postcondition, preserved it across reload, and cleaned up the conversation and disposable OAuth service. |
+| UC2 | Accepted | `origin/feature/integrate@87daa99e641533f25ea0ddc67396e1a0dc52bd59` | Steer, authoritative stop, new task, reload, and deletion were committed on one exact healthy image with no external effect. |
+| UC3 | Accepted | `origin/feature/integrate@b5f32cbbeb09f150b9d32ba8684926f61d40bfc9` | Rejection, uncertainty, exact reconciliation, fresh approved retry, provider verification, reload, cancel, and cleanup were proved with no grant. |
+| UC4 | Accepted | `origin/feature/integrate@4c3b33ad272807430ca3ba6bc753f849f8c8fe5b` | Both condition branches were proved; only score 80 wrote a row, and the exact row, conversations, grants, and service overlay were cleaned up. |
+
+### UC1a: Disconnected Start
+
+- Deployment anchor: source `4c3b33ad272807430ca3ba6bc753f849f8c8fe5b`;
+  image `docker.io/aelfdevops/aevatar-console-backend:4c3b33ad`; digest
+  `sha256:58d05dd6d2bf6b6d766159a2678f54ed806fcf2660eb5aafc729e4449c8f785e`;
+  generation `2908`; revision `1489`; Ready `1/1`; restart count `0`; health
+  `9/9`.
+- Bounded UTC evidence: created `2026-08-10T00:19:13.2353077Z`; blocked
+  terminal committed `2026-08-10T00:19:34.490761Z`; gate decided
+  `2026-08-10T00:20:10.4404147Z`; cleanup control committed
+  `2026-08-10T00:21:09.1576163Z`.
+- Start state: the authenticated owner's personal `api-github` service was
+  absent.
+- Conversation `nyxid-chat-9dd9187b266cbb613855666991acc9c3`; turn
+  `turn-c264ce54a3e9acdb696c2fe8693721f8`; task
+  `task-835994ffb8c96bdf86ab66ed501c7cbc`.
+- Plan revision `4` committed with gate `satisfied`. The single
+  `service_connect` action used request
+  `action-1c8040336794273bf6171eac414d2f32`, requested scope `public_repo`, and
+  remained `waiting` with `externalEffect=not_started`.
+- The turn/task committed the expected blocked terminal shape
+  `NYXID_ACTION_REQUESTED`; exactly one terminal frame, `RUN_FINISHED`, was
+  observed.
+- StateVersion `28` preserved the same task, action request, gate, and waiting
+  state after reload. Stop was accepted and committed as `already_terminal` at
+  StateVersion `29`.
+- No GitHub connection was created. Conversation deletion completed, and both
+  state and transcript subsequently returned `404 not_found`.
+
+### UC1b: Connected And Ready Start
+
+- Deployment anchor: source `4c3b33ad272807430ca3ba6bc753f849f8c8fe5b`;
+  image `docker.io/aelfdevops/aevatar-console-backend:4c3b33ad`; digest
+  `sha256:58d05dd6d2bf6b6d766159a2678f54ed806fcf2660eb5aafc729e4449c8f785e`;
+  generation `2908`; revision `1489`; Ready `1/1`; restart count `0`; health
+  `9/9`.
+- Bounded UTC evidence: the actor turn started at
+  `2026-08-10T01:18:55.9856642Z`, committed its terminal at
+  `2026-08-10T01:19:16.8611936Z`, and all conversation and OAuth cleanup was
+  verified by `2026-08-10T01:21:13Z`.
+- Start state: disposable personal OAuth UserService
+  `1727d7f8-0cbb-4b0a-9148-fe367e446d3d` was `active/connected`, used slug
+  `api-github`, and exposed granted scopes `read:user`, `repo`, and
+  `user:email`. Catalog refresh was observed and ready at visible StateVersion
+  `123`, ahead of required StateVersion `122`.
+- Conversation `nyxid-chat-6cefdf1da9ad4efa8f7e7561ad0ac9ef`; turn
+  `turn-55c05cceddccc41c1a0a2d18a08accaf`; task
+  `task-a5e8efae4152cc8482b10eb5d7eb0893`.
+- Plan revision `4` committed gate `satisfied`. The single admitted
+  `service_connect` postcondition used action request
+  `action-postcondition-95f66701cbad996960d0f4e96b869a14` and exact
+  provider resource identity
+  `1727d7f8-0cbb-4b0a-9148-fe367e446d3d`.
+- The actor-owned `service.connected` postcondition reached
+  `done/externalEffect=confirmed`; the task and turn succeeded at StateVersion
+  `30`. SSE contained exactly one terminal, `RUN_FINISHED`.
+- Reload preserved the same task, turn, gate, postcondition step, action
+  request, provider identity, and single terminal. Transcript before and after
+  reload contained the same one complete user message and one complete
+  assistant message.
+- Conversation deletion completed, and state and transcript returned
+  `404 not_found`. The disposable OAuth UserService and its upstream grant were
+  deleted; exact service read-back returned `404`, the personal `api-github`
+  inventory was empty, both pre-existing PAT services remained
+  `active/connected`, pending approvals were `0`, and grants were `0`.
+
+### UC2: Steer, Stop, And New Task
+
+- Deployment anchor: source `87daa99e641533f25ea0ddc67396e1a0dc52bd59`;
+  image `docker.io/aelfdevops/aevatar-console-backend:87daa99e`; digest
+  `sha256:a14b85c9441fa17fd251c6d116c670bdf2420d09dc0183a8d1fa76f0ffb0b12a`;
+  generation `2852`; revision `1461`; Ready `1/1`; restart count `0`; health
+  `9/9`.
+- Conversation `nyxid-chat-c40e91a694c70606d44fed169c697314`; initial turn
+  `turn-f3745b72b8abe1b27691c522fd178c8d`; initial task
+  `task-7ae33a60d0dcec561c650988a567a952`.
+- Steering was accepted at StateVersion `27`. The same task advanced to plan
+  revision `5`, preserving completed web evidence as `done`; all built-in
+  `web_search` effects remained `not_applied`.
+- Steering created authoritative continuation turn
+  `turn-c7aa565b0e77180b63fe920d4f9d8cd0`. A stop against the superseded turn was
+  honestly rejected with `NYXID_CHAT_CONTROL_IDENTITY_MISMATCH`; the stop
+  against the authoritative turn was accepted and committed at StateVersion
+  `50` with `NYXID_CHAT_STOP_ACCEPTED`.
+- A subsequent request created distinct task
+  `task-e97244afe7b88b6b15f26f6d7f3d1fc5` and turn
+  `turn-4abd5440b1a73dbcfda82fe62bcc9a3c`; the task succeeded and its step was
+  `done/externalEffect=not_applied`.
+- Reload at StateVersion `56` retained both stopped turns for the prior task
+  while the new task remained authoritative and succeeded. Cleanup was
+  accepted, actor commits `57` through `59` completed deletion, and subsequent
+  state and transcript reads returned `404 not_found`.
+
+### UC3: Reconcile Before Retry
+
+- Deployment anchor: source `b5f32cbbeb09f150b9d32ba8684926f61d40bfc9`;
+  image `docker.io/aelfdevops/aevatar-console-backend:b5f32cbb`; digest
+  `sha256:278e29c2e098f85dde8e8baacbd3a100fca7eb4029acea723d3b8b4873e82b59`;
+  generation `2906`; revision `1488`; Ready `1/1`; restart count `0`; health
+  `9/9`.
+- Bounded UTC evidence: started `2026-08-09T23:18:46Z`; finished
+  `2026-08-09T23:21:28Z`.
+- Conversation `nyxid-chat-239efbf34b0742bff1f67970fa9a2abf`; turn
+  `turn-71637a93e0807be320da4ba276cab454`; task
+  `task-f52c79c133304ac35335c431933e96eb`.
+- Generation `1` produced NyxID approval request
+  `e1748b89-8c90-4cd1-8bab-82cf89098412`, which was rejected. The operation
+  became `uncertain/externalEffect=may_have_changed`; exact reconciliation then
+  proved `not_applied`.
+- Generation `2` produced fresh NyxID approval request
+  `d22a723a-f66a-4ef3-8231-abf2c5db3366`, which was approved. Aevatar
+  correctly retained no generation-2 `approvalRequestId` or
+  `approvalObservation`; effect and postcondition were confirmed against
+  provider instance `4EAE494E-FB7D-4294-903D-518E76B5950F`.
+- Final StateVersion `31` retained plan revision `4`, both generations, the
+  reconciliation result, the absent generation-2 Aevatar approval fact, and
+  exactly one terminal; the task succeeded.
+- Cleanup used fresh approval request
+  `c5065560-6c6f-47f3-af2e-77faed821b1a`. Provider read-back reported
+  `CANCELED`; the conversation was deleted; grants created were `0`.
+
+### UC4: Conditional Bitable Write
+
+- Deployment anchor: source `4c3b33ad272807430ca3ba6bc753f849f8c8fe5b`;
+  image `docker.io/aelfdevops/aevatar-console-backend:4c3b33ad`; digest
+  `sha256:58d05dd6d2bf6b6d766159a2678f54ed806fcf2660eb5aafc729e4449c8f785e`;
+  generation `2908`; revision `1489`; Ready `1/1`; restart count `0`; health
+  `9/9`.
+- Bounded UTC evidence: started `2026-08-09T23:57:26Z`; finished
+  `2026-08-10T00:12:49Z`.
+- Score `72`: conversation `nyxid-chat-9370f82e717b838564fcb28226dbb046`;
+  turn `turn-f84c89859c65d5acbeca67a176eb7e2c`; task
+  `task-6d77eaf37a14049f69e98573edcf121b`; StateVersion `19`; plan revision `4`.
+  Threshold `75` observed score `72`, so the condition committed false. The
+  guarded write and postcondition were skipped, no approval was created, and no
+  effect was applied. The conversation was deleted.
+- Score `80`: conversation `nyxid-chat-25d486381c0bb02db188e214e424fcdd`;
+  turn `turn-6524bd6133728a1ab4cf82927100c275`; task
+  `task-8e8d96ffd4aa5f90fd6aa2d45da22b68`; StateVersion `28`; plan revision `5`;
+  gate `satisfied`. Threshold `75` observed score `80`, so the condition
+  committed true.
+- The create used NyxID approval request
+  `33ecb863-8118-405f-9158-626e0e30eb1f`; provider record
+  `recvrQAoCO2YfK` was returned; exact read-back confirmed the effect and
+  postcondition.
+- Cleanup used approval request `c71c4f50-4273-43db-b3b2-42ed497f9bc5` and
+  deleted the exact provider record. The supervised cleanup resumed from the
+  saved provider ID and did not replay create. Both conversations were deleted,
+  grants created were `0`, and the prior service overlay was restored.
+- On the successful Tier-B synchronous operation, Aevatar approval fields
+  remained absent and reload preserved that absence.
+
+Under Tier B, the exact approval request identity for a successful synchronous
+NyxID operation remains NyxID decision evidence. Aevatar `approvalRequestId`
+and `approvalObservation` remain absent; reload must preserve that absence and
+must never fabricate or inherit another generation's approval identity.
 
 ## Ownership And Retention
 
@@ -388,8 +554,11 @@ Run two independent conversations with unique canary keys:
    Bitable create operation receives a fresh per-request NyxID decision, returns
    a provider-generated record ID, and an exact read/search verifies the unique
    `Attestation Key`, score, owner, status, control, and timestamp.
-3. Reload preserves the threshold override, branch choice, approval facts,
-   provider-generated record identity, verification, and exactly one terminal.
+3. Reload preserves the threshold override, branch choice, provider-generated
+   record identity, verification, and exactly one terminal. Under Tier B, the
+   successful synchronous operation's exact approval ID remains NyxID decision
+   evidence; actor `approvalRequestId` and `approvalObservation` remain absent
+   and must never be fabricated or inherited from another generation.
 4. Delete the exact created record by provider-generated ID. Search the full
    result set for the unique key, following `data.page_token` while
    `data.has_more=true` and stopping only at `data.has_more=false`. A first-page
@@ -410,6 +579,11 @@ For each UC record only:
 - committed `StateVersion`, task/step statuses, external-effect evidence,
   plan-revision and operation-generation numbers;
 - terminal frame count/type and redacted cleanup read-back status.
+
+For a successful synchronous Tier-B operation, the exact approval request ID
+belongs to NyxID decision evidence. Aevatar actor evidence must record the
+absence of `approvalRequestId` and `approvalObservation`; it must not infer the
+ID from list order, timing, another generation, or another system's approval.
 
 Do not attach credentials, bearer headers, raw tool arguments or results,
 approval reasons, OAuth/device codes, form values, user content, browser
