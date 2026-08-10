@@ -62,6 +62,7 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.common.empty': '空',
     'workflowActivityVNext.common.failed': '失败',
     'workflowActivityVNext.common.no': '否',
+    'workflowActivityVNext.common.notReported': '未报告',
     'workflowActivityVNext.common.open': '打开',
     'workflowActivityVNext.common.pending': '等待中',
     'workflowActivityVNext.common.refresh': '刷新',
@@ -81,10 +82,6 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.editor.activityObserved': '已在活动中记录',
     'workflowActivityVNext.editor.activityObservedDescription':
       '你可以查看运行详情和进度。',
-    'workflowActivityVNext.editor.activityObserving':
-      '正在检查此运行的活动记录…',
-    'workflowActivityVNext.editor.activityObservingDescription':
-      '正在检查此运行。',
     'workflowActivityVNext.editor.activityUnavailable': '活动暂不可用',
     'workflowActivityVNext.editor.activityUnavailableDescription':
       '请再次检查最新状态。',
@@ -103,6 +100,7 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
       '请先发布此工作流，再运行。',
     'workflowActivityVNext.editor.publishLatestBeforeRun':
       '请先保存并发布最新更改，再运行。',
+    'workflowActivityVNext.editor.publicationStatusAria': '工作流发布状态',
     'workflowActivityVNext.editor.publishUnavailable': '此工作流暂时无法发布。',
     'workflowActivityVNext.editor.publishedRunDrawer': '运行已发布工作流',
     'workflowActivityVNext.editor.publishedTargetUnavailable':
@@ -111,69 +109,29 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
       '请等待工作流更新完成。',
     'workflowActivityVNext.editor.waitForPublishedRun':
       '请等待已发布版本可用。',
-    'workflowActivityVNext.publish.accepted': '发布请求已接受',
-    'workflowActivityVNext.publish.approvalNotRequired': '此请求无需额外审批。',
-    'workflowActivityVNext.publish.approvalRequired': '此请求运行前需要审批。',
     'workflowActivityVNext.publish.addExecutableStep':
       '发布前请至少添加一个可执行步骤。',
     'workflowActivityVNext.publish.applyNodeChanges':
       '发布前请应用或放弃节点配置更改。',
-    'workflowActivityVNext.publish.backToService': '返回',
     'workflowActivityVNext.publish.blocked': '发布受阻 · {count} 个问题',
     'workflowActivityVNext.publish.blockedOne': '发布受阻 · 1 个问题',
-    'workflowActivityVNext.publish.checkAgain': '再次检查',
-    'workflowActivityVNext.publish.delayed': '发布状态显示所需时间较长',
-    'workflowActivityVNext.publish.delayedDescription':
-      '请再次检查最新发布状态。',
-    'workflowActivityVNext.publish.destinationDescription':
-      '选择要使用 {workflowName} 的服务。',
     'workflowActivityVNext.publish.failed': '无法确认发布状态',
     'workflowActivityVNext.publish.failedDescription':
-      '请检查工作流或再次尝试发布。',
+      '请处理错误或再次尝试发布。',
     'workflowActivityVNext.publish.forbiddenDescription':
       '你无权查看此发布状态。',
-    'workflowActivityVNext.publish.loadingServices': '正在加载服务…',
-    'workflowActivityVNext.publish.noExternalRequests':
-      '没有需要审核的外部请求。',
-    'workflowActivityVNext.publish.noServices': '此工作区暂无可用服务',
-    'workflowActivityVNext.publish.observed': '工作流已发布',
-    'workflowActivityVNext.publish.observedDescription':
-      '所选服务现在正在使用此工作流。',
-    'workflowActivityVNext.publish.observingDescription':
-      '正在检查所选服务是否已准备就绪。',
     'workflowActivityVNext.publish.published': '已发布',
     'workflowActivityVNext.publish.publishedServiceId': '已发布服务 ID',
     'workflowActivityVNext.publish.publishing': '正在发布',
-    'workflowActivityVNext.publish.publishingTo': '正在发布到 {service}',
     'workflowActivityVNext.publish.revisionId': '版本 ID',
-    'workflowActivityVNext.publish.reviewAgain': '再次审核',
-    'workflowActivityVNext.publish.reviewAndPublish': '审核并发布',
-    'workflowActivityVNext.publish.reviewDescription':
-      '查看此工作流运行时可能执行的操作。',
-    'workflowActivityVNext.publish.reviewing': '正在准备审核…',
-    'workflowActivityVNext.publish.reviewingDescription':
-      '正在准备此工作流以供审核。',
-    'workflowActivityVNext.publish.reviewUnavailable':
-      '暂时无法准备此工作流以供发布。',
     'workflowActivityVNext.publish.readinessIssues': '发布就绪问题',
+    'workflowActivityVNext.publish.success': '工作流已发布',
     'workflowActivityVNext.publish.resolvePublication':
       '再次发布前请先处理当前发布状态。',
-    'workflowActivityVNext.publish.risk': '影响',
-    'workflowActivityVNext.publish.risk.destructive':
-      '可能删除数据或造成永久性更改',
-    'workflowActivityVNext.publish.risk.readOnly': '只读',
-    'workflowActivityVNext.publish.risk.write': '可进行更改',
     'workflowActivityVNext.publish.saveBeforePublishing':
       '请先保存此工作流，再发布。',
     'workflowActivityVNext.publish.saveChangesBeforePublishing':
       '请先保存更改，再发布。',
-    'workflowActivityVNext.publish.selectService': '选择服务',
-    'workflowActivityVNext.publish.service': '服务',
-    'workflowActivityVNext.publish.servicesUnavailable': '服务暂不可用',
-    'workflowActivityVNext.publish.submitting': '正在提交发布…',
-    'workflowActivityVNext.publish.submittingDescription':
-      '正在将此工作流发送到所选服务。',
-    'workflowActivityVNext.publish.title': '发布工作流',
     'workflowActivityVNext.publish.waitForPublication':
       '请等待当前发布流程完成。',
     'workflowActivityVNext.publish.waitForEditorUpdate':
@@ -181,7 +139,6 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.publish.waitForSave': '请等待工作流验证和保存完成。',
     'workflowActivityVNext.publish.waitForSavedDraft':
       '请等待已保存草稿变为可读取状态。',
-    'workflowActivityVNext.publish.workflowId': '工作流 ID',
     'workflowActivityVNext.publish.unauthorizedDescription':
       '请重新登录后检查此发布状态。',
     'workflowActivityVNext.editor.checkLatestStatus': '检查最新状态',
@@ -191,7 +148,6 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
       '打开运行详情可查看完整时间线、诊断信息和恢复操作。',
     'workflowActivityVNext.editor.openRunDetails': '打开运行详情',
     'workflowActivityVNext.editor.outputSummary': '输出摘要',
-    'workflowActivityVNext.editor.runAccepted': '运行已接受',
     'workflowActivityVNext.editor.runAgain': '再次运行',
     'workflowActivityVNext.editor.runFailed': '运行失败',
     'workflowActivityVNext.editor.runInput': '输入',
@@ -203,7 +159,6 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.editor.runPanel': '测试运行',
     'workflowActivityVNext.editor.runResult': '运行结果',
     'workflowActivityVNext.editor.runUnavailable': '请先添加至少一个有效步骤。',
-    'workflowActivityVNext.editor.runSubmitting': '正在启动运行…',
     'workflowActivityVNext.editor.retryActivityObservation': '再次检查',
     'workflowActivityVNext.editor.saveDelayed': '保存时间比预期更长',
     'workflowActivityVNext.editor.saveFailed': '无法保存工作流',
@@ -218,8 +173,6 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.editor.saved': '已保存',
     'workflowActivityVNext.editor.savedAt': '已保存于 {updatedAt}',
     'workflowActivityVNext.editor.stay': '留在此处',
-    'workflowActivityVNext.editor.streamEnded':
-      '实时更新已结束，请打开活动记录查看最新状态。',
     'workflowActivityVNext.editor.submitRun': '开始运行',
     'workflowActivityVNext.editor.submittedInput': '已提交输入',
     'workflowActivityVNext.editor.snapshotNotice':
@@ -259,8 +212,6 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.nodeInspector.discardTitle': '放弃节点更改？',
     'workflowActivityVNext.nodeInspector.nextStep': '下一步骤',
     'workflowActivityVNext.nodeInspector.noBranches': '没有分支',
-    'workflowActivityVNext.nodeInspector.noGuidedFields':
-      '此步骤暂不提供引导式配置项。',
     'workflowActivityVNext.nodeInspector.notSet': '未设置',
     'workflowActivityVNext.nodeInspector.rawConfigurationAria': '原始配置',
     'workflowActivityVNext.nodeInspector.rawConfigurationError':
@@ -361,6 +312,8 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
       '现在可以先选择创建方式；恢复访问权限期间，你的输入会保留在此页面。',
     'workflowActivityVNext.new.yaml': '工作流 YAML',
     'workflowActivityVNext.run.backAria': '返回活动列表',
+    'workflowActivityVNext.run.attempted': '已尝试',
+    'workflowActivityVNext.run.branch': '分支',
     'workflowActivityVNext.run.changeConfiguration': '更改配置',
     'workflowActivityVNext.run.commandId': '请求 ID',
     'workflowActivityVNext.run.code': '代码',
@@ -373,9 +326,17 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.run.cost': '费用',
     'workflowActivityVNext.run.costWarning':
       '此操作可能产生新的模型或工具费用。',
+    'workflowActivityVNext.run.currencyNotReported': '未报告币种',
     'workflowActivityVNext.run.definitionRevision': '定义版本',
     'workflowActivityVNext.run.diagnostics': '诊断',
+    'workflowActivityVNext.run.duration': '耗时',
+    'workflowActivityVNext.run.durationMinutes': '{minutes}分',
+    'workflowActivityVNext.run.durationMinutesSeconds':
+      '{minutes}分 {seconds}秒',
+    'workflowActivityVNext.run.durationSeconds': '{seconds}秒',
     'workflowActivityVNext.run.error': '最终错误',
+    'workflowActivityVNext.run.executionPath': '执行路径',
+    'workflowActivityVNext.run.failed': '失败',
     'workflowActivityVNext.run.failedSummary': '此次运行未完成。',
     'workflowActivityVNext.run.fixAccess': '修复访问权限',
     'workflowActivityVNext.run.description': '查看此次运行的结果、步骤和历史。',
@@ -383,18 +344,21 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.run.forkAccepted': '新运行已接受',
     'workflowActivityVNext.run.forkAcceptedDescription':
       '打开活动记录查看进度。',
-    'workflowActivityVNext.run.graph': '图',
-    'workflowActivityVNext.run.graphLoading': '正在加载运行图…',
-    'workflowActivityVNext.run.graphSummary': '{nodes} 个节点 · {edges} 条边',
-    'workflowActivityVNext.run.graphUnavailable': '运行图不可用',
     'workflowActivityVNext.run.input': '输入',
+    'workflowActivityVNext.run.initiator': '发起人',
+    'workflowActivityVNext.run.inputSummary': '输入摘要',
     'workflowActivityVNext.run.loading': '正在加载运行…',
     'workflowActivityVNext.run.loadingDescription': '正在加载运行详情…',
     'workflowActivityVNext.run.newActorId': '运行地址',
+    'workflowActivityVNext.run.nextStepId': '下一步骤 ID',
+    'workflowActivityVNext.run.noExecutionPath': '暂时没有可用的执行路径。',
+    'workflowActivityVNext.run.noOutcomeYet': '暂时没有最终结果。',
     'workflowActivityVNext.run.noSteps': '暂时没有可用步骤。',
     'workflowActivityVNext.run.noDiagnostics': '暂无诊断信息。',
     'workflowActivityVNext.run.noTimeline': '尚无可见的时间线事件。',
     'workflowActivityVNext.run.output': '最终输出',
+    'workflowActivityVNext.run.outcome': '结果',
+    'workflowActivityVNext.run.overview': '概览',
     'workflowActivityVNext.run.message': '消息',
     'workflowActivityVNext.run.promptTokens': '输入 Token',
     'workflowActivityVNext.run.requestedSteps': '已请求步骤',
@@ -403,6 +367,10 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.run.priorOutputsNotReused': '不会复用先前步骤输出。',
     'workflowActivityVNext.run.priorOutputsReused': '将复用先前步骤输出。',
     'workflowActivityVNext.run.relatedRuns': '相关运行',
+    'workflowActivityVNext.run.reported': '已报告',
+    'workflowActivityVNext.run.reportingState': '报告状态',
+    'workflowActivityVNext.run.result': '结果',
+    'workflowActivityVNext.run.reviewFailedStep': '查看失败步骤',
     'workflowActivityVNext.run.retry': '重试失败步骤',
     'workflowActivityVNext.run.retryAuthorityMissing':
       '运行服务未提供重试资格。',
@@ -413,24 +381,41 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
       '运行服务未提供再次运行资格。',
     'workflowActivityVNext.run.runAgainUnavailable':
       '此次运行暂时无法重新开始。',
+    'workflowActivityVNext.run.runId': '运行 ID',
     'workflowActivityVNext.run.roleReplies': '角色回复数',
     'workflowActivityVNext.run.severity': '严重级别',
     'workflowActivityVNext.run.sourceImmutable':
       '这会开始一次新运行，原运行不会改变。',
+    'workflowActivityVNext.run.skipped': '已跳过',
     'workflowActivityVNext.run.startFailed': '无法开始新运行',
     'workflowActivityVNext.run.startingStep': '起始步骤',
     'workflowActivityVNext.run.statusUrl': '状态 URL',
     'workflowActivityVNext.run.statisticsUsage': '统计与用量',
     'workflowActivityVNext.run.step': '步骤',
+    'workflowActivityVNext.run.stepId': '步骤 ID',
     'workflowActivityVNext.run.stepFailedSummary': '此步骤未完成。',
     'workflowActivityVNext.run.steps': '步骤',
+    'workflowActivityVNext.run.stateVersion': '状态版本',
+    'workflowActivityVNext.run.succeeded': '成功',
     'workflowActivityVNext.run.timeline': '时间线',
+    'workflowActivityVNext.run.timelineEvent.completed': '运行已完成',
+    'workflowActivityVNext.run.timelineEvent.failed': '运行失败',
+    'workflowActivityVNext.run.timelineEvent.response': '步骤已生成响应',
+    'workflowActivityVNext.run.timelineEvent.started': '运行已开始',
+    'workflowActivityVNext.run.timelineEvent.stopped': '运行已停止',
+    'workflowActivityVNext.run.timelineEvent.toolFinished': '工具调用已完成',
+    'workflowActivityVNext.run.timelineEvent.toolStarted': '工具调用已开始',
+    'workflowActivityVNext.run.timelineEvent.updated': '运行已更新',
+    'workflowActivityVNext.run.toolCalls': '工具调用数',
     'workflowActivityVNext.run.totalSteps': '步骤总数',
     'workflowActivityVNext.run.totalTokens': 'Token 总数',
     'workflowActivityVNext.run.type': '类型',
+    'workflowActivityVNext.run.usage': '用量',
     'workflowActivityVNext.run.unavailable': '运行记录不可用',
     'workflowActivityVNext.run.unavailableDescription': '无法加载此次运行。',
     'workflowActivityVNext.run.unavailableGuidance': '请重试加载此次运行。',
+    'workflowActivityVNext.run.wait': '等待',
+    'workflowActivityVNext.run.waiting': '等待中',
     'workflowActivityVNext.settings.account': '账户',
     'workflowActivityVNext.settings.accountDescription':
       '你的个人资料与访问权限。',
@@ -498,7 +483,6 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.settings.saveObserved': '设置已保存',
     'workflowActivityVNext.settings.savedModelUnavailable':
       '已保存的模型当前不可用，保存的值不会被更改。',
-    'workflowActivityVNext.settings.saving': '正在保存更改…',
     'workflowActivityVNext.settings.sectionsAria': '设置分类',
     'workflowActivityVNext.settings.serviceDefaultModel': '使用服务默认模型。',
     'workflowActivityVNext.settings.stay': '留在此页',

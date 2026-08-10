@@ -470,22 +470,22 @@ const SettingsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
           </div>
         )}
       </div>
-      {savePhase !== 'idle' ? (
+      {savePhase === 'observed' ||
+      savePhase === 'delayed' ||
+      savePhase === 'failed' ? (
         <Alert
           message={
-            savePhase === 'saving' || savePhase === 'accepted'
-              ? t('workflowActivityVNext.settings.saving', 'Saving changes…')
-              : savePhase === 'observed'
-                ? t('workflowActivityVNext.settings.observed', 'Changes saved')
-                : savePhase === 'delayed'
-                  ? t(
-                      'workflowActivityVNext.settings.delayed',
-                      'Changes are taking longer to appear',
-                    )
-                  : t(
-                      'workflowActivityVNext.settings.failed',
-                      "Changes couldn't be saved",
-                    )
+            savePhase === 'observed'
+              ? t('workflowActivityVNext.settings.observed', 'Changes saved')
+              : savePhase === 'delayed'
+                ? t(
+                    'workflowActivityVNext.settings.delayed',
+                    'Changes are taking longer to appear',
+                  )
+                : t(
+                    'workflowActivityVNext.settings.failed',
+                    "Changes couldn't be saved",
+                  )
           }
           description={
             savePhase === 'failed' && saveMessage ? (
@@ -498,9 +498,7 @@ const SettingsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
               ? 'error'
               : savePhase === 'delayed'
                 ? 'warning'
-                : savePhase === 'observed'
-                  ? 'success'
-                  : 'info'
+                : 'success'
           }
         />
       ) : null}

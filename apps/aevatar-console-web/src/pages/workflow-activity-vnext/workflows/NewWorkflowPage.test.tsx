@@ -128,6 +128,10 @@ describe('New workflow save-target recovery', () => {
     renderWithQueryClient(<NewWorkflowPage scopeId="scope-alpha" />);
 
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('Loading save locations…'),
+    ).not.toBeInTheDocument();
+    expect(document.querySelector('.ant-alert-info')).toBeNull();
     const importYaml = screen.getByRole('button', { name: 'Import YAML' });
     expect(importYaml).toBeEnabled();
     fireEvent.click(importYaml);

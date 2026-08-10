@@ -29,6 +29,7 @@ type ShellProps = {
   readonly description?: string;
   readonly footer?: React.ReactNode;
   readonly headerActions?: React.ReactNode;
+  readonly heading?: React.ReactNode;
   readonly onNavigate?: (target: string) => void;
   readonly scopeId: string;
   readonly title: string;
@@ -112,6 +113,7 @@ const WorkflowActivityVNextShell: React.FC<ShellProps> = ({
   description,
   footer,
   headerActions,
+  heading,
   onNavigate,
   scopeId,
   title,
@@ -124,8 +126,10 @@ const WorkflowActivityVNextShell: React.FC<ShellProps> = ({
   const mainBody = (
     <>
       <header className="wa-vnext__header">
-        <div className="wa-vnext__heading-copy">
-          <h1>{title}</h1>
+        <div
+          className={`wa-vnext__heading-copy${heading ? ' wa-vnext__heading-copy--custom' : ''}`}
+        >
+          <h1>{heading ?? title}</h1>
           {description ? <p>{description}</p> : null}
         </div>
         {headerActions ? (

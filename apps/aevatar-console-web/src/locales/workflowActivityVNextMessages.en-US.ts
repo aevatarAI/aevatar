@@ -58,6 +58,7 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.common.empty': 'Empty',
   'workflowActivityVNext.common.failed': 'Failed',
   'workflowActivityVNext.common.no': 'No',
+  'workflowActivityVNext.common.notReported': 'Not reported',
   'workflowActivityVNext.common.open': 'Open',
   'workflowActivityVNext.common.pending': 'Pending',
   'workflowActivityVNext.common.refresh': 'Refresh',
@@ -77,10 +78,6 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.editor.activityObserved': 'Observed in Activity',
   'workflowActivityVNext.editor.activityObservedDescription':
     'You can review its details and progress.',
-  'workflowActivityVNext.editor.activityObserving':
-    'Checking Activity for this run…',
-  'workflowActivityVNext.editor.activityObservingDescription':
-    'Checking for this run now.',
   'workflowActivityVNext.editor.activityUnavailable': 'Activity unavailable',
   'workflowActivityVNext.editor.activityUnavailableDescription':
     'Try again to check the latest status.',
@@ -100,6 +97,8 @@ const workflowActivityVNextMessages = {
     'Publish this workflow before running it.',
   'workflowActivityVNext.editor.publishLatestBeforeRun':
     'Save and publish the latest changes before running.',
+  'workflowActivityVNext.editor.publicationStatusAria':
+    'Workflow publication status',
   'workflowActivityVNext.editor.publishUnavailable':
     "Publishing isn't available for this workflow yet.",
   'workflowActivityVNext.editor.publishedRunDrawer': 'Run published workflow',
@@ -109,74 +108,29 @@ const workflowActivityVNextMessages = {
     'Wait for the workflow update to finish.',
   'workflowActivityVNext.editor.waitForPublishedRun':
     'Wait for the published revision to become available.',
-  'workflowActivityVNext.publish.accepted': 'Publication accepted',
-  'workflowActivityVNext.publish.approvalNotRequired':
-    'No additional approval is required.',
-  'workflowActivityVNext.publish.approvalRequired':
-    'Approval is required before this request can run.',
   'workflowActivityVNext.publish.addExecutableStep':
     'Add at least one executable step before publishing.',
   'workflowActivityVNext.publish.applyNodeChanges':
     'Apply or discard node configuration before publishing.',
-  'workflowActivityVNext.publish.backToService': 'Back',
   'workflowActivityVNext.publish.blocked': 'Publish blocked · {count} issues',
   'workflowActivityVNext.publish.blockedOne': 'Publish blocked · 1 issue',
-  'workflowActivityVNext.publish.checkAgain': 'Check again',
-  'workflowActivityVNext.publish.delayed':
-    'Publication is taking longer to appear',
-  'workflowActivityVNext.publish.delayedDescription':
-    'Check again for the latest publishing status.',
-  'workflowActivityVNext.publish.destinationDescription':
-    'Choose the service that will use {workflowName}.',
   'workflowActivityVNext.publish.failed': "Publication couldn't be confirmed",
   'workflowActivityVNext.publish.failedDescription':
-    'Review the workflow or try publishing again.',
+    'Resolve the error or try publishing again.',
   'workflowActivityVNext.publish.forbiddenDescription':
     "You don't have access to check this publication.",
-  'workflowActivityVNext.publish.loadingServices': 'Loading services…',
-  'workflowActivityVNext.publish.noExternalRequests':
-    'No external requests need review.',
-  'workflowActivityVNext.publish.noServices':
-    'No services are available in this workspace',
-  'workflowActivityVNext.publish.observed': 'Workflow published',
-  'workflowActivityVNext.publish.observedDescription':
-    'The selected service is now using this workflow.',
-  'workflowActivityVNext.publish.observingDescription':
-    'Checking whether the selected service is ready.',
   'workflowActivityVNext.publish.published': 'Published',
   'workflowActivityVNext.publish.publishedServiceId': 'Published service ID',
   'workflowActivityVNext.publish.publishing': 'Publishing',
-  'workflowActivityVNext.publish.publishingTo': 'Publishing to {service}',
   'workflowActivityVNext.publish.revisionId': 'Revision ID',
-  'workflowActivityVNext.publish.reviewAgain': 'Review again',
-  'workflowActivityVNext.publish.reviewAndPublish': 'Review and publish',
-  'workflowActivityVNext.publish.reviewDescription':
-    'Review what this workflow may do when it runs.',
-  'workflowActivityVNext.publish.reviewing': 'Reviewing publication…',
-  'workflowActivityVNext.publish.reviewingDescription':
-    'Preparing this workflow for review.',
-  'workflowActivityVNext.publish.reviewUnavailable':
-    "We couldn't prepare this workflow for publishing.",
   'workflowActivityVNext.publish.readinessIssues': 'Publish readiness issues',
+  'workflowActivityVNext.publish.success': 'Workflow published',
   'workflowActivityVNext.publish.resolvePublication':
     'Resolve the current publication status before publishing again.',
-  'workflowActivityVNext.publish.risk': 'Impact',
-  'workflowActivityVNext.publish.risk.destructive':
-    'May delete or permanently change data',
-  'workflowActivityVNext.publish.risk.readOnly': 'Read only',
-  'workflowActivityVNext.publish.risk.write': 'Can make changes',
   'workflowActivityVNext.publish.saveBeforePublishing':
     'Save this workflow before publishing.',
   'workflowActivityVNext.publish.saveChangesBeforePublishing':
     'Save your changes before publishing.',
-  'workflowActivityVNext.publish.selectService': 'Choose a service',
-  'workflowActivityVNext.publish.service': 'Service',
-  'workflowActivityVNext.publish.servicesUnavailable':
-    'Services are unavailable',
-  'workflowActivityVNext.publish.submitting': 'Submitting publication…',
-  'workflowActivityVNext.publish.submittingDescription':
-    'Sending this workflow to the selected service.',
-  'workflowActivityVNext.publish.title': 'Publish workflow',
   'workflowActivityVNext.publish.waitForPublication':
     'Wait for the current publication to finish.',
   'workflowActivityVNext.publish.waitForEditorUpdate':
@@ -185,7 +139,6 @@ const workflowActivityVNextMessages = {
     'Wait for workflow validation and saving to finish.',
   'workflowActivityVNext.publish.waitForSavedDraft':
     'Wait for the saved draft to become readable.',
-  'workflowActivityVNext.publish.workflowId': 'Workflow ID',
   'workflowActivityVNext.publish.unauthorizedDescription':
     'Sign in again to check this publication.',
   'workflowActivityVNext.editor.checkLatestStatus': 'Check latest status',
@@ -195,7 +148,6 @@ const workflowActivityVNextMessages = {
     'Open run details for the full timeline, diagnostics, and recovery actions.',
   'workflowActivityVNext.editor.openRunDetails': 'Open run details',
   'workflowActivityVNext.editor.outputSummary': 'Output summary',
-  'workflowActivityVNext.editor.runAccepted': 'Run accepted',
   'workflowActivityVNext.editor.runAgain': 'Run again',
   'workflowActivityVNext.editor.runFailed': 'Run failed',
   'workflowActivityVNext.editor.runInput': 'Input',
@@ -209,7 +161,6 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.editor.runResult': 'Run result',
   'workflowActivityVNext.editor.runUnavailable':
     'Add at least one valid step before running.',
-  'workflowActivityVNext.editor.runSubmitting': 'Starting run…',
   'workflowActivityVNext.editor.retryActivityObservation': 'Check again',
   'workflowActivityVNext.editor.saveDelayed':
     'Save is taking longer than expected',
@@ -225,8 +176,6 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.editor.saved': 'Saved',
   'workflowActivityVNext.editor.savedAt': 'Saved at {updatedAt}',
   'workflowActivityVNext.editor.stay': 'Stay',
-  'workflowActivityVNext.editor.streamEnded':
-    'Live updates ended. Open Activity to check the latest status.',
   'workflowActivityVNext.editor.submitRun': 'Start run',
   'workflowActivityVNext.editor.submittedInput': 'Submitted input',
   'workflowActivityVNext.editor.snapshotNotice':
@@ -271,8 +220,6 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.nodeInspector.discardTitle': 'Discard node changes?',
   'workflowActivityVNext.nodeInspector.nextStep': 'Next step',
   'workflowActivityVNext.nodeInspector.noBranches': 'No branches',
-  'workflowActivityVNext.nodeInspector.noGuidedFields':
-    'Guided options are not available for this step yet.',
   'workflowActivityVNext.nodeInspector.notSet': 'Not set',
   'workflowActivityVNext.nodeInspector.rawConfigurationAria':
     'Raw configuration',
@@ -386,6 +333,8 @@ const workflowActivityVNextMessages = {
     'Choose a creation method now. Your input stays on this page while you restore access.',
   'workflowActivityVNext.new.yaml': 'Workflow YAML',
   'workflowActivityVNext.run.backAria': 'Back to Activity',
+  'workflowActivityVNext.run.attempted': 'Attempted',
+  'workflowActivityVNext.run.branch': 'Branch',
   'workflowActivityVNext.run.changeConfiguration': 'Change configuration',
   'workflowActivityVNext.run.commandId': 'Request ID',
   'workflowActivityVNext.run.code': 'Code',
@@ -398,9 +347,16 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.run.cost': 'Cost',
   'workflowActivityVNext.run.costWarning':
     'This action may incur new model or tool cost.',
+  'workflowActivityVNext.run.currencyNotReported': 'Currency not reported',
   'workflowActivityVNext.run.definitionRevision': 'Definition revision',
   'workflowActivityVNext.run.diagnostics': 'Diagnostics',
+  'workflowActivityVNext.run.duration': 'Duration',
+  'workflowActivityVNext.run.durationMinutes': '{minutes}m',
+  'workflowActivityVNext.run.durationMinutesSeconds': '{minutes}m {seconds}s',
+  'workflowActivityVNext.run.durationSeconds': '{seconds}s',
   'workflowActivityVNext.run.error': 'Final error',
+  'workflowActivityVNext.run.executionPath': 'Execution path',
+  'workflowActivityVNext.run.failed': 'Failed',
   'workflowActivityVNext.run.failedSummary': 'The run did not complete.',
   'workflowActivityVNext.run.fixAccess': 'Fix access',
   'workflowActivityVNext.run.description':
@@ -409,18 +365,23 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.run.forkAccepted': 'New run accepted',
   'workflowActivityVNext.run.forkAcceptedDescription':
     'Open Activity to follow its progress.',
-  'workflowActivityVNext.run.graph': 'Graph',
-  'workflowActivityVNext.run.graphLoading': 'Loading run graph…',
-  'workflowActivityVNext.run.graphSummary': '{nodes} nodes · {edges} edges',
-  'workflowActivityVNext.run.graphUnavailable': 'Run graph unavailable',
   'workflowActivityVNext.run.input': 'Input',
+  'workflowActivityVNext.run.initiator': 'Initiator',
+  'workflowActivityVNext.run.inputSummary': 'Input summary',
   'workflowActivityVNext.run.loading': 'Loading run…',
   'workflowActivityVNext.run.loadingDescription': 'Loading run details…',
   'workflowActivityVNext.run.newActorId': 'Run address',
+  'workflowActivityVNext.run.nextStepId': 'Next step ID',
+  'workflowActivityVNext.run.noExecutionPath':
+    'No execution path is available yet.',
+  'workflowActivityVNext.run.noOutcomeYet':
+    'No final outcome is available yet.',
   'workflowActivityVNext.run.noSteps': 'No steps are available yet.',
   'workflowActivityVNext.run.noDiagnostics': 'No diagnostics were returned.',
   'workflowActivityVNext.run.noTimeline': 'No timeline events are visible yet.',
   'workflowActivityVNext.run.output': 'Final output',
+  'workflowActivityVNext.run.outcome': 'Outcome',
+  'workflowActivityVNext.run.overview': 'Overview',
   'workflowActivityVNext.run.message': 'Message',
   'workflowActivityVNext.run.promptTokens': 'Prompt tokens',
   'workflowActivityVNext.run.requestedSteps': 'Requested steps',
@@ -431,6 +392,10 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.run.priorOutputsReused':
     'Prior step outputs will be reused.',
   'workflowActivityVNext.run.relatedRuns': 'Related runs',
+  'workflowActivityVNext.run.reported': 'Reported',
+  'workflowActivityVNext.run.reportingState': 'Reporting state',
+  'workflowActivityVNext.run.result': 'Result',
+  'workflowActivityVNext.run.reviewFailedStep': 'Review failed step',
   'workflowActivityVNext.run.retry': 'Retry failed step',
   'workflowActivityVNext.run.retryAuthorityMissing':
     'Retry eligibility was not provided by the run service.',
@@ -441,26 +406,44 @@ const workflowActivityVNextMessages = {
     'Run-again eligibility was not provided by the run service.',
   'workflowActivityVNext.run.runAgainUnavailable':
     "Run again isn't available for this run.",
+  'workflowActivityVNext.run.runId': 'Run ID',
   'workflowActivityVNext.run.roleReplies': 'Role replies',
   'workflowActivityVNext.run.severity': 'Severity',
   'workflowActivityVNext.run.sourceImmutable':
     "This starts a new run. The original run won't change.",
+  'workflowActivityVNext.run.skipped': 'Skipped',
   'workflowActivityVNext.run.startFailed': "The new run couldn't be started",
   'workflowActivityVNext.run.startingStep': 'Starting step',
   'workflowActivityVNext.run.statusUrl': 'Status URL',
   'workflowActivityVNext.run.statisticsUsage': 'Statistics and usage',
   'workflowActivityVNext.run.step': 'Step',
+  'workflowActivityVNext.run.stepId': 'Step ID',
   'workflowActivityVNext.run.stepFailedSummary': 'This step did not complete.',
   'workflowActivityVNext.run.steps': 'Steps',
+  'workflowActivityVNext.run.stateVersion': 'State version',
+  'workflowActivityVNext.run.succeeded': 'Succeeded',
   'workflowActivityVNext.run.timeline': 'Timeline',
+  'workflowActivityVNext.run.timelineEvent.completed': 'Run completed',
+  'workflowActivityVNext.run.timelineEvent.failed': 'Run failed',
+  'workflowActivityVNext.run.timelineEvent.response':
+    'Step produced a response',
+  'workflowActivityVNext.run.timelineEvent.started': 'Run started',
+  'workflowActivityVNext.run.timelineEvent.stopped': 'Run stopped',
+  'workflowActivityVNext.run.timelineEvent.toolFinished': 'Tool finished',
+  'workflowActivityVNext.run.timelineEvent.toolStarted': 'Tool started',
+  'workflowActivityVNext.run.timelineEvent.updated': 'Run updated',
+  'workflowActivityVNext.run.toolCalls': 'Tool calls',
   'workflowActivityVNext.run.totalSteps': 'Total steps',
   'workflowActivityVNext.run.totalTokens': 'Total tokens',
   'workflowActivityVNext.run.type': 'Type',
+  'workflowActivityVNext.run.usage': 'Usage',
   'workflowActivityVNext.run.unavailable': 'Run unavailable',
   'workflowActivityVNext.run.unavailableDescription':
     "This run couldn't be loaded.",
   'workflowActivityVNext.run.unavailableGuidance':
     'Try again to load this run.',
+  'workflowActivityVNext.run.wait': 'Wait',
+  'workflowActivityVNext.run.waiting': 'Waiting',
   'workflowActivityVNext.settings.account': 'Account',
   'workflowActivityVNext.settings.accountDescription':
     'Your profile and access.',
@@ -534,7 +517,6 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.settings.saveObserved': 'Settings saved',
   'workflowActivityVNext.settings.savedModelUnavailable':
     'The saved model is unavailable. Your saved value remains unchanged.',
-  'workflowActivityVNext.settings.saving': 'Saving changes…',
   'workflowActivityVNext.settings.sectionsAria': 'Settings sections',
   'workflowActivityVNext.settings.serviceDefaultModel':
     'Uses the service default model.',
