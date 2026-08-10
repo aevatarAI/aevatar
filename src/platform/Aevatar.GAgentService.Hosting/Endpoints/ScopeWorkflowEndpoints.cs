@@ -39,6 +39,12 @@ public static class ScopeWorkflowEndpoints
         group.MapPost("/{scopeId}/workflows:save-and-bind", HandleSaveAndBindWorkflowAsync)
             .Produces<ScopeWorkflowSaveAndBindResult>(StatusCodes.Status202Accepted)
             .Produces(StatusCodes.Status400BadRequest);
+        group.MapPost("/{scopeId}/workflows/{workflowId}:archive", HandleArchiveWorkflowAsync)
+            .Produces<ScopeWorkflowArchiveAcceptedResult>(StatusCodes.Status202Accepted)
+            .Produces(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status403Forbidden)
+            .Produces(StatusCodes.Status404NotFound)
+            .Produces(StatusCodes.Status409Conflict);
         group.MapPost("/{scopeId}/workflows:explicit-request-preview", HandleExplicitRequestPreviewAsync)
             .Produces<ExplicitRequestPreviewHttpResult>(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status400BadRequest);
@@ -75,6 +81,14 @@ public static class ScopeWorkflowEndpoints
         [FromServices] IScopeWorkflowSaveAndBindPort saveAndBindPort,
         CancellationToken ct)
         => await HandleSaveAndBindWorkflowAsyncCore(http, scopeId, request, saveAndBindPort, ct);
+
+    internal static async Task<IResult> HandleArchiveWorkflowAsync(
+        HttpContext http,
+        string scopeId,
+        string workflowId,
+        [FromServices] IScopeWorkflowArchiveCommandPort archiveCommandPort,
+        CancellationToken ct)
+        => await HandleArchiveWorkflowAsyncCore(http, scopeId, workflowId, archiveCommandPort, ct);
 
     internal static async Task<IResult> HandleExplicitRequestPreviewAsync(
         HttpContext http,
@@ -229,6 +243,44 @@ public static class ScopeWorkflowEndpoints
             return Results.BadRequest(new
             {
                 code = "INVALID_USER_WORKFLOW_REQUEST",
+                message = ex.Message,
+            });
+        }
+    }
+
+    private static async Task<IResult> HandleArchiveWorkflowAsyncCore(
+        HttpContext http,
+        string scopeId,
+        string workflowId,
+        IScopeWorkflowArchiveCommandPort archiveCommandPort,
+        CancellationToken ct)
+    {
+        try
+        {
+            if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+                return denied;
+
+            var result = await archiveCommandPort.ArchiveAsync(
+                new ScopeWorkflowArchiveRequest(scopeId, workflowId),
+                ct);
+            return Results.Accepted(result.ReadModelUrl, result);
+        }
+        catch (ScopeWorkflowArchiveRejectedException ex)
+        {
+            var statusCode = ex.Kind == ScopeWorkflowArchiveRejectionKind.NotFound
+                ? StatusCodes.Status404NotFound
+                : StatusCodes.Status409Conflict;
+            return Results.Json(new
+            {
+                code = ex.Code,
+                message = ex.Message,
+            }, statusCode: statusCode);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new
+            {
+                code = "INVALID_USER_WORKFLOW_ARCHIVE_REQUEST",
                 message = ex.Message,
             });
         }

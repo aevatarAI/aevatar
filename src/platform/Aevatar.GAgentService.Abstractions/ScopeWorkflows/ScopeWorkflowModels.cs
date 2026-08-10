@@ -32,6 +32,10 @@ public sealed record ScopeWorkflowSaveAndBindRequest(
     public WorkflowCapabilityAdmissionContext? CapabilityAdmission { get; init; }
 }
 
+public sealed record ScopeWorkflowArchiveRequest(
+    string ScopeId,
+    string WorkflowId);
+
 public enum ScopeWorkflowLookupStatus
 {
     NotFound = 0,
@@ -121,5 +125,14 @@ public sealed record ScopeWorkflowSaveAndBindResult(
     string RevisionId,
     ScopeWorkflowUpsertResult Workflow,
     ScopeBindingUpsertResult Binding,
+    string AcceptanceStage = "accepted",
+    string PropagationStage = "readmodel_propagating");
+
+public sealed record ScopeWorkflowArchiveAcceptedResult(
+    string ScopeId,
+    string WorkflowId,
+    string DeploymentId,
+    ScopeWorkflowCommandAcceptedHandle CommandHandle,
+    string ReadModelUrl,
     string AcceptanceStage = "accepted",
     string PropagationStage = "readmodel_propagating");
