@@ -13,6 +13,7 @@ using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgents.NyxidChat.WorkflowRunDelivery;
+using Aevatar.GAgents.Platform.Lark;
 using Aevatar.Workflow.Abstractions;
 using FluentAssertions;
 using Google.Protobuf;
@@ -73,6 +74,33 @@ public sealed class WorkflowRunDeliveryGAgentTests
         await context.Agent.HandleEventAsync(Envelope(terminal, WorkflowActorId));
 
         AssertDelivered(context.Agent, handler, "Workflow run completed without a result to display.");
+    }
+
+    [Fact]
+    public async Task CompletedLarkTerminalWithUnlabeledJsonFence_ShouldDeliverKeyValueText()
+    {
+        var handler = new RecordingJsonHandler();
+        var context = await CreateContextAsync(handler);
+        await ReserveAndStartAsync(context);
+        var terminal = Terminal(context.TimeProvider);
+        terminal.Output = """
+            Result:
+
+            ```
+            {"name":"Ada","role":"admin"}
+            ```
+            """;
+
+        await context.Agent.HandleEventAsync(Envelope(terminal, WorkflowActorId));
+
+        context.Agent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Delivered);
+        var request = handler.Requests.Should().ContainSingle().Subject;
+        using var document = System.Text.Json.JsonDocument.Parse(request.Body);
+        var text = document.RootElement.GetProperty("reply").GetProperty("text").GetString();
+        text.Should().Contain("name: Ada");
+        text.Should().Contain("role: admin");
+        text.Should().NotContain("{\"name\"");
+        text.Should().NotContain("|");
     }
 
     [Fact]
@@ -668,7 +696,7 @@ public sealed class WorkflowRunDeliveryGAgentTests
         return new NyxIdRelayOutboundPort(
             client,
             NullLogger<NyxIdRelayOutboundPort>.Instance,
-            [new PlainTextComposer("lark")]);
+            [new LarkMessageComposer()]);
     }
 
     private sealed record TestContext(
@@ -789,19 +817,4 @@ public sealed class WorkflowRunDeliveryGAgentTests
         }
     }
 
-    private sealed class PlainTextComposer(string platform) : IMessageComposer<PlainTextPayload>
-    {
-        public ChannelId Channel { get; } = ChannelId.From(platform);
-
-        public PlainTextPayload Compose(MessageContent intent, ComposeContext context) =>
-            new(intent.Text ?? string.Empty);
-
-        object IMessageComposer.Compose(MessageContent intent, ComposeContext context) =>
-            Compose(intent, context);
-
-        public ComposeCapability Evaluate(MessageContent intent, ComposeContext context) =>
-            ComposeCapability.Exact;
-    }
-
-    private sealed record PlainTextPayload(string PlainText) : IPlainTextComposedMessage;
 }

@@ -1,9 +1,13 @@
+using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.Studio.Hosting;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Abstractions.Credentials;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Primitives;
 
 namespace Aevatar.Studio.Tests;
@@ -11,7 +15,7 @@ namespace Aevatar.Studio.Tests;
 public sealed class WorkflowCapabilityAdmissionHttpContextTests
 {
     [Fact]
-    public void Create_ShouldMapOnlyTypedExplicitRequestConfirmationFields()
+    public async Task CreateAsync_ShouldMapOnlyTypedExplicitRequestConfirmationFields()
     {
         var http = new DefaultHttpContext
         {
@@ -28,11 +32,11 @@ public sealed class WorkflowCapabilityAdmissionHttpContextTests
                 "read_only"),
         };
 
-        var serviceAdmission = WorkflowCapabilityAdmissionHttpContext.Create(
+        var serviceAdmission = await WorkflowCapabilityAdmissionHttpContext.CreateAsync(
             http,
             ExternalCapabilityExecutionMode.Durable,
             explicitRequestConfirmations: inputs);
-        var studioAdmission = StudioWorkflowCapabilityAdmissionHttpContext.Create(
+        var studioAdmission = await StudioWorkflowCapabilityAdmissionHttpContext.CreateAsync(
             http,
             ExternalCapabilityExecutionMode.Interactive,
             inputs);
@@ -51,22 +55,22 @@ public sealed class WorkflowCapabilityAdmissionHttpContextTests
     }
 
     [Fact]
-    public void Create_WithNullExplicitRequestConfirmation_ShouldRejectAtSharedHttpBoundary()
+    public async Task CreateAsync_WithNullExplicitRequestConfirmation_ShouldRejectAtSharedHttpBoundary()
     {
         var http = new DefaultHttpContext();
         NyxIdExplicitRequestConfirmationInput[] inputs = [null!];
 
-        var serviceAction = () => WorkflowCapabilityAdmissionHttpContext.Create(
+        Func<Task> serviceAction = async () => await WorkflowCapabilityAdmissionHttpContext.CreateAsync(
             http,
             explicitRequestConfirmations: inputs);
-        var studioAction = () => StudioWorkflowCapabilityAdmissionHttpContext.Create(
+        Func<Task> studioAction = async () => await StudioWorkflowCapabilityAdmissionHttpContext.CreateAsync(
             http,
             ExternalCapabilityExecutionMode.Interactive,
             inputs);
 
         foreach (var action in new[] { serviceAction, studioAction })
         {
-            action.Should().Throw<InvalidOperationException>()
+            await action.Should().ThrowAsync<InvalidOperationException>()
                 .WithMessage("Explicit request confirmations cannot contain null values.");
         }
     }
@@ -76,7 +80,7 @@ public sealed class WorkflowCapabilityAdmissionHttpContextTests
     [InlineData("delegation_only", null, "delegation-token")]
     [InlineData("both_valid", "bearer-token", null)]
     [InlineData("missing", null, null)]
-    public void Create_ShouldApplyCanonicalCallerCredentialSelection(
+    public async Task CreateAsync_ShouldApplyCanonicalCallerCredentialSelection(
         string scenario,
         string? expectedSourceReadableToken,
         string? expectedDelegationToken)
@@ -86,7 +90,7 @@ public sealed class WorkflowCapabilityAdmissionHttpContextTests
             var http = new DefaultHttpContext();
             ApplyScenario(http, scenario);
 
-            var admission = create(http);
+            var admission = await create(http);
 
             admission.NyxIdCallerCredential?.SourceReadableUserBearerToken.Should()
                 .Be(expectedSourceReadableToken, name);
@@ -100,28 +104,84 @@ public sealed class WorkflowCapabilityAdmissionHttpContextTests
     [InlineData("valid_authorization_with_malformed_delegation")]
     [InlineData("duplicate_authorization")]
     [InlineData("duplicate_delegation")]
-    public void Create_WithInvalidCallerCredentialSelection_ShouldFailClosed(string scenario)
+    public async Task CreateAsync_WithInvalidCallerCredentialSelection_ShouldFailClosed(string scenario)
     {
         foreach (var (name, create) in AdmissionFactories)
         {
             var http = new DefaultHttpContext();
             ApplyScenario(http, scenario);
 
-            var action = () => create(http);
+            Func<Task> action = async () => await create(http);
 
-            action.Should().Throw<InvalidOperationException>(name)
+            await action.Should().ThrowAsync<InvalidOperationException>(name)
                 .WithMessage("Caller credential selection is invalid.");
         }
     }
 
-    private static IReadOnlyList<(string Name, Func<HttpContext, WorkflowCapabilityAdmissionContext> Create)>
+    [Fact]
+    public async Task CreateAsync_DelegationOnly_ShouldUseBoundSourceReadableCredential()
+    {
+        foreach (var (name, create) in AdmissionFactories)
+        {
+            var tokenProvider = new RecordingCallerAccessTokenProvider("source-readable-alpha");
+            var services = new ServiceCollection()
+                .AddLogging()
+                .AddSingleton<IExternalIdentityBindingQueryPort>(
+                    new FixedBindingQueryPort("binding-alpha"))
+                .AddSingleton<IWorkflowCallerAccessTokenProvider>(tokenProvider)
+                .BuildServiceProvider();
+            var http = new DefaultHttpContext
+            {
+                RequestServices = services,
+                User = new System.Security.Claims.ClaimsPrincipal(
+                    new System.Security.Claims.ClaimsIdentity(
+                    [new System.Security.Claims.Claim("sub", "nyx-user-alpha")],
+                    "nyxid")),
+            };
+            http.Request.Headers["X-NyxID-Delegation-Token"] = "delegation-alpha";
+
+            var admission = await create(http);
+
+            admission.NyxIdCallerCredential?.SourceReadableUserBearerToken.Should()
+                .Be("source-readable-alpha", name);
+            admission.NyxIdCallerCredential?.ProxyDelegationToken.Should().BeNull(name);
+            tokenProvider.Authority?.BindingId.Should().Be("binding-alpha", name);
+        }
+    }
+
+    private static IReadOnlyList<(
+        string Name,
+        Func<HttpContext, ValueTask<WorkflowCapabilityAdmissionContext>> Create)>
         AdmissionFactories { get; } =
         [
-            ("GAgentService", http => WorkflowCapabilityAdmissionHttpContext.Create(http)),
-            ("Studio", http => StudioWorkflowCapabilityAdmissionHttpContext.Create(
+            ("GAgentService", http => WorkflowCapabilityAdmissionHttpContext.CreateAsync(http)),
+            ("Studio", http => StudioWorkflowCapabilityAdmissionHttpContext.CreateAsync(
                 http,
                 ExternalCapabilityExecutionMode.Interactive)),
         ];
+
+    private sealed class FixedBindingQueryPort(string bindingId)
+        : IExternalIdentityBindingQueryPort
+    {
+        public Task<BindingId?> ResolveAsync(
+            ExternalSubjectRef externalSubject,
+            CancellationToken ct = default) =>
+            Task.FromResult<BindingId?>(new BindingId { Value = bindingId });
+    }
+
+    private sealed class RecordingCallerAccessTokenProvider(string accessToken)
+        : IWorkflowCallerAccessTokenProvider
+    {
+        public WorkflowCallerNyxIdAuthority? Authority { get; private set; }
+
+        public Task<string> IssueAsync(
+            WorkflowCallerNyxIdAuthority authority,
+            CancellationToken ct = default)
+        {
+            Authority = authority;
+            return Task.FromResult(accessToken);
+        }
+    }
 
     private static void ApplyScenario(DefaultHttpContext http, string scenario)
     {

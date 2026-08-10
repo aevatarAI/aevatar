@@ -1333,6 +1333,9 @@ public class WorkflowRoleGAgent(
             .ToList();
         var contentParts = new List<ContentPart>();
         TokenUsage? usage = null;
+        var sessionDeltas = CreateSessionDeltaBatcher(
+            request.SessionId,
+            publishParentDeltas: false);
 
         WorkflowIntentReplayRecord CaptureReplay()
         {
@@ -1407,18 +1410,12 @@ public class WorkflowRoleGAgent(
                 if (!string.IsNullOrEmpty(chunk.DeltaContent))
                 {
                     fullContent.Append(chunk.DeltaContent);
-                    await PersistSessionProgressAsync(
-                        request.SessionId,
-                        progress => progress.TextDelta = new RoleChatTextDeltaProgress
-                        {
-                            Delta = chunk.DeltaContent,
-                        },
-                        streamCt);
-                    streamCt.ThrowIfCancellationRequested();
+                    await sessionDeltas.AppendTextAsync(chunk.DeltaContent, streamCt);
                 }
 
                 if (chunk.DeltaContentPart != null)
                 {
+                    await sessionDeltas.FlushAsync(streamCt);
                     contentParts.Add(chunk.DeltaContentPart);
                     await PersistSessionProgressAsync(
                         request.SessionId,
@@ -1434,14 +1431,7 @@ public class WorkflowRoleGAgent(
                 if (!string.IsNullOrEmpty(chunk.DeltaReasoningContent))
                 {
                     fullReasoning.Append(chunk.DeltaReasoningContent);
-                    await PersistSessionProgressAsync(
-                        request.SessionId,
-                        progress => progress.ReasoningDelta = new RoleChatReasoningDeltaProgress
-                        {
-                            Delta = chunk.DeltaReasoningContent,
-                        },
-                        streamCt);
-                    streamCt.ThrowIfCancellationRequested();
+                    await sessionDeltas.AppendReasoningAsync(chunk.DeltaReasoningContent, streamCt);
                 }
 
                 if (chunk.DeltaToolCall != null)
@@ -1449,6 +1439,7 @@ public class WorkflowRoleGAgent(
 
                 if (chunk.ToolCallStarted != null)
                 {
+                    await sessionDeltas.FlushAsync(streamCt);
                     var started = chunk.ToolCallStarted;
                     await PersistSessionProgressAsync(
                         request.SessionId,
@@ -1467,6 +1458,7 @@ public class WorkflowRoleGAgent(
 
                 if (chunk.ToolCallCompleted != null)
                 {
+                    await sessionDeltas.FlushAsync(streamCt);
                     var completed = chunk.ToolCallCompleted;
                     var toolResult = new ToolResultEvent
                     {
@@ -1505,6 +1497,7 @@ public class WorkflowRoleGAgent(
         }
 
         streamCt.ThrowIfCancellationRequested();
+        await sessionDeltas.FlushAsync(streamCt);
         return CaptureReplay();
     }
 

@@ -327,6 +327,36 @@ public sealed class SkillWorkflowsWiringTests
     }
 
     [Fact]
+    public void UseSkillTool_AcceptedMountWithoutCanonicalObservation_ShouldReturnTypedBlocker()
+    {
+        var tool = new UseSkillTool(new LocalSkillCatalog());
+        const string arguments =
+            "{\"skill\":\"translator\",\"mount_workflows\":true," +
+            "\"workflow_mount_confirmation_token\":\"sha256:alpha\"}";
+        const string result = """
+            {
+              "result_type": "skill_load",
+              "status": "success",
+              "loaded": true,
+              "workflow_mount": {
+                "status": "mount_observation_unavailable",
+                "mounted": false,
+                "read_model_observed": false,
+                "failure_code": "USE_SKILL_MOUNT_READ_MODEL_UNAVAILABLE"
+              }
+            }
+            """;
+
+        var receipt = tool.CreateResultReceipt("call-mount", tool.Name, arguments, result);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.Effect.Should().Be(AgentToolReceiptEffect.Mutating);
+        receipt.MutationStage.Should().Be(AgentToolReceiptMutationStage.Accepted);
+        receipt.ErrorCode.Should().Be("USE_SKILL_MOUNT_READ_MODEL_UNAVAILABLE");
+    }
+
+    [Fact]
     public async Task UseSkillTool_MountWorkflowsTrueWithoutScope_ReturnsErrorAndDoesNotUpsert()
     {
         var previous = AgentToolRequestContext.Current;

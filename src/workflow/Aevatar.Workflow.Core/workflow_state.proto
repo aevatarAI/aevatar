@@ -486,11 +486,65 @@ message PendingToolCallApprovalState
   string idempotency_key = 10;
   ExternalToolInvocationSpec external_invocation = 11;
   int64 issued_at_unix_ms = 12;
+  WorkflowSuspendedEvent suspension = 13;
+  bool suspension_published = 14;
+}
+
+enum WorkflowToolCallTerminalDecision
+{
+  WORKFLOW_TOOL_CALL_TERMINAL_DECISION_UNSPECIFIED = 0;
+  WORKFLOW_TOOL_CALL_TERMINAL_DECISION_NO_APPROVAL = 1;
+  WORKFLOW_TOOL_CALL_TERMINAL_DECISION_APPROVED = 2;
+  WORKFLOW_TOOL_CALL_TERMINAL_DECISION_DENIED = 3;
+}
+
+message WorkflowToolCallCompletionOutboxEntry
+{
+  string call_id = 1;
+  string execution_id = 2;
+  WorkflowToolCallCompletedEvent tool_completion = 3;
+  StepCompletedEvent step_completion = 4;
+  bool tool_completion_published = 5;
+  bool step_completion_published = 6;
+  string run_id = 7;
+  string step_id = 8;
+  string approval_request_id = 9;
+  WorkflowToolCallTerminalDecision terminal_decision = 10;
+}
+
+message WorkflowToolCallCompletionTombstone
+{
+  string run_id = 1;
+  string step_id = 2;
+  string call_id = 3;
+  string execution_id = 4;
+  string approval_request_id = 5;
+  WorkflowToolCallTerminalDecision terminal_decision = 6;
+}
+
+enum WorkflowToolCallPublicationKind
+{
+  WORKFLOW_TOOL_CALL_PUBLICATION_KIND_UNSPECIFIED = 0;
+  WORKFLOW_TOOL_CALL_PUBLICATION_KIND_COMPLETION = 1;
+  WORKFLOW_TOOL_CALL_PUBLICATION_KIND_SUSPENSION = 2;
+}
+
+message WorkflowToolCallPublicationRetryFiredEvent
+{
+  WorkflowToolCallPublicationKind publication_kind = 1;
+  string run_id = 2;
+  string step_id = 3;
+  string call_id = 4;
+  string execution_id = 5;
+  string approval_request_id = 6;
+  WorkflowToolCallTerminalDecision terminal_decision = 7;
 }
 
 message ToolCallModuleState
 {
   map<string, PendingToolCallApprovalState> pending_approvals = 1;
+  repeated WorkflowToolCallCompletionOutboxEntry completions = 2;
+  map<string, WorkflowToolCallCompletionTombstone> completion_tombstones = 3;
 }
 
 message PendingApprovalState

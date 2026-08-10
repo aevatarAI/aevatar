@@ -505,15 +505,20 @@ steps:
 
 `while`/`loop` 使用 `step: tool_call` 时遵循同一规则。编译期缺少静态 selector，或 authored request 缺少匹配 grant，就直接产生 typed admission blocker，不能以空 capability plan 进入运行时。`file_artifact` is allowed only for an authored GET with `body_mode=none`; it retains managed workflow context, exact proxy authority, ingress byte limits, and `IWorkflowFileIngressPort` handling.
 
-#### NyxID `codex_exec` 工具
+#### NyxID `code_execute` 与 `codex_exec` 工具
 
-`codex_exec` 是 NyxID tool provider 暴露的受限执行路由，不是独立 workflow primitive，也不使用 Aevatar CLI connector 或 `~/.aevatar/connectors.json`。它只接受强类型 target；workflow 不能选择镜像、provider、Codex flags 或 sandbox/isolation 配置。
+`code_execute` 与 `codex_exec` 是 NyxID tool provider 暴露的两个独立执行动词，不是独立 workflow primitive，也不使用 Aevatar CLI connector 或 `~/.aevatar/connectors.json`。一个 chrono 部署可以同时实现两条上游 path，但必须由两个不同的 exact NyxID UserService ID 暴露，禁止共享 scope、凭据或 fallback：
 
-- `managed_sandbox`：Aevatar 通过 `ICodexExecutionPort` 使用用户级 Vault agent key 调用固定 NyxID `chrono-sandbox` proxy 路由，只接受 `empty_git` workspace 和最长 `180s` timeout。内部 canary 阶段 NyxID 为该请求注入五分钟 `proxy:*` delegation token，Codex 只配置固定 `chrono-llm-public` proxy URL；chrono-sandbox 负责 OpenSandbox、runner 镜像、gVisor 隔离、provider 配置与清理（ADR-0044）。用户必须先通过 authenticated self-service endpoint 完成 allowlisted credential provisioning；在 NyxID 提供窄 scope 前禁止扩大到全用户。
+- `code_execute`：执行调用方给出的精确源码；固定使用 `chrono-sandbox`、`/execute`、`forward_access_token=false`、`inject_delegation_token=true`、`sandbox:execute`，source-readable caller bearer 只用于 NyxID 鉴权并终止于 NyxID。
+- `codex_exec.managed_sandbox`：委托自然语言任务；固定使用 `chrono-managed-codex`、`/codex/execute`、`forward_access_token=false`、`inject_delegation_token=true`、`proxy:*`，Vault agent key 只作为 NyxID `X-API-Key` 并终止于 NyxID。
+
+两条路由都必须使用结构化 inventory 中的 exact UserService ID。`/execute` 不回退 `/run`，managed 路由不回退 `chrono-sandbox`，任一 identity 缺失、重复或 policy 不匹配都 fail closed。`codex_exec` 只接受强类型 target；workflow 不能选择镜像、provider、Codex flags 或 sandbox/isolation 配置。
+
+- `managed_sandbox`：Aevatar 通过 `ICodexExecutionPort` 使用用户级 Vault agent key 调用固定 NyxID `chrono-managed-codex` proxy 路由，只接受 `empty_git` workspace 和最长 `180s` timeout。内部 canary 阶段 NyxID 为该请求注入五分钟 `proxy:*` delegation token，Codex 只配置固定 `chrono-llm-public` proxy URL；chrono-sandbox 部署负责 OpenSandbox、runner 镜像、gVisor 隔离、provider 配置与清理（ADR-0044）。用户必须先通过 authenticated self-service endpoint 完成 allowlisted credential provisioning；在 NyxID 提供窄 scope 前禁止扩大到全用户。
 - `private_ssh`：`target.private_ssh.service` 是 NyxID SSH UserService 的 slug/UUID，不是 `node_id`；`principal` 是该 service 允许的 Unix principal。Codex 登录态、workspace 与 sandbox policy 由目标机固定 wrapper 负责，最长 `300s`。
 - prompt 最多 `6000` UTF-8 bytes，只通过 stdin/file boundary 进入固定命令，不参与 shell command 拼接。
 - managed target 返回包含 `status/target/output/exit_code/diagnostic_id/elapsed_ms` 的 JSON；private SSH target 保留 NyxID SSH executor 的结构化结果。
-- 配置检查、credential status 或 chrono-sandbox health 只证明局部依赖；必须运行真实 workflow sample 并得到精确 `CODEX_EXEC_READY` 才能声明可用。
+- 配置检查、credential status 或 chrono-sandbox 部署 health 只证明局部依赖；必须运行真实 workflow sample 并得到精确 `CODEX_EXEC_READY` 才能声明可用。Managed deadline 必须保持 `180s chrono < 300s Aevatar < >=315s NyxID/ingress < >=360s workflow`。
 - 安全：private SSH 只有显式设置 `NyxIdToolOptions.EnableSshExecTool` 才暴露，且始终要求匹配当前冻结参数的 actor-owned durable grant，不存在 approval bypass。managed sandbox 的启用由独立 host 配置和执行端口控制。
 
 Managed sample 不接收调用者路由参数：
@@ -522,7 +527,7 @@ Managed sample 不接收调用者路由参数：
 steps:
   - id: verify_managed_codex
     type: tool_call
-    timeout_ms: 200000
+    timeout_ms: 360000
     parameters:
       tool: codex_exec
       arguments: >-

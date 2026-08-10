@@ -44,5 +44,8 @@
     <EmbeddedResource Include="CapabilityApi\StudioAssistant\readiness.js" />
     <EmbeddedResource Include="CapabilityApi\StudioAssistant\styles.css" />
     <EmbeddedResource Include="CapabilityApi\StudioAssistant\transport.js" />
+    <EmbeddedResource Include="CapabilityApi\StudioAssistant\Vendor\lucide.min.js" />
+    <EmbeddedResource Include="CapabilityApi\StudioAssistant\Vendor\marked.min.js" />
+    <EmbeddedResource Include="CapabilityApi\StudioAssistant\Vendor\purify.min.js" />
   </ItemGroup>
 </Project>

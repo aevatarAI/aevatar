@@ -52,7 +52,7 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
         """;
 
     /// <summary>
-    /// Built-in <c>studio</c> workflow for the channel-less <c>/workflow/studio</c> authoring surface.
+    /// Built-in <c>studio</c> workflow retained for the frozen external compatibility adapter.
     ///
     /// <para>
     /// Unlike <see cref="BuiltInDirectYaml"/> (a zero-bias "helpful assistant" used by every channel-less
@@ -73,10 +73,9 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
     /// </para>
     ///
     /// <para>
-    /// The studio page selects this workflow by sending <c>workflow: "studio"</c> on <c>/api/chat</c>
-    /// (legacy-name lookup → <c>WorkflowChatSource.CatalogWorkflow("studio")</c>). It is the ONLY studio
-    /// scoping signal: no proto/surface field is added and the shared role agent is untouched, so other
-    /// <c>Direct</c> callers keep the benign <c>direct</c> prompt + unrestricted tool surface.
+    /// The pinned external caller selects this workflow by sending <c>workflow: "studio"</c> on
+    /// <c>/api/chat</c> (legacy-name lookup → <c>WorkflowChatSource.CatalogWorkflow("studio")</c>).
+    /// Aevatar-owned Studio chat does not use this workflow wrapper.
     /// </para>
     ///
     /// <para>

@@ -73,6 +73,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
 
     private readonly ILLMProviderFactory _llmProviderFactory;
     private readonly IReadOnlyList<IAgentToolSource> _toolSources;
+    private readonly IReadOnlyList<IAgentToolSource> _nyxIdChatToolSources;
     private readonly IReadOnlyList<IAgentRunMiddleware> _agentMiddlewares;
     private readonly IReadOnlyList<ILLMCallMiddleware> _llmMiddlewares;
     private readonly IAgentToolExecutionPort? _toolExecutionPort;
@@ -131,10 +132,12 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         ISystemSkillOverlayProvider? overlayProvider = null,
         ILarkOutboundClientFactory? larkOutboundClientFactory = null,
         IAgentToolExecutionPort? toolExecutionPort = null,
-        IRemoteSkillAccessTokenResolver? remoteSkillAccessTokenResolver = null)
+        IRemoteSkillAccessTokenResolver? remoteSkillAccessTokenResolver = null,
+        IEnumerable<IAgentToolSource>? nyxIdChatToolSources = null)
     {
         _llmProviderFactory = llmProviderFactory ?? throw new ArgumentNullException(nameof(llmProviderFactory));
         _toolSources = (toolSources ?? []).ToArray();
+        _nyxIdChatToolSources = (nyxIdChatToolSources ?? []).ToArray();
         _agentMiddlewares = (agentMiddlewares ?? []).ToArray();
         _llmMiddlewares = (llmMiddlewares ?? []).ToArray();
         _toolExecutionPort = toolExecutionPort;
@@ -470,7 +473,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         // Refactor (iter27/cluster-027-skill-registry-remote-skill-process-state):
         //   Old pattern: SkillRegistry 暴露混合 local + remote skill 注册并用 5min TTL process-wide cache 缓存 remote skill,违反读写分离 + 多用户 token 共享 + 进程内事实状态
         //   New principle: 删 SkillRegistry + TTL tests + 5min cache;新建 local-only LocalSkillCatalog;remote skill 每次 use_skill 调用 IRemoteSkillFetcher.FetchSkillAsync(currentToken, ...) 不缓存;docs/canon factual sync
-        if ((_localSkillCatalog is not null || _remoteSkillFetcher is not null) &&
+        if (!IsNyxIdChatTurn(discoveryContext) &&
+            (_localSkillCatalog is not null || _remoteSkillFetcher is not null) &&
             tools.Get("use_skill") is null)
         {
             tools.Register(new UseSkillTool(
@@ -2218,11 +2222,13 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         AgentToolExecutionContext? toolContext,
         CancellationToken ct)
     {
-        if (_toolSources.Count == 0)
+        var isNyxIdChatTurn = IsNyxIdChatTurn(toolContext);
+        var toolSources = isNyxIdChatTurn ? _nyxIdChatToolSources : _toolSources;
+        if (toolSources.Count == 0)
             return [];
 
         var discovered = new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase);
-        foreach (var source in _toolSources)
+        foreach (var source in toolSources)
         {
             var tools = await source.DiscoverToolsAsync(ct);
             var excludedDirectChannelToolNames = new List<string>();
@@ -2242,24 +2248,35 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                     continue;
                 }
 
-                if (IsNyxIdChatTurn(toolContext) &&
+                if (isNyxIdChatTurn &&
                     DeclaresCapability(tool, AgentToolCapabilities.ExcludeFromNyxIdChat))
                 {
                     continue;
                 }
 
-                // Human-session management tools do not belong on channel relay or NyxID Assistant
-                // chat surfaces. The relay credential cannot call them, and NyxID Assistant owns
-                // service connection through nyxid_require_service + typed browser actions. Keep
-                // them available to other human-session consumers without exposing them here.
-                if ((isChannelTurn || IsNyxIdChatTurn(toolContext)) &&
-                    DeclaresCapability(tool, AgentToolCapabilities.RequiresHumanSession))
+                var requiresHumanSession =
+                    DeclaresCapability(tool, AgentToolCapabilities.RequiresHumanSession);
+                var hasSourceReadableBearer = !string.IsNullOrWhiteSpace(
+                    AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(toolContext?.Credentials));
+                if (requiresHumanSession &&
+                    (isChannelTurn || (isNyxIdChatTurn && !hasSourceReadableBearer)))
                 {
                     excludedHumanSessionToolNames.Add(tool.Name);
                     continue;
                 }
 
-                discovered[tool.Name] = tool;
+                if (!discovered.TryAdd(tool.Name, tool))
+                {
+                    if (isNyxIdChatTurn)
+                    {
+                        _logger.LogError(
+                            "NyxID Chat tool catalog resolution failed closed because duplicate tool names were discovered.");
+                        throw new InvalidOperationException(
+                            "NyxID Chat tool catalog contains duplicate tool names.");
+                    }
+
+                    discovered[tool.Name] = tool;
+                }
             }
 
             if (isChannelTurn)
@@ -2278,7 +2295,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         {
             _logger.LogInformation(
                 "Channel effective tool discovery completed: sourceCount={SourceCount}, toolCount={ToolCount}, tools={Tools}",
-                _toolSources.Count,
+                toolSources.Count,
                 effectiveTools.Length,
                 FormatToolNames(effectiveTools.Select(static tool => tool.Name)));
         }

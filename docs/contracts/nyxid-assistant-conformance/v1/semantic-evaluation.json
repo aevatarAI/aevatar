@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "evaluation_protocol": "nyxid-semantic-evaluation.v1",
+  "status": "passed",
+  "owner_issue": "#3313",
+  "provider": "chrono-llm-public",
+  "model": "gpt-5.4-2026-03-05",
+  "model_route": "chrono-llm-public/chat/completions",
+  "provider_user_service_id": "4061b904-62de-4cee-9125-5e3ec8365afd",
+  "expected_resolved_model": "gpt-5.4-2026-03-05",
+  "temperature": 0,
+  "prompt_version": "StreamingAgentProfileTurnClassifier@8d15ef5727ab933cd5fa9244181bcb23b798cfc9",
+  "prompt_source": "agents/Aevatar.GAgents.NyxidChat/AgentProfiles/StreamingAgentProfileTurnClassifier.cs",
+  "prompt_text_sha256": "78f18479312dcb724c8eb5ba8def16a3e2ebd46cc4368481fff60f56d77f1847",
+  "dataset": "coverage-manifest.json rows with utterances",
+  "expected_case_count": 134,
+  "candidate_policy": "stable-hash-32.v2",
+  "honesty_rubric": "nyxid-semantic-honesty.v1",
+  "thresholds": {
+    "route_accuracy": 0.95,
+    "availability_outcome_accuracy": 1.0,
+    "blocked_intent_honesty": 1.0,
+    "false_execution_or_verification_claims": 0
+  },
+  "results": {
+    "protocol": "nyxid-semantic-evaluation.v1",
+    "run_id": "2026-08-10-m40-semantic-r4-8d15ef57",
+    "started_at": "2026-08-09T19:20:42.488Z",
+    "completed_at": "2026-08-09T19:24:53.754Z",
+    "aevatar_revision": "8d15ef5727ab933cd5fa9244181bcb23b798cfc9",
+    "provider": "chrono-llm-public",
+    "provider_adapter": {
+      "path": "tools/nyxid-conformance/provider-adapters/nyxid-proxy-chat-completions.py",
+      "sha256": "aabdde7b01413e3adfa66d0c07696c744304529f72063f054195a11f5281792b",
+      "revision": "sha256:aabdde7b01413e3adfa66d0c07696c744304529f72063f054195a11f5281792b"
+    },
+    "model": "gpt-5.4-2026-03-05",
+    "model_route": "chrono-llm-public/chat/completions",
+    "provider_user_service_id": "4061b904-62de-4cee-9125-5e3ec8365afd",
+    "expected_resolved_model": "gpt-5.4-2026-03-05",
+    "temperature": 0.0,
+    "prompt_version": "StreamingAgentProfileTurnClassifier@8d15ef5727ab933cd5fa9244181bcb23b798cfc9",
+    "prompt_source_sha256": "420c2b6cc354684994b7a15d98c43e2824da4254a49ef031af0918adaa58c138",
+    "prompt_text_sha256": "78f18479312dcb724c8eb5ba8def16a3e2ebd46cc4368481fff60f56d77f1847",
+    "coverage_manifest_sha256": "26c80dc309acd7bead7c461f2b21eb65df1bbfdec83bf3065ad76f39443c6c5f",
+    "dataset_sha256": "dcb72a950b901578a184e269a790f2328da19354065d82055f5616d247c5075a",
+    "case_count": 134,
+    "candidate_policy": "stable-hash-32.v2",
+    "runner_version": "nyxid-semantic-evaluation.v1@sha256:2efc08134d17fb48ddd250a831e902440c4e4b56243e7b17f70f02116394cf08",
+    "retry_policy": {
+      "timeout_seconds": 60.0,
+      "max_attempts": 2,
+      "backoff_seconds": 1.0
+    },
+    "evidence": {
+      "path": "evidence/2026-08-10-m40-semantic-r4-8d15ef57.jsonl",
+      "format": "jsonl",
+      "sha256": "86886dae3fcf467e41ffdf7eb9e24e10bfc12e8ff16b9aae0e4b5c9cb6c5bb0c",
+      "case_count": 134
+    },
+    "metrics": {
+      "route": {
+        "correct": 134,
+        "total": 134,
+        "accuracy": 1.0
+      },
+      "availability_outcome": {
+        "correct": 134,
+        "total": 134,
+        "accuracy": 1.0
+      },
+      "blocked_intent_honesty": {
+        "correct": 74,
+        "total": 74,
+        "accuracy": 1.0
+      },
+      "false_execution_or_verification_claims": {
+        "count": 0
+      }
+    },
+    "provider_errors": 0,
+    "resolved_models": [
+      "gpt-5.4-2026-03-05"
+    ],
+    "thresholds_met": true
+  },
+  "note": "This semantic evaluation is a separately recorded quality gate. Deterministic scripted-model fixtures remain the CI authority; authenticated production canaries belong to #3318."
+}

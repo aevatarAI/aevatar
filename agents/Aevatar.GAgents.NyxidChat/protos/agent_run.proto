@@ -11,6 +11,8 @@ import "ai_messages.proto";
 import "workflow_execution_messages.proto";
 import "nyxid_chat_task.proto";
 import "agent_profiles.proto";
+import "ToolProviders/agent_tool_admission.proto";
+import "google/protobuf/timestamp.proto";
 
 enum AgentRunStatus {
   AGENT_RUN_STATUS_UNSPECIFIED = 0;
@@ -246,6 +248,7 @@ message AgentRunPendingToolAuthorization {
   bool is_destructive = 5;
   string side_effect_kind = 6;
   string tool_definition_fingerprint = 7;
+  aevatar.ai.tool_providers.AgentToolOperationAdmissionPayload operation_admission = 8;
 }
 
 enum AgentRunToolResultViewStatus {
@@ -370,6 +373,14 @@ message AgentRunToolStepResult {
   // example reply_with_interaction). The executor surfaces the captured intent
   // here for the run actor to merge into AgentRunReplyStepState.outbound_intent.
   aevatar.gagents.channel.abstractions.MessageContent outbound_intent = 4;
+  AgentRunToolAuthorizationOutcome authorization_outcome = 5;
+}
+
+enum AgentRunToolAuthorizationOutcome {
+  AGENT_RUN_TOOL_AUTHORIZATION_OUTCOME_UNSPECIFIED = 0;
+  AGENT_RUN_TOOL_AUTHORIZATION_OUTCOME_TRANSIENT_MATCHED = 1;
+  AGENT_RUN_TOOL_AUTHORIZATION_OUTCOME_DURABLE_MATCHED = 2;
+  AGENT_RUN_TOOL_AUTHORIZATION_OUTCOME_REJECTED = 3;
 }
 
 // Transient command for the run actor. The nested NeedsLlmReplyEvent may carry
@@ -1024,6 +1035,41 @@ message NyxIdChatConversationRegistrationUnavailableEvent {
   string reason = 4;
   string command_id = 5;
   string correlation_id = 6;
+}
+
+enum NyxIdChatPendingCreationFirstTurnOutcome {
+  NYX_ID_CHAT_PENDING_CREATION_FIRST_TURN_OUTCOME_UNSPECIFIED = 0;
+  NYX_ID_CHAT_PENDING_CREATION_FIRST_TURN_OUTCOME_STARTED = 1;
+  NYX_ID_CHAT_PENDING_CREATION_FIRST_TURN_OUTCOME_UNAVAILABLE = 2;
+}
+
+message NyxIdChatPendingCreationFirstTurnFinalizedEvent {
+  string conversation_actor_id = 1;
+  string turn_id = 2;
+  string credential_ref = 3;
+  NyxIdChatPendingCreationFirstTurnOutcome outcome = 4;
+  string failure_code = 5;
+  string safe_message = 6;
+  google.protobuf.Timestamp committed_at = 7;
+}
+
+enum NyxIdChatPendingSteeringContinuationOutcome {
+  NYX_ID_CHAT_PENDING_STEERING_CONTINUATION_OUTCOME_UNSPECIFIED = 0;
+  NYX_ID_CHAT_PENDING_STEERING_CONTINUATION_OUTCOME_STARTED = 1;
+  NYX_ID_CHAT_PENDING_STEERING_CONTINUATION_OUTCOME_SECRET_UNAVAILABLE = 2;
+  NYX_ID_CHAT_PENDING_STEERING_CONTINUATION_OUTCOME_INVALID_COMMAND = 3;
+  NYX_ID_CHAT_PENDING_STEERING_CONTINUATION_OUTCOME_IDENTITY_MISMATCH = 4;
+}
+
+message NyxIdChatPendingSteeringContinuationFinalizedEvent {
+  string conversation_actor_id = 1;
+  string continuation_turn_id = 2;
+  string credential_ref = 3;
+  NyxIdChatPendingSteeringContinuationOutcome outcome = 4;
+  string failure_code = 5;
+  string safe_message = 6;
+  google.protobuf.Timestamp committed_at = 7;
+  NyxIdChatConversationGAgentState state = 8;
 }
 
 message NyxIdChatConversationDeletionStartedEvent {

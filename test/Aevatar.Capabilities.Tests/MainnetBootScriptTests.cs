@@ -1,10 +1,33 @@
 using System.Diagnostics;
+using System.Text.Json;
 using FluentAssertions;
 
 namespace Aevatar.Capabilities.Tests;
 
 public sealed class MainnetBootScriptTests
 {
+    [Fact]
+    public async Task AppSettings_ShouldUseProvisionedConsoleOAuthClient()
+    {
+        var repoRoot = FindRepoRoot();
+        var appSettingsPath = Path.Combine(
+            repoRoot,
+            "src",
+            "Aevatar.Mainnet.Host.Api",
+            "appsettings.json");
+
+        await using var stream = File.OpenRead(appSettingsPath);
+        using var document = await JsonDocument.ParseAsync(stream);
+
+        document.RootElement
+            .GetProperty("Aevatar")
+            .GetProperty("BackendConsole")
+            .GetProperty("OidcClientId")
+            .GetString()
+            .Should()
+            .Be("a6ff2946-f02f-4c35-8203-1ec46132b660");
+    }
+
     [Fact]
     public async Task BootScript_LocalMode_ShouldPassCompleteDevelopmentStartupBoundary()
     {

@@ -28,6 +28,9 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
     private const string AccessTokenMissingErrorCode = "NYXID_ACCESS_TOKEN_MISSING";
     private const string AccessTokenMissingErrorMessage =
         "No NyxID access token available. User must be authenticated.";
+    private const string ResponseTooLargeErrorCode = "NYXID_PROXY_RESPONSE_TOO_LARGE";
+    private const string ResponseTooLargeErrorMessage =
+        "The admitted proxy response exceeded the configured text response limit.";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -186,7 +189,68 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
         string callId,
         string toolName,
         string argumentsJson,
+        CancellationToken ct = default) =>
+        await ExecuteWithOutcomeCoreAsync(
+            callId,
+            toolName,
+            argumentsJson,
+            maxTextResponseBytes: null,
+            ct);
+
+    internal async Task<AgentToolTerminalOutcome> ExecuteAdmittedReadWithOutcomeAsync(
+        string callId,
+        string toolName,
+        string argumentsJson,
+        long maxTextResponseBytes,
         CancellationToken ct = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxTextResponseBytes);
+        var admission = AgentToolRequestContext.Current?.OperationAdmission;
+        if (admission?.ExecutionPolicy.Risk != AgentToolOperationRisk.ReadOnly)
+        {
+            throw new InvalidOperationException(
+                "Bounded admitted read execution requires an exact read-only operation admission.");
+        }
+
+        return await ExecuteWithOutcomeCoreAsync(
+            callId,
+            toolName,
+            argumentsJson,
+            maxTextResponseBytes,
+            ct);
+    }
+
+    internal async Task<AgentToolTerminalOutcome> ExecuteAdmittedEffectWithOutcomeAsync(
+        string callId,
+        string toolName,
+        string argumentsJson,
+        CancellationToken ct = default)
+    {
+        var admission = AgentToolRequestContext.Current?.OperationAdmission;
+        if (admission?.ExecutionPolicy is not
+            {
+                Risk: AgentToolOperationRisk.Write,
+                Approval: AgentToolOperationApproval.Required,
+            })
+        {
+            throw new InvalidOperationException(
+                "Admitted effect execution requires an exact approval-gated write operation admission.");
+        }
+
+        return await ExecuteWithOutcomeCoreAsync(
+            callId,
+            toolName,
+            argumentsJson,
+            maxTextResponseBytes: null,
+            ct);
+    }
+
+    private async Task<AgentToolTerminalOutcome> ExecuteWithOutcomeCoreAsync(
+        string callId,
+        string toolName,
+        string argumentsJson,
+        long? maxTextResponseBytes,
+        CancellationToken ct)
     {
         var context = AgentToolRequestContext.Current;
         var managed = context?.WorkflowRuntime.HasManagedParent == true;
@@ -211,6 +275,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
                 callId,
                 toolName,
                 argumentsJson,
+                maxTextResponseBytes,
                 ct)
             : new AgentToolTerminalOutcome(await ExecuteCoreAsync(argumentsJson, ct));
     }
@@ -357,6 +422,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
         string callId,
         string toolName,
         string argumentsJson,
+        long? maxTextResponseBytes,
         CancellationToken ct)
     {
         var build = NyxIdAdmittedRequestBuilder.Build(admission, argumentsJson);
@@ -421,15 +487,37 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
                 ct);
         }
 
-        var response = await _client.ProxyRequestResponseAsync(
-            token,
-            request.Slug,
-            request.ServiceId,
-            request.Path,
-            request.Method,
-            request.Body,
-            request.Headers,
-            ct);
+        var response = maxTextResponseBytes.HasValue
+            ? await _client.ProxyRequestBoundedAsync(
+                token,
+                request.Slug,
+                request.ServiceId,
+                request.Path,
+                request.Method,
+                request.Body,
+                request.Headers,
+                maxTextResponseBytes.Value,
+                ct)
+            : await _client.ProxyRequestResponseAsync(
+                token,
+                request.Slug,
+                request.ServiceId,
+                request.Path,
+                request.Method,
+                request.Body,
+                request.Headers,
+                ct);
+        if (!response.Succeeded &&
+            response.Detail is "content_length_exceeds_max_bytes" or "content_exceeds_max_bytes")
+        {
+            return CreateAdmittedFailureOutcome(
+                admission,
+                callId,
+                toolName,
+                ResponseTooLargeErrorCode,
+                ResponseTooLargeErrorMessage);
+        }
+
         var authorityFailure = !response.Succeeded
             ? MapExactRouteFailure(response.Content, admission.ServiceInstanceId, request.Slug)
             : null;
@@ -437,11 +525,15 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
             ? AdmissionDriftError(authorityError.ErrorCode, authorityError.ErrorMessage)
             : response.Content;
         var receipt = response.Succeeded
-            ? NyxIdProxyReceiptFactory.CreateSuccess(
+            ? NyxIdProxyReceiptFactory.TryCreate(
                 callId,
                 toolName,
+                request.Slug,
                 request.ServiceId,
-                result)
+                serviceLabel: null,
+                request.Path,
+                result,
+                proxyRequestFailed: false)
             : authorityFailure is { } exactRouteFailure
                 ? NyxIdProxyReceiptFactory.CreateError(
                     callId,
@@ -457,8 +549,68 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
                 request.ServiceId,
                 serviceLabel: null,
                 request.Path,
-                response.Content);
+                response.Content,
+                proxyRequestFailed: true);
+        if (IsExactApprovalFailedReceipt(receipt))
+        {
+            receipt!.NyxIdApprovalTerminalOutcome = await ReadApprovalTerminalOutcomeAsync(
+                token,
+                receipt.ApprovalRequestId,
+                ct);
+        }
         return new AgentToolTerminalOutcome(result, receipt);
+    }
+
+    private static bool IsExactApprovalFailedReceipt(AgentToolReceipt? receipt) =>
+        receipt is
+        {
+            Status: AgentToolReceiptStatus.Denied,
+            ApprovalRequestId.Length: > 0,
+        } &&
+        string.Equals(
+            receipt.ErrorCode,
+            "NYXID_APPROVAL_FAILED",
+            StringComparison.Ordinal);
+
+    private async Task<NyxIdApprovalTerminalOutcome> ReadApprovalTerminalOutcomeAsync(
+        string requesterToken,
+        string approvalRequestId,
+        CancellationToken ct)
+    {
+        try
+        {
+            var response = await _client.GetApprovalStatusAsync(
+                requesterToken,
+                approvalRequestId,
+                ct);
+            using var document = JsonDocument.Parse(response);
+            if (document.RootElement.ValueKind != JsonValueKind.Object ||
+                !document.RootElement.TryGetProperty("status", out var status) ||
+                status.ValueKind != JsonValueKind.String)
+            {
+                return NyxIdApprovalTerminalOutcome.Unspecified;
+            }
+
+            return status.GetString() switch
+            {
+                "rejected" => NyxIdApprovalTerminalOutcome.Rejected,
+                "expired" => NyxIdApprovalTerminalOutcome.Expired,
+                "pending" => NyxIdApprovalTerminalOutcome.TimedOut,
+                _ => NyxIdApprovalTerminalOutcome.Unspecified,
+            };
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(
+                exception,
+                "[nyxid_proxy] Approval status readback failed. requestId={RequestId}",
+                approvalRequestId);
+            return NyxIdApprovalTerminalOutcome.Unspecified;
+        }
     }
 
     private async Task<NyxIdOperationRequestFailure?> RevalidateAdmittedOperationAsync(
@@ -485,6 +637,16 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
             "runtime",
             TimeProvider.System.GetUtcNow(),
             TimeSpan.FromMinutes(5));
+        if (!string.IsNullOrWhiteSpace(admission.CatalogDigest) &&
+            !string.Equals(
+                catalog.Source.ContentDigest,
+                admission.CatalogDigest,
+                StringComparison.Ordinal))
+        {
+            return new NyxIdOperationRequestFailure(
+                "NYXID_OPERATION_CATALOG_DRIFT",
+                "The live NyxID operation catalog no longer matches the admitted revision.");
+        }
         var service = catalog.Services.SingleOrDefault(candidate =>
             string.Equals(candidate.UserServiceId, admission.ServiceInstanceId, StringComparison.Ordinal));
         if (service is null)

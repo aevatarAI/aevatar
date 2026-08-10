@@ -54,7 +54,7 @@ public sealed class ChannelCardConversationTurnRunnerTests
     }
 
     [Fact]
-    public async Task RunCardCreateAsync_WhenAccumulatedTextIsJson_ShouldStreamTableMarkdownInsteadOfJson()
+    public async Task RunCardCreateAsync_WhenAccumulatedTextIsJson_ShouldStreamKeyValueTextInsteadOfJson()
     {
         var cardKit = new RecordingCardKitClient();
         var lark = new RecordingLarkNyxClient();
@@ -73,8 +73,9 @@ public sealed class ChannelCardConversationTurnRunnerTests
 
         result.Success.Should().BeTrue();
         var streamed = cardKit.StreamCalls.Should().ContainSingle().Subject.Request.Content;
-        streamed.Should().Contain("| name |");
-        streamed.Should().Contain("| Ada |");
+        streamed.Should().Contain("Item: 1");
+        streamed.Should().Contain("name: Ada");
+        streamed.Should().NotContain("|");
         streamed.Should().NotContain("{\"name\"");
     }
 

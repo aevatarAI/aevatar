@@ -1,11 +1,14 @@
 namespace Aevatar.AI.Application.CodexExecution;
 
 internal sealed record ManagedCodexNyxIdEligibility(
-    string ChronoSandboxUserServiceId,
+    string ManagedCodexUserServiceId,
     string ChronoLlmUserServiceId);
 
 internal sealed class ManagedCodexNyxIdCatalogResolver
 {
+    private const string SharedDelegationScope = "proxy:*";
+    private const string CodeDelegationScope = "sandbox:execute";
+
     public async Task<ManagedCodexNyxIdEligibility> ResolveAsync(
         IManagedCodexNyxIdCredentialPort port,
         string bearerToken,
@@ -17,7 +20,7 @@ internal sealed class ManagedCodexNyxIdCatalogResolver
             .Where(static service =>
                 string.Equals(
                     service.Slug,
-                    ManagedCodexOptions.ChronoSandboxServiceSlug,
+                    ManagedCodexOptions.ManagedCodexServiceSlug,
                     StringComparison.Ordinal) &&
                 string.Equals(service.CredentialSourceType, "personal", StringComparison.Ordinal))
             .ToArray();
@@ -49,9 +52,10 @@ internal sealed class ManagedCodexNyxIdCatalogResolver
                 "managed_user_services_unavailable",
                 "The user's required managed Codex services are not usable.");
         }
-        if (sandbox.ForwardAccessToken != false ||
-            sandbox.InjectDelegationToken != true ||
-            !string.Equals(sandbox.DelegationTokenScope, "proxy:*", StringComparison.Ordinal))
+        // Managed execution uses X-API-Key and sends no Authorization header, so the shared
+        // service's bearer-forwarding policy only applies to ordinary /execute calls.
+        if (sandbox.InjectDelegationToken != true ||
+            !HasAllowedDelegationScopes(sandbox.DelegationTokenScope))
         {
             throw Failure(
                 "chrono_sandbox_delegation_misconfigured",
@@ -59,6 +63,23 @@ internal sealed class ManagedCodexNyxIdCatalogResolver
         }
 
         return new ManagedCodexNyxIdEligibility(sandboxId, llmId);
+    }
+
+    private static bool HasAllowedDelegationScopes(string? scope)
+    {
+        if (string.IsNullOrWhiteSpace(scope))
+            return false;
+
+        var scopes = scope.Split(
+            (char[]?)null,
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return scopes.Length switch
+        {
+            1 => string.Equals(scopes[0], SharedDelegationScope, StringComparison.Ordinal),
+            2 => scopes.Contains(SharedDelegationScope, StringComparer.Ordinal) &&
+                 scopes.Contains(CodeDelegationScope, StringComparer.Ordinal),
+            _ => false,
+        };
     }
 
     private static bool IsUsable(ManagedCodexNyxIdService service) =>

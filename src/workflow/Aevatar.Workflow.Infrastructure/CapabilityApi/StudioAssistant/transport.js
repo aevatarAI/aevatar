@@ -1,4 +1,4 @@
-import { normalizeReadinessSnapshot } from "./readiness.js";
+import { normalizeReadinessSnapshot } from "./readiness.js?v=20260807-m40-thread-polish";
 
 const nativeFetch = globalThis.fetch.bind(globalThis);
 const backendConfig = globalThis.__AEVATAR_ASSISTANT_CONFIG__ || {};
@@ -9,8 +9,9 @@ const config = Object.freeze({
   scope: String(backendConfig.scope || "").trim(),
   resources: uniqueStrings(backendConfig.resources),
   nyxidApi: trimBaseUrl(backendConfig.nyxidApi || backendConfig.authority),
-  nyxidWeb: trimBaseUrl(backendConfig.authority),
-  storageKey: String(backendConfig.storageKey || "aevatar-console:nyxid:pkce"),
+  nyxidWeb: trimBaseUrl(backendConfig.nyxidWeb || backendConfig.authority),
+  storageKey: String(backendConfig.storageKey || "aevatar-studio:session"),
+  enableStudioWireInspector: backendConfig.enableStudioWireInspector === true,
   redirectUri: `${location.origin}/auto/callback`,
 });
 
@@ -78,19 +79,23 @@ function replacementToken(rejectedAccessToken) {
 
 async function requestAdminShellTokenRefresh(rejectedAccessToken) {
   const current = replacementToken(rejectedAccessToken);
-  if (current) return current;
-  if (!isEmbeddedInAdmin()) return null;
+  if (current) return { token: current, errorCode: "", reason: "" };
+  if (!isEmbeddedInAdmin()) return { token: null, errorCode: "", reason: "" };
 
   const requestId = `auth-${Date.now().toString(36)}-${randomString(10)}`;
   return await new Promise((resolve) => {
     let settled = false;
     let timer = null;
-    const finish = () => {
+    const finish = (result = {}) => {
       if (settled) return;
       settled = true;
       window.removeEventListener("message", onMessage);
       if (timer !== null) clearTimeout(timer);
-      resolve(replacementToken(rejectedAccessToken));
+      resolve({
+        token: replacementToken(rejectedAccessToken),
+        errorCode: String(result.errorCode || ""),
+        reason: String(result.reason || ""),
+      });
     };
     const onMessage = (event) => {
       const message = event.data || {};
@@ -99,7 +104,7 @@ async function requestAdminShellTokenRefresh(rejectedAccessToken) {
           message.source === "aevatar-backend-console-suite" &&
           message.type === "auth-refresh-result" &&
           message.requestId === requestId) {
-        finish();
+        finish(message);
       }
     };
     window.addEventListener("message", onMessage);
@@ -127,8 +132,11 @@ async function authorizedFetch(input, init = {}) {
   let response = await request(token);
   if (response.status !== 401) return response;
 
-  const replacement = replacementToken(token.access_token) ||
-    await requestAdminShellTokenRefresh(token.access_token);
+  const currentReplacement = replacementToken(token.access_token);
+  const refreshResult = currentReplacement
+    ? { token: currentReplacement, errorCode: "", reason: "" }
+    : await requestAdminShellTokenRefresh(token.access_token);
+  const replacement = refreshResult.token;
   if (replacement?.access_token && replacement.access_token !== token.access_token) {
     token = replacement;
     response = await request(token);
@@ -136,12 +144,14 @@ async function authorizedFetch(input, init = {}) {
   }
 
   clearToken();
+  const errorCode = refreshResult.errorCode || "AUTH_REQUIRED";
+  const reason = refreshResult.reason || "登录已过期，请重新使用 NyxID 登录。";
   notifyAdminShellAuth(
     "auth-required",
-    "登录已过期，请重新使用 NyxID 登录。",
+    reason,
     token.access_token,
   );
-  return response;
+  return jsonResponse({ code: errorCode, message: reason }, 401);
 }
 
 function b64url(buffer) {
@@ -172,14 +182,16 @@ async function beginLogin() {
     verifier,
     state,
     returnTo: "/workflow/studio",
-    resources: config.resources,
   }));
+  // ADR-0018: the session login never sends explicit `resource` parameters —
+  // NyxID would narrow the grant to exactly that list (RFC 8707 intersection)
+  // and the token could no longer reach other consented services such as the
+  // deployment's default LLM route. The consent page owns the granted set.
   const url = new URL(`${config.authority}/oauth/authorize`);
   url.searchParams.set("response_type", "code");
   url.searchParams.set("client_id", config.clientId);
   url.searchParams.set("redirect_uri", config.redirectUri);
   url.searchParams.set("scope", config.scope);
-  config.resources.forEach((resource) => url.searchParams.append("resource", resource));
   url.searchParams.set("state", state);
   url.searchParams.set("code_challenge", challenge);
   url.searchParams.set("code_challenge_method", "S256");
@@ -205,8 +217,6 @@ async function completeLoginIfCallback() {
   form.set("redirect_uri", config.redirectUri);
   form.set("client_id", config.clientId);
   form.set("code_verifier", pending.verifier);
-  uniqueStrings(pending.resources || config.resources)
-    .forEach((resource) => form.append("resource", resource));
   const response = await nativeFetch(`${config.authority}/oauth/token`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -437,9 +447,10 @@ async function studioFetch(input, init = {}) {
       proxyBaseUrl: config.resources[0] || "",
       ornnWebUrl: "",
       nyxidWebUrl: config.nyxidWeb,
-      servicesUrl: config.authority ? new URL("/keys", config.authority).toString() : "",
+      servicesUrl: config.nyxidWeb ? new URL("/keys", config.nyxidWeb).toString() : "",
       environment: "production",
       transportLocked: true,
+      enableStudioWireInspector: config.enableStudioWireInspector,
     });
   }
   if (url.pathname === "/api/auth/session") return await userSessionResponse();
@@ -454,12 +465,13 @@ async function studioFetch(input, init = {}) {
     if (!result.response.ok) return result.response;
     try {
       return jsonResponse(normalizeReadinessSnapshot(result.payload, {
-        nyxidWebUrl: config.nyxidWeb,
+        managementOrigins: [config.nyxidWeb, config.authority, config.nyxidApi],
       }));
     } catch (error) {
       return jsonResponse({
         code: error?.code || "READINESS_INVALID",
         message: "NyxID readiness evidence is invalid.",
+        reason: typeof error?.reason === "string" ? error.reason : "",
       }, 502);
     }
   }

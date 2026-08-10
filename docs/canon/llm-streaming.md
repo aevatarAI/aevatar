@@ -90,6 +90,13 @@ workflow 专用 transient chunk 协议。completion 中的 typed terminal tail �
 text end 与 authorization，role terminal/replay 不得冒充 workflow 根 actor 的 run terminal。每个 role
 session 的首个 progress 必须且只能是 `text_started`；approval continuation 与 recovery 重入也必须通过
 同一个幂等 start gate，禁止在新 message id 上直接发送 text delta，或因 recovery 重复发送 start。
+provider 的首个 text/reasoning delta 仍立即提交和发布；后续连续 token-sized delta 按有界字符数合并，
+并由 200 ms 上限保证低吞吐 stream 的交互刷新频率；
+切换 text/reasoning、进入 media/tool lifecycle 或正常结束前必须 flush。committed progress 与发给 parent
+的对应 publication 必须使用同一个 batch 边界，禁止一侧逐 token、另一侧批量而重新制造 stream fan-out。
+Orleans persistent-stream `MaxEventDeliveryTime` 必须覆盖默认 120 秒 turn 与 30 秒 post-turn finalization；
+Mainnet 默认三分钟，不能再用 10 秒 stale-subscription horizon 中断合法 AI turn。失效 subscription 仍由
+delivery failure handler 在真实 forwarding/delivery failure 时 fault，不靠缩短正常 handler 的执行窗口。
 
 审批通过后的 tool resume 是新的 actor turn，必须创建新的 Host-owned deadline；其 token 连续覆盖
 caller token refresh、request tool catalog materialization 和 approved tool execution，禁止使用

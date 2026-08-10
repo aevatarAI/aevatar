@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
+using Aevatar.AI.ToolProviders.NyxId.Tools;
 using Aevatar.Workflow.Abstractions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -14,31 +15,37 @@ public sealed class NyxIdConnectedServiceToolSource : IAgentToolSource
     private readonly NyxIdApiClient _apiClient;
     private readonly NyxIdServiceInstanceClient _client;
     private readonly ILogger _logger;
+    private readonly INyxIdProxyFileArtifactIngress? _fileArtifactIngress;
 
     public NyxIdConnectedServiceToolSource(
         NyxIdToolOptions options,
         NyxIdApiClient apiClient,
         NyxIdServiceInstanceClient client,
-        ILogger<NyxIdConnectedServiceToolSource>? logger = null)
+        ILogger<NyxIdConnectedServiceToolSource>? logger = null,
+        INyxIdProxyFileArtifactIngress? fileArtifactIngress = null)
     {
         _options = options;
         _apiClient = apiClient;
         _client = client;
         _logger = logger ?? NullLogger<NyxIdConnectedServiceToolSource>.Instance;
+        _fileArtifactIngress = fileArtifactIngress;
     }
 
     public async Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(_options.BaseUrl))
             return [];
-        var userToken = AgentToolRequestContext.NyxIdAccessToken;
-        if (string.IsNullOrWhiteSpace(userToken))
+        var context = AgentToolRequestContext.Current;
+        var executionToken = context?.Credentials.NyxIdAccessToken;
+        var catalogToken = AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(context?.Credentials)
+                           ?? executionToken;
+        if (string.IsNullOrWhiteSpace(executionToken) || string.IsNullOrWhiteSpace(catalogToken))
             return [];
 
         try
         {
             var discovered = await _client.DiscoverAsync(
-                userToken,
+                catalogToken,
                 AgentToolRequestContext.NyxIdOrgToken,
                 ct);
             var bindings = discovered
@@ -49,13 +56,54 @@ public sealed class NyxIdConnectedServiceToolSource : IAgentToolSource
             if (bindings.Length == 0)
                 return [];
 
-            await ObserveMcpCatalogAsync(userToken, ct);
-            return NyxIdServiceTools.Create(_client, bindings)
+            var catalog = await ReadMcpCatalogAsync(catalogToken, ct);
+            if (catalog is null)
+                return [];
+
+            var bindingsById = bindings.ToDictionary(
+                static binding => binding.Instance.UserServiceId,
+                StringComparer.Ordinal);
+            var proxy = new NyxIdProxyTool(
+                _apiClient,
+                _logger,
+                _fileArtifactIngress,
+                _options.EffectiveProxyFileArtifactMaxBytes,
+                _options.ManagedWorkflowAdmissionMode);
+            var tools = catalog.Services
+                .Where(service => HasExactRouteBinding(service, bindingsById))
+                .SelectMany(service => service.Endpoints
+                    .Where(endpoint => endpoint.IsReadOnly ||
+                        _options.EnableAssistantConnectedServiceEffects)
+                    .Select(endpoint =>
+                    NyxIdConnectedServiceOperationToolFactory.Create(
+                        proxy,
+                        service,
+                        endpoint,
+                        catalog.Source.ContentDigest,
+                        bindingsById[service.UserServiceId].Instance,
+                        NyxIdAssistantReadinessCapabilityRegistry.Resolve(
+                            _options,
+                            bindingsById[service.UserServiceId].Instance.CatalogServiceSlug),
+                        NyxIdAssistantOperationReadBackRegistry.Resolve(
+                            _options,
+                            service,
+                            endpoint,
+                            catalog.Source.ContentDigest,
+                            bindingsById[service.UserServiceId].Instance))))
+                .Where(static tool => tool is not null)
+                .Select(static tool => tool!)
                 .Where(static tool => !string.IsNullOrWhiteSpace(tool.Name))
                 .GroupBy(static tool => tool.Name.Trim(), StringComparer.OrdinalIgnoreCase)
-                .Where(static group => group.All(tool => ReferenceEquals(tool, group.First())))
+                .Where(static group => group.Count() == 1)
                 .Select(static group => group.First())
                 .ToArray();
+            _logger.LogInformation(
+                "NyxID current-turn MCP discovery completed. candidateCount={CandidateCount}, descriptorCount={DescriptorCount}, rejectedCount={RejectedCount}, exposedOperationCount={ExposedOperationCount}",
+                catalog.Discovery.CandidateCount,
+                catalog.Discovery.Capabilities.Count,
+                catalog.Discovery.RejectedCount,
+                tools.Length);
+            return tools;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -71,7 +119,20 @@ public sealed class NyxIdConnectedServiceToolSource : IAgentToolSource
         }
     }
 
-    private async Task ObserveMcpCatalogAsync(string accessToken, CancellationToken ct)
+    private static bool HasExactRouteBinding(
+        NyxIdMcpService service,
+        IReadOnlyDictionary<string, NyxIdServiceInstanceBinding> bindingsById) =>
+        bindingsById.TryGetValue(service.UserServiceId, out var binding) &&
+        !string.IsNullOrWhiteSpace(binding.Instance.DisplaySlug) &&
+        !string.IsNullOrWhiteSpace(service.ServiceSlug) &&
+        string.Equals(
+            binding.Instance.DisplaySlug,
+            service.ServiceSlug,
+            StringComparison.Ordinal);
+
+    private async Task<NyxIdMcpCatalogRead?> ReadMcpCatalogAsync(
+        string accessToken,
+        CancellationToken ct)
     {
         try
         {
@@ -88,12 +149,7 @@ public sealed class NyxIdConnectedServiceToolSource : IAgentToolSource
                     diagnostic.Code,
                     diagnostic.Count);
             }
-            _logger.LogInformation(
-                "NyxID current-turn MCP discovery completed. candidateCount={CandidateCount}, descriptorCount={DescriptorCount}, rejectedCount={RejectedCount}, exposedOperationCount={ExposedOperationCount}",
-                catalog.Discovery.CandidateCount,
-                catalog.Discovery.Capabilities.Count,
-                catalog.Discovery.RejectedCount,
-                0);
+            return catalog;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -105,6 +161,7 @@ public sealed class NyxIdConnectedServiceToolSource : IAgentToolSource
                 "NyxID current-turn MCP discovery diagnostic. code={DiagnosticCode}, count={DiagnosticCount}",
                 ExternalCapabilityDiscoveryDiagnosticCode.SourceUnavailable,
                 1);
+            return null;
         }
     }
 }

@@ -164,10 +164,11 @@ public static partial class ServiceEndpoints
 
                 try
                 {
-                    var admissionContext = WorkflowCapabilityAdmissionHttpContext.Create(
+                    var admissionContext = await WorkflowCapabilityAdmissionHttpContext.CreateAsync(
                         http,
                         ExternalCapabilityExecutionMode.Durable,
-                        explicitRequestConfirmations: request.ExplicitRequestConfirmations);
+                        explicitRequestConfirmations: request.ExplicitRequestConfirmations,
+                        ct: ct);
                     spec.WorkflowSpec.ExpectedExecutionMode = admissionContext.ExecutionMode;
                     spec.WorkflowSpec.CapabilityAdmissionPlan = await capabilityAdmissionService.AdmitAsync(
                         new WorkflowExternalCapabilityAdmissionRequest(

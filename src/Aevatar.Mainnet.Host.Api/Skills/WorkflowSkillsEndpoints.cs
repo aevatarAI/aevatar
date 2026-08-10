@@ -186,12 +186,7 @@ internal static class WorkflowSkillsEndpoints
         if (!AevatarScopeAccessGuard.TryGetCallerScopeId(http, out var scopeId))
             return Results.Unauthorized();
 
-        var loggerFactory = http.RequestServices.GetService<ILoggerFactory>();
-        var callerCredential = await WorkflowCallerCredentialExtractor.ExtractAsync(
-            http,
-            http.RequestServices.GetService<IExternalIdentityBindingQueryPort>(),
-            loggerFactory?.CreateLogger("Aevatar.Mainnet.Host.Api.WorkflowSkills"),
-            ct);
+        var callerCredential = await WorkflowCallerCredentialExtractor.ExtractAsync(http, ct);
         if (!callerCredential.Succeeded ||
             callerCredential.Credential == null ||
             string.IsNullOrWhiteSpace(callerCredential.Credential.BearerToken))
@@ -238,11 +233,7 @@ internal static class WorkflowSkillsEndpoints
 
         var loggerFactory = http.RequestServices.GetService<ILoggerFactory>();
         var logger = loggerFactory?.CreateLogger("Aevatar.Mainnet.Host.Api.WorkflowSkills");
-        var callerCredential = await WorkflowCallerCredentialExtractor.ExtractAsync(
-            http,
-            http.RequestServices.GetService<IExternalIdentityBindingQueryPort>(),
-            logger,
-            ct);
+        var callerCredential = await WorkflowCallerCredentialExtractor.ExtractAsync(http, ct);
         if (!callerCredential.Succeeded ||
             callerCredential.Credential == null ||
             string.IsNullOrWhiteSpace(callerCredential.Credential.BearerToken))

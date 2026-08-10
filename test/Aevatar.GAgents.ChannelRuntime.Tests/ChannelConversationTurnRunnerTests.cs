@@ -4021,7 +4021,7 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
-    public async Task RunLlmReplyAsync_WhenJsonTableDispatcherIsMissing_ShouldSendTableTextFallback()
+    public async Task RunLlmReplyAsync_WhenJsonTableDispatcherIsMissing_ShouldSendKeyValueTextFallback()
     {
         var registrationQueryPort = BuildRegistrationQueryPort();
         var adapter = new RecordingPlatformAdapter();
@@ -4061,10 +4061,12 @@ public sealed class ChannelConversationTurnRunnerTests
 
         result.Success.Should().BeTrue();
         var request = relayHandler.Requests.Should().ContainSingle().Subject;
-        request.Body.Should().Contain("| name |");
-        request.Body.Should().Contain("| Ada |");
+        request.Body.Should().Contain("Item: 1");
+        request.Body.Should().Contain("name: Ada");
+        request.Body.Should().Contain("name: Lin");
+        request.Body.Should().NotContain("|");
         request.Body.Should().NotContain("{\\\"name\\\"");
-        result.Outbound.Text.Should().Contain("| name |");
+        result.Outbound.Text.Should().Contain("name: Ada");
     }
 
     [Fact]

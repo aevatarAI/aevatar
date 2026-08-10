@@ -21,18 +21,26 @@ Transcript、execution state、prompt context 与 user memory 的跨能力语义
 
 ## Mainnet 统一 `/api/chat` facade
 
-Mainnet 只映射一个 `POST /api/chat`。该 Host-owned facade 在 HTTP 边界做确定性协议分流；它不从 prompt、模型输出、tool 名或错误文本推断产品 surface。
+Mainnet 只映射一个 `POST /api/chat`。Aevatar-owned Chat 的唯一执行主干是
+`NyxIdChatConversationGAgent -> NyxIdChatTurnGAgent`；Host 只把八类 v4 command 映射到既有
+application/actor boundary，不拥有 task、turn、等待、审批、重试或终态事实。`type` 是 command
+discriminator，不能用“存在或不存在 `type`”选择另一套 Chat runtime；缺少 `type` 只会进入
+冻结的 external compatibility adapter，不定义第二个 Chat 产品模型。
 
 | Request | Mainnet owner | Result |
 |---|---|---|
-| `multipart/form-data` | Workflow Chat | 继续使用既有 multipart parser、artifact ingress 与 Workflow command 主链。 |
-| JSON object without `type` | Workflow Chat | 保持既有 `HttpChatInput` 行为。 |
+| Existing multipart or JSON object without `type` | External Workflow compatibility adapter | 保留 Phase 1 既有 wire 行为，但冻结能力面，不作为 Aevatar-owned Chat runtime 演进。最终删除由 #3319 跟踪。 |
 | JSON with `type=text` | NyxID Assistant | 创建或复用现有 NyxIdChat conversation actor，并返回 AGUI SSE。 |
-| JSON with one of the other six recognized Assistant types | NyxID Assistant | 复用现有 action、approval 或 task-control application port。 |
+| JSON with one of the other seven recognized Assistant types | NyxID Assistant | 复用现有 input、action、approval 或 task-control application port。 |
 | JSON with malformed or unknown explicit `type` | none | `400 INVALID_CHAT_INPUT`; never falls through to Workflow. |
-| Other content type or malformed/non-object JSON | none | `400 INVALID_CHAT_INPUT`. |
+| Other content type or malformed/non-object JSON | none | `400 INVALID_CHAT_INPUT`; fail closed. |
 
-The seven closed Assistant discriminators are `text`, `action.continue`, `approval.resolve`, `task.stop`, `task.steer`, `step.retry`, and `step.skip`. Assistant JSON is strict: unknown fields are rejected, `scopeId` is not a request field, and scope is derived only from one unambiguous authenticated `scope_id` or `workflow.scope_id` claim.
+The eight closed Assistant discriminators are `text`, `input.resolve`, `action.continue`,
+`approval.resolve`, `task.stop`, `task.steer`, `step.retry`, and `step.skip`. Assistant JSON is
+strict: unknown fields are rejected, `scopeId` is not a request field, and scope is derived only
+from one unambiguous authenticated `scope_id` or `workflow.scope_id` claim. A recognized `type`
+always selects the typed command contract; Assistant DTO validation then rejects fields that are
+not part of that command.
 
 Mainnet also exposes the authenticated Assistant resource family:
 
@@ -45,7 +53,11 @@ Mainnet also exposes the authenticated Assistant resource family:
 
 The transcript endpoint returns every committed terminal turn while the conversation is active. An acknowledged conversation whose transcript actor read model has not materialized yet returns `200` with `messages: []`, `stateVersion: 0`, and `projectionStatus: "pending"`; once materialized, it returns `projectionStatus: "current"` and the authoritative transcript version. `404` remains reserved for a conversation that was never accepted, belongs to another scope, was abandoned before acceptance, or was explicitly deleted. The current contract has no per-turn TTL or silent rolling eviction: the 251st and later turns remain appendable, and only explicit whole-conversation deletion removes query availability. LLM continuation context is independently bounded to the latest 24 nonblank messages; that prompt selection never prunes the durable transcript.
 
-Standalone Workflow Host behavior is unchanged: its own `POST /api/chat` remains Workflow JSON/multipart, and `GET /api/ws/chat` remains the Workflow WebSocket surface. Mainnet's WebSocket route is likewise not selected by the Assistant JSON discriminators. New NyxID clients use only the HTTP facade and `/api/chat/conversations/**`; scoped NyxIdChat routes are compatibility adapters, not a second evolving contract.
+Standalone Workflow Host behavior is unchanged: its own `POST /api/chat` remains Workflow
+JSON/multipart, and `GET /api/ws/chat` remains the Workflow WebSocket surface. Those routes are
+explicit Workflow Host capabilities, not a second Mainnet Chat product. New NyxID clients use only
+the typed HTTP facade and `/api/chat/conversations/**`; scoped NyxIdChat routes and the frozen
+workflow-shaped leg are compatibility adapters, not evolving contracts.
 
 ## Chat Activity audit surface
 
@@ -69,13 +81,15 @@ applies only to Audit Trail artifacts with typed chat provenance.
 
 | Endpoint | 协议 | 作用 |
 |---|---|---|
-| `POST /api/chat` | HTTP + SSE | Mainnet 先按上表分流；Workflow Host 直接发起 Workflow run |
+| `POST /api/chat` | HTTP + SSE | Mainnet typed command 进入 Assistant actor 主干；既有 form/no-type 请求进入冻结的 external Workflow compatibility adapter；Workflow Host 直接发起 Workflow run |
 | `GET /api/ws/chat` | WebSocket | 与 `/api/chat` 同能力，使用 WS 封装 |
 | `POST /api/workflow-webhooks/{routeKey}` | HTTP JSON | 认证外部 webhook，并按 Host binding 启动新 run |
 | `POST /api/workflows/resume` | HTTP JSON | 恢复 `human_input/human_approval` 挂起步骤 |
 | `POST /api/workflows/signal` | HTTP JSON | 向等待信号的步骤发送 signal |
 
-说明：对于 Workflow 请求，`/api/chat` 与 `/api/ws/chat` 走同一套执行链路，差别只有传输协议。NyxID Assistant discriminator 只属于 Mainnet HTTP facade。
+说明：以下 Workflow 输入与 producer 章节描述 Standalone Workflow Host 以及 Mainnet 的冻结
+external compatibility adapter，不是 Mainnet 普通 Chat 的第二执行路径。对于 Standalone Workflow
+Host 请求，`/api/chat` 与 `/api/ws/chat` 走同一套执行链路，差别只有传输协议。
 
 口径补充：
 
@@ -119,7 +133,12 @@ applies only to Audit Trail artifacts with typed chat provenance.
 
 ### HTTP 请求 producer
 
-Workflow 所拥有的 `POST /api/chat` 请求支持两种 Host/API 边界 producer；两者最终都会被规范化为同一个 `WorkflowChatRunRequest`，并进入同一条 CQRS command skeleton。Host 不直接编排 workflow run，也不因为表单上传创建第二套执行链路。Mainnet 在此之前只执行上面的确定性 surface 分类。
+Standalone Workflow Host 所拥有的 `POST /api/chat` 请求支持两种 Host/API 边界 producer；
+两者最终都会被规范化为同一个 `WorkflowChatRunRequest`，并进入同一条 CQRS command skeleton。
+Host 不直接编排 workflow run，也不因为表单上传创建第二套执行链路。Mainnet 仅为 Phase 1
+schema/behavior compatibility 保留既有 workflow-shaped 输入，并在命名明确的 external adapter
+`ExternalWorkflowChatCompatibilityAdapter` 中复用该 Workflow handler；Aevatar-owned Studio
+不使用此路径。
 
 #### JSON Chat Input
 

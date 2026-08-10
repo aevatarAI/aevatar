@@ -17,10 +17,10 @@ netstack has no iptables NAT for the sidecar; runc + COS nodes do not enable the
 credential-protection stack therefore forced the runtime with the weaker escape isolation.
 
 Since #2908, the only credential that reaches the sandbox is a five-minute, single-user
-delegation token injected by NyxID. The persistent per-user agent
-key never leaves the NyxID Authorization header, and the interactive workflow bearer is never
-used for the chrono request. The token being protected no longer justifies the stack built to
-protect it.
+delegation token injected by NyxID. The persistent per-user agent key terminates
+at NyxID in `X-API-Key`; the managed request has no `Authorization` header, and
+the interactive workflow bearer is never used for the chrono request. The token
+being protected no longer justifies the stack built to protect it.
 
 The 2026-07-24 internal-canary correction established that `chrono-llm-public` is exposed at
 NyxID's REST proxy path, not as a provider in the generic LLM gateway. NyxID currently grants
@@ -28,6 +28,24 @@ that route only to `proxy` or `proxy:*`; injected UserService delegation support
 not a service-specific proxy scope. The canary therefore temporarily widens the five-minute
 token from `llm:proxy` to exact `proxy:*`. This amendment narrows the decision's rollout
 eligibility: it does not approve the widened scope for general availability.
+
+Milestone 41 supersedes the earlier shared-UserService assumption. One chrono deployment may
+serve both execution paths, but NyxID exposes them through two exact, non-interchangeable policy
+identities:
+
+- exact source execution uses `chrono-sandbox`, `/execute`,
+  `forward_access_token=false`, `inject_delegation_token=true`, and exact scope
+  `sandbox:execute`; the caller bearer authenticates only to NyxID and terminates there;
+- managed Codex execution uses `chrono-managed-codex`, `/codex/execute`,
+  `forward_access_token=false`, `inject_delegation_token=true`, and exact scope `proxy:*`; the
+  per-user agent key authenticates only to NyxID through `X-API-Key` and terminates there.
+
+The two policies must resolve to different exact UserService IDs. They do not share a scope,
+credential, slug, or fallback path.
+
+Managed deadline ownership is also fixed: `180s` chrono execution `< 300s` Aevatar complete
+lifecycle `< >=315s` NyxID/ingress `< 360s` workflow. An intermediary deadline shorter than
+the next inner owner is a deployment defect, not a Codex terminal result.
 
 Issue #2921 requested a decision between keeping runc + Landlock + Vault (option A) and
 switching to gVisor with the token injected directly (option B). PR #2924 demonstrated the
@@ -65,10 +83,11 @@ materially stronger escape isolation and sheds four moving parts.
 
 The managed credential boundary in `docs/canon/managed-codex-execution.md` is otherwise
 unchanged: the per-user agent key stays only in `ISecretVault`, is resolved immediately
-before the NyxID request, and is used only as that request's Authorization value. The NyxID
-UserService gate (`forward_access_token=false`, `inject_delegation_token=true`,
-`delegation_token_scope=proxy:*`) remains validated at provisioning and rotation for the
-internal canary.
+before the NyxID request, and is used only as that request's `X-API-Key` value. The exact
+`chrono-managed-codex` UserService gate (`forward_access_token=false`,
+`inject_delegation_token=true`, `delegation_token_scope=proxy:*`) remains validated at
+provisioning and rotation for the internal canary. Ordinary `/execute` belongs to the separate
+`chrono-sandbox` identity and cannot weaken or substitute for this managed gate.
 
 Issue #2899 includes replacing the persistent invocation key with a short-lived caller
 capability, making caller-credential non-forwarding immutable or request-level fail-closed,
@@ -77,9 +96,10 @@ Credential Vault clause — moving the delegated LLM token behind a sandbox
 credential vault — is closed by this decision as rejected, not deferred, because satisfying
 it forces the weaker-isolation runtime.
 
-Chrono-sandbox creates gVisor sandboxes for the codex path and injects the token as
-environment; operations applies the tenant NetworkPolicy and PID/resource limits. Neither
-change is owned by this repository; this ADR fixes the contract they implement. The rollout
+The chrono-sandbox deployment creates gVisor sandboxes for the codex path and injects the token
+as environment; the deployment name does not define its NyxID route identity. Operations
+applies the tenant NetworkPolicy and PID/resource limits. Neither change is owned by this
+repository; this ADR fixes the contract they implement. The rollout
 runbook (`docs/operations/2026-07-16-managed-codex-exec-rollout.md`) reflects the gVisor
 prerequisites, and FQDN-level egress claims are withdrawn from all managed codex_exec
 documents.

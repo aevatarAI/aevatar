@@ -165,6 +165,7 @@ message AgentToolExecutionContextPayload {
   repeated ChatFileRef input_file_refs = 16;
   AgentChatInvocationContextPayload chat = 17;
   aevatar.ai.tool_providers.AgentToolExecutionOwner execution_owner = 18;
+  aevatar.ai.tool_providers.AgentToolOperationAdmissionPayload operation_admission = 19;
 }
 
 enum AgentChatInvocationSurfacePayload {
@@ -251,6 +252,7 @@ message AgentToolRecoveryContextPayload {
   bool requires_nyx_id_org_token = 18;
   bool requires_sender_nyx_id_access_token = 19;
   bool requires_source_readable_nyx_id_access_token = 20;
+  aevatar.ai.tool_providers.AgentToolOperationAdmissionPayload operation_admission = 21;
 }
 
 message AgentSkillRecoveryCheckpointPayload {
@@ -413,6 +415,25 @@ enum AgentToolReceiptEffect {
   AGENT_TOOL_RECEIPT_EFFECT_MUTATING = 2;
 }
 
+enum AgentToolReceiptMutationStage {
+  AGENT_TOOL_RECEIPT_MUTATION_STAGE_UNSPECIFIED = 0;
+  AGENT_TOOL_RECEIPT_MUTATION_STAGE_ACCEPTED = 1;
+  AGENT_TOOL_RECEIPT_MUTATION_STAGE_READ_MODEL_OBSERVED = 2;
+}
+
+enum NyxIdApprovalDecisionMode {
+  NYX_ID_APPROVAL_DECISION_MODE_UNSPECIFIED = 0;
+  NYX_ID_APPROVAL_DECISION_MODE_PER_REQUEST = 1;
+  NYX_ID_APPROVAL_DECISION_MODE_GRANT = 2;
+}
+
+enum NyxIdApprovalTerminalOutcome {
+  NYX_ID_APPROVAL_TERMINAL_OUTCOME_UNSPECIFIED = 0;
+  NYX_ID_APPROVAL_TERMINAL_OUTCOME_REJECTED = 1;
+  NYX_ID_APPROVAL_TERMINAL_OUTCOME_EXPIRED = 2;
+  NYX_ID_APPROVAL_TERMINAL_OUTCOME_TIMED_OUT = 3;
+}
+
 message NyxIdAuthorizationRequiredEvent {
   string service_slug = 1;
   optional string service_label = 2;
@@ -442,6 +463,14 @@ message AgentToolReceipt {
   WorkflowRunBackgroundDeliveryReceipt workflow_run_delivery = 16;
   NyxIdAuthorizationRequiredEvent authorization_required = 17;
   AgentToolReceiptEffect effect = 18;
+  // Opaque identity assigned by the external provider to the affected resource.
+  // Raw provider responses remain transient; reconciliation persists only this ID.
+  string provider_resource_id = 19;
+  // NyxID-owned approval semantics. This is intentionally separate from the
+  // local tool approval mode above; omitted boundary data remains unknown.
+  NyxIdApprovalDecisionMode nyx_id_approval_decision_mode = 20;
+  AgentToolReceiptMutationStage mutation_stage = 21;
+  NyxIdApprovalTerminalOutcome nyx_id_approval_terminal_outcome = 22;
 }
 
 message ManagedWorkflowHandoffReceipt {

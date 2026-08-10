@@ -77,6 +77,20 @@ public sealed class WorkflowGAgentReplayContractTests : WorkflowGAgentTestBase
                 "wf_replay",
                 runId: "run-replay");
             await SeedRuntimeContextAsync(agent1);
+            await agent1.UpsertExecutionStateAsync(
+                WorkflowExecutionKernel.ModuleStateKey,
+                Any.Pack(new WorkflowExecutionKernelState
+                {
+                    Active = true,
+                    RunId = "run-replay",
+                    CurrentStepId = "step-terminal",
+                    CurrentStepInput = "terminal-input",
+                    CurrentStepDispatchPending = true,
+                    Variables =
+                    {
+                        ["result"] = "terminal-fact",
+                    },
+                }));
             await agent1.HandleWorkflowCompleted(new WorkflowCompletedEvent
             {
                 WorkflowName = "wf_replay",
@@ -85,6 +99,7 @@ public sealed class WorkflowGAgentReplayContractTests : WorkflowGAgentTestBase
                 Output = "done",
             });
             AssertRuntimeContextCleared(agent1);
+            AssertTerminalKernelState(agent1);
             await agent1.DeactivateAsync();
 
             var persisted = await eventStore.GetEventsAsync(agent1.Id);
@@ -99,9 +114,21 @@ public sealed class WorkflowGAgentReplayContractTests : WorkflowGAgentTestBase
             agent2.State.Status.Should().Be("completed");
             agent2.State.FinalOutput.Should().Be("done");
             agent2.State.Compiled.Should().BeTrue();
+            AssertTerminalKernelState(agent2);
 
             publisher.Published.Select(x => x.evt).OfType<WorkflowLlmInvocationCompletedEvent>()
                 .Should().ContainSingle(x => x.Content == "done");
+        }
+
+        private static void AssertTerminalKernelState(WorkflowRunGAgent agent)
+        {
+            var kernel = agent.State.ExecutionStates[WorkflowExecutionKernel.ModuleStateKey]
+                .Unpack<WorkflowExecutionKernelState>();
+            kernel.Active.Should().BeFalse();
+            kernel.RunId.Should().BeEmpty();
+            kernel.CurrentStepDispatchPending.Should().BeFalse();
+            kernel.CurrentStepId.Should().Be("step-terminal");
+            kernel.Variables.Should().Contain("result", "terminal-fact");
         }
 
         [Fact]

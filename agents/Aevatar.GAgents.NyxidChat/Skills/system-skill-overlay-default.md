@@ -19,7 +19,7 @@ Use the provider-specific typed sharing tool, loaded provider skill, or exact co
 
 NyxID service procedures and Ornn user manuals live on the Ornn skill platform, not in the kernel, so curators can update them without redeploying the bot. Learn the canonical, up-to-date usage by loading the skill for the requested operation.
 
-For a read-only request asking which services the caller already has connected, first call `use_skill(skill="nyxid-service-discovery")`, then call `nyxid_service_inventory`. The loaded skill supplies current NyxID semantics; the typed tool supplies the current sender's live inventory. Do not call `code_execute`, a sandbox CLI, or `nyxid service list` for this read. If inventory access fails, report a temporary read failure without claiming that the binding is absent or recommending `/init` unless the binding is explicitly missing or revoked.
+For a read-only request asking which services the caller already has connected, answer with the inventory read present in the final request's tool schemas. When `nyxid_service_inventory` is present, route the read through the catalog/service-inspection path: first call `use_skill(skill="nyxid-service-discovery")`, then call `nyxid_service_inventory`. This route establishes current sender-specific service facts; execution tools only run supplied work and cannot establish that inventory. The loaded skill supplies current NyxID semantics; treat the typed inventory result as the authority for the current sender. When `nyxid_service_inventory` is absent, answer from the read-only NyxID management read that is present instead, such as `nyxid_services`, without chasing the missing inventory tool. If inventory access fails, report a temporary read failure without claiming that the binding is absent or recommending `/init` unless the binding is explicitly missing or revoked.
 
 Load the narrow NyxID service skill that matches the request:
 - `use_skill(skill="nyxid-service-connect")` for connecting, adding, reconnecting, or authorizing a service
@@ -54,7 +54,9 @@ Quick reference:
 
 ### Capability tool details
 
-**`code_execute`** — Execute Python, JavaScript, TypeScript, or Bash in a sandboxed environment. Returns stdout, stderr, and exit code. Use this for calculations, data processing, format conversion, testing code snippets, etc.
+**`code_execute`** — Execute caller-provided exact Python, JavaScript, TypeScript, or Bash source in a one-shot remote code runtime. Returns stdout, stderr, and exit code. Use it when the caller supplied an explicit program.
+
+**`codex_exec`** — Delegate a natural-language task to Codex. Use `managed_sandbox` for the fixed isolated runtime without human approval, or `private_ssh` for a real user host; `private_ssh` requires approval.
 
 **`nyxid_proxy`** — Make HTTP requests to any connected service. NyxID injects credentials automatically.
 - Select an exact instance from `<connected-services>` or typed capability discovery; do not use `nyxid_proxy` as a discovery surface

@@ -16,7 +16,7 @@
     --panel:#171a21; --panel-2:#1f232c; --panel-3:#252b36;
     --border:#2a2f3a; --border-soft:#22272f;
     --fg:#e6e9ef; --fg-strong:#f4f6fb; --muted:#9aa3b2; --muted-2:#6c7585;
-    --accent:#5b8cff; --accent-ink:#0b1020; --accent-soft:rgba(91,140,255,.14); --accent-line:rgba(91,140,255,.40);
+    --accent:#6f97ff; --accent-ink:#0b1020; --accent-soft:rgba(111,151,255,.15); --accent-line:rgba(111,151,255,.42);
     --ok:#3fb950; --ok-soft:rgba(63,185,80,.14); --warn:#d29922; --warn-soft:rgba(210,153,34,.15);
     --err:#f85149; --err-soft:rgba(248,81,73,.14); --run:#58a6ff; --run-soft:rgba(88,166,255,.16);
     --neutral:#9aa3b2; --neutral-soft:rgba(154,163,178,.12);
@@ -24,7 +24,7 @@
     --ring:0 0 0 2px var(--bg),0 0 0 4px var(--accent);
     --r-sm:6px; --r:9px; --r-lg:13px; --r-pill:999px;
     --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;
-    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,"PingFang SC","Microsoft YaHei","Noto Sans CJK SC",sans-serif;
+    --sans:"Alibaba PuHuiTi 2.0","Alibaba PuHuiTi","AlibabaSans",-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,"PingFang SC","Microsoft YaHei","Noto Sans CJK SC",sans-serif;
     --nav-w:228px; --topbar-h:56px; --brand-w:268px; color-scheme:dark;
   }
   @media (prefers-color-scheme: light) {
@@ -32,7 +32,7 @@
       --bg:#f5f7fa; --bg-grad:radial-gradient(1100px 560px at 80% -12%,#eef2f8 0%,#f5f7fa 58%);
       --panel:#ffffff; --panel-2:#f3f5f9; --panel-3:#eaeef4; --border:#dde2ea; --border-soft:#e7ebf1;
       --fg:#1c2128; --fg-strong:#0b0f14; --muted:#57606b; --muted-2:#828b97;
-      --accent:#2f63e0; --accent-ink:#ffffff; --accent-soft:rgba(47,99,224,.10); --accent-line:rgba(47,99,224,.34);
+      --accent:#2f5cf6; --accent-ink:#ffffff; --accent-soft:rgba(47,92,246,.10); --accent-line:rgba(47,92,246,.34);
       --ok:#1a7f37; --ok-soft:rgba(26,127,55,.12); --warn:#9a6700; --warn-soft:rgba(154,103,0,.12);
       --err:#cf222e; --err-soft:rgba(207,34,46,.10); --run:#2f6fed; --run-soft:rgba(47,111,237,.12);
       --neutral:#57606b; --neutral-soft:rgba(87,96,107,.10);
@@ -43,7 +43,7 @@
     --bg:#f5f7fa; --bg-grad:radial-gradient(1100px 560px at 80% -12%,#eef2f8 0%,#f5f7fa 58%);
     --panel:#ffffff; --panel-2:#f3f5f9; --panel-3:#eaeef4; --border:#dde2ea; --border-soft:#e7ebf1;
     --fg:#1c2128; --fg-strong:#0b0f14; --muted:#57606b; --muted-2:#828b97;
-    --accent:#2f63e0; --accent-ink:#ffffff; --accent-soft:rgba(47,99,224,.10); --accent-line:rgba(47,99,224,.34);
+    --accent:#2f5cf6; --accent-ink:#ffffff; --accent-soft:rgba(47,92,246,.10); --accent-line:rgba(47,92,246,.34);
     --ok:#1a7f37; --ok-soft:rgba(26,127,55,.12); --warn:#9a6700; --warn-soft:rgba(154,103,0,.12);
     --err:#cf222e; --err-soft:rgba(207,34,46,.10); --run:#2f6fed; --run-soft:rgba(47,111,237,.12);
     --neutral:#57606b; --neutral-soft:rgba(87,96,107,.10);
@@ -326,20 +326,20 @@
      - GET  /api/studio/context → {scopeId, scopeResolved, scopeSource}  (scope chip + provisioning scope)
      - GET  /api/scopes/{scopeId}/chat-route-policy → protobuf-JSON policy view, 404 when absent
             (pre-flight: does a /ws/voice connect resolve a voice_attach_target?)
-     - POST /api/scopes/{scopeId}/nyxid-chat/conversations → 202 {actorId,...}
-            (zero-config step 1: create the default voice conversation agent)
+     - POST /api/scopes/{scopeId}/voice-agents → 202 {actorId,agentKind,moduleName,statusUrl}
+            (zero-config step 1: create and enable a dedicated voice-capable RoleGAgent)
      - PUT  /api/scopes/{scopeId}/chat-route-policy/rules/voice-default → 202
             body: protobuf-JSON UpsertChatRouteRuleRequested binding sourceKind=VOICE to that actor
             (zero-config step 2; owner_scope is server-stamped from the URL scope)
-     - GET  /api/scopes/{scopeId}/nyxid-chat/conversations  (poll until the new actor is registry-visible)
-     - DELETE /api/scopes/{scopeId}/nyxid-chat/conversations/{actorId}
-            (compensation: remove the just-created conversation when the rule write fails)
+     - GET  {statusUrl}  (poll the voice capability read model until initialized)
+     - DELETE /api/scopes/{scopeId}/voice-agents/{actorId}
+            (compensation: remove the just-created voice agent when the rule write fails)
      - POST /api/scopes/{scopeId}/gagent-actors/{actorId}/voice-presence/enable?agentKind=...
             body {moduleName} → 202 / 4xx-5xx {error,detail}   (advanced: attach to a specific actor)
      - WS   /ws/voice?codec=pcm16&mode=half_duplex  (Talk client; NyxID JWT via Sec-WebSocket-Protocol "aevatar-bearer.<token>")
    /ws/voice fails closed (501) when the caller's chat route policy resolves no voice attach target, so the
    Talk flow pre-flights the policy and self-provisions the default agent on first use (all endpoints above
-   already exist and carry their own scope-access guards). The default agent has no config write API, so the
+   carry their own scope-access guards). The default agent has no config write API, so the
    Default-agent view shows real runtime defaults read-only.
    =========================================================================== */
 
@@ -483,8 +483,10 @@ async function fetchWithConsoleAuth(path,options){
 }
 
 async function beginLogin(requestedResources, tokenPurpose){
-  const resources=normalizeResources(CFG.resources,requestedResources);
   const purpose=tokenPurpose===VOICE_TOKEN_PURPOSE ? VOICE_TOKEN_PURPOSE : "";
+  // ADR-0018：会话登录不发送显式 resource（NyxID 会按 RFC 8707 收窄授权）；
+  // 仅 voice-realtime 专用 token 保留有意收窄。
+  const resources=purpose===VOICE_TOKEN_PURPOSE ? normalizeResources(CFG.resources,requestedResources) : [];
   if(notifyAdminShellAuth("login-request","",resources,purpose)) return;
   const verifier = randomString(64);
   const st = randomString(32);
@@ -516,7 +518,7 @@ async function completeLoginIfCallback(){
   form.set("redirect_uri", CFG.redirectUri);
   form.set("client_id", CFG.clientId);
   form.set("code_verifier", pending.verifier);
-  const requestedResources=Array.isArray(pending.resources) ? normalizeResources(pending.resources) : normalizeResources(CFG.resources);
+  const requestedResources=Array.isArray(pending.resources) ? normalizeResources(pending.resources) : [];
   requestedResources.forEach(resource => form.append("resource", resource));
   const res = await fetch(CFG.authority + "/oauth/token", { method:"POST", headers:{ "Content-Type":"application/x-www-form-urlencoded" }, body: form.toString() });
   sessionStorage.removeItem(PKCE_KEY);
@@ -621,6 +623,7 @@ function initials(label){ const s=String(label||"?").trim(); return (s[0]||"?").
    - default tool allowlist (PolicyAwareVoiceEndpoints.DefaultVoiceToolAllowlist / VOICE_TOOL_ALLOWLIST).
    These are surfaced read-only; aevatar exposes no default-agent config GET or write today. */
 const DEFAULT_MODULE = "voice_presence_openai";
+const DEFAULT_VOICE_AGENT_KIND = "nyxid.voice";
 const DEFAULT_TOOL_ALLOWLIST = ["nyxid_proxy","nyxid_status","nyxid_services","nyxid_catalog","ornn_search_skills","use_skill"];
 
 const state = {
@@ -787,7 +790,7 @@ function renderAgents(){
   const v=el("div",{class:"view"});
   v.appendChild(pageHead(
     '默认语音 Agent <span class="badge b-ready" style="font-size:11px"><span class="dot s-ready"></span>零配置</span>',
-    '首次在本页发起对话时自动开通：控制台创建默认会话 agent，并写入 <code class="inline">voice-default</code> 语音路由规则；之后连接复用该规则的目标，不再重复创建。以下为运行时默认值（只读）。'));
+    '首次在本页发起对话时自动开通：控制台创建默认语音 agent，并写入 <code class="inline">voice-default</code> 语音路由规则；之后连接复用该规则的目标，不再重复创建。以下为运行时默认值（只读）。'));
 
   const grid=el("div",{class:"grid-2"});
 
@@ -931,16 +934,17 @@ function renderTools(){
    fails closed (501 "Voice ForwardToModel is not supported in v1.") when the
    resolution carries no voice_attach_target — a brand-new caller has no policy
    at all. To keep the first connect zero-config, the Talk flow pre-flights the
-   policy and, when voice resolves no target, provisions one through the two
-   existing audited endpoints, then waits for materialization before dialing.
+   policy and, when voice resolves no target, provisions one through the
+   capability-specific voice-agent endpoint, then waits for materialization
+   before dialing.
 
    Resource semantics of the default path:
-     ownership — a normal caller-scope nyxid-chat conversation actor (it shows
-       up in the conversation list and is deletable like any other);
+     ownership — a caller-scope nyxid.voice RoleGAgent registered by the
+       voice-agent capability command service;
      reuse key — the voice-default route rule: when it (or any rule resolving a
        voice target) exists, its target is reused and nothing is created;
-     cleanup  — the existing DELETE rule / DELETE conversation endpoints; when
-       the rule write fails the just-created conversation is deleted best-effort
+     cleanup  — the existing DELETE rule / DELETE voice-agent endpoints; when
+       the rule write fails the just-created voice agent is deleted best-effort
        so a retry does not accumulate orphans.
    =========================================================================== */
 const VOICE_ROUTE_RULE_ID = "voice-default";
@@ -958,10 +962,10 @@ function voiceRuleMatches(m){
   if(m.toolMode && m.toolMode !== "TOOL_MODE_NONE") return false;
   return true;
 }
-function voiceAttachActorId(action){
+function voiceAttachTarget(action){
   const t = action && action.forwardToModel && action.forwardToModel.toolChoiceHint
     && action.forwardToModel.toolChoiceHint.voiceAttachTarget;
-  return (t && t.actorId) ? t.actorId : null;
+  return (t && t.actorId) ? { actorId:t.actorId, moduleName:t.voiceModuleName||null } : null;
 }
 /* Mirrors ChatRouteResolver.Resolve over the GET view: rules are stored (and
    returned) priority-desc, first matching rule WITH an action wins, otherwise
@@ -969,7 +973,7 @@ function voiceAttachActorId(action){
    provisioning: matchedPriority lets the new rule outrank a matching-but-not-
    voice-capable rule, and rejected honours an explicit Reject (never overridden). */
 function resolveVoiceRoute(policy){
-  if(!policy) return { actorId:null, matchedPriority:null, rejected:false, reason:"" };
+  if(!policy) return { actorId:null, moduleName:null, matchedPriority:null, matchedRuleId:null, rejected:false, reason:"" };
   const rules = policy.rules || [];
   for(let i=0;i<rules.length;i++){
     const r = rules[i];
@@ -977,12 +981,21 @@ function resolveVoiceRoute(policy){
     const a = r.action || null;
     if(!a || (!a.forwardToModel && !a.reject)) continue; // action-less rule: resolver skips it
     const p = (typeof r.priority === "number") ? r.priority : 0;
-    if(a.reject) return { actorId:null, matchedPriority:p, rejected:true, reason:(a.reject.reason||"") };
-    return { actorId:voiceAttachActorId(a), matchedPriority:p, rejected:false, reason:"" };
+    if(a.reject) return { actorId:null, moduleName:null, matchedPriority:p, matchedRuleId:r.ruleId||null, rejected:true, reason:(a.reject.reason||"") };
+    const target=voiceAttachTarget(a);
+    return { actorId:target&&target.actorId, moduleName:target&&target.moduleName, matchedPriority:p, matchedRuleId:r.ruleId||null, rejected:false, reason:"" };
   }
   const d = policy.defaultTarget || null;
-  if(d && d.reject) return { actorId:null, matchedPriority:null, rejected:true, reason:(d.reject.reason||"") };
-  return { actorId:voiceAttachActorId(d), matchedPriority:null, rejected:false, reason:"" };
+  if(d && d.reject) return { actorId:null, moduleName:null, matchedPriority:null, matchedRuleId:null, rejected:true, reason:(d.reject.reason||"") };
+  const target=voiceAttachTarget(d);
+  return { actorId:target&&target.actorId, moduleName:target&&target.moduleName, matchedPriority:null, matchedRuleId:null, rejected:false, reason:"" };
+}
+
+async function actorKindFor(scopeId,actorId){
+  const registry=await apiGet("/api/scopes/"+encodeURIComponent(scopeId)+"/gagent-actors");
+  const groups=(registry&&registry.groups)||[];
+  const group=groups.find(g=>(g.actorIds||[]).some(id=>id===actorId));
+  return group&&group.agentKind||null;
 }
 
 async function ensureVoiceRoute(onStep){
@@ -990,18 +1003,36 @@ async function ensureVoiceRoute(onStep){
   const scopeId = state.scopeId;
   if(!scopeId) throw new Error("scope 未解析，无法检查语音路由");
   const policyPath = "/api/scopes/"+encodeURIComponent(scopeId)+"/chat-route-policy";
-  const convsPath  = "/api/scopes/"+encodeURIComponent(scopeId)+"/nyxid-chat/conversations";
+  const agentsPath = "/api/scopes/"+encodeURIComponent(scopeId)+"/voice-agents";
 
   const route = resolveVoiceRoute(await apiGet(policyPath));
   if(route.rejected) throw new Error("路由策略拒绝语音接入" + (route.reason ? "：" + route.reason : ""));
-  if(route.actorId) return { actorId: route.actorId, provisioned:false };
+  if(route.actorId){
+    let actorKind=null;
+    try { actorKind=await actorKindFor(scopeId,route.actorId); }
+    catch(e){
+      console.warn("voice: actor registry preflight failed",e);
+      throw new Error("无法验证当前语音目标，请稍后重试");
+    }
+    const staleConsoleTarget=route.matchedRuleId===VOICE_ROUTE_RULE_ID && (!actorKind || actorKind==="nyxid.chat");
+    if(!staleConsoleTarget) return { actorId:route.actorId, provisioned:false };
+    onStep("检测到旧版默认语音目标，正在重新开通…");
+  }
 
-  onStep("首次使用：正在创建默认语音会话 agent…");
-  const created = await apiSend("POST", convsPath);
+  onStep("首次使用：正在创建默认语音 agent…");
+  const created = await apiSend("POST", agentsPath);
   const actorId = (created.status === 202 && created.body && created.body.actorId) ? created.body.actorId : null;
   if(!actorId){
     const why = created.body && (created.body.detail || created.body.error);
-    throw new Error("创建默认会话失败（HTTP " + created.status + (why ? " · " + why : "") + "）");
+    throw new Error("创建默认语音 agent 失败（HTTP " + created.status + (why ? " · " + why : "") + "）");
+  }
+  const agentKind=created.body.agentKind;
+  const moduleName=created.body.moduleName;
+  const statusUrl=created.body.statusUrl;
+  if(agentKind!==DEFAULT_VOICE_AGENT_KIND || moduleName!==DEFAULT_MODULE || !statusUrl){
+    try { await apiSend("DELETE", agentsPath + "/" + encodeURIComponent(actorId)); }
+    catch(e){ console.warn("voice: incompatible voice agent cleanup failed",e); }
+    throw new Error("默认语音 agent 返回了不兼容的能力契约");
   }
 
   onStep("正在写入 voice-default 语音路由规则…");
@@ -1013,38 +1044,40 @@ async function ensureVoiceRoute(onStep){
     rule: {
       priority: priority,
       match: { sourceKind: "CHAT_SOURCE_KIND_VOICE" },
-      action: { forwardToModel: { toolChoiceHint: { voiceAttachTarget: { actorId: actorId } } } },
+      action: { forwardToModel: { toolChoiceHint: { voiceAttachTarget: { actorId: actorId, voiceModuleName: moduleName } } } },
       description: "Console-provisioned default voice attach target"
     }
   });
   if(rule.status !== 202){
-    try { await apiSend("DELETE", convsPath + "/" + encodeURIComponent(actorId)); }
-    catch(e){ console.warn("voice: orphan conversation cleanup failed", e); }
+    try { await apiSend("DELETE", agentsPath + "/" + encodeURIComponent(actorId)); }
+    catch(e){ console.warn("voice: orphan voice agent cleanup failed", e); }
     const why = rule.body && (rule.body.detail || rule.body.error);
     throw new Error("写入语音路由规则失败（HTTP " + rule.status + (why ? " · " + why : "") + "）");
   }
 
-  // Both writes are 202-accepted commands (honest ACK), so wait until the rule
-  // resolves to the new actor AND the conversation actor is registry-visible —
-  // /ws/voice reads the policy readmodel and its auto-enable probes the live actor.
-  onStep("等待路由与会话物化…");
+  // Both writes are honest accepted receipts, so wait until the route resolves
+  // to the new actor/module AND the committed voice capability is materialized.
+  onStep("等待路由与语音能力物化…");
   const deadline = Date.now() + 15000;
-  let ruleSeen = false, convSeen = false;
-  while(Date.now() < deadline && !(ruleSeen && convSeen)){
+  let ruleSeen = false, capabilitySeen = false;
+  while(Date.now() < deadline && !(ruleSeen && capabilitySeen)){
     await new Promise(r => setTimeout(r, 500));
     if(!ruleSeen){
-      try { ruleSeen = resolveVoiceRoute(await apiGet(policyPath)).actorId === actorId; }
+      try {
+        const observed=resolveVoiceRoute(await apiGet(policyPath));
+        ruleSeen=observed.actorId===actorId && observed.moduleName===moduleName;
+      }
       catch(e){ console.warn("voice: policy materialization poll failed", e); }
     }
-    if(!convSeen){
+    if(!capabilitySeen){
       try {
-        const list = await apiGet(convsPath);
-        convSeen = !!(list && list.conversations && list.conversations.some(c => c.actorId === actorId));
-      } catch(e){ console.warn("voice: conversation materialization poll failed", e); }
+        const capability=await apiGet(statusUrl);
+        capabilitySeen=!!(capability && capability.actorId===actorId && capability.moduleName===moduleName && capability.initialized);
+      } catch(e){ console.warn("voice: capability materialization poll failed", e); }
     }
   }
   if(!ruleSeen) throw new Error("语音路由规则尚未物化，请稍后重试");
-  if(!convSeen) throw new Error("默认会话 agent 尚未注册完成，请稍后重试");
+  if(!capabilitySeen) throw new Error("默认语音能力尚未物化，请稍后重试");
   return { actorId: actorId, provisioned:true };
 }
 
@@ -1312,7 +1345,7 @@ function renderTest(){
 
   if(voice.status==="error"){
     v.appendChild(banner("warn",ICON.alert,"连不上？",
-      '首次使用时本页会自动开通默认语音 agent（创建默认会话并写入 <code class="inline">voice-default</code> 路由规则）；开通失败会在上方给出原因，可直接重试。'+
+      '首次使用时本页会自动开通默认语音 agent（创建专用语音 agent 并写入 <code class="inline">voice-default</code> 路由规则）；开通失败会在上方给出原因，可直接重试。'+
       '<code class="inline">/ws/voice</code> 在未配置 provider 时返回 503，路由未解析出语音目标时返回 501，会话内部异常返回 5xx。'+
       '确认本部署已配置语音 provider、当前登录已授权 <span class="mono">'+esc(VOICE_REALTIME_SERVICE_SLUG)+'</span>，且该服务内保存了有效的 OpenAI 凭据。'));
   }

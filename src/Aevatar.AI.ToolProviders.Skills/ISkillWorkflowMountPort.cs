@@ -65,7 +65,8 @@ public sealed record SkillWorkflowMountResult(
     string? Message = null,
     IReadOnlyList<SkillWorkflowMountPreview>? ConfirmationRequests = null,
     string? FailureCode = null,
-    string? ConfirmationToken = null);
+    string? ConfirmationToken = null,
+    bool ReadModelObserved = false);
 
 public sealed record SkillWorkflowMountConfirmation(
     string WorkflowId,

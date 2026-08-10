@@ -51,6 +51,7 @@ The write-side authority for creating or updating a published runnable workflow 
 - Lark "create workflow" flows that mean "page-visible" or "later runnable by workflow id" must use `IScopeWorkflowCommandPort`.
 - Ornn import or mount flows become published workflows only after they call `IScopeWorkflowCommandPort.UpsertAsync`.
 - Command responses may return accepted receipts and stable read model URLs; they must not fabricate readmodel readiness or runnable actor facts inline.
+- A mount adapter must observe `IScopeWorkflowQueryPort.LookupByWorkflowIdAsync` returning `Runnable` for the exact scope, workflow, and accepted revision before it reports `mounted`. Accepted-only, stale-revision, timeout, and query-unavailable outcomes remain typed blockers rather than successful mounts.
 
 ### 2. Published workflow query authority
 

@@ -1,6 +1,8 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.GAgents.NyxidChat;
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.AI.Tests;
@@ -11,13 +13,14 @@ public sealed class NyxIdChatControlCommandTests
         new DateTimeOffset(2026, 7, 25, 8, 0, 0, TimeSpan.Zero));
 
     [Fact]
-    public void RetryFailedLlm_ShouldCommitNextGenerationWithoutPersistingCapability()
+    public void RetryFailedLlm_ShouldCommitFailureRecoveryRevisionWithoutPersistingCapability()
     {
         var state = FailedStepState(
             NyxIdChatStepKind.Llm,
             required: true,
             safeToSkip: false,
             retryInputRebuildable: true);
+        state.ActiveTask.PlanRevision = 4;
         var command = RetryCommand();
 
         var decision = NyxIdChatControlCommands.Retry(state, command, stateVersion: 3, Now);
@@ -29,6 +32,10 @@ public sealed class NyxIdChatControlCommandTests
         decision.Result.RequestId.Should().Be("retry-alpha");
         decision.Result.OperationGeneration.Should().Be(2);
         decision.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Active);
+        decision.State.ActiveTask.PlanRevision.Should().Be(5);
+        decision.State.ActiveTask.PlanRevisions.Should().ContainSingle(record =>
+            record.PlanRevision == 5 &&
+            record.RevisionCause == NyxIdChatPlanRevisionCause.FailureRecovery);
         decision.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Active);
         decision.State.RecentTerminalTurns.Should().BeEmpty();
         var retried = decision.State.ActiveTask.Steps.Single();
@@ -122,6 +129,227 @@ public sealed class NyxIdChatControlCommandTests
         decision.Result.ReasonCode.Should().Be(
             NyxIdChatControlCommands.StepActionUnavailable);
         decision.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Active);
+    }
+
+    [Fact]
+    public void RetryReconciledNotAppliedTool_ShouldEnterFreshGenerationWithoutAutomaticReplay()
+    {
+        var state = FailedStepState(
+            NyxIdChatStepKind.Tool,
+            required: true,
+            safeToSkip: false,
+            retryInputRebuildable: true);
+        var step = state.ActiveTask.Steps.Single();
+        step.MayChangeExternalState = true;
+        step.RetryToolInput = new NyxIdChatRetryToolInputState
+        {
+            CallId = "call-effect-alpha",
+            ToolName = "opaque-effect-tool",
+            Arguments = JsonParser.Default.Parse<Struct>("{\"value\":\"alpha\"}"),
+            OperationAdmission = new AgentToolOperationAdmissionPayload
+            {
+                ServiceInstanceId = "m-alpha",
+                ServiceSlug = "svc-alpha",
+                PublishedEndpoint = new AgentToolPublishedEndpointIdentityPayload
+                {
+                    EndpointId = "endpoint-effect-alpha",
+                },
+            },
+        };
+        step.AvailableActions = NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(step);
+
+        var decision = NyxIdChatControlCommands.Retry(
+            state,
+            RetryCommand(),
+            stateVersion: 3,
+            Now);
+
+        decision.ShouldCommit.Should().BeTrue();
+        decision.ShouldDispatch.Should().BeTrue();
+        decision.State.ActiveTask.TaskId.Should().Be("task-alpha");
+        decision.State.ActiveTask.Steps.Single().Operation.Key.OperationGeneration.Should().Be(2);
+        decision.NextCommand!.InputCase.Should().Be(
+            NyxIdChatOperationDispatchCommand.InputOneofCase.Tool);
+        decision.NextCommand.Tool.CallId.Should().Be("call-effect-alpha");
+        decision.NextCommand.Tool.IdempotencyKey.Should().Be(
+            decision.NextCommand.Key.OperationId);
+        decision.NextCommand.Tool.RetryAuthorizationSourceKey.Should().BeEquivalentTo(
+            step.Operation.Key);
+        decision.NextCommand.Key.OperationId.Should().NotBe("operation-alpha");
+    }
+
+    [Fact]
+    public void RetryConfirmModeEffect_ShouldRequireNewExactPlanConfirmationBeforeDispatch()
+    {
+        var state = FailedStepState(
+            NyxIdChatStepKind.Tool,
+            required: true,
+            safeToSkip: false,
+            retryInputRebuildable: true);
+        state.ActiveTask.PlanId = "plan-alpha";
+        state.ActiveTask.PlanRevision = 1;
+        var step = state.ActiveTask.Steps.Single();
+        step.MayChangeExternalState = true;
+        step.Source = new NyxIdChatStepSource
+        {
+            Tool = new NyxIdChatToolStepSource
+            {
+                ToolName = "opaque-effect-tool",
+                OperationAdmission = ExactEffectAdmission(),
+            },
+        };
+        step.RetryToolInput = new NyxIdChatRetryToolInputState
+        {
+            CallId = "call-effect-alpha",
+            ToolName = "opaque-effect-tool",
+            Arguments = JsonParser.Default.Parse<Struct>("{\"value\":\"alpha\"}"),
+            OperationAdmission = ExactEffectAdmission(),
+        };
+        state.AgentProfile = new AgentProfileSnapshot();
+        state.ActiveTurn.AgentProfileTurnAuthority = new AgentProfileTurnAuthorityState();
+        step.AvailableActions = NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(step);
+        state.ActiveTask.Gate = NyxIdChatPlanGateDecisions.BuildToolGate(
+            state,
+            step,
+            new NyxIdChatToolCall
+            {
+                CallId = step.RetryToolInput.CallId,
+                ToolName = step.RetryToolInput.ToolName,
+                ArgumentsJson = JsonFormatter.Default.Format(step.RetryToolInput.Arguments),
+            },
+            requiresConfirmation: true);
+        state.ActiveTask.Gate.Status = NyxIdChatPlanGateStatus.Satisfied;
+        state.ActiveTask.Gate.DecidedAt = Now.Clone();
+        var oldGate = state.ActiveTask.Gate.Clone();
+
+        var retry = NyxIdChatControlCommands.Retry(
+            state,
+            RetryCommand(),
+            stateVersion: 3,
+            Now);
+
+        retry.ShouldCommit.Should().BeTrue();
+        retry.ShouldDispatch.Should().BeFalse();
+        retry.NextCommand.Should().BeNull();
+        retry.State.ActiveTask.PlanRevision.Should().Be(2);
+        retry.State.ActiveTask.PlanRevisions.Should().ContainSingle(record =>
+            record.PlanRevision == 2 &&
+            record.RevisionCause == NyxIdChatPlanRevisionCause.FailureRecovery);
+        var retried = retry.State.ActiveTask.Steps.Single();
+        retried.Status.Should().Be(NyxIdChatStepStatus.Planned);
+        retried.Operation.Key.OperationGeneration.Should().Be(2);
+        retry.State.ActiveTask.ActiveOperationId.Should().BeEmpty();
+        var newGate = retry.State.ActiveTask.Gate;
+        newGate.Status.Should().Be(NyxIdChatPlanGateStatus.Pending);
+        newGate.PlanRevision.Should().Be(2);
+        newGate.RequestId.Should().NotBe(oldGate.RequestId);
+        newGate.Admissions.Should().ContainSingle()
+            .Which.Key.Should().BeEquivalentTo(retried.Operation.Key);
+
+        var staleConfirmation = NyxIdChatPlanGateDecisions.Resolve(
+            retry.State,
+            ResolvePlan(oldGate, expectedStateVersion: 4),
+            currentStateVersion: 4,
+            Now);
+        staleConfirmation.ShouldCommit.Should().BeFalse();
+        staleConfirmation.NextCommand.Should().BeNull();
+
+        var confirmed = NyxIdChatPlanGateDecisions.Resolve(
+            retry.State,
+            ResolvePlan(newGate, expectedStateVersion: 4),
+            currentStateVersion: 4,
+            Now);
+        confirmed.ShouldCommit.Should().BeTrue();
+        confirmed.NextCommand.Should().NotBeNull();
+        confirmed.NextCommand!.InputCase.Should().Be(
+            NyxIdChatOperationDispatchCommand.InputOneofCase.PlanGateContinuation);
+        confirmed.NextCommand.Key.OperationGeneration.Should().Be(2);
+        confirmed.NextCommand.PlanGateContinuation.PlanRevision.Should().Be(2);
+
+        var retryReplay = NyxIdChatControlCommands.Retry(
+            confirmed.State,
+            RetryCommand(),
+            stateVersion: 5,
+            Now);
+        retryReplay.ShouldCommit.Should().BeFalse();
+        retryReplay.ShouldDispatch.Should().BeFalse(
+            "the confirmed plan continuation exclusively owns generation-two dispatch");
+        retryReplay.NextCommand.Should().BeNull();
+    }
+
+    [Fact]
+    public void LateConnectedServiceApprovalReceipt_ShouldRefineOnlyTheFencedGeneration()
+    {
+        var state = FailedStepState(
+            NyxIdChatStepKind.Tool,
+            required: true,
+            safeToSkip: false,
+            retryInputRebuildable: true);
+        var step = state.ActiveTask.Steps.Single();
+        step.Status = NyxIdChatStepStatus.Uncertain;
+        step.MayChangeExternalState = true;
+        step.ExternalEffect = NyxIdChatEffectEvidence.MayHaveChanged;
+        step.Operation.Phase = NyxIdChatOperationPhase.Dispatched;
+        step.Operation.CompletedAt = null;
+        step.Source = new NyxIdChatStepSource
+        {
+            Tool = new NyxIdChatToolStepSource
+            {
+                ToolName = "repository_update",
+                OperationAdmission = new AgentToolOperationAdmissionPayload
+                {
+                    ServiceInstanceId = "m-alpha",
+                    ServiceSlug = "svc-alpha",
+                },
+            },
+        };
+        state.ActiveTask.Status = NyxIdChatTaskStatus.Stopped;
+        state.ActiveTurn.Status = NyxIdChatTurnStatus.Stopped;
+        state.LatestTurn = state.ActiveTurn.Clone();
+        state.ControlFence = new NyxIdChatControlFenceState
+        {
+            Kind = NyxIdChatControlKind.Stop,
+            TurnId = "turn-alpha",
+            TaskId = "task-alpha",
+            Outcome = NyxIdChatControlOutcome.Uncancellable,
+        };
+        var signal = new NyxIdChatOperationResultSignal
+        {
+            Key = step.Operation.Key.Clone(),
+            Tool = new NyxIdChatToolOperationResult
+            {
+                ExternalEffect = NyxIdChatEffectEvidence.NotStarted,
+                Receipt = new AgentToolReceipt
+                {
+                    CallId = "call-alpha",
+                    ToolName = "repository_update",
+                    Status = AgentToolReceiptStatus.ApprovalRequired,
+                    ApprovalRequestId = "approval-alpha",
+                    NyxIdApprovalDecisionMode = NyxIdApprovalDecisionMode.Unspecified,
+                },
+            },
+        };
+
+        var decision = NyxIdChatControlCommands.ReconcileLateOperationEvidence(
+            state,
+            signal,
+            Now);
+
+        decision.IsFencedOperation.Should().BeTrue();
+        decision.ShouldCommit.Should().BeTrue();
+        decision.OperationPhase.Should().Be(NyxIdChatOperationPhase.Cancelled);
+        var refined = decision.State.ActiveTask.Steps.Single();
+        refined.Operation.Key.Should().BeEquivalentTo(step.Operation.Key);
+        refined.ApprovalRequestId.Should().Be("approval-alpha");
+        refined.ApprovalObservation.Should().NotBeNull();
+        refined.ApprovalObservation.ApprovalRequestId.Should().Be("approval-alpha");
+        refined.ApprovalObservation.DecisionMode.Should().Be(NyxIdApprovalDecisionMode.Unspecified);
+        refined.ApprovalObservation.ReceiptStatus.Should()
+            .Be(AgentToolReceiptStatus.ApprovalRequired);
+        refined.ApprovalObservation.ObservedAt.Should().Be(Now);
+        decision.State.PendingApproval.Should().BeNull();
+        decision.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Stopped);
+        decision.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Stopped);
     }
 
     [Theory]
@@ -287,6 +515,61 @@ public sealed class NyxIdChatControlCommandTests
             .Attention.AttentionKind.Should().Be(NyxIdChatAttentionKind.None);
     }
 
+    [Theory]
+    [InlineData(NyxIdChatControlKind.Stop)]
+    [InlineData(NyxIdChatControlKind.Steering)]
+    public void SameTurnControl_WhenStreamingProgressAdvancesStateVersion_ShouldStillFence(
+        NyxIdChatControlKind kind)
+    {
+        var state = FailedStepState(
+            NyxIdChatStepKind.Llm,
+            required: true,
+            safeToSkip: false,
+            retryInputRebuildable: true);
+        var step = state.ActiveTask.Steps.Single();
+        step.Status = NyxIdChatStepStatus.Running;
+        step.Operation.Phase = NyxIdChatOperationPhase.Running;
+        step.Operation.CompletedAt = null;
+        state.ActiveTask.FailureCode = string.Empty;
+        state.ActiveTask.SafeMessage = string.Empty;
+        state.ActiveTurn.FailureCode = string.Empty;
+        state.ActiveTurn.SafeMessage = string.Empty;
+
+        var decision = kind == NyxIdChatControlKind.Stop
+            ? NyxIdChatControlCommands.Stop(
+                state,
+                new NyxIdChatStopCommand
+                {
+                    ScopeId = "scope-alpha",
+                    ConversationActorId = "conversation-alpha",
+                    TurnId = "turn-alpha",
+                    StopRequestId = "stop-after-progress",
+                    ClientRequestId = "client-stop-after-progress",
+                    ExpectedStateVersion = 3,
+                },
+                stateVersion: 500,
+                Now)
+            : NyxIdChatControlCommands.Steer(
+                state,
+                new NyxIdChatSteeringCommand
+                {
+                    ScopeId = "scope-alpha",
+                    ConversationActorId = "conversation-alpha",
+                    TurnId = "turn-alpha",
+                    SteeringId = "steer-after-progress",
+                    ClientRequestId = "client-steer-after-progress",
+                    Instruction = "Use the new constraints.",
+                    ExpectedStateVersion = 3,
+                },
+                stateVersion: 500,
+                Now);
+
+        decision.ShouldCommit.Should().BeTrue();
+        decision.Result.Outcome.Should().Be(NyxIdChatControlOutcome.Uncancellable);
+        decision.Result.ReasonCode.Should().NotBe(NyxIdChatControlCommands.StateVersionMismatch);
+        decision.FencedState.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Stopped);
+    }
+
     private static NyxIdChatRetryStepCommand RetryCommand() => new()
     {
         ScopeId = "scope-alpha",
@@ -298,18 +581,90 @@ public sealed class NyxIdChatControlCommandTests
         ClientRequestId = "client-retry-alpha",
         CommandId = "command-retry-alpha",
         CorrelationId = "correlation-retry-alpha",
+        OwnerSubject = "owner-alpha",
         ExpectedOperationGeneration = 1,
         ExpectedStateVersion = 3,
         LlmControl = new LLMControlContextPayload
         {
             NyxIdAccessToken = "retry-runtime-token-alpha",
         },
-        ToolContext = new AgentToolExecutionContextPayload
+        ToolContext = (AgentToolExecutionContext.Empty with
         {
-            Credentials = new AgentToolCredentialsPayload
-            {
-                NyxIdAccessToken = "retry-runtime-token-alpha",
-            },
+            Request = new AgentToolRequestIdentity("retry-alpha", null),
+            Credentials = new AgentToolCredentials(
+                "retry-runtime-token-alpha",
+                null,
+                null,
+                AgentToolNyxIdCredentialKind.SourceReadableUserBearer),
+            Caller = new AgentToolCallerContext(
+                "scope-alpha",
+                "owner-alpha",
+                "retry-alpha",
+                "scope-alpha"),
+            Channel = new AgentToolChannelContext(
+                NyxIdChatServiceDefaults.ServiceId,
+                null,
+                "scope-alpha",
+                null,
+                null),
+            NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                "nyxid",
+                string.Empty,
+                "owner-alpha",
+                "proxy"),
+            ExecutionOwner = AgentToolExecutionOwners.Actor("conversation-alpha"),
+        }).ToPayload(),
+    };
+
+    private static NyxIdChatPlanResolveCommand ResolvePlan(
+        NyxIdChatPlanGate gate,
+        long expectedStateVersion) => new()
+    {
+        ScopeId = "scope-alpha",
+        ConversationActorId = "conversation-alpha",
+        TaskId = gate.TaskId,
+        PlanId = gate.PlanId,
+        PlanRevision = gate.PlanRevision,
+        RequestId = gate.RequestId,
+        OwnerSubject = "owner-alpha",
+        ClientRequestId = $"confirm-{gate.PlanRevision}",
+        Confirmed = true,
+        ExpectedStateVersion = expectedStateVersion,
+        ToolContext = (AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity(gate.RequestId, null),
+            Credentials = new AgentToolCredentials(
+                "retry-runtime-token-alpha",
+                null,
+                null,
+                AgentToolNyxIdCredentialKind.SourceReadableUserBearer),
+            Caller = new AgentToolCallerContext(
+                "scope-alpha",
+                "owner-alpha",
+                gate.RequestId,
+                "scope-alpha"),
+            Channel = new AgentToolChannelContext(
+                NyxIdChatServiceDefaults.ServiceId,
+                null,
+                "scope-alpha",
+                null,
+                null),
+            NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                "nyxid",
+                string.Empty,
+                "owner-alpha",
+                "proxy"),
+            ExecutionOwner = AgentToolExecutionOwners.Actor("conversation-alpha"),
+        }).ToPayload(),
+    };
+
+    private static AgentToolOperationAdmissionPayload ExactEffectAdmission() => new()
+    {
+        ServiceInstanceId = "m-alpha",
+        ServiceSlug = "svc-alpha",
+        PublishedEndpoint = new AgentToolPublishedEndpointIdentityPayload
+        {
+            EndpointId = "endpoint-effect-alpha",
         },
     };
 
@@ -338,6 +693,7 @@ public sealed class NyxIdChatControlCommandTests
         {
             ConversationActorId = "conversation-alpha",
             ScopeId = "scope-alpha",
+            OwnerSubject = "owner-alpha",
             ActiveTurn = new NyxIdChatTurnState
             {
                 TurnId = "turn-alpha",

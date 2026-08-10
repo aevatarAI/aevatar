@@ -48,6 +48,50 @@ public sealed class RoleGAgentRecoveryCheckpointTests
     }
 
     [Fact]
+    public async Task Recover_WhenToolOwnsExactAdmission_ShouldUseActorCommittedProtobufFact()
+    {
+        var admission = ExactOperationAdmission();
+        var tool = new AdmissionOwnedTestTool(
+            "exact-read",
+            AgentToolReplayPolicy.ReadOnlyRetryable,
+            admission);
+        var executionPort = new RecordingExecutionPort(ExecutedOutcome("{\"ok\":true}"));
+        var fixture = await CreateFixtureAsync(
+            "role-exact-admission-recovery",
+            tool: tool,
+            executionPort: executionPort);
+        await fixture.StartSessionAsync("session-a");
+        var tools = new ToolManager();
+        tools.Register(tool);
+        var executor = new StreamingToolExecutor(
+            tools,
+            toolContext: ToolContext(fixture.ActorId, "session-a", "initial-bearer"),
+            toolExecutionPort: executionPort,
+            checkpointPort: fixture.Agent);
+
+        await executor.PrepareBatchAsync(
+            "session-a",
+            0,
+            [ToolCall("call-a", tool.Name, "{\"input\":\"safe\"}")]);
+        var committed = fixture.Agent.State.Sessions["session-a"].RecoveryCheckpoint;
+        var checkpoint = RoleChatRecoveryCheckpoint.Parser.ParseFrom(committed.ToByteArray());
+        var restored = AgentToolExecutionContextMapper.FromRecoveryPayload(
+            checkpoint.ToolIntents.Should().ContainSingle().Which.RecoveryContext);
+
+        restored.OperationAdmission.Should().BeEquivalentTo(admission);
+
+        await InvokeRecoveredResultsAsync(
+            fixture.Agent,
+            "session-a",
+            checkpoint,
+            ToolContext(fixture.ActorId, "session-a", "reissued-bearer"));
+
+        executionPort.Requests.Should().ContainSingle();
+        executionPort.Requests[0].ExecutionContext.OperationAdmission
+            .Should().BeEquivalentTo(admission);
+    }
+
+    [Fact]
     public async Task Recover_WhenCompletionIsCommitted_ShouldReuseResultWithoutExternalCall()
     {
         var fixture = await CreateFixtureAsync("role-completed-recovery");
@@ -217,7 +261,7 @@ public sealed class RoleGAgentRecoveryCheckpointTests
         const string firstResult = "{\"attempt\":1}";
         const string secondResult = "{\"attempt\":2}";
         var store = new FailOnceCompletionCheckpointEventStore();
-        var vault = new InMemorySecretVault();
+        var vault = CreateVault();
         var first = await CreateFixtureAsync("role-result-adoption", store, vault);
         await first.StartSessionAsync("session-a");
         var operation = (await first.Agent.PrepareBatchAsync(Batch(
@@ -341,7 +385,7 @@ public sealed class RoleGAgentRecoveryCheckpointTests
     public async Task Recovery_WhenCheckpointPayloadExpired_ShouldReachActorOwnedOutcomeUncertainFinalizer()
     {
         var store = new InMemoryEventStoreForTests();
-        var vault = new InMemorySecretVault();
+        var vault = CreateVault();
         var first = await CreateFixtureAsync("role-expired-checkpoint", store, vault);
         await first.StartSessionAsync("session-a");
         await first.Agent.PrepareBatchAsync(Batch(
@@ -525,7 +569,7 @@ public sealed class RoleGAgentRecoveryCheckpointTests
     public async Task ApprovalContinuation_WhenSelfPublishFails_ShouldCommitResultAndClearAtomicallyForActivationRecovery()
     {
         var store = new RecordingBatchEventStore();
-        var vault = new InMemorySecretVault();
+        var vault = CreateVault();
         var tool = new TestTool("approved-mutation", AgentToolReplayPolicy.NonReplayable);
         var executionPort = new RecordingExecutionPort(ExecutedOutcome("{\"approved\":true}"));
         var failingPublisher = new RecordingPublisher { FailRecoveryContinuation = true };
@@ -655,7 +699,7 @@ public sealed class RoleGAgentRecoveryCheckpointTests
     public async Task ActorRecovery_WhenPrimaryCredentialIsSourceReadable_ShouldRestorePrimaryAccessTokenSlot()
     {
         const string token = "source-readable-primary";
-        var vault = new InMemorySecretVault();
+        var vault = CreateVault();
         var tool = new TestTool("source-readable-tool", AgentToolReplayPolicy.ReadOnlyRetryable);
         var executionPort = new RecordingExecutionPort(ExecutedOutcome("{\"ok\":true}"));
         var provider = new CountingProviderFactory("credential recovery completed");
@@ -707,7 +751,7 @@ public sealed class RoleGAgentRecoveryCheckpointTests
     {
         const string delegationToken = "proxy-delegation-primary";
         const string supplementalToken = "source-readable-supplemental";
-        var vault = new InMemorySecretVault();
+        var vault = CreateVault();
         var tool = new TestTool("delegated-tool", AgentToolReplayPolicy.ReadOnlyRetryable);
         var executionPort = new RecordingExecutionPort(ExecutedOutcome("{\"must_not_run\":true}"));
         var fixture = await CreateFixtureAsync(
@@ -873,6 +917,30 @@ public sealed class RoleGAgentRecoveryCheckpointTests
             ExecutionOwner = AgentToolExecutionOwners.Actor(actorId),
         };
 
+    private static AgentToolOperationAdmission ExactOperationAdmission() => new(
+        "usvc-alpha",
+        "api-shop",
+        new AgentToolOperationIdentity.PublishedEndpoint("endpoint-alpha"),
+        AgentToolOperationAuthorizationBasis.PublishedContract,
+        "GET",
+        "/orders/{orderId}",
+        "contract-digest-alpha",
+        [
+            new AgentToolOperationParameter(
+                "orderId",
+                AgentToolOperationParameterLocation.Path,
+                true,
+                AgentToolOperationValueSchema.Text),
+        ],
+        null,
+        new AgentToolOperationResponsePolicy(true, false, ["application/json"]),
+        new AgentToolOperationExecutionPolicy(
+            AgentToolOperationRisk.ReadOnly,
+            AgentToolOperationApproval.None,
+            AgentToolOperationEnforcementOwner.Aevatar,
+            [AgentToolOperationExecutionMode.Interactive]),
+        "catalog-digest-alpha");
+
     private static AgentToolExecutionOutcome ExecutedOutcome(string result) => new(
         AgentToolExecutionOutcomeKind.Executed,
         result,
@@ -906,6 +974,9 @@ public sealed class RoleGAgentRecoveryCheckpointTests
         TerminalInvoked: true,
         Retryable: false,
         AuditCompleted: false);
+
+    private static InMemorySecretVault CreateVault() =>
+        new(new FakeTimeProvider(Now));
 
     private static ToolExecutionResult ApprovalRequiredResult(string callId, string toolName) => new(
         callId,
@@ -1017,7 +1088,8 @@ public sealed class RoleGAgentRecoveryCheckpointTests
         ILLMProviderFactory? providerFactory = null)
     {
         store ??= new InMemoryEventStoreForTests();
-        vault ??= new InMemorySecretVault();
+        var timeProvider = new FakeTimeProvider(now ?? Now);
+        vault ??= new InMemorySecretVault(timeProvider);
         tool ??= new TestTool("tool-a", AgentToolReplayPolicy.NonReplayable);
         executionPort ??= new RecordingExecutionPort(ExecutedOutcome("{\"ok\":true}"));
         publisher ??= new RecordingPublisher();
@@ -1028,7 +1100,6 @@ public sealed class RoleGAgentRecoveryCheckpointTests
             .AddSingleton<IActorRuntimeCallbackScheduler>(scheduler)
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
             .BuildServiceProvider();
-        var timeProvider = new FakeTimeProvider(now ?? Now);
         var agent = new TestRoleGAgent(
             executionPort,
             [new StaticToolSource([tool])],
@@ -1091,7 +1162,7 @@ public sealed class RoleGAgentRecoveryCheckpointTests
         public Task PersistForTestAsync(IMessage evt) => PersistDomainEventAsync(evt);
     }
 
-    private sealed class TestTool(string name, AgentToolReplayPolicy replayPolicy) : IAgentTool
+    private class TestTool(string name, AgentToolReplayPolicy replayPolicy) : IAgentTool
     {
         public string Name => name;
         public string Description => name;
@@ -1104,6 +1175,15 @@ public sealed class RoleGAgentRecoveryCheckpointTests
             ExecutionCount++;
             return Task.FromResult("{\"executed\":true}");
         }
+    }
+
+    private sealed class AdmissionOwnedTestTool(
+        string name,
+        AgentToolReplayPolicy replayPolicy,
+        AgentToolOperationAdmission admission)
+        : TestTool(name, replayPolicy), IAgentToolOperationAdmissionOwner
+    {
+        public AgentToolOperationAdmission OperationAdmission { get; } = admission;
     }
 
     private sealed class StaticToolSource(IReadOnlyList<IAgentTool> tools) : IAgentToolSource

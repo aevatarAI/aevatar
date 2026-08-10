@@ -384,7 +384,6 @@ async function beginLogin(){
   const u=new URL(CFG.authority+"/oauth/authorize");
   u.searchParams.set("response_type","code"); u.searchParams.set("client_id",CFG.clientId);
   u.searchParams.set("redirect_uri",CFG.redirectUri); u.searchParams.set("scope",CFG.scope);
-  CFG.resources.forEach(resource => u.searchParams.append("resource",resource));
   u.searchParams.set("state",st); u.searchParams.set("code_challenge",ch); u.searchParams.set("code_challenge_method","S256");
   location.assign(u.toString());
 }
@@ -396,7 +395,6 @@ async function completeLoginIfCallback(){
   const f=new URLSearchParams();
   f.set("grant_type","authorization_code"); f.set("code",code); f.set("redirect_uri",CFG.redirectUri);
   f.set("client_id",CFG.clientId); f.set("code_verifier",pend.verifier);
-  CFG.resources.forEach(resource => f.append("resource",resource));
   const r=await fetch(CFG.authority+"/oauth/token",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:f.toString()});
   sessionStorage.removeItem(PKCE_KEY);
   if(!r.ok)return false;

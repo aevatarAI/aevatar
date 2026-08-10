@@ -8,9 +8,11 @@ owner: eanzhao
 
 NyxID 是 exact UserService、credential、route、effective OpenAPI 与 normalized operation catalog 的唯一权威 owner。Aevatar 不托管 OpenAPI、不保存 UserService/endpoint 影子目录、不从 slug 推导实例身份，也不在 prompt 中维护第二份权限目录。
 
+NyxID Assistant 的 operation-class 权威边界见 [ADR-0048](../adr/0048-nyxid-assistant-operation-class-boundary.md)。管理读（R）、浏览器 action（A）与 admitted connected-service operation（P）是三个独立 surface；任一 surface 的注册或激活都不会自动授权另一个 surface。
+
 模型看到的最终 tool schema 与实际执行对象来自同一份 `LLMRequest.Tools`。工具调用仍经 NyxID proxy 下发，凭证注入、proxy/broker 审计、node routing 和 delegation 由 NyxID 负责；Aevatar 在进入 proxy 前统一执行 credential policy、actor-owned durable approval 和平台 tool audit。两边各自记录本边界事实，NyxID 的审批能力不能替代 Aevatar 本地准入。
 
-NyxID `GET /api/v1/mcp/config` is the only descriptor source for published operations. `GET /api/v1/keys` supplies exact UserService inventory plus credential/node execution readiness for bind-time authored-request admission, credential ownership, and management actions; `/api/v1/user-services` is the route-configuration projection, not the execution-readiness authority. Aevatar never fetches or parses raw OpenAPI from `/keys`. Published-operation runtime retains exact MCP endpoint-digest revalidation; authored-request runtime reads neither MCP, OpenAPI, nor inventory.
+NyxID `GET /api/v1/mcp/config` is the only descriptor source for published operations. `GET /api/v1/keys` supplies exact UserService inventory plus credential/node execution readiness for bind-time authored-request admission, credential ownership, and management actions; `/api/v1/user-services` is the route-configuration projection, not the execution-readiness authority. Aevatar never fetches or parses raw OpenAPI from `/keys`. Current-turn published-operation exposure requires the exact ordinal intersection of `/keys` and MCP on both `user_service_id` and route slug; matching an ID with a different slug is route drift and fails closed. Published-operation runtime retains exact MCP endpoint-digest revalidation; authored-request runtime reads neither MCP, OpenAPI, nor inventory.
 
 ## 1. 实例与 operation 身份
 
@@ -50,22 +52,17 @@ Aevatar 记录真实 observation time 作为 freshness fact，但不把时间戳
 
 ## 3. 普通 current-turn 工具
 
-成功发现 exact instance 后只生成四个 request-local 管理工具，参数和结果由 `nyxid_service_tools.proto` 定义：
+NyxID Assistant 的 management Class-R 由 `NyxIdAssistantToolSource` 提供 narrow typed REST reads。connected-service exact inventory 是其中独立的只读子边界：`nyxid_service_inventory` 由 `NyxIdConnectedServiceInventoryToolSource` 或 channel sender-authority wrapper 提供，只接受空参数，并在真正调用时读取当前 caller 的 exact `/keys` inventory。它不与 Class-P operation source 合并，也不把 inventory ID 当成 operation selector。
 
-| 工具 | 语义 | 审批 |
-|---|---|---|
-| `nyxid_service_inventory` | 列出或查看本次请求已冻结的 exact 实例 | 只读，不审批 |
-| `nyxid_service_update` | 更新一个 exact 实例的 label、endpoint、OpenAPI override 或 active 状态 | 必须审批 |
-| `nyxid_service_route` | 把一个 exact 实例设为 direct 或指定 node | 必须审批 |
-| `nyxid_service_delete` | 删除一个 exact 实例 | destructive，必须审批 |
+历史 `nyxid_service_update`、`nyxid_service_route` 与 `nyxid_service_delete` 不再由 connected-service tool source 生成。它们与 ADR-0048 的 Class-A action ownership 冲突，且 #3299 的 pinned chat allowlist 明确不允许这类 mutation 因 DI 注册进入 Assistant。需要管理 mutation 的产品 surface 必须拥有独立、显式的 authorization contract，不能复用 Class-R inventory 或 Class-P operation admission。
 
-每个需要选实例的 schema 都把 `user_service_id` 收紧为本次 request-local 实例枚举。inventory 允许省略 ID 以列出全部实例；update、route、delete 必须提供枚举中的 exact ID。NyxID 原始 mutation response 只放在 typed result 的 `response_json`，不承担内部控制语义。
+NyxID `contract_version=1.0` 没有发布独立的 typed current-turn exposure policy。Milestone 40 因此采用 Aevatar-owned、server-sealed closed policy，而不是把 MCP catalog 整体当成授权：只有同时存在于本次 active、credential-allowed exact inventory 的 UserService 才进入候选；`GET/HEAD/OPTIONS` 作为 safe read 暴露，`POST/PUT/PATCH` 只作为必须经过统一 approval port 的 non-destructive effect 暴露，`DELETE`、generic proxy、unknown risk 和 policy/schema contradiction 全部 fail closed。生产路径仍不存在 model-visible generic proxy、raw method/path selector 或 raw OpenAPI parser；workflow admission 通过也不能自动扩大普通 turn exposure。
 
-`nyxid_service_update.openapi_spec_url` 复用 NyxID 已发布的 exact UserService update wire：省略表示保持不变，非空字符串设置 override，空字符串 `""` 清除 override。设置或清除只改变 NyxID 权威的 effective contract，不让 Aevatar 成为 OpenAPI owner。
+Milestone 40 的唯一 model-visible Class-P contract 是 request-local dynamic operation tools：每个 server-admitted operation 对应一个 bounded argument-only schema 和 opaque request-local tool name，并在服务端映射回同一份冻结 `user_service_id + endpoint_id + catalog_digest + canonical operation digest`、risk 与 argument contract。opaque name、description 与 schema 都不得泄露 selector 或 digest；description 只携带 server-authored、bounded、normalized service/operation label，使模型在多 operation 场景可以区分工具。normalized label 只要包含任一 exact service ID、service slug、endpoint ID、catalog digest 或 contract digest，就必须整体降级为通用 `Connected service` / `Operation`；endpoint name 缺失时也不得把 endpoint ID fallback 暴露给模型。模型参数不得包含 service/endpoint/catalog selector。`search_connected_service_operations + invoke_connected_service_operation(candidate_ref)` 不属于本里程碑，不得作为第二条选择链路并存。
 
-NyxID `contract_version=1.0` 尚未发布等价于历史 `x-aevatar-tool` 的 typed current-turn exposure policy。Aevatar 因此 fail closed：不生成 operation tool，也不暴露 arbitrary method/path surface。生产路径不存在 `nyxid_service_request`、`nyxid_service_operation__*` 或 raw OpenAPI parser。workflow admission 通过不能自动扩大普通 turn exposure。
+current-turn discovery request-locally 读取并解析 MCP catalog，与 `/keys` exact inventory 求交后生成 operation tool，并只记录 bounded diagnostics/count。MCP 或 `/keys` discovery 不可用、无 caller token、无有效实例或 identity conflict 时，Class-P surface 为空；管理 surface 不作为 fallback。
 
-current-turn discovery 仍 request-locally 读取并解析 MCP catalog，以验证 shared adapter 与记录 bounded diagnostics；MCP discovery 不可用时，四个只依赖 `/keys` authority 的管理工具仍可用。`/keys` discovery 本身失败、无 caller token、无有效实例或 identity conflict 时不暴露这些工具。
+read operation 的 terminal 结果固定投影为 `connected_service_read_projection`：proxy transport 以 headers-first streaming read 将 upstream text 限制为 16 KiB，完整 model-visible typed projection 再以 UTF-8 字节数执行同一 16 KiB 上限；任一边界超限都只返回 bounded typed rejection，不返回 partial/raw provider body。投影携带 bounded service/operation provenance、`content_boundary=untrusted_external_data_only` 与 `instructions_allowed=false`，外部字符串始终只是 data。effect operation 固定投影为 `connected_service_effect_receipt` 并携带 provider-owned typed receipt；read projection 与 effect receipt 不共用结果 shape，upstream effect body 不进入模型或 durable result。
 
 ## 4. Workflow authoring 与 admission
 
@@ -89,7 +86,7 @@ flowchart LR
 
 Workflow live discovery uses the caller token to read MCP only for `nyxid_operation`, which is `PublishedEndpoint(endpoint_id)`. Its definition actor commits a call-site-scoped proof with server-derived slug, endpoint identity, request schema, response policy, execution policy, source stamp, and contract digest. `nyxid_request` is instead `AuthoredRequest(request_contract_digest)`: bind-time admission reads one active, caller-visible, credential-allowed exact `user_service_id` from inventory, derives the slug constraint server-side, and does zero MCP/OpenAPI read. The definition actor persists the request proof only after an authenticated binder explicitly confirms its current request-contract digest and effective risk as `NyxIdExplicitRequestGrant`; apply/save cannot grant it. Omitted risk remains method-derived. Explicit `POST + READ_ONLY` is supported for semantically read-only APIs but is interactive-only; `PUT/PATCH/DELETE + READ_ONLY` is rejected.
 
-这个重验是 terminal 内的资源一致性检查，不能代替 terminal 前的统一准入。所有 server-owned connected-service 工具都通过 `IAgentToolExecutionPort`；只有 `AdmittedAgentToolExecutor` 可以调用 raw `IAgentTool.ExecuteAsync`。端口冻结最终 arguments 并只分类一次，随后依次执行 credential policy、exact actor-owned grant、start-once admission ledger 与 `WAITING_APPROVAL/RUNNING/TERMINAL` audit observation。只有 ledger 返回 `Started` 才能进入上述 `/keys` 重验和 proxy 调用；ledger `Duplicate`、`Conflict`、审批拒绝或 credential 拒绝的下游请求数都为 0。audit append status 不授予执行；terminal 已调用后任何 audit failure 都保留实际结果并标记不可重试。
+这个重验是 terminal 内的资源一致性检查，不能代替 terminal 前的统一准入。所有 server-owned connected-service 工具都通过 `IAgentToolExecutionPort`；只有 `AdmittedAgentToolExecutor` 可以调用 raw `IAgentTool.ExecuteAsync`。端口冻结最终 arguments 并只分类一次，随后依次执行 credential policy、exact actor-owned grant、start-once admission ledger 与 `WAITING_APPROVAL/RUNNING/TERMINAL` audit observation。完整 `AgentToolOperationAdmission` 作为 typed Protobuf fact 随 actor-owned execution/recovery checkpoint 持久化，恢复时重建同一个 selector、contract、response 与 execution policy；credential 不进入该 payload，必须按恢复请求重新解析。plan-gate confirmation 也必须把同一份 exact admission 与以 `operation_id` 冻结的 idempotency key 交给 turn actor，不能退回只凭 tool name、argument hash 或 transient capability 执行。只有 ledger 返回 `Started` 才能进入上述 `/keys` 重验和 proxy 调用；ledger `Duplicate`、`Conflict`、审批拒绝或 credential 拒绝的下游请求数都为 0。audit append status 不授予执行；terminal 已调用后任何 audit failure 都保留实际结果并标记不可重试。
 
 proxy 请求只接受相对路径，拒绝绝对 URL、fragment、query-in-path 和 dot segment。路由只来自冻结并重验后的 catalog ID 或 custom slug；Aevatar 追加 URL 编码后的 `_nyxid_via={user_service_id}`，调用参数不得提供任何 `_nyxid_*` query。header allow-list 仅含 JSON `Accept`/`Content-Type` 与条件头 `If-Match`/`If-None-Match`，禁止调用者注入 authorization、routing 或 hop-by-hop header。非 safe method 由客户端生成 typed idempotency key。
 
@@ -108,7 +105,7 @@ Studio authoring 在 exact descriptor 缺失时不再把“当前不可运行”
 
 Dynamic exposure、workflow definition admission 与 runtime authorization 是三个独立 policy；authoring draft 位于这些授权 policy 之前，不授予执行权限：
 
-1. **Current-turn exposure**：缺 NyxID typed exposure policy，因此 operation 数量为零。
+1. **Current-turn exposure**：由上述 Aevatar-owned closed policy 对当前 exact MCP + inventory observation 做 request-local admission；catalog entry 本身不自动获得 exposure。
 2. **Workflow definition admission**：MCP resolves only `PublishedEndpoint`; exact inventory plus authenticated binder grant resolves `AuthoredRequest`.
 3. **Runtime authorization**：managed workflow accepts only its committed call-site proof and matching authored-request grant. Durable additionally requires exact-service catalog authorization plus the schedule operation-authorization gate; `READ_ONLY` remains limited to GET/HEAD/OPTIONS, while `WRITE` and `DESTRUCTIVE` requests keep their admitted risk in the proof.
 
@@ -138,13 +135,38 @@ proxy request 只接受 relative path，拒绝 absolute URL、fragment、query-i
 
 ## 6. 请求期能力与 channel inventory
 
-完整管理工具集位于 `nyxid.connected_services`（`ToolSetNames.NyxIdConnectedServices`）。Studio 每个 LLM turn 都在当前 caller token 与 typed context 下重新 resolve；结果只进入该请求的 `AgentProfileTurnCatalog` 与最终 `LLMRequest.Tools`。unknown set、discovery failure 或 duplicate name 对本请求 fail closed，不写 actor/global catalog，也不跨 caller 缓存。Workflow operation authoring 使用独立的 structured capability list/readiness tools。
+Class-P dynamic operation adapter set 注册为 `nyxid.connected_services`（`ToolSetNames.NyxIdConnectedServices`），但注册不等于 NyxID Assistant route 激活。Studio 每个 LLM turn 都在当前 caller token 与 typed context 下分别 resolve R/A route tools 与 P admitted operation tools；结果只进入该请求的 `AgentProfileTurnCatalog` 与最终 `LLMRequest.Tools`。unknown set、discovery failure 或 duplicate name 对本请求 fail closed，不写 actor/global catalog，也不跨 caller 缓存。Workflow operation authoring 使用独立的 structured capability list/readiness tools。
 
-Mainnet 的 `agent-profile.nyxid-chat` route 同时包含 `workspace.default` 与 `nyxid.connected_services`，再由已提交的 profile policy 收窄最终工具目录。raw `nyxid_proxy` 自声明不适用于 NyxID Assistant，因此 profiled 与 unprofiled NyxID Chat 都不会把它提供给模型；`nyxid_require_service` 与已连接服务的 typed 工具不受影响。该 surface 限制不删除 shared proxy，也不改变 workflow、Lark 或其他拥有独立 admission contract 的调用方。
+Mainnet 不得假设 `agent-profile.nyxid-chat` 自动合并 `workspace.default` 与完整 `nyxid.connected_services`。R/A 的 route set 由 profile binding 显式激活；P operation 则只能由本次请求的 exact MCP observation 生成，并以 `user_service_id + endpoint_id + catalog_digest` 完成 admission 后注入。Mainnet host 在 Milestone 40 直接启用已具备 actor-owned admission/effect facts 的 non-destructive effect exposure；其他 host 仍保持 fail-closed 默认值。raw `nyxid_proxy` 自声明不适用于 NyxID Assistant，因此 profiled 与 unprofiled NyxID Chat 都不会把它提供给模型。该 surface 限制不删除 shared proxy，也不改变 workflow、Lark 或其他拥有独立 admission contract 的调用方。
+
+Milestone 40 使用 ADR-0048 的 Tier B approval fallback。turn actor 提交准入与 effect dispatch waterline 后立即结束当前 turn；基础设施 dispatch session 在后台等待 NyxID effect handler。等待期间 Aevatar 尚无 exact `approval_request_id`，只能投影 running/waiting 与阈值派生的 stalled；只有 NyxID 返回 7000/7001 且携带真实 request ID 后，typed inbox completion 才能推进并提交 pending-approval fact。NyxID 返回的 `approval_mode` 独立映射为 typed `per_request / grant / unknown`，不复用 Aevatar 本地 approval receipt mode；缺失或非法值只能提交 `unknown`。generic `tool_approval` sentinel 没有真实 request ID，也不产生 exact-service grant，必须 fail closed。
+
+plan gate confirmation 只产生 conversation-owned decision，不直接授予执行能力。conversation 先把 secret-free exact admission 写入 durable delivery outbox，turn actor committed 后回 ACK；在此之前 continuation 不得执行。plan rejection、expiry、replacement 或 ambiguous operation dispatch 都先写 durable revoke outbox；turn actor 必须持久化 exact revocation fence 后才回 ACK，丢失的 delivery/ACK 会重投，迟到 admission 不得复活。显式 effect retry 只携带 credential-free authorization snapshot、完整 tool-definition fingerprint 与 exact `not_applied` source operation key；turn 重新匹配 current profile tool 和 complete admission contract，不能把 generation counter、历史 receipt 或 generic approval 当成授权。
 
 只读 `nyxid_service_inventory` 也可由 `ChannelNyxIdConnectedServiceInventoryToolSource` 显式挂入 channel reply generator。该 wrapper 在模型真正调用时才以 current sender authority 读取 `/api/v1/keys`；不得替换为 bot-owner token、sandbox CLI login 或进程级 cache。自然语言 inventory 走 `AgentRun -> ChatStreamAsync -> use_skill("nyxid") -> nyxid_service_inventory -> sender /keys -> streamed answer`，不引入 phrase matcher、direct query adapter 或 `code_execute`。
 
-## 7. 审计与架构边界
+Pinned NyxID Assistant route 不挂载 `nyxid_service_inventory`：该 route 的 caller inventory 读取由 read-only `nyxid_services`（list/show，读 `/api/v1/keys`）承担，不为同一事实并列第二个 model-visible 读取工具。kernel 与 floor prompt 对 inventory 读取的指引必须以 `nyxid_service_inventory` 出现在最终 tool schemas 为条件；缺席时指向当前实际存在的只读 management read，不得无条件指向单一工具名。
+
+## 7. NyxID Chat turn credential lifecycle
+
+NyxID Chat ingress 把 caller credential 明确分为两类，后续 turn operation 不得改变其 kind：
+
+- `SourceReadableUserBearer` 是 caller 自己的 bearer。Aevatar 只把它用于本次 human-session turn，不调用 delegation refresh，也不在 bearer 失效后改用 delegation、organization token 或其他 bearer。
+- `ProxyDelegation` 是 NyxID proxy 注入的短期 delegation token。run-scoped turn actor 在每次 catalog、LLM 或 tool external operation 之前读取 JWT `exp`；剩余时间不超过 120 秒时，通过现有 `POST /api/v1/delegation/refresh` 主动刷新。该 POST 使用当前 delegation bearer，且不发送 request body。
+
+JWT payload 只用于决定 refresh 时机，不被 Aevatar 当作身份或权限证明；NyxID refresh endpoint 仍负责签名、issuer、audience、actor、consent 与 scope 校验。刷新成功后，turn actor 在同一 transient execution session 中一起替换 request/step-state 的 typed tool credential 与 LLM control，并替换已授权 exact tool capability 携带的 credential。token 不进入 actor state、committed event、read model 或 process-local registry。
+
+刷新发生在 provider effect 调用之前，并有独立的 10 秒上限。effect-capable command 先提交 actor-owned `effect_dispatch_waterline=not_started`；turn actor 在把命令交给后台 dispatch session 前保守提交 `may_have_changed`，然后立即结束当前 turn。每个携带 exact admission 的 connected-service read/effect handoff 都注册 exact operation-key durable completion watchdog，其期限来自同一个 NyxID execution transport ceiling 并额外保留 30 秒，不能早于合法 provider 请求超时。若 background typed completion 丢失，effect watchdog 在 actor turn 内只启动一次 reconciliation；reconciliation completion 仍丢失时，下一次 watchdog 提交 `outcome uncertain`，不会再次读取 provider 或重放 effect。read watchdog 不猜测 provider ground truth，直接提交诚实的 interrupted terminal。terminal commit 后另有 durable result-delivery watchdog，确保向 conversation 的首次投递失败不会把 actor 永久留在 completed-undelivered。正常 completion/delivery 提交会通过 authoritative state version fencing 使旧 watchdog no-op，不使用进程内 registry 或 queue 作为恢复事实源。
+
+Milestone 40 的 reconciliation port 使用 admission 时冻结的 typed read-back operation、provider resource identity 与 check contract 读取 provider ground truth。effect 成功或 `may_have_changed` 后都保留 vault recovery credential，passivation/activation 会在过期前续期，直到 frozen verification 得出 `applied / not_applied / unavailable` 后才在 terminal commit 后 revoke。bounded-list read-back 未找到对象只能返回 `unavailable`，不能把分页不可见误报为 `not_applied`。retry 始终 reconcile-first；steering/stop cancellation 会 fence 精确 execution session，迟到的 effectful completion 只能触发 frozen verification。只有 `applied` 或 `not_applied` 才把 steering continuation 从 `accepted_for_later` 提升为 `accepted`，`unavailable` 继续停放，禁止用新 idempotency key 猜测重试。无 token、carrier token conflict、JWT 无合法 `exp`、NyxID 拒绝、transport failure 或 malformed success response 都返回 `NYXID_CHAT_DELEGATION_REFRESH_FAILED`，`externalEffect=not_applied`，且不调用 catalog、LLM 或 tool。Aevatar 不在下游 401 后用旧 token 重试，也不 fallback 到普通 bearer；后续 retry/skip/stop 只能由 actor 根据 committed effect evidence 与可重建输入计算，不提供固定 action 集合。
+
+operation dispatch 若在“可能已进入 turn inbox”后抛错，conversation 只提交 secret-free delivery probe，不得立刻自行 read-back、reconcile 或推进 N+1。turn actor 若已 committed exact operation，返回 admitted 与 actor-owned effect-dispatch waterline；若未 committed，则先持久化 exact delivery tombstone 再返回 not-admitted。conversation 只有收到其中一个 committed 结果后才清除 probe；匹配 tombstone 的迟到 command 永远不得执行。progress/result 可作为更强的 exact admission 证据并清除同一 probe，但 assistant 文案和 transport ACK 不能替代它。
+
+NyxID LLM progress 使用容量 32 的 bounded channel。首个 delta 立即提交，后续按固定 1 秒 deadline 或 64 KiB UTF-8 payload 上限批量提交；分片按 Unicode rune 边界切割，并保留 text/reasoning segment 顺序。terminal/cancellation 强制 flush 并使用独立 tail drain，不得因请求 cancellation 丢失已接收的尾部进度，也不得让 progress batching 阻塞 control actor turn。
+
+NyxID 当前 refresh contract 还有两项 provider-owned 限制，Aevatar 不绕过或掩盖：包含 `account:read` 的 delegation 明确不可刷新；service-injected token 当前把 service slug 写入 `act.sub`，而 refresh 实现按 OAuth client ID 解析该字段，因此标准 proxy token 可能被拒绝。此时 turn 诚实进入上述 typed failure，需要新的同-kind proxied request；不能据 fixture 或 assistant 文案宣称 long-run refresh 已线上成功。
+
+## 8. 审计与架构边界
 
 - 外部 JSON 只在 NyxID adapter 边界解析；内部稳定执行语义使用 Protobuf/typed records。
 - Aevatar 不新增 NyxID endpoint，不绕过 proxy 直连下游，不保留 raw OpenAPI fallback。
@@ -152,17 +174,17 @@ Mainnet 的 `agent-profile.nyxid-chat` route 同时包含 `workspace.default` �
 - platform tool audit 只消费 typed execution context、credential source 与 receipt，默认不记录完整 arguments/result。
 - `aevatar.nyxid.proxy.admission.decisions` 只使用 bounded enum/bool tags，不追加 credential 或用户内容。
 
-## 8. `QuotaLedger` profile
+## 9. `QuotaLedger` profile
 
 `QuotaLedger` 是外部 REST service profile，契约见 [approval-quota-ledger.openapi.yaml](../contracts/approval-quota-ledger.openapi.yaml)，权威口径见 [approval-quota-ledger.md](approval-quota-ledger.md)。它的 operations 可通过 exact MCP selector 进入 workflow admission；普通 current-turn 不因该 OpenAPI 的历史 marker 自动暴露 operation。余额、reservation 与 deduction transaction 始终由外部 ledger 或渠道原生账本拥有。
 
-## 9. 相关代码
+## 10. 相关代码
 
 - `src/Aevatar.AI.ToolProviders.NyxId/ConnectedServices/NyxIdMcpOperationCatalog.cs`
 - `src/Aevatar.AI.ToolProviders.NyxId/ConnectedServices/NyxIdOperationAdmissionProofBuilder.cs`
 - `src/Aevatar.AI.ToolProviders.NyxId/ConnectedServices/NyxIdOperationHeaderPolicy.cs`
+- `src/Aevatar.AI.ToolProviders.NyxId/ConnectedServices/NyxIdServiceInventoryReceiptFactory.cs`
 - `src/Aevatar.AI.ToolProviders.NyxId/ConnectedServices/NyxIdServiceInstanceClient.cs`
-- `src/Aevatar.AI.ToolProviders.NyxId/ConnectedServices/NyxIdServiceTools.cs`
 - `src/Aevatar.AI.ToolProviders.NyxId/ConnectedServices/nyxid_service_tools.proto`
 - `src/Aevatar.AI.ToolProviders.NyxId/NyxIdConnectedServiceToolSource.cs`
 - `src/Aevatar.AI.ToolProviders.NyxId/NyxIdExternalWorkflowCapabilitySource.cs`
@@ -172,3 +194,4 @@ Mainnet 的 `agent-profile.nyxid-chat` route 同时包含 `workspace.default` �
 - `src/Aevatar.AI.Abstractions/ToolProviders/IAgentToolExecutionPort.cs`
 - `src/Aevatar.AI.Core/Tools/AdmittedAgentToolExecutor.cs`
 - `agents/Aevatar.GAgents.NyxidChat/ChannelNyxIdConnectedServiceInventoryToolSource.cs`
+- `agents/Aevatar.GAgents.NyxidChat/NyxIdChatDelegationCredentialLifecycle.cs`

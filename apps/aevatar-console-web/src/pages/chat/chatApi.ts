@@ -1,8 +1,8 @@
-import type { AGUIEvent } from "@aevatar-react-sdk/types";
-import { normalizeBackendSseFrame } from "@/shared/agui/sseFrameNormalizer";
-import { readResponseErrorDetails } from "@/shared/api/http/error";
-import { authFetch } from "@/shared/auth/fetch";
-import type { ChatStudioTarget, ChatUsageSummary } from "./chatTypes";
+import type { AGUIEvent } from '@aevatar-react-sdk/types';
+import { normalizeBackendSseFrame } from '@/shared/agui/sseFrameNormalizer';
+import { readResponseErrorDetails } from '@/shared/api/http/error';
+import { authFetch } from '@/shared/auth/fetch';
+import type { ChatStudioTarget, ChatUsageSummary } from './chatTypes';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -12,7 +12,7 @@ export type ChatStreamFrame = {
 };
 
 export type ChatTextCommand = {
-  readonly type: "text";
+  readonly type: 'text';
   readonly clientRequestId: string;
   readonly conversationId?: string;
   readonly prompt: string;
@@ -33,7 +33,18 @@ export type ChatActionResource =
 export type ChatCommand =
   | ChatTextCommand
   | {
-      readonly type: "input.resolve";
+      readonly type: 'plan.resolve';
+      readonly conversationId: string;
+      readonly taskId: string;
+      readonly planId: string;
+      readonly requestId: string;
+      readonly clientRequestId: string;
+      readonly planRevision: number;
+      readonly confirmed: boolean;
+      readonly expectedStateVersion: number;
+    }
+  | {
+      readonly type: 'input.resolve';
       readonly conversationId: string;
       readonly requestId: string;
       readonly clientRequestId: string;
@@ -41,16 +52,7 @@ export type ChatCommand =
       readonly expectedStateVersion: number;
     }
   | {
-      readonly type: "approval.resolve";
-      readonly conversationId: string;
-      readonly requestId: string;
-      readonly clientRequestId: string;
-      readonly approved: boolean;
-      readonly reason?: string;
-      readonly expectedStateVersion: number;
-    }
-  | {
-      readonly type: "task.stop";
+      readonly type: 'task.stop';
       readonly conversationId: string;
       readonly turnId: string;
       readonly stopRequestId: string;
@@ -58,7 +60,7 @@ export type ChatCommand =
       readonly expectedStateVersion: number;
     }
   | {
-      readonly type: "task.steer";
+      readonly type: 'task.steer';
       readonly conversationId: string;
       readonly turnId: string;
       readonly steeringId: string;
@@ -67,7 +69,7 @@ export type ChatCommand =
       readonly expectedStateVersion: number;
     }
   | {
-      readonly type: "step.retry";
+      readonly type: 'step.retry';
       readonly conversationId: string;
       readonly turnId: string;
       readonly taskId: string;
@@ -78,7 +80,7 @@ export type ChatCommand =
       readonly expectedStateVersion: number;
     }
   | {
-      readonly type: "step.skip";
+      readonly type: 'step.skip';
       readonly conversationId: string;
       readonly turnId: string;
       readonly taskId: string;
@@ -89,7 +91,7 @@ export type ChatCommand =
       readonly expectedStateVersion: number;
     }
   | {
-      readonly type: "action.continue";
+      readonly type: 'action.continue';
       readonly conversationId: string;
       readonly originTurnId: string;
       readonly clientRequestId: string;
@@ -97,11 +99,11 @@ export type ChatCommand =
         readonly actionRequestId: string;
         readonly originTurnId: string;
         readonly disposition:
-          | "completed"
-          | "declined"
-          | "failed"
-          | "cancelled"
-          | "expired";
+          | 'completed'
+          | 'declined'
+          | 'failed'
+          | 'cancelled'
+          | 'expired';
         readonly resource?: ChatActionResource;
       }[];
     };
@@ -112,7 +114,7 @@ export class ChatApiError extends Error {
 
   constructor(message: string, status: number, code?: string) {
     super(message);
-    this.name = "ChatApiError";
+    this.name = 'ChatApiError';
     this.code = code;
     this.status = status;
   }
@@ -120,23 +122,23 @@ export class ChatApiError extends Error {
 
 export async function sendChatCommand(
   command: ChatCommand,
-  signal: AbortSignal
+  signal: AbortSignal,
 ): Promise<Response> {
   const clientRequestId = command.clientRequestId.trim();
   const body = Object.fromEntries(
     Object.entries(command).map(([key, value]) => [
       key,
-      typeof value === "string" ? value.trim() : value,
-    ])
+      typeof value === 'string' ? value.trim() : value,
+    ]),
   );
-  const response = await authFetch("/api/chat", {
+  const response = await authFetch('/api/chat', {
     body: JSON.stringify(compactObject(body)),
     headers: {
-      Accept: "text/event-stream",
-      "Content-Type": "application/json",
-      "Idempotency-Key": clientRequestId,
+      Accept: 'text/event-stream',
+      'Content-Type': 'application/json',
+      'Idempotency-Key': clientRequestId,
     },
-    method: "POST",
+    method: 'POST',
     signal,
   });
 
@@ -150,23 +152,23 @@ export async function sendChatCommand(
 
 function compactObject<T extends Record<string, unknown>>(value: T): T {
   return Object.fromEntries(
-    Object.entries(value).filter(([, entry]) => entry !== undefined)
+    Object.entries(value).filter(([, entry]) => entry !== undefined),
   ) as T;
 }
 
 function asRecord(value: unknown): JsonRecord | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
+  return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as JsonRecord)
     : undefined;
 }
 
 function readString(record: JsonRecord | undefined, ...keys: string[]): string {
-  if (!record) return "";
+  if (!record) return '';
   for (const key of keys) {
     const value = record[key];
-    if (typeof value === "string" && value.trim()) return value.trim();
+    if (typeof value === 'string' && value.trim()) return value.trim();
   }
-  return "";
+  return '';
 }
 
 function readNumber(
@@ -176,8 +178,8 @@ function readNumber(
   if (!record) return undefined;
   for (const key of keys) {
     const value = record[key];
-    if (typeof value === "number" && Number.isFinite(value)) return value;
-    if (typeof value === "string" && value.trim()) {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value === 'string' && value.trim()) {
       const parsed = Number(value);
       if (Number.isFinite(parsed)) return parsed;
     }
@@ -185,18 +187,24 @@ function readNumber(
   return undefined;
 }
 
-function normalizeUsage(record: JsonRecord | undefined): ChatUsageSummary | null {
+function normalizeUsage(
+  record: JsonRecord | undefined,
+): ChatUsageSummary | null {
   if (!record) return null;
   const usage: ChatUsageSummary = {
-    completionTokens: readNumber(record, "completionTokens", "completion_tokens"),
-    cost: readNumber(record, "cost"),
-    latencyMs: readNumber(record, "latencyMs", "latency_ms"),
-    model: readString(record, "model") || undefined,
-    promptTokens: readNumber(record, "promptTokens", "prompt_tokens"),
-    totalTokens: readNumber(record, "totalTokens", "total_tokens"),
+    completionTokens: readNumber(
+      record,
+      'completionTokens',
+      'completion_tokens',
+    ),
+    cost: readNumber(record, 'cost'),
+    latencyMs: readNumber(record, 'latencyMs', 'latency_ms'),
+    model: readString(record, 'model') || undefined,
+    promptTokens: readNumber(record, 'promptTokens', 'prompt_tokens'),
+    totalTokens: readNumber(record, 'totalTokens', 'total_tokens'),
   };
   return Object.values(usage).some(
-    (value) => value !== undefined && value !== ""
+    (value) => value !== undefined && value !== '',
   )
     ? usage
     : null;
@@ -204,40 +212,43 @@ function normalizeUsage(record: JsonRecord | undefined): ChatUsageSummary | null
 
 function mergeUsage(
   current: ChatUsageSummary | undefined,
-  next: ChatUsageSummary | null
+  next: ChatUsageSummary | null,
 ): ChatUsageSummary | undefined {
   return next
     ? {
         ...current,
         ...Object.fromEntries(
-          Object.entries(next).filter(([, value]) => value !== undefined)
+          Object.entries(next).filter(([, value]) => value !== undefined),
         ),
       }
     : current;
 }
 
-function normalizeTarget(record: JsonRecord | undefined): ChatStudioTarget | null {
+function normalizeTarget(
+  record: JsonRecord | undefined,
+): ChatStudioTarget | null {
   if (!record) return null;
   const target: ChatStudioTarget = {
-    memberId: readString(record, "memberId", "member_id") || undefined,
-    runId: readString(record, "runId", "run_id", "actorId", "actor_id") || undefined,
-    scopeId: readString(record, "scopeId", "scope_id") || undefined,
-    studioUrl: readString(record, "studioUrl", "studio_url") || undefined,
-    teamId: readString(record, "teamId", "team_id") || undefined,
-    workflowId: readString(record, "workflowId", "workflow_id") || undefined,
+    memberId: readString(record, 'memberId', 'member_id') || undefined,
+    runId:
+      readString(record, 'runId', 'run_id', 'actorId', 'actor_id') || undefined,
+    scopeId: readString(record, 'scopeId', 'scope_id') || undefined,
+    studioUrl: readString(record, 'studioUrl', 'studio_url') || undefined,
+    teamId: readString(record, 'teamId', 'team_id') || undefined,
+    workflowId: readString(record, 'workflowId', 'workflow_id') || undefined,
   };
   return Object.values(target).some(Boolean) ? target : null;
 }
 
 function mergeTarget(
   current: ChatStudioTarget | undefined,
-  next: ChatStudioTarget | null
+  next: ChatStudioTarget | null,
 ): ChatStudioTarget | undefined {
   return next
     ? {
         ...current,
         ...Object.fromEntries(
-          Object.entries(next).filter(([, value]) => Boolean(value))
+          Object.entries(next).filter(([, value]) => Boolean(value)),
         ),
       }
     : current;
@@ -253,11 +264,11 @@ function unpackStruct(value: unknown): JsonRecord | undefined {
   for (const [key, fieldValue] of Object.entries(fields)) {
     const field = asRecord(fieldValue);
     if (!field) continue;
-    if (typeof field.stringValue === "string") {
+    if (typeof field.stringValue === 'string') {
       unpacked[key] = field.stringValue;
-    } else if (typeof field.numberValue === "number") {
+    } else if (typeof field.numberValue === 'number') {
       unpacked[key] = field.numberValue;
-    } else if (typeof field.boolValue === "boolean") {
+    } else if (typeof field.boolValue === 'boolean') {
       unpacked[key] = field.boolValue;
     } else if (field.structValue) {
       unpacked[key] = unpackStruct(field.structValue);
@@ -297,29 +308,29 @@ export function extractChatStreamArtifacts(frames: readonly unknown[]): {
 
 export async function* readChatStreamFrames(
   response: Response,
-  options?: { signal?: AbortSignal }
+  options?: { signal?: AbortSignal },
 ): AsyncGenerator<ChatStreamFrame, void, undefined> {
   const body = response.body;
-  if (!body) throw new Error("Chat response has no readable stream.");
+  if (!body) throw new Error('Chat response has no readable stream.');
 
   const reader = body.getReader();
   const decoder = new TextDecoder();
-  let buffer = "";
+  let buffer = '';
   const dataLines: string[] = [];
 
   try {
     while (!options?.signal?.aborted) {
       const { done, value } = await reader.read();
-      buffer += done ? "\n" : decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = done ? "" : (lines.pop() ?? "");
+      buffer += done ? '\n' : decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = done ? '' : (lines.pop() ?? '');
 
       for (const line of lines) {
-        const normalizedLine = line.endsWith("\r") ? line.slice(0, -1) : line;
-        if (normalizedLine === "") {
+        const normalizedLine = line.endsWith('\r') ? line.slice(0, -1) : line;
+        if (normalizedLine === '') {
           if (dataLines.length > 0) {
-            const data = dataLines.splice(0).join("\n").trim();
-            if (data && data !== "[DONE]") {
+            const data = dataLines.splice(0).join('\n').trim();
+            if (data && data !== '[DONE]') {
               try {
                 const raw = JSON.parse(data);
                 yield { event: normalizeBackendSseFrame(raw), raw };
@@ -330,9 +341,9 @@ export async function* readChatStreamFrames(
           }
           continue;
         }
-        if (normalizedLine.startsWith("data:")) {
+        if (normalizedLine.startsWith('data:')) {
           const payload = normalizedLine.slice(5);
-          dataLines.push(payload.startsWith(" ") ? payload.slice(1) : payload);
+          dataLines.push(payload.startsWith(' ') ? payload.slice(1) : payload);
         }
       }
       if (done) break;

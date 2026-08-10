@@ -20,6 +20,7 @@ run_guard_meta_tests() {
   bash "${SCRIPT_DIR}/tests/test_gagent_registry_kind_guard.sh"
   bash "${SCRIPT_DIR}/tests/test_query_projection_priming_guard.sh"
   bash "${SCRIPT_DIR}/tests/test_nyxid_chat_semantics_guard.sh"
+  python3 -m unittest tools/ci/tests/test_nyxid_semantic_evaluation.py
 }
 
 if [[ ! -f "${allowlist_file}" ]]; then

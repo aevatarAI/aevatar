@@ -845,11 +845,27 @@ internal sealed class NyxIdChatDurableCompletionResolver
         NyxIdChatConversationTurnSnapshot turn)
     {
         if (!System.Enum.TryParse<NyxIdChatTaskStatus>(task.Status, true, out var taskStatus) ||
-            !System.Enum.TryParse<NyxIdChatTurnStatus>(turn.Status, true, out var turnStatus) ||
-            (taskStatus == NyxIdChatTaskStatus.Active &&
-             turnStatus == NyxIdChatTurnStatus.Active))
+            !System.Enum.TryParse<NyxIdChatTurnStatus>(turn.Status, true, out var turnStatus))
         {
             return null;
+        }
+
+        if (taskStatus == NyxIdChatTaskStatus.Active &&
+            turnStatus == NyxIdChatTurnStatus.Active)
+        {
+            return HasRecoverableTerminalStep(task)
+                ? new AGUIEvent
+                {
+                    Sequence = sequence,
+                    RunFinished = new RunFinishedEvent
+                    {
+                        ThreadId = receipt.ActorId,
+                        RunId = receipt.TurnId,
+                        Status = RunCompletionStatus.Blocked,
+                        Result = Any.Pack(new StringValue()),
+                    },
+                }
+                : null;
         }
 
         return NyxIdChatConversationAguiFrameBuilder.BuildTerminal(
@@ -875,6 +891,18 @@ internal sealed class NyxIdChatDurableCompletionResolver
                 },
             },
             sequence);
+    }
+
+    private static bool HasRecoverableTerminalStep(NyxIdChatConversationTaskSnapshot task)
+    {
+        var step = task.Steps.FirstOrDefault(candidate =>
+            string.Equals(candidate.StepId, task.ActiveStepId, StringComparison.Ordinal));
+        return step is not null &&
+               System.Enum.TryParse<NyxIdChatStepStatus>(step.Status, true, out var status) &&
+               NyxIdChatConversationAguiFrameBuilder.IsRecoverableTerminalStep(
+                   status,
+                   step.AvailableActions?.Retry == true,
+                   step.AvailableActions?.Skip == true);
     }
 }
 

@@ -193,7 +193,9 @@ internal sealed class StartWorkflowTool : IAevatarInvocationTool
             ToolName = string.IsNullOrWhiteSpace(toolName) ? Name : toolName,
             Status = AgentToolReceiptStatus.Success,
             ApprovalMode = AgentToolReceiptApprovalMode.NeverRequire,
+            Effect = AgentToolReceiptEffect.Mutating,
             SideEffectKind = SideEffectKind,
+            MutationStage = invocation.MutationStage,
             SubjectKind = AevatarInvocationReceiptJson.InvocationRunSubjectKind,
             SubjectId = invocation.RunId,
             ResultJson = resultJson ?? string.Empty,
@@ -214,7 +216,8 @@ internal sealed class StartWorkflowTool : IAevatarInvocationTool
         if (invocation.WorkflowRunDelivery is not null)
             receipt.WorkflowRunDelivery = invocation.WorkflowRunDelivery.Clone();
 
-        return receipt.ManagedWorkflowHandoff is not null || receipt.WorkflowRunDelivery is not null
+        return receipt.MutationStage != AgentToolReceiptMutationStage.Unspecified ||
+               receipt.ManagedWorkflowHandoff is not null || receipt.WorkflowRunDelivery is not null
             ? receipt
             : null;
     }
@@ -233,6 +236,7 @@ internal sealed class StartWorkflowTool : IAevatarInvocationTool
                 ReadString(root, "status"),
                 ReadString(root, "actor_id"),
                 ReadString(root, "stream_topic"),
+                ReadMutationStage(root),
                 TryReadWorkflowRunDeliveryReceipt(root));
         }
         catch (JsonException)
@@ -279,6 +283,14 @@ internal sealed class StartWorkflowTool : IAevatarInvocationTool
             ? value.GetString() ?? string.Empty
             : string.Empty;
 
+    private static AgentToolReceiptMutationStage ReadMutationStage(JsonElement root) =>
+        ReadString(root, "mutation_stage") switch
+        {
+            "accepted" => AgentToolReceiptMutationStage.Accepted,
+            "read_model_observed" => AgentToolReceiptMutationStage.ReadModelObserved,
+            _ => AgentToolReceiptMutationStage.Unspecified,
+        };
+
     private static bool IsAcceptedManagedWorkflowStart(ManagedWorkflowStartResult invocation) =>
         !string.IsNullOrWhiteSpace(invocation.RunId) &&
         !string.IsNullOrWhiteSpace(invocation.ActorId) &&
@@ -289,6 +301,7 @@ internal sealed class StartWorkflowTool : IAevatarInvocationTool
         string Status,
         string ActorId,
         string StreamTopic,
+        AgentToolReceiptMutationStage MutationStage,
         WorkflowRunBackgroundDeliveryReceipt? WorkflowRunDelivery);
 }
 

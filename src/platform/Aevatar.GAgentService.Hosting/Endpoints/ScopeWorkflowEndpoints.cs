@@ -158,9 +158,10 @@ public static class ScopeWorkflowEndpoints
                 request.InlineWorkflowYamls,
                 request.RevisionId)
             {
-                CapabilityAdmission = WorkflowCapabilityAdmissionHttpContext.Create(
+                CapabilityAdmission = await WorkflowCapabilityAdmissionHttpContext.CreateAsync(
                     http,
-                    explicitRequestConfirmations: request.ExplicitRequestConfirmations),
+                    explicitRequestConfirmations: request.ExplicitRequestConfirmations,
+                    ct: ct),
             }, ct);
             return Results.Accepted(result.ReadModelUrl, result);
         }
@@ -207,9 +208,10 @@ public static class ScopeWorkflowEndpoints
                     request.ExposureDesired,
                     request.RevisionId)
                 {
-                    CapabilityAdmission = WorkflowCapabilityAdmissionHttpContext.Create(
+                    CapabilityAdmission = await WorkflowCapabilityAdmissionHttpContext.CreateAsync(
                         http,
-                        explicitRequestConfirmations: request.ExplicitRequestConfirmations),
+                        explicitRequestConfirmations: request.ExplicitRequestConfirmations,
+                        ct: ct),
                 },
                 ct);
             return Results.Accepted(result.Workflow.ReadModelUrl, result);
@@ -260,7 +262,10 @@ public static class ScopeWorkflowEndpoints
                 return denied;
 
             var executionMode = ParseExplicitRequestPreviewExecutionMode(request.ExecutionMode);
-            var admissionContext = WorkflowCapabilityAdmissionHttpContext.Create(http, executionMode);
+            var admissionContext = await WorkflowCapabilityAdmissionHttpContext.CreateAsync(
+                http,
+                executionMode,
+                ct: ct);
             var result = await previewService.PreviewAsync(
                 new WorkflowExplicitRequestPreviewRequest(
                     new ExternalWorkflowCapabilityAccessContext(
@@ -737,7 +742,7 @@ public static class ScopeWorkflowEndpoints
         CancellationToken ct)
     {
         prompt = string.IsNullOrWhiteSpace(prompt) ? string.Empty : prompt.Trim();
-        var callerCredential = WorkflowCallerCredentialExtractor.Extract(http);
+        var callerCredential = await WorkflowCallerCredentialExtractor.ExtractAsync(http, ct);
         if (!callerCredential.Succeeded)
         {
             var (statusCode, code, message) = MapRunStartError(callerCredential.Error);

@@ -18,6 +18,16 @@ public sealed record NyxIdSessionRefreshResult(
     int? ExpiresIn = null,
     string? Detail = null);
 
+public sealed record NyxIdDelegationRefreshResult(
+    bool Succeeded,
+    string? AccessToken = null,
+    string? TokenType = null,
+    long? ExpiresIn = null,
+    string? Scope = null,
+    string? Detail = null,
+    int HttpStatus = 0,
+    string? ProviderErrorCode = null);
+
 public sealed record NyxIdProxyBinaryResponse(
     bool Succeeded,
     byte[] Content,
@@ -68,7 +78,9 @@ internal sealed record NyxIdApiErrorEnvelope(
 internal sealed record NyxIdProxyError(
     int HttpStatus,
     string ErrorKey,
-    int ErrorCode)
+    int ErrorCode,
+    string? ApprovalRequestId = null,
+    string? ApprovalMode = null)
 {
     public bool IsAuthorizationRequired =>
         HttpStatus == 401 &&
@@ -79,6 +91,8 @@ internal sealed record NyxIdProxyError(
 /// <summary>HTTP client for calling NyxID REST API endpoints.</summary>
 public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
 {
+    internal const int DelegationRefreshMaxResponseBytes = 16 * 1024;
+
     private enum ProxyCredentialTransport
     {
         AuthorizationBearer,
@@ -114,41 +128,68 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
         {
             using var outerDocument = JsonDocument.Parse(response);
             var outer = outerDocument.RootElement;
-            if (outer.ValueKind != JsonValueKind.Object ||
-                !outer.TryGetProperty("error", out var errorMarker) ||
-                errorMarker.ValueKind != JsonValueKind.True ||
-                !outer.TryGetProperty("status", out var statusProperty) ||
-                !statusProperty.TryGetInt32(out var status))
+            if (outer.ValueKind != JsonValueKind.Object)
             {
                 return false;
             }
 
-            var errorKey = string.Empty;
-            var errorCode = 0;
-            if (outer.TryGetProperty("body", out var bodyProperty) &&
+            if (outer.TryGetProperty("error", out var errorMarker) &&
+                errorMarker.ValueKind == JsonValueKind.True &&
+                outer.TryGetProperty("status", out var statusProperty) &&
+                statusProperty.TryGetInt32(out var status))
+            {
+                if (outer.TryGetProperty("body", out var bodyProperty) &&
                 bodyProperty.ValueKind == JsonValueKind.String &&
                 !string.IsNullOrWhiteSpace(bodyProperty.GetString()))
-            {
-                try
                 {
-                    using var bodyDocument = JsonDocument.Parse(bodyProperty.GetString()!);
-                    var bodyRoot = bodyDocument.RootElement;
-                    errorKey = TryGetString(bodyRoot, "error") ?? string.Empty;
-                    errorCode = TryGetInt(bodyRoot, "error_code") ?? 0;
+                    try
+                    {
+                        using var bodyDocument = JsonDocument.Parse(bodyProperty.GetString()!);
+                        if (TryParseProxyErrorBody(bodyDocument.RootElement, status, out error))
+                            return true;
+                    }
+                    catch (JsonException)
+                    {
+                        // The typed outer envelope still proves an upstream HTTP failure.
+                    }
                 }
-                catch (JsonException)
-                {
-                    // The typed outer envelope is sufficient to classify an upstream HTTP failure.
-                }
+
+                error = new NyxIdProxyError(status, string.Empty, 0);
+                return true;
             }
 
-            error = new NyxIdProxyError(status, errorKey, errorCode);
-            return true;
+            return TryParseProxyErrorBody(outer, 0, out error);
         }
         catch (JsonException)
         {
             return false;
         }
+    }
+
+    private static bool TryParseProxyErrorBody(
+        JsonElement body,
+        int httpStatus,
+        out NyxIdProxyError? error)
+    {
+        error = null;
+        if (body.ValueKind != JsonValueKind.Object)
+            return false;
+
+        var errorKey = TryGetString(body, "error");
+        var errorCode = TryGetInt(body, "error_code");
+        if (string.IsNullOrWhiteSpace(errorKey) || errorCode is null)
+            return false;
+
+        var requestId = TryGetString(body, "request_id") ??
+                        TryGetString(body, "approval_request_id");
+        var approvalMode = TryGetString(body, "approval_mode");
+        error = new NyxIdProxyError(
+            httpStatus,
+            errorKey,
+            errorCode.Value,
+            requestId,
+            approvalMode);
+        return true;
     }
 
     public NyxIdApiClient(
@@ -247,6 +288,180 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
             _logger.LogWarning(ex, "NyxID session refresh returned invalid JSON");
             return new NyxIdSessionRefreshResult(false, Detail: "invalid_refresh_response invalid_json");
         }
+    }
+
+    public async Task<NyxIdDelegationRefreshResult> RefreshDelegationAsync(
+        string delegationToken,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(delegationToken))
+            return new NyxIdDelegationRefreshResult(false, Detail: "missing_delegation_token");
+
+        var url = $"{GetBaseUrl()}/api/v1/delegation/refresh";
+        using var request = new HttpRequestMessage(HttpMethod.Post, url);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", delegationToken.Trim());
+        var response = await SendTextResponseAsync(
+            request,
+            DelegationRefreshMaxResponseBytes,
+            ct);
+        if (!response.Succeeded)
+        {
+            if (response.Detail is "content_length_exceeds_max_bytes" or "content_exceeds_max_bytes")
+            {
+                return new NyxIdDelegationRefreshResult(
+                    false,
+                    Detail: "delegation_refresh_response_too_large",
+                    HttpStatus: response.HttpStatus);
+            }
+
+            return DelegationRefreshFailure(response.Content, response.HttpStatus);
+        }
+
+        if (TryReadDelegationRefreshError(response.Content, response.HttpStatus, out var refreshFailure))
+            return refreshFailure;
+
+        try
+        {
+            using var document = JsonDocument.Parse(response.Content);
+            var root = document.RootElement;
+            var accessToken = TryGetString(root, "access_token");
+            var tokenType = TryGetString(root, "token_type");
+            if (string.IsNullOrWhiteSpace(accessToken) ||
+                string.IsNullOrWhiteSpace(tokenType) ||
+                !string.Equals(tokenType, "Bearer", StringComparison.OrdinalIgnoreCase) ||
+                !root.TryGetProperty("expires_in", out var expiresInProperty) ||
+                expiresInProperty.ValueKind != JsonValueKind.Number ||
+                !expiresInProperty.TryGetInt64(out var expiresIn) ||
+                expiresIn <= 0 ||
+                !root.TryGetProperty("scope", out var scopeProperty) ||
+                scopeProperty.ValueKind != JsonValueKind.String)
+            {
+                return new NyxIdDelegationRefreshResult(
+                    false,
+                    Detail: "invalid_delegation_refresh_response");
+            }
+
+            return new NyxIdDelegationRefreshResult(
+                true,
+                accessToken,
+                tokenType,
+                expiresIn,
+                scopeProperty.GetString() ?? string.Empty);
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogWarning(ex, "NyxID delegation refresh returned invalid JSON");
+            return new NyxIdDelegationRefreshResult(
+                false,
+                Detail: "invalid_delegation_refresh_response");
+        }
+    }
+
+    private static NyxIdDelegationRefreshResult DelegationRefreshFailure(
+        string response,
+        int httpStatus)
+    {
+        TryReadProviderErrorCode(response, out var providerErrorCode);
+        var detail = httpStatus > 0
+            ? $"nyx_status={httpStatus}"
+            : "delegation_refresh_transport_failure";
+        if (providerErrorCode is not null)
+            detail += $" provider_error={providerErrorCode}";
+
+        return new NyxIdDelegationRefreshResult(
+            false,
+            Detail: detail,
+            HttpStatus: httpStatus,
+            ProviderErrorCode: providerErrorCode);
+    }
+
+    private static bool TryReadDelegationRefreshError(
+        string response,
+        int fallbackHttpStatus,
+        out NyxIdDelegationRefreshResult failure)
+    {
+        failure = default!;
+        if (string.IsNullOrWhiteSpace(response))
+            return false;
+
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            var root = document.RootElement;
+            if (!root.TryGetProperty("error", out var errorProperty) ||
+                errorProperty.ValueKind is not (JsonValueKind.True or JsonValueKind.String))
+            {
+                return false;
+            }
+
+            var status = TryGetInt(root, "status") ?? fallbackHttpStatus;
+            failure = DelegationRefreshFailure(response, status);
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryReadProviderErrorCode(string response, out string? errorCode)
+    {
+        errorCode = null;
+        if (string.IsNullOrWhiteSpace(response))
+            return false;
+
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            var root = document.RootElement;
+            var candidate = TryGetString(root, "error");
+            if (candidate is null && TryGetInt(root, "error_code") is { } numericCode)
+                candidate = numericCode.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            if (candidate is null &&
+                root.TryGetProperty("body", out var bodyProperty) &&
+                bodyProperty.ValueKind == JsonValueKind.String)
+            {
+                candidate = TryReadNestedProviderErrorCode(bodyProperty.GetString());
+            }
+
+            errorCode = NormalizeProviderErrorCode(candidate);
+            return errorCode is not null;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static string? TryReadNestedProviderErrorCode(string? body)
+    {
+        if (string.IsNullOrWhiteSpace(body))
+            return null;
+
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            return TryGetString(document.RootElement, "error") ??
+                   TryGetInt(document.RootElement, "error_code")?.ToString(
+                       System.Globalization.CultureInfo.InvariantCulture);
+        }
+        catch (JsonException)
+        {
+            return body;
+        }
+    }
+
+    private static string? NormalizeProviderErrorCode(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        var normalized = value.Trim();
+        return normalized.Length <= 64 &&
+               normalized.All(static character =>
+                   char.IsAsciiLetterOrDigit(character) || character is '_' or '-' or '.')
+            ? normalized
+            : null;
     }
 
     // ─── Proxy ───
@@ -829,8 +1044,100 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
     public Task<string> GetNodeAsync(string token, string id, CancellationToken ct) =>
         GetAsync(token, $"/api/v1/nodes/{Uri.EscapeDataString(id)}", ct);
 
+    public Task<string> ListPendingNodeCredentialsAsync(
+        string token,
+        string nodeId,
+        bool? includeHistory,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(nodeId);
+        var path = $"/api/v1/nodes/{Uri.EscapeDataString(nodeId.Trim())}/credentials/pending";
+        if (includeHistory.HasValue)
+            path += $"?include_history={includeHistory.Value.ToString().ToLowerInvariant()}";
+        return GetAsync(token, path, ct);
+    }
+
     public Task<string> DeleteNodeAsync(string token, string id, CancellationToken ct) =>
         DeleteAsync(token, $"/api/v1/nodes/{Uri.EscapeDataString(id)}", ct);
+
+    // ─── Service pools ───
+
+    public Task<string> ListServicePoolsAsync(
+        string token,
+        string? organizationOwnerId,
+        CancellationToken ct)
+    {
+        var path = "/api/v1/service-pools";
+        if (!string.IsNullOrWhiteSpace(organizationOwnerId))
+            path += "?org_id=" + Uri.EscapeDataString(organizationOwnerId.Trim());
+        return GetAsync(token, path, ct);
+    }
+
+    public Task<string> GetServicePoolAsync(string token, string poolId, CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(poolId);
+        return GetAsync(token, $"/api/v1/service-pools/{Uri.EscapeDataString(poolId.Trim())}", ct);
+    }
+
+    // ─── Developer apps ───
+
+    public Task<string> ListDeveloperOAuthClientsAsync(
+        string token,
+        string? organizationOwnerId,
+        CancellationToken ct)
+    {
+        var path = "/api/v1/developer/oauth-clients";
+        if (!string.IsNullOrWhiteSpace(organizationOwnerId))
+            path += "?org_id=" + Uri.EscapeDataString(organizationOwnerId.Trim());
+        return GetAsync(token, path, ct);
+    }
+
+    public Task<string> GetDeveloperOAuthClientAsync(
+        string token,
+        string clientId,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(clientId);
+        return GetAsync(
+            token,
+            $"/api/v1/developer/oauth-clients/{Uri.EscapeDataString(clientId.Trim())}",
+            ct);
+    }
+
+    // ─── OAuth broker bindings ───
+
+    public Task<string> ListOAuthBrokerBindingsAsync(string token, CancellationToken ct) =>
+        GetAsync(token, "/api/v1/users/me/broker-bindings", ct);
+
+    // ─── Service accounts ───
+
+    public Task<string> ListServiceAccountsAsync(
+        string token,
+        string? organizationOwnerId,
+        int page,
+        int perPage,
+        CancellationToken ct)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(page, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(perPage, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(perPage, 100);
+        var path = $"/api/v1/admin/service-accounts?page={page}&per_page={perPage}";
+        if (!string.IsNullOrWhiteSpace(organizationOwnerId))
+            path += "&org_id=" + Uri.EscapeDataString(organizationOwnerId.Trim());
+        return GetAsync(token, path, ct);
+    }
+
+    public Task<string> GetServiceAccountAsync(
+        string token,
+        string serviceAccountId,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(serviceAccountId);
+        return GetAsync(
+            token,
+            $"/api/v1/admin/service-accounts/{Uri.EscapeDataString(serviceAccountId.Trim())}",
+            ct);
+    }
 
     // ─── Approvals ───
 
@@ -894,6 +1201,19 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
 
     public Task<string> GetApiKeyAsync(string token, string id, CancellationToken ct) =>
         GetAsync(token, $"/api/v1/api-keys/{Uri.EscapeDataString(id)}", ct);
+
+    public Task<string> ListDurableGrantsAsync(
+        string token,
+        string apiKeyId,
+        bool includeRevoked,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(apiKeyId);
+        var path = $"/api/v1/api-keys/{Uri.EscapeDataString(apiKeyId.Trim())}/durable-grants";
+        if (includeRevoked)
+            path += "?include_revoked=true";
+        return GetAsync(token, path, ct);
+    }
 
     public Task<string> RotateApiKeyAsync(string token, string id, CancellationToken ct) =>
         PostAsync(token, $"/api/v1/api-keys/{Uri.EscapeDataString(id)}/rotate", "{}", ct);
@@ -1591,19 +1911,6 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
                 request,
                 HttpCompletionOption.ResponseHeadersRead,
                 ct);
-            if (!response.IsSuccessStatusCode)
-            {
-                _logger.LogWarning(
-                    "NyxID bounded proxy request failed: {Method} -> {Status}",
-                    request.Method,
-                    (int)response.StatusCode);
-                return new NyxIdProxyTextResponse(
-                    false,
-                    string.Empty,
-                    Detail: "http_error",
-                    HttpStatus: (int)response.StatusCode);
-            }
-
             if (response.Content.Headers.ContentLength is { } contentLength &&
                 contentLength > maxBytes)
             {
@@ -1633,9 +1940,23 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
                     HttpStatus: (int)response.StatusCode);
             }
 
+            var text = Encoding.UTF8.GetString(content.Content);
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogWarning(
+                    "NyxID bounded proxy request failed: {Method} -> {Status}",
+                    request.Method,
+                    (int)response.StatusCode);
+                return new NyxIdProxyTextResponse(
+                    false,
+                    text,
+                    Detail: "http_error",
+                    HttpStatus: (int)response.StatusCode);
+            }
+
             return new NyxIdProxyTextResponse(
                 true,
-                Encoding.UTF8.GetString(content.Content),
+                text,
                 HttpStatus: (int)response.StatusCode);
         }
         catch (OperationCanceledException)

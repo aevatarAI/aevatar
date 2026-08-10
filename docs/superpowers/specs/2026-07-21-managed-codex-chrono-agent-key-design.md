@@ -30,10 +30,12 @@ workflow codex_exec
 The persistent agent key is intended to terminate at NyxID. Aevatar sends it only
 in `X-API-Key` on the Aevatar-to-NyxID request, deliberately leaving
 `Authorization` absent, and never serializes it into the chrono request body.
-This prevents `forward_access_token` policy drift from forwarding the key to
-chrono-sandbox. NyxID service configuration should still keep
-`forward_access_token=false`, `inject_delegation_token=true`, and temporary
-`delegation_token_scope=proxy:*`.
+This prevents `forward_access_token` policy from forwarding the key to
+chrono-sandbox: there is no bearer on this request to forward. The NyxID service
+must keep `inject_delegation_token=true` and temporary
+`delegation_token_scope=proxy:*`. `forward_access_token` may be either value;
+the shared `chrono-sandbox` UserService uses `true` so the ordinary `/execute`
+endpoint receives the authenticated caller bearer.
 
 The widened delegation scope belongs only to the five-minute runner token; the
 persistent agent key remains restricted to the exact `chrono-sandbox`

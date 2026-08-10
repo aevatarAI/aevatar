@@ -1,0 +1,89 @@
+{
+  "schema_version": 4,
+  "revision": "nyxid-assistant-actions.v4",
+  "actions": [
+    {
+      "action": "service.connect",
+      "description": "Ask the user's browser to connect a service through NyxID. Use when a task needs a catalog service (by slug) or a custom HTTPS endpoint that the user has not connected yet. NyxID owns the entire journey - auth modality, consent copy, and credential storage - and reports back only completion or decline with a safe resource reference. Never ask the user for keys, tokens, or passwords in chat.",
+      "params_schema": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "catalogService"
+            ],
+            "properties": {
+              "catalogService": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "serviceSlug"
+                ],
+                "properties": {
+                  "serviceSlug": {
+                    "type": "string"
+                  },
+                  "requestedScopes": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "viaNodeId": {
+                    "type": "string"
+                  },
+                  "targetOrgId": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "customService"
+            ],
+            "properties": {
+              "customService": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "name",
+                  "endpointUrl",
+                  "authMethod"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "endpointUrl": {
+                    "type": "string"
+                  },
+                  "authMethod": {
+                    "type": "string"
+                  },
+                  "authKeyName": {
+                    "type": "string"
+                  },
+                  "viaNodeId": {
+                    "type": "string"
+                  },
+                  "targetOrgId": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "risk": "grant",
+      "tier": "v1",
+      "remember_eligible": true
+    }
+  ]
+}
+

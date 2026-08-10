@@ -1,17 +1,15 @@
-import { fireEvent, screen, waitFor } from "@testing-library/react";
-import * as React from "react";
-import { authFetch } from "@/shared/auth/fetch";
-import { studioApi } from "@/shared/studio/api";
-import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
-import { chatHistoryApi } from "./chatHistoryApi";
-import {
-  createNyxIdCatalogKey,
-  listNyxIdConnectors,
-} from "./nyxIdServiceApi";
-import ChatPage, { hydrateStoredMessages } from "./index";
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import * as React from 'react';
+import { authFetch } from '@/shared/auth/fetch';
+import { history } from '@/shared/navigation/history';
+import { studioApi } from '@/shared/studio/api';
+import { renderWithQueryClient } from '../../../tests/reactQueryTestUtils';
+import { chatHistoryApi } from './chatHistoryApi';
+import ChatPage, { hydrateStoredMessages } from './index';
+import { createNyxIdCatalogKey, listNyxIdConnectors } from './nyxIdServiceApi';
 
-jest.mock("@/shared/auth/fetch", () => ({ authFetch: jest.fn() }));
-jest.mock("./chatHistoryApi", () => ({
+jest.mock('@/shared/auth/fetch', () => ({ authFetch: jest.fn() }));
+jest.mock('./chatHistoryApi', () => ({
   chatHistoryApi: {
     deleteConversation: jest.fn(),
     listConversationMetas: jest.fn(),
@@ -19,67 +17,146 @@ jest.mock("./chatHistoryApi", () => ({
     loadConversationState: jest.fn(),
   },
 }));
-jest.mock("./nyxIdServiceApi", () => ({
-  buildNyxIdConnectUrl: jest.fn(() => "https://nyx.example/keys?slug=api-github"),
+jest.mock('./nyxIdServiceApi', () => ({
+  buildNyxIdConnectUrl: jest.fn(
+    () => 'https://nyx.example/keys?slug=api-github',
+  ),
   createNyxIdCatalogKey: jest.fn(),
   listNyxIdConnectors: jest.fn(),
-  matchNewUserServiceId: jest.requireActual("./nyxIdServiceApi")
-    .matchNewUserServiceId,
-  matchingUserServiceIds: jest.requireActual("./nyxIdServiceApi")
-    .matchingUserServiceIds,
+  matchNewUserServiceId:
+    jest.requireActual('./nyxIdServiceApi').matchNewUserServiceId,
+  matchingUserServiceIds:
+    jest.requireActual('./nyxIdServiceApi').matchingUserServiceIds,
 }));
-jest.mock("@/shared/studio/api", () => ({
+jest.mock('@/shared/studio/api', () => ({
   studioApi: {
     getAuthSession: jest.fn(),
   },
 }));
-jest.mock("@/shared/navigation/history", () => ({
+jest.mock('@/shared/navigation/history', () => ({
   history: { push: jest.fn() },
 }));
-jest.mock("@/shared/ui/aevatarPageShells", () => {
-  const mockReact = require("react");
+jest.mock('@/shared/ui/aevatarPageShells', () => {
+  const mockReact = require('react');
   return {
     AevatarPageShell: ({ children, title }: any) =>
       mockReact.createElement(
-        "section",
+        'section',
         null,
-        title ? mockReact.createElement("h1", null, title) : null,
-        children
+        title ? mockReact.createElement('h1', null, title) : null,
+        children,
       ),
   };
 });
 
+const realChatHistoryApi =
+  jest.requireActual('./chatHistoryApi').chatHistoryApi;
+
 const serverConversation = {
-  createdAt: "2026-08-04T02:30:00+00:00",
-  id: "conversation-alpha",
+  createdAt: '2026-08-04T02:30:00+00:00',
+  id: 'conversation-alpha',
   messageCount: 1,
-  title: "Canonical conversation",
-  updatedAt: "2026-08-04T02:35:00+00:00",
+  title: 'Canonical conversation',
+  updatedAt: '2026-08-04T02:35:00+00:00',
 };
 
-function currentState(overrides: Record<string, unknown> = {}) {
+function currentState(
+  overrides: Record<string, unknown> = {},
+  stateVersion = 7,
+) {
   return {
-    status: "current",
-    stateVersion: 7,
-    turnId: "turn-alpha",
+    status: 'current',
+    stateVersion,
+    turnId: 'turn-alpha',
     snapshot: {
-      actorId: "conversation-alpha",
-      scopeId: "scope-alpha",
-      stateVersion: 7,
-      progressSequence: 7,
+      actorId: 'conversation-alpha',
+      scopeId: 'scope-alpha',
+      stateVersion,
+      progressSequence: stateVersion,
       activeTurn: null,
       latestTurn: {
-        turnId: "turn-alpha",
-        taskId: "task-alpha",
-        status: "succeeded",
+        turnId: 'turn-alpha',
+        taskId: 'task-alpha',
+        status: 'succeeded',
       },
       recentTerminalTurns: [],
       activeTask: null,
       pendingInput: null,
       pendingApproval: null,
       pendingActions: [],
+      recentActions: [],
       ...overrides,
     },
+  };
+}
+
+function taskStep(stepId: string, overrides: Record<string, unknown> = {}) {
+  return {
+    stepId,
+    order: 1,
+    kind: 'tool',
+    status: 'running',
+    required: true,
+    description: stepId,
+    source: {
+      tool: {
+        toolName: 'repository_read',
+        serviceSlug: 'github-api',
+        serviceId: 'svc-alpha',
+      },
+    },
+    mayChangeExternalState: false,
+    externalEffect: 'not_started',
+    availableActions: { stop: true },
+    updatedAt: '2026-08-08T00:00:00Z',
+    addedBy: 'initial',
+    addedInPlanRevision: 1,
+    dependsOn: [],
+    substeps: [],
+    operation: {
+      conversationActorId: 'conversation-alpha',
+      turnId: 'turn-alpha',
+      taskId: 'task-alpha',
+      stepId,
+      operationId: `operation-${stepId}`,
+      operationGeneration: 1,
+      kind: 'tool',
+      phase: 'running',
+    },
+    ...overrides,
+  };
+}
+
+function taskPlan(
+  steps: readonly Record<string, unknown>[],
+  overrides: Record<string, unknown> = {},
+) {
+  const planRevision = Number(overrides.planRevision ?? 1);
+  const { planRevisions, ...planOverrides } = overrides;
+  return {
+    schemaVersion: 4,
+    actorId: 'conversation-alpha',
+    taskId: 'task-alpha',
+    turnId: 'turn-alpha',
+    planId: 'plan-alpha',
+    planRevision,
+    planRevisionHistoryStart: 1,
+    planRevisions: planRevisions ?? [
+      {
+        planRevision,
+        revisionCause: planRevision === 1 ? 'initial' : 'failure_recovery',
+        addedStepIds: steps.map((step) => String(step.stepId)),
+        cancelledStepIds: [],
+      },
+    ],
+    title: 'Milestone 40 task',
+    status: 'active',
+    activeStepId: steps.find((step) =>
+      ['running', 'waiting', 'uncertain'].includes(String(step.status)),
+    )?.stepId,
+    gate: { mode: 'auto', status: 'satisfied' },
+    steps,
+    ...planOverrides,
   };
 }
 
@@ -90,8 +167,10 @@ function sseResponse(frames: readonly unknown[]): Response {
       start(controller) {
         controller.enqueue(
           encoder.encode(
-            frames.map((frame) => `data: ${JSON.stringify(frame)}\n\n`).join("")
-          )
+            frames
+              .map((frame) => `data: ${JSON.stringify(frame)}\n\n`)
+              .join(''),
+          ),
         );
         controller.close();
       },
@@ -101,12 +180,21 @@ function sseResponse(frames: readonly unknown[]): Response {
   } as Response;
 }
 
+function jsonResponse(payload: unknown): Response {
+  return {
+    json: jest.fn().mockResolvedValue(payload),
+    ok: true,
+    status: 200,
+    statusText: 'OK',
+  } as unknown as Response;
+}
+
 function runStarted(
-  conversationId = "conversation-alpha",
-  turnId = "turn-alpha"
+  conversationId = 'conversation-alpha',
+  turnId = 'turn-alpha',
 ) {
   return {
-    type: "RUN_STARTED",
+    type: 'RUN_STARTED',
     actorId: conversationId,
     turnId,
     runStarted: { threadId: conversationId, runId: turnId },
@@ -115,49 +203,123 @@ function runStarted(
 
 function completedStream(
   output: string,
-  conversationId = "conversation-alpha",
-  turnId = "turn-alpha",
-  extra: readonly unknown[] = []
+  conversationId = 'conversation-alpha',
+  turnId = 'turn-alpha',
+  extra: readonly unknown[] = [],
 ): Response {
   return sseResponse([
     runStarted(conversationId, turnId),
     ...extra,
     {
-      type: "TEXT_MESSAGE_CONTENT",
+      type: 'TEXT_MESSAGE_CONTENT',
       textMessageContent: { delta: output },
     },
-    { type: "RUN_FINISHED", runFinished: { runId: turnId } },
+    { type: 'RUN_FINISHED', runFinished: { runId: turnId } },
   ]);
+}
+
+function openSseResponse(frames: readonly unknown[]): {
+  close: () => void;
+  response: Response;
+} {
+  const encoder = new TextEncoder();
+  let close = () => {};
+  const response = {
+    body: new ReadableStream({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            frames
+              .map((frame) => `data: ${JSON.stringify(frame)}\n\n`)
+              .join(''),
+          ),
+        );
+        close = () => controller.close();
+      },
+    }),
+    ok: true,
+    status: 200,
+  } as Response;
+  return { close: () => close(), response };
 }
 
 function requestBodies(): Record<string, unknown>[] {
   return (authFetch as jest.Mock).mock.calls
-    .filter(([path]) => path === "/api/chat")
+    .filter(([path]) => path === '/api/chat')
     .map(([, request]) => JSON.parse(request.body));
 }
 
+function useRealChatHistoryApi(): void {
+  (chatHistoryApi.listConversationMetas as jest.Mock).mockImplementation(
+    realChatHistoryApi.listConversationMetas,
+  );
+  (chatHistoryApi.loadConversation as jest.Mock).mockImplementation(
+    realChatHistoryApi.loadConversation,
+  );
+  (chatHistoryApi.loadConversationState as jest.Mock).mockImplementation(
+    realChatHistoryApi.loadConversationState,
+  );
+}
+
 async function sendPrompt(prompt: string): Promise<void> {
-  await screen.findByText("Scope scope-alpha");
+  await screen.findByText('Scope scope-alpha');
   const input = await screen.findByPlaceholderText(
-    "Describe the workflow you want, or ask about the current setup..."
+    'Describe the workflow you want, or ask about the current setup...',
   );
   fireEvent.change(input, { target: { value: prompt } });
   await waitFor(() =>
-    expect(screen.getByRole("button", { name: "Send" })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled(),
   );
-  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+  fireEvent.click(screen.getByRole('button', { name: 'Send' }));
 }
 
-describe("ChatPage canonical NyxID Assistant", () => {
+const activeTurn = {
+  turnId: 'turn-alpha',
+  taskId: 'task-alpha',
+  status: 'active',
+};
+
+function activeTaskState(
+  plan: Record<string, unknown>,
+  stateVersion: number,
+  overrides: Record<string, unknown> = {},
+) {
+  return currentState(
+    {
+      activeTurn,
+      latestTurn: null,
+      activeTask: plan,
+      ...overrides,
+    },
+    stateVersion,
+  );
+}
+
+async function openCanonicalConversation(): Promise<void> {
+  fireEvent.click(
+    await screen.findByRole('button', { name: 'Canonical conversation' }),
+  );
+}
+
+function taskRow(description: string): HTMLElement {
+  const row = screen
+    .getAllByText(description)
+    .map((element) => element.closest('li'))
+    .find((element): element is HTMLLIElement => element !== null);
+  if (!row) throw new Error(`Expected ${description} to render in a task row.`);
+  return row;
+}
+
+describe('ChatPage canonical NyxID Assistant', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    window.history.replaceState({}, "", "/chat");
+    window.history.replaceState({}, '', '/chat');
     window.sessionStorage.clear();
     (studioApi.getAuthSession as jest.Mock).mockResolvedValue({
       authenticated: true,
       enabled: true,
-      scopeId: "scope-alpha",
-      scopeSource: "nyxid",
+      scopeId: 'scope-alpha',
+      scopeSource: 'nyxid',
     });
     (chatHistoryApi.listConversationMetas as jest.Mock).mockResolvedValue([]);
     (chatHistoryApi.loadConversation as jest.Mock).mockResolvedValue({
@@ -165,394 +327,1962 @@ describe("ChatPage canonical NyxID Assistant", () => {
       stateVersion: 0,
     });
     (chatHistoryApi.loadConversationState as jest.Mock).mockResolvedValue({
-      status: "not_found",
+      status: 'not_found',
     });
-    (chatHistoryApi.deleteConversation as jest.Mock).mockResolvedValue(undefined);
+    (chatHistoryApi.deleteConversation as jest.Mock).mockResolvedValue(
+      undefined,
+    );
     (listNyxIdConnectors as jest.Mock).mockResolvedValue({
       connected: [],
       available: [],
     });
   });
 
-  it("sends typed first and continuation turns using RUN_STARTED identity", async () => {
+  it('sends typed first and continuation turns using RUN_STARTED identity', async () => {
     (authFetch as jest.Mock)
-      .mockResolvedValueOnce(completedStream("First answer"))
+      .mockResolvedValueOnce(completedStream('First answer'))
       .mockResolvedValueOnce(
-        completedStream("Second answer", "conversation-alpha", "turn-beta")
+        completedStream('Second answer', 'conversation-alpha', 'turn-beta'),
       );
 
     renderWithQueryClient(<ChatPage />);
-    await sendPrompt("Create a workflow");
-    expect(await screen.findByText("First answer")).toBeInTheDocument();
-    await sendPrompt("Continue safely");
-    expect(await screen.findByText("Second answer")).toBeInTheDocument();
+    await sendPrompt('Create a workflow');
+    expect(await screen.findByText('First answer')).toBeInTheDocument();
+    await sendPrompt('Continue safely');
+    expect(await screen.findByText('Second answer')).toBeInTheDocument();
 
     const [first, second] = requestBodies();
     expect(first).toEqual({
-      type: "text",
-      prompt: "Create a workflow",
+      type: 'text',
+      prompt: 'Create a workflow',
       clientRequestId: expect.any(String),
     });
     expect(second).toEqual({
-      type: "text",
-      conversationId: "conversation-alpha",
-      prompt: "Continue safely",
+      type: 'text',
+      conversationId: 'conversation-alpha',
+      prompt: 'Continue safely',
       clientRequestId: expect.any(String),
     });
     expect(second.clientRequestId).not.toBe(first.clientRequestId);
-    expect(first).not.toHaveProperty("scopeId");
-    expect(first).not.toHaveProperty("sessionId");
-    expect(first).not.toHaveProperty("workflow");
-    expect(first).not.toHaveProperty("conversation");
+    expect(first).not.toHaveProperty('scopeId');
+    expect(first).not.toHaveProperty('sessionId');
+    expect(first).not.toHaveProperty('workflow');
+    expect(first).not.toHaveProperty('conversation');
   });
 
-  it("restores transcript and current state from canonical conversation resources", async () => {
+  it('enables actor-authorized stop after current state materializes during an active SSE', async () => {
+    const activeTurnId = 'turn-active';
+    const activePlan = taskPlan(
+      [
+        taskStep('step-active', {
+          operation: {
+            conversationActorId: 'conversation-alpha',
+            turnId: activeTurnId,
+            taskId: 'task-active',
+            stepId: 'step-active',
+            operationId: 'operation-step-active',
+            operationGeneration: 1,
+            kind: 'tool',
+            phase: 'running',
+          },
+        }),
+      ],
+      { taskId: 'task-active', turnId: activeTurnId },
+    );
+    (chatHistoryApi.loadConversationState as jest.Mock)
+      .mockResolvedValueOnce({ status: 'not_found' })
+      .mockResolvedValue(
+        activeTaskState(activePlan, 10, {
+          activeTurn: {
+            turnId: activeTurnId,
+            taskId: 'task-active',
+            status: 'active',
+          },
+        }),
+      );
+    const stream = openSseResponse([
+      runStarted('conversation-alpha', activeTurnId),
+      {
+        type: 'CUSTOM',
+        sequence: 10,
+        custom: { name: 'nyxid.task.snapshot', payload: activePlan },
+      },
+      {
+        type: 'TEXT_MESSAGE_CONTENT',
+        textMessageContent: { delta: 'Still working.' },
+      },
+    ]);
+    (authFetch as jest.Mock)
+      .mockResolvedValueOnce(stream.response)
+      .mockResolvedValueOnce({ ok: true, status: 202 });
+
+    renderWithQueryClient(<ChatPage />);
+    try {
+      await sendPrompt('Continue the active work');
+      await waitFor(() => expect(requestBodies()).toHaveLength(1));
+      const stop = await screen.findByRole('button', { name: 'Stop task' });
+      await waitFor(() => expect(stop).toBeEnabled());
+      expect(chatHistoryApi.loadConversationState).toHaveBeenCalledTimes(2);
+      fireEvent.click(stop);
+      await waitFor(() => expect(requestBodies()).toHaveLength(2));
+      expect(requestBodies()[1]).toEqual({
+        type: 'task.stop',
+        conversationId: 'conversation-alpha',
+        turnId: activeTurnId,
+        stopRequestId: expect.any(String),
+        clientRequestId: expect.any(String),
+        expectedStateVersion: 10,
+      });
+    } finally {
+      stream.close();
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: 'New Chat' })).toBeEnabled(),
+      );
+    }
+  });
+
+  it('routes Studio with distinct member, workflow, and published service identities', async () => {
+    const memberId = 'm-alpha';
+    const workflowId = 'wf-alpha';
+    const publishedServiceId = 'svc-alpha';
+    const plan = taskPlan([
+      taskStep('step-published-service', {
+        source: {
+          tool: {
+            toolName: 'repository_read',
+            serviceSlug: 'github-api',
+            serviceId: publishedServiceId,
+          },
+        },
+      }),
+    ]);
+    (authFetch as jest.Mock).mockResolvedValue(
+      sseResponse([
+        runStarted(),
+        {
+          type: 'CUSTOM',
+          sequence: 1,
+          custom: { name: 'nyxid.task.snapshot', payload: plan },
+        },
+        {
+          type: 'TEXT_MESSAGE_CONTENT',
+          textMessageContent: { delta: 'Studio target ready' },
+        },
+        {
+          type: 'RUN_FINISHED',
+          runFinished: {
+            runId: 'turn-alpha',
+            result: {
+              scopeId: 'scope-alpha',
+              teamId: 'team-alpha',
+              memberId,
+              workflowId,
+              publishedServiceId,
+            },
+          },
+        },
+      ]),
+    );
+
+    renderWithQueryClient(<ChatPage />);
+    await sendPrompt('Open the published service in Studio');
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Open Workflow Studio' }),
+    );
+
+    expect(history.push).toHaveBeenCalledWith(
+      '/scopes/scope-alpha/teams/team-alpha/members/m-alpha/workflow?workflowId=wf-alpha',
+    );
+    expect((history.push as jest.Mock).mock.calls[0][0]).not.toContain(
+      publishedServiceId,
+    );
+  });
+
+  it('restores transcript and current state from canonical conversation resources', async () => {
     (chatHistoryApi.listConversationMetas as jest.Mock).mockResolvedValue([
       serverConversation,
     ]);
     (chatHistoryApi.loadConversation as jest.Mock).mockResolvedValue({
       messages: [
         {
-          id: "turn-alpha:user",
-          turnId: "turn-alpha",
-          role: "user",
-          content: "Hello",
+          id: 'turn-alpha:user',
+          turnId: 'turn-alpha',
+          role: 'user',
+          content: 'Hello',
           timestamp: 1,
-          status: "complete",
+          status: 'complete',
         },
         {
-          id: "turn-alpha:assistant",
-          turnId: "turn-alpha",
-          role: "assistant",
-          content: "Restored answer",
+          id: 'turn-alpha:assistant',
+          turnId: 'turn-alpha',
+          role: 'assistant',
+          content: 'Restored answer',
           timestamp: 2,
-          status: "complete",
+          status: 'complete',
         },
       ],
       stateVersion: 7,
     });
     (chatHistoryApi.loadConversationState as jest.Mock).mockResolvedValue(
-      currentState()
+      currentState(),
     );
 
     renderWithQueryClient(<ChatPage />);
     fireEvent.click(
-      await screen.findByRole("button", { name: "Canonical conversation" })
+      await screen.findByRole('button', { name: 'Canonical conversation' }),
     );
 
-    expect(await screen.findByText("Restored answer")).toBeInTheDocument();
+    expect(await screen.findByText('Restored answer')).toBeInTheDocument();
     expect(chatHistoryApi.listConversationMetas).toHaveBeenCalledWith();
     expect(chatHistoryApi.loadConversation).toHaveBeenCalledWith(
-      "conversation-alpha"
+      'conversation-alpha',
     );
     expect(chatHistoryApi.loadConversationState).toHaveBeenCalledWith(
-      "conversation-alpha"
+      'conversation-alpha',
     );
   });
 
-  it("dispatches pending input and actor-authored step controls with exact identities", async () => {
+  it('UC1a renders live and reloaded committed connect requests identically', async () => {
+    useRealChatHistoryApi();
+    let reloading = false;
+    const connectStep = taskStep('step-connect', {
+      kind: 'browser_action',
+      status: 'waiting',
+      description: 'Connect GitHub',
+      source: { browserAction: { action: 'service.connect' } },
+      actionRequestId: 'action-alpha',
+      operation: null,
+    });
+    const connectPlan = taskPlan([connectStep], {
+      title: 'Connect and inspect GitHub',
+    });
+    const action = {
+      schemaVersion: 4,
+      actorId: 'conversation-alpha',
+      originTurnId: 'turn-alpha',
+      taskId: 'task-alpha',
+      stepId: 'step-connect',
+      actionRequestId: 'action-alpha',
+      action: 'service.connect',
+      params: {
+        catalogService: {
+          serviceSlug: 'api-github',
+          requestedScopes: ['repo:read'],
+        },
+      },
+    };
+    const pendingState = activeTaskState(connectPlan, 7, {
+      pendingActions: [
+        {
+          schemaVersion: 4,
+          originTurnId: 'turn-alpha',
+          taskId: 'task-alpha',
+          stepId: 'step-connect',
+          actionRequestId: 'action-alpha',
+          action: 'service.connect',
+          reports: [],
+          postconditionResult: null,
+          request: action,
+        },
+      ],
+    });
+    const stream = completedStream(
+      'Connection required',
+      'conversation-alpha',
+      'turn-alpha',
+      [
+        {
+          type: 'CUSTOM',
+          sequence: 1,
+          custom: { name: 'nyxid.task.snapshot', payload: connectPlan },
+        },
+        {
+          type: 'CUSTOM',
+          sequence: 2,
+          custom: { name: 'nyxid.action.request', payload: action },
+        },
+      ],
+    );
+    (authFetch as jest.Mock).mockImplementation((path: string) => {
+      if (path === '/api/chat') return Promise.resolve(stream);
+      if (path === '/api/chat/conversations') {
+        return Promise.resolve(
+          jsonResponse({
+            conversations: reloading ? [serverConversation] : [],
+            nextCursor: null,
+          }),
+        );
+      }
+      if (path === '/api/chat/conversations/conversation-alpha/state') {
+        return Promise.resolve(jsonResponse(pendingState));
+      }
+      if (path === '/api/chat/conversations/conversation-alpha') {
+        return Promise.resolve(
+          jsonResponse({
+            messages: [],
+            projectionStatus: 'current',
+            stateVersion: 7,
+          }),
+        );
+      }
+      throw new Error(`Unexpected authFetch path: ${path}`);
+    });
+
+    const liveView = renderWithQueryClient(<ChatPage />);
+    await sendPrompt('Connect GitHub and inspect the repository');
+    expect(
+      await screen.findByRole('button', { name: 'Open NyxID connection' }),
+    ).toBeInTheDocument();
+    expect(screen.getByText('repo:read')).toBeInTheDocument();
+    expect(requestBodies()).toEqual([
+      {
+        type: 'text',
+        prompt: 'Connect GitHub and inspect the repository',
+        clientRequestId: expect.any(String),
+      },
+    ]);
+
+    liveView.unmount();
+    reloading = true;
+    renderWithQueryClient(<ChatPage />);
+    await openCanonicalConversation();
+    expect(
+      await screen.findByRole('button', { name: 'Open NyxID connection' }),
+    ).toBeInTheDocument();
+    expect(screen.getByText('repo:read')).toBeInTheDocument();
+    expect(screen.getAllByText('Connect GitHub')).toHaveLength(2);
+    expect(
+      screen.queryByText(/current-state contract does not expose/),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText('Task result')).not.toBeInTheDocument();
+    expect(authFetch).toHaveBeenCalledWith(
+      '/api/chat/conversations/conversation-alpha',
+      expect.objectContaining({ method: 'GET' }),
+    );
+    expect(authFetch).toHaveBeenCalledWith(
+      '/api/chat/conversations/conversation-alpha/state',
+      expect.objectContaining({ method: 'GET' }),
+    );
+  });
+
+  it.each([
+    'pendingActions',
+    'recentActions',
+  ] as const)('fails closed on a reloaded %s request identity mismatch', async (collection) => {
     (chatHistoryApi.listConversationMetas as jest.Mock).mockResolvedValue([
       serverConversation,
     ]);
+    const connectPlan = taskPlan([
+      taskStep('step-connect', {
+        kind: 'browser_action',
+        status: 'waiting',
+        description: 'Connect GitHub',
+        source: { browserAction: { action: 'service.connect' } },
+        actionRequestId: 'action-alpha',
+        operation: null,
+      }),
+    ]);
+    const conflictingSummary = {
+      schemaVersion: 4,
+      originTurnId: 'turn-alpha',
+      taskId: 'task-alpha',
+      stepId: 'step-connect',
+      actionRequestId: 'action-alpha',
+      action: 'service.connect',
+      reports: [],
+      postconditionResult: null,
+      request: {
+        schemaVersion: 4,
+        actorId: 'conversation-alpha',
+        originTurnId: 'turn-alpha',
+        taskId: 'task-alpha',
+        stepId: 'step-connect',
+        actionRequestId: 'action-other',
+        action: 'service.connect',
+        params: {
+          catalogService: { serviceSlug: 'api-github' },
+        },
+      },
+    };
     (chatHistoryApi.loadConversationState as jest.Mock).mockResolvedValue(
-      currentState({
-        activeTurn: {
-          turnId: "turn-alpha",
-          taskId: "task-alpha",
-          status: "active",
-        },
-        activeTask: {
-          taskId: "task-alpha",
-          turnId: "turn-alpha",
-          status: "active",
-          steps: [
-            {
-              stepId: "step-retry",
-              order: 1,
-              description: "Fetch repository",
-              availableActions: { retry: true, skip: false, stop: true },
-              operation: { operationGeneration: 3 },
-            },
-          ],
-        },
-        pendingInput: {
-          requestId: "input-alpha",
-          turnId: "turn-alpha",
-          taskId: "task-alpha",
-          stepId: "step-input",
-          prompt: "Select a region",
-          options: [{ optionId: "option-sg", label: "Singapore" }],
-          allowFreeText: false,
-          multiSelect: false,
-        },
-      })
+      activeTaskState(connectPlan, 8, {
+        [collection]: [conflictingSummary],
+      }),
     );
-    (authFetch as jest.Mock).mockResolvedValue({ ok: true, status: 202 });
 
     renderWithQueryClient(<ChatPage />);
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Canonical conversation" })
-    );
-    fireEvent.click(await screen.findByRole("radio", { name: "Singapore" }));
-    fireEvent.click(screen.getByRole("button", { name: "Submit answer" }));
-    await waitFor(() => expect(requestBodies()).toHaveLength(1));
-    expect(requestBodies()[0]).toEqual({
-      type: "input.resolve",
-      conversationId: "conversation-alpha",
-      requestId: "input-alpha",
-      clientRequestId: expect.any(String),
-      answer: { selectedOptionIds: ["option-sg"] },
-      expectedStateVersion: 7,
-    });
+    await openCanonicalConversation();
 
-    const retry = screen.getByRole("button", {
-      name: "Retry Fetch repository",
-    });
-    await waitFor(() => expect(retry).toBeEnabled());
-    fireEvent.click(retry);
-    await waitFor(() => expect(requestBodies()).toHaveLength(2));
-    expect(requestBodies()[1]).toEqual({
-      type: "step.retry",
-      conversationId: "conversation-alpha",
-      turnId: "turn-alpha",
-      taskId: "task-alpha",
-      stepId: "step-retry",
-      retryRequestId: expect.any(String),
-      clientRequestId: expect.any(String),
-      expectedOperationGeneration: 3,
-      expectedStateVersion: 7,
-    });
-    expect(await screen.findByText("Request accepted")).toBeInTheDocument();
+    expect(
+      await screen.findByText(
+        'Action identity conflict; this browser journey is disabled.',
+      ),
+    ).toHaveAttribute('role', 'alert');
+    expect(
+      screen.queryByRole('button', { name: 'Open NyxID connection' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Refresh connection' }),
+    ).not.toBeInTheDocument();
   });
 
-  it("reports exactly one newly connected UserService through action.continue", async () => {
+  it('UC1b reloads the verified connection and terminal fact exactly once', async () => {
+    useRealChatHistoryApi();
+    let reloading = false;
+    const completedPlan = taskPlan(
+      [
+        taskStep('step-connect', {
+          kind: 'browser_action',
+          status: 'done',
+          description: 'Connect GitHub',
+          source: { browserAction: { action: 'service.connect' } },
+          externalEffect: 'confirmed',
+          availableActions: undefined,
+          actionRequestId: 'action-alpha',
+          operation: null,
+        }),
+        taskStep('step-verify', {
+          order: 2,
+          kind: 'postcondition',
+          status: 'done',
+          description: 'Verify GitHub connection',
+          source: { postcondition: { check: 'service.connected' } },
+          externalEffect: 'confirmed',
+          availableActions: undefined,
+          actionRequestId: 'action-alpha',
+          operation: null,
+        }),
+      ],
+      {
+        title: 'Connect and verify GitHub',
+        status: 'succeeded',
+      },
+    );
     const action = {
       schemaVersion: 4,
-      actorId: "conversation-alpha",
-      originTurnId: "turn-alpha",
-      taskId: "task-alpha",
-      stepId: "step-connect",
-      actionRequestId: "action-alpha",
-      action: "service.connect",
-      params: { catalogService: { serviceSlug: "api-github" } },
+      actorId: 'conversation-alpha',
+      originTurnId: 'turn-alpha',
+      taskId: 'task-alpha',
+      stepId: 'step-connect',
+      actionRequestId: 'action-alpha',
+      action: 'service.connect',
+      params: {
+        catalogService: {
+          serviceSlug: 'api-github',
+          requestedScopes: ['repo:read'],
+        },
+      },
+    };
+    const completedState = currentState(
+      {
+        latestTurn: {
+          turnId: 'turn-alpha',
+          taskId: 'task-alpha',
+          status: 'succeeded',
+          safeMessage: 'GitHub connection verified.',
+        },
+        activeTask: completedPlan,
+        pendingActions: [],
+        recentActions: [
+          {
+            schemaVersion: 4,
+            originTurnId: 'turn-alpha',
+            taskId: 'task-alpha',
+            stepId: 'step-connect',
+            actionRequestId: 'action-alpha',
+            action: 'service.connect',
+            reports: [
+              {
+                actionRequestId: 'action-alpha',
+                originTurnId: 'turn-alpha',
+                disposition: 'completed',
+                resource: {
+                  userService: { userServiceId: 'user-service-alpha' },
+                },
+              },
+            ],
+            postconditionResult: {
+              actionRequestId: 'action-alpha',
+              disposition: 'completed',
+              verified: true,
+              resource: {
+                userService: { userServiceId: 'user-service-alpha' },
+              },
+            },
+            request: action,
+          },
+        ],
+      },
+      9,
+    );
+    const stream = completedStream(
+      'GitHub connection verified.',
+      'conversation-alpha',
+      'turn-alpha',
+      [
+        {
+          type: 'CUSTOM',
+          sequence: 1,
+          custom: { name: 'nyxid.task.snapshot', payload: completedPlan },
+        },
+        {
+          type: 'CUSTOM',
+          sequence: 2,
+          custom: { name: 'nyxid.action.request', payload: action },
+        },
+      ],
+    );
+    (authFetch as jest.Mock).mockImplementation((path: string) => {
+      if (path === '/api/chat') return Promise.resolve(stream);
+      if (path === '/api/chat/conversations') {
+        return Promise.resolve(
+          jsonResponse({
+            conversations: reloading ? [serverConversation] : [],
+            nextCursor: null,
+          }),
+        );
+      }
+      if (path === '/api/chat/conversations/conversation-alpha/state') {
+        return Promise.resolve(jsonResponse(completedState));
+      }
+      if (path === '/api/chat/conversations/conversation-alpha') {
+        return Promise.resolve(
+          jsonResponse({
+            messages: [],
+            projectionStatus: 'current',
+            stateVersion: 9,
+          }),
+        );
+      }
+      throw new Error(`Unexpected authFetch path: ${path}`);
+    });
+
+    const firstView = renderWithQueryClient(<ChatPage />);
+    await sendPrompt('Connect GitHub and verify the connection');
+    expect(await screen.findByText('Actor verified')).toBeInTheDocument();
+    expect(
+      screen.getByText('Verified against service.connected'),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText('Task result')).toHaveLength(1);
+    expect(screen.getAllByText('GitHub connection verified.')).toHaveLength(2);
+    expect(requestBodies()).toEqual([
+      {
+        type: 'text',
+        prompt: 'Connect GitHub and verify the connection',
+        clientRequestId: expect.any(String),
+      },
+    ]);
+
+    firstView.unmount();
+    reloading = true;
+    renderWithQueryClient(<ChatPage />);
+    await openCanonicalConversation();
+    expect(await screen.findByText('Actor verified')).toBeInTheDocument();
+    expect(
+      screen.getByText('Verified against service.connected'),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText('Task result')).toHaveLength(1);
+    expect(screen.getByText('GitHub connection verified.')).toBeInTheDocument();
+    expect(authFetch).toHaveBeenCalledWith(
+      '/api/chat/conversations/conversation-alpha',
+      expect.objectContaining({ method: 'GET' }),
+    );
+    expect(authFetch).toHaveBeenCalledWith(
+      '/api/chat/conversations/conversation-alpha/state',
+      expect.objectContaining({ method: 'GET' }),
+    );
+  });
+
+  it('UC2 steers, stops, reloads, and starts a later goal as a new task', async () => {
+    (chatHistoryApi.listConversationMetas as jest.Mock).mockResolvedValue([
+      serverConversation,
+    ]);
+    const original = taskStep('step-original', {
+      description: 'Compare original candidates',
+    });
+    const completedEvidence = taskStep('step-completed-search', {
+      order: 2,
+      kind: 'web',
+      status: 'done',
+      description: 'Completed search evidence: Marina Bay options',
+      source: { web: {} },
+      externalEffect: 'not_applied',
+      availableActions: undefined,
+      operation: null,
+    });
+    const steered = taskPlan(
+      [
+        completedEvidence,
+        {
+          ...original,
+          status: 'cancelled',
+          cancelledInPlanRevision: 2,
+          availableActions: undefined,
+          operation: null,
+        },
+        taskStep('step-steered', {
+          order: 3,
+          description: 'Compare for 7 PM and a private room',
+          addedBy: 'steering',
+          addedInPlanRevision: 2,
+        }),
+      ],
+      {
+        planRevision: 2,
+        planRevisions: [
+          {
+            planRevision: 1,
+            revisionCause: 'initial',
+            addedStepIds: ['step-original', 'step-completed-search'],
+            cancelledStepIds: [],
+          },
+          {
+            planRevision: 2,
+            revisionCause: 'steering',
+            addedStepIds: ['step-steered'],
+            cancelledStepIds: ['step-original'],
+          },
+        ],
+        title: 'Dinner research',
+      },
+    );
+    const stopped = {
+      ...steered,
+      status: 'stopped',
+      activeStepId: undefined,
+      steps: (steered.steps as Record<string, unknown>[]).map((step) => ({
+        ...step,
+        status: step.status === 'running' ? 'cancelled' : step.status,
+        availableActions: undefined,
+        operation: null,
+      })),
+    };
+    const stoppedState = currentState(
+      {
+        latestTurn: {
+          turnId: 'turn-alpha',
+          taskId: 'task-alpha',
+          status: 'stopped',
+          safeMessage: 'Partial research preserved.',
+        },
+        activeTask: stopped,
+        latestControlResult: { outcome: 'stopped' },
+      },
+      12,
+    );
+    const newGoalStep = taskStep('step-new-search', {
+      description: 'Find Friday dinner options',
+      operation: {
+        conversationActorId: 'conversation-alpha',
+        turnId: 'turn-beta',
+        taskId: 'task-beta',
+        stepId: 'step-new-search',
+        operationId: 'operation-new-search',
+        operationGeneration: 1,
+        kind: 'web',
+        phase: 'running',
+      },
+    });
+    const newGoalPlan = taskPlan([newGoalStep], {
+      taskId: 'task-beta',
+      turnId: 'turn-beta',
+      planId: 'plan-beta',
+      title: 'Friday dinner research',
+    });
+    const newGoalState = {
+      ...currentState(
+        {
+          activeTurn: {
+            turnId: 'turn-beta',
+            taskId: 'task-beta',
+            status: 'active',
+          },
+          latestTurn: null,
+          recentTerminalTurns: [
+            {
+              turnId: 'turn-alpha',
+              taskId: 'task-alpha',
+              status: 'stopped',
+              safeMessage: 'Partial research preserved.',
+            },
+          ],
+          activeTask: newGoalPlan,
+        },
+        13,
+      ),
+      turnId: 'turn-beta',
+    };
+    (chatHistoryApi.loadConversationState as jest.Mock)
+      .mockResolvedValueOnce(
+        activeTaskState(
+          taskPlan([original, completedEvidence], { title: 'Dinner research' }),
+          10,
+        ),
+      )
+      .mockResolvedValueOnce(activeTaskState(steered, 11))
+      .mockResolvedValueOnce(stoppedState)
+      .mockResolvedValueOnce(stoppedState)
+      .mockResolvedValue(newGoalState);
+    (authFetch as jest.Mock).mockImplementation(
+      (_path: string, request: RequestInit) => {
+        const body = JSON.parse(String(request.body));
+        return Promise.resolve(
+          body.type === 'text'
+            ? completedStream(
+                'Friday dinner research started.',
+                'conversation-alpha',
+                'turn-beta',
+                [
+                  {
+                    type: 'CUSTOM',
+                    sequence: 13,
+                    custom: {
+                      name: 'nyxid.task.snapshot',
+                      payload: newGoalPlan,
+                    },
+                  },
+                ],
+              )
+            : ({ ok: true, status: 202 } as Response),
+        );
+      },
+    );
+
+    const firstView = renderWithQueryClient(<ChatPage />);
+    await openCanonicalConversation();
+    const steering = await screen.findByPlaceholderText(
+      'Steer the active task...',
+    );
+    fireEvent.change(steering, {
+      target: { value: 'Use 7 PM and require a private room' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    expect(await screen.findByText('Plan revision 2')).toBeInTheDocument();
+    expect(
+      screen.getByText('Compare for 7 PM and a private room'),
+    ).toBeInTheDocument();
+    expect(
+      within(taskRow('Compare for 7 PM and a private room')).getByText(
+        'addedBy: steering',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(taskRow('Compare for 7 PM and a private room')).getByText('r2'),
+    ).toBeInTheDocument();
+    expect(
+      within(taskRow('Compare original candidates')).getByText('cancelled'),
+    ).toBeInTheDocument();
+    expect(
+      within(
+        taskRow('Completed search evidence: Marina Bay options'),
+      ).getByText('done'),
+    ).toBeInTheDocument();
+    const stop = screen.getByRole('button', { name: 'Stop task' });
+    await waitFor(() => expect(stop).toBeEnabled());
+    fireEvent.click(stop);
+    expect(
+      await screen.findByText('Partial research preserved.'),
+    ).toBeInTheDocument();
+    expect(requestBodies()).toEqual([
+      {
+        type: 'task.steer',
+        conversationId: 'conversation-alpha',
+        turnId: 'turn-alpha',
+        steeringId: expect.any(String),
+        clientRequestId: expect.any(String),
+        instruction: 'Use 7 PM and require a private room',
+        expectedStateVersion: 10,
+      },
+      {
+        type: 'task.stop',
+        conversationId: 'conversation-alpha',
+        turnId: 'turn-alpha',
+        stopRequestId: expect.any(String),
+        clientRequestId: expect.any(String),
+        expectedStateVersion: 11,
+      },
+    ]);
+
+    firstView.unmount();
+    renderWithQueryClient(<ChatPage />);
+    await openCanonicalConversation();
+    expect(
+      await screen.findByText('Partial research preserved.'),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText('Task result')).toHaveLength(1);
+    expect(
+      within(
+        taskRow('Completed search evidence: Marina Bay options'),
+      ).getByText('done'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Stop task' }),
+    ).not.toBeInTheDocument();
+
+    await sendPrompt('Dinner is back on for Friday');
+    expect(
+      await screen.findByText('Friday dinner research'),
+    ).toBeInTheDocument();
+    expect(screen.getByText('Plan revision 1')).toBeInTheDocument();
+    expect(newGoalState).toEqual(
+      expect.objectContaining({
+        snapshot: expect.objectContaining({
+          activeTurn: expect.objectContaining({ taskId: 'task-beta' }),
+          activeTask: expect.objectContaining({ taskId: 'task-beta' }),
+        }),
+      }),
+    );
+    expect(requestBodies()[2]).toEqual({
+      type: 'text',
+      conversationId: 'conversation-alpha',
+      prompt: 'Dinner is back on for Friday',
+      clientRequestId: expect.any(String),
+    });
+  });
+
+  it('UC3 unlocks only actor-authorized controls after reconciliation and retries at N+1', async () => {
+    (chatHistoryApi.listConversationMetas as jest.Mock).mockResolvedValue([
+      serverConversation,
+    ]);
+    const uncertain = taskStep('step-effect', {
+      status: 'uncertain',
+      description: 'Submit reimbursement',
+      mayChangeExternalState: true,
+      externalEffect: 'may_have_changed',
+      availableActions: { stop: true },
+      operation: {
+        turnId: 'turn-alpha',
+        taskId: 'task-alpha',
+        stepId: 'step-effect',
+        operationId: 'operation-effect',
+        operationGeneration: 1,
+        kind: 'effect',
+        phase: 'uncertain',
+      },
+    });
+    const reconciling = taskStep('step-reconcile', {
+      order: 2,
+      description: 'Reconcile provider receipt',
+      addedBy: 'replan',
+      addedInPlanRevision: 2,
+      availableActions: undefined,
+      operation: {
+        operationId: 'operation-reconcile',
+        operationGeneration: 1,
+        kind: 'reconcile',
+        phase: 'running',
+      },
+    });
+    const reconciled = {
+      ...uncertain,
+      status: 'failed',
+      externalEffect: 'not_applied',
+      availableActions: { retry: true, skip: true },
+      operation: {
+        ...(uncertain.operation as Record<string, unknown>),
+        phase: 'failed',
+      },
+    };
+    const reconcileDone = {
+      ...reconciling,
+      status: 'done',
+      externalEffect: 'not_applied',
+      operation: null,
+    };
+    const retryPlan = taskPlan(
+      [
+        {
+          ...reconciled,
+          status: 'running',
+          externalEffect: 'not_started',
+          availableActions: { stop: true },
+          operation: {
+            ...(reconciled.operation as Record<string, unknown>),
+            operationGeneration: 2,
+            phase: 'running',
+          },
+        },
+        reconcileDone,
+      ],
+      {
+        planRevision: 3,
+        planRevisions: [
+          {
+            planRevision: 1,
+            revisionCause: 'initial',
+            addedStepIds: ['step-effect'],
+            cancelledStepIds: [],
+          },
+          {
+            planRevision: 2,
+            revisionCause: 'failure_recovery',
+            addedStepIds: ['step-reconcile'],
+            cancelledStepIds: [],
+          },
+          {
+            planRevision: 3,
+            revisionCause: 'failure_recovery',
+            addedStepIds: [],
+            cancelledStepIds: [],
+          },
+        ],
+        title: 'Reimbursement retry',
+        gate: {
+          mode: 'confirm',
+          status: 'satisfied',
+          requestId: 'plan-gate-retry-3',
+          taskId: 'task-alpha',
+          planId: 'plan-alpha',
+          planRevision: 3,
+          decidedAt: '2026-08-08T00:03:00Z',
+        },
+      },
+    );
+    const pendingRetryPlan = {
+      ...retryPlan,
+      activeOperationId: undefined,
+      gate: {
+        mode: 'confirm',
+        status: 'pending',
+        requestId: 'plan-gate-retry-3',
+        taskId: 'task-alpha',
+        planId: 'plan-alpha',
+        planRevision: 3,
+        reason: 'This retry changes the frozen operation generation.',
+      },
+      steps: (retryPlan.steps as Record<string, unknown>[]).map((step) =>
+        step.stepId === 'step-effect'
+          ? {
+              ...step,
+              status: 'planned',
+              availableActions: undefined,
+              operation: {
+                ...(step.operation as Record<string, unknown>),
+                phase: 'requested',
+              },
+            }
+          : step,
+      ),
+    };
+    const retryStartedResult = {
+      kind: 'retry',
+      requestId: 'retry-alpha',
+      clientRequestId: 'retry-client-alpha',
+      turnId: 'turn-alpha',
+      taskId: 'task-alpha',
+      stepId: 'step-effect',
+      expectedOperationGeneration: 1,
+      operationGeneration: 2,
+      outcome: 'retry_started',
+    };
+    const pendingRetryState = activeTaskState(pendingRetryPlan, 22, {
+      latestStepControlResult: retryStartedResult,
+      recentStepControlResults: [retryStartedResult],
+    });
+    const retryState = activeTaskState(retryPlan, 23, {
+      latestStepControlResult: retryStartedResult,
+      recentStepControlResults: [retryStartedResult],
+    });
+    const approvalRetryPlan = {
+      ...retryPlan,
+      activeOperationId: undefined,
+      steps: (retryPlan.steps as Record<string, unknown>[]).map((step) =>
+        step.stepId === 'step-effect'
+          ? {
+              ...step,
+              status: 'failed',
+              externalEffect: 'not_applied',
+              availableActions: { retry: true, skip: true },
+              approvalObservation: {
+                approvalRequestId: 'approval-generation-two',
+                decisionMode: 'per_request',
+                receiptStatus: 'approval_required',
+                observedAt: '2026-08-08T00:04:00Z',
+              },
+              operation: {
+                ...(step.operation as Record<string, unknown>),
+                phase: 'failed',
+              },
+            }
+          : step,
+      ),
+    };
+    const approvalRetryState = activeTaskState(approvalRetryPlan, 24, {
+      latestStepControlResult: retryStartedResult,
+      recentStepControlResults: [retryStartedResult],
+    });
+    (chatHistoryApi.loadConversationState as jest.Mock)
+      .mockResolvedValueOnce(
+        activeTaskState(
+          taskPlan([uncertain, reconciling], {
+            planRevision: 2,
+            planRevisions: [
+              {
+                planRevision: 1,
+                revisionCause: 'initial',
+                addedStepIds: ['step-effect'],
+                cancelledStepIds: [],
+              },
+              {
+                planRevision: 2,
+                revisionCause: 'failure_recovery',
+                addedStepIds: ['step-reconcile'],
+                cancelledStepIds: [],
+              },
+            ],
+            title: 'Reimbursement',
+          }),
+          20,
+        ),
+      )
+      .mockResolvedValueOnce(
+        activeTaskState(
+          taskPlan([reconciled, reconcileDone], {
+            planRevision: 2,
+            planRevisions: [
+              {
+                planRevision: 1,
+                revisionCause: 'initial',
+                addedStepIds: ['step-effect'],
+                cancelledStepIds: [],
+              },
+              {
+                planRevision: 2,
+                revisionCause: 'failure_recovery',
+                addedStepIds: ['step-reconcile'],
+                cancelledStepIds: [],
+              },
+            ],
+            title: 'Reimbursement reconciled',
+          }),
+          21,
+        ),
+      )
+      .mockResolvedValueOnce(pendingRetryState)
+      .mockResolvedValueOnce(retryState)
+      .mockRejectedValueOnce(new Error('Current state is not visible yet.'))
+      .mockResolvedValueOnce(retryState)
+      .mockResolvedValueOnce(retryState)
+      .mockResolvedValue(approvalRetryState);
+    (authFetch as jest.Mock).mockImplementation(
+      (_path: string, request: RequestInit) => {
+        const body = JSON.parse(String(request.body));
+        return Promise.resolve(
+          body.type === 'text'
+            ? completedStream(
+                'Generation 2 is running.',
+                'conversation-alpha',
+                'turn-alpha',
+                [
+                  {
+                    type: 'CUSTOM',
+                    sequence: 23,
+                    custom: {
+                      name: 'nyxid.task.snapshot',
+                      payload: retryPlan,
+                    },
+                  },
+                ],
+              )
+            : ({ ok: true, status: 202 } as Response),
+        );
+      },
+    );
+
+    const uncertainView = renderWithQueryClient(<ChatPage />);
+    await openCanonicalConversation();
+    await screen.findByText('Reimbursement');
+    expect(
+      within(taskRow('Submit reimbursement')).getByText('may_have_changed'),
+    ).toBeInTheDocument();
+    expect(
+      within(taskRow('Reconcile provider receipt')).getByText(
+        'addedBy: replan',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(taskRow('Reconcile provider receipt')).getByText('r2'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Retry Submit reimbursement' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Skip Submit reimbursement' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Stop task' }),
+    ).toBeInTheDocument();
+
+    uncertainView.unmount();
+    const reconciledView = renderWithQueryClient(<ChatPage />);
+    await openCanonicalConversation();
+    await screen.findByText('Reimbursement reconciled');
+    expect(
+      within(taskRow('Reconcile provider receipt')).getByText('done'),
+    ).toBeInTheDocument();
+    expect(
+      within(taskRow('Submit reimbursement')).getByText('not_applied'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Retry Submit reimbursement' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Skip Submit reimbursement' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Stop task' }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Retry Submit reimbursement' }),
+    );
+    expect(await screen.findByText(/generation 2/)).toBeInTheDocument();
+    expect(
+      within(taskRow('Submit reimbursement')).getByText('planned'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Confirm plan' }),
+    ).toBeInTheDocument();
+    expect(requestBodies()).toEqual([
+      {
+        type: 'step.retry',
+        conversationId: 'conversation-alpha',
+        turnId: 'turn-alpha',
+        taskId: 'task-alpha',
+        stepId: 'step-effect',
+        retryRequestId: expect.any(String),
+        clientRequestId: expect.any(String),
+        expectedOperationGeneration: 1,
+        expectedStateVersion: 21,
+      },
+    ]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm plan' }));
+    await waitFor(() =>
+      expect(
+        within(taskRow('Submit reimbursement')).getByText('running'),
+      ).toBeInTheDocument(),
+    );
+    expect(
+      screen.queryByRole('button', { name: 'Confirm plan' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('region', { name: 'NyxID approval observation' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Approve' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Reject' }),
+    ).not.toBeInTheDocument();
+    expect(requestBodies()).toEqual([
+      {
+        type: 'step.retry',
+        conversationId: 'conversation-alpha',
+        turnId: 'turn-alpha',
+        taskId: 'task-alpha',
+        stepId: 'step-effect',
+        retryRequestId: expect.any(String),
+        clientRequestId: expect.any(String),
+        expectedOperationGeneration: 1,
+        expectedStateVersion: 21,
+      },
+      {
+        type: 'plan.resolve',
+        conversationId: 'conversation-alpha',
+        taskId: 'task-alpha',
+        planId: 'plan-alpha',
+        requestId: 'plan-gate-retry-3',
+        clientRequestId: expect.any(String),
+        planRevision: 3,
+        confirmed: true,
+        expectedStateVersion: 22,
+      },
+    ]);
+
+    reconciledView.unmount();
+    const liveRetryView = renderWithQueryClient(<ChatPage />);
+    await sendPrompt('Observe the reimbursement retry');
+    expect(await screen.findByText(/generation 2/)).toBeInTheDocument();
+    expect(
+      within(taskRow('Submit reimbursement')).getByText('running'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('region', { name: 'NyxID approval observation' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Approve' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Reject' }),
+    ).not.toBeInTheDocument();
+
+    liveRetryView.unmount();
+    const retryReloadView = renderWithQueryClient(<ChatPage />);
+    await openCanonicalConversation();
+    expect(await screen.findByText(/generation 2/)).toBeInTheDocument();
+    expect(screen.getByText('Plan revision 3')).toBeInTheDocument();
+    expect(screen.getByText('retry_started')).toBeInTheDocument();
+    expect(
+      within(taskRow('Submit reimbursement')).getByText('running'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('region', { name: 'NyxID approval observation' }),
+    ).not.toBeInTheDocument();
+
+    retryReloadView.unmount();
+    renderWithQueryClient(<ChatPage />);
+    await openCanonicalConversation();
+    await screen.findAllByText('Submit reimbursement');
+    const retryApproval = within(taskRow('Submit reimbursement')).getByRole(
+      'region',
+      { name: 'NyxID approval observation' },
+    );
+    expect(retryApproval).toHaveTextContent('approval-generation-two');
+    expect(retryApproval).toHaveTextContent('per_request');
+    expect(retryApproval).toHaveTextContent('approval_required');
+    expect(
+      screen.getByRole('button', { name: 'Retry Submit reimbursement' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Skip Submit reimbursement' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Approve' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Reject' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('UC4 renders a below-threshold conditional write as skipped', async () => {
+    (chatHistoryApi.listConversationMetas as jest.Mock).mockResolvedValue([
+      serverConversation,
+    ]);
+    const belowThresholdPlan = taskPlan(
+      [
+        taskStep('step-threshold', {
+          kind: 'input',
+          status: 'done',
+          description: 'Use screening threshold 75',
+          source: { input: {} },
+          externalEffect: 'not_applied',
+          availableActions: undefined,
+          operation: null,
+        }),
+        taskStep('step-condition', {
+          order: 2,
+          kind: 'web',
+          status: 'done',
+          description: 'Candidate score 72 is below 75',
+          source: { web: {} },
+          externalEffect: 'not_applied',
+          availableActions: undefined,
+          operation: null,
+        }),
+        taskStep('step-write', {
+          order: 3,
+          status: 'skipped',
+          description: 'Write accepted candidate',
+          mayChangeExternalState: true,
+          externalEffect: 'not_applied',
+          availableActions: undefined,
+          operation: null,
+        }),
+        taskStep('step-verify', {
+          order: 4,
+          kind: 'postcondition',
+          status: 'skipped',
+          description: 'Read candidate row back',
+          source: { postcondition: { check: 'bitable.row.exists' } },
+          externalEffect: 'not_applied',
+          availableActions: undefined,
+          operation: null,
+        }),
+      ],
+      {
+        status: 'succeeded',
+        title: 'Candidate screening at 75',
+      },
+    );
+    (chatHistoryApi.loadConversationState as jest.Mock).mockResolvedValue(
+      currentState(
+        {
+          latestTurn: {
+            turnId: 'turn-alpha',
+            taskId: 'task-alpha',
+            status: 'succeeded',
+            safeMessage: 'Candidate did not meet the write threshold.',
+          },
+          activeTask: belowThresholdPlan,
+        },
+        29,
+      ),
+    );
+
+    renderWithQueryClient(<ChatPage />);
+    await openCanonicalConversation();
+
+    expect(
+      await screen.findByText('Candidate score 72 is below 75'),
+    ).toBeInTheDocument();
+    const write = within(taskRow('Write accepted candidate'));
+    expect(write.getByText('skipped')).toBeInTheDocument();
+    expect(write.getByText('not_applied')).toBeInTheDocument();
+    expect(
+      screen.queryByText('Verified against bitable.row.exists'),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('region', { name: 'NyxID approval observation' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('UC4 preserves the 75 override across Tier-B stall, return, and verified reload', async () => {
+    (chatHistoryApi.listConversationMetas as jest.Mock).mockResolvedValue([
+      serverConversation,
+    ]);
+    const finalPlan = taskPlan(
+      [
+        taskStep('step-threshold', {
+          kind: 'input',
+          status: 'done',
+          description: 'Use screening threshold 75',
+          source: { input: {} },
+          externalEffect: 'not_applied',
+          availableActions: undefined,
+          operation: null,
+        }),
+        taskStep('step-condition-true', {
+          order: 2,
+          kind: 'web',
+          status: 'done',
+          description: 'Conditional score at least 75 executed',
+          source: { web: {} },
+          externalEffect: 'not_applied',
+          availableActions: undefined,
+          operation: null,
+        }),
+        taskStep('step-write', {
+          order: 3,
+          status: 'done',
+          description: 'Write accepted candidate',
+          mayChangeExternalState: true,
+          externalEffect: 'confirmed',
+          availableActions: undefined,
+          operation: null,
+        }),
+        taskStep('step-condition-false', {
+          order: 4,
+          kind: 'web',
+          status: 'skipped',
+          description: 'Conditional score below 75 skipped',
+          source: { web: {} },
+          externalEffect: 'not_applied',
+          availableActions: undefined,
+          operation: null,
+        }),
+        taskStep('step-verify', {
+          order: 5,
+          kind: 'postcondition',
+          status: 'done',
+          description: 'Read candidate row back',
+          source: { postcondition: { check: 'bitable.row.exists' } },
+          externalEffect: 'confirmed',
+          availableActions: undefined,
+          operation: null,
+        }),
+      ],
+      {
+        status: 'succeeded',
+        planRevision: 2,
+        planRevisions: [
+          {
+            planRevision: 1,
+            revisionCause: 'initial',
+            addedStepIds: ['step-threshold'],
+            cancelledStepIds: [],
+          },
+          {
+            planRevision: 2,
+            revisionCause: 'scope_resolution',
+            addedStepIds: [
+              'step-condition-true',
+              'step-write',
+              'step-condition-false',
+              'step-verify',
+            ],
+            cancelledStepIds: [],
+          },
+        ],
+        title: 'Candidate screening at 75',
+      },
+    );
+    const waitingPlan = taskPlan(
+      (finalPlan.steps as Record<string, unknown>[]).map((step) => {
+        if (step.stepId === 'step-write') {
+          return {
+            ...step,
+            status: 'waiting',
+            externalEffect: 'not_started',
+            availableActions: { stop: true },
+            operation: {
+              conversationActorId: 'conversation-alpha',
+              turnId: 'turn-alpha',
+              taskId: 'task-alpha',
+              stepId: 'step-write',
+              operationId: 'operation-write',
+              operationGeneration: 1,
+              kind: 'effect',
+              phase: 'waiting',
+              lastProgressAt: '2026-08-08T00:00:00Z',
+              stalledAt: '2026-08-08T00:02:00Z',
+            },
+          };
+        }
+        if (
+          step.stepId === 'step-condition-false' ||
+          step.stepId === 'step-verify'
+        ) {
+          return {
+            ...step,
+            status: 'planned',
+            externalEffect: 'not_started',
+          };
+        }
+        return step;
+      }),
+      {
+        planRevision: 2,
+        planRevisions: finalPlan.planRevisions,
+        title: 'Candidate screening at 75',
+      },
+    );
+    const waitingState = activeTaskState(waitingPlan, 31, {
+      latestInputResolution: {
+        requestId: 'input-threshold',
+        outcome: 'resolved',
+      },
+    });
+    const postReturnApprovalObservation = {
+      approvalRequestId: 'nyxid-approval-write-alpha',
+      decisionMode: 'per_request',
+      receiptStatus: 'approval_required',
+      observedAt: '2026-08-08T00:10:00Z',
+    };
+    const returnedPlan = taskPlan(
+      (waitingPlan.steps as Record<string, unknown>[]).map((step) =>
+        step.stepId === 'step-write'
+          ? {
+              ...step,
+              status: 'failed',
+              externalEffect: 'not_applied',
+              availableActions: { retry: true, skip: true },
+              approvalObservation: postReturnApprovalObservation,
+              operation: {
+                conversationActorId: 'conversation-alpha',
+                turnId: 'turn-alpha',
+                taskId: 'task-alpha',
+                stepId: 'step-write',
+                operationId: 'operation-write',
+                operationGeneration: 1,
+                kind: 'effect',
+                phase: 'failed',
+                lastProgressAt: '2026-08-08T00:10:00Z',
+              },
+            }
+          : step,
+      ),
+      {
+        planRevision: 2,
+        planRevisions: finalPlan.planRevisions,
+        title: 'Candidate screening at 75',
+      },
+    );
+    const returnedState = activeTaskState(returnedPlan, 32, {
+      latestInputResolution: {
+        requestId: 'input-threshold',
+        outcome: 'resolved',
+      },
+    });
+    const terminalPlan = {
+      ...finalPlan,
+      steps: (finalPlan.steps as Record<string, unknown>[]).map((step) =>
+        step.stepId === 'step-write'
+          ? {
+              ...step,
+              approvalObservation: postReturnApprovalObservation,
+            }
+          : step,
+      ),
+    };
+    const finalState = currentState(
+      {
+        latestTurn: {
+          turnId: 'turn-alpha',
+          taskId: 'task-alpha',
+          status: 'succeeded',
+        },
+        activeTask: terminalPlan,
+        latestInputResolution: {
+          requestId: 'input-threshold',
+          outcome: 'resolved',
+        },
+      },
+      33,
+    );
+    (chatHistoryApi.loadConversationState as jest.Mock)
+      .mockResolvedValueOnce(
+        activeTaskState(
+          taskPlan(
+            [
+              taskStep('step-threshold', {
+                kind: 'input',
+                status: 'waiting',
+                description: 'Suggested screening threshold: 70',
+                source: { input: {} },
+                operation: null,
+              }),
+            ],
+            { title: 'Candidate screening at suggested 70' },
+          ),
+          30,
+          {
+            pendingInput: {
+              requestId: 'input-threshold',
+              prompt: 'Suggested threshold is 70. Set the screening threshold.',
+              options: [],
+              allowFreeText: true,
+              multiSelect: false,
+            },
+          },
+        ),
+      )
+      .mockResolvedValueOnce(waitingState)
+      .mockRejectedValueOnce(new Error('Current state is not visible yet.'))
+      .mockResolvedValueOnce(returnedState)
+      .mockResolvedValueOnce(returnedState)
+      .mockResolvedValue(finalState);
+    (authFetch as jest.Mock).mockImplementation(
+      (_path: string, request: RequestInit) => {
+        const body = JSON.parse(String(request.body));
+        return Promise.resolve(
+          body.type === 'text'
+            ? completedStream(
+                'NyxID returned an approval request.',
+                'conversation-alpha',
+                'turn-alpha',
+                [
+                  {
+                    type: 'CUSTOM',
+                    sequence: 32,
+                    custom: {
+                      name: 'nyxid.task.snapshot',
+                      payload: returnedPlan,
+                    },
+                  },
+                ],
+              )
+            : ({ ok: true, status: 202 } as Response),
+        );
+      },
+    );
+
+    const firstView = renderWithQueryClient(<ChatPage />);
+    await openCanonicalConversation();
+    expect(
+      await screen.findByText(
+        'Suggested threshold is 70. Set the screening threshold.',
+      ),
+    ).toBeInTheDocument();
+    const answer = screen.getByPlaceholderText(
+      'Answer the current question...',
+    );
+    fireEvent.change(answer, { target: { value: '75' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    expect(
+      await screen.findByText('Candidate screening at 75'),
+    ).toBeInTheDocument();
+    expect(
+      within(taskRow('Write accepted candidate')).getByText('Stalled'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText('NyxID request observed'),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Approve' }),
+    ).not.toBeInTheDocument();
+    expect(requestBodies()).toEqual([
+      {
+        type: 'input.resolve',
+        conversationId: 'conversation-alpha',
+        requestId: 'input-threshold',
+        clientRequestId: expect.any(String),
+        answer: { freeText: '75' },
+        expectedStateVersion: 30,
+      },
+    ]);
+
+    firstView.unmount();
+    const liveReturnedView = renderWithQueryClient(<ChatPage />);
+    await sendPrompt('Observe the candidate screening return');
+    expect(
+      await screen.findByText('Candidate screening at 75'),
+    ).toBeInTheDocument();
+    const liveApprovalObservation = within(
+      taskRow('Write accepted candidate'),
+    ).getByRole('region', { name: 'NyxID approval observation' });
+    expect(liveApprovalObservation).toHaveTextContent(
+      'nyxid-approval-write-alpha',
+    );
+    expect(liveApprovalObservation).toHaveTextContent('approval_required');
+    expect(
+      screen.queryByRole('button', { name: 'Approve' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Reject' }),
+    ).not.toBeInTheDocument();
+
+    liveReturnedView.unmount();
+    const returnedView = renderWithQueryClient(<ChatPage />);
+    await openCanonicalConversation();
+    expect(
+      await screen.findByText('Candidate screening at 75'),
+    ).toBeInTheDocument();
+    expect(
+      within(taskRow('Write accepted candidate')).getByText('failed'),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/generation 1/)).toBeInTheDocument();
+    expect(
+      within(taskRow('Write accepted candidate')).queryByText('Stalled'),
+    ).not.toBeInTheDocument();
+    const approvalObservation = within(
+      taskRow('Write accepted candidate'),
+    ).getByRole('region', { name: 'NyxID approval observation' });
+    expect(approvalObservation).toHaveTextContent('NyxID request observed');
+    expect(approvalObservation).toHaveTextContent('nyxid-approval-write-alpha');
+    expect(approvalObservation).toHaveTextContent('approval_required');
+    expect(
+      screen.queryByRole('button', { name: 'Approve' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Reject' }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText('approved')).not.toBeInTheDocument();
+
+    returnedView.unmount();
+    renderWithQueryClient(<ChatPage />);
+    await openCanonicalConversation();
+    expect(
+      await screen.findByText('Candidate screening at 75'),
+    ).toBeInTheDocument();
+    expect(
+      within(taskRow('Conditional score at least 75 executed')).getByText(
+        'done',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(taskRow('Conditional score below 75 skipped')).getByText(
+        'skipped',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Verified against bitable.row.exists'),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText('Task result')).toHaveLength(1);
+    const terminalApprovalObservation = within(
+      taskRow('Write accepted candidate'),
+    ).getByRole('region', { name: 'NyxID approval observation' });
+    expect(terminalApprovalObservation).toHaveTextContent(
+      'nyxid-approval-write-alpha',
+    );
+    expect(terminalApprovalObservation).toHaveTextContent('approval_required');
+    expect(
+      within(taskRow('Write accepted candidate')).getByText('confirmed'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('approved')).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Approve' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Reject' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('reports exactly one newly connected UserService through action.continue', async () => {
+    const action = {
+      schemaVersion: 4,
+      actorId: 'conversation-alpha',
+      originTurnId: 'turn-alpha',
+      taskId: 'task-alpha',
+      stepId: 'step-connect',
+      actionRequestId: 'action-alpha',
+      action: 'service.connect',
+      params: { catalogService: { serviceSlug: 'api-github' } },
     };
     (authFetch as jest.Mock)
       .mockResolvedValueOnce(
-        completedStream("Connect GitHub", "conversation-alpha", "turn-alpha", [
+        completedStream('Connect GitHub', 'conversation-alpha', 'turn-alpha', [
           {
-            type: "CUSTOM",
+            type: 'CUSTOM',
             sequence: 4,
-            custom: { name: "nyxid.action.request", payload: action },
+            custom: { name: 'nyxid.action.request', payload: action },
           },
-        ])
+        ]),
       )
       .mockResolvedValueOnce(
-        completedStream("Connection reported", "conversation-alpha", "turn-beta")
+        completedStream(
+          'Connection reported',
+          'conversation-alpha',
+          'turn-beta',
+        ),
       );
     (chatHistoryApi.loadConversationState as jest.Mock).mockResolvedValue(
       currentState({
         pendingActions: [
           {
             schemaVersion: 4,
-            originTurnId: "turn-alpha",
-            taskId: "task-alpha",
-            stepId: "step-connect",
-            actionRequestId: "action-alpha",
-            action: "service.connect",
+            originTurnId: 'turn-alpha',
+            taskId: 'task-alpha',
+            stepId: 'step-connect',
+            actionRequestId: 'action-alpha',
+            action: 'service.connect',
+            request: action,
             reports: [],
             postconditionResult: null,
           },
         ],
-      })
+      }),
     );
     (listNyxIdConnectors as jest.Mock)
       .mockResolvedValueOnce({ connected: [], available: [] })
       .mockResolvedValueOnce({
         connected: [
           {
-            slug: "api-github",
-            name: "GitHub",
-            description: "",
-            authKind: "oauth",
+            slug: 'api-github',
+            name: 'GitHub',
+            description: '',
+            authKind: 'oauth',
             userServices: [
               {
-                userServiceId: "user-service-new",
-                apiKeyId: "api-key-not-resource",
-                endpointUrl: "https://api.github.com",
-                label: "GitHub",
+                userServiceId: 'user-service-new',
+                apiKeyId: 'api-key-not-resource',
+                endpointUrl: 'https://api.github.com',
+                label: 'GitHub',
               },
             ],
           },
         ],
         available: [],
       });
-    const open = jest.spyOn(window, "open").mockReturnValue({
+    const open = jest.spyOn(window, 'open').mockReturnValue({
       focus: jest.fn(),
     } as unknown as Window);
 
     renderWithQueryClient(<ChatPage />);
-    await sendPrompt("Connect GitHub");
+    await sendPrompt('Connect GitHub');
     fireEvent.click(
-      await screen.findByRole("button", { name: "Open NyxID connection" })
+      await screen.findByRole('button', { name: 'Open NyxID connection' }),
     );
     await waitFor(() => expect(open).toHaveBeenCalled());
-    fireEvent.click(screen.getByRole("button", { name: "Refresh connection" }));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh connection' }));
     await waitFor(() => expect(requestBodies()).toHaveLength(2));
 
     expect(requestBodies()[1]).toEqual({
-      type: "action.continue",
-      conversationId: "conversation-alpha",
-      originTurnId: "turn-alpha",
+      type: 'action.continue',
+      conversationId: 'conversation-alpha',
+      originTurnId: 'turn-alpha',
       clientRequestId: expect.any(String),
       actions: [
         {
-          actionRequestId: "action-alpha",
-          originTurnId: "turn-alpha",
-          disposition: "completed",
+          actionRequestId: 'action-alpha',
+          originTurnId: 'turn-alpha',
+          disposition: 'completed',
           resource: {
-            userService: { userServiceId: "user-service-new" },
+            userService: { userServiceId: 'user-service-new' },
           },
         },
       ],
     });
-    expect(JSON.stringify(requestBodies()[1])).not.toContain("api-key-not-resource");
+    expect(JSON.stringify(requestBodies()[1])).not.toContain(
+      'api-key-not-resource',
+    );
   });
 
-  it("connects a catalog credential directly to NyxID without persisting it", async () => {
+  it('connects a catalog credential directly to NyxID without persisting it', async () => {
     const action = {
       schemaVersion: 4,
-      actorId: "conversation-alpha",
-      originTurnId: "turn-alpha",
-      taskId: "task-alpha",
-      stepId: "step-connect",
-      actionRequestId: "action-alpha",
-      action: "service.connect",
-      params: { catalogService: { serviceSlug: "api-github" } },
+      actorId: 'conversation-alpha',
+      originTurnId: 'turn-alpha',
+      taskId: 'task-alpha',
+      stepId: 'step-connect',
+      actionRequestId: 'action-alpha',
+      action: 'service.connect',
+      params: { catalogService: { serviceSlug: 'api-github' } },
     };
     (authFetch as jest.Mock)
       .mockResolvedValueOnce(
-        completedStream("Connect GitHub", "conversation-alpha", "turn-alpha", [
+        completedStream('Connect GitHub', 'conversation-alpha', 'turn-alpha', [
           {
-            type: "CUSTOM",
+            type: 'CUSTOM',
             sequence: 4,
-            custom: { name: "nyxid.action.request", payload: action },
+            custom: { name: 'nyxid.action.request', payload: action },
           },
-        ])
+        ]),
       )
       .mockResolvedValueOnce(
-        completedStream("Credential reported", "conversation-alpha", "turn-beta")
+        completedStream(
+          'Credential reported',
+          'conversation-alpha',
+          'turn-beta',
+        ),
       );
-    (createNyxIdCatalogKey as jest.Mock).mockResolvedValue("user-service-created");
+    (createNyxIdCatalogKey as jest.Mock).mockResolvedValue(
+      'user-service-created',
+    );
+    (chatHistoryApi.loadConversationState as jest.Mock).mockResolvedValue(
+      currentState({
+        pendingActions: [
+          {
+            schemaVersion: 4,
+            originTurnId: 'turn-alpha',
+            taskId: 'task-alpha',
+            stepId: 'step-connect',
+            actionRequestId: 'action-alpha',
+            action: 'service.connect',
+            request: action,
+            reports: [],
+            postconditionResult: null,
+          },
+        ],
+      }),
+    );
 
     renderWithQueryClient(<ChatPage />);
-    await sendPrompt("Connect GitHub");
-    const credential = await screen.findByLabelText("api-github credential");
-    fireEvent.change(credential, { target: { value: "secret-value" } });
-    fireEvent.click(
-      screen.getByRole("button", { name: "Connect api-github" })
-    );
+    await sendPrompt('Connect GitHub');
+    const credential = await screen.findByLabelText('api-github credential');
+    fireEvent.change(credential, { target: { value: 'secret-value' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Connect api-github' }));
     await waitFor(() =>
       expect(createNyxIdCatalogKey).toHaveBeenCalledWith({
-        serviceSlug: "api-github",
-        credential: "secret-value",
-        label: "api-github",
-      })
+        serviceSlug: 'api-github',
+        credential: 'secret-value',
+        label: 'api-github',
+      }),
     );
     await waitFor(() => expect(requestBodies()).toHaveLength(2));
-    expect(JSON.stringify(requestBodies()[1])).not.toContain("secret-value");
-    expect(window.sessionStorage.getItem("secret-value")).toBeNull();
-    expect(credential).toHaveValue("");
+    expect(JSON.stringify(requestBodies()[1])).not.toContain('secret-value');
+    expect(window.sessionStorage.getItem('secret-value')).toBeNull();
+    expect(credential).toHaveValue('');
   });
 
-  it("does not present a rejected action report as accepted", async () => {
+  it('does not present a rejected action report as accepted', async () => {
     const action = {
       schemaVersion: 4,
-      actorId: "conversation-alpha",
-      originTurnId: "turn-alpha",
-      taskId: "task-alpha",
-      stepId: "step-connect",
-      actionRequestId: "action-alpha",
-      action: "service.connect",
-      params: { catalogService: { serviceSlug: "api-github" } },
+      actorId: 'conversation-alpha',
+      originTurnId: 'turn-alpha',
+      taskId: 'task-alpha',
+      stepId: 'step-connect',
+      actionRequestId: 'action-alpha',
+      action: 'service.connect',
+      params: { catalogService: { serviceSlug: 'api-github' } },
     };
     (authFetch as jest.Mock)
       .mockResolvedValueOnce(
-        completedStream("Connect GitHub", "conversation-alpha", "turn-alpha", [
+        completedStream('Connect GitHub', 'conversation-alpha', 'turn-alpha', [
           {
-            type: "CUSTOM",
+            type: 'CUSTOM',
             sequence: 4,
-            custom: { name: "nyxid.action.request", payload: action },
+            custom: { name: 'nyxid.action.request', payload: action },
           },
-        ])
+        ]),
       )
-      .mockRejectedValueOnce(new Error("network unavailable"));
+      .mockRejectedValueOnce(new Error('network unavailable'));
+    (chatHistoryApi.loadConversationState as jest.Mock).mockResolvedValue(
+      currentState({
+        pendingActions: [
+          {
+            schemaVersion: 4,
+            originTurnId: 'turn-alpha',
+            taskId: 'task-alpha',
+            stepId: 'step-connect',
+            actionRequestId: 'action-alpha',
+            action: 'service.connect',
+            request: action,
+            reports: [],
+            postconditionResult: null,
+          },
+        ],
+      }),
+    );
 
     renderWithQueryClient(<ChatPage />);
-    await sendPrompt("Connect GitHub");
-    fireEvent.click(await screen.findByRole("button", { name: "Decline" }));
+    await sendPrompt('Connect GitHub');
+    fireEvent.click(await screen.findByRole('button', { name: 'Decline' }));
 
     expect(
-      await screen.findByText("Action report was not accepted.")
+      await screen.findByText('Action report was not accepted.'),
     ).toBeInTheDocument();
     expect(
-      screen.queryByText("Reported; waiting for actor verification")
+      screen.queryByText('Reported; waiting for actor verification'),
     ).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Decline" })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Decline' })).toBeInTheDocument();
   });
 
-  it("submits canonical delete and never infers approval from assistant prose", async () => {
+  it('submits canonical delete and never infers approval from assistant prose', async () => {
     (chatHistoryApi.listConversationMetas as jest.Mock).mockResolvedValue([
       serverConversation,
     ]);
     (authFetch as jest.Mock).mockResolvedValue(
-      completedStream("Please confirm this explanation only.")
+      completedStream('Please confirm this explanation only.'),
     );
 
     renderWithQueryClient(<ChatPage />);
     fireEvent.click(
-      await screen.findByRole("button", { name: "Delete Canonical conversation" })
+      await screen.findByRole('button', {
+        name: 'Delete Canonical conversation',
+      }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
     await waitFor(() =>
       expect(chatHistoryApi.deleteConversation).toHaveBeenCalledWith(
-        "conversation-alpha"
-      )
+        'conversation-alpha',
+      ),
     );
 
-    await sendPrompt("Explain confirmation");
+    await sendPrompt('Explain confirmation');
     expect(
-      await screen.findByText("Please confirm this explanation only.")
+      await screen.findByText('Please confirm this explanation only.'),
     ).toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: "Confirm and create" })
+      screen.queryByRole('button', { name: 'Confirm and create' }),
     ).not.toBeInTheDocument();
   });
 });
 
-describe("hydrateStoredMessages", () => {
-  it("preserves extensible roles and maps stored errors to presentation errors", () => {
+describe('hydrateStoredMessages', () => {
+  it('preserves extensible roles and maps stored errors to presentation errors', () => {
     expect(
       hydrateStoredMessages([
         {
-          authorName: "Automation",
-          content: "Queued",
-          id: "observer",
-          role: "observer",
-          status: "queued",
+          authorName: 'Automation',
+          content: 'Queued',
+          id: 'observer',
+          role: 'observer',
+          status: 'queued',
           timestamp: 1,
         },
         {
-          content: "",
-          error: "Stopped",
-          id: "assistant",
-          role: "assistant",
-          status: "complete",
+          content: '',
+          error: 'Stopped',
+          id: 'assistant',
+          role: 'assistant',
+          status: 'complete',
           timestamp: 2,
         },
-      ])
+      ]),
     ).toEqual([
-      expect.objectContaining({ role: "observer", status: "queued" }),
-      expect.objectContaining({ role: "assistant", status: "error" }),
+      expect.objectContaining({ role: 'observer', status: 'queued' }),
+      expect.objectContaining({ role: 'assistant', status: 'error' }),
     ]);
   });
 });

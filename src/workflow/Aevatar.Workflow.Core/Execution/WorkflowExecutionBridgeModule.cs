@@ -37,6 +37,14 @@ internal sealed class WorkflowExecutionBridgeModule : IEventModule<IEventHandler
             {
                 await executor.HandleAsync(envelope, workflowContext, ct);
             }
+            catch (WorkflowDurablePublicationPendingException ex)
+            {
+                ctx.Logger.LogWarning(
+                    ex,
+                    "workflow_execution_bridge: durable executor publication remains pending run={RunId}",
+                    _stateHost.RunId);
+                return;
+            }
             catch (Exception ex) when (envelope.Payload?.Is(StepRequestEvent.Descriptor) == true)
             {
                 var request = envelope.Payload.Unpack<StepRequestEvent>();

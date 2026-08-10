@@ -34,10 +34,10 @@
     --fg-strong: #f4f6fb;
     --muted:     #9aa3b2;
     --muted-2:   #6c7585;
-    --accent:    #5b8cff;
+    --accent:    #6f97ff;
     --accent-ink:#0b1020;
-    --accent-soft: rgba(91,140,255,.14);
-    --accent-line: rgba(91,140,255,.40);
+    --accent-soft: rgba(111,151,255,.15);
+    --accent-line: rgba(111,151,255,.42);
 
     --ok:    #3fb950;  --ok-soft:   rgba(63,185,80,.14);
     --warn:  #d29922;  --warn-soft: rgba(210,153,34,.15);
@@ -51,7 +51,7 @@
 
     --r-sm: 6px; --r: 9px; --r-lg: 13px; --r-pill: 999px;
     --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "PingFang SC",
+    --sans: "Alibaba PuHuiTi 2.0", "Alibaba PuHuiTi", "AlibabaSans", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "PingFang SC",
             "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
 
     --list-w: 320px;
@@ -80,10 +80,10 @@
       --fg-strong: #0b0f14;
       --muted:     #57606b;
       --muted-2:   #828b97;
-      --accent:    #2f63e0;
+      --accent:    #2f5cf6;
       --accent-ink:#ffffff;
-      --accent-soft: rgba(47,99,224,.10);
-      --accent-line: rgba(47,99,224,.34);
+      --accent-soft: rgba(47,92,246,.10);
+      --accent-line: rgba(47,92,246,.34);
       --ok:#1a7f37; --ok-soft:rgba(26,127,55,.12);
       --warn:#9a6700; --warn-soft:rgba(154,103,0,.12);
       --err:#cf222e; --err-soft:rgba(207,34,46,.10);
@@ -106,10 +106,10 @@
     --fg-strong: #0b0f14;
     --muted:     #57606b;
     --muted-2:   #828b97;
-    --accent:    #2f63e0;
+    --accent:    #2f5cf6;
     --accent-ink:#ffffff;
-    --accent-soft: rgba(47,99,224,.10);
-    --accent-line: rgba(47,99,224,.34);
+    --accent-soft: rgba(47,92,246,.10);
+    --accent-line: rgba(47,92,246,.34);
     --ok:#1a7f37; --ok-soft:rgba(26,127,55,.12);
     --warn:#9a6700; --warn-soft:rgba(154,103,0,.12);
     --err:#cf222e; --err-soft:rgba(207,34,46,.10);
@@ -1095,7 +1095,6 @@ async function beginLogin(){
   u.searchParams.set("client_id", CFG.clientId);
   u.searchParams.set("redirect_uri", CFG.redirectUri);
   u.searchParams.set("scope", CFG.scope);
-  CFG.resources.forEach(resource => u.searchParams.append("resource", resource));
   u.searchParams.set("state", st);
   u.searchParams.set("code_challenge", challenge);
   u.searchParams.set("code_challenge_method", "S256");
@@ -1116,7 +1115,6 @@ async function completeLoginIfCallback(){
   form.set("redirect_uri", CFG.redirectUri);
   form.set("client_id", CFG.clientId);
   form.set("code_verifier", pending.verifier);
-  CFG.resources.forEach(resource => form.append("resource", resource));
   const res = await fetch(CFG.authority + "/oauth/token", { method:"POST", headers:{ "Content-Type":"application/x-www-form-urlencoded" }, body: form.toString() });
   sessionStorage.removeItem(PKCE_KEY);
   if(!res.ok){ console.warn("observatory: token exchange failed", res.status); return false; }
@@ -1270,26 +1268,41 @@ function writeObservatoryRoute(patch){
   if(isEmbeddedInAdmin()) window.parent.postMessage({source:"aevatar-backend-console-suite",type:"observatory-route",query:route},location.origin);
   return route;
 }
-function observatoryRouteKey(route){
+/* The run list only depends on the filter fields (scope/status/origin/definition/schedule/from/to),
+   so its scroll position is keyed by those alone — selecting a run (which only changes run/tab)
+   must NOT reset the list scroll. The detail pane is keyed by run + tab, which are the fields that
+   determine its content. */
+function observatoryListKey(route){
   const r=route||{};
-  return ["scope","status","origin","definition","schedule","from","to","run","tab"]
+  return ["scope","status","origin","definition","schedule","from","to"]
     .map(key=>key+"="+encodeURIComponent(r[key]||"")).join("&");
 }
-function readObservatoryViewState(storage,key,route){
-  try {
-    const all=JSON.parse(storage.getItem(key)||"{}");
-    const value=all[observatoryRouteKey(route)]||{};
-    return {list:Math.max(0,Number(value.list)||0),detail:Math.max(0,Number(value.detail)||0)};
-  } catch(e){ return {list:0,detail:0}; }
+function observatoryDetailKey(route){
+  const r=route||{};
+  return "run=" + encodeURIComponent(r.run||"") + "&tab=" + encodeURIComponent(r.tab||"");
 }
-function writeObservatoryViewState(storage,key,route,position){
+function readObservatoryListState(storage,key,route){
+  try { const all=JSON.parse(storage.getItem(key)||"{}"); return Math.max(0,Number((all[observatoryListKey(route)]||{}).list)||0); }
+  catch(e){ return 0; }
+}
+function writeObservatoryListState(storage,key,route,position){
   try {
-    let all={};
-    try { all=JSON.parse(storage.getItem(key)||"{}")||{}; } catch(e){}
+    let all={}; try { all=JSON.parse(storage.getItem(key)||"{}")||{}; } catch(e){}
+    all[observatoryListKey(route)]={list:Math.max(0,Number(position)||0)};
+    storage.setItem(key,JSON.stringify(all));
+  } catch(e){}
+}
+function readObservatoryDetailState(storage,key,route){
+  try { const all=JSON.parse(storage.getItem(key+":detail")||"{}"); return Math.max(0,Number((all[observatoryDetailKey(route)]||{}).detail)||0); }
+  catch(e){ return 0; }
+}
+function writeObservatoryDetailState(storage,key,route,position){
+  try {
+    let all={}; try { all=JSON.parse(storage.getItem(key+":detail")||"{}")||{}; } catch(e){}
     const keys=Object.keys(all);
     if(keys.length>40) keys.slice(0,keys.length-40).forEach(existing=>delete all[existing]);
-    all[observatoryRouteKey(route)]={list:Math.max(0,Number(position&&position.list)||0),detail:Math.max(0,Number(position&&position.detail)||0)};
-    storage.setItem(key,JSON.stringify(all));
+    all[observatoryDetailKey(route)]={detail:Math.max(0,Number(position)||0)};
+    storage.setItem(key+":detail",JSON.stringify(all));
   } catch(e){}
 }
 function paneScrollPosition(pane,saved){
@@ -2800,15 +2813,17 @@ function render(){
   const app = $("#app");
   const oldList=app.querySelector(".runlist"),oldDetail=app.querySelector(".detail-pane");
   const previousRoute=renderedObservatoryRoute;
+  /* Persist the live scroll of the panes we are about to replace. The list is keyed by the filter
+     fields only (so selecting a run does not erase its saved position); the detail by run + tab. */
   if((oldList||oldDetail)&&previousRoute){
-    const previousSaved=readObservatoryViewState(sessionStorage,OBSERVATORY_VIEW_KEY,previousRoute);
-    writeObservatoryViewState(sessionStorage,OBSERVATORY_VIEW_KEY,previousRoute,{list:paneScrollPosition(oldList,previousSaved.list),detail:paneScrollPosition(oldDetail,previousSaved.detail)});
+    writeObservatoryListState(sessionStorage,OBSERVATORY_VIEW_KEY,previousRoute,paneScrollPosition(oldList,readObservatoryListState(sessionStorage,OBSERVATORY_VIEW_KEY,previousRoute)));
+    writeObservatoryDetailState(sessionStorage,OBSERVATORY_VIEW_KEY,previousRoute,paneScrollPosition(oldDetail,readObservatoryDetailState(sessionStorage,OBSERVATORY_VIEW_KEY,previousRoute)));
   }
   const route=readObservatoryRoute(location.search,location.hash);
-  const saved=readObservatoryViewState(sessionStorage,OBSERVATORY_VIEW_KEY,route);
-  const sameRoute=previousRoute&&observatoryRouteKey(previousRoute)===observatoryRouteKey(route);
-  const prevListScroll=pendingListScrollReset?0:(sameRoute?paneScrollPosition(oldList,saved.list):saved.list);
-  const prevDetailScroll=pendingDetailScrollReset?0:(sameRoute?paneScrollPosition(oldDetail,saved.detail):saved.detail);
+  const sameListKey=previousRoute&&observatoryListKey(previousRoute)===observatoryListKey(route);
+  const sameDetailKey=previousRoute&&observatoryDetailKey(previousRoute)===observatoryDetailKey(route);
+  const prevListScroll=pendingListScrollReset?0:(sameListKey?paneScrollPosition(oldList,readObservatoryListState(sessionStorage,OBSERVATORY_VIEW_KEY,route)):readObservatoryListState(sessionStorage,OBSERVATORY_VIEW_KEY,route));
+  const prevDetailScroll=pendingDetailScrollReset?0:(sameDetailKey?paneScrollPosition(oldDetail,readObservatoryDetailState(sessionStorage,OBSERVATORY_VIEW_KEY,route)):readObservatoryDetailState(sessionStorage,OBSERVATORY_VIEW_KEY,route));
   pendingListScrollReset = false;
   pendingDetailScrollReset = false;
   renderedObservatoryRoute=route;
@@ -2831,7 +2846,8 @@ function render(){
   app.appendChild(shell);
 
   applyPaneScrollState(app.querySelector(".runlist"),app.querySelector(".detail-pane"),{list:prevListScroll,detail:prevDetailScroll});
-  writeObservatoryViewState(sessionStorage,OBSERVATORY_VIEW_KEY,route,{list:prevListScroll,detail:prevDetailScroll});
+  writeObservatoryListState(sessionStorage,OBSERVATORY_VIEW_KEY,route,prevListScroll);
+  writeObservatoryDetailState(sessionStorage,OBSERVATORY_VIEW_KEY,route,prevDetailScroll);
 }
 
 /* ===========================================================================
@@ -3046,8 +3062,8 @@ document.addEventListener("keydown", event => {
 window.addEventListener("pagehide", () => {
   const list=document.querySelector(".runlist"),detail=document.querySelector(".detail-pane");
   const route=readObservatoryRoute(location.search,location.hash);
-  const saved=readObservatoryViewState(sessionStorage,OBSERVATORY_VIEW_KEY,route);
-  writeObservatoryViewState(sessionStorage,OBSERVATORY_VIEW_KEY,route,{list:paneScrollPosition(list,saved.list),detail:paneScrollPosition(detail,saved.detail)});
+  writeObservatoryListState(sessionStorage,OBSERVATORY_VIEW_KEY,route,paneScrollPosition(list,readObservatoryListState(sessionStorage,OBSERVATORY_VIEW_KEY,route)));
+  writeObservatoryDetailState(sessionStorage,OBSERVATORY_VIEW_KEY,route,paneScrollPosition(detail,readObservatoryDetailState(sessionStorage,OBSERVATORY_VIEW_KEY,route)));
 });
 (async function init(){
   try { await completeLoginIfCallback(); }

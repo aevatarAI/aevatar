@@ -36,6 +36,8 @@ public sealed class MainnetDistributedHostBuilderExtensionsTests
         using var receiverLowWatermark = new EnvironmentVariableScope("AEVATAR_ActorRuntime__KafkaReceiverBufferLowWatermark", "36");
         using var queueCount = new EnvironmentVariableScope("AEVATAR_Orleans__QueueCount", "6");
         using var queueCacheSize = new EnvironmentVariableScope("AEVATAR_Orleans__QueueCacheSize", "512");
+        using var maxEventDeliveryTime = new EnvironmentVariableScope(
+            "AEVATAR_Orleans__MaxEventDeliveryTime", "00:04:00");
         using var keyringFile = TemporaryKeyringFile.Create();
         using var keyringPath = new EnvironmentVariableScope("AEVATAR_ActorRuntime__SecretStoreKeyringPath", keyringFile.Path);
 
@@ -53,6 +55,7 @@ public sealed class MainnetDistributedHostBuilderExtensionsTests
 
         runtimeOptions.QueueCount.Should().Be(6);
         runtimeOptions.QueueCacheSize.Should().Be(512);
+        runtimeOptions.MaxEventDeliveryTime.Should().Be(TimeSpan.FromMinutes(4));
         transportOptions.TopicPartitionCount.Should().Be(6);
         transportOptions.TopicName.Should().Be("mainnet-kafka-provider-events");
         transportOptions.ReceiverBufferCapacity.Should().Be(96);

@@ -15,4 +15,8 @@ public static class CredentialSecretPurposes
     public const string OAuthStateTokenHmacKey = "identity.oauth-state-token-hmac-key";
     public const string ChannelWorkflowResultDeliveryAgentKey = "channel.workflow-result-delivery-agent-key";
     public const string ManagedCodexInvocationAgentKey = "managed.codex-invocation-agent-key";
+    public const string NyxIdChatRecoveryCredential = "nyxid-chat.recovery-credential";
+    public const string NyxIdChatPendingFirstTurn = "nyxid-chat.pending-first-turn";
+    public const string NyxIdChatPendingSteeringContinuation =
+        "nyxid-chat.pending-steering-continuation";
 }

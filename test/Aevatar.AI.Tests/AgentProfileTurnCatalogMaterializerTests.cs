@@ -8,6 +8,8 @@ using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.NyxId.Tools;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.ChatRouting.Abstractions;
+using Aevatar.GAgentService.Abstractions.AgentProfiles;
+using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgents.NyxidChat.AgentProfiles;
 using FluentAssertions;
 using Google.Protobuf;
@@ -23,6 +25,127 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
     private const string SkillMarkdown = "---\nname: skill-alpha\n---\nSelected instructions.";
     private static readonly ByteString SkillSha256 =
         ByteString.CopyFrom(Enumerable.Range(0, 32).Select(static value => (byte)value).ToArray());
+
+    [Fact]
+    public async Task TurnIntentClassifier_ExactServiceConnectPrompt_ShouldReturnTypedIntent()
+    {
+        var inner = new RecordingClassifier(
+            AgentProfileTurnClassificationResult.Matched(
+                NyxIdChatTurnIntentClassifier.ServiceConnectIntentId));
+        var classifier = new NyxIdChatTurnIntentClassifier(inner);
+        var llmControl = new LLMControlContext(
+            "caller-token",
+            null,
+            null,
+            null,
+            null,
+            null,
+            null);
+
+        var intent = await classifier.ClassifyAsync(
+            "turn-connect",
+            "Connect GitHub and verify the connection",
+            llmControl,
+            CancellationToken.None);
+
+        intent.Should().Be(NyxIdChatTurnIntent.ServiceConnect);
+        inner.LastRequest.Should().NotBeNull();
+        var request = inner.LastRequest!;
+        request.RequestId.Should().Be("turn-connect");
+        request.LlmControl.Should().BeSameAs(llmControl);
+        request.Timeout.Should().Be(TimeSpan.FromSeconds(15));
+        request.UserMessage.Should().Be("Connect GitHub and verify the connection");
+        request.Candidates.Should().ContainSingle().Which.Should().BeEquivalentTo(
+            new AgentProfileTurnClassificationCandidate(
+                NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
+                "Connect, add, or authorize a hosted external service account and verify that connection.",
+                AgentProfileSideEffectClass.ExternalHandoff));
+    }
+
+    [Fact]
+    public async Task MaterializeBuiltInIntentAsync_ServiceConnect_ShouldUseRequestLocalDiscoveryAndExposeOnlyAdmissionTools()
+    {
+        var catalogTool = new TestTool("nyxid_catalog");
+        var requireServiceTool = new TestTool("nyxid_require_service");
+        var unrelatedTool = new TestTool("nyxid_services");
+        var source = new TokenBoundToolSource(
+            "request-token",
+            [catalogTool, requireServiceTool, unrelatedTool]);
+        var registry = new RecordingToolSetRegistry();
+        registry.Add(AgentProfilePolicies.NyxIdChatRouteToolSet, source);
+        var materializer = NewMaterializer(
+            registry,
+            new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+            fetcher: null);
+
+        var catalog = await materializer.MaterializeBuiltInIntentAsync(
+            NyxIdChatTurnIntent.ServiceConnect,
+            ToolContext("request-token"),
+            CancellationToken.None);
+
+        registry.ResolveCalls.Should().Equal(AgentProfilePolicies.NyxIdChatRouteToolSet);
+        source.ObservedTokens.Should().Equal("request-token");
+        catalog.FinalAllowedToolNames.Should().BeEquivalentTo(
+            "nyxid_catalog",
+            "nyxid_require_service");
+        catalog.RouteOwnedTools.Keys.Should().BeEquivalentTo(
+            "nyxid_catalog",
+            "nyxid_require_service");
+        catalog.RouteOwnedTools["nyxid_catalog"].Should().BeSameAs(catalogTool);
+        catalog.RouteOwnedTools["nyxid_require_service"].Should().BeSameAs(requireServiceTool);
+        catalog.SelectedIntentId.Should().Be(NyxIdChatTurnIntentClassifier.ServiceConnectIntentId);
+        catalog.CandidateIntentId.Should().Be(NyxIdChatTurnIntentClassifier.ServiceConnectIntentId);
+    }
+
+    [Fact]
+    public async Task MaterializeBuiltInIntentAsync_WhenAdmissionToolIsMissing_ShouldFailClosed()
+    {
+        var registry = new RecordingToolSetRegistry();
+        registry.Add(
+            AgentProfilePolicies.NyxIdChatRouteToolSet,
+            new StaticToolSource([new TestTool("nyxid_catalog"), new TestTool("nyxid_services")]));
+        var materializer = NewMaterializer(
+            registry,
+            new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+            fetcher: null);
+
+        var catalog = await materializer.MaterializeBuiltInIntentAsync(
+            NyxIdChatTurnIntent.ServiceConnect,
+            ToolContext(),
+            CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().BeEmpty();
+        catalog.RouteOwnedTools.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task PrepareNyxIdChatAsync_ServiceConnectNoMatch_ShouldContinueWithProfileClassification()
+    {
+        var tools = NewTools("recovery", "task", "extra");
+        var classifier = new SequencedClassifier(
+            AgentProfileTurnClassificationResult.NoMatch(),
+            AgentProfileTurnClassificationResult.Matched("intent-alpha"));
+
+        var preparation = await NewMaterializer(
+                RegistryWithRoute(tools),
+                classifier,
+                fetcher: null)
+            .PrepareNyxIdChatAsync(
+                SealProfile(BuildProfile()),
+                "session-a",
+                "Run the alpha report",
+                tools,
+                ToolContext(),
+                llmControl: null,
+                CancellationToken.None);
+
+        preparation.Authority.CandidateRoute!.IntentId.Should().Be("intent-alpha");
+        classifier.Requests.Should().HaveCount(2);
+        classifier.Requests[0].Candidates.Should().ContainSingle().Which.IntentId.Should()
+            .Be(NyxIdChatTurnIntentClassifier.ServiceConnectIntentId);
+        classifier.Requests[1].Candidates.Should().ContainSingle().Which.IntentId.Should()
+            .Be("intent-alpha");
+    }
 
     [Fact]
     public async Task PrepareAsync_ShouldFreezeCandidateRefAndCanonicalCeilingWithoutExactFetch()
@@ -1411,6 +1534,37 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
     }
 
     [Fact]
+    public async Task MaterializeAsync_HumanSessionToolWithRawProxyDelegation_ShouldBeRejected()
+    {
+        var humanSessionTool = new CapabilityTool(
+            "task",
+            [AgentToolCapabilities.RequiresHumanSession]);
+        var tools = new IAgentTool[] { humanSessionTool };
+        var fetcher = new RecordingFetcher(SuccessfulFetch());
+
+        var catalog = await NewMaterializer(
+                RegistryWithRoute(tools),
+                new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+                fetcher)
+            .MaterializeAsync(
+                SealProfile(BuildProfile(withAlias: true)),
+                "/alpha",
+                "proxy-delegation",
+                tools,
+                ToolContext(
+                    "proxy-delegation",
+                    AgentToolNyxIdCredentialKind.ProxyDelegation),
+                CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().BeEmpty();
+        catalog.RouteOwnedTools.Should().BeEmpty();
+        catalog.Diagnostics.Should().Contain(diagnostic =>
+            diagnostic.Code == AgentProfileTurnDiagnosticCode.ToolCapabilityRejected &&
+            diagnostic.Detail == "task");
+        fetcher.CallCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task MaterializeAsync_NyxIdChatProfile_ShouldHideRawProxyWithoutLosingTypedTools()
     {
         var options = new NyxIdToolOptions { BaseUrl = "https://nyx.example" };
@@ -1528,10 +1682,13 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
             SkillSha256,
             skillMarkdown);
 
-    private static AgentToolExecutionContext ToolContext(string? accessToken = "token") =>
+    private static AgentToolExecutionContext ToolContext(
+        string? accessToken = "token",
+        AgentToolNyxIdCredentialKind credentialKind =
+            AgentToolNyxIdCredentialKind.SourceReadableUserBearer) =>
         AgentToolExecutionContext.Empty with
         {
-            Credentials = new AgentToolCredentials(accessToken, null, null),
+            Credentials = new AgentToolCredentials(accessToken, null, null, credentialKind),
         };
 
     private static IReadOnlyList<IAgentTool> NewTools(params string[] names) =>
@@ -1564,6 +1721,23 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
             return _exception is not null
                 ? Task.FromException<AgentProfileTurnClassificationResult>(_exception)
                 : Task.FromResult(_result!);
+        }
+    }
+
+    private sealed class SequencedClassifier(
+        params AgentProfileTurnClassificationResult[] results) : IAgentProfileTurnClassifier
+    {
+        private readonly Queue<AgentProfileTurnClassificationResult> _results = new(results);
+
+        public List<AgentProfileTurnClassificationRequest> Requests { get; } = [];
+
+        public Task<AgentProfileTurnClassificationResult> ClassifyAsync(
+            AgentProfileTurnClassificationRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Requests.Add(request);
+            return Task.FromResult(_results.Dequeue());
         }
     }
 

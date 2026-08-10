@@ -196,7 +196,7 @@ public static class ScopeServiceEndpoints
                 return;
             }
 
-            var callerCredential = WorkflowCallerCredentialExtractor.Extract(http);
+            var callerCredential = await WorkflowCallerCredentialExtractor.ExtractAsync(http, ct);
             if (!callerCredential.Succeeded)
             {
                 var (statusCode, code, message) = ScopeWorkflowEndpoints.MapRunStartError(callerCredential.Error);
@@ -386,7 +386,9 @@ public static class ScopeServiceEndpoints
                     request.ServiceId,
                     request.ExposureDesired)
                 {
-                    CapabilityAdmission = WorkflowCapabilityAdmissionHttpContext.Create(http),
+                    CapabilityAdmission = await WorkflowCapabilityAdmissionHttpContext.CreateAsync(
+                        http,
+                        ct: ct),
                 },
                 ct);
             return Results.Ok(result);
@@ -1892,7 +1894,7 @@ public static class ScopeServiceEndpoints
             var request = requestInput.Request!;
             var normalizedPrompt = request.Prompt?.Trim() ?? string.Empty;
             var scopedHeaders = BuildScopedHeaders(request.Headers);
-            var callerCredential = WorkflowCallerCredentialExtractor.Extract(http);
+            var callerCredential = await WorkflowCallerCredentialExtractor.ExtractAsync(http, ct);
             if (!callerCredential.Succeeded)
             {
                 var (statusCode, code, message) = ScopeWorkflowEndpoints.MapRunStartError(callerCredential.Error);
@@ -2369,7 +2371,7 @@ public static class ScopeServiceEndpoints
 
             if (payload.Is(ChatRequestEvent.Descriptor))
             {
-                var callerCredential = WorkflowCallerCredentialExtractor.Extract(http);
+                var callerCredential = await WorkflowCallerCredentialExtractor.ExtractAsync(http, ct);
                 if (!callerCredential.Succeeded)
                 {
                     var (statusCode, code, message) =

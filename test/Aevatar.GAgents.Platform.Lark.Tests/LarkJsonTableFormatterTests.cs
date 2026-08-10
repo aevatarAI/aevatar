@@ -14,7 +14,8 @@ public sealed class LarkJsonTableFormatterTests
 
         payload.MessageType.ShouldBe("interactive");
         payload.IsInteractive.ShouldBeTrue();
-        payload.PlainText.ShouldContain("| name | active | score |");
+        payload.PlainText.ShouldBe("name: Ada\nactive: true\nscore: 42");
+        payload.PlainText.ShouldNotContain("|");
         payload.PlainText.ShouldNotContain("{\"name\"");
 
         using var document = JsonDocument.Parse(payload.ContentJson);
@@ -57,6 +58,17 @@ public sealed class LarkJsonTableFormatterTests
         table.GetProperty("rows")[0].GetProperty("c1").GetString().ShouldBe("1. alpha\n2. beta");
         payload.PlainText.ShouldNotContain("{\"profile\"");
         payload.PlainText.ShouldNotContain("[\"alpha\"");
+        payload.PlainText.ShouldBe(
+            """
+            profile:
+                name: Ada
+            tags:
+                Item: 1
+                    Value: alpha
+
+                Item: 2
+                    Value: beta
+            """);
     }
 
     [Fact]
@@ -83,6 +95,72 @@ public sealed class LarkJsonTableFormatterTests
         elements[2].GetProperty("content").GetString().ShouldBe("Complete.");
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("application/json")]
+    public void Compose_WhenJsonFenceUsesSupportedAlternateLabel_ShouldRenderNativeTable(string language)
+    {
+        var payload = Compose(
+            "Result:\n\n```" + language + "\n" +
+            "{\"name\":\"Ada\",\"role\":\"admin\"}\n```\n");
+
+        payload.PlainText.ShouldContain("name: Ada");
+        payload.PlainText.ShouldContain("role: admin");
+        payload.PlainText.ShouldNotContain("{\"name\"");
+        using var document = JsonDocument.Parse(payload.ContentJson);
+        document.RootElement
+            .GetProperty("body")
+            .GetProperty("elements")[1]
+            .GetProperty("tag")
+            .GetString()
+            .ShouldBe("table");
+    }
+
+    [Fact]
+    public void Compose_WhenJsonIsEncodedAsString_ShouldDecodeBeforeRendering()
+    {
+        var payload = Compose(JsonSerializer.Serialize("""{"name":"Ada","role":"admin"}"""));
+
+        payload.PlainText.ShouldBe("name: Ada\nrole: admin");
+        payload.PlainText.ShouldNotContain("{\"name\"");
+        using var document = JsonDocument.Parse(payload.ContentJson);
+        document.RootElement
+            .GetProperty("body")
+            .GetProperty("elements")[0]
+            .GetProperty("tag")
+            .GetString()
+            .ShouldBe("table");
+    }
+
+    [Fact]
+    public void Compose_WhenObjectContainsEncodedJson_ShouldFlattenEmbeddedValue()
+    {
+        var payload = Compose("""{"output":"{\"name\":\"Ada\",\"role\":\"admin\"}"}""");
+
+        payload.PlainText.ShouldBe(
+            """
+            output:
+                name: Ada
+                role: admin
+            """);
+        payload.PlainText.ShouldNotContain("{\"name\"");
+    }
+
+    [Fact]
+    public void FormatAsKeyValueText_WhenJsonHasDeepNesting_ShouldIndentEachLevelByFourSpaces()
+    {
+        var text = LarkJsonTableFormatter.FormatAsKeyValueText(
+            """{"account":{"profile":{"address":{"city":"Singapore"}}}}""");
+
+        text.ShouldBe(
+            """
+            account:
+                profile:
+                    address:
+                        city: Singapore
+            """);
+    }
+
     [Fact]
     public void Compose_WhenJsonArrayExceedsRowLimit_ShouldKeepTableWithinOneHundredRows()
     {
@@ -100,16 +178,49 @@ public sealed class LarkJsonTableFormatterTests
     }
 
     [Fact]
-    public void FormatAsMarkdownTable_WhenJsonIsIncomplete_ShouldLeaveTextUntouched()
+    public void FormatAsKeyValueText_WhenJsonIsObjectArray_ShouldWriteOneFieldPerLine()
+    {
+        var text = LarkJsonTableFormatter.FormatAsKeyValueText(
+            """[{"name":"Ada","role":"admin"},{"name":"Lin","role":"viewer"}]""");
+
+        text.ShouldBe(
+            """
+            Item: 1
+                name: Ada
+                role: admin
+
+            Item: 2
+                name: Lin
+                role: viewer
+            """);
+        text.ShouldNotContain("|");
+        text.ShouldNotContain("{\"name\"");
+    }
+
+    [Fact]
+    public void Compose_WhenMoreThanFiveJsonValues_ShouldUseKeyValueTextAfterNativeTableLimit()
+    {
+        var payload = Compose("""{"id":1} {"id":2} {"id":3} {"id":4} {"id":5} {"id":6}""");
+
+        using var document = JsonDocument.Parse(payload.ContentJson);
+        var elements = document.RootElement.GetProperty("body").GetProperty("elements");
+        elements.GetArrayLength().ShouldBe(6);
+        var fallback = elements[5];
+        fallback.GetProperty("tag").GetString().ShouldBe("markdown");
+        fallback.GetProperty("content").GetString().ShouldBe("id: 6");
+    }
+
+    [Fact]
+    public void FormatAsKeyValueText_WhenJsonIsIncomplete_ShouldLeaveTextUntouched()
     {
         const string incomplete = "result: {\"name\":\"Ada\"";
 
         LarkJsonTableFormatter.ContainsConvertibleJson(incomplete).ShouldBeFalse();
-        LarkJsonTableFormatter.FormatAsMarkdownTable(incomplete).ShouldBe(incomplete);
+        LarkJsonTableFormatter.FormatAsKeyValueText(incomplete).ShouldBe(incomplete);
     }
 
     [Fact]
-    public void FormatAsMarkdownTable_WhenNonJsonCodeFenceContainsJsonText_ShouldLeaveFenceUntouched()
+    public void FormatAsKeyValueText_WhenNonJsonCodeFenceContainsJsonText_ShouldLeaveFenceUntouched()
     {
         const string code = """
                             ```javascript
@@ -118,7 +229,7 @@ public sealed class LarkJsonTableFormatterTests
                             """;
 
         LarkJsonTableFormatter.ContainsConvertibleJson(code).ShouldBeFalse();
-        LarkJsonTableFormatter.FormatAsMarkdownTable(code).ShouldBe(code);
+        LarkJsonTableFormatter.FormatAsKeyValueText(code).ShouldBe(code);
     }
 
     private static LarkOutboundMessage Compose(string text) =>

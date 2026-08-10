@@ -21,6 +21,18 @@ public sealed class NyxIdCodexExecTool : INyxIdBuiltInTool
     private const int MaxManagedTimeoutSeconds = 180;
     private const string GenericFailureErrorCode = "codex_exec_failed";
 
+    private static readonly HashSet<string> OwnedErrorOnlyCodes = new(StringComparer.Ordinal)
+    {
+        "invalid_arguments",
+        "prompt_too_large",
+        "invalid_target",
+        "invalid_timeout",
+        "mixed_target",
+        "invalid_workspace",
+        "target_not_configured",
+        "ssh_timeout",
+    };
+
     private static readonly JsonSerializerOptions ResultJsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -60,9 +72,9 @@ public sealed class NyxIdCodexExecTool : INyxIdBuiltInTool
     public string Name => "codex_exec";
 
     public string Description =>
-        "Run one non-interactive Codex CLI task using either a private NyxID-backed SSH host " +
-        "or the operator-managed isolated sandbox. Private SSH uses the host's local Codex " +
-        "configuration. Managed sandbox accepts only an empty Git workspace and fixed runtime policy.";
+        "Delegate a natural-language task to Codex. Use managed_sandbox for the fixed isolated " +
+        "runtime without human approval, or private_ssh for a real user host; private_ssh requires approval. " +
+        "Managed sandbox accepts only an empty Git workspace and fixed runtime policy.";
 
     public ToolApprovalMode ApprovalMode => ToolApprovalMode.AlwaysRequire;
 
@@ -81,6 +93,12 @@ public sealed class NyxIdCodexExecTool : INyxIdBuiltInTool
         };
     }
 
+    // Both targets run caller-directed work outside this actor turn. Managed sandbox
+    // isolation removes Aevatar-owned state access, but it does not make arbitrary
+    // delegated work safe to repeat after an ambiguous transport timeout.
+    public AgentToolReplayPolicy ResolveReplayPolicy(string argumentsJson) =>
+        AgentToolReplayPolicy.NonReplayable;
+
     // The receipt may claim only terminal facts already verified in the result payload:
     // managed status=="succeeded", or a private SSH exit_code==0 that did not time out.
     // Anything ambiguous stays null so the shared receipt boundary keeps it Unknown.
@@ -97,54 +115,49 @@ public sealed class NyxIdCodexExecTool : INyxIdBuiltInTool
             if (root.ValueKind != JsonValueKind.Object)
                 return null;
 
+            if (root.TryGetProperty("status", out var status))
+            {
+                return string.Equals(
+                    ReadReceiptTargetKind(argumentsJson),
+                    "managed_sandbox",
+                    StringComparison.Ordinal)
+                    ? CreateManagedResultReceipt(callId, toolName, resultJson, root, status)
+                    : null;
+            }
+
+            if (root.TryGetProperty("timed_out", out _) ||
+                root.TryGetProperty("exit_code", out _))
+            {
+                return string.Equals(
+                    ReadReceiptTargetKind(argumentsJson),
+                    "private_ssh",
+                    StringComparison.Ordinal)
+                    ? CreatePrivateSshResultReceipt(callId, toolName, root)
+                    : null;
+            }
+
             if (root.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.String)
             {
                 var errorValue = error.GetString() ?? string.Empty;
+                if (string.Equals(
+                        errorValue,
+                        "managed_execution_nonzero_exit",
+                        StringComparison.Ordinal))
+                {
+                    return null;
+                }
                 var detail = root.TryGetProperty("detail", out var detailElement) &&
                              detailElement.ValueKind == JsonValueKind.String
                     ? detailElement.GetString()
                     : null;
+                var ownedError = OwnedErrorOnlyCodes.Contains(errorValue);
                 return ErrorReceipt(
                     callId,
                     toolName,
-                    IsStableErrorCode(errorValue) ? errorValue : GenericFailureErrorCode,
-                    string.IsNullOrWhiteSpace(detail) ? errorValue : detail);
-            }
-
-            if (root.TryGetProperty("status", out var status))
-            {
-                return status.ValueKind == JsonValueKind.String &&
-                       string.Equals(status.GetString(), "succeeded", StringComparison.Ordinal)
-                    ? SuccessReceipt(callId, toolName)
-                    : null;
-            }
-
-            if (!root.TryGetProperty("timed_out", out var timedOut) ||
-                timedOut.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
-            {
-                return null;
-            }
-
-            if (timedOut.ValueKind == JsonValueKind.True)
-            {
-                return ErrorReceipt(
-                    callId,
-                    toolName,
-                    "codex_exec_timed_out",
-                    "Codex execution timed out on the SSH host.");
-            }
-
-            if (root.TryGetProperty("exit_code", out var exitCode) &&
-                exitCode.ValueKind == JsonValueKind.Number &&
-                exitCode.TryGetInt32(out var exitCodeValue))
-            {
-                return exitCodeValue == 0
-                    ? SuccessReceipt(callId, toolName)
-                    : ErrorReceipt(
-                        callId,
-                        toolName,
-                        "codex_exec_nonzero_exit",
-                        "Codex execution exited unsuccessfully on the SSH host.");
+                    ownedError ? errorValue : GenericFailureErrorCode,
+                    ownedError
+                        ? string.IsNullOrWhiteSpace(detail) ? errorValue : detail
+                        : "Codex execution failed.");
             }
         }
         catch (JsonException)
@@ -153,6 +166,109 @@ public sealed class NyxIdCodexExecTool : INyxIdBuiltInTool
         }
 
         return null;
+    }
+
+    private AgentToolReceipt? CreatePrivateSshResultReceipt(
+        string callId,
+        string toolName,
+        JsonElement root)
+    {
+        if (!root.TryGetProperty("timed_out", out var timedOut) ||
+            timedOut.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+        {
+            return null;
+        }
+
+        if (timedOut.GetBoolean())
+        {
+            return ErrorReceipt(
+                callId,
+                toolName,
+                "codex_exec_timed_out",
+                "Codex execution timed out on the SSH host.");
+        }
+
+        if (!root.TryGetProperty("exit_code", out var exitCode) ||
+            exitCode.ValueKind != JsonValueKind.Number ||
+            !exitCode.TryGetInt32(out var exitCodeValue))
+        {
+            return null;
+        }
+
+        return exitCodeValue == 0
+            ? SuccessReceipt(callId, toolName)
+            : ErrorReceipt(
+                callId,
+                toolName,
+                "codex_exec_nonzero_exit",
+                "Codex execution exited unsuccessfully on the SSH host.");
+    }
+
+    private AgentToolReceipt? CreateManagedResultReceipt(
+        string callId,
+        string toolName,
+        string resultJson,
+        JsonElement root,
+        JsonElement status)
+    {
+        if (status.ValueKind != JsonValueKind.String)
+            return null;
+
+        if (!root.TryGetProperty("target", out var target) ||
+            target.ValueKind != JsonValueKind.String ||
+            !string.Equals(target.GetString(), "managed_sandbox", StringComparison.Ordinal) ||
+            !root.TryGetProperty("output", out var output) ||
+            output.ValueKind != JsonValueKind.String ||
+            !root.TryGetProperty("exit_code", out var exitCode) ||
+            exitCode.ValueKind != JsonValueKind.Number ||
+            !exitCode.TryGetInt32(out var exitCodeValue))
+        {
+            return null;
+        }
+
+        if (string.Equals(status.GetString(), "succeeded", StringComparison.Ordinal))
+        {
+            return exitCodeValue == 0
+                ? SuccessReceipt(callId, toolName)
+                : null;
+        }
+
+        if (!string.Equals(status.GetString(), "failed", StringComparison.Ordinal) ||
+            exitCodeValue == 0 ||
+            !root.TryGetProperty("error", out var failedError) ||
+            failedError.ValueKind != JsonValueKind.String ||
+            !string.Equals(
+                failedError.GetString(),
+                "managed_execution_nonzero_exit",
+                StringComparison.Ordinal) ||
+            !root.TryGetProperty("code", out var failedCode) ||
+            failedCode.ValueKind != JsonValueKind.String ||
+            !string.Equals(
+                failedCode.GetString(),
+                "managed_execution_nonzero_exit",
+                StringComparison.Ordinal) ||
+            !root.TryGetProperty("message", out var failedMessage) ||
+            failedMessage.ValueKind != JsonValueKind.String)
+        {
+            return null;
+        }
+
+        return ErrorReceipt(
+            callId,
+            toolName,
+            "managed_execution_nonzero_exit",
+            failedMessage.GetString()!,
+            resultJson);
+    }
+
+    private static string? ReadReceiptTargetKind(string argumentsJson)
+    {
+        var args = ToolArgs.Parse(argumentsJson);
+        if (args.HasParseError)
+            return null;
+        return TryReadString(args.Element("target"), "kind", out var kind)
+            ? kind
+            : null;
     }
 
     public string ParametersSchema => """
@@ -250,6 +366,31 @@ public sealed class NyxIdCodexExecTool : INyxIdBuiltInTool
 
         if (request.Target.TargetCase == CodexExecutionTarget.TargetOneofCase.PrivateSsh)
             return result.Output;
+
+        if (result.ExitCode is null)
+        {
+            throw new CodexExecutionException(new CodexExecutionFailure(
+                CodexExecutionFailureKind.MalformedOutput,
+                "managed_response_invalid",
+                "Managed Codex returned an invalid response.",
+                result.DiagnosticId));
+        }
+
+        if (result.ExitCode != 0)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                status = "failed",
+                target = "managed_sandbox",
+                output = result.Output,
+                exit_code = result.ExitCode,
+                error = "managed_execution_nonzero_exit",
+                code = "managed_execution_nonzero_exit",
+                message = "Managed Codex execution exited unsuccessfully.",
+                diagnostic_id = result.DiagnosticId,
+                elapsed_ms = result.ElapsedMilliseconds,
+            }, ResultJsonOptions);
+        }
 
         return JsonSerializer.Serialize(new
         {
@@ -446,10 +587,6 @@ public sealed class NyxIdCodexExecTool : INyxIdBuiltInTool
     private static string ErrorJson(string code, string detail) =>
         JsonSerializer.Serialize(new { error = code, detail });
 
-    private static bool IsStableErrorCode(string value) =>
-        value.Length is > 0 and <= 64 &&
-        value.All(static ch => ch is (>= 'a' and <= 'z') or (>= '0' and <= '9') or '_');
-
     private AgentToolReceipt SuccessReceipt(string callId, string toolName) =>
         new()
         {
@@ -463,7 +600,8 @@ public sealed class NyxIdCodexExecTool : INyxIdBuiltInTool
         string callId,
         string toolName,
         string errorCode,
-        string errorMessage) =>
+        string errorMessage,
+        string? resultJson = null) =>
         new()
         {
             CallId = callId ?? string.Empty,
@@ -472,7 +610,8 @@ public sealed class NyxIdCodexExecTool : INyxIdBuiltInTool
             ApprovalMode = AgentToolReceiptApprovalMode.Auto,
             ErrorCode = errorCode,
             ErrorMessage = errorMessage,
-            ResultJson = JsonSerializer.Serialize(new { error = errorCode, message = errorMessage }),
+            ResultJson = resultJson ??
+                         JsonSerializer.Serialize(new { error = errorCode, message = errorMessage }),
         };
 
     private static string TargetName(CodexExecutionTarget.TargetOneofCase target) =>

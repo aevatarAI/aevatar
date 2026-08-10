@@ -189,7 +189,28 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
             NullIfEmpty(document.TaskStatus),
             NullIfEmpty(document.AttentionKind),
             ToDateTimeOffset(document.AttentionSince),
-            NullIfEmpty(document.ActiveStepSummary));
+            NullIfEmpty(document.ActiveStepSummary),
+            document.RecentActions.Select(ToAction).ToArray(),
+            ToStepControlResult(document.LatestStepControlResult),
+            document.RecentStepControlResults.Select(result => ToStepControlResult(result)!).ToArray(),
+            ToCanaryEffectFault(document.CanaryEffectFault));
+
+    private static NyxIdChatCanaryEffectFaultSnapshot? ToCanaryEffectFault(
+        NyxIdChatConversationCanaryEffectFaultDocument? fault) =>
+        fault is null
+            ? null
+            : new NyxIdChatCanaryEffectFaultSnapshot(
+                fault.ArmId,
+                fault.Status,
+                fault.TurnId,
+                fault.TaskId,
+                fault.StepId,
+                fault.OperationId,
+                fault.OperationGeneration,
+                ToDateTimeOffset(fault.ExpiresAt),
+                ToDateTimeOffset(fault.ArmedAt),
+                ToDateTimeOffset(fault.ForwardedAt),
+                ToDateTimeOffset(fault.ConsumedAt));
 
     private static NyxIdChatConversationTurnSnapshot? ToTurn(
         NyxIdChatConversationTurnDocument? turn) =>
@@ -229,7 +250,35 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
                     ? null
                     : new NyxIdChatConversationPlanGateSnapshot(
                         task.Gate.Mode,
-                        NullIfEmpty(task.Gate.Reason)));
+                        NullIfEmpty(task.Gate.Reason),
+                        task.Gate.Status,
+                        NullIfEmpty(task.Gate.RequestId),
+                        NullIfEmpty(task.Gate.TaskId),
+                        task.Gate.PlanRevision,
+                        ToDateTimeOffset(task.Gate.DecidedAt),
+                        NullIfEmpty(task.Gate.PlanId),
+                        task.Gate.Admissions.Select(static admission =>
+                            new NyxIdChatConversationPlanOperationAdmissionSnapshot(
+                                NullIfEmpty(admission.ConversationActorId),
+                                NullIfEmpty(admission.TurnId),
+                                NullIfEmpty(admission.TaskId),
+                                NullIfEmpty(admission.StepId),
+                                NullIfEmpty(admission.OperationId),
+                                admission.OperationGeneration,
+                                NullIfEmpty(admission.ToolCallId),
+                                NullIfEmpty(admission.ToolName),
+                                admission.ArgumentsSha256.ToByteArray(),
+                                NullIfEmpty(admission.ActionRequestId),
+                                NullIfEmpty(admission.Action),
+                                admission.ActionParamsSha256.ToByteArray())).ToArray()),
+                task.PlanRevisions.Select(static revision =>
+                    new NyxIdChatConversationPlanRevisionSnapshot(
+                        revision.PlanRevision,
+                        revision.RevisionCause,
+                        ToDateTimeOffset(revision.CommittedAt),
+                        revision.AddedStepIds.ToArray(),
+                        revision.CancelledStepIds.ToArray())).ToArray(),
+                task.PlanRevisionHistoryStart);
 
     private static NyxIdChatConversationStepSnapshot ToStep(
         NyxIdChatConversationStepDocument step) =>
@@ -247,10 +296,12 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
             NullIfEmpty(step.FailureCode),
             NullIfEmpty(step.SafeMessage),
             step.SafeToSkip,
-            new NyxIdChatAvailableActionsSnapshot(
-                step.AvailableActions?.Retry ?? false,
-                step.AvailableActions?.Skip ?? false,
-                step.AvailableActions?.Stop ?? false),
+            step.AvailableActions == null
+                ? null
+                : new NyxIdChatAvailableActionsSnapshot(
+                    step.AvailableActions.Retry,
+                    step.AvailableActions.Skip,
+                    step.AvailableActions.Stop),
             ToDateTimeOffset(step.UpdatedAt),
             ToOperation(step.Operation),
             ToSource(step.Source),
@@ -265,7 +316,23 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
                 new NyxIdChatConversationSubstepSnapshot(
                     substep.SubstepId,
                     substep.Title,
-                    substep.Status)).ToArray());
+                    substep.Status)).ToArray(),
+            step.AddedInPlanRevision,
+            step.CancelledInPlanRevision,
+            step.ApprovalObservation == null
+                ? null
+                : new NyxIdChatPostReturnApprovalObservationSnapshot(
+                    step.ApprovalObservation.ApprovalRequestId,
+                    step.ApprovalObservation.DecisionMode,
+                    step.ApprovalObservation.ReceiptStatus,
+                    ToDateTimeOffset(step.ApprovalObservation.ObservedAt),
+                    NullIfEmpty(step.ApprovalObservation.TerminalOutcome),
+                    NullIfEmpty(step.ApprovalObservation.SubjectKind)),
+            step.Guard == null
+                ? null
+                : new NyxIdChatStepGuardSnapshot(
+                    step.Guard.ConditionStepId,
+                    step.Guard.RequiredOutcome));
 
     private static NyxIdChatConversationStepSourceSnapshot? ToSource(
         NyxIdChatConversationStepSourceDocument? source) =>
@@ -282,7 +349,8 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
                         NullIfEmpty(source.Tool.ServiceId),
                         source.Tool.HasReadinessCapabilityId
                             ? NullIfEmpty(source.Tool.ReadinessCapabilityId)
-                            : null)),
+                            : null,
+                        NullIfEmpty(source.Tool.ProviderResourceId))),
             NyxIdChatConversationStepSourceDocument.SourceOneofCase.BrowserAction =>
                 new NyxIdChatConversationStepSourceSnapshot(
                     BrowserAction: new NyxIdChatBrowserActionStepSourceSnapshot(
@@ -292,7 +360,8 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
                 new NyxIdChatConversationStepSourceSnapshot(
                     Postcondition: new NyxIdChatPostconditionStepSourceSnapshot(
                         NullIfEmpty(source.Postcondition.ActionRequestId),
-                        NullIfEmpty(source.Postcondition.PostconditionKind))),
+                        NullIfEmpty(source.Postcondition.Check),
+                        NullIfEmpty(source.Postcondition.ProviderResourceId))),
             NyxIdChatConversationStepSourceDocument.SourceOneofCase.Input =>
                 new NyxIdChatConversationStepSourceSnapshot(
                     Input: new NyxIdChatInputStepSourceSnapshot(
@@ -304,6 +373,20 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
             NyxIdChatConversationStepSourceDocument.SourceOneofCase.Web =>
                 new NyxIdChatConversationStepSourceSnapshot(
                     Web: new NyxIdChatWebStepSourceSnapshot()),
+            NyxIdChatConversationStepSourceDocument.SourceOneofCase.Condition =>
+                new NyxIdChatConversationStepSourceSnapshot(
+                    Condition: new NyxIdChatConditionStepSourceSnapshot(
+                        new NyxIdChatNumericConditionSnapshot(
+                            source.Condition.Condition.ConditionId,
+                            source.Condition.Condition.SourceInputRequestId,
+                            source.Condition.Condition.SuggestedThreshold,
+                            source.Condition.Condition.EffectiveThreshold,
+                            source.Condition.Condition.ThresholdOrigin,
+                            source.Condition.Condition.ObservedValue,
+                            source.Condition.Condition.Comparison,
+                            source.Condition.Condition.Outcome,
+                            ToDateTimeOffset(source.Condition.Condition.EvaluatedAt),
+                            source.Condition.Condition.GuardedToolName))),
             _ => null,
         };
 
@@ -327,7 +410,9 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
                 NullIfEmpty(operation.SafeMessage),
                 ToDateTimeOffset(operation.RequestedAt),
                 ToDateTimeOffset(operation.DispatchedAt),
-                ToDateTimeOffset(operation.CompletedAt));
+                ToDateTimeOffset(operation.CompletedAt),
+                ToDateTimeOffset(operation.LastProgressAt),
+                ToDateTimeOffset(operation.StalledAt));
 
     private static NyxIdChatPendingApprovalSnapshot? ToPendingApproval(
         NyxIdChatConversationPendingApprovalDocument? approval) =>
@@ -365,7 +450,13 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
                         NullIfEmpty(option.Description))).ToArray(),
                 ToDateTimeOffset(input.AskedAt),
                 input.AllowFreeText,
-                input.MultiSelect);
+                input.MultiSelect,
+                input.NumericThreshold == null
+                    ? null
+                    : new NyxIdChatNumericThresholdInputSnapshot(
+                        input.NumericThreshold.SuggestedValue,
+                        input.NumericThreshold.MinimumValue,
+                        input.NumericThreshold.MaximumValue));
 
     private static NyxIdChatInputResolutionSnapshot? ToInputResolution(
         NyxIdChatConversationInputResolutionDocument? resolution) =>
@@ -375,7 +466,13 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
                 resolution.RequestId,
                 resolution.ClientRequestId,
                 resolution.Outcome,
-                ToDateTimeOffset(resolution.CommittedAt));
+                ToDateTimeOffset(resolution.CommittedAt),
+                resolution.NumericThreshold == null
+                    ? null
+                    : new NyxIdChatNumericThresholdResolutionSnapshot(
+                        resolution.NumericThreshold.SuggestedValue,
+                        resolution.NumericThreshold.EffectiveValue,
+                        resolution.NumericThreshold.Origin));
 
     private static NyxIdChatApprovalResolutionSnapshot? ToApprovalResolution(
         NyxIdChatConversationApprovalResolutionDocument? resolution) =>
@@ -419,6 +516,29 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
                 NullIfEmpty(admission.SafeMessage),
                 ToDateTimeOffset(admission.CommittedAt));
 
+    private static NyxIdChatStepControlResultSnapshot? ToStepControlResult(
+        NyxIdChatConversationStepControlResultDocument? result) =>
+        result == null
+            ? null
+            : new NyxIdChatStepControlResultSnapshot(
+                result.Kind,
+                result.RequestId,
+                result.ClientRequestId,
+                result.TurnId,
+                result.TaskId,
+                result.StepId,
+                result.ExpectedOperationGeneration,
+                result.OperationGeneration,
+                result.Outcome,
+                NullIfEmpty(result.ReasonCode),
+                NullIfEmpty(result.SafeMessage),
+                result.CommandId,
+                result.CorrelationId,
+                ToDateTimeOffset(result.CommittedAt),
+                result.ExpectedStateVersion,
+                result.ScopeId,
+                result.ConversationActorId);
+
     private static NyxIdChatActionSnapshot ToAction(
         NyxIdChatConversationActionDocument action) =>
         new(
@@ -430,7 +550,46 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
             action.Action,
             ToDateTimeOffset(action.RequestedAt),
             action.Reports.Select(ToActionReport).ToArray(),
-            ToPostcondition(action.PostconditionResult));
+            ToPostcondition(action.PostconditionResult),
+            ToActionRequest(action.Request));
+
+    private static NyxIdChatActionRequestSnapshot? ToActionRequest(
+        NyxIdChatConversationActionRequestDocument? request)
+    {
+        if (request?.Params is null)
+            return null;
+        var parameters = request.Params.ParamsCase switch
+        {
+            NyxIdChatConversationActionParamsDocument.ParamsOneofCase.CatalogService =>
+                new NyxIdChatActionParamsSnapshot(
+                    CatalogService: new NyxIdChatCatalogServiceConnectSnapshot(
+                        request.Params.CatalogService.ServiceSlug,
+                        request.Params.CatalogService.RequestedScopes.ToArray(),
+                        NullIfEmpty(request.Params.CatalogService.ViaNodeId),
+                        NullIfEmpty(request.Params.CatalogService.TargetOrgId))),
+            NyxIdChatConversationActionParamsDocument.ParamsOneofCase.CustomService =>
+                new NyxIdChatActionParamsSnapshot(
+                    CustomService: new NyxIdChatCustomServiceConnectSnapshot(
+                        request.Params.CustomService.Name,
+                        request.Params.CustomService.EndpointUrl,
+                        request.Params.CustomService.AuthMethod,
+                        NullIfEmpty(request.Params.CustomService.AuthKeyName),
+                        NullIfEmpty(request.Params.CustomService.ViaNodeId),
+                        NullIfEmpty(request.Params.CustomService.TargetOrgId))),
+            _ => null,
+        };
+        return parameters is null
+            ? null
+            : new NyxIdChatActionRequestSnapshot(
+                request.SchemaVersion,
+                request.ActorId,
+                request.OriginTurnId,
+                request.TaskId,
+                request.StepId,
+                request.ActionRequestId,
+                request.Action,
+                parameters);
+    }
 
     private static NyxIdChatActionReportSnapshot ToActionReport(
         NyxIdChatConversationActionReportDocument report) =>

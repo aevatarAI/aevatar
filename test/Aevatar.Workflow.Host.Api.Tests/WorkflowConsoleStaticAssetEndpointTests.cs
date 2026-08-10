@@ -37,13 +37,16 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         html.Should().Contain("client-example");
         html.Should().Contain("console:test");
         html.Should().Contain("https://api.example.test/api/v1/proxy/s/aevatar");
+        html.Should().Contain("\"nyxidWeb\":\"https://web.example.test\"");
         html.Should().NotContain("__BACKEND_CONSOLE_CONFIG__");
         html.Should().NotContain("https://nyx.chrono-ai.fun");
         html.Should().NotContain("37a93189-2734-406e-bca1-7dbdf25c5a53");
         if (endpoint == "admin-observatory")
         {
-            html.Should().Contain("searchParams.append(\"resource\"");
-            html.Should().Contain("form.append(\"resource\"");
+            // ADR-0018: session logins must not send explicit `resource` parameters,
+            // or NyxID narrows the grant below the deployment's default LLM route.
+            html.Should().NotContain("searchParams.append(\"resource\"");
+            html.Should().NotContain("form.append(\"resource\"");
             html.Should().Contain("async function fetchWithConsoleAuth(");
             html.Should().Contain("requestAdminShellTokenRefresh(");
             html.Should().Contain("rejectedAccessToken");
@@ -67,6 +70,7 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
             html.Should().NotContain("class=\"workflow-nav\"");
             html.Should().Contain("id=\"servicesButton\"");
             html.Should().Contain("id=\"mobileInspectorButton\"");
+            html.Should().Contain("\"enableStudioWireInspector\":false");
             html.Should().NotContain("class=\"studio-tabs\"");
             html.Should().Contain("<div class=\"group-label\">当前实录</div>");
             html.Should().Contain("name=\"color-scheme\" content=\"only light\"");
@@ -165,8 +169,11 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         var blocks = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantBlocks);
         var transport = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantTransport);
         var styles = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantStyles);
+        var lucide = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantLucide);
+        var marked = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantMarked);
+        var purify = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantPurify);
 
-        app.Should().Contain("import \"./transport.js\"");
+        app.Should().Contain("import \"./transport.js?v=20260807-m40-thread-polish\"");
         app.Should().Contain("async function sendPrompt(");
         app.Should().Contain("async function loadConversations(");
         app.Should().Contain("async function refreshActorState(");
@@ -175,6 +182,7 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         app.Should().Contain("async function submitPendingInputFromComposer(");
         app.Should().Contain("async function submitComposer(");
         app.Should().Contain("async function loadReadiness(");
+        app.Should().Contain("describeReadinessFailure(state.readiness.error)");
         app.Should().Contain("state.pendingFirstTurn ||=");
         app.Should().Contain("已受理，等待 Actor 确认");
         app.Should().Contain("async function submitApproval(");
@@ -194,12 +202,25 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         readiness.Should().Contain("export function normalizeReadinessSnapshot(");
         readiness.Should().Contain("Readiness snapshot contains secret fields");
         transport.Should().Contain("/api/v1/assistant/readiness");
+        transport.Should().Contain("const errorCode = refreshResult.errorCode");
         transport.Should().Contain("authorizedFetch(\"/api/chat\"");
+        transport.Should().Contain("ADR-0018");
+        transport.Should().NotContain("append(\"resource\"");
         blocks.Should().Contain("export function buildConnectCardBlock(");
         html.Should().Contain("id=\"readinessPanel\"");
+        html.Should().Contain("id=\"readinessRecovery\"");
+        html.Should().Contain("id=\"readinessRecoveryButton\"");
         html.Should().Contain("id=\"needsYouFilterButton\"");
         html.Should().NotContain("id=\"taskPhaseList\"");
         html.Should().Contain("id=\"composerInputRequest\"");
+        html.Should().Contain("class=\"hidden\" id=\"eventsTabButton\"");
+        html.Should().Contain("/workflow/studio/assets/vendor/lucide.min.js");
+        html.Should().Contain("/workflow/studio/assets/vendor/marked.min.js");
+        html.Should().Contain("/workflow/studio/assets/vendor/purify.min.js");
+        html.Should().NotContain("https://unpkg.com");
+        lucide.Should().Contain("@license lucide v0.563.0 - ISC");
+        marked.Should().Contain("marked v15.0.12");
+        purify.Should().Contain("DOMPurify 3.2.6");
         styles.Should().Contain(".connect-card");
         styles.Should().Contain(".readiness-panel");
         styles.Should().Contain(".needs-you-panel");
@@ -209,33 +230,63 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         styles.Should().Contain(".actor-task.collapsed");
         styles.Should().Contain(".cc-progress");
         styles.Should().Contain(".activity-card.collapsed");
-        styles.Should().Contain("--assistant-card-max-width: 860px");
-        styles.Should().Contain("--assistant-card-inline-gutter: 48px");
-        styles.Should().Contain("--workspace-max-width: 1400px");
-        styles.Should().Contain("--sidebar-width: 264px");
-        styles.Should().Contain("--conversation-max-width: 900px");
-        styles.Should().Contain("--conversation-inline-gutter: 48px");
+        styles.Should().Contain("--assistant-card-max-width: 720px");
+        styles.Should().Contain("--assistant-card-inline-gutter: 40px");
+        styles.Should().Contain("--workspace-max-width: 1240px");
+        styles.Should().Contain("--sidebar-width: 240px");
+        styles.Should().Contain("--conversation-max-width: 760px");
+        styles.Should().Contain("--conversation-inline-gutter: 40px");
         styles.Should().Contain("width: min(448px, calc(100% - 48px))");
         styles.Should().Contain("grid-template-columns: var(--sidebar-width) minmax(0, 1fr)");
         app.Should().Contain("展开计划详情");
+        app.Should().Contain("root.dataset.collapsed = \"false\"");
+        app.Should().NotContain("root.dataset.collapsed = \"true\"");
+        app.Should().Contain("state.config.enableStudioWireInspector === true && state.auth.authenticated");
+        transport.Should().Contain("backendConfig.enableStudioWireInspector === true");
+        app.Should().NotContain("https://aevatar-console-backend-api.aevatar.ai");
+        app.Should().NotContain("https://nyx-api.chrono-ai.fun");
+        app.Should().NotContain("https://nyx.chrono-ai.fun");
+        transport.Should().NotContain("https://nyx.chrono-ai.fun");
         app.Should().Contain("cc-progress-step");
         app.Should().NotContain("function setStudioTab(tab)");
+        app.Should().NotContain("尚未取得必需能力的有效证明");
+        app.Should().NotContain("暂时无法确认运行准备状态");
         html.Should().NotContain("id=\"assistantNavButton\"");
         html.Should().NotContain("id=\"openSettingsNav\"");
         styles.Should().NotContain(".studio-tabs");
         styles.Should().Contain(".composer-wrap {\n  position: relative;");
-        styles.Should().Contain(".chat-column {\n    width: 100%;\n    height: 100%;");
+        styles.Should().Contain(".chat-column {\n  min-width: 0;\n  min-height: 0;\n  height: 100%;\n  overflow: hidden;");
         app.Should().Contain("await submitActorControl(\"steer\", null, instruction)");
         app.Should().Contain("type: \"input.resolve\"");
         app.Should().NotContain("freeText.className = \"needs-you-free-text\"");
         styles.Should().Contain("@media (max-width:");
         html.Should().Contain("<meta name=\"color-scheme\" content=\"only light\"");
-        html.Should().Contain("app.js?v=20260806-studio-sidebar-focus");
+        html.Should().Contain("app.js?v=20260808-m42-card-scale-tighten");
+        html.Should().Contain("styles.css?v=20260808-m42-card-scale-tighten");
+        app.Should().Contain("transport.js?v=20260807-m40-thread-polish");
+        app.Should().Contain("readiness.js?v=20260807-m40-thread-polish");
+        transport.Should().Contain("readiness.js?v=20260807-m40-thread-polish");
+        actorState.Should().Contain("protocol.js?v=20260807-m40-thread-polish");
+        blocks.Should().Contain("protocol.js?v=20260807-m40-thread-polish");
+        html.Should().Contain("<span class=\"brand-name\">Aevatar Studio</span>");
+        html.Should().NotContain("class=\"brand-mark\"");
         styles.Should().Contain("color-scheme: only light");
         styles.Should().NotContain("color-scheme: dark");
         styles.Should().NotContain("prefers-color-scheme");
-        styles.Should().Contain("--bg: #f6f8f7");
-        styles.Should().Contain("--accent: #0f766e");
+        styles.Should().Contain("--bg: #eceff4");
+        styles.Should().Contain("--accent: #2f5cf6");
+        styles.Should().Contain("--accent-strong: #1e44d8");
+        styles.Should().Contain("--success: #12a15c");
+        styles.Should().NotContain("--accent: #0f766e");
+        styles.Should().NotContain("--accent-secondary: #df6b45");
+        styles.Should().Contain("overflow-y: scroll");
+        styles.Should().Contain("scrollbar-gutter: stable");
+        styles.Should().Contain(".thread::-webkit-scrollbar-thumb");
+        styles.Should().Contain("scrollbar-color: var(--tertiary) var(--surface)");
+        styles.Should().Contain("min-height: 108px;\n  flex-direction: column;");
+        styles.Should().Contain("width: 100%;\n  min-width: 0;\n  height: 40px;");
+        styles.Should().Contain(".recent-session-list {\n  min-height: 0;\n  flex: 1 1 0;");
+        styles.Should().NotContain("min-height: 480px");
         styles.Should().NotContain("data-theme");
     }
 
@@ -400,7 +451,246 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
     }
 
     [Fact]
-    public async Task WorkflowStudio_ReadinessAsset_ShouldRejectUnsafeOrOpenEndedEvidence()
+    public async Task WorkflowStudio_TaskStepSourceLabel_ShouldUseTypedPostconditionCheck()
+    {
+        var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
+
+        app.Should().Contain("source.postcondition.check");
+        app.Should().NotContain("source.postcondition.postconditionKind");
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_Protocol_ShouldPreserveTypedRunStoppedPayload()
+    {
+        var protocol = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantProtocol);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8').replace(/^export /gm, '');
+            const context = { structuredClone, TextDecoder, URL, console };
+            vm.createContext(context);
+            vm.runInContext(source, context);
+
+            const event = context.normalizeFrame({
+              type:'RUN_STOPPED',
+              runStopped:{
+                status:'stopped', detail:'Stopped after committed partial work.',
+                partialWork:{stateVersion:17,effectEvidence:'confirmed'}
+              }
+            });
+
+            assert.equal(event.type, 'run_stopped');
+            assert.equal(event.status, 'stopped');
+            assert.equal(event.detail, 'Stopped after committed partial work.');
+            assert.equal(event.partialWork.stateVersion, 17);
+            assert.equal(event.partialWork.effectEvidence, 'confirmed');
+            """;
+
+        var result = await RunNodeAsync(script, protocol);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_WireInspector_ShouldRequireHostFlagAndAuthenticatedSession()
+    {
+        var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name, nextName) {
+              const start = source.indexOf('function ' + name + '(');
+              const end = source.indexOf('\nfunction ' + nextName + '(', start);
+              assert.notEqual(start, -1, name + ' must exist');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return source.slice(start, end);
+            }
+
+            function element() {
+              const classes = new Set();
+              const attributes = new Map();
+              return {
+                classes, attributes,
+                classList:{toggle(name, enabled){
+                  if (enabled) classes.add(name); else classes.delete(name);
+                }},
+                setAttribute(name, value){attributes.set(name, value);}
+              };
+            }
+
+            const context = {
+              state:{config:{enableStudioWireInspector:true},auth:{authenticated:false}},
+              dom:{
+                runPanel:element(), eventsPanel:element(), runTabButton:element(),
+                eventsTabButton:element()
+              }
+            };
+            vm.createContext(context);
+            vm.runInContext(`
+              ${functionSource('configureWireInspector', 'updateElapsed')}
+              ${functionSource('setInspectorTab', 'openMobilePanel')}
+            `, context);
+
+            context.configureWireInspector();
+            assert.equal(context.dom.eventsTabButton.classes.has('hidden'), true);
+            assert.equal(context.dom.eventsTabButton.attributes.get('aria-hidden'), 'true');
+            context.setInspectorTab('events');
+            assert.equal(context.dom.runPanel.classes.has('hidden'), false);
+            assert.equal(context.dom.eventsPanel.classes.has('hidden'), true);
+
+            context.state.auth.authenticated = true;
+            context.configureWireInspector();
+            assert.equal(context.dom.eventsTabButton.classes.has('hidden'), false);
+            assert.equal(context.dom.eventsTabButton.attributes.get('aria-hidden'), 'false');
+            context.setInspectorTab('events');
+            assert.equal(context.dom.runPanel.classes.has('hidden'), true);
+            assert.equal(context.dom.eventsPanel.classes.has('hidden'), false);
+
+            context.state.config.enableStudioWireInspector = false;
+            context.setInspectorTab('events');
+            assert.equal(context.dom.runPanel.classes.has('hidden'), false);
+            assert.equal(context.dom.eventsPanel.classes.has('hidden'), true);
+            """;
+
+        var result = await RunNodeAsync(script, app);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_ReadinessAsset_ShouldDescribeActionableRecovery()
+    {
+        var readiness = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantReadiness);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8').replace(/^export /gm, '');
+            const context = { URL, Date, Set, Error };
+            vm.createContext(context);
+            vm.runInContext(source, context);
+
+            const inactive = context.describeReadinessFailure({status:401,code:'OAUTH_CLIENT_INACTIVE'});
+            assert.equal(inactive.freshness, '登录配置不可用');
+            assert.match(inactive.summary, /已停用/);
+            assert.match(inactive.guidance, /重复登录不会恢复/);
+            assert.equal(inactive.action, 'retry');
+            assert.equal(inactive.actionLabel, '修复后重新检查');
+
+            const expired = context.describeReadinessFailure({status:401,code:'AUTH_REQUIRED'});
+            assert.equal(expired.action, 'login');
+            assert.equal(expired.actionLabel, '重新登录');
+
+            const forbidden = context.describeReadinessFailure({status:403});
+            assert.equal(forbidden.action, 'account');
+            assert.match(forbidden.guidance, /访问策略/);
+
+            const missingEndpoint = context.describeReadinessFailure({status:404});
+            assert.match(missingEndpoint.summary, /尚未提供/);
+            assert.match(missingEndpoint.guidance, /部署 assistant readiness 接口/);
+
+            const invalid = context.describeReadinessFailure({
+              status:502, code:'READINESS_INVALID',
+              reason:'Capability has unknown fields: platformEvidence'
+            });
+            assert.equal(invalid.freshness, '契约不匹配');
+            assert.match(invalid.summary, /契约不一致：Capability has unknown fields: platformEvidence/);
+            assert.match(invalid.guidance, /nyxid-assistant-readiness\.v1/);
+            assert.equal(invalid.action, 'retry');
+
+            const invalidWithoutReason = context.describeReadinessFailure({status:502,code:'READINESS_INVALID'});
+            assert.equal(invalidWithoutReason.summary, 'NyxID readiness 响应与 Studio 契约不一致。');
+
+            const secretReason = context.describeReadinessFailure({
+              status:502, code:'READINESS_INVALID', reason:'Bearer leaked-token-value'
+            });
+            assert.doesNotMatch(secretReason.summary, /leaked-token-value/);
+
+            const upstreamBadGateway = context.describeReadinessFailure({status:502});
+            assert.match(upstreamBadGateway.summary, /暂时无法提供/);
+            assert.equal(upstreamBadGateway.freshness, '服务暂时不可用');
+
+            const unavailable = context.describeReadinessFailure({status:503});
+            assert.match(unavailable.summary, /暂时无法提供/);
+
+            const disconnected = context.describeReadinessFailure(new TypeError('Failed to fetch'));
+            assert.match(disconnected.summary, /无法连接/);
+            assert.match(disconnected.guidance, /网络或 VPN/);
+
+            const unexpected = context.describeReadinessFailure({status:418});
+            assert.equal(unexpected.freshness, '检查失败 (418)');
+            """;
+
+        var result = await RunNodeAsync(script, readiness);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+        readiness.Should().NotContain("状态格式不兼容");
+        readiness.Should().NotContain("无法识别的运行状态");
+        readiness.Should().NotContain("契约版本一致");
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_ReadinessAsset_ShouldAcceptTheDeployedNyxIdContractAcrossSplitHosts()
+    {
+        var readiness = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantReadiness);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8').replace(/^export /gm, '');
+            const context = { URL, Date, Set, Error };
+            vm.createContext(context);
+            vm.runInContext(source, context);
+
+            // Same shape as the live nyxid-assistant-readiness.v1 response: the
+            // managementUrl origin is NyxID's web frontend, which differs from the
+            // OIDC authority (API host) in a split-host deployment.
+            const fixture = {
+              revision:'nyxid-assistant-readiness.v1',
+              evaluatedAt:'2026-08-07T06:50:21.842990344Z',
+              capabilities:[{
+                capabilityId:'api-github', label:'GitHub', required:false, status:'cannot_use',
+                connectionState:'connected', grantState:'missing', requestedScopes:['repo'],
+                managementUrl:'https://nyx-web.example.test/keys', reasonCode:'grant_missing'
+              }]
+            };
+
+            const splitHost = context.normalizeReadinessSnapshot(fixture, {
+              managementOrigins:['https://nyx-web.example.test', 'https://nyx-api.example.test']
+            });
+            assert.equal(splitHost.revision, 'nyxid-assistant-readiness.v1');
+            assert.equal(splitHost.evaluatedAt, '2026-08-07T06:50:21.842Z');
+            assert.equal(splitHost.capabilities[0].status, 'cannot_use');
+            assert.equal(splitHost.capabilities[0].grantState, 'missing');
+            assert.equal(splitHost.capabilities[0].reasonCode, 'grant_missing');
+            assert.equal(splitHost.capabilities[0].managementUrl, 'https://nyx-web.example.test/keys');
+            assert.deepEqual(JSON.parse(JSON.stringify(splitHost.managementUrlDrops)), []);
+
+            // A console that only trusts the API origin keeps the capability facts
+            // and drops the unproven link instead of rejecting the snapshot.
+            const apiOnly = context.normalizeReadinessSnapshot(fixture, {
+              managementOrigins:['https://nyx-api.example.test']
+            });
+            assert.equal(apiOnly.capabilities[0].status, 'cannot_use');
+            assert.equal(apiOnly.capabilities[0].managementUrl, null);
+            assert.deepEqual(JSON.parse(JSON.stringify(apiOnly.managementUrlDrops)), [{
+              capabilityId:'api-github', origin:'https://nyx-web.example.test'
+            }]);
+
+            const nullLink = context.normalizeReadinessSnapshot({
+              ...fixture, capabilities:[{...fixture.capabilities[0], managementUrl:null}]
+            }, {managementOrigins:['https://nyx-web.example.test']});
+            assert.equal(nullLink.capabilities[0].managementUrl, null);
+            assert.deepEqual(JSON.parse(JSON.stringify(nullLink.managementUrlDrops)), []);
+            """;
+
+        var result = await RunNodeAsync(script, readiness);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_ReadinessAsset_ShouldRejectIncompatiblePayloadsWithSafeSpecificReasons()
     {
         var readiness = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantReadiness);
         const string script = """
@@ -412,29 +702,292 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
             vm.runInContext(source, context);
 
             const fixture = {
-              revision:'rev-alpha', evaluatedAt:'2026-08-01T01:02:03Z', capabilities:[{
-                capabilityId:'api-github', label:'GitHub', required:false, status:'available',
-                connectionState:'connected', grantState:'granted', requestedScopes:['repo:read'],
-                managementUrl:'https://nyx.example/keys/github', reasonCode:null
+              revision:'nyxid-assistant-readiness.v1',
+              evaluatedAt:'2026-08-07T06:50:21.842990344Z',
+              capabilities:[{
+                capabilityId:'api-github', label:'GitHub', required:false, status:'cannot_use',
+                connectionState:'connected', grantState:'missing', requestedScopes:['repo'],
+                managementUrl:'https://nyx-web.example.test/keys', reasonCode:'grant_missing'
               }]
             };
-            const normalized = context.normalizeReadinessSnapshot(fixture, {nyxidWebUrl:'https://nyx.example'});
-            assert.equal(normalized.capabilities[0].status, 'available');
-            assert.equal(normalized.evaluatedAt, '2026-08-01T01:02:03.000Z');
-            assert.throws(() => context.normalizeReadinessSnapshot({
-              ...fixture, capabilities:[{...fixture.capabilities[0], managementUrl:'https://evil.example/keys'}]
-            }, {nyxidWebUrl:'https://nyx.example'}), /not allowed/);
-            assert.throws(() => context.normalizeReadinessSnapshot({
-              ...fixture, accessToken:'secret'
-            }, {nyxidWebUrl:'https://nyx.example'}), /secret fields/);
-            assert.throws(() => context.normalizeReadinessSnapshot({
-              ...fixture, capabilities:[{...fixture.capabilities[0], status:'maybe'}]
-            }, {nyxidWebUrl:'https://nyx.example'}), /status is invalid/);
+            const origins = {managementOrigins:['https://nyx-web.example.test']};
+            const capture = (mutated) => {
+              try {
+                context.normalizeReadinessSnapshot(mutated, origins);
+                assert.fail('expected rejection');
+              } catch (error) {
+                assert.equal(error.code, 'READINESS_INVALID');
+                return error;
+              }
+            };
+
+            const unknownField = capture({...fixture, platformEvidence:{}});
+            assert.equal(unknownField.reason, 'Readiness snapshot has unknown fields: platformEvidence');
+            const unknownCapabilityField = capture({
+              ...fixture, capabilities:[{...fixture.capabilities[0], evidenceKind:'platform'}]
+            });
+            assert.equal(unknownCapabilityField.reason, 'Capability has unknown fields: evidenceKind');
+
+            const withoutGrantState = {...fixture.capabilities[0]};
+            delete withoutGrantState.grantState;
+            assert.equal(capture({...fixture, capabilities:[withoutGrantState]}).reason, 'grantState is missing');
+            assert.equal(
+              capture({...fixture, capabilities:[{...fixture.capabilities[0], status:'maybe'}]}).reason,
+              'status is invalid');
+            assert.equal(
+              capture({...fixture, capabilities:[{...fixture.capabilities[0], managementUrl:'http://nyx-web.example.test/keys'}]}).reason,
+              'managementUrl must be https');
+            assert.equal(
+              capture({...fixture, capabilities:[{...fixture.capabilities[0], managementUrl:'not a url'}]}).reason,
+              'managementUrl is invalid');
+
+            const secretField = capture({...fixture, accessToken:'nyx_0123456789abcdef'});
+            assert.equal(secretField.reason, 'Readiness snapshot contains secret fields');
+            assert.doesNotMatch(String(secretField.message), /nyx_0123456789abcdef/);
+            const secretValue = capture({
+              ...fixture, capabilities:[{...fixture.capabilities[0], label:'Bearer nyx-secret-value'}]
+            });
+            assert.equal(secretValue.reason, 'Readiness snapshot contains secret values');
+            assert.doesNotMatch(String(secretValue.message), /nyx-secret-value/);
             """;
 
         var result = await RunNodeAsync(script, readiness);
 
         result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_FirstTurn_ShouldOnlyBlockOnMissingRequiredCapabilities()
+    {
+        var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8');
+            const start = source.indexOf('function firstTurnReadinessBlocked()');
+            const end = source.indexOf('\nasync function loadServices(', start);
+            assert.notEqual(start, -1, 'firstTurnReadinessBlocked must exist in the served Studio app');
+            assert.notEqual(end, -1, 'loadServices must follow firstTurnReadinessBlocked');
+
+            const context = {
+              state:{
+                config:{surface:'nyxid-chat'},
+                actorId:null,
+                readiness:{loading:false, error:null, snapshot:null}
+              }
+            };
+            vm.createContext(context);
+            vm.runInContext(source.slice(start, end), context);
+            const blocked = () => vm.runInContext('firstTurnReadinessBlocked()', context);
+
+            context.state.readiness = {loading:true, error:null, snapshot:null};
+            assert.equal(blocked(), true, 'an in-flight check holds the first turn');
+
+            context.state.readiness = {loading:false, error:null, snapshot:null};
+            assert.equal(blocked(), true, 'an unchecked session holds the first turn');
+
+            // The optional api-github capability may be unusable (grant_missing)
+            // without holding the first run.
+            context.state.readiness = {loading:false, error:null, snapshot:{capabilities:[{
+              capabilityId:'api-github', required:false, status:'cannot_use'
+            }]}};
+            assert.equal(blocked(), false);
+
+            context.state.readiness = {loading:false, error:null, snapshot:{capabilities:[{
+              capabilityId:'model', required:true, status:'missing'
+            }]}};
+            assert.equal(blocked(), true, 'a missing required capability holds the first turn');
+
+            // A failed advisory check must not deadlock the chat.
+            context.state.readiness = {loading:false, error:{status:502}, snapshot:null};
+            assert.equal(blocked(), false);
+
+            context.state.actorId = 'conversation-alpha';
+            context.state.readiness = {loading:true, error:null, snapshot:null};
+            assert.equal(blocked(), false, 'existing conversations never re-gate');
+            """;
+
+        var result = await RunNodeAsync(script, app);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_ReadinessPanel_ShouldKeepOptionalCapabilitiesQuiet()
+    {
+        var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8');
+            const start = source.indexOf('const readinessStatusCopy = {');
+            const end = source.indexOf('\nfunction renderReadiness(', start);
+            assert.notEqual(start, -1, 'readiness status copy must exist in the served Studio app');
+            assert.notEqual(end, -1, 'renderReadiness must follow the readiness copy maps');
+
+            const context = {};
+            vm.createContext(context);
+            vm.runInContext(source.slice(start, end), context);
+            const label = (capability) => vm.runInContext('readinessStatusLabel', context)(capability);
+
+            // Optional capabilities read as neutral on/off facts; only required
+            // capabilities keep the blocking state words.
+            assert.equal(label({required:false, status:'cannot_use'}), '未启用');
+            assert.equal(label({required:false, status:'missing'}), '未启用');
+            assert.equal(label({required:false, status:'cannot_check'}), '未启用');
+            assert.equal(label({required:false, status:'available'}), '可用');
+            assert.equal(label({required:true, status:'missing'}), '缺失');
+            assert.equal(label({required:true, status:'cannot_use'}), '不可使用');
+            assert.equal(label({required:true, status:'available'}), '可用');
+            """;
+
+        var result = await RunNodeAsync(script, app);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+        app.Should().Contain("readiness-optional");
+        app.Should().Contain("不影响使用");
+        app.Should().Contain("state.readinessOptionalOpen");
+        var styles = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantStyles);
+        styles.Should().Contain(".readiness-row.optional .readiness-status");
+        styles.Should().Contain(".readiness-optional > summary");
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_ActorTaskCard_ShouldStayAnchoredAfterTheNewestUserMessage()
+    {
+        var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8');
+            const start = source.indexOf('function mountActorTask(');
+            const end = source.indexOf('\nasync function submitActorControl(', start);
+            assert.notEqual(start, -1, 'mountActorTask must exist in the served Studio app');
+            assert.notEqual(end, -1, 'submitActorControl must follow mountActorTask');
+
+            const context = {};
+            vm.createContext(context);
+            vm.runInContext(source.slice(start, end), context);
+            const mount = vm.runInContext('mountActorTask', context);
+
+            function fakeThread() {
+              const children = [];
+              const thread = {
+                children,
+                querySelectorAll(selector) {
+                  assert.equal(selector, ':scope > .message.user');
+                  return children.filter((child) => child.kind === 'user');
+                },
+                append(node) {
+                  remove(node);
+                  children.push(node);
+                  node.connected = true;
+                },
+              };
+              function remove(node) {
+                const index = children.indexOf(node);
+                if (index >= 0) children.splice(index, 1);
+              }
+              function decorate(node) {
+                Object.defineProperty(node, 'nextElementSibling', {
+                  get() {
+                    const index = children.indexOf(node);
+                    return index >= 0 ? children[index + 1] ?? null : null;
+                  },
+                });
+                node.after = (inserted) => {
+                  remove(inserted);
+                  children.splice(children.indexOf(node) + 1, 0, inserted);
+                  inserted.connected = true;
+                };
+                return node;
+              }
+              thread.add = (kind, name) => {
+                const node = decorate({ kind, name });
+                thread.append(node);
+                return node;
+              };
+              return thread;
+            }
+
+            const thread = fakeThread();
+            const card = { kind: 'actor-task', name: 'card', get isConnected() { return this.connected === true; } };
+            Object.defineProperty(card, 'nextElementSibling', {
+              get() {
+                const index = thread.children.indexOf(card);
+                return index >= 0 ? thread.children[index + 1] ?? null : null;
+              },
+            });
+            card.after = () => { throw new Error('the card itself is never an anchor'); };
+
+            // The assistant shell can arrive before the first actor snapshot; the
+            // card still lands between the user message and the reply.
+            const user1 = thread.add('user', 'user1');
+            const assistant1 = thread.add('assistant', 'assistant1');
+            mount(thread, card);
+            assert.deepEqual(thread.children.map((child) => child.name), ['user1', 'card', 'assistant1']);
+
+            // Re-rendering without new messages keeps the card where it is.
+            mount(thread, card);
+            assert.deepEqual(thread.children.map((child) => child.name), ['user1', 'card', 'assistant1']);
+
+            // A later turn pulls the card down next to the newest user message
+            // instead of stranding it inside history.
+            const user2 = thread.add('user', 'user2');
+            const assistant2 = thread.add('assistant', 'assistant2');
+            mount(thread, card);
+            assert.deepEqual(
+              thread.children.map((child) => child.name),
+              ['user1', 'assistant1', 'user2', 'card', 'assistant2']);
+
+            // Without any user message (restored empty view) the card appends once.
+            const bare = fakeThread();
+            const bareCard = { kind: 'actor-task', name: 'bare-card', get isConnected() { return this.connected === true; } };
+            mount(bare, bareCard);
+            mount(bare, bareCard);
+            assert.deepEqual(bare.children.map((child) => child.name), ['bare-card']);
+            """;
+
+        var result = await RunNodeAsync(script, app);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+        app.Should().NotContain("if (!root.isConnected) entry.thread.append(root);");
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_AssetCacheKeys_ShouldTrackChangedEntryAssetsAndStableImports()
+    {
+        var html = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetStudioPage);
+        var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
+        var transport = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantTransport);
+        var actorState = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantActorState);
+        var blocks = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantBlocks);
+
+        var entryVersions = System.Text.RegularExpressions.Regex.Matches(
+                html,
+                @"\.(?:js|css)\?v=([A-Za-z0-9-]+)")
+            .Select(match => match.Groups[1].Value)
+            .ToList();
+        var transitiveVersions = new[] { app, transport, actorState, blocks }
+            .SelectMany(source => System.Text.RegularExpressions.Regex.Matches(
+                source,
+                @"\.(?:js|css)\?v=([A-Za-z0-9-]+)")
+                .Select(match => match.Groups[1].Value))
+            .ToList();
+
+        entryVersions.Should().NotBeEmpty();
+        entryVersions.Should().OnlyContain(static version =>
+            version == "20260808-m42-card-scale-tighten");
+        transitiveVersions.Should().NotBeEmpty();
+        transitiveVersions.Should().OnlyContain(static version =>
+            version == "20260807-m40-thread-polish");
+        html.Should().Contain("styles.css?v=");
+        html.Should().Contain("app.js?v=");
+        app.Should().Contain("transport.js?v=");
+        app.Should().Contain("readiness.js?v=");
+        transport.Should().Contain("readiness.js?v=");
+        actorState.Should().Contain("protocol.js?v=");
+        blocks.Should().Contain("protocol.js?v=");
     }
 
     [Fact]
@@ -749,9 +1302,12 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
             const context = { URLSearchParams };
             vm.createContext(context);
             vm.runInContext(`
-              ${functionSource('observatoryRouteKey', 'readObservatoryViewState')}
-              ${functionSource('readObservatoryViewState', 'writeObservatoryViewState')}
-              ${functionSource('writeObservatoryViewState', 'paneScrollPosition')}
+              ${functionSource('observatoryListKey', 'observatoryDetailKey')}
+              ${functionSource('observatoryDetailKey', 'readObservatoryListState')}
+              ${functionSource('readObservatoryListState', 'writeObservatoryListState')}
+              ${functionSource('writeObservatoryListState', 'readObservatoryDetailState')}
+              ${functionSource('readObservatoryDetailState', 'writeObservatoryDetailState')}
+              ${functionSource('writeObservatoryDetailState', 'paneScrollPosition')}
               ${functionSource('paneScrollPosition', 'applyPaneScrollState')}
             `, context);
 
@@ -763,19 +1319,29 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
             const routeA = {scope:'scope-alpha',status:'failed',origin:'',definition:'wf-alpha',schedule:'',from:'',to:'',run:'run-alpha',tab:'logs'};
             const routeB = {...routeA, run:'run-beta'};
             const key = 'console:test:observatory:view';
-            const routeAKey = vm.runInContext('observatoryRouteKey', context)(routeA);
+            const routeAListKey = vm.runInContext('observatoryListKey', context)(routeA);
+            const routeBListKey = vm.runInContext('observatoryListKey', context)(routeB);
+            const routeADetailKey = vm.runInContext('observatoryDetailKey', context)(routeA);
+            const routeBDetailKey = vm.runInContext('observatoryDetailKey', context)(routeB);
 
-            vm.runInContext('writeObservatoryViewState', context)(storage, key, routeA, {list:180, detail:760});
-            vm.runInContext('writeObservatoryViewState', context)(storage, key, routeB, {list:25, detail:40});
-            assert.deepEqual(JSON.parse(JSON.stringify(vm.runInContext('readObservatoryViewState', context)(storage, key, routeA))), {list:180, detail:760});
-            assert.deepEqual(JSON.parse(JSON.stringify(vm.runInContext('readObservatoryViewState', context)(storage, key, routeB))), {list:25, detail:40});
-            assert.match(routeAKey, /run-alpha/);
+            vm.runInContext('writeObservatoryListState', context)(storage, key, routeA, 180);
+            vm.runInContext('writeObservatoryDetailState', context)(storage, key, routeA, 760);
+            vm.runInContext('writeObservatoryDetailState', context)(storage, key, routeB, 40);
+            assert.equal(vm.runInContext('readObservatoryListState', context)(storage, key, routeA), 180);
+            assert.equal(vm.runInContext('readObservatoryListState', context)(storage, key, routeB), 180);
+            assert.equal(vm.runInContext('readObservatoryDetailState', context)(storage, key, routeA), 760);
+            assert.equal(vm.runInContext('readObservatoryDetailState', context)(storage, key, routeB), 40);
+            assert.equal(routeAListKey, routeBListKey);
+            assert.notEqual(routeADetailKey, routeBDetailKey);
+            assert.match(routeADetailKey, /run-alpha/);
             assert.equal(vm.runInContext('paneScrollPosition', context)({scrollTop:0,scrollHeight:100,clientHeight:100}, 760), 760);
             assert.equal(vm.runInContext('paneScrollPosition', context)({scrollTop:0,scrollHeight:900,clientHeight:300}, 760), 0);
             assert.equal(vm.runInContext('paneScrollPosition', context)({scrollTop:180,scrollHeight:900,clientHeight:300}, 760), 180);
 
             storage.setItem(key, '{bad json');
-            assert.deepEqual(JSON.parse(JSON.stringify(vm.runInContext('readObservatoryViewState', context)(storage, key, routeA))), {list:0, detail:0});
+            storage.setItem(key + ':detail', '{bad json');
+            assert.equal(vm.runInContext('readObservatoryListState', context)(storage, key, routeA), 0);
+            assert.equal(vm.runInContext('readObservatoryDetailState', context)(storage, key, routeA), 0);
             """;
 
         var result = await RunNodeAsync(script, html);
@@ -919,6 +1485,7 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
                 ["Aevatar:BackendConsole:OidcClientId"] = "client-example",
                 ["Aevatar:BackendConsole:OidcScope"] = "openid profile",
                 ["Aevatar:BackendConsole:NyxApiBaseUrl"] = "https://api.example.test",
+                ["Aevatar:NyxId:Authority"] = "https://web.example.test",
                 ["Aevatar:BackendConsole:StorageKey"] = "console:test",
             })
             .Build();

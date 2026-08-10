@@ -11,6 +11,8 @@ public sealed class NyxIdChatNeedsYouDecisionsTests
         DateTimeOffset.Parse("2026-08-01T12:00:00Z"));
     private static readonly Timestamp ResolvedAt = Timestamp.FromDateTimeOffset(
         DateTimeOffset.Parse("2026-08-01T12:01:00Z"));
+    private static readonly Timestamp ExpiresAt = Timestamp.FromDateTimeOffset(
+        AskedAt.ToDateTimeOffset() + NyxIdChatTaskLifecycle.ToolApprovalExpiryWindow);
 
     [Fact]
     public void RequestInput_ShouldCommitExactPendingFactsAndActorAuthoredAttention()
@@ -331,6 +333,147 @@ public sealed class NyxIdChatNeedsYouDecisionsTests
         conflict.IsExactReplay.Should().BeFalse();
         conflict.State.ToByteArray().Should().Equal(reloaded.ToByteArray());
     }
+
+    [Fact]
+    public void ResolveApproval_ShouldStillApproveBeforeTheStampedDeadline()
+    {
+        var state = ExpiringApprovalState();
+        var beforeDeadline = Timestamp.FromDateTimeOffset(
+            ExpiresAt.ToDateTimeOffset() - TimeSpan.FromSeconds(1));
+
+        var decision = NyxIdChatNeedsYouDecisions.ResolveApproval(
+            state,
+            ApproveCommand(),
+            currentStateVersion: 52,
+            beforeDeadline);
+
+        decision.ShouldCommit.Should().BeTrue();
+        decision.Resolution!.Outcome.Should().Be(NyxIdChatNeedsYouResolutionOutcome.Accepted);
+        decision.Resolution.Approved.Should().BeTrue();
+        decision.NextCommand.Should().NotBeNull();
+        decision.NextCommand!.InputCase.Should().Be(
+            NyxIdChatOperationDispatchCommand.InputOneofCase.ToolApprovalContinuation);
+        decision.NextCommand.ToolApprovalContinuation.Approved.Should().BeTrue();
+    }
+
+    [Fact]
+    public void ResolveApproval_ShouldFailClosedOnceTheStampedDeadlineElapses()
+    {
+        var state = ExpiringApprovalState();
+
+        var decision = NyxIdChatNeedsYouDecisions.ResolveApproval(
+            state,
+            ApproveCommand(),
+            currentStateVersion: 52,
+            ExpiresAt);
+
+        decision.ShouldCommit.Should().BeTrue();
+        decision.IsExactReplay.Should().BeFalse();
+        decision.Resolution.Should().NotBeNull();
+        decision.Resolution!.RequestId.Should().Be("approval-alpha");
+        decision.Resolution.Outcome.Should().Be(NyxIdChatNeedsYouResolutionOutcome.Expired);
+        decision.Resolution.Approved.Should().BeFalse(
+            "expiry is a denial and can never be resolved as approval");
+        decision.NextCommand.Should().BeNull(
+            "an expired approval must not dispatch an approval continuation or any effect");
+        AssertExpiredApprovalState(decision.State);
+
+        var reloaded = NyxIdChatConversationGAgentState.Parser.ParseFrom(
+            decision.State.ToByteArray());
+        var lateApprove = NyxIdChatNeedsYouDecisions.ResolveApproval(
+            reloaded,
+            ApproveCommand(),
+            currentStateVersion: 53,
+            Timestamp.FromDateTimeOffset(ExpiresAt.ToDateTimeOffset() + TimeSpan.FromSeconds(5)));
+        lateApprove.ShouldCommit.Should().BeFalse();
+        lateApprove.IsExactReplay.Should().BeFalse();
+        lateApprove.Resolution.Should().BeNull(
+            "the committed expiry outcome is final and a later approve cannot advance state");
+        lateApprove.State.ToByteArray().Should().Equal(reloaded.ToByteArray());
+    }
+
+    [Fact]
+    public void ExpireApproval_ShouldCommitFencedSystemDenialAtTheDeadline()
+    {
+        var state = ExpiringApprovalState();
+        var signal = new NyxIdChatToolApprovalExpiredSignal
+        {
+            ApprovalRequestId = "approval-alpha",
+            ExpectedExpiresAt = ExpiresAt.Clone(),
+        };
+
+        var wrongRequest = signal.Clone();
+        wrongRequest.ApprovalRequestId = "approval-other";
+        NyxIdChatNeedsYouDecisions.ExpireApproval(state, wrongRequest, ExpiresAt)
+            .ShouldCommit.Should().BeFalse();
+
+        var wrongFence = signal.Clone();
+        wrongFence.ExpectedExpiresAt = Timestamp.FromDateTimeOffset(
+            ExpiresAt.ToDateTimeOffset() + TimeSpan.FromMinutes(1));
+        NyxIdChatNeedsYouDecisions.ExpireApproval(state, wrongFence, ExpiresAt)
+            .ShouldCommit.Should().BeFalse();
+
+        var beforeDeadline = Timestamp.FromDateTimeOffset(
+            ExpiresAt.ToDateTimeOffset() - TimeSpan.FromSeconds(1));
+        NyxIdChatNeedsYouDecisions.ExpireApproval(state, signal, beforeDeadline)
+            .ShouldCommit.Should().BeFalse();
+
+        var decision = NyxIdChatNeedsYouDecisions.ExpireApproval(state, signal, ExpiresAt);
+
+        decision.ShouldCommit.Should().BeTrue();
+        decision.Resolution!.Outcome.Should().Be(NyxIdChatNeedsYouResolutionOutcome.Expired);
+        decision.Resolution.Approved.Should().BeFalse();
+        decision.NextCommand.Should().BeNull(
+            "a timer-driven expiry must not dispatch an approval continuation or any effect");
+        AssertExpiredApprovalState(decision.State);
+    }
+
+    private static void AssertExpiredApprovalState(NyxIdChatConversationGAgentState state)
+    {
+        state.PendingApproval.Should().BeNull();
+        state.LatestApprovalResolution.Outcome.Should().Be(
+            NyxIdChatNeedsYouResolutionOutcome.Expired);
+        state.LatestApprovalResolution.Approved.Should().BeFalse();
+        var step = state.ActiveTask.Steps.Single();
+        step.Status.Should().Be(NyxIdChatStepStatus.Cancelled);
+        step.FailureCode.Should().Be(NyxIdChatTaskLifecycle.ApprovalExpired);
+        step.ExternalEffect.Should().Be(NyxIdChatEffectEvidence.NotApplied);
+        step.Operation.Phase.Should().Be(NyxIdChatOperationPhase.Cancelled);
+        step.Operation.Key.OperationGeneration.Should().Be(1,
+            "expiry cancels the exact waiting generation instead of advancing it");
+        state.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Failed);
+        state.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Failed);
+        state.ActiveTurn.FailureCode.Should().Be(NyxIdChatTaskLifecycle.ApprovalExpired);
+        state.ActiveTurn.TerminalAt.Should().NotBeNull();
+    }
+
+    private static NyxIdChatConversationGAgentState ExpiringApprovalState()
+    {
+        var state = ApprovalState();
+        state.ActiveTask.Steps.Single().Required = true;
+        state.PendingApproval = new NyxIdChatPendingApprovalState
+        {
+            ApprovalRequestId = "approval-alpha",
+            TurnId = "turn-alpha",
+            TaskId = "task-alpha",
+            StepId = "step-alpha",
+            ToolCallId = "call-approval-alpha",
+            ToolName = "repository_delete",
+            AskedAt = AskedAt.Clone(),
+            ExpiresAt = ExpiresAt.Clone(),
+        };
+        return state;
+    }
+
+    private static NyxIdChatApprovalResolveCommand ApproveCommand() => new()
+    {
+        ScopeId = "scope-alpha",
+        ConversationActorId = "conversation-alpha",
+        RequestId = "approval-alpha",
+        ClientRequestId = "client-approval-late",
+        Approved = true,
+        ExpectedStateVersion = 52,
+    };
 
     private static NyxIdChatInputRequestCommand InputRequest() => new()
     {

@@ -10,6 +10,7 @@ namespace Aevatar.AI.ToolProviders.Web;
 public sealed class WebApiClient : IWebApiClient, IDisposable
 {
     private const string FirecrawlNyxIdSearchSlug = "api-firecrawl";
+    private const string TavilyNyxIdSearchSlug = "tavily-search";
 
     private readonly HttpClient _http;
     private readonly WebToolOptions _options;
@@ -44,6 +45,13 @@ public sealed class WebApiClient : IWebApiClient, IDisposable
                 var url = $"{proxyBaseUrl}/v2/search";
                 return WebToolResultBoundaryJson.ParseSearchPayload(
                     await PostJsonAsync(token, url, new { query, limit = maxResults }, ct));
+            }
+
+            if (string.Equals(slug, TavilyNyxIdSearchSlug, StringComparison.OrdinalIgnoreCase))
+            {
+                var url = $"{proxyBaseUrl}/search";
+                return WebToolResultBoundaryJson.ParseSearchPayload(
+                    await PostJsonAsync(token, url, new { query, max_results = maxResults }, ct));
             }
 
             var path = $"/search?q={Uri.EscapeDataString(query)}&limit={maxResults}";

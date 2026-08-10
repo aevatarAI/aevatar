@@ -1,0 +1,167 @@
+{
+  "status": "current",
+  "stateVersion": 67,
+  "turnId": "turn-plan-alpha",
+  "snapshot": {
+    "actorId": "conversation-plan-alpha",
+    "scopeId": "scope-alpha",
+    "stateVersion": 67,
+    "progressSequence": 67,
+    "updatedAt": "2026-08-07T09:00:07Z",
+    "activeTask": {
+      "taskId": "task-plan-alpha",
+      "turnId": "turn-plan-alpha",
+      "status": "active",
+      "steps": [
+        {
+          "stepId": "step-llm",
+          "order": 1,
+          "kind": "llm",
+          "status": "done",
+          "required": true,
+          "description": "Resolve the execution plan.",
+          "source": { "llm": { "model": "gpt-5" } },
+          "mayChangeExternalState": false,
+          "externalEffect": "not_applied",
+          "availableActions": { "retry": false, "skip": false, "stop": false },
+          "updatedAt": "2026-08-07T09:00:01Z",
+          "addedBy": "initial"
+        },
+        {
+          "stepId": "step-tool",
+          "order": 2,
+          "kind": "tool",
+          "status": "failed",
+          "required": false,
+          "description": "Inspect the connected repository.",
+          "source": {
+            "tool": {
+              "toolName": "repository_read",
+              "serviceSlug": "github-api",
+              "serviceId": "service-alpha",
+              "readinessCapabilityId": "api-github"
+            }
+          },
+          "mayChangeExternalState": false,
+          "externalEffect": "not_applied",
+          "failureCode": "NYXID_CONNECTION_UNAVAILABLE",
+          "safeMessage": "The connected service is unavailable.",
+          "safeToSkip": true,
+          "availableActions": { "retry": true, "skip": true, "stop": false },
+          "updatedAt": "2026-08-07T09:00:04Z",
+          "addedBy": "replan",
+          "dependsOn": ["step-llm"],
+          "estimate": { "kind": "duration", "seconds": 30 },
+          "substeps": [
+            { "substepId": "substep-auth", "title": "Check access", "status": "done" },
+            { "substepId": "substep-read", "title": "Read repository", "status": "failed" }
+          ]
+        },
+        {
+          "stepId": "step-browser",
+          "order": 3,
+          "kind": "browser_action",
+          "status": "done",
+          "required": true,
+          "description": "Connect the repository service.",
+          "source": {
+            "browserAction": {
+              "action": "service_connect",
+              "actionRequestId": "action-alpha"
+            }
+          },
+          "mayChangeExternalState": true,
+          "externalEffect": "confirmed",
+          "actionRequestId": "action-alpha",
+          "availableActions": { "retry": false, "skip": false, "stop": false },
+          "updatedAt": "2026-08-07T09:00:05Z",
+          "addedBy": "replan",
+          "dependsOn": ["step-tool"]
+        },
+        {
+          "stepId": "step-postcondition",
+          "order": 4,
+          "kind": "postcondition",
+          "status": "done",
+          "required": true,
+          "description": "Verify the connected service.",
+          "source": {
+            "postcondition": {
+              "actionRequestId": "action-alpha",
+              "check": "service.connected"
+            }
+          },
+          "mayChangeExternalState": false,
+          "externalEffect": "confirmed",
+          "actionRequestId": "action-alpha",
+          "availableActions": { "retry": false, "skip": false, "stop": false },
+          "updatedAt": "2026-08-07T09:00:06Z",
+          "addedBy": "replan",
+          "dependsOn": ["step-browser"]
+        },
+        {
+          "stepId": "step-input",
+          "order": 5,
+          "kind": "input",
+          "status": "waiting",
+          "required": true,
+          "description": "Collect deployment preferences.",
+          "source": { "input": { "requestId": "input-alpha" } },
+          "mayChangeExternalState": false,
+          "externalEffect": "not_started",
+          "availableActions": { "retry": false, "skip": false, "stop": true },
+          "updatedAt": "2026-08-07T09:00:07Z",
+          "addedBy": "steering",
+          "dependsOn": ["step-postcondition"]
+        },
+        {
+          "stepId": "step-approval",
+          "order": 6,
+          "kind": "approval",
+          "status": "planned",
+          "required": true,
+          "description": "Approve the deployment.",
+          "source": { "approval": { "approvalRequestId": "approval-alpha" } },
+          "mayChangeExternalState": false,
+          "externalEffect": "not_started",
+          "approvalRequestId": "approval-alpha",
+          "availableActions": { "retry": false, "skip": false, "stop": true },
+          "updatedAt": "2026-08-07T09:00:07Z",
+          "addedBy": "steering",
+          "dependsOn": ["step-input"]
+        },
+        {
+          "stepId": "step-web",
+          "order": 7,
+          "kind": "web",
+          "status": "planned",
+          "required": false,
+          "description": "Collect public release evidence.",
+          "source": { "web": {} },
+          "mayChangeExternalState": false,
+          "externalEffect": "not_started",
+          "safeToSkip": true,
+          "availableActions": { "retry": false, "skip": true, "stop": true },
+          "updatedAt": "2026-08-07T09:00:07Z",
+          "addedBy": "steering",
+          "dependsOn": ["step-approval"]
+        }
+      ],
+      "activeStepId": "step-input",
+      "createdAt": "2026-08-07T09:00:00Z",
+      "updatedAt": "2026-08-07T09:00:07Z",
+      "schemaVersion": 4,
+      "actorId": "conversation-plan-alpha",
+      "planId": "plan-alpha",
+      "planRevision": 4,
+      "title": "Prepare and approve the deployment",
+      "gate": {
+        "mode": "confirm",
+        "reason": "The plan contains an effect-capable operation."
+      }
+    },
+    "taskStatus": "active",
+    "attentionKind": "input",
+    "activeStepSummary": "Collect deployment preferences."
+  }
+}

@@ -4,6 +4,7 @@ using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Core.Execution;
+using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Core.Primitives;
 using FluentAssertions;
 using Google.Protobuf;
@@ -113,6 +114,296 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
         failed.FailureOutcome.Should().Be(WorkflowStepFailureOutcome.OutcomeUncertain);
         failed.Error.Should().StartWith("step_executor_failed: step 'step-1' (tool_call) failed during executor: ");
         failed.Error.Should().NotContain("super-secret-token");
+    }
+
+    [Fact]
+    public async Task Bridge_ShouldLetActorOwnedRetryDrainPersistedToolCompletionWithoutUncertainOutcome()
+    {
+        var tool = new RecordingWorkflowTool(
+            "counting_tool",
+            _ => WorkflowToolExecutionResult.Success("""{"ok":true}"""));
+        var executor = new ToolCallModule(
+            [new SingleWorkflowToolSource(tool)],
+            NullLogger<ToolCallModule>.Instance);
+        var host = new RecordingStateHost { RunId = "run-1" };
+        var bridge = new WorkflowExecutionBridgeModule([executor], host);
+        var ctx = new RecordingEventHandlerContext
+        {
+            FailNextPublishType = typeof(WorkflowToolCallCompletedEvent),
+        };
+        var request = new StepRequestEvent
+        {
+            RunId = "run-1",
+            StepId = "tool-step",
+            StepType = "tool_call",
+            ExecutionId = "exec-1",
+            Parameters = { ["tool"] = tool.Name },
+        };
+
+        await bridge.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+
+        tool.ExecuteCalls.Should().Be(1);
+        ctx.Published.Select(x => x.Event)
+            .Where(x => x.Is(StepCompletedEvent.Descriptor))
+            .Should().BeEmpty();
+        var retry = ctx.Scheduled
+            .Select(x => x.Event.Unpack<WorkflowToolCallPublicationRetryFiredEvent>())
+            .Should().ContainSingle()
+            .Subject;
+        retry.PublicationKind.Should().Be(WorkflowToolCallPublicationKind.Completion);
+        host.States[ToolCallModule.ModuleStateKey]
+            .Unpack<ToolCallModuleState>()
+            .Completions.Should().ContainSingle();
+
+        await bridge.HandleAsync(Envelope(retry), ctx, CancellationToken.None);
+
+        tool.ExecuteCalls.Should().Be(1);
+        ctx.Published.Select(x => x.Event)
+            .Where(x => x.Is(WorkflowToolCallCompletedEvent.Descriptor))
+            .Should().ContainSingle();
+        ctx.Published.Select(x => x.Event)
+            .Where(x => x.Is(StepCompletedEvent.Descriptor))
+            .Should().ContainSingle();
+        var recovered = host.States[ToolCallModule.ModuleStateKey].Unpack<ToolCallModuleState>();
+        recovered.Completions.Should().BeEmpty();
+        recovered.CompletionTombstones.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task Bridge_ShouldLetActorOwnedRetryDrainPersistedApprovalSuspensionWithoutReexecution()
+    {
+        var pending = new WorkflowToolApprovalPendingOutcome(
+            "approval-1",
+            "danger",
+            "workflow:run-1:danger-step:exec-1",
+            "{}",
+            "AlwaysRequire",
+            false,
+            true);
+        var tool = new RecordingWorkflowTool(
+            "danger",
+            _ => new WorkflowToolExecutionResult(string.Empty, PendingApproval: pending));
+        var executor = new ToolCallModule(
+            [new SingleWorkflowToolSource(tool)],
+            NullLogger<ToolCallModule>.Instance);
+        var host = new RecordingStateHost { RunId = "run-1" };
+        var bridge = new WorkflowExecutionBridgeModule([executor], host);
+        var ctx = new RecordingEventHandlerContext
+        {
+            FailNextPublishType = typeof(WorkflowSuspendedEvent),
+        };
+        var request = new StepRequestEvent
+        {
+            RunId = "run-1",
+            StepId = "danger-step",
+            StepType = "tool_call",
+            ExecutionId = "exec-1",
+            Parameters = { ["tool"] = tool.Name },
+        };
+
+        await bridge.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+
+        tool.ExecuteCalls.Should().Be(1);
+        ctx.Published.Select(x => x.Event)
+            .Where(x => x.Is(StepCompletedEvent.Descriptor))
+            .Should().BeEmpty();
+        var retry = ctx.Scheduled
+            .Select(x => x.Event.Unpack<WorkflowToolCallPublicationRetryFiredEvent>())
+            .Should().ContainSingle()
+            .Subject;
+        retry.PublicationKind.Should().Be(WorkflowToolCallPublicationKind.Suspension);
+        host.States[ToolCallModule.ModuleStateKey]
+            .Unpack<ToolCallModuleState>()
+            .PendingApprovals.Values.Should().ContainSingle()
+            .Which.SuspensionPublished.Should().BeFalse();
+
+        await bridge.HandleAsync(Envelope(retry), ctx, CancellationToken.None);
+
+        tool.ExecuteCalls.Should().Be(1);
+        ctx.Published.Select(x => x.Event)
+            .Where(x => x.Is(WorkflowSuspendedEvent.Descriptor))
+            .Should().ContainSingle();
+        host.States[ToolCallModule.ModuleStateKey]
+            .Unpack<ToolCallModuleState>()
+            .PendingApprovals.Values.Should().ContainSingle()
+            .Which.SuspensionPublished.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Bridge_ShouldPublishSingleTypedContinuation_WhenCompletionRecoverySchedulingFails()
+    {
+        var tool = new RecordingWorkflowTool(
+            "counting_tool",
+            _ => WorkflowToolExecutionResult.Success("""{"ok":true}"""));
+        var executor = new ToolCallModule(
+            [new SingleWorkflowToolSource(tool)],
+            NullLogger<ToolCallModule>.Instance);
+        var host = new RecordingStateHost { RunId = "run-1" };
+        var bridge = new WorkflowExecutionBridgeModule([executor], host);
+        var ctx = new RecordingEventHandlerContext
+        {
+            FailPublish = evt => evt is WorkflowToolCallCompletedEvent,
+            FailSchedule = true,
+        };
+        var request = new StepRequestEvent
+        {
+            RunId = "run-1",
+            StepId = "tool-step",
+            StepType = "tool_call",
+            ExecutionId = "exec-1",
+            Parameters = { ["tool"] = tool.Name },
+        };
+
+        await bridge.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+
+        tool.ExecuteCalls.Should().Be(1);
+        ctx.ScheduleAttempts.Should().Be(1);
+        var retry = ctx.Published.Select(x => x.Event)
+            .Where(x => x.Is(WorkflowToolCallPublicationRetryFiredEvent.Descriptor))
+            .Should().ContainSingle()
+            .Subject
+            .Unpack<WorkflowToolCallPublicationRetryFiredEvent>();
+        retry.PublicationKind.Should().Be(WorkflowToolCallPublicationKind.Completion);
+        ctx.Published.Select(x => x.Event)
+            .Should().NotContain(x => x.Is(StepCompletedEvent.Descriptor));
+        host.States[ToolCallModule.ModuleStateKey]
+            .Unpack<ToolCallModuleState>()
+            .Completions.Should().ContainSingle();
+
+        await bridge.HandleAsync(Envelope(retry), ctx, CancellationToken.None);
+
+        tool.ExecuteCalls.Should().Be(1);
+        ctx.ScheduleAttempts.Should().Be(2);
+        ctx.Published.Select(x => x.Event)
+            .Where(x => x.Is(WorkflowToolCallPublicationRetryFiredEvent.Descriptor))
+            .Should().ContainSingle();
+        ctx.Published.Select(x => x.Event)
+            .Should().NotContain(x => x.Is(StepCompletedEvent.Descriptor));
+        host.States[ToolCallModule.ModuleStateKey]
+            .Unpack<ToolCallModuleState>()
+            .Completions.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task Bridge_ShouldPublishSingleTypedContinuation_WhenSuspensionRecoverySchedulingFails()
+    {
+        var pending = new WorkflowToolApprovalPendingOutcome(
+            "approval-1",
+            "danger",
+            "workflow:run-1:danger-step:exec-1",
+            "{}",
+            "AlwaysRequire",
+            false,
+            true);
+        var tool = new RecordingWorkflowTool(
+            "danger",
+            _ => new WorkflowToolExecutionResult(string.Empty, PendingApproval: pending));
+        var executor = new ToolCallModule(
+            [new SingleWorkflowToolSource(tool)],
+            NullLogger<ToolCallModule>.Instance);
+        var host = new RecordingStateHost { RunId = "run-1" };
+        var bridge = new WorkflowExecutionBridgeModule([executor], host);
+        var ctx = new RecordingEventHandlerContext
+        {
+            FailPublish = evt => evt is WorkflowSuspendedEvent,
+            FailSchedule = true,
+        };
+        var request = new StepRequestEvent
+        {
+            RunId = "run-1",
+            StepId = "danger-step",
+            StepType = "tool_call",
+            ExecutionId = "exec-1",
+            Parameters = { ["tool"] = tool.Name },
+        };
+
+        await bridge.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+
+        tool.ExecuteCalls.Should().Be(1);
+        ctx.ScheduleAttempts.Should().Be(1);
+        var retry = ctx.Published.Select(x => x.Event)
+            .Where(x => x.Is(WorkflowToolCallPublicationRetryFiredEvent.Descriptor))
+            .Should().ContainSingle()
+            .Subject
+            .Unpack<WorkflowToolCallPublicationRetryFiredEvent>();
+        retry.PublicationKind.Should().Be(WorkflowToolCallPublicationKind.Suspension);
+        ctx.Published.Select(x => x.Event)
+            .Should().NotContain(x => x.Is(StepCompletedEvent.Descriptor));
+        host.States[ToolCallModule.ModuleStateKey]
+            .Unpack<ToolCallModuleState>()
+            .PendingApprovals.Values.Should().ContainSingle()
+            .Which.SuspensionPublished.Should().BeFalse();
+
+        await bridge.HandleAsync(Envelope(retry), ctx, CancellationToken.None);
+
+        tool.ExecuteCalls.Should().Be(1);
+        ctx.ScheduleAttempts.Should().Be(2);
+        ctx.Published.Select(x => x.Event)
+            .Where(x => x.Is(WorkflowToolCallPublicationRetryFiredEvent.Descriptor))
+            .Should().ContainSingle();
+        ctx.Published.Select(x => x.Event)
+            .Should().NotContain(x => x.Is(StepCompletedEvent.Descriptor));
+        host.States[ToolCallModule.ModuleStateKey]
+            .Unpack<ToolCallModuleState>()
+            .PendingApprovals.Values.Should().ContainSingle()
+            .Which.SuspensionPublished.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Bridge_ShouldKeepAdapterSingleExecution_WhenPublishSucceedsBeforeCheckpointFailure()
+    {
+        var tool = new RecordingWorkflowTool(
+            "counting_tool",
+            _ => WorkflowToolExecutionResult.Success("""{"ok":true}"""));
+        var executor = new ToolCallModule(
+            [new SingleWorkflowToolSource(tool)],
+            NullLogger<ToolCallModule>.Instance);
+        var host = new RecordingStateHost
+        {
+            RunId = "run-1",
+            FailSaveAttempt = 2,
+        };
+        var bridge = new WorkflowExecutionBridgeModule([executor], host);
+        var ctx = new RecordingEventHandlerContext();
+        var request = new StepRequestEvent
+        {
+            RunId = "run-1",
+            StepId = "tool-step",
+            StepType = "tool_call",
+            ExecutionId = "exec-1",
+            Parameters = { ["tool"] = tool.Name },
+        };
+
+        await bridge.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+
+        tool.ExecuteCalls.Should().Be(1);
+        host.States[ToolCallModule.ModuleStateKey]
+            .Unpack<ToolCallModuleState>()
+            .Completions.Should().ContainSingle()
+            .Which.ToolCompletionPublished.Should().BeFalse();
+        var retry = ctx.Scheduled.Select(x => x.Event)
+            .Select(x => x.Unpack<WorkflowToolCallPublicationRetryFiredEvent>())
+            .Should().ContainSingle()
+            .Subject;
+        ctx.Published.Select(x => x.Event)
+            .Where(x => x.Is(WorkflowToolCallCompletedEvent.Descriptor))
+            .Should().ContainSingle();
+        ctx.Published.Select(x => x.Event)
+            .Should().NotContain(x => x.Is(StepCompletedEvent.Descriptor));
+
+        await bridge.HandleAsync(Envelope(retry), ctx, CancellationToken.None);
+
+        tool.ExecuteCalls.Should().Be(1);
+        ctx.Published.Select(x => x.Event)
+            .Where(x => x.Is(WorkflowToolCallCompletedEvent.Descriptor))
+            .Should().HaveCount(2);
+        ctx.Published.Select(x => x.Event)
+            .Where(x => x.Is(StepCompletedEvent.Descriptor))
+            .Should().ContainSingle()
+            .Which.Unpack<StepCompletedEvent>().Success.Should().BeTrue();
+        host.States[ToolCallModule.ModuleStateKey]
+            .Unpack<ToolCallModuleState>()
+            .CompletionTombstones.Should().ContainSingle();
     }
 
     [Fact]
@@ -531,9 +822,17 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
 
         public Func<IMessage, bool>? FailPublish { get; init; }
 
+        public System.Type? FailNextPublishType { get; set; }
+
+        public bool FailSchedule { get; init; }
+
+        public int ScheduleAttempts { get; private set; }
+
         public List<(Any Event, TopologyAudience Direction)> Published { get; } = [];
 
         public List<RuntimeCallbackLease> Canceled { get; } = [];
+
+        public List<(string CallbackId, Any Event)> Scheduled { get; } = [];
 
         public Task PublishAsync<TEvent>(
             TEvent evt,
@@ -543,6 +842,12 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
             where TEvent : IMessage
         {
             ct.ThrowIfCancellationRequested();
+            if (FailNextPublishType?.IsInstanceOfType(evt) == true)
+            {
+                FailNextPublishType = null;
+                throw new InvalidOperationException("publish failed with bearer super-secret-token");
+            }
+
             if (FailPublish?.Invoke(evt) == true)
                 throw new InvalidOperationException("publish failed with bearer super-secret-token");
 
@@ -563,8 +868,16 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
             TimeSpan dueTime,
             IMessage evt,
             EventEnvelopePublishOptions? options = null,
-            CancellationToken ct = default) =>
-            Task.FromResult(new RuntimeCallbackLease(AgentId, callbackId, 1, RuntimeCallbackBackend.InMemory));
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            ScheduleAttempts++;
+            if (FailSchedule)
+                throw new InvalidOperationException("schedule failed");
+
+            Scheduled.Add((callbackId, Any.Pack(evt)));
+            return Task.FromResult(new RuntimeCallbackLease(AgentId, callbackId, 1, RuntimeCallbackBackend.InMemory));
+        }
 
         public Task<RuntimeCallbackLease> ScheduleSelfDurableTimerAsync(
             string callbackId,
@@ -582,6 +895,33 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
         }
     }
 
+    private sealed class RecordingWorkflowTool(
+        string name,
+        Func<WorkflowToolExecutionRequest, WorkflowToolExecutionResult> execute) : IWorkflowTool
+    {
+        public string Name { get; } = name;
+
+        public int ExecuteCalls { get; private set; }
+
+        public Task<WorkflowToolExecutionResult> ExecuteAsync(
+            WorkflowToolExecutionRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            ExecuteCalls++;
+            return Task.FromResult(execute(request));
+        }
+    }
+
+    private sealed class SingleWorkflowToolSource(IWorkflowTool tool) : IWorkflowToolSource
+    {
+        public Task<IReadOnlyList<IWorkflowTool>> GetToolsAsync(CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<IReadOnlyList<IWorkflowTool>>([tool]);
+        }
+    }
+
     private sealed class RecordingStateHost : IWorkflowExecutionStateHost
     {
         public string RunId { get; init; } = "run-1";
@@ -591,6 +931,10 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
         public WorkflowRunExecutionContextState ExecutionContextSnapshot { get; } = new();
 
         public bool FailSave { get; set; }
+
+        public int? FailSaveAttempt { get; init; }
+
+        public int SaveAttempts { get; private set; }
 
         public bool FailRecordCompensableDispatch { get; init; }
 
@@ -612,7 +956,8 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
 
         public Task UpsertExecutionStateAsync(string scopeKey, Any state, CancellationToken ct = default)
         {
-            if (FailSave)
+            SaveAttempts++;
+            if (FailSave || SaveAttempts == FailSaveAttempt)
                 throw new InvalidOperationException("save failed with bearer super-secret-token");
 
             States[scopeKey] = state;

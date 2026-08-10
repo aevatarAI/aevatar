@@ -82,6 +82,13 @@ public enum NyxIdUserServiceCredentialStatus
     PendingAuthorization = 6,
 }
 
+public enum NyxIdOAuthConnectionStatus
+{
+    Unspecified = 0,
+    Active = 1,
+    Expired = 2,
+}
+
 public enum NyxIdUserServiceNodeStatus
 {
     Unspecified = 0,
@@ -102,9 +109,38 @@ public sealed record NyxIdUserServiceKey(
     NyxIdUserServiceCredentialStatus CredentialStatus,
     string? NodeId,
     NyxIdUserServiceNodeStatus NodeStatus,
-    NyxIdUserServiceCredentialSource CredentialSource);
+    NyxIdUserServiceCredentialSource CredentialSource,
+    string? CatalogServiceSlug,
+    bool Connected);
 
 public sealed record NyxIdUserServiceKeys(IReadOnlyList<NyxIdUserServiceKey> Services);
+
+public sealed record NyxIdUserServiceAuthorizationEvidence(
+    string UserServiceId,
+    string? ApiKeyId,
+    bool IsActive,
+    NyxIdUserServiceCredentialStatus CredentialStatus,
+    NyxIdOAuthConnectionStatus OAuthConnectionStatus,
+    IReadOnlyList<string>? GrantedScopes,
+    DateTimeOffset? LastAuthorizedAtUtc);
+
+public sealed record NyxIdApiKeyVersionEvidence(
+    string? RotationPredecessorId,
+    long StateVersion,
+    DateTimeOffset UpdatedAtUtc);
+
+public sealed record NyxIdAgentApiKeyEvidence(
+    string Id,
+    string Name,
+    IReadOnlyList<string> Scopes,
+    string? Platform,
+    bool IsActive,
+    IReadOnlyList<string> AllowedServiceIds,
+    bool AllowAllServices,
+    IReadOnlyList<string> AllowedNodeIds,
+    bool AllowAllNodes,
+    DateTimeOffset CreatedAtUtc,
+    NyxIdApiKeyVersionEvidence? VersionEvidence);
 
 public enum NyxIdScopePlanPrincipalKind
 {
@@ -190,6 +226,9 @@ public static class NyxIdApiAccessResponseParser
     private const string ScopePlanPreconditionField = "scope_plan_digest";
     private const string UserServicesFailurePrefix = "nyxid_user_services";
     private const string UserServiceKeysFailurePrefix = "nyxid_user_service_keys";
+    private const string UserServiceAuthorizationFailurePrefix =
+        "nyxid_user_service_authorization";
+    private const string AgentApiKeyFailurePrefix = "nyxid_agent_api_key";
     private const string ScopePlanFailurePrefix = "nyxid_scope_plan";
 
     private static readonly HashSet<string> PublishedErrorCodes = new(StringComparer.Ordinal)
@@ -211,6 +250,28 @@ public static class NyxIdApiAccessResponseParser
         "api_key_scope_plan_stale",
     };
 
+    private static readonly HashSet<string> SecretBearingReadFieldNames = new(StringComparer.Ordinal)
+    {
+        "fullkey",
+        "keyhash",
+        "credential",
+        "credentials",
+        "accesstoken",
+        "refreshtoken",
+        "authorization",
+        "cookie",
+        "cookies",
+        "secret",
+        "secrets",
+        "clientsecret",
+        "password",
+        "passphrase",
+        "usercode",
+        "devicecode",
+        "rawbody",
+        "rawupstreambody",
+    };
+
     private static readonly Regex Rfc3339Pattern = new(
         @"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$",
         RegexOptions.CultureInvariant);
@@ -224,6 +285,17 @@ public static class NyxIdApiAccessResponseParser
 
     public static NyxIdApiAccessResult<NyxIdUserServiceKeys> ParseUserServiceKeys(string response) =>
         Parse(response, UserServiceKeysFailurePrefix, ParseUserServiceKeysDocument);
+
+    public static NyxIdApiAccessResult<NyxIdUserServiceAuthorizationEvidence>
+        ParseUserServiceAuthorization(string response) =>
+        Parse(
+            response,
+            UserServiceAuthorizationFailurePrefix,
+            ParseUserServiceAuthorizationDocument);
+
+    public static NyxIdApiAccessResult<NyxIdAgentApiKeyEvidence> ParseAgentApiKey(
+        string response) =>
+        Parse(response, AgentApiKeyFailurePrefix, ParseAgentApiKeyDocument);
 
     public static NyxIdApiAccessResult<NyxIdApiKeyScopePlan> ParseScopePlan(string response) =>
         Parse(response, ScopePlanFailurePrefix, ParseScopePlanDocument);
@@ -308,11 +380,171 @@ public static class NyxIdApiAccessResponseParser
                 ParseCredentialSource(RequireProperty(
                     serviceElement,
                     "credential_source",
-                    JsonValueKind.Object))));
+                    JsonValueKind.Object)),
+                ReadOptionalNormalizedString(serviceElement, "catalog_service_slug"),
+                RequireBoolean(serviceElement, "connected")));
         }
 
         return new NyxIdUserServiceKeys(services);
     }
+
+    private static NyxIdUserServiceAuthorizationEvidence
+        ParseUserServiceAuthorizationDocument(JsonElement root)
+    {
+        RejectSecretBearingRead(root);
+        return new NyxIdUserServiceAuthorizationEvidence(
+            RequireNormalizedString(root, "id"),
+            ReadOptionalNormalizedString(root, "api_key_id"),
+            RequireBoolean(root, "is_active"),
+            ParseCredentialStatus(RequireNormalizedString(root, "status")),
+            ParseRequiredOAuthConnectionStatus(root),
+            ReadRequiredNullableNormalizedStringArray(root, "granted_scopes"),
+            ReadRequiredNullableTimestamp(root, "last_authorized_at"));
+    }
+
+    private static NyxIdAgentApiKeyEvidence ParseAgentApiKeyDocument(JsonElement root)
+    {
+        RejectSecretBearingRead(root);
+        var createdAt = ParseRfc3339(RequireNormalizedString(root, "created_at"));
+        var versionEvidence = ParseOptionalVersionEvidence(root);
+        if (versionEvidence is not null && versionEvidence.UpdatedAtUtc < createdAt)
+            throw new NyxIdContractException();
+
+        return new NyxIdAgentApiKeyEvidence(
+            RequireNormalizedString(root, "id"),
+            RequireNormalizedString(root, "name"),
+            ParseSpaceSeparatedValues(RequireNormalizedString(root, "scopes")),
+            ReadOptionalNormalizedString(root, "platform"),
+            RequireBoolean(root, "is_active"),
+            ReadRequiredNormalizedStringArray(root, "allowed_service_ids"),
+            RequireBoolean(root, "allow_all_services"),
+            ReadRequiredNormalizedStringArray(root, "allowed_node_ids"),
+            RequireBoolean(root, "allow_all_nodes"),
+            createdAt,
+            versionEvidence);
+    }
+
+    private static NyxIdApiKeyVersionEvidence? ParseOptionalVersionEvidence(JsonElement root)
+    {
+        var hasPrevious = root.TryGetProperty("rotation_predecessor_id", out _);
+        var hasVersion = root.TryGetProperty("state_version", out _);
+        var hasUpdatedAt = root.TryGetProperty("updated_at", out _);
+        if (!hasPrevious && !hasVersion && !hasUpdatedAt)
+            return null;
+        if (!hasPrevious || !hasVersion || !hasUpdatedAt)
+            throw new NyxIdContractException();
+
+        var versionElement = RequireProperty(root, "state_version", JsonValueKind.Number);
+        if (!versionElement.TryGetInt64(out var stateVersion) || stateVersion <= 0)
+            throw new NyxIdContractException();
+
+        var predecessorElement = RequireProperty(root, "rotation_predecessor_id");
+        var predecessorId = predecessorElement.ValueKind switch
+        {
+            JsonValueKind.Null => null,
+            JsonValueKind.String when IsNormalizedValue(predecessorElement.GetString()) =>
+                predecessorElement.GetString(),
+            _ => throw new NyxIdContractException(),
+        };
+
+        return new NyxIdApiKeyVersionEvidence(
+            predecessorId,
+            stateVersion,
+            ParseRfc3339(RequireNormalizedString(root, "updated_at")));
+    }
+
+    private static IReadOnlyList<string> ParseSpaceSeparatedValues(string value)
+    {
+        var values = value.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (values.Length == 0 ||
+            values.Any(static item => !IsNormalizedValue(item)) ||
+            values.Distinct(StringComparer.Ordinal).Count() != values.Length)
+        {
+            throw new NyxIdContractException();
+        }
+
+        return values;
+    }
+
+    private static IReadOnlyList<string> ReadRequiredNormalizedStringArray(
+        JsonElement root,
+        string propertyName)
+    {
+        var property = RequireProperty(root, propertyName, JsonValueKind.Array);
+        return ReadNormalizedStringArray(property);
+    }
+
+    private static IReadOnlyList<string>? ReadRequiredNullableNormalizedStringArray(
+        JsonElement root,
+        string propertyName)
+    {
+        var property = RequireProperty(root, propertyName);
+        if (property.ValueKind == JsonValueKind.Null)
+            return null;
+        RequireKind(property, JsonValueKind.Array);
+        return ReadNormalizedStringArray(property);
+    }
+
+    private static IReadOnlyList<string> ReadNormalizedStringArray(JsonElement array)
+    {
+        var values = array.EnumerateArray()
+            .Select(static item =>
+            {
+                RequireKind(item, JsonValueKind.String);
+                var value = item.GetString();
+                return IsNormalizedValue(value)
+                    ? value!
+                    : throw new NyxIdContractException();
+            })
+            .ToArray();
+        if (values.Distinct(StringComparer.Ordinal).Count() != values.Length)
+            throw new NyxIdContractException();
+        return values;
+    }
+
+    private static DateTimeOffset? ReadRequiredNullableTimestamp(
+        JsonElement root,
+        string propertyName)
+    {
+        var property = RequireProperty(root, propertyName);
+        if (property.ValueKind == JsonValueKind.Null)
+            return null;
+        RequireKind(property, JsonValueKind.String);
+        var value = property.GetString();
+        if (!IsNormalizedValue(value))
+            throw new NyxIdContractException();
+        return ParseRfc3339(value!);
+    }
+
+    private static bool IsNormalizedValue(string? value) =>
+        !string.IsNullOrWhiteSpace(value) &&
+        string.Equals(value, value.Trim(), StringComparison.Ordinal) &&
+        !value.Any(char.IsControl);
+
+    private static void RejectSecretBearingRead(JsonElement root)
+    {
+        switch (root.ValueKind)
+        {
+            case JsonValueKind.Object:
+                foreach (var property in root.EnumerateObject())
+                {
+                    if (SecretBearingReadFieldNames.Contains(
+                            NormalizeReadFieldName(property.Name)))
+                        throw new NyxIdContractException();
+                    RejectSecretBearingRead(property.Value);
+                }
+                break;
+            case JsonValueKind.Array:
+                foreach (var item in root.EnumerateArray())
+                    RejectSecretBearingRead(item);
+                break;
+        }
+    }
+
+    private static string NormalizeReadFieldName(string value) =>
+        string.Concat(value
+            .Where(static character => char.IsAsciiLetterOrDigit(character))
+            .Select(static character => char.ToLowerInvariant(character)));
 
     private static NyxIdUserServiceCredentialStatus ParseCredentialStatus(string value) => value switch
     {
@@ -324,6 +556,21 @@ public static class NyxIdApiAccessResponseParser
         "pending_auth" => NyxIdUserServiceCredentialStatus.PendingAuthorization,
         _ => throw new NyxIdContractException(),
     };
+
+    private static NyxIdOAuthConnectionStatus ParseRequiredOAuthConnectionStatus(
+        JsonElement root)
+    {
+        var property = RequireProperty(root, "connection_status");
+        if (property.ValueKind == JsonValueKind.Null)
+            return NyxIdOAuthConnectionStatus.Unspecified;
+        RequireKind(property, JsonValueKind.String);
+        return property.GetString() switch
+        {
+            "active" => NyxIdOAuthConnectionStatus.Active,
+            "expired" => NyxIdOAuthConnectionStatus.Expired,
+            _ => throw new NyxIdContractException(),
+        };
+    }
 
     private static NyxIdUserServiceNodeStatus ParseNodeStatus(JsonElement service, string? nodeId)
     {

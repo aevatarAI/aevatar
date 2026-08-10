@@ -39,5 +39,6 @@ internal static class AgentRunReplyStepCredentials
         credentials.NyxIdAccessToken = string.Empty;
         credentials.NyxIdOrgToken = string.Empty;
         credentials.SenderNyxIdAccessToken = string.Empty;
+        credentials.SourceReadableNyxIdAccessToken = string.Empty;
     }
 }

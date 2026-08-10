@@ -177,8 +177,10 @@ public static class NyxIdChatTaskTransitionPolicy
 
         return new NyxIdChatAvailableActions
         {
-            Retry = step.Kind == NyxIdChatStepKind.Llm &&
+            Retry = step.Kind is (NyxIdChatStepKind.Llm or NyxIdChatStepKind.Tool) &&
                     step.RetryInputRebuildable &&
+                    (step.Kind != NyxIdChatStepKind.Tool ||
+                     step.RetryToolInput?.OperationAdmission is not null) &&
                     retryableStatus &&
                     effectAllowsRetry,
             Skip = recoverableStatus && (!step.Required || step.SafeToSkip),
@@ -242,9 +244,7 @@ public static class NyxIdChatTaskTransitionPolicy
             string.IsNullOrWhiteSpace(key.StepId) ||
             string.IsNullOrWhiteSpace(key.OperationId) ||
             !string.Equals(state.ConversationActorId, key.ConversationActorId, StringComparison.Ordinal) ||
-            !string.Equals(state.ActiveTurn.TurnId, key.TurnId, StringComparison.Ordinal) ||
             !string.Equals(state.ActiveTurn.TaskId, key.TaskId, StringComparison.Ordinal) ||
-            !string.Equals(state.ActiveTask.TurnId, key.TurnId, StringComparison.Ordinal) ||
             !string.Equals(state.ActiveTask.TaskId, key.TaskId, StringComparison.Ordinal))
         {
             return false;
@@ -257,8 +257,44 @@ public static class NyxIdChatTaskTransitionPolicy
             return false;
         }
 
+        var activeTurnMatches =
+            string.Equals(state.ActiveTurn.TurnId, key.TurnId, StringComparison.Ordinal) &&
+            string.Equals(state.ActiveTask.TurnId, key.TurnId, StringComparison.Ordinal);
+        if (!activeTurnMatches && !MatchesActionPostconditionOrigin(state, resolved, key))
+            return false;
+
         step = resolved;
         return true;
+    }
+
+    private static bool MatchesActionPostconditionOrigin(
+        NyxIdChatConversationGAgentState state,
+        NyxIdChatTaskStepState step,
+        NyxIdChatOperationKey key)
+    {
+        if (step.Kind != NyxIdChatStepKind.Postcondition ||
+            state.ContinuationAdmission is not
+            {
+                Kind: NyxIdChatContinuationKind.Action,
+                Status: NyxIdChatContinuationAdmissionStatus.Accepted,
+            } admission ||
+            !string.Equals(admission.OriginTurnId, key.TurnId, StringComparison.Ordinal) ||
+            !string.Equals(
+                admission.ContinuationTurnId,
+                state.ActiveTurn.TurnId,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                state.ActiveTask.TurnId,
+                admission.ContinuationTurnId,
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return state.PendingActions.Any(request =>
+            string.Equals(request.ActionRequestId, step.ActionRequestId, StringComparison.Ordinal) &&
+            string.Equals(request.OriginTurnId, key.TurnId, StringComparison.Ordinal) &&
+            string.Equals(request.TaskId, key.TaskId, StringComparison.Ordinal));
     }
 
     private static NyxIdChatTaskStepState? FindStep(
@@ -331,6 +367,9 @@ public static class NyxIdChatTaskTransitionPolicy
             case NyxIdChatOperationResultSignal.ResultOneofCase.Failure:
                 result = ClassifyFailure(signal.Failure);
                 return true;
+            case NyxIdChatOperationResultSignal.ResultOneofCase.ToolVerification:
+                result = ClassifyToolVerification(signal.ToolVerification);
+                return true;
             default:
                 result = default;
                 return false;
@@ -343,6 +382,16 @@ public static class NyxIdChatTaskTransitionPolicy
         var receipt = tool.Receipt;
         return receipt?.Status switch
         {
+            AgentToolReceiptStatus.Success
+                when tool.ExternalEffect == NyxIdChatEffectEvidence.MayHaveChanged =>
+                new ClassifiedOperationResult(
+                    NyxIdChatStepStatus.Waiting,
+                    NyxIdChatOperationPhase.Succeeded,
+                    NyxIdChatEffectEvidence.MayHaveChanged,
+                    string.Empty,
+                    string.Empty,
+                    false,
+                    false),
             AgentToolReceiptStatus.Success => ClassifiedOperationResult.Success(
                 NormalizeEffect(tool.ExternalEffect, NyxIdChatEffectEvidence.NotApplied)),
             AgentToolReceiptStatus.ApprovalRequired or
@@ -424,6 +473,30 @@ public static class NyxIdChatTaskTransitionPolicy
                 failure.SafeMessage);
     }
 
+    private static ClassifiedOperationResult ClassifyToolVerification(
+        NyxIdChatToolVerificationResult verification) => verification.Disposition switch
+    {
+        NyxIdChatToolVerificationDisposition.Applied =>
+            ClassifiedOperationResult.Success(NyxIdChatEffectEvidence.Confirmed) with
+            {
+                RequiresVerifiedPostcondition = true,
+                PostconditionVerified = true,
+            },
+        NyxIdChatToolVerificationDisposition.NotApplied =>
+            ClassifiedOperationResult.Success(NyxIdChatEffectEvidence.NotApplied),
+        _ => new ClassifiedOperationResult(
+            NyxIdChatStepStatus.Uncertain,
+            NyxIdChatOperationPhase.Uncertain,
+            NyxIdChatEffectEvidence.MayHaveChanged,
+            verification.FailureCode,
+            verification.SafeMessage,
+            false,
+            false),
+    };
+
+    internal static void RefreshTaskOutcome(NyxIdChatConversationGAgentState state) =>
+        ApplyTaskOutcome(state);
+
     private static NyxIdChatEffectEvidence NormalizeEffect(
         NyxIdChatEffectEvidence effect,
         NyxIdChatEffectEvidence fallback) =>
@@ -440,11 +513,19 @@ public static class NyxIdChatTaskTransitionPolicy
         step.Operation.Phase = result.OperationPhase;
         step.Operation.TerminalCode = result.FailureCode;
         step.Operation.SafeMessage = result.SafeMessage;
+        foreach (var substep in step.Substeps.Where(static candidate =>
+                     candidate.Status == NyxIdChatSubstepStatus.Running))
+        {
+            substep.Status = result.StepStatus == NyxIdChatStepStatus.Done
+                ? NyxIdChatSubstepStatus.Done
+                : NyxIdChatSubstepStatus.Failed;
+        }
     }
 
     private static void ApplyTaskOutcome(NyxIdChatConversationGAgentState state)
     {
         var requiredFailure = state.ActiveTask.Steps.FirstOrDefault(step =>
+            step.CancelledInPlanRevision == 0 &&
             step.Required && step.Status is
                 NyxIdChatStepStatus.Failed or
                 NyxIdChatStepStatus.Cancelled or
@@ -462,6 +543,7 @@ public static class NyxIdChatTaskTransitionPolicy
         }
 
         var recoverableStep = state.ActiveTask.Steps.FirstOrDefault(step =>
+            step.CancelledInPlanRevision == 0 &&
             step.Status is
                 NyxIdChatStepStatus.Failed or
                 NyxIdChatStepStatus.Cancelled or

@@ -1,4 +1,4 @@
-import "./transport.js";
+import "./transport.js?v=20260807-m40-thread-polish";
 import {
   consumeSse,
   mergeUsage,
@@ -9,20 +9,21 @@ import {
   redact,
   safeJson,
   validateActionContinuation,
-} from "./protocol.js";
+} from "./protocol.js?v=20260807-m40-thread-polish";
 import {
   buildConnectCardBlock,
   connectCardSteps,
   connectorInitial,
   splitMessageSegments,
-} from "./blocks.js";
+} from "./blocks.js?v=20260807-m40-thread-polish";
 import {
   actorCan,
   applyCurrentStateResult,
   createActorProjection,
   reduceActorEvent,
   restoreCachedAction,
-} from "./actor-state.js";
+} from "./actor-state.js?v=20260807-m40-thread-polish";
+import { describeReadinessFailure } from "./readiness.js?v=20260807-m40-thread-polish";
 
 const PREFERENCES_KEY = "aevatar-studio:assistant-preferences:v4";
 const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
@@ -92,6 +93,11 @@ const dom = {
   readinessFreshness: $("#readinessFreshness"),
   readinessList: $("#readinessList"),
   readinessPanel: $("#readinessPanel"),
+  readinessRecovery: $("#readinessRecovery"),
+  readinessRecoveryButton: $("#readinessRecoveryButton"),
+  readinessRecoveryButtonLabel: $("#readinessRecoveryButtonLabel"),
+  readinessRecoveryDetail: $("#readinessRecoveryDetail"),
+  readinessRecoveryTitle: $("#readinessRecoveryTitle"),
   readinessSummary: $("#readinessSummary"),
   refreshReadinessButton: $("#refreshReadinessButton"),
   refreshComposerServicesButton: $("#refreshComposerServicesButton"),
@@ -151,18 +157,20 @@ const state = {
     transport: "nyxid-session",
     authMode: "site-session",
     surface: "nyxid-chat",
-    directBaseUrl: "https://aevatar-console-backend-api.aevatar.ai",
-    proxyBaseUrl: "https://nyx-api.chrono-ai.fun/api/v1/proxy/s/aevatar",
-    ornnWebUrl: "https://ornn.chrono-ai.fun",
-    nyxidWebUrl: "https://nyx.chrono-ai.fun",
-    servicesUrl: "https://nyx.chrono-ai.fun/keys",
+    directBaseUrl: "",
+    proxyBaseUrl: "",
+    ornnWebUrl: "",
+    nyxidWebUrl: "",
+    servicesUrl: "",
     scopeId: "",
     workflow: "direct",
+    enableStudioWireInspector: false,
   },
   auth: { authenticated: false, user: null, resources: [] },
   services: [],
   connectors: { connected: [], available: [], loadedAt: 0 },
   readiness: { subject: "", snapshot: null, loading: false, error: null, inFlight: null },
+  readinessOptionalOpen: false,
   pendingFirstTurn: null,
   historyFilter: "all",
   workflowSessionId: createId("workflow-session"),
@@ -458,6 +466,12 @@ function bindEvents() {
   dom.closeComposerServicesButton.addEventListener("click", closeComposerServices);
   dom.refreshComposerServicesButton.addEventListener("click", () => void loadServices());
   dom.refreshReadinessButton.addEventListener("click", () => void loadReadiness({ fresh: true }));
+  dom.readinessRecoveryButton.addEventListener("click", () => {
+    const action = dom.readinessRecoveryButton.dataset.action;
+    if (action === "login") beginLogin();
+    else if (action === "account") openSettings();
+    else void loadReadiness({ fresh: true });
+  });
   dom.needsYouFilterButton.addEventListener("click", () => {
     state.historyFilter = state.historyFilter === "needs-you" ? "all" : "needs-you";
     renderHistoryList();
@@ -599,6 +613,7 @@ async function refreshAuthSession({ includeServices = false } = {}) {
   }
   renderAuthUi();
   renderReadiness();
+  configureWireInspector();
   if (readinessSubjectChanged && state.auth.authenticated) await loadReadiness();
   return state.auth;
 }
@@ -648,6 +663,7 @@ function resumePendingFirstTurn() {
 
 function readinessNeedsRefresh() {
   return Boolean(state.pendingFirstTurn) ||
+    Boolean(state.readiness.error) ||
     state.readiness.snapshot?.capabilities?.some((capability) =>
       capability.status !== "available") === true;
 }
@@ -691,12 +707,21 @@ const readinessGrantCopy = {
   unknown: "授权状态未知",
 };
 
+// Optional capabilities never gate the workbench, so their status reads as a
+// neutral on/off fact instead of the alarming state words reserved for
+// capabilities that can actually block the first run.
+function readinessStatusLabel(capability) {
+  if (!capability.required) return capability.status === "available" ? "可用" : "未启用";
+  return readinessStatusCopy[capability.status];
+}
+
 function renderReadiness() {
   if (!dom.readinessPanel) return;
   const authenticated = state.auth.authenticated;
   dom.readinessPanel.classList.toggle("hidden", !authenticated);
   if (!authenticated) return;
   dom.refreshReadinessButton.disabled = state.readiness.loading;
+  dom.readinessRecovery.classList.add("hidden");
   if (state.readiness.loading) {
     dom.readinessFreshness.textContent = "正在检查";
     dom.readinessList.replaceChildren(el("div", "readiness-empty", "正在读取 NyxID 能力状态…"));
@@ -704,17 +729,24 @@ function renderReadiness() {
     return;
   }
   if (state.readiness.error || !state.readiness.snapshot) {
-    dom.readinessFreshness.textContent = "状态不可用";
-    dom.readinessList.replaceChildren(el("div", "readiness-empty error", "暂时无法确认运行准备状态。"));
-    dom.readinessSummary.textContent = "尚未取得必需能力的有效证明。";
+    const failure = describeReadinessFailure(state.readiness.error);
+    dom.readinessFreshness.textContent = failure.freshness;
+    dom.readinessList.replaceChildren();
+    dom.readinessSummary.textContent = failure.summary;
+    dom.readinessRecoveryTitle.textContent = "如何恢复";
+    dom.readinessRecoveryDetail.textContent = failure.guidance;
+    dom.readinessRecoveryButton.dataset.action = failure.action;
+    dom.readinessRecoveryButtonLabel.textContent = failure.actionLabel;
+    dom.readinessRecovery.classList.remove("hidden");
+    refreshIcons(dom.readinessRecovery);
     return;
   }
   const snapshot = state.readiness.snapshot;
   const capabilities = [...snapshot.capabilities].sort((left, right) =>
     Number(right.required) - Number(left.required));
   dom.readinessFreshness.textContent = `检查于 ${new Date(snapshot.evaluatedAt).toLocaleString("zh-CN")}`;
-  dom.readinessList.replaceChildren(...capabilities.map((capability) => {
-    const row = el("div", `readiness-row status-${capability.status}`);
+  const capabilityRow = (capability) => {
+    const row = el("div", `readiness-row status-${capability.status}${capability.required ? "" : " optional"}`);
     row.dataset.capabilityId = capability.capabilityId;
     row.setAttribute("role", "listitem");
     const copy = el("div", "readiness-copy");
@@ -726,7 +758,7 @@ function renderReadiness() {
         readinessGrantCopy[capability.grantState],
       ].join(" · ")),
     );
-    row.append(copy, el("span", "readiness-status", readinessStatusCopy[capability.status]));
+    row.append(copy, el("span", "readiness-status", readinessStatusLabel(capability)));
     if (capability.managementUrl) {
       const manage = el("button", "readiness-manage", "前往 NyxID");
       manage.type = "button";
@@ -734,7 +766,40 @@ function renderReadiness() {
       row.append(manage);
     }
     return row;
-  }));
+  };
+  const required = capabilities.filter((capability) => capability.required);
+  const optional = capabilities.filter((capability) => !capability.required);
+  const requiredReady = required.every((capability) => capability.status === "available");
+  const children = required.map(capabilityRow);
+  if (optional.length && requiredReady) {
+    const inactiveCount = optional.filter((capability) => capability.status !== "available").length;
+    const disclosure = el("details", "readiness-optional");
+    disclosure.open = state.readinessOptionalOpen === true;
+    disclosure.addEventListener("toggle", () => {
+      state.readinessOptionalOpen = disclosure.open;
+    });
+    disclosure.append(
+      el("summary", "", inactiveCount
+        ? `可选能力 ${optional.length} 项 · ${inactiveCount} 项未启用，不影响使用`
+        : `可选能力 ${optional.length} 项 · 全部可用`),
+      ...optional.map(capabilityRow),
+    );
+    children.push(disclosure);
+  } else {
+    children.push(...optional.map(capabilityRow));
+  }
+  dom.readinessList.replaceChildren(...children);
+  const managementUrlDrops = Array.isArray(snapshot.managementUrlDrops)
+    ? snapshot.managementUrlDrops
+    : [];
+  if (managementUrlDrops.length) {
+    dom.readinessList.append(el(
+      "div",
+      "readiness-note",
+      `已隐藏 ${managementUrlDrops.map((drop) => drop.capabilityId).join("、")} 的管理链接：` +
+        "其地址不在此控制台信任的 NyxID 域名内。",
+    ));
+  }
   const blocked = capabilities.some((capability) =>
     capability.required && capability.status !== "available");
   dom.readinessSummary.textContent = blocked
@@ -746,9 +811,12 @@ function renderReadiness() {
 function firstTurnReadinessBlocked() {
   if (state.config.surface !== "nyxid-chat" || state.actorId) return false;
   if (state.readiness.loading) return true;
+  // The readiness check is an advisory pre-flight: when it cannot complete,
+  // the first turn proceeds and the run surfaces its own authority errors.
+  if (state.readiness.error) return false;
   const capabilities = state.readiness.snapshot?.capabilities;
-  return !Array.isArray(capabilities) || capabilities.length === 0 ||
-    capabilities.some((capability) => capability.required && capability.status !== "available");
+  if (!Array.isArray(capabilities)) return true;
+  return capabilities.some((capability) => capability.required && capability.status !== "available");
 }
 
 async function loadServices() {
@@ -959,7 +1027,8 @@ function applyActorActionProof(card, action, projection) {
 }
 
 function connectDeepLink(card) {
-  const base = state.config.nyxidWebUrl || "https://nyx.chrono-ai.fun";
+  const base = state.config.nyxidWebUrl;
+  if (!base) return "";
   if (!card.block.known || !card.slug) return new URL("/keys", base).toString();
   const url = new URL("/keys", base);
   url.searchParams.set("slug", card.slug);
@@ -1017,6 +1086,12 @@ async function openConnectTarget(card) {
   }
   card.externalBaseline = matchingUserServiceIds(card, connectors);
   const target = connectDeepLink(card);
+  if (!target) {
+    card.status = "needs_connection";
+    card.error = "NyxID management is not configured for this deployment.";
+    renderConnectCard(card);
+    return;
+  }
   const opened = window.open(target, "nyxid-connect");
   if (opened) {
     try {
@@ -1632,6 +1707,7 @@ async function logout() {
     }
     renderAuthUi();
     renderReadiness();
+    configureWireInspector();
   }
 }
 
@@ -1705,8 +1781,8 @@ async function refreshRuntimeData() {
 function updateConfigUi() {
   const surface = surfaceLabels[state.config.surface];
   const transport = transportLabels[state.config.transport] || state.config.transport;
-  dom.sidebarSurface.textContent = surface;
-  dom.sidebarTransport.textContent = transport;
+  if (dom.sidebarSurface) dom.sidebarSurface.textContent = surface;
+  if (dom.sidebarTransport) dom.sidebarTransport.textContent = transport;
   dom.routeTransportValue.textContent = transport;
   dom.routeSurfaceValue.textContent = surfacePaths[state.config.surface];
   dom.routeLabel.textContent = state.config.surface === "workflow"
@@ -1810,7 +1886,7 @@ function applyHealthRouteState({ includeAevatar = !state.activeController } = {}
 
 function setConnectionStatus(status, text) {
   dom.connectionDot.className = `status-dot ${status}`;
-  dom.sidebarRuntimeDot.className = `status-dot ${status}`;
+  if (dom.sidebarRuntimeDot) dom.sidebarRuntimeDot.className = `status-dot ${status}`;
   dom.connectionText.textContent = text;
   dom.routeClientState.textContent = status === "ok" ? "ready" : status;
   const routeClass = status === "ok" ? "ok" : status === "error" ? "error" : status === "checking" ? "active" : "";
@@ -1906,7 +1982,9 @@ function renderHistoryList() {
   if (!dom.recentSessionsList) return;
   dom.recentSessionsList.replaceChildren();
   const needsYou = state.conversations.filter((conversation) =>
-    conversation.attentionKind === "input" || conversation.attentionKind === "approval");
+    conversation.attentionKind === "input" ||
+    conversation.attentionKind === "approval" ||
+    conversation.attentionKind === "stalled");
   dom.needsYouCount.textContent = String(needsYou.length);
   const filteringNeedsYou = state.historyFilter === "needs-you";
   dom.needsYouFilterButton.setAttribute("aria-pressed", String(filteringNeedsYou));
@@ -1940,7 +2018,9 @@ function renderHistoryList() {
     return;
   }
   for (const conversation of recent) {
-    const attentionKind = conversation.attentionKind === "input" || conversation.attentionKind === "approval"
+    const attentionKind = conversation.attentionKind === "input" ||
+      conversation.attentionKind === "approval" ||
+      conversation.attentionKind === "stalled"
       ? conversation.attentionKind
       : null;
     const row = el(
@@ -1955,7 +2035,11 @@ function renderHistoryList() {
     const conversationState = findConversationState(conversation.id);
     const running = Boolean(conversationState?.controller);
     const meta = attentionKind
-      ? `${attentionKind === "input" ? "等待输入" : "等待批准"} · ${formatHistoryTime(conversation.attentionSince)}`
+      ? `${attentionKind === "input"
+        ? "等待输入"
+        : attentionKind === "approval"
+          ? "等待批准"
+          : "进度停滞"} · ${formatHistoryTime(conversation.attentionSince)}`
       : `${conversation.messageCount} 条消息 · ${formatHistoryTime(conversation.updatedAt)}` +
         (running ? " · 运行中" : "");
     copy.append(el("strong", "", conversation.title), el("small", "", meta));
@@ -2182,7 +2266,7 @@ function actorStepSourceLabel(step) {
   }
   if (source.browserAction) return `NyxID Action · ${source.browserAction.action || "browser"}`;
   if (source.postcondition) {
-    return `验证 · ${source.postcondition.postconditionKind || "postcondition"}`;
+    return `验证 · ${source.postcondition.check || "postcondition"}`;
   }
   if (source.input) return "用户输入";
   if (source.approval) return "审批";
@@ -2502,7 +2586,7 @@ function renderActorProjection(entry) {
   const root = entry.actorTaskElement || el("section", "actor-task");
   entry.actorTaskElement = root;
   if (root.dataset.collapsed !== "true" && root.dataset.collapsed !== "false") {
-    root.dataset.collapsed = "true";
+    root.dataset.collapsed = "false";
   }
   root.replaceChildren();
   const task = projection.task;
@@ -2727,11 +2811,24 @@ function renderActorProjection(entry) {
       receipt.message,
     ));
   }
-  if (!root.isConnected) entry.thread.append(root);
+  mountActorTask(entry.thread, root);
   if (entry === state.activeConversation) {
     renderComposerInputRequest(entry, projection);
     renderInspector();
   }
+}
+
+// The plan card narrates the turn the user just opened, so it always sits
+// directly after the newest user message (above the assistant reply). Mounting
+// by arrival order instead would leave its position to an event race and
+// strand the card inside older turns as the conversation grows.
+function mountActorTask(thread, root) {
+  const anchor = [...thread.querySelectorAll(":scope > .message.user")].at(-1);
+  if (!anchor) {
+    if (!root.isConnected) thread.append(root);
+    return;
+  }
+  if (anchor.nextElementSibling !== root) anchor.after(root);
 }
 
 async function submitActorControl(kind, step = null, instruction = null) {
@@ -3184,6 +3281,7 @@ async function responseError(response) {
     const error = new Error(payload.message || payload.detail || payload.error || `HTTP ${response.status}`);
     error.code = payload.code || "";
     error.status = response.status;
+    error.reason = typeof payload.reason === "string" ? payload.reason : "";
     error.serviceId = payload.serviceId || payload.service_id || "";
     error.serviceSlug = payload.serviceSlug || payload.service_slug || "";
     error.resource = payload.resource || payload.resourceUri || payload.resource_uri || "";
@@ -4282,7 +4380,7 @@ function renderSteps() {
 }
 
 function renderEventLog() {
-  if (!isActiveConversationContext()) return;
+  if (!isActiveConversationContext() || !dom.eventCount || !dom.eventList) return;
   dom.eventCount.textContent = String(state.run.events.length);
   dom.eventList.replaceChildren();
   if (!state.run.events.length) {
@@ -4305,6 +4403,13 @@ function renderEventLog() {
 function clearEvents() {
   state.run.events = [];
   renderEventLog();
+}
+
+function configureWireInspector() {
+  const enabled = state.config.enableStudioWireInspector === true && state.auth.authenticated;
+  dom.eventsTabButton?.classList.toggle("hidden", !enabled);
+  dom.eventsTabButton?.setAttribute("aria-hidden", String(!enabled));
+  if (!enabled) setInspectorTab("run");
 }
 
 function updateElapsed() {
@@ -4461,13 +4566,15 @@ function renderAttachment() {
 }
 
 function setInspectorTab(tab) {
-  const events = tab === "events";
+  const events = tab === "events" &&
+    state.config.enableStudioWireInspector === true &&
+    state.auth.authenticated;
   dom.runPanel.classList.toggle("hidden", events);
-  dom.eventsPanel.classList.toggle("hidden", !events);
+  dom.eventsPanel?.classList.toggle("hidden", !events);
   dom.runTabButton.classList.toggle("active", !events);
-  dom.eventsTabButton.classList.toggle("active", events);
+  dom.eventsTabButton?.classList.toggle("active", events);
   dom.runTabButton.setAttribute("aria-selected", String(!events));
-  dom.eventsTabButton.setAttribute("aria-selected", String(events));
+  dom.eventsTabButton?.setAttribute("aria-selected", String(events));
 }
 
 function openMobilePanel(panel) {

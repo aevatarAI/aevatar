@@ -52,6 +52,41 @@ public sealed class CodexExecutionFailureAuditTests
         AuditOutcome.Error,
         AuditFailureCategory.Execution)]
     [InlineData(
+        CodexExecutionFailureKind.CapacityUnavailable,
+        "managed_upstream_codex_sandbox_creation_failed",
+        "managed_upstream_codex_sandbox_creation_failed",
+        AuditTerminalOutcome.Failed,
+        AuditOutcome.Error,
+        AuditFailureCategory.Execution)]
+    [InlineData(
+        CodexExecutionFailureKind.CapacityUnavailable,
+        "managed_upstream_provider_capacity_unavailable",
+        "codex_execution_capacity_unavailable",
+        AuditTerminalOutcome.Failed,
+        AuditOutcome.Error,
+        AuditFailureCategory.Execution)]
+    [InlineData(
+        CodexExecutionFailureKind.CapacityUnavailable,
+        "managed_upstream_codex_",
+        "codex_execution_capacity_unavailable",
+        AuditTerminalOutcome.Failed,
+        AuditOutcome.Error,
+        AuditFailureCategory.Execution)]
+    [InlineData(
+        CodexExecutionFailureKind.CapacityUnavailable,
+        " managed_upstream_codex_capacity_unavailable",
+        "codex_execution_capacity_unavailable",
+        AuditTerminalOutcome.Failed,
+        AuditOutcome.Error,
+        AuditFailureCategory.Execution)]
+    [InlineData(
+        CodexExecutionFailureKind.CapacityUnavailable,
+        "managed_upstream_codex_sandbox_creation_failed\nunsafe",
+        "codex_execution_capacity_unavailable",
+        AuditTerminalOutcome.Failed,
+        AuditOutcome.Error,
+        AuditFailureCategory.Execution)]
+    [InlineData(
         CodexExecutionFailureKind.ProvisioningFailed,
         "provider_detail_05",
         "codex_execution_provisioning_failed",
@@ -162,7 +197,16 @@ public sealed class CodexExecutionFailureAuditTests
             null));
 
         outcome.Receipt.ErrorCode.Should().Be(expectedAuditCode);
-        outcome.Receipt.ErrorMessage.Should().Be(nameof(CodexExecutionException));
+        outcome.Receipt.ErrorMessage.Should().Be(
+            expectedAuditCode == providerCode
+                ? "Provider-owned detail must not become audit classification."
+                : ExpectedCanonicalMessage(failureKind));
+        using (var result = System.Text.Json.JsonDocument.Parse(outcome.Receipt.ResultJson))
+        {
+            result.RootElement.GetProperty("code").GetString().Should().Be(expectedAuditCode);
+            result.RootElement.GetProperty("message").GetString().Should()
+                .Be(outcome.Receipt.ErrorMessage);
+        }
         var audit = appender.Records.Should().ContainSingle(record =>
             record.LifecyclePhase == AuditLifecyclePhase.Terminal).Which;
         audit.ErrorCode.Should().Be(expectedAuditCode);
@@ -179,22 +223,79 @@ public sealed class CodexExecutionFailureAuditTests
             audit.Failure.Category.Should().Be(expectedCategory.Value);
             audit.Failure.SanitizedMessage.Should().Be(expectedAuditCode);
         }
-        audit.ToString().Should().NotContain(providerCode);
+        if (expectedAuditCode == providerCode)
+            audit.ToString().Should().Contain(providerCode);
+        else
+            audit.ToString().Should().NotContain(providerCode);
         var warning = logger.Entries.Should().ContainSingle().Which;
         warning.Level.Should().Be(LogLevel.Warning);
         warning.Message.Should().Contain($"failureKind={failureKind}");
-        var expectedDiagnosticCode = providerCode.All(character =>
-            char.IsAsciiLetterLower(character) ||
-            char.IsAsciiDigit(character) ||
-            character == '_')
-                ? providerCode
-                : "unclassified";
+        var normalizedDiagnosticCode = providerCode.Trim();
+        var expectedDiagnosticCode = normalizedDiagnosticCode.Length is > 0 and <= 96 &&
+                                     char.IsAsciiLetterLower(normalizedDiagnosticCode[0]) &&
+                                     normalizedDiagnosticCode.All(character =>
+                                         char.IsAsciiLetterLower(character) ||
+                                         char.IsAsciiDigit(character) ||
+                                         character == '_')
+            ? normalizedDiagnosticCode
+            : "unclassified";
         warning.Message.Should().Contain($"failureCode={expectedDiagnosticCode}");
         if (expectedDiagnosticCode == "unclassified")
             warning.Message.Should().NotContain(providerCode);
         warning.Message.Should().Contain("runHash=0b42f7cb2207");
         warning.Message.Should().NotContain("sensitive-root-run-id");
     }
+
+    [Fact]
+    public async Task StreamingExecution_WhenManagedFailureIsOwned_PreservesSafeTypedEvidence()
+    {
+        var failure = new CodexExecutionFailure(
+            CodexExecutionFailureKind.MalformedOutput,
+            "managed_response_invalid",
+            "Managed Codex returned an invalid response.",
+            "managed-diag-17");
+        var tools = new ToolManager();
+        tools.Register(new NyxIdCodexExecTool(
+            [new FailingManagedPort(failure)],
+            new NyxIdToolOptions()));
+        var executor = new AdmittedAgentToolExecutor(
+            AlwaysStartingAgentToolAdmissionLedger.Instance,
+            new RecordingAuditTrailAppender(),
+            new StableAuditIdentityHasher());
+
+        var outcome = await executor.ExecuteAsync(new AgentToolExecutionRequest(
+            tools.Get("codex_exec")!,
+            """{"target":{"kind":"managed_sandbox"},"workspace":{"kind":"empty_git"},"prompt":"task"}""",
+            AgentToolExecutionContext.Empty with
+            {
+                Request = new AgentToolRequestIdentity("request-codex", "call-codex"),
+                ExecutionOwner = AgentToolExecutionOwners.Actor("actor-codex"),
+            },
+            AgentToolApprovalContinuationMode.None,
+            null));
+
+        outcome.Receipt.ErrorCode.Should().Be("managed_response_invalid");
+        outcome.Receipt.ErrorMessage.Should().Be("Managed Codex returned an invalid response.");
+        using var result = System.Text.Json.JsonDocument.Parse(outcome.Receipt.ResultJson);
+        result.RootElement.GetProperty("diagnostic_id").GetString().Should().Be("managed-diag-17");
+    }
+
+    private static string ExpectedCanonicalMessage(CodexExecutionFailureKind kind) =>
+        kind switch
+        {
+            CodexExecutionFailureKind.TargetNotConfigured => "Codex execution target is not configured.",
+            CodexExecutionFailureKind.AdmissionDenied => "Codex execution was not admitted.",
+            CodexExecutionFailureKind.LlmProviderNotConnected => "Codex LLM provider is not connected.",
+            CodexExecutionFailureKind.CapacityUnavailable => "Codex execution capacity is unavailable.",
+            CodexExecutionFailureKind.ProvisioningFailed => "Codex execution provisioning failed.",
+            CodexExecutionFailureKind.ReadinessFailed => "Codex execution target is not ready.",
+            CodexExecutionFailureKind.IsolationUnavailable => "Codex execution isolation is unavailable.",
+            CodexExecutionFailureKind.MalformedOutput => "Codex execution returned malformed output.",
+            CodexExecutionFailureKind.TimedOut => "Codex execution timed out.",
+            CodexExecutionFailureKind.Cancelled => "Codex execution was cancelled.",
+            CodexExecutionFailureKind.CleanupFailed => "Codex execution cleanup failed.",
+            _ => "Codex execution failed.",
+        };
 
     private sealed class FailingManagedPort(CodexExecutionFailure failure) : ICodexExecutionPort
     {

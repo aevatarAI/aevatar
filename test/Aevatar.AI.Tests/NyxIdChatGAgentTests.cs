@@ -354,9 +354,21 @@ public class NyxIdChatGAgentTests
             FirstTurn = firstTurn,
         }));
 
+        var historyContinuation = dispatch.Calls.Should().ContainSingle(call =>
+            call.Envelope.Payload.Is(
+                NyxIdChatHistoryInitializationDispatchRequested.Descriptor)).Which;
+        await agent.HandleEventAsync(historyContinuation.Envelope.Clone());
+
+        var firstTurnContinuation = dispatch.Calls.Should().ContainSingle(call =>
+            call.Envelope.Payload.Is(
+                NyxIdChatPendingCreationFirstTurnDispatchRequested.Descriptor)).Which;
+        await agent.HandleEventAsync(firstTurnContinuation.Envelope.Clone());
+
         operations.IndexOf("registry.register").Should().BeLessThan(
             operations.IndexOf("history.reserve"));
         agent.State.ActiveTurn.TurnId.Should().Be("turn-first");
+        agent.State.PendingCreationFirstTurn.Should().BeNull();
+        agent.State.PendingCreationFirstTurnId.Should().BeEmpty();
         dispatch.Calls.Should().Contain(call =>
             call.Envelope.Payload.Is(NyxIdChatOperationDispatchCommand.Descriptor));
     }
@@ -400,7 +412,9 @@ public class NyxIdChatGAgentTests
             RegisterStage = GAgentActorRegistryCommandStage.AcceptedForDispatch,
         };
         var dispatch = new RecordingSelfDispatchPort();
-        using var provider = BuildServiceProvider(registry, new RecordingActorRuntime());
+        using var provider = BuildServiceProvider(
+            registry,
+            new RecordingActorRuntime());
         const string actorId = "nyxid-chat-history-registration-unavailable";
         var agent = CreateConversationAgent(provider, actorId, dispatch);
 
@@ -423,7 +437,10 @@ public class NyxIdChatGAgentTests
             RegisterStage = GAgentActorRegistryCommandStage.AcceptedForDispatch,
         };
         var dispatch = new RecordingSelfDispatchPort();
-        using var provider = BuildServiceProvider(registry, new RecordingActorRuntime());
+        using var provider = BuildServiceProvider(
+            registry,
+            new RecordingActorRuntime(),
+            new RecordingChatHistoryCommandPort());
         const string actorId = "nyxid-chat-registration-retry";
         var agent = CreateConversationAgent(provider, actorId, dispatch);
         var command = new NyxIdChatConversationCreateCommand
@@ -454,8 +471,101 @@ public class NyxIdChatGAgentTests
         registry.RegisterStage = GAgentActorRegistryCommandStage.AdmissionVisible;
         await agent.HandleEventAsync(CreateEnvelope(actorId, command.Clone()));
 
+        var historyContinuation = dispatch.Calls.Should().ContainSingle(call =>
+            call.Envelope.Payload.Is(
+                NyxIdChatHistoryInitializationDispatchRequested.Descriptor)).Which;
+        await agent.HandleEventAsync(historyContinuation.Envelope.Clone());
+
+        var firstTurnContinuation = dispatch.Calls.Should().ContainSingle(call =>
+            call.Envelope.Payload.Is(
+                NyxIdChatPendingCreationFirstTurnDispatchRequested.Descriptor)).Which;
+        await agent.HandleEventAsync(firstTurnContinuation.Envelope.Clone());
+
         registry.RegisteredActors.Should().HaveCount(2);
         agent.State.ActiveTurn.TurnId.Should().Be("turn-retry");
+    }
+
+    [Fact]
+    public async Task PendingFirstTurnSecretExpiryAfterActivation_ShouldCommitTerminalCleanup()
+    {
+        var now = new MutableTimeProvider(
+            DateTimeOffset.Parse("2026-08-08T04:00:00Z"));
+        var eventStore = new InMemoryEventStoreForTests();
+        var callbacks = new RecordingRuntimeCallbackScheduler();
+        var registry = new RecordingGAgentActorRegistryCommandPort();
+        var history = new RecordingChatHistoryCommandPort();
+        using var provider = BuildServiceProvider(
+            registry,
+            new RecordingActorRuntime(),
+            history,
+            eventStore,
+            callbacks,
+            now);
+        const string actorId = "nyxid-chat-expired-first-turn";
+        var initialDispatch = new RecordingSelfDispatchPort();
+        var initial = CreateConversationAgent(provider, actorId, initialDispatch, now);
+        var command = new NyxIdChatConversationCreateCommand
+        {
+            ScopeId = "scope-a",
+            CreatedLocally = true,
+            FirstTurn = new NyxIdChatStartTurnCommand
+            {
+                ScopeId = "scope-a",
+                ConversationActorId = actorId,
+                TurnId = "turn-expired",
+                TaskId = "task-expired",
+                ClientRequestId = "client-expired",
+                CommandId = "command-expired",
+                CorrelationId = "correlation-expired",
+                Prompt = "resume me",
+                ToolContext = new AgentToolExecutionContextPayload
+                {
+                    Caller = new AgentToolCallerContextPayload
+                    {
+                        OwnerSubject = "owner-alpha",
+                    },
+                },
+            },
+        };
+        await initial.HandleEventAsync(CreateEnvelope(actorId, command));
+        initial.State.PendingCreationFirstTurn.Should().NotBeNull();
+        var historyContinuation = initialDispatch.Calls.Should().ContainSingle(call =>
+            call.Envelope.Payload.Is(
+                NyxIdChatHistoryInitializationDispatchRequested.Descriptor)).Which;
+        await initial.HandleEventAsync(historyContinuation.Envelope.Clone());
+        initial.State.PendingHistoryInitialization.Should().BeNull();
+
+        now.Advance(TimeSpan.FromMinutes(31));
+        var recovered = CreateConversationAgent(
+            provider,
+            actorId,
+            new RecordingSelfDispatchPort(),
+            now);
+        await recovered.ActivateAsync();
+        var recovery = callbacks.TimeoutRequests.Should().ContainSingle().Which;
+
+        await recovered.HandleEventAsync(recovery.TriggerEnvelope.Clone());
+
+        recovered.State.ActiveTurn.Should().BeNull();
+        recovered.State.PendingCreationFirstTurn.Should().BeNull();
+        recovered.State.PendingCreationFirstTurnId.Should().BeEmpty();
+        var events = await eventStore.GetEventsAsync(actorId);
+        var finalized = events.Should().ContainSingle(stateEvent =>
+                stateEvent.EventData.Is(
+                    NyxIdChatPendingCreationFirstTurnFinalizedEvent.Descriptor))
+            .Which.EventData.Unpack<NyxIdChatPendingCreationFirstTurnFinalizedEvent>();
+        finalized.Outcome.Should().Be(
+            NyxIdChatPendingCreationFirstTurnOutcome.Unavailable);
+        finalized.FailureCode.Should().Be("NYXID_CHAT_PENDING_FIRST_TURN_UNAVAILABLE");
+
+        var callbacksBeforeSecondActivation = callbacks.TimeoutRequests.Count;
+        var secondRecovery = CreateConversationAgent(
+            provider,
+            actorId,
+            new RecordingSelfDispatchPort(),
+            now);
+        await secondRecovery.ActivateAsync();
+        callbacks.TimeoutRequests.Should().HaveCount(callbacksBeforeSecondActivation);
     }
 
     [Fact]
@@ -942,7 +1052,12 @@ public class NyxIdChatGAgentTests
             message.ToolCalls[0].Id == toolCallId);
         var deltas = eventPublisher.Published.OfType<TextMessageContentEvent>()
             .Select(x => x.Delta).ToList();
-        deltas.Should().ContainInOrder(round1Text, round2Text);
+        var streamedContent = string.Concat(deltas);
+        streamedContent.Should().StartWith(round1Text);
+        streamedContent.Should().EndWith(round2Text);
+        var streamedMiddle = streamedContent[round1Text.Length..^round2Text.Length];
+        streamedMiddle.Should().MatchRegex(@"^\s*$",
+            "delta batching may combine the whitespace-only round separator with adjacent content");
 
         // ─── Completion event ───
 
@@ -2456,13 +2571,15 @@ public class NyxIdChatGAgentTests
         IActorRuntime? actorRuntime = null,
         IChatHistoryCommandPort? historyCommandPort = null,
         IEventStore? eventStore = null,
-        IActorRuntimeCallbackScheduler? callbackScheduler = null)
+        IActorRuntimeCallbackScheduler? callbackScheduler = null,
+        TimeProvider? secretTimeProvider = null)
     {
         eventStore ??= new InMemoryEventStoreForTests();
         callbackScheduler ??= new NoopRuntimeCallbackScheduler();
         var services = new ServiceCollection()
             .AddSingleton(eventStore)
-            .AddSingleton<ISecretVault, InMemorySecretVault>()
+            .AddSingleton<ISecretVault>(new InMemorySecretVault(
+                secretTimeProvider ?? TimeProvider.System))
             .AddSingleton<EventSourcingRuntimeOptions>()
             .AddSingleton(callbackScheduler)
             .AddSingleton<IAuditTrailAppender, AppendedAuditTrail>()
@@ -2520,13 +2637,14 @@ public class NyxIdChatGAgentTests
     private static NyxIdChatConversationGAgent CreateConversationAgent(
         IServiceProvider provider,
         string actorId,
-        IActorDispatchPort? dispatchPort = null)
+        IActorDispatchPort? dispatchPort = null,
+        TimeProvider? timeProvider = null)
     {
         var actorDispatchPort = dispatchPort ?? new NoopActorDispatchPort();
         var agent = new NyxIdChatConversationGAgent(
             provider.GetService<IActorRuntime>() ?? new RecordingActorRuntime(),
             actorDispatchPort,
-            TimeProvider.System)
+            timeProvider ?? TimeProvider.System)
         {
             Services = provider,
             EventSourcingBehaviorFactory = provider.GetRequiredService<

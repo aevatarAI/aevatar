@@ -36,6 +36,9 @@ internal sealed class ToolArgs
                 return new ToolArgs([], raw);
 
             using var doc = JsonDocument.Parse(raw);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+                return new ToolArgs([], raw, "Invalid JSON: tool arguments must be an object.");
+
             var dict = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
             foreach (var prop in doc.RootElement.EnumerateObject())
                 dict[prop.Name] = prop.Value.Clone();
@@ -112,4 +115,20 @@ internal sealed class ToolArgs
 
     /// <summary>Whether a property exists.</summary>
     public bool Has(string name) => _props.ContainsKey(name);
+
+    /// <summary>Whether a supplied property is a JSON string.</summary>
+    public bool IsString(string name) =>
+        _props.TryGetValue(name, out var element) && element.ValueKind == JsonValueKind.String;
+
+    /// <summary>Whether a supplied property is a JSON boolean.</summary>
+    public bool IsBoolean(string name) =>
+        _props.TryGetValue(name, out var element) &&
+        element.ValueKind is JsonValueKind.True or JsonValueKind.False;
+
+    /// <summary>Whether every supplied property belongs to the closed argument set.</summary>
+    public bool HasOnly(params string[] names)
+    {
+        var allowed = names.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return _props.Keys.All(allowed.Contains);
+    }
 }

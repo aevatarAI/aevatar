@@ -25,6 +25,7 @@ public sealed class BackendConsoleAssetServiceTests
                 ["Aevatar:BackendConsole:NyxApiBaseUrl"] = " https://api.example.test/// ",
                 ["Aevatar:BackendConsole:StorageKey"] = "console:test",
                 ["Aevatar:BackendConsole:DefaultReturnPath"] = "/admin",
+                ["Aevatar:BackendConsole:EnableStudioWireInspector"] = "true",
             })
             .Build();
         services.AddBackendConsoleStaticAssets(configuration);
@@ -46,6 +47,7 @@ public sealed class BackendConsoleAssetServiceTests
             "\"resources\":[\"https://api.example.test/api/v1/proxy/s/aevatar\",\"https://api.example.test/api/v1/proxy/s/ornn-api\",\"https://resource.example.test/custom\"]");
         html.Should().Contain("\"nyxidApi\":\"https://api.example.test\"");
         html.Should().Contain("\"storageKey\":\"console:test\"");
+        html.Should().Contain("\"enableStudioWireInspector\":true");
         html.Should().NotContain("__BACKEND_CONSOLE_CONFIG__");
     }
 

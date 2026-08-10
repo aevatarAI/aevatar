@@ -47,6 +47,35 @@ public sealed class NyxIdApiClientAuthorizationTests
         error.IsAuthorizationRequired.Should().BeFalse();
     }
 
+    [Theory]
+    [InlineData(7000, "approval_required")]
+    [InlineData(7001, "approval_failed")]
+    public void TryParseProxyError_ShouldPreserveNyxIdApprovalRequestIdentity(
+        int errorCode,
+        string errorKey)
+    {
+        var response = $$"""
+            {"error":true,"status":403,"body":"{\"error\":\"{{errorKey}}\",\"error_code\":{{errorCode}},\"message\":\"safe\",\"request_id\":\"approval-alpha\"}"}
+            """;
+
+        NyxIdApiClient.TryParseProxyError(response, out var error).Should().BeTrue();
+        error.Should().NotBeNull();
+        error!.ErrorCode.Should().Be(errorCode);
+        error.ErrorKey.Should().Be(errorKey);
+        error.ApprovalRequestId.Should().Be("approval-alpha");
+    }
+
+    [Fact]
+    public void TryParseProxyError_ShouldRecognizeDirectNyxIdApprovalErrorBody()
+    {
+        const string response =
+            """{"error":"approval_required","error_code":7000,"message":"safe","request_id":"approval-direct"}""";
+
+        NyxIdApiClient.TryParseProxyError(response, out var error).Should().BeTrue();
+        error.Should().NotBeNull();
+        error!.ApprovalRequestId.Should().Be("approval-direct");
+    }
+
     [Fact]
     public async Task ProxyRequest_ShouldNotLogQueryOrRawToolArguments()
     {

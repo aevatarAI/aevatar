@@ -51,8 +51,14 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         {
             html.Should().Contain("var NYX_API=BACKEND_CONSOLE_CONFIG.nyxidApi");
             html.Should().Contain("fetch(NYX_API+'/api/v1/admin/users");
+            html.Should().Contain("var FLEET_RUN_WINDOW=500;");
+            html.Should().Contain("Object.keys(NYX_USERS).forEach(function(sid){ scopeIds[sid]=1; });");
+            html.Should().Contain("/api/workflow/observatory/runs?scope=__all__&take='+FLEET_RUN_WINDOW");
             html.Should().NotContain("var NYX_AUTHORITY=BACKEND_CONSOLE_CONFIG.authority");
-            html.Should().Contain("searchParams.append('resource'");
+            // ADR-0018: only the deliberately narrowed voice-realtime purpose keeps
+            // explicit resources; the session login sends none.
+            html.Should().Contain("var resources=purpose===VOICE_TOKEN_PURPOSE?loginResources(requestedResources):[];");
+            html.Should().Contain("if(claims && claims.allow_all_services!==false) return true;");
             html.Should().Contain("function observatoryFrameSource()");
             html.Should().Contain("'/admin/workflow-observatory'");
             html.Should().NotContain("'/workflow/observatory'");
@@ -60,30 +66,149 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             html.Should().Contain("studio:{name:'工作台'");
             html.Should().Contain("suiteFrame('/admin/studio','工作台')");
             html.Should().NotContain("suiteFrame('/workflow/studio','工作台')");
+            html.Should().Contain("#frame-dock{flex:1 1 auto;height:100%;min-height:0;");
+            html.Should().Contain(".suite-embed{flex:1 1 auto;width:100%;height:100%;min-height:0;");
         }
         else if (path == "/admin/studio")
         {
+            html.Should().Contain("\"nyxidWeb\":\"https://web.example.test\"");
             html.Should().Contain("class=\"site-header\"");
             html.Should().Contain("id=\"composerForm\"");
             html.Should().Contain("生产环境 · 操作会影响真实数据，高风险操作需要确认");
-            html.Should().Contain("app.js?v=20260806-studio-sidebar-focus");
+            html.Should().Contain("app.js?v=20260808-m42-card-scale-tighten");
+            html.Should().Contain("styles.css?v=20260808-m42-card-scale-tighten");
+            html.Should().NotContain("class=\"brand-mark\"");
             html.Should().NotContain("Aevatar Studio · 工作流实录");
             html.Should().NotContain("从意图到交付的真实对话");
         }
         else if (path == "/auto/callback")
         {
+            // The exchange loops over the PKCE-stored request list; session logins
+            // store an empty list (ADR-0018), so only voice-purpose logins append.
             html.Should().Contain("form.append(\"resource\"");
+            html.Should().Contain("normalizeResources(pending.resources) : []");
+            html.Should().NotContain("normalizeResources(RESOURCES)");
         }
-        else
+        else if (path == "/voice")
         {
-            html.Should().Contain("searchParams.append(\"resource\"");
             html.Should().Contain("async function fetchWithConsoleAuth(");
             html.Should().Contain("requestAdminShellTokenRefresh(");
             html.Should().Contain("rejectedAccessToken");
-            html.Should().Contain(path == "/workflow/skills"
-                ? "f.append(\"resource\""
-                : "form.append(\"resource\"");
+            // Voice keeps its deliberately narrowed realtime-token flows, but the
+            // session login must not request explicit resources.
+            html.Should().Contain("purpose===VOICE_TOKEN_PURPOSE ? normalizeResources(CFG.resources,requestedResources) : []");
+            html.Should().Contain("normalizeResources(pending.resources) : []");
         }
+        else
+        {
+            html.Should().NotContain("searchParams.append(\"resource\"");
+            html.Should().NotContain("form.append(\"resource\"");
+            html.Should().NotContain("f.append(\"resource\"");
+            html.Should().Contain("async function fetchWithConsoleAuth(");
+            html.Should().Contain("requestAdminShellTokenRefresh(");
+            html.Should().Contain("rejectedAccessToken");
+        }
+    }
+
+    [Fact]
+    public async Task AdminShell_Fleet_ShouldIncludeNyxIdUsersWithoutRuns()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+            const start = html.indexOf('function mapFleetCompanies(runs){');
+            const end = html.indexOf('function loadFleet(rerender){', start);
+            assert.notEqual(start, -1, 'fleet mapper must exist');
+            assert.notEqual(end, -1, 'fleet loader must follow mapper');
+
+            const context = {
+              NYX_USERS: {
+                'scope-active': {display_name:'Active Org',email:'active@example.test'},
+                'scope-idle': {display_name:'Idle Org',email:'idle@example.test'}
+              },
+              FLEET_RUNS_BY_SCOPE: {},
+              fleetRunActive(status){ return status === 'running'; },
+              fleetRunFailed(status){ return status === 'failed' || status === 'timed_out'; },
+              fleetRunSuccess(status){ return status === 'completed'; },
+              fleetHealth(total, failed){ return total ? (failed ? 'red' : 'green') : 'grey'; },
+              fleetAgoMins(){ return null; },
+              fleetAgo(){ return '—'; },
+              fleetOrgProfile(scopeId){
+                const user = context.NYX_USERS[scopeId];
+                return {name:user.display_name,email:user.email,avatar:null,isAdmin:false};
+              }
+            };
+            vm.createContext(context);
+            vm.runInContext(html.slice(start, end), context);
+
+            const companies = context.mapFleetCompanies([{
+              id:'run-active',name:'workflow-active',status:'completed',scope:'scope-active',
+              updatedAtUtc:'2026-08-09T00:00:00Z'
+            }]);
+            assert.equal(companies.length, 2);
+            const active = companies.find(company => company.id === 'scope-active');
+            const idle = companies.find(company => company.id === 'scope-idle');
+            assert.equal(active.runsTotal, 1);
+            assert.equal(active.isEmpty, false);
+            assert.equal(idle.runsTotal, 0);
+            assert.equal(idle.isEmpty, true);
+            assert.deepEqual(Object.keys(context.FLEET_RUNS_BY_SCOPE), ['scope-active']);
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
+    public async Task AdminShell_Fleet_ShouldNotBlockPlatformAdminWhenNyxIdDirectoryForbids()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+            const start = html.indexOf('function loadFleet(rerender){');
+            const end = html.indexOf('/* 集团 KPI', start);
+            assert.notEqual(start, -1, 'fleet loader must exist');
+            assert.notEqual(end, -1, 'fleet KPI must follow loader');
+
+            const calls = [];
+            const context = {
+              Promise, Date, calls,
+              FLEET_ERR:null, FLEET_FORBIDDEN:false, FLEET_LOADING:false, FLEET_LOADED:false, FLEET_STAMP:0,
+              FLEET_DIRECTORY_STATUS:'pending', FLEET_RUN_WINDOW:500, FLEET_COMPANIES:[], COMPANIES:[],
+              NYX_USERS_ATTEMPTED:false, NYX_USERS:{'stale-user':{}},
+              loadNyxUsers(){ return Promise.resolve({forbidden:true}); },
+              adminJson(url){ calls.push(url); return Promise.resolve([{scope:'scope-active'}]); },
+              mapFleetRuns(runs){ return runs; },
+              mapFleetCompanies(runs){ return runs.map(run => ({id:run.scope})); }
+            };
+            vm.createContext(context);
+            vm.runInContext(html.slice(start, end), context);
+
+            (async () => {
+              await context.loadFleet();
+              assert.equal(context.FLEET_FORBIDDEN, false, 'NyxID directory denial must not deny the board');
+              assert.equal(context.FLEET_ERR, null);
+              assert.equal(context.FLEET_LOADED, true);
+              assert.equal(context.FLEET_DIRECTORY_STATUS, 'forbidden');
+              assert.deepEqual(Object.keys(context.NYX_USERS), [], 'stale directory entries must be discarded');
+              assert.equal(context.FLEET_COMPANIES.length, 1);
+              assert.equal(context.FLEET_COMPANIES[0].id, 'scope-active');
+              assert.deepEqual(calls, ['/api/workflow/observatory/runs?scope=__all__&take=500']);
+            })().catch(error => { console.error(error); process.exitCode = 1; });
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
     }
 
     [Fact]
@@ -2685,6 +2810,12 @@ public sealed class BackendConsoleStaticAssetEndpointTests
                       }));
                     });
                   }
+                  if(phase === 'inactive') {
+                    return response(400, {
+                      error:'invalid_client',
+                      error_description:'OAuth client is inactive',
+                    });
+                  }
                   return response(200, {
                     access_token: phase === 'proactive' ? 'proactive-access' : phase === 'embedded' ? 'embedded-access' : 'retry-access',
                     refresh_token: phase === 'proactive' ? 'proactive-refresh' : phase === 'embedded' ? 'embedded-refresh' : 'retry-refresh',
@@ -2766,6 +2897,17 @@ public sealed class BackendConsoleStaticAssetEndpointTests
               assert.equal(context.showLoginGate('current rejection', 'embedded-access'), true);
               assert.equal(stored.has('console:test:token'), false, 'only the currently rejected token may be cleared');
 
+              phase = 'inactive';
+              posted.length = 0;
+              context.setToken({access_token:'inactive-old',refresh_token:'inactive-refresh',expires_in:3600,obtained_at:Date.now()});
+              await context.handleEmbeddedAuthRefresh({origin:'https://console.example.test',source:{postMessage(message,origin){posted.push({message,origin});}}},
+                {requestId:'request-inactive',rejectedAccessToken:'inactive-old'});
+              assert.equal(posted.length, 1);
+              assert.equal(posted[0].message.refreshed, false);
+              assert.equal(posted[0].message.errorCode, 'OAUTH_CLIENT_INACTIVE');
+              assert.match(posted[0].message.reason, /登录客户端已停用/);
+              assert.match(posted[0].message.reason, /重复登录不会恢复/);
+
               phase = 'logout';
               context.setToken({access_token:'logout-access',refresh_token:'logout-refresh',expires_in:3600,obtained_at:Date.now()});
               const pendingRefresh = context.refreshAccessToken(true);
@@ -2824,6 +2966,7 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         builder.Configuration["Aevatar:BackendConsole:OidcClientId"] = "client-example";
         builder.Configuration["Aevatar:BackendConsole:OidcScope"] = "openid profile";
         builder.Configuration["Aevatar:BackendConsole:NyxApiBaseUrl"] = "https://api.example.test";
+        builder.Configuration["Aevatar:BackendConsole:NyxWebBaseUrl"] = "https://web.example.test";
         builder.Configuration["Aevatar:BackendConsole:StorageKey"] = "console:test";
         builder.Configuration["Aevatar:BackendConsole:DefaultReturnPath"] = "/admin";
         builder.Services.AddBackendConsoleStaticAssets(builder.Configuration);
