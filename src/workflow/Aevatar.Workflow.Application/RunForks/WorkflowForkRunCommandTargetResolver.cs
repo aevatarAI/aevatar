@@ -108,7 +108,7 @@ internal sealed class WorkflowForkRunCommandTargetResolver
             sourceRunId,
             startAtStepId,
             creationReceipt.ActorId,
-            creationReceipt.RunId,
+            ResolveReceiptRunId(creationReceipt),
             validation.WorkflowName,
             BuildChatRunRequest(
                 command,
@@ -126,6 +126,11 @@ internal sealed class WorkflowForkRunCommandTargetResolver
 
         return CommandTargetResolution<WorkflowForkRunCommandTarget, WorkflowForkRunStartError>.Success(target);
     }
+
+    private static string ResolveReceiptRunId(WorkflowRunCreationReceipt creationReceipt) =>
+        string.IsNullOrWhiteSpace(creationReceipt.RunId)
+            ? creationReceipt.ActorId
+            : creationReceipt.RunId.Trim();
 
     private async Task<WorkflowForkRunValidationResult> ValidateWorkflowAsync(
         string sourceRunId,

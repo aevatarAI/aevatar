@@ -300,6 +300,32 @@ public sealed class WorkflowForkRunCommandDispatchTests
     }
 
     [Fact]
+    public async Task DispatchAsync_WhenCreationReceiptOmitsRunId_ShouldUseActorIdAsReceiptRunId()
+    {
+        var seedPort = new RecordingSeedQueryPort
+        {
+            View = CreateSeedView("failed", scopeId: "scope-1"),
+        };
+        var runPort = new RecordingRunProvisioningPort
+        {
+            CreationRunId = string.Empty,
+        };
+        var dispatchPort = new RecordingActorDispatchPort();
+        var service = CreateDispatchService(seedPort, runPort, dispatchPort);
+
+        var result = await service.DispatchAsync(new WorkflowForkRunCommand(
+            SourceRunId: "source-run",
+            StartAtStepId: "step-b",
+            CommandId: "cmd-fork",
+            CorrelationId: "corr-fork",
+            ScopeId: "scope-1"));
+
+        result.Succeeded.Should().BeTrue();
+        result.Receipt!.NewRunActorId.Should().Be("run-created");
+        result.Receipt.NewRunId.Should().Be("run-created");
+    }
+
+    [Fact]
     public async Task ResolveAsync_WhenForkUsesSourceArtifacts_ShouldPreserveRevisionFacts()
     {
         var sourceYaml = WorkflowYaml("source");
@@ -487,6 +513,7 @@ public sealed class WorkflowForkRunCommandDispatchTests
     {
         public WorkflowYamlParseResult? ParseResult { get; set; }
         public Exception? CreateRunException { get; set; }
+        public string CreationRunId { get; set; } = "run-routable";
         public List<string> ParseRequests { get; } = [];
         public List<WorkflowDefinitionBinding> CreateRunBindings { get; } = [];
         public List<string> DestroyedActorIds { get; } = [];
@@ -504,7 +531,7 @@ public sealed class WorkflowForkRunCommandDispatchTests
                 "run-created",
                 "definition-created",
                 ["definition-created", "run-created"],
-                "run-routable"));
+                CreationRunId));
         }
 
         public Task DestroyAsync(string actorId, CancellationToken ct = default)
