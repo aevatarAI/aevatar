@@ -77,3 +77,19 @@ Contract:
 - Rows expose typed capabilities for `open`, `activity`, `rename`, and `delete`. Unavailable actions carry a typed unavailable reason instead of requiring the client to infer from sources.
 - Rows keep `workflowId`, committed `actorId`, deployment/service IDs, and other identities separate. `workflowId` must not be reused as `memberId` or `publishedServiceId`.
 - `freshness.refreshWatermarkUtc` is the maximum source `UpdatedAt` observed from the materialized draft workspace and committed workflow read models used by the query. It is a refresh watermark, not a synthetic local `StateVersion++`.
+
+## Scope workflow archive command
+
+Workflow Activity archives a published workflow through the scope-owned command endpoint:
+
+`POST /api/scopes/{scopeId}/workflows/{workflowId}:archive`
+
+The browser supplies only the independently typed `scopeId` and `workflowId`. After `AevatarScopeAccessGuard` validates the caller, the Application service resolves `publishedServiceId`, service app/namespace, and `deploymentId` from the authoritative scope workflow read model and dispatches deployment deactivation. The generic service-identity endpoint is not a browser fallback and its service-principal access requirements remain unchanged.
+
+Archive is accepted-only and preserves the editable draft, published revisions, committed facts, and Activity. The client reports success only after the exact `workflowId` is observed with a deactivated deployment. Permanent deletion, if introduced, requires a separate explicitly named purge contract.
+
+Workflow Activity presents one destructive list action according to the dominant row source:
+
+- draft-only rows expose `Delete draft`;
+- published rows expose `Archive`, whether or not a draft source also exists;
+- archived rows expose neither Archive nor Delete draft.

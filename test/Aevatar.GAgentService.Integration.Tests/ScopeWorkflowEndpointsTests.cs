@@ -151,6 +151,118 @@ public sealed class ScopeWorkflowEndpointsTests
     }
 
     [Fact]
+    public async Task HandleArchiveWorkflowAsync_ShouldReturnAcceptedForMatchingScopeUser()
+    {
+        var http = CreateHttpContext("scope-alpha");
+        var port = new RecordingScopeWorkflowArchiveCommandPort();
+
+        var result = await ScopeWorkflowEndpoints.HandleArchiveWorkflowAsync(
+            http,
+            "scope-alpha",
+            "wf-alpha",
+            port,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        http.Response.Headers.Location.ToString().Should()
+            .Be("/api/scopes/scope-alpha/workflows/wf-alpha");
+        port.Request.Should().Be(new ScopeWorkflowArchiveRequest("scope-alpha", "wf-alpha"));
+        body.Should().Contain("\"acceptanceStage\":\"accepted\"");
+        body.Should().Contain("\"stage\":\"deactivate_deployment\"");
+    }
+
+    [Fact]
+    public async Task HandleArchiveWorkflowAsync_ShouldReturnForbiddenWithoutDispatchForAnotherScope()
+    {
+        var http = CreateHttpContext("scope-other");
+        var port = new RecordingScopeWorkflowArchiveCommandPort();
+
+        var result = await ScopeWorkflowEndpoints.HandleArchiveWorkflowAsync(
+            http,
+            "scope-alpha",
+            "wf-alpha",
+            port,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
+        port.Request.Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData(ScopeWorkflowArchiveRejectionKind.NotFound, "SCOPE_WORKFLOW_NOT_FOUND", StatusCodes.Status404NotFound)]
+    [InlineData(ScopeWorkflowArchiveRejectionKind.Conflict, "WORKFLOW_NOT_ACTIVE", StatusCodes.Status409Conflict)]
+    public async Task HandleArchiveWorkflowAsync_ShouldMapTypedApplicationRejection(
+        ScopeWorkflowArchiveRejectionKind kind,
+        string code,
+        int expectedStatus)
+    {
+        var http = CreateHttpContext("scope-alpha");
+        var port = new RecordingScopeWorkflowArchiveCommandPort
+        {
+            Error = new ScopeWorkflowArchiveRejectedException(kind, code, "Archive rejected."),
+        };
+
+        var result = await ScopeWorkflowEndpoints.HandleArchiveWorkflowAsync(
+            http,
+            "scope-alpha",
+            "wf-alpha",
+            port,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(expectedStatus);
+        body.Should().Contain(code);
+    }
+
+    [Fact]
+    public async Task HandleArchiveWorkflowAsync_ShouldReturnBadRequestForInvalidArchiveRouteWithoutDispatch()
+    {
+        var http = CreateHttpContext("scope-alpha");
+        var port = new RecordingScopeWorkflowArchiveCommandPort();
+
+        var result = await ScopeWorkflowEndpoints.HandleArchiveWorkflowAsync(
+            http,
+            "scope-alpha",
+            "wf:alpha",
+            port,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.Should().Contain("INVALID_USER_WORKFLOW_ARCHIVE_REQUEST");
+        port.Request.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task HandleArchiveWorkflowAsync_ShouldNotMapUnexpectedInvalidOperationExceptionToBadRequest()
+    {
+        var http = CreateHttpContext("scope-alpha");
+        var port = new RecordingScopeWorkflowArchiveCommandPort
+        {
+            Error = new InvalidOperationException("Command path failed unexpectedly."),
+        };
+
+        var act = () => ScopeWorkflowEndpoints.HandleArchiveWorkflowAsync(
+            http,
+            "scope-alpha",
+            "wf-alpha",
+            port,
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("Command path failed unexpectedly.");
+    }
+
+    [Fact]
     public async Task HandleSaveAndBindWorkflowAsync_ShouldReturnAccepted_WithoutRequestRevisionId()
     {
         var http = CreateHttpContext();
@@ -1768,6 +1880,33 @@ public sealed class ScopeWorkflowEndpointsTests
                 "deployment-id",
                 DateTimeOffset.UtcNow,
                 [],
+                $"/api/scopes/{request.ScopeId}/workflows/{request.WorkflowId}"));
+        }
+    }
+
+    private sealed class RecordingScopeWorkflowArchiveCommandPort : IScopeWorkflowArchiveCommandPort
+    {
+        public ScopeWorkflowArchiveRequest? Request { get; private set; }
+
+        public Exception? Error { get; init; }
+
+        public Task<ScopeWorkflowArchiveAcceptedResult> ArchiveAsync(
+            ScopeWorkflowArchiveRequest request,
+            CancellationToken ct = default)
+        {
+            Request = request;
+            if (Error != null)
+                throw Error;
+
+            return Task.FromResult(new ScopeWorkflowArchiveAcceptedResult(
+                request.ScopeId,
+                request.WorkflowId,
+                "dep-alpha",
+                new ScopeWorkflowCommandAcceptedHandle(
+                    "deactivate_deployment",
+                    "deployment-actor",
+                    "cmd-archive",
+                    "corr-archive"),
                 $"/api/scopes/{request.ScopeId}/workflows/{request.WorkflowId}"));
         }
     }
