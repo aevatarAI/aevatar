@@ -58,12 +58,14 @@ describe('ConsoleToast', () => {
     const notice = status.closest('.ant-notification-notice');
     const holder = notice?.closest('.ant-notification-topRight');
 
-    expect(notice).not.toBeNull();
+    if (!(notice instanceof HTMLElement)) {
+      throw new Error('Expected the notification notice to be an HTML element');
+    }
     expect(notice).toHaveStyle({
       maxWidth: 'min(360px, calc(100vw - 32px))',
       width: 'max-content',
     });
-    expect(notice?.style.boxShadow).toBe('');
+    expect(notice.style.boxShadow).toBe('');
     expect(holder).toHaveStyle({ top: '68px' });
     expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument();
   });
@@ -107,7 +109,12 @@ describe('ConsoleToast', () => {
         marginBottom: 0,
       },
     });
-    expect(config.styles?.root).not.toHaveProperty('boxShadow');
+    if (!config.styles || typeof config.styles === 'function') {
+      throw new Error(
+        'Expected notification styles to be a semantic style map',
+      );
+    }
+    expect(config.styles.root).not.toHaveProperty('boxShadow');
   });
 
   it('uses status semantics and the short default for success', () => {
