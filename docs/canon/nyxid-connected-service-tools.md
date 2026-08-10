@@ -145,6 +145,8 @@ plan gate confirmation 只产生 conversation-owned decision，不直接授予�
 
 只读 `nyxid_service_inventory` 也可由 `ChannelNyxIdConnectedServiceInventoryToolSource` 显式挂入 channel reply generator。该 wrapper 在模型真正调用时才以 current sender authority 读取 `/api/v1/keys`；不得替换为 bot-owner token、sandbox CLI login 或进程级 cache。自然语言 inventory 走 `AgentRun -> ChatStreamAsync -> use_skill("nyxid") -> nyxid_service_inventory -> sender /keys -> streamed answer`，不引入 phrase matcher、direct query adapter 或 `code_execute`。
 
+Pinned NyxID Assistant route 不挂载 `nyxid_service_inventory`：该 route 的 caller inventory 读取由 read-only `nyxid_services`（list/show，读 `/api/v1/keys`）承担，不为同一事实并列第二个 model-visible 读取工具。kernel 与 floor prompt 对 inventory 读取的指引必须以 `nyxid_service_inventory` 出现在最终 tool schemas 为条件；缺席时指向当前实际存在的只读 management read，不得无条件指向单一工具名。
+
 ## 7. NyxID Chat turn credential lifecycle
 
 NyxID Chat ingress 把 caller credential 明确分为两类，后续 turn operation 不得改变其 kind：

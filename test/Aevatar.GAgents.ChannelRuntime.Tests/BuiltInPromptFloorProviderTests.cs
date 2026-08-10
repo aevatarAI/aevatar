@@ -65,6 +65,10 @@ public sealed class BuiltInPromptFloorProviderTests
 
         skillCall.Should().BeGreaterThanOrEqualTo(0);
         inventoryCall.Should().BeGreaterThan(skillCall);
+        floor.Should().Contain("inventory read present in the final request's tool schemas");
+        floor.Should().Contain("When `nyxid_service_inventory` is present");
+        floor.Should().Contain("When `nyxid_service_inventory` is absent");
+        floor.Should().Contain("such as `nyxid_services`");
         floor.Should().Contain("route the read through the catalog/service-inspection path");
         floor.Should().Contain("establishes current sender-specific service facts");
         floor.Should().Contain("execution tools only run supplied work and cannot establish that inventory");

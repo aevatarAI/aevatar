@@ -203,6 +203,10 @@ public class NyxIdChatSystemPromptTests
 
         skillCall.Should().BeGreaterThanOrEqualTo(0);
         inventoryCall.Should().BeGreaterThan(skillCall);
+        prompt.Should().Contain("inventory read present in the final request's tool schemas");
+        prompt.Should().Contain("When `nyxid_service_inventory` is present");
+        prompt.Should().Contain("When `nyxid_service_inventory` is absent");
+        prompt.Should().Contain("such as `nyxid_services`");
         prompt.Should().Contain("route the read through the catalog/service-inspection path");
         prompt.Should().Contain("establishes current sender-specific service facts");
         prompt.Should().Contain("execution tools only run supplied work and cannot establish that inventory");
