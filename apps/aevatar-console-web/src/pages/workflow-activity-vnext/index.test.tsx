@@ -4622,11 +4622,11 @@ describe('Workflow Activity vNext creation', () => {
 
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
-    const blankButton = await screen.findByRole('button', {
-      name: 'Start blank',
+    const describeButton = await screen.findByRole('button', {
+      name: 'Describe',
     });
-    await waitFor(() => expect(blankButton).toBeEnabled());
-    fireEvent.click(blankButton);
+    await waitFor(() => expect(describeButton).toBeEnabled());
+    fireEvent.click(describeButton);
     fireEvent.change(screen.getByLabelText('Workflow name'), {
       target: { value: ' incident REVIEW ' },
     });
@@ -4637,7 +4637,7 @@ describe('Workflow Activity vNext creation', () => {
       ),
     ).toBeVisible();
     expect(
-      screen.getByRole('button', { name: 'Create and open' }),
+      screen.getByRole('button', { name: 'Generate and open' }),
     ).toBeEnabled();
   });
 
@@ -4666,15 +4666,15 @@ describe('Workflow Activity vNext creation', () => {
     expect(
       screen.queryByText(/persisted workflow draft/i),
     ).not.toBeInTheDocument();
-    const blankButton = await screen.findByRole('button', {
-      name: 'Start blank',
+    const describeButton = await screen.findByRole('button', {
+      name: 'Describe',
     });
-    await waitFor(() => expect(blankButton).toBeEnabled());
-    fireEvent.click(blankButton);
+    await waitFor(() => expect(describeButton).toBeEnabled());
+    fireEvent.click(describeButton);
     fireEvent.change(screen.getByLabelText('Workflow name'), {
       target: { value: 'Incident review' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Create and open' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Generate and open' }));
 
     await waitFor(() =>
       expect(mockStudioApi.createWorkflowDraft).toHaveBeenCalledTimes(1),
@@ -4704,11 +4704,11 @@ describe('Workflow Activity vNext creation', () => {
     });
 
     renderWithQueryClient(<WorkflowActivityVNextPage />);
-    const blankButton = await screen.findByRole('button', {
-      name: 'Start blank',
+    const describeButton = await screen.findByRole('button', {
+      name: 'Describe',
     });
-    await waitFor(() => expect(blankButton).toBeEnabled());
-    fireEvent.click(blankButton);
+    await waitFor(() => expect(describeButton).toBeEnabled());
+    fireEvent.click(describeButton);
 
     expect(screen.queryByLabelText('Save to')).not.toBeInTheDocument();
     expect(screen.queryByText('Default workspace')).not.toBeInTheDocument();
@@ -4738,7 +4738,7 @@ describe('Workflow Activity vNext creation', () => {
       await screen.findByText("Workflow couldn't be created"),
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Change method' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Start blank' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Describe' }));
 
     expect(
       screen.queryByText("Workflow couldn't be created"),

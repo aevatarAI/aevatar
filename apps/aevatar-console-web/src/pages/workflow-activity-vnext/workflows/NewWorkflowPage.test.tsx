@@ -145,19 +145,25 @@ describe('New workflow save-target recovery', () => {
 
     renderWithQueryClient(<NewWorkflowPage scopeId="scope-alpha" />);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Start blank' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Describe' }));
     expect(screen.queryByLabelText('Save to')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Save location')).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Workflow name'), {
       target: { value: 'Incident review' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Create and open' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Generate and open' }));
 
     await waitFor(() =>
       expect(mockStudioApi.createWorkflowDraft).toHaveBeenCalledWith(
-        expect.objectContaining({ directoryId: 'directory-alpha' }),
+        expect.objectContaining({
+          directoryId: 'directory-alpha',
+          workflowName: 'Incident review',
+          yaml: 'name: Incident_review\ndescription: \nroles: []\nsteps: []\n',
+        }),
       ),
     );
+    expect(mockStudioApi.authorWorkflow).not.toHaveBeenCalled();
+    expect(mockStudioApi.parseYaml).not.toHaveBeenCalled();
   });
 
   it('shows Save to only when the workspace has multiple directories', async () => {
@@ -177,14 +183,14 @@ describe('New workflow save-target recovery', () => {
 
     renderWithQueryClient(<NewWorkflowPage scopeId="scope-alpha" />);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Start blank' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Describe' }));
     const directorySelect = screen.getByLabelText('Save to');
     fireEvent.mouseDown(directorySelect);
     fireEvent.click(await screen.findByText('Operations'));
     fireEvent.change(screen.getByLabelText('Workflow name'), {
       target: { value: 'Incident review' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Create and open' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Generate and open' }));
 
     await waitFor(() =>
       expect(mockStudioApi.createWorkflowDraft).toHaveBeenCalledWith(
@@ -216,11 +222,11 @@ describe('New workflow save-target recovery', () => {
 
     renderWithQueryClient(<NewWorkflowPage scopeId="scope-alpha" />);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Start blank' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Describe' }));
     fireEvent.change(screen.getByLabelText('Workflow name'), {
       target: { value: 'Incident review' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Create and open' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Generate and open' }));
 
     await waitFor(() =>
       expect(mockStudioApi.createWorkflowDraft).toHaveBeenCalledWith(
@@ -385,7 +391,7 @@ describe('New workflow save-target recovery', () => {
     );
   });
 
-  it('keeps every creation method available after a network failure', async () => {
+  it('keeps all three creation methods available after a network failure', async () => {
     mockStudioApi.getWorkspaceSettings.mockRejectedValue(
       new TypeError('Failed to fetch'),
     );
@@ -402,14 +408,12 @@ describe('New workflow save-target recovery', () => {
         'Choose a creation method now. Your input stays on this page while you restore access.',
       ),
     ).toBeVisible();
-    for (const name of [
-      'Describe',
-      'Start blank',
-      'Import YAML',
-      'Use template',
-    ]) {
+    for (const name of ['Describe', 'Import YAML', 'Use template']) {
       expect(screen.getByRole('button', { name })).toBeEnabled();
     }
+    expect(
+      screen.queryByRole('button', { name: 'Start blank' }),
+    ).not.toBeInTheDocument();
   });
 
   it('names an unauthorized save target and provides access recovery', async () => {
@@ -441,12 +445,12 @@ describe('New workflow save-target recovery', () => {
         'No save location is available in the current workspace.',
       ),
     ).toBeVisible();
-    fireEvent.click(screen.getByRole('button', { name: 'Start blank' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Describe' }));
     fireEvent.change(screen.getByLabelText('Workflow name'), {
       target: { value: 'Prepared workflow' },
     });
     expect(
-      screen.getByRole('button', { name: 'Create and open' }),
+      screen.getByRole('button', { name: 'Generate and open' }),
     ).toBeDisabled();
     expect(mockStudioApi.createWorkflowDraft).not.toHaveBeenCalled();
   });
