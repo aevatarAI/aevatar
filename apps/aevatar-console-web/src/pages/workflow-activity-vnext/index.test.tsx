@@ -1400,9 +1400,7 @@ describe('Workflow Activity vNext settings', () => {
   it('renders the same authoritative identity in the shell and Account while keeping support values secondary', async () => {
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
-    expect(
-      (await screen.findAllByText('System default')).length,
-    ).toBeGreaterThan(0);
+    await screen.findByRole('combobox', { name: 'Preferred service' });
     const accountLink = screen.getByRole('link', { name: 'Account' });
     expect(accountLink).toHaveAttribute(
       'href',
@@ -1566,20 +1564,6 @@ describe('Workflow Activity vNext settings', () => {
     expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled();
   });
 
-  it('explains service and model inheritance for System default', async () => {
-    renderWithQueryClient(<WorkflowActivityVNextPage />);
-
-    await screen.findByRole('combobox', { name: 'Preferred service' });
-    expect(screen.getAllByText('System default').length).toBeGreaterThan(0);
-    expect(screen.getByText('Default model')).toBeInTheDocument();
-    expect(
-      screen.getByText('Uses the system-selected service and model.'),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByRole('combobox', { name: 'Default model' }),
-    ).not.toBeInTheDocument();
-  });
-
   it('keeps dirty save actions outside the scrolling AI defaults panel', async () => {
     mockStudioApi.getUserLlmSettings.mockResolvedValue({
       savedSelection: null,
@@ -1650,15 +1634,11 @@ describe('Workflow Activity vNext settings', () => {
     expect(mockStudioApi.saveUserLlmSettings).not.toHaveBeenCalled();
   });
 
-  it('keeps connected services selectable without an enumerated model catalogue', async () => {
+  it('only offers backend services that publish at least one model', async () => {
     mockStudioApi.getUserLlmSettings.mockResolvedValue({
-      savedSelection: {
-        routeKind: 'gateway',
-        routeValue: '/api/v1/llm/gateway/v1',
-        modelSelection: { kind: 'provider_default' },
-      },
-      savedRouteLabel: 'Gateway',
-      selectionStatus: 'ready',
+      savedSelection: null,
+      savedRouteLabel: 'System default',
+      selectionStatus: 'system_default',
       catalogDiagnostic: 'unspecified',
       remediation: 'none',
       catalogStatus: 'ready',
@@ -1729,29 +1709,11 @@ describe('Workflow Activity vNext settings', () => {
     const routeSelect = await screen.findByRole('combobox', {
       name: 'Preferred service',
     });
-    expect(
-      screen.queryByRole('combobox', { name: 'Default model' }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.getByText('Uses the service default model.'),
-    ).toBeInTheDocument();
     fireEvent.mouseDown(routeSelect);
     expect(await screen.findByText('Service alpha')).toBeInTheDocument();
-    fireEvent.click(await screen.findByText('Storage alpha'));
-    expect(
-      screen.queryByRole('combobox', { name: 'Default model' }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.getByText('Uses the service default model.'),
-    ).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled();
-    fireEvent.click(
-      screen.getByRole('button', { name: 'Restore saved settings' }),
-    );
-    expect(
-      screen.queryByRole('button', { name: 'Save changes' }),
-    ).not.toBeInTheDocument();
-    expect(mockStudioApi.saveUserLlmSettings).not.toHaveBeenCalled();
+    expect(screen.queryByText('System default')).not.toBeInTheDocument();
+    expect(screen.queryByText('Gateway')).not.toBeInTheDocument();
+    expect(screen.queryByText('Storage alpha')).not.toBeInTheDocument();
   });
 
   it('guards dirty navigation with Stay and Discard and leave', async () => {

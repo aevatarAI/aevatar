@@ -143,7 +143,10 @@ const SettingsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
   );
 
   const options = React.useMemo(
-    () => buildUserLlmSelectionOptions(llm.data?.routeOptions ?? []),
+    () =>
+      buildUserLlmSelectionOptions(llm.data?.routeOptions ?? []).filter(
+        (option) => option.modelCatalog.modelIds.length > 0,
+      ),
     [llm.data?.routeOptions],
   );
   const selectedOption = draft
@@ -359,13 +362,6 @@ const SettingsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
             disabled={!llm.data?.capabilities.canEditRoute}
             onChange={selectRoute}
             options={[
-              {
-                label: t(
-                  'workflowActivityVNext.settings.systemDefault',
-                  'System default',
-                ),
-                value: '',
-              },
               ...options.map((item) => ({
                 disabled: !item.allowed || !item.ready,
                 label: item.label,
@@ -384,7 +380,7 @@ const SettingsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                   ]
                 : []),
             ]}
-            value={draft ? encodeUserLlmSelectionValue(draft) : ''}
+            value={draft ? encodeUserLlmSelectionValue(draft) : undefined}
           />
         </div>
         {draft && modelIds.length > 0 ? (
