@@ -1,8 +1,14 @@
-import { act, renderHook } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+} from '@testing-library/react';
 import { App } from 'antd';
 import type { NotificationInstance } from 'antd/es/notification/interface';
 import React from 'react';
-import { useConsoleToast } from './ConsoleToast';
+import { ConsoleToastProvider, useConsoleToast } from './ConsoleToast';
 
 function createNotificationStub(): jest.Mocked<NotificationInstance> {
   return {
@@ -15,9 +21,51 @@ function createNotificationStub(): jest.Mocked<NotificationInstance> {
   };
 }
 
+const PublishToastTrigger: React.FC = () => {
+  const toast = useConsoleToast();
+  return (
+    <button
+      onClick={() =>
+        toast.success('Workflow published', {
+          duration: false,
+          key: 'workflow-published',
+        })
+      }
+      type="button"
+    >
+      Show publish status
+    </button>
+  );
+};
+
 describe('ConsoleToast', () => {
   afterEach(() => {
     jest.restoreAllMocks();
+  });
+
+  it('renders a compact status below the console header', async () => {
+    render(
+      <ConsoleToastProvider>
+        <PublishToastTrigger />
+      </ConsoleToastProvider>,
+    );
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Show publish status' }),
+    );
+
+    const status = await screen.findByRole('status');
+    const notice = status.closest('.ant-notification-notice');
+    const holder = notice?.closest('.ant-notification-topRight');
+
+    expect(notice).not.toBeNull();
+    expect(notice).toHaveStyle({
+      maxWidth: 'min(360px, calc(100vw - 32px))',
+      width: 'max-content',
+    });
+    expect(notice?.style.boxShadow).toBe('');
+    expect(holder).toHaveStyle({ top: '68px' });
+    expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument();
   });
 
   it('opens a compact dismissible top-right error notification', () => {
@@ -52,13 +100,14 @@ describe('ConsoleToast', () => {
     expect(config.title).toBe(content);
     expect(config.styles).toMatchObject({
       root: {
-        maxWidth: 'calc(100vw - 32px)',
-        width: 360,
+        maxWidth: 'min(360px, calc(100vw - 32px))',
+        width: 'max-content',
       },
       title: {
         marginBottom: 0,
       },
     });
+    expect(config.styles?.root).not.toHaveProperty('boxShadow');
   });
 
   it('uses status semantics and the short default for success', () => {

@@ -4,6 +4,7 @@ import type {
   NotificationInstance,
 } from 'antd/es/notification/interface';
 import React from 'react';
+import { AEVATAR_GLOBAL_UI_SPEC } from './aevatarWorkbench';
 
 type ConsoleToastOptions = Pick<ArgsProps, 'duration' | 'key' | 'onClose'>;
 type ConsoleToastIntent = 'error' | 'info' | 'success' | 'warning';
@@ -11,12 +12,12 @@ type ConsoleToastIntent = 'error' | 'info' | 'success' | 'warning';
 type ConsoleToastSurfaceToken = Pick<
   ReturnType<typeof theme.useToken>['token'],
   | 'borderRadiusLG'
-  | 'boxShadowSecondary'
   | 'colorBorderSecondary'
   | 'fontSize'
   | 'lineHeight'
   | 'padding'
   | 'paddingSM'
+  | 'paddingXL'
 >;
 
 export type ConsoleToastApi = {
@@ -32,6 +33,8 @@ const TOAST_DURATION: Readonly<Record<ConsoleToastIntent, number>> = {
   success: 3,
   warning: 5,
 };
+
+const CONSOLE_TOAST_TOP = AEVATAR_GLOBAL_UI_SPEC.tokens.headerHeight + 12;
 
 function createConsoleToastApi(
   notificationApi: NotificationInstance,
@@ -55,15 +58,15 @@ function createConsoleToastApi(
         root: {
           border: `1px solid ${token.colorBorderSecondary}`,
           borderRadius: token.borderRadiusLG,
-          boxShadow: token.boxShadowSecondary,
-          maxWidth: 'calc(100vw - 32px)',
+          maxWidth: 'min(360px, calc(100vw - 32px))',
           padding: `${token.paddingSM}px ${token.padding}px`,
-          width: 360,
+          width: 'max-content',
         },
         title: {
           fontSize: token.fontSize,
           lineHeight: token.lineHeight,
           marginBottom: 0,
+          paddingInlineEnd: token.paddingXL,
         },
       },
       title: content,
@@ -81,7 +84,11 @@ function createConsoleToastApi(
 export const ConsoleToastProvider: React.FC<{
   readonly children: React.ReactNode;
 }> = ({ children }) => (
-  <App component="div" style={{ display: 'contents' }}>
+  <App
+    component="div"
+    notification={{ placement: 'topRight', top: CONSOLE_TOAST_TOP }}
+    style={{ display: 'contents' }}
+  >
     {children}
   </App>
 );
