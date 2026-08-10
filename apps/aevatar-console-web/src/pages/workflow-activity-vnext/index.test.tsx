@@ -3049,7 +3049,7 @@ describe('Workflow Activity vNext editor', () => {
       await screen.findByDisplayValue('Support triage'),
     ).toBeInTheDocument();
     expect(
-      screen.queryByRole('dialog', { name: 'Run published workflow' }),
+      screen.queryByRole('complementary', { name: 'Published run panel' }),
     ).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Run' })).toBeDisabled();
     expect(mockRuntimeRunsApi.streamChat).not.toHaveBeenCalled();
@@ -3076,7 +3076,7 @@ describe('Workflow Activity vNext editor', () => {
 
     expect(await screen.findByDisplayValue('Empty draft')).toBeInTheDocument();
     expect(
-      screen.queryByRole('dialog', { name: 'Run published workflow' }),
+      screen.queryByRole('complementary', { name: 'Published run panel' }),
     ).not.toBeInTheDocument();
     expect(mockRuntimeRunsApi.streamChat).not.toHaveBeenCalled();
   });
@@ -3708,15 +3708,23 @@ describe('Workflow Activity vNext editor', () => {
     ).not.toBeInTheDocument();
     fireEvent.click(run);
 
-    const drawer = await screen.findByRole('dialog', {
-      name: 'Run published workflow',
+    const runPanel = await screen.findByRole('complementary', {
+      name: 'Published run panel',
     });
-    expect(within(drawer).getByText('svc-existing')).toBeInTheDocument();
-    expect(within(drawer).getByText('rev-existing')).toBeInTheDocument();
+    expect(within(runPanel).getByText('Published run')).toBeInTheDocument();
+    expect(
+      within(runPanel).getByRole('textbox', { name: 'Published run input' }),
+    ).toBeInTheDocument();
+    expect(
+      within(runPanel).queryByText('svc-existing'),
+    ).not.toBeInTheDocument();
+    expect(
+      within(runPanel).queryByText('rev-existing'),
+    ).not.toBeInTheDocument();
     expect(mockStudioApi.publishWorkflow).not.toHaveBeenCalled();
   });
 
-  it('opens the published run drawer after publication is observed', async () => {
+  it('opens the shared run input panel after publication is observed', async () => {
     arrangeObservedWorkflowPublication();
     renderWithQueryClient(<WorkflowActivityVNextPage />);
     await publishObservedWorkflow();
@@ -3725,12 +3733,17 @@ describe('Workflow Activity vNext editor', () => {
     await waitFor(() => expect(run).toBeEnabled());
     fireEvent.click(run);
 
-    const drawer = await screen.findByRole('dialog', {
-      name: 'Run published workflow',
+    const runPanel = await screen.findByRole('complementary', {
+      name: 'Published run panel',
     });
-    expect(drawer).toBeVisible();
-    expect(within(drawer).getByText('svc-alpha')).toBeInTheDocument();
-    expect(within(drawer).getByText('rev-preview-alpha')).toBeInTheDocument();
+    expect(runPanel).toBeVisible();
+    expect(
+      within(runPanel).getByRole('button', { name: 'Start published run' }),
+    ).toBeInTheDocument();
+    expect(within(runPanel).queryByText('svc-alpha')).not.toBeInTheDocument();
+    expect(
+      within(runPanel).queryByText('rev-preview-alpha'),
+    ).not.toBeInTheDocument();
   });
 
   it('locks Run again when the published workflow is edited', async () => {
@@ -3758,10 +3771,15 @@ describe('Workflow Activity vNext editor', () => {
     const run = screen.getByRole('button', { name: 'Run' });
     await waitFor(() => expect(run).toBeEnabled());
     fireEvent.click(run);
-    fireEvent.change(await screen.findByRole('textbox', { name: 'Input' }), {
-      target: { value: 'Review order 42' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: 'Start run' }));
+    fireEvent.change(
+      await screen.findByRole('textbox', { name: 'Published run input' }),
+      {
+        target: { value: 'Review order 42' },
+      },
+    );
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Start published run' }),
+    );
 
     await waitFor(() =>
       expect(mockRuntimeRunsApi.streamChat).toHaveBeenCalledWith(
@@ -3772,6 +3790,47 @@ describe('Workflow Activity vNext editor', () => {
       ),
     );
     expect(mockRuntimeRunsApi.streamDraftRun).not.toHaveBeenCalled();
+  });
+
+  it('opens the shared Logs console from authoritative Activity run data', async () => {
+    mockWorkflowActivityApi.getRun.mockResolvedValue(
+      createEditorRunDetail({
+        runId: 'run-observed-alpha',
+        stateVersion: 7,
+        status: 'running',
+      }),
+    );
+    mockRuntimeRunsApi.streamChat.mockResolvedValue(
+      createSseResponse([{ runStarted: { runId: 'run-observed-alpha' } }]),
+    );
+
+    await renderPublishedWorkflowPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Run' }));
+    fireEvent.change(
+      await screen.findByRole('textbox', { name: 'Published run input' }),
+      { target: { value: 'Review order 42' } },
+    );
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Start published run' }),
+    );
+
+    const logs = await screen.findByRole('complementary', {
+      name: 'Workflow run console',
+    });
+    expect(within(logs).getByText('Logs')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(within(logs).getByText('step-alpha')).toBeInTheDocument();
+      expect(within(logs).getByText('Pending')).toBeInTheDocument();
+      expect(within(logs).getAllByText('step-verify').length).toBeGreaterThan(
+        0,
+      );
+      expect(within(logs).getAllByText('Running').length).toBeGreaterThan(0);
+    });
+    expect(mockWorkflowActivityApi.getRun).toHaveBeenCalledWith(
+      'scope-alpha',
+      'run-observed-alpha',
+    );
   });
 
   it('submits only one published run from a rapid double action', async () => {
@@ -3786,10 +3845,15 @@ describe('Workflow Activity vNext editor', () => {
     await renderPublishedWorkflowPage();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Run' }));
-    fireEvent.change(await screen.findByRole('textbox', { name: 'Input' }), {
-      target: { value: 'Review order 42' },
+    fireEvent.change(
+      await screen.findByRole('textbox', { name: 'Published run input' }),
+      {
+        target: { value: 'Review order 42' },
+      },
+    );
+    const startRun = await screen.findByRole('button', {
+      name: 'Start published run',
     });
-    const startRun = await screen.findByRole('button', { name: 'Start run' });
 
     await act(async () => {
       startRun.click();
@@ -3818,11 +3882,17 @@ describe('Workflow Activity vNext editor', () => {
     await renderPublishedWorkflowPage();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Run' }));
-    const input = await screen.findByRole('textbox', { name: 'Input' });
-    const startRun = screen.getByRole('button', { name: 'Start run' });
+    const input = await screen.findByRole('textbox', {
+      name: 'Published run input',
+    });
+    const startRun = screen.getByRole('button', {
+      name: 'Start published run',
+    });
 
     expect(startRun).toBeDisabled();
-    expect(screen.getByText('Required')).toBeInTheDocument();
+    expect(
+      screen.getByText('Enter an input to start this published workflow run.'),
+    ).toBeInTheDocument();
     fireEvent.change(input, { target: { value: 'Review order 42' } });
     expect(startRun).toBeEnabled();
 
@@ -3848,18 +3918,25 @@ describe('Workflow Activity vNext editor', () => {
     await renderPublishedWorkflowPage();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Run' }));
-    const input = await screen.findByRole('textbox', { name: 'Input' });
+    const input = await screen.findByRole('textbox', {
+      name: 'Published run input',
+    });
     fireEvent.change(input, { target: { value: 'x' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Start run' }));
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Start published run' }),
+    );
 
     expect(
       await screen.findByText('Use at least three characters.'),
     ).toBeInTheDocument();
-    expect(input).toHaveValue('x');
-    expect(input).toHaveAttribute('aria-invalid', 'true');
+    const currentInput = screen.getByRole('textbox', {
+      name: 'Published run input',
+    });
+    expect(currentInput).toHaveValue('x');
+    expect(currentInput).toHaveAttribute('aria-invalid', 'true');
   });
 
-  it('retains the accepted run while the panel is closed and follows its observed result', async () => {
+  it('keeps Logs visible while the run panel closes and refreshes Activity progress', async () => {
     mockWorkflowActivityApi.getRun
       .mockResolvedValueOnce(
         createEditorRunDetail({
@@ -3883,61 +3960,74 @@ describe('Workflow Activity vNext editor', () => {
           { runFinished: { runId: 'run-observed-alpha' } },
         ]),
       )
-      .mockResolvedValueOnce(
-        createSseResponse([
-          { runStarted: { runId: 'run-again-beta' } },
-          { runFinished: { runId: 'run-again-beta' } },
-        ]),
-      );
+      .mockResolvedValueOnce(createSseResponse([]));
 
     await renderPublishedWorkflowPage();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Run' }));
-    fireEvent.change(await screen.findByRole('textbox', { name: 'Input' }), {
-      target: { value: 'Review order 42' },
+    const input = await screen.findByRole('textbox', {
+      name: 'Published run input',
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Start run' }));
-
-    expect(await screen.findByText('Running')).toBeInTheDocument();
-    expect(screen.getByText('step-verify')).toBeInTheDocument();
-    expect(
-      screen.getByRole('link', { name: 'Open run details' }),
-    ).toHaveAttribute(
-      'href',
-      '/scopes/scope-alpha/workflow-activity-vnext/activity/run-observed-alpha',
+    fireEvent.change(input, { target: { value: 'Review order 42' } });
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Start published run' }),
     );
 
-    fireEvent.click(screen.getByText('Close'));
-    expect(
-      screen.queryByRole('dialog', { name: 'Run published workflow' }),
-    ).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Run' }));
-    expect(await screen.findByText('Running')).toBeInTheDocument();
-    expect(
-      within(screen.getByRole('region', { name: 'Run result' })).getByText(
-        'Review order 42',
+    const logs = await screen.findByRole('complementary', {
+      name: 'Workflow run console',
+    });
+    await waitFor(() =>
+      expect(within(logs).getAllByText('step-verify').length).toBeGreaterThan(
+        0,
       ),
-    ).toBeInTheDocument();
+    );
 
     fireEvent.click(
-      screen.getByRole('button', { name: 'Check latest status' }),
+      screen.getByRole('button', { name: 'Close published run panel' }),
     );
-
-    expect(await screen.findByText('Completed')).toBeInTheDocument();
     expect(
-      screen.getByText('Order 42 is ready for approval.'),
+      screen.queryByRole('complementary', { name: 'Published run panel' }),
+    ).not.toBeInTheDocument();
+    expect(logs).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run' }));
+    expect(
+      await screen.findByRole('textbox', { name: 'Published run input' }),
+    ).toHaveValue('Review order 42');
+
+    expect(
+      await within(logs).findByText(
+        'Order 42 is ready for approval.',
+        {},
+        {
+          timeout: 2500,
+        },
+      ),
     ).toBeInTheDocument();
-    fireEvent.change(screen.getByRole('textbox', { name: 'Input' }), {
-      target: { value: 'A different input' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: 'Run again' }));
+    fireEvent.click(within(logs).getByRole('button', { name: 'Clear logs' }));
+    expect(
+      screen.queryByRole('complementary', { name: 'Workflow run console' }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.change(
+      screen.getByRole('textbox', { name: 'Published run input' }),
+      { target: { value: 'A different input' } },
+    );
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Start published run' }),
+    );
+    expect(
+      await screen.findByRole('complementary', {
+        name: 'Workflow run console',
+      }),
+    ).toBeInTheDocument();
 
     await waitFor(() =>
       expect(mockRuntimeRunsApi.streamChat).toHaveBeenCalledTimes(2),
     );
     expect(mockRuntimeRunsApi.streamChat.mock.calls[1]).toEqual([
       'scope-alpha',
-      { prompt: 'Review order 42' },
+      { prompt: 'A different input' },
       expect.any(AbortSignal),
       { serviceId: 'svc-alpha' },
     ]);
@@ -3949,12 +4039,19 @@ describe('Workflow Activity vNext editor', () => {
     await renderPublishedWorkflowPage();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Run' }));
-    fireEvent.change(await screen.findByRole('textbox', { name: 'Input' }), {
-      target: { value: 'Review order 42' },
-    });
-    fireEvent.click(await screen.findByRole('button', { name: 'Start run' }));
+    fireEvent.change(
+      await screen.findByRole('textbox', { name: 'Published run input' }),
+      {
+        target: { value: 'Review order 42' },
+      },
+    );
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Start published run' }),
+    );
 
-    const startRun = await screen.findByRole('button', { name: 'Start run' });
+    const startRun = await screen.findByRole('button', {
+      name: 'Start published run',
+    });
     await waitFor(() => expect(startRun).toBeDisabled());
     expect(
       screen.queryByText(
@@ -4040,10 +4137,15 @@ describe('Workflow Activity vNext editor', () => {
     await publishObservedWorkflow();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Run' }));
-    fireEvent.change(await screen.findByRole('textbox', { name: 'Input' }), {
-      target: { value: 'Review order 42' },
-    });
-    fireEvent.click(await screen.findByRole('button', { name: 'Start run' }));
+    fireEvent.change(
+      await screen.findByRole('textbox', { name: 'Published run input' }),
+      {
+        target: { value: 'Review order 42' },
+      },
+    );
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Start published run' }),
+    );
     await waitFor(() => expect(firstReadStarted).toBe(true));
     expect(screen.queryByText('Run accepted')).not.toBeInTheDocument();
     expect(document.querySelector('.ant-alert-info')).toBeNull();
@@ -4073,7 +4175,7 @@ describe('Workflow Activity vNext editor', () => {
     expect(mockRuntimeRunsApi.streamChat).toHaveBeenCalledTimes(1);
   });
 
-  it('opens a run detail only after the SSE run id is observed by the activity API', async () => {
+  it('renders run logs only after the SSE run id is observed by Activity', async () => {
     mockWorkflowActivityApi.getRun.mockResolvedValue(
       createEditorRunDetail({
         runId: 'run-observed-alpha',
@@ -4091,20 +4193,27 @@ describe('Workflow Activity vNext editor', () => {
     await renderPublishedWorkflowPage();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Run' }));
-    fireEvent.change(await screen.findByRole('textbox', { name: 'Input' }), {
-      target: { value: 'Review order 42' },
-    });
-    fireEvent.click(await screen.findByRole('button', { name: 'Start run' }));
+    fireEvent.change(
+      await screen.findByRole('textbox', { name: 'Published run input' }),
+      {
+        target: { value: 'Review order 42' },
+      },
+    );
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Start published run' }),
+    );
 
-    expect(await screen.findByText('Observed in Activity')).toBeInTheDocument();
+    const logs = await screen.findByRole('complementary', {
+      name: 'Workflow run console',
+    });
+    await waitFor(() =>
+      expect(within(logs).getAllByText('step-verify').length).toBeGreaterThan(
+        0,
+      ),
+    );
     expect(mockWorkflowActivityApi.getRun).toHaveBeenCalledWith(
       'scope-alpha',
       'run-observed-alpha',
-    );
-
-    fireEvent.click(screen.getByRole('link', { name: 'Open run details' }));
-    expect(history.push).toHaveBeenCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/activity/run-observed-alpha',
     );
   });
 
@@ -4120,10 +4229,15 @@ describe('Workflow Activity vNext editor', () => {
     await renderPublishedWorkflowPage();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Run' }));
-    fireEvent.change(await screen.findByRole('textbox', { name: 'Input' }), {
-      target: { value: 'Review order 42' },
-    });
-    fireEvent.click(await screen.findByRole('button', { name: 'Start run' }));
+    fireEvent.change(
+      await screen.findByRole('textbox', { name: 'Published run input' }),
+      {
+        target: { value: 'Review order 42' },
+      },
+    );
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Start published run' }),
+    );
 
     await waitFor(() =>
       expect(mockWorkflowActivityApi.getRun).toHaveBeenCalledWith(
@@ -4180,10 +4294,15 @@ describe('Workflow Activity vNext editor', () => {
     await renderPublishedWorkflowPage();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Run' }));
-    fireEvent.change(await screen.findByRole('textbox', { name: 'Input' }), {
-      target: { value: 'Review order 42' },
-    });
-    fireEvent.click(await screen.findByRole('button', { name: 'Start run' }));
+    fireEvent.change(
+      await screen.findByRole('textbox', { name: 'Published run input' }),
+      {
+        target: { value: 'Review order 42' },
+      },
+    );
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Start published run' }),
+    );
 
     expect(await screen.findByText('Run failed')).toBeInTheDocument();
     expect(
@@ -4216,21 +4335,27 @@ describe('Workflow Activity vNext editor', () => {
     await renderPublishedWorkflowPage();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Run' }));
-    fireEvent.change(await screen.findByRole('textbox', { name: 'Input' }), {
-      target: { value: 'Review order 42' },
-    });
-    fireEvent.click(await screen.findByRole('button', { name: 'Start run' }));
+    fireEvent.change(
+      await screen.findByRole('textbox', { name: 'Published run input' }),
+      {
+        target: { value: 'Review order 42' },
+      },
+    );
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Start published run' }),
+    );
 
-    expect(await screen.findByText('Failed')).toBeInTheDocument();
-    expect(await screen.findByText('Observed in Activity')).toBeInTheDocument();
+    await screen.findByRole('complementary', {
+      name: 'Workflow run console',
+    });
+    await waitFor(() =>
+      expect(
+        screen.getAllByText('The workflow failed.').length,
+      ).toBeGreaterThan(0),
+    );
     expect(mockWorkflowActivityApi.getRun).toHaveBeenCalledWith(
       'scope-alpha',
       'run-failed-alpha',
-    );
-
-    fireEvent.click(screen.getByRole('link', { name: 'Open run details' }));
-    expect(history.push).toHaveBeenCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/activity/run-failed-alpha',
     );
   });
 
