@@ -58,6 +58,7 @@ jest.mock('@/shared/graphs/GraphCanvas', () => ({
     edges?: Array<{ id?: string }>;
     onCanvasSelect?: () => void;
     onConnectNodes?: (sourceNodeId: string, targetNodeId: string) => void;
+    onDeleteEdges?: (edgeIds: string[]) => Promise<void> | void;
     onEdgeSelect?: (edgeId: string) => void;
     onNodeLayoutChange?: (
       nodes: Array<{ id?: string; position?: { x: number; y: number } }>,
@@ -91,13 +92,24 @@ jest.mock('@/shared/graphs/GraphCanvas', () => ({
       ),
       props.edges?.map((edge) =>
         React.createElement(
-          'button',
-          {
-            key: edge.id,
-            onClick: () => props.onEdgeSelect?.(String(edge.id ?? '')),
-            type: 'button',
-          },
-          `edge:${edge.id}`,
+          React.Fragment,
+          { key: edge.id },
+          React.createElement(
+            'button',
+            {
+              onClick: () => props.onEdgeSelect?.(String(edge.id ?? '')),
+              type: 'button',
+            },
+            `edge:${edge.id}`,
+          ),
+          React.createElement(
+            'button',
+            {
+              onClick: () => props.onDeleteEdges?.([String(edge.id ?? '')]),
+              type: 'button',
+            },
+            `delete edge:${edge.id}`,
+          ),
         ),
       ),
       React.createElement(
@@ -3102,7 +3114,94 @@ describe('TeamMemberWorkflowStudioPage', () => {
     });
   });
 
-  it('deletes a selected connection without deleting either node', async () => {
+  it('connects conditional nodes through the shared branch-aware Studio editor', async () => {
+    window.history.replaceState(
+      {},
+      '',
+      '/scopes/scope-1/teams/t-alpha/members/member-alpha/workflow?workflowId=workflow-alpha',
+    );
+    (studioApi.getMember as jest.Mock).mockResolvedValue({
+      implementationRef: {
+        implementationKind: 'workflow',
+        workflowId: 'workflow-alpha',
+      },
+      summary: {
+        createdAt: '2026-06-08T00:00:00Z',
+        description: '',
+        displayName: 'Workflow Alpha',
+        implementationKind: 'workflow',
+        lastBoundRevisionId: null,
+        lifecycleStage: 'created',
+        memberId: 'member-alpha',
+        publishedServiceId: '',
+        scopeId: 'scope-1',
+        teamId: 't-alpha',
+        updatedAt: '2026-06-08T00:00:00Z',
+      },
+    });
+    (studioApi.getWorkflow as jest.Mock).mockResolvedValue({
+      directoryId: 'scope:scope-1',
+      directoryLabel: 'scope-1',
+      draftExists: true,
+      fileName: 'workflow-alpha.yaml',
+      filePath: 'scope://scope-1/workflow-alpha.yaml',
+      findings: [],
+      layout: null,
+      name: 'Workflow Alpha',
+      workflowId: 'workflow-alpha',
+      yaml: 'name: Workflow Alpha\nsteps: []\n',
+      document: {
+        ...mockWorkflowDocument,
+        steps: [
+          {
+            id: 'condition',
+            type: 'conditional',
+            targetRole: '',
+            parameters: {},
+            next: null,
+            branches: {},
+          },
+          {
+            id: 'transform',
+            type: 'transform',
+            targetRole: '',
+            parameters: {},
+            next: null,
+            branches: {},
+          },
+        ],
+      },
+      updatedAtUtc: '2026-06-08T00:00:00Z',
+    });
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('graph-canvas')).toHaveTextContent('nodes:2');
+    });
+    fireEvent.click(
+      screen.getByRole('button', { name: 'connect first two nodes' }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => {
+      expect(studioApi.serializeYaml).toHaveBeenCalledWith(
+        expect.objectContaining({
+          document: expect.objectContaining({
+            steps: expect.arrayContaining([
+              expect.objectContaining({
+                id: 'condition',
+                branches: { true: 'transform' },
+                next: null,
+              }),
+            ]),
+          }),
+        }),
+      );
+    });
+  });
+
+  it('deletes the connection requested by the canvas without deleting either node', async () => {
     window.history.replaceState(
       {},
       '',
@@ -3171,17 +3270,10 @@ describe('TeamMemberWorkflowStudioPage', () => {
       expect(screen.getByText('nodes:2')).toBeTruthy();
     });
     fireEvent.click(
-      screen.getByRole('button', { name: 'edge:edge:triage:publish:linear' }),
+      screen.getByRole('button', {
+        name: 'delete edge:edge:triage:publish:linear',
+      }),
     );
-    openMoreActionsMenu();
-    expect(
-      screen.getByRole('menuitem', { name: 'Delete selected connection' }),
-    ).toBeTruthy();
-    closeOpenMenu();
-    const confirmSpy = jest
-      .spyOn(window, 'confirm')
-      .mockImplementation(() => true);
-    clickMoreAction('Delete selected connection');
     expect(
       screen.queryByRole('button', {
         name: 'edge:edge:triage:publish:linear',
@@ -3192,10 +3284,6 @@ describe('TeamMemberWorkflowStudioPage', () => {
     expect(
       screen.queryByRole('button', { name: 'More workflow actions' }),
     ).toBeNull();
-    expect(confirmSpy).toHaveBeenCalledWith(
-      'Delete the selected connection? This cannot be undone.',
-    );
-    confirmSpy.mockRestore();
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => {

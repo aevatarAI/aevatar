@@ -10,8 +10,7 @@ import {
 import { useQuery } from '@tanstack/react-query';
 import { Alert, Button, Input, Modal, Segmented, Space, Tooltip } from 'antd';
 import React from 'react';
-import WorkflowStudioCanvasRegion from '@/pages/team-member-workflow-studio/components/WorkflowStudioCanvasRegion';
-import WorkflowStudioNodeLibrary from '@/pages/team-member-workflow-studio/components/WorkflowStudioNodeLibrary';
+import WorkflowStudioEditorSurface from '@/pages/team-member-workflow-studio/components/WorkflowStudioEditorSurface';
 import { scopesApi } from '@/shared/api/scopesApi';
 import { formatUtcDateTime } from '@/shared/datetime/dateTime';
 import { t } from '@/shared/i18n/messages';
@@ -437,6 +436,16 @@ const WorkflowEditorPage: React.FC<{
       </Space>,
     );
   }, [editor.nodeInsertionError, editor.retryNodeInsertion, toast]);
+
+  React.useEffect(() => {
+    if (!editor.canvasMutationError) return;
+    toast.error(
+      t(
+        'workflowActivityVNext.editor.canvasUpdateFailed',
+        "Couldn't update workflow",
+      ),
+    );
+  }, [editor.canvasMutationError, toast]);
 
   const retryMaterialization = React.useCallback(async () => {
     await editor.retryMaterialization();
@@ -1091,7 +1100,7 @@ const WorkflowEditorPage: React.FC<{
         </div>
       ) : null}
       {mode === 'canvas' ? (
-        <WorkflowStudioCanvasRegion
+        <WorkflowStudioEditorSurface
           ariaLabel={t(
             'workflowActivityVNext.editor.canvasAria',
             'Workflow canvas',
@@ -1103,11 +1112,39 @@ const WorkflowEditorPage: React.FC<{
           )}
           addFirstStepDisabled={editorWriteLocked}
           nodes={editor.graph.nodes}
+          nodeLibraryOpen={nodeLibraryOpen && !editorWriteLocked}
           onAddFirstStep={() => {
             if (!editorWriteLocked) setNodeLibraryOpen(true);
           }}
           onCanvasSelect={requestCanvasSelect}
+          onConnectNodes={(sourceNodeId, targetNodeId) => {
+            requestInspectorDiscard(() => {
+              void editor.connectNodes(sourceNodeId, targetNodeId);
+            });
+          }}
+          onCloseNodeLibrary={() => setNodeLibraryOpen(false)}
+          onDeleteEdges={(edgeIds) => {
+            requestInspectorDiscard(() => {
+              void editor.deleteEdges(edgeIds);
+            });
+          }}
+          onDeleteNodes={(nodeIds) => {
+            requestInspectorDiscard(() => {
+              void editor.deleteNodes(nodeIds);
+            });
+          }}
+          onEdgeSelect={(edgeId) => {
+            requestInspectorDiscard(() => editor.selectEdge(edgeId));
+          }}
+          onInsertNode={(stepType) => {
+            requestInspectorDiscard(() => {
+              void editor.addNode(stepType);
+              setNodeLibraryOpen(false);
+            });
+          }}
+          onNodeLayoutChange={editor.moveNodes}
           onNodeSelect={requestNodeSelect}
+          selectedEdgeId={editor.selectedEdgeId}
           selectedNodeId={editor.selectedNodeId}
           style={{
             border: '1px solid var(--wa-line)',
@@ -1126,16 +1163,6 @@ const WorkflowEditorPage: React.FC<{
           >
             {t('workflowActivityVNext.editor.addNode', 'Add node')}
           </Button>
-          <WorkflowStudioNodeLibrary
-            onClose={() => setNodeLibraryOpen(false)}
-            onInsertNode={(stepType) => {
-              requestInspectorDiscard(() => {
-                void editor.addNode(stepType);
-                setNodeLibraryOpen(false);
-              });
-            }}
-            open={nodeLibraryOpen && !editorWriteLocked}
-          />
           <WorkflowNodeInspector
             disabled={editorWriteLocked}
             error={editor.selectedStepConfigurationError}
@@ -1148,7 +1175,7 @@ const WorkflowEditorPage: React.FC<{
             onUnappliedChangesChange={setHasUnappliedNodeChanges}
             stepDraft={editor.selectedStepDraft}
           />
-        </WorkflowStudioCanvasRegion>
+        </WorkflowStudioEditorSurface>
       ) : (
         <Input.TextArea
           aria-label={t('workflowActivityVNext.new.yaml', 'Workflow YAML')}

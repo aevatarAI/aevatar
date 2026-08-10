@@ -83,6 +83,7 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.editor.backAria': 'Back to workflows',
   'workflowActivityVNext.editor.canvas': 'Canvas',
   'workflowActivityVNext.editor.canvasAria': 'Workflow canvas',
+  'workflowActivityVNext.editor.canvasUpdateFailed': "Couldn't update workflow",
   'workflowActivityVNext.editor.description':
     'Build, test, and refine this workflow.',
   'workflowActivityVNext.editor.discardLeave': 'Discard and leave',

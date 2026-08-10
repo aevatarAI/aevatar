@@ -365,12 +365,33 @@ jest.mock(
     __esModule: true,
     default: ({
       nodes,
+      onConnectNodes,
+      onDeleteEdges,
+      onDeleteNodes,
+      onEdgeSelect,
+      onNodeLayoutChange,
       onNodeSelect,
     }: {
       nodes: readonly { readonly id: string }[];
+      onConnectNodes?: (sourceNodeId: string, targetNodeId: string) => void;
+      onDeleteEdges?: (edgeIds: string[]) => Promise<void> | void;
+      onDeleteNodes?: (nodeIds: string[]) => Promise<void> | void;
+      onEdgeSelect?: (edgeId: string) => void;
+      onNodeLayoutChange?: (
+        nodes: readonly {
+          readonly id: string;
+          readonly position?: { readonly x: number; readonly y: number };
+        }[],
+      ) => void;
       onNodeSelect?: (nodeId: string) => void;
     }) => (
-      <div data-testid="workflow-studio-canvas">
+      <div
+        data-connectable={String(Boolean(onConnectNodes))}
+        data-deletable={String(Boolean(onDeleteEdges && onDeleteNodes))}
+        data-edge-selectable={String(Boolean(onEdgeSelect))}
+        data-layout-editable={String(Boolean(onNodeLayoutChange))}
+        data-testid="workflow-studio-canvas"
+      >
         {nodes.map((node) => (
           <button
             key={node.id}
@@ -380,6 +401,13 @@ jest.mock(
             Select {node.id}
           </button>
         ))}
+        <button
+          disabled={!onConnectNodes || nodes.length < 2}
+          onClick={() => onConnectNodes?.(nodes[0].id, nodes[1].id)}
+          type="button"
+        >
+          Connect first two nodes
+        </button>
       </div>
     ),
   }),
@@ -2922,6 +2950,61 @@ describe('Workflow Activity vNext editor', () => {
         name: 'Select step:step-root',
       }),
     ).toBeInTheDocument();
+  });
+
+  it('reuses the complete Studio canvas editing contract', async () => {
+    const sourceDocument = {
+      name: 'committed_source',
+      roles: [],
+      steps: [
+        { id: 'step-root', type: 'conditional' },
+        { id: 'step-next', type: 'transform' },
+      ],
+    };
+    mockStudioApi.getWorkflow.mockResolvedValue({
+      workflowId: 'wf-committed-source',
+      name: 'Committed source',
+      fileName: 'committed-source.yaml',
+      filePath: '',
+      directoryId: '',
+      directoryLabel: '',
+      yaml: 'name: committed_source\nroles: []\nsteps: []\n',
+      updatedAtUtc: '2026-08-04T10:00:00Z',
+      document: sourceDocument,
+      draftExists: false,
+      findings: [],
+    });
+    mockStudioApi.serializeYaml.mockImplementation(async ({ document }) => ({
+      yaml: 'name: committed_source\nroles: []\nsteps: []\n',
+      document,
+      findings: [],
+    }));
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    const canvas = await screen.findByTestId('workflow-studio-canvas');
+    expect(canvas).toHaveAttribute('data-connectable', 'true');
+    expect(canvas).toHaveAttribute('data-deletable', 'true');
+    expect(canvas).toHaveAttribute('data-edge-selectable', 'true');
+    expect(canvas).toHaveAttribute('data-layout-editable', 'true');
+
+    fireEvent.click(
+      within(canvas).getByRole('button', { name: 'Connect first two nodes' }),
+    );
+
+    await waitFor(() =>
+      expect(mockStudioApi.serializeYaml).toHaveBeenCalledWith({
+        document: expect.objectContaining({
+          steps: expect.arrayContaining([
+            expect.objectContaining({
+              id: 'step-root',
+              branches: { true: 'step-next' },
+              next: null,
+            }),
+          ]),
+        }),
+      }),
+    );
   });
 
   it('keeps the Canvas/YAML editor view switch discoverable and keyboard operable', async () => {
