@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.GAgents.NyxidChat;
 using FluentAssertions;
@@ -175,6 +176,41 @@ public sealed class NyxIdAssistantActionRegistryTests
     }
 
     [Fact]
+    public void ParseServiceReauthorize_ShouldRequireExactUserServiceIdentity()
+    {
+        using var valid = JsonDocument.Parse(
+            """{"userServiceId":"us-github-alpha","requestedScopes":["repo","read:org"]}""");
+
+        var parsed = NyxIdAssistantActionRegistry.ParseServiceReauthorize(valid.RootElement);
+
+        parsed.ParamsCase.Should().Be(
+            NyxIdAssistantActionParams.ParamsOneofCase.ServiceReauthorize);
+        parsed.ServiceReauthorize.UserServiceId.Should().Be("us-github-alpha");
+        parsed.ServiceReauthorize.RequestedScopes.Should().Equal("repo", "read:org");
+
+        using var obsolete = JsonDocument.Parse(
+            """{"keyId":"key-alpha","requestedScopes":["repo"]}""");
+        Action parseObsolete = () =>
+            NyxIdAssistantActionRegistry.ParseServiceReauthorize(obsolete.RootElement);
+        parseObsolete.Should().Throw<NyxIdAssistantActionRegistryException>()
+            .Which.Code.Should().Be("NYXID_ACTION_PARAMS_INVALID");
+    }
+
+    [Fact]
+    public void ServiceReauthorize_ShouldRemainFailClosedAtExecutableGate()
+    {
+        var registry = NyxIdAssistantActionRegistry.Load(
+            RegistryJsonWithServiceReauthorize());
+
+        registry.TryGetDefinition("service.reauthorize", out _).Should().BeFalse();
+        Action validate = () => registry.ValidateRequest(
+            "service.reauthorize",
+            """{"userServiceId":"us-github-alpha","requestedScopes":["repo"]}""");
+        validate.Should().Throw<NyxIdAssistantActionRegistryException>()
+            .Which.Code.Should().Be("NYXID_ACTION_UNSUPPORTED");
+    }
+
+    [Fact]
     public void StartupSnapshot_ShouldInitializeExactlyOnceAndFailBeforeInitialization()
     {
         var snapshot = new NyxIdAssistantActionRegistrySnapshot();
@@ -306,6 +342,43 @@ public sealed class NyxIdAssistantActionRegistryTests
             "name": {"type": "string"},
             "redirectUris": {"type": "array", "items": {"type": "string"}}
           }
+        }
+        """;
+
+    private const string ServiceReauthorizeSchema = """
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["userServiceId"],
+          "properties": {
+            "userServiceId": {"type": "string"},
+            "requestedScopes": {"type": "array", "items": {"type": "string"}}
+          }
+        }
+        """;
+
+    private static string RegistryJsonWithServiceReauthorize() => $$"""
+        {
+          "schema_version": 4,
+          "revision": "{{SupportedRevision}}",
+          "actions": [
+            {
+              "action": "service.connect",
+              "description": "Connect a service.",
+              "params_schema": {{ServiceConnectSchema}},
+              "risk": "grant",
+              "tier": "v1",
+              "remember_eligible": true
+            },
+            {
+              "action": "service.reauthorize",
+              "description": "Reauthorize a connected service.",
+              "params_schema": {{ServiceReauthorizeSchema}},
+              "risk": "grant",
+              "tier": "v1",
+              "remember_eligible": true
+            }
+          ]
         }
         """;
 

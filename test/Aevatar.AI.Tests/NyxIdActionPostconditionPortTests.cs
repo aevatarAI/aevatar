@@ -146,6 +146,55 @@ public sealed class NyxIdActionPostconditionPortTests
     }
 
     [Fact]
+    public async Task VerifyAsync_ServiceReauthorizeWithoutGrantedScopeEvidence_ShouldFailClosed()
+    {
+        var input = ReauthorizeInput();
+        input.ResourceHint = null;
+        var query = new StubCatalogQueryPort(ReadySnapshot());
+        var port = CreatePort(query);
+
+        var result = await port.VerifyAsync(input);
+
+        query.Owners.Should().BeEmpty();
+        result.Verified.Should().BeFalse();
+        result.FailureCode.Should().Be(NyxIdActionPostconditionPort.UnsupportedCode);
+        result.Resource.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task VerifyAsync_ServiceReauthorizeMismatchedHint_ShouldFailBeforeRead()
+    {
+        var input = ReauthorizeInput();
+        input.ResourceHint!.UserService.UserServiceId = "service-other";
+        var query = new StubCatalogQueryPort(ReadySnapshot());
+        var port = CreatePort(query);
+
+        var result = await port.VerifyAsync(input);
+
+        query.Owners.Should().BeEmpty();
+        result.Verified.Should().BeFalse();
+        result.FailureCode.Should().Be(NyxIdActionPostconditionPort.MismatchCode);
+    }
+
+    [Fact]
+    public async Task VerifyAsync_ServiceReauthorizeKeyHint_ShouldFailBeforeRead()
+    {
+        var input = ReauthorizeInput();
+        input.ResourceHint = new NyxIdChatSafeResourceRef
+        {
+            Key = new NyxIdChatKeyRef { KeyId = "key-alpha" },
+        };
+        var query = new StubCatalogQueryPort(ReadySnapshot());
+        var port = CreatePort(query);
+
+        var result = await port.VerifyAsync(input);
+
+        query.Owners.Should().BeEmpty();
+        result.Verified.Should().BeFalse();
+        result.FailureCode.Should().Be(NyxIdActionPostconditionPort.MismatchCode);
+    }
+
+    [Fact]
     public async Task VerifyAsync_UnsupportedAction_ShouldFailClosedWithoutCatalogRead()
     {
         var query = new StubCatalogQueryPort(ReadySnapshot());
@@ -192,6 +241,31 @@ public sealed class NyxIdActionPostconditionPortTests
             CatalogServiceConnect = new NyxIdCatalogServiceConnectParams
             {
                 ServiceSlug = "api-github",
+            },
+        },
+    };
+
+    private static NyxIdChatActionPostconditionInput ReauthorizeInput() => new()
+    {
+        ScopeId = "scope-alpha",
+        OwnerSubject = "owner-alpha",
+        OriginTurnId = "turn-origin-alpha",
+        ActionRequestId = "action-alpha",
+        Action = NyxIdAssistantActionKind.ServiceReauthorize,
+        ReportedDisposition = NyxIdChatActionDisposition.Completed,
+        ResourceHint = new NyxIdChatSafeResourceRef
+        {
+            UserService = new NyxIdChatUserServiceRef
+            {
+                UserServiceId = "service-alpha",
+            },
+        },
+        Params = new NyxIdAssistantActionParams
+        {
+            ServiceReauthorize = new NyxIdServiceReauthorizeParams
+            {
+                UserServiceId = "service-alpha",
+                RequestedScopes = { "repo" },
             },
         },
     };

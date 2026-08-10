@@ -412,7 +412,6 @@ internal static class NyxIdChatConversationAguiFrameBuilder
         NyxIdChatActionRequestState request)
     {
         if (request.SchemaVersion != NyxIdAssistantActionRegistry.SupportedSchemaVersion ||
-            request.Action != NyxIdAssistantActionKind.ServiceConnect ||
             request.Params is null)
         {
             return null;
@@ -430,9 +429,30 @@ internal static class NyxIdChatConversationAguiFrameBuilder
                 {
                     CustomService = request.Params.CustomServiceConnect.Clone(),
                 },
+            NyxIdAssistantActionParams.ParamsOneofCase.ServiceReauthorize =>
+                new NyxIdAssistantActionWireParams
+                {
+                    ServiceReauthorize = request.Params.ServiceReauthorize.Clone(),
+                },
             _ => null,
         };
         if (wireParams is null)
+            return null;
+
+        var wireAction = request.Action switch
+        {
+            NyxIdAssistantActionKind.ServiceConnect
+                when request.Params.ParamsCase is
+                    NyxIdAssistantActionParams.ParamsOneofCase.CatalogServiceConnect or
+                    NyxIdAssistantActionParams.ParamsOneofCase.CustomServiceConnect =>
+                "service.connect",
+            NyxIdAssistantActionKind.ServiceReauthorize
+                when request.Params.ParamsCase ==
+                    NyxIdAssistantActionParams.ParamsOneofCase.ServiceReauthorize =>
+                "service.reauthorize",
+            _ => null,
+        };
+        if (wireAction is null)
             return null;
 
         return new NyxIdAssistantActionRequestWirePayload
@@ -443,7 +463,7 @@ internal static class NyxIdChatConversationAguiFrameBuilder
             TaskId = request.TaskId,
             StepId = request.StepId,
             ActionRequestId = request.ActionRequestId,
-            Action = "service.connect",
+            Action = wireAction,
             Params = wireParams,
         };
     }

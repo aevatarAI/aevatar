@@ -257,7 +257,7 @@ public sealed class NyxIdChatBrowserActionTests
                 {
                     ServiceReauthorize = new NyxIdServiceReauthorizeParams
                     {
-                        KeyId = "key-alpha",
+                        UserServiceId = "service-alpha",
                     },
                 }),
         };

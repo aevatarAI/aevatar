@@ -339,12 +339,12 @@ public sealed class NyxIdAssistantActionRegistry
         };
     }
 
-    private static NyxIdAssistantActionParams ParseServiceReauthorize(JsonElement root)
+    internal static NyxIdAssistantActionParams ParseServiceReauthorize(JsonElement root)
     {
-        EnsureOnlyProperties(root, "keyId", "requestedScopes");
+        EnsureOnlyProperties(root, "userServiceId", "requestedScopes");
         var value = new NyxIdServiceReauthorizeParams
         {
-            KeyId = ReadRequiredString(root, "keyId", 256),
+            UserServiceId = ReadRequiredString(root, "userServiceId", 256),
         };
         value.RequestedScopes.AddRange(ReadStringArray(root, "requestedScopes", 64, 256));
         return new NyxIdAssistantActionParams { ServiceReauthorize = value };

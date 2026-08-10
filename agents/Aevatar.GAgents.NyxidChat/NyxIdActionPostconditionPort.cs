@@ -53,7 +53,7 @@ public sealed class NyxIdActionPostconditionPort : INyxIdActionPostconditionPort
             NyxIdAssistantActionKind.ServiceConnect =>
                 await VerifyServiceConnectAsync(input, ct).ConfigureAwait(false),
             NyxIdAssistantActionKind.ServiceReauthorize =>
-                await VerifyServiceReauthorizeAsync(input, ct).ConfigureAwait(false),
+                FailClosedServiceReauthorize(input),
             _ => Unverified(
                 input,
                 UnsupportedCode,
@@ -126,40 +126,44 @@ public sealed class NyxIdActionPostconditionPort : INyxIdActionPostconditionPort
             });
     }
 
-    private async Task<NyxIdChatActionPostconditionResult> VerifyServiceReauthorizeAsync(
-        NyxIdChatActionPostconditionInput input,
-        CancellationToken ct)
+    private static NyxIdChatActionPostconditionResult FailClosedServiceReauthorize(
+        NyxIdChatActionPostconditionInput input)
     {
         if (input.Params?.ParamsCase !=
                 NyxIdAssistantActionParams.ParamsOneofCase.ServiceReauthorize ||
-            string.IsNullOrWhiteSpace(input.Params.ServiceReauthorize.KeyId))
+            !ValidIdentity(input.Params.ServiceReauthorize.UserServiceId))
         {
             return Unverified(input, InvalidInputCode, "The service-reauthorize params are invalid.");
         }
 
-        var exactHint = ResolveUserServiceHint(input.ResourceHint);
-        if (exactHint is null)
+        var expectedUserServiceId = input.Params.ServiceReauthorize.UserServiceId;
+        if (input.ResourceHint is not null &&
+            input.ResourceHint.ResourceCase is not
+                (NyxIdChatSafeResourceRef.ResourceOneofCase.None or
+                 NyxIdChatSafeResourceRef.ResourceOneofCase.UserService))
         {
             return Unverified(
                 input,
                 MismatchCode,
-                "An exact connected-service reference is required to verify reauthorization.");
+                "The reauthorization report referenced the wrong resource kind.");
         }
 
-        var snapshot = await ReadCatalogAsync(input.OwnerSubject, ct).ConfigureAwait(false);
-        var invalid = ValidateSnapshot(input, snapshot);
-        if (invalid is not null)
-            return invalid;
-
-        var match = snapshot!.Services.SingleOrDefault(service =>
-            service.Access == NyxIdAuthorizationAccess.Permitted &&
-            string.Equals(service.UserServiceId, exactHint, StringComparison.Ordinal));
-        return match is null
-            ? Unverified(
+        var exactHint = ResolveUserServiceHint(input.ResourceHint);
+        if (exactHint is not null && !string.Equals(
+                exactHint,
+                expectedUserServiceId,
+                StringComparison.Ordinal))
+        {
+            return Unverified(
                 input,
                 MismatchCode,
-                "The reauthorized service was not visible in the typed read model.")
-            : Verified(input, input.ResourceHint.Clone());
+                "The connected-service reference did not match the requested reauthorization.");
+        }
+
+        return Unverified(
+            input,
+            UnsupportedCode,
+            "No typed granted-scope evidence is configured for this action postcondition.");
     }
 
     private async Task<NyxIdAuthorizationCatalogSnapshot?> ReadCatalogAsync(

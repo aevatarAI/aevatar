@@ -857,7 +857,7 @@ message NyxIdCustomServiceConnectParams {
 }
 
 message NyxIdServiceReauthorizeParams {
-  string key_id = 1;
+  string user_service_id = 1;
   repeated string requested_scopes = 2;
 }
 
@@ -942,6 +942,7 @@ message NyxIdAssistantActionWireParams {
   oneof params {
     NyxIdCatalogServiceConnectParams catalog_service = 1;
     NyxIdCustomServiceConnectParams custom_service = 2;
+    NyxIdServiceReauthorizeParams service_reauthorize = 3;
   }
 }
 

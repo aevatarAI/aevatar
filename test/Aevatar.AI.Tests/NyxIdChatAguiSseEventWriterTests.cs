@@ -484,6 +484,93 @@ public class NyxIdChatAguiSseEventWriterTests
     }
 
     [Fact]
+    public async Task WriteAsync_ShouldMapServiceReauthorizeToExactSchemaV4WirePayload()
+    {
+        var committed = new NyxIdChatActionRequestedEvent
+        {
+            Request = new NyxIdChatActionRequestState
+            {
+                SchemaVersion = 4,
+                RegistryRevision = "nyxid-assistant-actions.v4",
+                ConversationActorId = "conversation-alpha",
+                OriginTurnId = "turn-alpha",
+                TaskId = "task-alpha",
+                StepId = "step-alpha",
+                ActionRequestId = "action-alpha",
+                Action = NyxIdAssistantActionKind.ServiceReauthorize,
+                Params = new NyxIdAssistantActionParams
+                {
+                    ServiceReauthorize = new NyxIdServiceReauthorizeParams
+                    {
+                        UserServiceId = "us-github-alpha",
+                        RequestedScopes = { "repo", "read:org" },
+                    },
+                },
+                AdvisoryRisk = NyxIdAssistantActionRisk.Grant,
+            },
+            Task = new NyxIdChatTaskState
+            {
+                TaskId = "task-alpha",
+                TurnId = "turn-alpha",
+                Status = NyxIdChatTaskStatus.Blocked,
+                PlanId = "plan-alpha",
+                PlanRevision = 2,
+            },
+            OriginTurn = new NyxIdChatTurnState
+            {
+                TurnId = "turn-alpha",
+                TaskId = "task-alpha",
+                Status = NyxIdChatTurnStatus.Blocked,
+            },
+        };
+        committed.State = new NyxIdChatConversationGAgentState
+        {
+            ConversationActorId = "conversation-alpha",
+            ActiveTask = committed.Task.Clone(),
+            ActiveTurn = committed.OriginTurn.Clone(),
+        };
+        committed.State.PendingActions.Add(committed.Request.Clone());
+        committed.State.ActiveTask.Gate = NyxIdChatPlanGateDecisions.BuildActionGate(
+            committed.State,
+            committed.Request);
+        committed.State.ActiveTask.Gate.Status = NyxIdChatPlanGateStatus.Satisfied;
+        var actionFrame = NyxIdChatConversationAguiFrameBuilder.BuildActionRequested(
+                "conversation-alpha",
+                "turn-alpha",
+                committed,
+                sequence: 23)
+            .Single(frame => frame.Custom?.Name ==
+                             NyxIdChatConversationAguiFrameBuilder.ActionRequestEventName);
+        var sink = new SseFrameSink();
+
+        await sink.WriteAsync(actionFrame, "turn-alpha");
+
+        var payload = sink.ReadFrames().Should().ContainSingle().Which
+            .GetProperty("custom")
+            .GetProperty("payload");
+        var expected = JsonNode.Parse("""
+        {
+          "schemaVersion": 4,
+          "actorId": "conversation-alpha",
+          "originTurnId": "turn-alpha",
+          "taskId": "task-alpha",
+          "stepId": "step-alpha",
+          "actionRequestId": "action-alpha",
+          "action": "service.reauthorize",
+          "params": {
+            "serviceReauthorize": {
+              "userServiceId": "us-github-alpha",
+              "requestedScopes": ["repo", "read:org"]
+            }
+          }
+        }
+        """);
+
+        JsonNode.DeepEquals(JsonNode.Parse(payload.GetRawText()), expected)
+            .Should().BeTrue();
+    }
+
+    [Fact]
     public async Task WriteAsync_ShouldMapTypedStepControlCustomEventToStableJson()
     {
         var sink = new SseFrameSink();
