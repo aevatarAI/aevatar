@@ -115,6 +115,8 @@ internal sealed class WorkflowRunActorPort :
                     definition.RunOrigin,
                     definition.ScheduleId,
                     definition.WorkflowId,
+                    definition.RevisionId,
+                    definition.DefinitionVersion,
                     definition.ExpectedExecutionMode,
                     definitionResolution.CapabilityAdmissionPlan),
                 ct);
@@ -122,7 +124,11 @@ internal sealed class WorkflowRunActorPort :
             return new WorkflowRunCreationReceipt(
                 runActor.Id,
                 definitionResolution.ActorId,
-                createdActorIds);
+                createdActorIds,
+                // Fix (review round 1, F2):
+                //   CreateRunAsync previously copied the technical actor id into RunId.
+                //   No authoritative routable run id exists here, so leave RunId empty for honest fallback.
+                RunId: string.Empty);
         }
         catch
         {
@@ -208,6 +214,8 @@ internal sealed class WorkflowRunActorPort :
                     definition.RunOrigin,
                     definition.ScheduleId,
                     definition.WorkflowId,
+                    definition.RevisionId,
+                    definition.DefinitionVersion,
                     definition.ExpectedExecutionMode,
                     definitionResolution.CapabilityAdmissionPlan,
                     executionRequest,
@@ -223,7 +231,11 @@ internal sealed class WorkflowRunActorPort :
             return new WorkflowRunCreationReceipt(
                 runActor.Id,
                 definitionResolution.ActorId,
-                createdActorIds);
+                createdActorIds,
+                // Fix (review round 1, F2):
+                //   EnsureRunAsync has a caller-supplied routable run identity.
+                //   Populate RunId from the normalized request, not by reading the actor address back.
+                RunId: normalizedRunId);
         }
         catch
         {
@@ -829,6 +841,8 @@ internal sealed class WorkflowRunActorPort :
         string? runOrigin,
         string? scheduleId,
         string? workflowId,
+        string? revisionId,
+        long definitionVersion,
         ExternalCapabilityExecutionMode expectedExecutionMode,
         WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan) =>
         new()
@@ -845,6 +859,8 @@ internal sealed class WorkflowRunActorPort :
                 runOrigin,
                 scheduleId,
                 workflowId,
+                revisionId,
+                definitionVersion,
                 expectedExecutionMode,
                 capabilityAdmissionPlan)),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication(WorkflowRunActorPortPublisherId, TopologyAudience.Self),
@@ -864,6 +880,8 @@ internal sealed class WorkflowRunActorPort :
         string? runOrigin,
         string? scheduleId,
         string? workflowId,
+        string? revisionId,
+        long definitionVersion,
         ExternalCapabilityExecutionMode expectedExecutionMode,
         WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan,
         WorkflowChatRequestEvent? executionRequest = null,
@@ -885,6 +903,8 @@ internal sealed class WorkflowRunActorPort :
                 runOrigin,
                 scheduleId,
                 workflowId,
+                revisionId,
+                definitionVersion,
                 expectedExecutionMode,
                 capabilityAdmissionPlan),
         };
@@ -972,6 +992,8 @@ internal sealed class WorkflowRunActorPort :
         string? runOrigin,
         string? scheduleId,
         string? workflowId,
+        string? revisionId,
+        long definitionVersion,
         ExternalCapabilityExecutionMode expectedExecutionMode,
         WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan)
     {
@@ -985,6 +1007,8 @@ internal sealed class WorkflowRunActorPort :
             RunOrigin = runOrigin?.Trim() ?? string.Empty,
             ScheduleId = scheduleId?.Trim() ?? string.Empty,
             WorkflowId = workflowId?.Trim() ?? string.Empty,
+            RevisionId = revisionId?.Trim() ?? string.Empty,
+            DefinitionVersion = Math.Max(0, definitionVersion),
             CapabilityAdmissionPlan = capabilityAdmissionPlan?.Clone(),
             ExpectedExecutionMode = expectedExecutionMode,
         };

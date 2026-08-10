@@ -541,6 +541,7 @@ public sealed class WorkflowRunActorResolverTests
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
                 ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
                 ScopeId: "scope-authoritative",
+                SourceVersion: 12,
                 SourceKind: "service_revision",
                 CapabilityAdmissionPlan: admissionPlan,
                 WorkflowId: "wf-admitted",
@@ -566,6 +567,49 @@ public sealed class WorkflowRunActorResolverTests
         runBinding.CapabilityAdmissionPlan!.AdmissionDigest.Should().Be(admissionPlan.AdmissionDigest);
         runBinding.WorkflowId.Should().Be("wf-admitted");
         runBinding.RevisionId.Should().Be("rev-admitted");
+        runBinding.DefinitionVersion.Should().Be(12);
+    }
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_ShouldNotTreatRunBindingSourceVersionAsDefinitionVersion()
+    {
+        const string sourceActorId = "source-run-active";
+        const string workflowYaml =
+            """
+            name: active_run
+            roles: []
+            steps: []
+            """;
+        var bindingReader = new RecordingWorkflowActorBindingReader();
+        bindingReader.Register(
+            sourceActorId,
+            new WorkflowActorBinding(
+                WorkflowActorKind.Run,
+                sourceActorId,
+                "definition-active-run",
+                "run-active",
+                "active_run",
+                workflowYaml,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
+                ScopeId: "scope-authoritative",
+                SourceVersion: 99,
+                RevisionId: "rev-active-run"));
+        var actorPort = new RecordingWorkflowRunActorPort();
+        var resolver = new WorkflowRunActorResolver(bindingReader, actorPort, actorPort, new InMemoryWorkflowDefinitionCatalog());
+
+        var result = await resolver.ResolveOrCreateAsync(
+            new WorkflowChatRunRequest(
+                "hello",
+                WorkflowChatSource.DefinitionActor(sourceActorId, "active_run"),
+                ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive),
+            CancellationToken.None);
+
+        result.Error.Should().Be(WorkflowChatRunStartError.None);
+        actorPort.CreateRunBindings.Should().ContainSingle();
+        var runBinding = actorPort.CreateRunBindings[0];
+        runBinding.RevisionId.Should().Be("rev-active-run");
+        runBinding.DefinitionVersion.Should().Be(0);
     }
 
     [Fact]

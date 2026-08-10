@@ -27,6 +27,8 @@ public sealed partial class WorkflowRunGAgent
                 binding.RunOrigin,
                 binding.ScheduleId,
                 binding.WorkflowId,
+                binding.RevisionId,
+                binding.DefinitionVersion,
                 binding.CapabilityAdmissionPlan,
                 binding.ExpectedExecutionMode);
         }
@@ -60,6 +62,8 @@ public sealed partial class WorkflowRunGAgent
             string.Equals(State.RunOrigin, binding.RunOrigin?.Trim(), StringComparison.Ordinal) &&
             string.Equals(State.ScheduleId, binding.ScheduleId?.Trim(), StringComparison.Ordinal) &&
             string.Equals(State.WorkflowId, binding.WorkflowId?.Trim(), StringComparison.Ordinal) &&
+            string.Equals(State.RevisionId?.Trim() ?? string.Empty, binding.RevisionId?.Trim() ?? string.Empty, StringComparison.Ordinal) &&
+            Math.Max(0, State.DefinitionVersion) == Math.Max(0, binding.DefinitionVersion) &&
             State.ExpectedExecutionMode == binding.ExpectedExecutionMode &&
             string.Equals(
                 State.CapabilityAdmissionPlan?.AdmissionDigest ?? string.Empty,

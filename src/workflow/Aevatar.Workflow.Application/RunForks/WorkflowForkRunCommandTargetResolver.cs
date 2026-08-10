@@ -71,6 +71,7 @@ internal sealed class WorkflowForkRunCommandTargetResolver
 
         var workflowYaml = ResolveWorkflowYaml(command, seedView);
         var inlineWorkflowYamls = CopyDictionary(command.InlineSubYamls ?? seedView.InlineWorkflowYamls);
+        var preservesSourceArtifacts = PreservesSourceArtifacts(workflowYaml, inlineWorkflowYamls, seedView);
         var variables = MergeVariables(seedView.Variables, command.VariableOverrides);
         var validation = await ValidateWorkflowAsync(sourceRunId, startAtStepId, workflowYaml, ct)
             .ConfigureAwait(false);
@@ -91,7 +92,9 @@ internal sealed class WorkflowForkRunCommandTargetResolver
                     InlineWorkflowYamls: inlineWorkflowYamls,
                     ExpectedExecutionMode: seedView.ExpectedExecutionMode,
                     ScopeId: scopeId,
-                    CapabilityAdmissionPlan: seedView.CapabilityAdmissionPlan?.Clone()),
+                    CapabilityAdmissionPlan: seedView.CapabilityAdmissionPlan?.Clone(),
+                    RevisionId: preservesSourceArtifacts ? seedView.RevisionId : string.Empty,
+                    DefinitionVersion: preservesSourceArtifacts ? Math.Max(0, seedView.DefinitionVersion) : 0),
                 ct).ConfigureAwait(false);
         }
         catch (Exception ex)
@@ -105,6 +108,7 @@ internal sealed class WorkflowForkRunCommandTargetResolver
             sourceRunId,
             startAtStepId,
             creationReceipt.ActorId,
+            ResolveReceiptRunId(creationReceipt),
             validation.WorkflowName,
             BuildChatRunRequest(
                 command,
@@ -122,6 +126,11 @@ internal sealed class WorkflowForkRunCommandTargetResolver
 
         return CommandTargetResolution<WorkflowForkRunCommandTarget, WorkflowForkRunStartError>.Success(target);
     }
+
+    private static string ResolveReceiptRunId(WorkflowRunCreationReceipt creationReceipt) =>
+        string.IsNullOrWhiteSpace(creationReceipt.RunId)
+            ? creationReceipt.ActorId
+            : creationReceipt.RunId.Trim();
 
     private async Task<WorkflowForkRunValidationResult> ValidateWorkflowAsync(
         string sourceRunId,
@@ -246,6 +255,29 @@ internal sealed class WorkflowForkRunCommandTargetResolver
         string.IsNullOrWhiteSpace(command.InlineYaml)
             ? seedView.WorkflowYaml
             : command.InlineYaml!;
+
+    private static bool PreservesSourceArtifacts(
+        string workflowYaml,
+        IReadOnlyDictionary<string, string> inlineWorkflowYamls,
+        WorkflowRunForkSeedView seedView)
+    {
+        if (!string.Equals(workflowYaml, seedView.WorkflowYaml, StringComparison.Ordinal))
+            return false;
+
+        return DictionaryEquals(inlineWorkflowYamls, CopyDictionary(seedView.InlineWorkflowYamls));
+    }
+
+    private static bool DictionaryEquals(
+        IReadOnlyDictionary<string, string> left,
+        IReadOnlyDictionary<string, string> right)
+    {
+        if (left.Count != right.Count)
+            return false;
+
+        return left.All(entry =>
+            right.TryGetValue(entry.Key, out var value) &&
+            string.Equals(entry.Value, value, StringComparison.Ordinal));
+    }
 
     private static string ResolveResumeInput(
         IReadOnlyDictionary<string, string> variables,

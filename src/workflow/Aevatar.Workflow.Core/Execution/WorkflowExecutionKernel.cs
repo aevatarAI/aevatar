@@ -175,6 +175,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         state.CurrentStepTimeoutCallbackId = string.Empty;
         state.CompensationPhaseDeadlineCallbackId = string.Empty;
         state.CompensationPhaseDeadlineLease = null;
+        state.CompensationTerminalRecoveryFailureKind = WorkflowRecoveryFailureKind.Unspecified;
         if (evt.WorkflowRuntime != null)
         {
             await _stateHost.UpdateExecutionContextAsync(
@@ -425,6 +426,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                             RunId = runId,
                             Success = false,
                             Error = evt.Error,
+                            RecoveryFailureKind = evt.RecoveryFailureKind,
                         },
                         state,
                         evt,
@@ -453,6 +455,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                         RunId = runId,
                         Success = false,
                         Error = evt.Error,
+                        RecoveryFailureKind = evt.RecoveryFailureKind,
                     },
                     state,
                     evt,
@@ -533,6 +536,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                     RunId = runId,
                     Success = false,
                     Error = WorkflowRuntimeFailureMessages.StepCompletionHandlingFailed(current, evt, ex),
+                    RecoveryFailureKind = evt.RecoveryFailureKind,
                 },
                 state,
                 evt,
@@ -688,28 +692,34 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                     ct);
                 return true;
             case WorkflowCompensationTransitionStatus.CompletedAll:
-                await CleanupRunAsync(
-                    LoadState(ctx),
-                    ctx,
-                    ct,
-                    preserveTerminalFacts: true,
-                    preserveCurrentStepInputVariable: true);
-                await PublishWorkflowCompletedAsync(
-                    ctx,
-                    new WorkflowCompletedEvent
-                    {
-                        WorkflowName = _workflow.Name,
-                        RunId = NormalizeRunId(runId),
-                        Success = false,
-                        Error = error ?? string.Empty,
-                    },
-                    ct);
-                return true;
+                {
+                    var state = LoadState(ctx);
+                    var recoveryFailureKind = state.CompensationTerminalRecoveryFailureKind;
+                    await CleanupRunAsync(
+                        state,
+                        ctx,
+                        ct,
+                        preserveTerminalFacts: true,
+                        preserveCurrentStepInputVariable: true);
+                    await PublishWorkflowCompletedAsync(
+                        ctx,
+                        new WorkflowCompletedEvent
+                        {
+                            WorkflowName = _workflow.Name,
+                            RunId = NormalizeRunId(runId),
+                            Success = false,
+                            Error = error ?? string.Empty,
+                            RecoveryFailureKind = recoveryFailureKind,
+                        },
+                        ct);
+                    return true;
+                }
             case WorkflowCompensationTransitionStatus.RejectedStaleOrDuplicate:
                 return true;
             case WorkflowCompensationTransitionStatus.CompensationDeadLettered:
                 {
                     var state = LoadState(ctx);
+                    var recoveryFailureKind = state.CompensationTerminalRecoveryFailureKind;
                     await CleanupRunAsync(
                         state,
                         ctx,
@@ -725,6 +735,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                             RunId = NormalizeRunId(runId),
                             Success = false,
                             Error = deadLetterError,
+                            RecoveryFailureKind = recoveryFailureKind,
                         },
                         ct);
                     return true;
@@ -747,8 +758,27 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         switch (result.Status)
         {
             case WorkflowCompensationTransitionStatus.Started:
+                state.CompensationTerminalRecoveryFailureKind = terminalFailure.RecoveryFailureKind;
+                await SaveStateAsync(state, ctx, ct);
+                await EnsureCompensationPhaseDeadlineAsync(state, ctx, ct);
+                await PublishCompensationRequestAsync(
+                    ctx,
+                    terminalFailure.RunId,
+                    state.CurrentStepId,
+                    result,
+                    ct);
+                return;
             case WorkflowCompensationTransitionStatus.AlreadyCompensating:
+                await EnsureCompensationPhaseDeadlineAsync(state, ctx, ct);
+                await PublishCompensationRequestAsync(
+                    ctx,
+                    terminalFailure.RunId,
+                    state.CurrentStepId,
+                    result,
+                    ct);
+                return;
             case WorkflowCompensationTransitionStatus.AdvancedAndRequestedNext:
+                await SaveStateAsync(state, ctx, ct);
                 await EnsureCompensationPhaseDeadlineAsync(state, ctx, ct);
                 await PublishCompensationRequestAsync(
                     ctx,
@@ -1585,6 +1615,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         state.CurrentStepTimeoutCallbackId = string.Empty;
         state.CompensationPhaseDeadlineCallbackId = string.Empty;
         state.CompensationPhaseDeadlineLease = null;
+        state.CompensationTerminalRecoveryFailureKind = WorkflowRecoveryFailureKind.Unspecified;
         state.Variables.Clear();
         foreach (var (key, value) in terminalVariables)
             state.Variables[key] = value ?? string.Empty;
@@ -1648,6 +1679,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         state.CurrentStepTimeoutCallbackId = string.Empty;
         state.CompensationPhaseDeadlineCallbackId = string.Empty;
         state.CompensationPhaseDeadlineLease = null;
+        state.CompensationTerminalRecoveryFailureKind = WorkflowRecoveryFailureKind.Unspecified;
         state.InputFileRefs.Clear();
         state.RetryAttemptsByStepId.Clear();
         state.TimeoutsByStepId.Clear();
@@ -1675,6 +1707,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         state.CompensationExecutionIdsByStepId.Count == 0 &&
         state.InputFileRefs.Count == 0 &&
         state.CurrentStepInputFileRefs.Count == 0 &&
+        state.CompensationTerminalRecoveryFailureKind == WorkflowRecoveryFailureKind.Unspecified &&
         IsEmptyUsage(state.Usage);
 
     private static bool MatchesCurrentStep(WorkflowExecutionKernelState state, string? stepId) =>

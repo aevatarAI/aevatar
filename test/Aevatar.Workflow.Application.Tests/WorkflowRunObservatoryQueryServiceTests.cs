@@ -145,6 +145,7 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
             Prompt = "Approve?",
             Availability = "available",
         };
+        snapshot.RecoveryCapability = RecoveryCapability();
         var extraSnapshot = Snapshot("actor-beta", CallerScope, WorkflowRunCompletionStatus.Completed, started: 90, updated: 290);
         extraSnapshot.RunId = "run-beta";
         var currentState = new FakeCurrentStateQueryPort
@@ -204,6 +205,9 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         row.CompletedAtUtc.Should().Be(DateTimeOffset.UnixEpoch.AddSeconds(220));
         row.UpdatedAtUtc.Should().Be(DateTimeOffset.UnixEpoch.AddSeconds(300));
         row.DurationMs.Should().Be(120_000);
+        row.RecoveryCapability.WorkflowDefinitionRevisionId.Should().Be("rev-recovery");
+        row.RecoveryCapability.RetryFailedStep.Eligibility.Should().Be(WorkflowRecoveryEligibility.Eligible);
+        row.RecoveryCapability.RetryFailedStep.StartingStepId.Should().Be("step-failed");
     }
 
     [Fact]
@@ -616,9 +620,11 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
     [Fact]
     public async Task GetRunForScopeAsync_ShouldFallBackToSummary_WhenReportNotYetMaterialized()
     {
+        var snapshot = Snapshot("run-1", CallerScope, WorkflowRunCompletionStatus.Running);
+        snapshot.RecoveryCapability = RecoveryCapability();
         var currentState = new FakeCurrentStateQueryPort
         {
-            SingleResult = Snapshot("run-1", CallerScope, WorkflowRunCompletionStatus.Running),
+            SingleResult = snapshot,
         };
         var service = new WorkflowRunObservatoryQueryService(currentState, new FakeArtifactQueryPort { Report = null });
 
@@ -632,6 +638,26 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         detail.Steps.Should().BeEmpty();
         detail.Statistics.TotalSteps.Should().Be(0);
         detail.Diagnostics.Should().BeEmpty();
+        detail.RecoveryCapability.WorkflowDefinitionRevisionId.Should().Be("rev-recovery");
+        detail.RecoveryCapability.RetryFailedStep.Eligibility.Should().Be(WorkflowRecoveryEligibility.Eligible);
+    }
+
+    [Fact]
+    public async Task GetRunForScopeAsync_ShouldExposeRecoveryCapability_WhenReportIsMaterialized()
+    {
+        var snapshot = Snapshot("run-1", CallerScope, WorkflowRunCompletionStatus.Failed);
+        snapshot.RecoveryCapability = RecoveryCapability();
+        var service = new WorkflowRunObservatoryQueryService(
+            new FakeCurrentStateQueryPort { SingleResult = snapshot },
+            new FakeArtifactQueryPort { Report = new WorkflowRunReport { FinalError = "boom" } });
+
+        var detail = await service.GetRunForScopeAsync(CallerScope, "run-1");
+
+        detail.Should().NotBeNull();
+        detail!.RecoveryCapability.WorkflowDefinitionRevisionId.Should().Be("rev-recovery");
+        detail.RecoveryCapability.WorkflowDefinitionVersion.Should().Be(12);
+        detail.RecoveryCapability.RetryFailedStep.RecommendedActions.Should().ContainSingle()
+            .Which.Should().Be(WorkflowRecoveryRecommendedAction.Retry);
     }
 
     [Fact]
@@ -971,6 +997,33 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         if (started > 0)
             snapshot.StartedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UnixEpoch.AddSeconds(started));
         return snapshot;
+    }
+
+    private static WorkflowRunRecoveryCapability RecoveryCapability()
+    {
+        var capability = new WorkflowRunRecoveryCapability
+        {
+            WorkflowDefinitionRevisionId = "rev-recovery",
+            WorkflowDefinitionVersion = 12,
+            RetryFailedStep = new WorkflowRecoveryActionCapability
+            {
+                Eligibility = WorkflowRecoveryEligibility.Eligible,
+                UnavailableReasonCode = WorkflowRecoveryUnavailableReasonCode.None,
+                StartingStepId = "step-failed",
+                ReusesPriorStepOutputs = true,
+                MayIncurModelOrToolCost = true,
+            },
+            RunAgain = new WorkflowRecoveryActionCapability
+            {
+                Eligibility = WorkflowRecoveryEligibility.Eligible,
+                UnavailableReasonCode = WorkflowRecoveryUnavailableReasonCode.None,
+                StartingStepId = "step-a",
+                MayIncurModelOrToolCost = true,
+            },
+        };
+        capability.RetryFailedStep.RecommendedActions.Add(WorkflowRecoveryRecommendedAction.Retry);
+        capability.RunAgain.RecommendedActions.Add(WorkflowRecoveryRecommendedAction.RunAgain);
+        return capability;
     }
 
     private static WorkflowRunTimelineEvent TimelineEvent(string stage, string message, string? stepId = null) =>

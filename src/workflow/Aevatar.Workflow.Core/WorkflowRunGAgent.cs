@@ -477,6 +477,8 @@ public sealed partial class WorkflowRunGAgent
         string? runOrigin,
         string? scheduleId,
         string? workflowId,
+        string? revisionId,
+        long definitionVersion,
         WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan,
         ExternalCapabilityExecutionMode expectedExecutionMode,
         CancellationToken ct = default)
@@ -507,6 +509,8 @@ public sealed partial class WorkflowRunGAgent
             RunOrigin = runOrigin?.Trim() ?? string.Empty,
             ScheduleId = scheduleId?.Trim() ?? string.Empty,
             WorkflowId = workflowId?.Trim() ?? string.Empty,
+            RevisionId = revisionId?.Trim() ?? string.Empty,
+            DefinitionVersion = Math.Max(0, definitionVersion),
             CapabilityAdmissionPlan = capabilityAdmissionPlan?.Clone(),
             ExpectedExecutionMode = expectedExecutionMode,
         };
@@ -535,6 +539,8 @@ public sealed partial class WorkflowRunGAgent
             request.RunOrigin,
             request.ScheduleId,
             request.WorkflowId,
+            request.RevisionId,
+            request.DefinitionVersion,
             request.CapabilityAdmissionPlan,
             request.ExpectedExecutionMode);
 
@@ -679,6 +685,7 @@ public sealed partial class WorkflowRunGAgent
                 WorkflowName = _compiledWorkflow.Name,
                 Success = false,
                 Error = InputFileBindingError,
+                RecoveryFailureKind = WorkflowRecoveryFailureKind.ConfigurationFailure,
             }, request.SessionId);
             return null;
         }
@@ -1096,6 +1103,7 @@ public sealed partial class WorkflowRunGAgent
             Error = NormalizeInteractiveValue(completed.Error, 512) ??
                     NormalizeInteractiveValue(requirement.SafeMessage, 512) ??
                     "The requested service requires authorization.",
+            RecoveryFailureKind = WorkflowRecoveryFailureKind.AuthorizationFailure,
             Usage = completed.Usage?.Clone(),
         };
 
@@ -2232,12 +2240,19 @@ public sealed partial class WorkflowRunGAgent
         next.WorkflowId = string.IsNullOrWhiteSpace(evt.WorkflowId)
             ? current.WorkflowId
             : evt.WorkflowId.Trim();
+        next.RevisionId = string.IsNullOrWhiteSpace(evt.RevisionId)
+            ? current.RevisionId
+            : evt.RevisionId.Trim();
+        next.DefinitionVersion = evt.DefinitionVersion <= 0
+            ? current.DefinitionVersion
+            : evt.DefinitionVersion;
         next.CapabilityAdmissionPlan = evt.CapabilityAdmissionPlan?.Clone();
         next.ExpectedExecutionMode = evt.ExpectedExecutionMode;
         next.Status = "bound";
         next.Input = string.Empty;
         next.FinalOutput = string.Empty;
         next.FinalError = string.Empty;
+        next.TerminalRecoveryFailureKind = WorkflowRecoveryFailureKind.Unspecified;
         next.CompletedAtUtc = null;
         next.ClearDurationMs();
         next.Initiator = null;
@@ -2328,6 +2343,7 @@ public sealed partial class WorkflowRunGAgent
         next.Status = RunningStatus;
         next.FinalOutput = string.Empty;
         next.FinalError = string.Empty;
+        next.TerminalRecoveryFailureKind = WorkflowRecoveryFailureKind.Unspecified;
         next.CompletedAtUtc = null;
         next.ClearDurationMs();
         next.Initiator = BuildInitiator(evt.ExecutionContextDelta?.CallerCredential?.NyxIdAuthority);
@@ -2653,6 +2669,7 @@ public sealed partial class WorkflowRunGAgent
         next.Status = FailedStatus;
         next.FinalOutput = string.Empty;
         next.FinalError = evt.Error ?? string.Empty;
+        next.TerminalRecoveryFailureKind = WorkflowRecoveryFailureKind.Unspecified;
         next.SagaStatus = WorkflowSagaStatus.CompensationDeadLetter;
         next.CompensationExecutionId = string.Empty;
         next.DeadLetterFailedCompensationStepId = evt.FailedCompensationStepId ?? string.Empty;
@@ -2687,6 +2704,7 @@ public sealed partial class WorkflowRunGAgent
         next.FinalOutput = string.Empty;
         if (!string.IsNullOrWhiteSpace(evt.Reason))
             next.FinalError = evt.Reason;
+        next.TerminalRecoveryFailureKind = WorkflowRecoveryFailureKind.Unspecified;
         ApplyTerminalTiming(next, evt.CompletedAtUtc);
         next.ExecutionStates.Clear();
         next.ExecutionContext = new WorkflowRunExecutionContextState();
@@ -2704,6 +2722,9 @@ public sealed partial class WorkflowRunGAgent
         next.Status = evt.Success ? CompletedStatus : FailedStatus;
         next.FinalOutput = evt.Output ?? string.Empty;
         next.FinalError = evt.Error ?? string.Empty;
+        next.TerminalRecoveryFailureKind = evt.Success
+            ? WorkflowRecoveryFailureKind.Unspecified
+            : evt.RecoveryFailureKind;
         ApplyTerminalTiming(next, evt.CompletedAtUtc);
         next.TerminalWorkflowCompletionRecorded = true;
         next.ExecutionContext = new WorkflowRunExecutionContextState();
@@ -3699,6 +3720,8 @@ public sealed partial class WorkflowRunGAgent
             RunOrigin = State.RunOrigin ?? string.Empty,
             ScheduleId = State.ScheduleId ?? string.Empty,
             WorkflowId = State.WorkflowId ?? string.Empty,
+            RevisionId = State.RevisionId ?? string.Empty,
+            DefinitionVersion = Math.Max(0, State.DefinitionVersion),
             CapabilityAdmissionPlan = State.CapabilityAdmissionPlan?.Clone(),
             ExpectedExecutionMode = State.ExpectedExecutionMode,
             InlineWorkflowYamls = { State.InlineWorkflowYamls },

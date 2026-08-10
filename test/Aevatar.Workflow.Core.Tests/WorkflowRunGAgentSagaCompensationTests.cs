@@ -176,6 +176,72 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
     }
 
     [Fact]
+    public async Task SuccessfulCompensation_ShouldPreserveOriginalRecoveryFailureKind()
+    {
+        var harness = await CreateStartedRunAsync(SagaWorkflowYaml());
+
+        await CompleteStepAsync(harness, "create_order", "order-output");
+        await CompleteStepAsync(harness, "charge_payment", "charge-output");
+        await FailStepAsync(
+            harness,
+            "ship_order",
+            "authorization failed",
+            WorkflowRecoveryFailureKind.AuthorizationFailure);
+
+        var firstRequest = CompensationRequests(harness.Publisher).Single();
+        await CompleteCompensationAsync(harness, firstRequest);
+        var secondRequest = CompensationRequests(harness.Publisher).Last();
+        await CompleteCompensationAsync(harness, secondRequest);
+
+        var completed = CommittedEvents<WorkflowCompletedEvent>(harness.CommittedPublisher)
+            .Where(x => !x.Success)
+            .Should()
+            .ContainSingle()
+            .Subject;
+        completed.RecoveryFailureKind.Should().Be(WorkflowRecoveryFailureKind.AuthorizationFailure);
+        harness.Agent.State.TerminalRecoveryFailureKind.Should().Be(WorkflowRecoveryFailureKind.AuthorizationFailure);
+    }
+
+    [Fact]
+    public async Task AlreadyCompensatingTerminalFailure_ShouldPreserveOriginalRecoveryFailureKind()
+    {
+        var harness = await CreateStartedRunAsync(SagaWorkflowYaml());
+
+        await CompleteStepAsync(harness, "create_order", "order-output");
+        await CompleteStepAsync(harness, "charge_payment", "charge-output");
+        await FailStepAsync(
+            harness,
+            "ship_order",
+            "authorization failed",
+            WorkflowRecoveryFailureKind.AuthorizationFailure);
+
+        var failedRequest = StepRequests(harness.Publisher, "ship_order").Last();
+        await harness.Agent.HandleEventAsync(SelfEnvelope(harness.RunId, new StepCompletedEvent
+        {
+            RunId = harness.RunId,
+            StepId = "ship_order",
+            Success = false,
+            Error = "configuration failed",
+            Output = "duplicate-output",
+            ExecutionId = failedRequest.ExecutionId,
+            RecoveryFailureKind = WorkflowRecoveryFailureKind.ConfigurationFailure,
+        }));
+
+        var firstRequest = CompensationRequests(harness.Publisher).First();
+        await CompleteCompensationAsync(harness, firstRequest);
+        var secondRequest = CompensationRequests(harness.Publisher).Last();
+        await CompleteCompensationAsync(harness, secondRequest);
+
+        var completed = CommittedEvents<WorkflowCompletedEvent>(harness.CommittedPublisher)
+            .Where(x => !x.Success)
+            .Should()
+            .ContainSingle()
+            .Subject;
+        completed.RecoveryFailureKind.Should().Be(WorkflowRecoveryFailureKind.AuthorizationFailure);
+        harness.Agent.State.TerminalRecoveryFailureKind.Should().Be(WorkflowRecoveryFailureKind.AuthorizationFailure);
+    }
+
+    [Fact]
     public async Task TerminalFailure_WithMultipleCompensations_ShouldPreserveOriginalFailedStepId()
     {
         var harness = await CreateStartedRunAsync(SagaWorkflowYaml());
@@ -822,6 +888,62 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
     }
 
     [Fact]
+    public async Task DeadLetteredCompensation_ShouldPreserveOriginalRecoveryFailureKind()
+    {
+        var harness = await CreateStartedRunAsync(SagaWorkflowYaml());
+
+        await CompleteStepAsync(harness, "create_order", "order-output");
+        await CompleteStepAsync(harness, "charge_payment", "charge-output");
+        await FailStepAsync(
+            harness,
+            "ship_order",
+            "configuration failed",
+            WorkflowRecoveryFailureKind.ConfigurationFailure);
+
+        var request = CompensationRequests(harness.Publisher).Single();
+        await FailCompensationAsync(harness, request, "refund failed");
+
+        var completed = CommittedEvents<WorkflowCompletedEvent>(harness.CommittedPublisher)
+            .Where(x => !x.Success)
+            .Should()
+            .ContainSingle()
+            .Subject;
+        completed.RecoveryFailureKind.Should().Be(WorkflowRecoveryFailureKind.ConfigurationFailure);
+        harness.Agent.State.TerminalRecoveryFailureKind.Should().Be(WorkflowRecoveryFailureKind.ConfigurationFailure);
+    }
+
+    [Fact]
+    public async Task CompensationPhaseDeadline_ShouldPreserveOriginalRecoveryFailureKind()
+    {
+        var harness = await CreateStartedRunAsync(SagaWorkflowYaml());
+
+        await CompleteStepAsync(harness, "create_order", "order-output");
+        await CompleteStepAsync(harness, "charge_payment", "charge-output");
+        await FailStepAsync(
+            harness,
+            "ship_order",
+            "authorization failed",
+            WorkflowRecoveryFailureKind.AuthorizationFailure);
+
+        var deadline = SingleCompensationPhaseDeadline(harness);
+        await harness.Agent.HandleEventAsync(SelfEnvelope(
+            harness.RunId,
+            new WorkflowCompensationPhaseDeadlineFiredEvent
+            {
+                RunId = harness.RunId,
+            },
+            MetadataFor(deadline)));
+
+        var completed = CommittedEvents<WorkflowCompletedEvent>(harness.CommittedPublisher)
+            .Where(x => !x.Success)
+            .Should()
+            .ContainSingle()
+            .Subject;
+        completed.RecoveryFailureKind.Should().Be(WorkflowRecoveryFailureKind.AuthorizationFailure);
+        harness.Agent.State.TerminalRecoveryFailureKind.Should().Be(WorkflowRecoveryFailureKind.AuthorizationFailure);
+    }
+
+    [Fact]
     public async Task ManagedWorkflowCallChild_WhenCompensationCompletes_ShouldSendCompensatedChildCompletionToParent()
     {
         const string parentActorId = "parent-run-actor";
@@ -989,7 +1111,11 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
         }));
     }
 
-    private static async Task FailStepAsync(RunHarness harness, string stepId, string error)
+    private static async Task FailStepAsync(
+        RunHarness harness,
+        string stepId,
+        string error,
+        WorkflowRecoveryFailureKind recoveryFailureKind = WorkflowRecoveryFailureKind.Unspecified)
     {
         var request = harness.Publisher.Published
             .Where(x => x.Event is StepRequestEvent requestEvent && requestEvent.StepId == stepId)
@@ -1003,6 +1129,7 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
             Success = false,
             Error = error,
             ExecutionId = request.ExecutionId,
+            RecoveryFailureKind = recoveryFailureKind,
         }));
     }
 
