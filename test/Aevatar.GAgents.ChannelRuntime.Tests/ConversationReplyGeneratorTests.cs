@@ -1045,6 +1045,7 @@ public sealed class ConversationReplyGeneratorTests
             "nyxid_approvals",
             "nyxid_catalog",
             "nyxid_developer_apps",
+            "nyxid_durable_grants",
             "nyxid_endpoints",
             "nyxid_external_keys",
             "nyxid_llm_status",
