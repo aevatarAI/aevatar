@@ -2,11 +2,12 @@
 
 ## Status
 
-Approved direction on 2026-08-06 for the Workflow Activity vNext frontend.
+Approved direction on 2026-08-06 for the Workflow Activity vNext frontend,
+amended on 2026-08-10 to merge blank creation into Describe.
 This document narrows the existing direct-creation contract without changing
 its backend APIs, identity rules, or materialization semantics.
 
-Implementation branch: `fix/2026-08-06_new-workflow-creation-ux`.
+Implementation branch: `fix/2026-08-06_restore-describe-workflow-name`.
 
 ## Problem
 
@@ -22,6 +23,11 @@ Describe also requires two separate decisions after input: generate a YAML
 preview and then create it. The raw generated YAML is implementation detail at
 this stage. Users asked for one action that generates, validates, saves, and
 opens the common editor.
+
+Describe and Start blank are also presented as peer creation methods even
+though blank creation is the same named draft flow with no generation prompt.
+Making users choose between them before seeing the form adds a decision that
+the entered data already resolves.
 
 ## Product Decisions
 
@@ -48,19 +54,27 @@ error and never overwrites the existing draft.
 
 ### Describe
 
-Describe is a focused two-input flow with one final action:
+Describe is a focused form with one required input, one optional input, and one
+final action:
 
 - heading: `Describe your workflow`;
 - field label: `Workflow name`;
-- field label: `What should this workflow do?`;
+- optional field label: `What should this workflow do?`;
 - supporting copy explains that the generated steps can be reviewed in the
   editor;
 - one primary action: `Generate and open`.
 
-The action calls the real generator, parses and validates the returned YAML,
-uses the user-provided Workflow name for the draft display name and filename,
-creates the draft, waits for the exact draft to become readable when creation
-is accepted, and opens the editor. The generated YAML document name remains an
+The action label remains `Generate and open`; it does not change while the user
+types. Submission trims the description and chooses one of two existing paths:
+
+- a non-empty description calls the real generator, parses and validates the
+  returned YAML, then persists it;
+- an empty or whitespace-only description creates and persists the existing
+  minimal blank Workflow YAML without calling the generator.
+
+Both paths use the user-provided Workflow name for the draft display name and
+filename, wait for the exact draft to become readable when creation is
+accepted, and open the editor. The generated YAML document name remains an
 independent document field. The page does not expose generated YAML or require
 a second create confirmation. Generator, parse, validation, create, and
 materialization failures preserve both inputs and identify the failed stage in
@@ -73,8 +87,7 @@ provide, then use one final action.
 
 | Method | Visible input | Name source | Primary action |
 | --- | --- | --- | --- |
-| Describe | Workflow name and natural-language workflow outcome | User input | Generate and open |
-| Start blank | Workflow name | User input | Create and open |
+| Describe | Workflow name and optional natural-language workflow outcome | User input | Generate and open |
 | Import YAML | Workflow YAML | Parsed YAML document | Import and open |
 | Use template | Bundled template selection and concise preview | Template name, made independent for the new draft | Use template and open |
 
@@ -86,10 +99,19 @@ details. Creation does not add a second editor.
 
 ### Focused Prompt
 
-Show only task-specific inputs and one final action. Describe and Start blank
-ask for the user-controlled display name; Import and Template derive their
-names from their respective sources. This is the selected approach because it
-keeps the flow direct without hiding a decision the user can actually make.
+Show only task-specific inputs and one final action. Describe asks for the
+user-controlled display name and accepts an optional generation prompt; the
+prompt's presence selects generated or blank creation. Import and Template
+derive their names from their respective sources. This is the selected
+approach because it removes a redundant method choice while keeping the blank
+authoring path available.
+
+### Separate Describe And Blank Methods
+
+Keep the two existing chooser cards and their separate actions. This is
+rejected because the second method is already represented by submitting the
+Describe form without a description, so the chooser asks users to predict a
+distinction the form can determine directly.
 
 ### Derived Name For Describe
 
@@ -122,7 +144,7 @@ The page continues the Operational Automation Ledger direction:
 - stable button dimensions and visible keyboard focus;
 - long validation and technical details wrap without widening the viewport.
 
-The method chooser retains four clearly distinct starting methods. Selecting
+The method chooser retains three clearly distinct starting methods. Selecting
 one changes only the main creation column. `Change method` is a low-emphasis
 back action. User input survives method switches where the value remains
 meaningful, while stale failure and validation output from another method is
@@ -135,8 +157,12 @@ cleared.
 flowchart LR
     A["Choose creation method"] --> B["Enter method-specific input"]
     B --> C["Resolve the real workspace directory"]
-    C --> D["Generate or parse and validate"]
+    C --> K{"Describe entered?"}
+    K -->|"Yes"| D["Generate, parse, and validate"]
+    K -->|"No"| L["Build minimal blank YAML"]
+    K -->|"Import or template"| D
     D --> E["Resolve a non-conflicting YAML file name"]
+    L --> E
     E --> J["Create the scoped workflow draft"]
     J --> F{"Draft readable?"}
     F -->|"Yes"| G["Open the common workflow editor"]
@@ -145,11 +171,12 @@ flowchart LR
     H -->|"Delayed"| I["Preserve input and retry observation only"]
 ```
 
-Describe executes generation, parse/validation, draft creation, and opening
-behind one user action. These remain distinct technical stages so recovery can
-be truthful. The action never treats generated content as saved, never routes
-from a locally invented workflow ID, and never repeats the create POST when
-only materialization is delayed.
+Describe conditionally executes either generation plus parse/validation or
+minimal blank-YAML creation behind one user action, followed by the same draft
+creation and opening flow. These remain distinct technical stages so recovery
+can be truthful. The action never treats generated content as saved, never
+routes from a locally invented workflow ID, and never repeats the create POST
+when only materialization is delayed.
 
 ## State And Recovery Contract
 
@@ -157,7 +184,8 @@ only materialization is delayed.
   action remains unavailable until a real directory is resolved.
 - With zero directories, show the existing access/retry path and preserve all
   entered input.
-- Generator failure keeps the description and enables retry of generation.
+- Generator failure keeps the description and enables retry of generation;
+  blank creation never calls the generator.
 - Parse or validation failure keeps the input and shows actionable findings;
   no draft is created.
 - Draft-create failure keeps the method input and retries only creation after
@@ -166,7 +194,7 @@ only materialization is delayed.
   preserves the receipt and retries only the exact scoped GET.
 - Duplicate submission is blocked across the complete one-click operation.
 - Changing methods clears stale errors and findings but does not erase the
-  previously typed Describe prompt or blank name.
+  previously typed Describe name or prompt.
 
 ## Accessibility And Responsive Behavior
 
@@ -179,7 +207,7 @@ only materialization is delayed.
 - At widths below 768 px, inputs and actions stack, the action remains visible
   after its associated validation content, and no sticky element covers a
   focused textarea.
-- The four method options collapse to a single column or compact two-column
+- The three method options collapse to a single column or compact multi-column
   arrangement without truncating labels or descriptions.
 
 ## Focused Test Contract
@@ -190,17 +218,21 @@ The owning route integration test will protect these observable risks:
    create request.
 2. Multiple returned directories render `Save to` and the selected value is
    used in the create request.
-3. Describe requires both `Workflow name` and `What should this workflow do?`,
-   then exposes one action that calls generator, parser, draft create, and opens
-   the materialized workflow using the user-provided display name.
-4. File-name resolution chooses the first available suffix within the selected
+3. Describe requires `Workflow name`, keeps `What should this workflow do?`
+   optional, and exposes one fixed `Generate and open` action. With a
+   description it calls generator, parser, draft create, and opens the
+   materialized workflow using the user-provided display name.
+4. The same Describe action with an empty or whitespace-only description skips
+   generator and parser calls, persists the minimal blank Workflow YAML, and
+   opens the materialized workflow.
+5. File-name resolution chooses the first available suffix within the selected
    directory without changing the Workflow display name.
-5. Import derives the name from parsed YAML and creates without a separate
+6. Import derives the name from parsed YAML and creates without a separate
    workflow-name field.
-6. Generator or create failure preserves the Workflow name and prompt;
+7. Generator or create failure preserves the Workflow name and prompt;
    switching methods clears stale failure output without discarding shared
    name input.
-7. Accepted draft creation preserves the existing observe-and-retry contract
+8. Accepted draft creation preserves the existing observe-and-retry contract
    and never resubmits create during readiness retry.
 
 Tests assert accessible rendered behavior and typed boundary requests. They do
@@ -210,7 +242,7 @@ external operation sequence that distinguishes generation from persistence.
 ## Scope
 
 The change is frontend-only and restricted to Workflow Activity vNext creation
-page code, its focused tests, styles, locale messages, and this specification.
+page code, its focused tests, creation-mode type, and this specification.
 It does not change backend endpoints, shared workflow identity semantics,
 legacy Workflow/Studio routes, the common editor, global navigation, or the
 authoritative 17-frame baseline assets.
