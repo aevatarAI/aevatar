@@ -24,9 +24,10 @@ contains non-blank active revision and published service identities.
 
 1. The editor loads its editable draft through `studioApi.getWorkflow`.
 2. In parallel, it reads `/api/scopes/:scopeId/workflows/:workflowId`.
-3. An authoritative active publication seeds the publication observation path.
-4. The existing observer confirms that the active revision and callable service
-   still match before Run is enabled.
+3. An authoritative active publication directly supplies the restored published
+   invocation target; the detail read itself is the current read-model evidence.
+4. The existing receipt observer remains responsible for a newly accepted
+   Publish command until its new active revision and callable service appear.
 5. A Publish started in the current editor session temporarily supersedes the
    restored publication until the new receipt is observed.
 6. Route changes resolve publication state again for the new exact workflow ID.

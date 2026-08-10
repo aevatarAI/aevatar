@@ -4,7 +4,7 @@
 
 **Goal:** Enable published Workflow Activity Run after a fresh editor mount by restoring the exact active revision and published service from the authoritative workflow detail.
 
-**Architecture:** Keep draft authoring state and published invocation state separate. `WorkflowEditorPage` reads the exact scope workflow detail, derives a typed publication receipt only from matching authoritative identities, and feeds that receipt through the existing publication observer; a receipt from a new Publish command takes precedence while it is active.
+**Architecture:** Keep draft authoring state and published invocation state separate. `WorkflowEditorPage` reads the exact scope workflow detail and restores a typed invocation target only from matching authoritative identities; the existing observer remains responsible for a receipt from a new Publish command, which takes precedence while it is active.
 
 **Tech Stack:** React 19, TypeScript, TanStack Query, Jest, Testing Library, Biome.
 
@@ -31,9 +31,9 @@ pnpm exec jest src/pages/workflow-activity-vnext/index.test.tsx --runInBand -t '
 - Modify: `apps/aevatar-console-web/src/pages/workflow-activity-vnext/workflows/WorkflowEditorPage.tsx`
 
 - [ ] Query `scopesApi.getWorkflowDetail(activeScopeId, activeWorkflowId)` with a route-scoped query key and no retries.
-- [ ] Derive a restored receipt only from an available exact scope/workflow match with non-blank `activeRevisionId` and `publishedServiceId`.
-- [ ] Prefer a same-session Publish receipt; suppress the restored receipt while a replacement Publish submission is active.
-- [ ] Feed the effective receipt to the existing publication observer and derive the restored document version from the current editor version.
+- [ ] Derive a restored invocation target only from an available exact scope/workflow match with non-blank `activeRevisionId` and `publishedServiceId`.
+- [ ] Prefer a same-session Publish receipt; suppress the restored invocation target while a replacement Publish submission is active.
+- [ ] Keep the receipt observer scoped to newly accepted Publish commands and derive the restored target's document version from the initial editor revision.
 - [ ] Run the focused regression test and verify it passes.
 
 ### Task 3: Protect Existing Behavior
