@@ -1,10 +1,12 @@
 ---
 title: "Milestone 40 Gate 0 Baseline and Evidence Inventory"
-status: active
+status: superseded
 owner: eanzhao
 ---
 
 # Milestone 40 Gate 0 Baseline and Evidence Inventory
+
+> **Superseded (2026-08-10).** This is the Gate-0 planning snapshot recaptured on 2026-08-08; its section-5 classifications describe the state *at capture time*, not current status. Milestone 40 has since closed 30/30: the machine-readable conformance authority required by [#3313](https://github.com/AevatarAI/aevatar/issues/3313) is checked in at [`docs/contracts/nyxid-assistant-conformance/v1/`](../contracts/nyxid-assistant-conformance/v1/sources.json) (superseding this inventory per its own exit plan and refuting the `missing` row below), and [#3318](https://github.com/AevatarAI/aevatar/issues/3318) closed with final authenticated UC1a-UC4 production evidence anchored to `origin/feature/integrate@7b3dee82e`. This document is retained as a historical record only.
 
 Recaptured on 2026-08-08 for [Milestone 40](https://github.com/AevatarAI/aevatar/milestone/40). This inventory uses the production branch selected by [#3317](https://github.com/AevatarAI/aevatar/issues/3317). Source, deployment, canary, and issue-closure evidence all attach to exact `origin/feature/integrate` revisions.
 

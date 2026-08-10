@@ -268,7 +268,7 @@ set -euo pipefail
 umask 077
 
 export M40_NYXID_PROFILE="share-ops"
-export M40_NYXID_SUBJECT="5d0d7b72-acff-49af-bb1-9f30bbb7c102"
+export M40_NYXID_SUBJECT="5d0d7b72-acff-49af-bb1b-9f30bbb7c102"
 export M40_NYXID_EMAIL="eancuznaivy@gmail.com"
 export M40_LARK_USER_SERVICE_ID="41b9a19b-3aa8-4be8-a424-b3821b0951e4"
 export M40_LARK_ENDPOINT_ID="d6c2ee39-f2b1-460c-ae1f-5ce93037935b"

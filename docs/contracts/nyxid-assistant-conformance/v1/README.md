@@ -95,5 +95,8 @@ Run the focused self-test with:
 python3 -m unittest tools/ci/tests/test_nyxid_semantic_evaluation.py -v
 ```
 
-The current checked-in evaluation intentionally remains `not_run`; therefore the full conformance
-guard must fail until a real authenticated model run is reviewed and recorded.
+The checked-in evaluation records a reviewed authenticated run (`semantic-evaluation.json`,
+`status: passed`); the guard recomputes every digest and metric offline from that evidence and
+fails on any drift. To refresh, run `tools/nyxid-conformance/run-semantic-evaluation.py` — it
+writes a candidate document and refuses to overwrite the recorded evaluation — then review the
+candidate and record it explicitly.
