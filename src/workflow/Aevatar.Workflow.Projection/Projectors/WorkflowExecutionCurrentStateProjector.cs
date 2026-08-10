@@ -1,5 +1,6 @@
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Abstractions.Security;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Projection.Observability;
 using Aevatar.Workflow.Projection.ReadModels;
@@ -50,6 +51,7 @@ public sealed class WorkflowExecutionCurrentStateProjector
             CommandId = state.LastCommandId ?? string.Empty,
             DefinitionActorId = state.DefinitionActorId ?? string.Empty,
             RunId = string.IsNullOrWhiteSpace(state.RunId) ? context.RootActorId : state.RunId,
+            WorkflowId = state.WorkflowId ?? string.Empty,
             WorkflowName = state.WorkflowName ?? string.Empty,
             Status = ResolveCurrentStateStatus(state),
             ScopeId = state.ScopeId ?? string.Empty,
@@ -70,6 +72,12 @@ public sealed class WorkflowExecutionCurrentStateProjector
             StateVersion = stateEvent.Version,
             LastEventId = stateEvent.EventId ?? string.Empty,
             UpdatedAt = input.ObservedAt,
+            CompletedAtUtcValue = state.CompletedAtUtc?.Clone(),
+            ActivityInitiator = MapInitiator(state.Initiator),
+            InputSummary = WorkflowAuditTextSanitizer.SanitizeForDisplay(state.Input, 240),
+            ActivityCurrentStep = ResolveCurrentStep(state),
+            ActivityFirstFailure = ResolveFirstFailure(state),
+            ActivityWaiting = ResolveWaiting(state),
             WorkflowYaml = seedSnapshot.WorkflowYaml,
             InlineWorkflowYamls = seedSnapshot.InlineWorkflowYamls.ToDictionary(
                 x => x.Key,
@@ -91,6 +99,12 @@ public sealed class WorkflowExecutionCurrentStateProjector
         if (state.CapabilityAdmissionPlan is not null)
             document.CapabilityAdmissionPlan = state.CapabilityAdmissionPlan.Clone();
 
+        // Fix (review round 1, F1):
+        //   Projection previously materialized absent terminal duration as scalar zero.
+        //   Forward the optional duration only when the authoritative state carries it.
+        if (state.HasDurationMs)
+            document.DurationMs = state.DurationMs;
+
         // O2 (06-19-workflow-run-observatory): started_at is derived from the committed WorkflowRunState's
         // own start fact (StartedAtUtc), so the projector stays a pure committed-state -> readmodel mapper
         // (no prior-readmodel read). Absent for pre-existing runs -> run list falls back to updated_at.
@@ -99,6 +113,187 @@ public sealed class WorkflowExecutionCurrentStateProjector
 
         return document;
     }
+
+    private static WorkflowRunActivityInitiatorReadModel MapInitiator(WorkflowRunInitiatorState? initiator)
+    {
+        if (initiator == null)
+        {
+            return new WorkflowRunActivityInitiatorReadModel
+            {
+                Availability = "unavailable",
+                DisplayValue = "Unknown",
+            };
+        }
+
+        return new WorkflowRunActivityInitiatorReadModel
+        {
+            Platform = WorkflowAuditTextSanitizer.Sanitize(initiator.Platform),
+            Tenant = WorkflowAuditTextSanitizer.Sanitize(initiator.Tenant),
+            ExternalUserId = WorkflowAuditTextSanitizer.Sanitize(initiator.ExternalUserId),
+            Scope = WorkflowAuditTextSanitizer.Sanitize(initiator.Scope),
+            BindingId = WorkflowAuditTextSanitizer.Sanitize(initiator.BindingId),
+            DisplayValue = string.IsNullOrWhiteSpace(initiator.DisplayValue)
+                ? "Unknown"
+                : WorkflowAuditTextSanitizer.Sanitize(initiator.DisplayValue),
+            Availability = string.IsNullOrWhiteSpace(initiator.Availability)
+                ? "unavailable"
+                : WorkflowAuditTextSanitizer.Sanitize(initiator.Availability),
+        };
+    }
+
+    private static WorkflowRunActivityStepReadModel ResolveCurrentStep(WorkflowRunState state)
+    {
+        foreach (var executionState in state.ExecutionStates.Values)
+        {
+            if (!executionState.Is(WorkflowExecutionKernelState.Descriptor))
+                continue;
+
+            var kernelState = executionState.Unpack<WorkflowExecutionKernelState>();
+            if (kernelState == null || string.IsNullOrWhiteSpace(kernelState.CurrentStepId))
+                break;
+
+            return new WorkflowRunActivityStepReadModel
+            {
+                StepId = WorkflowAuditTextSanitizer.Sanitize(kernelState.CurrentStepId),
+                InputSummary = WorkflowAuditTextSanitizer.SanitizeForDisplay(kernelState.CurrentStepInput, 160),
+                Availability = "available",
+            };
+        }
+
+        return new WorkflowRunActivityStepReadModel
+        {
+            Availability = "unavailable",
+        };
+    }
+
+    private static WorkflowRunActivityFailureReadModel ResolveFirstFailure(WorkflowRunState state)
+    {
+        var message = !string.IsNullOrWhiteSpace(state.FinalError)
+            ? state.FinalError
+            : state.DeadLetterError;
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return new WorkflowRunActivityFailureReadModel
+            {
+                Availability = "unavailable",
+            };
+        }
+
+        return new WorkflowRunActivityFailureReadModel
+        {
+            StepId = WorkflowAuditTextSanitizer.Sanitize(ResolveFailureStepId(state)),
+            Message = WorkflowAuditTextSanitizer.SanitizeForDisplay(message, 240),
+            Availability = "available",
+        };
+    }
+
+    private static string ResolveFailureStepId(WorkflowRunState state)
+    {
+        if (!string.IsNullOrWhiteSpace(state.CompensationOriginFailedStepId))
+            return state.CompensationOriginFailedStepId;
+        if (!string.IsNullOrWhiteSpace(state.DeadLetterFailedCompensationStepId))
+            return state.DeadLetterFailedCompensationStepId;
+
+        foreach (var executionState in state.ExecutionStates.Values)
+        {
+            if (executionState?.Is(WorkflowExecutionKernelState.Descriptor) == true)
+                return executionState.Unpack<WorkflowExecutionKernelState>().CurrentStepId?.Trim() ?? string.Empty;
+        }
+
+        return string.Empty;
+    }
+
+    private static WorkflowRunActivityWaitingReadModel ResolveWaiting(WorkflowRunState state)
+    {
+        foreach (var executionState in state.ExecutionStates.Values)
+        {
+            if (executionState.Is(ToolCallModuleState.Descriptor))
+            {
+                var toolCallState = executionState.Unpack<ToolCallModuleState>();
+                var pending = toolCallState?.PendingApprovals.Values
+                    .OrderBy(static item => item.StepId, StringComparer.Ordinal)
+                    .FirstOrDefault();
+                if (pending != null)
+                    return Waiting(pending.StepId, "tool_approval", $"Approve {pending.ToolName}");
+            }
+
+            if (executionState.Is(HumanApprovalModuleState.Descriptor))
+            {
+                var approvalState = executionState.Unpack<HumanApprovalModuleState>();
+                var pending = approvalState?.Pending.Values
+                    .OrderBy(static item => item.StepId, StringComparer.Ordinal)
+                    .FirstOrDefault();
+                if (pending != null)
+                    return Waiting(pending.StepId, "human_approval", pending.Input);
+            }
+
+            if (executionState.Is(HumanInputModuleState.Descriptor))
+            {
+                var humanInputState = executionState.Unpack<HumanInputModuleState>();
+                var pending = humanInputState?.Pending.Values
+                    .OrderBy(static item => item.StepId, StringComparer.Ordinal)
+                    .FirstOrDefault();
+                if (pending != null)
+                    return Waiting(pending.StepId, "human_input", pending.Input);
+            }
+
+            if (executionState.Is(WaitSignalModuleState.Descriptor))
+            {
+                var signalState = executionState.Unpack<WaitSignalModuleState>();
+                var pending = signalState?.Pending.Values
+                    .OrderBy(static item => item.StepId, StringComparer.Ordinal)
+                    .FirstOrDefault();
+                if (pending != null)
+                    return Waiting(pending.StepId, "signal", pending.SignalName);
+            }
+
+            if (executionState.Is(SecureInputModuleState.Descriptor))
+            {
+                var secureInputState = executionState.Unpack<SecureInputModuleState>();
+                var pending = secureInputState?.Pending.Values
+                    .OrderBy(static item => item.StepId, StringComparer.Ordinal)
+                    .FirstOrDefault();
+                if (pending != null)
+                    return Waiting(pending.StepId, "secure_input", pending.Input);
+            }
+
+            if (executionState.Is(DelayModuleState.Descriptor))
+            {
+                var delayState = executionState.Unpack<DelayModuleState>();
+                if (delayState?.Pending.Count > 0)
+                {
+                    var pending = delayState.Pending
+                        .OrderBy(static item => item.Key, StringComparer.Ordinal)
+                        .First();
+                    return Waiting(ResolveDelayWaitingStepId(pending.Key, pending.Value), "delay", pending.Value.Input);
+                }
+            }
+        }
+
+        return new WorkflowRunActivityWaitingReadModel
+        {
+            Availability = "unavailable",
+        };
+    }
+
+    private static string ResolveDelayWaitingStepId(string pendingKey, PendingDelayState pending)
+    {
+        var stepId = pending.StepId?.Trim();
+        if (!string.IsNullOrWhiteSpace(stepId))
+            return stepId;
+
+        var separatorIndex = pendingKey.LastIndexOf(':');
+        return separatorIndex >= 0 ? pendingKey[(separatorIndex + 1)..].Trim() : string.Empty;
+    }
+
+    private static WorkflowRunActivityWaitingReadModel Waiting(string? stepId, string waitingKind, string? prompt) =>
+        new()
+        {
+            StepId = WorkflowAuditTextSanitizer.Sanitize(stepId),
+            WaitingKind = WorkflowAuditTextSanitizer.Sanitize(waitingKind),
+            Prompt = WorkflowAuditTextSanitizer.SanitizeForDisplay(prompt, 160),
+            Availability = "available",
+        };
 
     private static IList<WorkflowExternalActionApprovalSnapshot> MapConnectorApprovals(WorkflowRunState state)
     {

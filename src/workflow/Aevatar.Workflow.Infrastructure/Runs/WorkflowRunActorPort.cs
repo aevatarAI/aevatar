@@ -114,6 +114,7 @@ internal sealed class WorkflowRunActorPort :
                     definition.ScopeId,
                     definition.RunOrigin,
                     definition.ScheduleId,
+                    definition.WorkflowId,
                     definition.ExpectedExecutionMode,
                     definitionResolution.CapabilityAdmissionPlan),
                 ct);
@@ -206,6 +207,7 @@ internal sealed class WorkflowRunActorPort :
                     definition.ScopeId,
                     definition.RunOrigin,
                     definition.ScheduleId,
+                    definition.WorkflowId,
                     definition.ExpectedExecutionMode,
                     definitionResolution.CapabilityAdmissionPlan,
                     executionRequest,
@@ -826,6 +828,7 @@ internal sealed class WorkflowRunActorPort :
         string? scopeId,
         string? runOrigin,
         string? scheduleId,
+        string? workflowId,
         ExternalCapabilityExecutionMode expectedExecutionMode,
         WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan) =>
         new()
@@ -841,6 +844,7 @@ internal sealed class WorkflowRunActorPort :
                 scopeId,
                 runOrigin,
                 scheduleId,
+                workflowId,
                 expectedExecutionMode,
                 capabilityAdmissionPlan)),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication(WorkflowRunActorPortPublisherId, TopologyAudience.Self),
@@ -859,6 +863,7 @@ internal sealed class WorkflowRunActorPort :
         string? scopeId,
         string? runOrigin,
         string? scheduleId,
+        string? workflowId,
         ExternalCapabilityExecutionMode expectedExecutionMode,
         WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan,
         WorkflowChatRequestEvent? executionRequest = null,
@@ -879,6 +884,7 @@ internal sealed class WorkflowRunActorPort :
                 scopeId,
                 runOrigin,
                 scheduleId,
+                workflowId,
                 expectedExecutionMode,
                 capabilityAdmissionPlan),
         };
@@ -965,6 +971,7 @@ internal sealed class WorkflowRunActorPort :
         string? scopeId,
         string? runOrigin,
         string? scheduleId,
+        string? workflowId,
         ExternalCapabilityExecutionMode expectedExecutionMode,
         WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan)
     {
@@ -977,6 +984,7 @@ internal sealed class WorkflowRunActorPort :
             ScopeId = scopeId?.Trim() ?? string.Empty,
             RunOrigin = runOrigin?.Trim() ?? string.Empty,
             ScheduleId = scheduleId?.Trim() ?? string.Empty,
+            WorkflowId = workflowId?.Trim() ?? string.Empty,
             CapabilityAdmissionPlan = capabilityAdmissionPlan?.Clone(),
             ExpectedExecutionMode = expectedExecutionMode,
         };

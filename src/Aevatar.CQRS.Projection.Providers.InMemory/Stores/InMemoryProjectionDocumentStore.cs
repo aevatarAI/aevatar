@@ -636,7 +636,7 @@ public sealed class InMemoryProjectionDocumentStore<TReadModel, TKey>
         {
         }
 
-        throw new InvalidOperationException("Invalid InMemory projection document query cursor.");
+        throw new ProjectionDocumentQueryCursorException("Invalid InMemory projection document query cursor.");
     }
 
     private static TReadModel Clone(TReadModel source) => source.Clone();

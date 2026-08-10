@@ -195,6 +195,21 @@ message WorkflowRunState
   repeated WorkflowArtifactSourceIdentity processed_artifact_sources = 45;
   string current_turn_id = 46;
   repeated WorkflowInteractiveActionHandoffState interactive_action_handoffs = 47;
+  string workflow_id = 48;
+  google.protobuf.Timestamp completed_at_utc = 49;
+  optional double duration_ms = 50;
+  WorkflowRunInitiatorState initiator = 51;
+}
+
+message WorkflowRunInitiatorState
+{
+  string platform = 1;
+  string tenant = 2;
+  string external_user_id = 3;
+  string scope = 4;
+  string binding_id = 5;
+  string display_value = 6;
+  string availability = 7;
 }
 
 message WorkflowInteractiveActionHandoffState
@@ -378,6 +393,7 @@ message PendingDelayState
   WorkflowRuntimeCallbackLeaseState lease = 1;
   string input = 2;
   string callback_id = 3;
+  string step_id = 4;
 }
 
 message DelayModuleState

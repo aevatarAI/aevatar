@@ -12,6 +12,8 @@
 using Aevatar.AI.Infrastructure.ChronoSandbox;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Audit.Core.DependencyInjection;
+using Aevatar.Authentication.Hosting;
+using Aevatar.Authentication.Providers.NyxId;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.GAgentService.Hosting.DependencyInjection;
 using Aevatar.Workflow.Extensions.Hosting;
@@ -30,6 +32,8 @@ builder.Services.AddAuditTrailCore(builder.Configuration);
 if (builder.Environment.IsDevelopment() || builder.Environment.IsEnvironment("Testing"))
     builder.Services.AddInMemoryAuditTrailForDevelopment();
 builder.AddWorkflowAgentToolAdmission();
+builder.Services.AddNyxIdAuthentication();
+builder.AddAevatarAuthentication();
 // NyxID-backed current-user resolver plus aevatar admin access policy.
 builder.Services.AddNyxIdPlatformAuthorization(builder.Configuration);
 builder.Services.AddChronoSandboxCodeExecution();

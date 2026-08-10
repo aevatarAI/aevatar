@@ -102,6 +102,246 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
     }
 
     [Fact]
+    public async Task ListActivityRunsForScopeAsync_ShouldReturnPagedTypedRows_FromCurrentStateReadModel()
+    {
+        const string workflowId = "wf-alpha";
+        const string runId = "run-alpha";
+        const string actorId = "actor-alpha";
+        const string serviceIdentityCandidate = "svc-alpha";
+        const string memberIdentityCandidate = "m-alpha";
+        var snapshot = Snapshot(actorId, CallerScope, WorkflowRunCompletionStatus.Completed, started: 100, updated: 300);
+        snapshot.RunId = runId;
+        snapshot.WorkflowId = workflowId;
+        snapshot.CompletedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UnixEpoch.AddSeconds(220));
+        snapshot.DurationMs = 120_000;
+        snapshot.RunOrigin = "member-invoke";
+        snapshot.ActivityInitiator = new WorkflowRunActivityInitiatorSnapshot
+        {
+            Platform = "nyxid",
+            Tenant = "tenant-alpha",
+            ExternalUserId = memberIdentityCandidate,
+            Scope = CallerScope,
+            BindingId = serviceIdentityCandidate,
+            DisplayValue = "alice@example.com",
+            Availability = "available",
+        };
+        snapshot.InputSummary = "summarized input";
+        snapshot.ActivityCurrentStep = new WorkflowRunActivityStepSnapshot
+        {
+            StepId = "step-current",
+            InputSummary = "current step input",
+            Availability = "available",
+        };
+        snapshot.ActivityFirstFailure = new WorkflowRunActivityFailureSnapshot
+        {
+            StepId = "step-failed",
+            Message = "first failure",
+            Availability = "available",
+        };
+        snapshot.ActivityWaiting = new WorkflowRunActivityWaitingSnapshot
+        {
+            StepId = "step-waiting",
+            WaitingKind = "tool_approval",
+            Prompt = "Approve?",
+            Availability = "available",
+        };
+        var extraSnapshot = Snapshot("actor-beta", CallerScope, WorkflowRunCompletionStatus.Completed, started: 90, updated: 290);
+        extraSnapshot.RunId = "run-beta";
+        var currentState = new FakeCurrentStateQueryPort
+        {
+            PageResults =
+            [
+                new WorkflowActorCurrentStatePage([snapshot], "cursor-next", 42),
+                new WorkflowActorCurrentStatePage([extraSnapshot], null, null),
+            ],
+        };
+        var service = new WorkflowRunObservatoryQueryService(currentState, new FakeArtifactQueryPort());
+
+        var page = await service.ListActivityRunsForScopeAsync(
+            CallerScope,
+            new WorkflowActivityRunFeedFilter
+            {
+                Status = "completed",
+                WorkflowId = workflowId,
+                Origins = ["member-invoke"],
+                DefinitionActorIds = ["definition-alpha"],
+                ScheduleIds = ["schedule-alpha"],
+                FromUtc = DateTimeOffset.UnixEpoch.AddSeconds(10),
+                ToUtc = DateTimeOffset.UnixEpoch.AddSeconds(400),
+                Take = 1,
+                Cursor = "cursor-current",
+                IncludeTotalCount = true,
+            });
+
+        currentState.PageQueries.Should().HaveCount(2);
+        var firstQuery = currentState.PageQueries[0];
+        firstQuery.ScopeId.Should().Be(CallerScope);
+        firstQuery.WorkflowId.Should().Be(workflowId);
+        firstQuery.Cursor.Should().Be("cursor-current");
+        firstQuery.IncludeTotalCount.Should().BeTrue();
+        firstQuery.Take.Should().Be(1);
+        var verificationQuery = currentState.PageQueries[1];
+        verificationQuery.Cursor.Should().Be("cursor-next");
+        verificationQuery.IncludeTotalCount.Should().BeFalse();
+        verificationQuery.Take.Should().Be(1);
+        page.NextCursor.Should().Be("cursor-next");
+        page.HasMore.Should().BeTrue();
+        page.TotalCount.Should().Be(42);
+        page.Items.Should().ContainSingle();
+        var row = page.Items[0];
+        row.RunId.Should().Be(runId);
+        row.ActorId.Should().Be(actorId);
+        row.WorkflowId.Should().Be(workflowId);
+        row.Initiator.ExternalUserId.Should().Be(memberIdentityCandidate);
+        row.Initiator.BindingId.Should().Be(serviceIdentityCandidate);
+        row.InputSummary.Should().Be("summarized input");
+        row.CurrentStep.StepId.Should().Be("step-current");
+        row.FirstFailure.StepId.Should().Be("step-failed");
+        row.FirstFailure.Message.Should().Be("first failure");
+        row.Waiting.StepId.Should().Be("step-waiting");
+        row.Waiting.WaitingKind.Should().Be("tool_approval");
+        row.StartedAtUtc.Should().Be(DateTimeOffset.UnixEpoch.AddSeconds(100));
+        row.CompletedAtUtc.Should().Be(DateTimeOffset.UnixEpoch.AddSeconds(220));
+        row.UpdatedAtUtc.Should().Be(DateTimeOffset.UnixEpoch.AddSeconds(300));
+        row.DurationMs.Should().Be(120_000);
+    }
+
+    [Fact]
+    public async Task ListActivityRunsForScopeAsync_ShouldRepresentMissingFactsExplicitly()
+    {
+        var snapshot = Snapshot("actor-legacy", CallerScope, WorkflowRunCompletionStatus.Running, updated: 300);
+        var currentState = new FakeCurrentStateQueryPort
+        {
+            PageResult = new WorkflowActorCurrentStatePage([snapshot], null, null),
+        };
+        var service = new WorkflowRunObservatoryQueryService(currentState, new FakeArtifactQueryPort());
+
+        var page = await service.ListActivityRunsForScopeAsync(
+            CallerScope,
+            new WorkflowActivityRunFeedFilter());
+
+        page.HasMore.Should().BeFalse();
+        page.TotalCount.Should().BeNull();
+        page.Items.Should().ContainSingle();
+        var row = page.Items[0];
+        row.RunId.Should().BeEmpty();
+        row.ActorId.Should().Be("actor-legacy");
+        row.WorkflowId.Should().BeEmpty();
+        row.Initiator.DisplayValue.Should().Be("Unknown");
+        row.Initiator.Availability.Should().Be("unavailable");
+        row.CurrentStep.Availability.Should().Be("unavailable");
+        row.FirstFailure.Availability.Should().Be("unavailable");
+        row.Waiting.Availability.Should().Be("unavailable");
+        row.CompletedAtUtc.Should().BeNull();
+        row.DurationMs.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ListActivityRunsForScopeAsync_ShouldLeaveDurationUnavailable_WhenTerminalRunHasNoStart()
+    {
+        var completedAt = DateTimeOffset.UnixEpoch.AddSeconds(420);
+        var snapshot = Snapshot("actor-terminal-legacy", CallerScope, WorkflowRunCompletionStatus.Completed, updated: 430);
+        snapshot.CompletedAtUtc = Timestamp.FromDateTimeOffset(completedAt);
+        var currentState = new FakeCurrentStateQueryPort
+        {
+            PageResult = new WorkflowActorCurrentStatePage([snapshot], null, null),
+        };
+        var service = new WorkflowRunObservatoryQueryService(currentState, new FakeArtifactQueryPort());
+
+        var page = await service.ListActivityRunsForScopeAsync(
+            CallerScope,
+            new WorkflowActivityRunFeedFilter());
+
+        var row = page.Items.Should().ContainSingle().Subject;
+        row.CompletedAtUtc.Should().Be(completedAt);
+        row.StartedAtUtc.Should().BeNull();
+        row.DurationMs.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ListActivityRunsForScopeAsync_ShouldNotAdvertiseNextPage_WhenResultExactlyFillsRequestedPage()
+    {
+        var currentState = new FakeCurrentStateQueryPort
+        {
+            PageResults =
+            [
+                new WorkflowActorCurrentStatePage(
+                    [
+                        Snapshot("actor-one", CallerScope, WorkflowRunCompletionStatus.Running),
+                        Snapshot("actor-two", CallerScope, WorkflowRunCompletionStatus.Completed),
+                    ],
+                    "provider-cursor-at-full-page",
+                    2),
+                new WorkflowActorCurrentStatePage([], null, null),
+            ],
+        };
+        var service = new WorkflowRunObservatoryQueryService(currentState, new FakeArtifactQueryPort());
+
+        var page = await service.ListActivityRunsForScopeAsync(
+            CallerScope,
+            new WorkflowActivityRunFeedFilter { Take = 2 });
+
+        currentState.PageQueries.Should().HaveCount(2);
+        currentState.PageQueries[0].Take.Should().Be(2);
+        currentState.PageQueries[1].Take.Should().Be(1);
+        currentState.PageQueries[1].Cursor.Should().Be("provider-cursor-at-full-page");
+        page.Items.Should().HaveCount(2);
+        page.HasMore.Should().BeFalse();
+        page.NextCursor.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ListActivityRunsForScopeAsync_ShouldDropForeignRowsEvenWhenPageContainsThem()
+    {
+        var currentState = new FakeCurrentStateQueryPort
+        {
+            PageResult = new WorkflowActorCurrentStatePage(
+                [
+                    Snapshot("actor-own", CallerScope, WorkflowRunCompletionStatus.Running),
+                    Snapshot("actor-foreign", OtherScope, WorkflowRunCompletionStatus.Running),
+                ],
+                null,
+                null),
+        };
+        var service = new WorkflowRunObservatoryQueryService(currentState, new FakeArtifactQueryPort());
+
+        var page = await service.ListActivityRunsForScopeAsync(CallerScope, new WorkflowActivityRunFeedFilter());
+
+        page.Items.Should().ContainSingle().Which.ActorId.Should().Be("actor-own");
+    }
+
+    [Fact]
+    public async Task ListAllActivityRunsAsync_ShouldPageAcrossScopes_WithoutScopeFilter()
+    {
+        var currentState = new FakeCurrentStateQueryPort
+        {
+            PageResults =
+            [
+                new WorkflowActorCurrentStatePage(
+                    [
+                        Snapshot("actor-own", CallerScope, WorkflowRunCompletionStatus.Running),
+                        Snapshot("actor-other", OtherScope, WorkflowRunCompletionStatus.Completed),
+                    ],
+                    "cursor-next",
+                    null),
+                new WorkflowActorCurrentStatePage([], null, null),
+            ],
+        };
+        var service = new WorkflowRunObservatoryQueryService(currentState, new FakeArtifactQueryPort());
+
+        var page = await service.ListAllActivityRunsAsync(new WorkflowActivityRunFeedFilter { Cursor = "cursor-current" });
+
+        currentState.PageQueries.Should().HaveCount(2);
+        currentState.PageQueries[0].ScopeId.Should().BeEmpty();
+        currentState.PageQueries[0].Cursor.Should().Be("cursor-current");
+        currentState.PageQueries[1].ScopeId.Should().BeEmpty();
+        currentState.PageQueries[1].Cursor.Should().Be("cursor-next");
+        currentState.PageQueries[1].Take.Should().Be(1);
+        page.HasMore.Should().BeFalse();
+        page.Items.Select(item => item.ScopeId).Should().BeEquivalentTo([CallerScope, OtherScope]);
+    }
+
+    [Fact]
     public async Task GetRunForScopeAsync_ShouldReturnNull_WhenRunBelongsToAnotherScope()
     {
         var currentState = new FakeCurrentStateQueryPort
@@ -766,9 +1006,13 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
     {
         public bool WorkflowActorCurrentStateQueryEnabled => true;
         public IReadOnlyList<WorkflowActorSnapshot> ListResult { get; init; } = [];
+        public WorkflowActorCurrentStatePage PageResult { get; init; } = new([], null, null);
+        public IReadOnlyList<WorkflowActorCurrentStatePage> PageResults { get; init; } = [];
         public WorkflowActorSnapshot? SingleResult { get; init; }
         public IReadOnlyList<WorkflowActorSnapshot> Snapshots { get; init; } = [];
         public WorkflowActorCurrentStateListQuery? LastListQuery { get; private set; }
+        public WorkflowActorCurrentStateListQuery? LastPageQuery { get; private set; }
+        public List<WorkflowActorCurrentStateListQuery> PageQueries { get; } = [];
         public List<string> GetRequests { get; } = [];
 
         public Task<WorkflowActorSnapshot?> GetWorkflowActorCurrentStateAsync(string actorId, CancellationToken ct = default)
@@ -794,6 +1038,16 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         {
             LastListQuery = query;
             return Task.FromResult(ListResult);
+        }
+
+        public Task<WorkflowActorCurrentStatePage> PageWorkflowActorCurrentStatesAsync(
+            WorkflowActorCurrentStateListQuery query,
+            CancellationToken ct = default)
+        {
+            LastPageQuery = query;
+            PageQueries.Add(query);
+            var index = PageQueries.Count - 1;
+            return Task.FromResult(index < PageResults.Count ? PageResults[index] : PageResult);
         }
 
         public Task<WorkflowActorProjectionState?> GetWorkflowActorProjectionStateAsync(string actorId, CancellationToken ct = default) =>

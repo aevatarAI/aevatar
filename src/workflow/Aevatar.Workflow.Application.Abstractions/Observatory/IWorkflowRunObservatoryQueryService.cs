@@ -12,6 +12,11 @@ public interface IWorkflowRunObservatoryQueryService
         ObservatoryRunListFilter filter,
         CancellationToken ct = default);
 
+    Task<WorkflowActivityRunFeedPage> ListActivityRunsForScopeAsync(
+        string scopeId,
+        WorkflowActivityRunFeedFilter filter,
+        CancellationToken ct = default);
+
     Task<ObservatoryRunDetail?> GetRunForScopeAsync(
         string scopeId,
         string runId,
@@ -40,6 +45,125 @@ public sealed class ObservatoryRunListFilter
     public DateTimeOffset? ToUtc { get; init; }
 
     public int Take { get; init; } = 100;
+}
+
+public sealed class WorkflowActivityRunFeedFilter
+{
+    public string? Status { get; init; }
+
+    public IReadOnlyList<string> Origins { get; init; } = [];
+
+    public IReadOnlyList<string> DefinitionActorIds { get; init; } = [];
+
+    public IReadOnlyList<string> ScheduleIds { get; init; } = [];
+
+    public string? WorkflowId { get; init; }
+
+    public DateTimeOffset? FromUtc { get; init; }
+
+    public DateTimeOffset? ToUtc { get; init; }
+
+    public int Take { get; init; } = 100;
+
+    public string? Cursor { get; init; }
+
+    public bool IncludeTotalCount { get; init; }
+}
+
+public sealed class WorkflowActivityRunFeedPage
+{
+    public IReadOnlyList<WorkflowActivityRunFeedRow> Items { get; init; } = [];
+
+    public string? NextCursor { get; init; }
+
+    public bool HasMore { get; init; }
+
+    public long? TotalCount { get; init; }
+}
+
+public sealed class WorkflowActivityRunFeedRow
+{
+    public string RunId { get; init; } = string.Empty;
+
+    public string ActorId { get; init; } = string.Empty;
+
+    public string WorkflowId { get; init; } = string.Empty;
+
+    public string WorkflowName { get; init; } = string.Empty;
+
+    public string ScopeId { get; init; } = string.Empty;
+
+    public string Status { get; init; } = string.Empty;
+
+    public string RunOrigin { get; init; } = string.Empty;
+
+    public bool? Success { get; init; }
+
+    public WorkflowActivityRunInitiatorSummary Initiator { get; init; } = new();
+
+    public string InputSummary { get; init; } = string.Empty;
+
+    public WorkflowActivityRunStepSummary CurrentStep { get; init; } = new();
+
+    public WorkflowActivityRunFailureSummary FirstFailure { get; init; } = new();
+
+    public WorkflowActivityRunWaitingSummary Waiting { get; init; } = new();
+
+    public DateTimeOffset? StartedAtUtc { get; init; }
+
+    public DateTimeOffset? CompletedAtUtc { get; init; }
+
+    public DateTimeOffset UpdatedAtUtc { get; init; }
+
+    public double? DurationMs { get; init; }
+
+    public long StateVersion { get; init; }
+}
+
+public sealed class WorkflowActivityRunInitiatorSummary
+{
+    public string Platform { get; init; } = string.Empty;
+
+    public string Tenant { get; init; } = string.Empty;
+
+    public string ExternalUserId { get; init; } = string.Empty;
+
+    public string Scope { get; init; } = string.Empty;
+
+    public string BindingId { get; init; } = string.Empty;
+
+    public string DisplayValue { get; init; } = "Unknown";
+
+    public string Availability { get; init; } = "unavailable";
+}
+
+public sealed class WorkflowActivityRunStepSummary
+{
+    public string StepId { get; init; } = string.Empty;
+
+    public string InputSummary { get; init; } = string.Empty;
+
+    public string Availability { get; init; } = "unavailable";
+}
+
+public sealed class WorkflowActivityRunFailureSummary
+{
+    public string StepId { get; init; } = string.Empty;
+
+    public string Message { get; init; } = string.Empty;
+
+    public string Availability { get; init; } = "unavailable";
+}
+
+public sealed class WorkflowActivityRunWaitingSummary
+{
+    public string StepId { get; init; } = string.Empty;
+
+    public string WaitingKind { get; init; } = string.Empty;
+
+    public string Prompt { get; init; } = string.Empty;
+
+    public string Availability { get; init; } = "unavailable";
 }
 
 // Read-only view DTOs (Host -> browser JSON, sanctioned by observability.md §9). All carry the

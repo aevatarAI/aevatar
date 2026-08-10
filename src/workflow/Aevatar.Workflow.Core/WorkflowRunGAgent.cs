@@ -476,6 +476,7 @@ public sealed partial class WorkflowRunGAgent
         string? scopeId,
         string? runOrigin,
         string? scheduleId,
+        string? workflowId,
         WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan,
         ExternalCapabilityExecutionMode expectedExecutionMode,
         CancellationToken ct = default)
@@ -505,6 +506,7 @@ public sealed partial class WorkflowRunGAgent
             ScopeId = scopeId?.Trim() ?? string.Empty,
             RunOrigin = runOrigin?.Trim() ?? string.Empty,
             ScheduleId = scheduleId?.Trim() ?? string.Empty,
+            WorkflowId = workflowId?.Trim() ?? string.Empty,
             CapabilityAdmissionPlan = capabilityAdmissionPlan?.Clone(),
             ExpectedExecutionMode = expectedExecutionMode,
         };
@@ -532,6 +534,7 @@ public sealed partial class WorkflowRunGAgent
             request.ScopeId,
             request.RunOrigin,
             request.ScheduleId,
+            request.WorkflowId,
             request.CapabilityAdmissionPlan,
             request.ExpectedExecutionMode);
 
@@ -1502,14 +1505,25 @@ public sealed partial class WorkflowRunGAgent
         }
 
         var stateBeforeCompletion = State.Clone();
-        await PersistDomainEventAsync(evt);
+        var completedAt = evt.CompletedAtUtc ?? Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow());
+        var persistedEvent = evt.Clone();
+        persistedEvent.CompletedAtUtc = null;
+        await PersistDomainEventsAsync(
+            [
+                persistedEvent,
+                new WorkflowRunTerminalTimingRecordedEvent
+                {
+                    RunId = string.IsNullOrWhiteSpace(persistedEvent.RunId) ? RunId : persistedEvent.RunId,
+                    CompletedAtUtc = completedAt,
+                },
+            ]);
         await TryRevokeScheduledCallerCredentialAsync(
             stateBeforeCompletion,
             "workflow-run-completed",
             CancellationToken.None);
         if (!ShouldSuppressGenericParentCompletion(stateBeforeCompletion))
-            await PublishAsync(evt.Clone(), TopologyAudience.Parent);
-        await PersistForkRequestOnTerminalFailureAsync(evt, stateBeforeCompletion, CancellationToken.None);
+            await PublishAsync(persistedEvent.Clone(), TopologyAudience.Parent);
+        await PersistForkRequestOnTerminalFailureAsync(persistedEvent, stateBeforeCompletion, CancellationToken.None);
         await _subWorkflowOrchestrator.CancelPendingDefinitionResolutionTimeoutsAsync(stateBeforeCompletion, CancellationToken.None);
         await _subWorkflowOrchestrator.CleanupPendingInvocationsForRunAsync(evt.RunId, stateBeforeCompletion, CancellationToken.None);
         await CleanupRoleAgentTreeAsync(CancellationToken.None);
@@ -1519,31 +1533,31 @@ public sealed partial class WorkflowRunGAgent
         {
             Logger.LogInformation(
                 "Workflow run {Name} completed: success={Success} run={RunId} outputLen={OutputLen}",
-                evt.WorkflowName,
-                evt.Success,
-                evt.RunId,
-                (evt.Output ?? string.Empty).Length);
+                persistedEvent.WorkflowName,
+                persistedEvent.Success,
+                persistedEvent.RunId,
+                (persistedEvent.Output ?? string.Empty).Length);
         }
         else
         {
             Logger.LogError(
                 "Workflow run {Name} failed: run={RunId} error={Error} outputLen={OutputLen}",
-                evt.WorkflowName,
-                evt.RunId,
-                string.IsNullOrWhiteSpace(evt.Error) ? "(none)" : evt.Error,
-                (evt.Output ?? string.Empty).Length);
+                persistedEvent.WorkflowName,
+                persistedEvent.RunId,
+                string.IsNullOrWhiteSpace(persistedEvent.Error) ? "(none)" : persistedEvent.Error,
+                (persistedEvent.Output ?? string.Empty).Length);
         }
 
         await PublishAsync(new WorkflowLlmInvocationCompletedEvent
         {
-            RunId = evt.RunId,
+            RunId = persistedEvent.RunId,
             SessionId = sessionId?.Trim() ?? string.Empty,
-            Success = evt.Success,
-            Content = evt.Success ? evt.Output : $"Workflow execution failed: {evt.Error}",
-            Error = evt.Success ? string.Empty : evt.Error,
+            Success = persistedEvent.Success,
+            Content = persistedEvent.Success ? persistedEvent.Output : $"Workflow execution failed: {persistedEvent.Error}",
+            Error = persistedEvent.Success ? string.Empty : persistedEvent.Error,
         }, TopologyAudience.Parent);
 
-        await PublishManagedParentInvocationCompletionAsync(evt, stateBeforeCompletion, CancellationToken.None);
+        await PublishManagedParentInvocationCompletionAsync(persistedEvent, stateBeforeCompletion, CancellationToken.None);
         await EnsureTerminalNotificationAsync(CancellationToken.None);
     }
 
@@ -1594,7 +1608,16 @@ public sealed partial class WorkflowRunGAgent
             "Adopt relayed WorkflowCompletedEvent for own run={RunId} success={Success}.",
             RunId,
             evt.Success);
-        await PersistDomainEventAsync(NormalizeAdoptedCompleted(evt));
+        var completedAt = evt.CompletedAtUtc ?? Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow());
+        await PersistDomainEventsAsync(
+            [
+                NormalizeAdoptedCompleted(evt),
+                new WorkflowRunTerminalTimingRecordedEvent
+                {
+                    RunId = RunId,
+                    CompletedAtUtc = completedAt,
+                },
+            ]);
         await EnsureTerminalNotificationAsync(CancellationToken.None);
     }
 
@@ -1604,6 +1627,7 @@ public sealed partial class WorkflowRunGAgent
         normalized.RunId = RunId;
         if (string.IsNullOrWhiteSpace(normalized.WorkflowName))
             normalized.WorkflowName = State.WorkflowName;
+        normalized.CompletedAtUtc = null;
         return normalized;
     }
 
@@ -1687,6 +1711,7 @@ public sealed partial class WorkflowRunGAgent
             WorkflowName = string.IsNullOrWhiteSpace(evt.WorkflowName) ? State.WorkflowName : evt.WorkflowName,
             RunId = runId,
             Reason = evt.Reason ?? string.Empty,
+            CompletedAtUtc = evt.CompletedAtUtc ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         };
 
         await CompleteStopAsync(
@@ -1712,6 +1737,7 @@ public sealed partial class WorkflowRunGAgent
         {
             RunId = runId,
             Reason = evt.Reason ?? string.Empty,
+            CompletedAtUtc = evt.CompletedAtUtc ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         };
 
         await CompleteStopAsync(
@@ -2065,6 +2091,7 @@ public sealed partial class WorkflowRunGAgent
             .On<WorkflowCompensationRetryRequestedEvent>(ApplyWorkflowCompensationRetryRequested)
             .On<WorkflowStoppedEvent>(ApplyWorkflowStopped)
             .On<WorkflowCompletedEvent>(ApplyWorkflowCompleted)
+            .On<WorkflowRunTerminalTimingRecordedEvent>(ApplyWorkflowRunTerminalTimingRecorded)
             .On<WorkflowRunStoppedEvent>(ApplyWorkflowRunStopped)
             .On<WorkflowRunTerminalNotificationPreparedEvent>(ApplyWorkflowRunTerminalNotificationPrepared)
             .On<WorkflowRunTerminalNotificationRetryScheduledEvent>(ApplyWorkflowRunTerminalNotificationRetryScheduled)
@@ -2202,12 +2229,18 @@ public sealed partial class WorkflowRunGAgent
         next.ScheduleId = string.IsNullOrWhiteSpace(evt.ScheduleId)
             ? current.ScheduleId
             : evt.ScheduleId.Trim();
+        next.WorkflowId = string.IsNullOrWhiteSpace(evt.WorkflowId)
+            ? current.WorkflowId
+            : evt.WorkflowId.Trim();
         next.CapabilityAdmissionPlan = evt.CapabilityAdmissionPlan?.Clone();
         next.ExpectedExecutionMode = evt.ExpectedExecutionMode;
         next.Status = "bound";
         next.Input = string.Empty;
         next.FinalOutput = string.Empty;
         next.FinalError = string.Empty;
+        next.CompletedAtUtc = null;
+        next.ClearDurationMs();
+        next.Initiator = null;
         next.ForkAttempt = 0;
         next.CompensableLedger.Clear();
         next.CompensationCursor = 0;
@@ -2295,6 +2328,9 @@ public sealed partial class WorkflowRunGAgent
         next.Status = RunningStatus;
         next.FinalOutput = string.Empty;
         next.FinalError = string.Empty;
+        next.CompletedAtUtc = null;
+        next.ClearDurationMs();
+        next.Initiator = BuildInitiator(evt.ExecutionContextDelta?.CallerCredential?.NyxIdAuthority);
         next.ForkAttempt = Math.Max(0, evt.Attempt);
         next.CompensableLedger.Clear();
         next.CompensationCursor = 0;
@@ -2651,6 +2687,7 @@ public sealed partial class WorkflowRunGAgent
         next.FinalOutput = string.Empty;
         if (!string.IsNullOrWhiteSpace(evt.Reason))
             next.FinalError = evt.Reason;
+        ApplyTerminalTiming(next, evt.CompletedAtUtc);
         next.ExecutionStates.Clear();
         next.ExecutionContext = new WorkflowRunExecutionContextState();
         next.PendingSubWorkflowDefinitionResolutions.Clear();
@@ -2667,11 +2704,21 @@ public sealed partial class WorkflowRunGAgent
         next.Status = evt.Success ? CompletedStatus : FailedStatus;
         next.FinalOutput = evt.Output ?? string.Empty;
         next.FinalError = evt.Error ?? string.Empty;
+        ApplyTerminalTiming(next, evt.CompletedAtUtc);
         next.TerminalWorkflowCompletionRecorded = true;
         next.ExecutionContext = new WorkflowRunExecutionContextState();
         next.PendingSubWorkflowDefinitionResolutions.Clear();
         next.PendingSubWorkflowDefinitionResolutionIndexByInvocationId.Clear();
         NormalizeTerminalWorkflowExecutionState(next);
+        return next;
+    }
+
+    private static WorkflowRunState ApplyWorkflowRunTerminalTimingRecorded(
+        WorkflowRunState current,
+        WorkflowRunTerminalTimingRecordedEvent evt)
+    {
+        var next = current.Clone();
+        ApplyTerminalTiming(next, evt.CompletedAtUtc);
         return next;
     }
 
@@ -2700,6 +2747,7 @@ public sealed partial class WorkflowRunGAgent
         next.FinalOutput = string.Empty;
         if (!string.IsNullOrWhiteSpace(evt.Reason))
             next.FinalError = evt.Reason;
+        ApplyTerminalTiming(next, evt.CompletedAtUtc);
         next.ExecutionStates.Clear();
         next.ExecutionContext = new WorkflowRunExecutionContextState();
         next.PendingSubWorkflowDefinitionResolutions.Clear();
@@ -2708,6 +2756,73 @@ public sealed partial class WorkflowRunGAgent
         next.PendingSubWorkflowInvocationIndexByChildRunId.Clear();
         next.PendingChildRunIdsByParentRunId.Clear();
         return next;
+    }
+
+    private static void ApplyTerminalTiming(WorkflowRunState state, Timestamp? completedAtUtc)
+    {
+        if (completedAtUtc == null)
+            return;
+
+        state.CompletedAtUtc = completedAtUtc.Clone();
+        // Fix (review round 1, F1):
+        //   Missing startedAt was encoded as duration 0 for terminal Activity rows.
+        //   Preserve unavailable duration by only setting the optional field when both timestamps exist.
+        if (state.StartedAtUtc == null)
+        {
+            state.ClearDurationMs();
+            return;
+        }
+
+        state.DurationMs = Math.Max(
+            0,
+            (completedAtUtc.ToDateTimeOffset() - state.StartedAtUtc.ToDateTimeOffset()).TotalMilliseconds);
+    }
+
+    private static WorkflowRunInitiatorState BuildInitiator(WorkflowCallerNyxIdAuthority? authority)
+    {
+        if (authority == null)
+        {
+            return new WorkflowRunInitiatorState
+            {
+                Availability = "unavailable",
+                DisplayValue = "Unknown",
+            };
+        }
+
+        var platform = authority.Platform?.Trim() ?? string.Empty;
+        var tenant = authority.Tenant?.Trim() ?? string.Empty;
+        var externalUserId = authority.ExternalUserId?.Trim() ?? string.Empty;
+        var scope = authority.Scope?.Trim() ?? string.Empty;
+        var bindingId = authority.BindingId?.Trim() ?? string.Empty;
+        var displayValue = ResolveInitiatorDisplayValue(platform, tenant, externalUserId, scope, bindingId);
+        return new WorkflowRunInitiatorState
+        {
+            Platform = platform,
+            Tenant = tenant,
+            ExternalUserId = externalUserId,
+            Scope = scope,
+            BindingId = bindingId,
+            DisplayValue = string.IsNullOrWhiteSpace(displayValue) ? "Unknown" : displayValue,
+            Availability = string.IsNullOrWhiteSpace(displayValue) ? "unavailable" : "available",
+        };
+    }
+
+    private static string ResolveInitiatorDisplayValue(
+        string platform,
+        string tenant,
+        string externalUserId,
+        string scope,
+        string bindingId)
+    {
+        if (!string.IsNullOrWhiteSpace(platform) && !string.IsNullOrWhiteSpace(externalUserId))
+            return string.IsNullOrWhiteSpace(tenant)
+                ? $"{platform}:{externalUserId}"
+                : $"{platform}:{tenant}:{externalUserId}";
+        if (!string.IsNullOrWhiteSpace(scope))
+            return $"scope:{scope}";
+        if (!string.IsNullOrWhiteSpace(bindingId))
+            return $"binding:{bindingId}";
+        return string.Empty;
     }
 
     private static WorkflowRunState ApplyWorkflowRunTerminalNotificationPrepared(
@@ -3583,6 +3698,7 @@ public sealed partial class WorkflowRunGAgent
             ScopeId = State.ScopeId ?? string.Empty,
             RunOrigin = State.RunOrigin ?? string.Empty,
             ScheduleId = State.ScheduleId ?? string.Empty,
+            WorkflowId = State.WorkflowId ?? string.Empty,
             CapabilityAdmissionPlan = State.CapabilityAdmissionPlan?.Clone(),
             ExpectedExecutionMode = State.ExpectedExecutionMode,
             InlineWorkflowYamls = { State.InlineWorkflowYamls },

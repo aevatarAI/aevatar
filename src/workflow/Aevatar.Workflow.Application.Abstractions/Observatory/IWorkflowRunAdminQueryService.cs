@@ -16,6 +16,10 @@ public interface IWorkflowRunAdminQueryService
         ObservatoryRunListFilter filter,
         CancellationToken ct = default);
 
+    Task<WorkflowActivityRunFeedPage> ListAllActivityRunsAsync(
+        WorkflowActivityRunFeedFilter filter,
+        CancellationToken ct = default);
+
     /// <summary>
     /// Gets one run across all scopes by its stable workflow run id. Authorization is the endpoint's responsibility.
     /// </summary>
