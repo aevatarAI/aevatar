@@ -13,7 +13,7 @@ const receipt: WorkflowPublicationReceipt = {
 
 function workflowDetail(
   changes: Partial<NonNullable<ScopeWorkflowDetail['workflow']>> = {},
-  detailChanges: Partial<ScopeWorkflowDetail> = {},
+  detailChanges: Partial<Omit<ScopeWorkflowDetail, 'workflow'>> = {},
 ): ScopeWorkflowDetail & {
   readonly workflow: NonNullable<ScopeWorkflowDetail['workflow']>;
 } {
