@@ -1554,15 +1554,11 @@ describe('Workflow Activity vNext settings', () => {
     expect(mockStudioApi.saveUserLlmSettings).not.toHaveBeenCalled();
   });
 
-  it('keeps connected services selectable without an enumerated model catalogue', async () => {
+  it('only offers services that publish at least one model', async () => {
     mockStudioApi.getUserLlmSettings.mockResolvedValue({
-      savedSelection: {
-        routeKind: 'gateway',
-        routeValue: '/api/v1/llm/gateway/v1',
-        modelSelection: { kind: 'provider_default' },
-      },
-      savedRouteLabel: 'Gateway',
-      selectionStatus: 'ready',
+      savedSelection: null,
+      savedRouteLabel: 'System default',
+      selectionStatus: 'system_default',
       catalogDiagnostic: 'unspecified',
       remediation: 'none',
       catalogStatus: 'ready',
@@ -1633,29 +1629,10 @@ describe('Workflow Activity vNext settings', () => {
     const routeSelect = await screen.findByRole('combobox', {
       name: 'Preferred service',
     });
-    expect(
-      screen.queryByRole('combobox', { name: 'Default model' }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.getByText('Uses the service default model.'),
-    ).toBeInTheDocument();
     fireEvent.mouseDown(routeSelect);
     expect(await screen.findByText('Service alpha')).toBeInTheDocument();
-    fireEvent.click(await screen.findByText('Storage alpha'));
-    expect(
-      screen.queryByRole('combobox', { name: 'Default model' }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.getByText('Uses the service default model.'),
-    ).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled();
-    fireEvent.click(
-      screen.getByRole('button', { name: 'Restore saved settings' }),
-    );
-    expect(
-      screen.queryByRole('button', { name: 'Save changes' }),
-    ).not.toBeInTheDocument();
-    expect(mockStudioApi.saveUserLlmSettings).not.toHaveBeenCalled();
+    expect(screen.queryByText('Gateway')).not.toBeInTheDocument();
+    expect(screen.queryByText('Storage alpha')).not.toBeInTheDocument();
   });
 
   it('guards dirty navigation with Stay and Discard and leave', async () => {

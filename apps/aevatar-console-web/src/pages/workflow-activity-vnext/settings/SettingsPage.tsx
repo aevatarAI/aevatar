@@ -143,7 +143,10 @@ const SettingsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
   );
 
   const options = React.useMemo(
-    () => buildUserLlmSelectionOptions(llm.data?.routeOptions ?? []),
+    () =>
+      buildUserLlmSelectionOptions(llm.data?.routeOptions ?? []).filter(
+        (option) => option.modelCatalog.modelIds.length > 0,
+      ),
     [llm.data?.routeOptions],
   );
   const selectedOption = draft
