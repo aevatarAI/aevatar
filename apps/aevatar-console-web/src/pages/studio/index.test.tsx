@@ -6609,31 +6609,25 @@ describe('StudioPage', () => {
         }),
       );
     });
-    await waitFor(
-      () => {
-        expect(studioApi.getMemberBindingRun).toHaveBeenCalledWith(
-          'scope-1',
-          'draft1',
-          'bind-draft1',
-        );
-        expect(
-          mockScopeRuntimeApi.listServices.mock.calls.length,
-        ).toBeGreaterThanOrEqual(2);
-      },
-      { timeout: 5_000 },
-    );
+    await waitFor(() => {
+      expect(studioApi.getMemberBindingRun).toHaveBeenCalledWith(
+        'scope-1',
+        'draft1',
+        'bind-draft1',
+      );
+      expect(
+        mockScopeRuntimeApi.listServices.mock.calls.length,
+      ).toBeGreaterThanOrEqual(2);
+    });
     expect(studioApi.bindScopeWorkflow).not.toHaveBeenCalled();
-    await waitFor(
-      () => {
-        expect(screen.getByTestId('studio-context-title')).toHaveTextContent(
-          'draft1',
-        );
-        expect(screen.getByText('service:draft1')).toBeTruthy();
-        expect(screen.getByText('services:draft1')).toBeTruthy();
-        expect(screen.getByText('candidate:none')).toBeTruthy();
-      },
-      { timeout: 5_000 },
-    );
+    await waitFor(() => {
+      expect(screen.getByTestId('studio-context-title')).toHaveTextContent(
+        'draft1',
+      );
+      expect(screen.getByText('service:draft1')).toBeTruthy();
+      expect(screen.getByText('services:draft1')).toBeTruthy();
+      expect(screen.getByText('candidate:none')).toBeTruthy();
+    });
     expect(screen.queryByText('service:draft2')).toBeNull();
   });
 
