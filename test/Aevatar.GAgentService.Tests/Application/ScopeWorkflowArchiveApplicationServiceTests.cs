@@ -105,12 +105,17 @@ public sealed class ScopeWorkflowArchiveApplicationServiceTests
         commandPort.DeactivateCommand.Should().BeNull();
     }
 
-    [Fact]
-    public async Task ArchiveAsync_ShouldRejectMissingPublishedIdentityWithoutDispatch()
+    [Theory]
+    [InlineData(nameof(ScopeWorkflowSummary.PublishedServiceId))]
+    [InlineData(nameof(ScopeWorkflowSummary.ServiceAppId))]
+    [InlineData(nameof(ScopeWorkflowSummary.ServiceNamespace))]
+    [InlineData(nameof(ScopeWorkflowSummary.DeploymentId))]
+    public async Task ArchiveAsync_ShouldRejectMissingPublishedIdentityComponentWithoutDispatch(
+        string missingComponent)
     {
         var queryPort = new StubScopeWorkflowQueryPort(new ScopeWorkflowLookupResult(
             ScopeWorkflowLookupStatus.Runnable,
-            ActiveWorkflow() with { PublishedServiceId = string.Empty },
+            ActiveWorkflowWithMissingIdentityComponent(missingComponent),
             "runnable"));
         var commandPort = new RecordingServiceCommandPort();
         var service = new ScopeWorkflowArchiveApplicationService(queryPort, commandPort);
@@ -123,6 +128,19 @@ public sealed class ScopeWorkflowArchiveApplicationServiceTests
         commandPort.DeactivateCommand.Should().BeNull();
     }
 
+    private static ScopeWorkflowSummary ActiveWorkflowWithMissingIdentityComponent(string missingComponent)
+    {
+        var workflow = ActiveWorkflow();
+        return missingComponent switch
+        {
+            nameof(ScopeWorkflowSummary.PublishedServiceId) => workflow with { PublishedServiceId = string.Empty },
+            nameof(ScopeWorkflowSummary.ServiceAppId) => workflow with { ServiceAppId = string.Empty },
+            nameof(ScopeWorkflowSummary.ServiceNamespace) => workflow with { ServiceNamespace = string.Empty },
+            nameof(ScopeWorkflowSummary.DeploymentId) => workflow with { DeploymentId = string.Empty },
+            _ => throw new ArgumentOutOfRangeException(nameof(missingComponent), missingComponent, null),
+        };
+    }
+
     private static ScopeWorkflowSummary ActiveWorkflow() =>
         new(
             ScopeId: "scope-alpha",
@@ -133,7 +151,7 @@ public sealed class ScopeWorkflowArchiveApplicationServiceTests
             ActorId: "m-alpha",
             ActiveRevisionId: "rev-alpha",
             DeploymentId: "dep-alpha",
-            DeploymentStatus: "Active",
+            DeploymentStatus: ServiceDeploymentStatus.Active.ToString(),
             UpdatedAt: DateTimeOffset.Parse("2026-08-10T10:00:00Z"))
         {
             PublishedServiceId = "svc-alpha",

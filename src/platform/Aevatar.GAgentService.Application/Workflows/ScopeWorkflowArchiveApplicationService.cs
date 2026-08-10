@@ -58,7 +58,10 @@ public sealed class ScopeWorkflowArchiveApplicationService : IScopeWorkflowArchi
             throw IdentityUnavailable(workflowId, "The workflow read model resolved another scope or workflow identity.");
         }
 
-        if (!string.Equals(workflow.DeploymentStatus, "active", StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(
+                workflow.DeploymentStatus,
+                ServiceDeploymentStatus.Active.ToString(),
+                StringComparison.OrdinalIgnoreCase))
         {
             throw new ScopeWorkflowArchiveRejectedException(
                 ScopeWorkflowArchiveRejectionKind.Conflict,

@@ -255,13 +255,16 @@ public static class ScopeWorkflowEndpoints
         IScopeWorkflowArchiveCommandPort archiveCommandPort,
         CancellationToken ct)
     {
+        if (TryCreateArchiveRequestBadRequest(scopeId, workflowId, out var badRequest, out var normalizedScopeId, out var normalizedWorkflowId))
+            return badRequest;
+
         try
         {
-            if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, normalizedScopeId, out var denied))
                 return denied;
 
             var result = await archiveCommandPort.ArchiveAsync(
-                new ScopeWorkflowArchiveRequest(scopeId, workflowId),
+                new ScopeWorkflowArchiveRequest(normalizedScopeId, normalizedWorkflowId),
                 ct);
             return Results.Accepted(result.ReadModelUrl, result);
         }
@@ -276,13 +279,35 @@ public static class ScopeWorkflowEndpoints
                 message = ex.Message,
             }, statusCode: statusCode);
         }
+    }
+
+    private static bool TryCreateArchiveRequestBadRequest(
+        string scopeId,
+        string workflowId,
+        out IResult badRequest,
+        out string normalizedScopeId,
+        out string normalizedWorkflowId)
+    {
+        try
+        {
+            normalizedScopeId = ScopeWorkflowCapabilityOptions.NormalizeRequired(scopeId, nameof(scopeId));
+            normalizedWorkflowId = ScopeWorkflowCapabilityOptions.NormalizeRequired(workflowId, nameof(workflowId));
+            if (normalizedWorkflowId.Contains(':', StringComparison.Ordinal))
+                throw new InvalidOperationException("workflowId must not contain ':'.");
+
+            badRequest = Results.Empty;
+            return false;
+        }
         catch (InvalidOperationException ex)
         {
-            return Results.BadRequest(new
+            normalizedScopeId = string.Empty;
+            normalizedWorkflowId = string.Empty;
+            badRequest = Results.BadRequest(new
             {
                 code = "INVALID_USER_WORKFLOW_ARCHIVE_REQUEST",
                 message = ex.Message,
             });
+            return true;
         }
     }
 
