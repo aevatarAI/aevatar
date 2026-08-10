@@ -1,0 +1,6 @@
+# State Output Obligation Timeout Fixture
+
+This fixture models the persisted blocked terminal from `#3361`'s parent issue.
+
+<!-- fkst:github-devloop:state:v1 proposal="github-devloop/issue/aevatarAI/aevatar/3344" state="blocked" version="ready/consensus-github-devloop/issue/aevatarAI/aevatar/3344/intake/0366205136/loop/1/timeout-reconcile/impl-failed/3" stage_rank="800" marker_order_key="ready-consensus-github-devloo-001839198015/000000000001/000000000000/000000000000/000000000000/000000000000/000000000000/000000000000/000000000800" -->
+<!-- fkst:github-devloop:timeout-reconcile:v1 proposal="github-devloop/issue/aevatarAI/aevatar/3344" version="ready/consensus-github-devloop/issue/aevatarAI/aevatar/3344/intake/0366205136/loop/1/timeout-reconcile/impl-failed/3" state="impl-failed" round="3" action="drop" dedup="timeout-reconcile:ready/consensus-github-devloop/issue/aevatarAI/aevatar/3344/intake/0366205136/loop/1/timeout-reconcile/impl-failed/3" from_state="impl-failed" from_version="ready/consensus-github-devloop/issue/aevatarAI/aevatar/3344/intake/0366205136/loop/1" age_minutes="1472" budget_minutes="1440" attempt="3" attempt_limit="3" driving_queue="devloop_ready" reason_class="state-output-obligation-timeout" source_ref_kind="external" source_ref="aevatarAI/aevatar#issue/3344" -->
