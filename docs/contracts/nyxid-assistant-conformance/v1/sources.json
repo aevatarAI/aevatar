@@ -2,15 +2,15 @@
   "schema_version": 1,
   "aevatar": {
     "repository": "https://github.com/AevatarAI/aevatar.git",
-    "revision": "70287b4b2715288e8c53d44ed613be894fe4c7a3",
-    "contract_files_sha256": "6a033ef2a1a872a23abe966bbb088734105c57a2367c76f36a78b5858ffeb91e",
+    "revision": "94d5a31cc3822aee52c8592d2c40bd7b9f061994",
+    "contract_files_sha256": "1db8509822be0c4bf2de6609b89226cf8c491f484a48b57d6b6668f7e9392e84",
     "files": {
-      "agents/Aevatar.GAgents.NyxidChat/NyxIdActionPostconditionPort.cs": "82758c8726e51044c818a276db76032a382c792cd964df2c0d10e7ab4bd20155",
-      "agents/Aevatar.GAgents.NyxidChat/NyxIdAssistantActionRegistry.cs": "ed83f22bb95d01e4409a7e051748194a9595c93c276129d4ed38442ee4b0b53e",
+      "agents/Aevatar.GAgents.NyxidChat/NyxIdActionPostconditionPort.cs": "f65bc28bb0433ea4054b1373f39debb68f2f08886ae76327590ab2f2e813c86f",
+      "agents/Aevatar.GAgents.NyxidChat/NyxIdAssistantActionRegistry.cs": "974280b023bbad2b1f19d1dafd1d27dd81fe4f3644f060c66b5ca5d27e47c060",
       "agents/Aevatar.GAgents.NyxidChat/NyxIdChatBrowserActions.cs": "27929b6b2ae38fb2e3f30fed20be70bb40e83371ab40163f9a03758383905356",
-      "agents/Aevatar.GAgents.NyxidChat/NyxIdChatConversationAguiFrameBuilder.cs": "5c0a8a3d3c9dd703d4b80a7e5c9c83133ea168d200eec559049c5063319f5f30",
+      "agents/Aevatar.GAgents.NyxidChat/NyxIdChatConversationAguiFrameBuilder.cs": "878484270a9d0bb642f7bb09a7b847d20b139184a5a73dc896aea754974e65f0",
       "docs/adr/0048-nyxid-assistant-operation-class-boundary.md": "30c9de6c6e77a7aee14f0eb4a2f74bd15b8874bcfed88ba957cdd8213b9114eb",
-      "src/Aevatar.AI.ToolProviders.NyxId/NyxIdAssistantToolSource.cs": "bd35a49d03852767a88daddaa45c7ca90e85ecec66ebef0402565fe318eb729f",
+      "src/Aevatar.AI.ToolProviders.NyxId/NyxIdAssistantToolSource.cs": "e6a2c4c57b5179eb781b583a127f93e063f567006c02c2eaefb8709c724e5910",
       "src/Aevatar.Mainnet.Host.Api/Hosting/MainnetHostBuilderExtensions.cs": "1f03542b3aeae67f6700aba7cabdf7d5242d9a62e30acb36f07f9fdfee0f2b50"
     }
   },
@@ -38,6 +38,6 @@
   },
   "generated_artifacts": {
     "cli-leaves.json": "27ee6015977a88f30157cdbe8c51b68ca60f0a57c4c7248950906a990b7b7d13",
-    "coverage-manifest.json": "0b88ec0e63c349869fbe28542eb2baeae2daff70937eb8f0258f8f35d0bc3904"
+    "coverage-manifest.json": "26c80dc309acd7bead7c461f2b21eb65df1bbfdec83bf3065ad76f39443c6c5f"
   }
 }
