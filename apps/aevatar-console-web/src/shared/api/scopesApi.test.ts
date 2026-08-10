@@ -171,8 +171,8 @@ describe('scopesApi workflow catalogue', () => {
     expect(response.search.maximumQueryLength).toBe(128);
   });
 
-  it('preserves distinct published service identity from workflow detail', async () => {
-    global.fetch = jest.fn().mockResolvedValue({
+  it('reads the published service identity from the workflow detail read model', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
       status: 200,
       json: async () => ({
@@ -195,18 +195,26 @@ describe('scopesApi workflow catalogue', () => {
         },
         source: null,
       }),
-    } as Response) as typeof global.fetch;
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
 
-    const response = await scopesApi.getWorkflowDetail(
-      'scope-alpha',
-      'wf-alpha',
-    );
-
-    expect(response.workflow).toMatchObject({
-      workflowId: 'wf-alpha',
-      publishedServiceId: 'svc-alpha',
-      serviceAppId: 'workflow-app',
-      serviceNamespace: 'workflow-namespace',
+    await expect(
+      scopesApi.getWorkflowDetail('scope-alpha', 'wf-alpha'),
+    ).resolves.toMatchObject({
+      available: true,
+      scopeId: 'scope-alpha',
+      workflow: {
+        workflowId: 'wf-alpha',
+        activeRevisionId: 'rev-alpha',
+        publishedServiceId: 'svc-alpha',
+        serviceAppId: 'workflow-app',
+        serviceNamespace: 'workflow-namespace',
+      },
     });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/scopes/scope-alpha/workflows/wf-alpha',
+      expect.objectContaining({ headers: expect.any(Headers) }),
+    );
   });
 });
