@@ -7035,6 +7035,7 @@ describe('TeamMemberWorkflowStudioPage', () => {
   });
 
   it('keeps the publish action loading during automatic polling and surfaces polling failures', async () => {
+    jest.useFakeTimers();
     window.history.replaceState(
       {},
       '',
@@ -7093,50 +7094,59 @@ describe('TeamMemberWorkflowStudioPage', () => {
       })
       .mockRejectedValueOnce(new StudioApiError('Bad Gateway', 502));
 
-    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+    try {
+      renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
 
-    await waitFor(() => {
-      expect(screen.getByTestId('graph-canvas')).toHaveTextContent('nodes:1');
-    });
-    clickPublishAction();
+      await waitFor(() => {
+        expect(screen.getByTestId('graph-canvas')).toHaveTextContent('nodes:1');
+      });
+      clickPublishAction();
 
-    await waitFor(() => {
-      expect(studioApi.getMemberBindingRun).toHaveBeenCalled();
-      expect(screen.getByRole('button', { name: 'Publish' })).toBeDisabled();
-      expect(screen.getByText('Binding')).toBeTruthy();
-      expect(
-        screen.getAllByTitle(/Binding candidate accepted for dispatch/).length,
-      ).toBeGreaterThan(0);
-      expect(
-        screen.queryByRole('button', { name: 'Refresh status' }),
-      ).toBeNull();
-    });
+      await waitFor(() => {
+        expect(studioApi.getMemberBindingRun).toHaveBeenCalledTimes(1);
+        expect(screen.getByRole('button', { name: 'Publish' })).toBeDisabled();
+        expect(screen.getByText('Binding')).toBeTruthy();
+        expect(
+          screen.getAllByTitle(/Binding candidate accepted for dispatch/)
+            .length,
+        ).toBeGreaterThan(0);
+        expect(
+          screen.queryByRole('button', { name: 'Refresh status' }),
+        ).toBeNull();
+      });
 
-    await waitFor(
-      () => {
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(900);
+        await flushAsyncWork();
+      });
+      await waitFor(() => {
         expect(studioApi.getMemberBindingRun).toHaveBeenCalledTimes(2);
         expect(screen.getByRole('button', { name: 'Publish' })).toBeDisabled();
-      },
-      { timeout: 2_000 },
-    );
-    await waitFor(() => {
-      expect(
-        screen.queryByRole('button', { name: 'Refresh status' }),
-      ).toBeNull();
-    });
+        expect(
+          screen.queryByRole('button', { name: 'Refresh status' }),
+        ).toBeNull();
+      });
 
-    await waitFor(
-      () => {
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(900);
+        await flushAsyncWork();
+      });
+      await waitFor(() => {
         expect(studioApi.getMemberBindingRun).toHaveBeenCalledTimes(3);
         expect(screen.getByText('Error')).toBeTruthy();
         expect(screen.getByTitle(/Bad Gateway/)).toBeTruthy();
-      },
-      { timeout: 2_000 },
-    );
-    expect(screen.queryByText('Binding')).toBeNull();
-    expect(
-      screen.getByRole('button', { name: 'Refresh status' }),
-    ).toBeEnabled();
+      });
+      expect(screen.queryByText('Binding')).toBeNull();
+      expect(
+        screen.getByRole('button', { name: 'Refresh status' }),
+      ).toBeEnabled();
+    } finally {
+      await act(async () => {
+        jest.runOnlyPendingTimers();
+        await flushAsyncWork();
+      });
+      jest.useRealTimers();
+    }
   });
 
   it('blocks duplicate publish for an already published workflow member without surfacing refresh status', async () => {

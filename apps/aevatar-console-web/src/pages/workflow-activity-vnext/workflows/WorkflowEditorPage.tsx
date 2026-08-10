@@ -7,9 +7,11 @@ import {
   RocketOutlined,
   SaveOutlined,
 } from '@ant-design/icons';
+import { useQuery } from '@tanstack/react-query';
 import { Alert, Button, Input, Modal, Segmented, Space, Tooltip } from 'antd';
 import React from 'react';
 import WorkflowStudioEditorSurface from '@/pages/team-member-workflow-studio/components/WorkflowStudioEditorSurface';
+import { scopesApi } from '@/shared/api/scopesApi';
 import { formatUtcDateTime } from '@/shared/datetime/dateTime';
 import { t } from '@/shared/i18n/messages';
 import { getLocationSnapshot, history } from '@/shared/navigation/history';
@@ -22,7 +24,10 @@ import {
   isRunStatusTerminal,
 } from '../activity/runPresentation';
 import { useConsoleLocation } from '../hooks/useConsoleLocation';
-import { useWorkflowEditor } from '../hooks/useWorkflowEditor';
+import {
+  useWorkflowEditor,
+  type WorkflowPublishedInvocationTarget,
+} from '../hooks/useWorkflowEditor';
 import {
   useWorkflowPublication,
   type WorkflowPublicationReceipt,
@@ -66,6 +71,31 @@ function hasNonBlankIdentifier(value: unknown): value is string {
   return typeof value === 'string' && Boolean(value.trim());
 }
 
+function restorePublishedInvocationTarget(
+  scopeId: string,
+  workflowId: string,
+  detail: Awaited<ReturnType<typeof scopesApi.getWorkflowDetail>> | undefined,
+): WorkflowPublishedInvocationTarget | null {
+  const published = detail?.workflow;
+  if (
+    detail?.available !== true ||
+    detail.scopeId !== scopeId ||
+    !published ||
+    published.scopeId !== scopeId ||
+    published.workflowId !== workflowId ||
+    !hasNonBlankIdentifier(published.activeRevisionId) ||
+    !hasNonBlankIdentifier(published.publishedServiceId)
+  ) {
+    return null;
+  }
+
+  return {
+    publishedServiceId: published.publishedServiceId,
+    revisionId: published.activeRevisionId,
+    workflowId: published.workflowId,
+  };
+}
+
 const WorkflowEditorPage: React.FC<{
   readonly scopeId: string;
   readonly workflowId: string;
@@ -82,6 +112,16 @@ const WorkflowEditorPage: React.FC<{
   const activeScopeId = activeEditorRoute.scopeId;
   const activeWorkflowId = activeEditorRoute.workflowId;
   const editor = useWorkflowEditor(activeScopeId, activeWorkflowId);
+  const restoredPublication = useQuery({
+    queryKey: [
+      'workflow-activity-vnext',
+      'workflow-publication-current',
+      activeScopeId,
+      activeWorkflowId,
+    ],
+    queryFn: () => scopesApi.getWorkflowDetail(activeScopeId, activeWorkflowId),
+    retry: false,
+  });
   const toast = useConsoleToast();
   const [mode, setMode] = React.useState<'canvas' | 'yaml'>('canvas');
   const [nodeLibraryOpen, setNodeLibraryOpen] = React.useState(false);
@@ -178,15 +218,14 @@ const WorkflowEditorPage: React.FC<{
     else toast.error(toastMessage, { key: toastKey });
   }, [publication.phase, publicationReceipt, publicationStage, toast]);
   const publicationObserved = publication.phase === 'observed';
-  const publicationStale = Boolean(
-    publicationReceipt &&
-      publishedDocumentVersion !== null &&
-      publishedDocumentVersion !== editor.documentVersion,
+  const restoredPublishedInvocationTarget = restorePublishedInvocationTarget(
+    activeScopeId,
+    activeWorkflowId,
+    restoredPublication.data,
   );
-  const publishedInvocationTarget =
+  const observedPublishedInvocationTarget =
     publicationReceipt &&
     publicationObserved &&
-    !publicationStale &&
     hasNonBlankIdentifier(publication.publishedServiceId)
       ? {
           publishedServiceId: publication.publishedServiceId,
@@ -194,6 +233,21 @@ const WorkflowEditorPage: React.FC<{
           workflowId: publicationReceipt.workflowId,
         }
       : null;
+  const publishedTargetDocumentVersion = publicationReceipt
+    ? publishedDocumentVersion
+    : restoredPublishedInvocationTarget
+      ? 0
+      : null;
+  const publicationStale = Boolean(
+    publishedTargetDocumentVersion !== null &&
+      publishedTargetDocumentVersion !== editor.documentVersion,
+  );
+  const publishedInvocationTarget =
+    !publicationStale && publicationReceipt
+      ? observedPublishedInvocationTarget
+      : !publicationStale && publicationStage !== 'submitting'
+        ? restoredPublishedInvocationTarget
+        : null;
   const canOpenPublishedRun = Boolean(
     publishedInvocationTarget &&
       editor.canRun &&
@@ -713,7 +767,7 @@ const WorkflowEditorPage: React.FC<{
       ),
     });
   }
-  const publicationCurrent = publicationObserved && !publicationStale;
+  const publicationCurrent = Boolean(publishedInvocationTarget);
   const canPublish = publishReadinessIssues.length === 0 && !publicationCurrent;
   const publishLabel = publicationActionPending
     ? t('workflowActivityVNext.publish.publishing', 'Publishing')
@@ -729,42 +783,41 @@ const WorkflowEditorPage: React.FC<{
             { count: publishReadinessIssues.length },
           )
       : t('workflowActivityVNext.editor.publish', 'Publish');
+  const publishedTargetResolving =
+    publicationReceipt !== null ||
+    publicationStage === 'submitting' ||
+    restoredPublication.isPending;
   const runDisabledReason = publicationStale
     ? t(
         'workflowActivityVNext.editor.publishLatestBeforeRun',
         'Save and publish the latest changes before running.',
       )
-    : !publicationReceipt
-      ? t(
-          'workflowActivityVNext.editor.publishBeforeRun',
-          'Publish this workflow before running it.',
-        )
-      : !publicationObserved
+    : !publishedInvocationTarget
+      ? publishedTargetResolving
         ? t(
             'workflowActivityVNext.editor.waitForPublishedRun',
             'Wait for the published revision to become available.',
           )
-        : !publishedInvocationTarget
+        : t(
+            'workflowActivityVNext.editor.publishBeforeRun',
+            'Publish this workflow before running it.',
+          )
+      : editor.dirty || hasUnappliedNodeChanges
+        ? t(
+            'workflowActivityVNext.editor.publishLatestBeforeRun',
+            'Save and publish the latest changes before running.',
+          )
+        : !editor.canRun
           ? t(
-              'workflowActivityVNext.editor.waitForPublishedRun',
-              'Wait for the published revision to become available.',
+              'workflowActivityVNext.editor.runUnavailable',
+              'Add at least one valid step before running.',
             )
-          : editor.dirty || hasUnappliedNodeChanges
+          : editorWriteLocked
             ? t(
-                'workflowActivityVNext.editor.publishLatestBeforeRun',
-                'Save and publish the latest changes before running.',
+                'workflowActivityVNext.editor.waitForEditorBeforeRun',
+                'Wait for the workflow update to finish.',
               )
-            : !editor.canRun
-              ? t(
-                  'workflowActivityVNext.editor.runUnavailable',
-                  'Add at least one valid step before running.',
-                )
-              : editorWriteLocked
-                ? t(
-                    'workflowActivityVNext.editor.waitForEditorBeforeRun',
-                    'Wait for the workflow update to finish.',
-                  )
-                : undefined;
+            : undefined;
   const saveStatus = editor.validating
     ? t('workflowActivityVNext.editor.validating', 'Validating workflow…')
     : editor.saving || editor.receiptPending
