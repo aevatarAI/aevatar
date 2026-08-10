@@ -94,6 +94,8 @@ public sealed class WorkflowExecutionContextAdapterTests
             runOrigin: null,
             scheduleId: null,
             workflowId: null,
+            revisionId: null,
+            definitionVersion: 0,
             capabilityAdmissionPlan: null,
             expectedExecutionMode: ExternalCapabilityExecutionMode.Interactive);
         var adapter = WorkflowExecutionContextAdapter.Create(new RecordingEventHandlerContext(), stateHost);
@@ -154,6 +156,25 @@ public sealed class WorkflowExecutionContextAdapterTests
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*different definition or identity*");
         agent.State.ExpectedExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Interactive);
+        runtime.Links.Should().HaveCount(linksBeforeConflict);
+    }
+
+    [Fact]
+    public async Task EnsureWorkflowRunDefinition_WhenRevisionFactsChange_ShouldRejectAndPreserveFirstBinding()
+    {
+        var (agent, runtime) = CreateBareWorkflowRunAgent("work-order-run-1");
+        await agent.HandleEnsureWorkflowRunDefinitionAsync(BuildEnsureWorkflowRunDefinition());
+        var linksBeforeConflict = runtime.Links.Count;
+        var conflicting = BuildEnsureWorkflowRunDefinition();
+        conflicting.Binding.RevisionId = "rev-beta";
+        conflicting.Binding.DefinitionVersion = 8;
+
+        var act = () => agent.HandleEnsureWorkflowRunDefinitionAsync(conflicting);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*different definition or identity*");
+        agent.State.RevisionId.Should().Be("rev-alpha");
+        agent.State.DefinitionVersion.Should().Be(7);
         runtime.Links.Should().HaveCount(linksBeforeConflict);
     }
 
@@ -734,6 +755,8 @@ public sealed class WorkflowExecutionContextAdapterTests
                 RunId = "work-order-run-1",
                 ScopeId = "scope-1",
                 RunOrigin = WorkflowRunOrigins.WorkOrder,
+                RevisionId = "rev-alpha",
+                DefinitionVersion = 7,
                 ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
             },
         };

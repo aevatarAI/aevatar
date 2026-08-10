@@ -274,8 +274,8 @@ public sealed class WorkflowForkRunCommandDispatchTests
         binding.WorkflowYaml.Should().Be(editedYaml);
         binding.ScopeId.Should().Be("scope-1");
         binding.InlineWorkflowYamls.Should().Contain("child", childYaml);
-        binding.RevisionId.Should().Be("rev-source");
-        binding.DefinitionVersion.Should().Be(23);
+        binding.RevisionId.Should().BeEmpty();
+        binding.DefinitionVersion.Should().Be(0);
 
         dispatchPort.Dispatches.Should().ContainSingle();
         dispatchPort.Dispatches.Single().ActorId.Should().Be("run-created");
@@ -297,6 +297,39 @@ public sealed class WorkflowForkRunCommandDispatchTests
         request.ForkSeed.Variables.Should().Contain("step-a", "alpha");
         request.ForkSeed.Variables.Should().Contain("topic", "seed-topic");
         request.ForkSeed.Variables.Should().Contain("input", "override-input");
+    }
+
+    [Fact]
+    public async Task ResolveAsync_WhenForkUsesSourceArtifacts_ShouldPreserveRevisionFacts()
+    {
+        var sourceYaml = WorkflowYaml("source");
+        var sourceSubYamls = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["source-child"] = WorkflowYaml("source-child"),
+        };
+        var seedPort = new RecordingSeedQueryPort
+        {
+            View = CreateSeedView(
+                "completed",
+                workflowYaml: sourceYaml,
+                inlineWorkflowYamls: sourceSubYamls,
+                revisionId: "rev-source",
+                definitionVersion: 23),
+        };
+        var runPort = new RecordingRunProvisioningPort();
+        var resolver = CreateResolver(seedPort, runPort);
+
+        var result = await resolver.ResolveAsync(new WorkflowForkRunCommand(
+            SourceRunId: "source-run",
+            StartAtStepId: "step-b",
+            InlineYaml: sourceYaml,
+            InlineSubYamls: sourceSubYamls));
+
+        result.Succeeded.Should().BeTrue();
+        runPort.CreateRunBindings.Should().ContainSingle();
+        var binding = runPort.CreateRunBindings.Single();
+        binding.RevisionId.Should().Be("rev-source");
+        binding.DefinitionVersion.Should().Be(23);
     }
 
     [Fact]
