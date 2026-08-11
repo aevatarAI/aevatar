@@ -772,6 +772,7 @@ public sealed class MainnetHostCompositionTests
             typeof(WebSearchAgentToolSource),
             typeof(AskUserAgentToolSource),
             typeof(ConditionEvaluateAgentToolSource),
+            typeof(DomainEvidenceAgentToolSource),
             typeof(SkillsAgentToolSource),
             typeof(OrnnSearchAgentToolSource),
             typeof(StartWorkflowToolSource),
@@ -818,6 +819,7 @@ public sealed class MainnetHostCompositionTests
             typeof(WebSearchAgentToolSource),
             typeof(AskUserAgentToolSource),
             typeof(ConditionEvaluateAgentToolSource),
+            typeof(DomainEvidenceAgentToolSource),
             typeof(SkillsAgentToolSource),
             typeof(OrnnSearchAgentToolSource),
             typeof(StartWorkflowToolSource),
@@ -850,6 +852,14 @@ public sealed class MainnetHostCompositionTests
         var conditionTool = nyxIdChatConditionTools.Should().ContainSingle().Which;
         conditionTool.Name.Should().Be("condition_evaluate");
         conditionTool.IsReadOnly.Should().BeTrue();
+        var domainEvidenceTools = await nyxIdChatProfile.Sources
+            .OfType<DomainEvidenceAgentToolSource>()
+            .Single()
+            .DiscoverToolsAsync();
+        domainEvidenceTools.Select(static tool => tool.Name).Should().Equal(
+            "reimbursement_evidence_commit",
+            "candidate_screening_evidence_commit");
+        domainEvidenceTools.Should().OnlyContain(static tool => tool.IsReadOnly);
         var nyxIdChatOrnnTools = await nyxIdChatProfile.Sources
             .OfType<OrnnSearchAgentToolSource>()
             .Single()

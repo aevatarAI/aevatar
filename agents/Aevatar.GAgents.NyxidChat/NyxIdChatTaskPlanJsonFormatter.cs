@@ -73,7 +73,9 @@ internal static class NyxIdChatTaskPlanJsonFormatter
             "observedValue" or
             "suggestedValue" or
             "minimumValue" or
-            "maximumValue";
+            "maximumValue" or
+            "minorUnits" or
+            "threshold";
 
     private static void NormalizeNyxIdEnumValues(JsonNode node)
     {

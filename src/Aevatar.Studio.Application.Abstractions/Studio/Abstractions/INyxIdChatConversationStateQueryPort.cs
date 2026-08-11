@@ -164,7 +164,86 @@ public sealed record NyxIdChatConversationTaskSnapshot(
     string? Title = null,
     NyxIdChatConversationPlanGateSnapshot? Gate = null,
     IReadOnlyList<NyxIdChatConversationPlanRevisionSnapshot>? PlanRevisions = null,
-    int PlanRevisionHistoryStart = 0);
+    int PlanRevisionHistoryStart = 0,
+    NyxIdChatTaskDomainSnapshot? Domain = null,
+    NyxIdChatVerifiedArtifactSnapshot? Artifact = null);
+
+public sealed record NyxIdChatMoneyValueSnapshot(
+    string CurrencyCode,
+    long MinorUnits,
+    uint FractionDigits);
+
+public sealed record NyxIdChatInvoiceEvidenceSnapshot(
+    int SourceOrdinal,
+    string Vendor,
+    string InvoiceNumber,
+    string InvoiceDate,
+    NyxIdChatMoneyValueSnapshot Amount);
+
+public sealed record NyxIdChatInvoiceDuplicateEvidenceSnapshot(
+    int DuplicateSourceOrdinal,
+    int RetainedSourceOrdinal);
+
+public sealed record NyxIdChatReimbursementEvidenceSnapshot(
+    string EvidenceId,
+    string SourceInputRequestId,
+    string ExpenseCategory,
+    string CostCenter,
+    string ReimbursementCurrencyInstruction,
+    IReadOnlyList<NyxIdChatInvoiceEvidenceSnapshot> SourceInvoices,
+    IReadOnlyList<int> RetainedSourceOrdinals,
+    IReadOnlyList<NyxIdChatInvoiceDuplicateEvidenceSnapshot> DuplicateInvoices,
+    DateTimeOffset? CommittedAt,
+    string GuardedToolName);
+
+public sealed record NyxIdChatCandidateRubricCriterionSnapshot(
+    string CriterionId,
+    string Title,
+    int MaximumPoints);
+
+public sealed record NyxIdChatCandidateCriterionScoreSnapshot(
+    string CriterionId,
+    int AwardedPoints,
+    string Evidence);
+
+public sealed record NyxIdChatCandidateScreeningEvidenceSnapshot(
+    string EvidenceId,
+    string SourceInputRequestId,
+    string CandidateName,
+    string RoleTitle,
+    IReadOnlyList<NyxIdChatCandidateRubricCriterionSnapshot> Rubric,
+    IReadOnlyList<NyxIdChatCandidateCriterionScoreSnapshot> Scores,
+    int TotalScore,
+    string TrackerTable,
+    string TrackerTableId,
+    string Stage,
+    string GuardedToolName,
+    DateTimeOffset? CommittedAt);
+
+public sealed record NyxIdChatTaskDomainSnapshot(
+    NyxIdChatReimbursementEvidenceSnapshot? Reimbursement,
+    NyxIdChatCandidateScreeningEvidenceSnapshot? CandidateScreening);
+
+public sealed record NyxIdChatReimbursementArtifactSnapshot(
+    string ProviderInstanceId,
+    string CostCenter,
+    int RetainedItemCount,
+    int DuplicateItemCount);
+
+public sealed record NyxIdChatCandidateTrackerArtifactSnapshot(
+    string ProviderRecordId,
+    string CandidateName,
+    int Score,
+    long Threshold,
+    string TrackerTable,
+    string TrackerTableId,
+    string Stage);
+
+public sealed record NyxIdChatVerifiedArtifactSnapshot(
+    string CheckName,
+    DateTimeOffset? VerifiedAt,
+    NyxIdChatReimbursementArtifactSnapshot? Reimbursement,
+    NyxIdChatCandidateTrackerArtifactSnapshot? CandidateTracker);
 
 public sealed record NyxIdChatConversationPlanRevisionSnapshot(
     int PlanRevision,

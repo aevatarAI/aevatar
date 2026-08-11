@@ -13,6 +13,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading.Channels;
 
 namespace Aevatar.GAgents.NyxidChat;
@@ -487,6 +488,9 @@ public sealed class NyxIdChatTurnOperationExecutor
                     .ConfigureAwait(false),
             NyxIdChatOperationDispatchCommand.InputOneofCase.ConditionContinuation =>
                 await ExecuteConditionContinuationAsync(command, session, reportProgressAsync, ct)
+                    .ConfigureAwait(false),
+            NyxIdChatOperationDispatchCommand.InputOneofCase.DomainContinuation =>
+                await ExecuteDomainContinuationAsync(command, session, reportProgressAsync, ct)
                     .ConfigureAwait(false),
             NyxIdChatOperationDispatchCommand.InputOneofCase.ToolApprovalContinuation =>
                 await ExecuteToolApprovalContinuationAsync(command, session, reportProgressAsync, ct)
@@ -1202,6 +1206,109 @@ public sealed class NyxIdChatTurnOperationExecutor
             .ConfigureAwait(false);
     }
 
+    private async Task<NyxIdChatTurnOperationExecution> ExecuteDomainContinuationAsync(
+        NyxIdChatOperationDispatchCommand command,
+        NyxIdChatTransientExecutionSession session,
+        Func<NyxIdChatOperationProgressSignal, CancellationToken, Task> reportProgressAsync,
+        CancellationToken ct)
+    {
+        var continuation = command.DomainContinuation;
+        var pending = session.StepState?.PendingToolCalls.Count == 1
+            ? session.StepState.PendingToolCalls[0]
+            : null;
+        if (continuation is null ||
+            continuation.EvidenceCase ==
+                NyxIdChatDomainContinuationInput.EvidenceOneofCase.None ||
+            session.Request is null ||
+            pending is null ||
+            !string.Equals(pending.Id, continuation.ToolCallId, StringComparison.Ordinal) ||
+            !MatchesDomainEvidenceProposal(pending, continuation))
+        {
+            return Failure(
+                command.Key,
+                ToolCapabilityLostCode,
+                ToolCapabilityLostMessage,
+                NyxIdChatEffectEvidence.NotStarted);
+        }
+
+        var evidence = continuation.EvidenceCase switch
+        {
+            NyxIdChatDomainContinuationInput.EvidenceOneofCase.Reimbursement =>
+                JsonNode.Parse(JsonFormatter.Default.Format(continuation.Reimbursement)),
+            NyxIdChatDomainContinuationInput.EvidenceOneofCase.CandidateScreening =>
+                JsonNode.Parse(JsonFormatter.Default.Format(continuation.CandidateScreening)),
+            _ => null,
+        };
+        var resultJson = new JsonObject
+        {
+            ["type"] = "domain_evidence_committed",
+            ["evidence"] = evidence,
+        }.ToJsonString();
+        var result = new AgentRunToolStepResult { AdvanceRound = true };
+        result.ResultMessages.Add(AgentRunReplyStepMappers.ToProto(
+            ToolCallLoop.BuildToolResultMessage(
+                continuation.ToolCallId,
+                pending.Name,
+                resultJson)));
+        session.StepState = ApplyToolFacts(
+            session.StepState!,
+            result,
+            checked(session.StepState!.NextStepIndex + 1));
+        ClearAuthorization(session);
+
+        return await ExecuteLlmAsync(
+                new NyxIdChatOperationDispatchCommand
+                {
+                    Key = command.Key.Clone(),
+                    Llm = new NyxIdChatLLMOperationInput { ContinueSession = true },
+                },
+                session,
+                reportProgressAsync,
+                ct)
+            .ConfigureAwait(false);
+    }
+
+    private static bool MatchesDomainEvidenceProposal(
+        AgentRunToolCall pending,
+        NyxIdChatDomainContinuationInput continuation)
+    {
+        switch (continuation.EvidenceCase)
+        {
+            case NyxIdChatDomainContinuationInput.EvidenceOneofCase.Reimbursement:
+                if (!string.Equals(
+                        pending.Name,
+                        NyxIdChatDomainEvidenceContract.ReimbursementToolName,
+                        StringComparison.Ordinal) ||
+                    !NyxIdChatDomainEvidenceContract.TryParseReimbursement(
+                        pending.ArgumentsJson,
+                        out var reimbursement))
+                {
+                    return false;
+                }
+                var committedReimbursement = continuation.Reimbursement.Clone();
+                committedReimbursement.EvidenceId = string.Empty;
+                committedReimbursement.CommittedAt = null;
+                return committedReimbursement.Equals(reimbursement);
+            case NyxIdChatDomainContinuationInput.EvidenceOneofCase.CandidateScreening:
+                if (!string.Equals(
+                        pending.Name,
+                        NyxIdChatDomainEvidenceContract.CandidateScreeningToolName,
+                        StringComparison.Ordinal) ||
+                    !NyxIdChatDomainEvidenceContract.TryParseCandidateScreening(
+                        pending.ArgumentsJson,
+                        out var candidate))
+                {
+                    return false;
+                }
+                var committedCandidate = continuation.CandidateScreening.Clone();
+                committedCandidate.EvidenceId = string.Empty;
+                committedCandidate.CommittedAt = null;
+                return committedCandidate.Equals(candidate);
+            default:
+                return false;
+        }
+    }
+
     private static bool MatchesConditionProposal(
         NyxIdChatNumericConditionState condition,
         NyxIdChatConditionProposal proposal)
@@ -1214,6 +1321,10 @@ public sealed class NyxIdChatTurnOperationExecutor
                 (NyxIdChatThresholdOrigin.Suggested or NyxIdChatThresholdOrigin.UserOverride) ||
             condition.EvaluatedAt is null ||
             !string.Equals(condition.SourceInputRequestId, proposal.SourceInputRequestId,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                condition.SourceEvidenceId,
+                proposal.SourceEvidenceId ?? string.Empty,
                 StringComparison.Ordinal) ||
             condition.ObservedValue != proposal.ObservedValue ||
             !string.Equals(condition.GuardedToolName, proposal.GuardedToolName,

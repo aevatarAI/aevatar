@@ -597,6 +597,7 @@ public static class MainnetHostBuilderExtensions
                     CreateToolSource<WebSearchAgentToolSource>,
                     CreateToolSource<AskUserAgentToolSource>,
                     CreateToolSource<ConditionEvaluateAgentToolSource>,
+                    CreateToolSource<DomainEvidenceAgentToolSource>,
                     CreateToolSource<SkillsAgentToolSource>,
                     CreateToolSource<OrnnSearchAgentToolSource>,
                     CreateToolSource<StartWorkflowToolSource>,
