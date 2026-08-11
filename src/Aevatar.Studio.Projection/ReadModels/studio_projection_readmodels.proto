@@ -213,6 +213,39 @@ message WorkflowExecutionBoardSummaryReadModel {
   optional int32 definition_step_count = 5;
 }
 
+// Materialized source fact for the scope workflow catalogue. A single query
+// reads this document family only; source_kind distinguishes draft and
+// committed/member facts without exposing the original source read models to
+// the request path.
+message ScopeWorkflowCatalogueSourceDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at = 5;
+
+  string scope_id = 20;
+  string workflow_id = 21;
+  string source_kind = 22;
+  string name = 23;
+  string description = 24;
+  google.protobuf.Timestamp source_updated_at_utc_value = 25;
+
+  string service_key = 30;
+  string workflow_name = 31;
+  string committed_actor_id = 32;
+  string active_revision_id = 33;
+  string deployment_id = 34;
+  string deployment_status = 35;
+  string service_app_id = 36;
+  string service_namespace = 37;
+  string published_service_id = 38;
+
+  string team_id = 40;
+  string member_id = 41;
+  string last_bound_revision_id = 42;
+}
+
 // ─── UserConfig Current State ReadModel ───
 
 message UserConfigCurrentStateDocument {

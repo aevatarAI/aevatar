@@ -69,14 +69,16 @@ Contract:
 
 - `view=all` returns the deduplicated scope catalogue keyed by exact `workflowId`, preserving `hasDraftSource` and `hasCommittedSource` when both source read models contain the same workflow ID.
 - `view=drafts` returns only rows with an authoritative draft source, while still returning committed-source facts and capabilities when the same `workflowId` also has a committed workflow.
-- The backend applies scope authorization, view filtering, search, deterministic ordering, and cursor pagination in that order. Clients must not join draft/committed lists or filter an unbounded catalogue in memory.
+- The backend applies scope authorization, then reads the materialized `ScopeWorkflowCatalogueSourceDocument` query model family. Projection writes draft and committed/member source facts into this one catalogue model; the request path must not read Studio workspace drafts, Studio members, service catalogues, deployment catalogues, workflow actor bindings, event store, or write-model state to reconstruct catalogue rows.
+- View filtering, search, deterministic ordering, and cursor pagination are owned by the catalogue query port in that order. Clients must not join draft/committed lists or filter an unbounded catalogue in memory.
 - Deterministic ordering is `updatedAtUtc DESC`, then `workflowId ASC` using ordinal comparison. `nextPageToken` is an opaque cursor token returned by the previous response.
 - Search trims and normalizes the query with Unicode FormKC. Empty, omitted, or whitespace-only `query` values are equivalent to no search filter and do not create a separate freshness domain.
 - Searchable fields are `name`, `description`, and `workflowId`. `name` and `description` use ordinal case-insensitive substring matching; `workflowId` supports exact or prefix matching only. Chinese and English text are both matched after the same normalization.
 - Query length after trimming/normalization is capped by the response `search.maximumQueryLength`; invalid cursor or overlong query returns `400`.
 - Rows expose typed capabilities for `open`, `activity`, `rename`, and `delete`. Unavailable actions carry a typed unavailable reason instead of requiring the client to infer from sources.
-- Rows keep `workflowId`, committed `actorId`, deployment/service IDs, and other identities separate. `workflowId` must not be reused as `memberId` or `publishedServiceId`.
-- `freshness.refreshWatermarkUtc` is the maximum source `UpdatedAt` observed from the materialized draft workspace and committed workflow read models used by the query. It is a refresh watermark, not a synthetic local `StateVersion++`.
+- Rows expose Team/Member mapping facts as typed optional fields: `teamId`, `memberId`, `publishedServiceId`, and `lastBoundRevisionId`. These are product identity fields, not aliases for workflow or deployment identity.
+- Rows keep `workflowId`, `memberId`, `publishedServiceId`, committed `actorId`, deployment/service IDs, and other identities separate. `workflowId` must not be reused as `memberId` or `publishedServiceId`.
+- `freshness.refreshWatermarkUtc` is the maximum authoritative source `UpdatedAt` materialized into the workflow catalogue query model. It is a refresh watermark, not a synthetic local `StateVersion++`.
 
 ## Scope workflow archive command
 

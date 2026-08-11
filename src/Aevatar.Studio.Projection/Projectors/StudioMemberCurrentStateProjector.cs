@@ -23,13 +23,19 @@ public sealed class StudioMemberCurrentStateProjector
     : ICurrentStateProjectionMaterializer<StudioMaterializationContext>
 {
     private readonly IProjectionWriteDispatcher<StudioMemberCurrentStateDocument> _writeDispatcher;
+    private readonly IProjectionWriteDispatcher<ScopeWorkflowCatalogueSourceDocument> _catalogueWriteDispatcher;
+    private readonly IProjectionDocumentReader<ScopeWorkflowCatalogueSourceDocument, string> _catalogueDocumentReader;
     private readonly IProjectionClock _clock;
 
     public StudioMemberCurrentStateProjector(
         IProjectionWriteDispatcher<StudioMemberCurrentStateDocument> writeDispatcher,
+        IProjectionWriteDispatcher<ScopeWorkflowCatalogueSourceDocument> catalogueWriteDispatcher,
+        IProjectionDocumentReader<ScopeWorkflowCatalogueSourceDocument, string> catalogueDocumentReader,
         IProjectionClock clock)
     {
         _writeDispatcher = writeDispatcher ?? throw new ArgumentNullException(nameof(writeDispatcher));
+        _catalogueWriteDispatcher = catalogueWriteDispatcher ?? throw new ArgumentNullException(nameof(catalogueWriteDispatcher));
+        _catalogueDocumentReader = catalogueDocumentReader ?? throw new ArgumentNullException(nameof(catalogueDocumentReader));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
     }
 
@@ -56,14 +62,14 @@ public sealed class StudioMemberCurrentStateProjector
 
         if (state.Deleted)
         {
-            await _writeDispatcher.DeleteAsync(
-                new ProjectionDocumentDeleteMarker(
-                    context.RootActorId,
-                    context.RootActorId,
-                    stateEvent.Version,
-                    stateEvent.EventId ?? string.Empty,
-                    updatedAt),
-                ct);
+            var deleteMarker = new ProjectionDocumentDeleteMarker(
+                context.RootActorId,
+                context.RootActorId,
+                stateEvent.Version,
+                stateEvent.EventId ?? string.Empty,
+                updatedAt);
+            await _writeDispatcher.DeleteAsync(deleteMarker, ct);
+            await DeleteCatalogueCommittedSourcesAsync(context.RootActorId, stateEvent.Version, stateEvent.EventId ?? string.Empty, updatedAt, ct);
             return;
         }
 
@@ -98,7 +104,143 @@ public sealed class StudioMemberCurrentStateProjector
         }
 
         await _writeDispatcher.UpsertAsync(document, ct);
+        await MaterializeCatalogueCommittedSourceAsync(context.RootActorId, state, stateEvent.Version, stateEvent.EventId ?? string.Empty, updatedAt, ct);
     }
+
+    private async Task MaterializeCatalogueCommittedSourceAsync(
+        string actorId,
+        StudioMemberState state,
+        long stateVersion,
+        string eventId,
+        DateTimeOffset updatedAt,
+        CancellationToken ct)
+    {
+        var workflowId = state.ImplementationRef?.Workflow?.WorkflowId?.Trim() ?? string.Empty;
+        if (workflowId.Length == 0)
+        {
+            await DeleteCatalogueCommittedSourcesAsync(actorId, stateVersion, eventId, updatedAt, ct);
+            return;
+        }
+
+        var currentId = BuildCatalogueSourceDocumentId(
+            state.ScopeId,
+            workflowId,
+            ScopeWorkflowCatalogueSourceDocument.CommittedSourceKind,
+            state.MemberId);
+        var existingSources = await QueryCatalogueCommittedSourcesByActorAsync(actorId, ct);
+        foreach (var existing in existingSources)
+        {
+            if (string.Equals(existing.Id, currentId, StringComparison.Ordinal))
+                continue;
+
+            await DeleteCatalogueSourceAsync(existing.Id, actorId, stateVersion, eventId, updatedAt, ct);
+        }
+
+        await _catalogueWriteDispatcher.UpsertAsync(
+            ToCatalogueCommittedSource(currentId, actorId, state, workflowId, stateVersion, eventId, updatedAt),
+            ct);
+    }
+
+    private async Task DeleteCatalogueCommittedSourcesAsync(
+        string actorId,
+        long stateVersion,
+        string eventId,
+        DateTimeOffset updatedAt,
+        CancellationToken ct)
+    {
+        var existingSources = await QueryCatalogueCommittedSourcesByActorAsync(actorId, ct);
+        foreach (var existing in existingSources)
+            await DeleteCatalogueSourceAsync(existing.Id, actorId, stateVersion, eventId, updatedAt, ct);
+    }
+
+    private async Task<IReadOnlyList<ScopeWorkflowCatalogueSourceDocument>> QueryCatalogueCommittedSourcesByActorAsync(
+        string actorId,
+        CancellationToken ct)
+    {
+        var result = await _catalogueDocumentReader.QueryAsync(
+            new ProjectionDocumentQuery
+            {
+                Take = 10_000,
+                Filters =
+                [
+                    new ProjectionDocumentFilter
+                    {
+                        FieldPath = nameof(ScopeWorkflowCatalogueSourceDocument.ActorId),
+                        Operator = ProjectionDocumentFilterOperator.Eq,
+                        Value = ProjectionDocumentValue.FromString(actorId),
+                    },
+                    new ProjectionDocumentFilter
+                    {
+                        FieldPath = nameof(ScopeWorkflowCatalogueSourceDocument.SourceKind),
+                        Operator = ProjectionDocumentFilterOperator.Eq,
+                        Value = ProjectionDocumentValue.FromString(ScopeWorkflowCatalogueSourceDocument.CommittedSourceKind),
+                    },
+                ],
+            },
+            ct);
+        return result.Items;
+    }
+
+    private async Task DeleteCatalogueSourceAsync(
+        string documentId,
+        string actorId,
+        long stateVersion,
+        string eventId,
+        DateTimeOffset updatedAt,
+        CancellationToken ct) =>
+        await _catalogueWriteDispatcher.DeleteAsync(
+            new ProjectionDocumentDeleteMarker(documentId, actorId, stateVersion, eventId, updatedAt),
+            ct);
+
+    private static ScopeWorkflowCatalogueSourceDocument ToCatalogueCommittedSource(
+        string documentId,
+        string actorId,
+        StudioMemberState state,
+        string workflowId,
+        long stateVersion,
+        string eventId,
+        DateTimeOffset updatedAt)
+    {
+        var publishedServiceId = !string.IsNullOrWhiteSpace(state.LastBinding?.PublishedServiceId)
+            ? state.LastBinding.PublishedServiceId.Trim()
+            : state.PublishedServiceId?.Trim() ?? string.Empty;
+        var revisionId = !string.IsNullOrWhiteSpace(state.LastBinding?.RevisionId)
+            ? state.LastBinding.RevisionId.Trim()
+            : state.ImplementationRef?.Workflow?.WorkflowRevision?.Trim() ?? string.Empty;
+
+        var document = new ScopeWorkflowCatalogueSourceDocument
+        {
+            Id = documentId,
+            ActorId = actorId,
+            StateVersion = stateVersion,
+            LastEventId = eventId,
+            UpdatedAt = Timestamp.FromDateTimeOffset(updatedAt),
+            ScopeId = state.ScopeId,
+            WorkflowId = workflowId,
+            SourceKind = ScopeWorkflowCatalogueSourceDocument.CommittedSourceKind,
+            Name = state.DisplayName,
+            Description = state.Description,
+            SourceUpdatedAtUtc = updatedAt,
+            WorkflowName = state.DisplayName,
+            CommittedActorId = state.LastBinding?.ExpectedActorId ?? string.Empty,
+            ActiveRevisionId = revisionId,
+            PublishedServiceId = publishedServiceId,
+            MemberId = state.MemberId,
+            LastBoundRevisionId = revisionId,
+        };
+        if (!string.IsNullOrWhiteSpace(publishedServiceId))
+            document.ServiceKey = publishedServiceId;
+        if (state.HasTeamId)
+            document.TeamId = state.TeamId;
+        return document;
+    }
+
+    private static string BuildCatalogueSourceDocumentId(
+        string scopeId,
+        string workflowId,
+        string sourceKind,
+        string memberId) =>
+        $"{scopeId}:{workflowId}:{sourceKind}:{memberId}";
 
     private static void ApplyImplementationRef(
         StudioMemberCurrentStateDocument document,

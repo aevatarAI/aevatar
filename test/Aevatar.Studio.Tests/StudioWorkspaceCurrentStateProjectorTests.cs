@@ -2,6 +2,9 @@ using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Studio.Domain.Studio.Models;
+using IWorkflowYamlDocumentService = Aevatar.Studio.Application.Studio.Abstractions.IWorkflowYamlDocumentService;
+using WorkflowParseResult = Aevatar.Studio.Application.Studio.Abstractions.WorkflowParseResult;
 using Aevatar.Studio.Projection.Metadata;
 using Aevatar.Studio.Projection.Orchestration;
 using Aevatar.Studio.Projection.Projectors;
@@ -29,7 +32,7 @@ public sealed class StudioWorkspaceCurrentStateProjectorTests
     {
         var dispatcher = new RecordingWriteDispatcher();
         var clock = new FixedProjectionClock(DateTimeOffset.Parse("2026-05-19T08:00:00Z"));
-        var projector = new StudioWorkspaceCurrentStateProjector(dispatcher, clock);
+        var projector = CreateProjector(dispatcher, clock);
         var state = new StudioWorkspaceState
         {
             WorkspaceId = RootActorId,
@@ -69,9 +72,11 @@ public sealed class StudioWorkspaceCurrentStateProjectorTests
     public async Task ProjectAsync_ShouldStoreWorkspaceStateAsOpaqueJsonString_ForElasticsearch()
     {
         var dispatcher = new RecordingWriteDispatcher();
-        var projector = new StudioWorkspaceCurrentStateProjector(
+        var catalogueDispatcher = new RecordingCatalogueSourceDispatcher();
+        var projector = CreateProjector(
             dispatcher,
-            new FixedProjectionClock(DateTimeOffset.Parse("2026-05-19T08:00:00Z")));
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-05-19T08:00:00Z")),
+            catalogueDispatcher);
         var state = new StudioWorkspaceState
         {
             WorkspaceId = RootActorId,
@@ -121,6 +126,11 @@ public sealed class StudioWorkspaceCurrentStateProjectorTests
             DirectoryId = "dir-1",
             Version = 4,
         });
+        var catalogueSource = catalogueDispatcher.Upserts.Should().ContainSingle().Subject;
+        catalogueSource.ScopeId.Should().Be("scope-1");
+        catalogueSource.WorkflowId.Should().Be("wf-alpha");
+        catalogueSource.SourceKind.Should().Be(ScopeWorkflowCatalogueSourceDocument.DraftSourceKind);
+        catalogueSource.Name.Should().Be("workflow-alpha");
         StudioWorkspaceCurrentStateDocument.Descriptor.Fields.InDeclarationOrder()
             .Select(field => field.Name)
             .Should().NotContain("state_root");
@@ -180,7 +190,7 @@ public sealed class StudioWorkspaceCurrentStateProjectorTests
     public async Task ProjectAsync_ShouldNoOp_WhenEnvelopeIsUnrelatedOrInvalid()
     {
         var dispatcher = new RecordingWriteDispatcher();
-        var projector = new StudioWorkspaceCurrentStateProjector(
+        var projector = CreateProjector(
             dispatcher,
             new FixedProjectionClock(DateTimeOffset.UtcNow));
 
@@ -220,7 +230,7 @@ public sealed class StudioWorkspaceCurrentStateProjectorTests
     {
         var dispatcher = new RecordingWriteDispatcher();
         var clock = new FixedProjectionClock(DateTimeOffset.Parse("2026-05-19T12:00:00Z"));
-        var projector = new StudioWorkspaceCurrentStateProjector(dispatcher, clock);
+        var projector = CreateProjector(dispatcher, clock);
         var envelopeTimestamp = DateTimeOffset.Parse("2026-05-19T11:00:00Z");
 
         await projector.ProjectAsync(
@@ -236,6 +246,18 @@ public sealed class StudioWorkspaceCurrentStateProjectorTests
         dispatcher.Upserts.Should().ContainSingle();
         dispatcher.Upserts[0].UpdatedAt.ToDateTimeOffset().Should().Be(envelopeTimestamp);
     }
+
+    private static StudioWorkspaceCurrentStateProjector CreateProjector(
+        RecordingWriteDispatcher dispatcher,
+        IProjectionClock clock,
+        RecordingCatalogueSourceDispatcher? catalogueDispatcher = null,
+        StubCatalogueSourceReader? catalogueReader = null) =>
+        new(
+            dispatcher,
+            catalogueDispatcher ?? new RecordingCatalogueSourceDispatcher(),
+            catalogueReader ?? new StubCatalogueSourceReader(),
+            new StubWorkflowYamlDocumentService(),
+            clock);
 
     private static StudioMaterializationContext NewContext() => new()
     {
@@ -287,6 +309,78 @@ public sealed class StudioWorkspaceCurrentStateProjectorTests
 
         public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default) =>
             Task.FromResult(ProjectionWriteResult.Applied());
+    }
+
+    private sealed class RecordingCatalogueSourceDispatcher
+        : IProjectionWriteDispatcher<ScopeWorkflowCatalogueSourceDocument>
+    {
+        public List<ScopeWorkflowCatalogueSourceDocument> Upserts { get; } = [];
+        public List<ProjectionDocumentDeleteMarker> DeleteMarkers { get; } = [];
+
+        public Task<ProjectionWriteResult> UpsertAsync(
+            ScopeWorkflowCatalogueSourceDocument readModel,
+            CancellationToken ct = default)
+        {
+            Upserts.Add(readModel);
+            return Task.FromResult(ProjectionWriteResult.Applied());
+        }
+
+        public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default) =>
+            Task.FromResult(ProjectionWriteResult.Applied());
+
+        public Task<ProjectionWriteResult> DeleteAsync(
+            ProjectionDocumentDeleteMarker marker,
+            CancellationToken ct = default)
+        {
+            DeleteMarkers.Add(marker);
+            return Task.FromResult(ProjectionWriteResult.Applied());
+        }
+    }
+
+    private sealed class StubCatalogueSourceReader(IReadOnlyList<ScopeWorkflowCatalogueSourceDocument>? documents = null)
+        : IProjectionDocumentReader<ScopeWorkflowCatalogueSourceDocument, string>
+    {
+        private readonly IReadOnlyList<ScopeWorkflowCatalogueSourceDocument> _documents = documents ?? [];
+
+        public Task<ScopeWorkflowCatalogueSourceDocument?> GetAsync(string key, CancellationToken ct = default) =>
+            Task.FromResult(_documents.FirstOrDefault(document => string.Equals(document.Id, key, StringComparison.Ordinal)));
+
+        public Task<ProjectionDocumentQueryResult<ScopeWorkflowCatalogueSourceDocument>> QueryAsync(
+            ProjectionDocumentQuery query,
+            CancellationToken ct = default) =>
+            Task.FromResult(new ProjectionDocumentQueryResult<ScopeWorkflowCatalogueSourceDocument>
+            {
+                Items = _documents,
+            });
+    }
+
+    private sealed class StubWorkflowYamlDocumentService : IWorkflowYamlDocumentService
+    {
+        public WorkflowParseResult Parse(string yaml)
+        {
+            var document = new WorkflowDocument
+            {
+                Name = ReadScalar(yaml, "name") ?? "workflow",
+                Description = ReadScalar(yaml, "description") ?? string.Empty,
+            };
+            return new WorkflowParseResult(document, []);
+        }
+
+        public string Serialize(WorkflowDocument document) =>
+            $"name: {document.Name}\ndescription: {document.Description}\nsteps: []\n";
+
+        private static string? ReadScalar(string yaml, string key)
+        {
+            foreach (var line in yaml.Split('\n'))
+            {
+                var trimmed = line.Trim();
+                var prefix = $"{key}:";
+                if (trimmed.StartsWith(prefix, StringComparison.Ordinal))
+                    return trimmed[prefix.Length..].Trim();
+            }
+
+            return null;
+        }
     }
 
     private sealed class FixedProjectionClock(DateTimeOffset utcNow) : IProjectionClock
