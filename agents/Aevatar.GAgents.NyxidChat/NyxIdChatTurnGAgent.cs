@@ -884,6 +884,8 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
             ExternalEffect = completion.ExternalEffect,
             CompletedAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
             ProviderResourceId = result.Tool?.Receipt?.ProviderResourceId ?? string.Empty,
+            ToolReceiptStatus = result.Tool?.Receipt?.Status ??
+                                AgentToolReceiptStatus.Unspecified,
         };
         var requiresParentCommitAcknowledgement =
             State.OperationKind == NyxIdChatStepKind.Postcondition &&
@@ -1145,6 +1147,7 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
         next.RecoveryReadBack = evt.RecoveryReadBack?.Clone();
         next.RecoveryEffectStepId = evt.RecoveryEffectStepId;
         next.ExactServiceRecoveryStage = evt.ExactServiceRecoveryStage;
+        next.ToolReceiptStatus = AgentToolReceiptStatus.Unspecified;
         next.CanaryEffectFault = evt.CanaryEffectFault?.Clone();
         next.CanaryEffectFaultToolCallId = evt.CanaryEffectFaultToolCallId;
         next.CanaryEffectFaultToolName = evt.CanaryEffectFaultToolName;
@@ -1332,6 +1335,7 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
         next.SafeMessage = evt.SafeMessage;
         next.ExternalEffect = evt.ExternalEffect;
         next.ProviderResourceId = evt.ProviderResourceId;
+        next.ToolReceiptStatus = evt.ToolReceiptStatus;
         next.CompletedAt = evt.CompletedAt?.Clone();
         next.PendingResult = evt.Result?.Clone();
         next.ResultDeliveryAttempt = evt.Result is null ? 0 : 1;
@@ -1478,16 +1482,43 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
 
         var sourceProvesNotApplied =
             State.OperationKind == NyxIdChatStepKind.Postcondition &&
-            State.Phase == NyxIdChatOperationPhase.Succeeded ||
+            State.Phase == NyxIdChatOperationPhase.Succeeded &&
+            State.ExternalEffect == NyxIdChatEffectEvidence.NotApplied ||
             State.OperationKind == NyxIdChatStepKind.Tool &&
-            State.Phase is NyxIdChatOperationPhase.Failed or
-                NyxIdChatOperationPhase.Cancelled;
-        return sourceProvesNotApplied &&
-               State.ExternalEffect == NyxIdChatEffectEvidence.NotApplied &&
+            NyxIdChatOperationAdmissionPolicy.Matches(
+                State.OperationAdmission,
+                admission.OperationAdmission) &&
+            (State.Phase is NyxIdChatOperationPhase.Failed or
+                NyxIdChatOperationPhase.Cancelled) &&
+            State.ExternalEffect == NyxIdChatEffectEvidence.NotApplied;
+        var sourceProvesPendingExactServiceApproval =
+            State.OperationKind == NyxIdChatStepKind.Tool &&
+            State.Phase == NyxIdChatOperationPhase.Succeeded &&
+            State.ExternalEffect == NyxIdChatEffectEvidence.NotStarted &&
+            State.ExactServiceRecoveryStage ==
+            NyxIdChatExactServiceRecoveryStage.Create &&
+            (State.ToolReceiptStatus == AgentToolReceiptStatus.ApprovalRequired ||
+             State.ToolReceiptStatus == AgentToolReceiptStatus.Unspecified &&
+             string.IsNullOrWhiteSpace(State.TerminalCode)) &&
+            IsValidExactServiceWriteAdmission(State.OperationAdmission) &&
+            IsValidExactServiceWriteAdmission(admission.OperationAdmission) &&
+            NyxIdChatOperationAdmissionPolicy.Matches(
+                State.OperationAdmission,
+                admission.OperationAdmission);
+        return (sourceProvesNotApplied || sourceProvesPendingExactServiceApproval) &&
                admission.Key.OperationGeneration > 1 &&
                command.SourceOperationKey.OperationGeneration ==
                admission.Key.OperationGeneration - 1;
     }
+
+    private static bool IsValidExactServiceWriteAdmission(
+        AgentToolOperationAdmissionPayload? admission) =>
+        NyxIdChatOperationAdmissionPolicy.IsValid(
+            admission,
+            new NyxIdChatToolCallSafety
+            {
+                MayChangeExternalState = true,
+            });
 
     private bool CanRevokePlanGateAdmission(
         NyxIdChatTurnPlanGateAdmissionRevokeCommand command)
