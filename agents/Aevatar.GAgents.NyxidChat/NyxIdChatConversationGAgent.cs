@@ -2938,6 +2938,8 @@ public sealed class NyxIdChatConversationGAgent
             durable.WorkflowRunDelivery = receipt.WorkflowRunDelivery.Clone();
         if (receipt.AuthorizationRequired is not null)
             durable.AuthorizationRequired = receipt.AuthorizationRequired.Clone();
+        if (receipt.ExactServiceApproval is not null)
+            durable.ExactServiceApproval = receipt.ExactServiceApproval.Clone();
         return durable;
     }
 
