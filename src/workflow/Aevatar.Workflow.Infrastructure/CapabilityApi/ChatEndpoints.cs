@@ -76,7 +76,7 @@ public static class WorkflowCapabilityEndpoints
         Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential? trustedCallerCredential = null,
         CancellationToken cancellationToken = default,
         string? trustedScopeId = null,
-        bool allowEmptyInputForResolvedMemberWorkflow = false) =>
+        bool allowEmptyInputForResolvedWorkflowService = false) =>
         ChatRunRequestNormalizer.NormalizeAsync(
             input,
             fileIngressPort,
@@ -84,7 +84,7 @@ public static class WorkflowCapabilityEndpoints
             trustedCallerCredential,
             cancellationToken,
             trustedScopeId,
-            allowEmptyInputForResolvedMemberWorkflow);
+            allowEmptyInputForResolvedWorkflowService);
 
     internal static async Task HandleChatPost(
         HttpContext http,
@@ -198,7 +198,7 @@ public static class WorkflowCapabilityEndpoints
         CancellationToken ct = default,
         Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedHook = null,
         IFileArtifactIngressPort? fileIngressPort = null,
-        bool allowEmptyInputForResolvedMemberWorkflow = false,
+        bool allowEmptyInputForResolvedWorkflowService = false,
         WorkflowDefinitionBinding? resolvedDefinitionBinding = null)
     {
         using var scope = ApiRequestScope.BeginHttp();
@@ -248,7 +248,7 @@ public static class WorkflowCapabilityEndpoints
                 trustedCallerCredential: callerCredential.Credential,
                 cancellationToken: ct,
                 trustedScopeId: trustedScopeId,
-                allowEmptyInputForResolvedMemberWorkflow: allowEmptyInputForResolvedMemberWorkflow);
+                allowEmptyInputForResolvedWorkflowService: allowEmptyInputForResolvedWorkflowService);
             if (!normalizedRequest.Succeeded)
             {
                 var (code, message) = ChatRunStartErrorMapper.ToCommandError(normalizedRequest.Error);
