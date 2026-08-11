@@ -5,4 +5,5 @@ public sealed class NyxIdAssistantActionsOptions
     public const string ConfigSection = "Aevatar:NyxId:AssistantActions";
 
     public bool Enabled { get; set; }
+    public bool Required { get; set; }
 }

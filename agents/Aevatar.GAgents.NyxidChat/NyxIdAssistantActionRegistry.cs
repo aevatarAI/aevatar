@@ -1,6 +1,6 @@
 using System.Collections.Frozen;
+using System.Security.Cryptography;
 using System.Text.Json;
-using System.Text.Json.Nodes;
 using Aevatar.AI.Abstractions;
 
 namespace Aevatar.GAgents.NyxidChat;
@@ -19,6 +19,32 @@ public sealed class NyxIdAssistantActionRegistryException : Exception
 public sealed record NyxIdAssistantActionValidation(
     NyxIdAssistantActionDefinitionSnapshot Definition,
     NyxIdAssistantActionParams Params);
+
+internal enum NyxIdAssistantActionParamsSchemaVariant
+{
+    ServiceConnect = 1,
+    ServiceReauthorize = 2,
+    RelaxedKeyCreate = 3,
+    LeastScopeKeyCreate = 4,
+    KeyRotate = 5,
+}
+
+internal enum NyxIdAssistantActionUnknownDescriptorPolicy
+{
+    Reject = 1,
+    Ignore = 2,
+}
+
+internal sealed record NyxIdAssistantActionRevisionDescriptorSnapshot(
+    string WireAction,
+    string DescriptorFingerprint,
+    NyxIdAssistantActionParamsSchemaVariant ParamsSchemaVariant);
+
+internal sealed record NyxIdAssistantActionRevisionContractSnapshot(
+    string Revision,
+    int SchemaVersion,
+    FrozenDictionary<string, NyxIdAssistantActionRevisionDescriptorSnapshot> Actions,
+    NyxIdAssistantActionUnknownDescriptorPolicy UnknownDescriptorPolicy);
 
 /// <summary>
 /// Immutable, startup-pinned view of the NyxID action manifest. External JSON
@@ -41,254 +67,126 @@ public sealed class NyxIdAssistantActionRegistry
     private const string PolicyCallerOwned = "NYXID_ACTION_POLICY_CALLER_OWNED";
     private const string RegistryInvalid = "NYXID_ACTION_REGISTRY_INVALID";
 
-    private const string ServiceConnectParamsSchema = """
+    private static readonly FrozenDictionary<string, NyxIdAssistantActionRevisionContractSnapshot>
+        RevisionContractsByRevision =
+        new Dictionary<string, NyxIdAssistantActionRevisionContractSnapshot>(StringComparer.Ordinal)
         {
-          "oneOf": [
-            {
-              "type": "object",
-              "additionalProperties": false,
-              "required": ["catalogService"],
-              "properties": {
-                "catalogService": {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "required": ["serviceSlug"],
-                  "properties": {
-                    "serviceSlug": {"type": "string"},
-                    "requestedScopes": {"type": "array", "items": {"type": "string"}},
-                    "viaNodeId": {"type": "string"},
-                    "targetOrgId": {"type": "string"}
-                  }
-                }
-              }
-            },
-            {
-              "type": "object",
-              "additionalProperties": false,
-              "required": ["customService"],
-              "properties": {
-                "customService": {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "required": ["name", "endpointUrl", "authMethod"],
-                  "properties": {
-                    "name": {"type": "string"},
-                    "endpointUrl": {"type": "string"},
-                    "authMethod": {"type": "string"},
-                    "authKeyName": {"type": "string"},
-                    "viaNodeId": {"type": "string"},
-                    "targetOrgId": {"type": "string"}
-                  }
-                }
-              }
-            }
-          ]
-        }
-        """;
-
-    private const string ServiceReauthorizeParamsSchema = """
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["userServiceId", "requestedScopes"],
-          "properties": {
-            "userServiceId": {"type": "string"},
-            "requestedScopes": {"type": "array", "items": {"type": "string"}}
-          }
-        }
-        """;
-
-    private const string KeyCreateParamsSchema = """
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["name", "platform", "allowedServiceIds"],
-          "properties": {
-            "name": {"type": "string"},
-            "platform": {"type": "string"},
-            "allowedServiceIds": {"type": "array", "items": {"type": "string"}}
-          }
-        }
-        """;
-
-    private const string LeastScopeKeyCreateParamsSchema = """
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["name", "platform", "allowedServiceIds"],
-          "properties": {
-            "name": {"type": "string"},
-            "platform": {"type": "string"},
-            "allowedServiceIds": {
-              "type": "array",
-              "minItems": 1,
-              "maxItems": 64,
-              "uniqueItems": true,
-              "items": {"type": "string"}
-            }
-          }
-        }
-        """;
-
-    private const string KeyRotateParamsSchema = """
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["keyId"],
-          "properties": {
-            "keyId": {"type": "string"}
-          }
-        }
-        """;
-
-    private static readonly FrozenDictionary<string, ActionContract> SupportedActions =
-        new Dictionary<string, ActionContract>(StringComparer.Ordinal)
-        {
-            ["service.connect"] = new(
-                NyxIdAssistantActionKind.ServiceConnect,
-                ParseServiceConnect,
-                ServiceConnectParamsSchema,
-                NyxIdAssistantActionRisk.Grant,
-                true),
-            ["service.reauthorize"] = new(
-                NyxIdAssistantActionKind.ServiceReauthorize,
-                ParseServiceReauthorize,
-                ServiceReauthorizeParamsSchema,
-                NyxIdAssistantActionRisk.Grant,
-                false),
-            ["provider.set_app_credentials"] = new(
-                NyxIdAssistantActionKind.ProviderSetAppCredentials,
-                ParseProviderSetAppCredentials),
-            ["key.create"] = new(
-                NyxIdAssistantActionKind.KeyCreate,
-                ParseKeyCreate,
-                KeyCreateParamsSchema,
-                NyxIdAssistantActionRisk.Grant,
-                false),
-            ["key.rotate"] = new(
-                NyxIdAssistantActionKind.KeyRotate,
-                ParseKeyRotate,
-                KeyRotateParamsSchema,
-                NyxIdAssistantActionRisk.Grant,
-                false),
-            ["node.register_token"] = new(
-                NyxIdAssistantActionKind.NodeRegisterToken,
-                ParseNodeRegisterToken),
-            ["node.rotate_token"] = new(
-                NyxIdAssistantActionKind.NodeRotateToken,
-                ParseNodeRotateToken),
-            ["node.inject_credential"] = new(
-                NyxIdAssistantActionKind.NodeInjectCredential,
-                ParseNodeInjectCredential),
-            ["service_account.create"] = new(
-                NyxIdAssistantActionKind.ServiceAccountCreate,
-                ParseServiceAccountCreate),
-            ["service_account.rotate_secret"] = new(
-                NyxIdAssistantActionKind.ServiceAccountRotateSecret,
-                ParseServiceAccountRotateSecret),
-            ["developer_app.create"] = new(
-                NyxIdAssistantActionKind.DeveloperAppCreate,
-                ParseDeveloperAppCreate),
-            ["developer_app.rotate_secret"] = new(
-                NyxIdAssistantActionKind.DeveloperAppRotateSecret,
-                ParseDeveloperAppRotateSecret),
-            ["account.mfa_setup"] = new(
-                NyxIdAssistantActionKind.AccountMfaSetup,
-                ParseAccountMfaSetup),
-            ["device.onboard"] = new(
-                NyxIdAssistantActionKind.DeviceOnboard,
-                ParseDeviceOnboard),
-        }.ToFrozenDictionary(StringComparer.Ordinal);
-
-    private static readonly FrozenDictionary<string, FrozenSet<string>> PinnedActionsByRevision =
-        new Dictionary<string, FrozenSet<string>>(StringComparer.Ordinal)
-        {
-            [LegacyRegistryRevision] = new[]
-            {
-                "service.connect",
-            }.ToFrozenSet(StringComparer.Ordinal),
-            [WaveOneDraftRegistryRevision] = new[]
-            {
-                "service.connect",
-                "service.reauthorize",
-                "key.create",
-                "key.rotate",
-            }.ToFrozenSet(StringComparer.Ordinal),
-            [LeastScopeRegistryRevision] = new[]
-            {
-                "service.connect",
-                "key.create",
-            }.ToFrozenSet(StringComparer.Ordinal),
-            [SupportedRegistryRevision] = new[]
-            {
-                "service.connect",
-                "key.create",
-                "key.rotate",
-            }.ToFrozenSet(StringComparer.Ordinal),
-        }.ToFrozenDictionary(StringComparer.Ordinal);
-
-    // A manifest contract can be known without being executable by Aevatar.
-    // Each revision exposes only actions that have a typed producer, wire
-    // mapper, and typed postcondition reader on the canonical actor path.
-    private static readonly FrozenDictionary<string, FrozenSet<string>> ExecutableActionsByRevision =
-        new Dictionary<string, FrozenSet<string>>(StringComparer.Ordinal)
-        {
-            [LegacyRegistryRevision] = new[] { "service.connect" }
-                .ToFrozenSet(StringComparer.Ordinal),
-            [WaveOneDraftRegistryRevision] = new[] { "service.connect" }
-                .ToFrozenSet(StringComparer.Ordinal),
-            [LeastScopeRegistryRevision] = new[] { "service.connect", "key.create" }
-                .ToFrozenSet(StringComparer.Ordinal),
-            [SupportedRegistryRevision] = new[] { "service.connect", "key.create", "key.rotate" }
-                .ToFrozenSet(StringComparer.Ordinal),
+            [LegacyRegistryRevision] = RevisionContract(
+                LegacyRegistryRevision,
+                Descriptor(
+                    "service.connect",
+                    "20a4dc5fe13a30882a1f84085ace2d04a93081829ecb31e3c6a0f2bff94ec0a3",
+                    NyxIdAssistantActionParamsSchemaVariant.ServiceConnect)),
+            [WaveOneDraftRegistryRevision] = RevisionContract(
+                WaveOneDraftRegistryRevision,
+                Descriptor(
+                    "service.connect",
+                    "20a4dc5fe13a30882a1f84085ace2d04a93081829ecb31e3c6a0f2bff94ec0a3",
+                    NyxIdAssistantActionParamsSchemaVariant.ServiceConnect),
+                Descriptor(
+                    "service.reauthorize",
+                    "b6a16985e083b1fa71ab99f0fcede9ae69415d9e71f7e078789bcaeadb8ff0b8",
+                    NyxIdAssistantActionParamsSchemaVariant.ServiceReauthorize),
+                Descriptor(
+                    "key.create",
+                    "d5db2d5b1e34db1b8c727271f745c47c575947f027da9685bb76096f545c7975",
+                    NyxIdAssistantActionParamsSchemaVariant.RelaxedKeyCreate),
+                Descriptor(
+                    "key.rotate",
+                    "e65c6d81a00bf980ad3ac63bb44f6cbe901da73f6d825a4545aacf0108cc4643",
+                    NyxIdAssistantActionParamsSchemaVariant.KeyRotate)),
+            [LeastScopeRegistryRevision] = RevisionContract(
+                LeastScopeRegistryRevision,
+                Descriptor(
+                    "service.connect",
+                    "20a4dc5fe13a30882a1f84085ace2d04a93081829ecb31e3c6a0f2bff94ec0a3",
+                    NyxIdAssistantActionParamsSchemaVariant.ServiceConnect),
+                Descriptor(
+                    "key.create",
+                    "ce94e23543aad2417260f25a07eac15369c007d14d77963daaed7b5730e98e07",
+                    NyxIdAssistantActionParamsSchemaVariant.LeastScopeKeyCreate)),
+            [SupportedRegistryRevision] = RevisionContract(
+                SupportedRegistryRevision,
+                Descriptor(
+                    "service.connect",
+                    "20a4dc5fe13a30882a1f84085ace2d04a93081829ecb31e3c6a0f2bff94ec0a3",
+                    NyxIdAssistantActionParamsSchemaVariant.ServiceConnect),
+                Descriptor(
+                    "key.create",
+                    "ce94e23543aad2417260f25a07eac15369c007d14d77963daaed7b5730e98e07",
+                    NyxIdAssistantActionParamsSchemaVariant.LeastScopeKeyCreate),
+                Descriptor(
+                    "key.rotate",
+                    "e65c6d81a00bf980ad3ac63bb44f6cbe901da73f6d825a4545aacf0108cc4643",
+                    NyxIdAssistantActionParamsSchemaVariant.KeyRotate)),
         }.ToFrozenDictionary(StringComparer.Ordinal);
 
     private readonly FrozenDictionary<string, RegistryEntry> _entries;
+    private readonly FrozenDictionary<string, NyxIdAssistantActionCapabilityReadinessSnapshot>
+        _capabilityReadiness;
     private readonly FrozenSet<string> _executableActions;
 
     private NyxIdAssistantActionRegistry(
         int schemaVersion,
         string registryRevision,
         IReadOnlyDictionary<string, RegistryEntry> entries,
+        IReadOnlyDictionary<string, NyxIdAssistantActionCapabilityReadinessSnapshot>
+            capabilityReadiness,
         FrozenSet<string> executableActions)
     {
         SchemaVersion = schemaVersion;
         RegistryRevision = registryRevision;
         _entries = entries.ToFrozenDictionary(StringComparer.Ordinal);
+        _capabilityReadiness = capabilityReadiness.ToFrozenDictionary(StringComparer.Ordinal);
         _executableActions = executableActions;
     }
 
     public int SchemaVersion { get; }
     public string RegistryRevision { get; }
 
+    internal FrozenDictionary<string, NyxIdAssistantActionCapabilityReadinessSnapshot>
+        CapabilityReadiness => _capabilityReadiness;
+
     internal static NyxIdAssistantActionRegistry CreateDisabled() =>
         new(
             SupportedSchemaVersion,
             SupportedRegistryRevision,
             new Dictionary<string, RegistryEntry>(StringComparer.Ordinal),
+            new Dictionary<string, NyxIdAssistantActionCapabilityReadinessSnapshot>(
+                StringComparer.Ordinal),
             Array.Empty<string>().ToFrozenSet(StringComparer.Ordinal));
 
     internal static bool IsSupportedRegistryRevision(string revision) =>
-        PinnedActionsByRevision.ContainsKey(revision);
+        RevisionContractsByRevision.ContainsKey(revision);
+
+    internal static NyxIdAssistantActionRevisionContractSnapshot GetRevisionContractSnapshot(
+        string revision) =>
+        RevisionContractsByRevision.TryGetValue(revision, out var snapshot)
+            ? snapshot
+            : throw Error(
+                RevisionUnsupported,
+                "The NyxID action registry revision is not supported.");
 
     internal static bool IsActionExecutable(
         string revision,
         NyxIdAssistantActionKind action)
     {
-        var wireAction = action switch
-        {
-            NyxIdAssistantActionKind.ServiceConnect => "service.connect",
-            NyxIdAssistantActionKind.KeyCreate => "key.create",
-            NyxIdAssistantActionKind.KeyRotate => "key.rotate",
-            _ => null,
-        };
-        return wireAction is not null &&
-               ExecutableActionsByRevision.TryGetValue(revision, out var executableActions) &&
-               executableActions.Contains(wireAction);
+        return RevisionContractsByRevision.TryGetValue(revision, out var revisionContract) &&
+               NyxIdAssistantActionSemanticContracts.TryGet(action, out var semantic) &&
+               revisionContract.Actions.TryGetValue(semantic.WireAction, out var descriptor) &&
+               NyxIdAssistantActionCapabilityRegistrations.Current.IsExecutable(
+                   semantic,
+                   descriptor);
     }
 
-    public static NyxIdAssistantActionRegistry Load(string registryJson)
+    public static NyxIdAssistantActionRegistry Load(string registryJson) =>
+        Load(registryJson, NyxIdAssistantActionCapabilityRegistrations.Current);
+
+    internal static NyxIdAssistantActionRegistry Load(
+        string registryJson,
+        NyxIdAssistantActionCapabilityRegistrations capabilities)
     {
+        ArgumentNullException.ThrowIfNull(capabilities);
         try
         {
             using var document = JsonDocument.Parse(registryJson);
@@ -298,8 +196,7 @@ public sealed class NyxIdAssistantActionRegistry
                 throw Error(SchemaUnsupported, "The NyxID action schema version is not supported.");
 
             var revision = ReadRequiredString(root, "revision", 128);
-            if (!PinnedActionsByRevision.TryGetValue(revision, out var pinnedActions) ||
-                !ExecutableActionsByRevision.TryGetValue(revision, out var executableActions))
+            if (!RevisionContractsByRevision.TryGetValue(revision, out var revisionContract))
             {
                 throw Error(RevisionUnsupported, "The NyxID action registry revision is not supported.");
             }
@@ -312,35 +209,68 @@ public sealed class NyxIdAssistantActionRegistry
             foreach (var item in actions.EnumerateArray())
             {
                 var descriptor = RequireObject(item);
-                var wireAction = ReadRequiredString(descriptor, "action", 128);
-                if (!SupportedActions.TryGetValue(wireAction, out var contract) ||
-                    !pinnedActions.Contains(wireAction))
+                var wireAction = ReadRequiredCanonicalDescriptorString(
+                    descriptor,
+                    "action",
+                    128);
+                if (!revisionContract.Actions.TryGetValue(
+                        wireAction,
+                        out var descriptorSnapshot))
                 {
-                    continue;
+                    if (revisionContract.UnknownDescriptorPolicy ==
+                        NyxIdAssistantActionUnknownDescriptorPolicy.Ignore)
+                    {
+                        continue;
+                    }
+
+                    throw Error(
+                        RegistryInvalid,
+                        "The NyxID action registry contains an unknown action descriptor.");
                 }
 
-                var tier = ParseTier(ReadRequiredString(descriptor, "tier", 32));
+                if (!NyxIdAssistantActionSemanticContracts.TryGet(wireAction, out var semantic))
+                    throw Error(RegistryInvalid, "The pinned action has no semantic contract.");
+
+                var tierValue = ReadRequiredCanonicalDescriptorString(
+                    descriptor,
+                    "tier",
+                    32);
+                var tier = ParseTier(tierValue);
                 if (tier != NyxIdAssistantActionTier.V1)
                     throw Error(TierUnsupported, "Only NyxID Assistant v1 actions are supported.");
 
-                var risk = ParseRisk(ReadRequiredString(descriptor, "risk", 32));
+                var riskValue = ReadRequiredCanonicalDescriptorString(
+                    descriptor,
+                    "risk",
+                    32);
+                var risk = ParseRisk(riskValue);
                 var rememberEligible = RequireBoolean(descriptor, "remember_eligible");
                 if (risk == NyxIdAssistantActionRisk.Destructive && rememberEligible)
                     throw Error(RegistryInvalid, "Destructive actions cannot be remember eligible.");
 
                 var paramsSchema = RequireProperty(descriptor, "params_schema").Clone();
                 ValidateSchema(paramsSchema);
-                ValidatePinnedContract(
-                    contract,
-                    revision,
+                ValidateDescriptorFingerprint(
+                    descriptorSnapshot,
+                    wireAction,
                     paramsSchema,
-                    risk,
+                    riskValue,
+                    tierValue,
                     rememberEligible);
+                if (risk != semantic.RegistryRisk ||
+                    rememberEligible != semantic.RegistryRememberEligible)
+                {
+                    throw Error(
+                        RegistryInvalid,
+                        "The NyxID action policy does not match the semantic contract.");
+                }
+
+                capabilities.TryGetAdmissionParser(semantic, descriptorSnapshot, out var parser);
                 var definition = new NyxIdAssistantActionDefinitionSnapshot
                 {
                     SchemaVersion = schemaVersion,
                     RegistryRevision = revision,
-                    Action = contract.Action,
+                    Action = semantic.Action,
                     WireAction = wireAction,
                     Description = ReadRequiredString(descriptor, "description", 2048),
                     AdvisoryRisk = risk,
@@ -349,30 +279,44 @@ public sealed class NyxIdAssistantActionRegistry
                 };
                 if (!entries.TryAdd(
                         wireAction,
-                        new RegistryEntry(definition, paramsSchema, contract.Parser)))
+                        new RegistryEntry(
+                            definition,
+                            paramsSchema,
+                            semantic,
+                            descriptorSnapshot,
+                            parser)))
                 {
                     throw Error(RegistryInvalid, "The NyxID action registry contains a duplicate action.");
                 }
             }
 
-            if (!pinnedActions.All(entries.ContainsKey))
+            if (!revisionContract.Actions.Keys.All(entries.ContainsKey))
             {
                 throw Error(
                     RegistryInvalid,
                     "The NyxID action registry is missing an action required by its pinned revision.");
             }
 
-            if (!executableActions.All(entries.ContainsKey))
-            {
-                throw Error(
-                    ActionUnsupported,
-                    "The NyxID action registry is missing an action required by this Aevatar version.");
-            }
+            var capabilityReadiness = entries.ToDictionary(
+                static pair => pair.Key,
+                    pair => new NyxIdAssistantActionCapabilityReadinessSnapshot(
+                        pair.Value.Semantic.Action,
+                        pair.Key,
+                        capabilities.MissingCapabilities(
+                                pair.Value.Semantic,
+                                pair.Value.Descriptor)
+                            .ToFrozenSet()),
+                StringComparer.Ordinal);
+            var executableActions = capabilityReadiness
+                .Where(static pair => pair.Value.Executable)
+                .Select(static pair => pair.Key)
+                .ToFrozenSet(StringComparer.Ordinal);
 
             return new NyxIdAssistantActionRegistry(
                 schemaVersion,
                 revision,
                 entries,
+                capabilityReadiness,
                 executableActions);
         }
         catch (NyxIdAssistantActionRegistryException)
@@ -428,7 +372,11 @@ public sealed class NyxIdAssistantActionRegistry
         {
             using var document = JsonDocument.Parse(paramsJson);
             ValidateAgainstSchema(document.RootElement, entry.ParamsSchema, "params");
+            if (entry.Parser is null)
+                throw Error(ActionUnsupported, "The NyxID action parser is unavailable.");
             var typedParams = entry.Parser(document.RootElement);
+            if (!entry.Semantic.AllowedParamsCases.Contains(typedParams.ParamsCase))
+                throw Error(ActionUnsupported, "The NyxID action parser produced an unsupported params case.");
             return new NyxIdAssistantActionValidation(
                 entry.Definition.Clone(),
                 typedParams);
@@ -452,6 +400,7 @@ public sealed class NyxIdAssistantActionRegistry
         IEnumerable<string>? requestedScopes = null)
     {
         if (!_entries.TryGetValue("service.connect", out var entry) ||
+            !_executableActions.Contains("service.connect") ||
             entry.Definition.Action != NyxIdAssistantActionKind.ServiceConnect)
         {
             throw Error(ActionUnsupported, "Catalog service connect is not present in the pinned registry.");
@@ -549,7 +498,7 @@ public sealed class NyxIdAssistantActionRegistry
             });
     }
 
-    private static NyxIdAssistantActionParams ParseServiceConnect(JsonElement root)
+    internal static NyxIdAssistantActionParams ParseServiceConnect(JsonElement root)
     {
         EnsureOnlyProperties(root, "catalogService", "customService");
         var hasCatalog = root.TryGetProperty("catalogService", out var catalog);
@@ -656,7 +605,7 @@ public sealed class NyxIdAssistantActionRegistry
         return new NyxIdAssistantActionParams { KeyCreate = value };
     }
 
-    private static NyxIdAssistantActionParams ParseKeyRotate(JsonElement root)
+    internal static NyxIdAssistantActionParams ParseKeyRotate(JsonElement root)
     {
         EnsureOnlyProperties(root, "keyId");
         return new NyxIdAssistantActionParams
@@ -788,31 +737,111 @@ public sealed class NyxIdAssistantActionRegistry
         ValidateSchemaNode(schema);
     }
 
-    private static void ValidatePinnedContract(
-        ActionContract contract,
-        string revision,
+    private static void ValidateDescriptorFingerprint(
+        NyxIdAssistantActionRevisionDescriptorSnapshot descriptorSnapshot,
+        string wireAction,
         JsonElement paramsSchema,
-        NyxIdAssistantActionRisk risk,
+        string risk,
+        string tier,
         bool rememberEligible)
     {
-        var pinnedParamsSchema = revision is LeastScopeRegistryRevision or SupportedRegistryRevision &&
-                                 contract.Action == NyxIdAssistantActionKind.KeyCreate
-            ? LeastScopeKeyCreateParamsSchema
-            : contract.PinnedParamsSchema;
-        if (pinnedParamsSchema is null)
-            return;
-
-        var expectedSchema = JsonNode.Parse(pinnedParamsSchema);
-        var actualSchema = JsonNode.Parse(paramsSchema.GetRawText());
-        if (!JsonNode.DeepEquals(expectedSchema, actualSchema) ||
-            risk != contract.PinnedRisk ||
-            rememberEligible != contract.PinnedRememberEligible)
+        var actualFingerprint = ComputeDescriptorFingerprint(
+            wireAction,
+            paramsSchema,
+            risk,
+            tier,
+            rememberEligible);
+        if (!string.Equals(
+                descriptorSnapshot.DescriptorFingerprint,
+                actualFingerprint,
+                StringComparison.Ordinal))
         {
             throw Error(
                 RegistryInvalid,
                 "The NyxID action descriptor does not match the pinned registry contract.");
         }
     }
+
+    private static string ComputeDescriptorFingerprint(
+        string wireAction,
+        JsonElement paramsSchema,
+        string risk,
+        string tier,
+        bool rememberEligible)
+    {
+        using var buffer = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+            writer.WriteString("action", wireAction);
+            writer.WritePropertyName("params_schema");
+            WriteCanonicalJson(writer, paramsSchema);
+            writer.WriteBoolean("remember_eligible", rememberEligible);
+            writer.WriteString("risk", risk);
+            writer.WriteString("tier", tier);
+            writer.WriteEndObject();
+        }
+
+        return Convert.ToHexString(SHA256.HashData(buffer.ToArray()))
+            .ToLowerInvariant();
+    }
+
+    private static void WriteCanonicalJson(Utf8JsonWriter writer, JsonElement value)
+    {
+        switch (value.ValueKind)
+        {
+            case JsonValueKind.Object:
+                writer.WriteStartObject();
+                foreach (var property in value.EnumerateObject()
+                             .OrderBy(static property => property.Name, StringComparer.Ordinal))
+                {
+                    writer.WritePropertyName(property.Name);
+                    WriteCanonicalJson(writer, property.Value);
+                }
+                writer.WriteEndObject();
+                break;
+            case JsonValueKind.Array:
+                writer.WriteStartArray();
+                foreach (var item in value.EnumerateArray())
+                    WriteCanonicalJson(writer, item);
+                writer.WriteEndArray();
+                break;
+            case JsonValueKind.String:
+                writer.WriteStringValue(value.GetString());
+                break;
+            case JsonValueKind.Number:
+                writer.WriteRawValue(value.GetRawText());
+                break;
+            case JsonValueKind.True:
+                writer.WriteBooleanValue(true);
+                break;
+            case JsonValueKind.False:
+                writer.WriteBooleanValue(false);
+                break;
+            case JsonValueKind.Null:
+                writer.WriteNullValue();
+                break;
+            default:
+                throw Error(RegistryInvalid, "The action descriptor contains an invalid JSON value.");
+        }
+    }
+
+    private static NyxIdAssistantActionRevisionContractSnapshot RevisionContract(
+        string revision,
+        params NyxIdAssistantActionRevisionDescriptorSnapshot[] actions) =>
+        new(
+            revision,
+            SupportedSchemaVersion,
+            actions.ToFrozenDictionary(
+                static action => action.WireAction,
+                StringComparer.Ordinal),
+            NyxIdAssistantActionUnknownDescriptorPolicy.Ignore);
+
+    private static NyxIdAssistantActionRevisionDescriptorSnapshot Descriptor(
+        string wireAction,
+        string descriptorFingerprint,
+        NyxIdAssistantActionParamsSchemaVariant paramsSchemaVariant) =>
+        new(wireAction, descriptorFingerprint, paramsSchemaVariant);
 
     private static void ValidateSchemaNode(JsonElement schema)
     {
@@ -1002,6 +1031,33 @@ public sealed class NyxIdAssistantActionRegistry
         return NormalizeString(property.GetString(), maxLength, required: true);
     }
 
+    private static string ReadRequiredCanonicalDescriptorString(
+        JsonElement element,
+        string name,
+        int maxLength)
+    {
+        if (!element.TryGetProperty(name, out var property) ||
+            property.ValueKind != JsonValueKind.String)
+        {
+            throw Error(
+                RegistryInvalid,
+                "The NyxID action registry is missing a required descriptor string.");
+        }
+
+        var value = property.GetString() ?? string.Empty;
+        if (value.Length == 0 ||
+            value.Length > maxLength ||
+            value.Any(char.IsControl) ||
+            !string.Equals(value, value.Trim(), StringComparison.Ordinal))
+        {
+            throw Error(
+                RegistryInvalid,
+                "The NyxID action registry descriptor string is not canonical.");
+        }
+
+        return value;
+    }
+
     private static string ReadOptionalString(JsonElement element, string name, int maxLength)
     {
         if (!element.TryGetProperty(name, out var property))
@@ -1096,15 +1152,10 @@ public sealed class NyxIdAssistantActionRegistry
         string message) =>
         new(code, message);
 
-    private sealed record ActionContract(
-        NyxIdAssistantActionKind Action,
-        Func<JsonElement, NyxIdAssistantActionParams> Parser,
-        string? PinnedParamsSchema = null,
-        NyxIdAssistantActionRisk? PinnedRisk = null,
-        bool? PinnedRememberEligible = null);
-
     private sealed record RegistryEntry(
         NyxIdAssistantActionDefinitionSnapshot Definition,
         JsonElement ParamsSchema,
-        Func<JsonElement, NyxIdAssistantActionParams> Parser);
+        NyxIdAssistantActionSemanticContract Semantic,
+        NyxIdAssistantActionRevisionDescriptorSnapshot Descriptor,
+        Func<JsonElement, NyxIdAssistantActionParams>? Parser);
 }

@@ -99,6 +99,24 @@ namespace Aevatar.Capabilities.Tests;
 public sealed class MainnetHostCompositionTests
 {
     [Fact]
+    public void AddAevatarMainnetHost_ShouldRequireAssistantActionsByDefault()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder();
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        var options = app.Services.GetRequiredService<NyxIdAssistantActionsOptions>();
+        options.Enabled.Should().BeTrue();
+        options.Required.Should().BeTrue();
+    }
+
+    [Fact]
     public void AddAevatarMainnetHost_ShouldExportProjectionAndKafkaTelemetry()
     {
         using var home = new TemporaryAevatarHomeScope();

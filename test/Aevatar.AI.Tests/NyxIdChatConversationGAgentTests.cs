@@ -252,23 +252,9 @@ public sealed partial class NyxIdChatConversationGAgentTests
     }
 
     [Fact]
-    public async Task WorkflowInteractiveKeyCreateHandoff_ShouldValidateRegistryBeforeFirstEvent()
+    public async Task WorkflowInteractiveKeyCreateHandoff_ShouldFailClosedBeforeFirstEvent()
     {
         const string actorId = "nyxid-chat-workflow-key-create";
-        var invalidStore = new InMemoryEventStoreForTests();
-        using var invalidServices = BuildEventSourcingServices(
-            invalidStore,
-            actionRegistry: CreateLeastScopeActionRegistry());
-        var invalidAgent = CreateController(invalidServices, actorId);
-        await invalidAgent.ActivateAsync();
-        var invalid = KeyCreateHandoff(actorId);
-        invalid.Request.Params.KeyCreate.AllowedServiceIds.Clear();
-
-        var invalidAct = () => invalidAgent.HandleWorkflowInteractiveActionHandoffAsync(invalid);
-
-        await invalidAct.Should().ThrowAsync<NyxIdAssistantActionRegistryException>();
-        (await invalidStore.GetEventsAsync(actorId)).Should().BeEmpty();
-
         var eventStore = new InMemoryEventStoreForTests();
         using var services = BuildEventSourcingServices(
             eventStore,
@@ -277,14 +263,12 @@ public sealed partial class NyxIdChatConversationGAgentTests
         await agent.ActivateAsync();
         var valid = KeyCreateHandoff(actorId);
 
-        await agent.HandleWorkflowInteractiveActionHandoffAsync(valid);
+        var act = () => agent.HandleWorkflowInteractiveActionHandoffAsync(valid);
 
-        var action = agent.State.PendingActions.Should().ContainSingle().Which;
-        action.Action.Should().Be(NyxIdAssistantActionKind.KeyCreate);
-        action.Params.KeyCreate.Name.Should().Be("agent-alpha");
-        action.Params.KeyCreate.Platform.Should().Be("codex");
-        action.Params.KeyCreate.AllowedServiceIds.Should().Equal("m-github", "m-lark");
-        action.RegistryRevision.Should().Be(NyxIdAssistantActionRegistry.LeastScopeRegistryRevision);
+        (await act.Should().ThrowAsync<NyxIdAssistantActionRegistryException>())
+            .Which.Code.Should().Be("NYXID_ACTION_UNSUPPORTED");
+        (await eventStore.GetEventsAsync(actorId)).Should().BeEmpty();
+        agent.State.PendingActions.Should().BeEmpty();
     }
 
     private static WorkflowInteractiveActionHandoffCommand KeyCreateHandoff(string actorId) =>

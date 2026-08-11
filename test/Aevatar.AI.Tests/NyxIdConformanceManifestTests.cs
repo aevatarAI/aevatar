@@ -37,22 +37,13 @@ public sealed class NyxIdConformanceManifestTests
         draft.RegistryRevision.Should().Be("nyxid-assistant-actions.v5");
         leastScope.RegistryRevision.Should().Be("nyxid-assistant-actions.v6");
         target.RegistryRevision.Should().Be("nyxid-assistant-actions.v7");
-        foreach (var registry in new[] { legacy, draft })
+        foreach (var registry in new[] { legacy, draft, leastScope, target })
         {
             registry.TryGetDefinition("service.connect", out _).Should().BeTrue();
             registry.TryGetDefinition("service.reauthorize", out _).Should().BeFalse();
             registry.TryGetDefinition("key.create", out _).Should().BeFalse();
             registry.TryGetDefinition("key.rotate", out _).Should().BeFalse();
         }
-
-        leastScope.TryGetDefinition("service.connect", out _).Should().BeTrue();
-        leastScope.TryGetDefinition("key.create", out _).Should().BeTrue();
-        leastScope.TryGetDefinition("service.reauthorize", out _).Should().BeFalse();
-        leastScope.TryGetDefinition("key.rotate", out _).Should().BeFalse();
-        target.TryGetDefinition("service.connect", out _).Should().BeTrue();
-        target.TryGetDefinition("key.create", out _).Should().BeTrue();
-        target.TryGetDefinition("service.reauthorize", out _).Should().BeFalse();
-        target.TryGetDefinition("key.rotate", out _).Should().BeTrue();
     }
 
     [Fact]
@@ -121,11 +112,16 @@ public sealed class NyxIdConformanceManifestTests
 
         var shippedActions = rows.Where(static row =>
             row.GetProperty("operation_class").GetString() == "A" &&
-            row.GetProperty("status").GetString() == "shipped");
+            row.GetProperty("status").GetString() == "shipped").ToArray();
+        shippedActions.Select(static row => row.GetProperty("operation_id").GetString())
+            .Distinct(StringComparer.Ordinal)
+            .Should().BeEquivalentTo("service.connect", "key.create", "key.rotate");
         foreach (var row in shippedActions)
         {
             var operation = row.GetProperty("operation_id").GetString()!;
-            registry.TryGetDefinition(operation, out _).Should().BeTrue();
+            registry.TryGetDefinition(operation, out _).Should().Be(
+                operation == "service.connect",
+                $"{operation} is executable only when all typed runtime capabilities are registered");
             var artifacts = row.GetProperty("artifacts").EnumerateArray()
                 .Select(static value => value.GetString()!)
                 .ToArray();

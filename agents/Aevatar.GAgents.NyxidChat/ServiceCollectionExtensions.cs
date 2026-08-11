@@ -79,12 +79,17 @@ public static class ServiceCollectionExtensions
                 NyxIdAssistantActionRegistryHttpSource>();
             services.TryAddSingleton<NyxIdAssistantActionRegistry>(sp =>
                 sp.GetRequiredService<NyxIdAssistantActionRegistrySnapshot>().GetRequired());
+            services.TryAddSingleton<NyxIdAssistantActionRegistryReadinessSnapshot>(sp =>
+                sp.GetRequiredService<NyxIdAssistantActionRegistrySnapshot>()
+                    .GetReadinessRequired());
             services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService,
                 NyxIdAssistantActionRegistryStartupService>());
         }
         else
         {
             services.TryAddSingleton(NyxIdAssistantActionRegistry.CreateDisabled());
+            services.TryAddSingleton(
+                NyxIdAssistantActionRegistryReadinessSnapshot.Disabled());
         }
         services.TryAddSingleton(provider => BindRelayOptions(configuration));
         services.TryAddSingleton<Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions>(

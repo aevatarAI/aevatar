@@ -197,13 +197,19 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddNyxIdAuthentication();
         builder.AddAevatarAuthentication();
         builder.AddNyxIdIdentityAssertionAuthentication();
+        var assistantActionDefaults = new Dictionary<string, string?>();
         if (builder.Configuration[$"{NyxIdAssistantActionsOptions.ConfigSection}:Enabled"] is null)
         {
-            builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                [$"{NyxIdAssistantActionsOptions.ConfigSection}:Enabled"] = bool.TrueString,
-            });
+            assistantActionDefaults[$"{NyxIdAssistantActionsOptions.ConfigSection}:Enabled"] =
+                bool.TrueString;
         }
+        if (builder.Configuration[$"{NyxIdAssistantActionsOptions.ConfigSection}:Required"] is null)
+        {
+            assistantActionDefaults[$"{NyxIdAssistantActionsOptions.ConfigSection}:Required"] =
+                bool.TrueString;
+        }
+        if (assistantActionDefaults.Count > 0)
+            builder.Configuration.AddInMemoryCollection(assistantActionDefaults);
         builder.Services.AddNyxIdChat(builder.Configuration);
         builder.Services.Replace(ServiceDescriptor.Singleton(
             NyxIdChatCanaryEffectFaultOptions.EnabledFor(

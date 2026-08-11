@@ -71,9 +71,10 @@ public sealed class NyxIdChatBrowserActionTests
     }
 
     [Fact]
-    public void KeyCreateAuthorizationRequired_ShouldCommitExactLeastScopeActionRequest()
+    public void KeyCreateAuthorizationRequired_ShouldFailClosedWithoutCompleteCapabilities()
     {
         var state = AuthorizationWaitingState();
+        var original = state.Clone();
         var signal = AuthorizationRequiredSignal(state);
         signal.Tool.Receipt.ToolName = "nyxid_request_key_create";
         signal.Tool.Receipt.AuthorizationRequired.ServiceSlug = string.Empty;
@@ -86,38 +87,22 @@ public sealed class NyxIdChatBrowserActionTests
                 AllowedServiceIds = { "us-github-alpha" },
             };
 
-        var decision = NyxIdChatBrowserActions.RequestAuthorization(
+        Action request = () => NyxIdChatBrowserActions.RequestAuthorization(
             state,
             signal,
             LeastScopeRegistry(),
             Now);
 
-        decision.ShouldCommit.Should().BeTrue();
-        decision.Outcome.Should().Be(NyxIdChatTransitionOutcome.Accepted);
-        decision.Request.RegistryRevision.Should().Be(
-            NyxIdAssistantActionRegistry.LeastScopeRegistryRevision);
-        decision.Request.Action.Should().Be(NyxIdAssistantActionKind.KeyCreate);
-        decision.Request.Params.ParamsCase.Should().Be(
-            NyxIdAssistantActionParams.ParamsOneofCase.KeyCreate);
-        decision.Request.Params.KeyCreate.Name.Should().Be("agent-alpha");
-        decision.Request.Params.KeyCreate.Platform.Should().Be("codex");
-        decision.Request.Params.KeyCreate.AllowedServiceIds.Should()
-            .Equal("us-github-alpha");
-        decision.Request.RememberEligible.Should().BeFalse();
-        decision.State.PendingActions.Should().ContainSingle()
-            .Which.Should().BeEquivalentTo(decision.Request);
-        decision.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Blocked);
-        decision.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Blocked);
-        decision.State.ActiveTask.Steps.Should().ContainSingle(step =>
-            step.Kind == NyxIdChatStepKind.BrowserAction &&
-            step.Source.BrowserAction.Action == NyxIdAssistantActionKind.KeyCreate &&
-            step.ActionRequestId == decision.Request.ActionRequestId);
+        request.Should().Throw<NyxIdAssistantActionRegistryException>()
+            .Which.Code.Should().Be("NYXID_ACTION_UNSUPPORTED");
+        state.Should().BeEquivalentTo(original);
     }
 
     [Fact]
-    public void KeyRotateAuthorizationRequired_ShouldCommitExactKeyActionRequest()
+    public void KeyRotateAuthorizationRequired_ShouldFailClosedWithoutCompleteCapabilities()
     {
         var state = AuthorizationWaitingState();
+        var original = state.Clone();
         var signal = AuthorizationRequiredSignal(state);
         signal.Tool.Receipt.ToolName = "nyxid_request_key_rotate";
         signal.Tool.Receipt.AuthorizationRequired.ServiceSlug = string.Empty;
@@ -125,27 +110,15 @@ public sealed class NyxIdChatBrowserActionTests
         signal.Tool.Receipt.AuthorizationRequired.KeyRotate =
             new NyxIdKeyRotateActionRequirement { KeyId = "key-alpha" };
 
-        var decision = NyxIdChatBrowserActions.RequestAuthorization(
+        Action request = () => NyxIdChatBrowserActions.RequestAuthorization(
             state,
             signal,
             RotationRegistry(),
             Now);
 
-        decision.ShouldCommit.Should().BeTrue();
-        decision.Outcome.Should().Be(NyxIdChatTransitionOutcome.Accepted);
-        decision.Request.RegistryRevision.Should().Be(
-            NyxIdAssistantActionRegistry.SupportedRegistryRevision);
-        decision.Request.Action.Should().Be(NyxIdAssistantActionKind.KeyRotate);
-        decision.Request.Params.ParamsCase.Should().Be(
-            NyxIdAssistantActionParams.ParamsOneofCase.KeyRotate);
-        decision.Request.Params.KeyRotate.KeyId.Should().Be("key-alpha");
-        decision.Request.RememberEligible.Should().BeFalse();
-        decision.State.PendingActions.Should().ContainSingle()
-            .Which.Should().BeEquivalentTo(decision.Request);
-        decision.State.ActiveTask.Steps.Should().ContainSingle(step =>
-            step.Kind == NyxIdChatStepKind.BrowserAction &&
-            step.Source.BrowserAction.Action == NyxIdAssistantActionKind.KeyRotate &&
-            step.ActionRequestId == decision.Request.ActionRequestId);
+        request.Should().Throw<NyxIdAssistantActionRegistryException>()
+            .Which.Code.Should().Be("NYXID_ACTION_UNSUPPORTED");
+        state.Should().BeEquivalentTo(original);
     }
 
     [Fact]
@@ -378,7 +351,7 @@ public sealed class NyxIdChatBrowserActionTests
     }
 
     [Fact]
-    public void CommitRequest_ShouldAcceptLeastScopeKeyCreateOnlyOnV6()
+    public void CommitRequest_ShouldRejectKeyCreateWithoutCompleteCapabilities()
     {
         var state = AuthorizationWaitingState();
         var request = NyxIdChatBrowserActions.RequestAuthorization(
@@ -398,11 +371,11 @@ public sealed class NyxIdChatBrowserActionTests
             },
         };
 
-        var accepted = NyxIdChatBrowserActions.CommitRequest(state, request, Now);
+        var rejectedV6 = NyxIdChatBrowserActions.CommitRequest(state, request, Now);
 
-        accepted.ShouldCommit.Should().BeTrue();
-        accepted.Outcome.Should().Be(NyxIdChatTransitionOutcome.Accepted);
-        accepted.Request.Params.KeyCreate.AllowedServiceIds.Should().Equal("us-github-alpha");
+        rejectedV6.ShouldCommit.Should().BeFalse();
+        rejectedV6.Outcome.Should().Be(NyxIdChatTransitionOutcome.Rejected);
+        rejectedV6.ReasonCode.Should().Be(NyxIdChatBrowserActions.ActionRequestInvalid);
 
         request.RegistryRevision = "nyxid-assistant-actions.v5";
         var rejectedLegacy = NyxIdChatBrowserActions.CommitRequest(state, request, Now);
@@ -411,7 +384,7 @@ public sealed class NyxIdChatBrowserActionTests
     }
 
     [Fact]
-    public void CommitRequest_ShouldAcceptKeyRotateOnlyOnV7()
+    public void CommitRequest_ShouldRejectKeyRotateWithoutCompleteCapabilities()
     {
         var state = AuthorizationWaitingState();
         var request = NyxIdChatBrowserActions.RequestAuthorization(
@@ -426,11 +399,11 @@ public sealed class NyxIdChatBrowserActionTests
             KeyRotate = new NyxIdKeyRotateParams { KeyId = "key-alpha" },
         };
 
-        var accepted = NyxIdChatBrowserActions.CommitRequest(state, request, Now);
+        var rejectedV7 = NyxIdChatBrowserActions.CommitRequest(state, request, Now);
 
-        accepted.ShouldCommit.Should().BeTrue();
-        accepted.Outcome.Should().Be(NyxIdChatTransitionOutcome.Accepted);
-        accepted.Request.Params.KeyRotate.KeyId.Should().Be("key-alpha");
+        rejectedV7.ShouldCommit.Should().BeFalse();
+        rejectedV7.Outcome.Should().Be(NyxIdChatTransitionOutcome.Rejected);
+        rejectedV7.ReasonCode.Should().Be(NyxIdChatBrowserActions.ActionRequestInvalid);
 
         request.RegistryRevision = NyxIdAssistantActionRegistry.LeastScopeRegistryRevision;
         var rejectedV6 = NyxIdChatBrowserActions.CommitRequest(state, request, Now);

@@ -33,6 +33,11 @@ public sealed class NyxIdChatServiceCollectionExtensionsTests
                 service is NyxIdAssistantActionRegistryStartupService);
         var registry = provider.GetRequiredService<NyxIdAssistantActionRegistry>();
         registry.TryGetDefinition("service.connect", out _).Should().BeFalse();
+        var readiness = provider
+            .GetRequiredService<NyxIdAssistantActionRegistryReadinessSnapshot>();
+        readiness.Status.Should().Be(
+            NyxIdAssistantActionRegistryReadinessStatus.Disabled);
+        readiness.Actions.Should().BeEmpty();
         Action resolve = () => registry.ResolveCatalogServiceConnect("api-github");
         resolve.Should().Throw<NyxIdAssistantActionRegistryException>()
             .Which.Code.Should().Be("NYXID_ACTION_UNSUPPORTED");
@@ -55,7 +60,7 @@ public sealed class NyxIdChatServiceCollectionExtensionsTests
     }
 
     [Fact]
-    public void AddNyxIdChat_WhenAssistantActionsEnabled_ShouldRegisterStrictStartupFetcher()
+    public void AddNyxIdChat_WhenAssistantActionsEnabled_ShouldRegisterOptionalStartupFetcher()
     {
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
@@ -71,6 +76,31 @@ public sealed class NyxIdChatServiceCollectionExtensionsTests
             descriptor.ServiceType == typeof(IHostedService) &&
             descriptor.ImplementationType ==
             typeof(NyxIdAssistantActionRegistryStartupService));
+        services.Should().ContainSingle(descriptor =>
+            descriptor.ServiceType ==
+            typeof(NyxIdAssistantActionRegistryReadinessSnapshot));
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<NyxIdAssistantActionsOptions>()
+            .Required.Should().BeFalse();
+    }
+
+    [Fact]
+    public void AddNyxIdChat_WhenAssistantActionsRequired_ShouldBindFailStopMode()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Aevatar:NyxId:AssistantActions:Enabled"] = "true",
+                ["Aevatar:NyxId:AssistantActions:Required"] = "true",
+            })
+            .Build();
+        var services = new ServiceCollection();
+
+        services.AddNyxIdChat(configuration);
+        using var provider = services.BuildServiceProvider();
+
+        provider.GetRequiredService<NyxIdAssistantActionsOptions>()
+            .Required.Should().BeTrue();
     }
 
     [Fact]
