@@ -684,7 +684,7 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                 const isArchived = isWorkflowArchived(row);
                 const isPublished = Boolean(row.activeRevisionId);
                 const canDeleteDraft =
-                  row.capabilities.delete.available && !row.hasCommittedSource;
+                  row.capabilities.delete.available && !isPublished;
                 const workflowName = (
                   <span className="wa-vnext__title">{row.name}</span>
                 );
