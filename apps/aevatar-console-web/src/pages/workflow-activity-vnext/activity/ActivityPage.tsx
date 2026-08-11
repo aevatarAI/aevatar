@@ -1,18 +1,20 @@
 import {
+  ArrowRightOutlined,
   CloseOutlined,
   ReloadOutlined,
   SearchOutlined,
 } from '@ant-design/icons';
-import { useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery } from '@tanstack/react-query';
 import { getLocale } from '@umijs/max';
-import { Button, Input, Select, Space } from 'antd';
+import { Alert, Button, DatePicker, Input, Select, Space } from 'antd';
+import dayjs from 'dayjs';
 import React from 'react';
-import { scopesApi } from '@/shared/api/scopesApi';
 import {
   WorkflowActivityApiError,
   workflowActivityApi,
 } from '@/shared/api/workflowActivityApi';
 import { t } from '@/shared/i18n/messages';
+import type { WorkflowActivityRunFeedRow } from '@/shared/models/workflowActivity';
 import { history } from '@/shared/navigation/history';
 import AevatarContentSkeleton from '@/shared/ui/AevatarContentSkeleton';
 import { useConsoleLocation } from '../hooks/useConsoleLocation';
@@ -39,6 +41,54 @@ function formatDate(value: string | null): string {
         dateStyle: 'medium',
         timeStyle: 'short',
       }).format(date);
+}
+
+function formatDuration(milliseconds: number | null): string {
+  if (milliseconds === null || !Number.isFinite(milliseconds)) return '-';
+  const seconds = Math.max(0, Math.round(milliseconds / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return remainingMinutes ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
+}
+
+function runDuration(run: WorkflowActivityRunFeedRow, now: number): string {
+  if (run.durationMs !== null) return formatDuration(run.durationMs);
+  if (!run.startedAtUtc || run.completedAtUtc) return '-';
+  const startedAt = new Date(run.startedAtUtc).getTime();
+  return Number.isNaN(startedAt) ? '-' : formatDuration(now - startedAt);
+}
+
+function shortRunReference(runId: string): string {
+  const segments = runId.split(':').filter(Boolean);
+  const lastSegment = segments.at(-1) ?? runId;
+  return lastSegment.length > 18
+    ? `${lastSegment.slice(0, 8)}…${lastSegment.slice(-6)}`
+    : lastSegment;
+}
+
+function isAvailable(value: string): boolean {
+  return value.trim().toLowerCase() === 'available';
+}
+
+function runContext(run: WorkflowActivityRunFeedRow): string | null {
+  if (isAvailable(run.firstFailure.availability)) {
+    return run.firstFailure.message || run.firstFailure.stepId || null;
+  }
+  if (isAvailable(run.waiting.availability)) {
+    return (
+      run.waiting.prompt ||
+      run.waiting.waitingKind ||
+      run.waiting.stepId ||
+      null
+    );
+  }
+  if (isAvailable(run.currentStep.availability)) {
+    return run.currentStep.stepId || run.currentStep.inputSummary || null;
+  }
+  return null;
 }
 
 function failureTitle(error: unknown): string {
@@ -72,7 +122,10 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
   const definition = params.get('definition')?.trim() ?? '';
   const workflowFilterPresent = params.has('workflowId');
   const workflowId = params.get('workflowId')?.trim() ?? '';
+  const fromUtc = params.get('from')?.trim() ?? '';
+  const toUtc = params.get('to')?.trim() ?? '';
   const search = params.get('q') ?? '';
+  const [now, setNow] = React.useState(() => Date.now());
 
   const replaceParams = React.useCallback(
     (update: (next: URLSearchParams) => void) => {
@@ -105,64 +158,68 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
     replaceParam('status', '');
   }, [rawStatus, replaceParam, status]);
 
-  const workflow = useQuery({
+  const runs = useInfiniteQuery({
     queryKey: [
       'workflow-activity-vnext',
-      'activity-workflow',
-      scopeId,
-      workflowId,
-    ],
-    queryFn: () => scopesApi.getWorkflowDetail(scopeId, workflowId),
-    enabled: workflowFilterPresent && Boolean(workflowId),
-    retry: false,
-  });
-  const resolvedDefinition =
-    workflow.data?.source?.definitionActorId.trim() ?? '';
-  const effectiveDefinition = workflowFilterPresent
-    ? resolvedDefinition
-    : definition;
-  const workflowFilterReady =
-    !workflowFilterPresent || Boolean(resolvedDefinition);
-  const runs = useQuery({
-    queryKey: [
-      'workflow-activity-vnext',
-      'runs',
+      'activity-runs',
       scopeId,
       status,
       origin,
-      effectiveDefinition,
+      definition,
+      workflowId,
+      fromUtc,
+      toUtc,
     ],
-    queryFn: () =>
-      workflowActivityApi.listRuns(scopeId, {
+    queryFn: ({ pageParam }) =>
+      workflowActivityApi.listActivityRuns(scopeId, {
         status: status || undefined,
         origins: origin ? [origin] : undefined,
-        definitionActorIds: effectiveDefinition
-          ? [effectiveDefinition]
-          : undefined,
-        take: 100,
+        definitionActorIds: definition ? [definition] : undefined,
+        workflowId: workflowId || undefined,
+        fromUtc: fromUtc || undefined,
+        toUtc: toUtc || undefined,
+        take: 50,
+        cursor: pageParam,
+        includeTotalCount: pageParam === undefined,
       }),
-    enabled: workflowFilterReady,
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) =>
+      lastPage.hasMore ? (lastPage.nextCursor ?? undefined) : undefined,
+    enabled: !workflowFilterPresent || Boolean(workflowId),
     refetchOnMount: 'always',
     retry: false,
   });
 
-  const refresh = () => {
-    if (workflowFilterPresent && !resolvedDefinition) {
-      if (workflowId) void workflow.refetch();
-      return;
-    }
-    void runs.refetch();
-  };
+  const loadedRuns = React.useMemo(
+    () => runs.data?.pages.flatMap((page) => page.items) ?? [],
+    [runs.data],
+  );
+  const hasRunningRun = loadedRuns.some(
+    (run) => run.status.trim().toLowerCase() === 'running',
+  );
+  React.useEffect(() => {
+    if (!hasRunningRun) return;
+    const interval = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(interval);
+  }, [hasRunningRun]);
 
-  const filtered = (runs.data ?? []).filter((run) => {
+  const filtered = loadedRuns.filter((run) => {
     const normalized = search.trim().toLowerCase();
     return (
       !normalized ||
-      [run.workflowName, run.runId, run.status].some((value) =>
-        value.toLowerCase().includes(normalized),
-      )
+      [
+        run.workflowName,
+        run.runId,
+        run.status,
+        run.inputSummary,
+        run.initiator.displayValue,
+      ].some((value) => value.toLowerCase().includes(normalized))
     );
   });
+  const totalCount = runs.data?.pages[0]?.totalCount ?? null;
+  const cursorMalformed =
+    runs.error instanceof WorkflowActivityApiError &&
+    runs.error.code === 'malformed_cursor';
 
   return (
     <WorkflowActivityVNextShell
@@ -172,7 +229,7 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
         'Review recent workflow runs and open one for details.',
       )}
       headerActions={
-        <Button icon={<ReloadOutlined />} onClick={refresh}>
+        <Button icon={<ReloadOutlined />} onClick={() => void runs.refetch()}>
           {t('workflowActivityVNext.common.refresh', 'Refresh')}
         </Button>
       }
@@ -202,14 +259,14 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
         <Input
           allowClear
           aria-label={t(
-            'workflowActivityVNext.activity.searchAria',
-            'Search runs',
+            'workflowActivityVNext.activity.filterLoadedAria',
+            'Filter loaded runs',
           )}
           className="wa-vnext__toolbar-search"
           onChange={(event) => replaceParam('q', event.target.value)}
           placeholder={t(
-            'workflowActivityVNext.activity.search',
-            'Search runs',
+            'workflowActivityVNext.activity.filterLoaded',
+            'Filter loaded runs',
           )}
           prefix={<SearchOutlined />}
           role="searchbox"
@@ -300,6 +357,33 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
             ]}
             value={origin}
           />
+          <DatePicker.RangePicker
+            allowEmpty={[true, true]}
+            onChange={(range) =>
+              replaceParams((next) => {
+                const [after, before] = range ?? [];
+                if (after) next.set('from', after.toISOString());
+                else next.delete('from');
+                if (before) next.set('to', before.toISOString());
+                else next.delete('to');
+              })
+            }
+            placeholder={[
+              t(
+                'workflowActivityVNext.activity.afterPlaceholder',
+                'Activity after',
+              ),
+              t(
+                'workflowActivityVNext.activity.beforePlaceholder',
+                'Activity before',
+              ),
+            ]}
+            showTime
+            value={[
+              fromUtc && dayjs(fromUtc).isValid() ? dayjs(fromUtc) : null,
+              toUtc && dayjs(toUtc).isValid() ? dayjs(toUtc) : null,
+            ]}
+          />
           {definition && !workflowFilterPresent ? (
             <Button onClick={() => replaceParam('definition', '')}>
               {t(
@@ -327,71 +411,18 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
             </p>
           </div>
         </div>
-      ) : workflowFilterPresent && workflow.isPending ? (
-        <AevatarContentSkeleton
-          ariaLabel={t(
-            'workflowActivityVNext.activity.workflowFilterLoading',
-            'Loading workflow activity…',
-          )}
-          columnWidths={['minmax(240px, 1fr)', 120, 120, 190]}
-          rows={4}
-          tableMinWidth={900}
-          variant="table"
-        />
-      ) : workflowFilterPresent && workflow.isError ? (
-        <div className="wa-vnext__state" role="alert">
-          <div>
-            <h2>
-              {t(
-                'workflowActivityVNext.activity.workflowFilterResolutionFailed',
-                'Workflow activity unavailable',
-              )}
-            </h2>
-            <p>
-              {t(
-                'workflowActivityVNext.activity.workflowFilterResolutionFailedDescription',
-                'Try again or remove the workflow filter.',
-              )}
-            </p>
-            <Button onClick={() => void workflow.refetch()}>
-              {t('workflowActivityVNext.common.retry', 'Retry')}
-            </Button>
-            <TechnicalDetails>
-              {workflow.error instanceof Error
-                ? workflow.error.message
-                : String(workflow.error)}
-            </TechnicalDetails>
-          </div>
-        </div>
-      ) : workflowFilterPresent && !resolvedDefinition ? (
-        <div className="wa-vnext__state">
-          <div>
-            <h2>
-              {t(
-                'workflowActivityVNext.activity.workflowFilterUnavailableTitle',
-                'Activity filtering is unavailable',
-              )}
-            </h2>
-            <p>
-              {t(
-                'workflowActivityVNext.activity.workflowFilterUnavailableDescription',
-                'No runs are shown because this workflow does not expose an Activity filter.',
-              )}
-            </p>
-          </div>
-        </div>
       ) : runs.isPending ? (
         <AevatarContentSkeleton
           ariaLabel={t(
             'workflowActivityVNext.activity.loading',
             'Loading activity…',
           )}
-          columnWidths={['minmax(240px, 1fr)', 120, 120, 190]}
+          columnWidths={['minmax(220px, 1fr)', 180, 190, 180, 220, 56]}
           rows={4}
-          tableMinWidth={900}
+          tableMinWidth={1080}
           variant="table"
         />
-      ) : runs.isError ? (
+      ) : runs.isError && !runs.data ? (
         <div className="wa-vnext__state" role="alert">
           <div>
             <h2>{failureTitle(runs.error)}</h2>
@@ -415,7 +446,7 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
         <div className="wa-vnext__state">
           <div>
             <h2>
-              {runs.data?.length
+              {loadedRuns.length
                 ? t(
                     'workflowActivityVNext.activity.noMatch',
                     'No matching runs',
@@ -431,102 +462,199 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
           </div>
         </div>
       ) : (
-        <TableScrollRegion
-          ariaLabel={t('workflowActivityVNext.activity.title', 'Activity')}
-          className="wa-vnext__activity-table"
-        >
-          <table className="wa-vnext__table">
-            <thead>
-              <tr>
-                <th>
-                  {t('workflowActivityVNext.activity.columnRun', 'Workflow')}
-                </th>
-                <th>
-                  {t('workflowActivityVNext.activity.columnStatus', 'Status')}
-                </th>
-                <th>
-                  {t('workflowActivityVNext.activity.columnOrigin', 'Source')}
-                </th>
-                <th>
-                  {t('workflowActivityVNext.activity.columnUpdated', 'Updated')}
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((run) => {
-                const statusPresentation = getRunStatusPresentation(run.status);
-                const workflowName =
-                  run.workflowName ||
-                  t(
-                    'workflowActivityVNext.activity.unnamed',
-                    'Unnamed workflow',
-                  );
-                return (
-                  <tr key={run.runId}>
-                    <td
-                      data-label={t(
-                        'workflowActivityVNext.activity.columnRun',
-                        'Workflow',
+        <>
+          <TableScrollRegion
+            ariaLabel={t('workflowActivityVNext.activity.title', 'Activity')}
+            minWidth={1080}
+          >
+            <table className="wa-vnext__table">
+              <thead>
+                <tr>
+                  <th>
+                    {t('workflowActivityVNext.activity.columnRun', 'Workflow')}
+                  </th>
+                  <th>
+                    {t('workflowActivityVNext.activity.columnStatus', 'Status')}
+                  </th>
+                  <th>
+                    {t(
+                      'workflowActivityVNext.activity.columnStarted',
+                      'Started',
+                    )}
+                  </th>
+                  <th>
+                    {t(
+                      'workflowActivityVNext.activity.columnInitiator',
+                      'Initiator',
+                    )}
+                  </th>
+                  <th>
+                    {t('workflowActivityVNext.activity.columnInput', 'Input')}
+                  </th>
+                  <th>
+                    <span className="aevatar-loading-visually-hidden">
+                      {t(
+                        'workflowActivityVNext.activity.columnAction',
+                        'Open run',
                       )}
-                    >
-                      <button
-                        aria-label={t(
-                          'workflowActivityVNext.activity.openRunAria',
-                          'Open {name}',
-                          { name: workflowName },
+                    </span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((run) => {
+                  const statusPresentation = getRunStatusPresentation(
+                    run.status,
+                  );
+                  const workflowName =
+                    run.workflowName ||
+                    t(
+                      'workflowActivityVNext.activity.unnamed',
+                      'Unnamed workflow',
+                    );
+                  const context = runContext(run);
+                  return (
+                    <tr key={run.runId}>
+                      <td
+                        data-label={t(
+                          'workflowActivityVNext.activity.columnRun',
+                          'Workflow',
                         )}
-                        className="wa-vnext__run-link"
-                        onClick={() =>
-                          history.push(
-                            buildWorkflowActivityRunHref(scopeId, run.runId),
-                          )
-                        }
-                        style={{
-                          background: 'transparent',
-                          border: 0,
-                          color: 'var(--wa-blue)',
-                          padding: 0,
-                          textAlign: 'left',
-                        }}
-                        type="button"
                       >
                         <span className="wa-vnext__title">{workflowName}</span>
-                      </button>
-                    </td>
-                    <td
-                      data-label={t(
-                        'workflowActivityVNext.activity.columnStatus',
-                        'Status',
-                      )}
-                    >
-                      <span
-                        className={`wa-vnext__status wa-vnext__status--${statusPresentation.className}`}
+                        <span className="wa-vnext__sub wa-vnext__mono">
+                          {shortRunReference(run.runId)}
+                        </span>
+                      </td>
+                      <td
+                        data-label={t(
+                          'workflowActivityVNext.activity.columnStatus',
+                          'Status',
+                        )}
                       >
-                        {statusPresentation.label}
-                      </span>
-                    </td>
-                    <td
-                      data-label={t(
-                        'workflowActivityVNext.activity.columnOrigin',
-                        'Source',
-                      )}
-                    >
-                      {run.runOrigin || '-'}
-                    </td>
-                    <td
-                      data-label={t(
-                        'workflowActivityVNext.activity.columnUpdated',
-                        'Updated',
-                      )}
-                    >
-                      {formatDate(run.updatedAtUtc)}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </TableScrollRegion>
+                        <span
+                          className={`wa-vnext__status wa-vnext__status--${statusPresentation.className}`}
+                        >
+                          {statusPresentation.label}
+                        </span>
+                        {context ? (
+                          <span className="wa-vnext__sub">{context}</span>
+                        ) : null}
+                      </td>
+                      <td
+                        data-label={t(
+                          'workflowActivityVNext.activity.columnStarted',
+                          'Started',
+                        )}
+                      >
+                        {formatDate(run.startedAtUtc)}
+                        <span className="wa-vnext__sub">
+                          {runDuration(run, now)}
+                        </span>
+                      </td>
+                      <td
+                        data-label={t(
+                          'workflowActivityVNext.activity.columnInitiator',
+                          'Initiator',
+                        )}
+                      >
+                        {isAvailable(run.initiator.availability)
+                          ? run.initiator.displayValue
+                          : t(
+                              'workflowActivityVNext.common.unavailable',
+                              'Unavailable',
+                            )}
+                        <span className="wa-vnext__sub">
+                          {run.runOrigin || '-'}
+                        </span>
+                      </td>
+                      <td
+                        data-label={t(
+                          'workflowActivityVNext.activity.columnInput',
+                          'Input',
+                        )}
+                      >
+                        {run.inputSummary || '-'}
+                      </td>
+                      <td
+                        data-label={t(
+                          'workflowActivityVNext.activity.columnAction',
+                          'Open run',
+                        )}
+                      >
+                        <Button
+                          aria-label={t(
+                            'workflowActivityVNext.activity.openRunAria',
+                            'Open {name}',
+                            { name: workflowName },
+                          )}
+                          icon={<ArrowRightOutlined />}
+                          onClick={() =>
+                            history.push(
+                              buildWorkflowActivityRunHref(scopeId, run.runId),
+                            )
+                          }
+                          type="text"
+                        />
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </TableScrollRegion>
+          <div className="wa-vnext__activity-footer">
+            <span aria-live="polite">
+              {totalCount === null
+                ? t(
+                    'workflowActivityVNext.activity.loadedCount',
+                    '{loaded} runs loaded',
+                    { loaded: loadedRuns.length },
+                  )
+                : t(
+                    'workflowActivityVNext.activity.loadedTotalCount',
+                    '{loaded} of {total} runs loaded',
+                    { loaded: loadedRuns.length, total: totalCount },
+                  )}
+            </span>
+            {runs.isFetchNextPageError ? (
+              <Alert
+                action={
+                  <Button
+                    onClick={() =>
+                      cursorMalformed
+                        ? void runs.refetch()
+                        : void runs.fetchNextPage()
+                    }
+                  >
+                    {cursorMalformed
+                      ? t(
+                          'workflowActivityVNext.activity.refreshFromStart',
+                          'Refresh from start',
+                        )
+                      : t(
+                          'workflowActivityVNext.activity.retryLoadMore',
+                          'Retry loading more',
+                        )}
+                  </Button>
+                }
+                message={t(
+                  'workflowActivityVNext.activity.loadMoreFailed',
+                  "Couldn't load more runs",
+                )}
+                showIcon
+                type="warning"
+              />
+            ) : runs.hasNextPage ? (
+              <Button
+                loading={runs.isFetchingNextPage}
+                onClick={() => void runs.fetchNextPage()}
+              >
+                {t('workflowActivityVNext.activity.loadMore', 'Load more')}
+              </Button>
+            ) : null}
+          </div>
+        </>
       )}
     </WorkflowActivityVNextShell>
   );

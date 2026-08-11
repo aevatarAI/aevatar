@@ -1,54 +1,94 @@
+import type { WorkflowRunRecoveryCapability } from '@/shared/models/workflowActivity';
 import { resolveRunRecovery } from './runRecovery';
 
 describe('resolveRunRecovery', () => {
-  it('enables retry only for one explicit failed step and run again for an explicit graph root step', () => {
-    expect(
-      resolveRunRecovery(
-        [
-          { stepId: 'step-second', success: false },
-          { stepId: 'step-first', success: true },
-        ],
-        {
-          rootNodeId: 'node-root',
-          nodes: [
-            { nodeId: 'node-root', stepId: 'step-first' },
-            { nodeId: 'node-second', stepId: 'step-second' },
-          ],
-        },
-      ),
-    ).toEqual({ retryStepId: 'step-second', runAgainStepId: 'step-first' });
-  });
-
-  it('does not guess a failed step or first step from array order', () => {
-    expect(
-      resolveRunRecovery([
-        { stepId: 'step-first', success: false },
-        { stepId: 'step-second', success: false },
-      ]),
-    ).toEqual({ retryStepId: null, runAgainStepId: null });
-  });
-
-  it('does not enable run again when the graph root is missing or lacks an explicit step id', () => {
-    const steps = [{ stepId: 'step-first', success: true }] as const;
-
-    expect(
-      resolveRunRecovery(steps, {
-        rootNodeId: 'node-missing',
-        nodes: [{ nodeId: 'node-first', stepId: 'step-first' }],
-      }),
-    ).toEqual({ retryStepId: null, runAgainStepId: null });
-    expect(
-      resolveRunRecovery(steps, {
-        rootNodeId: 'node-root',
-        nodes: [{ nodeId: 'node-root', stepId: '' }],
-      }),
-    ).toEqual({ retryStepId: null, runAgainStepId: null });
-  });
-
-  it('does not invent a first step for an empty run', () => {
-    expect(resolveRunRecovery([])).toEqual({
-      retryStepId: null,
-      runAgainStepId: null,
+  it('enables only an eligible action with an authoritative starting step', () => {
+    expect(resolveRunRecovery(recoveryCapability())).toEqual({
+      retry: {
+        enabled: true,
+        mayIncurModelOrToolCost: true,
+        reason: '',
+        recommendedActions: [1],
+        reusesPriorStepOutputs: true,
+        startingStepId: 'step-failed',
+      },
+      runAgain: {
+        enabled: false,
+        mayIncurModelOrToolCost: false,
+        reason: 'Fix access first.',
+        recommendedActions: [3],
+        reusesPriorStepOutputs: false,
+        startingStepId: 'step-start',
+      },
+      workflowDefinitionRevisionId: 'revision-3',
+      workflowDefinitionVersion: 3,
     });
   });
+
+  it('uses the backend unavailable reason without deriving an alternative', () => {
+    const capability = recoveryCapability();
+    capability.retryFailedStep = {
+      ...capability.retryFailedStep,
+      eligibility: 3,
+      unavailableReason: 'The legacy run does not contain retry facts.',
+      recommendedActions: [7],
+    };
+
+    expect(resolveRunRecovery(capability).retry).toEqual(
+      expect.objectContaining({
+        enabled: false,
+        reason: 'The legacy run does not contain retry facts.',
+        recommendedActions: [7],
+      }),
+    );
+  });
+
+  it('keeps eligible actions disabled when the backend omits the starting step', () => {
+    const capability = recoveryCapability();
+    capability.retryFailedStep = {
+      ...capability.retryFailedStep,
+      startingStepId: '  ',
+    };
+
+    expect(resolveRunRecovery(capability).retry).toEqual(
+      expect.objectContaining({
+        enabled: false,
+        reason: 'Recovery starting step is unavailable.',
+        startingStepId: '',
+      }),
+    );
+  });
 });
+
+function recoveryCapability(): MutableRecoveryCapability {
+  return {
+    retryFailedStep: {
+      eligibility: 1,
+      unavailableReasonCode: 1,
+      unavailableReason: '',
+      recommendedActions: [1],
+      startingStepId: 'step-failed',
+      reusesPriorStepOutputs: true,
+      mayIncurModelOrToolCost: true,
+    },
+    runAgain: {
+      eligibility: 2,
+      unavailableReasonCode: 4,
+      unavailableReason: 'Fix access first.',
+      recommendedActions: [3],
+      startingStepId: 'step-start',
+      reusesPriorStepOutputs: false,
+      mayIncurModelOrToolCost: false,
+    },
+    workflowDefinitionRevisionId: 'revision-3',
+    workflowDefinitionVersion: 3,
+  };
+}
+
+type MutableRecoveryCapability = {
+  -readonly [Key in keyof WorkflowRunRecoveryCapability]: WorkflowRunRecoveryCapability[Key] extends object
+    ? {
+        -readonly [NestedKey in keyof WorkflowRunRecoveryCapability[Key]]: WorkflowRunRecoveryCapability[Key][NestedKey];
+      }
+    : WorkflowRunRecoveryCapability[Key];
+};

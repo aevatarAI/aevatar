@@ -14,18 +14,36 @@ import type {
   WorkflowActivityDiagnostic,
   WorkflowActivityGraphEdge,
   WorkflowActivityGraphNode,
+  WorkflowActivityRunCurrentStep,
   WorkflowActivityRunDetail,
+  WorkflowActivityRunFeedFilter,
+  WorkflowActivityRunFeedPage,
+  WorkflowActivityRunFeedRow,
   WorkflowActivityRunFilter,
+  WorkflowActivityRunFirstFailure,
   WorkflowActivityRunGraph,
+  WorkflowActivityRunInitiator,
   WorkflowActivityRunStatistics,
   WorkflowActivityRunSummary,
+  WorkflowActivityRunWaiting,
   WorkflowActivityStep,
   WorkflowActivityTimelineEvent,
   WorkflowActivityToolApproval,
   WorkflowActivityToolCall,
   WorkflowActivityUsageTotals,
+  WorkflowRecoveryActionCapability,
+  WorkflowRecoveryEligibility,
+  WorkflowRecoveryRecommendedAction,
+  WorkflowRecoveryUnavailableReasonCode,
   WorkflowRunForkAcceptedReceipt,
   WorkflowRunForkRequest,
+  WorkflowRunLineage,
+  WorkflowRunLineageAvailability,
+  WorkflowRunLineageRelationKind,
+  WorkflowRunLineageRunRef,
+  WorkflowRunRecoveryCapability,
+  WorkflowRunRetryForkLineage,
+  WorkflowRunSubWorkflowLineage,
 } from '@/shared/models/workflowActivity';
 
 const JSON_HEADERS = {
@@ -94,6 +112,331 @@ function readNullableNumberValue(value: unknown, label: string): number | null {
     throw new Error(`${label} must be a number.`);
   }
   return value;
+}
+
+function decodeNumericEnum<T extends number>(
+  value: unknown,
+  label: string,
+  allowed: readonly number[],
+): T {
+  if (
+    typeof value !== 'number' ||
+    !Number.isInteger(value) ||
+    !allowed.includes(value)
+  ) {
+    throw new Error(`${label} must be a supported numeric enum value.`);
+  }
+  return value as T;
+}
+
+function decodeRecoveryActionCapability(
+  value: unknown,
+  label = 'WorkflowRecoveryActionCapability',
+): WorkflowRecoveryActionCapability {
+  const record = expectRecord(value, label);
+  return {
+    eligibility: decodeNumericEnum<WorkflowRecoveryEligibility>(
+      record.eligibility,
+      `${label}.eligibility`,
+      [0, 1, 2, 3],
+    ),
+    unavailableReasonCode:
+      decodeNumericEnum<WorkflowRecoveryUnavailableReasonCode>(
+        record.unavailableReasonCode,
+        `${label}.unavailableReasonCode`,
+        [0, 1, 2, 3, 4, 5, 6, 7],
+      ),
+    unavailableReason: readString(
+      record,
+      'unavailableReason',
+      `${label}.unavailableReason`,
+    ),
+    recommendedActions: expectArray(
+      record.recommendedActions,
+      `${label}.recommendedActions`,
+      (entry, entryLabel = `${label}.recommendedActions[]`) =>
+        decodeNumericEnum<WorkflowRecoveryRecommendedAction>(
+          entry,
+          entryLabel,
+          [0, 1, 2, 3, 4, 5, 6, 7],
+        ),
+    ),
+    startingStepId: readString(
+      record,
+      'startingStepId',
+      `${label}.startingStepId`,
+    ),
+    reusesPriorStepOutputs: readBoolean(
+      record,
+      'reusesPriorStepOutputs',
+      `${label}.reusesPriorStepOutputs`,
+    ),
+    mayIncurModelOrToolCost: readBoolean(
+      record,
+      'mayIncurModelOrToolCost',
+      `${label}.mayIncurModelOrToolCost`,
+    ),
+  };
+}
+
+function decodeRecoveryCapability(
+  value: unknown,
+  label = 'WorkflowRunRecoveryCapability',
+): WorkflowRunRecoveryCapability {
+  const record = expectRecord(value, label);
+  return {
+    retryFailedStep: decodeRecoveryActionCapability(
+      record.retryFailedStep,
+      `${label}.retryFailedStep`,
+    ),
+    runAgain: decodeRecoveryActionCapability(
+      record.runAgain,
+      `${label}.runAgain`,
+    ),
+    workflowDefinitionRevisionId: readString(
+      record,
+      'workflowDefinitionRevisionId',
+      `${label}.workflowDefinitionRevisionId`,
+    ),
+    workflowDefinitionVersion: readNumber(
+      record,
+      'workflowDefinitionVersion',
+      `${label}.workflowDefinitionVersion`,
+    ),
+  };
+}
+
+function decodeLineageRunRef(
+  value: unknown,
+  label = 'WorkflowRunLineageRunRef',
+): WorkflowRunLineageRunRef {
+  const record = expectRecord(value, label);
+  return {
+    runId: readString(record, 'runId', `${label}.runId`),
+    actorId: readString(record, 'actorId', `${label}.actorId`),
+    relationshipId: readString(
+      record,
+      'relationshipId',
+      `${label}.relationshipId`,
+    ),
+    stepId: readString(record, 'stepId', `${label}.stepId`),
+    attempt: readNumber(record, 'attempt', `${label}.attempt`),
+    relationKind: decodeNumericEnum<WorkflowRunLineageRelationKind>(
+      record.relationKind,
+      `${label}.relationKind`,
+      [0, 1, 2],
+    ),
+  };
+}
+
+function decodeRetryForkLineage(
+  value: unknown,
+  label = 'WorkflowRunRetryForkLineage',
+): WorkflowRunRetryForkLineage {
+  const record = expectRecord(value, label);
+  return {
+    availability: decodeNumericEnum<WorkflowRunLineageAvailability>(
+      record.availability,
+      `${label}.availability`,
+      [0, 1, 2, 3],
+    ),
+    sourceRunId: readString(record, 'sourceRunId', `${label}.sourceRunId`),
+    originalRunId: readString(
+      record,
+      'originalRunId',
+      `${label}.originalRunId`,
+    ),
+    attempt: readNumber(record, 'attempt', `${label}.attempt`),
+    startAtStepId: readString(
+      record,
+      'startAtStepId',
+      `${label}.startAtStepId`,
+    ),
+    childRuns: expectArray(
+      record.childRuns,
+      `${label}.childRuns`,
+      decodeLineageRunRef,
+    ),
+  };
+}
+
+function decodeSubWorkflowLineage(
+  value: unknown,
+  label = 'WorkflowRunSubWorkflowLineage',
+): WorkflowRunSubWorkflowLineage {
+  const record = expectRecord(value, label);
+  return {
+    availability: decodeNumericEnum<WorkflowRunLineageAvailability>(
+      record.availability,
+      `${label}.availability`,
+      [0, 1, 2, 3],
+    ),
+    parentRunId: readString(record, 'parentRunId', `${label}.parentRunId`),
+    parentActorId: readString(
+      record,
+      'parentActorId',
+      `${label}.parentActorId`,
+    ),
+    parentStepId: readString(record, 'parentStepId', `${label}.parentStepId`),
+    rootRunId: readString(record, 'rootRunId', `${label}.rootRunId`),
+    depth: readNumber(record, 'depth', `${label}.depth`),
+    childRuns: expectArray(
+      record.childRuns,
+      `${label}.childRuns`,
+      decodeLineageRunRef,
+    ),
+  };
+}
+
+function decodeLineage(
+  value: unknown,
+  label = 'WorkflowRunLineage',
+): WorkflowRunLineage {
+  const record = expectRecord(value, label);
+  return {
+    availability: decodeNumericEnum<WorkflowRunLineageAvailability>(
+      record.availability,
+      `${label}.availability`,
+      [0, 1, 2, 3],
+    ),
+    retryFork: decodeRetryForkLineage(record.retryFork, `${label}.retryFork`),
+    subWorkflow: decodeSubWorkflowLineage(
+      record.subWorkflow,
+      `${label}.subWorkflow`,
+    ),
+    unavailableReason: readString(
+      record,
+      'unavailableReason',
+      `${label}.unavailableReason`,
+    ),
+  };
+}
+
+function decodeActivityInitiator(
+  value: unknown,
+  label = 'WorkflowActivityRunInitiator',
+): WorkflowActivityRunInitiator {
+  const record = expectRecord(value, label);
+  return {
+    platform: readString(record, 'platform', `${label}.platform`),
+    tenant: readString(record, 'tenant', `${label}.tenant`),
+    externalUserId: readString(
+      record,
+      'externalUserId',
+      `${label}.externalUserId`,
+    ),
+    scope: readString(record, 'scope', `${label}.scope`),
+    bindingId: readString(record, 'bindingId', `${label}.bindingId`),
+    displayValue: readString(record, 'displayValue', `${label}.displayValue`),
+    availability: readString(record, 'availability', `${label}.availability`),
+  };
+}
+
+function decodeActivityCurrentStep(
+  value: unknown,
+  label = 'WorkflowActivityRunCurrentStep',
+): WorkflowActivityRunCurrentStep {
+  const record = expectRecord(value, label);
+  return {
+    stepId: readString(record, 'stepId', `${label}.stepId`),
+    inputSummary: readString(record, 'inputSummary', `${label}.inputSummary`),
+    availability: readString(record, 'availability', `${label}.availability`),
+  };
+}
+
+function decodeActivityFirstFailure(
+  value: unknown,
+  label = 'WorkflowActivityRunFirstFailure',
+): WorkflowActivityRunFirstFailure {
+  const record = expectRecord(value, label);
+  return {
+    stepId: readString(record, 'stepId', `${label}.stepId`),
+    message: readString(record, 'message', `${label}.message`),
+    availability: readString(record, 'availability', `${label}.availability`),
+  };
+}
+
+function decodeActivityWaiting(
+  value: unknown,
+  label = 'WorkflowActivityRunWaiting',
+): WorkflowActivityRunWaiting {
+  const record = expectRecord(value, label);
+  return {
+    stepId: readString(record, 'stepId', `${label}.stepId`),
+    waitingKind: readString(record, 'waitingKind', `${label}.waitingKind`),
+    prompt: readString(record, 'prompt', `${label}.prompt`),
+    availability: readString(record, 'availability', `${label}.availability`),
+  };
+}
+
+function decodeActivityRunFeedRow(
+  value: unknown,
+  label = 'WorkflowActivityRunFeedRow',
+): WorkflowActivityRunFeedRow {
+  const record = expectRecord(value, label);
+  return {
+    runId: readNonBlank(record, 'runId', `${label}.runId`),
+    actorId: readNonBlank(record, 'actorId', `${label}.actorId`),
+    workflowId: readString(record, 'workflowId', `${label}.workflowId`),
+    workflowName: readString(record, 'workflowName', `${label}.workflowName`),
+    scopeId: readNonBlank(record, 'scopeId', `${label}.scopeId`),
+    status: readString(record, 'status', `${label}.status`),
+    runOrigin: readString(record, 'runOrigin', `${label}.runOrigin`),
+    success: readNullableBooleanValue(record.success, `${label}.success`),
+    initiator: decodeActivityInitiator(record.initiator, `${label}.initiator`),
+    inputSummary: readString(record, 'inputSummary', `${label}.inputSummary`),
+    currentStep: decodeActivityCurrentStep(
+      record.currentStep,
+      `${label}.currentStep`,
+    ),
+    firstFailure: decodeActivityFirstFailure(
+      record.firstFailure,
+      `${label}.firstFailure`,
+    ),
+    waiting: decodeActivityWaiting(record.waiting, `${label}.waiting`),
+    startedAtUtc: readNullableStringValue(
+      record.startedAtUtc,
+      `${label}.startedAtUtc`,
+    ),
+    completedAtUtc: readNullableStringValue(
+      record.completedAtUtc,
+      `${label}.completedAtUtc`,
+    ),
+    updatedAtUtc: readNonBlank(record, 'updatedAtUtc', `${label}.updatedAtUtc`),
+    durationMs: readNullableNumberValue(
+      record.durationMs,
+      `${label}.durationMs`,
+    ),
+    stateVersion: readNumber(record, 'stateVersion', `${label}.stateVersion`),
+    recoveryCapability: decodeRecoveryCapability(
+      record.recoveryCapability,
+      `${label}.recoveryCapability`,
+    ),
+    lineage: decodeLineage(record.lineage, `${label}.lineage`),
+  };
+}
+
+function decodeActivityRunFeedPage(
+  value: unknown,
+): WorkflowActivityRunFeedPage {
+  const label = 'WorkflowActivityRunFeedPage';
+  const record = expectRecord(value, label);
+  return {
+    items: expectArray(
+      record.items,
+      `${label}.items`,
+      decodeActivityRunFeedRow,
+    ),
+    nextCursor: readNullableStringValue(
+      record.nextCursor,
+      `${label}.nextCursor`,
+    ),
+    hasMore: readBoolean(record, 'hasMore', `${label}.hasMore`),
+    totalCount: readNullableNumberValue(
+      record.totalCount,
+      `${label}.totalCount`,
+    ),
+  };
 }
 
 function decodeUsage(
@@ -347,6 +690,11 @@ function decodeDetail(value: unknown): WorkflowActivityRunDetail {
       record.usageTotals,
       'WorkflowActivityRunDetail.usageTotals',
     ),
+    recoveryCapability: decodeRecoveryCapability(
+      record.recoveryCapability,
+      'WorkflowActivityRunDetail.recoveryCapability',
+    ),
+    lineage: decodeLineage(record.lineage, 'WorkflowActivityRunDetail.lineage'),
   };
 }
 
@@ -414,6 +762,11 @@ function decodeForkReceipt(value: unknown): WorkflowRunForkAcceptedReceipt {
       record,
       'sourceRunId',
       'WorkflowRunForkAcceptedReceipt.sourceRunId',
+    ),
+    newRunId: readNonBlank(
+      record,
+      'newRunId',
+      'WorkflowRunForkAcceptedReceipt.newRunId',
     ),
     newRunActorId: readNonBlank(
       record,
@@ -504,6 +857,26 @@ export const workflowActivityApi = {
     return requestActivityJson(url, (value) =>
       expectArray(value, 'WorkflowActivityRunSummary[]', decodeSummary),
     );
+  },
+
+  listActivityRuns(
+    scopeId: string,
+    filter: WorkflowActivityRunFeedFilter = {},
+  ): Promise<WorkflowActivityRunFeedPage> {
+    const url = withQuery('/api/workflow/observatory/activity-runs', {
+      scope: scopeId.trim(),
+      status: filter.status?.trim(),
+      origin: joinFilter(filter.origins),
+      definition: joinFilter(filter.definitionActorIds),
+      schedule: joinFilter(filter.scheduleIds),
+      workflowId: filter.workflowId?.trim(),
+      from: filter.fromUtc?.trim(),
+      to: filter.toUtc?.trim(),
+      take: filter.take,
+      cursor: filter.cursor?.trim(),
+      includeTotalCount: filter.includeTotalCount,
+    });
+    return requestActivityJson(url, decodeActivityRunFeedPage);
   },
 
   getRun(scopeId: string, runId: string): Promise<WorkflowActivityRunDetail> {

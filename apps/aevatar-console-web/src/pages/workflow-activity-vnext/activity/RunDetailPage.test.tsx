@@ -182,6 +182,67 @@ function buildRunDetail() {
       totalTokens: 12,
       cost: 0.02,
     },
+    recoveryCapability: {
+      retryFailedStep: {
+        eligibility: 1,
+        unavailableReasonCode: 0,
+        unavailableReason: '',
+        recommendedActions: [1],
+        startingStepId: 'step-failed',
+        reusesPriorStepOutputs: true,
+        mayIncurModelOrToolCost: false,
+      },
+      runAgain: {
+        eligibility: 1,
+        unavailableReasonCode: 0,
+        unavailableReason: '',
+        recommendedActions: [2],
+        startingStepId: 'step-root',
+        reusesPriorStepOutputs: false,
+        mayIncurModelOrToolCost: true,
+      },
+      workflowDefinitionRevisionId: 'revision-alpha',
+      workflowDefinitionVersion: 12,
+    },
+    lineage: {
+      availability: 1,
+      unavailableReason: '',
+      retryFork: {
+        availability: 1,
+        sourceRunId: 'run-source-alpha',
+        originalRunId: 'run-original-alpha',
+        attempt: 2,
+        startAtStepId: 'step-failed',
+        childRuns: [
+          {
+            runId: 'run-retry-child',
+            actorId: 'actor-retry-child',
+            relationshipId: 'relationship-retry-child',
+            stepId: 'step-failed',
+            attempt: 3,
+            relationKind: 1,
+          },
+        ],
+      },
+      subWorkflow: {
+        availability: 1,
+        parentRunId: 'run-parent-alpha',
+        parentActorId: 'actor-parent-alpha',
+        parentStepId: 'step-parent',
+        rootRunId: 'run-root-alpha',
+        depth: 1,
+        childRuns: [
+          {
+            runId: 'run-sub-child',
+            actorId: 'actor-sub-child',
+            relationshipId: 'relationship-sub-child',
+            stepId: 'step-child',
+            attempt: 1,
+            relationKind: 2,
+          },
+        ],
+      },
+    },
   };
 }
 
@@ -200,6 +261,7 @@ describe('Workflow Activity vNext run detail recovery', () => {
     mockWorkflowActivityApi.forkRun.mockResolvedValue({
       accepted: true,
       sourceRunId: 'run-source-alpha',
+      newRunId: 'run-new-alpha',
       newRunActorId: 'actor-new-alpha',
       workflowName: 'Incident review',
       acceptedCommandId: 'command-alpha',
@@ -210,7 +272,7 @@ describe('Workflow Activity vNext run detail recovery', () => {
 
   afterEach(() => cleanupTestQueryClients());
 
-  it('confirms a retry without exposing recovery receipts in the primary interface', async () => {
+  it('confirms an authoritative retry and opens the accepted run by public run ID', async () => {
     renderWithQueryClient(
       <RunDetailPage runId="run-source-alpha" scopeId="scope-alpha" />,
     );
@@ -230,11 +292,18 @@ describe('Workflow Activity vNext run detail recovery', () => {
       within(confirmation).getByText('Investigate checkout latency'),
     ).toBeInTheDocument();
     expect(
-      within(confirmation).queryByText(
-        "This starts a new run. The original run won't change.",
+      within(confirmation).getByText('revision-alpha'),
+    ).toBeInTheDocument();
+    expect(within(confirmation).getByText('12')).toBeInTheDocument();
+    expect(
+      within(confirmation).getByText('Prior step outputs will be reused.'),
+    ).toBeInTheDocument();
+    expect(
+      within(confirmation).getByText(
+        "This creates a separate run. The source run won't change.",
       ),
-    ).not.toBeInTheDocument();
-    expect(confirmation.querySelector('.ant-alert-info')).toBeNull();
+    ).toBeInTheDocument();
+    expect(confirmation.querySelector('.ant-alert-warning')).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'Confirm retry' }));
 
@@ -245,14 +314,84 @@ describe('Workflow Activity vNext run detail recovery', () => {
         input: 'Investigate checkout latency',
       }),
     );
-    expect(await screen.findByText('New run started')).toBeInTheDocument();
-    expect(screen.queryByText('actor-new-alpha')).not.toBeVisible();
-    expect(screen.queryByText('command-alpha')).not.toBeVisible();
-    expect(screen.queryByText('correlation-alpha')).not.toBeVisible();
+    expect(await screen.findByText('New run accepted')).toBeInTheDocument();
+    const openNewRun = screen.getByRole('button', { name: 'Open new run' });
+    fireEvent.click(openNewRun);
+    expect(history.push).toHaveBeenCalledWith(
+      '/scopes/scope-alpha/workflow-activity-vnext/activity/run-new-alpha',
+    );
+    expect(history.push).not.toHaveBeenCalledWith(
+      expect.stringContaining('actor-new-alpha'),
+    );
+
+    const actorAddress = screen.getByText('actor-new-alpha');
+    expect(actorAddress).not.toBeVisible();
+    const receiptDetails = actorAddress.closest('details');
+    expect(receiptDetails).not.toBeNull();
+    fireEvent.click(
+      within(receiptDetails as HTMLElement).getByText('Technical details'),
+    );
+    expect(screen.getByText('actor-new-alpha')).toBeVisible();
+    expect(screen.getByText('command-alpha')).toBeVisible();
+    expect(screen.getByText('correlation-alpha')).toBeVisible();
     expect(
-      screen.queryByText('/api/workflow/runs/status/command-alpha'),
-    ).not.toBeVisible();
-    expect(screen.queryByText(/state version/i)).not.toBeInTheDocument();
+      screen.getByText('/api/workflow/runs/status/command-alpha'),
+    ).toBeVisible();
+  });
+
+  it('shows the cost and non-reuse semantics for an authoritative run again', async () => {
+    renderWithQueryClient(
+      <RunDetailPage runId="run-source-alpha" scopeId="scope-alpha" />,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Run again' }));
+    const confirmation = screen.getByRole('dialog', {
+      name: 'Confirm new run',
+    });
+    expect(within(confirmation).getByText('step-root')).toBeInTheDocument();
+    expect(
+      within(confirmation).getByText('Prior step outputs will not be reused.'),
+    ).toBeInTheDocument();
+    expect(
+      within(confirmation).getByText(
+        'This action may incur model or tool costs again.',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('keeps a backend-unavailable action focusable and shows its reason', async () => {
+    const run = buildRunDetail();
+    run.recoveryCapability.runAgain = {
+      eligibility: 3,
+      unavailableReasonCode: 3,
+      unavailableReason: 'Restore model access before starting another run.',
+      recommendedActions: [3, 7],
+      startingStepId: '',
+      reusesPriorStepOutputs: false,
+      mayIncurModelOrToolCost: false,
+    };
+    mockWorkflowActivityApi.getRun.mockResolvedValue(run);
+
+    renderWithQueryClient(
+      <RunDetailPage runId="run-source-alpha" scopeId="scope-alpha" />,
+    );
+
+    const runAgain = await screen.findByRole('button', { name: 'Run again' });
+    expect(runAgain).toHaveAttribute('aria-disabled', 'true');
+    expect(runAgain).not.toBeDisabled();
+    runAgain.focus();
+    expect(runAgain).toHaveFocus();
+    fireEvent.click(runAgain);
+    expect(
+      screen.queryByRole('dialog', { name: 'Confirm new run' }),
+    ).toBeNull();
+    expect(
+      screen.getByText('Restore model access before starting another run.'),
+    ).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Review settings' }));
+    expect(history.push).toHaveBeenCalledWith(
+      '/scopes/scope-alpha/workflow-activity-vnext/settings',
+    );
   });
 
   it('reports a retry failure with a toast and keeps server detail out of the page', async () => {
@@ -282,7 +421,7 @@ describe('Workflow Activity vNext run detail recovery', () => {
     ).not.toBeInTheDocument();
   });
 
-  it('keeps committed detail visible and disables run again when graph evidence fails', async () => {
+  it('keeps capability-eligible recovery enabled when graph loading fails', async () => {
     mockWorkflowActivityApi.getRunGraph.mockRejectedValue(
       new Error('graph offline'),
     );
@@ -296,7 +435,60 @@ describe('Workflow Activity vNext run detail recovery', () => {
     expect(
       await screen.findByText('Run graph unavailable'),
     ).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Run again' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Run again' })).toHaveAttribute(
+      'aria-disabled',
+      'false',
+    );
+  });
+
+  it('renders retry history and sub-workflows as separate public-run link groups', async () => {
+    renderWithQueryClient(
+      <RunDetailPage runId="run-source-alpha" scopeId="scope-alpha" />,
+    );
+
+    expect(
+      await screen.findByRole('heading', { name: 'Related runs' }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole('heading', { name: 'Retry history' }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole('heading', { name: 'Sub-workflows' }),
+    ).toBeVisible();
+
+    for (const runId of [
+      'run-source-alpha',
+      'run-original-alpha',
+      'run-retry-child',
+      'run-parent-alpha',
+      'run-root-alpha',
+      'run-sub-child',
+    ]) {
+      expect(screen.getByRole('link', { name: runId })).toHaveAttribute(
+        'href',
+        `/scopes/scope-alpha/workflow-activity-vnext/activity/${runId}`,
+      );
+    }
+    expect(screen.queryByText('actor-retry-child')).not.toBeInTheDocument();
+    expect(screen.queryByText('actor-parent-alpha')).not.toBeInTheDocument();
+    expect(screen.queryByText('actor-sub-child')).not.toBeInTheDocument();
+  });
+
+  it('keeps run detail usable when lineage is unavailable', async () => {
+    const run = buildRunDetail();
+    run.lineage.availability = 3;
+    run.lineage.unavailableReason =
+      'Lineage has not been projected for this run.';
+    mockWorkflowActivityApi.getRun.mockResolvedValue(run);
+
+    renderWithQueryClient(
+      <RunDetailPage runId="run-source-alpha" scopeId="scope-alpha" />,
+    );
+
+    expect(await screen.findByText('Incident review')).toBeVisible();
+    expect(
+      screen.getByText('Lineage has not been projected for this run.'),
+    ).toBeVisible();
   });
 
   it('keeps raw run and step errors behind technical details', async () => {
@@ -381,7 +573,9 @@ describe('Workflow Activity vNext run detail recovery', () => {
     expect(
       await screen.findByRole('heading', { level: 1, name: 'Run details' }),
     ).toBeInTheDocument();
-    expect(screen.queryByText('run-source-alpha')).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('heading', { name: 'run-source-alpha' }),
+    ).not.toBeInTheDocument();
   });
 
   it('names a forbidden detail response without inventing run facts', async () => {

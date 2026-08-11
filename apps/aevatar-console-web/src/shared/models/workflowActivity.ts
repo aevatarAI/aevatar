@@ -8,6 +8,138 @@ export interface WorkflowActivityRunFilter {
   readonly take?: number;
 }
 
+export interface WorkflowActivityRunFeedFilter
+  extends WorkflowActivityRunFilter {
+  readonly workflowId?: string;
+  readonly cursor?: string;
+  readonly includeTotalCount?: boolean;
+}
+
+export type WorkflowRecoveryEligibility = 0 | 1 | 2 | 3;
+export type WorkflowRecoveryUnavailableReasonCode =
+  | 0
+  | 1
+  | 2
+  | 3
+  | 4
+  | 5
+  | 6
+  | 7;
+export type WorkflowRecoveryRecommendedAction = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
+export type WorkflowRunLineageAvailability = 0 | 1 | 2 | 3;
+export type WorkflowRunLineageRelationKind = 0 | 1 | 2;
+
+export interface WorkflowRecoveryActionCapability {
+  readonly eligibility: WorkflowRecoveryEligibility;
+  readonly unavailableReasonCode: WorkflowRecoveryUnavailableReasonCode;
+  readonly unavailableReason: string;
+  readonly recommendedActions: readonly WorkflowRecoveryRecommendedAction[];
+  readonly startingStepId: string;
+  readonly reusesPriorStepOutputs: boolean;
+  readonly mayIncurModelOrToolCost: boolean;
+}
+
+export interface WorkflowRunRecoveryCapability {
+  readonly retryFailedStep: WorkflowRecoveryActionCapability;
+  readonly runAgain: WorkflowRecoveryActionCapability;
+  readonly workflowDefinitionRevisionId: string;
+  readonly workflowDefinitionVersion: number;
+}
+
+export interface WorkflowRunLineageRunRef {
+  readonly runId: string;
+  readonly actorId: string;
+  readonly relationshipId: string;
+  readonly stepId: string;
+  readonly attempt: number;
+  readonly relationKind: WorkflowRunLineageRelationKind;
+}
+
+export interface WorkflowRunRetryForkLineage {
+  readonly availability: WorkflowRunLineageAvailability;
+  readonly sourceRunId: string;
+  readonly originalRunId: string;
+  readonly attempt: number;
+  readonly startAtStepId: string;
+  readonly childRuns: readonly WorkflowRunLineageRunRef[];
+}
+
+export interface WorkflowRunSubWorkflowLineage {
+  readonly availability: WorkflowRunLineageAvailability;
+  readonly parentRunId: string;
+  readonly parentActorId: string;
+  readonly parentStepId: string;
+  readonly rootRunId: string;
+  readonly depth: number;
+  readonly childRuns: readonly WorkflowRunLineageRunRef[];
+}
+
+export interface WorkflowRunLineage {
+  readonly availability: WorkflowRunLineageAvailability;
+  readonly retryFork: WorkflowRunRetryForkLineage;
+  readonly subWorkflow: WorkflowRunSubWorkflowLineage;
+  readonly unavailableReason: string;
+}
+
+export interface WorkflowActivityRunInitiator {
+  readonly platform: string;
+  readonly tenant: string;
+  readonly externalUserId: string;
+  readonly scope: string;
+  readonly bindingId: string;
+  readonly displayValue: string;
+  readonly availability: string;
+}
+
+export interface WorkflowActivityRunCurrentStep {
+  readonly stepId: string;
+  readonly inputSummary: string;
+  readonly availability: string;
+}
+
+export interface WorkflowActivityRunFirstFailure {
+  readonly stepId: string;
+  readonly message: string;
+  readonly availability: string;
+}
+
+export interface WorkflowActivityRunWaiting {
+  readonly stepId: string;
+  readonly waitingKind: string;
+  readonly prompt: string;
+  readonly availability: string;
+}
+
+export interface WorkflowActivityRunFeedRow {
+  readonly runId: string;
+  readonly actorId: string;
+  readonly workflowId: string;
+  readonly workflowName: string;
+  readonly scopeId: string;
+  readonly status: string;
+  readonly runOrigin: string;
+  readonly success: boolean | null;
+  readonly initiator: WorkflowActivityRunInitiator;
+  readonly inputSummary: string;
+  readonly currentStep: WorkflowActivityRunCurrentStep;
+  readonly firstFailure: WorkflowActivityRunFirstFailure;
+  readonly waiting: WorkflowActivityRunWaiting;
+  readonly startedAtUtc: string | null;
+  readonly completedAtUtc: string | null;
+  readonly updatedAtUtc: string;
+  readonly durationMs: number | null;
+  readonly stateVersion: number;
+  readonly recoveryCapability: WorkflowRunRecoveryCapability;
+  readonly lineage: WorkflowRunLineage;
+}
+
+export interface WorkflowActivityRunFeedPage {
+  readonly items: readonly WorkflowActivityRunFeedRow[];
+  readonly nextCursor: string | null;
+  readonly hasMore: boolean;
+  readonly totalCount: number | null;
+}
+
 export interface WorkflowActivityRunSummary {
   readonly runId: string;
   readonly workflowName: string;
@@ -107,6 +239,8 @@ export interface WorkflowActivityRunDetail {
   readonly timeline: readonly WorkflowActivityTimelineEvent[];
   readonly statistics: WorkflowActivityRunStatistics;
   readonly usageTotals: WorkflowActivityUsageTotals;
+  readonly recoveryCapability: WorkflowRunRecoveryCapability;
+  readonly lineage: WorkflowRunLineage;
 }
 
 export interface WorkflowActivityGraphNode {
@@ -143,6 +277,7 @@ export interface WorkflowRunForkRequest {
 export interface WorkflowRunForkAcceptedReceipt {
   readonly accepted: true;
   readonly sourceRunId: string;
+  readonly newRunId: string;
   readonly newRunActorId: string;
   readonly workflowName: string;
   readonly acceptedCommandId: string;
