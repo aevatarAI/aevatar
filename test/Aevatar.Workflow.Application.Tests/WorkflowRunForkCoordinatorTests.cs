@@ -50,7 +50,7 @@ public sealed class WorkflowRunForkCoordinatorTests
     }
 
     [Fact]
-    public async Task BeforePublishAsync_WhenForkAccepted_ShouldDispatchLineageRecordToSourceActor()
+    public async Task BeforePublishAsync_WhenForkAccepted_ShouldLeaveLineageRecordingToForkCommandDispatch()
     {
         var forkDispatchService = new RecordingForkDispatchService
         {
@@ -65,11 +65,9 @@ public sealed class WorkflowRunForkCoordinatorTests
                 "run-child-beta",
                 "run-original-alpha"),
         };
-        var dispatchPort = new RecordingActorDispatchPort();
         var coordinator = new WorkflowRunForkCoordinator(
             new Lazy<ICommandDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>>(
-                () => forkDispatchService),
-            dispatchPort);
+                () => forkDispatchService));
 
         await coordinator.BeforePublishAsync(
             CreateContext(new WorkflowRunForkRequestedEvent
@@ -81,16 +79,7 @@ public sealed class WorkflowRunForkCoordinatorTests
             }, actorId: "actor-source-epsilon"),
             CancellationToken.None);
 
-        var dispatched = dispatchPort.Dispatched.Should().ContainSingle().Subject;
-        dispatched.ActorId.Should().Be("actor-source-epsilon");
-        var recorded = dispatched.Envelope.Payload.Unpack<WorkflowRunLineageRecordedEvent>();
-        recorded.SourceRunId.Should().Be("run-source-gamma");
-        recorded.ChildRunId.Should().Be("run-child-beta");
-        recorded.ChildActorId.Should().Be("actor-child-delta");
-        recorded.OriginalRunId.Should().Be("run-original-alpha");
-        recorded.StartAtStepId.Should().Be("step-retry");
-        recorded.Attempt.Should().Be(4);
-        recorded.RelationKind.Should().Be(WorkflowRunLineageRelationKind.RetryFork);
+        forkDispatchService.Commands.Should().ContainSingle();
     }
 
     private static CommittedStatePublicationContext CreateContext(IMessage evt, string actorId = "run-source") =>

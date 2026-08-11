@@ -234,7 +234,8 @@ public sealed class WorkflowForkRunCommandDispatchTests
         };
         var runPort = new RecordingRunProvisioningPort();
         var dispatchPort = new RecordingActorDispatchPort();
-        var service = CreateDispatchService(seedPort, runPort, dispatchPort);
+        var lineagePort = new RecordingWorkflowRunLineageRecordingPort();
+        var service = CreateDispatchService(seedPort, runPort, dispatchPort, lineagePort);
 
         var result = await service.DispatchAsync(new WorkflowForkRunCommand(
             SourceRunId: "source-run",
@@ -278,8 +279,9 @@ public sealed class WorkflowForkRunCommandDispatchTests
         binding.DefinitionVersion.Should().Be(0);
 
         dispatchPort.Dispatches.Should().ContainSingle();
-        dispatchPort.Dispatches.Single().ActorId.Should().Be("run-created");
-        var envelope = dispatchPort.Dispatches.Single().Envelope;
+        var runDispatch = dispatchPort.Dispatches[0];
+        runDispatch.ActorId.Should().Be("run-created");
+        var envelope = runDispatch.Envelope;
         envelope.Id.Should().Be("cmd-1857");
         envelope.Propagation!.CorrelationId.Should().Be("corr-1857");
         envelope.Route.GetTargetActorId().Should().Be("run-created");
@@ -297,6 +299,14 @@ public sealed class WorkflowForkRunCommandDispatchTests
         request.ForkSeed.Variables.Should().Contain("step-a", "alpha");
         request.ForkSeed.Variables.Should().Contain("topic", "seed-topic");
         request.ForkSeed.Variables.Should().Contain("input", "override-input");
+
+        lineagePort.Records.Should().ContainSingle().Which.Should().Be(new RecordedForkChild(
+            "source-run",
+            "run-routable",
+            "run-created",
+            "source-run",
+            "step-b",
+            0));
     }
 
     [Fact]
@@ -441,7 +451,8 @@ public sealed class WorkflowForkRunCommandDispatchTests
     private static WorkflowForkRunCommandDispatchService CreateDispatchService(
         RecordingSeedQueryPort seedPort,
         RecordingRunProvisioningPort runPort,
-        RecordingActorDispatchPort dispatchPort)
+        RecordingActorDispatchPort dispatchPort,
+        RecordingWorkflowRunLineageRecordingPort? lineagePort = null)
     {
         var pipeline = new DefaultCommandDispatchPipeline<WorkflowForkRunCommand, WorkflowForkRunCommandTarget, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>(
             CreateResolver(seedPort, runPort),
@@ -449,7 +460,9 @@ public sealed class WorkflowForkRunCommandDispatchTests
             new WorkflowForkRunCommandEnvelopeFactory(new WorkflowChatRequestEnvelopeFactory()),
             new ActorCommandTargetDispatcher<WorkflowForkRunCommandTarget>(dispatchPort),
             new WorkflowForkRunAcceptedReceiptFactory());
-        return new WorkflowForkRunCommandDispatchService(pipeline);
+        return new WorkflowForkRunCommandDispatchService(
+            pipeline,
+            lineagePort ?? new RecordingWorkflowRunLineageRecordingPort());
     }
 
     private static WorkflowRunForkSeedView CreateSeedView(
@@ -590,6 +603,39 @@ public sealed class WorkflowForkRunCommandDispatchTests
         }
     }
 
+    private sealed class RecordingWorkflowRunLineageRecordingPort : IWorkflowRunLineageRecordingPort
+    {
+        public List<RecordedForkChild> Records { get; } = [];
+
+        public Task RecordForkChildAsync(
+            string sourceRunId,
+            string childRunId,
+            string childActorId,
+            string originalRunId,
+            string startAtStepId,
+            int attempt,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Records.Add(new RecordedForkChild(
+                sourceRunId,
+                childRunId,
+                childActorId,
+                originalRunId,
+                startAtStepId,
+                attempt));
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed record RecordedForkChild(
+        string SourceRunId,
+        string ChildRunId,
+        string ChildActorId,
+        string OriginalRunId,
+        string StartAtStepId,
+        int Attempt);
+
     private sealed class RecordingActorDispatchPort : IActorDispatchPort
     {
         public List<RecordedDispatch> Dispatches { get; } = [];
@@ -609,7 +655,8 @@ public sealed class WorkflowForkRunCommandDispatchTests
         }
 
         public WorkflowChatRequestEvent DispatchedRequest() =>
-            Dispatches.Single().Envelope.Payload.Unpack<WorkflowChatRequestEvent>();
+            Dispatches.Single(dispatch => dispatch.Envelope.Payload.Is(WorkflowChatRequestEvent.Descriptor))
+                .Envelope.Payload.Unpack<WorkflowChatRequestEvent>();
     }
 
     private sealed record RecordedDispatch(string ActorId, EventEnvelope Envelope);

@@ -114,6 +114,7 @@ public sealed class WorkflowInfrastructureCoverageTests
             x.ImplementationType == typeof(WorkflowRunActorPort));
         services.Should().Contain(x => x.ServiceType == typeof(IWorkflowDefinitionProvisioningPort));
         services.Should().Contain(x => x.ServiceType == typeof(IWorkflowRunProvisioningPort));
+        services.Should().Contain(x => x.ServiceType == typeof(IWorkflowRunLineageRecordingPort));
         services.Should().Contain(x => x.ServiceType == typeof(IWorkflowDefinitionParser));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IWorkflowDefinitionResolver) &&

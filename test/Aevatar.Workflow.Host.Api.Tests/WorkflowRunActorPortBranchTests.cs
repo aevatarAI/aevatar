@@ -1438,6 +1438,38 @@ public sealed class WorkflowRunActorPortBranchTests
         runtime.Linked.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task RecordForkChildAsync_ShouldDispatchTypedLineageEventToSourceRunActor()
+    {
+        var runtime = new RecordingActorRuntime();
+        var sourceActor = new RecordingActor("source-run", new StubAgent("source-run"));
+        runtime.StoredActors["source-run"] = sourceActor;
+        var port = CreatePort(runtime);
+
+        await port.RecordForkChildAsync(
+            " source-run ",
+            " child-run ",
+            " child-actor ",
+            " original-run ",
+            " start-step ",
+            -2,
+            CancellationToken.None);
+
+        runtime.CreateRequests.Should().ContainSingle()
+            .Which.Should().Be((typeof(WorkflowRunGAgent), "source-run"));
+        runtime.Dispatches.Should().BeEmpty();
+        sourceActor.LastHandledEnvelope.Should().NotBeNull();
+        sourceActor.LastHandledEnvelope!.Route.GetTargetActorId().Should().BeEmpty();
+        var lineage = sourceActor.LastHandledEnvelope.Payload.Unpack<WorkflowRunLineageRecordedEvent>();
+        lineage.SourceRunId.Should().Be("source-run");
+        lineage.ChildRunId.Should().Be("child-run");
+        lineage.ChildActorId.Should().Be("child-actor");
+        lineage.OriginalRunId.Should().Be("original-run");
+        lineage.StartAtStepId.Should().Be("start-step");
+        lineage.Attempt.Should().Be(0);
+        lineage.RelationKind.Should().Be(WorkflowRunLineageRelationKind.RetryFork);
+    }
+
     private static WorkflowRunActorPort CreatePort(
         RecordingActorRuntime runtime,
         IWorkflowActorBindingReader? bindingReader = null,
@@ -1585,6 +1617,12 @@ public sealed class WorkflowRunActorPortBranchTests
             var createException = CreateExceptionFactory?.Invoke(agentType, id);
             if (createException != null)
                 throw createException;
+
+            if (!string.IsNullOrWhiteSpace(id) && StoredActors.TryGetValue(id, out var existingActor))
+            {
+                _lastCreatedActor = existingActor;
+                return Task.FromResult(existingActor);
+            }
 
             if (ActorsToCreate.Count > 0)
             {

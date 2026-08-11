@@ -328,6 +328,18 @@ public interface IWorkflowRunIdentityExecutionPort
         CancellationToken ct = default);
 }
 
+public interface IWorkflowRunLineageRecordingPort
+{
+    Task RecordForkChildAsync(
+        string sourceRunId,
+        string childRunId,
+        string childActorId,
+        string originalRunId,
+        string startAtStepId,
+        int attempt,
+        CancellationToken ct = default);
+}
+
 public interface IWorkflowDefinitionParser
 {
     /// <summary>
