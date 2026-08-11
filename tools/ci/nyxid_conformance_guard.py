@@ -350,6 +350,20 @@ def validate_fixture_layers(tolerant, adversarial, errors):
     if identities != {"m-alpha", "wf-alpha", "svc-alpha"}:
         errors.append("identity-confusion fixture must keep member/workflow/service IDs distinct")
 
+    # Shape alone proves nothing about the system: every fixture must also be bound to an
+    # executor in the harness that runs it against production code. The harness fails on an
+    # unbound fixture by itself; this keeps the corpus from going decorative again if the
+    # harness is removed wholesale.
+    harness = REPO_ROOT / "test/Aevatar.AI.Tests/NyxIdAdversarialCorpusTests.cs"
+    if not harness.is_file():
+        errors.append("adversarial corpus has no executing harness")
+    else:
+        harness_source = harness.read_text(encoding="utf-8")
+        for fixture in fixtures:
+            fixture_id = fixture.get("id")
+            if f'"{fixture_id}"' not in harness_source:
+                errors.append(f"adversarial fixture is not executed by the harness: {fixture_id}")
+
 def validate_nyxid(root, sources, expected_leaves, errors):
     pin = sources["nyxid"]
     revision = git_output(
