@@ -2124,7 +2124,9 @@ public sealed class NyxIdChatTurnOperationExecutor
     }
 
     private static bool IsBuiltInIntent(NyxIdChatTurnIntent intent) =>
-        intent is NyxIdChatTurnIntent.ServiceConnect or NyxIdChatTurnIntent.KeyCreate;
+        intent is NyxIdChatTurnIntent.ServiceConnect or
+            NyxIdChatTurnIntent.KeyCreate or
+            NyxIdChatTurnIntent.KeyRotate;
 
     private static bool IsProfileSelectedBuiltInIntent(
         NyxIdChatTurnIntent intent,
@@ -2136,6 +2138,8 @@ public sealed class NyxIdChatTurnOperationExecutor
                 NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
             NyxIdChatTurnIntent.KeyCreate =>
                 NyxIdChatTurnIntentClassifier.KeyCreateIntentId,
+            NyxIdChatTurnIntent.KeyRotate =>
+                NyxIdChatTurnIntentClassifier.KeyRotateIntentId,
             _ => null,
         };
         return intentId is not null && string.Equals(

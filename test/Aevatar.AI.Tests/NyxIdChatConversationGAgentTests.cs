@@ -284,7 +284,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
         action.Params.KeyCreate.Name.Should().Be("agent-alpha");
         action.Params.KeyCreate.Platform.Should().Be("codex");
         action.Params.KeyCreate.AllowedServiceIds.Should().Equal("m-github", "m-lark");
-        action.RegistryRevision.Should().Be(NyxIdAssistantActionRegistry.SupportedRegistryRevision);
+        action.RegistryRevision.Should().Be(NyxIdAssistantActionRegistry.LeastScopeRegistryRevision);
     }
 
     private static WorkflowInteractiveActionHandoffCommand KeyCreateHandoff(string actorId) =>
@@ -920,6 +920,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
         {
             NyxIdChatTurnIntentClassifier.ServiceConnectCandidate,
             NyxIdChatTurnIntentClassifier.KeyCreateCandidate,
+            NyxIdChatTurnIntentClassifier.KeyRotateCandidate,
         });
         serverClassifier.UserMessages.Should().BeEmpty();
         agent.State.ActiveTurn.AgentProfileTurnAuthority.CandidateRoute.IntentId.Should()
@@ -1199,7 +1200,8 @@ public sealed partial class NyxIdChatConversationGAgentTests
             .Select(static intent => intent.GetProperty("intent_id").GetString())
             .Should().Equal(
                 NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
-                NyxIdChatTurnIntentClassifier.KeyCreateIntentId);
+                NyxIdChatTurnIntentClassifier.KeyCreateIntentId,
+                NyxIdChatTurnIntentClassifier.KeyRotateIntentId);
         intents[0]
             .GetProperty("side_effect_class").GetString().Should().Be("external_handoff");
         provider.Requests.Should().HaveCount(2);
@@ -7112,7 +7114,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
         {
             ct.ThrowIfCancellationRequested();
             Requests.Add(request);
-            var builtInNyxIdIntents = request.Candidates.Count == 2 &&
+            var builtInNyxIdIntents = request.Candidates.Count == 3 &&
                                       request.Candidates.Any(candidate => string.Equals(
                                           candidate.IntentId,
                                           NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
@@ -7120,6 +7122,10 @@ public sealed partial class NyxIdChatConversationGAgentTests
                                       request.Candidates.Any(candidate => string.Equals(
                                           candidate.IntentId,
                                           NyxIdChatTurnIntentClassifier.KeyCreateIntentId,
+                                          StringComparison.Ordinal)) &&
+                                      request.Candidates.Any(candidate => string.Equals(
+                                          candidate.IntentId,
+                                          NyxIdChatTurnIntentClassifier.KeyRotateIntentId,
                                           StringComparison.Ordinal));
             return Task.FromResult(AgentProfileTurnClassificationResult.Matched(
                 builtInNyxIdIntents

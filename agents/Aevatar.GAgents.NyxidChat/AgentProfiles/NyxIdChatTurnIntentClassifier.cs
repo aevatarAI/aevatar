@@ -23,6 +23,9 @@ public sealed class NyxIdChatTurnIntentClassifier : INyxIdChatTurnIntentClassifi
     internal const string KeyCreateIntentId = "key_create";
     internal const string KeyCreateRoutingDescription =
         "Create a least-scope NyxID API key for an exact nonempty set of caller-visible services.";
+    internal const string KeyRotateIntentId = "key_rotate";
+    internal const string KeyRotateRoutingDescription =
+        "Rotate one exact caller-visible NyxID API key through the browser-owned secure journey.";
     private static readonly TimeSpan ClassificationTimeout = TimeSpan.FromSeconds(15);
     internal static AgentProfileTurnClassificationCandidate ServiceConnectCandidate { get; } =
         new(
@@ -34,10 +37,16 @@ public sealed class NyxIdChatTurnIntentClassifier : INyxIdChatTurnIntentClassifi
             KeyCreateIntentId,
             KeyCreateRoutingDescription,
             AgentProfileSideEffectClass.ExternalHandoff);
+    internal static AgentProfileTurnClassificationCandidate KeyRotateCandidate { get; } =
+        new(
+            KeyRotateIntentId,
+            KeyRotateRoutingDescription,
+            AgentProfileSideEffectClass.ExternalHandoff);
     private static readonly AgentProfileTurnClassificationCandidate[] Candidates =
     [
         ServiceConnectCandidate,
         KeyCreateCandidate,
+        KeyRotateCandidate,
     ];
 
     private readonly IAgentProfileTurnClassifier _classifier;
@@ -71,6 +80,7 @@ public sealed class NyxIdChatTurnIntentClassifier : INyxIdChatTurnIntentClassifi
             {
                 ServiceConnectIntentId => NyxIdChatTurnIntent.ServiceConnect,
                 KeyCreateIntentId => NyxIdChatTurnIntent.KeyCreate,
+                KeyRotateIntentId => NyxIdChatTurnIntent.KeyRotate,
                 _ => NyxIdChatTurnIntent.Unspecified,
             }
             : NyxIdChatTurnIntent.Unspecified;

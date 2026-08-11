@@ -441,6 +441,11 @@ internal static class NyxIdChatConversationAguiFrameBuilder
                     KeyCreatePlatform = request.Params.KeyCreate.Platform,
                     KeyCreateAllowedServiceIds = { request.Params.KeyCreate.AllowedServiceIds },
                 },
+            NyxIdAssistantActionParams.ParamsOneofCase.KeyRotate =>
+                new NyxIdAssistantActionWireParams
+                {
+                    KeyRotateKeyId = request.Params.KeyRotate.KeyId,
+                },
             _ => null,
         };
         if (wireParams is null)
@@ -461,6 +466,10 @@ internal static class NyxIdChatConversationAguiFrameBuilder
                 when request.Params.ParamsCase ==
                     NyxIdAssistantActionParams.ParamsOneofCase.KeyCreate =>
                 "key.create",
+            NyxIdAssistantActionKind.KeyRotate
+                when request.Params.ParamsCase ==
+                    NyxIdAssistantActionParams.ParamsOneofCase.KeyRotate =>
+                "key.rotate",
             _ => null,
         };
         if (wireAction is null)

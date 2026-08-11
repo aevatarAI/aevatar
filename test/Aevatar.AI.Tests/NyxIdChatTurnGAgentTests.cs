@@ -2166,6 +2166,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
     [Theory]
     [InlineData(NyxIdChatTurnIntent.ServiceConnect)]
     [InlineData(NyxIdChatTurnIntent.KeyCreate)]
+    [InlineData(NyxIdChatTurnIntent.KeyRotate)]
     public async Task OperationExecutor_UnprofiledBuiltInIntent_ShouldMaterializeOnlyAdmissionTools(
         NyxIdChatTurnIntent intent)
     {
@@ -2175,6 +2176,8 @@ public sealed partial class NyxIdChatTurnGAgentTests
             new NamedProfileTool("nyxid_require_service"),
             new NamedProfileTool("nyxid_services"),
             new NamedProfileTool("nyxid_request_key_create"),
+            new NamedProfileTool("nyxid_api_keys"),
+            new NamedProfileTool("nyxid_request_key_rotate"),
             new NamedProfileTool("github_get_current_user"),
         ];
         var registry = new BuiltInIntentToolSetRegistry(tools);
@@ -2195,9 +2198,14 @@ public sealed partial class NyxIdChatTurnGAgentTests
                     Intent = intent,
                     Request = new ChatRequestEvent
                     {
-                        Prompt = intent == NyxIdChatTurnIntent.ServiceConnect
-                            ? "Connect GitHub and verify the connection"
-                            : "Create a least-scope key for one exact service",
+                        Prompt = intent switch
+                        {
+                            NyxIdChatTurnIntent.ServiceConnect =>
+                                "Connect GitHub and verify the connection",
+                            NyxIdChatTurnIntent.KeyCreate =>
+                                "Create a least-scope key for one exact service",
+                            _ => "Rotate one exact key",
+                        },
                         SessionId = "turn-alpha",
                     },
                 },
@@ -2208,9 +2216,14 @@ public sealed partial class NyxIdChatTurnGAgentTests
 
         registry.RequestedNames.Should().Equal(AgentProfilePolicies.NyxIdChatRouteToolSet);
         generationExecutor.LastTurnCatalog.Should().NotBeNull();
-        var expected = intent == NyxIdChatTurnIntent.ServiceConnect
-            ? new[] { "nyxid_catalog", "nyxid_require_service" }
-            : ["nyxid_services", "nyxid_request_key_create"];
+        string[] expected = intent switch
+        {
+            NyxIdChatTurnIntent.ServiceConnect =>
+                ["nyxid_catalog", "nyxid_require_service"],
+            NyxIdChatTurnIntent.KeyCreate =>
+                ["nyxid_services", "nyxid_request_key_create"],
+            _ => ["nyxid_api_keys", "nyxid_request_key_rotate"],
+        };
         generationExecutor.LastTurnCatalog!.FinalAllowedToolNames.Should()
             .BeEquivalentTo(expected);
         generationExecutor.LastTurnCatalog.RouteOwnedTools.Keys.Should()

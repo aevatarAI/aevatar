@@ -42,6 +42,7 @@ enum NyxIdChatTurnIntent {
   NYX_ID_CHAT_TURN_INTENT_UNSPECIFIED = 0;
   NYX_ID_CHAT_TURN_INTENT_SERVICE_CONNECT = 1;
   NYX_ID_CHAT_TURN_INTENT_KEY_CREATE = 2;
+  NYX_ID_CHAT_TURN_INTENT_KEY_ROTATE = 3;
 }
 
 enum NyxIdChatTaskStatus {
@@ -1053,6 +1054,7 @@ message NyxIdAssistantActionWireParams {
   string key_create_name = 4 [json_name = "name"];
   string key_create_platform = 5 [json_name = "platform"];
   repeated string key_create_allowed_service_ids = 6 [json_name = "allowedServiceIds"];
+  string key_rotate_key_id = 7 [json_name = "keyId"];
 }
 
 message NyxIdAssistantActionRequestWirePayload {

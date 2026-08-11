@@ -57,7 +57,8 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
         request.UserMessage.Should().Be("Connect GitHub and verify the connection");
         request.Candidates.Select(static candidate => candidate.IntentId).Should().Equal(
             NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
-            NyxIdChatTurnIntentClassifier.KeyCreateIntentId);
+            NyxIdChatTurnIntentClassifier.KeyCreateIntentId,
+            NyxIdChatTurnIntentClassifier.KeyRotateIntentId);
     }
 
     [Fact]
@@ -77,6 +78,26 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
         intent.Should().Be(NyxIdChatTurnIntent.KeyCreate);
         inner.LastRequest!.Candidates.Should().Contain(candidate =>
             candidate.IntentId == NyxIdChatTurnIntentClassifier.KeyCreateIntentId &&
+            candidate.SideEffectClass == AgentProfileSideEffectClass.ExternalHandoff);
+    }
+
+    [Fact]
+    public async Task TurnIntentClassifier_KeyRotationPrompt_ShouldReturnTypedIntent()
+    {
+        var inner = new RecordingClassifier(
+            AgentProfileTurnClassificationResult.Matched(
+                NyxIdChatTurnIntentClassifier.KeyRotateIntentId));
+        var classifier = new NyxIdChatTurnIntentClassifier(inner);
+
+        var intent = await classifier.ClassifyAsync(
+            "turn-key-rotate",
+            "Rotate the exact NyxID key",
+            llmControl: null,
+            CancellationToken.None);
+
+        intent.Should().Be(NyxIdChatTurnIntent.KeyRotate);
+        inner.LastRequest!.Candidates.Should().Contain(candidate =>
+            candidate.IntentId == NyxIdChatTurnIntentClassifier.KeyRotateIntentId &&
             candidate.SideEffectClass == AgentProfileSideEffectClass.ExternalHandoff);
     }
 
@@ -145,6 +166,35 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
     }
 
     [Fact]
+    public async Task MaterializeBuiltInIntentAsync_KeyRotate_ShouldExposeInventoryAndTypedProducerOnly()
+    {
+        var keysTool = new TestTool("nyxid_api_keys");
+        var keyRotateTool = new TestTool("nyxid_request_key_rotate");
+        var unrelatedTool = new TestTool("nyxid_catalog");
+        var source = new TokenBoundToolSource(
+            "request-token",
+            [keysTool, keyRotateTool, unrelatedTool]);
+        var registry = new RecordingToolSetRegistry();
+        registry.Add(AgentProfilePolicies.NyxIdChatRouteToolSet, source);
+        var materializer = NewMaterializer(
+            registry,
+            new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+            fetcher: null);
+
+        var catalog = await materializer.MaterializeBuiltInIntentAsync(
+            NyxIdChatTurnIntent.KeyRotate,
+            ToolContext("request-token"),
+            CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().BeEquivalentTo(
+            "nyxid_api_keys",
+            "nyxid_request_key_rotate");
+        catalog.RouteOwnedTools["nyxid_api_keys"].Should().BeSameAs(keysTool);
+        catalog.RouteOwnedTools["nyxid_request_key_rotate"].Should().BeSameAs(keyRotateTool);
+        catalog.SelectedIntentId.Should().Be(NyxIdChatTurnIntentClassifier.KeyRotateIntentId);
+    }
+
+    [Fact]
     public async Task MaterializeBuiltInIntentAsync_WhenAdmissionToolIsMissing_ShouldFailClosed()
     {
         var registry = new RecordingToolSetRegistry();
@@ -190,7 +240,8 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
         classifier.Requests.Should().HaveCount(2);
         classifier.Requests[0].Candidates.Select(static candidate => candidate.IntentId).Should().Equal(
             NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
-            NyxIdChatTurnIntentClassifier.KeyCreateIntentId);
+            NyxIdChatTurnIntentClassifier.KeyCreateIntentId,
+            NyxIdChatTurnIntentClassifier.KeyRotateIntentId);
         classifier.Requests[1].Candidates.Should().ContainSingle().Which.IntentId.Should()
             .Be("intent-alpha");
     }

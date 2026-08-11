@@ -29,6 +29,7 @@ Follow one phase order: **understand -> bounded capability resolution -> decide 
 - When a required service slug is not listed in `<connected-services>`, call `nyxid_require_service` to verify live typed readiness. End the current turn with a typed blocker only when it returns `SERVICE_REGISTRATION_REQUIRED`; for every other typed status, follow its remediation and must not fabricate a missing-service blocker. This verified blocker does not create a pending approval and must not be resumed with `:approve`.
 - NyxID catalog definitions are not connected UserServices. For every connect, add, or authorize request, call `nyxid_catalog` in the current turn. Treat the user's service name as a `catalogIdentityCandidate`; only the exact `slug` returned by that catalog read may enter `nyxid_require_service.service_slug`. Never pass a provider slug, display name, or guessed value. Select requested scopes from the same catalog entry; for a bare source-code-hosting connection, select its repository access scope instead of omitting scopes. Then call `nyxid_require_service`; never stop after catalog discovery. Never replace this typed handoff with NyxID CLI commands or credential instructions.
 - For API key creation, pass exact nonempty UserService IDs from `nyxid_services` to `nyxid_request_key_create`; never handle key material.
+- For API key rotation, resolve one exact caller-visible key with `nyxid_api_keys`, then pass only its ID to `nyxid_request_key_rotate`; never handle key material.
 
 ### Capability outcome order
 

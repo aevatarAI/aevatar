@@ -30,7 +30,8 @@ public sealed class NyxIdAssistantActionRegistry
     public const int SupportedSchemaVersion = 4;
     public const string LegacyRegistryRevision = "nyxid-assistant-actions.v4";
     public const string WaveOneDraftRegistryRevision = "nyxid-assistant-actions.v5";
-    public const string SupportedRegistryRevision = "nyxid-assistant-actions.v6";
+    public const string LeastScopeRegistryRevision = "nyxid-assistant-actions.v6";
+    public const string SupportedRegistryRevision = "nyxid-assistant-actions.v7";
 
     private const string SchemaUnsupported = "NYXID_ACTION_SCHEMA_UNSUPPORTED";
     private const string RevisionUnsupported = "NYXID_ACTION_REGISTRY_REVISION_UNSUPPORTED";
@@ -213,10 +214,16 @@ public sealed class NyxIdAssistantActionRegistry
                 "key.create",
                 "key.rotate",
             }.ToFrozenSet(StringComparer.Ordinal),
+            [LeastScopeRegistryRevision] = new[]
+            {
+                "service.connect",
+                "key.create",
+            }.ToFrozenSet(StringComparer.Ordinal),
             [SupportedRegistryRevision] = new[]
             {
                 "service.connect",
                 "key.create",
+                "key.rotate",
             }.ToFrozenSet(StringComparer.Ordinal),
         }.ToFrozenDictionary(StringComparer.Ordinal);
 
@@ -230,7 +237,9 @@ public sealed class NyxIdAssistantActionRegistry
                 .ToFrozenSet(StringComparer.Ordinal),
             [WaveOneDraftRegistryRevision] = new[] { "service.connect" }
                 .ToFrozenSet(StringComparer.Ordinal),
-            [SupportedRegistryRevision] = new[] { "service.connect", "key.create" }
+            [LeastScopeRegistryRevision] = new[] { "service.connect", "key.create" }
+                .ToFrozenSet(StringComparer.Ordinal),
+            [SupportedRegistryRevision] = new[] { "service.connect", "key.create", "key.rotate" }
                 .ToFrozenSet(StringComparer.Ordinal),
         }.ToFrozenDictionary(StringComparer.Ordinal);
 
@@ -270,6 +279,7 @@ public sealed class NyxIdAssistantActionRegistry
         {
             NyxIdAssistantActionKind.ServiceConnect => "service.connect",
             NyxIdAssistantActionKind.KeyCreate => "key.create",
+            NyxIdAssistantActionKind.KeyRotate => "key.rotate",
             _ => null,
         };
         return wireAction is not null &&
@@ -510,6 +520,33 @@ public sealed class NyxIdAssistantActionRegistry
         return new NyxIdAssistantActionValidation(
             entry.Definition.Clone(),
             new NyxIdAssistantActionParams { KeyCreate = value });
+    }
+
+    public NyxIdAssistantActionValidation ResolveKeyRotate(
+        NyxIdKeyRotateActionRequirement requirement)
+    {
+        ArgumentNullException.ThrowIfNull(requirement);
+        if (!_entries.TryGetValue("key.rotate", out var entry) ||
+            !_executableActions.Contains("key.rotate") ||
+            entry.Definition.Action != NyxIdAssistantActionKind.KeyRotate)
+        {
+            throw Error(ActionUnsupported, "Key rotation is not present in the pinned registry.");
+        }
+
+        var keyId = NormalizeString(requirement.KeyId, 256, required: true);
+        if (!string.Equals(requirement.KeyId, keyId, StringComparison.Ordinal) ||
+            keyId.Any(char.IsWhiteSpace) ||
+            keyId.Any(static character => character is '/' or '\\' or '?' or '#'))
+        {
+            throw Error(ParamsInvalid, "The key rotation identity is invalid.");
+        }
+
+        return new NyxIdAssistantActionValidation(
+            entry.Definition.Clone(),
+            new NyxIdAssistantActionParams
+            {
+                KeyRotate = new NyxIdKeyRotateParams { KeyId = keyId },
+            });
     }
 
     private static NyxIdAssistantActionParams ParseServiceConnect(JsonElement root)
@@ -758,7 +795,7 @@ public sealed class NyxIdAssistantActionRegistry
         NyxIdAssistantActionRisk risk,
         bool rememberEligible)
     {
-        var pinnedParamsSchema = revision == SupportedRegistryRevision &&
+        var pinnedParamsSchema = revision is LeastScopeRegistryRevision or SupportedRegistryRevision &&
                                  contract.Action == NyxIdAssistantActionKind.KeyCreate
             ? LeastScopeKeyCreateParamsSchema
             : contract.PinnedParamsSchema;

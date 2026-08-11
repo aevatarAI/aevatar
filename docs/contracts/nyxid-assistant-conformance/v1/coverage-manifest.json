@@ -307,16 +307,22 @@
       "operation_id": "key.rotate",
       "description": "Rotate a key",
       "operation_class": "A",
-      "outcome_class": "honest_decline",
-      "mechanism": "no_action_fallback",
-      "availability": "recognized_but_unavailable",
-      "availability_predicate": "all four Class-A artifacts are present and the owning wave is enabled",
+      "outcome_class": "browser_action",
+      "mechanism": "typed_browser_action",
+      "availability": "executable",
+      "availability_predicate": "registry descriptor, typed producer, wire mapper, and typed postcondition are all present",
       "approval_authority": "nyxid_browser_session",
-      "evidence_type": "none",
-      "status": "blocked",
-      "owning_issue": "#3309",
+      "evidence_type": "typed_postcondition_read_model",
+      "status": "shipped",
+      "owning_issue": "#3388",
       "utterances": [
         "rotate my github key"
+      ],
+      "artifacts": [
+        "agents/Aevatar.GAgents.NyxidChat/NyxIdAssistantActionRegistry.cs",
+        "src/Aevatar.AI.ToolProviders.NyxId/Tools/NyxIdRequestKeyRotateTool.cs",
+        "agents/Aevatar.GAgents.NyxidChat/NyxIdChatConversationAguiFrameBuilder.cs",
+        "agents/Aevatar.GAgents.NyxidChat/NyxIdActionPostconditionPort.cs"
       ]
     },
     {

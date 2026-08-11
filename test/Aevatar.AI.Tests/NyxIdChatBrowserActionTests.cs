@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using Aevatar.AI.Abstractions;
 using Aevatar.GAgents.NyxidChat;
 using FluentAssertions;
@@ -94,7 +95,7 @@ public sealed class NyxIdChatBrowserActionTests
         decision.ShouldCommit.Should().BeTrue();
         decision.Outcome.Should().Be(NyxIdChatTransitionOutcome.Accepted);
         decision.Request.RegistryRevision.Should().Be(
-            NyxIdAssistantActionRegistry.SupportedRegistryRevision);
+            NyxIdAssistantActionRegistry.LeastScopeRegistryRevision);
         decision.Request.Action.Should().Be(NyxIdAssistantActionKind.KeyCreate);
         decision.Request.Params.ParamsCase.Should().Be(
             NyxIdAssistantActionParams.ParamsOneofCase.KeyCreate);
@@ -110,6 +111,40 @@ public sealed class NyxIdChatBrowserActionTests
         decision.State.ActiveTask.Steps.Should().ContainSingle(step =>
             step.Kind == NyxIdChatStepKind.BrowserAction &&
             step.Source.BrowserAction.Action == NyxIdAssistantActionKind.KeyCreate &&
+            step.ActionRequestId == decision.Request.ActionRequestId);
+    }
+
+    [Fact]
+    public void KeyRotateAuthorizationRequired_ShouldCommitExactKeyActionRequest()
+    {
+        var state = AuthorizationWaitingState();
+        var signal = AuthorizationRequiredSignal(state);
+        signal.Tool.Receipt.ToolName = "nyxid_request_key_rotate";
+        signal.Tool.Receipt.AuthorizationRequired.ServiceSlug = string.Empty;
+        signal.Tool.Receipt.AuthorizationRequired.RequestedScopes.Clear();
+        signal.Tool.Receipt.AuthorizationRequired.KeyRotate =
+            new NyxIdKeyRotateActionRequirement { KeyId = "key-alpha" };
+
+        var decision = NyxIdChatBrowserActions.RequestAuthorization(
+            state,
+            signal,
+            RotationRegistry(),
+            Now);
+
+        decision.ShouldCommit.Should().BeTrue();
+        decision.Outcome.Should().Be(NyxIdChatTransitionOutcome.Accepted);
+        decision.Request.RegistryRevision.Should().Be(
+            NyxIdAssistantActionRegistry.SupportedRegistryRevision);
+        decision.Request.Action.Should().Be(NyxIdAssistantActionKind.KeyRotate);
+        decision.Request.Params.ParamsCase.Should().Be(
+            NyxIdAssistantActionParams.ParamsOneofCase.KeyRotate);
+        decision.Request.Params.KeyRotate.KeyId.Should().Be("key-alpha");
+        decision.Request.RememberEligible.Should().BeFalse();
+        decision.State.PendingActions.Should().ContainSingle()
+            .Which.Should().BeEquivalentTo(decision.Request);
+        decision.State.ActiveTask.Steps.Should().ContainSingle(step =>
+            step.Kind == NyxIdChatStepKind.BrowserAction &&
+            step.Source.BrowserAction.Action == NyxIdAssistantActionKind.KeyRotate &&
             step.ActionRequestId == decision.Request.ActionRequestId);
     }
 
@@ -351,7 +386,7 @@ public sealed class NyxIdChatBrowserActionTests
             AuthorizationRequiredSignal(state),
             Registry(),
             Now).Request;
-        request.RegistryRevision = NyxIdAssistantActionRegistry.SupportedRegistryRevision;
+        request.RegistryRevision = NyxIdAssistantActionRegistry.LeastScopeRegistryRevision;
         request.Action = NyxIdAssistantActionKind.KeyCreate;
         request.Params = new NyxIdAssistantActionParams
         {
@@ -373,6 +408,34 @@ public sealed class NyxIdChatBrowserActionTests
         var rejectedLegacy = NyxIdChatBrowserActions.CommitRequest(state, request, Now);
         rejectedLegacy.ShouldCommit.Should().BeFalse();
         rejectedLegacy.ReasonCode.Should().Be(NyxIdChatBrowserActions.ActionRequestInvalid);
+    }
+
+    [Fact]
+    public void CommitRequest_ShouldAcceptKeyRotateOnlyOnV7()
+    {
+        var state = AuthorizationWaitingState();
+        var request = NyxIdChatBrowserActions.RequestAuthorization(
+            state,
+            AuthorizationRequiredSignal(state),
+            Registry(),
+            Now).Request;
+        request.RegistryRevision = NyxIdAssistantActionRegistry.SupportedRegistryRevision;
+        request.Action = NyxIdAssistantActionKind.KeyRotate;
+        request.Params = new NyxIdAssistantActionParams
+        {
+            KeyRotate = new NyxIdKeyRotateParams { KeyId = "key-alpha" },
+        };
+
+        var accepted = NyxIdChatBrowserActions.CommitRequest(state, request, Now);
+
+        accepted.ShouldCommit.Should().BeTrue();
+        accepted.Outcome.Should().Be(NyxIdChatTransitionOutcome.Accepted);
+        accepted.Request.Params.KeyRotate.KeyId.Should().Be("key-alpha");
+
+        request.RegistryRevision = NyxIdAssistantActionRegistry.LeastScopeRegistryRevision;
+        var rejectedV6 = NyxIdChatBrowserActions.CommitRequest(state, request, Now);
+        rejectedV6.ShouldCommit.Should().BeFalse();
+        rejectedV6.ReasonCode.Should().Be(NyxIdChatBrowserActions.ActionRequestInvalid);
     }
 
     [Fact]
@@ -1334,7 +1397,33 @@ public sealed class NyxIdChatBrowserActionTests
         """);
 
     private static NyxIdAssistantActionRegistry LeastScopeRegistry() =>
-        NyxIdAssistantActionRegistry.Load("""
+        NyxIdAssistantActionRegistry.Load(LeastScopeRegistryJson);
+
+    private static NyxIdAssistantActionRegistry RotationRegistry()
+    {
+        var manifest = JsonNode.Parse(LeastScopeRegistryJson)!.AsObject();
+        manifest["revision"] = NyxIdAssistantActionRegistry.SupportedRegistryRevision;
+        manifest["actions"]!.AsArray().Add(JsonNode.Parse("""
+            {
+              "action": "key.rotate",
+              "description": "Rotate an API key.",
+              "params_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["keyId"],
+                "properties": {
+                  "keyId": {"type": "string"}
+                }
+              },
+              "risk": "grant",
+              "tier": "v1",
+              "remember_eligible": false
+            }
+            """));
+        return NyxIdAssistantActionRegistry.Load(manifest.ToJsonString());
+    }
+
+    private const string LeastScopeRegistryJson = """
         {
           "schema_version": 4,
           "revision": "nyxid-assistant-actions.v6",
@@ -1413,5 +1502,5 @@ public sealed class NyxIdChatBrowserActionTests
             }
           ]
         }
-        """);
+        """;
 }

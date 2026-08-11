@@ -443,12 +443,17 @@ message NyxIdAuthorizationRequiredEvent {
   optional string user_service_id = 6;
   repeated string requested_scopes = 7;
   NyxIdKeyCreateActionRequirement key_create = 8;
+  NyxIdKeyRotateActionRequirement key_rotate = 9;
 }
 
 message NyxIdKeyCreateActionRequirement {
   string name = 1;
   string platform = 2;
   repeated string allowed_service_ids = 3;
+}
+
+message NyxIdKeyRotateActionRequirement {
+  string key_id = 1;
 }
 
 message AgentToolReceipt {

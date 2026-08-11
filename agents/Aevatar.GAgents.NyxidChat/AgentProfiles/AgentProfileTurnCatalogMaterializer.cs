@@ -28,6 +28,12 @@ public sealed class AgentProfileTurnCatalogMaterializer
             "nyxid_services",
             "nyxid_request_key_create",
         };
+    private static readonly IReadOnlySet<string> KeyRotateToolNames =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "nyxid_api_keys",
+            "nyxid_request_key_rotate",
+        };
 
     private readonly IToolSetRegistry _toolSetRegistry;
     private readonly IAgentProfileTurnClassifier _classifier;
@@ -487,12 +493,17 @@ public sealed class AgentProfileTurnCatalogMaterializer
                     member.IntentId,
                     NyxIdChatTurnIntentClassifier.KeyCreateIntentId,
                     StringComparison.Ordinal)) ?? CreateBuiltInKeyCreateMember(),
+                profile.Members.FirstOrDefault(member => string.Equals(
+                    member.IntentId,
+                    NyxIdChatTurnIntentClassifier.KeyRotateIntentId,
+                    StringComparison.Ordinal)) ?? CreateBuiltInKeyRotateMember(),
             };
             var builtInResult = await ClassifyAsync(
                 userMessage,
                 [
                     NyxIdChatTurnIntentClassifier.ServiceConnectCandidate,
                     NyxIdChatTurnIntentClassifier.KeyCreateCandidate,
+                    NyxIdChatTurnIntentClassifier.KeyRotateCandidate,
                 ],
                 profile.ClassifierTimeoutMs,
                 llmControl,
@@ -625,6 +636,18 @@ public sealed class AgentProfileTurnCatalogMaterializer
             SideEffectClass = AgentProfileSideEffectClass.ExternalHandoff,
         };
 
+    private static AgentProfileSkillMember CreateBuiltInKeyRotateMember() =>
+        new()
+        {
+            IntentId = NyxIdChatTurnIntentClassifier.KeyRotateIntentId,
+            RoutingDescription = NyxIdChatTurnIntentClassifier.KeyRotateRoutingDescription,
+            TaskToolPolicy = new AgentProfileToolPolicy
+            {
+                ToolNames = { "nyxid_api_keys", "nyxid_request_key_rotate" },
+            },
+            SideEffectClass = AgentProfileSideEffectClass.ExternalHandoff,
+        };
+
     private static BuiltInIntent? ResolveBuiltInIntent(NyxIdChatTurnIntent intent) => intent switch
     {
         NyxIdChatTurnIntent.ServiceConnect => new BuiltInIntent(
@@ -633,6 +656,9 @@ public sealed class AgentProfileTurnCatalogMaterializer
         NyxIdChatTurnIntent.KeyCreate => new BuiltInIntent(
             NyxIdChatTurnIntentClassifier.KeyCreateIntentId,
             KeyCreateToolNames),
+        NyxIdChatTurnIntent.KeyRotate => new BuiltInIntent(
+            NyxIdChatTurnIntentClassifier.KeyRotateIntentId,
+            KeyRotateToolNames),
         _ => null,
     };
 

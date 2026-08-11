@@ -3210,6 +3210,8 @@ public sealed class NyxIdChatConversationGAgent
                     NyxIdChatTurnIntent.ServiceConnect,
                 NyxIdChatTurnIntentClassifier.KeyCreateIntentId =>
                     NyxIdChatTurnIntent.KeyCreate,
+                NyxIdChatTurnIntentClassifier.KeyRotateIntentId =>
+                    NyxIdChatTurnIntent.KeyRotate,
                 _ => NyxIdChatTurnIntent.Unspecified,
             };
         }

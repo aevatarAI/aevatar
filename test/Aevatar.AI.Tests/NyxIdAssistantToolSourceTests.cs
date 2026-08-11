@@ -17,6 +17,7 @@ public sealed class NyxIdAssistantToolSourceTests
         "nyxid_llm_status",
         "nyxid_require_service",
         "nyxid_request_key_create",
+        "nyxid_request_key_rotate",
         "nyxid_proxy",
         "nyxid_profile",
         "nyxid_mfa",

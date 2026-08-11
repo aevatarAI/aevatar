@@ -12,15 +12,17 @@
       "agents/Aevatar.GAgents.NyxidChat/protos/nyxid_chat_task.proto": "c6ccff202d846ac598ee2e6b820c2bf74d496ae5c88598ee7746408cf3ec2740",
       "docs/adr/0048-nyxid-assistant-operation-class-boundary.md": "30c9de6c6e77a7aee14f0eb4a2f74bd15b8874bcfed88ba957cdd8213b9114eb",
       "src/Aevatar.AI.Abstractions/ai_messages.proto": "6643404463d455585d702d6f6c9bdfccf8abb2707632ef59f5afbf4bb847c874",
+      "src/Aevatar.AI.ToolProviders.NyxId/NyxIdApiAccessContracts.cs": "",
       "src/Aevatar.AI.ToolProviders.NyxId/NyxIdAssistantToolSource.cs": "1cebe5e4eb0939f157015a42149aad46ed8ca94aaa884d10baca0a2b9cd80a47",
       "src/Aevatar.AI.ToolProviders.NyxId/Tools/NyxIdRequestKeyCreateTool.cs": "5552659efc5d43770fd0a4a284b82266f4ed2cca04d881c5b2e04a290758e0dd",
-      "src/Aevatar.Mainnet.Host.Api/Hosting/MainnetHostBuilderExtensions.cs": "3e6ac92b555d2c0b2c83b2d0cc029788e03174f12fe4bc8feb06599469836c26"
+      "src/Aevatar.AI.ToolProviders.NyxId/Tools/NyxIdRequestKeyRotateTool.cs": "",
+      "src/Aevatar.Mainnet.Host.Api/Hosting/MainnetHostBuilderExtensions.cs": "5d5e030d6d4b07c8d05181f884e0c8234c3f060aba1aa5fa807f03e7d241b7a2"
     }
   },
   "nyxid": {
     "repository": "https://github.com/ChronoAIProject/NyxID.git",
-    "revision": "84a62bf8525c624bd4c7877acddbeaf1ee885bb2",
-    "tree": "f77bd10e5cf19784a04114b168f014e43a9f5c8b",
+    "revision": "991c253dbc613e76768114559f9620a486cc636c",
+    "tree": "2f92ff93c8c66b4b2c27758fdb2b8b9c5cee5fb6",
     "cli_source": "cli/src/cli.rs",
     "cli_source_sha256": "51dd82101d7671859351e9989e8d554b4aa1cb898a4e04d948df28aa37de0195",
     "cargo_lock_sha256": "a7f1bb375e4d5135b369caea4b803273956c96b63125d4221da70dd8115638b8"
@@ -33,16 +35,17 @@
     "note": "The prose contract's historical 211 count is design input, not generator authority."
   },
   "assistant_registry": {
-    "revision": "nyxid-assistant-actions.v6",
+    "revision": "nyxid-assistant-actions.v7",
     "accepted_revisions": [
       "nyxid-assistant-actions.v4",
       "nyxid-assistant-actions.v5",
-      "nyxid-assistant-actions.v6"
+      "nyxid-assistant-actions.v6",
+      "nyxid-assistant-actions.v7"
     ],
     "nyxid_source": "backend/src/handlers/assistant_actions.rs",
-    "nyxid_source_sha256": "e260513dad549dee49960a2d6abf627f69fd2d656dd30b03ef696b7351544ebd",
-    "checked_in_payload": "registry-v6.json",
-    "checked_in_payload_sha256": "8ca3b496cf6813fe2573bc3e3d8ac2f61fae1a92820ba3d1c97fd635ff6f9f40",
+    "nyxid_source_sha256": "7350930688e5fbe08355c0bfc1b95b1c8546c4db6c999d400c2e8d88b9c70f36",
+    "checked_in_payload": "registry-v7.json",
+    "checked_in_payload_sha256": "b029b8fb295a213f7c4f4da8bde0ec0b74a5bcdfe502818bfdd0fb16d9bdf941",
     "transition_payloads": {
       "nyxid-assistant-actions.v4": {
         "checked_in_payload": "registry-v4.json",
@@ -55,11 +58,15 @@
       "nyxid-assistant-actions.v6": {
         "checked_in_payload": "registry-v6.json",
         "checked_in_payload_sha256": "8ca3b496cf6813fe2573bc3e3d8ac2f61fae1a92820ba3d1c97fd635ff6f9f40"
+      },
+      "nyxid-assistant-actions.v7": {
+        "checked_in_payload": "registry-v7.json",
+        "checked_in_payload_sha256": "b029b8fb295a213f7c4f4da8bde0ec0b74a5bcdfe502818bfdd0fb16d9bdf941"
       }
     }
   },
   "generated_artifacts": {
     "cli-leaves.json": "27ee6015977a88f30157cdbe8c51b68ca60f0a57c4c7248950906a990b7b7d13",
-    "coverage-manifest.json": "abd5a924044ed2fe7a49ee4536d7204bc875128f38ac0628a2c4d3d63087de49"
+    "coverage-manifest.json": "3e37230cfb2eeaa1f3a80002b17fcbf1763fbaac25f118e55f3267210fe5dbf2"
   }
 }
