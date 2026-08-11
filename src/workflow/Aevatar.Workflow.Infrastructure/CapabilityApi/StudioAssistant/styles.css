@@ -2245,6 +2245,18 @@ summary:focus-visible {
   color: #9a5b00;
 }
 
+/* A confirm gate is only amber while it is genuinely undecided. Once the actor commits the
+   decision the badge stops asking for attention it no longer needs. */
+.actor-plan-gate.confirm.satisfied {
+  border-left-color: var(--success);
+  color: var(--muted);
+}
+
+.actor-plan-gate.confirm.rejected {
+  border-left-color: var(--error);
+  color: var(--error);
+}
+
 .actor-plan-gate-reason {
   margin: 6px 0 0;
   color: var(--muted);
@@ -2293,6 +2305,24 @@ summary:focus-visible {
 
 .needs-you-panel.danger {
   box-shadow: inset 3px 0 0 var(--error);
+}
+
+.needs-you-panel.plan-gate-required {
+  box-shadow: inset 3px 0 0 #f59e0b;
+}
+
+.actor-plan-admission {
+  margin-top: 4px;
+  color: var(--text-soft);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.needs-you-hint {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 .needs-you-heading,

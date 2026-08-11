@@ -77,6 +77,9 @@ const ENUMS = Object.freeze({
     "llm", "tool", "browser_action", "postcondition", "input", "approval", "web", "condition",
   ]),
   planGateMode: enumDefinition("NYX_ID_CHAT_PLAN_GATE_MODE_", ["auto", "confirm"]),
+  planGateStatus: enumDefinition("NYX_ID_CHAT_PLAN_GATE_STATUS_", [
+    "pending", "satisfied", "rejected",
+  ]),
   stepAddedBy: enumDefinition("NYX_ID_CHAT_STEP_ADDED_BY_", ["initial", "replan", "steering"]),
   planRevisionCause: enumDefinition("NYX_ID_CHAT_PLAN_REVISION_CAUSE_", [
     "initial", "scope_resolution", "failure_recovery", "steering", "user_revision",
@@ -717,6 +720,8 @@ function normalizeActorPayload(type, payload) {
     if (value.gate && typeof value.gate === "object") {
       value.gate = cloneJsonObject(value.gate);
       normalizeEnumProperty(value.gate, "mode", ENUMS.planGateMode);
+      normalizeEnumProperty(value.gate, "status", ENUMS.planGateStatus);
+      normalizeIntegerProperty(value.gate, "planRevision");
     }
     if (Array.isArray(value.steps)) value.steps = value.steps.map(normalizeStep);
     if (Object.prototype.hasOwnProperty.call(value, "planRevisions")) {

@@ -509,6 +509,82 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
     }
 
     [Fact]
+    public async Task WorkflowStudio_Protocol_ShouldNormalizePlanGateStatusFromEveryWireForm()
+    {
+        var protocol = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantProtocol);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8').replace(/^export /gm, '');
+            const context = { structuredClone, TextDecoder, URL, console };
+            vm.createContext(context);
+            vm.runInContext(source, context);
+
+            const snapshotWith = (gate) => context.normalizeFrame({
+              type:'CUSTOM', sequence:61, custom:{name:'nyxid.task.snapshot', payload:{
+                schemaVersion:4, actorId:'conversation-alpha', turnId:'turn-alpha',
+                taskId:'task-alpha', planId:'plan-alpha', planRevision:2,
+                title:'Post the update', status:'active', gate,
+                steps:[{stepId:'step-plan',order:1,kind:'llm',status:'done',
+                  externalEffect:'not_started',addedBy:'initial'}]
+              }}
+            });
+
+            const prefixed = snapshotWith({
+              mode:'NYX_ID_CHAT_PLAN_GATE_MODE_CONFIRM',
+              status:'NYX_ID_CHAT_PLAN_GATE_STATUS_PENDING',
+              reason:'Effect-capable step', requestId:'gate-alpha',
+              planId:'plan-alpha', planRevision:2
+            });
+            assert.equal(prefixed.payload.gate.mode, 'confirm');
+            assert.equal(prefixed.payload.gate.status, 'pending');
+            assert.equal(prefixed.payload.gate.planRevision, 2);
+
+            const lowercase = snapshotWith({ mode:'confirm', status:'satisfied' });
+            assert.equal(lowercase.payload.gate.status, 'satisfied');
+
+            const numeric = snapshotWith({ mode:2, status:3 });
+            assert.equal(numeric.payload.gate.status, 'rejected');
+
+            // The projected gate defaults status to an empty string before the actor decides
+            // anything; that must stay absent rather than throwing or resolving to a decision.
+            const empty = snapshotWith({ mode:'auto', status:'' });
+            assert.equal(empty.payload.gate.status, '');
+
+            // An undeclared status fails the frame closed rather than rendering an invented
+            // decision: the decoder degrades it to a typed protocol error.
+            const invalid = snapshotWith({ mode:'confirm', status:'approved' });
+            assert.equal(invalid.type, 'protocol_error');
+            assert.equal(invalid.code, 'NYXID_ENUM_INVALID');
+            """;
+
+        var result = await RunNodeAsync(script, protocol);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_PlanGate_ShouldDecideThroughTheActorOwnedPlanResolveCommand()
+    {
+        var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
+
+        // The decision must ride the typed plan.resolve command with the gate's own requestId
+        // and the exact plan identity, never a synthesized local admission.
+        app.Should().Contain("type: \"plan.resolve\"");
+        app.Should().Contain("submitNeedsYouDecision(entry, \"plan\", gate.requestId");
+        app.Should().Contain("planRevision: gate.planRevision");
+
+        // Availability is actor-owned: the affordance exists only while the committed gate
+        // status is pending, and an unknown status never reads as satisfied.
+        app.Should().Contain("actorPendingPlanGate");
+        app.Should().Contain("actorPlanGateStatus(projection.task) !== \"pending\"");
+
+        // Confirming a plan is local admission only; it must not be presented as NyxID
+        // authorization or as proof that an external effect happened.
+        app.Should().Contain("不授予 NyxID 访问权限");
+    }
+
+    [Fact]
     public async Task WorkflowStudio_TaskStepSourceLabel_ShouldUseTypedPostconditionCheck()
     {
         var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
