@@ -1068,6 +1068,41 @@ describe('Workflow Activity vNext catalogue', () => {
     expect(screen.queryByRole('menuitem', { name: 'Archive' })).toBeNull();
   });
 
+  it('shows Delete draft without Archive when committed history has no active revision', async () => {
+    mockScopesApi.queryWorkflowCatalogue.mockResolvedValue(
+      createCatalogueResponse([
+        createCatalogueRow({
+          workflowId: 'wf-draft-with-history',
+          name: 'Draft workflow with history',
+          committed: {
+            serviceKey: 'opaque-service-key',
+            workflowName: 'draft_with_history',
+            actorId: 'm-alpha',
+            activeRevisionId: '',
+            deploymentId: '',
+            deploymentStatus: '',
+          },
+          hasDraftSource: true,
+        }),
+      ]),
+    );
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    const row = (
+      await screen.findByText('Draft workflow with history')
+    ).closest('tr');
+    fireEvent.click(
+      within(row as HTMLElement).getByRole('button', {
+        name: 'More actions for Draft workflow with history in Workspace',
+      }),
+    );
+    expect(
+      await screen.findByRole('menuitem', { name: 'Delete draft' }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: 'Archive' })).toBeNull();
+  });
+
   it('shows Archive without Delete draft for a published workflow that still has a draft', async () => {
     mockScopesApi.queryWorkflowCatalogue.mockResolvedValue(
       createCatalogueResponse([
