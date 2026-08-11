@@ -125,7 +125,7 @@ NyxID 2026-07-06 至 2026-07-08 的 OAuth 更新把第三方应用 service acces
 
 `aevatar`、部署默认 LLM、Ornn 与 Sandbox service 是 Studio 登录、channel binding 和后续对话/skill/code execution 正常工作的必要资源,不是可选 UI 偏好. 因此最终 contract 为:
 
-- channel `/init` 的 `/oauth/authorize` 请求显式携带配置化必需 resource 集合. `nyxid_api_base_url` 对应 NyxID backend `BASE_URL` / Aevatar `Aevatar:NyxId:ApiBaseUrl`,不得从浏览器 OAuth authority 或 JWT issuer 派生；各 service slug 由对应 provider 配置注入.控制台登录不发送该集合.
+- channel `/init` 的 `/oauth/authorize` 请求显式携带配置化必需 resource 集合. resource identity 对应 NyxID backend `BASE_URL` / Aevatar `Aevatar:NyxId:Authority`;服务端 HTTP 客户端优先使用 `Aevatar:NyxId:InternalApiBaseUrl`,未配置时才回退到现有公网 `Aevatar:NyxId:ApiBaseUrl`.内部传输地址不得参与 resource URI、issuer 或 audience 构造；各 service slug 由对应 provider 配置注入.控制台登录不发送该集合.
 - NyxID authorization decision 必须在服务端校验前端提交的 service ID 是否存在且可由当前用户授权;前端异步加载的 service picker 负责选择体验,不能单独成为授权事实源.带 RFC 8707 `resource` 的 flow 还必须由服务端解析并合并对应必需 service ID.
 - authorization-code exchange、控制台 refresh 与 broker 的主 token-exchange 都省略 `resource`,继承完整 Consent 边界;Aevatar 不把用户在前端选择的完整 grant 收窄为部署最低集合.
 - broker 每次拿到完整 grant token 后先校验 `resources` claim.若 claim 未枚举必需 resource,使用 token 的 `allow_all_services/allowed_service_ids` 与 NyxID `/api/v1/user-services` 的权威 ID/resource 映射校验;catalog 中存在但 token 未授权的 ID 不计入显式 grant.校验只读,返回给 runtime 的仍是原始完整 grant token.

@@ -41,13 +41,31 @@ Nyx/OIDC deployment facts are host configuration, not page source:
 | `Aevatar:BackendConsole:OidcClientId` | Canonical public OAuth client id used by embedded-console PKCE, Studio login/finalization, broker token-exchange, and binding revoke. Bootstrap materializes this value into the OAuth Client Actor; no runtime path may fall back to an older projected client id. |
 | `Aevatar:BackendConsole:OidcScope` | Browser OIDC scope. The host adds `offline_access` to every non-empty configured scope to obtain the rotating refresh token required for a durable console session. |
 | `Aevatar:BackendConsole:OidcResources` | Additional RFC 8707 resource indicators. The host always includes `{NyxApiBaseUrl}/api/v1/proxy/s/aevatar` and the Ornn proxy resource resolved from `Aevatar:Ornn:NyxIdSlug` (default `ornn-api`). |
-| `Aevatar:BackendConsole:NyxApiBaseUrl` | Canonical NyxID API/resource-server base. It falls back only to `Aevatar:NyxId:ApiBaseUrl`, never to the browser OIDC authority. |
+| `Aevatar:BackendConsole:NyxApiBaseUrl` | Canonical public NyxID API/resource-server base. It falls back to `Aevatar:NyxId:Authority`, never to the internal `Aevatar:NyxId:InternalApiBaseUrl` transport address. |
 | `Aevatar:BackendConsole:StorageKey` | Shared browser localStorage/sessionStorage prefix. |
 | `Aevatar:BackendConsole:DefaultReturnPath` | Safe default redirect path after `/auto/callback`. |
 
 Each configurable HTML asset contains `__BACKEND_CONSOLE_CONFIG__`. The serving helper replaces that placeholder with JSON rendered from `BackendConsoleOptions`. The six `HOST_BACKEND_CONSOLE_*` environment variables are optional overrides for host deployment, but `.refactor-loop/host.env` is not a production configuration source.
 
-The OIDC client id and resource indicators are public browser values, not secrets. Every configurable console page appends each injected resource to both `/oauth/authorize` and the authorization-code exchange at `/oauth/token`; the shared `/auto/callback` follows the same contract. The host normalizes the configured scope and adds `offline_access` exactly once, including after environment overrides, because NyxID access tokens expire after 15 minutes and broker-capable clients return a refresh token only when that scope is granted. The OIDC authority owns browser authorization, while `NyxApiBaseUrl` owns RFC 8707 resource identity and NyxID REST/admin routing; these hosts may differ and must not be substituted for each other. Secrets still belong in the existing host secret/config mechanisms and must not be injected into page assets.
+The OIDC client id and resource indicators are public browser values, not secrets. Every configurable console page appends each injected resource to both `/oauth/authorize` and the authorization-code exchange at `/oauth/token`; the shared `/auto/callback` follows the same contract. The host normalizes the configured scope and adds `offline_access` exactly once, including after environment overrides, because NyxID access tokens expire after 15 minutes and broker-capable clients return a refresh token only when that scope is granted. `Aevatar:NyxId:Authority` owns the public OAuth issuer and RFC 8707 resource identity. `Aevatar:NyxId:ApiBaseUrl` retains the existing public API address, while server-side clients prefer `Aevatar:NyxId:InternalApiBaseUrl` when configured. Browser assets must never receive that internal transport address. Secrets still belong in the existing host secret/config mechanisms and must not be injected into page assets.
+
+Mainnet production keeps the public identity and internal transport explicit:
+
+```json
+{
+  "Aevatar": {
+    "NyxId": {
+      "Authority": "https://nyx-api.chrono-ai.fun",
+      "ApiBaseUrl": "https://nyx-api.chrono-ai.fun",
+      "InternalApiBaseUrl": "http://nyxid-backend-production-api-svc.chronoai-platform.svc.cluster.local:3001"
+    },
+    "BackendConsole": {
+      "OidcAuthority": "https://nyx-api.chrono-ai.fun",
+      "NyxApiBaseUrl": "https://nyx-api.chrono-ai.fun"
+    }
+  }
+}
+```
 
 Studio's `/api/auth/nyxid/config` still returns an actor-backed snapshot so authority, callback/scope contract, HMAC state, and broker observation remain cluster-coherent. Its `clientId` must match `Aevatar:BackendConsole:OidcClientId`; while Actor projection still carries another id, the provider fails closed instead of combining new configuration with stale runtime facts. Startup and the admin reconcile endpoint materialize the configured id into Actor state, but neither DCR output nor an API request body is an alternative client-id authority.
 

@@ -101,6 +101,7 @@ public static class ServiceCollectionExtensions
 
         var configuredBaseUrl = FirstConfiguredValue(
             configuration,
+            "Aevatar:NyxId:InternalApiBaseUrl",
             "Aevatar:NyxId:ApiBaseUrl",
             "Aevatar:NyxId:Authority",
             "Cli:App:NyxId:Authority",

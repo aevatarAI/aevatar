@@ -135,11 +135,11 @@ public sealed class NyxIdToolOptions
     public const int DefaultMaxRequestDurationSeconds = 330;
 
     /// <summary>
-    /// Default NyxID REST API base URL. Deployments may configure a dedicated API/resource-server
-    /// base independently from their browser/OIDC authority; the production default remains usable
+    /// Default NyxID REST API transport base URL. Deployments may configure an internal transport
+    /// independently from their public browser/OIDC authority; the production default remains usable
     /// when no override is supplied.
     /// </summary>
-    public const string DefaultBaseUrl = "https://nyx.chrono-ai.fun/";
+    public const string DefaultBaseUrl = "https://nyx-api.chrono-ai.fun/";
 
     /// <summary>NyxID REST API base URL. Defaults to <see cref="DefaultBaseUrl"/>.</summary>
     public string? BaseUrl { get; set; } = DefaultBaseUrl;

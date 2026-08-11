@@ -9,6 +9,14 @@ internal sealed class NyxIdBrokerOptionsValidator : IValidateOptions<NyxIdBroker
         ArgumentNullException.ThrowIfNull(options);
 
         var failures = new List<string>();
+        ValidateBaseUrl(
+            options.TransportBaseUrl,
+            nameof(NyxIdBrokerOptions.TransportBaseUrl),
+            failures);
+        ValidateBaseUrl(
+            options.ResourceServerBaseUrl,
+            nameof(NyxIdBrokerOptions.ResourceServerBaseUrl),
+            failures);
         ValidateServiceSlug(
             options.RequiredLlmServiceSlug,
             nameof(NyxIdBrokerOptions.RequiredLlmServiceSlug),
@@ -34,6 +42,19 @@ internal sealed class NyxIdBrokerOptionsValidator : IValidateOptions<NyxIdBroker
         return failures.Count == 0
             ? ValidateOptionsResult.Success
             : ValidateOptionsResult.Fail(failures);
+    }
+
+    private static void ValidateBaseUrl(
+        string? baseUrl,
+        string optionName,
+        ICollection<string> failures)
+    {
+        if (string.IsNullOrWhiteSpace(baseUrl) ||
+            !Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri) ||
+            (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+        {
+            failures.Add($"{optionName} must be an absolute HTTP or HTTPS URL.");
+        }
     }
 
     private static void ValidateServiceSlug(

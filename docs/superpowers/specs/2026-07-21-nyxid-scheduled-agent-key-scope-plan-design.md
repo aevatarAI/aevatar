@@ -85,7 +85,7 @@ NyxID key creation performs the final current-state recomputation. A stale route
 
 NyxID API access registration is independently reusable by scheduled dispatch, Studio, and the full NyxID tool package. Singleton consumers depend on `INyxIdApiClientFactory` and create a client per operation; they do not capture a transient typed client.
 
-REST calls prefer `Aevatar:NyxId:ApiBaseUrl`, then the configured authority aliases, then the existing NyxID default.
+REST calls prefer `Aevatar:NyxId:InternalApiBaseUrl`, then `Aevatar:NyxId:ApiBaseUrl`, then the configured authority aliases, then the existing NyxID default.
 
 ## Verification Contract
 

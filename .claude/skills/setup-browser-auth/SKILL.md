@@ -47,7 +47,7 @@ If the user provides a full session JSON instead of just the token, extract `tok
 ## Phase 2: Refresh Token via NyxID
 
 ```bash
-NYXID_BASE_URL="${NYXID_BASE_URL:-https://nyx.chrono-ai.fun}"
+NYXID_BASE_URL="${NYXID_BASE_URL:-https://nyx-api.chrono-ai.fun}"
 
 TOKEN_RESPONSE=$(curl -s -X POST "${NYXID_BASE_URL}/oauth/token" \
   -H "Content-Type: application/x-www-form-urlencoded" \
@@ -130,7 +130,7 @@ console.log('Auth:', s?.user?.email, 'expires:', new Date(s?.tokens?.expiresAt).
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `NYXID_BASE_URL` | `https://nyx.chrono-ai.fun` | NyxID OAuth server |
+| `NYXID_BASE_URL` | `https://nyx-api.chrono-ai.fun` | NyxID OAuth server |
 | `NYXID_REFRESH_TOKEN` | (none) | Refresh token for auto-injection |
 | target URL arg | `http://127.0.0.1:5173` | App URL to open after auth |
 

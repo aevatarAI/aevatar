@@ -217,6 +217,10 @@ public sealed class ServiceCollectionExtensionsTests
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
+                [NyxIdBrokerOptions.ApiBaseUrlConfigurationKey] =
+                    " https://api.example.test/// ",
+                [NyxIdBrokerOptions.InternalApiBaseUrlConfigurationKey] =
+                    " http://nyxid.internal:3001/// ",
                 [NyxIdBrokerOptions.ResourceServerBaseUrlConfigurationKey] =
                     " https://api.example.test/// ",
             })
@@ -227,11 +231,59 @@ public sealed class ServiceCollectionExtensionsTests
 
         AssertProjectionActivationProviderRegistered<ChannelIdentityCommittedStateProjectionActivationPlanProvider>(
             services);
-        provider.GetRequiredService<IOptions<NyxIdBrokerOptions>>()
-            .Value.ResourceServerBaseUrl.Should().Be("https://api.example.test");
+        var options = provider.GetRequiredService<IOptions<NyxIdBrokerOptions>>().Value;
+        options.TransportBaseUrl.Should().Be("http://nyxid.internal:3001");
+        options.ResourceServerBaseUrl.Should().Be("https://api.example.test");
         services.Should().NotContain(descriptor =>
             descriptor.ServiceType == typeof(IHostedService) &&
             descriptor.ImplementationType == typeof(AevatarOAuthClientEsAclStartupGuard));
+    }
+
+    [Theory]
+    [InlineData(NyxIdBrokerOptions.InternalApiBaseUrlConfigurationKey, "not-a-url", "TransportBaseUrl")]
+    [InlineData(NyxIdBrokerOptions.ResourceServerBaseUrlConfigurationKey, " ", "ResourceServerBaseUrl")]
+    public void AddChannelIdentity_WithInvalidNyxIdBaseUrl_ShouldFailOptionsValidation(
+        string configurationKey,
+        string configuredValue,
+        string expectedOptionName)
+    {
+        var configurationValues = new Dictionary<string, string?>
+        {
+            [NyxIdBrokerOptions.ApiBaseUrlConfigurationKey] = "https://api.example.test",
+            [NyxIdBrokerOptions.InternalApiBaseUrlConfigurationKey] = "http://nyxid.internal:3001",
+            [NyxIdBrokerOptions.ResourceServerBaseUrlConfigurationKey] = "https://api.example.test",
+            [configurationKey] = configuredValue,
+        };
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(configurationValues)
+            .Build();
+        var services = new ServiceCollection();
+        services.AddChannelIdentity(configuration);
+        using var provider = services.BuildServiceProvider();
+
+        var act = () => provider.GetRequiredService<IOptions<NyxIdBrokerOptions>>().Value;
+
+        act.Should().Throw<OptionsValidationException>()
+            .WithMessage($"*{expectedOptionName}*absolute HTTP or HTTPS URL*");
+    }
+
+    [Fact]
+    public void AddChannelIdentity_WithBlankInternalApiBaseUrl_ShouldUsePublicApiBaseUrlForTransport()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [NyxIdBrokerOptions.InternalApiBaseUrlConfigurationKey] = " ",
+                [NyxIdBrokerOptions.ApiBaseUrlConfigurationKey] = " https://api.example.test/ ",
+                [NyxIdBrokerOptions.ResourceServerBaseUrlConfigurationKey] = "https://authority.example.test",
+            })
+            .Build();
+        var services = new ServiceCollection();
+        services.AddChannelIdentity(configuration);
+        using var provider = services.BuildServiceProvider();
+
+        provider.GetRequiredService<IOptions<NyxIdBrokerOptions>>().Value.TransportBaseUrl
+            .Should().Be("https://api.example.test");
     }
 
     [Fact]

@@ -38,7 +38,7 @@ If the report is missing the information needed to find or exercise the feature,
 
 ## Auth Injection Protocol
 
-This app stores auth session in `localStorage` under key `aevatar-console:nyxid:session`. The session contains OAuth2 tokens from NyxID (`https://nyx.chrono-ai.fun`).
+This app stores auth session in `localStorage` under key `aevatar-console:nyxid:session`. The session contains OAuth2 tokens from NyxID (`https://nyx-api.chrono-ai.fun`).
 
 **Before navigating to any protected route**, inject a valid session:
 
@@ -46,7 +46,7 @@ This app stores auth session in `localStorage` under key `aevatar-console:nyxid:
 
 2. Refresh the access token:
 ```bash
-curl -s -X POST "https://nyx.chrono-ai.fun/oauth/token" \
+curl -s -X POST "https://nyx-api.chrono-ai.fun/oauth/token" \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d "grant_type=refresh_token&refresh_token=$REFRESH_TOKEN"
 ```
@@ -54,7 +54,7 @@ If this fails (401/400), the refresh token is expired. Return `BLOCKED` with `bl
 
 3. Fetch user info:
 ```bash
-curl -s "https://nyx.chrono-ai.fun/oauth/userinfo" \
+curl -s "https://nyx-api.chrono-ai.fun/oauth/userinfo" \
   -H "Authorization: Bearer $ACCESS_TOKEN"
 ```
 

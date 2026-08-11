@@ -98,6 +98,7 @@ public sealed class BackendConsoleAssetServiceTests
                 ["Aevatar:Authentication:Authority"] = "https://auth.example.test",
                 ["Aevatar:NyxId:Authority"] = "https://nyx.example.test",
                 ["Aevatar:NyxId:ApiBaseUrl"] = "https://nyx-api.example.test",
+                ["Aevatar:NyxId:InternalApiBaseUrl"] = "http://nyxid.internal:3001",
             })
             .Build();
         services.AddBackendConsoleStaticAssets(configuration);
@@ -111,12 +112,13 @@ public sealed class BackendConsoleAssetServiceTests
             "text/html",
             InjectHostConfiguration: true));
 
-        html.Should().Contain("\"authority\":\"https://auth.example.test\"");
+        html.Should().Contain("\"authority\":\"https://nyx.example.test\"");
         html.Should().Contain("\"clientId\":\"client-example\"");
         html.Should().Contain("\"scope\":\"openid profile offline_access\"");
         html.Should().Contain(
-            "\"resources\":[\"https://nyx-api.example.test/api/v1/proxy/s/aevatar\",\"https://nyx-api.example.test/api/v1/proxy/s/ornn-api\"]");
-        html.Should().Contain("\"nyxidApi\":\"https://nyx-api.example.test\"");
+            "\"resources\":[\"https://nyx.example.test/api/v1/proxy/s/aevatar\",\"https://nyx.example.test/api/v1/proxy/s/ornn-api\"]");
+        html.Should().Contain("\"nyxidApi\":\"https://nyx.example.test\"");
+        html.Should().NotContain("http://nyxid.internal:3001");
         html.Should().Contain("\"storageKey\":\"console:test\"");
         html.Should().NotContain("__BACKEND_CONSOLE_CONFIG__");
     }
