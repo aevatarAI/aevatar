@@ -51,6 +51,11 @@ using Aevatar.AGUI.Contracts;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Core.TypeSystem;
+using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Domain.Studio.Compatibility;
+using Aevatar.Studio.Infrastructure.Serialization;
+using Aevatar.Studio.Projection.Metadata;
+using Aevatar.Studio.Projection.Projectors;
 using Aevatar.Studio.Projection.ReadModels;
 using Aevatar.Scripting.Hosting.DependencyInjection;
 using Aevatar.Foundation.Abstractions;
@@ -142,6 +147,9 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<LlmRunExecutor>();
         services.TryAddSingleton<ILlmRunExecutor>(sp => sp.GetRequiredService<LlmRunExecutor>());
         services.TryAddSingleton<ILlmRunExecutionService>(sp => sp.GetRequiredService<LlmRunExecutor>());
+        services.TryAddSingleton(WorkflowCompatibilityProfile.AevatarV1);
+        services.TryAddSingleton<IWorkflowYamlDocumentService, YamlWorkflowDocumentService>();
+        services.TryAddSingleton<ScopeWorkflowCatalogueRowMaterializer>();
         // Off-grain run execution (epic #2271 root fix): the scheduler enqueues to an
         // in-process bounded queue that a hosted background worker drains off any Orleans
         // grain turn, instead of provisioning a per-run execution grain that blocked its
@@ -305,6 +313,15 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<
             IProjectionDocumentMetadataProvider<WorkflowActorBindingDocument>,
             WorkflowActorBindingDocumentMetadataProvider>();
+        services.TryAddSingleton<
+            IProjectionDocumentMetadataProvider<ScopeWorkflowCatalogueSourceDocument>,
+            ScopeWorkflowCatalogueSourceDocumentMetadataProvider>();
+        services.TryAddSingleton<
+            IProjectionDocumentMetadataProvider<ScopeWorkflowCatalogueRowDocument>,
+            ScopeWorkflowCatalogueRowDocumentMetadataProvider>();
+        services.TryAddSingleton<
+            IProjectionDocumentMetadataProvider<StudioWorkspaceCurrentStateDocument>,
+            StudioWorkspaceCurrentStateDocumentMetadataProvider>();
 
         if (documentProvider.ElasticsearchEnabled)
         {
@@ -338,6 +355,9 @@ public static class ServiceCollectionExtensions
             TryAddElasticsearchDocumentProjectionStore<UserConfigCurrentStateDocument>(services, configuration, static readModel => readModel.Id);
             TryAddElasticsearchDocumentProjectionStore<WorkflowCatalogCurrentStateDocument>(services, configuration, static readModel => readModel.Id);
             TryAddElasticsearchDocumentProjectionStore<WorkflowActorBindingDocument>(services, configuration, static readModel => readModel.Id);
+            TryAddElasticsearchDocumentProjectionStore<ScopeWorkflowCatalogueSourceDocument>(services, configuration, static readModel => readModel.Id);
+            TryAddElasticsearchDocumentProjectionStore<ScopeWorkflowCatalogueRowDocument>(services, configuration, static readModel => readModel.Id);
+            TryAddElasticsearchDocumentProjectionStore<StudioWorkspaceCurrentStateDocument>(services, configuration, static readModel => readModel.Id);
         }
         else
         {
@@ -361,6 +381,9 @@ public static class ServiceCollectionExtensions
             TryAddInMemoryDocumentProjectionStore<UserConfigCurrentStateDocument>(services, static readModel => readModel.Id);
             TryAddInMemoryDocumentProjectionStore<WorkflowCatalogCurrentStateDocument>(services, static readModel => readModel.Id);
             TryAddInMemoryDocumentProjectionStore<WorkflowActorBindingDocument>(services, static readModel => readModel.Id);
+            TryAddInMemoryDocumentProjectionStore<ScopeWorkflowCatalogueSourceDocument>(services, static readModel => readModel.Id);
+            TryAddInMemoryDocumentProjectionStore<ScopeWorkflowCatalogueRowDocument>(services, static readModel => readModel.Id);
+            TryAddInMemoryDocumentProjectionStore<StudioWorkspaceCurrentStateDocument>(services, static readModel => readModel.Id);
         }
 
         return services;
@@ -389,7 +412,10 @@ public static class ServiceCollectionExtensions
                && HasProjectionDocumentReaderForProvider<NyxIdAuthorizationCatalogDocument>(services, providerKind)
                && HasProjectionDocumentReaderForProvider<UserConfigCurrentStateDocument>(services, providerKind)
                && HasProjectionDocumentReaderForProvider<WorkflowCatalogCurrentStateDocument>(services, providerKind)
-               && HasProjectionDocumentReaderForProvider<WorkflowActorBindingDocument>(services, providerKind);
+               && HasProjectionDocumentReaderForProvider<WorkflowActorBindingDocument>(services, providerKind)
+               && HasProjectionDocumentReaderForProvider<ScopeWorkflowCatalogueSourceDocument>(services, providerKind)
+               && HasProjectionDocumentReaderForProvider<ScopeWorkflowCatalogueRowDocument>(services, providerKind)
+               && HasProjectionDocumentReaderForProvider<StudioWorkspaceCurrentStateDocument>(services, providerKind);
     }
 
     private static bool HasAnyProjectionDocumentReader<TReadModel>(IServiceCollection services)
