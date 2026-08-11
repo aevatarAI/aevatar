@@ -62,6 +62,29 @@ public sealed class NyxIdCodeExecutionWorkflowCapabilitySourceTests
         readiness.SelectedCapability.CodeExecution.UserServiceId.Should().Be("us-code-alpha");
     }
 
+    [Fact]
+    public async Task InspectAsync_ProxyDelegationOnly_UsesDelegatedAccountReadAuthority()
+    {
+        var handler = new InventoryHandler(Inventory(Service(
+            "us-code-alpha",
+            "personal",
+            allowed: true)));
+        var source = CreateSource(handler);
+        var access = new ExternalWorkflowCapabilityAccessContext(
+            "scope-alpha",
+            "caller-alpha",
+            NyxIdCallerCredentialSelection.ProxyDelegation("delegation-alpha"));
+
+        var readiness = await source.InspectAsync(
+            access,
+            Selector(),
+            ExternalCapabilityExecutionMode.Interactive);
+
+        readiness.Status.Should().Be(ExternalCapabilityReadinessStatus.Ready);
+        readiness.SelectedCapability.CodeExecution.UserServiceId.Should().Be("us-code-alpha");
+        handler.Authorization.Should().Be("Bearer delegation-alpha");
+    }
+
     [Theory]
     [InlineData(false, true, "sandbox:execute", true, "CODE_EXECUTION_ROUTE_ACCESS_DENIED")]
     [InlineData(true, false, "sandbox:execute", false, "CODE_EXECUTION_ROUTE_POLICY_MISMATCH")]
@@ -127,9 +150,11 @@ public sealed class NyxIdCodeExecutionWorkflowCapabilitySourceTests
         readiness.SelectedCapability.CodeExecution.UserServiceId.Should().Be("us-code-alpha");
     }
 
-    private static NyxIdCodeExecutionWorkflowCapabilitySource CreateSource(string inventory)
+    private static NyxIdCodeExecutionWorkflowCapabilitySource CreateSource(string inventory) =>
+        CreateSource(new InventoryHandler(inventory));
+
+    private static NyxIdCodeExecutionWorkflowCapabilitySource CreateSource(InventoryHandler handler)
     {
-        var handler = new InventoryHandler(inventory);
         var options = new NyxIdToolOptions { BaseUrl = "https://nyx.example" };
         var client = new NyxIdApiClient(options, new HttpClient(handler));
         return new NyxIdCodeExecutionWorkflowCapabilitySource(
@@ -189,12 +214,17 @@ public sealed class NyxIdCodeExecutionWorkflowCapabilitySourceTests
 
     private sealed class InventoryHandler(string inventory) : HttpMessageHandler
     {
+        public string? Authorization { get; private set; }
+
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
-            CancellationToken cancellationToken) =>
-            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            CancellationToken cancellationToken)
+        {
+            Authorization = request.Headers.Authorization?.ToString();
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(inventory, Encoding.UTF8, "application/json"),
             });
+        }
     }
 }

@@ -519,6 +519,12 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
                     ? source.CallerDurableCredential.Clone()
                     : null,
                 NyxIdAuthority = authority,
+                Kind = string.Equals(
+                    source.CallerDurableCredential.Purpose,
+                    CredentialSecretPurposes.ScheduledInvocationAgentKey,
+                    StringComparison.Ordinal)
+                    ? NyxIdCallerCredentialKind.ProxyDelegation
+                    : NyxIdCallerCredentialKind.Unspecified,
             };
         }
 

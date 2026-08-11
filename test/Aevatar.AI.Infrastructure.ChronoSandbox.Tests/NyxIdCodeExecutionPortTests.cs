@@ -11,11 +11,12 @@ namespace Aevatar.AI.Infrastructure.ChronoSandbox.Tests;
 
 public sealed class NyxIdCodeExecutionPortTests
 {
-    private const string BearerToken = "caller-bearer";
+    private const string ExecutionBearerToken = "execution-bearer";
+    private const string SourceReadableBearerToken = "source-readable-bearer";
     private const string CodeServiceId = "us-code-alpha";
 
     [Fact]
-    public async Task ExecuteAsync_ResolvesExactCodeServiceAndUsesBearerProxyExecution()
+    public async Task ExecuteAsync_UsesSourceReadableCredentialForInventoryAndExecutionCredentialForProxy()
     {
         var handler = new SequenceHandler(
             JsonResponse(Inventory(
@@ -52,13 +53,74 @@ public sealed class NyxIdCodeExecutionPortTests
         handler.Requests[1].Method.Should().Be(HttpMethod.Post.Method);
         handler.Requests[1].PathAndQuery.Should().Be(
             "/api/v1/proxy/s/chrono-sandbox/execute?_nyxid_via=us-code-alpha");
-        handler.Requests.Should().OnlyContain(request => request.Authorization == $"Bearer {BearerToken}");
+        handler.Requests[0].Authorization.Should().Be($"Bearer {SourceReadableBearerToken}");
+        handler.Requests[1].Authorization.Should().Be($"Bearer {ExecutionBearerToken}");
         handler.Requests.Should().OnlyContain(request => request.ApiKeys.Count == 0);
         using var body = JsonDocument.Parse(handler.Requests[1].Body!);
         body.RootElement.EnumerateObject().Select(static property => property.Name)
             .Should().Equal("language", "script");
         body.RootElement.GetProperty("language").GetString().Should().Be("python");
         body.RootElement.GetProperty("script").GetString().Should().Be("print(42)");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ScheduledExactAdmissionSkipsInventoryAndUsesExecutionCredential()
+    {
+        var handler = new SequenceHandler(JsonResponse(
+            """
+            {
+              "success": true,
+              "output": {
+                "stdout": "scheduled-ok",
+                "stderr": "",
+                "exit_code": 0
+              }
+            }
+            """));
+        var port = CreatePort(handler);
+        var request = Request(
+            CodeServiceId,
+            executionBearerToken: "scheduled-agent-key",
+            sourceReadableBearerToken: null) with
+        {
+            Route = new CodeExecutionRouteIdentity(
+                "chrono-sandbox",
+                CodeServiceId,
+                CodeExecutionRouteIdentitySource.WorkflowCapabilityAdmission),
+        };
+
+        var outcome = await port.ExecuteAsync(request);
+
+        outcome.Failure.Should().BeNull();
+        outcome.Result!.Stdout.Should().Be("scheduled-ok");
+        outcome.ResolvedRoute.Should().Be(new CodeExecutionRouteIdentity(
+            "chrono-sandbox",
+            CodeServiceId,
+            CodeExecutionRouteIdentitySource.WorkflowCapabilityAdmission));
+        handler.Requests.Should().ContainSingle();
+        handler.Requests[0].Method.Should().Be(HttpMethod.Post.Method);
+        handler.Requests[0].PathAndQuery.Should().Be(
+            "/api/v1/proxy/s/chrono-sandbox/execute?_nyxid_via=us-code-alpha");
+        handler.Requests[0].Authorization.Should().Be("Bearer scheduled-agent-key");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WithoutSourceReadableCredentialOrExactAdmissionFailsBeforeNyxIdCall()
+    {
+        var handler = new SequenceHandler();
+        var port = CreatePort(handler);
+
+        var outcome = await port.ExecuteAsync(Request(
+            userServiceId: null,
+            executionBearerToken: "scheduled-agent-key",
+            sourceReadableBearerToken: null));
+
+        outcome.Failure.Should().BeEquivalentTo(new
+        {
+            Kind = CodeExecutionFailureKind.AdmissionDenied,
+            Code = "code_execution_credential_unavailable",
+        });
+        handler.Requests.Should().BeEmpty();
     }
 
     [Fact]
@@ -727,7 +789,8 @@ public sealed class NyxIdCodeExecutionPortTests
     {
         var message = logger.Messages.Should().ContainSingle().Which;
         message.Should().Contain(diagnosticId);
-        message.Should().NotContain(BearerToken);
+        message.Should().NotContain(ExecutionBearerToken);
+        message.Should().NotContain(SourceReadableBearerToken);
         message.Should().NotContain(CodeServiceId);
         message.Should().NotContain("print(42)");
         message.Should().NotContain("untrusted");
@@ -735,7 +798,10 @@ public sealed class NyxIdCodeExecutionPortTests
         message.Should().Contain("diagnosticSource=");
     }
 
-    private static CodeExecutionRequest Request(string? userServiceId) =>
+    private static CodeExecutionRequest Request(
+        string? userServiceId,
+        string executionBearerToken = ExecutionBearerToken,
+        string? sourceReadableBearerToken = SourceReadableBearerToken) =>
         new(
             CodeExecutionLanguage.Python,
             "print(42)",
@@ -743,7 +809,9 @@ public sealed class NyxIdCodeExecutionPortTests
                 "chrono-sandbox",
                 userServiceId,
                 CodeExecutionRouteIdentitySource.CodeExecutionContract),
-            new CodeExecutionCallerContext(BearerToken));
+            new CodeExecutionCallerContext(
+                executionBearerToken,
+                sourceReadableBearerToken));
 
     private static SequenceHandler HandlerWithProxyResponse(
         Func<CancellationToken, Task<HttpResponseMessage>> proxyResponse) =>
