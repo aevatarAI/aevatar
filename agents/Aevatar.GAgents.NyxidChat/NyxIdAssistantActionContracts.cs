@@ -173,46 +173,33 @@ internal sealed record NyxIdAssistantActionSafeResourcePredicateRegistration(
         bool> Predicate);
 
 internal delegate Task<NyxIdChatActionPostconditionResult>
-    NyxIdAssistantActionPostconditionVerifier(
+    NyxIdAssistantActionPostconditionVerifier<TExpectation, TEvidence>(
+        NyxIdActionPostconditionPort port,
+        NyxIdChatActionPostconditionInput input,
+        AgentToolExecutionContextPayload? transientToolContext,
+        Func<TExpectation, TEvidence, bool> evidencePredicate,
+        CancellationToken ct);
+
+internal abstract record NyxIdAssistantActionPostconditionCapabilityRegistration(
+    NyxIdAssistantActionKind Action,
+    NyxIdAssistantActionEvidenceStrategy EvidenceStrategy,
+    NyxIdChatActionPostconditionInput ProbeInput)
+{
+    internal abstract bool HasPostconditionVerifier { get; }
+    internal abstract bool HasEvidencePredicate { get; }
+
+    internal abstract Task<NyxIdChatActionPostconditionResult> VerifyAsync(
         NyxIdActionPostconditionPort port,
         NyxIdChatActionPostconditionInput input,
         AgentToolExecutionContextPayload? transientToolContext,
         CancellationToken ct);
 
-internal abstract record NyxIdAssistantActionPostconditionVerifierRegistration(
-    NyxIdAssistantActionKind Action,
-    NyxIdAssistantActionEvidenceStrategy EvidenceStrategy,
-    NyxIdAssistantActionPostconditionVerifier Verifier,
-    NyxIdChatActionPostconditionInput ProbeInput)
-{
-    internal abstract System.Type ExpectationType { get; }
-    internal abstract System.Type EvidenceType { get; }
-}
-
-internal sealed record NyxIdAssistantActionPostconditionVerifierRegistration<
-    TExpectation,
-    TEvidence>(
-    NyxIdAssistantActionKind Action,
-    NyxIdAssistantActionEvidenceStrategy EvidenceStrategy,
-    NyxIdAssistantActionPostconditionVerifier Verifier,
-    NyxIdChatActionPostconditionInput ProbeInput)
-    : NyxIdAssistantActionPostconditionVerifierRegistration(
-        Action,
-        EvidenceStrategy,
-        Verifier,
-        ProbeInput)
-{
-    internal override System.Type ExpectationType => typeof(TExpectation);
-    internal override System.Type EvidenceType => typeof(TEvidence);
-}
-
-internal abstract record NyxIdAssistantActionEvidencePredicateRegistration(
-    NyxIdAssistantActionKind Action,
-    NyxIdAssistantActionEvidenceStrategy EvidenceStrategy)
-{
-    internal abstract System.Type ExpectationType { get; }
-    internal abstract System.Type EvidenceType { get; }
-    internal abstract bool MatchesProbe();
+    internal abstract bool PostconditionVerifierMatchesProbe();
+    internal abstract bool EvidencePredicateMatchesProbe();
+    internal abstract NyxIdAssistantActionPostconditionCapabilityRegistration
+        WithoutPostconditionVerifier();
+    internal abstract NyxIdAssistantActionPostconditionCapabilityRegistration
+        WithoutEvidencePredicate();
 }
 
 internal sealed record NyxIdAssistantActionEvidencePredicateProbeCase<
@@ -222,24 +209,87 @@ internal sealed record NyxIdAssistantActionEvidencePredicateProbeCase<
     TEvidence MatchingEvidence,
     TEvidence MismatchedEvidence);
 
-internal sealed record NyxIdAssistantActionEvidencePredicateRegistration<
+internal sealed record NyxIdAssistantActionPostconditionCapabilityRegistration<
     TExpectation,
     TEvidence>(
     NyxIdAssistantActionKind Action,
     NyxIdAssistantActionEvidenceStrategy EvidenceStrategy,
-    Func<TExpectation, TEvidence, bool> Predicate,
+    NyxIdAssistantActionPostconditionVerifier<TExpectation, TEvidence>? Verifier,
+    Func<TExpectation, TEvidence, bool>? EvidencePredicate,
+    NyxIdChatActionPostconditionInput ProbeInput,
     IReadOnlyList<
-        NyxIdAssistantActionEvidencePredicateProbeCase<TExpectation, TEvidence>> ProbeCases)
-    : NyxIdAssistantActionEvidencePredicateRegistration(Action, EvidenceStrategy)
+        NyxIdAssistantActionEvidencePredicateProbeCase<TExpectation, TEvidence>>
+        EvidencePredicateProbeCases)
+    : NyxIdAssistantActionPostconditionCapabilityRegistration(
+        Action,
+        EvidenceStrategy,
+        ProbeInput)
 {
-    internal override System.Type ExpectationType => typeof(TExpectation);
-    internal override System.Type EvidenceType => typeof(TEvidence);
+    internal override bool HasPostconditionVerifier => Verifier is not null;
+    internal override bool HasEvidencePredicate => EvidencePredicate is not null;
 
-    internal override bool MatchesProbe() =>
-        ProbeCases.Count > 0 &&
-        ProbeCases.All(probe =>
-            Predicate(probe.Expectation, probe.MatchingEvidence) &&
-            !Predicate(probe.Expectation, probe.MismatchedEvidence));
+    internal override Task<NyxIdChatActionPostconditionResult> VerifyAsync(
+        NyxIdActionPostconditionPort port,
+        NyxIdChatActionPostconditionInput input,
+        AgentToolExecutionContextPayload? transientToolContext,
+        CancellationToken ct)
+    {
+        if (Verifier is null || EvidencePredicate is null)
+            throw new InvalidOperationException("The postcondition capability is incomplete.");
+
+        return Verifier(port, input, transientToolContext, EvidencePredicate, ct);
+    }
+
+    internal override bool PostconditionVerifierMatchesProbe()
+    {
+        if (Verifier is null || ProbeInput.Action != Action)
+            return false;
+
+        try
+        {
+            var verification = Verifier(
+                new NyxIdActionPostconditionPort(null, null, TimeProvider.System),
+                ProbeInput.Clone(),
+                null,
+                static (_, _) => false,
+                CancellationToken.None);
+            return verification.IsCompletedSuccessfully &&
+                   !verification.Result.Verified &&
+                   string.Equals(
+                       verification.Result.FailureCode,
+                       NyxIdActionPostconditionPort.UnavailableCode,
+                       StringComparison.Ordinal);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    internal override bool EvidencePredicateMatchesProbe()
+    {
+        if (EvidencePredicate is null || EvidencePredicateProbeCases.Count == 0)
+            return false;
+
+        try
+        {
+            return EvidencePredicateProbeCases.All(probe =>
+                EvidencePredicate(probe.Expectation, probe.MatchingEvidence) &&
+                !EvidencePredicate(probe.Expectation, probe.MismatchedEvidence));
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    internal override NyxIdAssistantActionPostconditionCapabilityRegistration
+        WithoutPostconditionVerifier() =>
+        this with { Verifier = null };
+
+    internal override NyxIdAssistantActionPostconditionCapabilityRegistration
+        WithoutEvidencePredicate() =>
+        this with { EvidencePredicate = null };
 }
 
 internal readonly record struct NyxIdServiceConnectEvidenceExpectation(
@@ -287,9 +337,7 @@ internal sealed class NyxIdAssistantActionCapabilityRegistrations
     private readonly FrozenDictionary<NyxIdAssistantActionKind,
         NyxIdAssistantActionSafeResourcePredicateRegistration> _safeResourcePredicates;
     private readonly FrozenDictionary<NyxIdAssistantActionKind,
-        NyxIdAssistantActionPostconditionVerifierRegistration> _postconditionVerifiers;
-    private readonly FrozenDictionary<NyxIdAssistantActionKind,
-        NyxIdAssistantActionEvidencePredicateRegistration> _evidencePredicates;
+        NyxIdAssistantActionPostconditionCapabilityRegistration> _postconditionCapabilities;
     private readonly FrozenDictionary<NyxIdAssistantActionKind,
         NyxIdAssistantActionAuthorityResolverRegistration> _authorityResolvers;
     private readonly FrozenDictionary<NyxIdAssistantActionKind,
@@ -300,8 +348,7 @@ internal sealed class NyxIdAssistantActionCapabilityRegistrations
         IEnumerable<NyxIdAssistantActionAdmissionParserRegistration> admissionParsers,
         IEnumerable<NyxIdAssistantActionAGUIMapperRegistration> aguiMappers,
         IEnumerable<NyxIdAssistantActionSafeResourcePredicateRegistration> safeResourcePredicates,
-        IEnumerable<NyxIdAssistantActionPostconditionVerifierRegistration> postconditionVerifiers,
-        IEnumerable<NyxIdAssistantActionEvidencePredicateRegistration> evidencePredicates,
+        IEnumerable<NyxIdAssistantActionPostconditionCapabilityRegistration> postconditionCapabilities,
         IEnumerable<NyxIdAssistantActionAuthorityResolverRegistration> authorityResolvers,
         IEnumerable<NyxIdAssistantActionRetryGenerationPolicyRegistration> retryGenerationPolicies)
     {
@@ -309,8 +356,8 @@ internal sealed class NyxIdAssistantActionCapabilityRegistrations
         _admissionParsers = admissionParsers.ToFrozenDictionary(static item => item.Action);
         _aguiMappers = aguiMappers.ToFrozenDictionary(static item => item.Action);
         _safeResourcePredicates = safeResourcePredicates.ToFrozenDictionary(static item => item.Action);
-        _postconditionVerifiers = postconditionVerifiers.ToFrozenDictionary(static item => item.Action);
-        _evidencePredicates = evidencePredicates.ToFrozenDictionary(static item => item.Action);
+        _postconditionCapabilities =
+            postconditionCapabilities.ToFrozenDictionary(static item => item.Action);
         _authorityResolvers = authorityResolvers.ToFrozenDictionary(static item => item.Action);
         _retryGenerationPolicies = retryGenerationPolicies.ToFrozenDictionary(static item => item.Action);
     }
@@ -331,9 +378,11 @@ internal sealed class NyxIdAssistantActionCapabilityRegistrations
             NyxIdAssistantActionCapabilityKind.SafeResourcePredicate => Copy(
                 safeResourcePredicates: _safeResourcePredicates.Values.Where(item => item.Action != action)),
             NyxIdAssistantActionCapabilityKind.PostconditionVerifier => Copy(
-                postconditionVerifiers: _postconditionVerifiers.Values.Where(item => item.Action != action)),
+                postconditionCapabilities: _postconditionCapabilities.Values.Select(item =>
+                    item.Action == action ? item.WithoutPostconditionVerifier() : item)),
             NyxIdAssistantActionCapabilityKind.EvidencePredicate => Copy(
-                evidencePredicates: _evidencePredicates.Values.Where(item => item.Action != action)),
+                postconditionCapabilities: _postconditionCapabilities.Values.Select(item =>
+                    item.Action == action ? item.WithoutEvidencePredicate() : item)),
             NyxIdAssistantActionCapabilityKind.AuthorityResolver => Copy(
                 authorityResolvers: _authorityResolvers.Values.Where(item => item.Action != action)),
             NyxIdAssistantActionCapabilityKind.RetryGenerationPolicy => Copy(
@@ -366,26 +415,55 @@ internal sealed class NyxIdAssistantActionCapabilityRegistrations
                 .Append(registration));
     }
 
-    public NyxIdAssistantActionCapabilityRegistrations With(
-        NyxIdAssistantActionPostconditionVerifierRegistration registration)
+    public NyxIdAssistantActionCapabilityRegistrations WithPostconditionVerifier<
+        TExpectation,
+        TEvidence>(
+        NyxIdAssistantActionKind action,
+        NyxIdAssistantActionPostconditionVerifier<TExpectation, TEvidence> verifier)
     {
-        ArgumentNullException.ThrowIfNull(registration);
-        ArgumentNullException.ThrowIfNull(registration.Verifier);
-        ArgumentNullException.ThrowIfNull(registration.ProbeInput);
+        ArgumentNullException.ThrowIfNull(verifier);
+        if (!_postconditionCapabilities.TryGetValue(action, out var current))
+            return this;
+
+        var replacement =
+            current is NyxIdAssistantActionPostconditionCapabilityRegistration<
+                TExpectation,
+                TEvidence> typed
+                ? typed with { Verifier = verifier }
+                : current.WithoutPostconditionVerifier();
         return Copy(
-            postconditionVerifiers: _postconditionVerifiers.Values
-                .Where(item => item.Action != registration.Action)
-                .Append(registration));
+            postconditionCapabilities: _postconditionCapabilities.Values
+                .Where(item => item.Action != action)
+                .Append(replacement));
     }
 
-    public NyxIdAssistantActionCapabilityRegistrations With(
-        NyxIdAssistantActionEvidencePredicateRegistration registration)
+    public NyxIdAssistantActionCapabilityRegistrations WithEvidencePredicate<
+        TExpectation,
+        TEvidence>(
+        NyxIdAssistantActionKind action,
+        Func<TExpectation, TEvidence, bool> evidencePredicate,
+        IReadOnlyList<
+            NyxIdAssistantActionEvidencePredicateProbeCase<TExpectation, TEvidence>> probeCases)
     {
-        ArgumentNullException.ThrowIfNull(registration);
+        ArgumentNullException.ThrowIfNull(evidencePredicate);
+        ArgumentNullException.ThrowIfNull(probeCases);
+        if (!_postconditionCapabilities.TryGetValue(action, out var current))
+            return this;
+
+        var replacement =
+            current is NyxIdAssistantActionPostconditionCapabilityRegistration<
+                TExpectation,
+                TEvidence> typed
+                ? typed with
+                {
+                    EvidencePredicate = evidencePredicate,
+                    EvidencePredicateProbeCases = probeCases,
+                }
+                : current.WithoutEvidencePredicate();
         return Copy(
-            evidencePredicates: _evidencePredicates.Values
-                .Where(item => item.Action != registration.Action)
-                .Append(registration));
+            postconditionCapabilities: _postconditionCapabilities.Values
+                .Where(item => item.Action != action)
+                .Append(replacement));
     }
 
     public bool IsExecutable(
@@ -424,17 +502,16 @@ internal sealed class NyxIdAssistantActionCapabilityRegistrations
         {
             missing.Add(NyxIdAssistantActionCapabilityKind.SafeResourcePredicate);
         }
-        _postconditionVerifiers.TryGetValue(semantic.Action, out var verifier);
-        if (verifier is null ||
-            verifier.EvidenceStrategy != semantic.EvidenceStrategy ||
-            !PostconditionVerifierMatches(verifier))
+        _postconditionCapabilities.TryGetValue(semantic.Action, out var postcondition);
+        if (postcondition is null ||
+            postcondition.EvidenceStrategy != semantic.EvidenceStrategy ||
+            !postcondition.PostconditionVerifierMatchesProbe())
         {
             missing.Add(NyxIdAssistantActionCapabilityKind.PostconditionVerifier);
         }
-        if (!_evidencePredicates.TryGetValue(semantic.Action, out var evidence) ||
-            evidence.EvidenceStrategy != semantic.EvidenceStrategy ||
-            (verifier is not null && !EvidenceContractMatches(verifier, evidence)) ||
-            !EvidencePredicateMatches(evidence))
+        if (postcondition is null ||
+            postcondition.EvidenceStrategy != semantic.EvidenceStrategy ||
+            !postcondition.EvidencePredicateMatchesProbe())
         {
             missing.Add(NyxIdAssistantActionCapabilityKind.EvidencePredicate);
         }
@@ -489,34 +566,18 @@ internal sealed class NyxIdAssistantActionCapabilityRegistrations
         return false;
     }
 
-    public bool TryResolvePostconditionVerifier(
+    public bool TryResolvePostconditionCapability(
         NyxIdAssistantActionKind action,
-        out NyxIdAssistantActionPostconditionVerifier verifier)
+        out NyxIdAssistantActionPostconditionCapabilityRegistration registration)
     {
-        if (_postconditionVerifiers.TryGetValue(action, out var registration))
+        if (_postconditionCapabilities.TryGetValue(action, out registration!) &&
+            registration.HasPostconditionVerifier &&
+            registration.HasEvidencePredicate)
         {
-            verifier = registration.Verifier;
             return true;
         }
 
-        verifier = null!;
-        return false;
-    }
-
-    public bool TryResolveEvidencePredicate<TExpectation, TEvidence>(
-        NyxIdAssistantActionKind action,
-        out Func<TExpectation, TEvidence, bool> predicate)
-    {
-        if (_evidencePredicates.TryGetValue(action, out var registration) &&
-            registration is NyxIdAssistantActionEvidencePredicateRegistration<
-                TExpectation,
-                TEvidence> typed)
-        {
-            predicate = typed.Predicate;
-            return true;
-        }
-
-        predicate = null!;
+        registration = null!;
         return false;
     }
 
@@ -525,8 +586,8 @@ internal sealed class NyxIdAssistantActionCapabilityRegistrations
         IEnumerable<NyxIdAssistantActionAdmissionParserRegistration>? admissionParsers = null,
         IEnumerable<NyxIdAssistantActionAGUIMapperRegistration>? aguiMappers = null,
         IEnumerable<NyxIdAssistantActionSafeResourcePredicateRegistration>? safeResourcePredicates = null,
-        IEnumerable<NyxIdAssistantActionPostconditionVerifierRegistration>? postconditionVerifiers = null,
-        IEnumerable<NyxIdAssistantActionEvidencePredicateRegistration>? evidencePredicates = null,
+        IEnumerable<NyxIdAssistantActionPostconditionCapabilityRegistration>?
+            postconditionCapabilities = null,
         IEnumerable<NyxIdAssistantActionAuthorityResolverRegistration>? authorityResolvers = null,
         IEnumerable<NyxIdAssistantActionRetryGenerationPolicyRegistration>? retryGenerationPolicies = null) =>
         new(
@@ -534,8 +595,7 @@ internal sealed class NyxIdAssistantActionCapabilityRegistrations
             admissionParsers ?? _admissionParsers.Values,
             aguiMappers ?? _aguiMappers.Values,
             safeResourcePredicates ?? _safeResourcePredicates.Values,
-            postconditionVerifiers ?? _postconditionVerifiers.Values,
-            evidencePredicates ?? _evidencePredicates.Values,
+            postconditionCapabilities ?? _postconditionCapabilities.Values,
             authorityResolvers ?? _authorityResolvers.Values,
             retryGenerationPolicies ?? _retryGenerationPolicies.Values);
 
@@ -601,51 +661,6 @@ internal sealed class NyxIdAssistantActionCapabilityRegistrations
                        string.Equals(mapped.Action, expectedWireAction, StringComparison.Ordinal) &&
                        WireParamsMatch(paramsCase, mapped.Params);
             });
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    private static bool PostconditionVerifierMatches(
-        NyxIdAssistantActionPostconditionVerifierRegistration registration)
-    {
-        if (registration.ProbeInput.Action != registration.Action)
-            return false;
-
-        try
-        {
-            var verification = registration.Verifier(
-                new NyxIdActionPostconditionPort(null, null, TimeProvider.System),
-                registration.ProbeInput.Clone(),
-                null,
-                CancellationToken.None);
-            return verification.IsCompletedSuccessfully &&
-                   !verification.Result.Verified &&
-                   string.Equals(
-                       verification.Result.FailureCode,
-                       NyxIdActionPostconditionPort.UnavailableCode,
-                       StringComparison.Ordinal);
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    private static bool EvidenceContractMatches(
-        NyxIdAssistantActionPostconditionVerifierRegistration verifier,
-        NyxIdAssistantActionEvidencePredicateRegistration evidence) =>
-        verifier.ExpectationType == evidence.ExpectationType &&
-        verifier.EvidenceType == evidence.EvidenceType;
-
-    private static bool EvidencePredicateMatches(
-        NyxIdAssistantActionEvidencePredicateRegistration registration)
-    {
-        try
-        {
-            return registration.MatchesProbe();
         }
         catch
         {
@@ -960,42 +975,14 @@ internal sealed class NyxIdAssistantActionCapabilityRegistrations
                     NyxIdChatBrowserActions.ResourceMatchesAction),
             ],
             [
-                new NyxIdAssistantActionPostconditionVerifierRegistration<
+                new NyxIdAssistantActionPostconditionCapabilityRegistration<
                     NyxIdServiceConnectEvidenceExpectation,
                     NyxIdAuthorizationServiceEvidence>(
                     NyxIdAssistantActionKind.ServiceConnect,
                     NyxIdAssistantActionEvidenceStrategy.UserServiceCurrentState,
                     NyxIdActionPostconditionPort.VerifyServiceConnectPostconditionAsync,
-                    ProbePostconditionInput(NyxIdAssistantActionKind.ServiceConnect)),
-                new NyxIdAssistantActionPostconditionVerifierRegistration<
-                    NyxIdServiceReauthorizeEvidenceExpectation,
-                    NyxIdUserServiceAuthorizationEvidence>(
-                    NyxIdAssistantActionKind.ServiceReauthorize,
-                    NyxIdAssistantActionEvidenceStrategy.UserServiceAuthorization,
-                    NyxIdActionPostconditionPort.VerifyServiceReauthorizePostconditionAsync,
-                    ProbePostconditionInput(NyxIdAssistantActionKind.ServiceReauthorize)),
-                new NyxIdAssistantActionPostconditionVerifierRegistration<
-                    NyxIdKeyCreateEvidenceExpectation,
-                    NyxIdAgentApiKeyEvidence>(
-                    NyxIdAssistantActionKind.KeyCreate,
-                    NyxIdAssistantActionEvidenceStrategy.AgentApiKeyCurrentState,
-                    NyxIdActionPostconditionPort.VerifyKeyCreatePostconditionAsync,
-                    ProbePostconditionInput(NyxIdAssistantActionKind.KeyCreate)),
-                new NyxIdAssistantActionPostconditionVerifierRegistration<
-                    NyxIdKeyRotateEvidenceExpectation,
-                    NyxIdAgentApiKeyEvidence>(
-                    NyxIdAssistantActionKind.KeyRotate,
-                    NyxIdAssistantActionEvidenceStrategy.KeyRotationLineage,
-                    NyxIdActionPostconditionPort.VerifyKeyRotatePostconditionAsync,
-                    ProbePostconditionInput(NyxIdAssistantActionKind.KeyRotate)),
-            ],
-            [
-                new NyxIdAssistantActionEvidencePredicateRegistration<
-                    NyxIdServiceConnectEvidenceExpectation,
-                    NyxIdAuthorizationServiceEvidence>(
-                    NyxIdAssistantActionKind.ServiceConnect,
-                    NyxIdAssistantActionEvidenceStrategy.UserServiceCurrentState,
                     NyxIdActionPostconditionPort.ServiceConnectEvidenceMatches,
+                    ProbePostconditionInput(NyxIdAssistantActionKind.ServiceConnect),
                     [
                         new(
                             new NyxIdServiceConnectEvidenceExpectation(
@@ -1032,12 +1019,14 @@ internal sealed class NyxIdAssistantActionCapabilityRegistrations
                                 Access = NyxIdAuthorizationAccess.Permitted,
                             }),
                     ]),
-                new NyxIdAssistantActionEvidencePredicateRegistration<
+                new NyxIdAssistantActionPostconditionCapabilityRegistration<
                     NyxIdServiceReauthorizeEvidenceExpectation,
                     NyxIdUserServiceAuthorizationEvidence>(
                     NyxIdAssistantActionKind.ServiceReauthorize,
                     NyxIdAssistantActionEvidenceStrategy.UserServiceAuthorization,
+                    NyxIdActionPostconditionPort.VerifyServiceReauthorizePostconditionAsync,
                     NyxIdActionPostconditionPort.ServiceReauthorizeEvidenceMatches,
+                    ProbePostconditionInput(NyxIdAssistantActionKind.ServiceReauthorize),
                     [
                         new(
                             new NyxIdServiceReauthorizeEvidenceExpectation(
@@ -1062,12 +1051,14 @@ internal sealed class NyxIdAssistantActionCapabilityRegistrations
                                 [],
                                 DateTimeOffset.UnixEpoch)),
                     ]),
-                new NyxIdAssistantActionEvidencePredicateRegistration<
+                new NyxIdAssistantActionPostconditionCapabilityRegistration<
                     NyxIdKeyCreateEvidenceExpectation,
                     NyxIdAgentApiKeyEvidence>(
                     NyxIdAssistantActionKind.KeyCreate,
                     NyxIdAssistantActionEvidenceStrategy.AgentApiKeyCurrentState,
+                    NyxIdActionPostconditionPort.VerifyKeyCreatePostconditionAsync,
                     NyxIdActionPostconditionPort.KeyCreateEvidenceMatches,
+                    ProbePostconditionInput(NyxIdAssistantActionKind.KeyCreate),
                     [
                         new(
                             new NyxIdKeyCreateEvidenceExpectation(
@@ -1100,12 +1091,14 @@ internal sealed class NyxIdAssistantActionCapabilityRegistrations
                                 DateTimeOffset.UnixEpoch,
                                 null)),
                     ]),
-                new NyxIdAssistantActionEvidencePredicateRegistration<
+                new NyxIdAssistantActionPostconditionCapabilityRegistration<
                     NyxIdKeyRotateEvidenceExpectation,
                     NyxIdAgentApiKeyEvidence>(
                     NyxIdAssistantActionKind.KeyRotate,
                     NyxIdAssistantActionEvidenceStrategy.KeyRotationLineage,
+                    NyxIdActionPostconditionPort.VerifyKeyRotatePostconditionAsync,
                     NyxIdActionPostconditionPort.KeyRotateEvidenceMatches,
+                    ProbePostconditionInput(NyxIdAssistantActionKind.KeyRotate),
                     [
                         new(
                             new NyxIdKeyRotateEvidenceExpectation(

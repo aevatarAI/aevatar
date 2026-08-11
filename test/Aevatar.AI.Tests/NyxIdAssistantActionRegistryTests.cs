@@ -269,13 +269,17 @@ public sealed class NyxIdAssistantActionRegistryTests
     public void ExecutableComposition_ShouldRejectUnrelatedPostconditionVerifierCallable()
     {
         var unrelated = NyxIdAssistantActionCapabilityRegistrations.Current
-            .With(new NyxIdAssistantActionPostconditionVerifierRegistration<
+            .WithPostconditionVerifier<
                 NyxIdServiceConnectEvidenceExpectation,
                 NyxIdAuthorizationServiceEvidence>(
                 NyxIdAssistantActionKind.ServiceConnect,
-                NyxIdAssistantActionEvidenceStrategy.UserServiceCurrentState,
-                NyxIdActionPostconditionPort.VerifyKeyCreatePostconditionAsync,
-                ServiceConnectPostconditionProbe()));
+                static (port, input, transientToolContext, _, ct) =>
+                    NyxIdActionPostconditionPort.VerifyKeyCreatePostconditionAsync(
+                        port,
+                        input,
+                        transientToolContext,
+                        NyxIdActionPostconditionPort.KeyCreateEvidenceMatches,
+                        ct));
 
         var registry = NyxIdAssistantActionRegistry.Load(
             RegistryJsonWithKeyRotation(),
@@ -289,11 +293,10 @@ public sealed class NyxIdAssistantActionRegistryTests
     public void ExecutableComposition_ShouldRejectUnrelatedEvidencePredicateCallable()
     {
         var unrelated = NyxIdAssistantActionCapabilityRegistrations.Current
-            .With(new NyxIdAssistantActionEvidencePredicateRegistration<
+            .WithEvidencePredicate<
                 NyxIdServiceConnectEvidenceExpectation,
                 NyxIdAuthorizationServiceEvidence>(
                 NyxIdAssistantActionKind.ServiceConnect,
-                NyxIdAssistantActionEvidenceStrategy.UserServiceCurrentState,
                 static (_, _) => false,
                 [
                     new(
@@ -312,7 +315,7 @@ public sealed class NyxIdAssistantActionRegistryTests
                             ServiceSlug = "api-other",
                             Access = NyxIdAuthorizationAccess.Permitted,
                         }),
-                ]));
+                ]);
 
         var registry = NyxIdAssistantActionRegistry.Load(
             RegistryJsonWithKeyRotation(),
@@ -326,14 +329,13 @@ public sealed class NyxIdAssistantActionRegistryTests
     public void ExecutableComposition_ShouldRejectEvidencePredicateWithWrongTypedContract()
     {
         var wrongContract = NyxIdAssistantActionCapabilityRegistrations.Current
-            .With(new NyxIdAssistantActionEvidencePredicateRegistration<string, string>(
+            .WithEvidencePredicate<string, string>(
                 NyxIdAssistantActionKind.ServiceConnect,
-                NyxIdAssistantActionEvidenceStrategy.UserServiceCurrentState,
                 static (expectation, evidence) => string.Equals(
                     expectation,
                     evidence,
                     StringComparison.Ordinal),
-                [new("probe", "probe", "other")]));
+                [new("probe", "probe", "other")]);
 
         var registry = NyxIdAssistantActionRegistry.Load(
             RegistryJsonWithKeyRotation(),
@@ -344,6 +346,39 @@ public sealed class NyxIdAssistantActionRegistryTests
         readiness.Executable.Should().BeFalse();
         readiness.MissingCapabilities.Should()
             .Equal(NyxIdAssistantActionCapabilityKind.EvidencePredicate);
+    }
+
+    [Fact]
+    public void ExecutableComposition_ShouldRejectPostconditionContractPairDrift()
+    {
+        var pairDrift = NyxIdAssistantActionCapabilityRegistrations.Current
+            .WithPostconditionVerifier<string, string>(
+                NyxIdAssistantActionKind.ServiceConnect,
+                static (port, input, transientToolContext, _, ct) =>
+                    NyxIdActionPostconditionPort.VerifyServiceConnectPostconditionAsync(
+                        port,
+                        input,
+                        transientToolContext,
+                        NyxIdActionPostconditionPort.ServiceConnectEvidenceMatches,
+                        ct))
+            .WithEvidencePredicate<string, string>(
+                NyxIdAssistantActionKind.ServiceConnect,
+                static (expectation, evidence) => string.Equals(
+                    expectation,
+                    evidence,
+                    StringComparison.Ordinal),
+                [new("probe", "probe", "other")]);
+
+        var registry = NyxIdAssistantActionRegistry.Load(
+            RegistryJsonWithKeyRotation(),
+            pairDrift);
+
+        registry.TryGetDefinition("service.connect", out _).Should().BeFalse();
+        var readiness = registry.CapabilityReadiness["service.connect"];
+        readiness.Executable.Should().BeFalse();
+        readiness.MissingCapabilities.Should().Equal(
+            NyxIdAssistantActionCapabilityKind.PostconditionVerifier,
+            NyxIdAssistantActionCapabilityKind.EvidencePredicate);
     }
 
     [Fact]

@@ -65,7 +65,7 @@ public sealed class NyxIdActionPostconditionPort : INyxIdActionPostconditionPort
             return Unverified(input, InvalidInputCode, "The action postcondition input is invalid.");
 
         if (!NyxIdAssistantActionCapabilityRegistrations.Current
-                .TryResolvePostconditionVerifier(input.Action, out var verifier))
+                .TryResolvePostconditionCapability(input.Action, out var postcondition))
         {
             return Unverified(
                 input,
@@ -73,7 +73,8 @@ public sealed class NyxIdActionPostconditionPort : INyxIdActionPostconditionPort
                 "No typed read model is configured for this action postcondition.");
         }
 
-        return await verifier(this, input, transientToolContext, ct).ConfigureAwait(false);
+        return await postcondition.VerifyAsync(this, input, transientToolContext, ct)
+            .ConfigureAwait(false);
     }
 
     internal static Task<NyxIdChatActionPostconditionResult>
@@ -81,9 +82,13 @@ public sealed class NyxIdActionPostconditionPort : INyxIdActionPostconditionPort
             NyxIdActionPostconditionPort port,
             NyxIdChatActionPostconditionInput input,
             AgentToolExecutionContextPayload? transientToolContext,
+            Func<
+                NyxIdServiceConnectEvidenceExpectation,
+                NyxIdAuthorizationServiceEvidence,
+                bool> evidencePredicate,
             CancellationToken ct) =>
         input.Action == NyxIdAssistantActionKind.ServiceConnect
-            ? port.VerifyServiceConnectAsync(input, ct)
+            ? port.VerifyServiceConnectAsync(input, evidencePredicate, ct)
             : Task.FromResult(InvalidDispatch(input));
 
     internal static Task<NyxIdChatActionPostconditionResult>
@@ -91,9 +96,17 @@ public sealed class NyxIdActionPostconditionPort : INyxIdActionPostconditionPort
             NyxIdActionPostconditionPort port,
             NyxIdChatActionPostconditionInput input,
             AgentToolExecutionContextPayload? transientToolContext,
+            Func<
+                NyxIdServiceReauthorizeEvidenceExpectation,
+                NyxIdUserServiceAuthorizationEvidence,
+                bool> evidencePredicate,
             CancellationToken ct) =>
         input.Action == NyxIdAssistantActionKind.ServiceReauthorize
-            ? port.VerifyServiceReauthorizeAsync(input, transientToolContext, ct)
+            ? port.VerifyServiceReauthorizeAsync(
+                input,
+                transientToolContext,
+                evidencePredicate,
+                ct)
             : Task.FromResult(InvalidDispatch(input));
 
     internal static Task<NyxIdChatActionPostconditionResult>
@@ -101,9 +114,11 @@ public sealed class NyxIdActionPostconditionPort : INyxIdActionPostconditionPort
             NyxIdActionPostconditionPort port,
             NyxIdChatActionPostconditionInput input,
             AgentToolExecutionContextPayload? transientToolContext,
+            Func<NyxIdKeyCreateEvidenceExpectation, NyxIdAgentApiKeyEvidence, bool>
+                evidencePredicate,
             CancellationToken ct) =>
         input.Action == NyxIdAssistantActionKind.KeyCreate
-            ? port.VerifyKeyCreateAsync(input, transientToolContext, ct)
+            ? port.VerifyKeyCreateAsync(input, transientToolContext, evidencePredicate, ct)
             : Task.FromResult(InvalidDispatch(input));
 
     internal static Task<NyxIdChatActionPostconditionResult>
@@ -111,9 +126,11 @@ public sealed class NyxIdActionPostconditionPort : INyxIdActionPostconditionPort
             NyxIdActionPostconditionPort port,
             NyxIdChatActionPostconditionInput input,
             AgentToolExecutionContextPayload? transientToolContext,
+            Func<NyxIdKeyRotateEvidenceExpectation, NyxIdAgentApiKeyEvidence, bool>
+                evidencePredicate,
             CancellationToken ct) =>
         input.Action == NyxIdAssistantActionKind.KeyRotate
-            ? port.VerifyKeyRotateAsync(input, transientToolContext, ct)
+            ? port.VerifyKeyRotateAsync(input, transientToolContext, evidencePredicate, ct)
             : Task.FromResult(InvalidDispatch(input));
 
     private static NyxIdChatActionPostconditionResult InvalidDispatch(
@@ -122,14 +139,6 @@ public sealed class NyxIdActionPostconditionPort : INyxIdActionPostconditionPort
             input,
             InvalidInputCode,
             "The action postcondition input does not match the verifier.");
-
-    private static bool MatchesEvidence<TExpectation, TEvidence>(
-        NyxIdAssistantActionKind action,
-        TExpectation expectation,
-        TEvidence evidence) =>
-        NyxIdAssistantActionCapabilityRegistrations.Current
-            .TryResolveEvidencePredicate<TExpectation, TEvidence>(action, out var predicate) &&
-        predicate(expectation, evidence);
 
     internal static bool ServiceConnectEvidenceMatches(
         NyxIdServiceConnectEvidenceExpectation expectation,
@@ -194,6 +203,10 @@ public sealed class NyxIdActionPostconditionPort : INyxIdActionPostconditionPort
 
     private async Task<NyxIdChatActionPostconditionResult> VerifyServiceConnectAsync(
         NyxIdChatActionPostconditionInput input,
+        Func<
+            NyxIdServiceConnectEvidenceExpectation,
+            NyxIdAuthorizationServiceEvidence,
+            bool> evidencePredicate,
         CancellationToken ct)
     {
         if (input.Params?.ParamsCase is not
@@ -220,8 +233,7 @@ public sealed class NyxIdActionPostconditionPort : INyxIdActionPostconditionPort
             return invalid;
 
         var matches = snapshot!.Services
-            .Where(service => MatchesEvidence(
-                NyxIdAssistantActionKind.ServiceConnect,
+            .Where(service => evidencePredicate(
                 new NyxIdServiceConnectEvidenceExpectation(input.Params, exactHint),
                 service))
             .ToArray();
@@ -256,6 +268,10 @@ public sealed class NyxIdActionPostconditionPort : INyxIdActionPostconditionPort
     private async Task<NyxIdChatActionPostconditionResult> VerifyServiceReauthorizeAsync(
         NyxIdChatActionPostconditionInput input,
         AgentToolExecutionContextPayload? transientToolContext,
+        Func<
+            NyxIdServiceReauthorizeEvidenceExpectation,
+            NyxIdUserServiceAuthorizationEvidence,
+            bool> evidencePredicate,
         CancellationToken ct)
     {
         if (input.Params?.ParamsCase !=
@@ -306,8 +322,7 @@ public sealed class NyxIdActionPostconditionPort : INyxIdActionPostconditionPort
             return ProviderReadFailure(input, read.Failure);
 
         var evidence = read.Value!;
-        if (!MatchesEvidence(
-                NyxIdAssistantActionKind.ServiceReauthorize,
+        if (!evidencePredicate(
                 new NyxIdServiceReauthorizeEvidenceExpectation(
                     input.Params.ServiceReauthorize),
                 evidence))
@@ -342,6 +357,8 @@ public sealed class NyxIdActionPostconditionPort : INyxIdActionPostconditionPort
     private async Task<NyxIdChatActionPostconditionResult> VerifyKeyCreateAsync(
         NyxIdChatActionPostconditionInput input,
         AgentToolExecutionContextPayload? transientToolContext,
+        Func<NyxIdKeyCreateEvidenceExpectation, NyxIdAgentApiKeyEvidence, bool>
+            evidencePredicate,
         CancellationToken ct)
     {
         if (input.Params?.ParamsCase != NyxIdAssistantActionParams.ParamsOneofCase.KeyCreate ||
@@ -377,8 +394,7 @@ public sealed class NyxIdActionPostconditionPort : INyxIdActionPostconditionPort
             return ProviderReadFailure(input, read.Failure);
 
         var evidence = read.Value!;
-        if (!MatchesEvidence(
-                NyxIdAssistantActionKind.KeyCreate,
+        if (!evidencePredicate(
                 new NyxIdKeyCreateEvidenceExpectation(input.Params.KeyCreate, keyId),
                 evidence))
         {
@@ -400,6 +416,8 @@ public sealed class NyxIdActionPostconditionPort : INyxIdActionPostconditionPort
     private async Task<NyxIdChatActionPostconditionResult> VerifyKeyRotateAsync(
         NyxIdChatActionPostconditionInput input,
         AgentToolExecutionContextPayload? transientToolContext,
+        Func<NyxIdKeyRotateEvidenceExpectation, NyxIdAgentApiKeyEvidence, bool>
+            evidencePredicate,
         CancellationToken ct)
     {
         if (input.Params?.ParamsCase != NyxIdAssistantActionParams.ParamsOneofCase.KeyRotate ||
@@ -455,8 +473,7 @@ public sealed class NyxIdActionPostconditionPort : INyxIdActionPostconditionPort
                 "NyxID did not expose authoritative key rotation lineage.");
         }
 
-        if (!MatchesEvidence(
-                NyxIdAssistantActionKind.KeyRotate,
+        if (!evidencePredicate(
                 new NyxIdKeyRotateEvidenceExpectation(input.Params.KeyRotate, newKeyId),
                 evidence))
         {
