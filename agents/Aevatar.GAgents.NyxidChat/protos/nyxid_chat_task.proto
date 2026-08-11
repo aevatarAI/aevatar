@@ -1446,6 +1446,9 @@ message NyxIdChatTurnGAgentState {
   NyxIdChatOperationResultSignal pending_result = 38;
   int32 result_delivery_attempt = 39;
   NyxIdChatExactServiceRecoveryStage exact_service_recovery_stage = 40;
+  // Safe terminal evidence used to distinguish approval-required results from
+  // success or authorization-required results after actor reactivation.
+  aevatar.ai.AgentToolReceiptStatus tool_receipt_status = 41;
 }
 
 message NyxIdChatTurnOperationAdmittedEvent {
@@ -1562,6 +1565,7 @@ message NyxIdChatTurnOperationCompletedEvent {
   // Populated only for a credential-free postcondition terminal result that
   // must survive accepted-but-uncommitted parent delivery.
   NyxIdChatOperationResultSignal result = 8;
+  aevatar.ai.AgentToolReceiptStatus tool_receipt_status = 9;
 }
 
 message NyxIdChatTurnOperationDeliveredEvent {
