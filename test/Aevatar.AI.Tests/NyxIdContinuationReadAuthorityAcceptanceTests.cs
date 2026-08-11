@@ -274,6 +274,9 @@ public sealed partial class NyxIdChatConversationGAgentTests
         reconciled.State.RecentTerminalTurns.Should().ContainSingle(summary =>
                 summary.TurnId == reconciled.State.ActiveTurn.TurnId).Which
             .FailureCode.Should().Be(expectedExpiredCode);
+        var reconciledHistoryTerminal = reconciled.State.PendingHistoryTerminal;
+        reconciledHistoryTerminal.Should().NotBeNull();
+        reconciledHistoryTerminal!.ErrorCode.Should().Be(expectedExpiredCode);
         var postconditionStep = reconciled.State.ActiveTask.Steps.Should()
             .ContainSingle(step => step.Kind == NyxIdChatStepKind.Postcondition).Which;
         postconditionStep.Status.Should().Be(NyxIdChatStepStatus.Waiting);
@@ -289,6 +292,9 @@ public sealed partial class NyxIdChatConversationGAgentTests
         actor.State.RecentTerminalTurns.Should().ContainSingle(summary =>
                 summary.TurnId == actor.State.ActiveTurn.TurnId).Which
             .FailureCode.Should().Be(expectedExpiredCode);
+        var actorHistoryTerminal = actor.State.PendingHistoryTerminal;
+        actorHistoryTerminal.Should().NotBeNull();
+        actorHistoryTerminal!.ErrorCode.Should().Be(expectedExpiredCode);
         var actorPostconditionStep = actor.State.ActiveTask.Steps.Should()
             .ContainSingle(step => step.Kind == NyxIdChatStepKind.Postcondition).Which;
         actorPostconditionStep.FailureCode.Should().Be(expectedExpiredCode);
