@@ -213,6 +213,26 @@ internal sealed class StudioWorkflowProvisioningAdmissionService
                             });
                         break;
                     }
+                case ExternalWorkflowCapabilityRef.CapabilityOneofCase.CodeExecution:
+                    {
+                        var proof = capability.CodeExecution;
+                        if (!proof.AllowedExecutionModes.Contains(
+                                ExternalCapabilityExecutionMode.Durable) ||
+                            string.IsNullOrWhiteSpace(proof.UserServiceId))
+                        {
+                            requiredServices = [];
+                            return false;
+                        }
+
+                        services.TryAdd(
+                            proof.UserServiceId,
+                            new NyxIdUserServiceCapabilityRef
+                            {
+                                UserServiceId = proof.UserServiceId,
+                                ServiceSlugSnapshot = proof.ServiceSlugSnapshot,
+                            });
+                        break;
+                    }
                 case ExternalWorkflowCapabilityRef.CapabilityOneofCase.HostConnector:
                     break;
                 default:

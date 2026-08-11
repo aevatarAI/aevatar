@@ -41,12 +41,15 @@ builder.Services.AddNyxIdTools(options =>
 {
     // Override the single default (NyxIdToolOptions.DefaultBaseUrl) only when config provides a
     // non-empty value; an absent/empty config key must NOT clobber the default to null.
-    var nyxAuthority = builder.Configuration["Aevatar:NyxId:ApiBaseUrl"]
-                       ?? builder.Configuration["Aevatar:NyxId:Authority"]
-                       ?? builder.Configuration["Cli:App:NyxId:Authority"]
-                       ?? builder.Configuration["Aevatar:Authentication:Authority"];
-    if (!string.IsNullOrWhiteSpace(nyxAuthority))
-        options.BaseUrl = nyxAuthority;
+    var nyxTransportBaseUrl = FirstConfiguredValue(
+        builder.Configuration,
+        "Aevatar:NyxId:InternalApiBaseUrl",
+        "Aevatar:NyxId:ApiBaseUrl",
+        "Aevatar:NyxId:Authority",
+        "Cli:App:NyxId:Authority",
+        "Aevatar:Authentication:Authority");
+    if (nyxTransportBaseUrl is not null)
+        options.BaseUrl = nyxTransportBaseUrl;
     if (long.TryParse(builder.Configuration["Aevatar:NyxId:ProxyFileArtifactMaxBytes"], out var maxBytes))
         options.ProxyFileArtifactMaxBytes = maxBytes;
 });
@@ -58,3 +61,15 @@ var app = builder.Build();
 app.UseAevatarDefaultHost();
 
 app.Run();
+
+static string? FirstConfiguredValue(IConfiguration configuration, params string[] keys)
+{
+    foreach (var key in keys)
+    {
+        var value = configuration[key];
+        if (!string.IsNullOrWhiteSpace(value))
+            return value.Trim();
+    }
+
+    return null;
+}

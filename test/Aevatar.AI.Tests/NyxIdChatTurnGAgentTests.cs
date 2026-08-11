@@ -2163,14 +2163,19 @@ public sealed partial class NyxIdChatTurnGAgentTests
             .Equal("text", "text", "reasoning", "text");
     }
 
-    [Fact]
-    public async Task OperationExecutor_UnprofiledServiceConnectIntent_ShouldMaterializeOnlyAdmissionTools()
+    [Theory]
+    [InlineData(NyxIdChatTurnIntent.ServiceConnect)]
+    [InlineData(NyxIdChatTurnIntent.KeyCreate)]
+    public async Task OperationExecutor_UnprofiledBuiltInIntent_ShouldMaterializeOnlyAdmissionTools(
+        NyxIdChatTurnIntent intent)
     {
         IAgentTool[] tools =
         [
             new NamedProfileTool("nyxid_catalog"),
             new NamedProfileTool("nyxid_require_service"),
             new NamedProfileTool("nyxid_services"),
+            new NamedProfileTool("nyxid_request_key_create"),
+            new NamedProfileTool("github_get_current_user"),
         ];
         var registry = new BuiltInIntentToolSetRegistry(tools);
         var generationExecutor = new CapabilityGeneratingReplyExecutor();
@@ -2187,10 +2192,12 @@ public sealed partial class NyxIdChatTurnGAgentTests
                 Key = CreateKey(),
                 Llm = new NyxIdChatLLMOperationInput
                 {
-                    Intent = NyxIdChatTurnIntent.ServiceConnect,
+                    Intent = intent,
                     Request = new ChatRequestEvent
                     {
-                        Prompt = "Connect GitHub and verify the connection",
+                        Prompt = intent == NyxIdChatTurnIntent.ServiceConnect
+                            ? "Connect GitHub and verify the connection"
+                            : "Create a least-scope key for one exact service",
                         SessionId = "turn-alpha",
                     },
                 },
@@ -2201,12 +2208,15 @@ public sealed partial class NyxIdChatTurnGAgentTests
 
         registry.RequestedNames.Should().Equal(AgentProfilePolicies.NyxIdChatRouteToolSet);
         generationExecutor.LastTurnCatalog.Should().NotBeNull();
-        generationExecutor.LastTurnCatalog!.FinalAllowedToolNames.Should().BeEquivalentTo(
-            "nyxid_catalog",
-            "nyxid_require_service");
-        generationExecutor.LastTurnCatalog.RouteOwnedTools.Keys.Should().BeEquivalentTo(
-            "nyxid_catalog",
-            "nyxid_require_service");
+        var expected = intent == NyxIdChatTurnIntent.ServiceConnect
+            ? new[] { "nyxid_catalog", "nyxid_require_service" }
+            : ["nyxid_services", "nyxid_request_key_create"];
+        generationExecutor.LastTurnCatalog!.FinalAllowedToolNames.Should()
+            .BeEquivalentTo(expected);
+        generationExecutor.LastTurnCatalog.RouteOwnedTools.Keys.Should()
+            .BeEquivalentTo(expected);
+        generationExecutor.LastTurnCatalog.FinalAllowedToolNames.Should()
+            .NotContain("github_get_current_user");
     }
 
     [Theory]

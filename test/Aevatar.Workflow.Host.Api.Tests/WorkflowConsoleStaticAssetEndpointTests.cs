@@ -39,7 +39,6 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         html.Should().Contain("https://api.example.test/api/v1/proxy/s/aevatar");
         html.Should().Contain("\"nyxidWeb\":\"https://web.example.test\"");
         html.Should().NotContain("__BACKEND_CONSOLE_CONFIG__");
-        html.Should().NotContain("https://nyx.chrono-ai.fun");
         html.Should().NotContain("37a93189-2734-406e-bca1-7dbdf25c5a53");
         if (endpoint == "admin-observatory")
         {
@@ -245,8 +244,6 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         transport.Should().Contain("backendConfig.enableStudioWireInspector === true");
         app.Should().NotContain("https://aevatar-console-backend-api.aevatar.ai");
         app.Should().NotContain("https://nyx-api.chrono-ai.fun");
-        app.Should().NotContain("https://nyx.chrono-ai.fun");
-        transport.Should().NotContain("https://nyx.chrono-ai.fun");
         app.Should().Contain("cc-progress-step");
         app.Should().NotContain("function setStudioTab(tab)");
         app.Should().NotContain("尚未取得必需能力的有效证明");

@@ -225,9 +225,11 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
     {
         var step = GetOrCreateStep(readModel.Steps, evt.StepId);
         step.StepId = evt.StepId ?? string.Empty;
+        step.DisplayName = ResolveStepDisplayName(evt.DisplayName, step.StepId);
         step.StepType = evt.StepType ?? string.Empty;
         step.TargetRole = evt.TargetRole ?? string.Empty;
         step.RequestedAt = observedAt;
+        step.Outcome = WorkflowExecutionStepOutcomeReadModel.Waiting;
         var parameters = WorkflowStepParameterProjectionSource.From(evt);
         ReplaceMap(step.RequestParameters, parameters);
         AddTimeline(
@@ -252,6 +254,7 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         step.StepId = evt.StepId ?? string.Empty;
         step.CompletedAt = observedAt;
         step.Success = evt.Success;
+        step.Outcome = ResolveStepOutcome(evt);
         step.OutputPreview = SanitizeAuditTextForDisplay(evt.Output, 240);
         step.Error = SanitizeAuditText(evt.Error);
         step.WorkerId = evt.WorkerId ?? string.Empty;
@@ -655,6 +658,7 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         return new WorkflowExecutionStepTrace
         {
             StepId = source.StepId,
+            DisplayName = source.DisplayName,
             StepType = source.StepType,
             TargetRole = source.TargetRole,
             RequestedAt = source.RequestedAt,
@@ -676,8 +680,34 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
             RequestedVariableName = source.RequestedVariableName,
             ToolApprovalValue = source.ToolApprovalValue?.Clone(),
             Usage = CloneUsage(source.Usage),
+            Outcome = source.Outcome,
         };
     }
+
+    private static string ResolveStepDisplayName(string? displayName, string stepId)
+    {
+        var normalized = displayName?.Trim() ?? string.Empty;
+        return normalized.Length == 0 ? stepId : normalized;
+    }
+
+    private static WorkflowExecutionStepOutcomeReadModel ResolveStepOutcome(StepCompletedEvent evt)
+    {
+        if (evt.Outcome == WorkflowStepCompletionOutcome.Skipped || HasSkippedAnnotation(evt.Annotations))
+            return WorkflowExecutionStepOutcomeReadModel.Skipped;
+        if (evt.Outcome == WorkflowStepCompletionOutcome.Succeeded)
+            return WorkflowExecutionStepOutcomeReadModel.Succeeded;
+        if (evt.Outcome == WorkflowStepCompletionOutcome.Failed)
+            return WorkflowExecutionStepOutcomeReadModel.Failed;
+
+        return evt.Success
+            ? WorkflowExecutionStepOutcomeReadModel.Succeeded
+            : WorkflowExecutionStepOutcomeReadModel.Failed;
+    }
+
+    private static bool HasSkippedAnnotation(IDictionary<string, string> annotations) =>
+        annotations.Any(static item =>
+            item.Key.EndsWith(".skipped", StringComparison.Ordinal) &&
+            string.Equals(item.Value, "true", StringComparison.OrdinalIgnoreCase));
 
     private static void RefreshSummary(WorkflowRunInsightReportDocument readModel)
     {

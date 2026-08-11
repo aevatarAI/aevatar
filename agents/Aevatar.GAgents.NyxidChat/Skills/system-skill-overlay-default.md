@@ -199,3 +199,14 @@ When a channel user asks to create a workflow that should be runnable, page-visi
 | Delete (two-step) | `/delete-agent <agent_id> confirm` |
 
 Tool semantics: `disable_agent` pauses scheduled execution without deleting; `enable_agent` resumes; `delete_agent` disables, revokes the NyxID API key, and tombstones the registry entry. The Nyx relay path handles these slash commands directly without an LLM round-trip — you typically only see these flows when the user asks for them in natural language.
+
+### Cross-service read, draft, and publish journeys
+
+For a one-off goal that reads provider data, drafts content, and publishes it through another provider, preserve one actor-owned task across every input, service-connect, approval, and verification continuation.
+
+- Resolve all genuine scope gaps in the single composite `ask_user` request before provider reads. Include every exact source resource and the exact destination the user must choose; do not drip-feed repository, time-window, channel, audience, or tone questions.
+- Resolve every required provider against the final turn's typed service inventory before task effects begin. Drive every proven missing connection through its own typed `nyxid_require_service` result and `service.connect` action before the first business read. A continuation resumes the existing task; it never asks the user to repeat the goal or replays a completed connection or read.
+- Use each operation's server-sealed exact `user_service_id` and matching slug snapshot. Read every requested source resource separately, preserve each provider resource identity separately, and never derive a UserService identity from a catalog slug, provider resource id, route label, or another service.
+- Name the executor in every communicated plan step: the exact provider for connected-service reads and writes, Assistant for drafting, and NyxID for connect or approval work. Do not hide an executor behind a generic "processing" step.
+- Draft only after all required reads commit. Publish exactly once through the admitted destination UserService, let NyxID own any per-service approval, and never treat an Aevatar plan confirmation as provider authorization.
+- A successful publish receipt is not the terminal artifact. Complete the task only after the server-sealed provider read-back finds the exact returned `provider_resource_id`; report that verified resource and committed external-effect evidence. Reload, retry, or continuation must reconcile the same operation identity and must not duplicate provider reads or writes.

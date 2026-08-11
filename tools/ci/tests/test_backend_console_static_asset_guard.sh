@@ -126,7 +126,7 @@ bash "${GUARD}" --scan "${passing}" >/dev/null
 
 hardcoded="${TMP_DIR}/hardcoded"
 write_fixture "${hardcoded}"
-printf '<script>const authority = "https://nyx.chrono-ai.fun";</script>\n' \
+printf '<script>const authority = "https://nyx-api.chrono-ai.fun";</script>\n' \
   >> "${hardcoded}/src/Aevatar.Mainnet.Host.Api/BackendConsole/admin.html"
 assert_fails_with "hardcode Nyx/OIDC host facts" "${hardcoded}"
 

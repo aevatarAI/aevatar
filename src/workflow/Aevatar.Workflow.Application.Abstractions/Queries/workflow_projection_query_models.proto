@@ -38,6 +38,14 @@ enum WorkflowRecoveryRecommendedAction {
   WORKFLOW_RECOVERY_RECOMMENDED_ACTION_TECHNICAL_DETAILS = 7;
 }
 
+enum WorkflowRunStepOutcome {
+  WORKFLOW_RUN_STEP_OUTCOME_UNSPECIFIED = 0;
+  WORKFLOW_RUN_STEP_OUTCOME_SUCCEEDED = 1;
+  WORKFLOW_RUN_STEP_OUTCOME_FAILED = 2;
+  WORKFLOW_RUN_STEP_OUTCOME_WAITING = 3;
+  WORKFLOW_RUN_STEP_OUTCOME_SKIPPED = 4;
+}
+
 message WorkflowRecoveryActionCapability {
   WorkflowRecoveryEligibility eligibility = 1;
   WorkflowRecoveryUnavailableReasonCode unavailable_reason_code = 2;
@@ -176,4 +184,5 @@ message WorkflowRunGraphExportSubgraph {
   string root_node_id = 1;
   repeated WorkflowRunGraphExportNode nodes = 2;
   repeated WorkflowRunGraphExportEdge edges = 3;
+  int64 source_state_version = 4;
 }

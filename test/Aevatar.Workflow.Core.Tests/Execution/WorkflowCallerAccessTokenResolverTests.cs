@@ -53,6 +53,7 @@ public sealed class WorkflowCallerAccessTokenResolverTests
 
         resolved.BearerToken.Should().Be("issued-token");
         resolved.NyxIdAuthority.Should().BeEquivalentTo(authority);
+        resolved.Kind.Should().Be(NyxIdCallerCredentialKind.ProxyDelegation);
         provider.IssueCount.Should().Be(1);
         provider.LastAuthority.Should().BeSameAs(authority);
     }

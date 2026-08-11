@@ -782,6 +782,49 @@ public sealed class WorkflowProjectionMaterializationTests
     }
 
     [Fact]
+    public async Task WorkflowRunInsightReportArtifactProjector_ShouldMaterializeTypedSkippedOutcome()
+    {
+        var reportStore = new RecordingDocumentStore<WorkflowRunInsightReportDocument>(x => x.Id);
+        var graphWriter = new RecordingGraphWriter<WorkflowRunInsightReportDocument>(x => x.Id);
+        var projector = new WorkflowRunInsightReportArtifactProjector(reportStore, reportStore, graphWriter);
+        var context = new WorkflowExecutionMaterializationContext
+        {
+            RootActorId = "actor-1",
+            ProjectionKind = "workflow-execution-materialization",
+        };
+
+        await projector.ProjectAsync(
+            context,
+            BuildCommittedEnvelope(
+                1,
+                new StepRequestEvent
+                {
+                    RunId = "run-1",
+                    StepId = "optional-step",
+                    StepType = "connector_call",
+                    DisplayName = "Optional connector",
+                },
+                BuildState("running")));
+        await projector.ProjectAsync(
+            context,
+            BuildCommittedEnvelope(
+                2,
+                new StepCompletedEvent
+                {
+                    RunId = "run-1",
+                    StepId = "optional-step",
+                    Success = true,
+                    Output = "unchanged input",
+                    Outcome = WorkflowStepCompletionOutcome.Skipped,
+                },
+                BuildState("running")));
+
+        reportStore.Stored["actor-1"].Steps.Should().ContainSingle();
+        reportStore.Stored["actor-1"].Steps[0].DisplayName.Should().Be("Optional connector");
+        reportStore.Stored["actor-1"].Steps[0].Outcome.Should().Be(WorkflowExecutionStepOutcomeReadModel.Skipped);
+    }
+
+    [Fact]
     public async Task WorkflowRunInsightReportArtifactProjector_ShouldIgnoreRelayedChildStateRoot()
     {
         var reportStore = new RecordingDocumentStore<WorkflowRunInsightReportDocument>(x => x.Id);

@@ -20,15 +20,24 @@ public sealed class NyxIdChatTurnIntentClassifier : INyxIdChatTurnIntentClassifi
     internal const string ServiceConnectIntentId = "service_connect";
     internal const string ServiceConnectRoutingDescription =
         "Connect, add, or authorize a hosted external service account and verify that connection.";
+    internal const string KeyCreateIntentId = "key_create";
+    internal const string KeyCreateRoutingDescription =
+        "Create a least-scope NyxID API key for an exact nonempty set of caller-visible services.";
     private static readonly TimeSpan ClassificationTimeout = TimeSpan.FromSeconds(15);
     internal static AgentProfileTurnClassificationCandidate ServiceConnectCandidate { get; } =
         new(
             ServiceConnectIntentId,
             ServiceConnectRoutingDescription,
             AgentProfileSideEffectClass.ExternalHandoff);
+    internal static AgentProfileTurnClassificationCandidate KeyCreateCandidate { get; } =
+        new(
+            KeyCreateIntentId,
+            KeyCreateRoutingDescription,
+            AgentProfileSideEffectClass.ExternalHandoff);
     private static readonly AgentProfileTurnClassificationCandidate[] Candidates =
     [
         ServiceConnectCandidate,
+        KeyCreateCandidate,
     ];
 
     private readonly IAgentProfileTurnClassifier _classifier;
@@ -57,9 +66,13 @@ public sealed class NyxIdChatTurnIntentClassifier : INyxIdChatTurnIntentClassifi
                     requestId),
                 ct)
             .ConfigureAwait(false);
-        var intent = result.Status == AgentProfileTurnClassificationStatus.Matched &&
-                     string.Equals(result.IntentId, ServiceConnectIntentId, StringComparison.Ordinal)
-            ? NyxIdChatTurnIntent.ServiceConnect
+        var intent = result.Status == AgentProfileTurnClassificationStatus.Matched
+            ? result.IntentId switch
+            {
+                ServiceConnectIntentId => NyxIdChatTurnIntent.ServiceConnect,
+                KeyCreateIntentId => NyxIdChatTurnIntent.KeyCreate,
+                _ => NyxIdChatTurnIntent.Unspecified,
+            }
             : NyxIdChatTurnIntent.Unspecified;
         _logger.LogInformation(
             "NyxID chat turn intent classification completed. request={RequestId} status={Status} intent={IntentId} failure={FailureCode}",

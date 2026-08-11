@@ -36,6 +36,9 @@ public static class ServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Transient<
             IExternalWorkflowCapabilitySource,
             NyxIdExplicitWorkflowCapabilitySource>());
+        services.TryAddEnumerable(ServiceDescriptor.Transient<
+            IExternalWorkflowCapabilitySource,
+            NyxIdCodeExecutionWorkflowCapabilitySource>());
         services.Replace(ServiceDescriptor.Singleton<
             IWorkflowFileMultipartUploadPort,
             NyxIdWorkflowFileMultipartUploadPort>());
@@ -98,6 +101,7 @@ public static class ServiceCollectionExtensions
 
         var configuredBaseUrl = FirstConfiguredValue(
             configuration,
+            "Aevatar:NyxId:InternalApiBaseUrl",
             "Aevatar:NyxId:ApiBaseUrl",
             "Aevatar:NyxId:Authority",
             "Cli:App:NyxId:Authority",

@@ -30,7 +30,7 @@ public sealed class WorkflowCapabilityAdmissionPlanIntegrityTests
         switch (mutation)
         {
             case "schema":
-                fixture.Plan.SchemaVersion = "external-capability-admission.v5";
+                fixture.Plan.SchemaVersion = "external-capability-admission.v6";
                 break;
             case "mode":
                 fixture.Plan.ExecutionMode = ExternalCapabilityExecutionMode.Durable;

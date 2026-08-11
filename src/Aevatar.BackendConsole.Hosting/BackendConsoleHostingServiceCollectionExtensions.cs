@@ -58,15 +58,15 @@ public static class BackendConsoleHostingServiceCollectionExtensions
         if (string.IsNullOrWhiteSpace(options.OidcAuthority))
         {
             options.OidcAuthority =
-                configuration["Aevatar:Authentication:Authority"]
-                ?? configuration["Aevatar:NyxId:Authority"]
+                configuration["Aevatar:NyxId:Authority"]
+                ?? configuration["Aevatar:Authentication:Authority"]
                 ?? string.Empty;
         }
 
         if (string.IsNullOrWhiteSpace(options.NyxApiBaseUrl))
         {
             options.NyxApiBaseUrl =
-                configuration["Aevatar:NyxId:ApiBaseUrl"]
+                configuration["Aevatar:NyxId:Authority"]
                 ?? string.Empty;
         }
 

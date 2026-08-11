@@ -56,6 +56,8 @@ public sealed class WorkflowRunForkSeedQueryPortTests
         view.LastFailedStepId.Should().BeEmpty();
         view.FinalError.Should().BeEmpty();
         view.ScopeId.Should().Be("scope-1");
+        view.WorkflowId.Should().Be("wf-alpha");
+        view.RevisionId.Should().Be("rev-alpha");
         view.IdempotencyByStepId.Should().ContainKey("step-b");
         view.IdempotencyByStepId!["step-b"].IdempotencyKey.Should().Be("run-completed:step-b:1");
     }
@@ -210,6 +212,8 @@ public sealed class WorkflowRunForkSeedQueryPortTests
             WorkflowYaml = "name: demo\nsteps: []",
             FinalError = finalError,
             ScopeId = "scope-1",
+            WorkflowId = "wf-alpha",
+            RevisionId = "rev-alpha",
             InlineWorkflowYamls = { ["child"] = "name: child" },
         };
 
@@ -224,6 +228,8 @@ public sealed class WorkflowRunForkSeedQueryPortTests
             WorkflowName = state.WorkflowName,
             Status = state.Status,
             ScopeId = seedSnapshot.ScopeId,
+            WorkflowId = state.WorkflowId,
+            RevisionId = state.RevisionId,
             FinalError = state.FinalError,
             WorkflowYaml = seedSnapshot.WorkflowYaml,
             InlineWorkflowYamls = seedSnapshot.InlineWorkflowYamls.ToDictionary(

@@ -1029,7 +1029,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
     }
 
     [Fact]
-    public async Task DispatchAsync_ShouldMapScheduledDurableCallerCredentialToWorkflowCallerCredential()
+    public async Task DispatchAsync_ShouldMapScheduledInvocationAgentKeyToProxyDelegationWorkflowCredential()
     {
         var dispatchPort = new RecordingDispatchPort();
         var workflowPort = new RecordingWorkflowRunActorPort();
@@ -1067,7 +1067,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
                 CallerDurableCredential = new DurableCallerCredentialRef
                 {
                     Ref = "sec_scheduled",
-                    Purpose = CredentialSecretPurposes.WorkflowCallerDurableBearerToken,
+                    Purpose = CredentialSecretPurposes.ScheduledInvocationAgentKey,
                     OwnerScopeKey = "schedule:schedule-1",
                     SubjectId = "lark:tenant:user",
                     SourceKind = DurableCallerCredentialSourceKind.ScheduledDispatch,
@@ -1089,6 +1089,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
         workflowRequest.CallerCredential.DurableCallerCredential.Ref.Should().Be("sec_scheduled");
         workflowRequest.CallerCredential.DurableCallerCredential.SourceKind
             .Should().Be(DurableCallerCredentialSourceKind.ScheduledDispatch);
+        workflowRequest.CallerCredential.Kind.Should().Be(NyxIdCallerCredentialKind.ProxyDelegation);
         workflowRequest.CallerCredential.NyxIdAuthority.Should().BeEquivalentTo(
             new Aevatar.Workflow.Abstractions.WorkflowCallerNyxIdAuthority
             {
@@ -1098,6 +1099,52 @@ public sealed class DefaultServiceInvocationDispatcherTests
                 Scope = "proxy",
                 BindingId = "bnd-owner-alpha",
             });
+    }
+
+    [Fact]
+    public async Task DispatchAsync_ShouldMapScheduledDurableBearerToProxyDelegationWorkflowCredential()
+    {
+        var dispatchPort = new RecordingDispatchPort();
+        var workflowPort = new RecordingWorkflowRunActorPort();
+        var dispatcher = new DefaultServiceInvocationDispatcher(
+            dispatchPort,
+            new RecordingScriptRuntimeCommandPort(),
+            workflowPort,
+            new RecordingServiceRunRegistrationPort(),
+            new AcceptingArtifactCompatibilityPreflight());
+        var target = CreateTarget(
+            ServiceImplementationKind.Workflow,
+            endpointId: "chat",
+            requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
+        target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
+        {
+            WorkflowName = "wf",
+            WorkflowYaml = "name: wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
+        };
+
+        await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
+        {
+            Identity = GAgentServiceTestKit.CreateIdentity(),
+            EndpointId = "chat",
+            CommandId = "cmd-scheduled-durable",
+            ScheduleId = "schedule-1",
+            Payload = Any.Pack(new ChatRequestEvent
+            {
+                Prompt = "hello",
+                CallerDurableCredential = CreateDurableCallerCredentialRef(),
+            }),
+        });
+
+        var workflowRequest = dispatchPort.Calls.Should().ContainSingle().Which
+            .envelope.Payload.Unpack<WorkflowChatRequestEvent>();
+        workflowRequest.CallerCredential.BearerToken.Should().BeEmpty();
+        workflowRequest.CallerCredential.DurableCallerCredential.Ref.Should().Be("sec_scheduled");
+        workflowRequest.CallerCredential.Kind.Should().Be(NyxIdCallerCredentialKind.ProxyDelegation);
     }
 
     [Fact]

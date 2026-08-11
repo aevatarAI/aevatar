@@ -78,6 +78,7 @@ public static class AevatarPlatformHostBuilderExtensions
                     FirstConfiguredValue(
                         builder.Configuration,
                         "Aevatar:Web:NyxIdBaseUrl",
+                        "Aevatar:NyxId:InternalApiBaseUrl",
                         "Aevatar:NyxId:ApiBaseUrl",
                         "Aevatar:NyxId:Authority",
                         "Cli:App:NyxId:Authority",

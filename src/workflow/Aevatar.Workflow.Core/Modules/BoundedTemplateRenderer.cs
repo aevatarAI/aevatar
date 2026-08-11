@@ -79,7 +79,7 @@ internal static class BoundedTemplateRenderer
         }
         catch (ScriptRuntimeException ex)
         {
-            throw new InvalidOperationException("transform template evaluation failed.", ex);
+            throw new InvalidOperationException($"transform template evaluation failed: {ex.Message}", ex);
         }
 
         if (Encoding.UTF8.GetByteCount(output) > MaxOutputBytes)

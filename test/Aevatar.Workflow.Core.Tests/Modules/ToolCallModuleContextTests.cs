@@ -136,6 +136,53 @@ public sealed class ToolCallModuleContextTests
     }
 
     [Fact]
+    public async Task ToolCallModule_PreviousSchemaCodeExecute_ShouldRevalidateAtRuntimeWithoutRebind()
+    {
+        var tool = new RecordingWorkflowTool("code_execute");
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext
+        {
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                SchemaVersion = WorkflowCapabilityAdmissionPlanIntegrity.PreviousSchemaVersion,
+            },
+        };
+
+        await ExecuteToolCallAsync(
+            module,
+            ctx,
+            tool.Name,
+            externalInvocation: CodeExecutionInvocation("wf-alpha/call_code"));
+
+        tool.Requests.Should().ContainSingle().Which.InvocationAdmission.Should().BeNull();
+        LastCompleted(ctx).Success.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ToolCallModule_CurrentSchemaCodeExecuteWithoutProof_ShouldFailClosed()
+    {
+        var tool = new RecordingWorkflowTool("code_execute");
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext
+        {
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                SchemaVersion = WorkflowCapabilityAdmissionPlanIntegrity.SchemaVersion,
+            },
+        };
+
+        await ExecuteToolCallAsync(
+            module,
+            ctx,
+            tool.Name,
+            externalInvocation: CodeExecutionInvocation("wf-alpha/call_code"));
+
+        tool.Requests.Should().BeEmpty();
+        LastCompleted(ctx).Success.Should().BeFalse();
+        LastCompleted(ctx).Error.Should().Contain("EXTERNAL_CAPABILITY_ADMISSION_PLAN_MISSING");
+    }
+
+    [Fact]
     public async Task ToolCallModule_ShouldPublishToolEventsWithWorkflowExecutionCallId()
     {
         var tool = new FakeAgentTool("call_id_reader", _ => "{}");
@@ -588,6 +635,8 @@ public sealed class ToolCallModuleContextTests
 
         tool.Requests.Select(request => request.CallerCredential.BearerToken)
             .Should().Equal("token-1", "token-2");
+        tool.Requests.Select(request => request.CallerCredential.Kind)
+            .Should().OnlyContain(kind => kind == NyxIdCallerCredentialKind.ProxyDelegation);
         tokenProvider.Authorities.Should().HaveCount(2);
     }
 
@@ -715,6 +764,17 @@ public sealed class ToolCallModuleContextTests
                     UserServiceId = userServiceId,
                     EndpointId = operationId,
                 },
+            },
+        };
+
+    private static ExternalToolInvocationSpec CodeExecutionInvocation(string callSiteId) =>
+        new()
+        {
+            CallSiteId = callSiteId,
+            ToolName = WorkflowAuthorizationDependencyEvaluator.CodeExecuteToolName,
+            Selector = new ExternalWorkflowCapabilitySelector
+            {
+                CodeExecution = new CodeExecutionSelector(),
             },
         };
 

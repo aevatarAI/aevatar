@@ -18,6 +18,19 @@ the requested work rather than from an implementation detail.
 
 ## `code_execute`
 
+NyxID-routed capabilities keep three ownership contracts separate:
+
+- `PlatformBuiltIn`: the platform owns the capability and route contract while the caller owns
+  invocation authority. `code_execute` is in this class.
+- `RolloutRestrictedPlatform`: the platform owns the capability, but a typed rollout boundary and
+  eligibility policy limit availability. Managed `codex_exec` remains in this class.
+- `CallerConnected`: the caller or an allowed organization owns the connected service. Ordinary
+  `nyxid_proxy`, explicit workflow capabilities, and LLM routes remain in this class.
+
+Resolvers and eligibility policies are private to their class. In particular, code-execution
+catalog and delegation checks must not filter `CallerConnected` inventory or alter managed Codex
+rollout eligibility.
+
 Use `code_execute` when the caller has already supplied the program to run. The input is exact
 Python, JavaScript, TypeScript, or Bash source. The output is the program's stdout, stderr, and
 exit code.
@@ -25,6 +38,50 @@ exit code.
 The read-only classification describes the isolated runtime's durable-effect boundary. It does
 not promise that arbitrary caller-provided code is deterministic, pure, successful, or safe to
 run outside that runtime. Do not present it as a natural-language agent delegation surface.
+
+Route selection is fail closed, but credential provenance is not a capability lifecycle. During
+interactive admission, Aevatar reads the caller-visible typed NyxID UserService inventory and
+selects exactly one active, catalog-backed `chrono-sandbox` route whose access and delegation
+policy satisfy the platform contract. A personal route is accessible by ownership; an
+organization/member route is accessible only when NyxID reports
+`credential_source.allowed=true`. An arbitrary custom UserService with the same slug has no
+canonical `catalog_service_id` and cannot shadow the platform route. The resolved exact
+UserService ID is sent through `_nyxid_via`; there is no slug fallback or first-candidate
+selection.
+
+Interactive NyxID ingress may authorize that admission read with either a source-readable user
+bearer or the short-lived proxy delegation token injected for Aevatar when it carries NyxID's
+`account:read` grant. The delegation token remains the execution credential for the exact proxy
+route; it terminates at NyxID and is never forwarded to the sandbox. This code-execution admission
+rule is not shared by connected-service discovery, ordinary `nyxid_proxy`, LLM, or managed Codex
+paths.
+
+For workflows, `code_execute` is compiled as an external capability with no caller-authored route
+selector. Save and bind readiness reads the same typed inventory resolver and commits the exact
+UserService ID, slug snapshot, catalog identity, and contract digest into an
+`external-capability-admission.v5` call-site proof. Durable bind/invoke additionally requires the
+existing actor-owned NyxID authorization catalog to prove that exact service grant. Interactive
+runtime re-reads NyxID facts when it has a source-readable caller credential. With delegation-only
+interactive ingress, runtime does not read inventory again and may call only the exact UserService
+ID sealed in the valid admission proof. Scheduled runtime follows the same exact-proof rule:
+authority-refreshed tokens, short-lived tokens projected through a scheduled durable handle, and
+restricted scheduled-invocation Agent Keys all retain the `ProxyDelegation` kind. They are execution
+credentials, not source-readable inventory credentials, so none may auto-resolve a slug.
+NyxID then enforces the exact route's slug constraint and credential allowlist on the proxy
+request. Without either a source-readable credential or an exact admitted route, execution fails
+before network access. Existing v4 plans did not contain code-execution proofs; they remain
+supported for source-readable interactive runtime resolution, but delegation-only and scheduled
+execution require an exact proof. New live admissions write v5 proofs.
+
+This resolver is private to the platform `code_execute` route. It does not filter connected
+services, `nyxid_proxy`, explicit external-capability selections, LLM routes, or managed
+`codex_exec`; those paths retain their existing exact UserService and authorization contracts.
+
+Route diagnostics distinguish `code_execution_route_missing`, `code_execution_route_inactive`,
+`code_execution_route_policy_mismatch`, `code_execution_route_ambiguous`, and
+`code_execution_route_access_denied`. Each runtime rejection carries a local diagnostic ID. Logs
+contain only that ID, the reason category, and canonical, accessible, active, and eligible candidate
+counts; they do not contain bearer tokens, source code, or the raw inventory.
 
 ## `codex_exec`
 

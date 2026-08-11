@@ -153,6 +153,14 @@ public static class ChatRunStartErrorMapper
                         operationId = (string?)readiness.SelectedSelector.HostConnector.OperationId,
                         connectorCapabilityRef = readiness.SelectedSelector.HostConnector.ConnectorCapabilityRef,
                     };
+                case ExternalWorkflowCapabilitySelector.SelectorOneofCase.CodeExecution:
+                    return new
+                    {
+                        userServiceId = (string?)readiness.SelectedCapability?.CodeExecution?.UserServiceId,
+                        endpointId = (string?)null,
+                        operationId = (string?)null,
+                        connectorCapabilityRef = (string?)null,
+                    };
             }
         }
 
@@ -180,6 +188,13 @@ public static class ChatRunStartErrorMapper
                 endpointId = (string?)null,
                 operationId = (string?)readiness.SelectedCapability.HostConnector.OperationId,
                 connectorCapabilityRef = (string?)readiness.SelectedCapability.HostConnector.ConnectorCapabilityRef,
+            },
+            ExternalWorkflowCapabilityRef.CapabilityOneofCase.CodeExecution => new
+            {
+                userServiceId = (string?)readiness.SelectedCapability.CodeExecution.UserServiceId,
+                endpointId = (string?)null,
+                operationId = (string?)null,
+                connectorCapabilityRef = (string?)null,
             },
             _ => null,
         };

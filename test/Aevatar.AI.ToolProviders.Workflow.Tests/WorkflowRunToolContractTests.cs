@@ -408,6 +408,7 @@ public sealed class WorkflowRunToolContractTests
             GraphSubgraph = new WorkflowRunGraphExportSubgraph
             {
                 RootNodeId = "run-1",
+                SourceStateVersion = 12,
                 Nodes =
                 {
                     new WorkflowRunGraphExportNode
@@ -437,6 +438,7 @@ public sealed class WorkflowRunToolContractTests
         root.GetProperty("workflow_run_id").GetString().Should().Be("run-1");
         root.GetProperty("artifact").GetString().Should().Be("graph_subgraph");
         root.GetProperty("subgraph").GetProperty("root").GetString().Should().Be("run-1");
+        root.GetProperty("subgraph").GetProperty("source_state_version").GetInt64().Should().Be(12);
         root.GetProperty("subgraph").GetProperty("node_count").GetInt32().Should().Be(1);
         root.GetProperty("subgraph").GetProperty("edge_count").GetInt32().Should().Be(1);
         root.GetProperty("subgraph").GetProperty("edges")[0].GetProperty("to").GetString().Should().Be("child-1");

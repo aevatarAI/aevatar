@@ -686,6 +686,9 @@ message StepRequestEvent
   // Compiled external tool invocation for this call site. Present for direct external tool
   // steps and for the primitives that synthesize external sub-steps at runtime.
   ExternalToolInvocationSpec external_invocation = 11;
+  // Runtime copy of the workflow-node display name for this executed step. Falls back to step_id
+  // when the authoring model did not provide a distinct label.
+  string display_name = 12;
 }
 message WorkflowUsageMetrics {
   int32 prompt_tokens = 1;
@@ -705,6 +708,14 @@ message WorkflowFileItemResult {
 message WorkflowFileItemResultSet {
   repeated WorkflowFileItemResult results = 1;
 }
+
+enum WorkflowStepCompletionOutcome {
+  WORKFLOW_STEP_COMPLETION_OUTCOME_UNSPECIFIED = 0;
+  WORKFLOW_STEP_COMPLETION_OUTCOME_SUCCEEDED = 1;
+  WORKFLOW_STEP_COMPLETION_OUTCOME_FAILED = 2;
+  WORKFLOW_STEP_COMPLETION_OUTCOME_SKIPPED = 3;
+}
+
 message StepCompletedEvent {
   string step_id = 1;
   bool success = 2;
@@ -723,6 +734,7 @@ message StepCompletedEvent {
   WorkflowStepFailureOutcome failure_outcome = 15;
   WorkflowFileItemResultSet file_item_results = 16;
   WorkflowRecoveryFailureKind recovery_failure_kind = 17;
+  WorkflowStepCompletionOutcome outcome = 18;
 }
 message SubWorkflowInvokeRequestedEvent
 {
@@ -1049,6 +1061,14 @@ message WorkflowInteractiveAuthorizationRequirement
   repeated string requested_scopes = 2;
   string reason_code = 3;
   string safe_message = 4;
+  WorkflowInteractiveKeyCreateRequirement key_create = 5;
+}
+
+message WorkflowInteractiveKeyCreateRequirement
+{
+  string name = 1;
+  string platform = 2;
+  repeated string allowed_service_ids = 3;
 }
 
 message WorkflowInteractiveCatalogServiceActionParams
@@ -1060,6 +1080,14 @@ message WorkflowInteractiveCatalogServiceActionParams
 message WorkflowInteractiveActionParams
 {
   WorkflowInteractiveCatalogServiceActionParams catalog_service = 1;
+  WorkflowInteractiveKeyCreateActionParams key_create = 2;
+}
+
+message WorkflowInteractiveKeyCreateActionParams
+{
+  string name = 1;
+  string platform = 2;
+  repeated string allowed_service_ids = 3;
 }
 
 // Presentation-safe schema-v4 request. It intentionally mirrors NyxID's wire

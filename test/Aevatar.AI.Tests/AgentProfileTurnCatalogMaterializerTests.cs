@@ -55,11 +55,29 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
         request.LlmControl.Should().BeSameAs(llmControl);
         request.Timeout.Should().Be(TimeSpan.FromSeconds(15));
         request.UserMessage.Should().Be("Connect GitHub and verify the connection");
-        request.Candidates.Should().ContainSingle().Which.Should().BeEquivalentTo(
-            new AgentProfileTurnClassificationCandidate(
-                NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
-                "Connect, add, or authorize a hosted external service account and verify that connection.",
-                AgentProfileSideEffectClass.ExternalHandoff));
+        request.Candidates.Select(static candidate => candidate.IntentId).Should().Equal(
+            NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
+            NyxIdChatTurnIntentClassifier.KeyCreateIntentId);
+    }
+
+    [Fact]
+    public async Task TurnIntentClassifier_KeyCreationPrompt_ShouldReturnTypedIntent()
+    {
+        var inner = new RecordingClassifier(
+            AgentProfileTurnClassificationResult.Matched(
+                NyxIdChatTurnIntentClassifier.KeyCreateIntentId));
+        var classifier = new NyxIdChatTurnIntentClassifier(inner);
+
+        var intent = await classifier.ClassifyAsync(
+            "turn-key-create",
+            "Create a NyxID key limited to GitHub",
+            llmControl: null,
+            CancellationToken.None);
+
+        intent.Should().Be(NyxIdChatTurnIntent.KeyCreate);
+        inner.LastRequest!.Candidates.Should().Contain(candidate =>
+            candidate.IntentId == NyxIdChatTurnIntentClassifier.KeyCreateIntentId &&
+            candidate.SideEffectClass == AgentProfileSideEffectClass.ExternalHandoff);
     }
 
     [Fact]
@@ -95,6 +113,35 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
         catalog.RouteOwnedTools["nyxid_require_service"].Should().BeSameAs(requireServiceTool);
         catalog.SelectedIntentId.Should().Be(NyxIdChatTurnIntentClassifier.ServiceConnectIntentId);
         catalog.CandidateIntentId.Should().Be(NyxIdChatTurnIntentClassifier.ServiceConnectIntentId);
+    }
+
+    [Fact]
+    public async Task MaterializeBuiltInIntentAsync_KeyCreate_ShouldExposeInventoryAndTypedProducerOnly()
+    {
+        var servicesTool = new TestTool("nyxid_services");
+        var keyCreateTool = new TestTool("nyxid_request_key_create");
+        var unrelatedTool = new TestTool("nyxid_catalog");
+        var source = new TokenBoundToolSource(
+            "request-token",
+            [servicesTool, keyCreateTool, unrelatedTool]);
+        var registry = new RecordingToolSetRegistry();
+        registry.Add(AgentProfilePolicies.NyxIdChatRouteToolSet, source);
+        var materializer = NewMaterializer(
+            registry,
+            new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+            fetcher: null);
+
+        var catalog = await materializer.MaterializeBuiltInIntentAsync(
+            NyxIdChatTurnIntent.KeyCreate,
+            ToolContext("request-token"),
+            CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().BeEquivalentTo(
+            "nyxid_services",
+            "nyxid_request_key_create");
+        catalog.RouteOwnedTools["nyxid_services"].Should().BeSameAs(servicesTool);
+        catalog.RouteOwnedTools["nyxid_request_key_create"].Should().BeSameAs(keyCreateTool);
+        catalog.SelectedIntentId.Should().Be(NyxIdChatTurnIntentClassifier.KeyCreateIntentId);
     }
 
     [Fact]
@@ -141,8 +188,9 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
 
         preparation.Authority.CandidateRoute!.IntentId.Should().Be("intent-alpha");
         classifier.Requests.Should().HaveCount(2);
-        classifier.Requests[0].Candidates.Should().ContainSingle().Which.IntentId.Should()
-            .Be(NyxIdChatTurnIntentClassifier.ServiceConnectIntentId);
+        classifier.Requests[0].Candidates.Select(static candidate => candidate.IntentId).Should().Equal(
+            NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
+            NyxIdChatTurnIntentClassifier.KeyCreateIntentId);
         classifier.Requests[1].Candidates.Should().ContainSingle().Which.IntentId.Should()
             .Be("intent-alpha");
     }

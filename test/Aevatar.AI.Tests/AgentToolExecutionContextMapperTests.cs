@@ -254,6 +254,34 @@ public sealed class AgentToolExecutionContextMapperTests
     }
 
     [Fact]
+    public void PlatformBuiltInAdmission_ShouldRoundTripThroughExecutionAndRecoveryProtobuf()
+    {
+        var admission = ExactOperationAdmission() with
+        {
+            Identity = new AgentToolOperationIdentity.PlatformBuiltIn("code_execute"),
+            AuthorizationBasis = AgentToolOperationAuthorizationBasis.PlatformContract,
+        };
+        var context = AgentToolExecutionContext.Empty with
+        {
+            OperationAdmission = admission,
+        };
+
+        var executionPayload = AgentToolExecutionContextPayload.Parser.ParseFrom(
+            context.ToPayload().ToByteArray());
+        var recoveryPayload = AgentToolRecoveryContextPayload.Parser.ParseFrom(
+            context.ToRecoveryPayload().ToByteArray());
+
+        executionPayload.OperationAdmission.IdentityCase.Should().Be(
+            AgentToolOperationAdmissionPayload.IdentityOneofCase.PlatformBuiltIn);
+        recoveryPayload.OperationAdmission.IdentityCase.Should().Be(
+            AgentToolOperationAdmissionPayload.IdentityOneofCase.PlatformBuiltIn);
+        AgentToolExecutionContextMapper.FromPayload(executionPayload).OperationAdmission
+            .Should().BeEquivalentTo(admission);
+        AgentToolExecutionContextMapper.FromRecoveryPayload(recoveryPayload).OperationAdmission
+            .Should().BeEquivalentTo(admission);
+    }
+
+    [Fact]
     public void OperationAdmission_WhenIdentityOneofIsMissing_ShouldFailClosed()
     {
         var malformed = new AgentToolOperationAdmissionPayload

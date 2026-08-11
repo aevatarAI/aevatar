@@ -61,7 +61,7 @@ class NyxIdConformanceGuardTests(unittest.TestCase):
             },
             "generated_artifacts": {},
             "assistant_registry": {
-                "checked_in_payload": "registry-v5.json",
+                "checked_in_payload": "registry-v6.json",
                 "checked_in_payload_sha256": "unused",
             },
         }
@@ -200,6 +200,7 @@ class NyxIdConformanceGuardTests(unittest.TestCase):
         revisions = [
             "nyxid-assistant-actions.v4",
             "nyxid-assistant-actions.v5",
+            "nyxid-assistant-actions.v6",
         ]
         transition_payloads = {}
         for revision in revisions:
@@ -213,11 +214,11 @@ class NyxIdConformanceGuardTests(unittest.TestCase):
                 ).hexdigest(),
             }
         return {
-            "revision": "nyxid-assistant-actions.v5",
+            "revision": "nyxid-assistant-actions.v6",
             "accepted_revisions": revisions,
-            "checked_in_payload": "registry-v5.json",
+            "checked_in_payload": "registry-v6.json",
             "checked_in_payload_sha256": transition_payloads[
-                "nyxid-assistant-actions.v5"
+                "nyxid-assistant-actions.v6"
             ]["checked_in_payload_sha256"],
             "transition_payloads": transition_payloads,
         }

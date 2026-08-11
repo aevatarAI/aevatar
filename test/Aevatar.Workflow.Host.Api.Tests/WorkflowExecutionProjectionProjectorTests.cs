@@ -923,7 +923,10 @@ public sealed class WorkflowExecutionProjectionProjectorTests
 
         var graph = new WorkflowRunInsightReportGraphMaterializer().Materialize(report);
         graph.Nodes.Should().Contain(x => x.NodeId == "root-actor");
-        graph.Edges.Should().Contain(x => x.ToNodeId == "child-1");
+        graph.Nodes.Should().Contain(x =>
+            x.NodeId == "actor:root-actor:cmd-3:child-1" &&
+            x.Properties["actorId"] == "child-1");
+        graph.Edges.Should().Contain(x => x.ToNodeId == "actor:root-actor:cmd-3:child-1");
     }
 
     [Fact]
@@ -1566,7 +1569,9 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         materialization.Nodes.Should().Contain(x => x.NodeId == "unknown" && x.NodeType == WorkflowExecutionGraphConstants.ActorNodeType);
         materialization.Nodes.Should().Contain(x => x.NodeId == "run:unknown:unknown" && x.NodeType == WorkflowExecutionGraphConstants.RunNodeType);
         materialization.Nodes.Should().Contain(x => x.NodeId == "step:unknown:unknown:unknown" && x.NodeType == WorkflowExecutionGraphConstants.StepNodeType);
-        materialization.Nodes.Should().Contain(x => x.NodeId == "child-1");
+        materialization.Nodes.Should().Contain(x =>
+            x.NodeId == "actor:unknown:unknown:child-1" &&
+            x.Properties["actorId"] == "child-1");
 
         materialization.Edges.Should().Contain(x =>
             x.EdgeType == WorkflowExecutionGraphConstants.EdgeTypeOwns &&
@@ -1578,7 +1583,7 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         materialization.Edges.Count(x =>
                 x.EdgeType == WorkflowExecutionGraphConstants.EdgeTypeChildOf &&
                 x.FromNodeId == "unknown" &&
-                x.ToNodeId == "child-1")
+                x.ToNodeId == "actor:unknown:unknown:child-1")
             .Should()
             .Be(1);
     }
@@ -1738,6 +1743,16 @@ public sealed class WorkflowExecutionProjectionProjectorTests
                         NodeId = "node-1",
                         NodeType = "Actor",
                     },
+                    new ProjectionGraphNode
+                    {
+                        NodeId = "run:node-1:cmd-1",
+                        NodeType = WorkflowExecutionGraphConstants.RunNodeType,
+                        Properties =
+                        {
+                            [WorkflowExecutionGraphConstants.RootActorIdPropertyKey] = "node-1",
+                            [WorkflowExecutionGraphConstants.SourceStateVersionPropertyKey] = "12",
+                        },
+                    },
                 ],
                 Edges =
                 [
@@ -1767,7 +1782,8 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         node.Properties.Should().Contain(new KeyValuePair<string, string>("key", "value"));
         edge.Properties.Should().Contain(new KeyValuePair<string, string>("kind", "runtime"));
         subgraph.RootNodeId.Should().Be("node-1");
-        subgraph.Nodes.Should().ContainSingle();
+        subgraph.SourceStateVersion.Should().Be(12);
+        subgraph.Nodes.Should().HaveCount(2);
         subgraph.Edges.Should().ContainSingle();
 
         var mappedReport = mapper.ToRunReport(report);

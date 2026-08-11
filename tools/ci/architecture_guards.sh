@@ -112,6 +112,50 @@ check_directory_build_version_guard() {
 
 check_directory_build_version_guard
 
+check_code_execution_nyxid_route_boundary() {
+  local expected_files
+  local resolver_files
+  local parser_files
+
+  expected_files="$(printf '%s\n' \
+    'src/Aevatar.AI.Infrastructure.ChronoSandbox/NyxIdCodeExecutionPort.cs' \
+    'src/Aevatar.AI.ToolProviders.NyxId/NyxIdCodeExecutionRouteResolver.cs' \
+    'src/Aevatar.AI.ToolProviders.NyxId/NyxIdCodeExecutionWorkflowCapabilitySource.cs' \
+    | sort)"
+
+  resolver_files="$(
+    rg -l 'NyxIdCodeExecutionRouteResolver' src \
+      -g '!**/bin/**' \
+      -g '!**/obj/**' \
+      | sort
+  )"
+  if [[ "${resolver_files}" != "${expected_files}" ]]; then
+    printf '%s\n' "${resolver_files}"
+    echo "The NyxID code-execution route resolver is private to code_execute runtime and readiness."
+    exit 1
+  fi
+
+  parser_files="$(
+    rg -l 'ParseCodeExecutionUserServices' src \
+      -g '!**/bin/**' \
+      -g '!**/obj/**' \
+      | sort
+  )"
+  local expected_parser_files
+  expected_parser_files="$(printf '%s\n' \
+    'src/Aevatar.AI.ToolProviders.NyxId/NyxIdApiAccessContracts.cs' \
+    'src/Aevatar.AI.ToolProviders.NyxId/NyxIdCodeExecutionRouteResolver.cs' \
+    'src/Aevatar.AI.ToolProviders.NyxId/NyxIdCodeExecutionWorkflowCapabilitySource.cs' \
+    | sort)"
+  if [[ "${parser_files}" != "${expected_parser_files}" ]]; then
+    printf '%s\n' "${parser_files}"
+    echo "Code-execution policy parsing must not change ordinary NyxID inventory consumers."
+    exit 1
+  fi
+}
+
+check_code_execution_nyxid_route_boundary
+
 # Refactor (v1/issue1466-first):
 #   Old: ChannelInboundEvent.registration_token looked like a durable runtime credential carrier.
 #   New: proto field 9/name are reserved and mappers/docs stay credential-free.

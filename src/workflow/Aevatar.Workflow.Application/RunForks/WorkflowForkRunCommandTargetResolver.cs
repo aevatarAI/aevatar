@@ -93,6 +93,7 @@ internal sealed class WorkflowForkRunCommandTargetResolver
                     ExpectedExecutionMode: seedView.ExpectedExecutionMode,
                     ScopeId: scopeId,
                     CapabilityAdmissionPlan: seedView.CapabilityAdmissionPlan?.Clone(),
+                    WorkflowId: preservesSourceArtifacts ? seedView.WorkflowId : string.Empty,
                     RevisionId: preservesSourceArtifacts ? seedView.RevisionId : string.Empty,
                     DefinitionVersion: preservesSourceArtifacts ? Math.Max(0, seedView.DefinitionVersion) : 0),
                 ct).ConfigureAwait(false);

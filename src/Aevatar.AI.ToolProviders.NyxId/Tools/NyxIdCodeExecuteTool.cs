@@ -20,12 +20,17 @@ public sealed class NyxIdCodeExecuteTool(ICodeExecutionPort executionPort) : INy
     private static readonly HashSet<string> PreExecutionFailureCodes = new(StringComparer.Ordinal)
     {
         "code_execution_credential_unavailable",
+        "code_execution_admission_invalid",
         "code_execution_outcome_invalid",
         "code_execution_request_invalid",
         "code_execution_response_invalid",
         "code_execution_response_too_large",
+        "code_execution_route_access_denied",
+        "code_execution_route_ambiguous",
+        "code_execution_route_inactive",
+        "code_execution_route_missing",
+        "code_execution_route_policy_mismatch",
         "code_execution_route_resolution_failed",
-        "code_execution_route_unavailable",
         "code_execution_timed_out",
         "code_execution_transport_unavailable",
         "FORBIDDEN",
@@ -172,9 +177,9 @@ public sealed class NyxIdCodeExecuteTool(ICodeExecutionPort executionPort) : INy
                     "Language must be one of: python, javascript, typescript, bash."));
         }
 
-        var bearerToken = AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(
-            AgentToolRequestContext.Current?.Credentials);
-        if (string.IsNullOrWhiteSpace(bearerToken))
+        var credentials = AgentToolRequestContext.Current?.Credentials;
+        var executionBearerToken = ResolveExecutionBearerToken(credentials);
+        if (executionBearerToken is null)
         {
             return TerminalFailure(
                 callId,
@@ -182,7 +187,30 @@ public sealed class NyxIdCodeExecuteTool(ICodeExecutionPort executionPort) : INy
                 new CodeExecutionFailure(
                     CodeExecutionFailureKind.AdmissionDenied,
                     "code_execution_credential_unavailable",
-                    "A source-readable NyxID credential is required for code execution."));
+                    "A typed NyxID execution credential is required for code execution."));
+        }
+
+        if (!TryResolveAdmittedRoute(out var admittedUserServiceId))
+        {
+            return TerminalFailure(
+                callId,
+                toolName,
+                new CodeExecutionFailure(
+                    CodeExecutionFailureKind.AdmissionDenied,
+                    "code_execution_admission_invalid",
+                    "The workflow code execution admission proof is invalid."));
+        }
+
+        var sourceReadableBearerToken = AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(credentials);
+        if (sourceReadableBearerToken is null && admittedUserServiceId is null)
+        {
+            return TerminalFailure(
+                callId,
+                toolName,
+                new CodeExecutionFailure(
+                    CodeExecutionFailureKind.AdmissionDenied,
+                    "code_execution_credential_unavailable",
+                    "A source-readable NyxID credential is required to resolve the code execution route."));
         }
 
         var outcome = await _executionPort.ExecuteAsync(
@@ -191,12 +219,76 @@ public sealed class NyxIdCodeExecuteTool(ICodeExecutionPort executionPort) : INy
                     source,
                     new CodeExecutionRouteIdentity(
                         CodeExecutionContract.ServiceSlug,
-                        UserServiceId: null,
-                        CodeExecutionRouteIdentitySource.CodeExecutionContract),
-                    new CodeExecutionCallerContext(bearerToken)),
+                        admittedUserServiceId,
+                        admittedUserServiceId is null
+                            ? CodeExecutionRouteIdentitySource.CodeExecutionContract
+                            : CodeExecutionRouteIdentitySource.WorkflowCapabilityAdmission),
+                    new CodeExecutionCallerContext(
+                        executionBearerToken,
+                        sourceReadableBearerToken)),
                 ct)
             .ConfigureAwait(false);
         return Terminal(callId, toolName, outcome);
+    }
+
+    private static string? ResolveExecutionBearerToken(AgentToolCredentials? credentials)
+    {
+        if (credentials?.NyxIdCredentialKind is not (
+                AgentToolNyxIdCredentialKind.SourceReadableUserBearer or
+                AgentToolNyxIdCredentialKind.ProxyDelegation))
+        {
+            return null;
+        }
+
+        return NormalizeBearerToken(credentials.NyxIdAccessToken);
+    }
+
+    private static string? NormalizeBearerToken(string? token)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+            return null;
+
+        var normalized = token.Trim();
+        if (string.Equals(normalized, "Bearer", StringComparison.OrdinalIgnoreCase) ||
+            normalized.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Any(char.IsWhiteSpace))
+        {
+            return null;
+        }
+
+        return normalized;
+    }
+
+    private static bool TryResolveAdmittedRoute(out string? userServiceId)
+    {
+        userServiceId = null;
+        var admission = AgentToolRequestContext.Current?.OperationAdmission;
+        if (admission is null)
+            return true;
+
+        if (string.IsNullOrWhiteSpace(admission.ServiceInstanceId) ||
+            !string.Equals(
+                admission.ServiceInstanceId,
+                admission.ServiceInstanceId.Trim(),
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                admission.ServiceSlug,
+                CodeExecutionContract.ServiceSlug,
+                StringComparison.Ordinal) ||
+            admission.Identity is not AgentToolOperationIdentity.PlatformBuiltIn
+            {
+                CapabilityId: "code_execute",
+            } ||
+            admission.AuthorizationBasis != AgentToolOperationAuthorizationBasis.PlatformContract ||
+            !string.Equals(admission.HttpMethod, "POST", StringComparison.Ordinal) ||
+            !string.Equals(admission.PathTemplate, "/execute", StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(admission.ContractDigest))
+        {
+            return false;
+        }
+
+        userServiceId = admission.ServiceInstanceId;
+        return true;
     }
 
     private static bool TryParseLanguage(string language, out CodeExecutionLanguage result)

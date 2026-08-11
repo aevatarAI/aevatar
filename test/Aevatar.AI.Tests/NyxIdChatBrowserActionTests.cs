@@ -299,6 +299,39 @@ public sealed class NyxIdChatBrowserActionTests
     }
 
     [Fact]
+    public void CommitRequest_ShouldAcceptLeastScopeKeyCreateOnlyOnV6()
+    {
+        var state = AuthorizationWaitingState();
+        var request = NyxIdChatBrowserActions.RequestAuthorization(
+            state,
+            AuthorizationRequiredSignal(state),
+            Registry(),
+            Now).Request;
+        request.RegistryRevision = NyxIdAssistantActionRegistry.SupportedRegistryRevision;
+        request.Action = NyxIdAssistantActionKind.KeyCreate;
+        request.Params = new NyxIdAssistantActionParams
+        {
+            KeyCreate = new NyxIdKeyCreateParams
+            {
+                Name = "agent-alpha",
+                Platform = "codex",
+                AllowedServiceIds = { "us-github-alpha" },
+            },
+        };
+
+        var accepted = NyxIdChatBrowserActions.CommitRequest(state, request, Now);
+
+        accepted.ShouldCommit.Should().BeTrue();
+        accepted.Outcome.Should().Be(NyxIdChatTransitionOutcome.Accepted);
+        accepted.Request.Params.KeyCreate.AllowedServiceIds.Should().Equal("us-github-alpha");
+
+        request.RegistryRevision = "nyxid-assistant-actions.v5";
+        var rejectedLegacy = NyxIdChatBrowserActions.CommitRequest(state, request, Now);
+        rejectedLegacy.ShouldCommit.Should().BeFalse();
+        rejectedLegacy.ReasonCode.Should().Be(NyxIdChatBrowserActions.ActionRequestInvalid);
+    }
+
+    [Fact]
     public void CompletedReport_ShouldRejectResourceVariantThatDoesNotMatchAction()
     {
         var blocked = BlockedActionState();

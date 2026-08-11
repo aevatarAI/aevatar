@@ -691,13 +691,23 @@ public class WorkflowRoleGAgent(
             completed.ManagedHandoff = managedHandoff;
         if (session.AuthorizationRequired is { } authorizationRequired)
         {
-            completed.AuthorizationRequirement = new WorkflowInteractiveAuthorizationRequirement
+            var requirement = new WorkflowInteractiveAuthorizationRequirement
             {
                 ServiceSlug = authorizationRequired.ServiceSlug,
                 ReasonCode = authorizationRequired.ReasonCode,
                 SafeMessage = authorizationRequired.SafeMessage,
                 RequestedScopes = { authorizationRequired.RequestedScopes },
             };
+            if (authorizationRequired.KeyCreate is not null)
+            {
+                requirement.KeyCreate = new WorkflowInteractiveKeyCreateRequirement
+                {
+                    Name = authorizationRequired.KeyCreate.Name,
+                    Platform = authorizationRequired.KeyCreate.Platform,
+                    AllowedServiceIds = { authorizationRequired.KeyCreate.AllowedServiceIds },
+                };
+            }
+            completed.AuthorizationRequirement = requirement;
         }
         return completed;
     }

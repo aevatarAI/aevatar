@@ -9,13 +9,14 @@ namespace Aevatar.AI.Tests;
 public sealed class NyxIdAssistantActionRegistryTests
 {
     private const string LegacyRevision = "nyxid-assistant-actions.v4";
-    private const string SupportedRevision = "nyxid-assistant-actions.v5";
+    private const string TransitionRevision = "nyxid-assistant-actions.v5";
+    private const string SupportedRevision = "nyxid-assistant-actions.v6";
 
     [Fact]
     public void Load_ShouldPinSchemaVersionAndRevision()
     {
         var registry = NyxIdAssistantActionRegistry.Load(
-            RegistryJsonWithWaveOneActions());
+            RegistryJsonWithLeastScopeKeyCreate());
 
         registry.SchemaVersion.Should().Be(4);
         registry.RegistryRevision.Should().Be(SupportedRevision);
@@ -89,6 +90,31 @@ public sealed class NyxIdAssistantActionRegistryTests
         Action rememberedReauthorization = () => NyxIdAssistantActionRegistry.Load(
             RegistryJsonWithWaveOneActions(serviceReauthorizeRememberEligible: true));
         rememberedReauthorization.Should().Throw<NyxIdAssistantActionRegistryException>()
+            .Which.Code.Should().Be("NYXID_ACTION_REGISTRY_INVALID");
+    }
+
+    [Fact]
+    public void Load_ShouldExposeLeastScopeKeyCreateOnlyInV6()
+    {
+        var registry = NyxIdAssistantActionRegistry.Load(
+            RegistryJsonWithLeastScopeKeyCreate());
+
+        registry.TryGetDefinition("service.connect", out _).Should().BeTrue();
+        registry.TryGetDefinition("key.create", out _).Should().BeTrue();
+        registry.TryGetDefinition("service.reauthorize", out _).Should().BeFalse();
+        registry.TryGetDefinition("key.rotate", out _).Should().BeFalse();
+        NyxIdAssistantActionRegistry.IsActionExecutable(
+                SupportedRevision,
+                NyxIdAssistantActionKind.KeyCreate)
+            .Should().BeTrue();
+        NyxIdAssistantActionRegistry.IsActionExecutable(
+                TransitionRevision,
+                NyxIdAssistantActionKind.KeyCreate)
+            .Should().BeFalse();
+
+        Action staleSchema = () => NyxIdAssistantActionRegistry.Load(
+            RegistryJsonWithLeastScopeKeyCreate(KeyCreateSchema));
+        staleSchema.Should().Throw<NyxIdAssistantActionRegistryException>()
             .Which.Code.Should().Be("NYXID_ACTION_REGISTRY_INVALID");
     }
 
@@ -262,11 +288,44 @@ public sealed class NyxIdAssistantActionRegistryTests
         parsed.KeyCreate.Platform.Should().Be("codex");
         parsed.KeyCreate.AllowedServiceIds.Should().Equal("us-github-alpha");
 
+        using var missingServices = JsonDocument.Parse(
+            """{"name":"agent-alpha","platform":"codex"}""");
+        Action parseMissingServices = () =>
+            NyxIdAssistantActionRegistry.ParseKeyCreate(missingServices.RootElement);
+        parseMissingServices.Should().Throw<NyxIdAssistantActionRegistryException>()
+            .Which.Code.Should().Be("NYXID_ACTION_PARAMS_INVALID");
+
         using var allServices = JsonDocument.Parse(
             """{"name":"agent-alpha","platform":"codex","allowedServiceIds":[]}""");
         Action parseAllServices = () =>
             NyxIdAssistantActionRegistry.ParseKeyCreate(allServices.RootElement);
         parseAllServices.Should().Throw<NyxIdAssistantActionRegistryException>()
+            .Which.Code.Should().Be("NYXID_ACTION_PARAMS_INVALID");
+
+        using var duplicateServices = JsonDocument.Parse(
+            """{"name":"agent-alpha","platform":"codex","allowedServiceIds":["us-github-alpha","us-github-alpha"]}""");
+        Action parseDuplicates = () =>
+            NyxIdAssistantActionRegistry.ParseKeyCreate(duplicateServices.RootElement);
+        parseDuplicates.Should().Throw<NyxIdAssistantActionRegistryException>()
+            .Which.Code.Should().Be("NYXID_ACTION_PARAMS_INVALID");
+
+        using var nonCanonicalService = JsonDocument.Parse(
+            """{"name":"agent-alpha","platform":"codex","allowedServiceIds":[" us-github-alpha"]}""");
+        Action parseNonCanonical = () =>
+            NyxIdAssistantActionRegistry.ParseKeyCreate(nonCanonicalService.RootElement);
+        parseNonCanonical.Should().Throw<NyxIdAssistantActionRegistryException>()
+            .Which.Code.Should().Be("NYXID_ACTION_PARAMS_INVALID");
+
+        var overLimitJson = JsonSerializer.Serialize(new
+        {
+            name = "agent-alpha",
+            platform = "codex",
+            allowedServiceIds = Enumerable.Range(0, 65).Select(index => $"us-{index}"),
+        });
+        using var overLimitServices = JsonDocument.Parse(overLimitJson);
+        Action parseOverLimit = () =>
+            NyxIdAssistantActionRegistry.ParseKeyCreate(overLimitServices.RootElement);
+        parseOverLimit.Should().Throw<NyxIdAssistantActionRegistryException>()
             .Which.Code.Should().Be("NYXID_ACTION_PARAMS_INVALID");
     }
 
@@ -309,7 +368,8 @@ public sealed class NyxIdAssistantActionRegistryTests
         foreach (var (payload, revision) in new[]
                  {
                      (RegistryJson(), LegacyRevision),
-                     (RegistryJsonWithWaveOneActions(), SupportedRevision),
+                     (RegistryJsonWithWaveOneActions(), TransitionRevision),
+                     (RegistryJsonWithLeastScopeKeyCreate(), SupportedRevision),
                  })
         {
             var source = new RecordingRegistrySource(payload);
@@ -337,7 +397,7 @@ public sealed class NyxIdAssistantActionRegistryTests
 
         var json = await source.FetchAsync(CancellationToken.None);
 
-        json.Should().Contain(SupportedRevision);
+        json.Should().Contain(TransitionRevision);
         handler.Requests.Should().ContainSingle();
         handler.Requests.Single().Method.Should().Be(HttpMethod.Get);
         handler.Requests.Single().RequestUri.Should().Be(
@@ -463,6 +523,25 @@ public sealed class NyxIdAssistantActionRegistryTests
         }
         """;
 
+    private const string LeastScopeKeyCreateSchema = """
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "platform", "allowedServiceIds"],
+          "properties": {
+            "name": {"type": "string"},
+            "platform": {"type": "string"},
+            "allowedServiceIds": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 64,
+              "uniqueItems": true,
+              "items": {"type": "string"}
+            }
+          }
+        }
+        """;
+
     private const string RelaxedKeyCreateSchema = """
         {
           "type": "object",
@@ -492,7 +571,7 @@ public sealed class NyxIdAssistantActionRegistryTests
         string keyCreateSchema = KeyCreateSchema,
         bool keyCreateRememberEligible = false,
         bool serviceReauthorizeRememberEligible = false,
-        string revision = SupportedRevision) => $$"""
+        string revision = TransitionRevision) => $$"""
         {
           "schema_version": 4,
           "revision": "{{revision}}",
@@ -525,6 +604,32 @@ public sealed class NyxIdAssistantActionRegistryTests
               "action": "key.rotate",
               "description": "Rotate an API key.",
               "params_schema": {{KeyRotateSchema}},
+              "risk": "grant",
+              "tier": "v1",
+              "remember_eligible": false
+            }
+          ]
+        }
+        """;
+
+    private static string RegistryJsonWithLeastScopeKeyCreate(
+        string keyCreateSchema = LeastScopeKeyCreateSchema) => $$"""
+        {
+          "schema_version": 4,
+          "revision": "{{SupportedRevision}}",
+          "actions": [
+            {
+              "action": "service.connect",
+              "description": "Connect a service.",
+              "params_schema": {{ServiceConnectSchema}},
+              "risk": "grant",
+              "tier": "v1",
+              "remember_eligible": true
+            },
+            {
+              "action": "key.create",
+              "description": "Create a least-scope API key.",
+              "params_schema": {{keyCreateSchema}},
               "risk": "grant",
               "tier": "v1",
               "remember_eligible": false

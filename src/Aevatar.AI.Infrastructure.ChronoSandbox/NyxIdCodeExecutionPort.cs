@@ -12,9 +12,6 @@ internal sealed class NyxIdCodeExecutionPort(
 {
     private const long MaxResponseBytes = 1_048_576;
     private const string ExecutionPath = "/execute";
-    private const string SharedDelegationScope = "proxy:*";
-    private const string CodeDelegationScope = "sandbox:execute";
-    private const string PersonalCredentialSourceType = "personal";
     private const string RequiredServiceSlug = CodeExecutionContract.ServiceSlug;
     private static readonly HashSet<string> AllowedCompletedFailureCodes =
         new(StringComparer.Ordinal)
@@ -56,44 +53,83 @@ internal sealed class NyxIdCodeExecutionPort(
                 "The code execution request is invalid.");
         }
 
-        var bearerToken = request.Caller?.NyxIdAccessToken?.Trim();
-        if (string.IsNullOrWhiteSpace(bearerToken))
+        var executionBearerToken = NormalizeBearerToken(request.Caller?.ExecutionNyxIdAccessToken);
+        if (executionBearerToken is null)
         {
             return Failed(
                 CodeExecutionFailureKind.AdmissionDenied,
                 "code_execution_credential_unavailable",
-                "A source-readable NyxID credential is required for code execution.");
+                "A typed NyxID execution credential is required for code execution.");
         }
 
-        var client = _clientFactory.CreateClient();
+        var localDiagnosticId = CreateLocalDiagnosticId();
+        var sourceReadableBearerToken = NormalizeBearerToken(
+            request.Caller?.SourceReadableNyxIdAccessToken);
         CodeExecutionRouteIdentity route;
-        try
+        if (sourceReadableBearerToken is null)
         {
-            route = await ResolveRouteAsync(client, bearerToken, request.Route, ct)
-                .ConfigureAwait(false);
+            if (!TryResolveExactAdmittedRoute(request.Route, out var admittedUserServiceId))
+            {
+                return Failed(
+                    CodeExecutionFailureKind.AdmissionDenied,
+                    "code_execution_credential_unavailable",
+                    "A source-readable NyxID credential or an exact workflow admission is required for code execution.",
+                    localDiagnosticId);
+            }
+
+            route = new CodeExecutionRouteIdentity(
+                RequiredServiceSlug,
+                admittedUserServiceId,
+                CodeExecutionRouteIdentitySource.WorkflowCapabilityAdmission);
         }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        else
         {
-            throw;
-        }
-        catch (Exception exception)
-        {
-            _logger.LogWarning(
-                "Code execution route resolution failed with exception type {ExceptionType}",
-                exception.GetType().Name);
-            return Failed(
-                CodeExecutionFailureKind.TransportUnavailable,
-                "code_execution_route_resolution_failed",
-                "The code execution route could not be resolved.");
+            NyxIdCodeExecutionRouteResolution resolution;
+            try
+            {
+                resolution = await NyxIdCodeExecutionRouteResolver.ResolveAsync(
+                        _clientFactory,
+                        sourceReadableBearerToken,
+                        request.Route.UserServiceId,
+                        ct)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                _logger.LogWarning(
+                    "Code execution route resolution failed. diagnosticId={DiagnosticId} failureKind=source_exception exceptionType={ExceptionType}",
+                    localDiagnosticId,
+                    exception.GetType().Name);
+                return Failed(
+                    CodeExecutionFailureKind.TransportUnavailable,
+                    "code_execution_route_resolution_failed",
+                    "The code execution route could not be resolved.",
+                    localDiagnosticId);
+            }
+
+            if (!resolution.IsReady)
+                return RouteResolutionFailed(resolution, localDiagnosticId);
+
+            var resolvedService = resolution.Service!;
+            route = new CodeExecutionRouteIdentity(
+                resolvedService.Slug,
+                resolvedService.Id,
+                CodeExecutionRouteIdentitySource.NyxIdUserServiceCatalog);
         }
 
         if (string.IsNullOrWhiteSpace(route.UserServiceId))
         {
             return Failed(
-                CodeExecutionFailureKind.TargetNotConfigured,
-                "code_execution_route_unavailable",
-                "The code execution service is not uniquely available.");
+                CodeExecutionFailureKind.AdmissionDenied,
+                "code_execution_admission_invalid",
+                "The code execution route does not contain an exact UserService identity.",
+                localDiagnosticId);
         }
+        var resolvedUserServiceId = route.UserServiceId;
 
         var body = JsonSerializer.Serialize(new
         {
@@ -101,14 +137,14 @@ internal sealed class NyxIdCodeExecutionPort(
             script = request.Source,
         });
 
-        var localDiagnosticId = CreateLocalDiagnosticId();
+        var client = _clientFactory.CreateClient();
         NyxIdProxyTextResponse response;
         try
         {
             response = await client.ProxyRequestBoundedAsync(
-                    bearerToken,
+                    executionBearerToken,
                     route.ServiceSlug,
-                    route.UserServiceId,
+                    resolvedUserServiceId,
                     ExecutionPath,
                     HttpMethod.Post.Method,
                     body,
@@ -146,47 +182,30 @@ internal sealed class NyxIdCodeExecutionPort(
         return ParseResponse(response.Content, route, localDiagnosticId);
     }
 
-    private static async Task<CodeExecutionRouteIdentity> ResolveRouteAsync(
-        NyxIdApiClient client,
-        string bearerToken,
-        CodeExecutionRouteIdentity candidate,
-        CancellationToken ct)
+    private static bool TryResolveExactAdmittedRoute(
+        CodeExecutionRouteIdentity route,
+        out string userServiceId)
     {
-        var response = await client.ListUserServicesAsync(bearerToken, ct).ConfigureAwait(false);
-        using var document = JsonDocument.Parse(response);
-        var root = document.RootElement;
-        if (root.ValueKind != JsonValueKind.Object ||
-            (root.TryGetProperty("error", out var error) &&
-             error.ValueKind is JsonValueKind.True or JsonValueKind.String))
+        userServiceId = route.UserServiceId ?? string.Empty;
+        return route.Source == CodeExecutionRouteIdentitySource.WorkflowCapabilityAdmission &&
+               !string.IsNullOrWhiteSpace(userServiceId) &&
+               string.Equals(userServiceId, userServiceId.Trim(), StringComparison.Ordinal);
+    }
+
+    private static string? NormalizeBearerToken(string? token)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+            return null;
+
+        var normalized = token.Trim();
+        if (string.Equals(normalized, "Bearer", StringComparison.OrdinalIgnoreCase) ||
+            normalized.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Any(char.IsWhiteSpace))
         {
-            throw new JsonException("NyxID returned an invalid user-service inventory.");
+            return null;
         }
 
-        var matches = EnumerateServices(root)
-            .Where(service =>
-                string.Equals(service.Slug, candidate.ServiceSlug.Trim(), StringComparison.Ordinal) &&
-                (string.IsNullOrWhiteSpace(candidate.UserServiceId) ||
-                 string.Equals(service.Id, candidate.UserServiceId.Trim(), StringComparison.Ordinal)) &&
-                service.IsActive &&
-                string.Equals(
-                    service.CredentialSourceType,
-                    PersonalCredentialSourceType,
-                    StringComparison.Ordinal) &&
-                service.InjectDelegationToken == true &&
-                HasTransitionExecutionPolicy(
-                    service.ForwardAccessToken,
-                    service.DelegationTokenScope))
-            .ToArray();
-
-        return matches.Length == 1
-            ? new CodeExecutionRouteIdentity(
-                matches[0].Slug,
-                matches[0].Id,
-                CodeExecutionRouteIdentitySource.NyxIdUserServiceCatalog)
-            : new CodeExecutionRouteIdentity(
-                candidate.ServiceSlug.Trim(),
-                null,
-                CodeExecutionRouteIdentitySource.NyxIdUserServiceCatalog);
+        return normalized;
     }
 
     private static string SerializeLanguage(CodeExecutionLanguage language) => language switch
@@ -198,62 +217,51 @@ internal sealed class NyxIdCodeExecutionPort(
         _ => throw new ArgumentOutOfRangeException(nameof(language), language, null),
     };
 
-    private static bool HasTransitionExecutionPolicy(
-        bool? forwardAccessToken,
-        string? scope)
+    private CodeExecutionOutcome RouteResolutionFailed(
+        NyxIdCodeExecutionRouteResolution resolution,
+        string diagnosticId)
     {
-        if (forwardAccessToken is null || string.IsNullOrWhiteSpace(scope))
-            return false;
-
-        var scopes = scope.Split(
-            (char[]?)null,
-            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        var isLegacyScope = scopes.Length == 1 &&
-                            string.Equals(scopes[0], SharedDelegationScope, StringComparison.Ordinal);
-        var isCombinedScope = scopes.Length == 2 &&
-                              scopes.Contains(SharedDelegationScope, StringComparer.Ordinal) &&
-                              scopes.Contains(CodeDelegationScope, StringComparer.Ordinal);
-
-        return forwardAccessToken.Value
-            ? isLegacyScope || isCombinedScope
-            : isCombinedScope;
-    }
-
-    private static IEnumerable<CodeUserService> EnumerateServices(JsonElement root)
-    {
-        foreach (var collectionName in new[] { "services", "keys", "items", "data" })
+        _logger.LogWarning(
+            "Code execution route rejected. diagnosticId={DiagnosticId} failureKind={FailureKind} canonicalCandidates={CanonicalCandidates} accessibleCandidates={AccessibleCandidates} activeCandidates={ActiveCandidates} eligibleCandidates={EligibleCandidates}",
+            diagnosticId,
+            resolution.Kind,
+            resolution.CanonicalCandidateCount,
+            resolution.AccessibleCandidateCount,
+            resolution.ActiveCandidateCount,
+            resolution.EligibleCandidateCount);
+        return resolution.Kind switch
         {
-            if (!root.TryGetProperty(collectionName, out var services) ||
-                services.ValueKind != JsonValueKind.Array)
-            {
-                continue;
-            }
-
-            foreach (var service in services.EnumerateArray())
-            {
-                if (service.ValueKind != JsonValueKind.Object)
-                    continue;
-                var id = ReadString(service, "id", "user_service_id");
-                var slug = ReadString(service, "slug", "service_slug");
-                if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(slug))
-                    continue;
-                var credentialSource =
-                    service.TryGetProperty("credential_source", out var credentialSourceElement) &&
-                    credentialSourceElement.ValueKind == JsonValueKind.Object
-                        ? credentialSourceElement
-                        : default;
-                yield return new CodeUserService(
-                    id,
-                    slug,
-                    ReadBoolean(service, "is_active") == true,
-                    credentialSource.ValueKind == JsonValueKind.Object
-                        ? ReadString(credentialSource, "type")
-                        : null,
-                    ReadBoolean(service, "forward_access_token"),
-                    ReadBoolean(service, "inject_delegation_token"),
-                    ReadString(service, "delegation_token_scope"));
-            }
-        }
+            NyxIdCodeExecutionRouteResolutionKind.Missing => Failed(
+                CodeExecutionFailureKind.TargetNotConfigured,
+                "code_execution_route_missing",
+                "The canonical code execution route is missing.",
+                diagnosticId),
+            NyxIdCodeExecutionRouteResolutionKind.Inactive => Failed(
+                CodeExecutionFailureKind.TargetNotConfigured,
+                "code_execution_route_inactive",
+                "The canonical code execution route is inactive.",
+                diagnosticId),
+            NyxIdCodeExecutionRouteResolutionKind.PolicyMismatch => Failed(
+                CodeExecutionFailureKind.TargetNotConfigured,
+                "code_execution_route_policy_mismatch",
+                "The canonical code execution route policy is incompatible.",
+                diagnosticId),
+            NyxIdCodeExecutionRouteResolutionKind.Ambiguous => Failed(
+                CodeExecutionFailureKind.TargetNotConfigured,
+                "code_execution_route_ambiguous",
+                "Multiple canonical code execution routes are eligible.",
+                diagnosticId),
+            NyxIdCodeExecutionRouteResolutionKind.AccessDenied => Failed(
+                CodeExecutionFailureKind.AdmissionDenied,
+                "code_execution_route_access_denied",
+                "The caller cannot access the canonical code execution route.",
+                diagnosticId),
+            _ => Failed(
+                CodeExecutionFailureKind.TransportUnavailable,
+                "code_execution_route_resolution_failed",
+                "The code execution route could not be resolved.",
+                diagnosticId),
+        };
     }
 
     private CodeExecutionOutcome ClassifyProxyFailure(
@@ -501,18 +509,4 @@ internal sealed class NyxIdCodeExecutionPort(
         return true;
     }
 
-    private static bool? ReadBoolean(JsonElement owner, string name) =>
-        owner.TryGetProperty(name, out var value) &&
-        value.ValueKind is JsonValueKind.True or JsonValueKind.False
-            ? value.GetBoolean()
-            : null;
-
-    private sealed record CodeUserService(
-        string Id,
-        string Slug,
-        bool IsActive,
-        string? CredentialSourceType,
-        bool? ForwardAccessToken,
-        bool? InjectDelegationToken,
-        string? DelegationTokenScope);
 }

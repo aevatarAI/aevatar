@@ -725,6 +725,103 @@ public sealed class ToolProviderHttpClientRegistrationTests
         receipt.AuthorizationRequired.Should().BeNull();
     }
 
+    [Fact]
+    public async Task NyxIdRequestKeyCreateTool_ShouldEmitTypedRequirementForExactOwnerInventory()
+    {
+        var handler = new StubUserServiceListHandler(
+            """
+            { "keys": [
+              { "id": "m-github", "slug": "api-github", "status": "active", "is_active": true, "connected": true, "credential_source": { "type": "personal" } },
+              { "id": "m-lark", "slug": "api-lark", "status": "active", "is_active": true, "connected": true, "credential_source": { "type": "personal" } }
+            ] }
+            """);
+        var tool = CreateKeyCreateTool(handler);
+        const string arguments =
+            """{"name":"agent-alpha","platform":"codex","allowed_service_ids":["m-github","m-lark"]}""";
+        var previous = AgentToolRequestContext.Current;
+        AgentToolRequestContext.Current = CapabilityContext();
+        try
+        {
+            var result = await tool.ExecuteAsync(arguments);
+            var receipt = tool.CreateResultReceipt("call-key", tool.Name, arguments, result);
+
+            handler.Requests.Should().Equal("/api/v1/keys");
+            handler.Methods.Should().OnlyContain(static method => method == HttpMethod.Get);
+            receipt.Should().NotBeNull();
+            receipt!.Status.Should().Be(AgentToolReceiptStatus.AuthorizationRequired);
+            receipt.AuthorizationRequired.ServiceSlug.Should().BeEmpty();
+            receipt.AuthorizationRequired.KeyCreate.Name.Should().Be("agent-alpha");
+            receipt.AuthorizationRequired.KeyCreate.Platform.Should().Be("codex");
+            receipt.AuthorizationRequired.KeyCreate.AllowedServiceIds
+                .Should().Equal("m-github", "m-lark");
+            receipt.ToString().Should().NotContain("token").And.NotContain("secret");
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = previous;
+        }
+    }
+
+    [Theory]
+    [InlineData("{\"name\":\"agent-alpha\",\"platform\":\"codex\"}")]
+    [InlineData("{\"name\":\"agent-alpha\",\"platform\":\"codex\",\"allowed_service_ids\":[]}")]
+    [InlineData("{\"name\":\"agent-alpha\",\"platform\":\"codex\",\"allowed_service_ids\":[\"m-github\",\"m-github\"]}")]
+    [InlineData("{\"name\":\"agent-alpha\",\"platform\":\"codex\",\"allowed_service_ids\":[\" m-github\"]}")]
+    [InlineData("{\"name\":\"Bearer key-material\",\"platform\":\"codex\",\"allowed_service_ids\":[\"m-github\"]}")]
+    [InlineData("{\"name\":\"agent-alpha\",\"platform\":\"codex\",\"allowed_service_ids\":[\"https://service.test/path?token=secret\"]}")]
+    public async Task NyxIdRequestKeyCreateTool_ShouldRejectInvalidSelectionBeforeInventoryRead(
+        string arguments)
+    {
+        var handler = new StubUserServiceListHandler("""{ "keys": [] }""");
+        var tool = CreateKeyCreateTool(handler);
+        var previous = AgentToolRequestContext.Current;
+        AgentToolRequestContext.Current = CapabilityContext();
+        try
+        {
+            var result = await tool.ExecuteAsync(arguments);
+            var receipt = tool.CreateResultReceipt("call-key", tool.Name, arguments, result);
+
+            handler.Requests.Should().BeEmpty();
+            result.Should().Contain("NYXID_KEY_CREATE_ARGUMENTS_INVALID");
+            receipt.Should().NotBeNull();
+            receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+            receipt.AuthorizationRequired.Should().BeNull();
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = previous;
+        }
+    }
+
+    [Theory]
+    [InlineData("m-unknown")]
+    [InlineData("m-cross-owner")]
+    public async Task NyxIdRequestKeyCreateTool_ShouldRejectIdentityOutsideOwnerInventory(
+        string selectedId)
+    {
+        var handler = new StubUserServiceListHandler(
+            """{ "keys": [{ "id": "m-owner", "slug": "api-github", "status": "active", "is_active": true, "connected": true, "credential_source": { "type": "personal" } }] }""");
+        var tool = CreateKeyCreateTool(handler);
+        var arguments = $$"""{"name":"agent-alpha","platform":"codex","allowed_service_ids":["{{selectedId}}"]}""";
+        var previous = AgentToolRequestContext.Current;
+        AgentToolRequestContext.Current = CapabilityContext();
+        try
+        {
+            var result = await tool.ExecuteAsync(arguments);
+            var receipt = tool.CreateResultReceipt("call-key", tool.Name, arguments, result);
+
+            handler.Requests.Should().Equal("/api/v1/keys");
+            result.Should().Contain("NYXID_KEY_CREATE_SERVICE_IDENTITY_INVALID");
+            receipt.Should().NotBeNull();
+            receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+            receipt.AuthorizationRequired.Should().BeNull();
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = previous;
+        }
+    }
+
     private static IAgentTool CreateRequireServiceTool(StubUserServiceListHandler handler)
     {
         var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
@@ -732,11 +829,20 @@ public sealed class ToolProviderHttpClientRegistrationTests
         return new NyxIdRequireServiceTool(client);
     }
 
+    private static IAgentTool CreateKeyCreateTool(StubUserServiceListHandler handler)
+    {
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
+        var client = new NyxIdApiClient(options, new HttpClient(handler));
+        return new NyxIdRequestKeyCreateTool(client);
+    }
+
     private sealed class StubUserServiceListHandler(string responseJson) : HttpMessageHandler
     {
         public List<string> Requests { get; } = [];
 
         public List<string?> BearerTokens { get; } = [];
+
+        public List<HttpMethod> Methods { get; } = [];
 
         public System.Net.HttpStatusCode CatalogStatus { get; init; } = System.Net.HttpStatusCode.OK;
 
@@ -749,6 +855,7 @@ public sealed class ToolProviderHttpClientRegistrationTests
             var path = request.RequestUri!.AbsolutePath;
             Requests.Add(path);
             BearerTokens.Add(request.Headers.Authorization?.Parameter);
+            Methods.Add(request.Method);
             var isCatalogRequest = path.StartsWith("/api/v1/catalog/", StringComparison.Ordinal);
             var response = isCatalogRequest
                 ? CatalogResponseJson ?? System.Text.Json.JsonSerializer.Serialize(new

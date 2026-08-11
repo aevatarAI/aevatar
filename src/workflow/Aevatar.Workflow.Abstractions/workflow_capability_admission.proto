@@ -115,11 +115,15 @@ message NyxIdRequestSelector {
   NyxIdOperationRisk risk = 9;
 }
 
+// The platform code route is canonical and has no caller-authored selector fields.
+message CodeExecutionSelector {}
+
 message ExternalWorkflowCapabilitySelector {
   oneof selector {
     HostConnectorCapabilityRef host_connector = 1;
     NyxIdOperationSelector nyx_id_operation = 2;
     NyxIdRequestSelector nyx_id_request = 3;
+    CodeExecutionSelector code_execution = 4;
   }
 }
 
@@ -150,6 +154,14 @@ message NyxIdUserRequestCapabilityRef {
   string contract_digest = 3;
   NyxIdOperationExecutionPolicy execution_policy = 4;
   string explicit_request_grant_digest = 5;
+}
+
+message CodeExecutionCapabilityRef {
+  string user_service_id = 1;
+  string service_slug_snapshot = 2;
+  string catalog_service_id = 3;
+  string contract_digest = 4;
+  repeated ExternalCapabilityExecutionMode allowed_execution_modes = 5;
 }
 
 enum NyxIdOperationRisk {
@@ -258,6 +270,7 @@ message ExternalWorkflowCapabilityRef {
     HostConnectorCapabilityRef host_connector = 1;
     NyxIdUserServiceCapabilityRef nyx_id_user_service = 2;
     NyxIdUserRequestCapabilityRef nyx_id_user_request = 3;
+    CodeExecutionCapabilityRef code_execution = 4;
   }
 }
 

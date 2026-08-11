@@ -190,6 +190,7 @@ public sealed class WorkflowParser
         return new StepDefinition
         {
             Id = s.Id ?? throw new InvalidOperationException("step 缺 id"),
+            DisplayName = NormalizeText(s.DisplayName),
             Type = canonicalType,
             TargetRole = s.TargetRole ?? s.Role,
             Parameters = WorkflowPrimitiveCatalog.CanonicalizeStepTypeParameters(parameters),
@@ -1435,6 +1436,8 @@ public sealed class WorkflowParser
     private sealed class RawStep
     {
         public string? Id { get; set; }
+        [YamlMember(Alias = "display_name")]
+        public string? DisplayName { get; set; }
         public string? Type { get; set; }
         public string? TargetRole { get; set; }
         public string? Role { get; set; }

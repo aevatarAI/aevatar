@@ -164,6 +164,7 @@ public sealed record WorkflowRunForkSeedView(
     string ScopeId = "",
     IReadOnlyDictionary<string, WorkflowStepIdempotencyView>? IdempotencyByStepId = null,
     WorkflowCapabilityAdmissionPlan? CapabilityAdmissionPlan = null,
+    string WorkflowId = "",
     string RevisionId = "",
     long DefinitionVersion = 0,
     string OriginalRunId = "")
@@ -182,6 +183,7 @@ public sealed record WorkflowRunForkSeedView(
             string.Empty,
             new Dictionary<string, WorkflowStepIdempotencyView>(StringComparer.Ordinal),
             null,
+            string.Empty,
             string.Empty,
             0,
             string.Empty)

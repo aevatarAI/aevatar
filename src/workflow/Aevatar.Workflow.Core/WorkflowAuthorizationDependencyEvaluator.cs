@@ -11,6 +11,8 @@ public static class WorkflowAuthorizationDependencyEvaluator
     /// <summary>The workflow tool whose every call site must carry a committed admission proof.</summary>
     public const string NyxIdProxyToolName = "nyxid_proxy";
 
+    public const string CodeExecuteToolName = "code_execute";
+
     private static readonly HashSet<string> NyxIdRuntimeArgumentNames = new(StringComparer.Ordinal)
     {
         "path_params",
@@ -41,7 +43,8 @@ public static class WorkflowAuthorizationDependencyEvaluator
 
     /// <summary>True when a dispatched tool may only run against a committed call-site proof.</summary>
     public static bool RequiresExternalCapabilityAdmission(string? toolName) =>
-        string.Equals(toolName?.Trim(), NyxIdProxyToolName, StringComparison.OrdinalIgnoreCase);
+        string.Equals(toolName?.Trim(), NyxIdProxyToolName, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(toolName?.Trim(), CodeExecuteToolName, StringComparison.OrdinalIgnoreCase);
 
     public static WorkflowAuthorizationDependencies Evaluate(WorkflowDefinition workflow)
     {
@@ -131,6 +134,26 @@ public static class WorkflowAuthorizationDependencyEvaluator
             if (invocation.Step.Capability is not null)
                 throw Invalid(invocation.Step, "step capability is only valid for its matching external tool invocation.");
             return null;
+        }
+
+        if (string.Equals(toolName, CodeExecuteToolName, StringComparison.OrdinalIgnoreCase))
+        {
+            if (invocation.Step.Capability is not null)
+            {
+                throw Invalid(
+                    invocation.Step,
+                    "code_execute uses the canonical platform route and does not accept an authored capability selector.");
+            }
+
+            return new ExternalToolInvocationSpec
+            {
+                CallSiteId = invocation.CallSiteId,
+                ToolName = CodeExecuteToolName,
+                Selector = new ExternalWorkflowCapabilitySelector
+                {
+                    CodeExecution = new CodeExecutionSelector(),
+                },
+            };
         }
 
         ValidateNyxIdRuntimeArguments(invocation.Step);

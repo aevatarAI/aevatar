@@ -434,6 +434,13 @@ internal static class NyxIdChatConversationAguiFrameBuilder
                 {
                     ServiceReauthorize = request.Params.ServiceReauthorize.Clone(),
                 },
+            NyxIdAssistantActionParams.ParamsOneofCase.KeyCreate =>
+                new NyxIdAssistantActionWireParams
+                {
+                    KeyCreateName = request.Params.KeyCreate.Name,
+                    KeyCreatePlatform = request.Params.KeyCreate.Platform,
+                    KeyCreateAllowedServiceIds = { request.Params.KeyCreate.AllowedServiceIds },
+                },
             _ => null,
         };
         if (wireParams is null)
@@ -450,6 +457,10 @@ internal static class NyxIdChatConversationAguiFrameBuilder
                 when request.Params.ParamsCase ==
                     NyxIdAssistantActionParams.ParamsOneofCase.ServiceReauthorize =>
                 "service.reauthorize",
+            NyxIdAssistantActionKind.KeyCreate
+                when request.Params.ParamsCase ==
+                    NyxIdAssistantActionParams.ParamsOneofCase.KeyCreate =>
+                "key.create",
             _ => null,
         };
         if (wireAction is null)

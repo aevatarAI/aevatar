@@ -493,6 +493,7 @@ message PendingToolCallApprovalState
   int64 issued_at_unix_ms = 12;
   WorkflowSuspendedEvent suspension = 13;
   bool suspension_published = 14;
+  string display_name = 15;
 }
 
 enum WorkflowToolCallTerminalDecision

@@ -46,6 +46,7 @@ public sealed class NyxIdAssistantToolSource : IAgentToolSource
             new NyxIdCatalogTool(_client),
             new NyxIdLlmStatusTool(_client),
             new NyxIdRequireServiceTool(_client),
+            new NyxIdRequestKeyCreateTool(_client),
             new NyxIdProxyTool(
                 _client,
                 _logger,

@@ -344,10 +344,7 @@ public sealed class StudioMemberWorkflowDurableAdmissionPort :
         string revisionId)
     {
         if (plan is null ||
-            !string.Equals(
-                plan.SchemaVersion,
-                WorkflowCapabilityAdmissionPlanIntegrity.SchemaVersion,
-                StringComparison.Ordinal) ||
+            !WorkflowCapabilityAdmissionPlanIntegrity.IsSupportedSchemaVersion(plan.SchemaVersion) ||
             !string.Equals(
                 plan.AdmissionDigest,
                 WorkflowCapabilityAdmissionPlanIntegrity.ComputeAdmissionDigest(plan),
@@ -397,19 +394,21 @@ public sealed class StudioMemberWorkflowDurableAdmissionPort :
 
     private static bool AllowsDurableExecution(WorkflowCapabilityInvocationAdmission admission)
     {
-        var policy = admission.Capability?.CapabilityCase switch
+        var allowsDurable = admission.Capability?.CapabilityCase switch
         {
             ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService =>
-                admission.Capability.NyxIdUserService.ExecutionPolicy,
+                admission.Capability.NyxIdUserService.ExecutionPolicy?.AllowedExecutionModes.Contains(
+                    ExternalCapabilityExecutionMode.Durable) != false,
             ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest =>
-                admission.Capability.NyxIdUserRequest.ExecutionPolicy,
-            _ => null,
+                admission.Capability.NyxIdUserRequest.ExecutionPolicy?.AllowedExecutionModes.Contains(
+                    ExternalCapabilityExecutionMode.Durable) != false,
+            ExternalWorkflowCapabilityRef.CapabilityOneofCase.CodeExecution =>
+                admission.Capability.CodeExecution.AllowedExecutionModes.Contains(
+                    ExternalCapabilityExecutionMode.Durable),
+            _ => true,
         };
-        if (policy is not null &&
-            !policy.AllowedExecutionModes.Contains(ExternalCapabilityExecutionMode.Durable))
-        {
+        if (!allowsDurable)
             return false;
-        }
 
         return admission.NyxIdExplicitRequestGrant is null ||
                admission.NyxIdExplicitRequestGrant.AllowedExecutionModes.Contains(

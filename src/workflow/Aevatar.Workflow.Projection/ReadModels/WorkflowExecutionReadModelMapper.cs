@@ -244,16 +244,43 @@ public sealed class WorkflowExecutionReadModelMapper
     //   New principle: graph mapper methods produce workflow-run graph export subgraphs.
     public WorkflowRunGraphExportSubgraph ToWorkflowRunGraphExportSubgraph(
         string rootNodeId,
-        ProjectionGraphSubgraph source)
+        ProjectionGraphSubgraph source,
+        long sourceStateVersion = 0)
     {
         var subgraph = new WorkflowRunGraphExportSubgraph
         {
             RootNodeId = rootNodeId,
+            SourceStateVersion = sourceStateVersion > 0
+                ? sourceStateVersion
+                : ResolveGraphSourceStateVersion(rootNodeId, source),
         };
         subgraph.Nodes.Add(source.Nodes.Select(ToWorkflowRunGraphExportNode));
         subgraph.Edges.Add(source.Edges.Select(ToWorkflowRunGraphExportEdge));
         return subgraph;
     }
+
+    private static long ResolveGraphSourceStateVersion(string rootNodeId, ProjectionGraphSubgraph source)
+    {
+        var rootNodeIdValue = rootNodeId.Trim();
+        var versions = source.Nodes
+            .Where(node => string.Equals(node.NodeType, WorkflowExecutionGraphConstants.RunNodeType, StringComparison.Ordinal))
+            .Where(node =>
+                node.Properties.TryGetValue(WorkflowExecutionGraphConstants.RootActorIdPropertyKey, out var nodeRootActorId) &&
+                string.Equals(nodeRootActorId, rootNodeIdValue, StringComparison.Ordinal))
+            .Select(ReadSourceStateVersion)
+            .Where(version => version > 0)
+            .Distinct()
+            .ToList();
+
+        return versions.Count == 1 ? versions[0] : 0;
+    }
+
+    private static long ReadSourceStateVersion(ProjectionGraphNode node) =>
+        node.Properties.TryGetValue(WorkflowExecutionGraphConstants.SourceStateVersionPropertyKey, out var value) &&
+        long.TryParse(value, out var parsed) &&
+        parsed > 0
+            ? parsed
+            : 0;
 
     private static WorkflowRunCompletionStatus MapCompletionStatus(string? status)
     {
@@ -387,6 +414,7 @@ public sealed class WorkflowExecutionReadModelMapper
         new()
         {
             StepId = source.StepId,
+            DisplayName = source.DisplayName,
             StepType = source.StepType,
             TargetRole = source.TargetRole,
             RequestedAt = source.RequestedAtUtcValue?.ToDateTimeOffset(),
@@ -416,6 +444,17 @@ public sealed class WorkflowExecutionReadModelMapper
                     ApprovalRequestId = source.ToolApprovalValue.ApprovalRequestId,
                 },
             Usage = MapUsage(source.Usage),
+            Outcome = MapStepOutcome(source.Outcome),
+        };
+
+    private static WorkflowRunStepOutcome MapStepOutcome(WorkflowExecutionStepOutcomeReadModel outcome) =>
+        outcome switch
+        {
+            WorkflowExecutionStepOutcomeReadModel.Succeeded => WorkflowRunStepOutcome.Succeeded,
+            WorkflowExecutionStepOutcomeReadModel.Failed => WorkflowRunStepOutcome.Failed,
+            WorkflowExecutionStepOutcomeReadModel.Waiting => WorkflowRunStepOutcome.Waiting,
+            WorkflowExecutionStepOutcomeReadModel.Skipped => WorkflowRunStepOutcome.Skipped,
+            _ => WorkflowRunStepOutcome.Unspecified,
         };
 
     private static WorkflowRunRoleReply MapRoleReply(WorkflowExecutionRoleReply source) =>

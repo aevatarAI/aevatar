@@ -81,7 +81,7 @@ public sealed class NyxIdCodeExecuteToolTests : IDisposable
     }
 
     [Fact]
-    public async Task ExecuteWithOutcomeAsync_UsesTypedRouteAndSourceReadableCredential()
+    public async Task ExecuteWithOutcomeAsync_SeparatesExecutionAndSourceReadableCredentials()
     {
         var port = new StubCodeExecutionPort(CodeExecutionOutcome.Succeeded(
             new CodeExecutionResult("42\n", string.Empty, 0, "diag-code-1", 17),
@@ -101,7 +101,9 @@ public sealed class NyxIdCodeExecuteToolTests : IDisposable
                 "chrono-sandbox",
                 null,
                 CodeExecutionRouteIdentitySource.CodeExecutionContract),
-            new CodeExecutionCallerContext("source-readable-bearer")));
+            new CodeExecutionCallerContext(
+                "request-delegation",
+                "source-readable-bearer")));
         terminal.Receipt.Should().NotBeNull();
         terminal.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
         terminal.Receipt.SubjectId.Should().Be("svc-code-alpha");
@@ -111,6 +113,97 @@ public sealed class NyxIdCodeExecuteToolTests : IDisposable
         root.GetProperty("output").GetProperty("stdout").GetString().Should().Be("42\n");
         root.GetProperty("output").GetProperty("exit_code").GetInt32().Should().Be(0);
         root.GetProperty("output").GetProperty("diagnostic_id").GetString().Should().Be("diag-code-1");
+    }
+
+    [Fact]
+    public async Task ExecuteWithOutcomeAsync_WorkflowAdmissionPinsExactUserServiceRoute()
+    {
+        var port = new StubCodeExecutionPort(CodeExecutionOutcome.Succeeded(
+            new CodeExecutionResult("ok", string.Empty, 0),
+            ResolvedRoute));
+        var tool = new NyxIdCodeExecuteTool(port);
+        AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
+        {
+            Credentials = new AgentToolCredentials(
+                "source-readable-bearer",
+                null,
+                null,
+                AgentToolNyxIdCredentialKind.SourceReadableUserBearer),
+            OperationAdmission = CodeExecutionAdmission("us-code-admitted"),
+        };
+
+        await tool.ExecuteWithOutcomeAsync(
+            "call-admitted",
+            tool.Name,
+            """{"language":"javascript","code":"console.log('ok')"}""");
+
+        port.Request!.Route.Should().Be(new CodeExecutionRouteIdentity(
+            "chrono-sandbox",
+            "us-code-admitted",
+            CodeExecutionRouteIdentitySource.WorkflowCapabilityAdmission));
+        port.Request.Caller.Should().Be(new CodeExecutionCallerContext(
+            "source-readable-bearer",
+            "source-readable-bearer"));
+    }
+
+    [Fact]
+    public async Task ExecuteWithOutcomeAsync_ScheduledDelegationUsesExactAdmissionWithoutSourceReadableCredential()
+    {
+        var port = new StubCodeExecutionPort(CodeExecutionOutcome.Succeeded(
+            new CodeExecutionResult("ok", string.Empty, 0),
+            ResolvedRoute));
+        var tool = new NyxIdCodeExecuteTool(port);
+        SetProxyDelegation("scheduled-agent-key", sourceReadableBearer: null);
+        AgentToolRequestContext.Current = AgentToolRequestContext.Current! with
+        {
+            OperationAdmission = CodeExecutionAdmission("us-code-admitted"),
+        };
+
+        await tool.ExecuteWithOutcomeAsync(
+            "call-scheduled-admitted",
+            tool.Name,
+            """{"language":"javascript","code":"console.log('ok')"}""");
+
+        port.Request.Should().NotBeNull();
+        port.Request!.Route.Should().Be(new CodeExecutionRouteIdentity(
+            "chrono-sandbox",
+            "us-code-admitted",
+            CodeExecutionRouteIdentitySource.WorkflowCapabilityAdmission));
+        port.Request.Caller.Should().Be(new CodeExecutionCallerContext(
+            "scheduled-agent-key",
+            null));
+    }
+
+    [Fact]
+    public async Task ExecuteWithOutcomeAsync_MismatchedWorkflowAdmissionFailsBeforeDispatch()
+    {
+        var port = new StubCodeExecutionPort(CodeExecutionOutcome.Succeeded(
+            new CodeExecutionResult("ok", string.Empty, 0),
+            ResolvedRoute));
+        var tool = new NyxIdCodeExecuteTool(port);
+        AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
+        {
+            Credentials = new AgentToolCredentials(
+                "source-readable-bearer",
+                null,
+                null,
+                AgentToolNyxIdCredentialKind.SourceReadableUserBearer),
+            OperationAdmission = CodeExecutionAdmission("us-code-admitted") with
+            {
+                ServiceSlug = "arbitrary-shadow",
+            },
+        };
+
+        var outcome = await tool.ExecuteWithOutcomeAsync(
+            "call-invalid-admission",
+            tool.Name,
+            """{"language":"javascript","code":"console.log('ok')"}""");
+
+        port.Request.Should().BeNull();
+        AssertFailure(
+            outcome,
+            "code_execution_admission_invalid",
+            "The workflow code execution admission proof is invalid.");
     }
 
     [Fact]
@@ -203,7 +296,7 @@ public sealed class NyxIdCodeExecuteToolTests : IDisposable
         AssertFailure(
             terminal,
             "code_execution_credential_unavailable",
-            "A source-readable NyxID credential is required for code execution.");
+            "A source-readable NyxID credential is required to resolve the code execution route.");
     }
 
     [Fact]
@@ -372,6 +465,25 @@ public sealed class NyxIdCodeExecuteToolTests : IDisposable
 
     private static NyxIdCodeExecuteTool CreateTool(CodeExecutionOutcome outcome) =>
         new(new StubCodeExecutionPort(outcome));
+
+    private static AgentToolOperationAdmission CodeExecutionAdmission(string userServiceId) =>
+        new(
+            userServiceId,
+            "chrono-sandbox",
+            new AgentToolOperationIdentity.PlatformBuiltIn("code_execute"),
+            AgentToolOperationAuthorizationBasis.PlatformContract,
+            "POST",
+            "/execute",
+            "code-execution-contract-digest",
+            [],
+            null,
+            AgentToolOperationResponsePolicy.TextOnly,
+            new AgentToolOperationExecutionPolicy(
+                AgentToolOperationRisk.ReadOnly,
+                AgentToolOperationApproval.None,
+                AgentToolOperationEnforcementOwner.Aevatar,
+                [AgentToolOperationExecutionMode.Interactive,
+                    AgentToolOperationExecutionMode.Durable]));
 
     private static void AssertFailure(
         AgentToolTerminalOutcome terminal,

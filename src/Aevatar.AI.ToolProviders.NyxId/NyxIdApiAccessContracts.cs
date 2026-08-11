@@ -67,7 +67,11 @@ public sealed record NyxIdUserService(
     string? CatalogServiceName,
     bool IsActive,
     NyxIdUserServiceCredentialSource CredentialSource,
-    string? DefaultModel = null);
+    string? DefaultModel = null,
+    string? CatalogServiceId = null,
+    bool? ForwardAccessToken = null,
+    bool? InjectDelegationToken = null,
+    string? DelegationTokenScope = null);
 
 public sealed record NyxIdUserServices(IReadOnlyList<NyxIdUserService> Services);
 
@@ -283,6 +287,13 @@ public static class NyxIdApiAccessResponseParser
     public static NyxIdApiAccessResult<NyxIdUserServices> ParseUserServices(string response) =>
         Parse(response, UserServicesFailurePrefix, ParseUserServicesDocument);
 
+    public static NyxIdApiAccessResult<NyxIdUserServices> ParseCodeExecutionUserServices(
+        string response) =>
+        Parse(
+            response,
+            UserServicesFailurePrefix,
+            static root => ParseUserServicesDocument(root, includeCodeExecutionRouteFields: true));
+
     public static NyxIdApiAccessResult<NyxIdUserServiceKeys> ParseUserServiceKeys(string response) =>
         Parse(response, UserServiceKeysFailurePrefix, ParseUserServiceKeysDocument);
 
@@ -327,7 +338,12 @@ public static class NyxIdApiAccessResponseParser
         }
     }
 
-    private static NyxIdUserServices ParseUserServicesDocument(JsonElement root)
+    private static NyxIdUserServices ParseUserServicesDocument(JsonElement root) =>
+        ParseUserServicesDocument(root, includeCodeExecutionRouteFields: false);
+
+    private static NyxIdUserServices ParseUserServicesDocument(
+        JsonElement root,
+        bool includeCodeExecutionRouteFields)
     {
         var servicesElement = RequireProperty(root, "services", JsonValueKind.Array);
         var services = new List<NyxIdUserService>();
@@ -349,7 +365,19 @@ public static class NyxIdApiAccessResponseParser
                     serviceElement,
                     "credential_source",
                     JsonValueKind.Object)),
-                ReadOptionalString(serviceElement, "default_model", "defaultModel")));
+                ReadOptionalString(serviceElement, "default_model", "defaultModel"),
+                includeCodeExecutionRouteFields
+                    ? ReadOptionalNormalizedString(serviceElement, "catalog_service_id")
+                    : null,
+                includeCodeExecutionRouteFields
+                    ? ReadOptionalBoolean(serviceElement, "forward_access_token")
+                    : null,
+                includeCodeExecutionRouteFields
+                    ? ReadOptionalBoolean(serviceElement, "inject_delegation_token")
+                    : null,
+                includeCodeExecutionRouteFields
+                    ? ReadOptionalNormalizedString(serviceElement, "delegation_token_scope")
+                    : null));
         }
 
         return new NyxIdUserServices(services);
@@ -1002,6 +1030,23 @@ public static class NyxIdApiAccessResponseParser
     private static bool RequireBoolean(JsonElement root, string propertyName)
     {
         var property = RequireProperty(root, propertyName);
+        return property.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            _ => throw new NyxIdContractException(),
+        };
+    }
+
+    private static bool? ReadOptionalBoolean(JsonElement root, string propertyName)
+    {
+        RequireKind(root, JsonValueKind.Object);
+        if (!root.TryGetProperty(propertyName, out var property) ||
+            property.ValueKind == JsonValueKind.Null)
+        {
+            return null;
+        }
+
         return property.ValueKind switch
         {
             JsonValueKind.True => true,

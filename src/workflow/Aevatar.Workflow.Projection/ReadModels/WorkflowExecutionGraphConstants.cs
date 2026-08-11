@@ -19,4 +19,8 @@ public static class WorkflowExecutionGraphConstants
     // Step -> next-step execution flow (from the step trace's NextStepId), so the topology graph carries the
     // real run order instead of only run -> step containment. The branch taken is on the edge's branchKey.
     public const string EdgeTypeNext = "NEXT";
+
+    public const string RootActorIdPropertyKey = "rootActorId";
+
+    public const string SourceStateVersionPropertyKey = "sourceStateVersion";
 }

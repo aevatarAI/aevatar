@@ -23,6 +23,7 @@ internal static class WorkflowCallerAccessTokenResolver
         {
             BearerToken = token,
             NyxIdAuthority = credential.NyxIdAuthority.Clone(),
+            Kind = NyxIdCallerCredentialKind.ProxyDelegation,
         };
     }
 }
