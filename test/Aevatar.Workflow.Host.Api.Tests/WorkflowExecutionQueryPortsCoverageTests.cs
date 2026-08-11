@@ -461,6 +461,17 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
                             NodeId = "actor-1",
                             NodeType = "Actor",
                         },
+                        new ProjectionGraphNode
+                        {
+                            Scope = WorkflowExecutionGraphConstants.Scope,
+                            NodeId = "run:actor-1:cmd-1",
+                            NodeType = WorkflowExecutionGraphConstants.RunNodeType,
+                            Properties = new Dictionary<string, string>(StringComparer.Ordinal)
+                            {
+                                [WorkflowExecutionGraphConstants.RootActorIdPropertyKey] = "actor-1",
+                                [WorkflowExecutionGraphConstants.SourceStateVersionPropertyKey] = "12",
+                            },
+                        },
                     ],
                 },
             },

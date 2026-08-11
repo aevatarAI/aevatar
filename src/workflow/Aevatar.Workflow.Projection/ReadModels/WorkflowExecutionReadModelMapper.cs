@@ -244,12 +244,15 @@ public sealed class WorkflowExecutionReadModelMapper
     //   New principle: graph mapper methods produce workflow-run graph export subgraphs.
     public WorkflowRunGraphExportSubgraph ToWorkflowRunGraphExportSubgraph(
         string rootNodeId,
-        ProjectionGraphSubgraph source)
+        ProjectionGraphSubgraph source,
+        long sourceStateVersion = 0)
     {
         var subgraph = new WorkflowRunGraphExportSubgraph
         {
             RootNodeId = rootNodeId,
-            SourceStateVersion = ResolveGraphSourceStateVersion(rootNodeId, source),
+            SourceStateVersion = sourceStateVersion > 0
+                ? sourceStateVersion
+                : ResolveGraphSourceStateVersion(rootNodeId, source),
         };
         subgraph.Nodes.Add(source.Nodes.Select(ToWorkflowRunGraphExportNode));
         subgraph.Edges.Add(source.Edges.Select(ToWorkflowRunGraphExportEdge));

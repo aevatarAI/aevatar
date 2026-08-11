@@ -62,6 +62,60 @@ public sealed class WorkflowRunGraphExportVersionTests
     }
 
     [Fact]
+    public async Task ArtifactQueryPort_ShouldPreserveGraphVersion_WhenFilteredTraversalOmitsRunNode()
+    {
+        var port = new WorkflowExecutionArtifactQueryPort(
+            new SingleDocumentReader<WorkflowRunInsightReportDocument>(new WorkflowRunInsightReportDocument
+            {
+                Id = "actor-1",
+                StateVersion = 12,
+            }),
+            new WorkflowExecutionReadModelMapper(),
+            new StaticProjectionGraphStore(
+                new ProjectionGraphSubgraph
+                {
+                    Nodes =
+                    [
+                        new ProjectionGraphNode
+                        {
+                            NodeId = "actor-1",
+                            NodeType = WorkflowExecutionGraphConstants.ActorNodeType,
+                        },
+                    ],
+                },
+                new ProjectionGraphSubgraph
+                {
+                    Nodes =
+                    [
+                        new ProjectionGraphNode
+                        {
+                            NodeId = "run:actor-1:cmd-1",
+                            NodeType = WorkflowExecutionGraphConstants.RunNodeType,
+                            Properties = new Dictionary<string, string>(StringComparer.Ordinal)
+                            {
+                                [WorkflowExecutionGraphConstants.RootActorIdPropertyKey] = "actor-1",
+                                [WorkflowExecutionGraphConstants.SourceStateVersionPropertyKey] = "12",
+                            },
+                        },
+                    ],
+                }),
+            new WorkflowExecutionProjectionOptions { Enabled = true, WorkflowArtifactQueryEnabled = true });
+
+        var subgraph = await port.GetWorkflowRunGraphExportSubgraphAsync(
+            "actor-1",
+            depth: 1,
+            take: 1,
+            options: new WorkflowRunGraphExportQueryOptions
+            {
+                Direction = WorkflowRunGraphExportDirection.Inbound,
+                EdgeTypes = [WorkflowExecutionGraphConstants.EdgeTypeChildOf],
+            });
+
+        subgraph.Nodes.Should().NotContain(node => node.NodeType == WorkflowExecutionGraphConstants.RunNodeType);
+        subgraph.SourceStateVersion.Should().Be(12);
+    }
+
+    [Fact]
     public async Task ArtifactQueryPort_ShouldKeepOwnerGraphVersionAndRunScopedActorNode_WhenSharedActorAppearsInAnotherRun()
     {
         var graphStore = new InMemoryProjectionGraphStore();
@@ -132,7 +186,9 @@ public sealed class WorkflowRunGraphExportVersionTests
         }
     }
 
-    private sealed class StaticProjectionGraphStore(ProjectionGraphSubgraph subgraph) : IProjectionGraphStore
+    private sealed class StaticProjectionGraphStore(
+        ProjectionGraphSubgraph subgraph,
+        ProjectionGraphSubgraph? sourceVersionSubgraph = null) : IProjectionGraphStore
     {
         public Task ReplaceOwnerGraphAsync(ProjectionOwnedGraph graph, CancellationToken ct = default) =>
             throw new NotSupportedException();
@@ -174,9 +230,17 @@ public sealed class WorkflowRunGraphExportVersionTests
             ProjectionGraphQuery query,
             CancellationToken ct = default)
         {
-            _ = query;
             ct.ThrowIfCancellationRequested();
-            return Task.FromResult(subgraph);
+            return Task.FromResult(IsSourceVersionQuery(query)
+                ? sourceVersionSubgraph ?? subgraph
+                : subgraph);
         }
+
+        private static bool IsSourceVersionQuery(ProjectionGraphQuery query) =>
+            query.Direction == ProjectionGraphDirection.Outbound &&
+            query.Depth == 1 &&
+            query.Take == 2000 &&
+            query.EdgeTypes.Count == 1 &&
+            string.Equals(query.EdgeTypes[0], WorkflowExecutionGraphConstants.EdgeTypeOwns, StringComparison.Ordinal);
     }
 }
