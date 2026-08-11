@@ -336,7 +336,7 @@ public sealed class WorkflowForkRunCommandDispatchTests
     }
 
     [Fact]
-    public async Task ResolveAsync_WhenForkUsesSourceArtifacts_ShouldPreserveRevisionFacts()
+    public async Task ResolveAsync_WhenForkUsesSourceArtifacts_ShouldPreserveDefinitionIdentityFacts()
     {
         var sourceYaml = WorkflowYaml("source");
         var sourceSubYamls = new Dictionary<string, string>(StringComparer.Ordinal)
@@ -349,6 +349,7 @@ public sealed class WorkflowForkRunCommandDispatchTests
                 "completed",
                 workflowYaml: sourceYaml,
                 inlineWorkflowYamls: sourceSubYamls,
+                workflowId: "wf-source",
                 revisionId: "rev-source",
                 definitionVersion: 23),
         };
@@ -364,6 +365,7 @@ public sealed class WorkflowForkRunCommandDispatchTests
         result.Succeeded.Should().BeTrue();
         runPort.CreateRunBindings.Should().ContainSingle();
         var binding = runPort.CreateRunBindings.Single();
+        binding.WorkflowId.Should().Be("wf-source");
         binding.RevisionId.Should().Be("rev-source");
         binding.DefinitionVersion.Should().Be(23);
     }
@@ -472,6 +474,7 @@ public sealed class WorkflowForkRunCommandDispatchTests
         IReadOnlyDictionary<string, string>? variables = null,
         string scopeId = "",
         IReadOnlyDictionary<string, WorkflowStepIdempotencyView>? idempotencyByStepId = null,
+        string workflowId = "",
         string revisionId = "",
         long definitionVersion = 0) =>
         new WorkflowRunForkSeedView(
@@ -490,6 +493,7 @@ public sealed class WorkflowForkRunCommandDispatchTests
             FinalError: status.Equals("failed", StringComparison.OrdinalIgnoreCase) ? "boom" : string.Empty,
             ScopeId: scopeId,
             IdempotencyByStepId: idempotencyByStepId ?? new Dictionary<string, WorkflowStepIdempotencyView>(StringComparer.Ordinal),
+            WorkflowId: workflowId,
             RevisionId: revisionId,
             DefinitionVersion: definitionVersion);
 

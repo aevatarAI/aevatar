@@ -33,6 +33,7 @@ public sealed class WorkflowRunForkSeedReadModelMapper
                 x => ToView(x.Value),
                 StringComparer.Ordinal),
             source.CapabilityAdmissionPlan?.Clone(),
+            source.WorkflowId ?? string.Empty,
             source.RevisionId ?? string.Empty,
             source.DefinitionVersion,
             ResolveOriginalRunId(source.Lineage, source.RunId));
