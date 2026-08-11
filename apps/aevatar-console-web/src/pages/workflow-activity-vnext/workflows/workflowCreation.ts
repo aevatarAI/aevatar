@@ -1,6 +1,6 @@
 import type { StudioWorkflowDocument } from '@/shared/studio/models';
 
-export type WorkflowCreationMode = 'describe' | 'blank' | 'import' | 'template';
+export type WorkflowCreationMode = 'describe' | 'import' | 'template';
 
 export type BundledWorkflowTemplate = {
   readonly id: string;

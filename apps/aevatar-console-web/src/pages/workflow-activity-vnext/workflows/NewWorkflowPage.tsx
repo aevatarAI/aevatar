@@ -1,6 +1,5 @@
 import {
   ArrowLeftOutlined,
-  FileAddOutlined,
   FileTextOutlined,
   ImportOutlined,
   RobotOutlined,
@@ -52,15 +51,6 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
       description: t(
         'workflowActivityVNext.new.mode.describe.description',
         'Turn a goal into a workflow you can review and edit.',
-      ),
-    },
-    {
-      key: 'blank',
-      icon: <FileAddOutlined />,
-      label: t('workflowActivityVNext.new.mode.blank', 'Start blank'),
-      description: t(
-        'workflowActivityVNext.new.mode.blank.description',
-        'Start with an empty canvas and add steps yourself.',
       ),
     },
     {
@@ -430,7 +420,7 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
                 />
               </div>
             ) : null}
-            {mode === 'blank' || mode === 'describe' ? (
+            {mode === 'describe' ? (
               <div className="wa-vnext__creation-field">
                 <span>
                   {t('workflowActivityVNext.new.name', 'Workflow name')}
@@ -477,11 +467,11 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
                 </div>
                 <div className="wa-vnext__creation-actions">
                   <Button
-                    disabled={
-                      !name.trim() || !prompt.trim() || saveTargetUnavailable
-                    }
+                    disabled={!name.trim() || saveTargetUnavailable}
                     loading={submitting}
-                    onClick={() => void generateAndOpen()}
+                    onClick={() =>
+                      void (prompt.trim() ? generateAndOpen() : createBlank())
+                    }
                     type="primary"
                   >
                     {t(
@@ -491,22 +481,6 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
                   </Button>
                 </div>
               </>
-            ) : null}
-
-            {mode === 'blank' ? (
-              <div className="wa-vnext__creation-actions">
-                <Button
-                  disabled={!name.trim() || saveTargetUnavailable}
-                  loading={submitting}
-                  onClick={() => void createBlank()}
-                  type="primary"
-                >
-                  {t(
-                    'workflowActivityVNext.new.createBlank',
-                    'Create and open',
-                  )}
-                </Button>
-              </div>
             ) : null}
 
             {mode === 'import' ? (
