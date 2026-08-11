@@ -101,10 +101,12 @@ public sealed class ToolCallModuleApprovalTests
             "exec-1",
             [fileRef],
             "idem-approval-1",
-            issuedAt);
-        ctx.LoadState<ToolCallModuleState>("tool_call")
-            .PendingApprovals.Values.Should().ContainSingle()
-            .Which.IssuedAtUnixMs.Should().Be(issuedAt.ToUnixTimeMilliseconds());
+            issuedAt,
+            displayName: "Dangerous step");
+        var pendingState = ctx.LoadState<ToolCallModuleState>("tool_call")
+            .PendingApprovals.Values.Should().ContainSingle().Subject;
+        pendingState.IssuedAtUnixMs.Should().Be(issuedAt.ToUnixTimeMilliseconds());
+        pendingState.DisplayName.Should().Be("Dangerous step");
         ctx.Published.Clear();
 
         var resumed = new WorkflowResumedEvent
@@ -509,7 +511,8 @@ public sealed class ToolCallModuleApprovalTests
         string executionId,
         IReadOnlyList<WorkflowFileRef>? inputFileRefs = null,
         string idempotencyKey = "",
-        DateTimeOffset? issuedAt = null)
+        DateTimeOffset? issuedAt = null,
+        string displayName = "")
     {
         var request = new StepRequestEvent
         {
@@ -519,6 +522,7 @@ public sealed class ToolCallModuleApprovalTests
             ExecutionId = executionId,
             IdempotencyKey = idempotencyKey,
             Input = input,
+            DisplayName = displayName,
             Parameters = { ["tool"] = toolName },
         };
         request.InputFileRefs.Add(inputFileRefs?.Select(static fileRef => fileRef.Clone()) ?? []);

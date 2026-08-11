@@ -5,6 +5,7 @@ using Aevatar.Workflow.Application.Observatory;
 using Aevatar.Workflow.Abstractions;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
+using System.Text.Json;
 
 namespace Aevatar.Workflow.Application.Tests;
 
@@ -403,6 +404,7 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         };
         var report = new WorkflowRunReport
         {
+            StateVersion = 7,
             Usage = new WorkflowRunUsageMetrics { PromptTokens = 10, CompletionTokens = 5, TotalTokens = 15, Cost = 0.004 },
             Timeline =
             [
@@ -457,6 +459,7 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         var currentState = new FakeCurrentStateQueryPort { SingleResult = snapshot };
         var report = new WorkflowRunReport
         {
+            StateVersion = 7,
             Steps =
             [
                 new WorkflowRunStepTrace
@@ -497,6 +500,7 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         var currentState = new FakeCurrentStateQueryPort { SingleResult = snapshot };
         var report = new WorkflowRunReport
         {
+            StateVersion = 7,
             Steps =
             [
                 new WorkflowRunStepTrace
@@ -553,6 +557,7 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         rejection.Data["reason"] = "IdentityMismatch";
         var report = new WorkflowRunReport
         {
+            StateVersion = 7,
             Timeline = [rejection],
         };
         var service = new WorkflowRunObservatoryQueryService(
@@ -575,12 +580,22 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
     [Fact]
     public async Task GetRunForScopeAsync_ShouldSurfaceFinalResultStepsAndStatistics_WhenOwned()
     {
+        var snapshot = Snapshot("run-1", CallerScope, WorkflowRunCompletionStatus.Completed);
+        snapshot.ActivityInitiator = new WorkflowRunActivityInitiatorSnapshot
+        {
+            Platform = "nyxid",
+            ExternalUserId = "m-alpha",
+            DisplayValue = "alice@example.com",
+            Availability = "available",
+        };
+        snapshot.InputSummary = "redacted prompt summary";
         var currentState = new FakeCurrentStateQueryPort
         {
-            SingleResult = Snapshot("run-1", CallerScope, WorkflowRunCompletionStatus.Completed),
+            SingleResult = snapshot,
         };
         var report = new WorkflowRunReport
         {
+            StateVersion = 7,
             Input = "do the thing",
             FinalOutput = "the thing is done",
             FinalError = string.Empty,
@@ -589,6 +604,7 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
                 new WorkflowRunStepTrace
                 {
                     StepId = "draft",
+                    DisplayName = "Draft answer",
                     StepType = "llm_call",
                     TargetRole = "planner",
                     RequestedAt = DateTimeOffset.UnixEpoch,
@@ -618,16 +634,23 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         var detail = await service.GetRunForScopeAsync(CallerScope, "run-1");
 
         detail.Should().NotBeNull();
-        detail!.Input.Should().Be("do the thing");
+        detail!.Initiator.DisplayValue.Should().Be("alice@example.com");
+        detail.InputSummary.Should().Be("redacted prompt summary");
+        detail.Sections.Overview.VersionStatus.Should().Be(ObservatoryRunDetailSectionVersionStatus.Aligned);
+        detail.Sections.Steps.VersionStatus.Should().Be(ObservatoryRunDetailSectionVersionStatus.Aligned);
+        detail.Sections.Timeline.VersionStatus.Should().Be(ObservatoryRunDetailSectionVersionStatus.Aligned);
+        detail.Input.Should().Be("do the thing");
         detail.FinalOutput.Should().Be("the thing is done");
         detail.FinalError.Should().BeEmpty();
 
         detail.Steps.Should().ContainSingle();
         var step = detail.Steps[0];
         step.StepId.Should().Be("draft");
+        step.DisplayName.Should().Be("Draft answer");
         step.StepType.Should().Be("llm_call");
         step.TargetRole.Should().Be("planner");
         step.Success.Should().BeTrue();
+        step.Outcome.Should().Be(WorkflowRunStepOutcome.Succeeded);
         step.OutputPreview.Should().Be("preview of the step output");
         step.DurationMs.Should().Be(2000);
         step.Usage.TotalTokens.Should().Be(10);
@@ -636,6 +659,85 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         detail.Statistics.CompletedSteps.Should().Be(1);
         detail.Statistics.RoleReplyCount.Should().Be(1);
         detail.Statistics.StepTypeCounts["llm_call"].Should().Be(1);
+    }
+
+    [Fact]
+    public async Task GetRunForScopeAsync_ShouldExposeVersionMismatch_WhenReportVersionDiffersFromSummary()
+    {
+        var snapshot = Snapshot("run-1", CallerScope, WorkflowRunCompletionStatus.Completed);
+        var report = new WorkflowRunReport
+        {
+            StateVersion = 6,
+            Input = "stale input",
+            FinalOutput = "stale output",
+            Steps = [new WorkflowRunStepTrace { StepId = "stale", Success = true }],
+            Timeline = [TimelineEvent("workflow.completed", "stale")],
+        };
+        var service = new WorkflowRunObservatoryQueryService(
+            new FakeCurrentStateQueryPort { SingleResult = snapshot },
+            new FakeArtifactQueryPort { Report = report });
+
+        var detail = await service.GetRunForScopeAsync(CallerScope, "run-1");
+
+        detail.Should().NotBeNull();
+        detail!.Summary.StateVersion.Should().Be(7);
+        detail.Sections.Steps.VersionStatus.Should().Be(ObservatoryRunDetailSectionVersionStatus.VersionMismatch);
+        detail.Sections.Steps.DetailStateVersion.Should().Be(7);
+        detail.Sections.Steps.SourceStateVersion.Should().Be(6);
+        detail.Sections.Timeline.VersionStatus.Should().Be(ObservatoryRunDetailSectionVersionStatus.VersionMismatch);
+        detail.Input.Should().BeEmpty();
+        detail.FinalOutput.Should().BeEmpty();
+        detail.Steps.Should().BeEmpty();
+        detail.Timeline.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetRunForScopeAsync_ShouldMapWaitingFailedAndSkippedStepOutcomes()
+    {
+        var skipped = new WorkflowRunStepTrace
+        {
+            StepId = "optional_connector",
+            CompletedAt = DateTimeOffset.UnixEpoch.AddSeconds(1),
+            Success = true,
+            CompletionAnnotations = new Dictionary<string, string> { ["connector.skipped"] = "true" },
+        };
+        var service = new WorkflowRunObservatoryQueryService(
+            new FakeCurrentStateQueryPort
+            {
+                SingleResult = Snapshot("run-1", CallerScope, WorkflowRunCompletionStatus.Running),
+            },
+            new FakeArtifactQueryPort
+            {
+                Report = new WorkflowRunReport
+                {
+                    StateVersion = 7,
+                    Steps =
+                    [
+                        new WorkflowRunStepTrace { StepId = "approval", RequestedAt = DateTimeOffset.UnixEpoch, SuspensionType = "tool_approval" },
+                        new WorkflowRunStepTrace { StepId = "publish", CompletedAt = DateTimeOffset.UnixEpoch, Success = false },
+                        skipped,
+                    ],
+                },
+            });
+
+        var detail = await service.GetRunForScopeAsync(CallerScope, "run-1");
+
+        detail.Should().NotBeNull();
+        detail!.Steps.Single(step => step.StepId == "approval").Outcome.Should().Be(WorkflowRunStepOutcome.Waiting);
+        detail.Steps.Single(step => step.StepId == "publish").Outcome.Should().Be(WorkflowRunStepOutcome.Failed);
+        detail.Steps.Single(step => step.StepId == "optional_connector").Outcome.Should().Be(WorkflowRunStepOutcome.Skipped);
+    }
+
+    [Fact]
+    public void ObservatoryStepDetail_ShouldSerializeOutcomeAsContractValue()
+    {
+        var json = JsonSerializer.Serialize(new ObservatoryStepDetail
+        {
+            StepId = "draft",
+            Outcome = WorkflowRunStepOutcome.Succeeded,
+        });
+
+        json.Should().Contain("\"Outcome\":\"succeeded\"");
     }
 
     [Fact]
@@ -652,7 +754,14 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         var detail = await service.GetRunForScopeAsync(CallerScope, "run-1");
 
         detail.Should().NotBeNull();
-        detail!.Timeline.Should().BeEmpty();
+        detail!.Sections.Steps.VersionStatus.Should().Be(ObservatoryRunDetailSectionVersionStatus.Unavailable);
+        detail.Sections.Steps.DetailStateVersion.Should().Be(7);
+        detail.Sections.Steps.SourceStateVersion.Should().Be(0);
+        detail.Sections.Timeline.VersionStatus.Should().Be(ObservatoryRunDetailSectionVersionStatus.Unavailable);
+        detail.Sections.ExecutionPath.VersionStatus.Should().Be(ObservatoryRunDetailSectionVersionStatus.Unavailable);
+        detail.Sections.ExecutionPath.DetailStateVersion.Should().Be(7);
+        detail.Sections.ExecutionPath.SourceStateVersion.Should().Be(0);
+        detail.Timeline.Should().BeEmpty();
         detail.UsageTotals.TotalTokens.Should().Be(0);
         // Enriched fields degrade to empty when the report artifact has not materialized yet.
         detail.FinalOutput.Should().BeEmpty();
@@ -670,7 +779,7 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         snapshot.RecoveryCapability = RecoveryCapability();
         var service = new WorkflowRunObservatoryQueryService(
             new FakeCurrentStateQueryPort { SingleResult = snapshot },
-            new FakeArtifactQueryPort { Report = new WorkflowRunReport { FinalError = "boom" } });
+            new FakeArtifactQueryPort { Report = new WorkflowRunReport { StateVersion = 7, FinalError = "boom" } });
 
         var detail = await service.GetRunForScopeAsync(CallerScope, "run-1");
 
@@ -693,6 +802,7 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         var currentState = new FakeCurrentStateQueryPort { SingleResult = snapshot };
         var report = new WorkflowRunReport
         {
+            StateVersion = 7,
             FinalError = "final report failure",
             EndedAt = DateTimeOffset.UnixEpoch.AddSeconds(9),
             Steps =
@@ -834,7 +944,7 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         {
             SingleResult = Snapshot("run-1", CallerScope, WorkflowRunCompletionStatus.Running),
         };
-        var subgraph = new WorkflowRunGraphExportSubgraph { RootNodeId = "run-1" };
+        var subgraph = new WorkflowRunGraphExportSubgraph { RootNodeId = "run-1", SourceStateVersion = 7 };
         subgraph.Nodes.Add(new WorkflowRunGraphExportNode { NodeId = "n1", NodeType = "role" });
         subgraph.Edges.Add(new WorkflowRunGraphExportEdge { EdgeId = "e1", FromNodeId = "run-1", ToNodeId = "n1", EdgeType = "child" });
         var artifact = new FakeArtifactQueryPort { Subgraph = subgraph };
@@ -844,8 +954,33 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
 
         graph.Should().NotBeNull();
         graph!.RootNodeId.Should().Be("run-1");
+        graph.VersionStatus.Should().Be(ObservatoryRunDetailSectionVersionStatus.Aligned);
+        graph.SourceStateVersion.Should().Be(7);
         graph.Nodes.Should().ContainSingle().Which.NodeId.Should().Be("n1");
         graph.Edges.Should().ContainSingle().Which.EdgeType.Should().Be("child");
+    }
+
+    [Fact]
+    public async Task GetRunGraphForScopeAsync_ShouldExposeMismatchAndHideStaleGraph_WhenSourceVersionDiffers()
+    {
+        var currentState = new FakeCurrentStateQueryPort
+        {
+            SingleResult = Snapshot("run-1", CallerScope, WorkflowRunCompletionStatus.Running),
+        };
+        var subgraph = new WorkflowRunGraphExportSubgraph { RootNodeId = "run-1", SourceStateVersion = 6 };
+        subgraph.Nodes.Add(new WorkflowRunGraphExportNode { NodeId = "stale-node", NodeType = "WorkflowRun" });
+        var service = new WorkflowRunObservatoryQueryService(
+            currentState,
+            new FakeArtifactQueryPort { Subgraph = subgraph });
+
+        var graph = await service.GetRunGraphForScopeAsync(CallerScope, "run-1");
+
+        graph.Should().NotBeNull();
+        graph!.VersionStatus.Should().Be(ObservatoryRunDetailSectionVersionStatus.VersionMismatch);
+        graph.DetailStateVersion.Should().Be(7);
+        graph.SourceStateVersion.Should().Be(6);
+        graph.Nodes.Should().BeEmpty();
+        graph.Edges.Should().BeEmpty();
     }
 
     // 06-21: graph node ids are composite (step:{actor}:{cmd}:{stepId}); the viewer can only join a node
@@ -858,9 +993,10 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         {
             SingleResult = Snapshot("run-1", CallerScope, WorkflowRunCompletionStatus.Completed),
         };
-        var subgraph = new WorkflowRunGraphExportSubgraph { RootNodeId = "run-1" };
+        var subgraph = new WorkflowRunGraphExportSubgraph { RootNodeId = "run-1", SourceStateVersion = 7 };
         var stepNode = new WorkflowRunGraphExportNode { NodeId = "step:run-1:cmd:answer", NodeType = "WorkflowStep" };
         stepNode.Properties.Add("stepId", "answer");
+        stepNode.Properties.Add("displayName", "Answer customer");
         subgraph.Nodes.Add(stepNode);
         subgraph.Nodes.Add(new WorkflowRunGraphExportNode { NodeId = "run:run-1:cmd", NodeType = "WorkflowRun" });
         var artifact = new FakeArtifactQueryPort { Subgraph = subgraph };
@@ -870,6 +1006,7 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
 
         graph.Should().NotBeNull();
         graph!.Nodes.Single(node => node.NodeType == "WorkflowStep").StepId.Should().Be("answer");
+        graph.Nodes.Single(node => node.NodeType == "WorkflowStep").DisplayName.Should().Be("Answer customer");
         graph.Nodes.Single(node => node.NodeType == "WorkflowRun").StepId.Should().BeEmpty();
     }
 
@@ -929,7 +1066,7 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         };
         var artifact = new FakeArtifactQueryPort
         {
-            Report = new WorkflowRunReport { FinalOutput = "done" },
+            Report = new WorkflowRunReport { StateVersion = 7, FinalOutput = "done" },
         };
         var service = new WorkflowRunObservatoryQueryService(currentState, artifact);
 
@@ -971,7 +1108,7 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
                 Snapshot("run-foreign", OtherScope, WorkflowRunCompletionStatus.Completed),
             ],
         };
-        var subgraph = new WorkflowRunGraphExportSubgraph { RootNodeId = "run-foreign" };
+        var subgraph = new WorkflowRunGraphExportSubgraph { RootNodeId = "run-foreign", SourceStateVersion = 7 };
         subgraph.Nodes.Add(new WorkflowRunGraphExportNode { NodeId = "run-foreign", NodeType = "WorkflowRun" });
         var artifact = new FakeArtifactQueryPort { Subgraph = subgraph };
         var service = new WorkflowRunObservatoryQueryService(currentState, artifact);

@@ -742,6 +742,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             RunId = request.RunId,
             Success = true,
             Output = request.Input,
+            Outcome = WorkflowStepCompletionOutcome.Skipped,
         };
         skipped.Annotations["connector.skipped"] = "true";
         skipped.Annotations["connector.skip_reason"] = reason;

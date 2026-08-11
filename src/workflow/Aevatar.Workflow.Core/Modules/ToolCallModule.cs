@@ -598,6 +598,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             IdempotencyKey = request.IdempotencyKey ?? string.Empty,
             ExternalInvocation = request.ExternalInvocation?.Clone(),
             IssuedAtUnixMs = issuedAtUnixMs,
+            DisplayName = ResolveStepDisplayName(request.DisplayName, request.StepId),
         };
         pendingState.InputFileRefs.Add(request.InputFileRefs.Select(static fileRef => fileRef.Clone()));
         pendingState.Suspension = BuildSuspension(pendingState);
@@ -1253,6 +1254,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             ExecutionId = pending.ExecutionId,
             Input = pending.ArgumentsJson,
             IdempotencyKey = pending.IdempotencyKey,
+            DisplayName = ResolveStepDisplayName(pending.DisplayName, pending.StepId),
             Parameters = { ["tool"] = pending.ToolName },
             InputFileRefs = { pending.InputFileRefs.Select(static fileRef => fileRef.Clone()) },
             ExternalInvocation = pending.ExternalInvocation?.Clone(),
@@ -1303,6 +1305,12 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
 
     private static string NormalizeRequired(string? value) =>
         string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
+
+    private static string ResolveStepDisplayName(string? displayName, string? stepId)
+    {
+        var normalized = displayName?.Trim() ?? string.Empty;
+        return normalized.Length == 0 ? NormalizeRequired(stepId) : normalized;
+    }
 
     private static string BuildPendingKey(PendingToolCallApprovalState pending) =>
         BuildPendingKey(

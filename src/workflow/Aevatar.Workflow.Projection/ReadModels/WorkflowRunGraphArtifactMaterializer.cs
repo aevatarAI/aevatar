@@ -30,9 +30,10 @@ public sealed class WorkflowRunGraphArtifactMaterializer
         var updatedAt = readModel.UpdatedAt == default ? DateTimeOffset.UtcNow : readModel.UpdatedAt;
         var rootActorId = NormalizeToken(readModel.RootActorId);
         var runNodeId = BuildRunNodeId(rootActorId, readModel.CommandId);
+        var sourceStateVersion = readModel.StateVersion.ToString();
         var nodes = new Dictionary<string, ProjectionGraphNode>(StringComparer.Ordinal);
 
-        nodes[rootActorId] = CreateActorNode(rootActorId, readModel.WorkflowName, updatedAt);
+        nodes[rootActorId] = CreateActorNode(rootActorId, rootActorId, readModel.WorkflowName, updatedAt);
         nodes[runNodeId] = new ProjectionGraphNode
         {
             Scope = WorkflowExecutionGraphConstants.Scope,
@@ -40,17 +41,19 @@ public sealed class WorkflowRunGraphArtifactMaterializer
             NodeType = WorkflowExecutionGraphConstants.RunNodeType,
             Properties = new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                ["rootActorId"] = rootActorId,
+                [WorkflowExecutionGraphConstants.RootActorIdPropertyKey] = rootActorId,
                 ["workflowName"] = readModel.WorkflowName ?? string.Empty,
                 ["commandId"] = NormalizeToken(readModel.CommandId),
                 ["input"] = readModel.Input ?? string.Empty,
+                [WorkflowExecutionGraphConstants.SourceStateVersionPropertyKey] = sourceStateVersion,
             },
             UpdatedAt = updatedAt,
         };
 
         foreach (var step in readModel.Steps)
         {
-            var stepNodeId = BuildStepNodeId(rootActorId, readModel.CommandId, step.StepId);
+            var stepId = step.StepId ?? string.Empty;
+            var stepNodeId = BuildStepNodeId(rootActorId, readModel.CommandId, stepId);
             nodes[stepNodeId] = new ProjectionGraphNode
             {
                 Scope = WorkflowExecutionGraphConstants.Scope,
@@ -60,11 +63,12 @@ public sealed class WorkflowRunGraphArtifactMaterializer
                 {
                     ["rootActorId"] = rootActorId,
                     ["commandId"] = NormalizeToken(readModel.CommandId),
-                    ["stepId"] = NormalizeToken(step.StepId),
+                    ["stepId"] = NormalizeToken(stepId),
                     ["stepType"] = step.StepType ?? string.Empty,
                     ["targetRole"] = step.TargetRole ?? string.Empty,
                     ["workerId"] = step.WorkerId ?? string.Empty,
                     ["success"] = step.Success?.ToString() ?? string.Empty,
+                    ["displayName"] = string.IsNullOrWhiteSpace(step.DisplayName) ? stepId : step.DisplayName,
                 },
                 UpdatedAt = updatedAt,
             };
@@ -72,13 +76,13 @@ public sealed class WorkflowRunGraphArtifactMaterializer
 
         foreach (var topologyEdge in readModel.Topology)
         {
-            var parentId = NormalizeToken(topologyEdge.Parent);
-            var childId = NormalizeToken(topologyEdge.Child);
+            var parentId = BuildTopologyActorNodeId(rootActorId, readModel.CommandId, topologyEdge.Parent);
+            var childId = BuildTopologyActorNodeId(rootActorId, readModel.CommandId, topologyEdge.Child);
             if (!nodes.ContainsKey(parentId))
-                nodes[parentId] = CreateActorNode(parentId, readModel.WorkflowName, updatedAt);
+                nodes[parentId] = CreateActorNode(parentId, topologyEdge.Parent, readModel.WorkflowName, updatedAt);
 
             if (!nodes.ContainsKey(childId))
-                nodes[childId] = CreateActorNode(childId, readModel.WorkflowName, updatedAt);
+                nodes[childId] = CreateActorNode(childId, topologyEdge.Child, readModel.WorkflowName, updatedAt);
         }
 
         return nodes.Values.ToList();
@@ -105,14 +109,15 @@ public sealed class WorkflowRunGraphArtifactMaterializer
 
         foreach (var step in readModel.Steps)
         {
-            var stepNodeId = BuildStepNodeId(rootActorId, readModel.CommandId, step.StepId);
+            var stepId = step.StepId ?? string.Empty;
+            var stepNodeId = BuildStepNodeId(rootActorId, readModel.CommandId, stepId);
             var containsEdge = CreateEdge(
                 WorkflowExecutionGraphConstants.EdgeTypeContainsStep,
                 runNodeId,
                 stepNodeId,
                 new Dictionary<string, string>(StringComparer.Ordinal)
                 {
-                    ["stepId"] = NormalizeToken(step.StepId),
+                    ["stepId"] = NormalizeToken(stepId),
                     ["stepType"] = step.StepType ?? string.Empty,
                 },
                 updatedAt);
@@ -137,8 +142,8 @@ public sealed class WorkflowRunGraphArtifactMaterializer
 
         foreach (var topologyEdge in readModel.Topology)
         {
-            var parentId = NormalizeToken(topologyEdge.Parent);
-            var childId = NormalizeToken(topologyEdge.Child);
+            var parentId = BuildTopologyActorNodeId(rootActorId, readModel.CommandId, topologyEdge.Parent);
+            var childId = BuildTopologyActorNodeId(rootActorId, readModel.CommandId, topologyEdge.Child);
             var childOfEdge = CreateEdge(
                 WorkflowExecutionGraphConstants.EdgeTypeChildOf,
                 parentId,
@@ -152,17 +157,20 @@ public sealed class WorkflowRunGraphArtifactMaterializer
     }
 
     private static ProjectionGraphNode CreateActorNode(
-        string actorId,
+        string nodeId,
+        string? actorId,
         string? workflowName,
         DateTimeOffset updatedAt)
     {
+        var normalizedActorId = NormalizeToken(actorId);
         return new ProjectionGraphNode
         {
             Scope = WorkflowExecutionGraphConstants.Scope,
-            NodeId = actorId,
+            NodeId = nodeId,
             NodeType = WorkflowExecutionGraphConstants.ActorNodeType,
             Properties = new Dictionary<string, string>(StringComparer.Ordinal)
             {
+                ["actorId"] = normalizedActorId,
                 ["workflowName"] = workflowName ?? string.Empty,
             },
             UpdatedAt = updatedAt,
@@ -205,6 +213,17 @@ public sealed class WorkflowRunGraphArtifactMaterializer
         var normalizedCommandId = NormalizeToken(commandId);
         var normalizedStepId = NormalizeToken(stepId);
         return $"step:{normalizedRootActorId}:{normalizedCommandId}:{normalizedStepId}";
+    }
+
+    private static string BuildTopologyActorNodeId(string rootActorId, string commandId, string actorId)
+    {
+        var normalizedRootActorId = NormalizeToken(rootActorId);
+        var normalizedActorId = NormalizeToken(actorId);
+        if (string.Equals(normalizedActorId, normalizedRootActorId, StringComparison.Ordinal))
+            return normalizedRootActorId;
+
+        var normalizedCommandId = NormalizeToken(commandId);
+        return $"actor:{normalizedRootActorId}:{normalizedCommandId}:{normalizedActorId}";
     }
 
     private static string BuildEdgeId(string relationType, string fromNodeId, string toNodeId)

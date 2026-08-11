@@ -377,6 +377,7 @@ public static class ChatQueryEndpoints
     private static WorkflowRunGraphExportSubgraphHttpResponse MapGraphSubgraph(WorkflowRunGraphExportSubgraph subgraph) =>
         new(
             subgraph.RootNodeId,
+            subgraph.SourceStateVersion,
             subgraph.Nodes.Select(MapGraphNode).ToList(),
             subgraph.Edges.Select(MapGraphEdge).ToList());
 
@@ -518,6 +519,7 @@ public sealed record WorkflowRunGraphExportEdgeHttpResponse(
 //   New principle: HTTP graph responses expose workflow-run graph export artifact semantics.
 public sealed record WorkflowRunGraphExportSubgraphHttpResponse(
     string RootNodeId,
+    long SourceStateVersion,
     List<WorkflowRunGraphExportNodeHttpResponse> Nodes,
     List<WorkflowRunGraphExportEdgeHttpResponse> Edges);
 

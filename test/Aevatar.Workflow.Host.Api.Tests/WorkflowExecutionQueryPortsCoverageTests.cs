@@ -464,6 +464,14 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
                     ],
                 },
             },
+            reportReader: new RecordingDocumentReader<WorkflowRunInsightReportDocument>
+            {
+                Item = new WorkflowRunInsightReportDocument
+                {
+                    Id = "actor-1",
+                    StateVersion = 12,
+                },
+            },
             currentStateReader: new RecordingDocumentReader<WorkflowExecutionCurrentStateDocument>
             {
                 Item = new WorkflowExecutionCurrentStateDocument
@@ -488,6 +496,7 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
 
         edges.Should().ContainSingle(x => x.EdgeId == "edge-1");
         subgraph.RootNodeId.Should().Be("actor-1");
+        subgraph.SourceStateVersion.Should().Be(12);
 
         harness.GraphStore.LastGraphEdgesQuery.Should().NotBeNull();
         harness.GraphStore.LastGraphEdgesQuery!.RootNodeId.Should().Be("actor-1");

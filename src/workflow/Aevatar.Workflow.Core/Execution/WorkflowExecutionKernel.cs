@@ -1957,6 +1957,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             RunId = state.RunId,
             Input = input,
             TargetRole = effectiveTargetRole,
+            DisplayName = ResolveStepDisplayName(step),
         };
         request.InputFileRefs.Add(inputFileRefs.Select(static fileRef => fileRef.Clone()));
 
@@ -2002,6 +2003,12 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         ApplyInteractionPresentation(request, step.Presentation, state);
 
         return request;
+    }
+
+    private static string ResolveStepDisplayName(StepDefinition step)
+    {
+        var displayName = step.DisplayName?.Trim() ?? string.Empty;
+        return displayName.Length == 0 ? step.Id : displayName;
     }
 
     // The call-site identity a step carries at runtime must be the one admission committed, so both

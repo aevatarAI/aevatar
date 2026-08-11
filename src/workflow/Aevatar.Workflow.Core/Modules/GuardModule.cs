@@ -46,7 +46,11 @@ public sealed class GuardModule : IEventModule<IWorkflowExecutionContext>
         {
             var completed = new StepCompletedEvent
             {
-                StepId = request.StepId, RunId = request.RunId, Success = true, Output = input,
+                StepId = request.StepId,
+                RunId = request.RunId,
+                Success = true,
+                Output = input,
+                Outcome = WorkflowStepCompletionOutcome.Skipped,
             };
             completed.Annotations["guard.skipped"] = "true";
             completed.Annotations["guard.reason"] = reason;

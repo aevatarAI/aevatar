@@ -1,5 +1,6 @@
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Queries;
+using System.Text.Json.Serialization;
 
 namespace Aevatar.Workflow.Application.Abstractions.Observatory;
 
@@ -207,6 +208,12 @@ public sealed class ObservatoryRunDetail
 {
     public ObservatoryRunSummary Summary { get; init; } = new();
 
+    public WorkflowActivityRunInitiatorSummary Initiator { get; init; } = new();
+
+    public string InputSummary { get; init; } = string.Empty;
+
+    public ObservatoryRunDetailSectionVersions Sections { get; init; } = new();
+
     // 06-26 detail enrichment: the run's authoritative input + final result, surfaced from the committed
     // run-report artifact. These are NOT truncated by materialization (unlike per-step OutputPreview), so the
     // viewer can show the real final output/error honestly. FinalOutput is empty while a run is still running.
@@ -227,6 +234,8 @@ public sealed class ObservatoryRunDetail
 
     public IReadOnlyList<ObservatoryViewEvent> Timeline { get; init; } = [];
 
+    public ObservatoryRunGraph ExecutionPath { get; init; } = new();
+
     public ObservatoryRunStatistics Statistics { get; init; } = new();
 
     public ObservatoryUsageTotals UsageTotals { get; init; } = new();
@@ -234,6 +243,45 @@ public sealed class ObservatoryRunDetail
     public WorkflowRunRecoveryCapability RecoveryCapability { get; init; } = new();
 
     public WorkflowRunLineage Lineage { get; init; } = new();
+}
+
+[JsonConverter(typeof(JsonStringEnumConverter<ObservatoryRunDetailSectionVersionStatus>))]
+public enum ObservatoryRunDetailSectionVersionStatus
+{
+    [JsonStringEnumMemberName("unknown")]
+    Unknown = 0,
+
+    [JsonStringEnumMemberName("aligned")]
+    Aligned = 1,
+
+    [JsonStringEnumMemberName("unavailable")]
+    Unavailable = 2,
+
+    [JsonStringEnumMemberName("version_mismatch")]
+    VersionMismatch = 3,
+}
+
+public sealed class ObservatoryRunDetailSectionVersions
+{
+    public ObservatoryRunDetailSectionVersion Overview { get; init; } = new();
+
+    public ObservatoryRunDetailSectionVersion Steps { get; init; } = new();
+
+    public ObservatoryRunDetailSectionVersion Timeline { get; init; } = new();
+
+    public ObservatoryRunDetailSectionVersion ExecutionPath { get; init; } = new();
+}
+
+public sealed class ObservatoryRunDetailSectionVersion
+{
+    public long DetailStateVersion { get; init; }
+
+    public long SourceStateVersion { get; init; }
+
+    public ObservatoryRunDetailSectionVersionStatus VersionStatus { get; init; } =
+        ObservatoryRunDetailSectionVersionStatus.Unknown;
+
+    public string Reason { get; init; } = string.Empty;
 }
 
 public sealed class ObservatoryRunDiagnostic
@@ -262,6 +310,8 @@ public sealed class ObservatoryStepDetail
 {
     public string StepId { get; init; } = string.Empty;
 
+    public string DisplayName { get; init; } = string.Empty;
+
     public string StepType { get; init; } = string.Empty;
 
     public string TargetRole { get; init; } = string.Empty;
@@ -271,6 +321,9 @@ public sealed class ObservatoryStepDetail
     public DateTimeOffset? CompletedAtUtc { get; init; }
 
     public bool? Success { get; init; }
+
+    [JsonConverter(typeof(WorkflowRunStepOutcomeJsonConverter))]
+    public WorkflowRunStepOutcome Outcome { get; init; } = WorkflowRunStepOutcome.Unspecified;
 
     public double? DurationMs { get; init; }
 
@@ -385,6 +438,15 @@ public sealed class ObservatoryRunGraph
 {
     public string RootNodeId { get; init; } = string.Empty;
 
+    public long DetailStateVersion { get; init; }
+
+    public long SourceStateVersion { get; init; }
+
+    public ObservatoryRunDetailSectionVersionStatus VersionStatus { get; init; } =
+        ObservatoryRunDetailSectionVersionStatus.Unknown;
+
+    public string VersionReason { get; init; } = string.Empty;
+
     public IReadOnlyList<ObservatoryGraphNode> Nodes { get; init; } = [];
 
     public IReadOnlyList<ObservatoryGraphEdge> Edges { get; init; } = [];
@@ -395,6 +457,8 @@ public sealed class ObservatoryGraphNode
     public string NodeId { get; init; } = string.Empty;
 
     public string NodeType { get; init; } = string.Empty;
+
+    public string DisplayName { get; init; } = string.Empty;
 
     // Bare workflow step id for WorkflowStep nodes (empty for run / actor topology nodes). The graph node
     // id is a composite key (step:{actor}:{cmd}:{stepId}); this surfaces the plain stepId so the viewer can

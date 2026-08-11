@@ -47,6 +47,7 @@ public static class WorkflowAuditReportSanitizer
         new()
         {
             StepId = WorkflowAuditTextSanitizer.Sanitize(step.StepId),
+            DisplayName = WorkflowAuditTextSanitizer.Sanitize(step.DisplayName),
             StepType = WorkflowAuditTextSanitizer.Sanitize(step.StepType),
             TargetRole = WorkflowAuditTextSanitizer.Sanitize(step.TargetRole),
             RequestedAt = step.RequestedAt,
@@ -74,8 +75,9 @@ public static class WorkflowAuditReportSanitizer
                     ToolName = WorkflowAuditTextSanitizer.Sanitize(step.ToolApproval.ToolName),
                     ToolCallId = WorkflowAuditTextSanitizer.Sanitize(step.ToolApproval.ToolCallId),
                     ApprovalRequestId = WorkflowAuditTextSanitizer.Sanitize(step.ToolApproval.ApprovalRequestId),
-                },
+            },
             Usage = SanitizeUsage(step.Usage),
+            Outcome = step.Outcome,
         };
 
     private static WorkflowRunRoleReply SanitizeRoleReply(WorkflowRunRoleReply reply)

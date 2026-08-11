@@ -37,6 +37,14 @@ enum WorkflowRecoveryRecommendedActionReadModel {
   WORKFLOW_RECOVERY_RECOMMENDED_ACTION_READ_MODEL_TECHNICAL_DETAILS = 7;
 }
 
+enum WorkflowExecutionStepOutcomeReadModel {
+  WORKFLOW_EXECUTION_STEP_OUTCOME_READ_MODEL_UNSPECIFIED = 0;
+  WORKFLOW_EXECUTION_STEP_OUTCOME_READ_MODEL_SUCCEEDED = 1;
+  WORKFLOW_EXECUTION_STEP_OUTCOME_READ_MODEL_FAILED = 2;
+  WORKFLOW_EXECUTION_STEP_OUTCOME_READ_MODEL_WAITING = 3;
+  WORKFLOW_EXECUTION_STEP_OUTCOME_READ_MODEL_SKIPPED = 4;
+}
+
 message WorkflowRecoveryActionCapabilityReadModel {
   WorkflowRecoveryEligibilityReadModel eligibility = 1;
   WorkflowRecoveryUnavailableReasonCodeReadModel unavailable_reason_code = 2;
@@ -233,6 +241,8 @@ message WorkflowExecutionStepTrace {
   WorkflowUsageMetricsReadModel usage_value = 20;
   string suspension_content = 21;
   WorkflowToolApprovalReadModel tool_approval_value = 22;
+  string display_name = 23;
+  WorkflowExecutionStepOutcomeReadModel outcome = 24;
 }
 
 message WorkflowToolApprovalReadModel {
