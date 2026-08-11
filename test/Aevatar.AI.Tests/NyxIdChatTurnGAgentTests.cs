@@ -3462,6 +3462,11 @@ public sealed partial class NyxIdChatTurnGAgentTests
     {
         private readonly Queue<IMessage> _pendingSignals = new();
 
+        public AgentToolExecutionContextPayload? CapturedToolContext { get; init; }
+
+        public AgentToolExecutionContextPayload? CaptureToolContext() =>
+            CapturedToolContext?.Clone();
+
         public async Task DispatchExecutionAsync(
             string turnActorId,
             NyxIdChatOperationDispatchCommand command,

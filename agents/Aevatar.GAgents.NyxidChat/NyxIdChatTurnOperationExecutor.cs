@@ -1227,7 +1227,7 @@ public sealed class NyxIdChatTurnOperationExecutor
             session);
     }
 
-    private static NyxIdChatTurnOperationExecution BuildExactServiceApprovalExecution(
+    internal static NyxIdChatTurnOperationExecution BuildExactServiceApprovalExecution(
         NyxIdChatOperationKey key,
         string callId,
         string toolName,
@@ -1289,6 +1289,12 @@ public sealed class NyxIdChatTurnOperationExecutor
                 receipt.Status = AgentToolReceiptStatus.Error;
                 receipt.ErrorCode = "exact_service_redemption_in_progress";
                 receipt.ErrorMessage = "Exact-service effect admission is still in progress.";
+                externalEffect = NyxIdChatEffectEvidence.MayHaveChanged;
+                break;
+            case NyxIdExactServiceApprovalState.Failed:
+                receipt.Status = AgentToolReceiptStatus.Error;
+                receipt.ErrorCode = snapshot.FailureCode ?? "exact_service_approval_failed";
+                receipt.ErrorMessage = "Exact-service approval redemption failed.";
                 externalEffect = NyxIdChatEffectEvidence.MayHaveChanged;
                 break;
             default:

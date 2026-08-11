@@ -2,8 +2,11 @@ using System.Text.Json.Nodes;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId.ExactServiceApprovals;
+using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.GAgents.NyxidChat;
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -54,13 +57,15 @@ public sealed partial class NyxIdChatTurnGAgentTests
         execution.Result.Tool.Receipt.ExactServiceApproval.Should().BeEquivalentTo(authority);
     }
 
-    [Fact]
-    public async Task ExactConnectedServiceEffect_WhenTierAIsUnavailable_ShouldUseTierBFallback()
+    [Theory]
+    [InlineData(NyxIdExactServiceApprovalCreateDisposition.TierAUnavailable)]
+    [InlineData(NyxIdExactServiceApprovalCreateDisposition.ApprovalNotRequired)]
+    public async Task ExactConnectedServiceEffect_WhenTierAFallsBack_ShouldUseTierB(
+        NyxIdExactServiceApprovalCreateDisposition disposition)
     {
         var approvalPort = new RecordingExactServiceApprovalPort
         {
-            CreateResult = new NyxIdExactServiceApprovalCreateResult(
-                NyxIdExactServiceApprovalCreateDisposition.TierAUnavailable),
+            CreateResult = new NyxIdExactServiceApprovalCreateResult(disposition),
         };
         var generation = new StreamingCapabilityReplyExecutor(ExactWriteAdmission());
         var executor = ExactApprovalExecutor(generation, approvalPort);
@@ -176,6 +181,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
     [InlineData(NyxIdExactServiceApprovalState.Revoked, "approval_revoked")]
     [InlineData(NyxIdExactServiceApprovalState.Drifted, "approval_drifted")]
     [InlineData(NyxIdExactServiceApprovalState.Redeeming, "redemption_in_progress")]
+    [InlineData(NyxIdExactServiceApprovalState.Failed, "provider_response_too_large")]
     public async Task ExactApprovalTerminalOrDriftState_ShouldFailClosed(
         NyxIdExactServiceApprovalState state,
         string failureCode)
@@ -200,10 +206,419 @@ public sealed partial class NyxIdChatTurnGAgentTests
         approvalPort.RedeemAuthorities.Should().BeEmpty();
         execution.Result.Tool.Receipt.Status.Should().NotBe(AgentToolReceiptStatus.Success);
         execution.Result.Tool.ExternalEffect.Should().Be(
-            state == NyxIdExactServiceApprovalState.Redeeming
+            state is NyxIdExactServiceApprovalState.Redeeming or
+                NyxIdExactServiceApprovalState.Failed
                 ? NyxIdChatEffectEvidence.MayHaveChanged
                 : NyxIdChatEffectEvidence.NotApplied);
     }
+
+    [Fact]
+    public async Task ExactCreateRecovery_AfterCompletionLoss_ShouldRecoverSameRequestIdentity()
+    {
+        var authority = ExactApprovalAuthority();
+        var approvalPort = new RecordingExactServiceApprovalPort
+        {
+            CreateResult = new NyxIdExactServiceApprovalCreateResult(
+                NyxIdExactServiceApprovalCreateDisposition.Created,
+                new NyxIdExactServiceApprovalSnapshot(
+                    NyxIdExactServiceApprovalState.Pending,
+                    authority)),
+        };
+        var command = ExactServiceToolCommand(new NyxIdChatToolCall
+        {
+            CallId = "call-alpha",
+            ToolName = "tool-alpha",
+            ArgumentsJson = "{\"value\":1}",
+            OperationAdmission = ExactWriteAdmission(),
+        });
+        var credentials = RecoveryToolContext("user-token").Credentials;
+
+        await approvalPort.CreateAsync(
+            "user-token",
+            AgentToolOperationAdmissionPayloadMapper.FromPayload(ExactWriteAdmission())!,
+            JsonNode.Parse(command.Tool.ArgumentsJson)!,
+            command.Key.OperationId,
+            command.Key.OperationGeneration,
+            command.Tool.IdempotencyKey,
+            CancellationToken.None);
+
+        var (vault, input) = await ExactRecoveryInputAsync(
+            command,
+            credentials,
+            NyxIdChatExactServiceRecoveryStage.Create);
+        var reconciliation = ExactReconciliationPort(vault, approvalPort);
+
+        var result = await reconciliation.ReconcileAsync(input, CancellationToken.None);
+
+        approvalPort.CreateInputs.Should().HaveCount(2);
+        approvalPort.CreateInputs[1].AccessToken.Should().Be(
+            approvalPort.CreateInputs[0].AccessToken);
+        approvalPort.CreateInputs[1].Admission.Should().BeEquivalentTo(
+            approvalPort.CreateInputs[0].Admission);
+        approvalPort.CreateInputs[1].Arguments.ToJsonString().Should().Be(
+            approvalPort.CreateInputs[0].Arguments.ToJsonString());
+        approvalPort.CreateInputs[1].OperationId.Should().Be(
+            approvalPort.CreateInputs[0].OperationId);
+        approvalPort.CreateInputs[1].OperationGeneration.Should().Be(
+            approvalPort.CreateInputs[0].OperationGeneration);
+        approvalPort.CreateInputs[1].IdempotencyKey.Should().Be(
+            approvalPort.CreateInputs[0].IdempotencyKey);
+        result.Tool.Receipt.Status.Should().Be(AgentToolReceiptStatus.ApprovalRequired);
+        result.Tool.Receipt.ExactServiceApproval.Should().BeEquivalentTo(authority);
+        await AssertRecoveryCredentialRevokedAsync(vault, input);
+    }
+
+    [Theory]
+    [InlineData(NyxIdExactServiceApprovalCreateDisposition.TierAUnavailable)]
+    [InlineData(NyxIdExactServiceApprovalCreateDisposition.ApprovalNotRequired)]
+    public async Task ExactCreateRecovery_WhenTierAIsUnavailable_ShouldStayUncertainWithoutProviderFallback(
+        NyxIdExactServiceApprovalCreateDisposition disposition)
+    {
+        var approvalPort = new RecordingExactServiceApprovalPort
+        {
+            CreateResult = new NyxIdExactServiceApprovalCreateResult(disposition),
+        };
+        var command = ExactServiceToolCommand(new NyxIdChatToolCall
+        {
+            CallId = "call-alpha",
+            ToolName = "tool-alpha",
+            ArgumentsJson = "{\"value\":1}",
+            OperationAdmission = ExactWriteAdmission(),
+        });
+        var (vault, input) = await ExactRecoveryInputAsync(
+            command,
+            RecoveryToolContext("user-token").Credentials,
+            NyxIdChatExactServiceRecoveryStage.Create);
+
+        var result = await ExactReconciliationPort(vault, approvalPort)
+            .ReconcileAsync(input, CancellationToken.None);
+
+        approvalPort.CreateInputs.Should().ContainSingle();
+        result.Failure.FailureCode.Should().Be(
+            UnavailableNyxIdChatTurnOperationReconciliationPort.OutcomeUncertainCode);
+        result.Failure.ExternalEffect.Should().Be(
+            NyxIdChatEffectEvidence.MayHaveChanged);
+        await AssertRecoveryCredentialActiveAsync(vault, input);
+    }
+
+    [Fact]
+    public async Task ExactRedeemRecovery_AfterCompletionLoss_ShouldReplayStoredReceiptWithoutReinvocation()
+    {
+        var authority = ExactApprovalAuthority();
+        var receipt = new NyxIdExactServiceApprovalReceipt(
+            201,
+            "{\"id\":\"message-alpha\"}",
+            "sha256:response");
+        var redeemed = new NyxIdExactServiceApprovalSnapshot(
+            NyxIdExactServiceApprovalState.Redeemed,
+            authority,
+            receipt);
+        var approvalPort = new RecordingExactServiceApprovalPort
+        {
+            ObserveResult = redeemed,
+            RedeemResult = redeemed,
+        };
+        var command = ExactApprovalContinuation(authority, approved: true);
+        var credentials = RecoveryToolContext("fresh-user-token").Credentials;
+
+        await approvalPort.RedeemAsync(
+            credentials.NyxIdAccessToken,
+            authority,
+            CancellationToken.None);
+
+        var (vault, input) = await ExactRecoveryInputAsync(
+            command,
+            credentials,
+            NyxIdChatExactServiceRecoveryStage.DecideRedeem);
+        var reconciliation = ExactReconciliationPort(vault, approvalPort);
+
+        var result = await reconciliation.ReconcileAsync(input, CancellationToken.None);
+
+        approvalPort.ObservedAuthorities.Should().ContainSingle()
+            .Which.Should().BeEquivalentTo(authority);
+        approvalPort.RedeemAuthorities.Should().ContainSingle(
+            "the completed redemption must not invoke the provider a second time");
+        result.Tool.Receipt.Status.Should().Be(AgentToolReceiptStatus.Success);
+        result.Tool.ResultJson.Should().Be(receipt.ResponseBody);
+        result.Tool.Receipt.ResultJson.Should().Be(receipt.ResponseBody);
+        await AssertRecoveryCredentialRevokedAsync(vault, input);
+    }
+
+    [Fact]
+    public async Task ExactDecisionRecovery_WhenPending_ShouldReplayDecisionThenRedeem()
+    {
+        var authority = ExactApprovalAuthority();
+        var receipt = new NyxIdExactServiceApprovalReceipt(
+            201,
+            "{\"id\":\"message-alpha\"}",
+            "sha256:response");
+        var approvalPort = new RecordingExactServiceApprovalPort
+        {
+            ObserveResult = new NyxIdExactServiceApprovalSnapshot(
+                NyxIdExactServiceApprovalState.Pending,
+                authority),
+            DecideResult = new NyxIdExactServiceApprovalSnapshot(
+                NyxIdExactServiceApprovalState.Approved,
+                authority),
+            RedeemResult = new NyxIdExactServiceApprovalSnapshot(
+                NyxIdExactServiceApprovalState.Redeemed,
+                authority,
+                receipt),
+        };
+        var command = ExactApprovalContinuation(authority, approved: true);
+        var (vault, input) = await ExactRecoveryInputAsync(
+            command,
+            RecoveryToolContext("fresh-user-token").Credentials,
+            NyxIdChatExactServiceRecoveryStage.DecideRedeem);
+
+        var result = await ExactReconciliationPort(vault, approvalPort)
+            .ReconcileAsync(input, CancellationToken.None);
+
+        approvalPort.ObservedAuthorities.Should().ContainSingle();
+        approvalPort.Decisions.Should().ContainSingle().Which.Should().BeTrue();
+        approvalPort.RedeemAuthorities.Should().ContainSingle();
+        result.Tool.Receipt.Status.Should().Be(AgentToolReceiptStatus.Success);
+        result.Tool.ResultJson.Should().Be(receipt.ResponseBody);
+        await AssertRecoveryCredentialRevokedAsync(vault, input);
+    }
+
+    [Fact]
+    public void RecoverySecretCodec_ShouldReadLegacyCredentialPayload()
+    {
+        var credentials = RecoveryToolContext("legacy-token").Credentials;
+        credentials.NyxIdOrgToken = "legacy-org-token";
+        credentials.SenderNyxIdAccessToken = "legacy-sender-token";
+        var encoded = Convert.ToBase64String(credentials.ToByteArray());
+
+        NyxIdChatRecoverySecretPayloadCodec.TryDecode(encoded, out var decoded)
+            .Should().BeTrue();
+
+        decoded.IsWrapped.Should().BeFalse();
+        decoded.ExactServiceCommand.Should().BeNull();
+        decoded.Credentials.Should().BeEquivalentTo(credentials);
+    }
+
+    [Fact]
+    public void RecoverySecretCodec_WhenCredentialRotates_ShouldPreserveFrozenCommand()
+    {
+        var command = ExactApprovalContinuation(ExactApprovalAuthority(), approved: true);
+        command.ToolApprovalContinuation.ToolContext = null;
+        var original = RecoveryToolContext("original-token").Credentials;
+        var refreshed = RecoveryToolContext("refreshed-token").Credentials;
+        NyxIdChatRecoverySecretPayloadCodec.TryDecode(
+                NyxIdChatRecoverySecretPayloadCodec.Encode(original, command),
+                out var decoded)
+            .Should().BeTrue();
+
+        NyxIdChatRecoverySecretPayloadCodec.TryDecode(
+                NyxIdChatRecoverySecretPayloadCodec.Encode(decoded, refreshed),
+                out var rotated)
+            .Should().BeTrue();
+
+        rotated.IsWrapped.Should().BeTrue();
+        rotated.Credentials.NyxIdAccessToken.Should().Be("refreshed-token");
+        rotated.ExactServiceCommand.Should().BeEquivalentTo(command);
+        rotated.ExactServiceCommand!.ToolApprovalContinuation.ToolContext.Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData(0u)]
+    [InlineData(2u)]
+    public void RecoverySecretCodec_WhenWrapperVersionIsUnsupported_ShouldFailClosed(
+        uint schemaVersion)
+    {
+        var payload = new NyxIdChatRecoverySecretPayload
+        {
+            Format = NyxIdChatRecoverySecretPayloadCodec.FormatMarker,
+            SchemaVersion = schemaVersion,
+            Credentials = RecoveryToolContext("user-token").Credentials,
+            ExactServiceCommand = ExactApprovalContinuation(
+                ExactApprovalAuthority(),
+                approved: true),
+        };
+
+        NyxIdChatRecoverySecretPayloadCodec.TryDecode(
+                Convert.ToBase64String(payload.ToByteArray()),
+                out _)
+            .Should().BeFalse();
+    }
+
+    [Fact]
+    public void RecoverySecretCodec_WhenWrapperFormatIsUnknown_ShouldFailClosed()
+    {
+        var payload = new NyxIdChatRecoverySecretPayload
+        {
+            Format = "unknown-recovery-format",
+            SchemaVersion = NyxIdChatRecoverySecretPayloadCodec.CurrentSchemaVersion,
+            Credentials = RecoveryToolContext("user-token").Credentials,
+            ExactServiceCommand = ExactApprovalContinuation(
+                ExactApprovalAuthority(),
+                approved: true),
+        };
+
+        NyxIdChatRecoverySecretPayloadCodec.TryDecode(
+                Convert.ToBase64String(payload.ToByteArray()),
+                out _)
+            .Should().BeFalse();
+    }
+
+    [Fact]
+    public void RecoverySecretCodec_WhenWrapperIsIncomplete_ShouldFailClosed()
+    {
+        var payload = new NyxIdChatRecoverySecretPayload
+        {
+            Format = NyxIdChatRecoverySecretPayloadCodec.FormatMarker,
+            SchemaVersion = NyxIdChatRecoverySecretPayloadCodec.CurrentSchemaVersion,
+            Credentials = RecoveryToolContext("user-token").Credentials,
+        };
+
+        NyxIdChatRecoverySecretPayloadCodec.TryDecode(
+                Convert.ToBase64String(payload.ToByteArray()),
+                out _)
+            .Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task AutoGateExactCreate_WithoutCommandToolContext_ShouldSealTransientSessionContext()
+    {
+        var clock = new FixedTimeProvider(
+            new DateTimeOffset(2026, 7, 24, 8, 0, 0, TimeSpan.Zero));
+        var vault = new InMemorySecretVault(clock);
+        var eventStore = new InMemoryEventStoreForTests();
+        var executor = new RecordingOperationExecutor(command => new NyxIdChatOperationResultSignal
+        {
+            Key = command.Key.Clone(),
+        });
+        var operationDispatch = new RecordingOperationDispatchPort(executor)
+        {
+            CapturedToolContext = RecoveryToolContext("captured-user-token"),
+        };
+        using var services = BuildEventSourcingServices(eventStore);
+        var agent = CreateAgent(
+            services,
+            operationDispatch,
+            new RecordingDispatchPort(),
+            timeProvider: clock,
+            secretVault: vault);
+        await agent.ActivateAsync();
+        var command = ExactServiceToolCommand(new NyxIdChatToolCall
+        {
+            CallId = "call-alpha",
+            ToolName = "tool-alpha",
+            ArgumentsJson = "{\"value\":1}",
+            OperationAdmission = ExactWriteAdmission(),
+        });
+
+        await agent.HandleOperationAsync(command);
+
+        agent.State.ExactServiceRecoveryStage.Should().Be(
+            NyxIdChatExactServiceRecoveryStage.Create);
+        agent.State.RecoveryCredential.Should().NotBeNull();
+        executor.Commands.Should().ContainSingle();
+        var credential = agent.State.RecoveryCredential;
+        var resolved = await vault.ResolveAsync(new ResolveSecretRequest(
+            credential.Ref,
+            credential.Purpose,
+            credential.OwnerScopeKey,
+            credential.SubjectId,
+            "inspect exact-service recovery seal"));
+        NyxIdChatRecoverySecretPayloadCodec.TryDecode(resolved.Secret, out var decoded)
+            .Should().BeTrue();
+        decoded.IsWrapped.Should().BeTrue();
+        decoded.Credentials.NyxIdAccessToken.Should().Be("captured-user-token");
+        decoded.ExactServiceCommand.Should().NotBeNull();
+        decoded.ExactServiceCommand!.Tool.ToolContext.Should().BeNull();
+        decoded.ExactServiceCommand.Key.Should().BeEquivalentTo(command.Key);
+    }
+
+    private static AdmittedNyxIdChatTurnOperationReconciliationPort ExactReconciliationPort(
+        ISecretVault vault,
+        INyxIdExactServiceApprovalPort approvalPort) => new(
+        new NyxIdChatToolVerificationPort(),
+        vault,
+        new NyxIdChatDelegationCredentialLifecyclePort(TimeProvider.System),
+        approvalPort,
+        NullLogger<AdmittedNyxIdChatTurnOperationReconciliationPort>.Instance);
+
+    private static async Task<(InMemorySecretVault Vault,
+        NyxIdChatTurnOperationReconciliationInput Input)> ExactRecoveryInputAsync(
+        NyxIdChatOperationDispatchCommand command,
+        AgentToolCredentialsPayload credentials,
+        NyxIdChatExactServiceRecoveryStage stage)
+    {
+        var context = RecoveryToolContext(credentials.NyxIdAccessToken);
+        var frozen = command.Clone();
+        if (frozen.Tool is not null)
+            frozen.Tool.ToolContext = null;
+        if (frozen.ToolApprovalContinuation is not null)
+            frozen.ToolApprovalContinuation.ToolContext = null;
+        var vault = new InMemorySecretVault(TimeProvider.System);
+        var ownerScopeKey = $"nyxid-chat:{command.Key.ConversationActorId}";
+        var ownerSubject = context.Caller.OwnerSubject;
+        var stored = await vault.PutAsync(new StoreSecretRequest(
+            CredentialSecretPurposes.NyxIdChatRecoveryCredential,
+            ownerScopeKey,
+            ownerSubject,
+            NyxIdChatRecoverySecretPayloadCodec.Encode(credentials, frozen),
+            "test exact-service recovery",
+            DateTimeOffset.UtcNow.AddMinutes(30)));
+        return (vault, new NyxIdChatTurnOperationReconciliationInput
+        {
+            Key = command.Key.Clone(),
+            RecoveryContext = AgentToolExecutionContextMapper.ToRecoveryPayload(
+                AgentToolExecutionContextMapper.FromPayload(context)),
+            RecoveryCredential = new DurableCallerCredentialRef
+            {
+                Ref = stored.Reference.Ref,
+                Purpose = CredentialSecretPurposes.NyxIdChatRecoveryCredential,
+                OwnerScopeKey = ownerScopeKey,
+                SubjectId = ownerSubject,
+                SourceKind = DurableCallerCredentialSourceKind.NyxIdChat,
+            },
+            ExactServiceRecoveryStage = stage,
+        });
+    }
+
+    private static async Task AssertRecoveryCredentialRevokedAsync(
+        InMemorySecretVault vault,
+        NyxIdChatTurnOperationReconciliationInput input)
+    {
+        var resolved = await ResolveRecoveryCredentialAsync(vault, input);
+        resolved.Resolved.Should().BeFalse();
+        resolved.FailureReason.Should().Be(SecretResolutionFailureReason.Revoked);
+    }
+
+    private static async Task AssertRecoveryCredentialActiveAsync(
+        InMemorySecretVault vault,
+        NyxIdChatTurnOperationReconciliationInput input)
+    {
+        var resolved = await ResolveRecoveryCredentialAsync(vault, input);
+        resolved.Resolved.Should().BeTrue();
+    }
+
+    private static Task<ResolveSecretResult> ResolveRecoveryCredentialAsync(
+        InMemorySecretVault vault,
+        NyxIdChatTurnOperationReconciliationInput input) =>
+        vault.ResolveAsync(new ResolveSecretRequest(
+            input.RecoveryCredential.Ref,
+            input.RecoveryCredential.Purpose,
+            input.RecoveryCredential.OwnerScopeKey,
+            input.RecoveryCredential.SubjectId,
+            "assert exact-service recovery credential lifecycle"));
+
+    private static AgentToolExecutionContextPayload RecoveryToolContext(string token) => new()
+    {
+        Caller = new AgentToolCallerContextPayload
+        {
+            OwnerSubject = "owner-alpha",
+            ScopeId = "scope-alpha",
+        },
+        Credentials = new AgentToolCredentialsPayload
+        {
+            NyxIdAccessToken = token,
+            NyxIdCredentialKind = AgentToolNyxIdCredentialKindPayload.SourceReadableUserBearer,
+        },
+    };
 
     private static NyxIdChatTurnOperationExecutor ExactApprovalExecutor(
         IAgentRunReplyGenerationExecutorPort generation,
@@ -308,6 +723,8 @@ public sealed partial class NyxIdChatTurnGAgentTests
 
         public NyxIdExactServiceApprovalSnapshot? RedeemResult { get; set; }
 
+        public NyxIdExactServiceApprovalSnapshot? ObserveResult { get; set; }
+
         public List<ExactApprovalCreateInput> CreateInputs { get; } = [];
 
         public List<bool> Decisions { get; } = [];
@@ -315,6 +732,8 @@ public sealed partial class NyxIdChatTurnGAgentTests
         public List<NyxIdExactServiceApprovalAuthority> DecisionAuthorities { get; } = [];
 
         public List<NyxIdExactServiceApprovalAuthority> RedeemAuthorities { get; } = [];
+
+        public List<NyxIdExactServiceApprovalAuthority> ObservedAuthorities { get; } = [];
 
         public Task<NyxIdExactServiceApprovalCreateResult> CreateAsync(
             string accessToken,
@@ -339,7 +758,14 @@ public sealed partial class NyxIdChatTurnGAgentTests
         public Task<NyxIdExactServiceApprovalSnapshot> ObserveAsync(
             string accessToken,
             NyxIdExactServiceApprovalAuthority authority,
-            CancellationToken ct) => throw new NotSupportedException();
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            accessToken.Should().Be("fresh-user-token");
+            ObservedAuthorities.Add(authority.Clone());
+            return Task.FromResult(ObserveResult ?? throw new InvalidOperationException(
+                "An observation result was not configured."));
+        }
 
         public Task<NyxIdExactServiceApprovalSnapshot> DecideAsync(
             string accessToken,

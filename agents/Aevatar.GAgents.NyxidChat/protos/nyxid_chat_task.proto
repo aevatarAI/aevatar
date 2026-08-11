@@ -74,6 +74,14 @@ enum NyxIdChatEffectEvidence {
   NYX_ID_CHAT_EFFECT_EVIDENCE_MAY_HAVE_CHANGED = 4;
 }
 
+// Exact-service recovery resumes only the frozen NyxID admission protocol.
+// It must never fall through to provider execution after an interrupted turn.
+enum NyxIdChatExactServiceRecoveryStage {
+  NYX_ID_CHAT_EXACT_SERVICE_RECOVERY_STAGE_UNSPECIFIED = 0;
+  NYX_ID_CHAT_EXACT_SERVICE_RECOVERY_STAGE_CREATE = 1;
+  NYX_ID_CHAT_EXACT_SERVICE_RECOVERY_STAGE_DECIDE_REDEEM = 2;
+}
+
 enum NyxIdChatActionDisposition {
   NYX_ID_CHAT_ACTION_DISPOSITION_UNSPECIFIED = 0;
   NYX_ID_CHAT_ACTION_DISPOSITION_COMPLETED = 1;
@@ -1432,6 +1440,7 @@ message NyxIdChatTurnGAgentState {
   // confirms that this exact result committed.
   NyxIdChatOperationResultSignal pending_result = 38;
   int32 result_delivery_attempt = 39;
+  NyxIdChatExactServiceRecoveryStage exact_service_recovery_stage = 40;
 }
 
 message NyxIdChatTurnOperationAdmittedEvent {
@@ -1451,6 +1460,7 @@ message NyxIdChatTurnOperationAdmittedEvent {
   NyxIdChatCanaryEffectFaultDirective canary_effect_fault = 14;
   string canary_effect_fault_tool_call_id = 15;
   string canary_effect_fault_tool_name = 16;
+  NyxIdChatExactServiceRecoveryStage exact_service_recovery_stage = 17;
 }
 
 message NyxIdChatTurnPlanGateAdmissionCommand {
@@ -1686,6 +1696,17 @@ message NyxIdChatOperationDispatchCommand {
   }
 }
 
+// Vault-only recovery material. The actor state stores only the durable secret
+// reference and recovery stage, never credentials or raw tool arguments.
+message NyxIdChatRecoverySecretPayload {
+  // High field numbers keep this wrapper distinguishable from the legacy
+  // AgentToolCredentialsPayload (fields 1-5) stored in the same vault slot.
+  string format = 100;
+  uint32 schema_version = 101;
+  aevatar.ai.AgentToolCredentialsPayload credentials = 102;
+  NyxIdChatOperationDispatchCommand exact_service_command = 103;
+}
+
 enum NyxIdChatToolVerificationDisposition {
   NYX_ID_CHAT_TOOL_VERIFICATION_DISPOSITION_UNSPECIFIED = 0;
   NYX_ID_CHAT_TOOL_VERIFICATION_DISPOSITION_APPLIED = 1;
@@ -1821,6 +1842,7 @@ message NyxIdChatTurnOperationReconciliationInput {
   aevatar.ai.AgentToolRecoveryContextPayload recovery_context = 7;
   aevatar.credentials.DurableCallerCredentialRef recovery_credential = 8;
   string effect_step_id = 9;
+  NyxIdChatExactServiceRecoveryStage exact_service_recovery_stage = 10;
 }
 
 message NyxIdChatTextProgress {
