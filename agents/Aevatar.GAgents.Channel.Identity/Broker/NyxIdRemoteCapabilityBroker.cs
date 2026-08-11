@@ -614,7 +614,7 @@ public sealed class NyxIdRemoteCapabilityBroker :
     {
         using var request = new HttpRequestMessage(
             HttpMethod.Get,
-            $"{_options.ResourceServerBaseUrl.Trim().TrimEnd('/')}{UserServicesEndpoint}");
+            $"{_options.TransportBaseUrl.Trim().TrimEnd('/')}{UserServicesEndpoint}");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
 
         var http = CreateHttpClient();

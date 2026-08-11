@@ -682,6 +682,7 @@ public sealed class NyxIdApiAccessContractTests
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
+                ["Aevatar:NyxId:InternalApiBaseUrl"] = " ",
                 ["Aevatar:NyxId:ApiBaseUrl"] = " https://api.nyx.test/ ",
                 ["Aevatar:NyxId:Authority"] = "https://authority.nyx.test",
                 ["Cli:App:NyxId:Authority"] = "https://cli.nyx.test",
@@ -698,6 +699,26 @@ public sealed class NyxIdApiAccessContractTests
         provider.GetRequiredService<INyxIdApiClientFactory>().CreateClient().Should().NotBeNull();
         provider.GetRequiredService<INyxIdActionEvidenceReadPort>()
             .Should().BeOfType<NyxIdActionEvidenceReadPort>();
+    }
+
+    [Fact]
+    public void AddNyxIdApiAccess_ShouldPreferInternalApiBaseUrl()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Aevatar:NyxId:InternalApiBaseUrl"] = " http://nyxid.internal:3001/ ",
+                ["Aevatar:NyxId:ApiBaseUrl"] = "https://api.nyx.test",
+                ["Aevatar:NyxId:Authority"] = "https://authority.nyx.test",
+            })
+            .Build();
+        var services = new ServiceCollection();
+
+        services.AddNyxIdApiAccess(configuration);
+
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<NyxIdToolOptions>().BaseUrl.Should()
+            .Be("http://nyxid.internal:3001/");
     }
 
     [Theory]

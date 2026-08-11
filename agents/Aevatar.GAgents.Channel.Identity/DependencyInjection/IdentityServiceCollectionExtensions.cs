@@ -260,6 +260,14 @@ public static class IdentityServiceCollectionExtensions
         {
             services.Configure<NyxIdBrokerOptions>(options =>
             {
+                var internalApiBaseUrl =
+                    configuration[NyxIdBrokerOptions.InternalApiBaseUrlConfigurationKey];
+                options.TransportBaseUrl =
+                    (!string.IsNullOrWhiteSpace(internalApiBaseUrl)
+                        ? internalApiBaseUrl
+                        : configuration[NyxIdBrokerOptions.ApiBaseUrlConfigurationKey] ?? string.Empty)
+                    .Trim()
+                    .TrimEnd('/');
                 options.ResourceServerBaseUrl =
                     (configuration[NyxIdBrokerOptions.ResourceServerBaseUrlConfigurationKey] ?? string.Empty)
                     .Trim()

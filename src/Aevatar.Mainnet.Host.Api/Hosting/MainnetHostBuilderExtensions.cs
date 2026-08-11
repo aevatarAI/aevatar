@@ -102,7 +102,7 @@ public static class MainnetHostBuilderExtensions
         "AgentToolAdmission:KeyPrefix";
     internal const string DefaultAgentToolAdmissionKeyPrefix =
         "aevatar:mainnet:agent-tool-admission:v1:";
-    private const string NyxIdApiBaseUrlKey = "Aevatar:NyxId:ApiBaseUrl";
+    private const string NyxIdAuthorityKey = "Aevatar:NyxId:Authority";
     private const string DeviceInboundDirectExternalEventTypeUrl =
         "type.googleapis.com/aevatar.gagents.household.DeviceInbound";
 
@@ -350,12 +350,15 @@ public static class MainnetHostBuilderExtensions
         {
             // Override the single default (NyxIdToolOptions.DefaultBaseUrl) only when config provides a
             // non-empty value; an absent/empty config key must NOT clobber the default to null.
-            var nyxAuthority = builder.Configuration["Aevatar:NyxId:ApiBaseUrl"]
-                               ?? builder.Configuration["Aevatar:NyxId:Authority"]
-                               ?? builder.Configuration["Cli:App:NyxId:Authority"]
-                               ?? builder.Configuration["Aevatar:Authentication:Authority"];
-            if (!string.IsNullOrWhiteSpace(nyxAuthority))
-                o.BaseUrl = nyxAuthority;
+            var nyxTransportBaseUrl = FirstConfiguredValue(
+                builder.Configuration,
+                "Aevatar:NyxId:InternalApiBaseUrl",
+                "Aevatar:NyxId:ApiBaseUrl",
+                "Aevatar:NyxId:Authority",
+                "Cli:App:NyxId:Authority",
+                "Aevatar:Authentication:Authority");
+            if (nyxTransportBaseUrl is not null)
+                o.BaseUrl = nyxTransportBaseUrl;
             // SSH-backed tools are disabled unless the deployment opts in explicitly.
             // Even when exposed, their contract always requires a durable actor-owned grant.
             if (bool.TryParse(builder.Configuration["Aevatar:NyxId:EnableSshExecTool"], out var enableSsh))
@@ -526,6 +529,7 @@ public static class MainnetHostBuilderExtensions
             NyxIdBaseUrl = FirstConfiguredValue(
                 builder.Configuration,
                 "Aevatar:Web:NyxIdBaseUrl",
+                "Aevatar:NyxId:InternalApiBaseUrl",
                 "Aevatar:NyxId:ApiBaseUrl",
                 "Aevatar:NyxId:Authority",
                 "Cli:App:NyxId:Authority",
@@ -672,15 +676,15 @@ public static class MainnetHostBuilderExtensions
         if (!string.IsNullOrWhiteSpace(builder.Configuration[audienceKey]))
             return;
 
-        // NyxID access tokens use its API BASE_URL as their audience. Identity assertions use
+        // NyxID access tokens use its public authority/BASE_URL as their audience. Identity assertions use
         // a separate audience and must not be reused for bearer-token validation.
-        var nyxIdApiBaseUrl = builder.Configuration[NyxIdApiBaseUrlKey];
-        if (string.IsNullOrWhiteSpace(nyxIdApiBaseUrl))
+        var nyxIdAuthority = builder.Configuration[NyxIdAuthorityKey];
+        if (string.IsNullOrWhiteSpace(nyxIdAuthority))
             return;
 
         builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
         {
-            [audienceKey] = nyxIdApiBaseUrl.Trim(),
+            [audienceKey] = nyxIdAuthority.Trim(),
         });
     }
 

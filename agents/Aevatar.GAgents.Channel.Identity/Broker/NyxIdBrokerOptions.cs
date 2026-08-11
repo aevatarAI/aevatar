@@ -9,11 +9,20 @@ namespace Aevatar.GAgents.Channel.Identity.Broker;
 /// </summary>
 public sealed class NyxIdBrokerOptions
 {
-    public const string ResourceServerBaseUrlConfigurationKey = "Aevatar:NyxId:ApiBaseUrl";
+    public const string InternalApiBaseUrlConfigurationKey = "Aevatar:NyxId:InternalApiBaseUrl";
+    public const string ApiBaseUrlConfigurationKey = "Aevatar:NyxId:ApiBaseUrl";
+    public const string ResourceServerBaseUrlConfigurationKey = "Aevatar:NyxId:Authority";
 
     /// <summary>
-    /// Canonical NyxID backend base URL used for RFC 8707 resource indicators.
-    /// This is independent from the OAuth authority stored by the OAuth client actor.
+    /// Effective NyxID HTTP transport base URL used for server-to-server API calls.
+    /// This prefers the internal cluster address and must not be used as an
+    /// OAuth issuer, audience, or RFC 8707 resource identity.
+    /// </summary>
+    public string TransportBaseUrl { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Canonical public NyxID authority used for RFC 8707 resource indicators.
+    /// This remains independent from the HTTP transport base URL.
     /// </summary>
     public string ResourceServerBaseUrl { get; set; } = string.Empty;
 

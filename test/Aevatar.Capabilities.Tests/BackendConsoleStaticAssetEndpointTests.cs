@@ -38,7 +38,6 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         html.Should().Contain(
             "\"resources\":[\"https://api.example.test/api/v1/proxy/s/aevatar\",\"https://api.example.test/api/v1/proxy/s/ornn-api\"]");
         html.Should().NotContain("__BACKEND_CONSOLE_CONFIG__");
-        html.Should().NotContain("https://nyx.chrono-ai.fun");
         html.Should().NotContain("https://nyx-api.chrono-ai.fun");
         html.Should().NotContain("37a93189-2734-406e-bca1-7dbdf25c5a53");
         if (path == "/cqrs")

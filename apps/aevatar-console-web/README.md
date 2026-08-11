@@ -48,7 +48,7 @@ through `/api/auth/nyxid/finalize`, so keep `/api/auth/*` proxied to the Studio
 backend. Configure all four browser OAuth values before building:
 
 ```bash
-NYXID_BASE_URL=https://nyx.chrono-ai.fun
+NYXID_BASE_URL=https://nyx-api.chrono-ai.fun
 NYXID_CLIENT_ID=replace-with-public-client-id
 NYXID_SCOPE="openid profile email offline_access urn:nyxid:scope:broker_binding proxy"
 NYXID_REDIRECT_URI=http://127.0.0.1:5173/auth/callback
