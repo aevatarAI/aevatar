@@ -497,7 +497,7 @@ public sealed class ChatEndpointsInternalTests
     }
 
     [Fact]
-    public async Task HandleChat_ShouldAcceptEmptyPromptForResolvedMemberWorkflowSource()
+    public async Task HandleChat_ShouldAcceptEmptyPromptForResolvedWorkflowServiceSource()
     {
         var capturedCommand = default(WorkflowChatRunRequest);
         var http = CreateHttpContext();
@@ -535,7 +535,7 @@ public sealed class ChatEndpointsInternalTests
             },
             interactionService,
             CancellationToken.None,
-            allowEmptyInputForResolvedMemberWorkflow: true);
+            allowEmptyInputForResolvedWorkflowService: true);
 
         var body = await ReadBodyAsync(http.Response);
         http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
