@@ -315,6 +315,50 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
         return ConversationCardFinalizeResult.Succeeded();
     }
 
+    public async Task<ConversationCardAbortResult> RunCardAbortAsync(
+        ChatActivity referenceActivity,
+        string cardId,
+        long sequence,
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(referenceActivity);
+
+        var token = ResolveToken(referenceActivity, runtimeContext);
+        if (token is null)
+        {
+            return ConversationCardAbortResult.Failed(
+                "token_missing",
+                "NyxID user access token is missing for card timeout compensation.");
+        }
+
+        var (cardKit, _) = ResolveOutboundClients(referenceActivity);
+        try
+        {
+            var settingsResponse = await cardKit.SetCardSettingsAsync(
+                token,
+                new LarkCardKitSettingsRequest(
+                    CardId: cardId,
+                    SettingsJson: LarkStreamingCardShell.BuildCloseStreamingSettingsJson(),
+                    Sequence: sequence,
+                    IdempotencyKey: $"abort-{cardId}-{sequence}"),
+                ct);
+            if (LarkProxyResponseParser.TryParseError(settingsResponse, out var settingsError))
+                return ConversationCardAbortResult.Failed("card_abort_streaming_failed", settingsError);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "CardKit timeout compensation threw for card_id={CardId}, seq={Sequence}",
+                cardId,
+                sequence);
+            return ConversationCardAbortResult.Failed("card_abort_streaming_threw", ex.Message);
+        }
+
+        return ConversationCardAbortResult.Succeeded();
+    }
+
     private static string? TryComposeJsonTableCard(string? text, ChatActivity referenceActivity)
     {
         if (!LarkJsonTableFormatter.ContainsConvertibleJson(text))

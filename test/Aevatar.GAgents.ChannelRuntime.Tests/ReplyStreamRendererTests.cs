@@ -231,6 +231,45 @@ public sealed class ReplyStreamRendererTests
         completed.RawResult.RawErrorSummary.Should().Be("stream rejected");
     }
 
+    [Fact]
+    public async Task LarkCardRenderer_CreatesAndExecutesTypedAbortStep()
+    {
+        var runner = new RecordingCardTurnRunner();
+        var renderer = new LarkCardReplyStreamRenderer(
+            runner,
+            NullLogger<LarkCardReplyStreamRenderer>.Instance);
+        var context = new RecordingReplyOperationContext(matchesNyx: false, matchesLark: true);
+        var step = renderer.CreateAbortStep(new LarkCardAbortOperationStepInput(
+            CreateActivity(),
+            "corr-card",
+            "cmd-card",
+            "card-1",
+            "message-1",
+            "partial text",
+            LarkCardAbortReason.GenerationTimeout,
+            Sequence: 9,
+            Generation: 10));
+
+        step.OperationId.Should().Be("corr-card:Abort:9:10");
+        step.OperationName.Should().Be("lark-card-abort");
+        step.LarkCard.Operation.Should().Be(LarkCardOperationPhase.Abort);
+        step.LarkCard.AbortReason.Should().Be(LarkCardAbortReason.GenerationTimeout);
+
+        await renderer.ExecuteAsync(context, step, CancellationToken.None);
+
+        runner.Aborts.Should().ContainSingle(call =>
+            call.CardId == "card-1" &&
+            call.Sequence == 9 &&
+            call.ActivityUserAccessToken == "runtime-user-token" &&
+            call.RuntimeUserAccessToken == "runtime-user-token");
+        var completed = context.Dispatched.Should().ContainSingle().Subject.Event
+            .Should().BeOfType<LarkCardOperationCompletedEvent>().Subject;
+        completed.Operation.Should().Be(LarkCardOperationPhase.Abort);
+        completed.OperationId.Should().Be("corr-card:Abort:9:10");
+        completed.AbortReason.Should().Be(LarkCardAbortReason.GenerationTimeout);
+        completed.Activity.TransportExtras.NyxUserAccessToken.Should().BeEmpty();
+    }
+
     private static LlmReplyStreamChunkEvent CreateTextChunk() =>
         new()
         {
@@ -313,6 +352,8 @@ public sealed class ReplyStreamRendererTests
 
         public List<StreamCall> Streams { get; } = [];
 
+        public List<AbortCall> Aborts { get; } = [];
+
         public ConversationCardStreamResult StreamResult { get; init; } =
             ConversationCardStreamResult.Succeeded();
 
@@ -348,6 +389,21 @@ public sealed class ReplyStreamRendererTests
             Finalizes.Add(referenceActivity.Clone());
             return Task.FromResult(ConversationCardFinalizeResult.Succeeded());
         }
+
+        public Task<ConversationCardAbortResult> RunCardAbortAsync(
+            ChatActivity referenceActivity,
+            string cardId,
+            long sequence,
+            ConversationTurnRuntimeContext runtimeContext,
+            CancellationToken ct)
+        {
+            Aborts.Add(new AbortCall(
+                cardId,
+                sequence,
+                referenceActivity.TransportExtras?.NyxUserAccessToken ?? string.Empty,
+                runtimeContext.NyxUserAccessToken ?? string.Empty));
+            return Task.FromResult(ConversationCardAbortResult.Succeeded());
+        }
     }
 
     private sealed record StreamCall(
@@ -355,6 +411,12 @@ public sealed class ReplyStreamRendererTests
         string CardId,
         string ElementId,
         long Sequence);
+
+    private sealed record AbortCall(
+        string CardId,
+        long Sequence,
+        string ActivityUserAccessToken,
+        string RuntimeUserAccessToken);
 
     private sealed class RecordingReplyOperationContext(
         bool matchesNyx,
@@ -382,7 +444,9 @@ public sealed class ReplyStreamRendererTests
             ChatActivity? activity,
             string? replyToken,
             long replyTokenExpiresAtUnixMs) =>
-            ConversationTurnRuntimeContext.Empty;
+            new(
+                NyxRelayReplyToken: null,
+                NyxUserAccessToken: activity?.TransportExtras?.NyxUserAccessToken);
 
         public void RestoreRuntimeTransportCredentials(
             ChatActivity? activity,

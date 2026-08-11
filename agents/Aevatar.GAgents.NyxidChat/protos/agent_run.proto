@@ -12,6 +12,7 @@ import "workflow_execution_messages.proto";
 import "nyxid_chat_task.proto";
 import "agent_profiles.proto";
 import "ToolProviders/agent_tool_admission.proto";
+import "Credentials/credential_secret_references.proto";
 import "google/protobuf/timestamp.proto";
 
 enum AgentRunStatus {
@@ -96,6 +97,9 @@ message AgentRunGAgentState {
   // produced reply is intentionally invisible: output retries re-dispatch this
   // receipt to ConversationGAgent instead of re-running the LLM/tool chain.
   aevatar.ai.WorkflowRunBackgroundDeliveryReceipt produced_workflow_run_delivery = 32;
+  // Encrypted, TTL-bound handle only. The raw NyxID user bearer remains outside
+  // actor state and is resolved solely for Lark CardKit timeout compensation.
+  aevatar.credentials.RuntimeSecretReference relay_user_access_token_ref = 33;
 }
 
 enum AgentRunToolApprovalDecision {
@@ -173,6 +177,9 @@ message AgentRunLarkCardDeliveryState {
   string pending_finalize_command_id = 14;
   repeated aevatar.gagents.channel.runtime.ConversationHistoryEntry pending_appended_history = 15;
   AgentRunLarkCardTextFallbackPhase text_fallback_phase = 16;
+  string nyx_provider_slug = 17;
+  aevatar.gagents.channel.runtime.LarkCardAbortReason pending_abort_reason = 18;
+  int64 pending_abort_triggered_at_unix_ms = 19;
 }
 
 message AgentRunLarkCardDeliveryChangedEvent {
@@ -196,6 +203,9 @@ message AgentRunLarkCardDeliveryChangedEvent {
   optional string finalize_command_id = 18;
   repeated aevatar.gagents.channel.runtime.ConversationHistoryEntry appended_history = 19;
   optional AgentRunLarkCardTextFallbackPhase text_fallback_phase = 20;
+  optional string nyx_provider_slug = 21;
+  optional aevatar.gagents.channel.runtime.LarkCardAbortReason pending_abort_reason = 22;
+  optional int64 pending_abort_triggered_at_unix_ms = 23;
 }
 
 message AgentRunLarkCardDeliveryCompletion {
@@ -496,6 +506,7 @@ message AgentRunReplyGenerationRequestedEvent {
   string target_actor_id = 3;
   int64 requested_at_unix_ms = 4;
   int32 attempt = 5;
+  aevatar.credentials.RuntimeSecretReference relay_user_access_token_ref = 6;
 }
 
 // Persisted per-step waterline owned by AgentRunGAgent. Runtime-only

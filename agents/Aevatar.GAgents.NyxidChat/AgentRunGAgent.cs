@@ -5,6 +5,7 @@ using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
@@ -370,19 +371,16 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             return;
         }
 
-        await DispatchGenerationTimeoutDropNotificationAsync(command);
-
-        await PersistDomainEventAsync(new AgentRunFailedEvent
+        if (await TryBeginLarkCardTimeoutAbortAsync(
+                command.CorrelationId,
+                LarkCardAbortReason.GenerationTimeout,
+                command.TimedOutAtUnixMs,
+                BuildLlmReplyCommandId(command.CorrelationId)))
         {
-            RunId = command.RunId,
-            CorrelationId = command.CorrelationId,
-            TargetActorId = command.TargetActorId,
-            ErrorCode = "llm_reply_timeout",
-            ErrorSummary = $"LLM reply generation exceeded {(int)ResolveFallbackTimeout().TotalSeconds}s budget.",
-            FailedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
-        });
+            return;
+        }
 
-        await ScheduleTerminalCleanupAsync(command.RunId);
+        await CompleteReplyGenerationTimeoutAsync(command);
     }
 
     [EventHandler]
@@ -481,6 +479,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             TargetActorId = request.TargetActorId,
             RequestedAtUnixMs = requestedAtUnixMs,
             Attempt = attempt,
+            RelayUserAccessTokenRef = request.RelayUserAccessTokenRef?.Clone(),
         });
 
         await ScheduleGenerationTimeoutAsync(request, runId, attempt);
@@ -2542,6 +2541,26 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         }
     }
 
+    private async Task CompleteReplyGenerationTimeoutAsync(AgentRunReplyGenerationTimedOut command)
+    {
+        if (!IsCurrentGenerationContinuation(command.RunId, command.CorrelationId, command.Attempt))
+            return;
+
+        await DispatchGenerationTimeoutDropNotificationAsync(command);
+
+        await PersistDomainEventAsync(new AgentRunFailedEvent
+        {
+            RunId = command.RunId,
+            CorrelationId = command.CorrelationId,
+            TargetActorId = command.TargetActorId,
+            ErrorCode = "llm_reply_timeout",
+            ErrorSummary = $"LLM reply generation exceeded {(int)ResolveFallbackTimeout().TotalSeconds}s budget.",
+            FailedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+        });
+
+        await ScheduleTerminalCleanupAsync(command.RunId);
+    }
+
     private async Task<bool> TryHandleOutputDispatchFailureAsync(
         NeedsLlmReplyEvent request,
         string runId,
@@ -2965,6 +2984,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         next.Status = AgentRunStatus.ReplyGenerationRequested;
         next.GenerationRequestedAtUnixMs = evt.RequestedAtUnixMs;
         next.GenerationAttempt = evt.Attempt;
+        next.RelayUserAccessTokenRef = evt.RelayUserAccessTokenRef?.Clone();
         return next;
     }
 

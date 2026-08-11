@@ -61,6 +61,18 @@ public interface IConversationCardTurnRunner
         long sequence,
         ConversationTurnRuntimeContext runtimeContext,
         CancellationToken ct);
+
+    /// <summary>
+    /// Compensates a timed-out turn by closing the existing card's streaming mode without
+    /// changing its last visible content. The operation is idempotent and uses an actor-owned
+    /// monotonic sequence.
+    /// </summary>
+    Task<ConversationCardAbortResult> RunCardAbortAsync(
+        ChatActivity referenceActivity,
+        string cardId,
+        long sequence,
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct);
 }
 
 /// <summary>
@@ -174,6 +186,18 @@ public sealed record ConversationCardFinalizeResult(
         new(false, finalTextWritten, errorCode, errorSummary);
 }
 
+public sealed record ConversationCardAbortResult(
+    bool Success,
+    string ErrorCode,
+    string ErrorSummary)
+{
+    public static ConversationCardAbortResult Succeeded() =>
+        new(true, string.Empty, string.Empty);
+
+    public static ConversationCardAbortResult Failed(string errorCode, string errorSummary) =>
+        new(false, errorCode, errorSummary);
+}
+
 /// <summary>
 /// No-op default. Every CardKit operation reports a transient failure that disables the
 /// card path so the grain can fall back to the legacy text-edit sink. Production DI registers
@@ -211,6 +235,16 @@ public sealed class NullConversationCardTurnRunner : IConversationCardTurnRunner
         ConversationTurnRuntimeContext runtimeContext,
         CancellationToken ct) =>
         Task.FromResult(ConversationCardFinalizeResult.Failed(
+            "no_card_runner",
+            "no IConversationCardTurnRunner registered"));
+
+    public Task<ConversationCardAbortResult> RunCardAbortAsync(
+        ChatActivity referenceActivity,
+        string cardId,
+        long sequence,
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct) =>
+        Task.FromResult(ConversationCardAbortResult.Failed(
             "no_card_runner",
             "no IConversationCardTurnRunner registered"));
 }

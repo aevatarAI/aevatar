@@ -259,6 +259,51 @@ public sealed class ChannelCardConversationTurnRunnerTests
     }
 
     [Fact]
+    public async Task RunCardAbortAsync_ShouldUseRuntimeTokenProviderClientAndCloseStreamingOnly()
+    {
+        var defaultCardKit = new RecordingCardKitClient();
+        var defaultLark = new RecordingLarkNyxClient();
+        var perBotCardKit = new RecordingCardKitClient();
+        var perBotLark = new RecordingLarkNyxClient();
+        var factory = new RecordingOutboundClientFactory(
+            defaultCardKit,
+            defaultLark,
+            new Dictionary<string, (RecordingCardKitClient, RecordingLarkNyxClient)>
+            {
+                ["api-lark-bot-4"] = (perBotCardKit, perBotLark),
+            });
+        var runner = new ChannelCardConversationTurnRunner(
+            defaultCardKit,
+            defaultLark,
+            factory,
+            NullLogger<ChannelCardConversationTurnRunner>.Instance);
+        var activity = BuildSanitizedActivity(providerSlug: "api-lark-bot-4");
+
+        var result = await runner.RunCardAbortAsync(
+            activity,
+            "card-abort-1",
+            sequence: 9,
+            RuntimeContext("runtime-card-abort-token"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        factory.RequestedCardKitSlugs.Should().ContainSingle().Which.Should().Be("api-lark-bot-4");
+        perBotCardKit.SettingsCalls.Should().ContainSingle();
+        var settings = perBotCardKit.SettingsCalls[0];
+        settings.Token.Should().Be("runtime-card-abort-token");
+        settings.Request.CardId.Should().Be("card-abort-1");
+        settings.Request.Sequence.Should().Be(9);
+        settings.Request.SettingsJson.Should().Be("""{"config":{"streaming_mode":false}}""");
+        settings.Request.IdempotencyKey.Should().Be("abort-card-abort-1-9");
+        perBotCardKit.CreateCalls.Should().BeEmpty();
+        perBotCardKit.StreamCalls.Should().BeEmpty();
+        perBotCardKit.UpdateCalls.Should().BeEmpty();
+        perBotLark.SendCalls.Should().BeEmpty();
+        perBotLark.ReplyCalls.Should().BeEmpty();
+        defaultCardKit.SettingsCalls.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task RunCardFinalizeAsync_WhenFinalTextIsJson_ShouldReplaceStreamingShellWithNativeTable()
     {
         var cardKit = new RecordingCardKitClient();
