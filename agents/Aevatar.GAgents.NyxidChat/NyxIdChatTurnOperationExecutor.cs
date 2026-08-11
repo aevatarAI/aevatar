@@ -1937,8 +1937,8 @@ public sealed class NyxIdChatTurnOperationExecutor
     {
         var profile = input.AgentProfile;
         var authority = input.AgentProfileTurnAuthority;
-        if (input.Intent == NyxIdChatTurnIntent.ServiceConnect &&
-            !IsProfileSelectedServiceConnect(authority))
+        if (IsBuiltInIntent(input.Intent) &&
+            !IsProfileSelectedBuiltInIntent(input.Intent, authority))
         {
             if (_turnCatalogMaterializer is null ||
                 (profile is null) != (authority is null))
@@ -1993,7 +1993,7 @@ public sealed class NyxIdChatTurnOperationExecutor
                     toolContext,
                     ct)
                 .ConfigureAwait(false)).Catalog;
-            return input.Intent == NyxIdChatTurnIntent.ServiceConnect
+            return IsBuiltInIntent(input.Intent)
                 ? AgentProfileTurnCatalogMaterializer.NarrowToBuiltInIntent(
                     input.Intent,
                     catalog,
@@ -2010,12 +2010,26 @@ public sealed class NyxIdChatTurnOperationExecutor
         }
     }
 
-    private static bool IsProfileSelectedServiceConnect(
-        AgentProfileTurnAuthorityState? authority) =>
-        string.Equals(
+    private static bool IsBuiltInIntent(NyxIdChatTurnIntent intent) =>
+        intent is NyxIdChatTurnIntent.ServiceConnect or NyxIdChatTurnIntent.KeyCreate;
+
+    private static bool IsProfileSelectedBuiltInIntent(
+        NyxIdChatTurnIntent intent,
+        AgentProfileTurnAuthorityState? authority)
+    {
+        var intentId = intent switch
+        {
+            NyxIdChatTurnIntent.ServiceConnect =>
+                NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
+            NyxIdChatTurnIntent.KeyCreate =>
+                NyxIdChatTurnIntentClassifier.KeyCreateIntentId,
+            _ => null,
+        };
+        return intentId is not null && string.Equals(
             authority?.CandidateRoute?.IntentId,
-            NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
+            intentId,
             StringComparison.Ordinal);
+    }
 
     private static AgentProfileTurnCatalog RestrictedEmptyCatalog() =>
         new(
