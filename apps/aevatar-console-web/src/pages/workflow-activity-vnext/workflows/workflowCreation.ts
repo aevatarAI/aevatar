@@ -3,14 +3,35 @@ import type { StudioWorkflowDocument } from '@/shared/studio/models';
 export type WorkflowCreationMode = 'describe' | 'import' | 'template';
 
 export type BundledWorkflowTemplate = {
+  readonly copyNameMessage: WorkflowTemplateMessage;
+  readonly descriptionMessage: WorkflowTemplateMessage;
   readonly id: string;
+  readonly nameMessage: WorkflowTemplateMessage;
   readonly version: string;
   readonly yaml: string;
 };
 
+export type WorkflowTemplateMessage = {
+  readonly defaultMessage: string;
+  readonly id: string;
+};
+
 export const BUNDLED_WORKFLOW_TEMPLATES: readonly BundledWorkflowTemplate[] = [
   {
+    copyNameMessage: {
+      defaultMessage: 'Incident triage copy',
+      id: 'workflowActivityVNext.new.templateCopyName.incidentTriage',
+    },
+    descriptionMessage: {
+      defaultMessage:
+        'Classify an incident, prepare a response, and request human approval.',
+      id: 'workflowActivityVNext.new.templateDescription.incidentTriage',
+    },
     id: 'incident-triage',
+    nameMessage: {
+      defaultMessage: 'Incident triage',
+      id: 'workflowActivityVNext.new.templateName.incidentTriage',
+    },
     version: '2026.08.1',
     yaml: `name: incident_triage
 description: Classify an incident and prepare a reviewed response.
