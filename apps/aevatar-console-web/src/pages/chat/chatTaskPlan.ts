@@ -1,3 +1,5 @@
+import { t } from '@/shared/i18n/messages';
+
 export type ChatTaskStatus =
   | 'active'
   | 'succeeded'
@@ -582,7 +584,10 @@ function decodeSource(
         label: optionalString(source.check) || 'Postcondition',
       };
     case 'input':
-      return { kind: 'input', label: 'User input' };
+      return {
+        kind: 'input',
+        label: t('pages.chat.taskPlan.userInput', 'User input'),
+      };
     case 'approval':
       return { kind: 'approval', label: 'Approval' };
     case 'condition': {
