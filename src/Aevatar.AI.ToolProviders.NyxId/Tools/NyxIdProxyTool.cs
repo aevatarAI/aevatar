@@ -7,6 +7,7 @@ using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using System.Net;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -28,6 +29,10 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
     private const string AccessTokenMissingErrorCode = "NYXID_ACCESS_TOKEN_MISSING";
     private const string AccessTokenMissingErrorMessage =
         "No NyxID access token available. User must be authenticated.";
+    private const long MaxConnectedServiceReadBytes = 16L * 1024;
+    private const string ConnectedServiceReadTooLargeErrorCode = "NYXID_CONNECTED_SERVICE_READ_TOO_LARGE";
+    private const string ConnectedServiceReadTooLargeErrorMessage =
+        "The connected-service read result exceeded the bounded projection limit.";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -421,7 +426,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
                 ct);
         }
 
-        var response = await _client.ProxyRequestResponseAsync(
+        var response = await _client.ProxyRequestResponseBoundedAsync(
             token,
             request.Slug,
             request.ServiceId,
@@ -429,7 +434,14 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
             request.Method,
             request.Body,
             request.Headers,
+            MaxConnectedServiceReadBytes,
             ct);
+        if (IsConnectedServiceReadTooLarge(response) ||
+            Encoding.UTF8.GetByteCount(response.Content) > MaxConnectedServiceReadBytes)
+        {
+            return CreateConnectedServiceReadTooLargeOutcome(admission, callId, toolName);
+        }
+
         var authorityFailure = !response.Succeeded
             ? MapExactRouteFailure(response.Content, admission.ServiceInstanceId, request.Slug)
             : null;
@@ -707,6 +719,31 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
 
     private static string AdmissionDriftError(string code, string message) =>
         JsonSerializer.Serialize(new { error = true, error_code = code, message });
+
+    private static bool IsConnectedServiceReadTooLarge(NyxIdProxyTextResponse response) =>
+        !response.Succeeded &&
+        response.Detail is "content_length_exceeds_max_bytes" or
+            "content_exceeds_max_bytes" or
+            "projection_exceeds_max_bytes";
+
+    private static AgentToolTerminalOutcome CreateConnectedServiceReadTooLargeOutcome(
+        AgentToolOperationAdmission admission,
+        string callId,
+        string toolName)
+    {
+        var result = AdmissionDriftError(
+            ConnectedServiceReadTooLargeErrorCode,
+            ConnectedServiceReadTooLargeErrorMessage);
+        return new AgentToolTerminalOutcome(
+            result,
+            NyxIdProxyReceiptFactory.CreateError(
+                callId,
+                toolName,
+                admission.ServiceInstanceId,
+                ConnectedServiceReadTooLargeErrorCode,
+                ConnectedServiceReadTooLargeErrorMessage,
+                result));
+    }
 
     private static AgentToolTerminalOutcome CreateAdmittedFailureOutcome(
         AgentToolOperationAdmission admission,
