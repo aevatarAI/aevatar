@@ -1238,6 +1238,11 @@ message NyxIdChatConversationGAgentState {
   // terminal identity plus a SHA-256 digest); correctness must not depend on
   // evicting an older receipt from a long-lived conversation actor.
   repeated NyxIdChatOperationResultAcknowledgementFence result_acknowledgement_fences = 43;
+  // Secret-vault pointer for a plan resolution that committed before the turn
+  // actor acknowledged its exact gate admission. The bearer-bearing command
+  // remains outside actor state until that admission barrier is satisfied.
+  aevatar.credentials.DurableCallerCredentialRef pending_plan_gate_continuation = 44;
+  NyxIdChatOperationKey pending_plan_gate_continuation_key = 45;
 }
 
 message NyxIdChatOperationResultAcknowledgementFence {
@@ -1478,6 +1483,11 @@ message NyxIdChatTurnPlanGateAdmissionCommittedSignal {
 
 message NyxIdChatPlanGateAdmissionDeliveryDispatchRequested {
   string gate_request_id = 1;
+}
+
+message NyxIdChatPendingPlanGateContinuationDispatchRequested {
+  string credential_ref = 1;
+  NyxIdChatOperationKey key = 2;
 }
 
 message NyxIdChatTurnPlanGateAdmissionExpiredEvent {

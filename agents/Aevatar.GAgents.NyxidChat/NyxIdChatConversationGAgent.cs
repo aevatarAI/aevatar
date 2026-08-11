@@ -33,6 +33,10 @@ public sealed class NyxIdChatConversationGAgent
         TimeSpan.FromMinutes(30);
     private static readonly TimeSpan PendingSteeringContinuationRetryDelay =
         TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan PendingPlanGateContinuationRetention =
+        TimeSpan.FromMinutes(30);
+    private static readonly TimeSpan PendingPlanGateContinuationRetryDelay =
+        TimeSpan.FromSeconds(5);
     private static readonly TimeSpan HistoryReservationRetryDelay = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan HistoryTerminalRetryDelay = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan PlanGateAdmissionRevocationRetryDelay =
@@ -199,6 +203,8 @@ public sealed class NyxIdChatConversationGAgent
             await SchedulePlanGateAdmissionRevocationAsync(ActivationRecoveryDelay, ct);
         else if (State.PendingPlanGateAdmissionDelivery is not null)
             await SchedulePlanGateAdmissionDeliveryAsync(ActivationRecoveryDelay, ct);
+        else if (State.PendingPlanGateContinuation is not null)
+            await SchedulePendingPlanGateContinuationAsync(ActivationRecoveryDelay, ct);
 
         if (State.PendingOperationDeliveryProbe is not null)
             await ScheduleOperationDeliveryProbeAsync(ActivationRecoveryDelay, ct);
@@ -1688,7 +1694,7 @@ public sealed class NyxIdChatConversationGAgent
             return;
 
         var nextState = NyxIdChatNeedsYouDecisions.RefreshAttention(decision.State);
-        PreparePlanGateAdmissionRevocation(
+        var pendingContinuationToRevoke = PreparePlanGateAdmissionRevocation(
             nextState,
             State.ActiveTurnPlanGateAdmission,
             decision.Result.ReasonCode);
@@ -1701,6 +1707,13 @@ public sealed class NyxIdChatConversationGAgent
             Turn = nextState.ActiveTurn?.Clone(),
             State = nextState,
         }, CancellationToken.None);
+
+        if (pendingContinuationToRevoke is not null)
+        {
+            await RevokePendingPlanGateContinuationAsync(
+                pendingContinuationToRevoke,
+                "nyxid chat stopped before plan-gate continuation dispatch");
+        }
 
         if (operationToCancel is not null)
             await DispatchOperationCancellationAsync(operationToCancel);
@@ -2044,9 +2057,6 @@ public sealed class NyxIdChatConversationGAgent
     public async Task HandlePlanResolveAsync(NyxIdChatPlanResolveCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
-        if (State.PendingPlanGateAdmissionDelivery is not null)
-            return;
-
         var decision = NyxIdChatPlanGateDecisions.Resolve(
             State,
             command,
@@ -2068,24 +2078,53 @@ public sealed class NyxIdChatConversationGAgent
             if (directive is not null)
                 nextCommand.PlanGateContinuation.CanaryEffectFault = directive;
         }
+        DurableCallerCredentialRef? pendingContinuation = null;
+        if (nextCommand is not null && State.PendingPlanGateAdmissionDelivery is not null)
+        {
+            pendingContinuation = await StorePendingPlanGateContinuationAsync(nextCommand);
+            nextState.PendingPlanGateContinuation = pendingContinuation.Clone();
+            nextState.PendingPlanGateContinuationKey = nextCommand.Key.Clone();
+        }
+        DurableCallerCredentialRef? pendingContinuationToRevoke = null;
         if (!decision.Resolution.Confirmed && admitted is not null)
         {
-            PreparePlanGateAdmissionRevocation(
+            pendingContinuationToRevoke = PreparePlanGateAdmissionRevocation(
                 nextState,
                 admitted,
                 "NYXID_CHAT_PLAN_REJECTED");
         }
 
-        await PersistDomainEventAsync(new NyxIdChatPlanResolutionCommittedEvent
+        try
         {
-            Resolution = decision.Resolution.Clone(),
-            State = nextState,
-        }, CancellationToken.None);
+            await PersistDomainEventAsync(new NyxIdChatPlanResolutionCommittedEvent
+            {
+                Resolution = decision.Resolution.Clone(),
+                State = nextState,
+            }, CancellationToken.None);
+        }
+        catch
+        {
+            if (pendingContinuation is not null)
+            {
+                await RevokePendingPlanGateContinuationAsync(
+                    pendingContinuation,
+                    "plan resolution did not commit");
+            }
+
+            throw;
+        }
+
+        if (pendingContinuationToRevoke is not null)
+        {
+            await RevokePendingPlanGateContinuationAsync(
+                pendingContinuationToRevoke,
+                "nyxid chat plan rejected");
+        }
 
         if (State.PendingPlanGateAdmissionRevocation is not null)
             await DispatchPendingPlanGateAdmissionRevocationAsync(CancellationToken.None);
 
-        if (nextCommand is not null)
+        if (nextCommand is not null && pendingContinuation is null)
         {
             await DispatchAuthorizedOperationAsync(
                 nextCommand,
@@ -2149,6 +2188,13 @@ public sealed class NyxIdChatConversationGAgent
             nextState.ActiveTurnPlanGateAdmission = null;
         if (nextState.PendingPlanGateAdmissionDelivery?.Admission?.Equals(signal.Admission) == true)
             nextState.PendingPlanGateAdmissionDelivery = null;
+        DurableCallerCredentialRef? pendingContinuationToRevoke = null;
+        if (KeysEqual(nextState.PendingPlanGateContinuationKey, signal.Admission.Key))
+        {
+            pendingContinuationToRevoke = nextState.PendingPlanGateContinuation?.Clone();
+            nextState.PendingPlanGateContinuation = null;
+            nextState.PendingPlanGateContinuationKey = null;
+        }
         var terminalPrepared = PrepareHistoryTerminalOutbox(nextState);
         await PersistDomainEventAsync(new NyxIdChatPlanGateCapabilityExpiredCommittedEvent
         {
@@ -2157,6 +2203,13 @@ public sealed class NyxIdChatConversationGAgent
             SafeMessage = signal.SafeMessage,
             State = nextState,
         }, CancellationToken.None);
+
+        if (pendingContinuationToRevoke is not null)
+        {
+            await RevokePendingPlanGateContinuationAsync(
+                pendingContinuationToRevoke,
+                "nyxid chat plan-gate capability expired");
+        }
 
         if (terminalPrepared)
             await DispatchPendingHistoryTerminalAsync();
@@ -2200,6 +2253,26 @@ public sealed class NyxIdChatConversationGAgent
                 AcknowledgedAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
             },
             CancellationToken.None);
+
+        if (State.PendingPlanGateContinuation is not null)
+            await DispatchPendingPlanGateContinuationAsync(CancellationToken.None);
+    }
+
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+    public async Task HandlePendingPlanGateContinuationDispatchRequestedAsync(
+        NyxIdChatPendingPlanGateContinuationDispatchRequested signal)
+    {
+        ArgumentNullException.ThrowIfNull(signal);
+        if (State.PendingPlanGateAdmissionDelivery is not null ||
+            State.PendingPlanGateContinuation is not { } pending ||
+            signal.Key is null ||
+            !string.Equals(pending.Ref, signal.CredentialRef, StringComparison.Ordinal) ||
+            !KeysEqual(State.PendingPlanGateContinuationKey, signal.Key))
+        {
+            return;
+        }
+
+        await DispatchPendingPlanGateContinuationAsync(CancellationToken.None);
     }
 
     [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
@@ -3490,6 +3563,11 @@ public sealed class NyxIdChatConversationGAgent
         {
             next.ActiveTurnPlanGateAdmission = null;
         }
+        if (KeysEqual(next.PendingPlanGateContinuationKey, evt.Key))
+        {
+            next.PendingPlanGateContinuation = null;
+            next.PendingPlanGateContinuationKey = null;
+        }
         if (KeysEqual(next.PendingOperationDeliveryProbe, evt.Key))
             next.PendingOperationDeliveryProbe = null;
         next.UpdatedAt = evt.DispatchedAt?.Clone();
@@ -4605,6 +4683,13 @@ public sealed class NyxIdChatConversationGAgent
         var next = NyxIdChatNeedsYouDecisions.RefreshAttention(decision.State);
         if (KeysEqual(next.PendingOperationDeliveryProbe, operationKey))
             next.PendingOperationDeliveryProbe = null;
+        DurableCallerCredentialRef? pendingContinuationToRevoke = null;
+        if (KeysEqual(next.PendingPlanGateContinuationKey, operationKey))
+        {
+            pendingContinuationToRevoke = next.PendingPlanGateContinuation?.Clone();
+            next.PendingPlanGateContinuation = null;
+            next.PendingPlanGateContinuationKey = null;
+        }
         next.ProgressSequence = State.ProgressSequence + 1;
         next.UpdatedAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow());
         PreparePlanGateAdmissionRevocation(
@@ -4620,6 +4705,13 @@ public sealed class NyxIdChatConversationGAgent
             ProgressSequence = next.ProgressSequence,
             State = next,
         }, CancellationToken.None);
+
+        if (pendingContinuationToRevoke is not null)
+        {
+            await RevokePendingPlanGateContinuationAsync(
+                pendingContinuationToRevoke,
+                "nyxid chat plan-gate continuation dispatch failed");
+        }
 
         if (State.PendingPlanGateAdmissionRevocation is not null)
             await DispatchPendingPlanGateAdmissionRevocationAsync(CancellationToken.None);
@@ -4659,6 +4751,13 @@ public sealed class NyxIdChatConversationGAgent
         next.ActiveTask!.UpdatedAt = now.Clone();
         next.UpdatedAt = now.Clone();
         next.PendingOperationDeliveryProbe = operationKey.Clone();
+        DurableCallerCredentialRef? pendingContinuationToRevoke = null;
+        if (KeysEqual(next.PendingPlanGateContinuationKey, operationKey))
+        {
+            pendingContinuationToRevoke = next.PendingPlanGateContinuation?.Clone();
+            next.PendingPlanGateContinuation = null;
+            next.PendingPlanGateContinuationKey = null;
+        }
         PreparePlanGateAdmissionRevocation(
             next,
             State.ActiveTurnPlanGateAdmission,
@@ -4670,6 +4769,13 @@ public sealed class NyxIdChatConversationGAgent
             ObservedAt = now,
             State = next,
         }, CancellationToken.None);
+
+        if (pendingContinuationToRevoke is not null)
+        {
+            await RevokePendingPlanGateContinuationAsync(
+                pendingContinuationToRevoke,
+                "nyxid chat plan-gate continuation delivery uncertain");
+        }
 
         if (State.PendingPlanGateAdmissionRevocation is not null)
             await DispatchPendingPlanGateAdmissionRevocationAsync(CancellationToken.None);
@@ -4893,6 +4999,233 @@ public sealed class NyxIdChatConversationGAgent
         await ScheduleOutstandingOperationStallCheckAsync(CancellationToken.None);
     }
 
+    private async Task<DurableCallerCredentialRef> StorePendingPlanGateContinuationAsync(
+        NyxIdChatOperationDispatchCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        var vault = Services.GetService<ISecretVault>() ??
+                    throw new InvalidOperationException(
+                        "The pending plan-gate continuation secret vault is unavailable.");
+        var ownerSubject = NormalizeRequired(State.OwnerSubject, "owner_subject");
+        var ownerScopeKey = $"nyxid-chat:{Id}";
+        var requestedRef = BuildStableIdentity(
+            "pending-plan-gate-continuation",
+            Id,
+            command.Key.OperationId,
+            command.PlanGateContinuation?.GateRequestId ?? string.Empty);
+        var stored = await vault.PutAsync(
+            new StoreSecretRequest(
+                CredentialSecretPurposes.NyxIdChatPendingPlanGateContinuation,
+                ownerScopeKey,
+                ownerSubject,
+                Convert.ToBase64String(command.ToByteArray()),
+                "nyxid chat pending plan gate continuation",
+                _timeProvider.GetUtcNow() + PendingPlanGateContinuationRetention,
+                requestedRef),
+            CancellationToken.None);
+        return new DurableCallerCredentialRef
+        {
+            Ref = stored.Reference.Ref,
+            Purpose = CredentialSecretPurposes.NyxIdChatPendingPlanGateContinuation,
+            OwnerScopeKey = ownerScopeKey,
+            SubjectId = ownerSubject,
+            SourceKind = DurableCallerCredentialSourceKind.NyxIdChat,
+        };
+    }
+
+    private async Task DispatchPendingPlanGateContinuationAsync(CancellationToken ct)
+    {
+        var pending = State.PendingPlanGateContinuation?.Clone();
+        var key = State.PendingPlanGateContinuationKey?.Clone();
+        if (pending is null || key is null || State.PendingPlanGateAdmissionDelivery is not null)
+            return;
+
+        var vault = Services.GetService<ISecretVault>();
+        if (vault is null)
+        {
+            Logger.LogWarning(
+                "NyxIdChat pending plan-gate continuation vault is temporarily unavailable: actor={ActorId} operation={OperationId}",
+                Id,
+                key.OperationId);
+            await SchedulePendingPlanGateContinuationAsync(
+                PendingPlanGateContinuationRetryDelay,
+                CancellationToken.None);
+            return;
+        }
+
+        ResolveSecretResult resolved;
+        try
+        {
+            resolved = await vault.ResolveAsync(
+                new ResolveSecretRequest(
+                    pending.Ref,
+                    CredentialSecretPurposes.NyxIdChatPendingPlanGateContinuation,
+                    pending.OwnerScopeKey,
+                    pending.SubjectId,
+                    "nyxid chat dispatch pending plan gate continuation"),
+                ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            Logger.LogWarning(
+                exception,
+                "NyxIdChat pending plan-gate continuation vault resolution failed and remains recoverable: actor={ActorId} operation={OperationId}",
+                Id,
+                key.OperationId);
+            await SchedulePendingPlanGateContinuationAsync(
+                PendingPlanGateContinuationRetryDelay,
+                CancellationToken.None);
+            return;
+        }
+
+        if (!resolved.Resolved)
+        {
+            await FailPendingPlanGateContinuationAsync(
+                pending,
+                key,
+                "NYXID_CHAT_PENDING_PLAN_GATE_CONTINUATION_SECRET_UNAVAILABLE",
+                "The confirmed plan could not resume its authorized operation.");
+            return;
+        }
+
+        NyxIdChatOperationDispatchCommand command;
+        try
+        {
+            command = NyxIdChatOperationDispatchCommand.Parser.ParseFrom(
+                Convert.FromBase64String(resolved.Secret ?? string.Empty));
+        }
+        catch (Exception exception) when (exception is FormatException or InvalidProtocolBufferException)
+        {
+            Logger.LogWarning(
+                exception,
+                "NyxIdChat pending plan-gate continuation is invalid: actor={ActorId} operation={OperationId}",
+                Id,
+                key.OperationId);
+            await FailPendingPlanGateContinuationAsync(
+                pending,
+                key,
+                "NYXID_CHAT_PENDING_PLAN_GATE_CONTINUATION_INVALID",
+                "The confirmed plan could not resume its authorized operation.");
+            return;
+        }
+
+        if (!MatchesPendingPlanGateContinuation(command, key))
+        {
+            await FailPendingPlanGateContinuationAsync(
+                pending,
+                key,
+                "NYXID_CHAT_PENDING_PLAN_GATE_CONTINUATION_IDENTITY_MISMATCH",
+                "The confirmed plan could not resume its authorized operation.");
+            return;
+        }
+
+        await DispatchAuthorizedOperationAsync(
+            command,
+            command.PlanGateContinuation.GateRequestId,
+            Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()));
+        if (!KeysEqual(State.PendingPlanGateContinuationKey, key))
+        {
+            await RevokePendingPlanGateContinuationAsync(
+                pending,
+                "nyxid chat plan-gate continuation dispatched");
+        }
+    }
+
+    private bool MatchesPendingPlanGateContinuation(
+        NyxIdChatOperationDispatchCommand command,
+        NyxIdChatOperationKey key)
+    {
+        var continuation = command.PlanGateContinuation;
+        var gate = State.ActiveTask?.Gate;
+        var admission = State.ActiveTurnPlanGateAdmission;
+        return continuation is not null &&
+               gate is { Status: NyxIdChatPlanGateStatus.Satisfied } &&
+               admission?.Key is not null &&
+               KeysEqual(command.Key, key) &&
+               KeysEqual(admission.Key, key) &&
+               string.Equals(key.ConversationActorId, Id, StringComparison.Ordinal) &&
+               string.Equals(key.TaskId, State.ActiveTask?.TaskId, StringComparison.Ordinal) &&
+               string.Equals(gate.RequestId, continuation.GateRequestId, StringComparison.Ordinal) &&
+               string.Equals(gate.TaskId, continuation.TaskId, StringComparison.Ordinal) &&
+               string.Equals(gate.PlanId, continuation.PlanId, StringComparison.Ordinal) &&
+               gate.PlanRevision == continuation.PlanRevision &&
+               string.Equals(admission.GateRequestId, continuation.GateRequestId,
+                   StringComparison.Ordinal) &&
+               string.Equals(admission.ToolCallId, continuation.ToolCallId,
+                   StringComparison.Ordinal) &&
+               string.Equals(admission.ToolName, continuation.ToolName, StringComparison.Ordinal) &&
+               (!continuation.RematerializeDurableAuthorization ||
+                NyxIdChatDurableRetryAuthority.IsValid(key, continuation.ToolContext));
+    }
+
+    private Task SchedulePendingPlanGateContinuationAsync(TimeSpan delay, CancellationToken ct)
+    {
+        var pending = State.PendingPlanGateContinuation;
+        var key = State.PendingPlanGateContinuationKey;
+        var retryAt = _timeProvider.GetUtcNow() + delay;
+        return pending is null || key is null || State.PendingPlanGateAdmissionDelivery is not null
+            ? Task.CompletedTask
+            : ScheduleSelfDurableTimeoutAsync(
+                BuildStableIdentity(
+                    "pending-plan-gate-continuation-dispatch",
+                    Id,
+                    key.OperationId,
+                    pending.Ref,
+                    retryAt.ToUnixTimeMilliseconds().ToString(
+                        System.Globalization.CultureInfo.InvariantCulture)),
+                delay,
+                new NyxIdChatPendingPlanGateContinuationDispatchRequested
+                {
+                    CredentialRef = pending.Ref,
+                    Key = key.Clone(),
+                },
+                ct: ct);
+    }
+
+    private async Task FailPendingPlanGateContinuationAsync(
+        DurableCallerCredentialRef pending,
+        NyxIdChatOperationKey key,
+        string failureCode,
+        string safeMessage)
+    {
+        await PersistOperationDispatchFailureAsync(key, failureCode, safeMessage);
+        await RevokePendingPlanGateContinuationAsync(
+            pending,
+            "nyxid chat plan-gate continuation unavailable");
+    }
+
+    private async Task RevokePendingPlanGateContinuationAsync(
+        DurableCallerCredentialRef pending,
+        string reason)
+    {
+        var vault = Services.GetService<ISecretVault>();
+        if (vault is null)
+            return;
+        try
+        {
+            await vault.RevokeAsync(
+                new RevokeSecretRequest(
+                    pending.Ref,
+                    CredentialSecretPurposes.NyxIdChatPendingPlanGateContinuation,
+                    pending.OwnerScopeKey,
+                    pending.SubjectId,
+                    reason),
+                CancellationToken.None);
+        }
+        catch (Exception exception)
+        {
+            Logger.LogWarning(
+                exception,
+                "NyxIdChat pending plan-gate continuation cleanup failed: actor={ActorId} ref={CredentialRef}",
+                Id,
+                pending.Ref);
+        }
+    }
+
     private async Task DispatchPendingPlanGateAdmissionDeliveryAsync(CancellationToken ct)
     {
         var command = State.PendingPlanGateAdmissionDelivery?.Clone();
@@ -4973,7 +5306,8 @@ public sealed class NyxIdChatConversationGAgent
             return;
 
         var nextState = NyxIdChatNeedsYouDecisions.RefreshAttention(decision.State);
-        PreparePlanGateAdmissionRevocation(nextState, admission, failureCode);
+        var pendingContinuationToRevoke =
+            PreparePlanGateAdmissionRevocation(nextState, admission, failureCode);
         var terminalPrepared = PrepareHistoryTerminalOutbox(nextState);
         await PersistDomainEventAsync(new NyxIdChatPlanGateCapabilityExpiredCommittedEvent
         {
@@ -4982,6 +5316,13 @@ public sealed class NyxIdChatConversationGAgent
             SafeMessage = safeMessage,
             State = nextState,
         }, CancellationToken.None);
+
+        if (pendingContinuationToRevoke is not null)
+        {
+            await RevokePendingPlanGateContinuationAsync(
+                pendingContinuationToRevoke,
+                "nyxid chat plan-gate admission dispatch failed");
+        }
 
         if (State.PendingPlanGateAdmissionRevocation is not null)
             await DispatchPendingPlanGateAdmissionRevocationAsync(CancellationToken.None);
@@ -5017,13 +5358,15 @@ public sealed class NyxIdChatConversationGAgent
         state.PendingPlanGateAdmissionDelivery = command.Clone();
     }
 
-    private static void PreparePlanGateAdmissionRevocation(
+    private static DurableCallerCredentialRef? PreparePlanGateAdmissionRevocation(
         NyxIdChatConversationGAgentState state,
         NyxIdChatTurnPlanGateAdmissionState? admission,
         string reasonCode)
     {
         if (admission?.Key is null)
-            return;
+            return null;
+
+        var pendingContinuation = state.PendingPlanGateContinuation?.Clone();
 
         if (state.PendingPlanGateAdmissionRevocation is { Admission: { } pending })
         {
@@ -5035,7 +5378,9 @@ public sealed class NyxIdChatConversationGAgent
 
             state.ActiveTurnPlanGateAdmission = null;
             state.PendingPlanGateAdmissionDelivery = null;
-            return;
+            state.PendingPlanGateContinuation = null;
+            state.PendingPlanGateContinuationKey = null;
+            return pendingContinuation;
         }
 
         if (state.PendingPlanGateAdmissionDelivery?.Admission is { } deliveryAdmission &&
@@ -5047,6 +5392,8 @@ public sealed class NyxIdChatConversationGAgent
 
         state.ActiveTurnPlanGateAdmission = null;
         state.PendingPlanGateAdmissionDelivery = null;
+        state.PendingPlanGateContinuation = null;
+        state.PendingPlanGateContinuationKey = null;
         state.PendingPlanGateAdmissionRevocation =
             new NyxIdChatPlanGateAdmissionRevocationOutbox
             {
@@ -5055,6 +5402,7 @@ public sealed class NyxIdChatConversationGAgent
                     ? "NYXID_CHAT_PLAN_GATE_REVOKED"
                     : reasonCode.Trim(),
             };
+        return pendingContinuation;
     }
 
     private async Task DispatchPendingOperationDeliveryProbeAsync(CancellationToken ct)
