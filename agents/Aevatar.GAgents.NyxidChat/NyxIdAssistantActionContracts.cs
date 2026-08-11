@@ -314,6 +314,7 @@ internal sealed record NyxIdAssistantActionAuthorityResolverRegistration(
 
 internal sealed record NyxIdAssistantActionRetryGenerationPolicyRegistration(
     NyxIdAssistantActionKind Action,
+    FrozenSet<string> AllowedRegistryRevisions,
     NyxIdAssistantActionRetryStrategy RetryStrategy,
     NyxIdAssistantActionReplayPolicy ReplayPolicy,
     Func<string, string[], string> StableIdentityBuilder);
@@ -467,11 +468,13 @@ internal sealed class NyxIdAssistantActionCapabilityRegistrations
     }
 
     public bool IsExecutable(
+        string registryRevision,
         NyxIdAssistantActionSemanticContract semantic,
         NyxIdAssistantActionRevisionDescriptorSnapshot descriptor) =>
-        MissingCapabilities(semantic, descriptor).Count == 0;
+        MissingCapabilities(registryRevision, semantic, descriptor).Count == 0;
 
     public IReadOnlyList<NyxIdAssistantActionCapabilityKind> MissingCapabilities(
+        string registryRevision,
         NyxIdAssistantActionSemanticContract semantic,
         NyxIdAssistantActionRevisionDescriptorSnapshot descriptor)
     {
@@ -522,6 +525,8 @@ internal sealed class NyxIdAssistantActionCapabilityRegistrations
             missing.Add(NyxIdAssistantActionCapabilityKind.AuthorityResolver);
         }
         if (!_retryGenerationPolicies.TryGetValue(semantic.Action, out var retry) ||
+            retry.AllowedRegistryRevisions is null ||
+            !retry.AllowedRegistryRevisions.Contains(registryRevision) ||
             retry.RetryStrategy != semantic.RetryStrategy ||
             retry.ReplayPolicy != semantic.ReplayPolicy ||
             !RetryGenerationPolicyMatches(retry))
@@ -685,6 +690,14 @@ internal sealed class NyxIdAssistantActionCapabilityRegistrations
     private static bool RetryGenerationPolicyMatches(
         NyxIdAssistantActionRetryGenerationPolicyRegistration registration)
     {
+        if (registration.AllowedRegistryRevisions is null ||
+            registration.AllowedRegistryRevisions.Count == 0 ||
+            registration.AllowedRegistryRevisions.Any(revision =>
+                !NyxIdAssistantActionRegistry.IsSupportedRegistryRevision(revision)))
+        {
+            return false;
+        }
+
         try
         {
             var first = registration.StableIdentityBuilder(
@@ -1151,8 +1164,26 @@ internal sealed class NyxIdAssistantActionCapabilityRegistrations
             ],
             [
                 new(NyxIdAssistantActionKind.ServiceConnect,
+                    RegistryRevisions(
+                        NyxIdAssistantActionRegistry.LegacyRegistryRevision,
+                        NyxIdAssistantActionRegistry.WaveOneDraftRegistryRevision,
+                        NyxIdAssistantActionRegistry.LeastScopeRegistryRevision,
+                        NyxIdAssistantActionRegistry.SupportedRegistryRevision),
                     NyxIdAssistantActionRetryStrategy.StableBrowserActionRequest,
                     NyxIdAssistantActionReplayPolicy.StableActionRequestIdentity,
+                    NyxIdChatBrowserActions.BuildStableIdentity),
+                new(NyxIdAssistantActionKind.KeyCreate,
+                    RegistryRevisions(
+                        NyxIdAssistantActionRegistry.LeastScopeRegistryRevision,
+                        NyxIdAssistantActionRegistry.SupportedRegistryRevision),
+                    NyxIdAssistantActionRetryStrategy.AuthorityBoundGeneration,
+                    NyxIdAssistantActionReplayPolicy.ExactMutationGeneration,
+                    NyxIdChatBrowserActions.BuildStableIdentity),
+                new(NyxIdAssistantActionKind.KeyRotate,
+                    RegistryRevisions(
+                        NyxIdAssistantActionRegistry.SupportedRegistryRevision),
+                    NyxIdAssistantActionRetryStrategy.AuthorityBoundGeneration,
+                    NyxIdAssistantActionReplayPolicy.ExactMutationGeneration,
                     NyxIdChatBrowserActions.BuildStableIdentity),
             ]);
     }
@@ -1164,6 +1195,9 @@ internal sealed class NyxIdAssistantActionCapabilityRegistrations
     private static FrozenSet<NyxIdAssistantActionParamsSchemaVariant> SchemaVariants(
         params NyxIdAssistantActionParamsSchemaVariant[] values) =>
         values.ToFrozenSet();
+
+    private static FrozenSet<string> RegistryRevisions(params string[] values) =>
+        values.ToFrozenSet(StringComparer.Ordinal);
 
     private static FrozenDictionary<NyxIdAssistantActionParams.ParamsOneofCase, string>
         ProbeParams(

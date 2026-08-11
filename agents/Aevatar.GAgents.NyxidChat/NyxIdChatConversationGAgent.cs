@@ -51,6 +51,10 @@ public sealed class NyxIdChatConversationGAgent
         "NYXID_CHAT_POSTCONDITION_RESULT_CONSUMED_AFTER_CONTROL_FENCE";
     private const string FencedPostconditionResultConsumedMessage =
         "The NyxID postcondition result arrived after the task was stopped.";
+    private const string GenerationFencedPostconditionResultConsumedCode =
+        "NYXID_CHAT_POSTCONDITION_RESULT_CONSUMED_AFTER_GENERATION_FENCE";
+    private const string GenerationFencedPostconditionResultConsumedMessage =
+        "The NyxID postcondition result arrived after a newer retry generation became active.";
 
     public static string ProjectionKind => "nyxid-chat-conversation";
 
@@ -2596,7 +2600,22 @@ public sealed class NyxIdChatConversationGAgent
         }
 
         if (!TryResolveCurrentOperation(signal.Key, out var currentOperation))
+        {
+            if (!TryResolveSupersededPostconditionGeneration(
+                    State,
+                    signal.Key,
+                    out currentOperation) ||
+                !IsCredentialFreePostconditionTerminal(signal))
+            {
+                return;
+            }
+
+            await CommitGenerationFencedPostconditionResultConsumptionAsync(
+                signal,
+                currentOperation,
+                Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()));
             return;
+        }
 
         var acknowledgementRequired = RequiresResultAcknowledgement(State, signal);
         var committedSignal = signal;
@@ -3728,6 +3747,14 @@ public sealed class NyxIdChatConversationGAgent
         NyxIdChatConversationGAgentState current,
         NyxIdChatLateOperationEvidenceCommittedEvent evt)
     {
+        if (string.Equals(
+                evt.ConsumedPostconditionFailure?.FailureCode,
+                GenerationFencedPostconditionResultConsumedCode,
+                StringComparison.Ordinal))
+        {
+            return ApplyGenerationFencedPostconditionResultConsumption(current, evt);
+        }
+
         if (evt.Key is null ||
             evt.State?.ActiveTask is null ||
             evt.State.ActiveTurn is null ||
@@ -3752,6 +3779,60 @@ public sealed class NyxIdChatConversationGAgent
         var next = evt.State.Clone();
         if (KeysEqual(next.PendingOperationDeliveryProbe, evt.Key))
             next.PendingOperationDeliveryProbe = null;
+        return next;
+    }
+
+    private static NyxIdChatConversationGAgentState ApplyGenerationFencedPostconditionResultConsumption(
+        NyxIdChatConversationGAgentState current,
+        NyxIdChatLateOperationEvidenceCommittedEvent evt)
+    {
+        if (evt.Key is null ||
+            evt.State is null ||
+            evt.CommittedAt is null ||
+            evt.ProgressSequence <= current.ProgressSequence ||
+            evt.State.ProgressSequence != evt.ProgressSequence ||
+            !string.Equals(
+                evt.State.ConversationActorId,
+                current.ConversationActorId,
+                StringComparison.Ordinal) ||
+            !string.Equals(evt.State.ScopeId, current.ScopeId, StringComparison.Ordinal) ||
+            evt.ExternalEffect != NyxIdChatEffectEvidence.NotApplied ||
+            !string.Equals(
+                evt.TerminalCode,
+                GenerationFencedPostconditionResultConsumedCode,
+                StringComparison.Ordinal) ||
+            !TryResolveSupersededPostconditionGeneration(
+                current,
+                evt.Key,
+                out var currentOperation))
+        {
+            return current;
+        }
+
+        var committedOperation = evt.State.ActiveTask?.Steps
+            .Select(static step => step.Operation)
+            .FirstOrDefault(candidate => KeysEqual(candidate?.Key, currentOperation.Key));
+        var acknowledgementFence = evt.State.ResultAcknowledgementFences.FirstOrDefault(fence =>
+            KeysEqual(fence.Key, evt.Key) &&
+            fence.ResultSha256.Length == SHA256.HashSizeInBytes);
+        if (committedOperation is null ||
+            !committedOperation.ToByteString().Equals(currentOperation.ToByteString()) ||
+            acknowledgementFence is null)
+        {
+            return current;
+        }
+
+        var next = current.Clone();
+        next.ProgressSequence = evt.ProgressSequence;
+        next.UpdatedAt = evt.CommittedAt.Clone();
+        if (!next.ResultAcknowledgementFences.Any(fence =>
+                KeysEqual(fence.Key, acknowledgementFence.Key) &&
+                CryptographicOperations.FixedTimeEquals(
+                    fence.ResultSha256.Span,
+                    acknowledgementFence.ResultSha256.Span)))
+        {
+            next.ResultAcknowledgementFences.Add(acknowledgementFence.Clone());
+        }
         return next;
     }
 
@@ -3851,6 +3932,74 @@ public sealed class NyxIdChatConversationGAgent
         operation = candidate;
         return true;
     }
+
+    private static bool TryResolveSupersededPostconditionGeneration(
+        NyxIdChatConversationGAgentState state,
+        NyxIdChatOperationKey? key,
+        out NyxIdChatOperationState operation)
+    {
+        operation = null!;
+        if (key is null ||
+            key.OperationGeneration <= 0 ||
+            state.ActiveTurn?.Status != NyxIdChatTurnStatus.Active ||
+            state.ActiveTask?.Status != NyxIdChatTaskStatus.Active)
+        {
+            return false;
+        }
+
+        var step = state.ActiveTask.Steps.FirstOrDefault(candidate =>
+            candidate.Kind == NyxIdChatStepKind.Postcondition &&
+            candidate.Status == NyxIdChatStepStatus.Running &&
+            candidate.Operation?.Key is { } currentKey &&
+            IsInFlight(candidate.Operation.Phase) &&
+            string.Equals(
+                currentKey.ConversationActorId,
+                key.ConversationActorId,
+                StringComparison.Ordinal) &&
+            string.Equals(currentKey.TurnId, key.TurnId, StringComparison.Ordinal) &&
+            string.Equals(currentKey.TaskId, key.TaskId, StringComparison.Ordinal) &&
+            string.Equals(currentKey.StepId, key.StepId, StringComparison.Ordinal) &&
+            currentKey.OperationGeneration > key.OperationGeneration);
+        if (step?.Operation?.Key is not { } activeKey ||
+            !string.Equals(
+                state.ConversationActorId,
+                key.ConversationActorId,
+                StringComparison.Ordinal) ||
+            !string.Equals(state.ActiveTask.TaskId, key.TaskId, StringComparison.Ordinal) ||
+            !string.Equals(state.ActiveTask.ActiveStepId, key.StepId, StringComparison.Ordinal) ||
+            !string.Equals(
+                state.ActiveTask.ActiveOperationId,
+                activeKey.OperationId,
+                StringComparison.Ordinal) ||
+            !IsDeterministicPostconditionOperationKey(key) ||
+            !IsDeterministicPostconditionOperationKey(activeKey) ||
+            !state.PendingActions.Any(request =>
+                string.Equals(
+                    request.ActionRequestId,
+                    step.ActionRequestId,
+                    StringComparison.Ordinal) &&
+                string.Equals(request.OriginTurnId, key.TurnId, StringComparison.Ordinal) &&
+                string.Equals(request.TaskId, key.TaskId, StringComparison.Ordinal)))
+        {
+            return false;
+        }
+
+        operation = step.Operation;
+        return true;
+    }
+
+    private static bool IsDeterministicPostconditionOperationKey(NyxIdChatOperationKey key) =>
+        string.Equals(
+            key.OperationId,
+            BuildStableIdentity(
+                "operation",
+                key.ConversationActorId,
+                key.TurnId,
+                key.TaskId,
+                key.StepId,
+                key.OperationGeneration.ToString(
+                    System.Globalization.CultureInfo.InvariantCulture)),
+            StringComparison.Ordinal);
 
     private static NyxIdChatOperationState? ResolveOutstandingRecoveryOperation(
         NyxIdChatConversationGAgentState state)
@@ -4462,7 +4611,7 @@ public sealed class NyxIdChatConversationGAgent
     {
         var version = CurrentCommittedVersion();
         var kind = operation.Kind == NyxIdChatStepKind.Postcondition &&
-                   operation.Phase == NyxIdChatOperationPhase.Requested
+                   IsInFlight(operation.Phase)
             ? NyxIdChatRecoveryKind.PostconditionRedispatch
             : NyxIdChatRecoveryKind.InterruptedOperationReconciliation;
         try
@@ -5519,6 +5668,36 @@ public sealed class NyxIdChatConversationGAgent
         await DispatchOperationResultAcknowledgementAsync(result, CancellationToken.None);
     }
 
+    private async Task CommitGenerationFencedPostconditionResultConsumptionAsync(
+        NyxIdChatOperationResultSignal result,
+        NyxIdChatOperationState currentOperation,
+        Timestamp committedAt)
+    {
+        var failure = new NyxIdChatOperationFailure
+        {
+            FailureCode = GenerationFencedPostconditionResultConsumedCode,
+            SafeMessage = GenerationFencedPostconditionResultConsumedMessage,
+            ExternalEffect = NyxIdChatEffectEvidence.NotApplied,
+        };
+        var next = State.Clone();
+        next.ProgressSequence = checked(State.ProgressSequence + 1);
+        next.UpdatedAt = committedAt.Clone();
+        RememberResultAcknowledgementFence(next, result);
+        await PersistDomainEventAsync(new NyxIdChatLateOperationEvidenceCommittedEvent
+        {
+            Key = result.Key.Clone(),
+            OperationPhase = currentOperation.Phase,
+            ExternalEffect = failure.ExternalEffect,
+            TerminalCode = failure.FailureCode,
+            SafeMessage = failure.SafeMessage,
+            ProgressSequence = next.ProgressSequence,
+            CommittedAt = committedAt.Clone(),
+            State = next,
+            ConsumedPostconditionFailure = failure,
+        }, CancellationToken.None);
+        await DispatchOperationResultAcknowledgementAsync(result, CancellationToken.None);
+    }
+
     private static void RememberResultAcknowledgementFence(
         NyxIdChatConversationGAgentState state,
         NyxIdChatOperationResultSignal result)
@@ -5564,9 +5743,10 @@ public sealed class NyxIdChatConversationGAgent
         NyxIdChatOperationResultSignal result) =>
         result.Key is not null &&
         IsCredentialFreePostconditionTerminal(result) &&
-        state.ActiveTask?.Steps.Any(step =>
-            step.Kind == NyxIdChatStepKind.Postcondition &&
-            KeysEqual(step.Operation?.Key, result.Key)) == true;
+        (state.ActiveTask?.Steps.Any(step =>
+             step.Kind == NyxIdChatStepKind.Postcondition &&
+             KeysEqual(step.Operation?.Key, result.Key)) == true ||
+         TryResolveSupersededPostconditionGeneration(state, result.Key, out _));
 
     private static bool IsCredentialFreePostconditionTerminal(
         NyxIdChatOperationResultSignal result) =>

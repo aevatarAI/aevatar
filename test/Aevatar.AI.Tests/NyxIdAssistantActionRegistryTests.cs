@@ -394,7 +394,7 @@ public sealed class NyxIdAssistantActionRegistryTests
             .Actions["service.connect"];
 
         var missing = NyxIdAssistantActionCapabilityRegistrations.Current
-            .MissingCapabilities(mismatched, descriptor);
+            .MissingCapabilities(LegacyRevision, mismatched, descriptor);
 
         missing.Should().Contain(NyxIdAssistantActionCapabilityKind.RequestProducer);
     }
@@ -488,7 +488,7 @@ public sealed class NyxIdAssistantActionRegistryTests
     }
 
     [Fact]
-    public void Load_ShouldPinWaveOneSchemasAndKeepUnimplementedActionsClosed()
+    public void Load_ShouldPinWaveOneSchemasAndKeepDraftActionsClosed()
     {
         var registry = NyxIdAssistantActionRegistry.Load(
             RegistryJsonWithWaveOneActions());
@@ -498,7 +498,20 @@ public sealed class NyxIdAssistantActionRegistryTests
         registry.TryGetDefinition("key.create", out _).Should().BeFalse();
         registry.TryGetDefinition("key.rotate", out _).Should().BeFalse();
         registry.CapabilityReadiness["key.create"].MissingCapabilities.Should()
-            .Contain(NyxIdAssistantActionCapabilityKind.AdmissionParser);
+            .BeEquivalentTo([
+                NyxIdAssistantActionCapabilityKind.AdmissionParser,
+                NyxIdAssistantActionCapabilityKind.RetryGenerationPolicy,
+            ]);
+        registry.CapabilityReadiness["key.rotate"].MissingCapabilities.Should()
+            .Equal(NyxIdAssistantActionCapabilityKind.RetryGenerationPolicy);
+        NyxIdAssistantActionRegistry.IsActionExecutable(
+                TransitionRevision,
+                NyxIdAssistantActionKind.KeyCreate)
+            .Should().BeFalse();
+        NyxIdAssistantActionRegistry.IsActionExecutable(
+                TransitionRevision,
+                NyxIdAssistantActionKind.KeyRotate)
+            .Should().BeFalse();
 
         var legacy = NyxIdAssistantActionRegistry.Load(
             RegistryJsonWithWaveOneActions(revision: LegacyRevision));
@@ -531,32 +544,33 @@ public sealed class NyxIdAssistantActionRegistryTests
     }
 
     [Fact]
-    public void Load_ShouldKeepLeastScopeKeyCreateClosedWithoutCompleteCapabilities()
+    public void Load_ShouldOpenLeastScopeKeyCreateWithRevisionScopedRetryCapability()
     {
         var registry = NyxIdAssistantActionRegistry.Load(
             RegistryJsonWithLeastScopeKeyCreate());
 
         registry.TryGetDefinition("service.connect", out _).Should().BeTrue();
-        registry.TryGetDefinition("key.create", out _).Should().BeFalse();
+        registry.TryGetDefinition("key.create", out _).Should().BeTrue();
         registry.TryGetDefinition("service.reauthorize", out _).Should().BeFalse();
         registry.TryGetDefinition("key.rotate", out _).Should().BeFalse();
+        registry.CapabilityReadiness["key.create"].MissingCapabilities.Should().BeEmpty();
         NyxIdAssistantActionRegistry.IsActionExecutable(
                 LeastScopeRevision,
                 NyxIdAssistantActionKind.KeyCreate)
-            .Should().BeFalse();
+            .Should().BeTrue();
         NyxIdAssistantActionRegistry.IsActionExecutable(
                 TransitionRevision,
                 NyxIdAssistantActionKind.KeyCreate)
             .Should().BeFalse();
-        Action resolve = () => registry.ResolveKeyCreate(
+        var resolved = registry.ResolveKeyCreate(
             new NyxIdKeyCreateActionRequirement
             {
                 Name = "agent-alpha",
                 Platform = "codex",
                 AllowedServiceIds = { "us-github-alpha" },
             });
-        resolve.Should().Throw<NyxIdAssistantActionRegistryException>()
-            .Which.Code.Should().Be("NYXID_ACTION_UNSUPPORTED");
+        resolved.Definition.Action.Should().Be(NyxIdAssistantActionKind.KeyCreate);
+        resolved.Params.KeyCreate.AllowedServiceIds.Should().Equal("us-github-alpha");
 
         Action staleSchema = () => NyxIdAssistantActionRegistry.Load(
             RegistryJsonWithLeastScopeKeyCreate(KeyCreateSchema));
@@ -565,36 +579,80 @@ public sealed class NyxIdAssistantActionRegistryTests
     }
 
     [Fact]
-    public void Load_ShouldKeepKeyRotationClosedWithoutCompleteCapabilities()
+    public void Load_ShouldOpenSupportedKeyMutationsWithRevisionScopedRetryCapabilities()
     {
         var registry = NyxIdAssistantActionRegistry.Load(
             RegistryJsonWithKeyRotation());
 
         registry.TryGetDefinition("service.connect", out _).Should().BeTrue();
-        registry.TryGetDefinition("key.create", out _).Should().BeFalse();
-        registry.TryGetDefinition("key.rotate", out _).Should().BeFalse();
+        registry.TryGetDefinition("key.create", out _).Should().BeTrue();
+        registry.TryGetDefinition("key.rotate", out _).Should().BeTrue();
         registry.TryGetDefinition("service.reauthorize", out _).Should().BeFalse();
+        registry.CapabilityReadiness["key.create"].MissingCapabilities.Should().BeEmpty();
+        registry.CapabilityReadiness["key.rotate"].MissingCapabilities.Should().BeEmpty();
         NyxIdAssistantActionRegistry.IsActionExecutable(
                 SupportedRevision,
                 NyxIdAssistantActionKind.KeyRotate)
-            .Should().BeFalse();
+            .Should().BeTrue();
+        NyxIdAssistantActionRegistry.IsActionExecutable(
+                SupportedRevision,
+                NyxIdAssistantActionKind.KeyCreate)
+            .Should().BeTrue();
         NyxIdAssistantActionRegistry.IsActionExecutable(
                 LeastScopeRevision,
                 NyxIdAssistantActionKind.KeyRotate)
             .Should().BeFalse();
-        Action resolveCreate = () => registry.ResolveKeyCreate(
+        NyxIdAssistantActionRegistry.IsActionExecutable(
+                TransitionRevision,
+                NyxIdAssistantActionKind.KeyRotate)
+            .Should().BeFalse();
+        var resolvedCreate = registry.ResolveKeyCreate(
             new NyxIdKeyCreateActionRequirement
             {
                 Name = "agent-alpha",
                 Platform = "codex",
                 AllowedServiceIds = { "us-github-alpha" },
             });
-        resolveCreate.Should().Throw<NyxIdAssistantActionRegistryException>()
-            .Which.Code.Should().Be("NYXID_ACTION_UNSUPPORTED");
-        Action resolveRotate = () => registry.ResolveKeyRotate(
+        var resolvedRotate = registry.ResolveKeyRotate(
             new NyxIdKeyRotateActionRequirement { KeyId = "key-alpha" });
-        resolveRotate.Should().Throw<NyxIdAssistantActionRegistryException>()
-            .Which.Code.Should().Be("NYXID_ACTION_UNSUPPORTED");
+        resolvedCreate.Definition.Action.Should().Be(NyxIdAssistantActionKind.KeyCreate);
+        resolvedRotate.Definition.Action.Should().Be(NyxIdAssistantActionKind.KeyRotate);
+        resolvedRotate.Params.KeyRotate.KeyId.Should().Be("key-alpha");
+    }
+
+    [Theory]
+    [InlineData(
+        LeastScopeRevision,
+        NyxIdAssistantActionKind.KeyCreate,
+        "key.create")]
+    [InlineData(
+        SupportedRevision,
+        NyxIdAssistantActionKind.KeyCreate,
+        "key.create")]
+    [InlineData(
+        SupportedRevision,
+        NyxIdAssistantActionKind.KeyRotate,
+        "key.rotate")]
+    public void ExecutableComposition_WithoutRetryCapability_ShouldCloseRevisionExecutableAction(
+        string revision,
+        NyxIdAssistantActionKind action,
+        string wireAction)
+    {
+        var payload = revision == LeastScopeRevision
+            ? RegistryJsonWithLeastScopeKeyCreate()
+            : RegistryJsonWithKeyRotation();
+        NyxIdAssistantActionRegistry.Load(payload)
+            .TryGetDefinition(wireAction, out _).Should().BeTrue();
+
+        var incomplete = NyxIdAssistantActionRegistry.Load(
+            payload,
+            NyxIdAssistantActionCapabilityRegistrations.Current.Without(
+                action,
+                NyxIdAssistantActionCapabilityKind.RetryGenerationPolicy));
+
+        incomplete.TryGetDefinition(wireAction, out _).Should().BeFalse();
+        incomplete.CapabilityReadiness[wireAction].MissingCapabilities.Should()
+            .Equal(NyxIdAssistantActionCapabilityKind.RetryGenerationPolicy);
     }
 
     [Fact]
@@ -875,24 +933,32 @@ public sealed class NyxIdAssistantActionRegistryTests
             snapshot.GetRequired().RegistryRevision.Should().Be(revision);
             var readiness = snapshot.GetReadinessRequired();
             readiness.Status.Should().Be(
-                revision == LegacyRevision
-                    ? NyxIdAssistantActionRegistryReadinessStatus.Ready
-                    : NyxIdAssistantActionRegistryReadinessStatus.Partial);
+                revision == TransitionRevision
+                    ? NyxIdAssistantActionRegistryReadinessStatus.Partial
+                    : NyxIdAssistantActionRegistryReadinessStatus.Ready);
             readiness.RegistryRevision.Should().Be(revision);
             readiness.Actions["service.connect"].Executable.Should().BeTrue();
-            if (revision is LeastScopeRevision or SupportedRevision)
+            readiness.Actions["service.connect"].MissingCapabilities.Should().BeEmpty();
+            if (revision == TransitionRevision)
             {
                 readiness.Actions["key.create"].MissingCapabilities.Should().BeEquivalentTo([
+                    NyxIdAssistantActionCapabilityKind.AdmissionParser,
                     NyxIdAssistantActionCapabilityKind.RetryGenerationPolicy,
                 ]);
                 readiness.Actions["key.create"].Executable.Should().BeFalse();
+                readiness.Actions["key.rotate"].MissingCapabilities.Should()
+                    .Equal(NyxIdAssistantActionCapabilityKind.RetryGenerationPolicy);
+                readiness.Actions["key.rotate"].Executable.Should().BeFalse();
+            }
+            if (revision is LeastScopeRevision or SupportedRevision)
+            {
+                readiness.Actions["key.create"].MissingCapabilities.Should().BeEmpty();
+                readiness.Actions["key.create"].Executable.Should().BeTrue();
             }
             if (revision == SupportedRevision)
             {
-                readiness.Actions["key.rotate"].MissingCapabilities.Should().BeEquivalentTo([
-                    NyxIdAssistantActionCapabilityKind.RetryGenerationPolicy,
-                ]);
-                readiness.Actions["key.rotate"].Executable.Should().BeFalse();
+                readiness.Actions["key.rotate"].MissingCapabilities.Should().BeEmpty();
+                readiness.Actions["key.rotate"].Executable.Should().BeTrue();
             }
             await service.StopAsync(CancellationToken.None);
             source.FetchCount.Should().Be(1);

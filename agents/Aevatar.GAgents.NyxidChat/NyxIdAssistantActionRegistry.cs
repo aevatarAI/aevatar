@@ -175,6 +175,7 @@ public sealed class NyxIdAssistantActionRegistry
                NyxIdAssistantActionSemanticContracts.TryGet(action, out var semantic) &&
                revisionContract.Actions.TryGetValue(semantic.WireAction, out var descriptor) &&
                NyxIdAssistantActionCapabilityRegistrations.Current.IsExecutable(
+                   revision,
                    semantic,
                    descriptor);
     }
@@ -305,6 +306,7 @@ public sealed class NyxIdAssistantActionRegistry
                         pair.Value.Semantic.Action,
                         pair.Key,
                         capabilities.MissingCapabilities(
+                                revision,
                                 pair.Value.Semantic,
                                 pair.Value.Descriptor)
                             .ToFrozenSet()),

@@ -460,7 +460,11 @@ public static class NyxIdChatBrowserActions
                 if (firstDispatch is not null)
                     continue;
 
-                ActivatePostcondition(task, step, now);
+                ActivatePostconditionForStateChange(
+                    task,
+                    pending[index],
+                    step,
+                    now);
                 firstDispatch = BuildPostconditionCommand(
                     next.ScopeId,
                     admission.OwnerSubject,
@@ -724,9 +728,63 @@ public static class NyxIdChatBrowserActions
         step.Status = NyxIdChatStepStatus.Running;
         step.Operation.Phase = NyxIdChatOperationPhase.Requested;
         step.Operation.RequestedAt = now.Clone();
+        step.FailureCode = string.Empty;
+        step.SafeMessage = string.Empty;
+        step.AvailableActions = NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(step);
         step.UpdatedAt = now.Clone();
+        task.Status = NyxIdChatTaskStatus.Active;
         task.ActiveStepId = step.StepId;
         task.ActiveOperationId = step.Operation.Key.OperationId;
+        task.FailureCode = string.Empty;
+        task.SafeMessage = string.Empty;
+    }
+
+    private static void ActivatePostconditionForStateChange(
+        NyxIdChatTaskState task,
+        NyxIdChatActionRequestState request,
+        NyxIdChatTaskStepState step,
+        Timestamp now)
+    {
+        if (step.Operation?.Key is not null &&
+            step.Operation.Phase == NyxIdChatOperationPhase.Failed &&
+            step.Status is NyxIdChatStepStatus.Waiting or NyxIdChatStepStatus.Failed)
+        {
+            StartNextPostconditionGeneration(request, step, now);
+        }
+
+        ActivatePostcondition(task, step, now);
+    }
+
+    private static void StartNextPostconditionGeneration(
+        NyxIdChatActionRequestState request,
+        NyxIdChatTaskStepState step,
+        Timestamp now)
+    {
+        var previous = step.Operation;
+        var generation = checked(previous.Key.OperationGeneration + 1);
+        var key = previous.Key.Clone();
+        key.OperationGeneration = generation;
+        key.OperationId = BuildStableIdentity(
+            "operation",
+            key.ConversationActorId,
+            key.TurnId,
+            key.TaskId,
+            key.StepId,
+            generation.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+        request.PostconditionResult = null;
+        step.Operation = new NyxIdChatOperationState
+        {
+            Key = key,
+            Kind = previous.Kind,
+            MayChangeExternalState = previous.MayChangeExternalState,
+            Idempotent = previous.Idempotent,
+            IdempotencyKey = previous.IdempotencyKey,
+            Phase = NyxIdChatOperationPhase.Requested,
+            RequestedAt = now.Clone(),
+        };
+        step.ExternalEffect = NyxIdChatEffectEvidence.NotStarted;
+        step.Substeps.Clear();
     }
 
     private static void CancelPostcondition(
@@ -950,7 +1008,9 @@ public static class NyxIdChatBrowserActions
         var step = state.ActiveTask.Steps.FirstOrDefault(candidate =>
             candidate.Kind == NyxIdChatStepKind.Postcondition &&
             candidate.Status == NyxIdChatStepStatus.Running &&
-            candidate.Operation?.Phase == NyxIdChatOperationPhase.Requested &&
+            candidate.Operation?.Phase is NyxIdChatOperationPhase.Requested or
+                NyxIdChatOperationPhase.Dispatched or
+                NyxIdChatOperationPhase.Running &&
             KeysEqual(candidate.Operation.Key, key));
         if (step is null ||
             !string.Equals(state.ActiveTask.TaskId, key.TaskId, StringComparison.Ordinal) ||

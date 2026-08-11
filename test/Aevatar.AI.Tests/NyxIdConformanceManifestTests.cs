@@ -41,9 +41,15 @@ public sealed class NyxIdConformanceManifestTests
         {
             registry.TryGetDefinition("service.connect", out _).Should().BeTrue();
             registry.TryGetDefinition("service.reauthorize", out _).Should().BeFalse();
-            registry.TryGetDefinition("key.create", out _).Should().BeFalse();
-            registry.TryGetDefinition("key.rotate", out _).Should().BeFalse();
         }
+        legacy.TryGetDefinition("key.create", out _).Should().BeFalse();
+        legacy.TryGetDefinition("key.rotate", out _).Should().BeFalse();
+        draft.TryGetDefinition("key.create", out _).Should().BeFalse();
+        draft.TryGetDefinition("key.rotate", out _).Should().BeFalse();
+        leastScope.TryGetDefinition("key.create", out _).Should().BeTrue();
+        leastScope.TryGetDefinition("key.rotate", out _).Should().BeFalse();
+        target.TryGetDefinition("key.create", out _).Should().BeTrue();
+        target.TryGetDefinition("key.rotate", out _).Should().BeTrue();
     }
 
     [Fact]
@@ -119,8 +125,7 @@ public sealed class NyxIdConformanceManifestTests
         foreach (var row in shippedActions)
         {
             var operation = row.GetProperty("operation_id").GetString()!;
-            registry.TryGetDefinition(operation, out _).Should().Be(
-                operation == "service.connect",
+            registry.TryGetDefinition(operation, out _).Should().BeTrue(
                 $"{operation} is executable only when all typed runtime capabilities are registered");
             var artifacts = row.GetProperty("artifacts").EnumerateArray()
                 .Select(static value => value.GetString()!)
