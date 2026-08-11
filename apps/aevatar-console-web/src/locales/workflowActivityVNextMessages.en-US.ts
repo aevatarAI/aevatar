@@ -406,11 +406,9 @@ const workflowActivityVNextMessages = {
     'Your profile and access.',
   'workflowActivityVNext.settings.accountLoading': 'Loading account…',
   'workflowActivityVNext.settings.accountUnavailable': 'Account unavailable',
-  'workflowActivityVNext.settings.accessNotLoaded': 'Not loaded',
-  'workflowActivityVNext.settings.activeRuntime': 'Active connection URL',
   'workflowActivityVNext.settings.advanced': 'Advanced',
   'workflowActivityVNext.settings.advancedDescription':
-    'Connection details for support and troubleshooting.',
+    'Read-only execution details used when starting workflows.',
   'workflowActivityVNext.settings.ai': 'AI defaults',
   'workflowActivityVNext.settings.aiDescription':
     'Choose the default service and model for new AI sessions.',
@@ -419,8 +417,6 @@ const workflowActivityVNextMessages = {
     'Your saved choice is unchanged. Try again to load available services.',
   'workflowActivityVNext.settings.catalogUnavailableTitle':
     'Services unavailable',
-  'workflowActivityVNext.settings.capabilityContractMissing':
-    'Capability details are not provided by the current account service.',
   'workflowActivityVNext.settings.defaultModel': 'Default model',
   'workflowActivityVNext.settings.defaultModelHelp':
     'Leave unset to use the service default.',
@@ -430,16 +426,17 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.settings.discard': 'Restore saved settings',
   'workflowActivityVNext.settings.discardLeave': 'Discard and leave',
   'workflowActivityVNext.settings.email': 'Email',
+  'workflowActivityVNext.settings.emailVerification': 'Email verification',
+  'workflowActivityVNext.settings.executionTarget': 'Execution target',
   'workflowActivityVNext.settings.expires': 'Expires',
   'workflowActivityVNext.settings.failed': "Changes couldn't be saved",
-  'workflowActivityVNext.settings.groups': 'Group claims',
+  'workflowActivityVNext.settings.groups': 'Groups',
   'workflowActivityVNext.settings.llmLoading': 'Loading AI defaults…',
   'workflowActivityVNext.settings.llmUnavailable': 'AI defaults unavailable',
-  'workflowActivityVNext.settings.localRuntime': 'Local connection URL',
   'workflowActivityVNext.settings.name': 'Name',
   'workflowActivityVNext.settings.manageServiceAccess': 'Manage service access',
+  'workflowActivityVNext.settings.localRuntimeLabel': 'Local runtime',
   'workflowActivityVNext.settings.notLoaded': 'Not loaded',
-  'workflowActivityVNext.settings.notProvided': 'Not provided',
   'workflowActivityVNext.settings.notAccepted':
     'The settings update was not accepted.',
   'workflowActivityVNext.settings.observed': 'Changes saved',
@@ -448,15 +445,17 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.settings.preferredServiceHelp':
     'Choose which service new sessions use.',
   'workflowActivityVNext.settings.provider': 'Sign-in method',
-  'workflowActivityVNext.settings.productAccess': 'Product access',
-  'workflowActivityVNext.settings.refreshStatus': 'Refresh status',
-  'workflowActivityVNext.settings.remoteRuntime': 'Remote connection URL',
-  'workflowActivityVNext.settings.roles': 'Access',
+  'workflowActivityVNext.settings.profile': 'Profile',
+  'workflowActivityVNext.settings.profileUnavailable':
+    'Profile details are unavailable.',
+  'workflowActivityVNext.settings.remoteRuntimeLabel': 'Remote runtime',
+  'workflowActivityVNext.settings.roles': 'Roles',
   'workflowActivityVNext.settings.runtimeLoading':
     'Loading connection details…',
-  'workflowActivityVNext.settings.runtimeMode': 'Connection mode',
   'workflowActivityVNext.settings.runtimeUnavailable':
-    'Connection details unavailable',
+    'Workflow execution details unavailable',
+  'workflowActivityVNext.settings.runtimeUrl': 'Runtime URL',
+  'workflowActivityVNext.settings.scope': 'Scope',
   'workflowActivityVNext.settings.serviceAccessFailed':
     'Could not start service access review. Try again.',
   'workflowActivityVNext.settings.sessionActive': 'Active',
@@ -464,9 +463,9 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.settings.sessionExpiringSoon': 'Expiring soon',
   'workflowActivityVNext.settings.sessionInvalid': 'Invalid',
   'workflowActivityVNext.settings.sessionState': 'Session state',
+  'workflowActivityVNext.settings.sessionAccess': 'Session & access',
   'workflowActivityVNext.settings.signInAgain': 'Sign in again',
   'workflowActivityVNext.settings.signOut': 'Sign out',
-  'workflowActivityVNext.settings.supportDetails': 'Support details',
   'workflowActivityVNext.settings.retryGuidance':
     'Try loading this section again.',
   'workflowActivityVNext.settings.save': 'Save changes',
@@ -495,7 +494,9 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.settings.unsavedLeaveTitle':
     'Unsaved AI default changes',
   'workflowActivityVNext.settings.userId': 'User ID',
-  'workflowActivityVNext.settings.workspaceContext': 'Workspace context',
+  'workflowActivityVNext.settings.verified': 'Verified',
+  'workflowActivityVNext.settings.notVerified': 'Not verified',
+  'workflowActivityVNext.settings.workflowExecution': 'Workflow execution',
   'workflowActivityVNext.state.forbidden':
     "You don't have access to this workspace",
   'workflowActivityVNext.state.unauthorized': 'Sign in to continue',

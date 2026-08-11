@@ -13,6 +13,7 @@ export type AccountField =
 export type AccountIdentity = {
   readonly displayName: AccountField;
   readonly email: AccountField;
+  readonly emailVerified: boolean | null;
   readonly expiry: AccountField;
   readonly picture: string | null;
   readonly provider: AccountField;
@@ -101,6 +102,7 @@ export function buildAccountIdentity(
   return {
     displayName: valueOrMissing(profileName),
     email: valueOrMissing(profileEmail),
+    emailVerified: auth.profile?.emailVerified ?? null,
     expiry: formatExpiry(auth.session?.expiresAtUtc, nowMs, locale),
     picture: auth.profile?.picture || auth.picture || null,
     provider: valueOrMissing(

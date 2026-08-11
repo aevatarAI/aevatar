@@ -23,6 +23,7 @@ jest.mock('@/shared/ui/ConsoleToast', () => ({
 const identity = {
   displayName: { kind: 'value', value: 'Ada Lovelace' },
   email: { kind: 'value', value: 'ada@example.com' },
+  emailVerified: true,
   expiry: { kind: 'value', value: 'Aug 7, 2026' },
   picture: null,
   provider: { kind: 'value', value: 'NyxID' },
@@ -48,7 +49,6 @@ describe('Workflow Activity vNext account panel', () => {
     render(
       <AccountPanel
         identity={identity}
-        onRefresh={jest.fn()}
         returnTo="/scopes/scope-alpha/workflow-activity-vnext/settings"
       />,
     );
@@ -66,5 +66,86 @@ describe('Workflow Activity vNext account panel', () => {
     expect(
       screen.getByRole('button', { name: 'Manage service access' }),
     ).not.toHaveClass('ant-btn-loading');
+  });
+
+  it('keeps identity and access facts primary without placeholder product status', () => {
+    render(
+      <AccountPanel
+        identity={{
+          ...identity,
+          emailVerified: true,
+          support: {
+            groups: ['platform'],
+            roles: ['operator'],
+            subject: 'user-alpha',
+          },
+        }}
+        returnTo="/scopes/scope-alpha/workflow-activity-vnext/settings"
+      />,
+    );
+
+    expect(screen.getByText('AL')).toBeInTheDocument();
+    expect(screen.getByText('Ada Lovelace')).toBeInTheDocument();
+    expect(screen.getByText('ada@example.com')).toBeInTheDocument();
+    expect(screen.getByText('NyxID')).toBeInTheDocument();
+    expect(screen.getByText('scope-alpha')).toBeInTheDocument();
+    expect(screen.getByText('user-alpha')).toBeInTheDocument();
+    expect(screen.getByText('operator')).toBeInTheDocument();
+    expect(screen.getByText('platform')).toBeInTheDocument();
+    expect(screen.getByText('Verified')).toBeInTheDocument();
+    expect(screen.queryByText('Product access')).not.toBeInTheDocument();
+    expect(screen.queryByText('Not loaded')).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(
+        'Capability details are not provided by the current account service.',
+      ),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Refresh status' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('shows provider user IDs when they use a machine identifier shape', () => {
+    render(
+      <AccountPanel
+        identity={{
+          ...identity,
+          support: {
+            groups: [],
+            roles: [],
+            subject: 'ccb108c4-dcb3-473a-a0f7-e9859bb2f2a0',
+          },
+        }}
+        returnTo="/scopes/scope-alpha/workflow-activity-vnext/settings"
+      />,
+    );
+
+    expect(screen.getByText('ccb108c4-dcb...9bb2f2a0')).toBeInTheDocument();
+  });
+
+  it('renders a compact signed-in state when optional profile fields are absent', () => {
+    render(
+      <AccountPanel
+        identity={{
+          ...identity,
+          displayName: { kind: 'not_provided' },
+          email: { kind: 'not_provided' },
+          emailVerified: null,
+          expiry: { kind: 'not_provided' },
+          scope: { kind: 'not_provided' },
+          support: { groups: [], roles: [], subject: null },
+        }}
+        returnTo="/scopes/scope-alpha/workflow-activity-vnext/settings"
+      />,
+    );
+
+    expect(
+      screen.getByRole('heading', { name: 'Signed in' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Profile details are unavailable.'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('Not provided')).not.toBeInTheDocument();
+    expect(screen.getByText('NyxID')).toBeInTheDocument();
   });
 });

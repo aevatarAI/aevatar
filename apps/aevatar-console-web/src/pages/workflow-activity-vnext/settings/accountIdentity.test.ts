@@ -123,6 +123,7 @@ describe('account identity presentation', () => {
     );
 
     expect(missing.email.kind).toBe('not_provided');
+    expect(missing.emailVerified).toBeNull();
     expect(missingProfile.email.kind).toBe('not_provided');
   });
 });

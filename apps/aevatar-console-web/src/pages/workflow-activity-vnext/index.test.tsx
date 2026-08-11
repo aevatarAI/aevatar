@@ -1486,10 +1486,15 @@ describe('Workflow Activity vNext settings', () => {
 
   afterEach(() => cleanupTestQueryClients());
 
-  it('renders the same authoritative identity in the shell and Account while keeping support values secondary', async () => {
+  it('renders authoritative identity and the effective workflow execution target', async () => {
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
     await screen.findByRole('combobox', { name: 'Preferred service' });
+    expect(
+      screen
+        .getByRole('link', { name: 'Settings' })
+        .querySelector('[data-icon-mock="SettingOutlined"]'),
+    ).not.toBeNull();
     const accountLink = screen.getByRole('link', { name: 'Account' });
     expect(accountLink).toHaveAttribute(
       'href',
@@ -1503,27 +1508,30 @@ describe('Workflow Activity vNext settings', () => {
     expect(screen.getByText('NyxID')).toBeInTheDocument();
     expect(screen.getByText('scope-alpha')).toBeInTheDocument();
     expect(screen.getByText(/GMT|UTC/)).toHaveTextContent(/in .+ days/);
-    expect(screen.getByText('Support details')).toBeInTheDocument();
-    expect(screen.getByText('user-subject-alpha')).not.toBeVisible();
-    expect(screen.getByText('operator')).not.toBeVisible();
-    expect(screen.getByText('platform')).not.toBeVisible();
-    expect(screen.queryByText('nyxid-session')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByText('Support details'));
+    expect(screen.getByText('Verified')).toBeInTheDocument();
     expect(screen.getByText('user-subject-alpha')).toBeVisible();
     expect(screen.getByText('operator')).toBeVisible();
     expect(screen.getByText('platform')).toBeVisible();
+    expect(screen.queryByText('Support details')).not.toBeInTheDocument();
+    expect(screen.queryByText('Product access')).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Refresh status' }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText('nyxid-session')).not.toBeInTheDocument();
 
     const advancedLink = screen.getByRole('link', { name: 'Advanced' });
     fireEvent.click(advancedLink);
     expect(advancedLink).toHaveAttribute('aria-current', 'page');
-    expect(
-      screen.getAllByText('https://runtime.example.test')[0],
-    ).not.toBeVisible();
-    fireEvent.click(screen.getByText('Technical details'));
+    expect(screen.getByText('Workflow execution')).toBeInTheDocument();
+    expect(screen.getByText('Execution target')).toBeInTheDocument();
+    expect(screen.getByText('Remote runtime')).toBeInTheDocument();
+    expect(screen.getByText('Runtime URL')).toBeInTheDocument();
     expect(
       await screen.findAllByText('https://runtime.example.test'),
-    ).toHaveLength(2);
-    expect(screen.getByText('remote')).toBeInTheDocument();
+    ).toHaveLength(1);
+    expect(screen.queryByText('Local connection URL')).not.toBeInTheDocument();
+    expect(screen.queryByText('Remote connection URL')).not.toBeInTheDocument();
+    expect(screen.queryByText('Technical details')).not.toBeInTheDocument();
   });
 
   it.each([
@@ -1594,9 +1602,13 @@ describe('Workflow Activity vNext settings', () => {
       '/scopes/scope-alpha/workflow-activity-vnext/settings?section=account';
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
-    expect((await screen.findAllByText('Not provided')).length).toBeGreaterThan(
-      1,
-    );
+    expect(
+      await screen.findByRole('heading', { name: 'Ada Operator' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Profile details are unavailable.'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('Not provided')).not.toBeInTheDocument();
     expect(screen.queryByText('Hidden by policy')).not.toBeInTheDocument();
   });
 

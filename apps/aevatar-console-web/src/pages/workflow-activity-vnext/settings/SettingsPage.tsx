@@ -1,7 +1,15 @@
 import { ReloadOutlined, SaveOutlined } from '@ant-design/icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getLocale } from '@umijs/max';
-import { Alert, Button, Descriptions, Modal, Select, Space } from 'antd';
+import {
+  Alert,
+  Button,
+  Descriptions,
+  Modal,
+  Select,
+  Space,
+  Typography,
+} from 'antd';
 import React from 'react';
 import { observeUserLlmSave } from '@/pages/settings/userLlmSaveObservation';
 import {
@@ -531,7 +539,6 @@ const SettingsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
   ) : auth.data && accountIdentity ? (
     <AccountPanel
       identity={accountIdentity}
-      onRefresh={() => void auth.refetch()}
       returnTo={`${location.pathname}?section=account`}
     />
   ) : null;
@@ -553,60 +560,53 @@ const SettingsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
       )}
     />
   ) : (
-    <TechnicalDetails>
-      <div className="wa-vnext__settings-facts">
-        <Descriptions
-          bordered
-          column={1}
-          items={[
-            {
-              key: 'mode',
-              label: t(
-                'workflowActivityVNext.settings.runtimeMode',
-                'Runtime mode',
-              ),
-              children: runtime.data?.runtimeMode,
-            },
-            {
-              key: 'active',
-              label: t(
-                'workflowActivityVNext.settings.activeRuntime',
-                'Active runtime URL',
-              ),
-              children: (
-                <span className="wa-vnext__mono" translate="no">
-                  {runtime.data?.activeRuntimeBaseUrl}
-                </span>
-              ),
-            },
-            {
-              key: 'local',
-              label: t(
-                'workflowActivityVNext.settings.localRuntime',
-                'Local runtime URL',
-              ),
-              children: (
-                <span className="wa-vnext__mono" translate="no">
-                  {runtime.data?.localRuntimeBaseUrl}
-                </span>
-              ),
-            },
-            {
-              key: 'remote',
-              label: t(
-                'workflowActivityVNext.settings.remoteRuntime',
-                'Remote runtime URL',
-              ),
-              children: (
-                <span className="wa-vnext__mono" translate="no">
-                  {runtime.data?.remoteRuntimeBaseUrl}
-                </span>
-              ),
-            },
-          ]}
-        />
-      </div>
-    </TechnicalDetails>
+    <section className="wa-vnext__settings-facts">
+      <h3 className="wa-vnext__settings-facts-heading">
+        {t(
+          'workflowActivityVNext.settings.workflowExecution',
+          'Workflow execution',
+        )}
+      </h3>
+      <Descriptions
+        bordered
+        column={1}
+        items={[
+          {
+            key: 'mode',
+            label: t(
+              'workflowActivityVNext.settings.executionTarget',
+              'Execution target',
+            ),
+            children:
+              runtime.data?.runtimeMode === 'remote'
+                ? t(
+                    'workflowActivityVNext.settings.remoteRuntimeLabel',
+                    'Remote runtime',
+                  )
+                : t(
+                    'workflowActivityVNext.settings.localRuntimeLabel',
+                    'Local runtime',
+                  ),
+          },
+          {
+            key: 'active',
+            label: t(
+              'workflowActivityVNext.settings.runtimeUrl',
+              'Runtime URL',
+            ),
+            children: (
+              <Typography.Text
+                className="wa-vnext__mono"
+                copyable={{ text: runtime.data?.activeRuntimeBaseUrl }}
+                translate="no"
+              >
+                {runtime.data?.activeRuntimeBaseUrl}
+              </Typography.Text>
+            ),
+          },
+        ]}
+      />
+    </section>
   );
 
   const sections = [
@@ -633,7 +633,7 @@ const SettingsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
       label: t('workflowActivityVNext.settings.advanced', 'Advanced'),
       description: t(
         'workflowActivityVNext.settings.advancedDescription',
-        'Connection details for support and troubleshooting.',
+        'Read-only execution details used when starting workflows.',
       ),
       panel: runtimePanel,
     },

@@ -1,8 +1,8 @@
 import {
-  ControlOutlined,
   HistoryOutlined,
   MenuOutlined,
   PartitionOutlined,
+  SettingOutlined,
 } from '@ant-design/icons';
 import { Button, Drawer } from 'antd';
 import React from 'react';
@@ -51,7 +51,7 @@ const items = [
   },
   {
     key: 'settings' as const,
-    icon: <ControlOutlined aria-hidden="true" />,
+    icon: <SettingOutlined aria-hidden="true" />,
     labelKey: 'settings',
     fallback: 'Settings',
   },
