@@ -1558,10 +1558,12 @@ public sealed partial class NyxIdChatTurnGAgentTests
     }
 
     [Theory]
-    [InlineData(AgentToolReceiptStatus.Success)]
-    [InlineData(AgentToolReceiptStatus.AuthorizationRequired)]
+    [InlineData(AgentToolReceiptStatus.Success, "")]
+    [InlineData(AgentToolReceiptStatus.AuthorizationRequired, "")]
+    [InlineData(AgentToolReceiptStatus.Unspecified, "NYXID_UNAUTHORIZED")]
     public async Task ExactServiceNonApprovalTerminal_ShouldRejectGenerationTwoPlanGate(
-        AgentToolReceiptStatus receiptStatus)
+        AgentToolReceiptStatus receiptStatus,
+        string terminalCode)
     {
         var continuation = DurableGenerationTwoPlanGateContinuation();
         var sourceKey = CreateKey(
@@ -1573,7 +1575,8 @@ public sealed partial class NyxIdChatTurnGAgentTests
             eventStore,
             sourceKey,
             continuation.PlanGateContinuation.OperationAdmission,
-            receiptStatus);
+            receiptStatus,
+            terminalCode);
         var executor = new RecordingOperationExecutor(_ =>
             throw new InvalidOperationException("The retry must remain fenced."));
         var conversationDispatch = new RecordingDispatchPort();
@@ -3484,7 +3487,8 @@ public sealed partial class NyxIdChatTurnGAgentTests
         InMemoryEventStoreForTests eventStore,
         NyxIdChatOperationKey sourceKey,
         AgentToolOperationAdmissionPayload operationAdmission,
-        AgentToolReceiptStatus receiptStatus)
+        AgentToolReceiptStatus receiptStatus,
+        string terminalCode = "")
     {
         var recordedAt = Timestamp.FromDateTimeOffset(
             new DateTimeOffset(2026, 8, 12, 1, 0, 0, TimeSpan.Zero));
@@ -3522,6 +3526,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
                     {
                         Key = sourceKey.Clone(),
                         Phase = NyxIdChatOperationPhase.Succeeded,
+                        TerminalCode = terminalCode,
                         ExternalEffect = NyxIdChatEffectEvidence.NotStarted,
                         CompletedAt = recordedAt.Clone(),
                         ToolReceiptStatus = receiptStatus,

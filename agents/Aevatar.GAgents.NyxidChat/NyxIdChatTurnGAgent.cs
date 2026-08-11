@@ -1497,8 +1497,9 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
             State.ExternalEffect == NyxIdChatEffectEvidence.NotStarted &&
             State.ExactServiceRecoveryStage ==
             NyxIdChatExactServiceRecoveryStage.Create &&
-            (State.ToolReceiptStatus is AgentToolReceiptStatus.ApprovalRequired or
-                AgentToolReceiptStatus.Unspecified) &&
+            (State.ToolReceiptStatus == AgentToolReceiptStatus.ApprovalRequired ||
+             State.ToolReceiptStatus == AgentToolReceiptStatus.Unspecified &&
+             string.IsNullOrWhiteSpace(State.TerminalCode)) &&
             IsValidExactServiceWriteAdmission(State.OperationAdmission) &&
             IsValidExactServiceWriteAdmission(admission.OperationAdmission) &&
             NyxIdChatOperationAdmissionPolicy.Matches(
