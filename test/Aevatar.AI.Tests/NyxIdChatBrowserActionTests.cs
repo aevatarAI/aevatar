@@ -299,6 +299,34 @@ public sealed class NyxIdChatBrowserActionTests
     }
 
     [Fact]
+    public void CommitRequest_ShouldRejectKeyCreateUntilProducerAndWireAreImplemented()
+    {
+        var state = AuthorizationWaitingState();
+        var request = NyxIdChatBrowserActions.RequestAuthorization(
+            state,
+            AuthorizationRequiredSignal(state),
+            Registry(),
+            Now).Request;
+        request.RegistryRevision = NyxIdAssistantActionRegistry.SupportedRegistryRevision;
+        request.Action = NyxIdAssistantActionKind.KeyCreate;
+        request.Params = new NyxIdAssistantActionParams
+        {
+            KeyCreate = new NyxIdKeyCreateParams
+            {
+                Name = "agent-alpha",
+                Platform = "codex",
+                AllowedServiceIds = { "us-github-alpha" },
+            },
+        };
+
+        var accepted = NyxIdChatBrowserActions.CommitRequest(state, request, Now);
+
+        accepted.ShouldCommit.Should().BeFalse();
+        accepted.Outcome.Should().Be(NyxIdChatTransitionOutcome.Rejected);
+        accepted.ReasonCode.Should().Be(NyxIdChatBrowserActions.ActionRequestInvalid);
+    }
+
+    [Fact]
     public void CompletedReport_ShouldRejectResourceVariantThatDoesNotMatchAction()
     {
         var blocked = BlockedActionState();

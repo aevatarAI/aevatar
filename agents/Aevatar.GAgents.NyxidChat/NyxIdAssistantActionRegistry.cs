@@ -28,7 +28,8 @@ public sealed class NyxIdAssistantActionRegistry
 {
     public const int SupportedSchemaVersion = 4;
     public const string LegacyRegistryRevision = "nyxid-assistant-actions.v4";
-    public const string SupportedRegistryRevision = "nyxid-assistant-actions.v5";
+    public const string WaveOneDraftRegistryRevision = "nyxid-assistant-actions.v5";
+    public const string SupportedRegistryRevision = "nyxid-assistant-actions.v6";
 
     private const string SchemaUnsupported = "NYXID_ACTION_SCHEMA_UNSUPPORTED";
     private const string RevisionUnsupported = "NYXID_ACTION_REGISTRY_REVISION_UNSUPPORTED";
@@ -104,6 +105,25 @@ public sealed class NyxIdAssistantActionRegistry
             "name": {"type": "string"},
             "platform": {"type": "string"},
             "allowedServiceIds": {"type": "array", "items": {"type": "string"}}
+          }
+        }
+        """;
+
+    private const string LeastScopeKeyCreateParamsSchema = """
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "platform", "allowedServiceIds"],
+          "properties": {
+            "name": {"type": "string"},
+            "platform": {"type": "string"},
+            "allowedServiceIds": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 64,
+              "uniqueItems": true,
+              "items": {"type": "string"}
+            }
           }
         }
         """;
@@ -185,12 +205,17 @@ public sealed class NyxIdAssistantActionRegistry
             {
                 "service.connect",
             }.ToFrozenSet(StringComparer.Ordinal),
-            [SupportedRegistryRevision] = new[]
+            [WaveOneDraftRegistryRevision] = new[]
             {
                 "service.connect",
                 "service.reauthorize",
                 "key.create",
                 "key.rotate",
+            }.ToFrozenSet(StringComparer.Ordinal),
+            [SupportedRegistryRevision] = new[]
+            {
+                "service.connect",
+                "key.create",
             }.ToFrozenSet(StringComparer.Ordinal),
         }.ToFrozenDictionary(StringComparer.Ordinal);
 
@@ -201,6 +226,8 @@ public sealed class NyxIdAssistantActionRegistry
         new Dictionary<string, FrozenSet<string>>(StringComparer.Ordinal)
         {
             [LegacyRegistryRevision] = new[] { "service.connect" }
+                .ToFrozenSet(StringComparer.Ordinal),
+            [WaveOneDraftRegistryRevision] = new[] { "service.connect" }
                 .ToFrozenSet(StringComparer.Ordinal),
             [SupportedRegistryRevision] = new[] { "service.connect" }
                 .ToFrozenSet(StringComparer.Ordinal),
@@ -284,7 +311,12 @@ public sealed class NyxIdAssistantActionRegistry
 
                 var paramsSchema = RequireProperty(descriptor, "params_schema").Clone();
                 ValidateSchema(paramsSchema);
-                ValidatePinnedContract(contract, paramsSchema, risk, rememberEligible);
+                ValidatePinnedContract(
+                    contract,
+                    revision,
+                    paramsSchema,
+                    risk,
+                    rememberEligible);
                 var definition = new NyxIdAssistantActionDefinitionSnapshot
                 {
                     SchemaVersion = schemaVersion,
@@ -514,7 +546,12 @@ public sealed class NyxIdAssistantActionRegistry
     internal static NyxIdAssistantActionParams ParseKeyCreate(JsonElement root)
     {
         EnsureOnlyProperties(root, "name", "platform", "allowedServiceIds");
-        var allowedServiceIds = ReadStringArray(root, "allowedServiceIds", 128, 256);
+        var allowedServiceIds = ReadStringArray(
+            root,
+            "allowedServiceIds",
+            64,
+            256,
+            rejectDuplicates: true);
         if (allowedServiceIds.Count == 0)
         {
             throw Error(
@@ -665,14 +702,19 @@ public sealed class NyxIdAssistantActionRegistry
 
     private static void ValidatePinnedContract(
         ActionContract contract,
+        string revision,
         JsonElement paramsSchema,
         NyxIdAssistantActionRisk risk,
         bool rememberEligible)
     {
-        if (contract.PinnedParamsSchema is null)
+        var pinnedParamsSchema = revision == SupportedRegistryRevision &&
+                                 contract.Action == NyxIdAssistantActionKind.KeyCreate
+            ? LeastScopeKeyCreateParamsSchema
+            : contract.PinnedParamsSchema;
+        if (pinnedParamsSchema is null)
             return;
 
-        var expectedSchema = JsonNode.Parse(contract.PinnedParamsSchema);
+        var expectedSchema = JsonNode.Parse(pinnedParamsSchema);
         var actualSchema = JsonNode.Parse(paramsSchema.GetRawText());
         if (!JsonNode.DeepEquals(expectedSchema, actualSchema) ||
             risk != contract.PinnedRisk ||
@@ -723,6 +765,15 @@ public sealed class NyxIdAssistantActionRegistry
 
         if (string.Equals(type, "array", StringComparison.Ordinal))
         {
+            var minItems = ReadOptionalSchemaCount(schema, "minItems");
+            var maxItems = ReadOptionalSchemaCount(schema, "maxItems");
+            if (minItems.HasValue && maxItems.HasValue && minItems > maxItems)
+                throw Error(RegistryInvalid, "Action params_schema contains an invalid array range.");
+            if (schema.TryGetProperty("uniqueItems", out var uniqueItems) &&
+                uniqueItems.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+            {
+                throw Error(RegistryInvalid, "Action params_schema uniqueItems must be a boolean.");
+            }
             ValidateSchemaNode(RequireProperty(schema, "items"));
             return;
         }
@@ -784,6 +835,23 @@ public sealed class NyxIdAssistantActionRegistry
             case "array":
                 if (instance.ValueKind != JsonValueKind.Array)
                     throw Error(ParamsInvalid, $"{path} must be an array.");
+                var itemCount = instance.GetArrayLength();
+                var minItems = ReadOptionalSchemaCount(schema, "minItems");
+                var maxItems = ReadOptionalSchemaCount(schema, "maxItems");
+                if ((minItems.HasValue && itemCount < minItems) ||
+                    (maxItems.HasValue && itemCount > maxItems))
+                {
+                    throw Error(ParamsInvalid, $"{path} contains an invalid number of items.");
+                }
+                if (schema.TryGetProperty("uniqueItems", out var uniqueItems) &&
+                    uniqueItems.ValueKind == JsonValueKind.True)
+                {
+                    var values = instance.EnumerateArray()
+                        .Select(static item => item.GetRawText())
+                        .ToArray();
+                    if (values.Distinct(StringComparer.Ordinal).Count() != values.Length)
+                        throw Error(ParamsInvalid, $"{path} contains duplicate items.");
+                }
                 var items = RequireProperty(schema, "items");
                 foreach (var item in instance.EnumerateArray())
                     ValidateAgainstSchema(item, items, path);
@@ -859,19 +927,32 @@ public sealed class NyxIdAssistantActionRegistry
         JsonElement element,
         string name,
         int maxCount,
-        int maxItemLength)
+        int maxItemLength,
+        bool rejectDuplicates = false)
     {
         if (!element.TryGetProperty(name, out var property))
             return [];
         if (property.ValueKind != JsonValueKind.Array || property.GetArrayLength() > maxCount)
             throw Error(ParamsInvalid, "An action string array is invalid.");
 
-        return property.EnumerateArray()
+        var values = property.EnumerateArray()
             .Select(item => item.ValueKind == JsonValueKind.String
                 ? NormalizeString(item.GetString(), maxItemLength, required: true)
                 : throw Error(ParamsInvalid, "An action string array item is invalid."))
-            .Distinct(StringComparer.Ordinal)
             .ToArray();
+        var distinctValues = values.Distinct(StringComparer.Ordinal).ToArray();
+        if (rejectDuplicates && distinctValues.Length != values.Length)
+            throw Error(ParamsInvalid, "An action string array contains duplicate identities.");
+        return distinctValues;
+    }
+
+    private static int? ReadOptionalSchemaCount(JsonElement schema, string name)
+    {
+        if (!schema.TryGetProperty(name, out var property))
+            return null;
+        if (!property.TryGetInt32(out var value) || value < 0)
+            throw Error(RegistryInvalid, "Action params_schema contains an invalid array count.");
+        return value;
     }
 
     private static string ReadEnumString(
