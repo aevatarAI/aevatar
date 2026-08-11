@@ -10,6 +10,7 @@ using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
+using Aevatar.GAgents.Channel.Identity.Broker;
 using Aevatar.GAgents.Channel.Identity.DependencyInjection;
 using Aevatar.Tests.Shared;
 using FluentAssertions;
@@ -229,6 +230,8 @@ public sealed class ChannelIdentityOrleansDispatchProjectionTests
                         {
                             [$"{AevatarOAuthClientBootstrapOptions.SectionName}:Enabled"] = "false",
                             [AevatarOAuthClientOptions.ClientIdConfigurationKey] = "channel-identity-projection-test-client",
+                            [NyxIdBrokerOptions.InternalApiBaseUrlConfigurationKey] = "http://nyxid.internal.test",
+                            [NyxIdBrokerOptions.ResourceServerBaseUrlConfigurationKey] = "https://nyxid.test",
                         })
                         .Build();
                     services.AddSingleton(forwardingObserver);
