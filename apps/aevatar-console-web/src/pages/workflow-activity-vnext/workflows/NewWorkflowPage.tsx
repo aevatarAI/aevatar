@@ -262,18 +262,24 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
               .toLocaleLowerCase() === normalizedName,
         )),
   );
-  const templateName = t(
-    'workflowActivityVNext.new.templateName.incidentTriage',
-    'Incident triage',
-  );
-  const templateDescription = t(
-    'workflowActivityVNext.new.templateDescription.incidentTriage',
-    'Classify an incident, prepare a response, and request human approval.',
-  );
-  const templateCopyName = t(
-    'workflowActivityVNext.new.templateCopyName.incidentTriage',
-    'Incident triage copy',
-  );
+  const templateName = selectedTemplate
+    ? t(
+        selectedTemplate.nameMessage.id,
+        selectedTemplate.nameMessage.defaultMessage,
+      )
+    : '';
+  const templateDescription = selectedTemplate
+    ? t(
+        selectedTemplate.descriptionMessage.id,
+        selectedTemplate.descriptionMessage.defaultMessage,
+      )
+    : '';
+  const templateCopyName = selectedTemplate
+    ? t(
+        selectedTemplate.copyNameMessage.id,
+        selectedTemplate.copyNameMessage.defaultMessage,
+      )
+    : '';
   const saveTargetUnavailable = !directoryId;
   const workspaceAccessDenied =
     isStudioApiStatus(workspace.error, 401) ||
@@ -555,7 +561,10 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
                     )}
                     onChange={setTemplateId}
                     options={BUNDLED_WORKFLOW_TEMPLATES.map((item) => ({
-                      label: templateName,
+                      label: t(
+                        item.nameMessage.id,
+                        item.nameMessage.defaultMessage,
+                      ),
                       value: item.id,
                     }))}
                     className="wa-vnext__field-control"

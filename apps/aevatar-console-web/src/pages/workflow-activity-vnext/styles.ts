@@ -182,6 +182,9 @@ export const workflowActivityVNextCss = `
 .wa-vnext__form > div > span:first-child { font-size: 12px; font-weight: 600; }
 .wa-vnext__form-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .wa-vnext__field-control { display: block; margin-top: 6px; width: 100%; }
+.wa-vnext__field-control.ant-select { align-items: center; display: flex; }
+.wa-vnext__field-control.ant-select .ant-select-content { align-items: center; display: flex; flex: 1 1 auto; min-width: 0; }
+.wa-vnext__field-control.ant-select .ant-select-suffix { align-items: center; display: flex; flex: 0 0 auto; }
 .wa-vnext__duplicate-warning { color: var(--wa-amber); font-size: 12px; line-height: 17px; margin: 6px 0 0; }
 .wa-vnext__modal-field { display: grid; font-size: 12px; font-weight: 600; gap: 6px; }
 .wa-vnext__mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
