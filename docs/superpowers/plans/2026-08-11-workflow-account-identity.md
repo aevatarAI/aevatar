@@ -45,4 +45,4 @@
 - [x] **Step 2: Run dependency-related Jest tests and explicit changed test files**
 - [x] **Step 3: Run Biome only on analyzer `staticCheckFiles`; skip local full typecheck/build**
 - [x] **Step 4: Inspect the complete diff and browser-smoke Settings and Workflows in the user's Chrome**
-- [ ] **Step 5: Stage only task files, commit, push, and create the follow-up PR with exact validation evidence**
+- [x] **Step 5: Stage only task files, commit, push, and create the follow-up PR with exact validation evidence**
