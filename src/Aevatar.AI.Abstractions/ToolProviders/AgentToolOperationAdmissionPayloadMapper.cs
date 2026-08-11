@@ -120,6 +120,14 @@ public static class AgentToolOperationAdmissionPayloadMapper
                 MaxPages = (uint)Math.Max(0, readBack.Pagination.MaxPages),
             };
         }
+        if (readBack.ProviderResourceArgument is not null)
+        {
+            payload.ProviderResourceArgument = new AgentToolReadBackProviderResourceArgumentPayload
+            {
+                Location = ToParameterLocation(readBack.ProviderResourceArgument.Location),
+                ArgumentName = readBack.ProviderResourceArgument.ArgumentName ?? string.Empty,
+            };
+        }
         return payload;
     }
 
@@ -161,7 +169,12 @@ public static class AgentToolOperationAdmissionPayloadMapper
                     payload.Pagination.PageTokenJsonPointer ?? string.Empty,
                     FromParameterLocation(payload.Pagination.PageTokenLocation),
                     payload.Pagination.PageTokenArgumentName ?? string.Empty,
-                    checked((int)payload.Pagination.MaxPages)));
+                    checked((int)payload.Pagination.MaxPages)),
+            payload.ProviderResourceArgument is null
+                ? null
+                : new AgentToolReadBackProviderResourceArgument(
+                    FromParameterLocation(payload.ProviderResourceArgument.Location),
+                    payload.ProviderResourceArgument.ArgumentName ?? string.Empty));
     }
 
     private static AgentToolReadBackAssertionPayload ToReadBackAssertion(

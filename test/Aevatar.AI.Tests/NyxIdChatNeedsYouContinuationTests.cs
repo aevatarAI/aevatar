@@ -6,6 +6,7 @@ using Aevatar.AI.Core.Tools;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat;
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.AI.Tests;
@@ -584,6 +585,99 @@ public sealed class NyxIdChatNeedsYouContinuationTests
             .Status.Should().Be(NyxIdChatStepStatus.Cancelled);
         reconciled.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Failed);
         reconciled.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Failed);
+    }
+
+    [Fact]
+    public void ExactApprovalAuthority_ShouldPersistAndResumeWithoutTransientCapability()
+    {
+        var state = ApprovalWaitingState();
+        state.PendingApproval = null;
+        var step = state.ActiveTask.Steps.Single(candidate =>
+            candidate.StepId == "step-tool-alpha");
+        step.Status = NyxIdChatStepStatus.Running;
+        step.ApprovalRequestId = string.Empty;
+        step.Operation.Phase = NyxIdChatOperationPhase.Requested;
+        step.Source.Tool.OperationAdmission = new AgentToolOperationAdmissionPayload
+        {
+            ServiceInstanceId = "us-alpha",
+            ServiceSlug = "lark",
+            PublishedEndpoint = new AgentToolPublishedEndpointIdentityPayload
+            {
+                EndpointId = "message.create",
+            },
+            CatalogDigest = "sha256:catalog",
+            ContractDigest = "sha256:contract",
+        };
+        var expiresAt = Timestamp.FromDateTimeOffset(
+            new DateTimeOffset(2026, 8, 11, 12, 0, 0, TimeSpan.Zero));
+        var authority = new NyxIdExactServiceApprovalAuthority
+        {
+            RequestId = "request-exact-alpha",
+            UserServiceId = "us-alpha",
+            EndpointId = "message.create",
+            CatalogDigest = "sha256:catalog",
+            EndpointContractDigest = "sha256:contract",
+            OperationDigest = "sha256:operation",
+            OperationId = "operation-tool-alpha",
+            OperationGeneration = 1,
+            IdempotencyKey = "operation-tool-alpha",
+            ExpiresAt = expiresAt,
+        };
+        var reconciled = NyxIdChatTaskLifecycle.ApplyOperationResult(
+            state,
+            new NyxIdChatOperationResultSignal
+            {
+                Key = step.Operation.Key.Clone(),
+                Tool = new NyxIdChatToolOperationResult
+                {
+                    ExternalEffect = NyxIdChatEffectEvidence.NotStarted,
+                    Receipt = new AgentToolReceipt
+                    {
+                        CallId = "call-danger-alpha",
+                        ToolName = "dangerous_tool",
+                        ApprovalRequestId = authority.RequestId,
+                        Status = AgentToolReceiptStatus.ApprovalRequired,
+                        Effect = AgentToolReceiptEffect.Mutating,
+                        ExactServiceApproval = authority.Clone(),
+                    },
+                },
+            },
+            Now());
+
+        reconciled.State.PendingApproval.Should().NotBeNull();
+        reconciled.State.PendingApproval.ExactServiceApproval.Should()
+            .BeEquivalentTo(authority);
+        reconciled.State.PendingApproval.ExpiresAt.Should().Be(expiresAt);
+        reconciled.State.ActiveTask.Steps.Single(candidate =>
+                candidate.StepId == "step-tool-alpha")
+            .Status.Should().Be(NyxIdChatStepStatus.Waiting);
+
+        var reactivated = NyxIdChatConversationGAgentState.Parser.ParseFrom(
+            reconciled.State.ToByteArray());
+        var resolved = NyxIdChatNeedsYouDecisions.ResolveApproval(
+            reactivated,
+            new NyxIdChatApprovalResolveCommand
+            {
+                ScopeId = "scope-alpha",
+                ConversationActorId = "conversation-alpha",
+                RequestId = authority.RequestId,
+                ClientRequestId = "client-exact-approve",
+                Approved = true,
+                ExpectedStateVersion = 10,
+                ToolContext = ReplacementToolContext("fresh-exact-token"),
+            },
+            currentStateVersion: 10,
+            Now());
+
+        resolved.ShouldCommit.Should().BeTrue();
+        resolved.NextCommand.Should().NotBeNull();
+        resolved.NextCommand!.ToolApprovalContinuation.ExactServiceApproval.Should()
+            .BeEquivalentTo(authority);
+        resolved.NextCommand.ToolApprovalContinuation.ToolCallId.Should().Be(
+            "call-danger-alpha");
+        resolved.NextCommand.ToolApprovalContinuation.ToolName.Should().Be("dangerous_tool");
+        reactivated.ToString().Should().NotContain("fresh-exact-token");
+        resolved.State.ToString().Should().NotContain("fresh-exact-token");
     }
 
     [Fact]

@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
+using Aevatar.AI.ToolProviders.NyxId.ExactServiceApprovals;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -59,6 +60,9 @@ public static class ServiceCollectionExtensions
         //   Old pattern: NyxID was registered as a generic local approval handler that blocked while polling.
         //   New principle: NyxID is a remote submit/status port; local approval/yield remains host-owned.
         services.TryAddTransient<IRemoteToolApprovalPort, NyxIdRemoteToolApprovalPort>();
+        services.TryAddSingleton<INyxIdExactServiceApprovalPort>(sp =>
+            new NyxIdExactServiceApprovalPort(
+                sp.GetRequiredService<INyxIdApiClientFactory>().CreateClient()));
 
         return services;
     }

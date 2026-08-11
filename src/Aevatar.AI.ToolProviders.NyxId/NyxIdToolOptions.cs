@@ -45,6 +45,13 @@ public sealed class NyxIdAssistantReadBackLiteralArgument
     public Value Value { get; set; } = new();
 }
 
+public sealed class NyxIdAssistantReadBackProviderResourceArgument
+{
+    public NyxIdAssistantOperationArgumentLocation ReadLocation { get; set; }
+
+    public string ReadArgumentName { get; set; } = string.Empty;
+}
+
 public sealed class NyxIdAssistantEffectArgumentConstraint
 {
     public NyxIdAssistantOperationArgumentLocation EffectLocation { get; set; }
@@ -97,6 +104,13 @@ public sealed class NyxIdAssistantOperationReadBackBinding
     public List<NyxIdAssistantReadBackArgumentBinding> ArgumentBindings { get; set; } = [];
 
     public List<NyxIdAssistantReadBackLiteralArgument> LiteralReadArguments { get; set; } = [];
+
+    /// <summary>
+    /// Optional read argument populated from the provider resource identity extracted from the
+    /// effect response. The binding is frozen with the read-back admission; the value is supplied
+    /// only after the effect succeeds.
+    /// </summary>
+    public NyxIdAssistantReadBackProviderResourceArgument? ProviderResourceArgument { get; set; }
 
     public List<NyxIdAssistantEffectArgumentConstraint> EffectArgumentConstraints { get; set; } = [];
 

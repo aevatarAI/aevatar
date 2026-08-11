@@ -88,7 +88,8 @@ public static class NyxIdChatTaskLifecycle
 
     // Deadline the actor stamps on every local pending tool approval it parks.
     // The actor is the authoritative source for actor-owned approvals; admitted
-    // connected-service operations never park a local pending approval.
+    // Tier B connected-service approvals are post-return observations. Tier A
+    // exact-service approvals park the actor-owned continuation before effect.
     public static readonly TimeSpan ToolApprovalExpiryWindow = TimeSpan.FromMinutes(10);
 
     public static NyxIdChatTaskLifecycleDecision ApplyOperationResult(
@@ -2272,8 +2273,9 @@ public static class NyxIdChatTaskLifecycle
         step.ApprovalRequestId = receipt.ApprovalRequestId;
         step.UpdatedAt = now.Clone();
         if (step.Source?.Tool?.OperationAdmission is not null &&
-            receipt.Status is AgentToolReceiptStatus.ApprovalRequired or
-                AgentToolReceiptStatus.Denied)
+            receipt.ExactServiceApproval is null &&
+            (receipt.Status is AgentToolReceiptStatus.ApprovalRequired or
+                AgentToolReceiptStatus.Denied))
         {
             step.ApprovalObservation = new NyxIdChatPostReturnApprovalObservation
             {
@@ -2304,8 +2306,9 @@ public static class NyxIdChatTaskLifecycle
                 ? previousStep.Source?.Tool?.ToolName ?? string.Empty
                 : receipt.ToolName,
             AskedAt = now.Clone(),
-            ExpiresAt = Timestamp.FromDateTimeOffset(
-                now.ToDateTimeOffset() + ToolApprovalExpiryWindow),
+            ExpiresAt = receipt.ExactServiceApproval?.ExpiresAt?.Clone() ??
+                        Timestamp.FromDateTimeOffset(
+                            now.ToDateTimeOffset() + ToolApprovalExpiryWindow),
             Presentation = new NyxIdChatApprovalPresentation
             {
                 Action = string.IsNullOrWhiteSpace(receipt.SideEffectKind)
@@ -2319,6 +2322,13 @@ public static class NyxIdChatTaskLifecycle
                 GrantBoundary = "within_grant",
             },
         };
+        if (receipt.ExactServiceApproval is not null)
+        {
+            state.PendingApproval.ExactServiceApproval =
+                receipt.ExactServiceApproval.Clone();
+            state.PendingApproval.Presentation.NyxidRequestId =
+                receipt.ExactServiceApproval.RequestId;
+        }
     }
 
     private static void ApplyConnectedServiceApprovalReentry(
@@ -2329,6 +2339,7 @@ public static class NyxIdChatTaskLifecycle
     {
         var receipt = signal.Tool?.Receipt;
         if (previousStep.Source?.Tool?.OperationAdmission is null ||
+            receipt?.ExactServiceApproval is not null ||
             receipt?.Status != AgentToolReceiptStatus.ApprovalRequired)
         {
             return;
