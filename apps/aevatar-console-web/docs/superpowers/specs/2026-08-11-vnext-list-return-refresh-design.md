@@ -54,4 +54,3 @@ the bug rather than passing because test data is immediately stale. Cover:
 Run only the changed test files and affected frontend checks. The complete
 frontend suite, typecheck, and production build remain delegated to GitHub CI
 under the personal incremental frontend policy.
-

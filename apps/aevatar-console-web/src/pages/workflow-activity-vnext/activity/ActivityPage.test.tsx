@@ -1,3 +1,4 @@
+import { QueryClient } from '@tanstack/react-query';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import * as React from 'react';
 import { history } from '@/shared/navigation/history';
@@ -102,6 +103,30 @@ describe('Workflow Activity vNext Activity ledger', () => {
       screen.getByRole('searchbox', { name: 'Search runs' }),
     ).toBeEnabled();
     expect(screen.queryByText('No runs yet')).not.toBeInTheDocument();
+  });
+
+  it('refreshes runs when returning to activity', async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: {
+          gcTime: Infinity,
+          refetchOnWindowFocus: false,
+          retry: false,
+          staleTime: 30_000,
+        },
+      },
+    });
+    const firstView = renderWithQueryClient(
+      <ActivityPage scopeId="scope-alpha" />,
+      queryClient,
+    );
+
+    await waitFor(() => expect(mockListRuns).toHaveBeenCalledTimes(1));
+    firstView.unmount();
+
+    renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />, queryClient);
+
+    await waitFor(() => expect(mockListRuns).toHaveBeenCalledTimes(2));
   });
 
   it('renders the activity table skeleton while resolving a workflow filter', () => {

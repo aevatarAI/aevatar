@@ -112,4 +112,3 @@ Stage only this task's files, commit with an imperative single-purpose message,
 push the branch, and create a PR targeting
 `feat/2026-08-04_workflow-activity-vnext`. Record all focused commands and state
 that full frontend validation is delegated to GitHub CI.
-
