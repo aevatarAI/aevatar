@@ -223,6 +223,8 @@ public sealed partial class NyxIdChatConversationGAgentTests
     [Fact]
     public async Task ExpiredAuthority_ShouldPersistBlockedActorStateWithStableCode()
     {
+        const string expectedExpiredCode = "NYXID_ACTION_READ_AUTHORITY_EXPIRED";
+
         var clock = new FakeTimeProvider(P0CNow);
         var vault = new InMemorySecretVault(clock);
         var authorityPort = P0CCreateAuthorityPort(vault, clock);
@@ -247,33 +249,50 @@ public sealed partial class NyxIdChatConversationGAgentTests
         await actor.HandleEventAsync(CreateEnvelope(P0CActorId, execution.Result));
 
         evidence.BearerTokens.Should().BeEmpty();
+        NyxIdActionReadAuthorityPort.ExpiredCode.Should().Be(expectedExpiredCode);
         execution.Result.ActionPostcondition.Verified.Should().BeFalse();
-        execution.Result.ActionPostcondition.FailureCode.Should().Be(
-            NyxIdActionReadAuthorityPort.ExpiredCode);
+        execution.Result.ActionPostcondition.FailureCode.Should().Be(expectedExpiredCode);
         var committed = await eventStore.GetEventsAsync(P0CActorId);
         var reconciled = committed.Should().ContainSingle(item =>
                 item.EventData.Is(NyxIdChatOperationReconciledEvent.Descriptor))
             .Which.EventData.Unpack<NyxIdChatOperationReconciledEvent>();
-        reconciled.Result.ActionPostcondition.FailureCode.Should().Be(
-            NyxIdActionReadAuthorityPort.ExpiredCode);
+        reconciled.Result.ActionPostcondition.FailureCode.Should().Be(expectedExpiredCode);
+        reconciled.Task.FailureCode.Should().Be(expectedExpiredCode);
+        reconciled.Turn.FailureCode.Should().Be(expectedExpiredCode);
+        var reconciledTaskPostconditionStep = reconciled.Task.Steps.Should()
+            .ContainSingle(step => step.Kind == NyxIdChatStepKind.Postcondition).Which;
+        reconciledTaskPostconditionStep.FailureCode.Should().Be(expectedExpiredCode);
+        reconciledTaskPostconditionStep.Operation.TerminalCode.Should().Be(expectedExpiredCode);
         reconciled.State.PendingActions.Should().ContainSingle().Which
-            .PostconditionResult.FailureCode.Should().Be(
-                NyxIdActionReadAuthorityPort.ExpiredCode);
+            .PostconditionResult.FailureCode.Should().Be(expectedExpiredCode);
         reconciled.State.RecentActions.Should().BeEmpty();
         reconciled.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Blocked);
-        reconciled.State.ActiveTask.FailureCode.Should().Be(
-            NyxIdActionReadAuthorityPort.ExpiredCode);
+        reconciled.State.ActiveTask.FailureCode.Should().Be(expectedExpiredCode);
         reconciled.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Blocked);
-        reconciled.State.ActiveTurn.FailureCode.Should().Be(
-            NyxIdActionReadAuthorityPort.ExpiredCode);
+        reconciled.State.ActiveTurn.FailureCode.Should().Be(expectedExpiredCode);
+        reconciled.State.LatestTurn.FailureCode.Should().Be(expectedExpiredCode);
+        reconciled.State.RecentTerminalTurns.Should().ContainSingle(summary =>
+                summary.TurnId == reconciled.State.ActiveTurn.TurnId).Which
+            .FailureCode.Should().Be(expectedExpiredCode);
         var postconditionStep = reconciled.State.ActiveTask.Steps.Should()
             .ContainSingle(step => step.Kind == NyxIdChatStepKind.Postcondition).Which;
         postconditionStep.Status.Should().Be(NyxIdChatStepStatus.Waiting);
-        postconditionStep.FailureCode.Should().Be(NyxIdActionReadAuthorityPort.ExpiredCode);
+        postconditionStep.FailureCode.Should().Be(expectedExpiredCode);
         postconditionStep.Operation.Phase.Should().Be(NyxIdChatOperationPhase.Failed);
-        postconditionStep.Operation.TerminalCode.Should().Be(
-            NyxIdActionReadAuthorityPort.ExpiredCode);
+        postconditionStep.Operation.TerminalCode.Should().Be(expectedExpiredCode);
         actor.State.Should().BeEquivalentTo(reconciled.State);
+        actor.State.PendingActions.Should().ContainSingle().Which
+            .PostconditionResult.FailureCode.Should().Be(expectedExpiredCode);
+        actor.State.ActiveTask.FailureCode.Should().Be(expectedExpiredCode);
+        actor.State.ActiveTurn.FailureCode.Should().Be(expectedExpiredCode);
+        actor.State.LatestTurn.FailureCode.Should().Be(expectedExpiredCode);
+        actor.State.RecentTerminalTurns.Should().ContainSingle(summary =>
+                summary.TurnId == actor.State.ActiveTurn.TurnId).Which
+            .FailureCode.Should().Be(expectedExpiredCode);
+        var actorPostconditionStep = actor.State.ActiveTask.Steps.Should()
+            .ContainSingle(step => step.Kind == NyxIdChatStepKind.Postcondition).Which;
+        actorPostconditionStep.FailureCode.Should().Be(expectedExpiredCode);
+        actorPostconditionStep.Operation.TerminalCode.Should().Be(expectedExpiredCode);
     }
 
     [Fact]
@@ -290,6 +309,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
         var actor = CreateController(services, P0CActorId, dispatch, timeProvider: clock);
         var publications = P0CAttachCommittedPublisher(actor);
         await actor.ActivateAsync();
+        var committedBeforeAdmission = (await eventStore.GetEventsAsync(P0CActorId)).Count;
         await actor.HandleEventAsync(endpoint.Envelope);
         var operation = dispatch.OperationCalls.Should().ContainSingle().Which.Envelope.Payload
             .Unpack<NyxIdChatOperationDispatchCommand>();
@@ -302,8 +322,19 @@ public sealed partial class NyxIdChatConversationGAgentTests
         await actor.HandleEventAsync(CreateEnvelope(P0CActorId, execution.Result));
 
         evidence.BearerTokens.Should().ContainSingle().Which.Should().Be(P0CRawBearer);
+        P0CAssertSerializedBoundary(operation, P0CRawBearer, absent: true);
+        P0CAssertSerializedBoundary(execution.Result, P0CRawBearer, absent: true);
         var opaqueRef = endpoint.Command.ReadAuthority!.SecretRef;
         var committed = await eventStore.GetEventsAsync(P0CActorId);
+        var committedAfterAdmission = committed.Skip(committedBeforeAdmission).ToArray();
+        committedAfterAdmission.Should().NotBeEmpty();
+        foreach (var stateEvent in committedAfterAdmission)
+            P0CAssertSerializedBoundary(stateEvent, P0CRawBearer, absent: true);
+        publications.Publications.Count.Should().Be(committedAfterAdmission.Length);
+        publications.Publications.Select(static item => item.StateEvent.EventId).Should()
+            .Equal(committedAfterAdmission.Select(static item => item.EventId));
+        foreach (var publication in publications.Publications)
+            P0CAssertSerializedBoundary(publication, P0CRawBearer, absent: true);
         var admissionStateEvent = committed.Should().ContainSingle(item =>
                 item.EventData.Is(NyxIdChatContinuationAdmissionCommittedEvent.Descriptor))
             .Which;
