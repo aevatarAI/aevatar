@@ -1439,7 +1439,7 @@ public sealed class WorkflowRunActorPortBranchTests
     }
 
     [Fact]
-    public async Task RecordForkChildAsync_ShouldDispatchTypedLineageEventToSourceRunActor()
+    public async Task RecordForkChildAsync_ShouldActivateSourceRunAndDispatchTypedLineageEvent()
     {
         var runtime = new RecordingActorRuntime();
         var sourceActor = new RecordingActor("source-run", new StubAgent("source-run"));
@@ -1457,10 +1457,11 @@ public sealed class WorkflowRunActorPortBranchTests
 
         runtime.CreateRequests.Should().ContainSingle()
             .Which.Should().Be((typeof(WorkflowRunGAgent), "source-run"));
-        runtime.Dispatches.Should().BeEmpty();
+        runtime.Dispatches.Should().ContainSingle();
+        runtime.Dispatches[0].ActorId.Should().Be("source-run");
         sourceActor.LastHandledEnvelope.Should().NotBeNull();
         sourceActor.LastHandledEnvelope!.Route.GetTargetActorId().Should().BeEmpty();
-        var lineage = sourceActor.LastHandledEnvelope.Payload.Unpack<WorkflowRunLineageRecordedEvent>();
+        var lineage = runtime.Dispatches[0].Envelope.Payload.Unpack<WorkflowRunLineageRecordedEvent>();
         lineage.SourceRunId.Should().Be("source-run");
         lineage.ChildRunId.Should().Be("child-run");
         lineage.ChildActorId.Should().Be("child-actor");

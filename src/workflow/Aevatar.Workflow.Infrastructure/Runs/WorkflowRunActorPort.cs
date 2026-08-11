@@ -265,7 +265,8 @@ internal sealed class WorkflowRunActorPort :
             normalizedSourceRunId,
             ct).ConfigureAwait(false);
 
-        await sourceActor.HandleEventAsync(
+        await _dispatchPort.DispatchAsync(
+            sourceActor.Id,
             CreateWorkflowRunLineageRecordedEnvelope(
                 normalizedSourceRunId,
                 normalizedChildRunId,
