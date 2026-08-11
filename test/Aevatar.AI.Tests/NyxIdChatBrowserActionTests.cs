@@ -70,6 +70,50 @@ public sealed class NyxIdChatBrowserActionTests
     }
 
     [Fact]
+    public void KeyCreateAuthorizationRequired_ShouldCommitExactLeastScopeActionRequest()
+    {
+        var state = AuthorizationWaitingState();
+        var signal = AuthorizationRequiredSignal(state);
+        signal.Tool.Receipt.ToolName = "nyxid_request_key_create";
+        signal.Tool.Receipt.AuthorizationRequired.ServiceSlug = string.Empty;
+        signal.Tool.Receipt.AuthorizationRequired.RequestedScopes.Clear();
+        signal.Tool.Receipt.AuthorizationRequired.KeyCreate =
+            new NyxIdKeyCreateActionRequirement
+            {
+                Name = "agent-alpha",
+                Platform = "codex",
+                AllowedServiceIds = { "us-github-alpha" },
+            };
+
+        var decision = NyxIdChatBrowserActions.RequestAuthorization(
+            state,
+            signal,
+            LeastScopeRegistry(),
+            Now);
+
+        decision.ShouldCommit.Should().BeTrue();
+        decision.Outcome.Should().Be(NyxIdChatTransitionOutcome.Accepted);
+        decision.Request.RegistryRevision.Should().Be(
+            NyxIdAssistantActionRegistry.SupportedRegistryRevision);
+        decision.Request.Action.Should().Be(NyxIdAssistantActionKind.KeyCreate);
+        decision.Request.Params.ParamsCase.Should().Be(
+            NyxIdAssistantActionParams.ParamsOneofCase.KeyCreate);
+        decision.Request.Params.KeyCreate.Name.Should().Be("agent-alpha");
+        decision.Request.Params.KeyCreate.Platform.Should().Be("codex");
+        decision.Request.Params.KeyCreate.AllowedServiceIds.Should()
+            .Equal("us-github-alpha");
+        decision.Request.RememberEligible.Should().BeFalse();
+        decision.State.PendingActions.Should().ContainSingle()
+            .Which.Should().BeEquivalentTo(decision.Request);
+        decision.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Blocked);
+        decision.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Blocked);
+        decision.State.ActiveTask.Steps.Should().ContainSingle(step =>
+            step.Kind == NyxIdChatStepKind.BrowserAction &&
+            step.Source.BrowserAction.Action == NyxIdAssistantActionKind.KeyCreate &&
+            step.ActionRequestId == decision.Request.ActionRequestId);
+    }
+
+    [Fact]
     public void ExactActionPlanConfirm_ShouldSatisfyOnlyLocalGateWithoutDispatchOrRevision()
     {
         var state = BlockedActionStateWithPendingGate();
@@ -1284,6 +1328,88 @@ public sealed class NyxIdChatBrowserActionTests
               "risk": "grant",
               "tier": "v1",
               "remember_eligible": true
+            }
+          ]
+        }
+        """);
+
+    private static NyxIdAssistantActionRegistry LeastScopeRegistry() =>
+        NyxIdAssistantActionRegistry.Load("""
+        {
+          "schema_version": 4,
+          "revision": "nyxid-assistant-actions.v6",
+          "actions": [
+            {
+              "action": "service.connect",
+              "description": "Connect a catalog service in the NyxID browser.",
+              "params_schema": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["catalogService"],
+                    "properties": {
+                      "catalogService": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["serviceSlug"],
+                        "properties": {
+                          "serviceSlug": {"type": "string"},
+                          "requestedScopes": {"type": "array", "items": {"type": "string"}},
+                          "viaNodeId": {"type": "string"},
+                          "targetOrgId": {"type": "string"}
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["customService"],
+                    "properties": {
+                      "customService": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["name", "endpointUrl", "authMethod"],
+                        "properties": {
+                          "name": {"type": "string"},
+                          "endpointUrl": {"type": "string"},
+                          "authMethod": {"type": "string"},
+                          "authKeyName": {"type": "string"},
+                          "viaNodeId": {"type": "string"},
+                          "targetOrgId": {"type": "string"}
+                        }
+                      }
+                    }
+                  }
+                ]
+              },
+              "risk": "grant",
+              "tier": "v1",
+              "remember_eligible": true
+            },
+            {
+              "action": "key.create",
+              "description": "Create a least-scope API key.",
+              "params_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "platform", "allowedServiceIds"],
+                "properties": {
+                  "name": {"type": "string"},
+                  "platform": {"type": "string"},
+                  "allowedServiceIds": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 64,
+                    "uniqueItems": true,
+                    "items": {"type": "string"}
+                  }
+                }
+              },
+              "risk": "grant",
+              "tier": "v1",
+              "remember_eligible": false
             }
           ]
         }

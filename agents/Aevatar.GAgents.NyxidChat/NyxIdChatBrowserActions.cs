@@ -55,12 +55,14 @@ public static class NyxIdChatBrowserActions
         var receipt = signal.Tool?.Receipt;
         var blocker = receipt?.AuthorizationRequired;
         var sourceStep = FindStep(state, signalKey?.StepId);
+        var hasCatalogServiceConnect = !string.IsNullOrWhiteSpace(blocker?.ServiceSlug);
+        var hasKeyCreate = blocker?.KeyCreate is not null;
         if (receipt?.Status != AgentToolReceiptStatus.AuthorizationRequired ||
             blocker is null ||
             signalKey is null ||
             sourceStep?.Operation?.Key is null ||
             !KeysEqual(sourceStep.Operation.Key, signalKey) ||
-            string.IsNullOrWhiteSpace(blocker.ServiceSlug) ||
+            hasCatalogServiceConnect == hasKeyCreate ||
             state.ActiveTurn is null ||
             state.ActiveTask is null)
         {
@@ -81,9 +83,11 @@ public static class NyxIdChatBrowserActions
             sourceStep = FindStep(actionState, signalKey.StepId)!;
         }
 
-        var validated = registry.ResolveCatalogServiceConnect(
-            blocker.ServiceSlug,
-            blocker.RequestedScopes);
+        var validated = hasKeyCreate
+            ? registry.ResolveKeyCreate(blocker.KeyCreate)
+            : registry.ResolveCatalogServiceConnect(
+                blocker.ServiceSlug,
+                blocker.RequestedScopes);
         var actionRequestId = BuildStableIdentity(
             "action",
             actionState.ConversationActorId,

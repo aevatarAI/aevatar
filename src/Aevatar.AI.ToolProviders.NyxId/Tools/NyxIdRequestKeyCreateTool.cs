@@ -4,7 +4,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 
 namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 
-public sealed class NyxIdRequestKeyCreateTool : INyxIdBuiltInTool
+public sealed class NyxIdRequestKeyCreateTool : INyxIdBuiltInTool, IAgentToolCapabilityDescriptor
 {
     private const int MaxAllowedServiceIds = 64;
     private const string ArgumentsInvalidCode = "NYXID_KEY_CREATE_ARGUMENTS_INVALID";
@@ -17,6 +17,8 @@ public sealed class NyxIdRequestKeyCreateTool : INyxIdBuiltInTool
         "Create the least-scope NyxID API key in the secure browser action.";
 
     private readonly NyxIdApiClient _client;
+
+    public IReadOnlyCollection<string> Capabilities => NyxIdToolSurfaces.HumanSessionOnly;
 
     public NyxIdRequestKeyCreateTool(NyxIdApiClient client)
     {

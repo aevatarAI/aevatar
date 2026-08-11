@@ -27,7 +27,7 @@ public class NyxIdAgentToolSourceHumanSessionGatingTests
         "nyxid_account", "nyxid_profile", "nyxid_mfa", "nyxid_sessions", "nyxid_api_keys",
         "nyxid_external_keys", "nyxid_nodes", "nyxid_endpoints", "nyxid_notifications",
         "nyxid_providers", "nyxid_orgs", "nyxid_admin", "nyxid_channel_bots", "nyxid_status",
-        "nyxid_services", "nyxid_approvals",
+        "nyxid_services", "nyxid_approvals", "nyxid_request_key_create",
     };
 
     private static readonly HashSet<string> RelaySafeTools = new(StringComparer.Ordinal)
