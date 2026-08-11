@@ -56,3 +56,12 @@ condition, guard, and artifact facts.
 Additional domain-journey contract evidence:
 
 - [Aevatar issue #3369](https://github.com/aevatarAI/aevatar/issues/3369)
+
+`uc2-research-journey.json` freezes target journey UC2 from support-spec gist
+revision `f45febb057a7182dab2495d4c739d2bb8d7026f5`. It keeps `task-uc2` stable
+across steering while changing the continuation turn, preserves the completed
+`web_search` evidence and substeps, fences the stopped task with a no-effect
+partial receipt, and starts `turn-uc2b-1 / task-uc2b` as a distinct task. The
+final artifact is ordinary assistant content, not a new wire object; the
+fixture records its verified/cannot-check/no-reservation obligations for
+deterministic conformance tests.

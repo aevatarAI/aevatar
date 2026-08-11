@@ -2651,6 +2651,70 @@ public sealed partial class NyxIdChatTurnGAgentTests
     }
 
     [Fact]
+    public async Task OperationExecutor_WebSearch_ShouldPublishHonestResearchSubsteps()
+    {
+        var generationExecutor = new StreamingCapabilityReplyExecutor(toolName: "web_search");
+        var executor = new NyxIdChatTurnOperationExecutor(generationExecutor);
+        var session = new NyxIdChatTransientExecutionSession();
+        var progress = new List<NyxIdChatOperationProgressSignal>();
+        await executor.ExecuteAsync(
+            new NyxIdChatOperationDispatchCommand
+            {
+                Key = CreateKey(),
+                Llm = new NyxIdChatLLMOperationInput
+                {
+                    Request = new ChatRequestEvent
+                    {
+                        Prompt = "Research Greek dinner options in northern Singapore.",
+                        SessionId = "turn-uc2-1",
+                    },
+                },
+            },
+            session,
+            (signal, _) =>
+            {
+                progress.Add(signal.Clone());
+                return Task.CompletedTask;
+            },
+            CancellationToken.None);
+
+        var execution = await executor.ExecuteAsync(
+            new NyxIdChatOperationDispatchCommand
+            {
+                Key = CreateKey("step-uc2-search", "operation-uc2-search", 1),
+                Tool = new NyxIdChatToolOperationInput
+                {
+                    CallId = "call-alpha",
+                    ToolName = "web_search",
+                    ArgumentsJson = "{\"value\":1}",
+                    MayChangeExternalState = false,
+                },
+            },
+            session,
+            (signal, _) =>
+            {
+                progress.Add(signal.Clone());
+                return Task.CompletedTask;
+            },
+            CancellationToken.None);
+
+        generationExecutor.ToolExecutions.Should().Be(1);
+        execution.Result.Tool.Receipt.ToolName.Should().Be("web_search");
+        execution.Result.Tool.ExternalEffect.Should().Be(NyxIdChatEffectEvidence.NotApplied);
+        progress.Where(static signal =>
+                signal.ProgressCase == NyxIdChatOperationProgressSignal.ProgressOneofCase.Phase)
+            .Select(static signal => (
+                signal.Phase.SubstepId,
+                signal.Phase.Title,
+                signal.Phase.Status))
+            .Should().Equal(
+                ("prepare-operation", "Build search query", NyxIdChatSubstepStatus.Running),
+                ("prepare-operation", "Build search query", NyxIdChatSubstepStatus.Done),
+                ("execute-operation", "Search current web results", NyxIdChatSubstepStatus.Running),
+                ("execute-operation", "Search current web results", NyxIdChatSubstepStatus.Done));
+    }
+
+    [Fact]
     public async Task OperationExecutor_ExactPlanGateContinuation_ShouldUseTransientCallOnce()
     {
         var generationExecutor = new StreamingCapabilityReplyExecutor();
@@ -3788,13 +3852,14 @@ public sealed partial class NyxIdChatTurnGAgentTests
     }
 
     private sealed class StreamingCapabilityReplyExecutor(
-        AgentToolOperationAdmissionPayload? operationAdmission = null)
+        AgentToolOperationAdmissionPayload? operationAdmission = null,
+        string toolName = "tool-alpha")
         : IAgentRunReplyGenerationExecutorPort
     {
-        private static AgentRunToolCall AuthorizedToolCall { get; } = new()
+        private readonly AgentRunToolCall _authorizedToolCall = new()
         {
             Id = "call-alpha",
-            Name = "tool-alpha",
+            Name = toolName,
             ArgumentsJson = "{\"value\":1}",
         };
 
@@ -3868,14 +3933,16 @@ public sealed partial class NyxIdChatTurnGAgentTests
                 {
                     ToolCall = new ToolCall
                     {
-                        Id = AuthorizedToolCall.Id,
-                        Name = AuthorizedToolCall.Name,
-                        ArgumentsJson = AuthorizedToolCall.ArgumentsJson,
+                        Id = _authorizedToolCall.Id,
+                        Name = _authorizedToolCall.Name,
+                        ArgumentsJson = _authorizedToolCall.ArgumentsJson,
                     },
                     Presentation = new ToolPresentationDescriptor
                     {
-                        InvocationName = AuthorizedToolCall.Name,
-                        DisplayName = "Tool Alpha",
+                        InvocationName = _authorizedToolCall.Name,
+                        DisplayName = _authorizedToolCall.Name == "web_search"
+                            ? "Web search"
+                            : "Tool Alpha",
                         Kind = ToolPresentationKind.Generic,
                         Availability = ToolAvailability.Available,
                     },
@@ -3890,7 +3957,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
                 FinishReason = "tool_calls",
                 HasStreamedTextContent = true,
             };
-            result.ToolCalls.Add(AuthorizedToolCall.Clone());
+            result.ToolCalls.Add(_authorizedToolCall.Clone());
             var continuation = new AgentRunNextLlmStepRequestedEvent
             {
                 RunId = request.RunId,
@@ -3906,7 +3973,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
                 request.Request.CorrelationId,
                 request.Attempt,
                 continuation.StepIndex,
-                [AuthorizedToolCall],
+                [_authorizedToolCall],
                 _ =>
                 {
                     ToolExecutions++;
@@ -3918,7 +3985,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
                             new AgentRunChatMessage
                             {
                                 Role = "tool",
-                                ToolCallId = AuthorizedToolCall.Id,
+                                ToolCallId = _authorizedToolCall.Id,
                                 Content = "{\"ok\":true}",
                             },
                         },
@@ -3926,8 +3993,8 @@ public sealed partial class NyxIdChatTurnGAgentTests
                         {
                             new AgentToolReceipt
                             {
-                                CallId = AuthorizedToolCall.Id,
-                                ToolName = AuthorizedToolCall.Name,
+                                CallId = _authorizedToolCall.Id,
+                                ToolName = _authorizedToolCall.Name,
                                 Status = AgentToolReceiptStatus.Success,
                                 ResultJson = "{\"ok\":true}",
                             },
@@ -3939,18 +4006,22 @@ public sealed partial class NyxIdChatTurnGAgentTests
                 capability,
                 [
                     new AgentRunAuthorizedToolCallSafety(
-                        AuthorizedToolCall.Id,
-                        AuthorizedToolCall.Name,
-                        AuthorizedToolCall.ArgumentsJson,
+                        _authorizedToolCall.Id,
+                        _authorizedToolCall.Name,
+                        _authorizedToolCall.ArgumentsJson,
                         new AgentToolCallSafety(
                             RequiresApproval: false,
-                            IsReadOnly: false,
+                            IsReadOnly: toolName == "web_search",
                             IsDestructive: false),
-                        SideEffectKind: "tool-alpha.update",
+                        SideEffectKind: toolName == "web_search"
+                            ? "web.search"
+                            : "tool-alpha.update",
                         Presentation: new ToolPresentationDescriptor
                         {
-                            InvocationName = AuthorizedToolCall.Name,
-                            DisplayName = "Tool Alpha",
+                            InvocationName = _authorizedToolCall.Name,
+                            DisplayName = _authorizedToolCall.Name == "web_search"
+                                ? "Web search"
+                                : "Tool Alpha",
                             Kind = ToolPresentationKind.NyxIdOperation,
                             Availability = ToolAvailability.Available,
                             NyxIdOperation = new NyxIdOperationRef

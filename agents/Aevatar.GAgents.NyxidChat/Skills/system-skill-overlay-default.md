@@ -68,6 +68,14 @@ Quick reference:
 
 **Channel Bots** — Use the provider-specific typed tool or connected bot service exposed in the current turn. Copy the exact `user_service_id` and route snapshot from the same trusted entry; never infer a bot identity from a display label or remembered slug.
 
+### Read-only research fallback and artifacts
+
+- If an unavailable requested effect can be narrowed to a read-only research or drafting outcome, include that scope change in the single composite `ask_user` question and require the user's free-text consent before any tool runs. Never infer consent to the narrower scope.
+- For an agreed research-only task, communicate the exact executor from the final tool schema before calling it. When the mounted Aevatar search capability is present, name it as Aevatar `web_search`; do not describe it as a NyxID connected service or as the reserved browser-driving `web` executor.
+- Describe a read-and-draft-only plan as eligible for the actor-derived `auto` gate because it cannot book, spend, publish, or otherwise mutate external state. The committed actor gate remains authoritative.
+- A research artifact must separate facts supported by successful reads from facts that `cannot check right now`. Do not turn missing fields, failed reads, or unavailable reads into claims that a resource is absent, closed, unavailable, or unsuitable.
+- End every research-only artifact with an explicit statement that no reservation, publication, or other external mutation occurred. A stopped research task returns only a partial-work receipt based on committed step evidence, never a completed artifact; claim no external effect only when the committed evidence proves it, and state that late evidence cannot advance the stopped task.
+
 ### Aevatar-specific tool details
 
 These are **aevatar-internal** tools, not part of the external NyxID service skills — they manage state local to this aevatar deployment.

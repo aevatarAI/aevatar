@@ -59,9 +59,6 @@ public static class NyxIdChatControlCommands
     public const string ActiveTurnRequiresSteeringMessage =
         "This conversation already has active work. Submit a steering command for the active turn.";
 
-    private const string StopAcceptedMessage = "The active chat turn was stopped.";
-    private const string StopUncancellableMessage =
-        "The chat turn was fenced, but the in-flight operation could not be proven cancelled.";
     private const string SteeringAcceptedMessage =
         "The steering instruction was accepted at a safe checkpoint.";
     private const string SteeringAcceptedForLaterMessage =
@@ -518,6 +515,7 @@ public static class NyxIdChatControlCommands
         var outcome = physicallyInFlight
             ? NyxIdChatControlOutcome.Uncancellable
             : NyxIdChatControlOutcome.Accepted;
+        var receipt = BuildStopReceipt(state, physicallyInFlight);
         var fence = BuildResult(
             state,
             NyxIdChatControlKind.Stop,
@@ -525,7 +523,7 @@ public static class NyxIdChatControlCommands
             command.ClientRequestId,
             outcome,
             physicallyInFlight ? StopUncancellable : StopAccepted,
-            physicallyInFlight ? StopUncancellableMessage : StopAcceptedMessage,
+            receipt,
             now);
         var next = ApplyTerminalFence(state, fence, now);
         return new NyxIdChatControlDecision(
@@ -1344,6 +1342,72 @@ public static class NyxIdChatControlCommands
         state.ActiveTask?.Steps.Any(step =>
             IsPhysicallyInFlight(step.Operation?.Phase ??
                                  NyxIdChatOperationPhase.Unspecified)) == true;
+
+    private static string BuildStopReceipt(
+        NyxIdChatConversationGAgentState state,
+        bool physicallyInFlight)
+    {
+        var steps = state.ActiveTask?.Steps ?? [];
+        var completed = steps.Where(static step =>
+            step.Status == NyxIdChatStepStatus.Done).ToArray();
+        var unfinishedSteps = steps.Where(static step =>
+            step.Status is NyxIdChatStepStatus.Planned or
+                NyxIdChatStepStatus.Waiting or
+                NyxIdChatStepStatus.Running).ToArray();
+        var retained = completed.Length switch
+        {
+            0 => "No completed steps were retained.",
+            1 => "1 completed step was retained.",
+            _ => $"{completed.Length} completed steps were retained.",
+        };
+        var retainedDetails = BuildReceiptStepList(completed);
+        if (retainedDetails.Length > 0)
+            retained += $" Retained: {retainedDetails}.";
+        var unfinished = physicallyInFlight
+            ? "Unfinished work was fenced; the in-flight operation could not be proven cancelled."
+            : "Unfinished work was cancelled.";
+        var unfinishedDetails = BuildReceiptStepList(unfinishedSteps);
+        if (unfinishedDetails.Length > 0)
+            unfinished += physicallyInFlight
+                ? $" Fenced: {unfinishedDetails}."
+                : $" Cancelled: {unfinishedDetails}.";
+        var uncertainExternalEffect = steps.Any(static step =>
+            step.ExternalEffect == NyxIdChatEffectEvidence.MayHaveChanged) ||
+            steps.Any(step =>
+                step.Kind == NyxIdChatStepKind.Tool &&
+                step.MayChangeExternalState &&
+                IsPhysicallyInFlight(step.Operation?.Phase ??
+                                     NyxIdChatOperationPhase.Unspecified));
+        var confirmedExternalEffect = steps.Any(static step =>
+            step.MayChangeExternalState &&
+            step.ExternalEffect == NyxIdChatEffectEvidence.Confirmed);
+        var effectReceipt = uncertainExternalEffect
+            ? "An external operation may have changed state; inspect its committed evidence before retrying."
+            : confirmedExternalEffect
+                ? "Completed external effects remain recorded in the committed step evidence."
+                : "No external effect was applied.";
+
+        return $"Stopped. Partial-work receipt: {retained} {unfinished} {effectReceipt} " +
+               "Late evidence cannot advance this stopped task.";
+    }
+
+    private static string BuildReceiptStepList(IEnumerable<NyxIdChatTaskStepState> steps) =>
+        string.Join("; ", steps
+            .Select(static step => ReceiptStepLabel(step))
+            .Where(static label => label.Length > 0)
+            .Take(3));
+
+    private static string ReceiptStepLabel(NyxIdChatTaskStepState step)
+    {
+        var label = string.Join(" ", (step.Description ?? string.Empty)
+            .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+            .TrimEnd('.', ';', ':');
+        if (label.Length == 0 && step.Source?.SourceCase == NyxIdChatStepSource.SourceOneofCase.Tool)
+            label = step.Source.Tool.ToolName;
+        if (label.Length == 0)
+            label = step.Kind.ToString();
+        return label.Length <= 96 ? label : string.Concat(label.AsSpan(0, 93), "...");
+    }
 
     private static bool IsPhysicallyInFlight(NyxIdChatOperationPhase phase) =>
         phase is NyxIdChatOperationPhase.Dispatched or NyxIdChatOperationPhase.Running;

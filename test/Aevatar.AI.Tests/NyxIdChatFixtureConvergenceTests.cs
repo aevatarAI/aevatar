@@ -187,6 +187,126 @@ public sealed class NyxIdChatFixtureConvergenceTests
             .Be("rec-candidate-uc4");
     }
 
+    [Fact]
+    public void Uc2ResearchJourneyFixture_ShouldConvergeAcrossScopeSteerStopReloadAndRestart()
+    {
+        using var fixture = ReadFixture("uc2-research-journey.json");
+        var root = fixture.RootElement;
+        root.GetProperty("specRevision").GetString().Should()
+            .Be("f45febb057a7182dab2495d4c739d2bb8d7026f5");
+
+        var initial = root.GetProperty("initialInput").GetProperty("snapshot");
+        var initialTask = initial.GetProperty("activeTask");
+        var pending = initial.GetProperty("pendingInput");
+        initialTask.GetProperty("turnId").GetString().Should().Be("turn-uc2-1");
+        initialTask.GetProperty("taskId").GetString().Should().Be("task-uc2");
+        initialTask.GetProperty("planRevision").GetInt32().Should().Be(1);
+        initialTask.GetProperty("steps").EnumerateArray().Should().ContainSingle(step =>
+            step.GetProperty("kind").GetString() == "input");
+        pending.GetProperty("options").GetArrayLength().Should().Be(0);
+        pending.GetProperty("allowFreeText").GetBoolean().Should().BeTrue();
+        pending.GetProperty("prompt").GetString().Should().Contain("party size")
+            .And.Contain("dietary restrictions")
+            .And.Contain("budget cap")
+            .And.Contain("research-only shortlist");
+
+        var research = root.GetProperty("researchRunning").GetProperty("snapshot")
+            .GetProperty("activeTask");
+        research.GetProperty("planRevision").GetInt32().Should().Be(2);
+        research.GetProperty("gate").GetProperty("mode").GetString().Should().Be("auto");
+        var runningSearch = FindStep(research, "step-uc2-search");
+        runningSearch.GetProperty("source").GetProperty("tool").GetProperty("toolName")
+            .GetString().Should().Be("web_search");
+        runningSearch.GetProperty("externalEffect").GetString().Should().Be("not_started");
+        var runningOperation = runningSearch.GetProperty("operation");
+        runningOperation.GetProperty("phase").GetString().Should().Be("running");
+        runningOperation.GetProperty("key").GetProperty("operationId").GetString()
+            .Should().Be("operation-uc2-search");
+        runningOperation.GetProperty("idempotent").GetBoolean().Should().BeTrue();
+        runningSearch.GetProperty("substeps").EnumerateArray()
+            .Select(substep => (
+                substep.GetProperty("substepId").GetString(),
+                substep.GetProperty("title").GetString(),
+                substep.GetProperty("status").GetString()))
+            .Should().Equal(
+                ("prepare-operation", "Build search query", "done"),
+                ("execute-operation", "Search current web results", "running"));
+
+        var steeredSnapshot = root.GetProperty("steered").GetProperty("snapshot");
+        var steered = steeredSnapshot.GetProperty("activeTask");
+        steeredSnapshot.GetProperty("activeTurn").GetProperty("turnId").GetString()
+            .Should().Be("turn-uc2-2");
+        steered.GetProperty("taskId").GetString().Should().Be("task-uc2");
+        steered.GetProperty("planRevision").GetInt32().Should().Be(3);
+        var completedSearch = FindStep(steered, "step-uc2-search");
+        completedSearch.GetProperty("status").GetString().Should().Be("done");
+        completedSearch.GetProperty("externalEffect").GetString().Should().Be("not_applied");
+        completedSearch.GetProperty("operation").GetProperty("phase").GetString()
+            .Should().Be("succeeded");
+        completedSearch.GetProperty("substeps").EnumerateArray().Should().OnlyContain(substep =>
+            substep.GetProperty("status").GetString() == "done");
+        FindStep(steered, "step-uc2-compare").GetProperty("status").GetString()
+            .Should().Be("cancelled");
+        var replacement = FindStep(steered, "step-uc2-refine");
+        replacement.GetProperty("status").GetString().Should().Be("running");
+        replacement.GetProperty("addedBy").GetString().Should().Be("steering");
+        replacement.GetProperty("operation").GetProperty("phase").GetString()
+            .Should().Be("running");
+
+        var stoppedSnapshot = root.GetProperty("stopped").GetProperty("snapshot");
+        var stopped = stoppedSnapshot.GetProperty("activeTask");
+        stopped.GetProperty("status").GetString().Should().Be("stopped");
+        var fence = stoppedSnapshot.GetProperty("controlFence");
+        fence.GetProperty("requestId").GetString().Should().Be("stop-uc2-1");
+        fence.GetProperty("outcome").GetString().Should().Be("uncancellable");
+        fence.GetProperty("safeMessage").GetString().Should().Contain("Partial-work receipt")
+            .And.Contain("Retained: Answer logistics and agree to research-only scope")
+            .And.Contain("Fenced: Refine for 7 pm and a private room")
+            .And.Contain("No external effect was applied")
+            .And.Contain("Late evidence cannot advance this stopped task");
+        var stoppedSearch = FindStep(stopped, "step-uc2-search");
+        JsonNode.DeepEquals(
+                JsonNode.Parse(completedSearch.GetProperty("source").GetRawText()),
+                JsonNode.Parse(stoppedSearch.GetProperty("source").GetRawText()))
+            .Should().BeTrue("reload must preserve the exact Aevatar search executor identity");
+        JsonNode.DeepEquals(
+                JsonNode.Parse(completedSearch.GetProperty("substeps").GetRawText()),
+                JsonNode.Parse(stoppedSearch.GetProperty("substeps").GetRawText()))
+            .Should().BeTrue("reload must preserve completed search progress evidence");
+        JsonNode.DeepEquals(
+                JsonNode.Parse(completedSearch.GetProperty("operation").GetRawText()),
+                JsonNode.Parse(stoppedSearch.GetProperty("operation").GetRawText()))
+            .Should().BeTrue("reload must preserve the durable search operation reservation");
+        stopped.GetProperty("steps").EnumerateArray().Should().OnlyContain(step =>
+            step.GetProperty("externalEffect").GetString() == "not_started" ||
+            step.GetProperty("externalEffect").GetString() == "not_applied");
+
+        var restart = root.GetProperty("restart");
+        var restartedSnapshot = restart.GetProperty("snapshot");
+        var restarted = restartedSnapshot.GetProperty("activeTask");
+        restartedSnapshot.GetProperty("activeTurn").GetProperty("turnId").GetString()
+            .Should().Be("turn-uc2b-1");
+        restarted.GetProperty("taskId").GetString().Should().Be("task-uc2b")
+            .And.NotBe(stopped.GetProperty("taskId").GetString());
+        restarted.GetProperty("steps").EnumerateArray()
+            .Select(step => step.GetProperty("stepId").GetString())
+            .Intersect(stopped.GetProperty("steps").EnumerateArray()
+                .Select(step => step.GetProperty("stepId").GetString()))
+            .Should().BeEmpty();
+        var restartedSearch = FindStep(restarted, "step-uc2b-search");
+        restartedSearch.GetProperty("operation").GetProperty("key").GetProperty("taskId")
+            .GetString().Should().Be("task-uc2b");
+        restartedSearch.GetProperty("substeps").GetArrayLength().Should().Be(2);
+        var message = restart.GetProperty("assistantMessage");
+        message.GetProperty("turnId").GetString().Should().Be("turn-uc2b-1");
+        message.GetProperty("taskId").GetString().Should().Be("task-uc2b");
+        message.GetProperty("content").GetString().Should().Contain("Verified facts:")
+            .And.Contain("Cannot check right now:")
+            .And.EndWith("Research artifact only: no reservation was made.");
+
+        root.GetRawText().Should().NotContainAny("credential", "accessToken", "bearer");
+    }
+
     [Theory]
     [InlineData("input-request", "nyxid.input.request", "input", "pendingInput", null)]
     [InlineData("input-changed", "nyxid.input.changed", "none", null, "latestInputResolution")]
@@ -408,4 +528,8 @@ public sealed class NyxIdChatFixtureConvergenceTests
         IEnumerable<JsonElement> journeys,
         string variant) =>
         journeys.Single(item => item.GetProperty("variant").GetString() == variant);
+
+    private static JsonElement FindStep(JsonElement task, string stepId) =>
+        task.GetProperty("steps").EnumerateArray().Single(step =>
+            step.GetProperty("stepId").GetString() == stepId);
 }
