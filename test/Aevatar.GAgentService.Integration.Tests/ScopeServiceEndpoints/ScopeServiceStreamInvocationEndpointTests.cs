@@ -1443,9 +1443,9 @@ public sealed class ScopeServiceStreamInvocationEndpointTests : ScopeServiceEndp
         host.TeamEntryMemberResolver.Result = new TeamEntryMemberResolution(
             "scope-a",
             "team-a",
-            "member-a",
-            "member-a");
-        await ConfigureWorkflowStreamServiceAsync(host, serviceId: "member-a", definitionActorId: "definition-actor-member-a");
+            "m-alpha",
+            "svc-alpha");
+        await ConfigureWorkflowStreamServiceAsync(host, serviceId: "svc-alpha", definitionActorId: "definition-actor-svc-alpha");
 
         var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/teams/team-a/invoke/chat:stream", new { });
         var body = await response.Content.ReadAsStringAsync();
