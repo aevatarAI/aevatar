@@ -83,6 +83,8 @@ function taskPlan(stepStatus: 'running' | 'failed' = 'running') {
           decisionMode: 'grant',
           receiptStatus: 'denied',
           observedAt: '2026-08-08T00:02:31Z',
+          terminalOutcome: 'expired',
+          subjectKind: 'nyxid.user-service',
         },
       },
     ],
@@ -256,6 +258,8 @@ describe('chatActorState', () => {
       decisionMode: 'grant',
       receiptStatus: 'denied',
       observedAt: '2026-08-08T00:02:31Z',
+      terminalOutcome: 'expired',
+      subjectKind: 'nyxid.user-service',
     });
     expect(actorCan(reloaded, 'stop')).toBe(true);
     expect(reloaded.steps.get('step-alpha')?.availableActions).toEqual({

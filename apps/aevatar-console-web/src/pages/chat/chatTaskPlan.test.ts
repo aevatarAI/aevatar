@@ -36,6 +36,8 @@ function taskPlanWithObservation(overrides: Record<string, unknown> = {}) {
           decisionMode: 'per_request',
           receiptStatus: 'approval_required',
           observedAt: '2026-08-08T00:10:00Z',
+          terminalOutcome: 'rejected',
+          subjectKind: 'nyxid.user-service',
           ...overrides,
         },
       },
@@ -118,12 +120,15 @@ describe('decodeChatTaskPlan', () => {
       decisionMode: 'per_request',
       receiptStatus: 'approval_required',
       observedAt: '2026-08-08T00:10:00Z',
+      terminalOutcome: 'rejected',
+      subjectKind: 'nyxid.user-service',
     });
   });
 
   it.each([
     ['decisionMode', 'session'],
     ['receiptStatus', 'pending'],
+    ['terminalOutcome', 'cancelled'],
   ])('rejects an unknown approval observation %s', (field, value) => {
     expect(() =>
       decodeChatTaskPlan(taskPlanWithObservation({ [field]: value })),

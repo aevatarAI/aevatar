@@ -119,6 +119,8 @@ export type ChatApprovalObservation = {
   readonly decisionMode: 'unknown' | 'per_request' | 'grant';
   readonly receiptStatus: 'approval_required' | 'denied';
   readonly observedAt: string;
+  readonly terminalOutcome?: 'rejected' | 'expired' | 'timed_out';
+  readonly subjectKind?: string;
 };
 
 export type ChatActorStep = {
@@ -423,6 +425,18 @@ function decodeApprovalObservation(input: unknown): ChatApprovalObservation {
       'approvalObservation.observedAt',
       128,
     ),
+    ...(value.terminalOutcome !== undefined
+      ? {
+          terminalOutcome: closed(
+            value.terminalOutcome,
+            ['rejected', 'expired', 'timed_out'] as const,
+            'approvalObservation.terminalOutcome',
+          ),
+        }
+      : {}),
+    ...(optionalString(value.subjectKind)
+      ? { subjectKind: optionalString(value.subjectKind) }
+      : {}),
   };
 }
 
