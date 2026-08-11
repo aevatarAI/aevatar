@@ -102,6 +102,8 @@ public sealed class ProjectionNyxIdChatConversationStateQueryPortTests
         result.Snapshot.PendingInput.Options.Select(static option => option.Label).Should()
             .Equal("Singapore", "Frankfurt");
         result.Snapshot.LatestInputResolution!.RequestId.Should().Be("input-before");
+        result.Snapshot.LatestInputResolution.Answer!.Selection!.OptionIds.Should()
+            .Equal("option-singapore");
         result.Snapshot.LatestApprovalResolution!.Approved.Should().BeFalse();
         result.Snapshot.TaskStatus.Should().Be("active");
         result.Snapshot.AttentionKind.Should().Be("input");
@@ -366,6 +368,13 @@ public sealed class ProjectionNyxIdChatConversationStateQueryPortTests
             ClientRequestId = "client-input-before",
             Outcome = "accepted",
             CommittedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-01T11:55:00Z")),
+            Answer = new NyxIdChatConversationInputAnswerDocument
+            {
+                Selection = new NyxIdChatConversationInputSelectionAnswerDocument
+                {
+                    OptionIds = { "option-singapore" },
+                },
+            },
         },
         LatestApprovalResolution = new NyxIdChatConversationApprovalResolutionDocument
         {

@@ -452,7 +452,18 @@ public sealed record NyxIdChatInputResolutionSnapshot(
     string ClientRequestId,
     string Outcome,
     DateTimeOffset? CommittedAt,
-    NyxIdChatNumericThresholdResolutionSnapshot? NumericThreshold = null);
+    NyxIdChatNumericThresholdResolutionSnapshot? NumericThreshold = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    NyxIdChatInputAnswerSnapshot? Answer = null);
+
+public sealed record NyxIdChatInputAnswerSnapshot(
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? FreeText = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    NyxIdChatInputSelectionAnswerSnapshot? Selection = null);
+
+public sealed record NyxIdChatInputSelectionAnswerSnapshot(
+    IReadOnlyList<string> OptionIds);
 
 public sealed record NyxIdChatNumericThresholdResolutionSnapshot(
     long SuggestedValue,

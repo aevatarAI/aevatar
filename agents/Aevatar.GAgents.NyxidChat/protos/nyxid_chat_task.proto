@@ -873,6 +873,7 @@ message NyxIdChatInputResolutionState {
   bytes answer_sha256 = 4;
   google.protobuf.Timestamp committed_at = 5;
   NyxIdChatNumericThresholdResolution numeric_threshold = 6;
+  NyxIdChatInputAnswer answer = 7;
 }
 
 message NyxIdChatApprovalResolutionState {
@@ -1934,6 +1935,7 @@ message NyxIdChatSteeringInputResolutionFact {
   string request_id = 1;
   NyxIdChatNeedsYouResolutionOutcome outcome = 2;
   NyxIdChatNumericThresholdResolution numeric_threshold = 3;
+  NyxIdChatInputAnswer answer = 4;
 }
 
 message NyxIdChatSteeringExecutionContext {

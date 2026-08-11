@@ -641,6 +641,27 @@ public sealed class NyxIdChatConversationCurrentStateProjector
                     Origin = ToWireName(resolution.NumericThreshold.Origin),
                 };
         }
+        if (resolution.Answer is not null)
+        {
+            switch (resolution.Answer.AnswerCase)
+            {
+                case NyxIdChatInputAnswer.AnswerOneofCase.FreeText:
+                    document.Answer = new NyxIdChatConversationInputAnswerDocument
+                    {
+                        FreeText = resolution.Answer.FreeText,
+                    };
+                    break;
+                case NyxIdChatInputAnswer.AnswerOneofCase.Selection:
+                    document.Answer = new NyxIdChatConversationInputAnswerDocument
+                    {
+                        Selection = new NyxIdChatConversationInputSelectionAnswerDocument
+                        {
+                            OptionIds = { resolution.Answer.Selection.OptionIds },
+                        },
+                    };
+                    break;
+            }
+        }
         return document;
     }
 

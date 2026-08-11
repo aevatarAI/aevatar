@@ -357,6 +357,11 @@ public sealed class NyxIdChatStateEndpointTests
                 RequestId = "input-threshold",
                 ClientRequestId = "client-threshold",
                 Outcome = NyxIdChatNeedsYouResolutionOutcome.Accepted,
+                Answer = new NyxIdChatInputAnswer
+                {
+                    FreeText =
+                        "Party size 4; one vegetarian; SGD 200 total; research only.",
+                },
                 CommittedAt = evaluatedAt.Clone(),
                 NumericThreshold = new NyxIdChatNumericThresholdResolution
                 {
@@ -418,6 +423,16 @@ public sealed class NyxIdChatStateEndpointTests
             .GetValue<long>().Should().Be(75);
         snapshot["latestInputResolution"]!["numericThreshold"]!["origin"]!
             .GetValue<string>().Should().Be("user_override");
+        snapshot["latestInputResolution"]!["answer"]!["freeText"]!
+            .GetValue<string>().Should().Be(
+                "Party size 4; one vegetarian; SGD 200 total; research only.");
+        var liveInputChanged = JsonNode.Parse(
+            JsonFormatter.Default.Format(state.LatestInputResolution))!;
+        JsonNode.DeepEquals(
+                liveInputChanged["answer"],
+                snapshot["latestInputResolution"]!["answer"])
+            .Should().BeTrue(
+                "live input.changed and current-state reload expose the same typed answer");
         snapshot["activeTask"]!["domain"]!["candidateScreening"]!["totalScore"]!
             .GetValue<int>().Should().Be(80);
         snapshot["activeTask"]!["domain"]!["candidateScreening"]!["scores"]![0]!["evidence"]!

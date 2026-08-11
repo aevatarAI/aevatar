@@ -376,6 +376,13 @@ public class NyxIdChatAguiSseEventWriterTests
                     RequestId = "input-alpha",
                     ClientRequestId = "client-input-alpha",
                     Outcome = NyxIdChatNeedsYouResolutionOutcome.Accepted,
+                    Answer = new NyxIdChatInputAnswer
+                    {
+                        Selection = new NyxIdChatInputSelectionAnswer
+                        {
+                            OptionIds = { "option-singapore" },
+                        },
+                    },
                 }),
             },
         }, "turn-alpha");
@@ -391,6 +398,8 @@ public class NyxIdChatAguiSseEventWriterTests
         var changed = frames[1].GetProperty("custom");
         changed.GetProperty("name").GetString().Should().Be("nyxid.input.changed");
         changed.GetProperty("payload").GetProperty("outcome").GetString().Should().Be("accepted");
+        changed.GetProperty("payload").GetProperty("answer").GetProperty("selection")
+            .GetProperty("optionIds")[0].GetString().Should().Be("option-singapore");
     }
 
     [Fact]

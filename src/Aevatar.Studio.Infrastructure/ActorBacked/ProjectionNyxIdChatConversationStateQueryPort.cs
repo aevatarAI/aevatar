@@ -561,7 +561,18 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
                     : new NyxIdChatNumericThresholdResolutionSnapshot(
                         resolution.NumericThreshold.SuggestedValue,
                         resolution.NumericThreshold.EffectiveValue,
-                        resolution.NumericThreshold.Origin));
+                        resolution.NumericThreshold.Origin),
+                resolution.Answer?.AnswerCase switch
+                {
+                    NyxIdChatConversationInputAnswerDocument.AnswerOneofCase.FreeText =>
+                        new NyxIdChatInputAnswerSnapshot(
+                            FreeText: resolution.Answer.FreeText),
+                    NyxIdChatConversationInputAnswerDocument.AnswerOneofCase.Selection =>
+                        new NyxIdChatInputAnswerSnapshot(
+                            Selection: new NyxIdChatInputSelectionAnswerSnapshot(
+                                resolution.Answer.Selection.OptionIds.ToArray())),
+                    _ => null,
+                });
 
     private static NyxIdChatApprovalResolutionSnapshot? ToApprovalResolution(
         NyxIdChatConversationApprovalResolutionDocument? resolution) =>

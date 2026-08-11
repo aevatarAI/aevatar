@@ -4956,6 +4956,7 @@ public sealed class NyxIdChatConversationGAgent
                 RequestId = resolution.RequestId,
                 Outcome = resolution.Outcome,
                 NumericThreshold = resolution.NumericThreshold?.Clone(),
+                Answer = resolution.Answer?.Clone(),
             }));
         context.CompletedSteps.AddRange(task.Steps
             .Where(static step =>
@@ -5009,8 +5010,17 @@ public sealed class NyxIdChatConversationGAgent
             var threshold = resolution.NumericThreshold is null
                 ? string.Empty
                 : $"; numeric threshold: {resolution.NumericThreshold}";
+            var answer = resolution.Answer?.AnswerCase switch
+            {
+                NyxIdChatInputAnswer.AnswerOneofCase.FreeText =>
+                    $"; answer: free text {JsonSerializer.Serialize(resolution.Answer.FreeText)}",
+                NyxIdChatInputAnswer.AnswerOneofCase.Selection =>
+                    $"; answer: selected option ids " +
+                    JsonSerializer.Serialize(resolution.Answer.Selection.OptionIds.ToArray()),
+                _ => string.Empty,
+            };
             lines.Add(
-                $"Committed input resolution: {resolution.RequestId}; outcome: {resolution.Outcome}{threshold}");
+                $"Committed input resolution: {resolution.RequestId}; outcome: {resolution.Outcome}{answer}{threshold}");
         }
 
         foreach (var step in context.CompletedSteps.OrderBy(static fact => fact.Order))

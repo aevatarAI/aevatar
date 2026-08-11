@@ -730,6 +730,18 @@ public sealed partial class NyxIdChatConversationGAgentTests
         {
             OriginPrompt = "caller-forged execution context",
             TaskId = "forged-task",
+            InputResolutions =
+            {
+                new NyxIdChatSteeringInputResolutionFact
+                {
+                    RequestId = "forged-input",
+                    Outcome = NyxIdChatNeedsYouResolutionOutcome.Accepted,
+                    Answer = new NyxIdChatInputAnswer
+                    {
+                        FreeText = "caller-forged committed answer",
+                    },
+                },
+            },
         };
 
         await agent.HandleEventAsync(CreateEnvelope(conversationActorId, start));
@@ -745,7 +757,9 @@ public sealed partial class NyxIdChatConversationGAgentTests
         command.Llm.AgentProfile.Should().BeNull();
         command.Llm.AgentProfileTurnAuthority.Should().BeNull();
         command.Llm.Request.Prompt.Should().Be("Connect GitHub and verify the connection");
-        agent.State.ToString().Should().NotContain("caller-forged execution context");
+        agent.State.ToString().Should()
+            .NotContain("caller-forged execution context")
+            .And.NotContain("caller-forged committed answer");
     }
 
     [Fact]
@@ -4638,13 +4652,23 @@ public sealed partial class NyxIdChatConversationGAgentTests
         };
         task.Steps.Insert(0, completed);
         task.Steps.Insert(0, completedInput);
-        agent.State.RecentInputResolutions.Add(new NyxIdChatInputResolutionState
+        const string committedCompositeAnswer =
+            "Party size: 4; dietary needs: one vegetarian; budget cap: SGD 200 total; " +
+            "research only: do not reserve, contact, or message venues.";
+        var committedInputResolution = new NyxIdChatInputResolutionState
         {
             RequestId = "input-uc2-logistics",
             ClientRequestId = "client-input-uc2-logistics",
             Outcome = NyxIdChatNeedsYouResolutionOutcome.Accepted,
+            AnswerSha256 = ByteString.CopyFromUtf8("committed-answer-fingerprint"),
+            Answer = new NyxIdChatInputAnswer
+            {
+                FreeText = committedCompositeAnswer,
+            },
             CommittedAt = completed.UpdatedAt.Clone(),
-        });
+        };
+        agent.State.RecentInputResolutions.Add(committedInputResolution.Clone());
+        agent.State.LatestInputResolution = committedInputResolution.Clone();
         task.PlanRevision = 2;
         task.PlanRevisionHistoryStart = 1;
         task.PlanRevisions.Clear();
@@ -4750,6 +4774,8 @@ public sealed partial class NyxIdChatConversationGAgentTests
             .And.Contain(
                 "Committed input resolution: input-uc2-logistics; outcome: Accepted")
             .And.Contain(
+                $"answer: free text \"{committedCompositeAnswer}\"")
+            .And.Contain(
                 "Completed step 2: Aevatar web search - find Greek dinner candidates.")
             .And.Contain("tool web_search")
             .And.Contain("Completed substep: Search current web results [status: Done]")
@@ -4762,6 +4788,14 @@ public sealed partial class NyxIdChatConversationGAgentTests
         classifier.UserMessages.Should().HaveCount(2);
         classifier.UserMessages[^1].Should().Be(continuation.Llm.Request.Prompt,
             "routing and execution must use the same steering context");
+        agent.State.LatestInputResolution.Answer.FreeText.Should().Be(
+            committedCompositeAnswer);
+        var committedEvents = await eventStore.GetEventsAsync(conversationActorId);
+        committedEvents.Should().OnlyContain(item =>
+            !item.EventData.ToString().Contains(
+                "steering-runtime-token-alpha",
+                StringComparison.Ordinal));
+        agent.State.ToString().Should().NotContain("steering-runtime-token-alpha");
     }
 
     [Theory]
@@ -6183,6 +6217,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
             "Please answer together: party size, dietary restrictions, budget cap, and whether you accept a research-only shortlist because no reservation can be placed.";
         const string rawAnswer =
             "Party of 6, one vegetarian, no budget cap. Yes - research and prepare a ready-to-book shortlist.";
+        const string runtimeToken = "uc2-composite-runtime-token";
         var eventStore = new InMemoryEventStoreForTests();
         var dispatch = new RecordingActorDispatchPort([], static (_, _) => Task.CompletedTask);
         using var services = BuildEventSourcingServices(eventStore);
@@ -6260,6 +6295,13 @@ public sealed partial class NyxIdChatConversationGAgentTests
                 ExpectedStateVersion = committedBeforeResolution.Count,
                 CommandId = "command-input-composite",
                 CorrelationId = "correlation-input-composite",
+                ToolContext = new AgentToolExecutionContextPayload
+                {
+                    Credentials = new AgentToolCredentialsPayload
+                    {
+                        NyxIdAccessToken = runtimeToken,
+                    },
+                },
             }));
 
         recovered.State.PendingInput.Should().BeNull();
@@ -6278,6 +6320,8 @@ public sealed partial class NyxIdChatConversationGAgentTests
             NyxIdChatOperationDispatchCommand.InputOneofCase.InputContinuation);
         continuation.InputContinuation.Answer.FreeText.Should().Be(rawAnswer);
         continuation.InputContinuation.ToolCallId.Should().Be("call-ask-user-composite");
+        continuation.InputContinuation.ToolContext.Credentials.NyxIdAccessToken.Should()
+            .Be(runtimeToken);
 
         const string searchArguments =
             "{\"query\":\"Greek dinner northern Singapore Friday 6 to 7 pm\",\"max_results\":5}";
@@ -6345,11 +6389,14 @@ public sealed partial class NyxIdChatConversationGAgentTests
             .Should().BeLessThan(indexedEvents.Last(entry =>
                     entry.item.EventData.Is(NyxIdChatOperationReconciledEvent.Descriptor)).index,
                 "the communicated plan must be observable before the tool plan dispatches");
-        committed.Should().ContainSingle(item =>
-            item.EventData.Is(NyxIdChatInputResolutionCommittedEvent.Descriptor));
+        var inputResolution = committed.Should().ContainSingle(item =>
+                item.EventData.Is(NyxIdChatInputResolutionCommittedEvent.Descriptor))
+            .Which.EventData.Unpack<NyxIdChatInputResolutionCommittedEvent>();
+        inputResolution.Resolution.Answer.FreeText.Should().Be(rawAnswer);
         committed.Should().OnlyContain(item =>
-            !item.EventData.ToString().Contains(rawAnswer, StringComparison.Ordinal));
-        recovered.State.ToString().Should().NotContain(rawAnswer);
+            !item.EventData.ToString().Contains(runtimeToken, StringComparison.Ordinal));
+        recovered.State.LatestInputResolution.Answer.FreeText.Should().Be(rawAnswer);
+        recovered.State.ToString().Should().NotContain(runtimeToken);
     }
 
     [Fact]

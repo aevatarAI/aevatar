@@ -133,6 +133,7 @@ public static class NyxIdChatNeedsYouDecisions
             ClientRequestId = command.ClientRequestId.Trim(),
             Outcome = NyxIdChatNeedsYouResolutionOutcome.Accepted,
             AnswerSha256 = answerHash,
+            Answer = normalizedAnswer.Clone(),
             CommittedAt = now.Clone(),
         };
         if (numericResolution is not null)

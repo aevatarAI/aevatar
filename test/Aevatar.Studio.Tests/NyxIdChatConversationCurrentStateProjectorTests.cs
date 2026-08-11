@@ -556,6 +556,13 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
             RequestId = "input-before",
             ClientRequestId = "client-input-before",
             Outcome = NyxIdChatNeedsYouResolutionOutcome.Accepted,
+            Answer = new NyxIdChatInputAnswer
+            {
+                Selection = new NyxIdChatInputSelectionAnswer
+                {
+                    OptionIds = { "option-singapore" },
+                },
+            },
             CommittedAt = askedAt.Clone(),
         };
         state.LatestApprovalResolution = new NyxIdChatApprovalResolutionState
@@ -597,6 +604,8 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
         document.PendingInput.AskedAt.Should().Be(askedAt);
         document.LatestInputResolution.RequestId.Should().Be("input-before");
         document.LatestInputResolution.Outcome.Should().Be("accepted");
+        document.LatestInputResolution.Answer.Selection.OptionIds.Should()
+            .Equal("option-singapore");
         document.LatestApprovalResolution.RequestId.Should().Be("approval-before");
         document.LatestApprovalResolution.Approved.Should().BeFalse();
         document.AttentionKind.Should().Be("input");

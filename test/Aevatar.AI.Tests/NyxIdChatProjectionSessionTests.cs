@@ -2164,6 +2164,10 @@ public sealed class NyxIdChatProjectionSessionTests
             RequestId = "input-alpha",
             ClientRequestId = "client-input-alpha",
             Outcome = NyxIdChatNeedsYouResolutionOutcome.Accepted,
+            Answer = new NyxIdChatInputAnswer
+            {
+                FreeText = "Party size 4; one vegetarian; SGD 200 total; research only.",
+            },
             CommittedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-01T12:01:00Z")),
         };
         state.ActiveTask.PlanRevision = 2;
@@ -2192,6 +2196,9 @@ public sealed class NyxIdChatProjectionSessionTests
             NyxIdChatConversationAguiFrameBuilder.InputChangedEventName);
         changed.Custom.Payload.Unpack<NyxIdChatInputResolutionState>()
             .Should().BeEquivalentTo(resolution);
+        changed.Custom.Payload.Unpack<NyxIdChatInputResolutionState>()
+            .Answer.FreeText.Should().Be(
+                "Party size 4; one vegetarian; SGD 200 total; research only.");
         var snapshot = hub.Published[^1].Event;
         snapshot.Sequence.Should().Be(32);
         snapshot.Custom.Name.Should().Be(

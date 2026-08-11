@@ -670,12 +670,24 @@ message NyxIdChatConversationNumericThresholdResolutionDocument {
   string origin = 3;
 }
 
+message NyxIdChatConversationInputSelectionAnswerDocument {
+  repeated string option_ids = 1;
+}
+
+message NyxIdChatConversationInputAnswerDocument {
+  oneof answer {
+    string free_text = 1;
+    NyxIdChatConversationInputSelectionAnswerDocument selection = 2;
+  }
+}
+
 message NyxIdChatConversationInputResolutionDocument {
   string request_id = 1;
   string client_request_id = 2;
   string outcome = 3;
   google.protobuf.Timestamp committed_at = 4;
   NyxIdChatConversationNumericThresholdResolutionDocument numeric_threshold = 5;
+  NyxIdChatConversationInputAnswerDocument answer = 6;
 }
 
 message NyxIdChatConversationApprovalResolutionDocument {
