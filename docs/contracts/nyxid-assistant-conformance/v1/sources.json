@@ -2,15 +2,15 @@
   "schema_version": 1,
   "aevatar": {
     "repository": "https://github.com/AevatarAI/aevatar.git",
-    "revision": "99d4ce0c3d80d7346aad0da27af9b3c38c17a6ad",
-    "contract_files_sha256": "8bf4b9709b97f1f8b770a348122045eaf987bda08d9bcf73a570f34d8d08efa8",
+    "revision": "6e3f14e67a18876813c0c4f216b22ce53ddbc019",
+    "contract_files_sha256": "1d6e33188398633f112a8c0edb1d1b2c45e8e6c77f30f05ff32e54af684d0f2b",
     "files": {
       "agents/Aevatar.GAgents.NyxidChat/NyxIdActionPostconditionPort.cs": "7e5da0c90f8537037fc03de8d67cdf36356485f4ccd650f794b0e5cfb6d5bb94",
       "agents/Aevatar.GAgents.NyxidChat/NyxIdAssistantActionRegistry.cs": "1daa67dc2cad48249268990e525ada39b65a580d150a9ae8ed896d5392f6a130",
       "agents/Aevatar.GAgents.NyxidChat/NyxIdChatBrowserActions.cs": "ed34d2ea4f13058f1a80b9809baf05a3ac4694606d89945cae15da57a13639e5",
       "agents/Aevatar.GAgents.NyxidChat/NyxIdChatConversationAguiFrameBuilder.cs": "24b36e1a4e43f611dbcec3c48415a184752886fed6d7369a58c006bed554a567",
       "agents/Aevatar.GAgents.NyxidChat/protos/nyxid_chat_recovery_secret.proto": "07dbc449a732df6c7a6d0a97054ddbe35a517f4af4c5670b05ed0bea0bf2011a",
-      "agents/Aevatar.GAgents.NyxidChat/protos/nyxid_chat_task.proto": "ea03049bc1a7b25186c6dd1b08f45f93722376be8a8f1dbf8ebde6d01b89b14f",
+      "agents/Aevatar.GAgents.NyxidChat/protos/nyxid_chat_task.proto": "4c50e5693226d5f2761a653e65b3ab0c3436a6ccab1c065260097a97a5f4922d",
       "docs/adr/0048-nyxid-assistant-operation-class-boundary.md": "30c9de6c6e77a7aee14f0eb4a2f74bd15b8874bcfed88ba957cdd8213b9114eb",
       "src/Aevatar.AI.Abstractions/ai_messages.proto": "06e24d63b85a38ad8d4e1dd9696577b3869cfc2ba39356b4b3e5d748ca425bd8",
       "src/Aevatar.AI.ToolProviders.NyxId/NyxIdApiAccessContracts.cs": "dc0b1ba28ee88516ba75634a2d181284699b74a8fe5f74483ac4a515ce4153ae",
