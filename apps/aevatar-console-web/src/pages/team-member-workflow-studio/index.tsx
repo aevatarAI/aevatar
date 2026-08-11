@@ -229,7 +229,6 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
       ) : null}
       <WorkflowStudioExecutionPanel
         activeLogIndex={studio.activeExecutionLogIndex}
-        clearDisabled={studio.currentDraftRunPending}
         detail={studio.executionDetail}
         error={studio.executionError}
         height={executionPanelHeight}

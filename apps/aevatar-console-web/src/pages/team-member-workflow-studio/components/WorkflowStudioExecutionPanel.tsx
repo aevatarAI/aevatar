@@ -7,7 +7,6 @@ import WorkflowExecutionLogsPanel from '@/shared/workflows/WorkflowExecutionLogs
 
 type WorkflowStudioExecutionPanelProps = {
   readonly activeLogIndex?: number | null;
-  readonly clearDisabled?: boolean;
   readonly detail: StudioExecutionDetail | null;
   readonly error?: string;
   readonly height?: number;

@@ -906,7 +906,6 @@ const WorkflowEditorPage: React.FC<{
             />
             <WorkflowExecutionLogsPanel
               activeLogIndex={activeRunLogIndex}
-              clearDisabled={runBusy}
               collapseButtonRef={collapseRunConsoleButtonRef}
               collapseControlsId={PUBLISHED_RUN_CONSOLE_ID}
               error={runConsoleError}
@@ -979,6 +978,7 @@ const WorkflowEditorPage: React.FC<{
           />
           <Button
             disabled={
+              !editor.dirty ||
               editorWriteLocked ||
               editor.receiptPending ||
               hasUnappliedNodeChanges

@@ -1946,6 +1946,35 @@ describe('Workflow Activity vNext editor', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('enables Save workflow only while the loaded workflow has unsaved changes', async () => {
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    const workflowName = await screen.findByRole('textbox', {
+      name: 'Workflow name',
+    });
+    const saveWorkflowButton = screen.getByRole('button', {
+      name: 'Save workflow',
+    });
+    expect(
+      screen.getByRole('status', { name: 'Workflow save status' }),
+    ).toHaveTextContent('Saved at 2026-08-04 10:00:00 UTC');
+    expect(saveWorkflowButton).toBeDisabled();
+
+    fireEvent.change(workflowName, {
+      target: { value: 'Committed source updated' },
+    });
+    expect(saveWorkflowButton).toBeEnabled();
+    fireEvent.click(saveWorkflowButton);
+
+    await waitFor(() =>
+      expect(mockStudioApi.saveWorkflow).toHaveBeenCalledTimes(1),
+    );
+    await waitFor(() => expect(saveWorkflowButton).toBeDisabled());
+    expect(
+      screen.getByRole('status', { name: 'Workflow save status' }),
+    ).toHaveTextContent('Saved at 2026-08-04 10:01:00 UTC');
+  });
+
   it('publishes a saved workflow in one click and waits for observed evidence before showing Published', async () => {
     mockLocation =
       '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-draft-alpha';
@@ -3580,6 +3609,9 @@ describe('Workflow Activity vNext editor', () => {
       await screen.findByRole('button', { name: 'Insert LLM call node' }),
     ).toBeVisible();
 
+    fireEvent.change(screen.getByLabelText('Workflow name'), {
+      target: { value: 'Committed source updated' },
+    });
     fireEvent.click(screen.getByRole('button', { name: 'Save workflow' }));
 
     await waitFor(() =>
@@ -4131,6 +4163,56 @@ describe('Workflow Activity vNext editor', () => {
         }),
       },
     } as unknown as Response);
+  });
+
+  it('clears the published run console without aborting an active run', async () => {
+    let streamController:
+      | ReadableStreamDefaultController<Uint8Array>
+      | undefined;
+    let runSignal: AbortSignal | undefined;
+    mockRuntimeRunsApi.streamChat.mockImplementation(
+      (_scopeId, _request, signal) => {
+        runSignal = signal;
+        return Promise.resolve({
+          body: new ReadableStream({
+            start(controller) {
+              streamController = controller;
+            },
+          }),
+          ok: true,
+        } as Response);
+      },
+    );
+
+    await renderPublishedWorkflowPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Run' }));
+    fireEvent.change(
+      await screen.findByRole('textbox', { name: 'Published run input' }),
+      { target: { value: 'Review order 42' } },
+    );
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Start published run' }),
+    );
+
+    const logs = await screen.findByRole('complementary', {
+      name: 'Workflow run console',
+    });
+    const clearLogs = within(logs).getByRole('button', {
+      name: 'Clear logs',
+    });
+    expect(clearLogs).toBeEnabled();
+    fireEvent.click(clearLogs);
+
+    expect(
+      screen.queryByRole('complementary', { name: 'Workflow run console' }),
+    ).not.toBeInTheDocument();
+    expect(runSignal?.aborted).toBe(false);
+    expect(mockRuntimeRunsApi.streamChat).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      streamController?.close();
+    });
   });
 
   it('requires text or a file before invoking a published workflow', async () => {

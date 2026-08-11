@@ -4844,7 +4844,7 @@ describe('TeamMemberWorkflowStudioPage', () => {
     expect(consolePanel).toHaveTextContent('running');
     expect(
       within(consolePanel).getByRole('button', { name: 'Clear logs' }),
-    ).toBeDisabled();
+    ).toBeEnabled();
     const executionPanelResponsiveRules = findRenderedStyleText(
       '.workflow-studio-execution-panel__body',
     );
