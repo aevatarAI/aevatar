@@ -123,14 +123,19 @@ function resolveFinalizationErrorReason(
   flow: AuthFlow,
   error: unknown,
 ): NyxIDAuthCallbackErrorReason {
-  if (flow !== "serviceAccessReview") return "signInFailed";
   if (!(error instanceof NyxIDLoginFinalizationError)) {
-    return "serviceAccessReviewFailed";
+    return flow === "serviceAccessReview"
+      ? "serviceAccessReviewFailed"
+      : "signInFailed";
   }
 
-  switch (error.code) {
-    case "required_service_access_missing":
-      return "requiredServiceAccessMissing";
+  const errorCode = error.code ?? error.message;
+  if (errorCode === "required_service_access_missing") {
+    return "requiredServiceAccessMissing";
+  }
+  if (flow !== "serviceAccessReview") return "signInFailed";
+
+  switch (errorCode) {
     case "issued_binding_invalid":
       return "issuedBindingInvalid";
     case "issued_binding_probe_failed":

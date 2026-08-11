@@ -290,6 +290,38 @@ describe("NyxIDAuthClient", () => {
     expect(loadStoredAuthSession()?.tokens.accessToken).toBe("review-access-token");
   });
 
+  it("recognizes a plain-text required service access failure during sign-in", async () => {
+    const pendingKey = "aevatar-console:nyxid:pending:broker-client-1";
+    window.localStorage.setItem(
+      pendingKey,
+      JSON.stringify({
+        clientId: "broker-client-1",
+        codeVerifier: "pkce-verifier",
+        redirectUri: "http://localhost:8000/auth/callback",
+        returnTo: "/scopes/scope-1/workflow-activity-vnext/workflows",
+        scope: "openid urn:nyxid:scope:broker_binding proxy",
+        state: "state-1",
+        flow: "signIn",
+      }),
+    );
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 400,
+      statusText: "Bad Request",
+      text: async () => "required_service_access_missing",
+    } as Response) as typeof global.fetch;
+
+    await expect(
+      new NyxIDAuthClient(runtimeConfig).handleRedirectCallback(
+        "http://localhost:8000/auth/callback?code=auth-code&state=state-1",
+      ),
+    ).rejects.toMatchObject({
+      flow: "signIn",
+      reason: "requiredServiceAccessMissing",
+      returnTo: "/scopes/scope-1/workflow-activity-vnext/workflows",
+    });
+  });
+
   it.each<[number, string, NyxIDAuthCallbackErrorReason]>([
     [409, "required_service_access_missing", "requiredServiceAccessMissing"],
     [503, "issued_binding_invalid", "issuedBindingInvalid"],

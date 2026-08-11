@@ -171,6 +171,29 @@ describe('NyxID callback page', () => {
     expect(await findByRole('alert')).toHaveTextContent(message);
   });
 
+  it('requests consent when sign-in is missing required service access', async () => {
+    handleRedirectCallback.mockRejectedValue(
+      Object.assign(new Error('required_service_access_missing'), {
+        flow: 'signIn',
+        reason: 'requiredServiceAccessMissing',
+        returnTo: '/scopes/scope-1/workflow-activity-vnext/workflows',
+      }),
+    );
+
+    const { findByRole } = render(React.createElement(CallbackPage));
+    const retryButton = await findByRole('button', {
+      name: 'Try sign-in again',
+    });
+
+    fireEvent.click(retryButton);
+
+    expect(loginWithRedirect).toHaveBeenCalledWith({
+      flow: 'signIn',
+      prompt: 'consent',
+      returnTo: '/scopes/scope-1/workflow-activity-vnext/workflows',
+    });
+  });
+
   it('keeps service access review retryable when authorization restart fails', async () => {
     handleRedirectCallback.mockRejectedValue(Object.assign(new Error('raw'), {
       flow: 'serviceAccessReview', reason: 'serviceAccessReviewUnavailable',

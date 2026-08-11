@@ -8,6 +8,10 @@ import {
   within,
 } from '@testing-library/react';
 import * as React from 'react';
+import {
+  clearStoredAuthSession,
+  persistAuthSession,
+} from '@/shared/auth/session';
 import { history } from '@/shared/navigation/history';
 import {
   cleanupTestQueryClients,
@@ -252,7 +256,13 @@ jest.mock('@/shared/studio/api', () => ({
     createWorkflowDraft: jest.fn(),
     deleteWorkflowDraft: jest.fn(),
     getWorkspaceSettings: jest.fn(),
-    getAuthSession: jest.fn(),
+    getAuthSession: jest.fn(async () => ({
+      authenticated: true,
+      enabled: true,
+      profile: null,
+      session: { authenticated: true },
+      subject: 'test-user',
+    })),
     getUserConfigRuntime: jest.fn(),
     getUserLlmSettings: jest.fn(),
     getWorkflow: jest.fn(),
@@ -346,10 +356,13 @@ jest.mock('@/shared/ui/ConsoleHeaderActions', () => ({
     principal?: {
       authenticated: boolean;
       displayName: string;
+      picture: string | null;
     } | null;
   }) => (
     <button
       data-auth-source={principal === undefined ? 'stored' : 'account'}
+      data-picture={principal?.picture ?? ''}
+      title={principal?.displayName}
       type="button"
     >
       {principal?.authenticated ? principal.displayName : 'Account'}
@@ -1433,6 +1446,7 @@ describe('Workflow Activity vNext settings', () => {
   beforeEach(() => {
     mockLocation = '/scopes/scope-alpha/workflow-activity-vnext/settings';
     jest.clearAllMocks();
+    clearStoredAuthSession();
     mockStudioApi.getUserLlmSettings.mockResolvedValue({
       savedSelection: null,
       savedRouteLabel: 'System default',
@@ -1484,7 +1498,48 @@ describe('Workflow Activity vNext settings', () => {
     mockObserveUserLlmSave.mockResolvedValue({ phase: 'observed' });
   });
 
-  afterEach(() => cleanupTestQueryClients());
+  afterEach(() => {
+    clearStoredAuthSession();
+    cleanupTestQueryClients();
+  });
+
+  it('uses the matching NyxID profile when the account endpoint omits header fields', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'token',
+        expiresAt: Date.now() + 60_000,
+        expiresIn: 60,
+        tokenType: 'Bearer',
+      },
+      user: {
+        email: 'abigail@example.test',
+        name: 'Abigail Deng',
+        picture: 'https://example.test/abigail.png',
+        sub: 'user-abigail',
+      },
+    });
+    mockStudioApi.getAuthSession.mockResolvedValue({
+      enabled: true,
+      authenticated: true,
+      providerDisplayName: 'NyxID',
+      subject: 'user-abigail',
+      profile: null,
+      session: {
+        authenticated: true,
+        scopeId: 'scope-alpha',
+        scopeSource: 'nyxid-session',
+        expiresAtUtc: '2099-08-05T10:00:00Z',
+      },
+    });
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    expect(await screen.findByTitle('Abigail Deng')).toBeInTheDocument();
+    expect(screen.getByTitle('Abigail Deng')).toHaveAttribute(
+      'data-picture',
+      'https://example.test/abigail.png',
+    );
+  });
 
   it('renders authoritative identity and the effective workflow execution target', async () => {
     renderWithQueryClient(<WorkflowActivityVNextPage />);

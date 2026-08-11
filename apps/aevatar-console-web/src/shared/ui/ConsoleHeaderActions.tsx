@@ -123,6 +123,9 @@ export const ConsoleAuthActions: React.FC<ConsoleAuthActionsProps> = ({
         className="console-header-actions__login"
         icon={<LoginOutlined />}
         onClick={() => {
+          if (hasAuthoritativePrincipal && storedSession) {
+            clearStoredAuthSession();
+          }
           history.push(buildLoginRoute(getCurrentReturnTo()));
         }}
         type="link"
