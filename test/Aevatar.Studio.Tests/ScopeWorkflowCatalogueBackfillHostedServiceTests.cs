@@ -207,6 +207,58 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
     }
 
     [Fact]
+    public async Task StartAsync_ShouldSkipMalformedWorkflowServiceRevisionWithoutFailingBackfill()
+    {
+        var sourceWriter = new RecordingCatalogueSourceDispatcher();
+        var rowWriter = new RecordingCatalogueRowDispatcher();
+        var sourceReader = new RecordingCatalogueSourceReader([], sourceWriter);
+        var service = CreateService(
+            [new ServiceCatalogReadModel
+            {
+                Id = "svc-key",
+                ActorId = "service-definition:scope-1:published-service-1",
+                StateVersion = 3,
+                LastEventId = "evt-service-catalog",
+                TenantId = "scope-1",
+                AppId = "workflow-app",
+                Namespace = "user",
+                ServiceId = "published-service-1",
+                UpdatedAt = DateTimeOffset.Parse("2026-08-04T00:00:00Z"),
+            }],
+            [new ServiceDeploymentCatalogReadModel
+            {
+                Id = "svc-key",
+                ActorId = "service-deployment:scope-1:published-service-1",
+                StateVersion = 8,
+                LastEventId = "evt-deployment",
+                UpdatedAt = DateTimeOffset.Parse("2026-08-05T00:00:00Z"),
+                Deployments =
+                [
+                    new ServiceDeploymentReadModel
+                    {
+                        DeploymentId = "dep-1",
+                        RevisionId = "rev-malformed",
+                        PrimaryActorId = "workflow-actor-live",
+                        Status = ServiceDeploymentStatus.Active.ToString(),
+                        UpdatedAt = DateTimeOffset.Parse("2026-08-05T01:00:00Z"),
+                    },
+                ],
+            }],
+            [MalformedWorkflowRevisionCatalog("svc-key", "rev-malformed")],
+            [],
+            [],
+            sourceWriter,
+            rowWriter,
+            sourceReader);
+
+        await service.StartAsync(CancellationToken.None);
+
+        sourceWriter.Upserts.Should().BeEmpty();
+        rowWriter.Upserts.Should().BeEmpty();
+        rowWriter.DeleteMarkers.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task RowMaterializer_ShouldComposeDraftAndServiceSourcesIntoStableAggregateRow()
     {
         var draft = ExistingDraftSource("scope-1", "wf-shared");
@@ -411,6 +463,39 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
                                 {
                                     ExecutionMode = ExternalCapabilityExecutionMode.Durable,
                                 },
+                            },
+                        },
+                    },
+                },
+            ],
+        };
+
+    private static ServiceRevisionCatalogReadModel MalformedWorkflowRevisionCatalog(
+        string serviceKey,
+        string revisionId) =>
+        new()
+        {
+            Id = serviceKey,
+            ActorId = $"service-revisions:{serviceKey}",
+            StateVersion = 5,
+            LastEventId = $"evt-revision-{revisionId}",
+            UpdatedAt = DateTimeOffset.Parse("2026-08-04T12:00:00Z"),
+            Revisions =
+            [
+                new ServiceRevisionEntryReadModel
+                {
+                    RevisionId = revisionId,
+                    WorkflowName = "Malformed Workflow",
+                    PreparedArtifact = new PreparedServiceRevisionArtifact
+                    {
+                        RevisionId = revisionId,
+                        ImplementationKind = ServiceImplementationKind.Workflow,
+                        DeploymentPlan = new ServiceDeploymentPlan
+                        {
+                            WorkflowPlan = new WorkflowServiceDeploymentPlan
+                            {
+                                WorkflowName = "Malformed Workflow",
+                                RevisionId = revisionId,
                             },
                         },
                     },

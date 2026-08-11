@@ -301,11 +301,18 @@ internal sealed class ScopeWorkflowCatalogueBackfillHostedService : IHostedServi
         if (revision?.PreparedArtifact?.DeploymentPlan?.PlanSpecCase != ServiceDeploymentPlan.PlanSpecOneofCase.WorkflowPlan)
             return false;
 
-        var bindingIdentity = WorkflowServiceDeploymentPlanIntegrity.ResolveBindingIdentity(
-            revision.PreparedArtifact,
-            revisionId);
-        workflowId = bindingIdentity.WorkflowId;
-        return !string.IsNullOrWhiteSpace(workflowId);
+        try
+        {
+            var bindingIdentity = WorkflowServiceDeploymentPlanIntegrity.ResolveBindingIdentity(
+                revision.PreparedArtifact,
+                revisionId);
+            workflowId = bindingIdentity.WorkflowId;
+            return !string.IsNullOrWhiteSpace(workflowId);
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
     }
 
     private static ScopeWorkflowCatalogueSourceDocument ToServiceSource(
