@@ -1134,8 +1134,15 @@ describe('StudioMemberBindPanel', () => {
   });
 
   it('explains that a smoke test failure is scoped to the contract check', async () => {
-    (runtimeRunsApi.streamChat as jest.Mock).mockRejectedValueOnce(
-      new Error('Backend rejected the smoke prompt.'),
+    (parseBackendSSEStream as jest.Mock).mockImplementationOnce(
+      async function* () {
+        yield {
+          type: 'RUN_ERROR',
+          code: 'ERR_RUNTIME',
+          message: 'The workflow run failed.',
+          runId: 'run-1',
+        };
+      },
     );
 
     renderWithQueryClient(
@@ -1256,15 +1263,15 @@ describe('StudioMemberBindPanel', () => {
 
     await waitFor(() => {
       expect(mockConsoleToast.error).toHaveBeenCalledWith(
-        'Could not complete the smoke test. Review the result and try again.',
+        'Could not complete the smoke test. Try again.',
       );
     });
     expect(mockConsoleToast.error).not.toHaveBeenCalledWith(
       'Backend rejected the smoke prompt.',
     );
     expect(
-      await screen.findByText('Backend rejected the smoke prompt.'),
-    ).toBeTruthy();
+      screen.queryByText('Backend rejected the smoke prompt.'),
+    ).not.toBeInTheDocument();
   });
 
   it('clears the previous member bind notice when the bind candidate changes', async () => {
@@ -1341,5 +1348,45 @@ describe('StudioMemberBindPanel', () => {
         'joker binding request was accepted. Studio will show the published contract after the run completes.',
       ),
     ).toBeNull();
+  });
+
+  it('reports pending bind failures with a safe toast', async () => {
+    const handleBindPendingCandidate = jest
+      .fn()
+      .mockRejectedValue(new Error('POST /api/studio/bind returned 500'));
+
+    renderWithQueryClient(
+      React.createElement(StudioMemberBindPanel, {
+        authSession: {
+          enabled: true,
+          authenticated: true,
+          name: 'Abigail Deng',
+          scopeId: 'scope-1',
+          scopeSource: 'nyxid',
+        },
+        scopeId: 'scope-1',
+        pendingBindingCandidate: {
+          kind: 'workflow',
+          displayName: 'draft1',
+          description: 'Publish the current workflow revision first.',
+          actionLabel: 'Bind current revision',
+        },
+        onBindPendingCandidate: handleBindPendingCandidate,
+        services: [],
+      }),
+    );
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Bind current revision' }),
+    );
+
+    await waitFor(() => {
+      expect(mockConsoleToast.error).toHaveBeenCalledWith(
+        'Binding action could not be completed. Try again.',
+      );
+    });
+    expect(
+      screen.queryByText('POST /api/studio/bind returned 500'),
+    ).not.toBeInTheDocument();
   });
 });

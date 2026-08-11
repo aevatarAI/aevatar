@@ -1,5 +1,5 @@
-import * as React from 'react';
 import { act, render, screen } from '@testing-library/react';
+import * as React from 'react';
 import GraphCanvas from './GraphCanvas';
 
 const mockBackgroundRender = jest.fn();
@@ -24,11 +24,7 @@ jest.mock('@xyflow/react', () => {
       mockControlsRender(props);
       return null;
     },
-    Handle: (props: {
-      className?: string;
-      position?: string;
-      type?: string;
-    }) =>
+    Handle: (props: { className?: string; position?: string; type?: string }) =>
       React.createElement('span', {
         className: props.className,
         'data-position': props.position,
@@ -153,6 +149,77 @@ describe('GraphCanvas', () => {
       ).resolves.toBe(false);
     });
     expect(onDeleteEdges).toHaveBeenCalledWith(['edge:assert:publish:linear']);
+  });
+
+  it('makes the selected edge visually distinct without changing other edges', () => {
+    const styledEdges = [
+      {
+        ...edges[0],
+        markerEnd: {
+          color: '#2F6FEC',
+          height: 11,
+          type: 'arrowclosed',
+          width: 11,
+        },
+        style: {
+          opacity: 0.9,
+          stroke: '#2F6FEC',
+          strokeWidth: 2.5,
+        },
+      },
+      {
+        ...edges[0],
+        id: 'edge:publish:archive:linear',
+        markerEnd: {
+          color: '#8B5CF6',
+          height: 11,
+          type: 'arrowclosed',
+          width: 11,
+        },
+        source: 'step:publish',
+        style: {
+          stroke: '#8B5CF6',
+          strokeWidth: 2.5,
+        },
+        target: 'step:archive',
+      },
+    ];
+
+    render(
+      <GraphCanvas
+        edges={styledEdges}
+        nodes={nodes}
+        selectedEdgeId="edge:assert:publish:linear"
+        variant="studio"
+      />,
+    );
+
+    const reactFlowProps = mockReactFlowRender.mock.calls.at(-1)?.[0] as any;
+    const selectedEdge = reactFlowProps.edges[0];
+    const unselectedEdge = reactFlowProps.edges[1];
+
+    expect(selectedEdge.selected).toBe(true);
+    expect(selectedEdge.style).toEqual(
+      expect.objectContaining({
+        filter: 'drop-shadow(0 0 3px rgba(22, 119, 255, 0.55))',
+        opacity: 0.9,
+        stroke: 'var(--ant-color-primary)',
+        strokeWidth: 4,
+      }),
+    );
+    expect(selectedEdge.markerEnd).toEqual({
+      color: '#1677ff',
+      height: 11,
+      type: 'arrowclosed',
+      width: 11,
+    });
+    expect(unselectedEdge).toEqual(
+      expect.objectContaining({
+        markerEnd: styledEdges[1].markerEnd,
+        selected: false,
+        style: styledEdges[1].style,
+      }),
+    );
   });
 
   it('renders studio nodes with their product label instead of the backend step type id', () => {

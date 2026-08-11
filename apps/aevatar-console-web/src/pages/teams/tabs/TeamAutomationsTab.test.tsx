@@ -847,18 +847,37 @@ describe('TeamAutomationsTab canonical member authority', () => {
       target: { value: 'Summarize open work.' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Create automation' }));
-    fireEvent.click(
-      await screen.findByRole('button', { name: 'Authorize and continue' }),
-    );
+    const authorizeButton = await screen.findByRole('button', {
+      name: 'Authorize and continue',
+    });
 
-    expect(
-      await screen.findByText('Preparing authorization'),
-    ).toBeInTheDocument();
-    expect(
-      await screen.findByRole('status', { name: 'Active' }, { timeout: 3_500 }),
-    ).toBeInTheDocument();
-    expect(teamAutomationApi.listAll).toHaveBeenCalledTimes(3);
-    expect(screen.queryByText('Still pending')).not.toBeInTheDocument();
+    jest.useFakeTimers({ now: Date.now() });
+    try {
+      fireEvent.click(authorizeButton);
+      await act(async () => {
+        await Promise.resolve();
+        await jest.advanceTimersByTimeAsync(0);
+      });
+
+      expect(screen.getByText('Preparing authorization')).toBeInTheDocument();
+      expect(teamAutomationApi.listAll).toHaveBeenCalledTimes(2);
+
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(2_000);
+        await Promise.resolve();
+        await jest.advanceTimersByTimeAsync(0);
+      });
+
+      expect(teamAutomationApi.listAll).toHaveBeenCalledTimes(3);
+      await waitFor(() =>
+        expect(
+          screen.getByRole('status', { name: 'Active' }),
+        ).toBeInTheDocument(),
+      );
+      expect(screen.queryByText('Still pending')).not.toBeInTheDocument();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('shows an accepted create while the authoritative row is unavailable', async () => {
@@ -1202,22 +1221,37 @@ describe('TeamAutomationsTab canonical member authority', () => {
     });
     renderTab('m-alpha');
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Pause' }));
+    const pauseButton = await screen.findByRole('button', { name: 'Pause' });
+    jest.useFakeTimers({ now: Date.now() });
+    try {
+      fireEvent.click(pauseButton);
+      await act(async () => {
+        await Promise.resolve();
+        await jest.advanceTimersByTimeAsync(0);
+      });
 
-    await waitFor(() =>
       expect(mockConsoleToast.info).toHaveBeenCalledWith(
         'Pause request accepted',
-      ),
-    );
-    expect(mockConsoleToast.success).not.toHaveBeenCalled();
-    await waitFor(
-      () =>
+      );
+      expect(mockConsoleToast.success).not.toHaveBeenCalled();
+      expect(teamAutomationApi.listAll).toHaveBeenCalledTimes(2);
+      expect(screen.getByRole('button', { name: 'Pause' })).toBeInTheDocument();
+
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(2_000);
+        await Promise.resolve();
+        await jest.advanceTimersByTimeAsync(0);
+      });
+
+      expect(teamAutomationApi.listAll).toHaveBeenCalledTimes(3);
+      await waitFor(() =>
         expect(
           screen.getByRole('button', { name: 'Resume' }),
         ).toBeInTheDocument(),
-      { timeout: 7_500 },
-    );
-    expect(teamAutomationApi.listAll).toHaveBeenCalledTimes(3);
+      );
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('keeps observing delete until the authoritative row disappears', async () => {
@@ -1249,24 +1283,40 @@ describe('TeamAutomationsTab canonical member authority', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Delete' }));
     const confirmation = await screen.findByRole('dialog');
-    fireEvent.click(
-      within(confirmation).getByRole('button', { name: 'Delete' }),
-    );
+    const confirmDeleteButton = within(confirmation).getByRole('button', {
+      name: 'Delete',
+    });
 
-    await waitFor(() =>
+    jest.useFakeTimers({ now: Date.now() });
+    try {
+      fireEvent.click(confirmDeleteButton);
+      await act(async () => {
+        await Promise.resolve();
+        await jest.advanceTimersByTimeAsync(0);
+      });
+
       expect(mockConsoleToast.info).toHaveBeenCalledWith(
         'Delete request accepted',
-      ),
-    );
-    expect(mockConsoleToast.success).not.toHaveBeenCalled();
-    await waitFor(
-      () =>
+      );
+      expect(mockConsoleToast.success).not.toHaveBeenCalled();
+      expect(teamAutomationApi.listAll).toHaveBeenCalledTimes(2);
+      expect(screen.queryByText('No automations for this member')).toBeNull();
+
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(2_000);
+        await Promise.resolve();
+        await jest.advanceTimersByTimeAsync(0);
+      });
+
+      expect(teamAutomationApi.listAll).toHaveBeenCalledTimes(3);
+      await waitFor(() =>
         expect(
           screen.getByText('No automations for this member'),
         ).toBeInTheDocument(),
-      { timeout: 3_500 },
-    );
-    expect(teamAutomationApi.listAll).toHaveBeenCalledTimes(3);
+      );
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('offers reauthorization for a projected authorization failure', async () => {
@@ -1320,23 +1370,41 @@ describe('TeamAutomationsTab canonical member authority', () => {
 
     expect(await screen.findByText('NyxID: Completed')).toBeInTheDocument();
     expect(screen.getByText('Vault: Pending')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Retry revocation' }));
+    const retryButton = screen.getByRole('button', {
+      name: 'Retry revocation',
+    });
 
-    await waitFor(() =>
+    jest.useFakeTimers({ now: Date.now() });
+    try {
+      fireEvent.click(retryButton);
+      await act(async () => {
+        await Promise.resolve();
+        await jest.advanceTimersByTimeAsync(0);
+      });
+
       expect(teamAutomationApi.retryRevocation).toHaveBeenCalledWith(
         { scopeId: 'scope-alpha', teamId: 'team-alpha', memberId: 'm-alpha' },
         'sch-alpha',
-      ),
-    );
-    expect(
-      await screen.findByText(
-        'No automations for this member',
-        {},
-        { timeout: 3_500 },
-      ),
-    ).toBeInTheDocument();
-    expect(teamAutomationApi.listAll).toHaveBeenCalledTimes(3);
-    expect(screen.queryByText('Still pending')).not.toBeInTheDocument();
+      );
+      expect(teamAutomationApi.listAll).toHaveBeenCalledTimes(2);
+      expect(screen.queryByText('No automations for this member')).toBeNull();
+
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(2_000);
+        await Promise.resolve();
+        await jest.advanceTimersByTimeAsync(0);
+      });
+
+      expect(teamAutomationApi.listAll).toHaveBeenCalledTimes(3);
+      await waitFor(() =>
+        expect(
+          screen.getByText('No automations for this member'),
+        ).toBeInTheDocument(),
+      );
+      expect(screen.queryByText('Still pending')).not.toBeInTheDocument();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('reconnects NyxID for revocation retry without persisting an action ledger', async () => {

@@ -2,31 +2,30 @@ import {
   CopyOutlined,
   DeleteOutlined,
   EditOutlined,
+  HistoryOutlined,
+  InboxOutlined,
   MoreOutlined,
   PlusOutlined,
   ReloadOutlined,
   SearchOutlined,
 } from '@ant-design/icons';
-import { useQuery } from '@tanstack/react-query';
-import {
-  Button,
-  Dropdown,
-  Input,
-  Modal,
-  Popover,
-  Select,
-  Space,
-  Tooltip,
-} from 'antd';
+import { useInfiniteQuery } from '@tanstack/react-query';
+import { Button, Dropdown, Input, Modal, Popover, Select, Space } from 'antd';
 import React from 'react';
 import { scopesApi } from '@/shared/api/scopesApi';
 import { t } from '@/shared/i18n/messages';
-import type { ScopeWorkflowSummary } from '@/shared/models/scopes';
+import type {
+  ScopeWorkflowCatalogueRow,
+  ScopeWorkflowCatalogueRowCapabilities,
+  ScopeWorkflowCatalogueView,
+} from '@/shared/models/scopes';
 import { history } from '@/shared/navigation/history';
 import { isStudioApiStatus, studioApi } from '@/shared/studio/api';
-import type { StudioWorkflowDraftSummary } from '@/shared/studio/models';
+import AevatarContentSkeleton from '@/shared/ui/AevatarContentSkeleton';
 import { useConsoleToast } from '@/shared/ui/ConsoleToast';
+import { AEVATAR_INTERACTIVE_BUTTON_CLASS } from '@/shared/ui/interactionStandards';
 import { useConsoleLocation } from '../hooks/useConsoleLocation';
+import { observeDraftMaterialization } from '../hooks/useDraftMaterialization';
 import {
   buildWorkflowActivityEditorHref,
   buildWorkflowActivityNewHref,
@@ -34,51 +33,75 @@ import {
 } from '../navigation';
 import TableScrollRegion from '../TableScrollRegion';
 import WorkflowActivityVNextShell from '../WorkflowActivityVNextShell';
+import {
+  canArchiveWorkflow,
+  isWorkflowArchived,
+  observeWorkflowArchival,
+} from './workflowArchival';
 
 type WorkflowRow = {
   readonly activeRevisionId: string;
+  readonly deploymentId: string;
+  readonly deploymentStatus: string;
   readonly description: string;
+  readonly capabilities: ScopeWorkflowCatalogueRowCapabilities;
   readonly hasCommittedSource: boolean;
-  readonly hasDraftSource: boolean;
   readonly name: string;
-  readonly stepCount?: number;
+  readonly ownershipLabel: string;
   readonly updatedAtUtc: string | null;
   readonly workflowId: string;
 };
 
-function toDraftRow(
-  item: StudioWorkflowDraftSummary,
-  committed?: WorkflowRow,
-): WorkflowRow {
+function toWorkflowRow(item: ScopeWorkflowCatalogueRow): WorkflowRow {
   return {
-    activeRevisionId:
-      item.activeRevisionId?.trim() || committed?.activeRevisionId || '',
+    activeRevisionId: item.committed?.activeRevisionId.trim() ?? '',
+    capabilities: item.capabilities,
     description: item.description,
-    hasCommittedSource: Boolean(committed),
-    hasDraftSource: true,
+    deploymentId: item.committed?.deploymentId.trim() ?? '',
+    deploymentStatus: item.committed?.deploymentStatus.trim() ?? '',
+    hasCommittedSource: item.hasCommittedSource,
     name: item.name,
-    stepCount: item.stepCount,
+    ownershipLabel: t(
+      'workflowActivityVNext.workflows.workspaceOwner',
+      'Workspace',
+    ),
     updatedAtUtc: item.updatedAtUtc,
     workflowId: item.workflowId,
   };
 }
 
-function toCommittedRow(item: ScopeWorkflowSummary): WorkflowRow {
-  return {
-    activeRevisionId: item.activeRevisionId.trim(),
-    description: '',
-    hasCommittedSource: true,
-    hasDraftSource: false,
-    name: item.displayName || item.workflowName,
-    updatedAtUtc: item.updatedAt,
-    workflowId: item.workflowId,
-  };
+async function readWorkflowCatalogueMatch(
+  scopeId: string,
+  workflowId: string,
+): Promise<readonly WorkflowRow[]> {
+  let cursor: string | undefined;
+  const visitedCursors = new Set<string>();
+
+  do {
+    const response = await scopesApi.queryWorkflowCatalogue({
+      scopeId,
+      view: 'all',
+      query: workflowId,
+      cursor,
+      take: 100,
+    });
+    const target = response.items.find(
+      (item) => item.workflowId === workflowId,
+    );
+    if (target) return [toWorkflowRow(target)];
+
+    const nextCursor = response.nextPageToken ?? undefined;
+    if (!nextCursor || visitedCursors.has(nextCursor)) return [];
+    visitedCursors.add(nextCursor);
+    cursor = nextCursor;
+  } while (cursor);
+
+  return [];
 }
 
-type WorkflowView = 'all' | 'drafts';
-
-function readWorkflowView(params: URLSearchParams): WorkflowView {
-  return params.get('view') === 'drafts' ? 'drafts' : 'all';
+function readWorkflowView(params: URLSearchParams): ScopeWorkflowCatalogueView {
+  const view = params.get('view');
+  return view === 'drafts' ? 'drafts' : 'all';
 }
 
 function formatDate(value: string | null): string {
@@ -97,19 +120,45 @@ function normalizeWorkflowName(value: string): string {
   return value.trim().toLocaleLowerCase();
 }
 
+function handleClientLinkClick(
+  event: React.MouseEvent<HTMLElement>,
+  href: string,
+): void {
+  if (
+    event.button !== 0 ||
+    event.altKey ||
+    event.ctrlKey ||
+    event.metaKey ||
+    event.shiftKey
+  )
+    return;
+
+  event.preventDefault();
+  history.push(href);
+}
+
 const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
   const location = useConsoleLocation();
   const toast = useConsoleToast();
   const lastListErrorSignature = React.useRef('');
-  const suppressNextDraftListError = React.useRef(false);
+  const selfAuthoredSearch = React.useRef<string | null>(null);
   const initialParams = React.useMemo(
     () => new URLSearchParams(location.search),
     [location.search],
   );
   const [query, setQuery] = React.useState(initialParams.get('q') ?? '');
-  const [view, setView] = React.useState<WorkflowView>(
+  const [debouncedQuery, setDebouncedQuery] = React.useState(query.trim());
+  const [view, setView] = React.useState<ScopeWorkflowCatalogueView>(
     readWorkflowView(initialParams),
   );
+  const [archiveTarget, setArchiveTarget] = React.useState<WorkflowRow | null>(
+    null,
+  );
+  const [archiving, setArchiving] = React.useState(false);
+  const [archiveSubmitted, setArchiveSubmitted] = React.useState(false);
+  const [archivePhase, setArchivePhase] = React.useState<
+    'delayed' | 'failed' | 'idle'
+  >('idle');
   const [renameTarget, setRenameTarget] = React.useState<WorkflowRow | null>(
     null,
   );
@@ -121,65 +170,74 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
   const [deleteFailed, setDeleteFailed] = React.useState(false);
   const [deleteSucceeded, setDeleteSucceeded] = React.useState(false);
   const [deleting, setDeleting] = React.useState(false);
-  const drafts = useQuery({
-    queryKey: ['workflow-activity-vnext', 'drafts', scopeId],
-    queryFn: () => studioApi.listWorkflowDrafts(scopeId),
-    retry: false,
-  });
-  const committed = useQuery({
-    queryKey: ['workflow-activity-vnext', 'committed', scopeId],
-    queryFn: () => scopesApi.listWorkflows(scopeId),
+  const catalogue = useInfiniteQuery({
+    queryKey: [
+      'workflow-activity-vnext',
+      'workflow-catalogue',
+      scopeId,
+      view,
+      debouncedQuery,
+    ],
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam, signal }) =>
+      scopesApi.queryWorkflowCatalogue(
+        {
+          scopeId,
+          view,
+          query: debouncedQuery || undefined,
+          cursor: pageParam,
+          take: 50,
+        },
+        signal,
+      ),
+    getNextPageParam: (lastPage) => lastPage.nextPageToken ?? undefined,
     retry: false,
   });
 
   React.useEffect(() => {
+    if (selfAuthoredSearch.current === location.search) {
+      selfAuthoredSearch.current = null;
+      return;
+    }
+    selfAuthoredSearch.current = null;
     const params = new URLSearchParams(location.search);
-    setQuery(params.get('q') ?? '');
+    const routeQuery = params.get('q') ?? '';
+    setQuery(routeQuery);
+    setDebouncedQuery(routeQuery.trim());
     setView(readWorkflowView(params));
   }, [location.search]);
 
   React.useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedQuery(query.trim()), 300);
+    return () => window.clearTimeout(timer);
+  }, [query]);
+
+  React.useEffect(() => {
     const params = new URLSearchParams();
     if (query.trim()) params.set('q', query.trim());
-    if (view === 'drafts') params.set('view', 'drafts');
+    if (view !== 'all') params.set('view', view);
     const suffix = params.toString();
-    history.replace(`${location.pathname}${suffix ? `?${suffix}` : ''}`);
-  }, [location.pathname, query, view]);
+    const nextSearch = suffix ? `?${suffix}` : '';
+    if (nextSearch === location.search) return;
+    selfAuthoredSearch.current = nextSearch;
+    history.replace(`${location.pathname}${nextSearch}`);
+  }, [location.pathname, location.search, query, view]);
 
-  const loading = drafts.isPending || committed.isPending;
-  const draftWorkflowIds = React.useMemo(
-    () => new Set((drafts.data ?? []).map((item) => item.workflowId)),
-    [drafts.data],
-  );
+  const loading =
+    catalogue.isPending ||
+    (catalogue.isFetching && !catalogue.isFetchingNextPage);
   const rows = React.useMemo(() => {
-    const merged = new Map<string, WorkflowRow>();
-    for (const item of committed.data ?? [])
-      merged.set(item.workflowId, toCommittedRow(item));
-    for (const item of drafts.data ?? [])
-      merged.set(
-        item.workflowId,
-        toDraftRow(item, merged.get(item.workflowId)),
-      );
-    const normalized = query.trim().toLowerCase();
-    return [...merged.values()]
-      .filter(
-        (item) => view !== 'drafts' || draftWorkflowIds.has(item.workflowId),
-      )
-      .filter(
-        (item) =>
-          !normalized ||
-          [item.name, item.description, item.workflowId].some((value) =>
-            value.toLowerCase().includes(normalized),
-          ),
-      )
-      .sort(
-        (left, right) =>
-          Date.parse(right.updatedAtUtc ?? '') -
-          Date.parse(left.updatedAtUtc ?? ''),
-      );
-  }, [committed.data, draftWorkflowIds, drafts.data, query, view]);
-  const totalFailure = drafts.isError && committed.isError;
-  const filtersActive = Boolean(query.trim()) || view === 'drafts';
+    return (catalogue.data?.pages ?? []).flatMap((page) =>
+      page.items
+        .filter(
+          (item) =>
+            view !== 'drafts' ||
+            (item.hasDraftSource && !item.committed?.activeRevisionId.trim()),
+        )
+        .map(toWorkflowRow),
+    );
+  }, [catalogue.data?.pages, view]);
+  const filtersActive = Boolean(query.trim()) || view !== 'all';
   const renameDuplicates = React.useMemo(() => {
     if (!renameTarget) return false;
     const normalizedName = normalizeWorkflowName(renameName);
@@ -194,47 +252,25 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
   }, [renameName, renameTarget, rows]);
 
   React.useEffect(() => {
-    if (loading || (!drafts.isError && !committed.isError)) return;
+    if (loading || !catalogue.isLoadingError) return;
 
-    const errorSignature = [
-      scopeId,
-      drafts.isError ? drafts.errorUpdatedAt : 0,
-      committed.isError ? committed.errorUpdatedAt : 0,
-    ].join(':');
+    const errorSignature = [scopeId, catalogue.errorUpdatedAt].join(':');
     if (lastListErrorSignature.current === errorSignature) return;
 
     lastListErrorSignature.current = errorSignature;
-    if (suppressNextDraftListError.current && drafts.isError) {
-      suppressNextDraftListError.current = false;
-      return;
-    }
-
     toast.error(
-      t(
-        'workflowActivityVNext.workflows.partialUnavailable',
-        "Some workflows couldn't be loaded",
-      ),
+      t('workflowActivityVNext.workflows.unavailable', 'Workflows unavailable'),
     );
   }, [
-    committed.errorUpdatedAt,
-    committed.isError,
-    drafts.errorUpdatedAt,
-    drafts.isError,
+    catalogue.errorUpdatedAt,
+    catalogue.isLoadingError,
     loading,
     scopeId,
     toast,
   ]);
 
   const retry = () => {
-    void drafts.refetch();
-    void committed.refetch();
-  };
-
-  const openActivity = (row: WorkflowRow) => {
-    const activityHref = buildWorkflowActivitySectionHref(scopeId, 'activity');
-    history.push(
-      `${activityHref}?workflowId=${encodeURIComponent(row.workflowId)}`,
-    );
+    void catalogue.refetch();
   };
 
   const copyWorkflowReference = async (row: WorkflowRow) => {
@@ -278,6 +314,15 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
         renameTarget.workflowId,
         scopeId,
       );
+      const parsed = await studioApi.parseYaml({ yaml: draft.yaml });
+      if (!parsed.document)
+        throw new Error('Workflow YAML could not be parsed');
+      const serialized = await studioApi.serializeYaml({
+        document: {
+          ...parsed.document,
+          name: workflowName,
+        },
+      });
       await studioApi.updateWorkflowDraft({
         directoryId: draft.directoryId,
         fileName: draft.fileName,
@@ -285,9 +330,18 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
         scopeId,
         workflowId: renameTarget.workflowId,
         workflowName,
-        yaml: draft.yaml,
+        yaml: serialized.yaml,
       });
-      const refreshed = await drafts.refetch();
+      const observation = await observeDraftMaterialization({
+        workflowId: renameTarget.workflowId,
+        read: (workflowId) => studioApi.getWorkflowDraft(workflowId, scopeId),
+        isNotFound: (candidate) => isStudioApiStatus(candidate, 404),
+        isObserved: (candidate) => candidate.name.trim() === workflowName,
+      });
+      if (observation.kind === 'delayed') {
+        throw new Error('Workflow rename was not observed');
+      }
+      const refreshed = await catalogue.refetch();
       if (refreshed.isError) throw refreshed.error;
       setRenameTarget(null);
       setRenameName('');
@@ -303,6 +357,70 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
       );
     } finally {
       setRenaming(false);
+    }
+  };
+
+  const openArchive = (row: WorkflowRow) => {
+    setArchiveTarget(row);
+    setArchiveSubmitted(false);
+    setArchivePhase('idle');
+  };
+
+  const closeArchive = () => {
+    if (archiving) return;
+    setArchiveTarget(null);
+    setArchiveSubmitted(false);
+    setArchivePhase('idle');
+  };
+
+  const confirmArchive = async () => {
+    if (!archiveTarget || archiving) return;
+    const target = archiveTarget;
+    let accepted = archiveSubmitted;
+    setArchiving(true);
+    setArchivePhase('idle');
+
+    try {
+      if (!accepted) {
+        await scopesApi.archiveWorkflow(scopeId, target.workflowId);
+        accepted = true;
+        setArchiveSubmitted(true);
+      }
+
+      const observation = await observeWorkflowArchival({
+        readWorkflows: () =>
+          readWorkflowCatalogueMatch(scopeId, target.workflowId),
+        workflowId: target.workflowId,
+      });
+      if (observation.kind === 'delayed') {
+        setArchivePhase('delayed');
+        return;
+      }
+
+      await catalogue.refetch();
+      setArchiveTarget(null);
+      setArchiveSubmitted(false);
+      setArchivePhase('idle');
+      toast.success(
+        t(
+          'workflowActivityVNext.workflows.archiveSuccess',
+          'Workflow archived',
+        ),
+      );
+    } catch {
+      if (accepted) {
+        setArchivePhase('delayed');
+      } else {
+        setArchivePhase('failed');
+        toast.error(
+          t(
+            'workflowActivityVNext.workflows.archiveFailed',
+            "Workflow couldn't be archived",
+          ),
+        );
+      }
+    } finally {
+      setArchiving(false);
     }
   };
 
@@ -331,9 +449,7 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
         }
       }
 
-      suppressNextDraftListError.current = true;
-      const refreshed = await drafts.refetch();
-      if (!refreshed.isError) suppressNextDraftListError.current = false;
+      const refreshed = await catalogue.refetch();
       if (refreshed.isError) throw refreshed.error;
       setDeleteTarget(null);
       setDeleteSucceeded(false);
@@ -395,6 +511,9 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
             'Search workflows',
           )}
           className="wa-vnext__toolbar-search"
+          maxLength={
+            catalogue.data?.pages[0]?.search.maximumQueryLength ?? undefined
+          }
           onChange={(event) => setQuery(event.target.value)}
           placeholder={t(
             'workflowActivityVNext.workflows.search',
@@ -420,7 +539,6 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                 value: 'all',
               },
               {
-                disabled: drafts.isError,
                 label: t(
                   'workflowActivityVNext.workflows.draftsView',
                   'Drafts',
@@ -434,39 +552,17 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
       </div>
 
       {loading ? (
-        <div aria-live="polite" className="wa-vnext__state">
-          <p>
-            {t('workflowActivityVNext.workflows.loading', 'Loading workflows')}
-          </p>
-        </div>
-      ) : view === 'drafts' && drafts.isError ? (
-        <div className="wa-vnext__state" role="alert">
-          <div>
-            <h2>
-              {t(
-                'workflowActivityVNext.workflows.draftsUnavailable',
-                'Draft workflows unavailable',
-              )}
-            </h2>
-            <p>
-              {t(
-                'workflowActivityVNext.workflows.draftsUnavailableDescription',
-                'Try again to load draft workflows.',
-              )}
-            </p>
-            <Button
-              aria-label={t(
-                'workflowActivityVNext.workflows.retryAria',
-                'Retry workflows',
-              )}
-              icon={<ReloadOutlined />}
-              onClick={() => void drafts.refetch()}
-            >
-              {t('workflowActivityVNext.common.retry', 'Retry')}
-            </Button>
-          </div>
-        </div>
-      ) : totalFailure ? (
+        <AevatarContentSkeleton
+          ariaLabel={t(
+            'workflowActivityVNext.workflows.loading',
+            'Loading workflows',
+          )}
+          columnWidths={['minmax(240px, 1fr)', 120, 190, 270]}
+          rows={4}
+          tableMinWidth={900}
+          variant="table"
+        />
+      ) : catalogue.isLoadingError ? (
         <div className="wa-vnext__state" role="alert">
           <div>
             <h2>
@@ -565,7 +661,7 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                     'Last updated',
                   )}
                 </th>
-                <th className="wa-vnext__table-column--actions">
+                <th className="wa-vnext__table-column--actions wa-vnext__workflow-actions-cell">
                   {t(
                     'workflowActivityVNext.workflows.columnActions',
                     'Actions',
@@ -575,8 +671,19 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
             </thead>
             <tbody>
               {rows.map((row) => {
+                const editorHref = buildWorkflowActivityEditorHref(
+                  scopeId,
+                  row.workflowId,
+                );
+                const activityHref = `${buildWorkflowActivitySectionHref(
+                  scopeId,
+                  'activity',
+                )}?workflowId=${encodeURIComponent(row.workflowId)}`;
                 const description = row.description.trim();
+                const isArchived = isWorkflowArchived(row);
                 const isPublished = Boolean(row.activeRevisionId);
+                const canDeleteDraft =
+                  row.capabilities.delete.available && !row.hasCommittedSource;
                 const workflowName = (
                   <span className="wa-vnext__title">{row.name}</span>
                 );
@@ -627,20 +734,27 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                     >
                       <span
                         className={`wa-vnext__status ${
-                          isPublished
-                            ? 'wa-vnext__status--committed'
-                            : 'wa-vnext__status--draft'
+                          isArchived
+                            ? 'wa-vnext__status--archived'
+                            : isPublished
+                              ? 'wa-vnext__status--committed'
+                              : 'wa-vnext__status--draft'
                         }`}
                       >
-                        {isPublished
+                        {isArchived
                           ? t(
-                              'workflowActivityVNext.workflows.publishedStatus',
-                              'Published',
+                              'workflowActivityVNext.workflows.archivedStatus',
+                              'Archived',
                             )
-                          : t(
-                              'workflowActivityVNext.workflows.draftStatus',
-                              'Draft',
-                            )}
+                          : isPublished
+                            ? t(
+                                'workflowActivityVNext.workflows.publishedStatus',
+                                'Published',
+                              )
+                            : t(
+                                'workflowActivityVNext.workflows.draftStatus',
+                                'Draft',
+                              )}
                       </span>
                     </td>
                     <td
@@ -652,63 +766,67 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                       {formatDate(row.updatedAtUtc)}
                     </td>
                     <td
+                      className="wa-vnext__workflow-actions-cell"
                       data-label={t(
                         'workflowActivityVNext.workflows.columnActions',
                         'Actions',
                       )}
                     >
-                      <Space>
+                      <Space className="wa-vnext__workflow-actions" size={6}>
                         <Button
                           aria-label={t(
                             'workflowActivityVNext.workflows.openAria',
-                            'Open {name}',
-                            { name: row.name },
+                            'Open {name} in {owner}',
+                            { name: row.name, owner: row.ownershipLabel },
                           )}
-                          onClick={() =>
-                            history.push(
-                              buildWorkflowActivityEditorHref(
-                                scopeId,
-                                row.workflowId,
-                              ),
-                            )
+                          className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+                          disabled={!row.capabilities.open.available}
+                          href={
+                            row.capabilities.open.available
+                              ? editorHref
+                              : undefined
                           }
+                          icon={<EditOutlined />}
+                          onClick={
+                            row.capabilities.open.available
+                              ? (event) =>
+                                  handleClientLinkClick(event, editorHref)
+                              : undefined
+                          }
+                          type="primary"
                         >
                           {t('workflowActivityVNext.common.open', 'Open')}
                         </Button>
-                        <Button onClick={() => openActivity(row)}>
+                        <Button
+                          aria-label={t(
+                            'workflowActivityVNext.workflows.viewActivityAria',
+                            'View activity for {name} in {owner}',
+                            { name: row.name, owner: row.ownershipLabel },
+                          )}
+                          className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+                          disabled={!row.capabilities.activity.available}
+                          href={
+                            row.capabilities.activity.available
+                              ? activityHref
+                              : undefined
+                          }
+                          icon={<HistoryOutlined />}
+                          onClick={
+                            row.capabilities.activity.available
+                              ? (event) =>
+                                  handleClientLinkClick(event, activityHref)
+                              : undefined
+                          }
+                        >
                           {t(
                             'workflowActivityVNext.workflows.viewActivity',
-                            'Activity',
+                            'View activity',
                           )}
                         </Button>
-                        {row.hasDraftSource ? (
-                          <Tooltip
-                            title={t(
-                              'workflowActivityVNext.workflows.deleteDraft',
-                              'Delete draft',
-                            )}
-                          >
-                            <Button
-                              aria-label={t(
-                                'workflowActivityVNext.workflows.deleteAria',
-                                'Delete {name}',
-                                { name: row.name },
-                              )}
-                              danger
-                              icon={<DeleteOutlined />}
-                              onClick={() => {
-                                setDeleteTarget(row);
-                                setDeleteFailed(false);
-                                setDeleteSucceeded(false);
-                              }}
-                              type="text"
-                            />
-                          </Tooltip>
-                        ) : null}
                         <Dropdown
                           menu={{
                             items: [
-                              ...(row.hasDraftSource
+                              ...(row.capabilities.rename.available
                                 ? [
                                     {
                                       icon: <EditOutlined />,
@@ -728,11 +846,46 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                                   'Copy workflow reference',
                                 ),
                               },
+                              ...(canDeleteDraft || canArchiveWorkflow(row)
+                                ? [{ type: 'divider' as const }]
+                                : []),
+                              ...(canDeleteDraft
+                                ? [
+                                    {
+                                      danger: true,
+                                      icon: <DeleteOutlined />,
+                                      key: 'delete',
+                                      label: t(
+                                        'workflowActivityVNext.workflows.deleteDraft',
+                                        'Delete draft',
+                                      ),
+                                    },
+                                  ]
+                                : []),
+                              ...(canArchiveWorkflow(row)
+                                ? [
+                                    {
+                                      danger: true,
+                                      icon: <InboxOutlined />,
+                                      key: 'archive',
+                                      label: t(
+                                        'workflowActivityVNext.workflows.archive',
+                                        'Archive',
+                                      ),
+                                    },
+                                  ]
+                                : []),
                             ],
                             onClick: ({ key }) => {
                               if (key === 'rename') openRename(row);
                               if (key === 'copy-reference')
                                 void copyWorkflowReference(row);
+                              if (key === 'delete') {
+                                setDeleteTarget(row);
+                                setDeleteFailed(false);
+                                setDeleteSucceeded(false);
+                              }
+                              if (key === 'archive') openArchive(row);
                             },
                           }}
                           placement="bottomRight"
@@ -741,11 +894,11 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                           <Button
                             aria-label={t(
                               'workflowActivityVNext.workflows.moreActionsAria',
-                              'More actions for {name}',
-                              { name: row.name },
+                              'More actions for {name} in {owner}',
+                              { name: row.name, owner: row.ownershipLabel },
                             )}
+                            className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                             icon={<MoreOutlined />}
-                            type="text"
                           />
                         </Dropdown>
                       </Space>
@@ -757,6 +910,79 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
           </table>
         </TableScrollRegion>
       )}
+      {catalogue.hasNextPage ? (
+        <div className="wa-vnext__pagination-actions">
+          {catalogue.isFetchNextPageError ? (
+            <p role="alert">
+              {t(
+                'workflowActivityVNext.workflows.loadMoreFailed',
+                "More workflows couldn't be loaded",
+              )}
+            </p>
+          ) : null}
+          <Button
+            loading={catalogue.isFetchingNextPage}
+            onClick={() => void catalogue.fetchNextPage()}
+          >
+            {t('workflowActivityVNext.workflows.loadMore', 'Load more')}
+          </Button>
+        </div>
+      ) : null}
+      <Modal
+        cancelButtonProps={{ disabled: archiving }}
+        cancelText={t('workflowActivityVNext.common.cancel', 'Cancel')}
+        closable={!archiving}
+        confirmLoading={archiving}
+        destroyOnHidden
+        keyboard={!archiving}
+        mask={{ closable: false }}
+        okButtonProps={{ danger: true }}
+        okText={
+          archivePhase === 'delayed'
+            ? t(
+                'workflowActivityVNext.workflows.archiveCheckAgain',
+                'Check again',
+              )
+            : archivePhase === 'failed'
+              ? t(
+                  'workflowActivityVNext.workflows.archiveTryAgain',
+                  'Try again',
+                )
+              : t(
+                  'workflowActivityVNext.workflows.archiveConfirm',
+                  'Archive workflow',
+                )
+        }
+        onCancel={closeArchive}
+        onOk={() => void confirmArchive()}
+        open={Boolean(archiveTarget)}
+        title={t(
+          'workflowActivityVNext.workflows.archiveTitle',
+          'Archive this workflow?',
+        )}
+      >
+        <p>
+          {t(
+            'workflowActivityVNext.workflows.archiveDescription',
+            'This stops new runs for the published workflow. Its editable draft, published revisions, and Activity history remain available. Publishing it again restores it.',
+          )}
+        </p>
+        {archivePhase === 'failed' ? (
+          <p className="wa-vnext__duplicate-warning" role="alert">
+            {t(
+              'workflowActivityVNext.workflows.archiveFailed',
+              "Workflow couldn't be archived",
+            )}
+          </p>
+        ) : archivePhase === 'delayed' ? (
+          <p className="wa-vnext__duplicate-warning" role="status">
+            {t(
+              'workflowActivityVNext.workflows.archiveDelayed',
+              "Archive was accepted, but it hasn't been confirmed yet",
+            )}
+          </p>
+        ) : null}
+      </Modal>
       <Modal
         cancelText={t('workflowActivityVNext.common.cancel', 'Cancel')}
         closable={!renaming}

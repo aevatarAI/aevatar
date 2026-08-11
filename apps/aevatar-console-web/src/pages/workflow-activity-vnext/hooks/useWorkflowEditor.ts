@@ -1,6 +1,10 @@
-import { AGUIEventType } from '@aevatar-react-sdk/types';
+import { type AGUIEvent, AGUIEventType } from '@aevatar-react-sdk/types';
 import { useQuery } from '@tanstack/react-query';
 import React from 'react';
+import {
+  applyRuntimeEvent,
+  createRuntimeEventAccumulator,
+} from '@/shared/agui/runtimeEventSemantics';
 import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
 import { t } from '@/shared/i18n/messages';
@@ -8,24 +12,33 @@ import { getLocationSnapshot, history } from '@/shared/navigation/history';
 import { studioApi } from '@/shared/studio/api';
 import {
   applyStepInspectorDraft,
+  connectStepToTarget,
   createStepInspectorDraft,
   insertStepByType,
+  materializeImplicitSequentialTransitions,
+  removeStepConnection,
+  removeSteps,
+  suggestBranchLabelForStep,
 } from '@/shared/studio/document';
+import { createStudioExecutionFrame } from '@/shared/studio/execution';
 import {
   buildStudioGraphElements,
   buildStudioWorkflowLayout,
 } from '@/shared/studio/graph';
 import type {
+  StudioExecutionDetail,
+  StudioExecutionFrame,
   StudioValidationFinding,
   StudioWorkflowDocument,
   StudioWorkflowFile,
 } from '@/shared/studio/models';
+import { createStreamingExecutionDetail } from '@/shared/workflows/executionDetail';
 import { buildWorkflowActivityEditorHref } from '../navigation';
 import { hasBlockingFindings } from '../workflows/workflowCreation';
 import { useDraftMaterialization } from './useDraftMaterialization';
 import { useRunObservation } from './useRunObservation';
 
-export type DraftRunPhase =
+export type PublishedRunPhase =
   | 'idle'
   | 'submitting'
   | 'accepted'
@@ -37,13 +50,20 @@ type SubmittedSaveSnapshot = {
   readonly revision: number;
 };
 
-export type DraftRunSnapshot = {
-  readonly input: string;
+export type WorkflowPublishedInvocationTarget = {
+  readonly publishedServiceId: string;
+  readonly revisionId: string;
   readonly workflowId: string;
-  readonly workflowYaml: string;
+};
+
+export type PublishedRunSnapshot = {
+  readonly files: readonly File[];
+  readonly input: string;
+  readonly target: WorkflowPublishedInvocationTarget;
 };
 
 export type WorkflowPublicationPreparation = {
+  readonly documentVersion: number;
   readonly workflowId: string;
   readonly workflowName: string;
   readonly workflowYaml: string;
@@ -75,10 +95,16 @@ function readSseRunId(event: unknown): string {
   if (
     record.type !== AGUIEventType.RUN_STARTED &&
     record.type !== AGUIEventType.RUN_FINISHED &&
-    record.type !== AGUIEventType.RUN_ERROR
+    record.type !== AGUIEventType.RUN_ERROR &&
+    record.type !== 'RUN_STOPPED'
   )
     return '';
   return typeof record.runId === 'string' ? record.runId.trim() : '';
+}
+
+function isSseRunFinished(event: unknown): boolean {
+  if (!event || typeof event !== 'object') return false;
+  return (event as Record<string, unknown>).type === AGUIEventType.RUN_FINISHED;
 }
 
 function isSseRunError(event: unknown): event is Record<string, unknown> {
@@ -87,8 +113,29 @@ function isSseRunError(event: unknown): event is Record<string, unknown> {
   return record.type === AGUIEventType.RUN_ERROR;
 }
 
+function isSseRunStopped(event: unknown): boolean {
+  if (!event || typeof event !== 'object') return false;
+  return (event as Record<string, unknown>).type === 'RUN_STOPPED';
+}
+
 function readSseRunError(event: Record<string, unknown>): string {
   return typeof event.message === 'string' ? event.message.trim() : '';
+}
+
+function createPublishedRunExecutionFrame(
+  event: AGUIEvent,
+): StudioExecutionFrame {
+  if (!isSseRunStopped(event)) return createStudioExecutionFrame(event);
+  const record = event as unknown as Record<string, unknown>;
+  return createStudioExecutionFrame({
+    type: AGUIEventType.CUSTOM,
+    timestamp: record.timestamp,
+    name: 'aevatar.run.stopped',
+    payload: {
+      reason: record.reason,
+      runId: record.runId,
+    },
+  } as AGUIEvent);
 }
 
 function readRunInputError(error: unknown): string {
@@ -146,16 +193,22 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
     null,
   );
   const [saveError, setSaveError] = React.useState('');
+  const [runFiles, setRunFiles] = React.useState<File[]>([]);
   const [runInput, setRunInput] = React.useState('');
   const [runInputError, setRunInputError] = React.useState('');
   const [lastRunSnapshot, setLastRunSnapshot] =
-    React.useState<DraftRunSnapshot | null>(null);
-  const [runPhase, setRunPhase] = React.useState<DraftRunPhase>('idle');
+    React.useState<PublishedRunSnapshot | null>(null);
+  const [liveRunExecution, setLiveRunExecution] =
+    React.useState<StudioExecutionDetail | null>(null);
+  const [runRequestActive, setRunRequestActive] = React.useState(false);
+  const [runPhase, setRunPhase] = React.useState<PublishedRunPhase>('idle');
   const [runError, setRunError] = React.useState('');
   const [sseRunId, setSseRunId] = React.useState('');
   const [selectedNodeId, setSelectedNodeId] = React.useState('');
+  const [selectedEdgeId, setSelectedEdgeId] = React.useState('');
   const [selectedStepConfigurationError, setSelectedStepConfigurationError] =
     React.useState('');
+  const [canvasMutationError, setCanvasMutationError] = React.useState('');
   const runControllerRef = React.useRef<AbortController | null>(null);
   const runInFlightRef = React.useRef(false);
   const runGenerationRef = React.useRef(0);
@@ -173,10 +226,6 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
     null,
   );
   const runObservation = useRunObservation(scopeId, sseRunId);
-  const runObservationUnresolved = Boolean(
-    sseRunId && runObservation.phase !== 'observed',
-  );
-  const runAwaitingIdentification = runPhase === 'stream_ended' && !sseRunId;
   const receiptPending =
     materialization.phase === 'accepted' ||
     materialization.phase === 'observing' ||
@@ -226,6 +275,8 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
     setSaveError('');
     setStructuralMutationError('');
     setFailedNodeType(null);
+    setCanvasMutationError('');
+    setSelectedEdgeId('');
     setSelectedNodeId('');
     setSelectedStepConfigurationError('');
     if (source.data.document) return;
@@ -346,6 +397,7 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
       runControllerRef.current?.abort();
       runControllerRef.current = null;
       runInFlightRef.current = false;
+      setRunRequestActive(false);
       pendingMaterializationRef.current = null;
       loadedSignatureRef.current = '';
       loadedRouteWorkflowIdRef.current = '';
@@ -365,15 +417,20 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
       setStructuralMutationPending(false);
       setStructuralMutationError('');
       setFailedNodeType(null);
+      setCanvasMutationError('');
       setSaveError('');
+      setRunFiles([]);
       setRunInput('');
       setRunInputError('');
       setLastRunSnapshot(null);
+      setLiveRunExecution(null);
+      setRunRequestActive(false);
       setRunPhase('idle');
       setRunError('');
       sseRunIdRef.current = '';
       setSseRunId('');
       setSelectedNodeId('');
+      setSelectedEdgeId('');
       setSelectedStepConfigurationError('');
     },
     [materialization.reset],
@@ -497,7 +554,18 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
         const current = document ?? (await parseCurrentYaml());
         if (!current || generation !== structuralMutationGenerationRef.current)
           return false;
-        const inserted = insertStepByType(current, stepType);
+        const explicitDocument =
+          materializeImplicitSequentialTransitions(current);
+        const selectedStepId = selectedNodeId.startsWith('step:')
+          ? selectedNodeId.slice('step:'.length).trim()
+          : '';
+        const finalStepId = [...(explicitDocument.steps ?? [])]
+          .reverse()
+          .map((step) => String(step.id ?? '').trim())
+          .find(Boolean);
+        const inserted = insertStepByType(explicitDocument, stepType, {
+          afterStepId: selectedStepId || finalStepId || null,
+        });
         const serialized = await studioApi.serializeYaml({
           document: inserted.document,
         });
@@ -522,7 +590,7 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
         }
       }
     },
-    [document, markLocalEdit, parseCurrentYaml],
+    [document, markLocalEdit, parseCurrentYaml, selectedNodeId],
   );
 
   const retryNodeInsertion = React.useCallback(
@@ -533,6 +601,130 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
   const graph = React.useMemo(
     () => buildStudioGraphElements(document, layout),
     [document, layout],
+  );
+  const applyCanvasDocumentMutation = React.useCallback(
+    async (
+      mutate: (current: StudioWorkflowDocument) => {
+        document: StudioWorkflowDocument;
+        nodeId: string;
+      },
+    ): Promise<boolean> => {
+      if (savingRef.current || structuralMutationPendingRef.current)
+        return false;
+      const generation = ++structuralMutationGenerationRef.current;
+      structuralMutationPendingRef.current = true;
+      setStructuralMutationPending(true);
+      setCanvasMutationError('');
+      try {
+        const current = document ?? (await parseCurrentYaml());
+        if (!current || generation !== structuralMutationGenerationRef.current)
+          return false;
+        const result = mutate(current);
+        const serialized = await studioApi.serializeYaml({
+          document: result.document,
+        });
+        if (generation !== structuralMutationGenerationRef.current)
+          return false;
+        setDocument(serialized.document);
+        setYaml(serialized.yaml);
+        setFindings(serialized.findings);
+        setSelectedEdgeId('');
+        setSelectedNodeId(result.nodeId);
+        setSelectedStepConfigurationError('');
+        markLocalEdit();
+        return true;
+      } catch (error) {
+        if (generation === structuralMutationGenerationRef.current) {
+          setCanvasMutationError(toErrorMessage(error));
+        }
+        return false;
+      } finally {
+        if (generation === structuralMutationGenerationRef.current) {
+          structuralMutationPendingRef.current = false;
+          setStructuralMutationPending(false);
+        }
+      }
+    },
+    [document, markLocalEdit, parseCurrentYaml],
+  );
+  const connectNodes = React.useCallback(
+    (sourceNodeId: string, targetNodeId: string) =>
+      applyCanvasDocumentMutation((current) => {
+        const currentGraph = buildStudioGraphElements(current, layout);
+        const sourceStepId = currentGraph.nodes.find(
+          (node) => node.id === sourceNodeId,
+        )?.data.stepId;
+        const targetStepId = currentGraph.nodes.find(
+          (node) => node.id === targetNodeId,
+        )?.data.stepId;
+        if (!sourceStepId || !targetStepId || sourceStepId === targetStepId) {
+          return { document: current, nodeId: sourceNodeId };
+        }
+        const sourceStep = current.steps?.find(
+          (step) => String(step.id ?? '').trim() === sourceStepId,
+        );
+        const branchLabel = suggestBranchLabelForStep(
+          String(sourceStep?.type ?? '').trim(),
+          sourceStep?.branches ?? {},
+        );
+        return connectStepToTarget(
+          current,
+          sourceStepId,
+          targetStepId,
+          branchLabel,
+        );
+      }),
+    [applyCanvasDocumentMutation, layout],
+  );
+  const deleteNodes = React.useCallback(
+    (nodeIds: readonly string[]) =>
+      applyCanvasDocumentMutation((current) => {
+        const currentGraph = buildStudioGraphElements(current, layout);
+        const stepIds = nodeIds
+          .map(
+            (nodeId) =>
+              currentGraph.nodes.find((node) => node.id === nodeId)?.data
+                .stepId,
+          )
+          .filter((stepId): stepId is string => Boolean(stepId));
+        return removeSteps(current, stepIds);
+      }),
+    [applyCanvasDocumentMutation, layout],
+  );
+  const deleteEdges = React.useCallback(
+    (edgeIds: readonly string[]) =>
+      applyCanvasDocumentMutation((current) => {
+        const currentGraph = buildStudioGraphElements(current, layout);
+        let result = { document: current, nodeId: selectedNodeId };
+        for (const edgeId of edgeIds) {
+          const edge = currentGraph.edges.find((entry) => entry.id === edgeId);
+          const sourceStepId = currentGraph.nodes.find(
+            (node) => node.id === edge?.source,
+          )?.data.stepId;
+          const targetStepId = currentGraph.nodes.find(
+            (node) => node.id === edge?.target,
+          )?.data.stepId;
+          if (!sourceStepId || !targetStepId) continue;
+          result = removeStepConnection(
+            result.document,
+            sourceStepId,
+            targetStepId,
+            edge?.data?.branchLabel ?? null,
+          );
+        }
+        return result;
+      }),
+    [applyCanvasDocumentMutation, layout, selectedNodeId],
+  );
+  const moveNodes = React.useCallback(
+    (nodes: ReturnType<typeof buildStudioGraphElements>['nodes']) => {
+      if (savingRef.current || structuralMutationPendingRef.current) return;
+      setLayout((current: unknown) =>
+        buildStudioWorkflowLayout(workflowTitle, nodes, current),
+      );
+      markLocalEdit();
+    },
+    [markLocalEdit, workflowTitle],
   );
   const selectedStepDraft = React.useMemo(() => {
     const selectedStepId = selectedNodeId.startsWith('step:')
@@ -629,6 +821,7 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
       }
 
       return {
+        documentVersion: localEditRevisionRef.current,
         workflowId: workflow.workflowId,
         workflowName: workflowTitle.trim(),
         workflowYaml: serialized.yaml,
@@ -636,82 +829,154 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
     }, [dirty, receiptPending, routeWorkflowId, workflow, workflowTitle, yaml]);
 
   const submitRun = React.useCallback(
-    async (snapshot?: DraftRunSnapshot) => {
+    async (
+      target: WorkflowPublishedInvocationTarget,
+      snapshot?: PublishedRunSnapshot,
+    ) => {
       if (
         runInFlightRef.current ||
         savingRef.current ||
         structuralMutationPendingRef.current ||
         runPhase === 'submitting' ||
-        runPhase === 'accepted' ||
-        runObservationUnresolved ||
-        runAwaitingIdentification
+        runPhase === 'accepted'
       )
         return;
+      const activeWorkflowId = workflow?.workflowId ?? routeWorkflowId;
+      if (
+        !target.publishedServiceId.trim() ||
+        !target.revisionId.trim() ||
+        !target.workflowId.trim() ||
+        target.workflowId !== activeWorkflowId
+      ) {
+        setRunError(
+          t(
+            'workflowActivityVNext.editor.publishedTargetUnavailable',
+            'Publish this workflow before running it.',
+          ),
+        );
+        setRunPhase('failed');
+        return;
+      }
       const normalizedInput = (snapshot?.input ?? runInput).trim();
-      if (!normalizedInput) {
+      const submittedFiles = snapshot?.files ?? runFiles;
+      if (!normalizedInput && submittedFiles.length === 0) {
         setRunInputError(
           t(
             'workflowActivityVNext.editor.runInputRequired',
-            'Input is required.',
+            'Input or an attached file is required.',
           ),
         );
         return;
       }
+      const emptyFile = submittedFiles.find((file) => file.size <= 0);
+      if (emptyFile) {
+        setRunError(
+          t(
+            'workflowActivityVNext.editor.publishedRunPanel.removeEmptyFile',
+            'Remove empty file {name} before starting the published run.',
+            { name: emptyFile.name || 'this file' },
+          ),
+        );
+        setRunPhase('failed');
+        return;
+      }
       const generation = ++runGenerationRef.current;
       const controller = new AbortController();
+      const liveAccumulator = createRuntimeEventAccumulator();
+      const liveFrames: StudioExecutionFrame[] = [];
+      const liveStartedAtUtc = new Date().toISOString();
+      const liveExecutionId = [
+        'published-run',
+        target.publishedServiceId,
+        generation,
+      ].join(':');
+      const buildLiveExecution = (
+        status: string,
+        completedAtUtc: string | null = null,
+        error: string | null = null,
+      ) =>
+        createStreamingExecutionDetail({
+          accumulator: liveAccumulator,
+          completedAtUtc,
+          error,
+          executionId: liveExecutionId,
+          frames: liveFrames,
+          prompt: normalizedInput,
+          serviceId: target.publishedServiceId,
+          startedAtUtc: liveStartedAtUtc,
+          status,
+          workflowName: workflow?.name || workflowTitle,
+        });
       runControllerRef.current?.abort();
       runControllerRef.current = controller;
       runInFlightRef.current = true;
+      setRunRequestActive(true);
       setRunPhase('submitting');
       setRunError('');
       setRunInputError('');
+      setLiveRunExecution(buildLiveExecution('running'));
       sseRunIdRef.current = '';
       setSseRunId('');
-      if (snapshot) setRunInput(snapshot.input);
+      if (snapshot) {
+        setRunFiles([...snapshot.files]);
+        setRunInput(snapshot.input);
+      }
       const ownsRun = () =>
         runGenerationRef.current === generation &&
         runControllerRef.current === controller &&
         !controller.signal.aborted;
       try {
-        let submittedSnapshot = snapshot;
-        if (!submittedSnapshot) {
-          const current = await parseCurrentYaml(ownsRun);
-          if (!ownsRun()) return;
-          if (!current) {
-            setRunPhase('failed');
-            return;
-          }
-          const serialized = await studioApi.serializeYaml({
-            document: current,
-          });
-          if (!ownsRun()) return;
-          setFindings(serialized.findings);
-          if (hasBlockingFindings(serialized.document, serialized.findings)) {
-            setRunPhase('failed');
-            return;
-          }
-          submittedSnapshot = {
-            input: normalizedInput,
-            workflowId: workflow?.workflowId ?? routeWorkflowId,
-            workflowYaml: serialized.yaml,
-          };
-        }
-        const response = await runtimeRunsApi.streamDraftRun(
-          scopeId,
-          {
-            prompt: submittedSnapshot.input,
-            workflowYamls: [submittedSnapshot.workflowYaml],
-          },
-          controller.signal,
-        );
+        const submittedSnapshot: PublishedRunSnapshot = {
+          files: [...submittedFiles],
+          input: normalizedInput,
+          target,
+        };
+        const response =
+          submittedSnapshot.files.length > 0
+            ? await runtimeRunsApi.streamEndpoint(
+                scopeId,
+                {
+                  endpointId: 'chat',
+                  files: submittedSnapshot.files,
+                  prompt: submittedSnapshot.input,
+                },
+                controller.signal,
+                { serviceId: target.publishedServiceId },
+              )
+            : await runtimeRunsApi.streamChat(
+                scopeId,
+                { prompt: submittedSnapshot.input },
+                controller.signal,
+                { serviceId: target.publishedServiceId },
+              );
         if (!ownsRun()) return;
         setLastRunSnapshot(submittedSnapshot);
         setRunPhase('accepted');
         let sawRunError = false;
+        let sawRunFinished = false;
+        let sawRunStopped = false;
         for await (const event of parseBackendSSEStream(response, {
           signal: controller.signal,
         })) {
           if (!ownsRun()) return;
+          applyRuntimeEvent(liveAccumulator, event);
+          liveFrames.push(createPublishedRunExecutionFrame(event));
+          sawRunFinished = sawRunFinished || isSseRunFinished(event);
+          sawRunStopped = sawRunStopped || isSseRunStopped(event);
+          const liveStatus = liveAccumulator.errorText
+            ? 'failed'
+            : sawRunStopped
+              ? 'stopped'
+              : sawRunFinished
+                ? 'succeeded'
+                : 'running';
+          setLiveRunExecution(
+            buildLiveExecution(
+              liveStatus,
+              liveStatus === 'running' ? null : new Date().toISOString(),
+              liveAccumulator.errorText || null,
+            ),
+          );
           const reportedRunId = readSseRunId(event);
           if (reportedRunId && !sseRunIdRef.current) {
             sseRunIdRef.current = reportedRunId;
@@ -724,11 +989,28 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
             setRunPhase('failed');
           }
         }
-        if (ownsRun() && !sawRunError) setRunPhase('stream_ended');
+        if (ownsRun() && !sawRunError) {
+          const liveStatus = sawRunStopped
+            ? 'stopped'
+            : sawRunFinished
+              ? 'succeeded'
+              : 'running';
+          setLiveRunExecution(
+            buildLiveExecution(
+              liveStatus,
+              liveStatus === 'running' ? null : new Date().toISOString(),
+            ),
+          );
+          setRunPhase('stream_ended');
+        }
       } catch (error) {
         if (ownsRun()) {
+          const message = toErrorMessage(error);
           setRunInputError(readRunInputError(error));
-          setRunError(toErrorMessage(error));
+          setLiveRunExecution(
+            buildLiveExecution('failed', new Date().toISOString(), message),
+          );
+          setRunError(message);
           setRunPhase('failed');
         }
       } finally {
@@ -738,37 +1020,51 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
         ) {
           runInFlightRef.current = false;
           runControllerRef.current = null;
+          setRunRequestActive(false);
         }
       }
     },
     [
-      parseCurrentYaml,
       routeWorkflowId,
+      runFiles,
       runInput,
-      runObservationUnresolved,
       runPhase,
       scopeId,
+      workflow?.name,
       workflow?.workflowId,
+      workflowTitle,
     ],
   );
 
-  const run = React.useCallback(() => submitRun(), [submitRun]);
+  const run = React.useCallback(
+    (target: WorkflowPublishedInvocationTarget) => submitRun(target),
+    [submitRun],
+  );
   const runAgain = React.useCallback(
-    () => (lastRunSnapshot ? submitRun(lastRunSnapshot) : Promise.resolve()),
+    (target: WorkflowPublishedInvocationTarget) =>
+      lastRunSnapshot
+        ? submitRun(target, { ...lastRunSnapshot, target })
+        : Promise.resolve(),
     [lastRunSnapshot, submitRun],
   );
 
   return {
     addNode,
     canRun,
+    documentVersion: localEditRevisionRef.current,
     discardForRouteChange,
     dirty,
     document,
     findings,
     graph,
+    canvasMutationError,
+    connectNodes,
+    deleteEdges,
+    deleteNodes,
     loading: source.isPending,
     loadError: source.error,
     materialization,
+    moveNodes,
     nodeInsertionError: structuralMutationError,
     preparePublication,
     receiptPending,
@@ -776,12 +1072,13 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
     retryNodeInsertion,
     run,
     runError,
+    runFiles,
     runInput,
     runInputError,
     lastRunSnapshot,
+    liveRunExecution,
     runObservation,
-    runObservationUnresolved,
-    runAwaitingIdentification,
+    runRequestActive,
     runPhase,
     runAgain,
     save,
@@ -791,15 +1088,34 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
     structuralMutationPending,
     sseRunId,
     selectedNodeId,
+    selectedEdgeId,
     selectedStepConfigurationError,
     selectedStepDraft,
     selectCanvas: () => {
+      setSelectedEdgeId('');
+      setSelectedNodeId('');
+      setSelectedStepConfigurationError('');
+    },
+    selectEdge: (edgeId: string) => {
+      setSelectedEdgeId(edgeId);
       setSelectedNodeId('');
       setSelectedStepConfigurationError('');
     },
     selectNode: (nodeId: string) => {
+      setSelectedEdgeId('');
       setSelectedNodeId(nodeId);
       setSelectedStepConfigurationError('');
+    },
+    addRunFiles: (files: readonly File[]) => {
+      if (files.length > 0) {
+        setRunFiles((current) => [...current, ...files]);
+        setRunInputError('');
+      }
+    },
+    removeRunFile: (index: number) => {
+      setRunFiles((current) =>
+        current.filter((_, itemIndex) => itemIndex !== index),
+      );
     },
     setRunInput: (next: string) => {
       setRunInput(next);

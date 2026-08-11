@@ -1,5 +1,6 @@
 import React from "react";
 import { t } from "@/shared/i18n/messages";
+import AevatarContentSkeleton from "@/shared/ui/AevatarContentSkeleton";
 import type { MissionWallRun, MissionWallSnapshot } from "../models";
 import { WorkflowReplayCanvas } from "./WorkflowReplayCanvas";
 
@@ -23,7 +24,9 @@ export function MissionStage({
       <header className="mission-wall-stage-head">
         <div style={{ minWidth: 0 }}>
           <h2 className="mission-wall-stage-title">
-            {focusRun
+            {isRuntimeLoading
+              ? t("pages.missionwall.stepFlow", "Step Flow")
+              : focusRun
               ? t(
                   "pages.missionwall.stageTitle",
                   "{workflowName} · Step Flow",
@@ -31,57 +34,61 @@ export function MissionStage({
                 )
               : t("pages.missionwall.noFocusRun", "No focus run")}
           </h2>
-          <div className="mission-wall-stage-subtitle">
-            {focusRun
-              ? t(
-                  "pages.missionwall.stageSubtitle",
-                  "Team {teamName} · {memberName}",
-                  {
-                    memberName:
-                      focusRun.entryMemberName ||
-                      t(
-                        "pages.missionwall.unknownEntryMember",
-                        "Unknown entry member",
-                      ),
-                    teamName:
-                      focusRun.teamName ||
-                      t("pages.missionwall.unknownTeam", "Unknown team"),
-                  },
-                )
-              : t(
-                  "pages.missionwall.noFocusExplain",
-                  "Select a workflow.",
-                )}
-          </div>
+          {isRuntimeLoading ? null : (
+            <div className="mission-wall-stage-subtitle">
+              {focusRun
+                ? t(
+                    "pages.missionwall.stageSubtitle",
+                    "Team {teamName} · {memberName}",
+                    {
+                      memberName:
+                        focusRun.entryMemberName ||
+                        t(
+                          "pages.missionwall.unknownEntryMember",
+                          "Unknown entry member",
+                        ),
+                      teamName:
+                        focusRun.teamName ||
+                        t("pages.missionwall.unknownTeam", "Unknown team"),
+                    },
+                  )
+                : t(
+                    "pages.missionwall.noFocusExplain",
+                    "Select a workflow.",
+                  )}
+            </div>
+          )}
         </div>
       </header>
-      {isRuntimeLoading || !focusRun || !graphHasNodes ? (
+      {isRuntimeLoading ? (
+        <AevatarContentSkeleton
+          ariaLabel={t(
+            "pages.missionwall.state.loadingTitle",
+            "Loading workflow runs",
+          )}
+          className="mission-wall-stage-skeleton"
+          variant="canvas"
+        />
+      ) : !focusRun || !graphHasNodes ? (
         <div className="mission-wall-state-panel">
           <div className="mission-wall-state-panel__kicker">
-            {isRuntimeLoading
-              ? t("pages.missionwall.state.loadingKicker", "Loading runtime")
-              : t("pages.missionwall.state.emptyKicker", "Waiting for runs")}
+            {t("pages.missionwall.state.emptyKicker", "Waiting for runs")}
           </div>
           <div className="mission-wall-state-panel__title">
-            {isRuntimeLoading
-              ? t(
-                  "pages.missionwall.state.loadingTitle",
-                  "Loading workflow runs",
-                )
-              : focusRun
-                ? selectedPublishedWorkflowWithoutRun
-                  ? t(
-                      "pages.missionwall.state.publishedWorkflowTitle",
-                      "No visible run",
-                    )
-                  : t(
-                      "pages.missionwall.state.auditPendingTitle",
-                      "No step flow for this run yet",
-                    )
+            {focusRun
+              ? selectedPublishedWorkflowWithoutRun
+                ? t(
+                    "pages.missionwall.state.publishedWorkflowTitle",
+                    "No visible run",
+                  )
                 : t(
-                    "pages.missionwall.state.emptyTitle",
-                    "No published workflows are visible",
-                  )}
+                    "pages.missionwall.state.auditPendingTitle",
+                    "No step flow for this run yet",
+                  )
+              : t(
+                  "pages.missionwall.state.emptyTitle",
+                  "No published workflows are visible",
+                )}
           </div>
         </div>
       ) : (

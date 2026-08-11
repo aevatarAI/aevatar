@@ -183,6 +183,7 @@ const enUSMessages = {
   'pages.missionwall.state.publishedWorkflowTitle': 'No visible run',
   'pages.missionwall.stageSubtitle': 'Team {teamName} · {memberName}',
   'pages.missionwall.stageTitle': '{workflowName} · Step Flow',
+  'pages.missionwall.stepFlow': 'Step Flow',
   'pages.missionwall.stepStatus.active': 'ACTIVE',
   'pages.missionwall.stepStatus.completed': 'COMPLETED',
   'pages.missionwall.stepStatus.failed': 'FAILED',
@@ -758,6 +759,9 @@ const enUSMessages = {
   'shared.studio.nodeConfiguration.workflowCall.workflow.label': 'Workflow',
   'shared.studio.nodeConfiguration.workflowCall.workflow.placeholder':
     'child_workflow',
+  'shared.workflowExecutionLogs.collapse': 'Collapse workflow logs',
+  'shared.workflowExecutionLogs.consoleAria': 'Workflow run console',
+  'shared.workflowExecutionLogs.tokenUsage': 'Token usage',
   'teams.members.actions.build': 'Build',
   'teams.members.actions.clearEntry': 'Clear entry member',
   'teams.members.actions.create': 'Create member',
@@ -1702,7 +1706,7 @@ const enUSMessages = {
   'pages.studio.bind.studiomemberbindpanel.run.completed': 'Run completed',
   'pages.studio.bind.studiomemberbindpanel.service.ready': 'Service ready',
   'pages.studio.bind.studiomemberbindpanel.smoke.test.request.failed':
-    'Could not complete the smoke test. Review the result and try again.',
+    'Could not complete the smoke test. Try again.',
   'pages.studio.studiobuildpanels.command.accepted': 'command: accepted',
   'pages.studio.studiobuildpanels.current.run.ready': 'current run: ready',
   'pages.studio.studiobuildpanels.events.count': 'events: {count}',
@@ -1768,6 +1772,30 @@ const enUSMessages = {
     'YAML copied to clipboard.',
   'pages.workflows.workflowyamlviewer.failed.to.copy.yaml':
     'Failed to copy YAML.',
+  'pages.chat.chatadvancedconsole.timelineActionFailed':
+    'Run action could not be completed. Try again.',
+  'pages.deployments.index.actionFailed':
+    'Deployment action could not be completed. Try again.',
+  'pages.gagents.index.bindingActionFailed':
+    'Binding action could not be completed. Try again.',
+  'pages.gagents.index.registryActionFailed':
+    'Actor registry action could not be completed. Try again.',
+  'pages.governance.governanceworkbench.actionFailed':
+    'Governance action could not be completed. Try again.',
+  'pages.studio.bind.studiomemberbindpanel.bindingActionFailed':
+    'Binding action could not be completed. Try again.',
+  'pages.studio.studiobuildpanels.workflowSaveFailed':
+    'Could not save workflow. Try again.',
+  'pages.studio.studiofilesdetailpane.connectorSaveFailed':
+    'Could not save connector catalog. Try again.',
+  'pages.studio.studiofilesdetailpane.conversationDeleteFailed':
+    'Could not delete conversation. Try again.',
+  'pages.studio.studiofilesdetailpane.roleSaveFailed':
+    'Could not save role catalog. Try again.',
+  'pages.studio.studioinspectorpane.nodeActionFailed':
+    'Could not apply node changes. Try again.',
+  'pages.studio.studioworkbenchsections.executionActionFailed':
+    'Execution action could not be completed. Try again.',
 };
 
 export default enUSMessages;

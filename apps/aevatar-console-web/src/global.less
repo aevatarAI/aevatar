@@ -472,6 +472,22 @@ body.aevatar-studio-host
     opacity: 1;
     transform: none;
   }
+
+  .aevatar-content-skeleton .ant-skeleton.ant-skeleton-active
+    .ant-skeleton-avatar,
+  .aevatar-content-skeleton .ant-skeleton.ant-skeleton-active
+    .ant-skeleton-button,
+  .aevatar-content-skeleton .ant-skeleton.ant-skeleton-active
+    .ant-skeleton-image,
+  .aevatar-content-skeleton .ant-skeleton.ant-skeleton-active
+    .ant-skeleton-input,
+  .aevatar-content-skeleton .ant-skeleton.ant-skeleton-active
+    .ant-skeleton-paragraph
+    > li,
+  .aevatar-content-skeleton .ant-skeleton.ant-skeleton-active
+    .ant-skeleton-title {
+    animation: none;
+  }
 }
 
 body.aevatar-studio-host
@@ -2527,6 +2543,13 @@ ol {
   font-size: 12px;
   line-height: 1.6;
   color: var(--studio-muted-text);
+}
+
+.aevatar-console-toast.ant-notification-notice {
+  .ant-notification-notice-close {
+    inset-inline-end: 12px;
+    top: 12px;
+  }
 }
 
 .studio-catalog-toast {

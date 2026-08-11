@@ -627,8 +627,8 @@ describe('StudioWorkflowBuildPanel', () => {
       );
     });
     expect(
-      screen.getByText('The workflow adapter rejected this node.'),
-    ).toBeInTheDocument();
+      screen.queryByText('The workflow adapter rejected this node.'),
+    ).not.toBeInTheDocument();
   });
 
   it('keeps the Script bind CTA stable and uses the dry-run panel as the run entry', () => {
@@ -1077,7 +1077,7 @@ describe('StudioWorkflowBuildPanel', () => {
         isTerminal: true,
       });
 
-    render(
+    const view = render(
       <StudioScriptBuildPanel
         scopeId="scope-1"
         scriptsQuery={{
@@ -1107,19 +1107,38 @@ describe('StudioWorkflowBuildPanel', () => {
       },
       { timeout: 3000 },
     );
-    fireEvent.click(screen.getByRole('button', { name: 'Save script' }));
+    jest.useFakeTimers();
+    try {
+      fireEvent.click(screen.getByRole('button', { name: 'Save script' }));
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(0);
+      });
 
-    expect(await screen.findByText(/checking again in 1s/)).toBeInTheDocument();
-    await waitFor(
-      () => {
-        expect(mockedScriptsApi.observeSaveScript).toHaveBeenCalledTimes(2);
-        expect(handleDraftSaved).toHaveBeenCalledWith('orders-script');
-        expect(
-          screen.getByRole('button', { name: 'Continue to Bind' }),
-        ).toBeEnabled();
-      },
-      { timeout: 2500 },
-    );
+      expect(mockedScriptsApi.observeSaveScript).toHaveBeenCalledTimes(1);
+      expect(screen.getByText(/checking again in 1s/)).toBeInTheDocument();
+      expect(handleDraftSaved).not.toHaveBeenCalled();
+      expect(
+        screen.getByRole('button', { name: 'Continue to Bind' }),
+      ).toBeDisabled();
+
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(999);
+      });
+      expect(mockedScriptsApi.observeSaveScript).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(1);
+      });
+
+      expect(mockedScriptsApi.observeSaveScript).toHaveBeenCalledTimes(2);
+      expect(handleDraftSaved).toHaveBeenCalledWith('orders-script');
+      expect(
+        screen.getByRole('button', { name: 'Continue to Bind' }),
+      ).toBeEnabled();
+    } finally {
+      view.unmount();
+      jest.useRealTimers();
+    }
   });
 
   it('ignores a save observation that resolves after the source changes', async () => {

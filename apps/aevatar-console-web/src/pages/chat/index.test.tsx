@@ -7,6 +7,13 @@ import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
 import { chatHistoryApi } from "./chatHistoryApi";
 import ChatPage, { hydrateStoredMessages } from "./index";
 
+const mockConsoleToast = {
+  error: jest.fn(),
+  info: jest.fn(),
+  success: jest.fn(),
+  warning: jest.fn(),
+};
+
 jest.mock("@/shared/auth/fetch", () => ({
   authFetch: jest.fn(),
 }));
@@ -43,6 +50,10 @@ jest.mock("@/shared/navigation/history", () => ({
   history: {
     push: jest.fn(),
   },
+}));
+
+jest.mock("@/shared/ui/ConsoleToast", () => ({
+  useConsoleToast: () => mockConsoleToast,
 }));
 
 jest.mock("@/shared/studio/api", () => ({
@@ -641,16 +652,26 @@ describe("ChatPage server-backed history", () => {
       ])
     );
 
-    renderWithQueryClient(<ChatPage />);
-    await sendPrompt("Start an unbound chat");
+    const view = renderWithQueryClient(<ChatPage />);
+    await screen.findByText("No chat history");
 
-    expect(
-      await screen.findByText(
-        "Chat completed without a conversation context.",
-        {},
-        { timeout: 5_000 }
-      )
-    ).toBeTruthy();
+    jest.useFakeTimers();
+    try {
+      await sendPrompt("Start an unbound chat");
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(3_000);
+      });
+
+      expect(chatHistoryApi.recoverCreate).toHaveBeenCalledTimes(4);
+      expect(
+        await screen.findByText(
+          "Chat completed without a conversation context."
+        )
+      ).toBeTruthy();
+    } finally {
+      view.unmount();
+      jest.useRealTimers();
+    }
   });
 
   it("keeps a create command id for the same prompt and replaces it for new input", async () => {
@@ -675,8 +696,7 @@ describe("ChatPage server-backed history", () => {
     expect(retryBody.commandId).toBe(firstBody.commandId);
 
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument(),
-      { timeout: 5_000 }
+      expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument()
     );
     await sendPrompt("Changed create request");
     await waitFor(() => expect(chatRequestBodies()).toHaveLength(3));
@@ -1052,32 +1072,69 @@ describe("ChatPage server-backed history", () => {
         ])
       );
 
-    renderWithQueryClient(<ChatPage />);
+    const view = renderWithQueryClient(<ChatPage />);
     fireEvent.click(
       await screen.findByRole("button", { name: "Server conversation" })
     );
     await screen.findByText("The support workflow is ready.");
-    await sendPrompt("Continue from the stale tab");
 
-    await waitFor(() => expect(chatRequestBodies()).toHaveLength(2), {
-      timeout: 4_000,
-    });
-    expect(await screen.findByText("Answer committed in another tab")).toBeTruthy();
-    expect(screen.getByText("Question accepted in another tab")).toBeTruthy();
-    expect(screen.getByRole("textbox")).toBeEnabled();
+    jest.useFakeTimers();
+    try {
+      await sendPrompt("Continue from the stale tab");
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(0);
+      });
+      expect(chatRequestBodies()).toHaveLength(1);
+      expect(chatHistoryApi.loadConversation).toHaveBeenCalledTimes(1);
 
-    await sendPrompt("Continue after the explicit rejection");
-    await waitFor(() => expect(chatRequestBodies()).toHaveLength(3));
-    expect(chatRequestBodies()[2]).toMatchObject({
-      conversation: {
-        conversationId: "conversation-a",
-        minimumStateVersion: 8,
-      },
-      prompt: "Continue after the explicit rejection",
-    });
-    expect(
-      await screen.findByText("Accepted after the explicit rejection")
-    ).toBeTruthy();
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(299);
+      });
+      expect(chatRequestBodies()).toHaveLength(1);
+      expect(chatHistoryApi.loadConversation).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(1);
+      });
+      expect(chatRequestBodies()).toHaveLength(2);
+      expect(chatHistoryApi.loadConversation).toHaveBeenCalledTimes(2);
+
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(899);
+      });
+      expect(chatRequestBodies()).toHaveLength(2);
+      expect(chatHistoryApi.loadConversation).toHaveBeenCalledTimes(2);
+
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(1);
+      });
+      expect(chatRequestBodies()).toHaveLength(2);
+      expect(chatHistoryApi.loadConversation).toHaveBeenCalledTimes(3);
+      expect(
+        await screen.findByText("Answer committed in another tab")
+      ).toBeTruthy();
+      expect(screen.getByText("Question accepted in another tab")).toBeTruthy();
+      expect(screen.getByRole("textbox")).toBeEnabled();
+
+      await sendPrompt("Continue after the explicit rejection");
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(0);
+      });
+      expect(chatRequestBodies()).toHaveLength(3);
+      expect(chatRequestBodies()[2]).toMatchObject({
+        conversation: {
+          conversationId: "conversation-a",
+          minimumStateVersion: 8,
+        },
+        prompt: "Continue after the explicit rejection",
+      });
+      expect(
+        await screen.findByText("Accepted after the explicit rejection")
+      ).toBeTruthy();
+    } finally {
+      view.unmount();
+      jest.useRealTimers();
+    }
   });
 
   it("does not lock a continuation when history refresh is definitively rejected", async () => {
@@ -1183,12 +1240,12 @@ describe("ChatPage server-backed history", () => {
         resolveZeroDetail = resolve;
       }
     );
-    let resolveRegressedDetail: (
+    let resolvePositiveDetail: (
       detail: ReturnType<typeof conversationDetail>
     ) => void = () => undefined;
-    const regressedDetail = new Promise<ReturnType<typeof conversationDetail>>(
+    const positiveDetail = new Promise<ReturnType<typeof conversationDetail>>(
       (resolve) => {
-        resolveRegressedDetail = resolve;
+        resolvePositiveDetail = resolve;
       }
     );
     const projectedConversation = {
@@ -1212,23 +1269,7 @@ describe("ChatPage server-backed history", () => {
       .mockResolvedValue([projectedConversation]);
     (chatHistoryApi.loadConversation as jest.Mock)
       .mockReturnValueOnce(zeroDetail)
-      .mockReturnValueOnce(regressedDetail)
-      .mockResolvedValue(
-        conversationDetail(
-          [
-            ...projectedMessages,
-            {
-              content: "Created.",
-              id: "turn-create:assistant",
-              role: "assistant",
-              status: "complete",
-              timestamp: 1784255701000,
-              turnId: "turn-create",
-            },
-          ],
-          9
-        )
-      );
+      .mockReturnValueOnce(positiveDetail);
     (authFetch as jest.Mock)
       .mockResolvedValueOnce(
         createSseResponse([
@@ -1247,44 +1288,61 @@ describe("ChatPage server-backed history", () => {
         ])
       );
 
-    renderWithQueryClient(<ChatPage />);
-    await sendPrompt("Draft a workflow plan");
+    const view = renderWithQueryClient(<ChatPage />);
+    await screen.findByText("No chat history");
 
-    const confirmButton = await screen.findByRole("button", {
-      name: "Confirm and create",
-    });
-    await waitFor(() =>
-      expect(chatHistoryApi.loadConversation).toHaveBeenCalledTimes(1)
-    );
-    expect(confirmButton).toBeDisabled();
-    expect(screen.getByRole("textbox")).toBeDisabled();
+    jest.useFakeTimers();
+    try {
+      await sendPrompt("Draft a workflow plan");
 
-    act(() => resolveZeroDetail(conversationDetail(projectedMessages, 0)));
-    await waitFor(() =>
-      expect(chatHistoryApi.loadConversation).toHaveBeenCalledTimes(2)
-    );
-    expect(confirmButton).toBeDisabled();
-    expect(screen.getByRole("textbox")).toBeDisabled();
+      const confirmButton = await screen.findByRole("button", {
+        name: "Confirm and create",
+      });
+      await waitFor(() =>
+        expect(chatHistoryApi.loadConversation).toHaveBeenCalledTimes(1)
+      );
+      expect(confirmButton).toBeDisabled();
+      expect(screen.getByRole("textbox")).toBeDisabled();
 
-    act(() =>
-      resolveRegressedDetail(conversationDetail(projectedMessages, 6))
-    );
-    await waitFor(() =>
-      expect(
+      await act(async () => {
+        resolveZeroDetail(conversationDetail(projectedMessages, 0));
+        await Promise.resolve();
+        await jest.advanceTimersByTimeAsync(300);
+      });
+      await waitFor(() =>
+        expect(chatHistoryApi.loadConversation).toHaveBeenCalledTimes(2)
+      );
+      expect(confirmButton).toBeDisabled();
+      expect(screen.getByRole("textbox")).toBeDisabled();
+
+      await act(async () => {
+        resolvePositiveDetail(conversationDetail(projectedMessages, 6));
+        await Promise.resolve();
+        await jest.advanceTimersByTimeAsync(0);
+      });
+      await waitFor(() =>
+        expect(
+          screen.getByRole("button", { name: "Confirm and create" })
+        ).toBeEnabled()
+      );
+      expect(chatHistoryApi.loadConversation).toHaveBeenCalledTimes(2);
+      expect(screen.getByRole("textbox")).toBeEnabled();
+
+      fireEvent.click(
         screen.getByRole("button", { name: "Confirm and create" })
-      ).toBeEnabled()
-    );
-    expect(screen.getByRole("textbox")).toBeEnabled();
-
-    fireEvent.click(screen.getByRole("button", { name: "Confirm and create" }));
-    await waitFor(() => expect(chatRequestBodies()).toHaveLength(2));
-    expect(chatRequestBodies()[1]).toMatchObject({
-      conversation: {
-        conversationId: "server-confirm",
-        minimumStateVersion: 6,
-      },
-      prompt: "Confirm. Please create it now.",
-    });
+      );
+      await waitFor(() => expect(chatRequestBodies()).toHaveLength(2));
+      expect(chatRequestBodies()[1]).toMatchObject({
+        conversation: {
+          conversationId: "server-confirm",
+          minimumStateVersion: 6,
+        },
+        prompt: "Confirm. Please create it now.",
+      });
+    } finally {
+      view.unmount();
+      jest.useRealTimers();
+    }
   });
 
   it("does not use create recovery for a continuation without context", async () => {
@@ -1410,43 +1468,60 @@ describe("ChatPage server-backed history", () => {
       ])
     );
 
-    renderWithQueryClient(<ChatPage />);
+    const view = renderWithQueryClient(<ChatPage />);
     await screen.findByText("No chat history");
-    await sendPrompt("Projection-safe prompt");
-    expect(await screen.findByText("Live response")).toBeTruthy();
 
-    await waitFor(() =>
-      expect(chatHistoryApi.listConversationMetas).toHaveBeenCalledTimes(2)
-    );
-    expect(
-      screen.getAllByRole("button", { name: "Projection-safe prompt" })
-    ).toHaveLength(1);
-    expect(screen.getByText("Live response")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "New Chat" }));
-    expect(
-      screen.getAllByRole("button", { name: "Projection-safe prompt" })
-    ).toHaveLength(1);
-    fireEvent.click(
-      screen.getByRole("button", { name: "Projection-safe prompt" })
-    );
-    expect(screen.getByText("Live response")).toBeTruthy();
+    jest.useFakeTimers();
+    try {
+      await sendPrompt("Projection-safe prompt");
+      expect(await screen.findByText("Live response")).toBeTruthy();
 
-    await waitFor(
-      () => {
+      await waitFor(() =>
+        expect(chatHistoryApi.listConversationMetas).toHaveBeenCalledTimes(2)
+      );
+      expect(
+        screen.getAllByRole("button", { name: "Projection-safe prompt" })
+      ).toHaveLength(1);
+      expect(screen.getByText("Live response")).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "New Chat" }));
+      expect(
+        screen.getAllByRole("button", { name: "Projection-safe prompt" })
+      ).toHaveLength(1);
+      fireEvent.click(
+        screen.getByRole("button", { name: "Projection-safe prompt" })
+      );
+      expect(screen.getByText("Live response")).toBeTruthy();
+
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(300);
+      });
+      expect(chatHistoryApi.listConversationMetas).toHaveBeenCalledTimes(3);
+      expect(
+        screen.getAllByRole("button", { name: "Projection-safe prompt" })
+      ).toHaveLength(1);
+
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(900);
+      });
+      await waitFor(() => {
         expect(chatHistoryApi.listConversationMetas).toHaveBeenCalledTimes(4);
         expect(
           screen.getAllByRole("button", { name: "Projected conversation" })
         ).toHaveLength(1);
-      },
-      { timeout: 2_500 }
-    );
-    expect(screen.queryByRole("button", { name: "Projection-safe prompt" })).toBeNull();
-    expect(screen.getByText("Live response")).toBeTruthy();
-    expect(chatHistoryApi.loadConversation).toHaveBeenCalledWith(
-      "scope-a",
-      "server-projected",
-      expect.any(AbortSignal)
-    );
+      });
+      expect(
+        screen.queryByRole("button", { name: "Projection-safe prompt" })
+      ).toBeNull();
+      expect(screen.getByText("Live response")).toBeTruthy();
+      expect(chatHistoryApi.loadConversation).toHaveBeenCalledWith(
+        "scope-a",
+        "server-projected",
+        expect.any(AbortSignal)
+      );
+    } finally {
+      view.unmount();
+      jest.useRealTimers();
+    }
   });
 
   it("uses typed turn identity only when metadata cannot prove observation", async () => {
@@ -1624,13 +1699,23 @@ describe("ChatPage server-backed history", () => {
     expect(chatHistoryApi.listConversationMetas).not.toHaveBeenCalledWith(
       "scope-b"
     );
+
+    const streamRequest = (authFetch as jest.Mock).mock.calls.find(
+      ([path]) => path === "/api/chat"
+    )?.[1] as RequestInit | undefined;
+    expect(streamRequest?.signal?.aborted).toBe(true);
+
     await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      stream.enqueue({
+        runFinished: { result: { output: "Late old-scope response" } },
+      });
+      stream.close();
     });
 
     expect(
       screen.queryByRole("button", { name: "Scope isolated prompt" })
     ).toBeNull();
+    expect(screen.queryByText("Late old-scope response")).toBeNull();
     expect(chatHistoryApi.loadConversation).not.toHaveBeenCalledWith(
       "scope-a",
       "server-old-scope"
@@ -1646,61 +1731,69 @@ describe("ChatPage server-backed history", () => {
       ])
     );
 
-    renderWithQueryClient(<ChatPage />);
+    const view = renderWithQueryClient(<ChatPage />);
     await screen.findByText("No chat history");
-    await sendPrompt("Late projection prompt");
-    expect(await screen.findByText("Optimistic response")).toBeTruthy();
-    await waitFor(
-      () => expect(chatHistoryApi.listConversationMetas).toHaveBeenCalledTimes(5),
-      { timeout: 4_500 }
-    );
-    expect(chatHistoryApi.loadConversation).not.toHaveBeenCalled();
-    expect(
-      await screen.findByText("History save was not confirmed")
-    ).toBeTruthy();
-    expect(
-      screen.getByText("History save was not observed by the server.")
-    ).toBeTruthy();
 
-    (chatHistoryApi.listConversationMetas as jest.Mock).mockResolvedValueOnce([
-      {
-        ...serverConversation,
-        id: "server-late",
-        messageCount: 1,
-        title: "Late authoritative conversation",
-      },
-    ]);
-    (chatHistoryApi.loadConversation as jest.Mock).mockResolvedValueOnce(
-      conversationDetail(
-        [
-          {
-            content: "Optimistic response",
-            id: "turn-late:assistant",
-            role: "assistant",
-            status: "complete",
-            timestamp: 1784255700000,
-            turnId: "turn-late",
-          },
-        ],
-        8
-      )
-    );
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: "Retry saving Late projection prompt",
-      })
-    );
-    expect(
-      await screen.findByRole("button", {
-        name: "Late authoritative conversation",
-      })
-    ).toBeTruthy();
-    expect(screen.queryByText("History save was not confirmed")).toBeNull();
-    expect(chatHistoryApi.loadConversation).toHaveBeenCalledWith(
-      "scope-a",
-      "server-late",
-      expect.any(AbortSignal)
-    );
+    jest.useFakeTimers();
+    try {
+      await sendPrompt("Late projection prompt");
+      expect(await screen.findByText("Optimistic response")).toBeTruthy();
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(3_000);
+      });
+
+      expect(chatHistoryApi.listConversationMetas).toHaveBeenCalledTimes(5);
+      expect(chatHistoryApi.loadConversation).not.toHaveBeenCalled();
+      expect(
+        await screen.findByText("History save was not confirmed")
+      ).toBeTruthy();
+      expect(
+        screen.getByText("History save was not observed by the server.")
+      ).toBeTruthy();
+
+      (chatHistoryApi.listConversationMetas as jest.Mock).mockResolvedValueOnce([
+        {
+          ...serverConversation,
+          id: "server-late",
+          messageCount: 1,
+          title: "Late authoritative conversation",
+        },
+      ]);
+      (chatHistoryApi.loadConversation as jest.Mock).mockResolvedValueOnce(
+        conversationDetail(
+          [
+            {
+              content: "Optimistic response",
+              id: "turn-late:assistant",
+              role: "assistant",
+              status: "complete",
+              timestamp: 1784255700000,
+              turnId: "turn-late",
+            },
+          ],
+          8
+        )
+      );
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: "Retry saving Late projection prompt",
+        })
+      );
+      expect(
+        await screen.findByRole("button", {
+          name: "Late authoritative conversation",
+        })
+      ).toBeTruthy();
+      expect(screen.queryByText("History save was not confirmed")).toBeNull();
+      expect(chatHistoryApi.loadConversation).toHaveBeenCalledWith(
+        "scope-a",
+        "server-late",
+        expect.any(AbortSignal)
+      );
+    } finally {
+      view.unmount();
+      jest.useRealTimers();
+    }
   });
 
   it("shows list failure separately and retries without disabling chat", async () => {
@@ -1922,7 +2015,7 @@ describe("ChatPage server-backed history", () => {
     ).toBeTruthy();
   });
 
-  it("keeps history visible when deletion fails", async () => {
+  it("reports deletion failures with a toast and keeps history visible", async () => {
     (chatHistoryApi.listConversationMetas as jest.Mock).mockResolvedValue([
       serverConversation,
     ]);
@@ -1937,8 +2030,13 @@ describe("ChatPage server-backed history", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
 
-    expect(await screen.findByText("Conversation could not be deleted")).toBeTruthy();
-    expect(screen.getByText("Delete request failed")).toBeTruthy();
+    await waitFor(() =>
+      expect(mockConsoleToast.error).toHaveBeenCalledWith(
+        "Conversation could not be deleted",
+      ),
+    );
+    expect(screen.queryByText("Conversation could not be deleted")).toBeNull();
+    expect(screen.queryByText("Delete request failed")).toBeNull();
     expect(screen.getByRole("button", { name: "Server conversation" })).toBeTruthy();
   });
 

@@ -152,6 +152,30 @@ describe("ActorsPage", () => {
     setLocale("en-US", false);
   });
 
+  it("renders a table skeleton before deciding whether traceable actors are empty", async () => {
+    let resolveActors: (value: unknown[]) => void = () => {};
+    (runtimeQueryApi.listAgents as jest.Mock).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveActors = resolve;
+        }),
+    );
+
+    renderWithQueryClient(React.createElement(ActorsPage));
+
+    expect(await screen.findByText("选择追查对象")).toBeTruthy();
+    expect(await screen.findByRole("status")).toHaveAttribute(
+      "data-variant",
+      "table",
+    );
+    expect(screen.queryByText("暂无可追查对象")).toBeNull();
+
+    resolveActors([]);
+
+    expect(await screen.findByText("暂无可追查对象")).toBeTruthy();
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
   it("renders the live runtime explorer shell and actor list", async () => {
     const { container } = renderWithQueryClient(React.createElement(ActorsPage));
 

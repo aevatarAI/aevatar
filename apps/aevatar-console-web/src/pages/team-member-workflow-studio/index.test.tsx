@@ -58,6 +58,7 @@ jest.mock('@/shared/graphs/GraphCanvas', () => ({
     edges?: Array<{ id?: string }>;
     onCanvasSelect?: () => void;
     onConnectNodes?: (sourceNodeId: string, targetNodeId: string) => void;
+    onDeleteEdges?: (edgeIds: string[]) => Promise<void> | void;
     onEdgeSelect?: (edgeId: string) => void;
     onNodeLayoutChange?: (
       nodes: Array<{ id?: string; position?: { x: number; y: number } }>,
@@ -91,13 +92,24 @@ jest.mock('@/shared/graphs/GraphCanvas', () => ({
       ),
       props.edges?.map((edge) =>
         React.createElement(
-          'button',
-          {
-            key: edge.id,
-            onClick: () => props.onEdgeSelect?.(String(edge.id ?? '')),
-            type: 'button',
-          },
-          `edge:${edge.id}`,
+          React.Fragment,
+          { key: edge.id },
+          React.createElement(
+            'button',
+            {
+              onClick: () => props.onEdgeSelect?.(String(edge.id ?? '')),
+              type: 'button',
+            },
+            `edge:${edge.id}`,
+          ),
+          React.createElement(
+            'button',
+            {
+              onClick: () => props.onDeleteEdges?.([String(edge.id ?? '')]),
+              type: 'button',
+            },
+            `delete edge:${edge.id}`,
+          ),
         ),
       ),
       React.createElement(
@@ -777,12 +789,12 @@ describe('TeamMemberWorkflowStudioPage', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Run' }));
     const draftRunPanel = await screen.findByLabelText('Draft run panel');
     expect(
-      within(draftRunPanel).getByTestId('draft-run-file-drop-zone'),
+      within(draftRunPanel).getByTestId('workflow-run-file-drop-zone'),
     ).toBeTruthy();
     expect(within(draftRunPanel).getByText('No files attached')).toBeTruthy();
     const image = new File(['image-bytes'], 'draft.png', { type: 'image/png' });
     fireEvent.change(
-      within(draftRunPanel).getByTestId('draft-run-file-input'),
+      within(draftRunPanel).getByTestId('workflow-run-file-input'),
       {
         target: { files: [image] },
       },
@@ -1135,10 +1147,10 @@ describe('TeamMemberWorkflowStudioPage', () => {
     );
     expect(message.error).not.toHaveBeenCalled();
     expect(
-      await screen.findByText(
+      screen.queryByText(
         "We couldn't create the workflow member. Review your changes and try again.",
       ),
-    ).toBeTruthy();
+    ).toBeNull();
   });
 
   it('waits for a newly created workflow member to materialize before linking the draft', async () => {
@@ -1265,14 +1277,16 @@ describe('TeamMemberWorkflowStudioPage', () => {
     const saveButton = screen.getByRole('button', { name: 'Save' });
     fireEvent.click(saveButton);
 
+    await waitFor(() =>
+      expect(mockConsoleToast.error).toHaveBeenCalledWith(
+        'Could not finish linking the workflow member. Save again to retry.',
+      ),
+    );
     expect(
-      await screen.findByText(
+      screen.queryByText(
         "We couldn't finish linking the workflow member. Your draft is still available. Save again to retry.",
       ),
-    ).toBeTruthy();
-    expect(mockConsoleToast.error).toHaveBeenCalledWith(
-      'Could not finish linking the workflow member. Save again to retry.',
-    );
+    ).toBeNull();
     expect(studioApi.saveWorkflow).toHaveBeenCalledTimes(1);
     expect(studioApi.createMember).toHaveBeenCalledTimes(1);
     expect(studioApi.updateMemberImplementationRef).not.toHaveBeenCalled();
@@ -3100,7 +3114,94 @@ describe('TeamMemberWorkflowStudioPage', () => {
     });
   });
 
-  it('deletes a selected connection without deleting either node', async () => {
+  it('connects conditional nodes through the shared branch-aware Studio editor', async () => {
+    window.history.replaceState(
+      {},
+      '',
+      '/scopes/scope-1/teams/t-alpha/members/member-alpha/workflow?workflowId=workflow-alpha',
+    );
+    (studioApi.getMember as jest.Mock).mockResolvedValue({
+      implementationRef: {
+        implementationKind: 'workflow',
+        workflowId: 'workflow-alpha',
+      },
+      summary: {
+        createdAt: '2026-06-08T00:00:00Z',
+        description: '',
+        displayName: 'Workflow Alpha',
+        implementationKind: 'workflow',
+        lastBoundRevisionId: null,
+        lifecycleStage: 'created',
+        memberId: 'member-alpha',
+        publishedServiceId: '',
+        scopeId: 'scope-1',
+        teamId: 't-alpha',
+        updatedAt: '2026-06-08T00:00:00Z',
+      },
+    });
+    (studioApi.getWorkflow as jest.Mock).mockResolvedValue({
+      directoryId: 'scope:scope-1',
+      directoryLabel: 'scope-1',
+      draftExists: true,
+      fileName: 'workflow-alpha.yaml',
+      filePath: 'scope://scope-1/workflow-alpha.yaml',
+      findings: [],
+      layout: null,
+      name: 'Workflow Alpha',
+      workflowId: 'workflow-alpha',
+      yaml: 'name: Workflow Alpha\nsteps: []\n',
+      document: {
+        ...mockWorkflowDocument,
+        steps: [
+          {
+            id: 'condition',
+            type: 'conditional',
+            targetRole: '',
+            parameters: {},
+            next: null,
+            branches: {},
+          },
+          {
+            id: 'transform',
+            type: 'transform',
+            targetRole: '',
+            parameters: {},
+            next: null,
+            branches: {},
+          },
+        ],
+      },
+      updatedAtUtc: '2026-06-08T00:00:00Z',
+    });
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('graph-canvas')).toHaveTextContent('nodes:2');
+    });
+    fireEvent.click(
+      screen.getByRole('button', { name: 'connect first two nodes' }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => {
+      expect(studioApi.serializeYaml).toHaveBeenCalledWith(
+        expect.objectContaining({
+          document: expect.objectContaining({
+            steps: expect.arrayContaining([
+              expect.objectContaining({
+                id: 'condition',
+                branches: { true: 'transform' },
+                next: null,
+              }),
+            ]),
+          }),
+        }),
+      );
+    });
+  });
+
+  it('deletes the connection requested by the canvas without deleting either node', async () => {
     window.history.replaceState(
       {},
       '',
@@ -3169,17 +3270,10 @@ describe('TeamMemberWorkflowStudioPage', () => {
       expect(screen.getByText('nodes:2')).toBeTruthy();
     });
     fireEvent.click(
-      screen.getByRole('button', { name: 'edge:edge:triage:publish:linear' }),
+      screen.getByRole('button', {
+        name: 'delete edge:edge:triage:publish:linear',
+      }),
     );
-    openMoreActionsMenu();
-    expect(
-      screen.getByRole('menuitem', { name: 'Delete selected connection' }),
-    ).toBeTruthy();
-    closeOpenMenu();
-    const confirmSpy = jest
-      .spyOn(window, 'confirm')
-      .mockImplementation(() => true);
-    clickMoreAction('Delete selected connection');
     expect(
       screen.queryByRole('button', {
         name: 'edge:edge:triage:publish:linear',
@@ -3190,10 +3284,6 @@ describe('TeamMemberWorkflowStudioPage', () => {
     expect(
       screen.queryByRole('button', { name: 'More workflow actions' }),
     ).toBeNull();
-    expect(confirmSpy).toHaveBeenCalledWith(
-      'Delete the selected connection? This cannot be undone.',
-    );
-    confirmSpy.mockRestore();
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => {
@@ -4403,6 +4493,15 @@ describe('TeamMemberWorkflowStudioPage', () => {
     const consoleResizeHandle = screen.getByRole('separator', {
       name: 'Resize run console',
     });
+    const studioMain = screen.getByTestId('team-member-workflow-studio');
+    Object.defineProperty(studioMain, 'clientHeight', {
+      configurable: true,
+      value: 600,
+    });
+    fireEvent(window, new Event('resize'));
+    await waitFor(() => {
+      expect(consoleResizeHandle).toHaveAttribute('aria-valuemax', '360');
+    });
     expect(consoleResizeHandle).toHaveAttribute(
       'aria-orientation',
       'horizontal',
@@ -4745,7 +4844,7 @@ describe('TeamMemberWorkflowStudioPage', () => {
     expect(consolePanel).toHaveTextContent('running');
     expect(
       within(consolePanel).getByRole('button', { name: 'Clear logs' }),
-    ).toBeDisabled();
+    ).toBeEnabled();
     const executionPanelResponsiveRules = findRenderedStyleText(
       '.workflow-studio-execution-panel__body',
     );
@@ -4785,21 +4884,17 @@ describe('TeamMemberWorkflowStudioPage', () => {
       within(consolePanel).getByLabelText('Log details'),
     ).toHaveTextContent('RUN_STARTED');
     fireEvent.click(within(consolePanel).getByRole('radio', { name: 'Nodes' }));
-    const pendingTriageRow = within(consolePanel).getByTestId(
-      'workflow-execution-log-row-node-triage',
-    );
-    const pendingGuardRow = within(consolePanel).getByTestId(
-      'workflow-execution-log-row-node-guard',
-    );
-    expect(pendingTriageRow).toHaveTextContent('Pending');
-    expect(pendingGuardRow).toHaveTextContent('Pending');
-    expect(pendingTriageRow).toBeDisabled();
-    expect(pendingGuardRow).toBeDisabled();
-    expect(pendingTriageRow).toHaveStyle({ height: '80px', minHeight: '80px' });
-    expect(pendingGuardRow).toHaveStyle({ height: '80px', minHeight: '80px' });
     expect(
-      within(consolePanel).getByLabelText('Log details'),
-    ).toHaveTextContent('Select a log entry');
+      within(consolePanel).queryByTestId(
+        'workflow-execution-log-row-node-triage',
+      ),
+    ).toBeNull();
+    expect(
+      within(consolePanel).queryByTestId(
+        'workflow-execution-log-row-node-guard',
+      ),
+    ).toBeNull();
+    expect(consolePanel).toHaveTextContent(/Steps\s*0/);
 
     const confirmSpy = jest
       .spyOn(window, 'confirm')
@@ -4810,9 +4905,11 @@ describe('TeamMemberWorkflowStudioPage', () => {
       expect(screen.getByText('nodes:1')).toBeTruthy();
     });
     expect(
-      within(consolePanel).getByTestId('workflow-execution-log-row-node-guard'),
-    ).toHaveTextContent('Pending');
-    expect(consolePanel).toHaveTextContent(/Steps\s*2/);
+      within(consolePanel).queryByTestId(
+        'workflow-execution-log-row-node-guard',
+      ),
+    ).toBeNull();
+    expect(consolePanel).toHaveTextContent(/Steps\s*0/);
     confirmSpy.mockRestore();
 
     await act(async () => {
@@ -4835,8 +4932,10 @@ describe('TeamMemberWorkflowStudioPage', () => {
     expect(runningTriageRow).toHaveTextContent('Running');
     expect(runningTriageRow).toBeEnabled();
     expect(
-      within(consolePanel).getByTestId('workflow-execution-log-row-node-guard'),
-    ).toHaveTextContent('Pending');
+      within(consolePanel).queryByTestId(
+        'workflow-execution-log-row-node-guard',
+      ),
+    ).toBeNull();
     expect(runningTriageRow).not.toHaveTextContent('Run the workflow');
     fireEvent.click(runningTriageRow);
     expect(
@@ -4849,11 +4948,8 @@ describe('TeamMemberWorkflowStudioPage', () => {
       key: 'ArrowDown',
     });
     expect(runningTriageRow).toHaveAttribute('aria-pressed', 'true');
-    expect(
-      within(consolePanel).getByTestId('workflow-execution-log-row-node-guard'),
-    ).toBeDisabled();
     expect(consolePanel).toHaveTextContent(/Events\s*2/);
-    expect(consolePanel).toHaveTextContent(/Steps\s*2/);
+    expect(consolePanel).toHaveTextContent(/Steps\s*1/);
 
     await act(async () => {
       stream.emit({
@@ -4939,7 +5035,7 @@ describe('TeamMemberWorkflowStudioPage', () => {
     expect(
       within(consolePanel).getByLabelText('Log details'),
     ).toHaveTextContent('Second pass output');
-    expect(consolePanel).toHaveTextContent(/Steps\s*2/);
+    expect(consolePanel).toHaveTextContent(/Steps\s*1/);
 
     await act(async () => {
       stream.emit({
@@ -5004,16 +5100,16 @@ describe('TeamMemberWorkflowStudioPage', () => {
     });
     const secondRunConsole = await screen.findByLabelText('Draft run console');
     expect(
-      within(secondRunConsole).getByTestId(
+      within(secondRunConsole).queryByTestId(
         'workflow-execution-log-row-node-triage',
       ),
-    ).toHaveTextContent('Pending');
+    ).toBeNull();
     expect(
       within(secondRunConsole).queryByTestId(
         'workflow-execution-log-row-node-guard',
       ),
     ).toBeNull();
-    expect(secondRunConsole).toHaveTextContent(/Steps\s*1/);
+    expect(secondRunConsole).toHaveTextContent(/Steps\s*0/);
   });
 
   it('starts a failed draft run from the draft run panel and keeps the error visible', async () => {
@@ -5086,8 +5182,11 @@ describe('TeamMemberWorkflowStudioPage', () => {
     });
     expect(resultPanel).toHaveTextContent('failed');
     expect(
-      within(resultPanel).getByTestId('workflow-execution-log-row-node-triage'),
-    ).toHaveTextContent('Pending');
+      within(resultPanel).queryByTestId(
+        'workflow-execution-log-row-node-triage',
+      ),
+    ).toBeNull();
+    expect(resultPanel).toHaveTextContent(/Steps\s*0/);
     expect(screen.queryByTestId('member-run-summary')).toBeNull();
     expect(resultPanel).not.toHaveTextContent('Member run');
     expect(runtimeRunsApi.streamChat).not.toHaveBeenCalled();
@@ -6945,6 +7044,7 @@ describe('TeamMemberWorkflowStudioPage', () => {
   });
 
   it('keeps the publish action loading during automatic polling and surfaces polling failures', async () => {
+    jest.useFakeTimers();
     window.history.replaceState(
       {},
       '',
@@ -7003,50 +7103,59 @@ describe('TeamMemberWorkflowStudioPage', () => {
       })
       .mockRejectedValueOnce(new StudioApiError('Bad Gateway', 502));
 
-    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+    try {
+      renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
 
-    await waitFor(() => {
-      expect(screen.getByTestId('graph-canvas')).toHaveTextContent('nodes:1');
-    });
-    clickPublishAction();
+      await waitFor(() => {
+        expect(screen.getByTestId('graph-canvas')).toHaveTextContent('nodes:1');
+      });
+      clickPublishAction();
 
-    await waitFor(() => {
-      expect(studioApi.getMemberBindingRun).toHaveBeenCalled();
-      expect(screen.getByRole('button', { name: 'Publish' })).toBeDisabled();
-      expect(screen.getByText('Binding')).toBeTruthy();
-      expect(
-        screen.getAllByTitle(/Binding candidate accepted for dispatch/).length,
-      ).toBeGreaterThan(0);
-      expect(
-        screen.queryByRole('button', { name: 'Refresh status' }),
-      ).toBeNull();
-    });
+      await waitFor(() => {
+        expect(studioApi.getMemberBindingRun).toHaveBeenCalledTimes(1);
+        expect(screen.getByRole('button', { name: 'Publish' })).toBeDisabled();
+        expect(screen.getByText('Binding')).toBeTruthy();
+        expect(
+          screen.getAllByTitle(/Binding candidate accepted for dispatch/)
+            .length,
+        ).toBeGreaterThan(0);
+        expect(
+          screen.queryByRole('button', { name: 'Refresh status' }),
+        ).toBeNull();
+      });
 
-    await waitFor(
-      () => {
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(900);
+        await flushAsyncWork();
+      });
+      await waitFor(() => {
         expect(studioApi.getMemberBindingRun).toHaveBeenCalledTimes(2);
         expect(screen.getByRole('button', { name: 'Publish' })).toBeDisabled();
-      },
-      { timeout: 2_000 },
-    );
-    await waitFor(() => {
-      expect(
-        screen.queryByRole('button', { name: 'Refresh status' }),
-      ).toBeNull();
-    });
+        expect(
+          screen.queryByRole('button', { name: 'Refresh status' }),
+        ).toBeNull();
+      });
 
-    await waitFor(
-      () => {
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(900);
+        await flushAsyncWork();
+      });
+      await waitFor(() => {
         expect(studioApi.getMemberBindingRun).toHaveBeenCalledTimes(3);
         expect(screen.getByText('Error')).toBeTruthy();
         expect(screen.getByTitle(/Bad Gateway/)).toBeTruthy();
-      },
-      { timeout: 2_000 },
-    );
-    expect(screen.queryByText('Binding')).toBeNull();
-    expect(
-      screen.getByRole('button', { name: 'Refresh status' }),
-    ).toBeEnabled();
+      });
+      expect(screen.queryByText('Binding')).toBeNull();
+      expect(
+        screen.getByRole('button', { name: 'Refresh status' }),
+      ).toBeEnabled();
+    } finally {
+      await act(async () => {
+        jest.runOnlyPendingTimers();
+        await flushAsyncWork();
+      });
+      jest.useRealTimers();
+    }
   });
 
   it('blocks duplicate publish for an already published workflow member without surfacing refresh status', async () => {
@@ -7471,12 +7580,13 @@ describe('TeamMemberWorkflowStudioPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => {
-      expect(
-        screen.getByText(
-          "We couldn't validate and publish the workflow. Review the workflow and try again.",
-        ),
-      ).toBeTruthy();
+      expect(mockConsoleToast.error).toHaveBeenCalledWith(
+        'Could not save and publish the workflow. Review the details and try again.',
+      );
     });
+    expect(
+      screen.queryByText('Latest workflow preview failed.'),
+    ).not.toBeInTheDocument();
     expect(studioApi.previewExplicitRequests).toHaveBeenCalledWith({
       executionMode: 'interactive',
       inlineWorkflowYamls: {},

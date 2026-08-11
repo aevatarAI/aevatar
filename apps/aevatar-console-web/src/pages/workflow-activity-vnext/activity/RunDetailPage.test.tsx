@@ -229,6 +229,12 @@ describe('Workflow Activity vNext run detail recovery', () => {
     expect(
       within(confirmation).getByText('Investigate checkout latency'),
     ).toBeInTheDocument();
+    expect(
+      within(confirmation).queryByText(
+        "This starts a new run. The original run won't change.",
+      ),
+    ).not.toBeInTheDocument();
+    expect(confirmation.querySelector('.ant-alert-info')).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'Confirm retry' }));
 
@@ -249,7 +255,7 @@ describe('Workflow Activity vNext run detail recovery', () => {
     expect(screen.queryByText(/state version/i)).not.toBeInTheDocument();
   });
 
-  it("keeps a retry failure's server detail out of the confirmation message", async () => {
+  it('reports a retry failure with a toast and keeps server detail out of the page', async () => {
     mockWorkflowActivityApi.forkRun.mockRejectedValue(
       new Error('POST /api/workflow/runs/fork returned 503'),
     );
@@ -263,14 +269,17 @@ describe('Workflow Activity vNext run detail recovery', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: 'Confirm retry' }));
 
+    await waitFor(() =>
+      expect(mockConsoleToast.error).toHaveBeenCalledWith(
+        "The new run couldn't be started",
+      ),
+    );
     expect(
-      (await screen.findAllByText("The new run couldn't be started")).length,
-    ).toBeGreaterThan(0);
-    for (const detail of screen.getAllByText(
-      'POST /api/workflow/runs/fork returned 503',
-    )) {
-      expect(detail).not.toBeVisible();
-    }
+      screen.queryByText("The new run couldn't be started"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('POST /api/workflow/runs/fork returned 503'),
+    ).not.toBeInTheDocument();
   });
 
   it('keeps committed detail visible and disables run again when graph evidence fails', async () => {
@@ -341,7 +350,7 @@ describe('Workflow Activity vNext run detail recovery', () => {
     );
     const [content, options] = mockConsoleToast.error.mock.calls[0];
     expect(options).toEqual({
-      duration: 0,
+      duration: 8,
       key: 'run-failure:run-source-alpha:access_denied',
     });
     const toastContent = render(content).container;

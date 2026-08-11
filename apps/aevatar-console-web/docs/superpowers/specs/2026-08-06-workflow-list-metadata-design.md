@@ -29,7 +29,7 @@ The Status column contains one badge:
 - `Draft` when there is no active revision.
 - `Published` when an active revision exists.
 
-The active revision identifier is not rendered in the primary list. The list does not render ownership or scope labels. Workflow and service identifiers remain available only through the existing explicit copy-reference action and navigation contracts.
+The active revision identifier is not rendered in the primary list. The list does not visibly render ownership or scope labels. A draft's user-facing directory label may remain an internal accessibility discriminator for same-name row actions, but it is not row metadata and must not create another visible label. Workflow and service identifiers remain available only through the existing explicit copy-reference action and navigation contracts.
 
 The Last updated column renders the existing authoritative `updatedAtUtc` value with the established localized formatter. The UI does not add a Created column and does not derive a creation time from update time, file metadata, identifiers, or ordering.
 
@@ -47,7 +47,7 @@ No API, model, or backend change is required.
 2. Draft descriptions continue to populate the merged row when available.
 3. `activeRevisionId` is converted to the user-facing status label only.
 4. `updatedAtUtc` continues to supply the localized last-update value.
-5. `directoryLabel` is no longer mapped into a user-visible row property.
+5. `directoryLabel` is not rendered as visible row metadata; when available, it may disambiguate the accessible names of same-name row actions.
 
 Search continues to match workflow name, description, and workflow ID even though descriptions and IDs are not permanently rendered. Sorting continues to use `updatedAtUtc` descending.
 

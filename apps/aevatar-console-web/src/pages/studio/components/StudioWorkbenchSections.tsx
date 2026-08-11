@@ -45,6 +45,7 @@ import {
   fillCardStyle,
 } from '@/shared/ui/proComponents';
 import { AevatarPanel, AevatarStatusTag } from '@/shared/ui/aevatarPageShells';
+import ConsoleOperationNotice from '@/shared/ui/ConsoleOperationNotice';
 import { describeError } from '@/shared/ui/errorText';
 import {
   AEVATAR_INTERACTIVE_BUTTON_CLASS,
@@ -1620,15 +1621,13 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
       type: 'error',
     });
   }
-  if (executionNotice) {
+  if (executionNotice && executionNotice.type !== 'error') {
     compactNotices.push({
       description: executionNotice.message,
       title:
-        executionNotice.type === 'error'
-          ? t("pages.studio.studioworkbenchsections.operation.failed", "Operation failed")
-          : executionNotice.type === 'info'
-            ? t("pages.studio.studioworkbenchsections.requested.to.stop.running", "Requested to stop running")
-            : t("pages.studio.studioworkbenchsections.execution.status.updated", "Execution status updated"),
+        executionNotice.type === 'info'
+          ? t("pages.studio.studioworkbenchsections.requested.to.stop.running", "Requested to stop running")
+          : t("pages.studio.studioworkbenchsections.execution.status.updated", "Execution status updated"),
       type: executionNotice.type,
     });
   }
@@ -1649,11 +1648,20 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
 
   return (
     <div style={cardStackStyle}>
+      <ConsoleOperationNotice
+        errorMessage={t(
+          'pages.studio.studioworkbenchsections.executionActionFailed',
+          'Execution action could not be completed. Try again.',
+        )}
+        notice={
+          executionNotice?.type === 'error' ? executionNotice : null
+        }
+      />
       {compactNotices.length > 0 ? (
         <div style={studioCompactNoticeStackStyle}>
-          {compactNotices.map((notice, index) => (
+          {compactNotices.map((notice) => (
             <StudioCompactNotice
-              key={`${notice.type}-${index}`}
+              key={String(notice.title)}
               {...notice}
             />
           ))}

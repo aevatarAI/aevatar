@@ -372,7 +372,13 @@ export const runtimeRunsApi = {
     );
 
     if (!response.ok) {
-      throw new Error(await readResponseError(response));
+      const details = await readResponseErrorDetails(response);
+      throw new RuntimeRunsApiError(
+        details.message,
+        response.status,
+        details.code,
+        details.fieldErrors,
+      );
     }
 
     return response;

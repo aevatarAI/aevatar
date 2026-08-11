@@ -4,7 +4,7 @@ import React from 'react';
 import { t } from '@/shared/i18n/messages';
 import type { StudioValidationFinding } from '@/shared/studio/models';
 import { useConsoleToast } from '@/shared/ui/ConsoleToast';
-import WorkflowStudioSidePanel from './WorkflowStudioSidePanel';
+import WorkflowSidePanel from '@/shared/workflows/WorkflowSidePanel';
 
 type WorkflowStudioYamlPanelProps = {
   readonly applying: boolean;
@@ -248,7 +248,7 @@ const WorkflowStudioYamlPanel: React.FC<WorkflowStudioYamlPanelProps> = ({
   }
 
   return (
-    <WorkflowStudioSidePanel
+    <WorkflowSidePanel
       ariaLabel={t(
         'teamMemberWorkflowStudio.yamlPanel.sectionAria',
         'Workflow YAML panel',
@@ -409,7 +409,7 @@ const WorkflowStudioYamlPanel: React.FC<WorkflowStudioYamlPanelProps> = ({
           </Button>
         </Space>
       </footer>
-    </WorkflowStudioSidePanel>
+    </WorkflowSidePanel>
   );
 };
 

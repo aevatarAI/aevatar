@@ -143,7 +143,10 @@ const SettingsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
   );
 
   const options = React.useMemo(
-    () => buildUserLlmSelectionOptions(llm.data?.routeOptions ?? []),
+    () =>
+      buildUserLlmSelectionOptions(llm.data?.routeOptions ?? []).filter(
+        (option) => option.modelCatalog.modelIds.length > 0,
+      ),
     [llm.data?.routeOptions],
   );
   const selectedOption = draft
@@ -359,13 +362,6 @@ const SettingsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
             disabled={!llm.data?.capabilities.canEditRoute}
             onChange={selectRoute}
             options={[
-              {
-                label: t(
-                  'workflowActivityVNext.settings.systemDefault',
-                  'System default',
-                ),
-                value: '',
-              },
               ...options.map((item) => ({
                 disabled: !item.allowed || !item.ready,
                 label: item.label,
@@ -384,7 +380,7 @@ const SettingsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                   ]
                 : []),
             ]}
-            value={draft ? encodeUserLlmSelectionValue(draft) : ''}
+            value={draft ? encodeUserLlmSelectionValue(draft) : undefined}
           />
         </div>
         {draft && modelIds.length > 0 ? (
@@ -470,22 +466,22 @@ const SettingsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
           </div>
         )}
       </div>
-      {savePhase !== 'idle' ? (
+      {savePhase === 'observed' ||
+      savePhase === 'delayed' ||
+      savePhase === 'failed' ? (
         <Alert
           message={
-            savePhase === 'saving' || savePhase === 'accepted'
-              ? t('workflowActivityVNext.settings.saving', 'Saving changes…')
-              : savePhase === 'observed'
-                ? t('workflowActivityVNext.settings.observed', 'Changes saved')
-                : savePhase === 'delayed'
-                  ? t(
-                      'workflowActivityVNext.settings.delayed',
-                      'Changes are taking longer to appear',
-                    )
-                  : t(
-                      'workflowActivityVNext.settings.failed',
-                      "Changes couldn't be saved",
-                    )
+            savePhase === 'observed'
+              ? t('workflowActivityVNext.settings.observed', 'Changes saved')
+              : savePhase === 'delayed'
+                ? t(
+                    'workflowActivityVNext.settings.delayed',
+                    'Changes are taking longer to appear',
+                  )
+                : t(
+                    'workflowActivityVNext.settings.failed',
+                    "Changes couldn't be saved",
+                  )
           }
           description={
             savePhase === 'failed' && saveMessage ? (
@@ -498,9 +494,7 @@ const SettingsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
               ? 'error'
               : savePhase === 'delayed'
                 ? 'warning'
-                : savePhase === 'observed'
-                  ? 'success'
-                  : 'info'
+                : 'success'
           }
         />
       ) : null}

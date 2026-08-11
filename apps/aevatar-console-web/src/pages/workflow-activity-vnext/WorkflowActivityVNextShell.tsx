@@ -26,9 +26,11 @@ type ShellProps = {
   } | null;
   readonly activeSection: WorkflowActivitySection;
   readonly children: React.ReactNode;
-  readonly description: string;
+  readonly description?: string;
   readonly footer?: React.ReactNode;
   readonly headerActions?: React.ReactNode;
+  readonly heading?: React.ReactNode;
+  readonly mainRef?: React.Ref<HTMLElement>;
   readonly onNavigate?: (target: string) => void;
   readonly scopeId: string;
   readonly title: string;
@@ -112,6 +114,8 @@ const WorkflowActivityVNextShell: React.FC<ShellProps> = ({
   description,
   footer,
   headerActions,
+  heading,
+  mainRef,
   onNavigate,
   scopeId,
   title,
@@ -124,9 +128,11 @@ const WorkflowActivityVNextShell: React.FC<ShellProps> = ({
   const mainBody = (
     <>
       <header className="wa-vnext__header">
-        <div className="wa-vnext__heading-copy">
-          <h1>{title}</h1>
-          <p>{description}</p>
+        <div
+          className={`wa-vnext__heading-copy${heading ? ' wa-vnext__heading-copy--custom' : ''}`}
+        >
+          <h1>{heading ?? title}</h1>
+          {description ? <p>{description}</p> : null}
         </div>
         {headerActions ? (
           <div className="wa-vnext__header-actions">{headerActions}</div>
@@ -184,6 +190,7 @@ const WorkflowActivityVNextShell: React.FC<ShellProps> = ({
       </aside>
       <main
         className={`wa-vnext__main${footer ? ' wa-vnext__main--with-footer' : ''}`}
+        ref={mainRef}
       >
         {footer ? (
           <div className="wa-vnext__main-scroll">{mainBody}</div>

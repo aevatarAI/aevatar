@@ -122,12 +122,16 @@ describe('New workflow save-target recovery', () => {
 
   afterEach(() => cleanupTestQueryClients());
 
-  it('allows method selection and input while save locations are loading', () => {
+  it('keeps the creation chooser quiet and usable while save locations load', () => {
     mockStudioApi.getWorkspaceSettings.mockReturnValue(new Promise(() => {}));
 
     renderWithQueryClient(<NewWorkflowPage scopeId="scope-alpha" />);
 
-    expect(screen.getByText('Loading save locations…')).toBeVisible();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('Loading save locations…'),
+    ).not.toBeInTheDocument();
+    expect(document.querySelector('.ant-alert-info')).toBeNull();
     const importYaml = screen.getByRole('button', { name: 'Import YAML' });
     expect(importYaml).toBeEnabled();
     fireEvent.click(importYaml);
@@ -314,7 +318,9 @@ describe('New workflow save-target recovery', () => {
     expect(
       await screen.findByText("Workflow couldn't be created"),
     ).toBeVisible();
-    expect(screen.getByText('Generation unavailable')).toBeInTheDocument();
+    expect(
+      screen.queryByText('Generation unavailable'),
+    ).not.toBeInTheDocument();
     expect(workflowName).toHaveValue('Weekly review');
     expect(description).toHaveValue('Summarize this week');
     expect(mockStudioApi.createWorkflowDraft).not.toHaveBeenCalled();

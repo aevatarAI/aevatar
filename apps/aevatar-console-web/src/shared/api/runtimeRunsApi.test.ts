@@ -355,6 +355,33 @@ describe("runtimeRunsApi", () => {
     });
   });
 
+  it("preserves structured Invoke validation errors for the owning input", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 422,
+      statusText: "Unprocessable Content",
+      text: async () =>
+        JSON.stringify({
+          title: "Validation failed",
+          errors: { Prompt: ["Use at least three characters."] },
+        }),
+    } satisfies Partial<Response>);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    const request = runtimeRunsApi.streamChat(
+      "scope-1",
+      { prompt: "x" },
+      new AbortController().signal,
+      { serviceId: "svc-alpha" },
+    );
+
+    await expect(request).rejects.toMatchObject({
+      fieldErrors: { Prompt: ["Use at least three characters."] },
+      message: "Validation failed: Prompt: Use at least three characters.",
+      status: 422,
+    });
+  });
+
   it("sends member stream endpoint file inputs as multipart form data", async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,

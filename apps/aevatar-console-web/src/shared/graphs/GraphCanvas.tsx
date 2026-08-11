@@ -1,6 +1,6 @@
 import {
-  ApiOutlined,
   ApartmentOutlined,
+  ApiOutlined,
   AppstoreOutlined,
   CodeOutlined,
   DatabaseOutlined,
@@ -9,31 +9,31 @@ import {
   UserOutlined,
 } from '@ant-design/icons';
 import {
+  applyNodeChanges,
   Background,
   BackgroundVariant,
   Controls,
-  Handle,
-  MiniMap,
-  Position,
-  ReactFlow,
-  applyNodeChanges,
-  useEdgesState,
-  useNodesState,
-  useStore,
   type Edge,
   type FitViewOptions,
+  Handle,
+  MiniMap,
   type Node,
   type NodeChange,
   type NodeProps,
+  Position,
+  ReactFlow,
   type ReactFlowInstance,
+  useEdgesState,
+  useNodesState,
+  useStore,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import React, { useEffect, useLayoutEffect, useMemo } from 'react';
+import { t } from '@/shared/i18n/messages';
 import {
   getStudioGraphCategory,
   type StudioGraphNodeData,
 } from '@/shared/studio/graph';
-import { t } from '@/shared/i18n/messages';
 
 type GraphCanvasProps = {
   autoFitKey?: string;
@@ -84,6 +84,9 @@ const STUDIO_FIT_VIEW_ATTEMPT_COUNT = 3;
 const STUDIO_NODE_WIDTH = 268;
 const STUDIO_NODE_COMPACT_WIDTH = 244;
 const STUDIO_NODE_COMPACT_ZOOM = 0.48;
+const SELECTED_EDGE_COLOR = '#1677ff';
+const SELECTED_EDGE_FILTER = 'drop-shadow(0 0 3px rgba(22, 119, 255, 0.55))';
+const SELECTED_EDGE_STROKE_WIDTH = 4;
 const studioCanvasCss = `
 .studio-canvas {
   background: #f7f9fc;
@@ -327,7 +330,8 @@ function StudioWorkflowNode({
 }: NodeProps<Node<StudioGraphNodeData>>) {
   const category = getStudioGraphCategory(data.stepType);
   const Icon =
-    STUDIO_NODE_ICON_BY_CATEGORY[category.key] ?? STUDIO_NODE_ICON_BY_CATEGORY.custom;
+    STUDIO_NODE_ICON_BY_CATEGORY[category.key] ??
+    STUDIO_NODE_ICON_BY_CATEGORY.custom;
   const zoom = useStore((state) => state.transform[2]);
   const compact = zoom < STUDIO_NODE_COMPACT_ZOOM;
   const width = compact ? STUDIO_NODE_COMPACT_WIDTH : STUDIO_NODE_WIDTH;
@@ -370,10 +374,12 @@ function StudioWorkflowNode({
       ]
         .filter(Boolean)
         .join(' ')}
-      style={{
-        width,
-        '--studio-node-accent': category.color,
-      } as React.CSSProperties}
+      style={
+        {
+          width,
+          '--studio-node-accent': category.color,
+        } as React.CSSProperties
+      }
     >
       <Handle
         className="studio-workflow-node__handle studio-workflow-node__handle--target"
@@ -475,7 +481,12 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
   }, [edges, setLocalEdges]);
 
   useLayoutEffect(() => {
-    if (!autoFitKey || !flowInstance || !isStudioVariant || nodes.length === 0) {
+    if (
+      !autoFitKey ||
+      !flowInstance ||
+      !isStudioVariant ||
+      nodes.length === 0
+    ) {
       return;
     }
 
@@ -525,12 +536,7 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
         window.clearTimeout(timeoutId);
       });
     };
-  }, [
-    autoFitKey,
-    flowInstance,
-    isStudioVariant,
-    nodes.length,
-  ]);
+  }, [autoFitKey, flowInstance, isStudioVariant, nodes.length]);
 
   const decoratedNodes = useMemo(
     () =>
@@ -577,12 +583,22 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
         return {
           ...edge,
           selected: isSelected,
+          markerEnd:
+            isSelected && edge.markerEnd && typeof edge.markerEnd === 'object'
+              ? {
+                  ...edge.markerEnd,
+                  color: SELECTED_EDGE_COLOR,
+                }
+              : edge.markerEnd,
           style: {
             ...edge.style,
+            filter: isSelected ? SELECTED_EDGE_FILTER : edge.style?.filter,
             stroke: isSelected
               ? 'var(--ant-color-primary)'
               : edge.style?.stroke,
-            strokeWidth: isSelected ? 3 : (edge.style?.strokeWidth ?? 1.5),
+            strokeWidth: isSelected
+              ? SELECTED_EDGE_STROKE_WIDTH
+              : (edge.style?.strokeWidth ?? 1.5),
           },
           labelStyle: {
             ...edge.labelStyle,
@@ -709,7 +725,9 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
       >
         <Background
           color={isStudioVariant ? '#cbd5e1' : undefined}
-          variant={isStudioVariant ? BackgroundVariant.Dots : BackgroundVariant.Lines}
+          variant={
+            isStudioVariant ? BackgroundVariant.Dots : BackgroundVariant.Lines
+          }
           gap={isStudioVariant ? 28 : 16}
           size={isStudioVariant ? 1 : 1}
         />

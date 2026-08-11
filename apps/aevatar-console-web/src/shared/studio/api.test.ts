@@ -590,6 +590,9 @@ describe('studioApi host-session requests', () => {
               deploymentId: 'dep-draft',
               deploymentStatus: 'Running',
               updatedAt: '2026-04-15T00:00:00Z',
+              publishedServiceId: 'published-draft',
+              serviceAppId: 'workflow-app',
+              serviceNamespace: 'workflow-namespace',
             },
             {
               scopeId: 'scope-1',
@@ -602,6 +605,9 @@ describe('studioApi host-session requests', () => {
               deploymentId: 'dep-published',
               deploymentStatus: 'Running',
               updatedAt: '2026-04-14T00:00:00Z',
+              publishedServiceId: 'published-workflow',
+              serviceAppId: 'workflow-app',
+              serviceNamespace: 'workflow-namespace',
             },
           ],
         } as Response;
@@ -687,6 +693,9 @@ describe('studioApi host-session requests', () => {
                 deploymentId: 'dep-1',
                 deploymentStatus: 'Pending',
                 updatedAt: '2026-04-16T00:00:00Z',
+                publishedServiceId: 'published-workflow-1',
+                serviceAppId: 'workflow-app',
+                serviceNamespace: 'workflow-namespace',
               },
               source: {
                 workflowYaml: 'name: published-demo\nsteps: []\n',
@@ -753,6 +762,9 @@ describe('studioApi host-session requests', () => {
           deploymentId: 'dep-1',
           deploymentStatus: 'Running',
           updatedAt: '2026-04-17T00:00:00Z',
+          publishedServiceId: 'published-workflow-1',
+          serviceAppId: 'workflow-app',
+          serviceNamespace: 'workflow-namespace',
         },
         source: {
           workflowYaml: 'name: published-demo-v2\nsteps: []\n',
@@ -1410,6 +1422,71 @@ describe('studioApi host-session requests', () => {
       appId: 'studio',
       serviceId: 'svc-alpha',
       exposureDesired: true,
+    });
+  });
+
+  it('publishes a workflow from an accepted upsert receipt without requiring a service identity', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 202,
+      json: async () => ({
+        scopeId: 'scope-alpha',
+        workflowId: 'wf-alpha',
+        serviceKey: 'scope-alpha:default:default:svc-workflow-alpha',
+        revisionId: 'rev-alpha',
+        definitionActorIdPrefix: 'workflow-definition-alpha',
+        expectedActorId: 'actor-alpha',
+        expectedDeploymentId: 'deployment-alpha',
+        acceptedAtUtc: '2026-08-07T00:00:00Z',
+        commandHandles: [],
+        readModelUrl: '/api/scopes/scope-alpha/workflows/wf-alpha',
+        acceptanceStage: 'accepted',
+        propagationStage: 'readmodel_propagating',
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    const result = await studioApi.publishWorkflow({
+      scopeId: 'scope-alpha',
+      workflowId: 'wf-alpha',
+      revisionId: 'rev-alpha',
+      workflowYaml: 'name: Workflow Alpha\nsteps: []\n',
+      workflowName: 'Workflow Alpha',
+      displayName: 'Workflow Alpha',
+      explicitRequestConfirmations: [],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        scopeId: 'scope-alpha',
+        workflowId: 'wf-alpha',
+        revisionId: 'rev-alpha',
+      }),
+    );
+    expect(result).not.toHaveProperty('publishedServiceId');
+    const [input, init] = fetchMock.mock.calls[0] as [
+      string,
+      RequestInit | undefined,
+    ];
+    expect(input).toBe('/api/scopes/scope-alpha/workflows/wf-alpha');
+    expect(init?.method).toBe('PUT');
+    expect(JSON.parse(String(init?.body))).toEqual({
+      revisionId: 'rev-alpha',
+      workflowYaml: 'name: Workflow Alpha\nsteps: []\n',
+      workflowName: 'Workflow Alpha',
+      displayName: 'Workflow Alpha',
     });
   });
 
