@@ -2,6 +2,8 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.GAgents.NyxidChat;
@@ -322,24 +324,21 @@ public sealed partial class NyxIdChatConversationGAgentTests
     }
 
     [Fact]
-    public async Task RetryPlanGateContinuation_WhenDispatchRejected_ShouldRevokeCommittedAdmission()
+    public async Task RetryPlanResolve_BeforeAdmissionAck_ShouldDispatchAfterExactAck()
     {
-        const string actorId = "conversation-retry-continuation-rejected";
+        const string actorId = "conversation-retry-resolve-before-direct-ack";
         var eventStore = new InMemoryEventStoreForTests();
         await PersistTestStateAsync(eventStore, actorId, 1, CreateFailedRetryMatrixState(actorId));
-        var dispatch = new RecordingActorDispatchPort(
-            [],
-            static (_, _) => Task.CompletedTask,
-            failedStage: "dispatch-rejected");
-        using var services = BuildEventSourcingServices(eventStore);
+        var dispatch = new RecordingActorDispatchPort([], static (_, _) => Task.CompletedTask);
+        var vault = new InMemorySecretVault(new FixedTimeProvider(
+            new DateTimeOffset(2026, 7, 24, 8, 0, 0, TimeSpan.Zero)));
+        using var services = BuildEventSourcingServices(eventStore, secretVault: vault);
         var agent = CreateController(services, actorId, dispatch);
         await agent.ActivateAsync();
         var beforeRetry = await eventStore.GetEventsAsync(actorId);
         await agent.HandleEventAsync(CreateEnvelope(
             actorId,
             MatrixRetryCommand(actorId, MatrixEffectStep(agent.State), beforeRetry[^1].Version)));
-        var admission = agent.State.ActiveTurnPlanGateAdmission.Clone();
-        await AcknowledgeMatrixPlanGateAdmissionAsync(agent, actorId);
         var beforeConfirm = await eventStore.GetEventsAsync(actorId);
 
         await agent.HandleEventAsync(CreateEnvelope(
@@ -349,12 +348,156 @@ public sealed partial class NyxIdChatConversationGAgentTests
                 agent.State.ActiveTask.Gate,
                 beforeConfirm[^1].Version)));
 
+        agent.State.ActiveTask.Gate.Status.Should().Be(NyxIdChatPlanGateStatus.Satisfied);
+        dispatch.OperationCalls.Should().BeEmpty();
+        agent.State.PendingPlanGateContinuation.Purpose.Should().Be(
+            CredentialSecretPurposes.NyxIdChatPendingPlanGateContinuation);
+        agent.State.PendingPlanGateContinuationKey.OperationGeneration.Should().Be(2);
+        agent.State.ToString().Should().NotContain("retry-capability-alpha");
+        var pendingContinuation = agent.State.PendingPlanGateContinuation.Clone();
+
+        await AcknowledgeMatrixPlanGateAdmissionAsync(agent, actorId);
+
+        var retry = dispatch.OperationCalls.Should().ContainSingle().Which.Envelope.Payload
+            .Unpack<NyxIdChatOperationDispatchCommand>();
+        retry.Key.OperationGeneration.Should().Be(2);
+        retry.InputCase.Should().Be(
+            NyxIdChatOperationDispatchCommand.InputOneofCase.PlanGateContinuation);
+        agent.State.PendingPlanGateAdmissionDelivery.Should().BeNull();
+        agent.State.PendingPlanGateContinuation.Should().BeNull();
+        agent.State.PendingPlanGateContinuationKey.Should().BeNull();
+        agent.State.ToString().Should().NotContain("retry-capability-alpha");
+        var resolved = await vault.ResolveAsync(new ResolveSecretRequest(
+            pendingContinuation.Ref,
+            pendingContinuation.Purpose,
+            pendingContinuation.OwnerScopeKey,
+            pendingContinuation.SubjectId,
+            "verify dispatched plan-gate continuation cleanup"));
+        resolved.FailureReason.Should().Be(SecretResolutionFailureReason.Revoked);
+    }
+
+    [Fact]
+    public async Task RetryPlanResolve_BeforeAdmissionAck_ShouldRecoverAfterAckCommit()
+    {
+        const string actorId = "conversation-retry-resolve-before-admission-ack";
+        var eventStore = new InMemoryEventStoreForTests();
+        await PersistTestStateAsync(eventStore, actorId, 1, CreateFailedRetryMatrixState(actorId));
+        var callbacks = new RecordingRuntimeCallbackScheduler();
+        var initialDispatch = new RecordingActorDispatchPort([], static (_, _) => Task.CompletedTask);
+        using var services = BuildEventSourcingServices(
+            eventStore,
+            callbackScheduler: callbacks);
+        var initial = CreateController(services, actorId, initialDispatch);
+        await initial.ActivateAsync();
+        var beforeRetry = await eventStore.GetEventsAsync(actorId);
+        await initial.HandleEventAsync(CreateEnvelope(
+            actorId,
+            MatrixRetryCommand(actorId, MatrixEffectStep(initial.State), beforeRetry[^1].Version)));
+        var admission = initial.State.PendingPlanGateAdmissionDelivery?.Admission?.Clone();
+        admission.Should().NotBeNull();
+        var beforeConfirm = await eventStore.GetEventsAsync(actorId);
+
+        await initial.HandleEventAsync(CreateEnvelope(
+            actorId,
+            MatrixPlanResolveCommand(
+                actorId,
+                initial.State.ActiveTask.Gate,
+                beforeConfirm[^1].Version)));
+
+        initial.State.ActiveTask.Gate.Status.Should().Be(NyxIdChatPlanGateStatus.Satisfied);
+        initialDispatch.OperationCalls.Should().BeEmpty(
+            "the generation-two continuation stays behind the exact turn admission ACK");
+        initial.State.ToString().Should().NotContain("retry-capability-alpha");
+
+        callbacks.TimeoutRequests.Clear();
+        var afterConfirm = await eventStore.GetEventsAsync(actorId);
+        await eventStore.AppendAsync(
+            actorId,
+            [
+                new StateEvent
+                {
+                    EventId = "plan-gate-admission-ack-before-recovery",
+                    AgentId = actorId,
+                    Version = afterConfirm[^1].Version + 1,
+                    Timestamp = Timestamp.FromDateTimeOffset(
+                        new DateTimeOffset(2026, 7, 24, 8, 1, 0, TimeSpan.Zero)),
+                    EventType =
+                        NyxIdChatPlanGateAdmissionDeliveryAcknowledgedEvent.Descriptor.FullName,
+                    EventData = Any.Pack(
+                        new NyxIdChatPlanGateAdmissionDeliveryAcknowledgedEvent
+                        {
+                            Admission = admission,
+                            AcknowledgedAt = Timestamp.FromDateTimeOffset(
+                                new DateTimeOffset(2026, 7, 24, 8, 1, 0, TimeSpan.Zero)),
+                        }),
+                },
+            ],
+            afterConfirm[^1].Version);
+
+        var recoveredDispatch = new RecordingActorDispatchPort([], static (_, _) => Task.CompletedTask);
+        var recovered = CreateController(services, actorId, recoveredDispatch);
+        await recovered.ActivateAsync();
+        var activationResume = callbacks.TimeoutRequests.Should().ContainSingle(request =>
+                request.TriggerEnvelope.Payload.Is(
+                    NyxIdChatPendingPlanGateContinuationDispatchRequested.Descriptor))
+            .Which.TriggerEnvelope.Clone();
+        await recovered.HandleEventAsync(activationResume);
+
+        recovered.State.PendingPlanGateAdmissionDelivery.Should().BeNull();
+        var retry = recoveredDispatch.OperationCalls.Should().ContainSingle().Which.Envelope.Payload
+            .Unpack<NyxIdChatOperationDispatchCommand>();
+        retry.InputCase.Should().Be(
+            NyxIdChatOperationDispatchCommand.InputOneofCase.PlanGateContinuation);
+        retry.Key.OperationGeneration.Should().Be(2);
+        retry.PlanGateContinuation.ToolContext.Credentials.NyxIdAccessToken.Should().Be(
+            "retry-capability-alpha");
+        recovered.State.ToString().Should().NotContain("retry-capability-alpha");
+    }
+
+    [Fact]
+    public async Task RetryPlanGateContinuation_WhenDispatchRejected_ShouldRevokeCommittedAdmission()
+    {
+        const string actorId = "conversation-retry-continuation-rejected";
+        var eventStore = new InMemoryEventStoreForTests();
+        await PersistTestStateAsync(eventStore, actorId, 1, CreateFailedRetryMatrixState(actorId));
+        var dispatch = new RecordingActorDispatchPort(
+            [],
+            static (_, _) => Task.CompletedTask,
+            failedStage: "dispatch-rejected");
+        var vault = new InMemorySecretVault(new FixedTimeProvider(
+            new DateTimeOffset(2026, 7, 24, 8, 0, 0, TimeSpan.Zero)));
+        using var services = BuildEventSourcingServices(eventStore, secretVault: vault);
+        var agent = CreateController(services, actorId, dispatch);
+        await agent.ActivateAsync();
+        var beforeRetry = await eventStore.GetEventsAsync(actorId);
+        await agent.HandleEventAsync(CreateEnvelope(
+            actorId,
+            MatrixRetryCommand(actorId, MatrixEffectStep(agent.State), beforeRetry[^1].Version)));
+        var admission = agent.State.ActiveTurnPlanGateAdmission.Clone();
+        var beforeConfirm = await eventStore.GetEventsAsync(actorId);
+
+        await agent.HandleEventAsync(CreateEnvelope(
+            actorId,
+            MatrixPlanResolveCommand(
+                actorId,
+                agent.State.ActiveTask.Gate,
+                beforeConfirm[^1].Version)));
+        var pendingContinuation = agent.State.PendingPlanGateContinuation.Clone();
+        await AcknowledgeMatrixPlanGateAdmissionAsync(agent, actorId);
+
         agent.State.ActiveTurnPlanGateAdmission.Should().BeNull();
         agent.State.PendingPlanGateAdmissionRevocation.Admission.Should().BeEquivalentTo(admission);
         MatrixEffectStep(agent.State).FailureCode.Should().Be(
             "NYXID_CHAT_OPERATION_DISPATCH_REJECTED");
         dispatch.Calls.Should().ContainSingle(call =>
             call.Envelope.Payload.Is(NyxIdChatTurnPlanGateAdmissionRevokeCommand.Descriptor));
+        var resolved = await vault.ResolveAsync(new ResolveSecretRequest(
+            pendingContinuation.Ref,
+            pendingContinuation.Purpose,
+            pendingContinuation.OwnerScopeKey,
+            pendingContinuation.SubjectId,
+            "verify rejected plan-gate continuation cleanup"));
+        resolved.FailureReason.Should().Be(SecretResolutionFailureReason.Revoked);
     }
 
     [Fact]
@@ -367,7 +510,9 @@ public sealed partial class NyxIdChatConversationGAgentTests
             [],
             static (_, _) => Task.CompletedTask,
             failedStage: "dispatch");
-        using var services = BuildEventSourcingServices(eventStore);
+        var vault = new InMemorySecretVault(new FixedTimeProvider(
+            new DateTimeOffset(2026, 7, 24, 8, 0, 0, TimeSpan.Zero)));
+        using var services = BuildEventSourcingServices(eventStore, secretVault: vault);
         var agent = CreateController(services, actorId, dispatch);
         await agent.ActivateAsync();
         var beforeRetry = await eventStore.GetEventsAsync(actorId);
@@ -375,7 +520,6 @@ public sealed partial class NyxIdChatConversationGAgentTests
             actorId,
             MatrixRetryCommand(actorId, MatrixEffectStep(agent.State), beforeRetry[^1].Version)));
         var admission = agent.State.ActiveTurnPlanGateAdmission.Clone();
-        await AcknowledgeMatrixPlanGateAdmissionAsync(agent, actorId);
         var beforeConfirm = await eventStore.GetEventsAsync(actorId);
 
         await agent.HandleEventAsync(CreateEnvelope(
@@ -384,6 +528,8 @@ public sealed partial class NyxIdChatConversationGAgentTests
                 actorId,
                 agent.State.ActiveTask.Gate,
                 beforeConfirm[^1].Version)));
+        var pendingContinuation = agent.State.PendingPlanGateContinuation.Clone();
+        await AcknowledgeMatrixPlanGateAdmissionAsync(agent, actorId);
 
         var effect = MatrixEffectStep(agent.State);
         effect.Operation.Phase.Should().Be(NyxIdChatOperationPhase.Dispatched);
@@ -395,6 +541,13 @@ public sealed partial class NyxIdChatConversationGAgentTests
             call.Envelope.Payload.Is(NyxIdChatTurnOperationDeliveryProbeCommand.Descriptor));
         dispatch.RecoveryCalls.Should().BeEmpty(
             "conversation-owned read-back cannot race an ambiguously delivered effect");
+        var resolved = await vault.ResolveAsync(new ResolveSecretRequest(
+            pendingContinuation.Ref,
+            pendingContinuation.Purpose,
+            pendingContinuation.OwnerScopeKey,
+            pendingContinuation.SubjectId,
+            "verify ambiguous plan-gate continuation cleanup"));
+        resolved.FailureReason.Should().Be(SecretResolutionFailureReason.Revoked);
         var events = await eventStore.GetEventsAsync(actorId);
         events.Should().ContainSingle(item =>
             item.EventData.Is(NyxIdChatOperationDispatchUncertainEvent.Descriptor));
@@ -426,7 +579,9 @@ public sealed partial class NyxIdChatConversationGAgentTests
         var eventStore = new InMemoryEventStoreForTests();
         await PersistTestStateAsync(eventStore, actorId, 1, CreateFailedRetryMatrixState(actorId));
         var dispatch = new RecordingActorDispatchPort([], static (_, _) => Task.CompletedTask);
-        using var services = BuildEventSourcingServices(eventStore);
+        var vault = new InMemorySecretVault(new FixedTimeProvider(
+            new DateTimeOffset(2026, 7, 24, 8, 0, 0, TimeSpan.Zero)));
+        using var services = BuildEventSourcingServices(eventStore, secretVault: vault);
         var agent = CreateController(services, actorId, dispatch);
         await agent.ActivateAsync();
         var beforeRetry = await eventStore.GetEventsAsync(actorId);
@@ -434,6 +589,14 @@ public sealed partial class NyxIdChatConversationGAgentTests
             actorId,
             MatrixRetryCommand(actorId, MatrixEffectStep(agent.State), beforeRetry[^1].Version)));
         var admission = agent.State.ActiveTurnPlanGateAdmission.Clone();
+        var beforeConfirm = await eventStore.GetEventsAsync(actorId);
+        await agent.HandleEventAsync(CreateEnvelope(
+            actorId,
+            MatrixPlanResolveCommand(
+                actorId,
+                agent.State.ActiveTask.Gate,
+                beforeConfirm[^1].Version)));
+        var pendingContinuation = agent.State.PendingPlanGateContinuation.Clone();
         var beforeStop = await eventStore.GetEventsAsync(actorId);
         var stop = CreateStopCommand(beforeStop[^1].Version);
         stop.ConversationActorId = actorId;
@@ -443,9 +606,19 @@ public sealed partial class NyxIdChatConversationGAgentTests
         agent.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Stopped);
         agent.State.ActiveTurnPlanGateAdmission.Should().BeNull();
         agent.State.PendingPlanGateAdmissionDelivery.Should().BeNull();
+        agent.State.PendingPlanGateContinuation.Should().BeNull();
+        agent.State.PendingPlanGateContinuationKey.Should().BeNull();
         agent.State.PendingPlanGateAdmissionRevocation.Admission.Should().BeEquivalentTo(admission);
         dispatch.Calls.Should().ContainSingle(call =>
             call.Envelope.Payload.Is(NyxIdChatTurnPlanGateAdmissionRevokeCommand.Descriptor));
+        var resolved = await vault.ResolveAsync(new ResolveSecretRequest(
+            pendingContinuation.Ref,
+            pendingContinuation.Purpose,
+            pendingContinuation.OwnerScopeKey,
+            pendingContinuation.SubjectId,
+            "verify stopped plan-gate continuation cleanup"));
+        resolved.Resolved.Should().BeFalse();
+        resolved.FailureReason.Should().Be(SecretResolutionFailureReason.Revoked);
     }
 
     [Fact]

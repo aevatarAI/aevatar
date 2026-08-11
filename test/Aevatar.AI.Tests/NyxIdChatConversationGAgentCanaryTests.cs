@@ -78,6 +78,17 @@ public sealed partial class NyxIdChatConversationGAgentTests
             NyxIdChatCanaryEffectFaultStatus.Forwarded);
         armed.State.CanaryEffectFault.ForwardedAt.Should().NotBeNull();
         armed.State.CanaryEffectFault.ConsumedAt.Should().BeNull();
+        firstDispatch.OperationCalls.Should().BeEmpty(
+            "the fault-bearing continuation remains behind the exact admission ACK");
+        var pendingAdmission = armed.State.PendingPlanGateAdmissionDelivery.Admission.Clone();
+
+        await armed.HandleEventAsync(CreateEnvelope(
+            actorId,
+            new NyxIdChatTurnPlanGateAdmissionCommittedSignal
+            {
+                Admission = pendingAdmission,
+            }));
+
         var forwarded = firstDispatch.OperationCalls.Should().ContainSingle().Which.Envelope.Payload
             .Unpack<NyxIdChatOperationDispatchCommand>();
         forwarded.PlanGateContinuation.CanaryEffectFault.Should().BeEquivalentTo(
@@ -272,6 +283,11 @@ public sealed partial class NyxIdChatConversationGAgentTests
                 OperationAdmission = admission.Clone(),
             },
         });
+        state.PendingPlanGateAdmissionDelivery = new NyxIdChatTurnPlanGateAdmissionCommand
+        {
+            SourceOperationKey = key.Clone(),
+            Admission = state.ActiveTurnPlanGateAdmission.Clone(),
+        };
         return state;
     }
 
