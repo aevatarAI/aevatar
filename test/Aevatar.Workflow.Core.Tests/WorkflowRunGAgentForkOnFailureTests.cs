@@ -59,6 +59,95 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
     }
 
     [Fact]
+    public async Task HandleReplaceWorkflowDefinitionAndExecute_ShouldPreserveExistingLineage()
+    {
+        const string runId = "run-child-beta";
+        const string sourceRunId = "run-source-gamma";
+        const string originalRunId = "run-original-alpha";
+        var harness = await CreateUnboundRunAsync(runId);
+
+        await harness.Agent.HandleBindWorkflowRunDefinition(new BindWorkflowRunDefinitionEvent
+        {
+            DefinitionActorId = "definition-child-delta",
+            WorkflowName = "wf_1859",
+            WorkflowYaml = WorkflowYaml(onFailure: false),
+            RunId = runId,
+            ScopeId = "scope-child",
+            ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+            InitialLineage = new WorkflowRunLineage
+            {
+                Availability = WorkflowRunLineageAvailability.Available,
+                UnavailableReason = "stale unavailable reason",
+                RetryFork = new WorkflowRunRetryForkLineage
+                {
+                    Availability = WorkflowRunLineageAvailability.Available,
+                    SourceRunId = sourceRunId,
+                    OriginalRunId = originalRunId,
+                    Attempt = 2,
+                    StartAtStepId = "step-failed",
+                },
+                SubWorkflow = new WorkflowRunSubWorkflowLineage
+                {
+                    Availability = WorkflowRunLineageAvailability.Unavailable,
+                },
+            },
+        });
+
+        await harness.Agent.HandleReplaceWorkflowDefinitionAndExecute(new ReplaceWorkflowDefinitionAndExecuteEvent
+        {
+            WorkflowYaml = WorkflowYaml(onFailure: false),
+            Input = "replacement-input",
+        });
+
+        var committedReplacement = CommittedEvents<BindWorkflowRunDefinitionEvent>(harness.CommittedPublisher)
+            .Last();
+        committedReplacement.InitialLineage.Availability.Should().Be(WorkflowRunLineageAvailability.Available);
+        committedReplacement.InitialLineage.RetryFork.SourceRunId.Should().Be(sourceRunId);
+        committedReplacement.InitialLineage.RetryFork.OriginalRunId.Should().Be(originalRunId);
+        harness.Agent.State.Lineage.Availability.Should().Be(WorkflowRunLineageAvailability.Available);
+        harness.Agent.State.Lineage.UnavailableReason.Should().BeEmpty();
+        harness.Agent.State.Lineage.RetryFork.SourceRunId.Should().Be(sourceRunId);
+        harness.Agent.State.Lineage.RetryFork.OriginalRunId.Should().Be(originalRunId);
+    }
+
+    [Fact]
+    public async Task HandleWorkflowRunLineageRecorded_ShouldClearUnavailableReasonWhenLineageBecomesAvailable()
+    {
+        const string runId = "run-source-gamma";
+        var harness = await CreateUnboundRunAsync(runId);
+
+        await harness.Agent.HandleBindWorkflowRunDefinition(new BindWorkflowRunDefinitionEvent
+        {
+            DefinitionActorId = "definition-source-delta",
+            WorkflowName = "wf_1859",
+            WorkflowYaml = WorkflowYaml(onFailure: false),
+            RunId = runId,
+            ScopeId = "scope-source",
+            ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+            InitialLineage = WorkflowRunGAgent.CreateUnavailableLineage("Run lineage is unavailable for this run."),
+        });
+
+        await harness.Agent.HandleWorkflowRunLineageRecorded(new WorkflowRunLineageRecordedEvent
+        {
+            SourceRunId = runId,
+            ChildRunId = "run-child-beta",
+            ChildActorId = "actor-child-delta",
+            OriginalRunId = "run-original-alpha",
+            StartAtStepId = "step-failed",
+            Attempt = 2,
+            RelationKind = WorkflowRunLineageRelationKind.RetryFork,
+        });
+
+        harness.Agent.State.Lineage.Availability.Should().Be(WorkflowRunLineageAvailability.Available);
+        harness.Agent.State.Lineage.UnavailableReason.Should().BeEmpty();
+        harness.Agent.State.Lineage.RetryFork.Availability.Should().Be(WorkflowRunLineageAvailability.Available);
+        harness.Agent.State.Lineage.RetryFork.ChildRuns.Should().ContainSingle(child =>
+            child.RunId == "run-child-beta" &&
+            child.ActorId == "actor-child-delta" &&
+            child.RelationKind == WorkflowRunLineageRelationKind.RetryFork);
+    }
+
+    [Fact]
     public async Task HandleBindWorkflowRunDefinition_WithInitialSubWorkflowLineage_ShouldCommitAndApplyChildLineage()
     {
         const string childRunId = "run-child-beta";

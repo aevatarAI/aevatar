@@ -2293,7 +2293,9 @@ public sealed partial class WorkflowRunGAgent
         next.TerminalNotificationAttempt = 0;
         next.TerminalNotificationDeliveryStatus = WorkflowRunTerminalNotificationDeliveryStatus.Unspecified;
         next.TerminalNotificationRetryCallbackId = string.Empty;
-        next.Lineage = evt.InitialLineage?.Clone() ?? CreateUnavailableLineage("Run lineage is unavailable for this run.");
+        next.Lineage = evt.InitialLineage == null
+            ? CreateUnavailableLineage("Run lineage is unavailable for this run.")
+            : EnsureLineage(evt.InitialLineage);
         next.InlineWorkflowYamls.Clear();
         foreach (var (workflowNameKey, workflowYamlValue) in evt.InlineWorkflowYamls)
         {
@@ -2452,7 +2454,7 @@ public sealed partial class WorkflowRunGAgent
 
         var next = current.Clone();
         next.Lineage = EnsureLineage(next.Lineage);
-        next.Lineage.Availability = WorkflowRunLineageAvailability.Available;
+        MarkLineageAvailable(next.Lineage);
         next.Lineage.RetryFork ??= new WorkflowRunRetryForkLineage();
         next.Lineage.RetryFork.Availability = WorkflowRunLineageAvailability.Available;
         if (string.IsNullOrWhiteSpace(next.Lineage.RetryFork.SourceRunId))
@@ -2510,6 +2512,12 @@ public sealed partial class WorkflowRunGAgent
         };
     }
 
+    internal static void MarkLineageAvailable(WorkflowRunLineage lineage)
+    {
+        lineage.Availability = WorkflowRunLineageAvailability.Available;
+        lineage.UnavailableReason = string.Empty;
+    }
+
     internal static WorkflowRunLineage CreateUnavailableLineage(string reason) =>
         new()
         {
@@ -2538,6 +2546,8 @@ public sealed partial class WorkflowRunGAgent
         {
             Availability = WorkflowRunLineageAvailability.Unavailable,
         };
+        if (next.Availability == WorkflowRunLineageAvailability.Available)
+            next.UnavailableReason = string.Empty;
         return next;
     }
 
@@ -3930,6 +3940,7 @@ public sealed partial class WorkflowRunGAgent
             DefinitionVersion = Math.Max(0, State.DefinitionVersion),
             CapabilityAdmissionPlan = State.CapabilityAdmissionPlan?.Clone(),
             ExpectedExecutionMode = State.ExpectedExecutionMode,
+            InitialLineage = State.Lineage?.Clone(),
             InlineWorkflowYamls = { State.InlineWorkflowYamls },
         }, ct);
         await _subWorkflowOrchestrator.CancelPendingDefinitionResolutionTimeoutsAsync(stateBeforeBind, CancellationToken.None);

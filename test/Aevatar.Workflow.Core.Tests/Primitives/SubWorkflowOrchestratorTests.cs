@@ -158,6 +158,38 @@ public sealed class SubWorkflowOrchestratorTests
     }
 
     [Fact]
+    public void ApplySubWorkflowInvocationRegistered_ShouldClearUnavailableReasonWhenLineageBecomesAvailable()
+    {
+        var current = new WorkflowRunState
+        {
+            Lineage = WorkflowRunGAgent.CreateUnavailableLineage("Run lineage is unavailable for this run."),
+        };
+
+        var next = SubWorkflowOrchestrator.ApplySubWorkflowInvocationRegistered(
+            current,
+            new SubWorkflowInvocationRegisteredEvent
+            {
+                InvocationId = "invoke-child-beta",
+                ParentRunId = "run-parent-alpha",
+                ParentStepId = "step-call-child",
+                WorkflowName = "child_workflow",
+                ChildActorId = "actor-child-delta",
+                ChildRunId = "run-child-beta",
+                RootRunId = "run-root-omega",
+                Depth = 2,
+            });
+
+        next.Lineage.Availability.Should().Be(WorkflowRunLineageAvailability.Available);
+        next.Lineage.UnavailableReason.Should().BeEmpty();
+        next.Lineage.SubWorkflow.Availability.Should().Be(WorkflowRunLineageAvailability.Available);
+        next.Lineage.SubWorkflow.ChildRuns.Should().ContainSingle(child =>
+            child.RunId == "run-child-beta" &&
+            child.ActorId == "actor-child-delta" &&
+            child.RelationshipId == "invoke-child-beta" &&
+            child.RelationKind == WorkflowRunLineageRelationKind.SubWorkflow);
+    }
+
+    [Fact]
     public async Task HandleInvokeRequestedAsync_WhenDefinitionActorMustBeResolved_ShouldRegisterResolutionAndScheduleTimeout()
     {
         var harness = CreateHarness();

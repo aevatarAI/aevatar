@@ -747,7 +747,7 @@ internal sealed class SubWorkflowOrchestrator
         //   Behavior: parent workflow runs expose durable sub-workflow child run identities separately from retry/fork lineage.
         //   Why this shape: the committed invocation registration is the parent-owned fact; graph/topology edges remain execution-path data.
         next.Lineage = WorkflowRunGAgent.EnsureLineage(next.Lineage);
-        next.Lineage.Availability = WorkflowRunLineageAvailability.Available;
+        WorkflowRunGAgent.MarkLineageAvailable(next.Lineage);
         next.Lineage.SubWorkflow ??= new WorkflowRunSubWorkflowLineage();
         next.Lineage.SubWorkflow.Availability = WorkflowRunLineageAvailability.Available;
         WorkflowRunGAgent.UpsertLineageChild(
