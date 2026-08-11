@@ -54,7 +54,7 @@ public sealed class ChannelCardConversationTurnRunnerTests
     }
 
     [Fact]
-    public async Task RunCardCreateAsync_WhenAccumulatedTextIsJson_ShouldStreamKeyValueTextInsteadOfJson()
+    public async Task RunCardCreateAsync_WhenAccumulatedTextIsJson_ShouldPreserveJsonUntilFinalization()
     {
         var cardKit = new RecordingCardKitClient();
         var lark = new RecordingLarkNyxClient();
@@ -72,11 +72,33 @@ public sealed class ChannelCardConversationTurnRunnerTests
             CancellationToken.None);
 
         result.Success.Should().BeTrue();
-        var streamed = cardKit.StreamCalls.Should().ContainSingle().Subject.Request.Content;
-        streamed.Should().Contain("Item: 1");
-        streamed.Should().Contain("name: Ada");
-        streamed.Should().NotContain("|");
-        streamed.Should().NotContain("{\"name\"");
+        cardKit.StreamCalls.Should().ContainSingle().Subject.Request.Content
+            .Should().Be(chunk.AccumulatedText);
+    }
+
+    [Fact]
+    public async Task RunCardStreamAsync_WhenAccumulatedTextContainsJson_ShouldPreserveOriginalText()
+    {
+        var cardKit = new RecordingCardKitClient();
+        var lark = new RecordingLarkNyxClient();
+        var runner = new ChannelCardConversationTurnRunner(
+            cardKit,
+            lark,
+            NullLogger<ChannelCardConversationTurnRunner>.Instance);
+        var chunk = BuildChunk("corr-card-json-stream-1");
+        chunk.AccumulatedText = """Starting workflow with prompt `{"submit":false}`.""";
+
+        var result = await runner.RunCardStreamAsync(
+            chunk,
+            "card-json-stream-1",
+            "streaming_main",
+            sequence: 2,
+            RuntimeContext("runtime-card-json-stream-token"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        cardKit.StreamCalls.Should().ContainSingle().Subject.Request.Content
+            .Should().Be(chunk.AccumulatedText);
     }
 
     [Fact]

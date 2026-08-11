@@ -111,8 +111,10 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
 
         var cardMessageId = bindResult.CardMessageId ?? string.Empty;
 
-        // 3. Write the first chunk's text into the streaming element. Sequence = 1 (the
-        //    grain pre-allocates this value; subsequent chunks pass sequence+1 each call).
+        // 3. Write the first chunk's text into the streaming element. Preserve interim JSON
+        //    verbatim: only complete final JSON can replace the shell with a native table, and
+        //    key/value rendering is reserved for the non-CardKit fallback path. Sequence = 1
+        //    (the grain pre-allocates this value; subsequent chunks pass sequence+1 each call).
         //    The card has already been bound to the chat (step 2), so any failure from here
         //    on is a *post-send* failure: an empty card is visible in the chat. We must
         //    return PostSendFailed (not Failed) so the actor terminates the turn instead
@@ -125,7 +127,7 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
                 new LarkCardKitStreamElementContentRequest(
                     CardId: cardId,
                     ElementId: streamingElementId,
-                    Content: LarkJsonTableFormatter.FormatAsKeyValueText(chunk.AccumulatedText),
+                    Content: chunk.AccumulatedText,
                     Sequence: 1,
                     IdempotencyKey: $"{chunk.CorrelationId}-1"),
                 ct);
@@ -201,7 +203,7 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
                 new LarkCardKitStreamElementContentRequest(
                     CardId: cardId,
                     ElementId: elementId,
-                    Content: LarkJsonTableFormatter.FormatAsKeyValueText(chunk.AccumulatedText),
+                    Content: chunk.AccumulatedText,
                     Sequence: sequence,
                     IdempotencyKey: $"{chunk.CorrelationId}-{sequence}"),
                 ct);

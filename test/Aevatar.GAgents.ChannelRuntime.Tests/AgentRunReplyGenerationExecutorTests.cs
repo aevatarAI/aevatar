@@ -121,6 +121,44 @@ public sealed class AgentRunReplyGenerationExecutorTests
     }
 
     [Fact]
+    public async Task BuildLlmStepContinuation_WhenCardKitTurnEmitsToolCall_ShouldNotExposeToolPreamble()
+    {
+        var tool = new DriftableDefinitionTool("scope_workflows_get");
+        var provider = new TextThenToolCallProvider(
+            tool.Name,
+            """Starting workflow with prompt `{"submit":false}`.""");
+        var dispatchPort = Substitute.For<IActorDispatchPort>();
+        var executor = CreateToolEnabledExecutor(
+            tool,
+            provider,
+            actorDispatchPort: dispatchPort,
+            relayOptions: new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                StreamingRepliesEnabled = true,
+                StreamingCardKitEnabled = true,
+            });
+        var workItem = BuildToolEnabledWorkItem();
+        workItem.Request.Activity.OutboundDelivery = new OutboundDeliveryContext
+        {
+            ReplyMessageId = "relay-message-1",
+            CorrelationId = "corr-1",
+        };
+        workItem.Request.ReplyToken = "relay-token";
+        workItem.Request.ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds();
+
+        var execution = await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
+
+        await dispatchPort.DidNotReceiveWithAnyArgs()
+            .DispatchAsync(default!, default!, default);
+        execution.Continuation.LlmStepResult.AccumulatedText.Should().BeEmpty();
+        execution.Continuation.LlmStepResult.HasStreamedTextContent.Should().BeFalse();
+        execution.Continuation.LlmStepResult.ToolCalls.Should().ContainSingle()
+            .Which.Name.Should().Be(tool.Name);
+        execution.Continuation.LlmStepResult.Content.Should()
+            .Be("""Starting workflow with prompt `{"submit":false}`.""");
+    }
+
+    [Fact]
     public async Task BuildLlmStepContinuation_WhenToolEnabledFirstRoundHasSuccessfulMutatingReceipt_ShouldKeepGroundingConstraint()
     {
         var provider = new RecordingProvider();

@@ -220,17 +220,16 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         }
 
         var output = new StringBuilder(workItem.StepState.AccumulatedText ?? string.Empty);
+        var initialOutputLength = output.Length;
         var skillRecoveryMessages = BuildSkillRecoveryMessages(workItem.StepState);
         var deferSkillRecoveryText = !workItem.StepState.FinalNoToolsStep &&
                                      llmRequest.ToolContext?.SkillRecovery.RequireOrnnSearchOnBlocker == true;
-        // A relay reply token can create exactly one visible reply. Buffer text while an
-        // approval-capable tool is in play so a model preamble cannot consume the token
-        // before the actor sends the approval card. CardKit uses its own Lark transport.
-        var deferApprovalCapableToolText = streamingState is not null &&
-                                          _relayOptions?.StreamingCardKitEnabled != true &&
-                                          llmRequest.Tools?.Any(static tool =>
-                                              tool.ApprovalMode != ToolApprovalMode.NeverRequire) == true;
-        List<LLMStreamChunk>? deferredLlmChunks = deferSkillRecoveryText || deferApprovalCapableToolText
+        // A tool-enabled LLM step may emit prose before its tool call. Buffer that step until
+        // its terminal shape is known so intermediate planning never becomes a visible reply.
+        // This applies to CardKit too: its separate transport does not make tool preambles final.
+        var deferPotentialToolCallText = streamingState is not null &&
+                                         !workItem.StepState.FinalNoToolsStep;
+        List<LLMStreamChunk>? deferredLlmChunks = deferSkillRecoveryText || deferPotentialToolCallText
             ? []
             : null;
 
@@ -318,16 +317,20 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             }
         }
 
+        var hasToolCalls = effectiveToolCalls is { Count: > 0 };
+        if (hasToolCalls && output.Length > initialOutputLength)
+            output.Length = initialOutputLength;
+
         var approvalRequired = HasApprovalRequiredToolCall(
             effectiveToolCalls,
             llmResult.AuthorizedTools,
             llmResult.AuthorizedToolContext);
-        if (deferredLlmChunks is not null && !approvalRequired)
+        if (deferredLlmChunks is not null && !approvalRequired && !hasToolCalls)
         {
             foreach (var chunk in deferredLlmChunks)
                 await DeliverLlmChunkAsync(chunk, ct).ConfigureAwait(false);
         }
-        if (streamingState is not null && !approvalRequired)
+        if (streamingState is not null && !approvalRequired && !hasToolCalls)
             await streamingState.FinalizeAsync(output.ToString(), ct).ConfigureAwait(false);
 
         var result = new AgentRunLlmStepResult
@@ -336,7 +339,9 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             Content = effectiveContent ?? string.Empty,
             ReasoningContent = llmResult.ReasoningContent ?? string.Empty,
             FinishReason = llmResult.FinishReason ?? string.Empty,
-            HasStreamedTextContent = !approvalRequired && !string.IsNullOrEmpty(llmResult.Content),
+            HasStreamedTextContent = !approvalRequired &&
+                                     !hasToolCalls &&
+                                     !string.IsNullOrEmpty(effectiveContent),
             ToolRequestId = llmRequest.ToolContext?.Request.RequestId ?? string.Empty,
         };
         if (AgentRunReplyStepMappers.ToProto(llmResult.Usage) is { } usage)
