@@ -152,7 +152,7 @@ public sealed class NyxIdChatUc1JourneyFixtureTests
                     step.GetProperty("kind").GetString() == "postcondition" &&
                     step.GetProperty("source").GetProperty("postcondition")
                         .GetProperty("check").GetString() ==
-                            "lark_provider_message_visible_in_chat");
+                            "lark_provider_message_visible_by_id");
             var verificationSource = verification.GetProperty("source")
                 .GetProperty("postcondition");
             verification.GetProperty("dependsOn").EnumerateArray().Select(item => item.GetString())
@@ -160,7 +160,7 @@ public sealed class NyxIdChatUc1JourneyFixtureTests
             verificationSource.GetProperty("providerResourceId").GetString().Should()
                 .Be(LarkMessageId);
             verificationSource.GetProperty("check").GetString().Should()
-                .Be("lark_provider_message_visible_in_chat");
+                .Be("lark_provider_message_visible_by_id");
             verification.GetProperty("externalEffect").GetString().Should().Be("confirmed");
 
             var artifact = journey.GetProperty("artifact");

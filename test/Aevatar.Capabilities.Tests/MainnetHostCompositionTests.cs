@@ -1176,13 +1176,18 @@ public sealed class MainnetHostCompositionTests
         readBack.EffectHttpMethod.Should().Be("POST");
         readBack.EffectPathTemplate.Should().Be("/open-apis/im/v1/messages");
         readBack.ReadHttpMethod.Should().Be("GET");
-        readBack.ReadPathTemplate.Should().Be("/open-apis/im/v1/messages");
+        readBack.ReadPathTemplate.Should().Be("/open-apis/im/v1/messages/{message_id}");
+        readBack.CheckName.Should().Be("lark_provider_message_visible_by_id");
         readBack.Match.Should().Be(AgentToolReadBackMatch.ArrayContainsEquals);
         readBack.JsonPointer.Should().Be("/data/items");
         readBack.ElementJsonPointer.Should().Be("/message_id");
         readBack.EffectResultIdentityJsonPointer.Should().Be("/data/message_id");
-        readBack.EffectArgumentConstraints.Should().ContainSingle();
-        readBack.LiteralReadArguments.Should().HaveCount(2);
+        readBack.ProviderResourceArgument.Should().NotBeNull();
+        readBack.ProviderResourceArgument!.ReadLocation.Should()
+            .Be(NyxIdAssistantOperationArgumentLocation.Path);
+        readBack.ProviderResourceArgument.ReadArgumentName.Should().Be("message_id");
+        readBack.EffectArgumentConstraints.Should().BeEmpty();
+        readBack.LiteralReadArguments.Should().BeEmpty();
 
         var approvalReadBack = options.AssistantOperationReadBackBindings.Single(binding =>
             binding.EffectPathTemplate == "/open-apis/approval/v4/instances");
