@@ -726,6 +726,11 @@ public sealed partial class NyxIdChatConversationGAgentTests
             NyxIdAccessToken = "caller-token",
             ModelOverride = "model-a",
         };
+        start.SteeringExecutionContext = new NyxIdChatSteeringExecutionContext
+        {
+            OriginPrompt = "caller-forged execution context",
+            TaskId = "forged-task",
+        };
 
         await agent.HandleEventAsync(CreateEnvelope(conversationActorId, start));
 
@@ -739,6 +744,8 @@ public sealed partial class NyxIdChatConversationGAgentTests
         command.Llm.Intent.Should().Be(NyxIdChatTurnIntent.ServiceConnect);
         command.Llm.AgentProfile.Should().BeNull();
         command.Llm.AgentProfileTurnAuthority.Should().BeNull();
+        command.Llm.Request.Prompt.Should().Be("Connect GitHub and verify the connection");
+        agent.State.ToString().Should().NotContain("caller-forged execution context");
     }
 
     [Fact]
@@ -4542,7 +4549,11 @@ public sealed partial class NyxIdChatConversationGAgentTests
         var continuation = dispatch.OperationCalls.Last().Envelope.Payload
             .Unpack<NyxIdChatOperationDispatchCommand>();
         continuation.Key.TurnId.Should().Be(continuationTurnId);
-        continuation.Llm.Request.Prompt.Should().Be("Use the safer read-only approach.");
+        continuation.Llm.Request.Prompt.Should()
+            .Contain("Steering instruction: Use the safer read-only approach.")
+            .And.Contain("Original task: hello");
+        agent.State.ActiveTurn.Prompt.Should().Be("Use the safer read-only approach.",
+            "the transcript-visible prompt remains the user's steering instruction");
         continuation.Llm.Request.LlmControl.NyxIdAccessToken.Should().Be(
             "steering-runtime-token-alpha");
         continuation.Llm.Request.ToolContext.Credentials.NyxIdAccessToken.Should().Be(
@@ -4575,7 +4586,12 @@ public sealed partial class NyxIdChatConversationGAgentTests
         var eventStore = new InMemoryEventStoreForTests();
         using var services = BuildEventSourcingServices(eventStore);
         var dispatch = new RecordingActorDispatchPort([], static (_, _) => Task.CompletedTask);
-        var agent = CreateController(services, conversationActorId, dispatch);
+        var classifier = new RecordingTurnIntentClassifier(NyxIdChatTurnIntent.Unspecified);
+        var agent = CreateController(
+            services,
+            conversationActorId,
+            dispatch,
+            turnIntentClassifier: classifier);
         await agent.ActivateAsync();
         agent.State.OwnerSubject = "owner-alpha";
         var start = CreateStartTurnCommand();
@@ -4592,7 +4608,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
 
         var task = agent.State.ActiveTask;
         var superseded = task.Steps.Should().ContainSingle().Which;
-        superseded.Order = 2;
+        superseded.Order = 3;
         superseded.AddedBy = NyxIdChatStepAddedBy.Replan;
         superseded.AddedInPlanRevision = 2;
         superseded.Description = "Compare the current service state.";
@@ -4600,7 +4616,35 @@ public sealed partial class NyxIdChatConversationGAgentTests
             conversationActorId,
             originalTurnId,
             task.TaskId);
+        completed.Order = 2;
+        var completedInput = new NyxIdChatTaskStepState
+        {
+            StepId = "step-uc2-input",
+            Order = 1,
+            Kind = NyxIdChatStepKind.Input,
+            Status = NyxIdChatStepStatus.Done,
+            Description = "Resolve dinner logistics and research-only scope.",
+            Source = new NyxIdChatStepSource
+            {
+                Input = new NyxIdChatInputStepSource
+                {
+                    RequestId = "input-uc2-logistics",
+                },
+            },
+            ExternalEffect = NyxIdChatEffectEvidence.NotApplied,
+            AddedBy = NyxIdChatStepAddedBy.Initial,
+            AddedInPlanRevision = 1,
+            UpdatedAt = completed.UpdatedAt.Clone(),
+        };
         task.Steps.Insert(0, completed);
+        task.Steps.Insert(0, completedInput);
+        agent.State.RecentInputResolutions.Add(new NyxIdChatInputResolutionState
+        {
+            RequestId = "input-uc2-logistics",
+            ClientRequestId = "client-input-uc2-logistics",
+            Outcome = NyxIdChatNeedsYouResolutionOutcome.Accepted,
+            CommittedAt = completed.UpdatedAt.Clone(),
+        });
         task.PlanRevision = 2;
         task.PlanRevisionHistoryStart = 1;
         task.PlanRevisions.Clear();
@@ -4693,14 +4737,31 @@ public sealed partial class NyxIdChatConversationGAgentTests
         snapshot.ToByteString().Should().Equal(
             revisionStarted.State.ActiveTask.ToByteString(),
             "every revision must emit the complete committed task snapshot");
-        snapshot.Steps.Should().HaveCount(3);
+        snapshot.Steps.Should().HaveCount(4);
         snapshot.Steps.Single(step => step.StepId == completed.StepId)
             .ToByteString().Should().Equal(completedBytes);
         var continuation = dispatch.OperationCalls.Last().Envelope.Payload
             .Unpack<NyxIdChatOperationDispatchCommand>();
         continuation.Key.TurnId.Should().NotBe(originalTurnId);
-        continuation.Llm.Request.Prompt.Should().Be(
+        continuation.Llm.Request.Prompt.Should()
+            .Contain("Steering instruction: Use 7 pm sharp and require a private room.")
+            .And.Contain(
+                "Original task: Research Greek dinner options for Friday in northern Singapore.")
+            .And.Contain(
+                "Committed input resolution: input-uc2-logistics; outcome: Accepted")
+            .And.Contain(
+                "Completed step 2: Aevatar web search - find Greek dinner candidates.")
+            .And.Contain("tool web_search")
+            .And.Contain("Completed substep: Search current web results [status: Done]")
+            .And.NotContain("The superseded comparison completed too late.");
+        agent.State.ActiveTurn.Prompt.Should().Be(
             "Use 7 pm sharp and require a private room.");
+        agent.State.ToString().Should().NotContain(
+            "Continue the same committed task",
+            "execution context must remain transient");
+        classifier.UserMessages.Should().HaveCount(2);
+        classifier.UserMessages[^1].Should().Be(continuation.Llm.Request.Prompt,
+            "routing and execution must use the same steering context");
     }
 
     [Theory]

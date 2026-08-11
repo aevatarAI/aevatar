@@ -783,6 +783,9 @@ public sealed class NyxIdChatConversationGAgent
             return;
         }
 
+        // Refresh only from the actor's latest committed task after the safe
+        // checkpoint; the vaulted command owns capability, not business facts.
+        command.SteeringExecutionContext = BuildSteeringExecutionContext(admission);
         try
         {
             await StartTurnCoreAsync(command);
@@ -1617,6 +1620,18 @@ public sealed class NyxIdChatConversationGAgent
             }
         }
 
+        command.SteeringExecutionContext =
+            command.AddedBy == NyxIdChatStepAddedBy.Steering &&
+            State.ContinuationAdmission is
+            {
+                Kind: NyxIdChatContinuationKind.Steering,
+            } steeringAdmission &&
+            string.Equals(
+                steeringAdmission.ContinuationTurnId,
+                command.TurnId.Trim(),
+                StringComparison.Ordinal)
+                ? BuildSteeringExecutionContext(steeringAdmission)
+                : null;
         var now = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow());
         var turnAuthority = await PrepareAgentProfileTurnAuthorityAsync(command);
         var intent = await ClassifyTurnIntentAsync(command, turnAuthority);
@@ -3225,7 +3240,7 @@ public sealed class NyxIdChatConversationGAgent
     {
         var request = new Aevatar.AI.Abstractions.ChatRequestEvent
         {
-            Prompt = command.Prompt,
+            Prompt = BuildExecutionPrompt(command),
             SessionId = command.TurnId.Trim(),
             ScopeId = command.ScopeId.Trim(),
             CommandAttemptId = command.CommandId.Trim(),
@@ -3256,7 +3271,7 @@ public sealed class NyxIdChatConversationGAgent
             return (await _turnCatalogMaterializer.PrepareNyxIdChatAsync(
                     profile,
                     command.TurnId.Trim(),
-                    command.Prompt ?? string.Empty,
+                    BuildExecutionPrompt(command),
                     registeredTools: [],
                     toolContext,
                     llmControl,
@@ -3300,7 +3315,7 @@ public sealed class NyxIdChatConversationGAgent
         {
             return await _turnIntentClassifier.ClassifyAsync(
                 command.TurnId.Trim(),
-                command.Prompt ?? string.Empty,
+                BuildExecutionPrompt(command),
                 LLMControlContextMapper.FromPayload(command.LlmControl),
                 CancellationToken.None);
         }
@@ -4902,11 +4917,127 @@ public sealed class NyxIdChatConversationGAgent
             CommandId = continuationCommandId,
             CorrelationId = command.CorrelationId.Trim(),
             Prompt = command.Instruction.Trim(),
+            SteeringExecutionContext = BuildSteeringExecutionContext(admission),
             ToolContext = command.ToolContext?.Clone(),
             LlmControl = command.LlmControl?.Clone(),
         };
         start.InputParts.AddRange(command.InputParts.Select(static part => part.Clone()));
         return start;
+    }
+
+    private NyxIdChatSteeringExecutionContext BuildSteeringExecutionContext(
+        NyxIdChatContinuationAdmissionState admission)
+    {
+        var task = State.ActiveTask;
+        var context = new NyxIdChatSteeringExecutionContext
+        {
+            OriginTurnId = admission.OriginTurnId,
+            OriginPrompt = State.ActiveTurn?.Prompt ?? string.Empty,
+            TaskId = task?.TaskId ?? string.Empty,
+            PlanId = task?.PlanId ?? string.Empty,
+            PlanRevision = task?.PlanRevision ?? 0,
+            TaskTitle = task?.Title ?? string.Empty,
+            GateMode = task?.Gate?.Mode ?? NyxIdChatPlanGateMode.Unspecified,
+            GateReason = task?.Gate?.Reason ?? string.Empty,
+        };
+        if (task is null)
+            return context;
+
+        var resolvedInputRequestIds = task.Steps
+            .Where(static step =>
+                step.Source?.SourceCase == NyxIdChatStepSource.SourceOneofCase.Input)
+            .Select(static step => step.Source.Input.RequestId)
+            .Where(static requestId => !string.IsNullOrWhiteSpace(requestId))
+            .ToHashSet(StringComparer.Ordinal);
+        context.InputResolutions.AddRange(State.RecentInputResolutions
+            .Where(resolution => resolvedInputRequestIds.Contains(resolution.RequestId))
+            .Select(static resolution => new NyxIdChatSteeringInputResolutionFact
+            {
+                RequestId = resolution.RequestId,
+                Outcome = resolution.Outcome,
+                NumericThreshold = resolution.NumericThreshold?.Clone(),
+            }));
+        context.CompletedSteps.AddRange(task.Steps
+            .Where(static step =>
+                step.Status is NyxIdChatStepStatus.Done or NyxIdChatStepStatus.Skipped)
+            .OrderBy(static step => step.Order)
+            .Select(static step => new NyxIdChatSteeringCompletedStepFact
+            {
+                StepId = step.StepId,
+                Order = step.Order,
+                Kind = step.Kind,
+                Status = step.Status,
+                Description = step.Description,
+                Source = step.Source?.Clone(),
+                ExternalEffect = step.ExternalEffect,
+                OperationPhase = step.Operation?.Phase ?? NyxIdChatOperationPhase.Unspecified,
+                TerminalCode = step.Operation?.TerminalCode ?? string.Empty,
+                SafeMessage = step.Operation?.SafeMessage ?? step.SafeMessage ?? string.Empty,
+                Substeps = { step.Substeps.Select(static substep => substep.Clone()) },
+            }));
+        return context;
+    }
+
+    private static string BuildExecutionPrompt(NyxIdChatStartTurnCommand command)
+    {
+        var context = command.SteeringExecutionContext;
+        if (context is null)
+            return command.Prompt ?? string.Empty;
+
+        var lines = new List<string>
+        {
+            "Continue the same committed task using the steering instruction below.",
+            "Do not ask the user to restate the original task.",
+            "Do not repeat completed steps unless the steering instruction explicitly requires fresh execution.",
+            "Treat completed-step facts as execution evidence, not as the raw provider response.",
+            "If a provider-result detail is absent, say it cannot be checked instead of inventing it.",
+            $"Steering instruction: {command.Prompt?.Trim()}",
+            $"Original task: {context.OriginPrompt.Trim()}",
+            $"Committed task: {context.TaskId}; plan: {context.PlanId}; revision: {context.PlanRevision}",
+        };
+        if (!string.IsNullOrWhiteSpace(context.TaskTitle))
+            lines.Add($"Committed task title: {context.TaskTitle.Trim()}");
+        if (context.GateMode != NyxIdChatPlanGateMode.Unspecified ||
+            !string.IsNullOrWhiteSpace(context.GateReason))
+        {
+            lines.Add(
+                $"Committed gate: {context.GateMode}; reason: {context.GateReason.Trim()}");
+        }
+
+        foreach (var resolution in context.InputResolutions)
+        {
+            var threshold = resolution.NumericThreshold is null
+                ? string.Empty
+                : $"; numeric threshold: {resolution.NumericThreshold}";
+            lines.Add(
+                $"Committed input resolution: {resolution.RequestId}; outcome: {resolution.Outcome}{threshold}");
+        }
+
+        foreach (var step in context.CompletedSteps.OrderBy(static fact => fact.Order))
+        {
+            var source = step.Source?.SourceCase switch
+            {
+                NyxIdChatStepSource.SourceOneofCase.Tool =>
+                    $"tool {step.Source.Tool.ToolName}",
+                NyxIdChatStepSource.SourceOneofCase.Postcondition =>
+                    $"postcondition {step.Source.Postcondition.Check}",
+                NyxIdChatStepSource.SourceOneofCase.Input =>
+                    $"input {step.Source.Input.RequestId}",
+                NyxIdChatStepSource.SourceOneofCase.Web =>
+                    "web",
+                _ => step.Kind.ToString(),
+            };
+            lines.Add(
+                $"Completed step {step.Order}: {step.Description.Trim()} " +
+                $"[{source}; status: {step.Status}; operation: {step.OperationPhase}; effect: {step.ExternalEffect}]");
+            foreach (var substep in step.Substeps)
+            {
+                lines.Add(
+                    $"Completed substep: {substep.Title.Trim()} [status: {substep.Status}]");
+            }
+        }
+
+        return string.Join('\n', lines);
     }
 
     private Task<DispatchAdmission> DispatchStartTurnContinuationAsync(
