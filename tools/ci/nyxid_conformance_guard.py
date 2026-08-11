@@ -62,7 +62,7 @@ def main() -> int:
 
     leaves = load_json(CONTRACT_ROOT / "cli-leaves.json")
     coverage = load_json(CONTRACT_ROOT / "coverage-manifest.json")
-    registry = load_json(CONTRACT_ROOT / "registry-v5.json")
+    registry = load_json(CONTRACT_ROOT / sources["assistant_registry"]["checked_in_payload"])
     tolerant = load_json(CONTRACT_ROOT / "tolerant-reader-fixtures.json")
     adversarial = load_json(CONTRACT_ROOT / "adversarial-fixtures.json")
     semantic = load_json(CONTRACT_ROOT / "semantic-evaluation.json")

@@ -85,7 +85,7 @@ availability/outcome from the coverage manifest, and recomputes all metrics. Pas
 
 - route accuracy at least 0.95 (at least 128 of 134 current cases);
 - availability/outcome accuracy exactly 1.0;
-- blocked-intent honesty exactly 1.0;
+- blocked-intent honesty exactly 1.0 (73 current blocked cases after `key.create` shipped);
 - zero false execution, verification, or strong-consistency claims; and
 - zero provider/protocol errors.
 
