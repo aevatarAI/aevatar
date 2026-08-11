@@ -84,6 +84,7 @@ const AccountPanel: React.FC<AccountPanelProps> = ({ identity, returnTo }) => {
               <AevatarCompactText
                 copyable
                 head={12}
+                hideMachineIdentifier={false}
                 monospace
                 tail={8}
                 value={identity.support.subject}

@@ -105,6 +105,24 @@ describe('Workflow Activity vNext account panel', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('shows provider user IDs when they use a machine identifier shape', () => {
+    render(
+      <AccountPanel
+        identity={{
+          ...identity,
+          support: {
+            groups: [],
+            roles: [],
+            subject: 'ccb108c4-dcb3-473a-a0f7-e9859bb2f2a0',
+          },
+        }}
+        returnTo="/scopes/scope-alpha/workflow-activity-vnext/settings"
+      />,
+    );
+
+    expect(screen.getByText('ccb108c4-dcb...9bb2f2a0')).toBeInTheDocument();
+  });
+
   it('renders a compact signed-in state when optional profile fields are absent', () => {
     render(
       <AccountPanel
