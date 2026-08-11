@@ -269,7 +269,9 @@ public sealed class NyxIdAssistantActionRegistryTests
     public void ExecutableComposition_ShouldRejectUnrelatedPostconditionVerifierCallable()
     {
         var unrelated = NyxIdAssistantActionCapabilityRegistrations.Current
-            .With(new NyxIdAssistantActionPostconditionVerifierRegistration(
+            .With(new NyxIdAssistantActionPostconditionVerifierRegistration<
+                NyxIdServiceConnectEvidenceExpectation,
+                NyxIdAuthorizationServiceEvidence>(
                 NyxIdAssistantActionKind.ServiceConnect,
                 NyxIdAssistantActionEvidenceStrategy.UserServiceCurrentState,
                 NyxIdActionPostconditionPort.VerifyKeyCreatePostconditionAsync,
@@ -317,6 +319,30 @@ public sealed class NyxIdAssistantActionRegistryTests
             unrelated);
 
         registry.CapabilityReadiness["service.connect"].MissingCapabilities.Should()
+            .Equal(NyxIdAssistantActionCapabilityKind.EvidencePredicate);
+    }
+
+    [Fact]
+    public void ExecutableComposition_ShouldRejectEvidencePredicateWithWrongTypedContract()
+    {
+        var wrongContract = NyxIdAssistantActionCapabilityRegistrations.Current
+            .With(new NyxIdAssistantActionEvidencePredicateRegistration<string, string>(
+                NyxIdAssistantActionKind.ServiceConnect,
+                NyxIdAssistantActionEvidenceStrategy.UserServiceCurrentState,
+                static (expectation, evidence) => string.Equals(
+                    expectation,
+                    evidence,
+                    StringComparison.Ordinal),
+                [new("probe", "probe", "other")]));
+
+        var registry = NyxIdAssistantActionRegistry.Load(
+            RegistryJsonWithKeyRotation(),
+            wrongContract);
+
+        registry.TryGetDefinition("service.connect", out _).Should().BeFalse();
+        var readiness = registry.CapabilityReadiness["service.connect"];
+        readiness.Executable.Should().BeFalse();
+        readiness.MissingCapabilities.Should()
             .Equal(NyxIdAssistantActionCapabilityKind.EvidencePredicate);
     }
 

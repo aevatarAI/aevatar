@@ -179,16 +179,39 @@ internal delegate Task<NyxIdChatActionPostconditionResult>
         AgentToolExecutionContextPayload? transientToolContext,
         CancellationToken ct);
 
-internal sealed record NyxIdAssistantActionPostconditionVerifierRegistration(
+internal abstract record NyxIdAssistantActionPostconditionVerifierRegistration(
     NyxIdAssistantActionKind Action,
     NyxIdAssistantActionEvidenceStrategy EvidenceStrategy,
     NyxIdAssistantActionPostconditionVerifier Verifier,
-    NyxIdChatActionPostconditionInput ProbeInput);
+    NyxIdChatActionPostconditionInput ProbeInput)
+{
+    internal abstract System.Type ExpectationType { get; }
+    internal abstract System.Type EvidenceType { get; }
+}
+
+internal sealed record NyxIdAssistantActionPostconditionVerifierRegistration<
+    TExpectation,
+    TEvidence>(
+    NyxIdAssistantActionKind Action,
+    NyxIdAssistantActionEvidenceStrategy EvidenceStrategy,
+    NyxIdAssistantActionPostconditionVerifier Verifier,
+    NyxIdChatActionPostconditionInput ProbeInput)
+    : NyxIdAssistantActionPostconditionVerifierRegistration(
+        Action,
+        EvidenceStrategy,
+        Verifier,
+        ProbeInput)
+{
+    internal override System.Type ExpectationType => typeof(TExpectation);
+    internal override System.Type EvidenceType => typeof(TEvidence);
+}
 
 internal abstract record NyxIdAssistantActionEvidencePredicateRegistration(
     NyxIdAssistantActionKind Action,
     NyxIdAssistantActionEvidenceStrategy EvidenceStrategy)
 {
+    internal abstract System.Type ExpectationType { get; }
+    internal abstract System.Type EvidenceType { get; }
     internal abstract bool MatchesProbe();
 }
 
@@ -209,6 +232,9 @@ internal sealed record NyxIdAssistantActionEvidencePredicateRegistration<
         NyxIdAssistantActionEvidencePredicateProbeCase<TExpectation, TEvidence>> ProbeCases)
     : NyxIdAssistantActionEvidencePredicateRegistration(Action, EvidenceStrategy)
 {
+    internal override System.Type ExpectationType => typeof(TExpectation);
+    internal override System.Type EvidenceType => typeof(TEvidence);
+
     internal override bool MatchesProbe() =>
         ProbeCases.Count > 0 &&
         ProbeCases.All(probe =>
@@ -398,7 +424,8 @@ internal sealed class NyxIdAssistantActionCapabilityRegistrations
         {
             missing.Add(NyxIdAssistantActionCapabilityKind.SafeResourcePredicate);
         }
-        if (!_postconditionVerifiers.TryGetValue(semantic.Action, out var verifier) ||
+        _postconditionVerifiers.TryGetValue(semantic.Action, out var verifier);
+        if (verifier is null ||
             verifier.EvidenceStrategy != semantic.EvidenceStrategy ||
             !PostconditionVerifierMatches(verifier))
         {
@@ -406,6 +433,7 @@ internal sealed class NyxIdAssistantActionCapabilityRegistrations
         }
         if (!_evidencePredicates.TryGetValue(semantic.Action, out var evidence) ||
             evidence.EvidenceStrategy != semantic.EvidenceStrategy ||
+            (verifier is not null && !EvidenceContractMatches(verifier, evidence)) ||
             !EvidencePredicateMatches(evidence))
         {
             missing.Add(NyxIdAssistantActionCapabilityKind.EvidencePredicate);
@@ -605,6 +633,12 @@ internal sealed class NyxIdAssistantActionCapabilityRegistrations
             return false;
         }
     }
+
+    private static bool EvidenceContractMatches(
+        NyxIdAssistantActionPostconditionVerifierRegistration verifier,
+        NyxIdAssistantActionEvidencePredicateRegistration evidence) =>
+        verifier.ExpectationType == evidence.ExpectationType &&
+        verifier.EvidenceType == evidence.EvidenceType;
 
     private static bool EvidencePredicateMatches(
         NyxIdAssistantActionEvidencePredicateRegistration registration)
@@ -926,19 +960,31 @@ internal sealed class NyxIdAssistantActionCapabilityRegistrations
                     NyxIdChatBrowserActions.ResourceMatchesAction),
             ],
             [
-                new(NyxIdAssistantActionKind.ServiceConnect,
+                new NyxIdAssistantActionPostconditionVerifierRegistration<
+                    NyxIdServiceConnectEvidenceExpectation,
+                    NyxIdAuthorizationServiceEvidence>(
+                    NyxIdAssistantActionKind.ServiceConnect,
                     NyxIdAssistantActionEvidenceStrategy.UserServiceCurrentState,
                     NyxIdActionPostconditionPort.VerifyServiceConnectPostconditionAsync,
                     ProbePostconditionInput(NyxIdAssistantActionKind.ServiceConnect)),
-                new(NyxIdAssistantActionKind.ServiceReauthorize,
+                new NyxIdAssistantActionPostconditionVerifierRegistration<
+                    NyxIdServiceReauthorizeEvidenceExpectation,
+                    NyxIdUserServiceAuthorizationEvidence>(
+                    NyxIdAssistantActionKind.ServiceReauthorize,
                     NyxIdAssistantActionEvidenceStrategy.UserServiceAuthorization,
                     NyxIdActionPostconditionPort.VerifyServiceReauthorizePostconditionAsync,
                     ProbePostconditionInput(NyxIdAssistantActionKind.ServiceReauthorize)),
-                new(NyxIdAssistantActionKind.KeyCreate,
+                new NyxIdAssistantActionPostconditionVerifierRegistration<
+                    NyxIdKeyCreateEvidenceExpectation,
+                    NyxIdAgentApiKeyEvidence>(
+                    NyxIdAssistantActionKind.KeyCreate,
                     NyxIdAssistantActionEvidenceStrategy.AgentApiKeyCurrentState,
                     NyxIdActionPostconditionPort.VerifyKeyCreatePostconditionAsync,
                     ProbePostconditionInput(NyxIdAssistantActionKind.KeyCreate)),
-                new(NyxIdAssistantActionKind.KeyRotate,
+                new NyxIdAssistantActionPostconditionVerifierRegistration<
+                    NyxIdKeyRotateEvidenceExpectation,
+                    NyxIdAgentApiKeyEvidence>(
+                    NyxIdAssistantActionKind.KeyRotate,
                     NyxIdAssistantActionEvidenceStrategy.KeyRotationLineage,
                     NyxIdActionPostconditionPort.VerifyKeyRotatePostconditionAsync,
                     ProbePostconditionInput(NyxIdAssistantActionKind.KeyRotate)),
