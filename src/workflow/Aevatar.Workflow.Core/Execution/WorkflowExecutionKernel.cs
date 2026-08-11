@@ -520,7 +520,9 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
 
             await DispatchStepAsync(next, evt.Output ?? string.Empty, state.InputFileRefs, state, WorkflowStepDispatchKind.Forward, ctx, ct);
         }
-        catch (Exception ex) when (!ct.IsCancellationRequested)
+        catch (Exception ex) when (
+            !ct.IsCancellationRequested &&
+            !WorkflowRuntimeInfrastructureFailurePolicy.IsCommittedStatePublicationFailure(ex))
         {
             ctx.Logger.LogError(
                 ex,
@@ -830,7 +832,9 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 preserveTerminalFacts,
                 preserveCurrentStepInputVariable);
         }
-        catch (Exception ex) when (!ct.IsCancellationRequested)
+        catch (Exception ex) when (
+            !ct.IsCancellationRequested &&
+            !WorkflowRuntimeInfrastructureFailurePolicy.IsCommittedStatePublicationFailure(ex))
         {
             ctx.Logger.LogError(
                 ex,
@@ -1238,7 +1242,9 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             state.CurrentStepDispatchPending = false;
             await SaveStateAsync(state, ctx, ct);
         }
-        catch (Exception ex) when (!ct.IsCancellationRequested)
+        catch (Exception ex) when (
+            !ct.IsCancellationRequested &&
+            !WorkflowRuntimeInfrastructureFailurePolicy.IsCommittedStatePublicationFailure(ex))
         {
             if (timeoutLease != null)
             {
@@ -1252,7 +1258,8 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 {
                     await SaveStateAsync(state, ctx, CancellationToken.None);
                 }
-                catch (Exception saveEx)
+                catch (Exception saveEx) when (
+                    !WorkflowRuntimeInfrastructureFailurePolicy.IsCommittedStatePublicationFailure(saveEx))
                 {
                     ctx.Logger.LogError(
                         saveEx,
@@ -1292,7 +1299,9 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         {
             await SaveStateAsync(state, ctx, ct);
         }
-        catch (Exception saveEx) when (!ct.IsCancellationRequested)
+        catch (Exception saveEx) when (
+            !ct.IsCancellationRequested &&
+            !WorkflowRuntimeInfrastructureFailurePolicy.IsCommittedStatePublicationFailure(saveEx))
         {
             ctx.Logger.LogError(
                 saveEx,
