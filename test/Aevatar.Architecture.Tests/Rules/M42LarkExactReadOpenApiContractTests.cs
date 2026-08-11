@@ -31,6 +31,30 @@ public sealed class M42LarkExactReadOpenApiContractTests
         Assert.Equal("string", parameter.GetProperty("schema").GetProperty("type").GetString());
     }
 
+    [Fact]
+    public void ExactMessageCleanupIsDestructiveApprovalProtectedAndIdentityBound()
+    {
+        using var document = LoadOverlay();
+        Assert.Equal("m42-canary-v3",
+            document.RootElement.GetProperty("info").GetProperty("version").GetString());
+        var exactDelete = document.RootElement.GetProperty("paths")
+            .GetProperty(MessageExactReadPath)
+            .GetProperty("delete");
+
+        Assert.Equal("im_message_delete", exactDelete.GetProperty("operationId").GetString());
+        var tool = exactDelete.GetProperty("x-aevatar-tool");
+        Assert.False(tool.GetProperty("readOnly").GetBoolean());
+        Assert.True(tool.GetProperty("destructive").GetBoolean());
+        Assert.True(tool.GetProperty("requiresApproval").GetBoolean());
+
+        var parameters = exactDelete.GetProperty("parameters").EnumerateArray().ToArray();
+        var parameter = Assert.Single(parameters);
+        Assert.Equal("message_id", parameter.GetProperty("name").GetString());
+        Assert.Equal("path", parameter.GetProperty("in").GetString());
+        Assert.True(parameter.GetProperty("required").GetBoolean());
+        Assert.Equal("string", parameter.GetProperty("schema").GetProperty("type").GetString());
+    }
+
     private static JsonDocument LoadOverlay()
     {
         var path = Path.Combine(

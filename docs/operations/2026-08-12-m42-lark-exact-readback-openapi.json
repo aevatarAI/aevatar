@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Lark / Feishu Bot API - Aevatar M42 Canary",
-    "version": "m42-canary-v2",
-    "description": "Immutable Milestone 42 revision of the Aevatar Lark/Feishu canary overlay. It preserves the reviewed Milestone 40 operations and adds the exact message read used to verify one provider-returned message identity without requiring chat message-list scope. Paths are relative to the domain root; NyxID injects the tenant access token."
+    "version": "m42-canary-v3",
+    "description": "Immutable Milestone 42 revision of the Aevatar Lark/Feishu canary overlay. It preserves the reviewed Milestone 40 operations and adds exact message read and approval-protected delete operations for one provider-returned message identity without requiring chat message-list scope. Paths are relative to the domain root; NyxID injects the tenant access token."
   },
   "servers": [
     {
@@ -1129,6 +1129,41 @@
         "responses": {
           "200": {
             "description": "Exact message",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "im_message_delete",
+        "summary": "Delete one message by exact provider message ID",
+        "description": "Deletes only the exact canary message returned by im_message_create. NyxID approval policy must authorize this destructive cleanup separately.",
+        "x-aevatar-tool": {
+          "name": "im_message_delete",
+          "description": "Delete one exact Lark/Feishu message by its provider message ID.",
+          "readOnly": false,
+          "destructive": true,
+          "requiresApproval": true
+        },
+        "parameters": [
+          {
+            "name": "message_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Exact message deleted",
             "content": {
               "application/json": {
                 "schema": {
