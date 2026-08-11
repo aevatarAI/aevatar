@@ -179,6 +179,14 @@ message AgentToolReadBackPaginationPayload {
   uint32 max_pages = 5;
 }
 
+// Read argument populated from the provider resource identity returned by the
+// effect. The actor persists only this target contract; the value remains in the
+// typed effect receipt and is injected immediately before the exact read.
+message AgentToolReadBackProviderResourceArgumentPayload {
+  AgentToolOperationParameterLocationPayload location = 1;
+  string argument_name = 2;
+}
+
 // Server-sealed read-back contract for proving whether an effect was applied.
 // The read operation must itself be a read-only admitted exact selector and may
 // not contain another read-back contract.
@@ -191,6 +199,7 @@ message AgentToolOperationReadBackPayload {
   // When present, a generic assertion miss is unavailable rather than absence.
   AgentToolReadBackAssertionPayload not_applied_assertion = 5;
   AgentToolReadBackPaginationPayload pagination = 6;
+  AgentToolReadBackProviderResourceArgumentPayload provider_resource_argument = 7;
 }
 
 // Credential-free authorization fence captured from the exact model-visible

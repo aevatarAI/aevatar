@@ -14,6 +14,7 @@ using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.Foundation.Abstractions.Tools;
 using Aevatar.GAgents.NyxidChat;
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -772,7 +773,7 @@ public class NyxIdConnectedServiceToolSourceTests
     }
 
     [Fact]
-    public async Task DynamicEffect_ExactRouteReadBack_FreezesRuntimeEndpointAndArrayAssertion()
+    public async Task DynamicEffect_ExactRouteReadBack_FreezesProviderIdentityPathArgument()
     {
         var handler = new FakeNyxIdHandler();
         handler.KeysByToken["user-token"] = Keys(
@@ -783,7 +784,7 @@ public class NyxIdConnectedServiceToolSourceTests
                 "usvc-lark",
                 "api-lark-bot",
                 LarkMessageEffectEndpoint("runtime-effect-uuid"),
-                LarkMessagesReadEndpoint("runtime-read-uuid")));
+                LarkMessageExactReadEndpoint("runtime-read-uuid")));
         handler.ProxyResponseBody = """{"code":0,"data":{"message_id":"om_provider_alpha"}}""";
         var source = CreateSource(
             handler,
@@ -800,10 +801,21 @@ public class NyxIdConnectedServiceToolSourceTests
         frozen.ReadBack.Should().NotBeNull();
         frozen.ReadBack!.ReadOperation.Identity.Should().Be(
             new AgentToolOperationIdentity.PublishedEndpoint("runtime-read-uuid"));
-        var query = frozen.ReadBack.Arguments.Fields["query"].StructValue.Fields;
-        query["container_id"].StringValue.Should().Be("oc_alpha");
-        query["container_id_type"].StringValue.Should().Be("chat");
-        query["page_size"].NumberValue.Should().Be(50);
+        frozen.ReadBack.ReadOperation.PathTemplate.Should()
+            .Be("/open-apis/im/v1/messages/{message_id}");
+        frozen.ReadBack.Arguments.Fields.Should().BeEmpty(
+            "the provider resource identity does not exist until the effect succeeds");
+        frozen.ReadBack.ProviderResourceArgument.Should().Be(
+            new AgentToolReadBackProviderResourceArgument(
+                AgentToolOperationParameterLocation.Path,
+                "message_id"));
+        var reloaded = AgentToolOperationAdmissionPayloadMapper.FromPayload(
+            AgentToolOperationAdmissionPayload.Parser.ParseFrom(
+                AgentToolOperationAdmissionPayloadMapper.ToPayload(frozen).ToByteArray()));
+        reloaded.Should().NotBeNull();
+        reloaded!.ReadBack!.ProviderResourceArgument.Should().Be(
+            frozen.ReadBack.ProviderResourceArgument,
+            "the exact provider identity target is an actor-persisted typed contract");
         frozen.ReadBack.Assertion.Match.Should().Be(AgentToolReadBackMatch.ArrayContainsEquals);
         frozen.ReadBack.Assertion.JsonPointer.Should().Be("/data/items");
         frozen.ReadBack.Assertion.ElementJsonPointer.Should().Be("/message_id");
@@ -821,7 +833,8 @@ public class NyxIdConnectedServiceToolSourceTests
 
         owner.ResolveOperationAdmission(
                 """{"query":{"receive_id_type":"open_id"},"body":{"receive_id":"ou_alpha","msg_type":"text","content":"{\"text\":\"m40-alpha\"}"}}""")
-            .ReadBack.Should().BeNull();
+            .ReadBack.Should().NotBeNull(
+                "an exact provider message read does not require chat-list scope");
     }
 
     [Fact]
@@ -838,7 +851,7 @@ public class NyxIdConnectedServiceToolSourceTests
                 "usvc-lark",
                 "api-lark-bot",
                 LarkMessageEffectEndpoint("runtime-effect-uuid"),
-                LarkMessagesReadEndpoint("runtime-read-uuid")));
+                LarkMessageExactReadEndpoint("runtime-read-uuid")));
         handler.ProxyResponseBody = """{"code":0,"data":{"message_id":"om_provider_alpha"}}""";
         var options = new NyxIdToolOptions
         {
@@ -977,7 +990,7 @@ public class NyxIdConnectedServiceToolSourceTests
             }).ToPayload();
 
         handler.ProxyResponseBody =
-            """{"code":0,"data":{"items":[{"message_id":"om_old"},{"message_id":"om_provider_alpha"}]}}""";
+            """{"code":0,"data":{"items":[{"message_id":"om_provider_alpha"}]}}""";
         INyxIdAdmittedOperationToolFactory toolFactory = new NyxIdAdmittedOperationToolFactory(
             client,
             options,
@@ -995,8 +1008,12 @@ public class NyxIdConnectedServiceToolSourceTests
             "the real port accepts only a successful bounded read projection with exact " +
             "selector provenance and provider resource identity");
         verification.ReadOperation.PublishedEndpoint.EndpointId.Should().Be("runtime-read-uuid");
-        verification.CheckName.Should().Be("lark_provider_message_visible_in_chat");
+        verification.CheckName.Should().Be("lark_provider_message_visible_by_id");
         handler.ProxyRequests.Should().HaveCount(2);
+        handler.ProxyRequests[1].Path.Should().EndWith(
+            "/open-apis/im/v1/messages/om_provider_alpha");
+        handler.ProxyRequests[1].Query.Should().NotContain("container_id")
+            .And.NotContain("page_size");
 
         var completed = NyxIdChatTaskLifecycle.ApplyOperationResult(
             afterEffect.State,
@@ -1013,6 +1030,26 @@ public class NyxIdConnectedServiceToolSourceTests
         completed.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Succeeded);
         completed.State.ActiveTask.Steps.Should().OnlyContain(step =>
             step.Status == NyxIdChatStepStatus.Done);
+    }
+
+    [Fact]
+    public async Task ToolVerification_LarkExactRead_ListScopePermissionError_ShouldRemainUnavailable()
+    {
+        var verification = await VerifyReadBackAsync(
+            LarkMessageExactReadBack(),
+            [
+                """{"code":99991672,"msg":"Access denied. One of the following scopes is required: [im:message.group_msg]"}""",
+            ],
+            providerResourceId: "om_provider_alpha");
+
+        verification.Result.Disposition.Should().Be(
+            NyxIdChatToolVerificationDisposition.Unavailable,
+            "a provider permission error is not evidence that the exact message is absent");
+        verification.Handler.ProxyRequests.Should().ContainSingle();
+        verification.Handler.ProxyRequests.Single().Path.Should().EndWith(
+            "/open-apis/im/v1/messages/om_provider_alpha");
+        verification.Handler.ProxyRequests.Single().Query.Should().NotContain("container_id")
+            .And.NotContain("page_size");
     }
 
     [Theory]
@@ -1637,46 +1674,17 @@ public class NyxIdConnectedServiceToolSourceTests
         EffectHttpMethod = "POST",
         EffectPathTemplate = "/open-apis/im/v1/messages",
         ReadHttpMethod = "GET",
-        ReadPathTemplate = "/open-apis/im/v1/messages",
-        CheckName = "lark_provider_message_visible_in_chat",
+        ReadPathTemplate = "/open-apis/im/v1/messages/{message_id}",
+        CheckName = "lark_provider_message_visible_by_id",
         Match = AgentToolReadBackMatch.ArrayContainsEquals,
         JsonPointer = "/data/items",
         ElementJsonPointer = "/message_id",
         EffectResultIdentityJsonPointer = "/data/message_id",
-        EffectArgumentConstraints =
-        [
-            new NyxIdAssistantEffectArgumentConstraint
-            {
-                EffectLocation = NyxIdAssistantOperationArgumentLocation.Query,
-                EffectArgumentName = "receive_id_type",
-                ExpectedValue = ProtoValue.ForString("chat_id"),
-            },
-        ],
-        ArgumentBindings =
-        [
-            new NyxIdAssistantReadBackArgumentBinding
-            {
-                EffectLocation = NyxIdAssistantOperationArgumentLocation.Body,
-                EffectArgumentName = "receive_id",
-                ReadLocation = NyxIdAssistantOperationArgumentLocation.Query,
-                ReadArgumentName = "container_id",
-            },
-        ],
-        LiteralReadArguments =
-        [
-            new NyxIdAssistantReadBackLiteralArgument
-            {
-                ReadLocation = NyxIdAssistantOperationArgumentLocation.Query,
-                ReadArgumentName = "container_id_type",
-                Value = ProtoValue.ForString("chat"),
-            },
-            new NyxIdAssistantReadBackLiteralArgument
-            {
-                ReadLocation = NyxIdAssistantOperationArgumentLocation.Query,
-                ReadArgumentName = "page_size",
-                Value = ProtoValue.ForNumber(50),
-            },
-        ],
+        ProviderResourceArgument = new NyxIdAssistantReadBackProviderResourceArgument
+        {
+            ReadLocation = NyxIdAssistantOperationArgumentLocation.Path,
+            ReadArgumentName = "message_id",
+        },
     };
 
     private static string LarkMessageEffectEndpoint(string endpointId) => $$"""
@@ -1704,16 +1712,14 @@ public class NyxIdConnectedServiceToolSourceTests
         }
         """;
 
-    private static string LarkMessagesReadEndpoint(string endpointId) => $$"""
+    private static string LarkMessageExactReadEndpoint(string endpointId) => $$"""
         {
           "endpoint_id": "{{endpointId}}",
-          "name": "im_messages_list",
+          "name": "im_message_get",
           "method": "GET",
-          "path": "/open-apis/im/v1/messages",
+          "path": "/open-apis/im/v1/messages/{message_id}",
           "parameters": [
-            { "name": "container_id_type", "in": "query", "required": true, "schema": { "type": "string", "enum": ["chat"] } },
-            { "name": "container_id", "in": "query", "required": true, "schema": { "type": "string" } },
-            { "name": "page_size", "in": "query", "required": false, "schema": { "type": "integer" } }
+            { "name": "message_id", "in": "path", "required": true, "schema": { "type": "string" } }
           ],
           "request_body_schema": null,
           "request_content_type": null,
@@ -1737,6 +1743,36 @@ public class NyxIdConnectedServiceToolSourceTests
           "response": { "content_types": ["application/json"], "binary_artifact": false }
         }
         """;
+
+    private static AgentToolOperationReadBackPayload LarkMessageExactReadBack() => new()
+    {
+        ReadOperation = AgentToolOperationAdmissionPayloadMapper.ToPayload(
+            VerificationReadOperation(
+                "lark-message-read-endpoint",
+                "/open-apis/im/v1/messages/{message_id}",
+                [
+                    new AgentToolOperationParameter(
+                        "message_id",
+                        AgentToolOperationParameterLocation.Path,
+                        true,
+                        AgentToolOperationValueSchema.Text),
+                ])),
+        Arguments = new Struct(),
+        Assertion = new AgentToolReadBackAssertionPayload
+        {
+            Match = AgentToolReadBackMatchPayload.ArrayContainsEquals,
+            JsonPointer = "/data/items",
+            ElementJsonPointer = "/message_id",
+            ExpectedValueSource =
+                AgentToolReadBackExpectedValueSourcePayload.ProviderResourceId,
+        },
+        ProviderResourceArgument = new AgentToolReadBackProviderResourceArgumentPayload
+        {
+            Location = AgentToolOperationParameterLocationPayload.Path,
+            ArgumentName = "message_id",
+        },
+        CheckName = "lark_provider_message_visible_by_id",
+    };
 
     private static AgentToolOperationReadBackPayload ApprovalReadBack()
     {
