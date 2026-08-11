@@ -39,23 +39,29 @@ The read-only classification describes the isolated runtime's durable-effect bou
 not promise that arbitrary caller-provided code is deterministic, pure, successful, or safe to
 run outside that runtime. Do not present it as a natural-language agent delegation surface.
 
-Route selection is fail closed, but credential provenance is not a capability lifecycle. Aevatar
-reads the caller-visible typed NyxID UserService inventory and selects exactly one active,
-catalog-backed `chrono-sandbox` route whose access and delegation policy satisfy the platform
-contract. A personal route is accessible by ownership; an organization/member route is accessible
-only when NyxID reports `credential_source.allowed=true`. An arbitrary custom UserService with the
-same slug has no canonical `catalog_service_id` and cannot shadow the platform route. The resolved
-exact UserService ID is sent through `_nyxid_via`; there is no slug fallback or first-candidate
+Route selection is fail closed, but credential provenance is not a capability lifecycle. During
+interactive admission and execution, Aevatar reads the caller-visible typed NyxID UserService
+inventory and selects exactly one active, catalog-backed `chrono-sandbox` route whose access and
+delegation policy satisfy the platform contract. A personal route is accessible by ownership; an
+organization/member route is accessible only when NyxID reports
+`credential_source.allowed=true`. An arbitrary custom UserService with the same slug has no
+canonical `catalog_service_id` and cannot shadow the platform route. The resolved exact
+UserService ID is sent through `_nyxid_via`; there is no slug fallback or first-candidate
 selection.
 
 For workflows, `code_execute` is compiled as an external capability with no caller-authored route
 selector. Save and bind readiness reads the same typed inventory resolver and commits the exact
 UserService ID, slug snapshot, catalog identity, and contract digest into an
 `external-capability-admission.v5` call-site proof. Durable bind/invoke additionally requires the
-existing actor-owned NyxID authorization catalog to prove that exact service grant. Runtime uses
-the committed ID as its candidate and re-reads NyxID facts as the final fail-closed gate. Existing
-v4 plans did not contain code-execution proofs; they remain supported and use the same runtime
-resolver without requiring a user rebind. New live admissions write v5 proofs.
+existing actor-owned NyxID authorization catalog to prove that exact service grant. Interactive
+runtime uses the committed ID as its candidate and re-reads NyxID facts with the source-readable
+caller credential. Scheduled runtime has only its restricted scheduled-invocation Agent Key, so it
+must not read inventory or auto-resolve a slug: it may call only the exact UserService ID sealed in
+the valid admission proof. NyxID then enforces that exact route's slug constraint and the Agent
+Key's service allowlist on the proxy request. Without either a source-readable credential or an
+exact admitted route, execution fails before network access. Existing v4 plans did not contain
+code-execution proofs; they remain supported for source-readable interactive runtime resolution,
+but scheduled execution requires an exact proof. New live admissions write v5 proofs.
 
 This resolver is private to the platform `code_execute` route. It does not filter connected
 services, `nyxid_proxy`, explicit external-capability selections, LLM routes, or managed

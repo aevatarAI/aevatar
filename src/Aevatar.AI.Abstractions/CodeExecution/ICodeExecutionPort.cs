@@ -31,7 +31,9 @@ public enum CodeExecutionLanguage
     Bash = 4,
 }
 
-public sealed record CodeExecutionCallerContext(string? NyxIdAccessToken);
+public sealed record CodeExecutionCallerContext(
+    string? ExecutionNyxIdAccessToken,
+    string? SourceReadableNyxIdAccessToken);
 
 public enum CodeExecutionRouteIdentitySource
 {

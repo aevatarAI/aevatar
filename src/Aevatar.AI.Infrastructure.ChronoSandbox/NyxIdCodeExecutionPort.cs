@@ -53,52 +53,83 @@ internal sealed class NyxIdCodeExecutionPort(
                 "The code execution request is invalid.");
         }
 
-        var bearerToken = request.Caller?.NyxIdAccessToken?.Trim();
-        if (string.IsNullOrWhiteSpace(bearerToken))
+        var executionBearerToken = NormalizeBearerToken(request.Caller?.ExecutionNyxIdAccessToken);
+        if (executionBearerToken is null)
         {
             return Failed(
                 CodeExecutionFailureKind.AdmissionDenied,
                 "code_execution_credential_unavailable",
-                "A source-readable NyxID credential is required for code execution.");
+                "A typed NyxID execution credential is required for code execution.");
         }
 
         var localDiagnosticId = CreateLocalDiagnosticId();
-        NyxIdCodeExecutionRouteResolution resolution;
-        try
+        var sourceReadableBearerToken = NormalizeBearerToken(
+            request.Caller?.SourceReadableNyxIdAccessToken);
+        CodeExecutionRouteIdentity route;
+        if (sourceReadableBearerToken is null)
         {
-            resolution = await NyxIdCodeExecutionRouteResolver.ResolveAsync(
-                    _clientFactory,
-                    bearerToken,
-                    request.Route.UserServiceId,
-                    ct)
-                .ConfigureAwait(false);
+            if (!TryResolveExactAdmittedRoute(request.Route, out var admittedUserServiceId))
+            {
+                return Failed(
+                    CodeExecutionFailureKind.AdmissionDenied,
+                    "code_execution_credential_unavailable",
+                    "A source-readable NyxID credential or an exact workflow admission is required for code execution.",
+                    localDiagnosticId);
+            }
+
+            route = new CodeExecutionRouteIdentity(
+                RequiredServiceSlug,
+                admittedUserServiceId,
+                CodeExecutionRouteIdentitySource.WorkflowCapabilityAdmission);
         }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        else
         {
-            throw;
+            NyxIdCodeExecutionRouteResolution resolution;
+            try
+            {
+                resolution = await NyxIdCodeExecutionRouteResolver.ResolveAsync(
+                        _clientFactory,
+                        sourceReadableBearerToken,
+                        request.Route.UserServiceId,
+                        ct)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                _logger.LogWarning(
+                    "Code execution route resolution failed. diagnosticId={DiagnosticId} failureKind=source_exception exceptionType={ExceptionType}",
+                    localDiagnosticId,
+                    exception.GetType().Name);
+                return Failed(
+                    CodeExecutionFailureKind.TransportUnavailable,
+                    "code_execution_route_resolution_failed",
+                    "The code execution route could not be resolved.",
+                    localDiagnosticId);
+            }
+
+            if (!resolution.IsReady)
+                return RouteResolutionFailed(resolution, localDiagnosticId);
+
+            var resolvedService = resolution.Service!;
+            route = new CodeExecutionRouteIdentity(
+                resolvedService.Slug,
+                resolvedService.Id,
+                CodeExecutionRouteIdentitySource.NyxIdUserServiceCatalog);
         }
-        catch (Exception exception)
+
+        if (string.IsNullOrWhiteSpace(route.UserServiceId))
         {
-            _logger.LogWarning(
-                "Code execution route resolution failed. diagnosticId={DiagnosticId} failureKind=source_exception exceptionType={ExceptionType}",
-                localDiagnosticId,
-                exception.GetType().Name);
             return Failed(
-                CodeExecutionFailureKind.TransportUnavailable,
-                "code_execution_route_resolution_failed",
-                "The code execution route could not be resolved.",
+                CodeExecutionFailureKind.AdmissionDenied,
+                "code_execution_admission_invalid",
+                "The code execution route does not contain an exact UserService identity.",
                 localDiagnosticId);
         }
-
-        if (!resolution.IsReady)
-            return RouteResolutionFailed(resolution, localDiagnosticId);
-
-        var resolvedService = resolution.Service!;
-        var resolvedUserServiceId = resolvedService.Id;
-        var route = new CodeExecutionRouteIdentity(
-            resolvedService.Slug,
-            resolvedUserServiceId,
-            CodeExecutionRouteIdentitySource.NyxIdUserServiceCatalog);
+        var resolvedUserServiceId = route.UserServiceId;
 
         var body = JsonSerializer.Serialize(new
         {
@@ -111,7 +142,7 @@ internal sealed class NyxIdCodeExecutionPort(
         try
         {
             response = await client.ProxyRequestBoundedAsync(
-                    bearerToken,
+                    executionBearerToken,
                     route.ServiceSlug,
                     resolvedUserServiceId,
                     ExecutionPath,
@@ -149,6 +180,32 @@ internal sealed class NyxIdCodeExecutionPort(
             return ClassifyProxyFailure(response, localDiagnosticId);
 
         return ParseResponse(response.Content, route, localDiagnosticId);
+    }
+
+    private static bool TryResolveExactAdmittedRoute(
+        CodeExecutionRouteIdentity route,
+        out string userServiceId)
+    {
+        userServiceId = route.UserServiceId ?? string.Empty;
+        return route.Source == CodeExecutionRouteIdentitySource.WorkflowCapabilityAdmission &&
+               !string.IsNullOrWhiteSpace(userServiceId) &&
+               string.Equals(userServiceId, userServiceId.Trim(), StringComparison.Ordinal);
+    }
+
+    private static string? NormalizeBearerToken(string? token)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+            return null;
+
+        var normalized = token.Trim();
+        if (string.Equals(normalized, "Bearer", StringComparison.OrdinalIgnoreCase) ||
+            normalized.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Any(char.IsWhiteSpace))
+        {
+            return null;
+        }
+
+        return normalized;
     }
 
     private static string SerializeLanguage(CodeExecutionLanguage language) => language switch

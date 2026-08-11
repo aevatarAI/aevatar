@@ -177,9 +177,9 @@ public sealed class NyxIdCodeExecuteTool(ICodeExecutionPort executionPort) : INy
                     "Language must be one of: python, javascript, typescript, bash."));
         }
 
-        var bearerToken = AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(
-            AgentToolRequestContext.Current?.Credentials);
-        if (string.IsNullOrWhiteSpace(bearerToken))
+        var credentials = AgentToolRequestContext.Current?.Credentials;
+        var executionBearerToken = ResolveExecutionBearerToken(credentials);
+        if (executionBearerToken is null)
         {
             return TerminalFailure(
                 callId,
@@ -187,7 +187,7 @@ public sealed class NyxIdCodeExecuteTool(ICodeExecutionPort executionPort) : INy
                 new CodeExecutionFailure(
                     CodeExecutionFailureKind.AdmissionDenied,
                     "code_execution_credential_unavailable",
-                    "A source-readable NyxID credential is required for code execution."));
+                    "A typed NyxID execution credential is required for code execution."));
         }
 
         if (!TryResolveAdmittedRoute(out var admittedUserServiceId))
@@ -201,6 +201,18 @@ public sealed class NyxIdCodeExecuteTool(ICodeExecutionPort executionPort) : INy
                     "The workflow code execution admission proof is invalid."));
         }
 
+        var sourceReadableBearerToken = AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(credentials);
+        if (sourceReadableBearerToken is null && admittedUserServiceId is null)
+        {
+            return TerminalFailure(
+                callId,
+                toolName,
+                new CodeExecutionFailure(
+                    CodeExecutionFailureKind.AdmissionDenied,
+                    "code_execution_credential_unavailable",
+                    "A source-readable NyxID credential is required to resolve the code execution route."));
+        }
+
         var outcome = await _executionPort.ExecuteAsync(
                 new CodeExecutionRequest(
                     codeLanguage,
@@ -211,10 +223,40 @@ public sealed class NyxIdCodeExecuteTool(ICodeExecutionPort executionPort) : INy
                         admittedUserServiceId is null
                             ? CodeExecutionRouteIdentitySource.CodeExecutionContract
                             : CodeExecutionRouteIdentitySource.WorkflowCapabilityAdmission),
-                    new CodeExecutionCallerContext(bearerToken)),
+                    new CodeExecutionCallerContext(
+                        executionBearerToken,
+                        sourceReadableBearerToken)),
                 ct)
             .ConfigureAwait(false);
         return Terminal(callId, toolName, outcome);
+    }
+
+    private static string? ResolveExecutionBearerToken(AgentToolCredentials? credentials)
+    {
+        if (credentials?.NyxIdCredentialKind is not (
+                AgentToolNyxIdCredentialKind.SourceReadableUserBearer or
+                AgentToolNyxIdCredentialKind.ProxyDelegation))
+        {
+            return null;
+        }
+
+        return NormalizeBearerToken(credentials.NyxIdAccessToken);
+    }
+
+    private static string? NormalizeBearerToken(string? token)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+            return null;
+
+        var normalized = token.Trim();
+        if (string.Equals(normalized, "Bearer", StringComparison.OrdinalIgnoreCase) ||
+            normalized.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Any(char.IsWhiteSpace))
+        {
+            return null;
+        }
+
+        return normalized;
     }
 
     private static bool TryResolveAdmittedRoute(out string? userServiceId)

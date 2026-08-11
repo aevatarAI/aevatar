@@ -81,7 +81,7 @@ public sealed class NyxIdCodeExecuteToolTests : IDisposable
     }
 
     [Fact]
-    public async Task ExecuteWithOutcomeAsync_UsesTypedRouteAndSourceReadableCredential()
+    public async Task ExecuteWithOutcomeAsync_SeparatesExecutionAndSourceReadableCredentials()
     {
         var port = new StubCodeExecutionPort(CodeExecutionOutcome.Succeeded(
             new CodeExecutionResult("42\n", string.Empty, 0, "diag-code-1", 17),
@@ -101,7 +101,9 @@ public sealed class NyxIdCodeExecuteToolTests : IDisposable
                 "chrono-sandbox",
                 null,
                 CodeExecutionRouteIdentitySource.CodeExecutionContract),
-            new CodeExecutionCallerContext("source-readable-bearer")));
+            new CodeExecutionCallerContext(
+                "request-delegation",
+                "source-readable-bearer")));
         terminal.Receipt.Should().NotBeNull();
         terminal.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
         terminal.Receipt.SubjectId.Should().Be("svc-code-alpha");
@@ -139,6 +141,37 @@ public sealed class NyxIdCodeExecuteToolTests : IDisposable
             "chrono-sandbox",
             "us-code-admitted",
             CodeExecutionRouteIdentitySource.WorkflowCapabilityAdmission));
+        port.Request.Caller.Should().Be(new CodeExecutionCallerContext(
+            "source-readable-bearer",
+            "source-readable-bearer"));
+    }
+
+    [Fact]
+    public async Task ExecuteWithOutcomeAsync_ScheduledDelegationUsesExactAdmissionWithoutSourceReadableCredential()
+    {
+        var port = new StubCodeExecutionPort(CodeExecutionOutcome.Succeeded(
+            new CodeExecutionResult("ok", string.Empty, 0),
+            ResolvedRoute));
+        var tool = new NyxIdCodeExecuteTool(port);
+        SetProxyDelegation("scheduled-agent-key", sourceReadableBearer: null);
+        AgentToolRequestContext.Current = AgentToolRequestContext.Current! with
+        {
+            OperationAdmission = CodeExecutionAdmission("us-code-admitted"),
+        };
+
+        await tool.ExecuteWithOutcomeAsync(
+            "call-scheduled-admitted",
+            tool.Name,
+            """{"language":"javascript","code":"console.log('ok')"}""");
+
+        port.Request.Should().NotBeNull();
+        port.Request!.Route.Should().Be(new CodeExecutionRouteIdentity(
+            "chrono-sandbox",
+            "us-code-admitted",
+            CodeExecutionRouteIdentitySource.WorkflowCapabilityAdmission));
+        port.Request.Caller.Should().Be(new CodeExecutionCallerContext(
+            "scheduled-agent-key",
+            null));
     }
 
     [Fact]
@@ -263,7 +296,7 @@ public sealed class NyxIdCodeExecuteToolTests : IDisposable
         AssertFailure(
             terminal,
             "code_execution_credential_unavailable",
-            "A source-readable NyxID credential is required for code execution.");
+            "A source-readable NyxID credential is required to resolve the code execution route.");
     }
 
     [Fact]

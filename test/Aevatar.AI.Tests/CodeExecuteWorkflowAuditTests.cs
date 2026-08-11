@@ -47,7 +47,8 @@ public sealed class CodeExecuteWorkflowAuditTests
 
         port.Request.Should().NotBeNull();
         port.CallCount.Should().Be(1);
-        port.Request!.Caller.NyxIdAccessToken.Should().Be("source-readable-bearer");
+        port.Request!.Caller.ExecutionNyxIdAccessToken.Should().Be("source-readable-bearer");
+        port.Request.Caller.SourceReadableNyxIdAccessToken.Should().Be("source-readable-bearer");
 
         executor.Outcome.Should().NotBeNull();
         var executionOutcome = executor.Outcome!;
