@@ -1,6 +1,7 @@
 using System.Collections.Frozen;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Aevatar.AI.Abstractions;
 
 namespace Aevatar.GAgents.NyxidChat;
 
@@ -468,6 +469,47 @@ public sealed class NyxIdAssistantActionRegistry
         return new NyxIdAssistantActionValidation(
             entry.Definition.Clone(),
             new NyxIdAssistantActionParams { CatalogServiceConnect = value });
+    }
+
+    public NyxIdAssistantActionValidation ResolveKeyCreate(
+        NyxIdKeyCreateActionRequirement requirement)
+    {
+        ArgumentNullException.ThrowIfNull(requirement);
+        if (!_entries.TryGetValue("key.create", out var entry) ||
+            !_executableActions.Contains("key.create") ||
+            entry.Definition.Action != NyxIdAssistantActionKind.KeyCreate)
+        {
+            throw Error(ActionUnsupported, "Key creation is not present in the pinned registry.");
+        }
+
+        var name = NormalizeString(requirement.Name, 256, required: true);
+        var platform = NormalizeString(requirement.Platform, 128, required: true);
+        if (requirement.AllowedServiceIds.Count is < 1 or > 64)
+            throw Error(ParamsInvalid, "Key creation requires an exact nonempty service set.");
+
+        var allowedServiceIds = new List<string>(requirement.AllowedServiceIds.Count);
+        var distinct = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var serviceId in requirement.AllowedServiceIds)
+        {
+            var normalized = NormalizeString(serviceId, 256, required: true);
+            if (!string.Equals(serviceId, normalized, StringComparison.Ordinal) ||
+                !distinct.Add(normalized))
+            {
+                throw Error(ParamsInvalid, "The key creation service identities are invalid.");
+            }
+
+            allowedServiceIds.Add(normalized);
+        }
+
+        var value = new NyxIdKeyCreateParams
+        {
+            Name = name,
+            Platform = platform,
+        };
+        value.AllowedServiceIds.Add(allowedServiceIds);
+        return new NyxIdAssistantActionValidation(
+            entry.Definition.Clone(),
+            new NyxIdAssistantActionParams { KeyCreate = value });
     }
 
     private static NyxIdAssistantActionParams ParseServiceConnect(JsonElement root)
