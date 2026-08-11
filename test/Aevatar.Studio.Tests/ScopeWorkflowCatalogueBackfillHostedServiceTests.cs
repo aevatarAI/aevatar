@@ -271,21 +271,18 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
         var rowWriter = new RecordingCatalogueRowDispatcher();
         var materializer = new ScopeWorkflowCatalogueRowMaterializer(
             new RecordingCatalogueSourceReader([draft, serviceSource], sourceWriter),
-            new RecordingCatalogueRowReader(rowWriter),
             rowWriter);
 
         await materializer.RefreshAsync(
             "scope-1",
             "wf-shared",
-            "workspace-actor",
-            7,
             "evt-refresh",
             DateTimeOffset.Parse("2026-08-06T00:00:00Z"));
 
         var row = rowWriter.Upserts.Should().ContainSingle().Subject;
         row.Id.Should().Be("scope-1:workflow:wf-shared");
         row.ActorId.Should().Be("scope-workflow-catalogue-row:scope-1:wf-shared");
-        row.StateVersion.Should().Be(1);
+        row.StateVersion.Should().Be(WatermarkStateVersion("2026-08-06T00:00:00Z"));
         row.Name.Should().Be("Draft Display");
         row.Description.Should().Be("draft desc");
         row.HasDraftSource.Should().BeTrue();
@@ -304,12 +301,10 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
         await materializer.RefreshAsync(
             "scope-1",
             "wf-shared",
-            "workspace-actor",
-            8,
             "evt-delete-draft",
             DateTimeOffset.Parse("2026-08-06T01:00:00Z"));
 
-        rowWriter.Upserts.Last().StateVersion.Should().Be(2);
+        rowWriter.Upserts.Last().StateVersion.Should().Be(WatermarkStateVersion("2026-08-06T01:00:00Z"));
         rowWriter.Upserts.Last().HasDraftSource.Should().BeFalse();
         rowWriter.DeleteMarkers.Should().BeEmpty();
 
@@ -322,15 +317,13 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
         await materializer.RefreshAsync(
             "scope-1",
             "wf-shared",
-            "service-actor",
-            9,
             "evt-delete-service",
             DateTimeOffset.Parse("2026-08-06T02:00:00Z"));
 
         rowWriter.DeleteMarkers.Should().ContainSingle().Which.Should().Be(new ProjectionDocumentDeleteMarker(
             "scope-1:workflow:wf-shared",
             "scope-workflow-catalogue-row:scope-1:wf-shared",
-            3,
+            WatermarkStateVersion("2026-08-06T02:00:00Z"),
             "evt-delete-service",
             DateTimeOffset.Parse("2026-08-06T02:00:00Z")));
     }
@@ -359,18 +352,15 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
         });
         var materializer = new ScopeWorkflowCatalogueRowMaterializer(
             new RecordingCatalogueSourceReader([draft], sourceWriter),
-            new RecordingCatalogueRowReader(rowWriter),
             rowWriter);
 
         await materializer.RefreshAsync(
             "scope-1",
             "wf-retry",
-            "workspace-actor",
-            7,
             "evt-refresh",
             DateTimeOffset.Parse("2026-08-06T00:00:00Z"));
 
-        rowWriter.Upserts.Last().StateVersion.Should().Be(5);
+        rowWriter.Upserts.Last().StateVersion.Should().Be(WatermarkStateVersion("2026-08-06T00:00:00Z"));
         rowWriter.UpsertAttempts.Should().Be(2);
     }
 
@@ -394,20 +384,20 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
         });
         var materializer = new ScopeWorkflowCatalogueRowMaterializer(
             new RecordingCatalogueSourceReader([], sourceWriter),
-            new RecordingCatalogueRowReader(rowWriter),
             rowWriter);
 
         await materializer.RefreshAsync(
             "scope-1",
             "wf-delete-retry",
-            "workspace-actor",
-            7,
             "evt-refresh",
             DateTimeOffset.Parse("2026-08-06T00:00:00Z"));
 
-        rowWriter.DeleteMarkers.Should().ContainSingle().Which.StateVersion.Should().Be(5);
+        rowWriter.DeleteMarkers.Should().ContainSingle().Which.StateVersion.Should().Be(WatermarkStateVersion("2026-08-06T00:00:00Z"));
         rowWriter.DeleteAttempts.Should().Be(2);
     }
+
+    private static long WatermarkStateVersion(string value) =>
+        DateTimeOffset.Parse(value).UtcDateTime.Ticks;
 
     private static ScopeWorkflowCatalogueBackfillHostedService CreateService(
         IReadOnlyList<ServiceCatalogReadModel> serviceCatalogs,
@@ -425,7 +415,7 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
             new StubProjectionDocumentReader<StudioWorkspaceCurrentStateDocument>(workspaces),
             new StubProjectionDocumentReader<ScopeWorkflowCatalogueSourceDocument>(existingSources),
             sourceWriter,
-            new ScopeWorkflowCatalogueRowMaterializer(sourceReader, new RecordingCatalogueRowReader(rowWriter), rowWriter),
+            new ScopeWorkflowCatalogueRowMaterializer(sourceReader, rowWriter),
             new StubWorkflowYamlDocumentService(),
             NullLogger<ScopeWorkflowCatalogueBackfillHostedService>.Instance);
 
@@ -612,29 +602,6 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
             DeleteMarkers.Add(marker);
             return Task.FromResult(ProjectionWriteResult.Applied());
         }
-    }
-
-    private sealed class RecordingCatalogueRowReader(RecordingCatalogueRowDispatcher dispatcher)
-        : IProjectionDocumentReader<ScopeWorkflowCatalogueRowDocument, string>
-    {
-        public Task<ScopeWorkflowCatalogueRowDocument?> GetAsync(string key, CancellationToken ct = default)
-        {
-            if (dispatcher.DeleteMarkers.Any(marker => string.Equals(marker.Id, key, StringComparison.Ordinal)))
-                return Task.FromResult<ScopeWorkflowCatalogueRowDocument?>(null);
-
-            var row = dispatcher.Upserts.LastOrDefault(document => string.Equals(document.Id, key, StringComparison.Ordinal));
-            return Task.FromResult(row);
-        }
-
-        public Task<ProjectionDocumentQueryResult<ScopeWorkflowCatalogueRowDocument>> QueryAsync(
-            ProjectionDocumentQuery query,
-            CancellationToken ct = default) =>
-            Task.FromResult(new ProjectionDocumentQueryResult<ScopeWorkflowCatalogueRowDocument>
-            {
-                Items = dispatcher.Upserts,
-                NextCursor = null,
-                TotalCount = dispatcher.Upserts.Count,
-            });
     }
 
     private sealed class RecordingCatalogueRowDispatcher

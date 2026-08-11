@@ -98,8 +98,6 @@ public sealed class StudioWorkspaceCurrentStateProjector
                 await _catalogueRowMaterializer.RefreshAsync(
                     state.ScopeId,
                     saved.Draft.WorkflowId,
-                    context.RootActorId,
-                    stateVersion,
                     eventId,
                     updatedAt,
                     ct);
@@ -124,8 +122,6 @@ public sealed class StudioWorkspaceCurrentStateProjector
                 await _catalogueRowMaterializer.RefreshAsync(
                     state.ScopeId,
                     deleted.WorkflowId,
-                    context.RootActorId,
-                    stateVersion,
                     eventId,
                     updatedAt,
                     ct);

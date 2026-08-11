@@ -93,8 +93,6 @@ internal sealed class ScopeWorkflowCatalogueBackfillHostedService : IHostedServi
             await RefreshRowAsync(
                 serviceCatalog.TenantId,
                 workflowId,
-                deploymentCatalog.ActorId,
-                deploymentCatalog.StateVersion,
                 deploymentCatalog.LastEventId,
                 deploymentCatalog.UpdatedAt,
                 cancellationToken);
@@ -139,8 +137,6 @@ internal sealed class ScopeWorkflowCatalogueBackfillHostedService : IHostedServi
                 await RefreshRowAsync(
                     state.ScopeId,
                     draft.WorkflowId,
-                    workspace.ActorId,
-                    workspace.StateVersion,
                     workspace.LastEventId,
                     workspace.UpdatedAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue,
                     cancellationToken);
@@ -164,8 +160,6 @@ internal sealed class ScopeWorkflowCatalogueBackfillHostedService : IHostedServi
                 await RefreshRowAsync(
                     existingDraftSource.ScopeId,
                     existingDraftSource.WorkflowId,
-                    cleanupAuthority.ActorId,
-                    cleanupAuthority.StateVersion,
                     cleanupAuthority.LastEventId,
                     cleanupAuthority.UpdatedAt,
                     cancellationToken);
@@ -235,8 +229,6 @@ internal sealed class ScopeWorkflowCatalogueBackfillHostedService : IHostedServi
                 await RefreshRowAsync(
                     existingSource.ScopeId,
                     existingSource.WorkflowId,
-                    existingSource.ActorId,
-                    existingSource.StateVersion,
                     existingSource.LastEventId,
                     existingSource.UpdatedAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue,
                     ct);
@@ -275,12 +267,10 @@ internal sealed class ScopeWorkflowCatalogueBackfillHostedService : IHostedServi
     private Task RefreshRowAsync(
         string scopeId,
         string workflowId,
-        string actorId,
-        long stateVersion,
         string eventId,
         DateTimeOffset updatedAt,
         CancellationToken ct) =>
-        _catalogueRowMaterializer.RefreshAsync(scopeId, workflowId, actorId, stateVersion, eventId, updatedAt, ct);
+        _catalogueRowMaterializer.RefreshAsync(scopeId, workflowId, eventId, updatedAt, ct);
 
     private static ServiceDeploymentReadModel? ResolveActiveDeployment(ServiceDeploymentCatalogReadModel deploymentCatalog) =>
         deploymentCatalog.Deployments

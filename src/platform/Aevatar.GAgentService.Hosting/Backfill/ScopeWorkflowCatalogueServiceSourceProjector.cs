@@ -80,8 +80,6 @@ internal sealed class ScopeWorkflowCatalogueServiceSourceProjector
         await _catalogueRowMaterializer.RefreshAsync(
             state.Identity.TenantId,
             workflowId,
-            context.RootActorId,
-            stateVersion,
             eventId,
             observedAt,
             ct);
@@ -151,8 +149,6 @@ internal sealed class ScopeWorkflowCatalogueServiceSourceProjector
             await _catalogueRowMaterializer.RefreshAsync(
                 identity.TenantId,
                 workflowId,
-                actorId,
-                stateVersion,
                 eventId,
                 observedAt,
                 ct);

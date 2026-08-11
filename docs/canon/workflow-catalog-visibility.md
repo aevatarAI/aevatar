@@ -81,7 +81,7 @@ Contract:
 - Query length after trimming/normalization is capped by the response `search.maximumQueryLength`; invalid cursor or overlong query returns `400`.
 - Rows expose typed capabilities for `open`, `activity`, `rename`, and `delete`. Unavailable actions carry a typed unavailable reason instead of requiring the client to infer from sources.
 - Rows keep `workflowId`, `publishedServiceId`, committed `actorId`, deployment/service IDs, and other identities separate. `workflowId` is the workflow-native merge key; it must not be reused as Team or Member identity.
-- `freshness.refreshWatermarkUtc` is the maximum authoritative source `UpdatedAt` materialized into the workflow catalogue row read model. It is a refresh watermark, not a synthetic local `StateVersion++`.
+- `freshness.refreshWatermarkUtc` is the maximum authoritative source `UpdatedAt` materialized into the workflow catalogue row read model. Row write `StateVersion` is derived from the authority `UpdatedAt` watermark; it is not a synthetic local `StateVersion++`.
 
 ## Scope workflow archive command
 

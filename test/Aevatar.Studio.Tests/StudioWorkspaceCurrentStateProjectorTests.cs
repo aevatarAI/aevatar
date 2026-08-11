@@ -272,7 +272,7 @@ public sealed class StudioWorkspaceCurrentStateProjectorTests
             new ProjectionDocumentDeleteMarker(
                 "scope-1:workflow:wf-alpha",
                 "scope-workflow-catalogue-row:scope-1:wf-alpha",
-                1,
+                projectedAt.UtcDateTime.Ticks,
                 "evt-draft-deleted",
                 projectedAt));
     }
@@ -309,7 +309,6 @@ public sealed class StudioWorkspaceCurrentStateProjectorTests
         rowDispatcher ??= new RecordingCatalogueRowDispatcher();
         var rowMaterializer = new ScopeWorkflowCatalogueRowMaterializer(
             new RecordingCatalogueSourceReader(catalogueDispatcher),
-            new RecordingCatalogueRowReader(rowDispatcher),
             rowDispatcher);
         return new StudioWorkspaceCurrentStateProjector(
             dispatcher,
@@ -413,29 +412,6 @@ public sealed class StudioWorkspaceCurrentStateProjectorTests
             ProjectionDocumentQuery query,
             CancellationToken ct = default) =>
             Task.FromResult(new ProjectionDocumentQueryResult<ScopeWorkflowCatalogueSourceDocument>
-            {
-                Items = dispatcher.Upserts,
-                NextCursor = null,
-                TotalCount = dispatcher.Upserts.Count,
-            });
-    }
-
-    private sealed class RecordingCatalogueRowReader(RecordingCatalogueRowDispatcher dispatcher)
-        : IProjectionDocumentReader<ScopeWorkflowCatalogueRowDocument, string>
-    {
-        public Task<ScopeWorkflowCatalogueRowDocument?> GetAsync(string key, CancellationToken ct = default)
-        {
-            if (dispatcher.DeleteMarkers.Any(marker => string.Equals(marker.Id, key, StringComparison.Ordinal)))
-                return Task.FromResult<ScopeWorkflowCatalogueRowDocument?>(null);
-
-            var row = dispatcher.Upserts.LastOrDefault(document => string.Equals(document.Id, key, StringComparison.Ordinal));
-            return Task.FromResult(row);
-        }
-
-        public Task<ProjectionDocumentQueryResult<ScopeWorkflowCatalogueRowDocument>> QueryAsync(
-            ProjectionDocumentQuery query,
-            CancellationToken ct = default) =>
-            Task.FromResult(new ProjectionDocumentQueryResult<ScopeWorkflowCatalogueRowDocument>
             {
                 Items = dispatcher.Upserts,
                 NextCursor = null,

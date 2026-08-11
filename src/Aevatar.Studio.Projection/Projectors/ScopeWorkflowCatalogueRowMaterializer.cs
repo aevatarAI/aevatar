@@ -10,24 +10,19 @@ public sealed class ScopeWorkflowCatalogueRowMaterializer
     private const int MaxWriteAttempts = 3;
 
     private readonly IProjectionDocumentReader<ScopeWorkflowCatalogueSourceDocument, string> _sourceReader;
-    private readonly IProjectionDocumentReader<ScopeWorkflowCatalogueRowDocument, string> _rowReader;
     private readonly IProjectionWriteDispatcher<ScopeWorkflowCatalogueRowDocument> _rowWriteDispatcher;
 
     public ScopeWorkflowCatalogueRowMaterializer(
         IProjectionDocumentReader<ScopeWorkflowCatalogueSourceDocument, string> sourceReader,
-        IProjectionDocumentReader<ScopeWorkflowCatalogueRowDocument, string> rowReader,
         IProjectionWriteDispatcher<ScopeWorkflowCatalogueRowDocument> rowWriteDispatcher)
     {
         _sourceReader = sourceReader ?? throw new ArgumentNullException(nameof(sourceReader));
-        _rowReader = rowReader ?? throw new ArgumentNullException(nameof(rowReader));
         _rowWriteDispatcher = rowWriteDispatcher ?? throw new ArgumentNullException(nameof(rowWriteDispatcher));
     }
 
     public async Task RefreshAsync(
         string scopeId,
         string workflowId,
-        string actorId,
-        long stateVersion,
         string eventId,
         DateTimeOffset updatedAt,
         CancellationToken ct = default)
@@ -38,10 +33,9 @@ public sealed class ScopeWorkflowCatalogueRowMaterializer
         for (var attempt = 0; attempt < MaxWriteAttempts; attempt++)
         {
             var rowId = BuildRowDocumentId(scopeId, workflowId);
-            var existingRow = await _rowReader.GetAsync(rowId, ct);
             var draft = await _sourceReader.GetAsync(BuildDraftSourceDocumentId(scopeId, workflowId), ct);
             var service = await _sourceReader.GetAsync(BuildServiceSourceDocumentId(scopeId, workflowId), ct);
-            var rowStateVersion = ResolveNextRowStateVersion(existingRow);
+            var rowWatermark = ResolveRowAuthorityWatermark(eventId, updatedAt, draft, service);
             ProjectionWriteResult result;
             if (draft == null && service == null)
             {
@@ -49,15 +43,15 @@ public sealed class ScopeWorkflowCatalogueRowMaterializer
                     new ProjectionDocumentDeleteMarker(
                         rowId,
                         BuildRowActorId(scopeId, workflowId),
-                        rowStateVersion,
-                        eventId,
-                        updatedAt),
+                        rowWatermark.StateVersion,
+                        rowWatermark.LastEventId,
+                        rowWatermark.UpdatedAt),
                     ct);
             }
             else
             {
                 result = await _rowWriteDispatcher.UpsertAsync(
-                    ToRowDocument(scopeId, workflowId, rowStateVersion, eventId, updatedAt, draft, service),
+                    ToRowDocument(scopeId, workflowId, rowWatermark, draft, service),
                     ct);
             }
 
@@ -84,9 +78,7 @@ public sealed class ScopeWorkflowCatalogueRowMaterializer
     private static ScopeWorkflowCatalogueRowDocument ToRowDocument(
         string scopeId,
         string workflowId,
-        long rowStateVersion,
-        string eventId,
-        DateTimeOffset projectedAt,
+        RowAuthorityWatermark rowWatermark,
         ScopeWorkflowCatalogueSourceDocument? draft,
         ScopeWorkflowCatalogueSourceDocument? service)
     {
@@ -95,9 +87,9 @@ public sealed class ScopeWorkflowCatalogueRowMaterializer
         {
             Id = BuildRowDocumentId(scopeId, workflowId),
             ActorId = BuildRowActorId(scopeId, workflowId),
-            StateVersion = rowStateVersion,
-            LastEventId = eventId,
-            UpdatedAt = Timestamp.FromDateTimeOffset(projectedAt),
+            StateVersion = rowWatermark.StateVersion,
+            LastEventId = rowWatermark.LastEventId,
+            UpdatedAt = Timestamp.FromDateTimeOffset(rowWatermark.UpdatedAt),
             ScopeId = scopeId,
             WorkflowId = workflowId,
             Name = ResolveName(workflowId, draft, service),
@@ -117,8 +109,33 @@ public sealed class ScopeWorkflowCatalogueRowMaterializer
         };
     }
 
-    private static long ResolveNextRowStateVersion(ScopeWorkflowCatalogueRowDocument? existingRow) =>
-        existingRow == null ? 1 : existingRow.StateVersion + 1;
+    private static RowAuthorityWatermark ResolveRowAuthorityWatermark(
+        string eventId,
+        DateTimeOffset updatedAt,
+        ScopeWorkflowCatalogueSourceDocument? draft,
+        ScopeWorkflowCatalogueSourceDocument? service)
+    {
+        var watermark = new RowAuthorityWatermark(
+            ToWatermarkStateVersion(updatedAt),
+            eventId,
+            updatedAt);
+
+        foreach (var source in new[] { draft, service }.Where(static source => source != null))
+        {
+            var sourceUpdatedAt = source!.UpdatedAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue;
+            var sourceWatermark = new RowAuthorityWatermark(
+                ToWatermarkStateVersion(sourceUpdatedAt),
+                source.LastEventId,
+                sourceUpdatedAt);
+            if (sourceWatermark.StateVersion > watermark.StateVersion)
+                watermark = sourceWatermark;
+        }
+
+        return watermark;
+    }
+
+    private static long ToWatermarkStateVersion(DateTimeOffset updatedAt) =>
+        Math.Max(1L, updatedAt.UtcDateTime.Ticks);
 
     private static DateTimeOffset ResolveRowUpdatedAt(
         ScopeWorkflowCatalogueSourceDocument? draft,
@@ -154,4 +171,9 @@ public sealed class ScopeWorkflowCatalogueRowMaterializer
 
         return workflowId;
     }
+
+    private sealed record RowAuthorityWatermark(
+        long StateVersion,
+        string LastEventId,
+        DateTimeOffset UpdatedAt);
 }
