@@ -13,6 +13,11 @@ public sealed class StepDefinition
     public required string Id { get; init; }
 
     /// <summary>
+    /// Authoring-owned display label for the workflow node. Runtime projections fall back to <see cref="Id"/>.
+    /// </summary>
+    public string? DisplayName { get; init; }
+
+    /// <summary>
     /// 步骤类型（如 llm_call、parallel、loop、conditional 等）。
     /// </summary>
     public required string Type { get; init; }

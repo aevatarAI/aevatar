@@ -179,6 +179,7 @@ public sealed class WorkflowRunStatistics
 public sealed class WorkflowRunStepTrace
 {
     public string StepId { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
     public string StepType { get; set; } = string.Empty;
     public string TargetRole { get; set; } = string.Empty;
     public DateTimeOffset? RequestedAt { get; set; }
@@ -200,6 +201,7 @@ public sealed class WorkflowRunStepTrace
     public string RequestedVariableName { get; set; } = string.Empty;
     public WorkflowRunToolApproval? ToolApproval { get; set; }
     public WorkflowRunUsageMetrics Usage { get; set; } = new();
+    public WorkflowRunStepOutcome Outcome { get; set; } = WorkflowRunStepOutcome.Unspecified;
     public double? DurationMs => RequestedAt.HasValue && CompletedAt.HasValue
         ? Math.Max(0, (CompletedAt.Value - RequestedAt.Value).TotalMilliseconds)
         : null;

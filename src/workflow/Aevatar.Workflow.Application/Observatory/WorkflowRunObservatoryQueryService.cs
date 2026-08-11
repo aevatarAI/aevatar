@@ -264,17 +264,35 @@ public sealed class WorkflowRunObservatoryQueryService
         WorkflowActorSnapshot snapshot,
         CancellationToken ct)
     {
+        var summary = ToRunSummary(snapshot);
+        var graph = await BuildRunGraphAsync(snapshot, ct);
         // One read gives the committed timeline + authoritative usage aggregate (no usage in the timeline
         // data map). Falls back to the snapshot summary if the run-isolated report has not materialized yet.
         var report = await _artifactQueryPort.GetWorkflowRunReportArtifactAsync(snapshot.ActorId, ct);
-        if (report == null)
+        if (report == null || report.StateVersion != snapshot.StateVersion)
         {
+            var reportSectionStatus = report == null
+                ? UnavailableSection(snapshot.StateVersion, "Run report artifact has not materialized.")
+                : VersionMismatchSection(
+                    snapshot.StateVersion,
+                    report.StateVersion,
+                    "Run report artifact source version does not match the current-state detail version.");
             return new ObservatoryRunDetail
             {
-                Summary = ToRunSummary(snapshot),
+                Summary = summary,
+                Initiator = ToActivityInitiatorSummary(snapshot.ActivityInitiator),
+                InputSummary = snapshot.InputSummary,
+                Sections = new ObservatoryRunDetailSectionVersions
+                {
+                    Overview = AlignedSection(snapshot.StateVersion),
+                    Steps = reportSectionStatus,
+                    Timeline = reportSectionStatus,
+                    ExecutionPath = ToSectionVersion(graph),
+                },
                 Timeline = [],
                 Diagnostics = BuildDiagnostics(snapshot, report: null, steps: [], viewEvents: []),
                 UsageTotals = new ObservatoryUsageTotals(),
+                ExecutionPath = graph,
                 RecoveryCapability = CloneRecoveryCapability(snapshot),
                 Lineage = CloneLineage(snapshot),
             };
@@ -301,7 +319,16 @@ public sealed class WorkflowRunObservatoryQueryService
 
         return new ObservatoryRunDetail
         {
-            Summary = ToRunSummary(snapshot),
+            Summary = summary,
+            Initiator = ToActivityInitiatorSummary(snapshot.ActivityInitiator),
+            InputSummary = snapshot.InputSummary,
+            Sections = new ObservatoryRunDetailSectionVersions
+            {
+                Overview = AlignedSection(snapshot.StateVersion),
+                Steps = AlignedSection(snapshot.StateVersion),
+                Timeline = AlignedSection(snapshot.StateVersion),
+                ExecutionPath = ToSectionVersion(graph),
+            },
             // Final result is fully materialized (not truncated), so the viewer can show it honestly.
             Input = report.Input,
             FinalOutput = report.FinalOutput,
@@ -309,6 +336,7 @@ public sealed class WorkflowRunObservatoryQueryService
             Diagnostics = BuildDiagnostics(snapshot, report, steps, viewEvents),
             Steps = steps,
             Timeline = viewEvents,
+            ExecutionPath = graph,
             Statistics = ToStatistics(report.Summary),
             UsageTotals = WorkflowRunObservatoryTimelineMapper.ToUsageTotals(report.Usage),
             RecoveryCapability = CloneRecoveryCapability(snapshot),
@@ -350,14 +378,34 @@ public sealed class WorkflowRunObservatoryQueryService
             snapshot.ActorId,
             ct: ct);
 
+        var status = ResolveGraphVersionStatus(snapshot.StateVersion, subgraph.SourceStateVersion);
+        if (status.VersionStatus != ObservatoryRunDetailSectionVersionStatus.Aligned)
+        {
+            return new ObservatoryRunGraph
+            {
+                RootNodeId = subgraph.RootNodeId,
+                DetailStateVersion = status.DetailStateVersion,
+                SourceStateVersion = status.SourceStateVersion,
+                VersionStatus = status.VersionStatus,
+                VersionReason = status.Reason,
+            };
+        }
+
         return new ObservatoryRunGraph
         {
             RootNodeId = subgraph.RootNodeId,
+            DetailStateVersion = status.DetailStateVersion,
+            SourceStateVersion = status.SourceStateVersion,
+            VersionStatus = status.VersionStatus,
+            VersionReason = status.Reason,
             Nodes = subgraph.Nodes
                 .Select(node => new ObservatoryGraphNode
                 {
                     NodeId = node.NodeId,
                     NodeType = node.NodeType,
+                    DisplayName = node.Properties != null && node.Properties.TryGetValue("displayName", out var displayName)
+                        ? displayName
+                        : string.Empty,
                     // WorkflowStep nodes carry the bare stepId in their properties; surface it so the
                     // viewer can join the node to its committed timeline steps (run / actor nodes have none).
                     StepId = node.Properties != null && node.Properties.TryGetValue("stepId", out var stepId)
@@ -379,6 +427,62 @@ public sealed class WorkflowRunObservatoryQueryService
                 .ToList(),
         };
     }
+
+    private static ObservatoryRunDetailSectionVersion ResolveGraphVersionStatus(
+        long detailStateVersion,
+        long sourceStateVersion)
+    {
+        if (sourceStateVersion <= 0)
+        {
+            return UnavailableSection(
+                detailStateVersion,
+                "Execution path graph source version is unavailable.");
+        }
+
+        return sourceStateVersion == detailStateVersion
+            ? AlignedSection(detailStateVersion)
+            : VersionMismatchSection(
+                detailStateVersion,
+                sourceStateVersion,
+                "Execution path graph source version does not match the current-state detail version.");
+    }
+
+    private static ObservatoryRunDetailSectionVersion ToSectionVersion(ObservatoryRunGraph graph) =>
+        new()
+        {
+            DetailStateVersion = graph.DetailStateVersion,
+            SourceStateVersion = graph.SourceStateVersion,
+            VersionStatus = graph.VersionStatus,
+            Reason = graph.VersionReason,
+        };
+
+    private static ObservatoryRunDetailSectionVersion AlignedSection(long stateVersion) =>
+        new()
+        {
+            DetailStateVersion = stateVersion,
+            SourceStateVersion = stateVersion,
+            VersionStatus = ObservatoryRunDetailSectionVersionStatus.Aligned,
+        };
+
+    private static ObservatoryRunDetailSectionVersion UnavailableSection(long detailStateVersion, string reason) =>
+        new()
+        {
+            DetailStateVersion = detailStateVersion,
+            VersionStatus = ObservatoryRunDetailSectionVersionStatus.Unavailable,
+            Reason = reason,
+        };
+
+    private static ObservatoryRunDetailSectionVersion VersionMismatchSection(
+        long detailStateVersion,
+        long sourceStateVersion,
+        string reason) =>
+        new()
+        {
+            DetailStateVersion = detailStateVersion,
+            SourceStateVersion = sourceStateVersion,
+            VersionStatus = ObservatoryRunDetailSectionVersionStatus.VersionMismatch,
+            Reason = reason,
+        };
 
     // Ownership gate: the run is visible only when its scope-stamped current-state snapshot matches the
     // caller scope. Returning null on mismatch (or missing run) lets the endpoint answer 404 uniformly.
@@ -533,11 +637,13 @@ public sealed class WorkflowRunObservatoryQueryService
         new()
         {
             StepId = step.StepId,
+            DisplayName = string.IsNullOrWhiteSpace(step.DisplayName) ? step.StepId : step.DisplayName,
             StepType = step.StepType,
             TargetRole = step.TargetRole,
             RequestedAtUtc = step.RequestedAt,
             CompletedAtUtc = step.CompletedAt,
             Success = step.Success,
+            Outcome = ResolveStepOutcome(step),
             DurationMs = step.DurationMs,
             OutputPreview = step.OutputPreview,
             Error = step.Error,
@@ -565,6 +671,30 @@ public sealed class WorkflowRunObservatoryQueryService
                 Cost = step.Usage.Cost,
             },
         };
+
+    private static WorkflowRunStepOutcome ResolveStepOutcome(WorkflowRunStepTrace step)
+    {
+        if (step.Outcome != WorkflowRunStepOutcome.Unspecified)
+            return step.Outcome;
+        if (HasSkippedAnnotation(step.CompletionAnnotations))
+            return WorkflowRunStepOutcome.Skipped;
+        if (step.Success == true)
+            return WorkflowRunStepOutcome.Succeeded;
+        if (step.Success == false || !string.IsNullOrWhiteSpace(step.Error))
+            return WorkflowRunStepOutcome.Failed;
+        if (!string.IsNullOrWhiteSpace(step.SuspensionType) ||
+            (step.RequestedAt.HasValue && !step.CompletedAt.HasValue))
+        {
+            return WorkflowRunStepOutcome.Waiting;
+        }
+
+        return WorkflowRunStepOutcome.Unspecified;
+    }
+
+    private static bool HasSkippedAnnotation(IReadOnlyDictionary<string, string> annotations) =>
+        annotations.Any(static item =>
+            item.Key.EndsWith(".skipped", StringComparison.Ordinal) &&
+            string.Equals(item.Value, "true", StringComparison.OrdinalIgnoreCase));
 
     private static ObservatoryRunStatistics ToStatistics(WorkflowRunStatistics summary) =>
         new()
@@ -834,6 +964,8 @@ public sealed class WorkflowRunObservatoryQueryService
 
     private static string StepDisplayName(ObservatoryStepDetail step)
     {
+        if (!string.IsNullOrWhiteSpace(step.DisplayName))
+            return step.DisplayName;
         if (!string.IsNullOrWhiteSpace(step.StepId))
             return step.StepId;
         if (!string.IsNullOrWhiteSpace(step.StepType))

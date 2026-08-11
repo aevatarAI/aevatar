@@ -110,6 +110,7 @@ public sealed class WorkflowExecutionArtifactQueryPort : IWorkflowExecutionArtif
         var boundedTake = Math.Clamp(take, 1, 2000);
         var direction = MapDirection(options?.Direction ?? WorkflowRunGraphExportDirection.Both);
         var edgeTypes = NormalizeEdgeTypes(options?.EdgeTypes);
+        var sourceStateVersion = await ResolveGraphSourceStateVersionAsync(workflowRunIdValue, ct);
         var subgraph = await _graphStore.GetSubgraphAsync(
             new ProjectionGraphQuery
             {
@@ -121,8 +122,42 @@ public sealed class WorkflowExecutionArtifactQueryPort : IWorkflowExecutionArtif
                 Take = boundedTake,
             },
             ct);
-        return _mapper.ToWorkflowRunGraphExportSubgraph(workflowRunIdValue, subgraph);
+        return _mapper.ToWorkflowRunGraphExportSubgraph(workflowRunIdValue, subgraph, sourceStateVersion);
     }
+
+    private async Task<long> ResolveGraphSourceStateVersionAsync(string workflowRunId, CancellationToken ct)
+    {
+        var sourceSubgraph = await _graphStore.GetSubgraphAsync(
+            new ProjectionGraphQuery
+            {
+                Scope = WorkflowExecutionGraphConstants.Scope,
+                RootNodeId = workflowRunId,
+                Direction = ProjectionGraphDirection.Outbound,
+                EdgeTypes = [WorkflowExecutionGraphConstants.EdgeTypeOwns],
+                Depth = 1,
+                Take = 2000,
+            },
+            ct);
+
+        var sourceVersions = sourceSubgraph.Nodes
+            .Where(node => string.Equals(node.NodeType, WorkflowExecutionGraphConstants.RunNodeType, StringComparison.Ordinal))
+            .Where(node =>
+                node.Properties.TryGetValue(WorkflowExecutionGraphConstants.RootActorIdPropertyKey, out var rootActorId) &&
+                string.Equals(rootActorId, workflowRunId, StringComparison.Ordinal))
+            .Select(ReadSourceStateVersion)
+            .Where(version => version > 0)
+            .Distinct()
+            .ToList();
+
+        return sourceVersions.Count == 1 ? sourceVersions[0] : 0;
+    }
+
+    private static long ReadSourceStateVersion(ProjectionGraphNode node) =>
+        node.Properties.TryGetValue(WorkflowExecutionGraphConstants.SourceStateVersionPropertyKey, out var value) &&
+        long.TryParse(value, out var parsed) &&
+        parsed > 0
+            ? parsed
+            : 0;
 
     private static ProjectionGraphDirection MapDirection(WorkflowRunGraphExportDirection direction)
     {

@@ -461,7 +461,26 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
                             NodeId = "actor-1",
                             NodeType = "Actor",
                         },
+                        new ProjectionGraphNode
+                        {
+                            Scope = WorkflowExecutionGraphConstants.Scope,
+                            NodeId = "run:actor-1:cmd-1",
+                            NodeType = WorkflowExecutionGraphConstants.RunNodeType,
+                            Properties = new Dictionary<string, string>(StringComparer.Ordinal)
+                            {
+                                [WorkflowExecutionGraphConstants.RootActorIdPropertyKey] = "actor-1",
+                                [WorkflowExecutionGraphConstants.SourceStateVersionPropertyKey] = "12",
+                            },
+                        },
                     ],
+                },
+            },
+            reportReader: new RecordingDocumentReader<WorkflowRunInsightReportDocument>
+            {
+                Item = new WorkflowRunInsightReportDocument
+                {
+                    Id = "actor-1",
+                    StateVersion = 12,
                 },
             },
             currentStateReader: new RecordingDocumentReader<WorkflowExecutionCurrentStateDocument>
@@ -488,6 +507,7 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
 
         edges.Should().ContainSingle(x => x.EdgeId == "edge-1");
         subgraph.RootNodeId.Should().Be("actor-1");
+        subgraph.SourceStateVersion.Should().Be(12);
 
         harness.GraphStore.LastGraphEdgesQuery.Should().NotBeNull();
         harness.GraphStore.LastGraphEdgesQuery!.RootNodeId.Should().Be("actor-1");
