@@ -448,6 +448,67 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
     }
 
     [Fact]
+    public async Task WorkflowStudio_TaskStepProtocol_ShouldDecodeConditionStepsAndExpiredNeedsYouOutcomes()
+    {
+        var protocol = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantProtocol);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8').replace(/^export /gm, '');
+            const context = { structuredClone, TextDecoder, URL, console };
+            vm.createContext(context);
+            vm.runInContext(source, context);
+
+            // Conditional branches commit a condition step, and local approval expiry commits an
+            // expired needs-you resolution. normalizeEnum throws NYXID_ENUM_INVALID on any value
+            // the decoder never declared, and consumeSse then degrades the whole frame to a
+            // protocol error, so an undeclared value silently stops the run card from rendering.
+            const conditionStep = context.normalizeFrame({
+              type:'CUSTOM', sequence:51, custom:{name:'nyxid.task.step.changed', payload:{
+                taskId:'task-alpha', planRevision:3,
+                changeKind:'NYX_ID_CHAT_STEP_CHANGE_KIND_STATUS',
+                step:{
+                  stepId:'step-condition', order:3, kind:'NYX_ID_CHAT_STEP_KIND_CONDITION',
+                  status:'NYX_ID_CHAT_STEP_STATUS_DONE',
+                  externalEffect:'NYX_ID_CHAT_EFFECT_EVIDENCE_NOT_APPLIED',
+                  addedBy:'NYX_ID_CHAT_STEP_ADDED_BY_INITIAL'
+                }
+              }}
+            });
+
+            assert.equal(conditionStep.type, 'task_step_changed');
+            assert.equal(conditionStep.payload.step.kind, 'condition');
+            assert.equal(conditionStep.payload.step.externalEffect, 'not_applied');
+
+            // The numeric wire form resolves positionally, so the declared order must stay in
+            // proto field-number order (condition is 8).
+            const numericConditionStep = context.normalizeFrame({
+              type:'CUSTOM', sequence:52, custom:{name:'nyxid.task.step.changed', payload:{
+                taskId:'task-alpha', planRevision:3, changeKind:1,
+                step:{ stepId:'step-condition', order:3, kind:8, status:4,
+                  externalEffect:2, addedBy:1 }
+              }}
+            });
+
+            assert.equal(numericConditionStep.payload.step.kind, 'condition');
+
+            const expiredNeedsYou = context.normalizeFrame({
+              type:'CUSTOM', sequence:53, custom:{name:'nyxid.input.changed', payload:{
+                requestId:'input-alpha', clientRequestId:'client-input',
+                outcome:'NYX_ID_CHAT_NEEDS_YOU_RESOLUTION_OUTCOME_EXPIRED'
+              }}
+            });
+
+            assert.equal(expiredNeedsYou.type, 'input_changed');
+            assert.equal(expiredNeedsYou.payload.outcome, 'expired');
+            """;
+
+        var result = await RunNodeAsync(script, protocol);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
     public async Task WorkflowStudio_TaskStepSourceLabel_ShouldUseTypedPostconditionCheck()
     {
         var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);

@@ -74,7 +74,7 @@ const ENUMS = Object.freeze({
     "planned", "waiting", "running", "done", "failed", "skipped", "cancelled", "uncertain",
   ]),
   stepKind: enumDefinition("NYX_ID_CHAT_STEP_KIND_", [
-    "llm", "tool", "browser_action", "postcondition", "input", "approval", "web",
+    "llm", "tool", "browser_action", "postcondition", "input", "approval", "web", "condition",
   ]),
   planGateMode: enumDefinition("NYX_ID_CHAT_PLAN_GATE_MODE_", ["auto", "confirm"]),
   stepAddedBy: enumDefinition("NYX_ID_CHAT_STEP_ADDED_BY_", ["initial", "replan", "steering"]),
@@ -104,7 +104,9 @@ const ENUMS = Object.freeze({
   transitionOutcome: enumDefinition("NYX_ID_CHAT_TRANSITION_OUTCOME_", [
     "accepted", "rejected", "idempotent",
   ]),
-  needsYouOutcome: enumDefinition("NYX_ID_CHAT_NEEDS_YOU_RESOLUTION_OUTCOME_", ["accepted"]),
+  needsYouOutcome: enumDefinition("NYX_ID_CHAT_NEEDS_YOU_RESOLUTION_OUTCOME_", [
+    "accepted", "expired",
+  ]),
   approvalReversibility: enumDefinition("NYX_ID_CHAT_APPROVAL_REVERSIBILITY_", [
     "reversible", "irreversible", "unknown",
   ]),

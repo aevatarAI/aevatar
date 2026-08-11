@@ -193,11 +193,18 @@ typed `source`, effect evidence, actor-computed `availableActions`, and its
 actor-authored update time. Planning provenance is typed as `addedBy`,
 `addedInPlanRevision`, `cancelledInPlanRevision`, `dependsOn`, optional
 `estimate`, and typed `substeps`. The closed source union
-is `llm`, `tool`, `browserAction`, `postcondition`, `input`, `approval`, or the
-reserved `web` source. Tool source keeps `toolName`, exact `serviceSlug`, exact
-`serviceId`, and optional producer-authored `readinessCapabilityId` separate.
-Postcondition source carries `actionRequestId` plus the stable `check`; approval
-source carries the exact `approvalRequestId`.
+is `llm`, `tool`, `browserAction`, `postcondition`, `input`, `approval`,
+`condition`, or the reserved `web` source. Tool source keeps `toolName`, exact
+`serviceSlug`, exact `serviceId`, and optional producer-authored
+`readinessCapabilityId` separate. Postcondition source carries `actionRequestId`
+plus the stable `check`; approval source carries the exact `approvalRequestId`.
+Condition source carries the committed numeric threshold evaluation — effective
+threshold, threshold origin, observed value, comparison, and outcome — that a
+guarded step depends on through its typed `guard`.
+
+Every renderer must decode the complete union. A client that omits a member
+cannot render any task that reaches it, on the live frame path and the state
+path alike, so adding a member to the union is a client-visible change.
 
 `planRevision` identifies the frozen semantic plan, not a conversation turn or
 status transition. Revision 1 has cause `initial`; later records use exactly one
