@@ -328,6 +328,7 @@ public sealed class NyxIdChatTurnOperationExecutor
         "The action postcondition input was invalid.";
     private const string PrepareOperationSubstepId = "prepare-operation";
     private const string ExecuteOperationSubstepId = "execute-operation";
+    private const string WebSearchToolName = "web_search";
     internal const int StreamingProgressBatchBytes = 64 * 1024;
     internal static readonly TimeSpan StreamingProgressBatchInterval = TimeSpan.FromSeconds(1);
 
@@ -868,10 +869,11 @@ public sealed class NyxIdChatTurnOperationExecutor
                 NyxIdChatEffectEvidence.NotStarted);
         }
 
+        var phaseTitles = ResolveToolPhaseTitles(toolInput.ToolName);
         await ReportPhaseAsync(
                 command.Key,
                 PrepareOperationSubstepId,
-                "Prepare operation",
+                phaseTitles.Prepare,
                 NyxIdChatSubstepStatus.Running,
                 session,
                         reportProgressAsync,
@@ -917,7 +919,7 @@ public sealed class NyxIdChatTurnOperationExecutor
         await ReportPhaseAsync(
                 command.Key,
                 PrepareOperationSubstepId,
-                "Prepare operation",
+                phaseTitles.Prepare,
                 NyxIdChatSubstepStatus.Done,
                 session,
                 reportProgressAsync,
@@ -946,7 +948,7 @@ public sealed class NyxIdChatTurnOperationExecutor
         await ReportPhaseAsync(
                 command.Key,
                 ExecuteOperationSubstepId,
-                "Execute operation",
+                phaseTitles.Execute,
                 NyxIdChatSubstepStatus.Running,
                 session,
                 reportProgressAsync,
@@ -983,7 +985,7 @@ public sealed class NyxIdChatTurnOperationExecutor
         await ReportPhaseAsync(
                 command.Key,
                 ExecuteOperationSubstepId,
-                "Execute operation",
+                phaseTitles.Execute,
                 NyxIdChatSubstepStatus.Done,
                 session,
                 reportProgressAsync,
@@ -2246,6 +2248,11 @@ public sealed class NyxIdChatTurnOperationExecutor
                 Status = status,
             },
         }, ct);
+
+    private static (string Prepare, string Execute) ResolveToolPhaseTitles(string toolName) =>
+        string.Equals(toolName, WebSearchToolName, StringComparison.Ordinal)
+            ? ("Build search query", "Search current web results")
+            : ("Prepare operation", "Execute operation");
 
     private static bool IsValidLlmExecution(
         AgentRunLlmStepExecution execution,

@@ -897,21 +897,52 @@ describe('ChatPage canonical NyxID Assistant', () => {
     (chatHistoryApi.listConversationMetas as jest.Mock).mockResolvedValue([
       serverConversation,
     ]);
-    const original = taskStep('step-original', {
-      description: 'Compare original candidates',
-    });
-    const completedEvidence = taskStep('step-completed-search', {
-      order: 2,
-      kind: 'web',
+    const completedInput = taskStep('step-uc2-gaps', {
+      kind: 'input',
       status: 'done',
-      description: 'Completed search evidence: Marina Bay options',
-      source: { web: {} },
+      description: 'Answer logistics and agree to research-only scope',
+      source: { input: { requestId: 'input-uc2-gaps' } },
       externalEffect: 'not_applied',
       availableActions: undefined,
       operation: null,
     });
+    const original = taskStep('step-original', {
+      order: 3,
+      description: 'Compare original candidates',
+    });
+    const completedEvidence = taskStep('step-uc2-search', {
+      order: 2,
+      status: 'done',
+      description: 'Aevatar web_search found the candidate set',
+      source: { tool: { toolName: 'web_search' } },
+      externalEffect: 'not_applied',
+      availableActions: undefined,
+      operation: {
+        conversationActorId: 'conversation-alpha',
+        turnId: 'turn-alpha',
+        taskId: 'task-alpha',
+        stepId: 'step-uc2-search',
+        operationId: 'operation-uc2-search',
+        operationGeneration: 1,
+        kind: 'tool',
+        phase: 'succeeded',
+      },
+      substeps: [
+        {
+          substepId: 'prepare-operation',
+          title: 'Build search query',
+          status: 'done',
+        },
+        {
+          substepId: 'execute-operation',
+          title: 'Search current web results',
+          status: 'done',
+        },
+      ],
+    });
     const steered = taskPlan(
       [
+        completedInput,
         completedEvidence,
         {
           ...original,
@@ -933,7 +964,7 @@ describe('ChatPage canonical NyxID Assistant', () => {
           {
             planRevision: 1,
             revisionCause: 'initial',
-            addedStepIds: ['step-original', 'step-completed-search'],
+            addedStepIds: ['step-uc2-gaps', 'step-original', 'step-uc2-search'],
             cancelledStepIds: [],
           },
           {
@@ -946,6 +977,13 @@ describe('ChatPage canonical NyxID Assistant', () => {
         title: 'Dinner research',
       },
     );
+    const stopReceipt =
+      'Stopped. Partial-work receipt: 2 completed steps were retained. ' +
+      'Retained: Answer logistics and agree to research-only scope; ' +
+      'Aevatar web_search found the candidate set. ' +
+      'Unfinished work was fenced; the in-flight operation could not be proven cancelled. ' +
+      'Fenced: Compare for 7 PM and a private room. No external effect was applied. ' +
+      'Late evidence cannot advance this stopped task.';
     const stopped = {
       ...steered,
       status: 'stopped',
@@ -954,7 +992,6 @@ describe('ChatPage canonical NyxID Assistant', () => {
         ...step,
         status: step.status === 'running' ? 'cancelled' : step.status,
         availableActions: undefined,
-        operation: null,
       })),
     };
     const stoppedState = currentState(
@@ -963,38 +1000,47 @@ describe('ChatPage canonical NyxID Assistant', () => {
           turnId: 'turn-alpha',
           taskId: 'task-alpha',
           status: 'stopped',
-          safeMessage: 'Partial research preserved.',
+          safeMessage: stopReceipt,
         },
         activeTask: stopped,
-        latestControlResult: { outcome: 'stopped' },
+        controlFence: {
+          kind: 'stop',
+          requestId: 'stop-uc2-1',
+          clientRequestId: 'client-stop-uc2-1',
+          turnId: 'turn-alpha',
+          taskId: 'task-alpha',
+          outcome: 'uncancellable',
+          safeMessage: stopReceipt,
+        },
       },
       12,
     );
-    const newGoalStep = taskStep('step-new-search', {
+    const newGoalStep = taskStep('step-uc2b-search', {
       description: 'Find Friday dinner options',
+      source: { tool: { toolName: 'web_search' } },
       operation: {
         conversationActorId: 'conversation-alpha',
-        turnId: 'turn-beta',
-        taskId: 'task-beta',
-        stepId: 'step-new-search',
-        operationId: 'operation-new-search',
+        turnId: 'turn-uc2b-1',
+        taskId: 'task-uc2b',
+        stepId: 'step-uc2b-search',
+        operationId: 'operation-uc2b-search',
         operationGeneration: 1,
-        kind: 'web',
+        kind: 'tool',
         phase: 'running',
       },
     });
     const newGoalPlan = taskPlan([newGoalStep], {
-      taskId: 'task-beta',
-      turnId: 'turn-beta',
-      planId: 'plan-beta',
+      taskId: 'task-uc2b',
+      turnId: 'turn-uc2b-1',
+      planId: 'plan-uc2b',
       title: 'Friday dinner research',
     });
     const newGoalState = {
       ...currentState(
         {
           activeTurn: {
-            turnId: 'turn-beta',
-            taskId: 'task-beta',
+            turnId: 'turn-uc2b-1',
+            taskId: 'task-uc2b',
             status: 'active',
           },
           latestTurn: null,
@@ -1003,19 +1049,21 @@ describe('ChatPage canonical NyxID Assistant', () => {
               turnId: 'turn-alpha',
               taskId: 'task-alpha',
               status: 'stopped',
-              safeMessage: 'Partial research preserved.',
+              safeMessage: stopReceipt,
             },
           ],
           activeTask: newGoalPlan,
         },
         13,
       ),
-      turnId: 'turn-beta',
+      turnId: 'turn-uc2b-1',
     };
     (chatHistoryApi.loadConversationState as jest.Mock)
       .mockResolvedValueOnce(
         activeTaskState(
-          taskPlan([original, completedEvidence], { title: 'Dinner research' }),
+          taskPlan([completedInput, original, completedEvidence], {
+            title: 'Dinner research',
+          }),
           10,
         ),
       )
@@ -1031,7 +1079,7 @@ describe('ChatPage canonical NyxID Assistant', () => {
             ? completedStream(
                 'Friday dinner research started.',
                 'conversation-alpha',
-                'turn-beta',
+                'turn-uc2b-1',
                 [
                   {
                     type: 'CUSTOM',
@@ -1073,16 +1121,29 @@ describe('ChatPage canonical NyxID Assistant', () => {
       within(taskRow('Compare original candidates')).getByText('cancelled'),
     ).toBeInTheDocument();
     expect(
-      within(
-        taskRow('Completed search evidence: Marina Bay options'),
-      ).getByText('done'),
+      within(taskRow('Aevatar web_search found the candidate set')).getByText(
+        'done',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(taskRow('Aevatar web_search found the candidate set')).getByText(
+        'web_search',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(taskRow('Aevatar web_search found the candidate set')).getByText(
+        'Build search query · done',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(taskRow('Aevatar web_search found the candidate set')).getByText(
+        'Search current web results · done',
+      ),
     ).toBeInTheDocument();
     const stop = screen.getByRole('button', { name: 'Stop task' });
     await waitFor(() => expect(stop).toBeEnabled());
     fireEvent.click(stop);
-    expect(
-      await screen.findByText('Partial research preserved.'),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(stopReceipt)).toBeInTheDocument();
     expect(requestBodies()).toEqual([
       {
         type: 'task.steer',
@@ -1106,14 +1167,12 @@ describe('ChatPage canonical NyxID Assistant', () => {
     firstView.unmount();
     renderWithQueryClient(<ChatPage />);
     await openCanonicalConversation();
-    expect(
-      await screen.findByText('Partial research preserved.'),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(stopReceipt)).toBeInTheDocument();
     expect(screen.getAllByText('Task result')).toHaveLength(1);
     expect(
-      within(
-        taskRow('Completed search evidence: Marina Bay options'),
-      ).getByText('done'),
+      within(taskRow('Aevatar web_search found the candidate set')).getByText(
+        'done',
+      ),
     ).toBeInTheDocument();
     expect(
       screen.queryByRole('button', { name: 'Stop task' }),
@@ -1127,8 +1186,8 @@ describe('ChatPage canonical NyxID Assistant', () => {
     expect(newGoalState).toEqual(
       expect.objectContaining({
         snapshot: expect.objectContaining({
-          activeTurn: expect.objectContaining({ taskId: 'task-beta' }),
-          activeTask: expect.objectContaining({ taskId: 'task-beta' }),
+          activeTurn: expect.objectContaining({ taskId: 'task-uc2b' }),
+          activeTask: expect.objectContaining({ taskId: 'task-uc2b' }),
         }),
       }),
     );

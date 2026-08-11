@@ -88,6 +88,33 @@ public sealed class NyxIdChatPlanGateDecisionsTests
     }
 
     [Fact]
+    public void MountedWebSearch_ShouldAutoAdmitWithExactAevatarExecutorIdentity()
+    {
+        var planned = NyxIdChatTaskLifecycle.ApplyOperationResult(
+            ActiveLlmState(),
+            ToolPlan(
+                "{\"query\":\"Greek dinner northern Singapore Friday 7 pm\"}",
+                isReadOnly: true,
+                toolName: "web_search"),
+            Now);
+
+        planned.State.ActiveTask.Gate.Mode.Should().Be(NyxIdChatPlanGateMode.Auto);
+        planned.State.ActiveTask.Gate.Status.Should().Be(NyxIdChatPlanGateStatus.Satisfied);
+        var search = planned.State.ActiveTask.Steps.Single(step =>
+            step.Kind == NyxIdChatStepKind.Tool);
+        search.Source.Tool.ToolName.Should().Be("web_search");
+        search.MayChangeExternalState.Should().BeFalse();
+        search.Status.Should().Be(NyxIdChatStepStatus.Running);
+        search.AvailableActions.Stop.Should().BeTrue();
+        planned.NextCommand!.Tool.ToolName.Should().Be("web_search");
+        planned.NextCommand.Tool.MayChangeExternalState.Should().BeFalse();
+        planned.State.ActiveTask.Steps.Should().ContainSingle(step =>
+            step.Kind == NyxIdChatStepKind.Llm &&
+            step.Status == NyxIdChatStepStatus.Planned &&
+            step.DependsOn.Contains(search.StepId));
+    }
+
+    [Fact]
     public void EstimatedPlanAboveConfiguredThreshold_ShouldRequireConfirmation()
     {
         var state = ActiveLlmState();
@@ -586,7 +613,8 @@ public sealed class NyxIdChatPlanGateDecisionsTests
         string arguments,
         bool requiresApproval = false,
         bool isReadOnly = false,
-        AgentToolOperationAdmissionPayload? operationAdmission = null) => new()
+        AgentToolOperationAdmissionPayload? operationAdmission = null,
+        string toolName = "repository_update") => new()
         {
             Key = OperationKey("step-llm-alpha", "operation-llm-alpha"),
             Llm = new NyxIdChatLLMOperationResult
@@ -597,7 +625,7 @@ public sealed class NyxIdChatPlanGateDecisionsTests
                 new NyxIdChatToolCall
                 {
                     CallId = "call-alpha",
-                    ToolName = "repository_update",
+                    ToolName = toolName,
                     ArgumentsJson = arguments,
                     Safety = new NyxIdChatToolCallSafety
                     {

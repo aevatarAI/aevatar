@@ -161,6 +161,21 @@ public class NyxIdChatSystemPromptTests
     }
 
     [Fact]
+    public void ComposedPrompt_ShouldKeepReadOnlyResearchFallbackAndArtifactHonest()
+    {
+        var prompt = ComposedAgentPrompt();
+
+        prompt.Should().Contain("include that scope change in the single composite `ask_user` question");
+        prompt.Should().Contain("require the user's free-text consent before any tool runs");
+        prompt.Should().Contain("name it as Aevatar `web_search`");
+        prompt.Should().Contain("actor-derived `auto` gate");
+        prompt.Should().Contain("separate facts supported by successful reads from facts that `cannot check right now`");
+        prompt.Should().Contain("no reservation, publication, or other external mutation occurred");
+        prompt.Should().Contain("partial-work receipt based on committed step evidence");
+        prompt.Should().Contain("late evidence cannot advance the stopped task");
+    }
+
+    [Fact]
     public void Value_ShouldKeepLocalHandoffsAndExcludedOperationsHonest()
     {
         var prompt = NyxIdChatSystemPrompt.Value.Content;
