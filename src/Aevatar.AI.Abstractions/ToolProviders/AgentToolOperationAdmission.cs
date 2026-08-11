@@ -84,7 +84,29 @@ public sealed record AgentToolOperationReadBack(
     string CheckName,
     AgentToolReadBackAssertion? NotAppliedAssertion = null,
     AgentToolReadBackPagination? Pagination = null,
-    AgentToolReadBackProviderResourceArgument? ProviderResourceArgument = null);
+    AgentToolReadBackProviderResourceArgument? ProviderResourceArgument = null,
+    string EffectResultIdentityJsonPointer = "");
+
+public static class AgentToolEffectResultIdentityJsonPointer
+{
+    public static bool IsValid(string? pointer)
+    {
+        if (string.IsNullOrEmpty(pointer))
+            return true;
+        if (!pointer.StartsWith("/", StringComparison.Ordinal))
+            return false;
+
+        for (var index = 0; index < pointer.Length; index++)
+        {
+            if (pointer[index] != '~')
+                continue;
+            if (++index >= pointer.Length || pointer[index] is not ('0' or '1'))
+                return false;
+        }
+
+        return true;
+    }
+}
 
 public static class AgentToolOperationSelector
 {

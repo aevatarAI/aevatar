@@ -337,6 +337,7 @@ public sealed class AdmittedNyxIdChatTurnOperationReconciliationPort
                 tool.CallId,
                 tool.ToolName,
                 created.Snapshot,
+                tool.OperationAdmission?.ReadBack,
                 new NyxIdChatTransientExecutionSession())
             .Result;
     }
@@ -411,6 +412,7 @@ public sealed class AdmittedNyxIdChatTurnOperationReconciliationPort
                 continuation.ToolCallId,
                 continuation.ToolName,
                 snapshot,
+                continuation.OperationAdmission?.ReadBack,
                 new NyxIdChatTransientExecutionSession())
             .Result;
     }

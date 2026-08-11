@@ -502,6 +502,8 @@ public sealed class NyxIdExactServiceApprovalPortTests
     public async Task RedeemAsync_ShouldReplaySameBoundReceipt()
     {
         var authority = Authority();
+        const string responseBody = "{\"id\":\"message-alpha\"}";
+        var responseDigest = NyxIdExactServiceApprovalReceiptValidator.ComputeDigest(responseBody);
         JsonObject? captured = null;
         var handler = new RecordingHandler(async request =>
         {
@@ -515,8 +517,8 @@ public sealed class NyxIdExactServiceApprovalPortTests
                 receipt: new JsonObject
                 {
                     ["http_status"] = 201,
-                    ["response_body"] = "{\"id\":\"message-alpha\"}",
-                    ["response_digest"] = "sha256:response",
+                    ["response_body"] = responseBody,
+                    ["response_digest"] = responseDigest,
                 }));
         });
         var port = CreatePort(handler);
@@ -527,8 +529,8 @@ public sealed class NyxIdExactServiceApprovalPortTests
         snapshot.State.Should().Be(NyxIdExactServiceApprovalState.Redeemed);
         snapshot.Receipt.Should().Be(new NyxIdExactServiceApprovalReceipt(
             201,
-            "{\"id\":\"message-alpha\"}",
-            "sha256:response"));
+            responseBody,
+            responseDigest));
         captured.Should().NotBeNull();
         captured!["catalog_digest"]!.GetValue<string>().Should().Be(authority.CatalogDigest);
         captured["operation_digest"]!.GetValue<string>().Should().Be(authority.OperationDigest);
@@ -536,6 +538,68 @@ public sealed class NyxIdExactServiceApprovalPortTests
         captured["operation_generation"]!.GetValue<long>().Should().Be(
             authority.OperationGeneration);
         captured["idempotency_key"]!.GetValue<string>().Should().Be(authority.IdempotencyKey);
+    }
+
+    [Fact]
+    public async Task RedeemAsync_WhenResponseDigestDoesNotMatchBody_ShouldFailClosed()
+    {
+        var authority = Authority();
+        var handler = new RecordingHandler(_ => Task.FromResult(JsonResponse(SnapshotJson(
+            "redeemed",
+            authority.OperationDigest,
+            receipt: new JsonObject
+            {
+                ["http_status"] = 201,
+                ["response_body"] = "{\"id\":\"message-alpha\"}",
+                ["response_digest"] = $"sha256:{new string('0', 64)}",
+            }))));
+
+        var snapshot = await CreatePort(handler).RedeemAsync(
+            "user-token", authority, CancellationToken.None);
+
+        snapshot.State.Should().Be(NyxIdExactServiceApprovalState.Failed);
+        snapshot.FailureCode.Should().Be("exact_service_receipt_digest_mismatch");
+        snapshot.Receipt.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task RedeemAsync_WhenRedeemedReceiptIsMissing_ShouldFailClosed()
+    {
+        var authority = Authority();
+        var handler = new RecordingHandler(_ => Task.FromResult(JsonResponse(SnapshotJson(
+            "redeemed",
+            authority.OperationDigest))));
+
+        var snapshot = await CreatePort(handler).RedeemAsync(
+            "user-token", authority, CancellationToken.None);
+
+        snapshot.State.Should().Be(NyxIdExactServiceApprovalState.Failed);
+        snapshot.FailureCode.Should().Be("exact_service_receipt_missing");
+        snapshot.Receipt.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task RedeemAsync_WhenProviderReceiptHasNonSuccessfulStatus_ShouldFailClosed()
+    {
+        var authority = Authority();
+        const string responseBody = "{\"code\":\"provider_rejected\"}";
+        var handler = new RecordingHandler(_ => Task.FromResult(JsonResponse(SnapshotJson(
+            "redeemed",
+            authority.OperationDigest,
+            receipt: new JsonObject
+            {
+                ["http_status"] = 409,
+                ["response_body"] = responseBody,
+                ["response_digest"] =
+                    NyxIdExactServiceApprovalReceiptValidator.ComputeDigest(responseBody),
+            }))));
+
+        var snapshot = await CreatePort(handler).RedeemAsync(
+            "user-token", authority, CancellationToken.None);
+
+        snapshot.State.Should().Be(NyxIdExactServiceApprovalState.Failed);
+        snapshot.FailureCode.Should().Be("exact_service_provider_http_error");
+        snapshot.Receipt.Should().BeNull();
     }
 
     private static NyxIdExactServiceApprovalPort CreatePort(HttpMessageHandler handler)

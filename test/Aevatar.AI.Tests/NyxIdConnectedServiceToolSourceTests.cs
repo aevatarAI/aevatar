@@ -809,6 +809,7 @@ public class NyxIdConnectedServiceToolSourceTests
             new AgentToolReadBackProviderResourceArgument(
                 AgentToolOperationParameterLocation.Path,
                 "message_id"));
+        frozen.ReadBack.EffectResultIdentityJsonPointer.Should().Be("/data/message_id");
         var reloaded = AgentToolOperationAdmissionPayloadMapper.FromPayload(
             AgentToolOperationAdmissionPayload.Parser.ParseFrom(
                 AgentToolOperationAdmissionPayloadMapper.ToPayload(frozen).ToByteArray()));
@@ -816,6 +817,7 @@ public class NyxIdConnectedServiceToolSourceTests
         reloaded!.ReadBack!.ProviderResourceArgument.Should().Be(
             frozen.ReadBack.ProviderResourceArgument,
             "the exact provider identity target is an actor-persisted typed contract");
+        reloaded.ReadBack.EffectResultIdentityJsonPointer.Should().Be("/data/message_id");
         frozen.ReadBack.Assertion.Match.Should().Be(AgentToolReadBackMatch.ArrayContainsEquals);
         frozen.ReadBack.Assertion.JsonPointer.Should().Be("/data/items");
         frozen.ReadBack.Assertion.ElementJsonPointer.Should().Be("/message_id");

@@ -106,6 +106,8 @@ public static class AgentToolOperationAdmissionPayloadMapper
             Arguments = readBack.Arguments?.Clone() ?? new Google.Protobuf.WellKnownTypes.Struct(),
             Assertion = ToReadBackAssertion(readBack.Assertion),
             CheckName = readBack.CheckName ?? string.Empty,
+            EffectResultIdentityJsonPointer =
+                readBack.EffectResultIdentityJsonPointer ?? string.Empty,
         };
         if (readBack.NotAppliedAssertion is not null)
             payload.NotAppliedAssertion = ToReadBackAssertion(readBack.NotAppliedAssertion);
@@ -174,7 +176,8 @@ public static class AgentToolOperationAdmissionPayloadMapper
                 ? null
                 : new AgentToolReadBackProviderResourceArgument(
                     FromParameterLocation(payload.ProviderResourceArgument.Location),
-                    payload.ProviderResourceArgument.ArgumentName ?? string.Empty));
+                    payload.ProviderResourceArgument.ArgumentName ?? string.Empty),
+            payload.EffectResultIdentityJsonPointer ?? string.Empty);
     }
 
     private static AgentToolReadBackAssertionPayload ToReadBackAssertion(

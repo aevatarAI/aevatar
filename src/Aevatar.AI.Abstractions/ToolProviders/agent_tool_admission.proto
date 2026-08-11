@@ -200,6 +200,9 @@ message AgentToolOperationReadBackPayload {
   AgentToolReadBackAssertionPayload not_applied_assertion = 5;
   AgentToolReadBackPaginationPayload pagination = 6;
   AgentToolReadBackProviderResourceArgumentPayload provider_resource_argument = 7;
+  // RFC 6901 pointer into the bounded effect response that yields the exact
+  // provider resource identity needed by the frozen read-back contract.
+  string effect_result_identity_json_pointer = 8;
 }
 
 // Credential-free authorization fence captured from the exact model-visible

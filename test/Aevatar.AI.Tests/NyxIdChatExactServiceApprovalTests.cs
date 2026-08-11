@@ -26,7 +26,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
                     NyxIdExactServiceApprovalState.Pending,
                     authority)),
         };
-        var admission = ExactWriteAdmission();
+        var admission = ExactWriteAdmissionWithProviderIdentity();
         var generation = new StreamingCapabilityReplyExecutor(admission);
         var executor = ExactApprovalExecutor(generation, approvalPort);
         var (session, call) = await PrepareExactServiceCallAsync(executor);
@@ -67,7 +67,8 @@ public sealed partial class NyxIdChatTurnGAgentTests
         {
             CreateResult = new NyxIdExactServiceApprovalCreateResult(disposition),
         };
-        var generation = new StreamingCapabilityReplyExecutor(ExactWriteAdmission());
+        var generation = new StreamingCapabilityReplyExecutor(
+            ExactWriteAdmissionWithProviderIdentity());
         var executor = ExactApprovalExecutor(generation, approvalPort);
         var (session, call) = await PrepareExactServiceCallAsync(executor);
 
@@ -91,7 +92,8 @@ public sealed partial class NyxIdChatTurnGAgentTests
                 NyxIdExactServiceApprovalCreateDisposition.Rejected,
                 FailureCode: "requester_scope_mismatch"),
         };
-        var generation = new StreamingCapabilityReplyExecutor(ExactWriteAdmission());
+        var generation = new StreamingCapabilityReplyExecutor(
+            ExactWriteAdmissionWithProviderIdentity());
         var executor = ExactApprovalExecutor(generation, approvalPort);
         var (session, call) = await PrepareExactServiceCallAsync(executor);
 
@@ -114,10 +116,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
     public async Task ExactApprovalContinuation_AfterTransientSessionLoss_ShouldDecideAndRedeemSameAuthority()
     {
         var authority = ExactApprovalAuthority();
-        var receipt = new NyxIdExactServiceApprovalReceipt(
-            201,
-            "{\"id\":\"message-alpha\"}",
-            "sha256:response");
+        var receipt = ExactProviderReceipt();
         var approvalPort = new RecordingExactServiceApprovalPort
         {
             DecideResult = new NyxIdExactServiceApprovalSnapshot(
@@ -144,9 +143,73 @@ public sealed partial class NyxIdChatTurnGAgentTests
             .Which.Should().BeEquivalentTo(authority);
         execution.Result.Tool.Receipt.Status.Should().Be(AgentToolReceiptStatus.Success);
         execution.Result.Tool.Receipt.ResultJson.Should().Be(receipt.ResponseBody);
+        execution.Result.Tool.Receipt.ProviderResourceId.Should().Be("message-alpha");
         execution.Result.Tool.ResultJson.Should().Be(receipt.ResponseBody);
         execution.Result.Tool.ExternalEffect.Should().Be(
             NyxIdChatEffectEvidence.MayHaveChanged);
+    }
+
+    [Fact]
+    public async Task ExactConnectedServiceEffect_WhenCreateReplaysRedeemedReceipt_ShouldRecoverIdentity()
+    {
+        var authority = ExactApprovalAuthority();
+        var approvalPort = new RecordingExactServiceApprovalPort
+        {
+            CreateResult = new NyxIdExactServiceApprovalCreateResult(
+                NyxIdExactServiceApprovalCreateDisposition.Created,
+                new NyxIdExactServiceApprovalSnapshot(
+                    NyxIdExactServiceApprovalState.Redeemed,
+                    authority,
+                    ExactProviderReceipt())),
+        };
+        var generation = new StreamingCapabilityReplyExecutor(
+            ExactWriteAdmissionWithProviderIdentity());
+        var executor = ExactApprovalExecutor(generation, approvalPort);
+        var (session, call) = await PrepareExactServiceCallAsync(executor);
+
+        var execution = await executor.ExecuteAsync(
+            ExactServiceToolCommand(call),
+            session,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        generation.ToolExecutions.Should().Be(0);
+        execution.Result.Tool.Receipt.Status.Should().Be(AgentToolReceiptStatus.Success);
+        execution.Result.Tool.Receipt.ProviderResourceId.Should().Be("message-alpha");
+    }
+
+    [Theory]
+    [InlineData(400, false, "exact_service_provider_http_error")]
+    [InlineData(201, true, "exact_service_receipt_digest_mismatch")]
+    public async Task ExactApprovalRedeem_WithUntrustedReceipt_ShouldFailClosedWithoutIdentity(
+        int httpStatus,
+        bool corruptDigest,
+        string expectedError)
+    {
+        var authority = ExactApprovalAuthority();
+        var approvalPort = new RecordingExactServiceApprovalPort
+        {
+            DecideResult = new NyxIdExactServiceApprovalSnapshot(
+                NyxIdExactServiceApprovalState.Approved,
+                authority),
+            RedeemResult = new NyxIdExactServiceApprovalSnapshot(
+                NyxIdExactServiceApprovalState.Redeemed,
+                authority,
+                ExactProviderReceipt(httpStatus, corruptDigest)),
+        };
+
+        var execution = await ExactApprovalExecutor(
+                new CapabilityGeneratingReplyExecutor(), approvalPort)
+            .ExecuteAsync(
+                ExactApprovalContinuation(authority, approved: true),
+                new NyxIdChatTransientExecutionSession(),
+                static (_, _) => Task.CompletedTask,
+                CancellationToken.None);
+
+        execution.Result.Tool.Receipt.Status.Should().Be(AgentToolReceiptStatus.Error);
+        execution.Result.Tool.Receipt.ErrorCode.Should().Be(expectedError);
+        execution.Result.Tool.Receipt.ProviderResourceId.Should().BeEmpty();
+        execution.Result.Tool.ExternalEffect.Should().Be(NyxIdChatEffectEvidence.MayHaveChanged);
     }
 
     [Fact]
@@ -229,13 +292,14 @@ public sealed partial class NyxIdChatTurnGAgentTests
             CallId = "call-alpha",
             ToolName = "tool-alpha",
             ArgumentsJson = "{\"value\":1}",
-            OperationAdmission = ExactWriteAdmission(),
+            OperationAdmission = ExactWriteAdmissionWithProviderIdentity(),
         });
         var credentials = RecoveryToolContext("user-token").Credentials;
 
         await approvalPort.CreateAsync(
             "user-token",
-            AgentToolOperationAdmissionPayloadMapper.FromPayload(ExactWriteAdmission())!,
+            AgentToolOperationAdmissionPayloadMapper.FromPayload(
+                ExactWriteAdmissionWithProviderIdentity())!,
             JsonNode.Parse(command.Tool.ArgumentsJson)!,
             command.Key.OperationId,
             command.Key.OperationGeneration,
@@ -268,6 +332,40 @@ public sealed partial class NyxIdChatTurnGAgentTests
         await AssertRecoveryCredentialRevokedAsync(vault, input);
     }
 
+    [Fact]
+    public async Task ExactCreateRecovery_WhenRequestWasAlreadyRedeemed_ShouldRecoverIdentity()
+    {
+        var authority = ExactApprovalAuthority();
+        var approvalPort = new RecordingExactServiceApprovalPort
+        {
+            CreateResult = new NyxIdExactServiceApprovalCreateResult(
+                NyxIdExactServiceApprovalCreateDisposition.Created,
+                new NyxIdExactServiceApprovalSnapshot(
+                    NyxIdExactServiceApprovalState.Redeemed,
+                    authority,
+                    ExactProviderReceipt())),
+        };
+        var command = ExactServiceToolCommand(new NyxIdChatToolCall
+        {
+            CallId = "call-alpha",
+            ToolName = "tool-alpha",
+            ArgumentsJson = "{\"value\":1}",
+            OperationAdmission = ExactWriteAdmissionWithProviderIdentity(),
+        });
+        var (vault, input) = await ExactRecoveryInputAsync(
+            command,
+            RecoveryToolContext("user-token").Credentials,
+            NyxIdChatExactServiceRecoveryStage.Create);
+
+        var result = await ExactReconciliationPort(vault, approvalPort)
+            .ReconcileAsync(input, CancellationToken.None);
+
+        approvalPort.CreateInputs.Should().ContainSingle();
+        result.Tool.Receipt.Status.Should().Be(AgentToolReceiptStatus.Success);
+        result.Tool.Receipt.ProviderResourceId.Should().Be("message-alpha");
+        await AssertRecoveryCredentialRevokedAsync(vault, input);
+    }
+
     [Theory]
     [InlineData(NyxIdExactServiceApprovalCreateDisposition.TierAUnavailable)]
     [InlineData(NyxIdExactServiceApprovalCreateDisposition.ApprovalNotRequired)]
@@ -283,7 +381,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
             CallId = "call-alpha",
             ToolName = "tool-alpha",
             ArgumentsJson = "{\"value\":1}",
-            OperationAdmission = ExactWriteAdmission(),
+            OperationAdmission = ExactWriteAdmissionWithProviderIdentity(),
         });
         var (vault, input) = await ExactRecoveryInputAsync(
             command,
@@ -305,10 +403,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
     public async Task ExactRedeemRecovery_AfterCompletionLoss_ShouldReplayStoredReceiptWithoutReinvocation()
     {
         var authority = ExactApprovalAuthority();
-        var receipt = new NyxIdExactServiceApprovalReceipt(
-            201,
-            "{\"id\":\"message-alpha\"}",
-            "sha256:response");
+        var receipt = ExactProviderReceipt();
         var redeemed = new NyxIdExactServiceApprovalSnapshot(
             NyxIdExactServiceApprovalState.Redeemed,
             authority,
@@ -341,6 +436,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
         result.Tool.Receipt.Status.Should().Be(AgentToolReceiptStatus.Success);
         result.Tool.ResultJson.Should().Be(receipt.ResponseBody);
         result.Tool.Receipt.ResultJson.Should().Be(receipt.ResponseBody);
+        result.Tool.Receipt.ProviderResourceId.Should().Be("message-alpha");
         await AssertRecoveryCredentialRevokedAsync(vault, input);
     }
 
@@ -348,10 +444,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
     public async Task ExactDecisionRecovery_WhenPending_ShouldReplayDecisionThenRedeem()
     {
         var authority = ExactApprovalAuthority();
-        var receipt = new NyxIdExactServiceApprovalReceipt(
-            201,
-            "{\"id\":\"message-alpha\"}",
-            "sha256:response");
+        var receipt = ExactProviderReceipt();
         var approvalPort = new RecordingExactServiceApprovalPort
         {
             ObserveResult = new NyxIdExactServiceApprovalSnapshot(
@@ -379,6 +472,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
         approvalPort.RedeemAuthorities.Should().ContainSingle();
         result.Tool.Receipt.Status.Should().Be(AgentToolReceiptStatus.Success);
         result.Tool.ResultJson.Should().Be(receipt.ResponseBody);
+        result.Tool.Receipt.ProviderResourceId.Should().Be("message-alpha");
         await AssertRecoveryCredentialRevokedAsync(vault, input);
     }
 
@@ -506,7 +600,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
             CallId = "call-alpha",
             ToolName = "tool-alpha",
             ArgumentsJson = "{\"value\":1}",
-            OperationAdmission = ExactWriteAdmission(),
+            OperationAdmission = ExactWriteAdmissionWithProviderIdentity(),
         });
 
         await agent.HandleOperationAsync(command);
@@ -688,8 +782,59 @@ public sealed partial class NyxIdChatTurnGAgentTests
             ExactServiceApproval = authority.Clone(),
             ToolCallId = "call-alpha",
             ToolName = "tool-alpha",
+            OperationAdmission = ExactWriteAdmissionWithProviderIdentity(),
         },
     };
+
+    private static AgentToolOperationAdmissionPayload ExactWriteAdmissionWithProviderIdentity()
+    {
+        var admission = ExactWriteAdmission();
+        var readOperation = ExactReadAdmission();
+        readOperation.ServiceInstanceId = admission.ServiceInstanceId;
+        readOperation.ServiceSlug = admission.ServiceSlug;
+        readOperation.CatalogDigest = admission.CatalogDigest;
+        readOperation.Parameters.Add(new AgentToolOperationParameterPayload
+        {
+            Name = "repositoryId",
+            Location = AgentToolOperationParameterLocationPayload.Path,
+            Required = true,
+            Schema = new AgentToolOperationValueSchemaPayload
+            {
+                Kind = AgentToolOperationValueKindPayload.String,
+            },
+        });
+        admission.ReadBack = new AgentToolOperationReadBackPayload
+        {
+            ReadOperation = readOperation,
+            Arguments = new Struct(),
+            Assertion = new AgentToolReadBackAssertionPayload
+            {
+                Match = AgentToolReadBackMatchPayload.Equals,
+                JsonPointer = "/id",
+                ExpectedValueSource =
+                    AgentToolReadBackExpectedValueSourcePayload.ProviderResourceId,
+            },
+            CheckName = "repository_visible_by_id",
+            ProviderResourceArgument = new AgentToolReadBackProviderResourceArgumentPayload
+            {
+                Location = AgentToolOperationParameterLocationPayload.Path,
+                ArgumentName = "repositoryId",
+            },
+            EffectResultIdentityJsonPointer = "/data/message_id",
+        };
+        return admission;
+    }
+
+    private static NyxIdExactServiceApprovalReceipt ExactProviderReceipt(
+        int httpStatus = 201,
+        bool corruptDigest = false)
+    {
+        const string responseBody = "{\"data\":{\"message_id\":\"message-alpha\"}}";
+        var responseDigest = corruptDigest
+            ? $"sha256:{new string('0', 64)}"
+            : NyxIdExactServiceApprovalReceiptValidator.ComputeDigest(responseBody);
+        return new(httpStatus, responseBody, responseDigest);
+    }
 
     private static NyxIdExactServiceApprovalAuthority ExactApprovalAuthority() => new()
     {

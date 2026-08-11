@@ -94,6 +94,8 @@ internal static class NyxIdChatOperationAdmissionPolicy
             readBack.Assertion is null ||
             string.IsNullOrWhiteSpace(readBack.CheckName) ||
             readBack.Assertion.Match == AgentToolReadBackMatchPayload.Unspecified ||
+            !AgentToolEffectResultIdentityJsonPointer.IsValid(
+                readBack.EffectResultIdentityJsonPointer) ||
             operation.ReadBack is not null)
         {
             return false;
@@ -102,6 +104,12 @@ internal static class NyxIdChatOperationAdmissionPolicy
         if (!AgentToolReadBackExpectedValueSourcePayloadCanonicalizer.TryGetCanonicalSource(
                 readBack.Assertion,
                 out var expectedValueSource))
+        {
+            return false;
+        }
+        if (!string.IsNullOrEmpty(readBack.EffectResultIdentityJsonPointer) &&
+            expectedValueSource !=
+            AgentToolReadBackExpectedValueSourcePayload.ProviderResourceId)
         {
             return false;
         }

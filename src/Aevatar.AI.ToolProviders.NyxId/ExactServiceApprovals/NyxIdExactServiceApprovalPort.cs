@@ -36,6 +36,41 @@ public sealed record NyxIdExactServiceApprovalReceipt(
     string ResponseBody,
     string ResponseDigest);
 
+public static class NyxIdExactServiceApprovalReceiptValidator
+{
+    public static bool IsSuccessfulHttpStatus(NyxIdExactServiceApprovalReceipt receipt) =>
+        receipt.HttpStatus is >= 200 and <= 299;
+
+    public static bool HasValidDigest(NyxIdExactServiceApprovalReceipt receipt)
+    {
+        ArgumentNullException.ThrowIfNull(receipt);
+        if (receipt.ResponseDigest.Length != 71 ||
+            !receipt.ResponseDigest.StartsWith("sha256:", StringComparison.Ordinal) ||
+            !IsLowerHex(receipt.ResponseDigest.AsSpan(7)))
+        {
+            return false;
+        }
+
+        var expected = ComputeDigest(receipt.ResponseBody);
+        return CryptographicOperations.FixedTimeEquals(
+            Encoding.ASCII.GetBytes(expected),
+            Encoding.ASCII.GetBytes(receipt.ResponseDigest));
+    }
+
+    public static string ComputeDigest(string responseBody) =>
+        $"sha256:{Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(responseBody)))}";
+
+    private static bool IsLowerHex(ReadOnlySpan<char> value)
+    {
+        foreach (var character in value)
+        {
+            if (character is not (>= '0' and <= '9') and not (>= 'a' and <= 'f'))
+                return false;
+        }
+        return true;
+    }
+}
+
 public sealed record NyxIdExactServiceApprovalSnapshot(
     NyxIdExactServiceApprovalState State,
     NyxIdExactServiceApprovalAuthority Authority,
@@ -293,25 +328,61 @@ public sealed class NyxIdExactServiceApprovalPort : INyxIdExactServiceApprovalPo
                 IdempotencyKey = idempotencyKey,
                 ExpiresAt = Timestamp.FromDateTimeOffset(expiresAt),
             };
-            NyxIdExactServiceApprovalReceipt? receipt = null;
-            if (root.TryGetProperty("receipt", out var receiptElement) &&
-                receiptElement.ValueKind == JsonValueKind.Object &&
-                receiptElement.TryGetProperty("http_status", out var httpStatus) &&
-                httpStatus.TryGetInt32(out var status) &&
-                TryString(receiptElement, "response_body", out var responseBody) &&
-                TryString(receiptElement, "response_digest", out var responseDigest))
-            {
-                receipt = new(status, responseBody, responseDigest);
-            }
+            var state = MapState(stateText);
+            var receipt = ParseReceipt(root);
             var failureCode = TryString(root, "failure_code", out var failure)
                 ? failure
                 : null;
-            return new(MapState(stateText), authority, receipt, failureCode);
+            return ValidateSnapshotReceipt(state, authority, receipt, failureCode);
         }
         catch (JsonException)
         {
             return null;
         }
+    }
+
+    private static NyxIdExactServiceApprovalReceipt? ParseReceipt(JsonElement root)
+    {
+        if (!root.TryGetProperty("receipt", out var receipt) ||
+            receipt.ValueKind != JsonValueKind.Object ||
+            !receipt.TryGetProperty("http_status", out var httpStatus) ||
+            !httpStatus.TryGetInt32(out var status) ||
+            !TryString(receipt, "response_body", out var responseBody) ||
+            !TryString(receipt, "response_digest", out var responseDigest))
+        {
+            return null;
+        }
+        return new(status, responseBody, responseDigest);
+    }
+
+    private static NyxIdExactServiceApprovalSnapshot ValidateSnapshotReceipt(
+        NyxIdExactServiceApprovalState state,
+        NyxIdExactServiceApprovalAuthority authority,
+        NyxIdExactServiceApprovalReceipt? receipt,
+        string? failureCode)
+    {
+        if (state != NyxIdExactServiceApprovalState.Redeemed)
+            return new(state, authority, receipt, failureCode);
+        if (receipt is null)
+        {
+            return new(
+                NyxIdExactServiceApprovalState.Failed,
+                authority,
+                FailureCode: "exact_service_receipt_missing");
+        }
+        if (!NyxIdExactServiceApprovalReceiptValidator.HasValidDigest(receipt))
+        {
+            return new(
+                NyxIdExactServiceApprovalState.Failed,
+                authority,
+                FailureCode: "exact_service_receipt_digest_mismatch");
+        }
+        return NyxIdExactServiceApprovalReceiptValidator.IsSuccessfulHttpStatus(receipt)
+            ? new(state, authority, receipt, failureCode)
+            : new(
+                NyxIdExactServiceApprovalState.Failed,
+                authority,
+                FailureCode: "exact_service_provider_http_error");
     }
 
     private static NyxIdExactServiceApprovalSnapshot Failed(

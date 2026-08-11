@@ -531,11 +531,17 @@ public sealed record NyxIdChatActionRequestSnapshot(
     NyxIdChatActionParamsSnapshot Params);
 
 public sealed record NyxIdChatActionParamsSnapshot(
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     NyxIdChatCatalogServiceConnectSnapshot? CatalogService = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     NyxIdChatCustomServiceConnectSnapshot? CustomService = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     string? Name = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     string? Platform = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     IReadOnlyList<string>? AllowedServiceIds = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     string? KeyId = null);
 
 public sealed record NyxIdChatCatalogServiceConnectSnapshot(

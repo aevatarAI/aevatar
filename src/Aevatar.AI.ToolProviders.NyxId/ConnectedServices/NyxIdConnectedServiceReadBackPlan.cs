@@ -190,36 +190,19 @@ internal sealed class NyxIdConnectedServiceReadBackPlan
             _binding.CheckName,
             notAppliedAssertion,
             pagination,
-            providerResourceArgument);
+            providerResourceArgument,
+            _binding.EffectResultIdentityJsonPointer ?? string.Empty);
         return true;
     }
 
     public string? ExtractProviderResourceId(string? effectResultJson)
-    {
-        if (!UsesProviderResourceIdentity(_binding) || string.IsNullOrWhiteSpace(effectResultJson))
-            return null;
-
-        try
-        {
-            return TryResolvePointer(
-                       JsonNode.Parse(effectResultJson),
-                       _binding.EffectResultIdentityJsonPointer,
-                       out var value) &&
-                   value is JsonValue jsonValue &&
-                   jsonValue.TryGetValue<string>(out var resourceId) &&
-                   !string.IsNullOrWhiteSpace(resourceId)
-                ? resourceId.Trim()
-                : null;
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
-    }
+        => NyxIdEffectResultIdentityExtractor.ExtractAtPointer(
+            effectResultJson,
+            _binding.EffectResultIdentityJsonPointer);
 
     private static bool UsesProviderResourceIdentity(NyxIdAssistantOperationReadBackBinding binding) =>
         !string.IsNullOrWhiteSpace(binding.EffectResultIdentityJsonPointer) &&
-        binding.EffectResultIdentityJsonPointer.StartsWith("/", StringComparison.Ordinal);
+        AgentToolEffectResultIdentityJsonPointer.IsValid(binding.EffectResultIdentityJsonPointer);
 
     private static bool IsValidNotAppliedEvidence(
         NyxIdAssistantReadBackNotAppliedEvidence? evidence) =>
@@ -256,30 +239,6 @@ internal sealed class NyxIdConnectedServiceReadBackPlan
             readOperation,
             pagination.PageTokenLocation,
             pagination.PageTokenArgumentName);
-
-    private static bool TryResolvePointer(JsonNode? root, string pointer, out JsonNode? value)
-    {
-        value = root;
-        if (root is null || !pointer.StartsWith("/", StringComparison.Ordinal))
-            return false;
-
-        foreach (var encoded in pointer.Split('/').Skip(1))
-        {
-            var segment = encoded.Replace("~1", "/", StringComparison.Ordinal)
-                .Replace("~0", "~", StringComparison.Ordinal);
-            if (value is JsonObject obj && obj.TryGetPropertyValue(segment, out value))
-                continue;
-            if (value is JsonArray array && int.TryParse(segment, out var index) &&
-                index >= 0 && index < array.Count)
-            {
-                value = array[index];
-                continue;
-            }
-            value = null;
-            return false;
-        }
-        return value is not null;
-    }
 
     private static bool HasArgument(
         AgentToolOperationAdmission operation,

@@ -3,6 +3,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Tools;
+using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 using Aevatar.AI.ToolProviders.NyxId.ExactServiceApprovals;
 using Aevatar.Foundation.Abstractions.Tools;
 using Aevatar.GAgents.Channel.Abstractions;
@@ -1224,6 +1225,7 @@ public sealed class NyxIdChatTurnOperationExecutor
             toolInput.CallId,
             toolInput.ToolName,
             created.Snapshot,
+            toolInput.OperationAdmission?.ReadBack,
             session);
     }
 
@@ -1232,6 +1234,7 @@ public sealed class NyxIdChatTurnOperationExecutor
         string callId,
         string toolName,
         NyxIdExactServiceApprovalSnapshot snapshot,
+        AgentToolOperationReadBackPayload? readBack,
         NyxIdChatTransientExecutionSession session)
     {
         var authority = snapshot.Authority.Clone();
@@ -1279,11 +1282,39 @@ public sealed class NyxIdChatTurnOperationExecutor
                 externalEffect = NyxIdChatEffectEvidence.NotApplied;
                 break;
             case NyxIdExactServiceApprovalState.Redeemed when snapshot.Receipt is not null:
+                if (!NyxIdExactServiceApprovalReceiptValidator.HasValidDigest(snapshot.Receipt))
+                {
+                    receipt.Status = AgentToolReceiptStatus.Error;
+                    receipt.ErrorCode = "exact_service_receipt_digest_mismatch";
+                    receipt.ErrorMessage =
+                        "Exact-service receipt integrity validation failed.";
+                    externalEffect = NyxIdChatEffectEvidence.MayHaveChanged;
+                    break;
+                }
+                if (!NyxIdExactServiceApprovalReceiptValidator.IsSuccessfulHttpStatus(
+                        snapshot.Receipt))
+                {
+                    receipt.Status = AgentToolReceiptStatus.Error;
+                    receipt.ErrorCode = "exact_service_provider_http_error";
+                    receipt.ErrorMessage =
+                        "Exact-service provider returned an unsuccessful response.";
+                    externalEffect = NyxIdChatEffectEvidence.MayHaveChanged;
+                    break;
+                }
                 receipt.Status = AgentToolReceiptStatus.Success;
                 resultJson = snapshot.Receipt.ResponseBody;
                 receipt.ResultJson = resultJson;
+                receipt.ProviderResourceId =
+                    NyxIdEffectResultIdentityExtractor.Extract(readBack, resultJson) ??
+                    string.Empty;
                 externalEffect = NyxIdChatEffectEvidence.MayHaveChanged;
                 ApplyExactServiceResultToSession(session, callId, toolName, resultJson, receipt);
+                break;
+            case NyxIdExactServiceApprovalState.Redeemed:
+                receipt.Status = AgentToolReceiptStatus.Error;
+                receipt.ErrorCode = "exact_service_receipt_missing";
+                receipt.ErrorMessage = "Exact-service receipt was unavailable.";
+                externalEffect = NyxIdChatEffectEvidence.MayHaveChanged;
                 break;
             case NyxIdExactServiceApprovalState.Redeeming:
                 receipt.Status = AgentToolReceiptStatus.Error;
@@ -1786,6 +1817,7 @@ public sealed class NyxIdChatTurnOperationExecutor
                 approval.ToolCallId,
                 approval.ToolName,
                 decision,
+                approval.OperationAdmission?.ReadBack,
                 session);
         }
 
@@ -1820,6 +1852,7 @@ public sealed class NyxIdChatTurnOperationExecutor
             approval.ToolCallId,
             approval.ToolName,
             redeemed,
+            approval.OperationAdmission?.ReadBack,
             session);
     }
 

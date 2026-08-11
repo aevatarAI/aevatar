@@ -660,11 +660,15 @@ public sealed class NyxIdChatStateEndpointTests
         createParams.GetProperty("allowedServiceIds").EnumerateArray()
             .Select(static value => value.GetString())
             .Should().Equal("service-github", "service-lark");
+        createParams.EnumerateObject().Select(static property => property.Name)
+            .Should().Equal("name", "platform", "allowedServiceIds");
         createParams.TryGetProperty("keyCreate", out _).Should().BeFalse();
         var rotateParams = snapshot.GetProperty("recentActions")[0]
             .GetProperty("request")
             .GetProperty("params");
         rotateParams.GetProperty("keyId").GetString().Should().Be("key-predecessor");
+        rotateParams.EnumerateObject().Select(static property => property.Name)
+            .Should().Equal("keyId");
         rotateParams.TryGetProperty("keyRotate", out _).Should().BeFalse();
         response.Body.Should().NotContain("fullKey").And.NotContain("keyMaterial");
     }
