@@ -103,7 +103,8 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
             ]);
         var serviceSource = sourceWriter.Upserts.Single(static source => source.SourceKind == ScopeWorkflowCatalogueSourceDocument.ServiceSourceKind);
         serviceSource.Id.Should().Be("scope-1:wf-published:service");
-        serviceSource.StateVersion.Should().Be(8);
+        serviceSource.ActorId.Should().Be("scope-workflow-catalogue-source:scope-1:wf-published:service");
+        serviceSource.StateVersion.Should().Be(WatermarkStateVersion("2026-08-05T00:00:00Z"));
         serviceSource.WorkflowId.Should().Be("wf-published");
         serviceSource.PublishedServiceId.Should().Be("published-service-1");
         serviceSource.Name.Should().Be("Published Workflow");
@@ -112,6 +113,8 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
 
         var draftSource = sourceWriter.Upserts.Single(static source => source.SourceKind == ScopeWorkflowCatalogueSourceDocument.DraftSourceKind);
         draftSource.Id.Should().Be("scope-1:wf-draft:draft");
+        draftSource.ActorId.Should().Be("scope-workflow-catalogue-source:scope-1:wf-draft:draft");
+        draftSource.StateVersion.Should().Be(WatermarkStateVersion("2026-08-02T01:00:00Z"));
         draftSource.Name.Should().Be("Draft From Yaml");
         draftSource.Description.Should().Be("draft desc");
 
@@ -166,7 +169,7 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
         sourceWriter.DeleteMarkers.Should().ContainSingle().Which.Should().Be(new ProjectionDocumentDeleteMarker(
             "scope-1:wf-stale:draft",
             "studio-workspace-scope-1",
-            12,
+            WatermarkStateVersion("2026-08-02T01:00:00Z") + 1,
             "evt-workspace-current",
             DateTimeOffset.Parse("2026-08-02T01:00:00Z")));
         rowWriter.DeleteMarkers.Should().ContainSingle(marker => marker.Id == "scope-1:workflow:wf-stale");
@@ -323,7 +326,7 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
         rowWriter.DeleteMarkers.Should().ContainSingle().Which.Should().Be(new ProjectionDocumentDeleteMarker(
             "scope-1:workflow:wf-shared",
             "scope-workflow-catalogue-row:scope-1:wf-shared",
-            WatermarkStateVersion("2026-08-06T02:00:00Z"),
+            WatermarkStateVersion("2026-08-06T02:00:00Z") + 1,
             "evt-delete-service",
             DateTimeOffset.Parse("2026-08-06T02:00:00Z")));
     }
@@ -392,8 +395,30 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
             "evt-refresh",
             DateTimeOffset.Parse("2026-08-06T00:00:00Z"));
 
-        rowWriter.DeleteMarkers.Should().ContainSingle().Which.StateVersion.Should().Be(WatermarkStateVersion("2026-08-06T00:00:00Z"));
+        rowWriter.DeleteMarkers.Should().ContainSingle().Which.StateVersion.Should().Be(WatermarkStateVersion("2026-08-06T00:00:00Z") + 1);
         rowWriter.DeleteAttempts.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task RowMaterializer_ShouldUseSourceUpdatedAtWatermarkWhenSourceIsNewerThanRefreshEvent()
+    {
+        var draft = ExistingDraftSource("scope-1", "wf-source-watermark");
+        draft.UpdatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-07T00:00:00Z"));
+        draft.LastEventId = "evt-source-newer";
+        var rowWriter = new RecordingCatalogueRowDispatcher();
+        var materializer = new ScopeWorkflowCatalogueRowMaterializer(
+            new RecordingCatalogueSourceReader([draft], new RecordingCatalogueSourceDispatcher()),
+            rowWriter);
+
+        await materializer.RefreshAsync(
+            "scope-1",
+            "wf-source-watermark",
+            "evt-refresh-older",
+            DateTimeOffset.Parse("2026-08-06T00:00:00Z"));
+
+        var row = rowWriter.Upserts.Should().ContainSingle().Subject;
+        row.StateVersion.Should().Be(WatermarkStateVersion("2026-08-07T00:00:00Z"));
+        row.LastEventId.Should().Be("evt-source-newer");
     }
 
     private static long WatermarkStateVersion(string value) =>

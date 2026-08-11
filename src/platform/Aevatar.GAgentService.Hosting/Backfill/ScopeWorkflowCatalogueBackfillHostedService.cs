@@ -120,8 +120,6 @@ internal sealed class ScopeWorkflowCatalogueBackfillHostedService : IHostedServi
                 continue;
 
             var cleanupAuthority = new DraftCleanupAuthority(
-                workspace.ActorId,
-                workspace.StateVersion,
                 workspace.LastEventId,
                 workspace.UpdatedAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue);
             draftCleanupAuthorities[state.ScopeId] = cleanupAuthority;
@@ -156,7 +154,7 @@ internal sealed class ScopeWorkflowCatalogueBackfillHostedService : IHostedServi
                 if (currentDraftSourceIds.Contains(existingDraftSource.Id))
                     continue;
 
-                await DeleteSourceAsync(existingDraftSource.Id, cleanupAuthority, cancellationToken);
+                await DeleteSourceAsync(existingDraftSource, cleanupAuthority.LastEventId, cleanupAuthority.UpdatedAt, cancellationToken);
                 await RefreshRowAsync(
                     existingDraftSource.ScopeId,
                     existingDraftSource.WorkflowId,
@@ -239,30 +237,35 @@ internal sealed class ScopeWorkflowCatalogueBackfillHostedService : IHostedServi
         return staleCount;
     }
 
+    private Task DeleteSourceAsync(
+        ScopeWorkflowCatalogueSourceDocument source,
+        CancellationToken ct) =>
+        DeleteSourceAsync(
+            source,
+            source.LastEventId,
+            source.UpdatedAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue,
+            ct);
+
     private async Task DeleteSourceAsync(
         ScopeWorkflowCatalogueSourceDocument source,
+        string eventId,
+        DateTimeOffset updatedAt,
         CancellationToken ct) =>
         await _catalogueWriteDispatcher.DeleteAsync(
             new ProjectionDocumentDeleteMarker(
                 source.Id,
                 source.ActorId,
-                source.StateVersion,
-                source.LastEventId,
-                source.UpdatedAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue),
+                ResolveSourceDeleteStateVersion(source, updatedAt),
+                eventId,
+                updatedAt),
             ct);
 
-    private async Task DeleteSourceAsync(
-        string sourceId,
-        DraftCleanupAuthority cleanupAuthority,
-        CancellationToken ct) =>
-        await _catalogueWriteDispatcher.DeleteAsync(
-            new ProjectionDocumentDeleteMarker(
-                sourceId,
-                cleanupAuthority.ActorId,
-                cleanupAuthority.StateVersion,
-                cleanupAuthority.LastEventId,
-                cleanupAuthority.UpdatedAt),
-            ct);
+    private static long ResolveSourceDeleteStateVersion(
+        ScopeWorkflowCatalogueSourceDocument source,
+        DateTimeOffset updatedAt) =>
+        Math.Max(
+            source.StateVersion == long.MaxValue ? long.MaxValue : source.StateVersion + 1,
+            ScopeWorkflowCatalogueRowMaterializer.BuildSourceDeleteStateVersion(updatedAt));
 
     private Task RefreshRowAsync(
         string scopeId,
@@ -321,8 +324,8 @@ internal sealed class ScopeWorkflowCatalogueBackfillHostedService : IHostedServi
         return new ScopeWorkflowCatalogueSourceDocument
         {
             Id = ScopeWorkflowCatalogueRowMaterializer.BuildServiceSourceDocumentId(serviceCatalog.TenantId, workflowId),
-            ActorId = deploymentCatalog.ActorId,
-            StateVersion = deploymentCatalog.StateVersion,
+            ActorId = ScopeWorkflowCatalogueRowMaterializer.BuildServiceSourceActorId(serviceCatalog.TenantId, workflowId),
+            StateVersion = ScopeWorkflowCatalogueRowMaterializer.BuildSourceStateVersion(deploymentCatalog.UpdatedAt),
             LastEventId = deploymentCatalog.LastEventId,
             UpdatedAt = Timestamp.FromDateTimeOffset(deploymentCatalog.UpdatedAt),
             ScopeId = serviceCatalog.TenantId,
@@ -352,15 +355,14 @@ internal sealed class ScopeWorkflowCatalogueBackfillHostedService : IHostedServi
         if (string.IsNullOrWhiteSpace(name))
             name = string.IsNullOrWhiteSpace(draft.Name) ? draft.WorkflowId : draft.Name.Trim();
 
-        var sourceUpdatedAt = draft.UpdatedAtUtc?.ToDateTimeOffset() ??
-                              workspace.UpdatedAt?.ToDateTimeOffset() ??
-                              DateTimeOffset.MinValue;
+        var updatedAt = workspace.UpdatedAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue;
+        var sourceUpdatedAt = draft.UpdatedAtUtc?.ToDateTimeOffset() ?? updatedAt;
 
         return new ScopeWorkflowCatalogueSourceDocument
         {
             Id = ScopeWorkflowCatalogueRowMaterializer.BuildDraftSourceDocumentId(scopeId, draft.WorkflowId),
-            ActorId = workspace.ActorId,
-            StateVersion = workspace.StateVersion,
+            ActorId = ScopeWorkflowCatalogueRowMaterializer.BuildDraftSourceActorId(scopeId, draft.WorkflowId),
+            StateVersion = ScopeWorkflowCatalogueRowMaterializer.BuildSourceStateVersion(updatedAt),
             LastEventId = workspace.LastEventId,
             UpdatedAt = workspace.UpdatedAt,
             ScopeId = scopeId,
@@ -373,8 +375,6 @@ internal sealed class ScopeWorkflowCatalogueBackfillHostedService : IHostedServi
     }
 
     private sealed record DraftCleanupAuthority(
-        string ActorId,
-        long StateVersion,
         string LastEventId,
         DateTimeOffset UpdatedAt);
 }

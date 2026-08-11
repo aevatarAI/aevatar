@@ -75,13 +75,11 @@ public sealed class StudioWorkspaceCurrentStateProjector
         document.DraftSummaries.AddRange(state.Drafts.Values.Select(ToDraftSummary));
 
         await _writeDispatcher.UpsertAsync(document, ct);
-        await MaterializeCatalogueDraftSourceAsync(context, state, stateEvent.Version, stateEvent.EventId ?? string.Empty, updatedAt, stateEvent.EventData, ct);
+        await MaterializeCatalogueDraftSourceAsync(state, stateEvent.EventId ?? string.Empty, updatedAt, stateEvent.EventData, ct);
     }
 
     private async Task MaterializeCatalogueDraftSourceAsync(
-        StudioMaterializationContext context,
         StudioWorkspaceState state,
-        long stateVersion,
         string eventId,
         DateTimeOffset updatedAt,
         Any eventData,
@@ -93,7 +91,7 @@ public sealed class StudioWorkspaceCurrentStateProjector
             if (saved.Draft != null && !string.IsNullOrWhiteSpace(saved.Draft.WorkflowId))
             {
                 await _catalogueWriteDispatcher.UpsertAsync(
-                    ToCatalogueDraftSource(context.RootActorId, state.ScopeId, saved.Draft, stateVersion, eventId, updatedAt),
+                    ToCatalogueDraftSource(state.ScopeId, saved.Draft, eventId, updatedAt),
                     ct);
                 await _catalogueRowMaterializer.RefreshAsync(
                     state.ScopeId,
@@ -114,8 +112,8 @@ public sealed class StudioWorkspaceCurrentStateProjector
                 await _catalogueWriteDispatcher.DeleteAsync(
                     new ProjectionDocumentDeleteMarker(
                         ScopeWorkflowCatalogueRowMaterializer.BuildDraftSourceDocumentId(state.ScopeId, deleted.WorkflowId),
-                        context.RootActorId,
-                        stateVersion,
+                        ScopeWorkflowCatalogueRowMaterializer.BuildDraftSourceActorId(state.ScopeId, deleted.WorkflowId),
+                        ScopeWorkflowCatalogueRowMaterializer.BuildSourceDeleteStateVersion(updatedAt),
                         eventId,
                         updatedAt),
                     ct);
@@ -130,10 +128,8 @@ public sealed class StudioWorkspaceCurrentStateProjector
     }
 
     private ScopeWorkflowCatalogueSourceDocument ToCatalogueDraftSource(
-        string actorId,
         string scopeId,
         StudioWorkflowDraft draft,
-        long stateVersion,
         string eventId,
         DateTimeOffset projectedAt)
     {
@@ -145,8 +141,8 @@ public sealed class StudioWorkspaceCurrentStateProjector
         return new ScopeWorkflowCatalogueSourceDocument
         {
             Id = ScopeWorkflowCatalogueRowMaterializer.BuildDraftSourceDocumentId(scopeId, draft.WorkflowId),
-            ActorId = actorId,
-            StateVersion = stateVersion,
+            ActorId = ScopeWorkflowCatalogueRowMaterializer.BuildDraftSourceActorId(scopeId, draft.WorkflowId),
+            StateVersion = ScopeWorkflowCatalogueRowMaterializer.BuildSourceStateVersion(projectedAt),
             LastEventId = eventId,
             UpdatedAt = Timestamp.FromDateTimeOffset(projectedAt),
             ScopeId = scopeId,

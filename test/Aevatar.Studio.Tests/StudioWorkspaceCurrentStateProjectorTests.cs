@@ -74,9 +74,10 @@ public sealed class StudioWorkspaceCurrentStateProjectorTests
         var dispatcher = new RecordingWriteDispatcher();
         var catalogueDispatcher = new RecordingCatalogueSourceDispatcher();
         var rowDispatcher = new RecordingCatalogueRowDispatcher();
+        var projectedAt = DateTimeOffset.Parse("2026-05-19T08:00:00Z");
         var projector = CreateProjector(
             dispatcher,
-            new FixedProjectionClock(DateTimeOffset.Parse("2026-05-19T08:00:00Z")),
+            new FixedProjectionClock(projectedAt),
             catalogueDispatcher,
             rowDispatcher);
         var state = new StudioWorkspaceState
@@ -132,6 +133,8 @@ public sealed class StudioWorkspaceCurrentStateProjectorTests
         catalogueSource.ScopeId.Should().Be("scope-1");
         catalogueSource.WorkflowId.Should().Be("wf-alpha");
         catalogueSource.SourceKind.Should().Be(ScopeWorkflowCatalogueSourceDocument.DraftSourceKind);
+        catalogueSource.ActorId.Should().Be("scope-workflow-catalogue-source:scope-1:wf-alpha:draft");
+        catalogueSource.StateVersion.Should().Be(catalogueSource.UpdatedAt.ToDateTimeOffset().UtcDateTime.Ticks);
         catalogueSource.Name.Should().Be("workflow-alpha");
         rowDispatcher.Upserts.Should().ContainSingle(row => row.Id == "scope-1:workflow:wf-alpha" &&
                                                            row.ActorId == "scope-workflow-catalogue-row:scope-1:wf-alpha" &&
@@ -264,15 +267,15 @@ public sealed class StudioWorkspaceCurrentStateProjectorTests
         catalogueDispatcher.DeleteMarkers.Should().ContainSingle().Which.Should().Be(
             new ProjectionDocumentDeleteMarker(
                 "scope-1:wf-alpha:draft",
-                RootActorId,
-                12,
+                "scope-workflow-catalogue-source:scope-1:wf-alpha:draft",
+                projectedAt.UtcDateTime.Ticks + 1,
                 "evt-draft-deleted",
                 projectedAt));
         rowDispatcher.DeleteMarkers.Should().ContainSingle().Which.Should().Be(
             new ProjectionDocumentDeleteMarker(
                 "scope-1:workflow:wf-alpha",
                 "scope-workflow-catalogue-row:scope-1:wf-alpha",
-                projectedAt.UtcDateTime.Ticks,
+                projectedAt.UtcDateTime.Ticks + 1,
                 "evt-draft-deleted",
                 projectedAt));
     }

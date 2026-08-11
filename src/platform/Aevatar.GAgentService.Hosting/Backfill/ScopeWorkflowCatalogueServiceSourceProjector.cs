@@ -45,7 +45,6 @@ internal sealed class ScopeWorkflowCatalogueServiceSourceProjector
                 envelope,
                 out var state,
                 out var eventId,
-                out var stateVersion,
                 out var observedAt) ||
             state?.Identity == null)
         {
@@ -64,18 +63,18 @@ internal sealed class ScopeWorkflowCatalogueServiceSourceProjector
         var activeDeployment = ResolveActiveDeployment(state);
         if (activeDeployment == null)
         {
-            await DeleteInactiveWorkflowSourcesAsync(state.Identity, revisionCatalog, null, context.RootActorId, stateVersion, eventId, observedAt, ct);
+            await DeleteInactiveWorkflowSourcesAsync(state.Identity, revisionCatalog, null, eventId, observedAt, ct);
             return;
         }
 
         if (!TryResolveWorkflowRevision(revisionCatalog, activeDeployment.RevisionId, out var revision, out var workflowId))
         {
-            await DeleteInactiveWorkflowSourcesAsync(state.Identity, revisionCatalog, null, context.RootActorId, stateVersion, eventId, observedAt, ct);
+            await DeleteInactiveWorkflowSourcesAsync(state.Identity, revisionCatalog, null, eventId, observedAt, ct);
             return;
         }
 
         await _catalogueWriteDispatcher.UpsertAsync(
-            ToCatalogueServiceSource(context.RootActorId, state.Identity, serviceKey, workflowId, revision, activeDeployment, stateVersion, eventId, observedAt),
+            ToCatalogueServiceSource(state.Identity, serviceKey, workflowId, revision, activeDeployment, eventId, observedAt),
             ct);
         await _catalogueRowMaterializer.RefreshAsync(
             state.Identity.TenantId,
@@ -83,19 +82,17 @@ internal sealed class ScopeWorkflowCatalogueServiceSourceProjector
             eventId,
             observedAt,
             ct);
-        await DeleteInactiveWorkflowSourcesAsync(state.Identity, revisionCatalog, workflowId, context.RootActorId, stateVersion, eventId, observedAt, ct);
+        await DeleteInactiveWorkflowSourcesAsync(state.Identity, revisionCatalog, workflowId, eventId, observedAt, ct);
     }
 
     private bool TryGetObservedState(
         EventEnvelope envelope,
         out ServiceDeploymentState? state,
         out string eventId,
-        out long stateVersion,
         out DateTimeOffset observedAt)
     {
         state = null;
         eventId = string.Empty;
-        stateVersion = 0;
         observedAt = default;
 
         if (!CommittedStateEventEnvelope.TryUnpackState<ServiceDeploymentState>(
@@ -111,7 +108,6 @@ internal sealed class ScopeWorkflowCatalogueServiceSourceProjector
         }
 
         eventId = stateEvent.EventId ?? string.Empty;
-        stateVersion = stateEvent.Version;
         observedAt = CommittedStateEventEnvelope.ResolveTimestamp(envelope, _clock.UtcNow);
         return true;
     }
@@ -127,8 +123,6 @@ internal sealed class ScopeWorkflowCatalogueServiceSourceProjector
         ServiceIdentity identity,
         ServiceRevisionCatalogReadModel? revisionCatalog,
         string? activeWorkflowId,
-        string actorId,
-        long stateVersion,
         string eventId,
         DateTimeOffset observedAt,
         CancellationToken ct)
@@ -141,8 +135,8 @@ internal sealed class ScopeWorkflowCatalogueServiceSourceProjector
             await _catalogueWriteDispatcher.DeleteAsync(
                 new ProjectionDocumentDeleteMarker(
                     ScopeWorkflowCatalogueRowMaterializer.BuildServiceSourceDocumentId(identity.TenantId, workflowId),
-                    actorId,
-                    stateVersion,
+                    ScopeWorkflowCatalogueRowMaterializer.BuildServiceSourceActorId(identity.TenantId, workflowId),
+                    ScopeWorkflowCatalogueRowMaterializer.BuildSourceDeleteStateVersion(observedAt),
                     eventId,
                     observedAt),
                 ct);
@@ -204,13 +198,11 @@ internal sealed class ScopeWorkflowCatalogueServiceSourceProjector
     }
 
     private static ScopeWorkflowCatalogueSourceDocument ToCatalogueServiceSource(
-        string actorId,
         ServiceIdentity identity,
         string serviceKey,
         string workflowId,
         ServiceRevisionEntryReadModel revision,
         ServiceDeploymentRecord deployment,
-        long stateVersion,
         string eventId,
         DateTimeOffset observedAt)
     {
@@ -222,8 +214,8 @@ internal sealed class ScopeWorkflowCatalogueServiceSourceProjector
         return new ScopeWorkflowCatalogueSourceDocument
         {
             Id = ScopeWorkflowCatalogueRowMaterializer.BuildServiceSourceDocumentId(identity.TenantId, workflowId),
-            ActorId = actorId,
-            StateVersion = stateVersion,
+            ActorId = ScopeWorkflowCatalogueRowMaterializer.BuildServiceSourceActorId(identity.TenantId, workflowId),
+            StateVersion = ScopeWorkflowCatalogueRowMaterializer.BuildSourceStateVersion(observedAt),
             LastEventId = eventId,
             UpdatedAt = Timestamp.FromDateTimeOffset(observedAt),
             ScopeId = identity.TenantId,

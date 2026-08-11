@@ -43,7 +43,7 @@ public sealed class ScopeWorkflowCatalogueRowMaterializer
                     new ProjectionDocumentDeleteMarker(
                         rowId,
                         BuildRowActorId(scopeId, workflowId),
-                        rowWatermark.StateVersion,
+                        rowWatermark.DeleteStateVersion,
                         rowWatermark.LastEventId,
                         rowWatermark.UpdatedAt),
                     ct);
@@ -68,6 +68,18 @@ public sealed class ScopeWorkflowCatalogueRowMaterializer
 
     public static string BuildServiceSourceDocumentId(string scopeId, string workflowId) =>
         $"{scopeId}:{workflowId}:{ScopeWorkflowCatalogueSourceDocument.ServiceSourceKind}";
+
+    public static string BuildDraftSourceActorId(string scopeId, string workflowId) =>
+        $"scope-workflow-catalogue-source:{scopeId}:{workflowId}:{ScopeWorkflowCatalogueSourceDocument.DraftSourceKind}";
+
+    public static string BuildServiceSourceActorId(string scopeId, string workflowId) =>
+        $"scope-workflow-catalogue-source:{scopeId}:{workflowId}:{ScopeWorkflowCatalogueSourceDocument.ServiceSourceKind}";
+
+    public static long BuildSourceStateVersion(DateTimeOffset updatedAt) =>
+        ToWatermarkStateVersion(updatedAt);
+
+    public static long BuildSourceDeleteStateVersion(DateTimeOffset updatedAt) =>
+        ToWatermarkStateVersion(updatedAt) + 1;
 
     public static string BuildRowDocumentId(string scopeId, string workflowId) =>
         $"{scopeId}:workflow:{workflowId}";
@@ -137,6 +149,9 @@ public sealed class ScopeWorkflowCatalogueRowMaterializer
     private static long ToWatermarkStateVersion(DateTimeOffset updatedAt) =>
         Math.Max(1L, updatedAt.UtcDateTime.Ticks);
 
+    private static long ToDeleteStateVersion(long stateVersion) =>
+        stateVersion == long.MaxValue ? long.MaxValue : stateVersion + 1;
+
     private static DateTimeOffset ResolveRowUpdatedAt(
         ScopeWorkflowCatalogueSourceDocument? draft,
         ScopeWorkflowCatalogueSourceDocument? service) =>
@@ -175,5 +190,8 @@ public sealed class ScopeWorkflowCatalogueRowMaterializer
     private sealed record RowAuthorityWatermark(
         long StateVersion,
         string LastEventId,
-        DateTimeOffset UpdatedAt);
+        DateTimeOffset UpdatedAt)
+    {
+        public long DeleteStateVersion => ToDeleteStateVersion(StateVersion);
+    }
 }

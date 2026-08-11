@@ -72,7 +72,8 @@ Contract:
 - The backend applies scope authorization, then reads the materialized `ScopeWorkflowCatalogueRowDocument` read model. The request path must not read Studio workspace drafts, Studio members, service catalogues, deployment catalogues, workflow actor bindings, event store, or write-model state to reconstruct catalogue rows.
 - The aggregate row is keyed as `{scopeId}:workflow:{workflowId}`. Draft and published workflow service sources merge by exact `workflowId`; Team and Member state are not inputs to this catalogue surface.
 - `ScopeWorkflowCatalogueSourceDocument` is an internal materialization input with two authority kinds only: `draft` from Studio workspace committed state and `service` from service/deployment committed state. Service facts carry committed actor, active revision, deployment ID, deployment status, and service identity.
-- Existing current-state read models are backfilled by host startup composition into draft/service source documents and refreshed aggregate rows before request-path reads rely on the catalogue. Backfill uses deterministic source IDs (`{scopeId}:{workflowId}:draft`, `{scopeId}:{workflowId}:service`) and exact upserts/tombstones; it must not use search-based cleanup of just-written documents.
+- Source documents use deterministic source IDs (`{scopeId}:{workflowId}:draft`, `{scopeId}:{workflowId}:service`) and deterministic materialized actor IDs, because the same workflow-keyed source can be refreshed from different underlying workspace or service actors over time.
+- Existing current-state read models are backfilled by host startup composition into draft/service source documents and refreshed aggregate rows before request-path reads rely on the catalogue. Backfill uses exact upserts/tombstones; it must not use search-based cleanup of just-written documents.
 - Row materialization composes the latest draft source and latest service source: draft name/description wins for editable display, service facts drive Activity/run capability, `updatedAtUtc` is the maximum source update time, and the row is deleted only after both source documents are absent.
 - View filtering, search, deterministic ordering, and cursor pagination are owned by the catalogue query port in that order. Clients must not join draft/committed lists or filter an unbounded catalogue in memory.
 - Deterministic ordering is `updatedAtUtc DESC`, then `workflowId ASC` using ordinal comparison. `nextPageToken` is an opaque cursor token returned by the previous response.
@@ -81,7 +82,7 @@ Contract:
 - Query length after trimming/normalization is capped by the response `search.maximumQueryLength`; invalid cursor or overlong query returns `400`.
 - Rows expose typed capabilities for `open`, `activity`, `rename`, and `delete`. Unavailable actions carry a typed unavailable reason instead of requiring the client to infer from sources.
 - Rows keep `workflowId`, `publishedServiceId`, committed `actorId`, deployment/service IDs, and other identities separate. `workflowId` is the workflow-native merge key; it must not be reused as Team or Member identity.
-- `freshness.refreshWatermarkUtc` is the maximum authoritative source `UpdatedAt` materialized into the workflow catalogue row read model. Row write `StateVersion` is derived from the authority `UpdatedAt` watermark; it is not a synthetic local `StateVersion++`.
+- `freshness.refreshWatermarkUtc` is the maximum authoritative source `UpdatedAt` materialized into the workflow catalogue row read model. Source and row write `StateVersion` values are derived from authority `UpdatedAt` watermarks; tombstones advance the same watermark so deletes cannot conflict with same-event upserts.
 
 ## Scope workflow archive command
 
