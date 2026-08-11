@@ -130,6 +130,9 @@ const CallbackPage: React.FC = () => {
       const client = new NyxIDAuthClient(config);
       await client.loginWithRedirect({
         flow: callbackError.flow,
+        ...(callbackError.reason === "requiredServiceAccessMissing"
+          ? { prompt: "consent" as const }
+          : {}),
         returnTo: callbackError.returnTo,
       });
     } catch (error) {

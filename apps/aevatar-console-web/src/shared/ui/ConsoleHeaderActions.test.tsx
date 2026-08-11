@@ -120,6 +120,32 @@ describe('ConsoleHeaderActions', () => {
     expect(screen.queryByText('Stale Browser Name')).not.toBeInTheDocument();
   });
 
+  it('clears a stale stored session before authoritative sign-in recovery', () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'stale-token',
+        expiresAt: Date.now() + 60_000,
+        expiresIn: 60,
+        tokenType: 'Bearer',
+      },
+      user: {
+        name: 'Stale Browser Name',
+        sub: 'stored-user',
+      },
+    });
+
+    render(React.createElement(ConsoleAuthActions, { principal: null }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+
+    expect(
+      window.localStorage.getItem('aevatar-console:nyxid:session'),
+    ).toBeNull();
+    expect(mockedHistoryPush).toHaveBeenCalledWith(
+      '/login?redirect=%2Fruntime%2Fmission-wall%3FfocusRunId%3Drun-1',
+    );
+  });
+
   it('applies an optional dropdown root class to action menus', async () => {
     persistAuthSession({
       tokens: {
