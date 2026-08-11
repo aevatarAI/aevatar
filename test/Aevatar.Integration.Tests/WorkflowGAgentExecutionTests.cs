@@ -262,6 +262,59 @@ public sealed class WorkflowGAgentExecutionTests : WorkflowGAgentTestBase
         }
 
         [Fact]
+        public async Task WorkflowRunGAgent_KeyCreateRequirement_ShouldProduceStableTypedHandoffAndRejectConflictingReplay()
+        {
+            var eventStore = new InMemoryEventStore();
+            var publisher = new RecordingEventPublisher();
+            var runtime = new RecordingActorRuntime();
+            var agent = CreateRunAgent(runtime: runtime, eventStore: eventStore);
+            SetAgentId(agent, "workflow-run-key-create");
+            agent.EventPublisher = publisher;
+            await BindInteractiveWorkflowRunDefinitionAsync(
+                agent,
+                "definition-1",
+                BuildValidWorkflowYaml("role_a", "RoleA"),
+                "wf_valid",
+                runId: "run-key-create",
+                scopeId: "scope-alpha",
+                capabilityAdmissionPlan: InteractiveAdmissionPlan());
+            await agent.HandleChatRequest(new WorkflowChatRequestEvent
+            {
+                Prompt = "create a least-scope NyxID key",
+                SessionId = "studio-session-alpha",
+                CurrentTurnId = "turn-studio-alpha",
+                CallerCredential = InteractiveCallerCredential("owner-alpha"),
+            });
+            var completed = InteractiveKeyCreateCompletion();
+
+            await agent.HandleInteractiveAuthorizationRequirementAsync(completed);
+
+            var command = publisher.Sent
+                .Where(item => item.evt is WorkflowInteractiveActionHandoffCommand)
+                .Should().ContainSingle().Which.evt
+                .Should().BeOfType<WorkflowInteractiveActionHandoffCommand>().Subject;
+            command.Request.Action.Should().Be("key.create");
+            command.Request.Params.CatalogService.Should().BeNull();
+            command.Request.Params.KeyCreate.Name.Should().Be("agent-alpha");
+            command.Request.Params.KeyCreate.Platform.Should().Be("codex");
+            command.Request.Params.KeyCreate.AllowedServiceIds.Should().Equal("m-github", "m-lark");
+            var persistedCount = (await eventStore.GetEventsAsync(agent.Id)).Count;
+            var sentCount = publisher.Sent.Count;
+
+            await agent.HandleInteractiveAuthorizationRequirementAsync(completed.Clone());
+
+            (await eventStore.GetEventsAsync(agent.Id)).Should().HaveCount(persistedCount);
+            publisher.Sent.Should().HaveCount(sentCount);
+
+            var conflicting = completed.Clone();
+            conflicting.AuthorizationRequirement.KeyCreate.Platform = "claude";
+            var conflict = () => agent.HandleInteractiveAuthorizationRequirementAsync(conflicting);
+            await conflict.Should().ThrowAsync<InvalidOperationException>()
+                .WithMessage("*reused with different content*");
+            publisher.Sent.Should().HaveCount(sentCount);
+        }
+
+        [Fact]
         public async Task WorkflowRunGAgent_WhenInteractiveActionOwnerCannotBeCreated_ShouldStillDispatchTerminalContinuation()
         {
             var eventStore = new InMemoryEventStore();
@@ -1125,6 +1178,28 @@ public sealed class WorkflowGAgentExecutionTests : WorkflowGAgentTestBase
                     RequestedScopes = { "repo" },
                     ReasonCode = "USER_SERVICE_NOT_VISIBLE",
                     SafeMessage = "Connect GitHub to continue.",
+                },
+            };
+
+        private static WorkflowLlmInvocationCompletedEvent InteractiveKeyCreateCompletion() =>
+            new()
+            {
+                RunId = "run-key-create",
+                StepId = "reply",
+                SessionId = "studio-session-alpha",
+                RoleActorId = "role-studio-alpha",
+                Success = false,
+                Error = "authorization_required: Create the least-scope key.",
+                AuthorizationRequirement = new WorkflowInteractiveAuthorizationRequirement
+                {
+                    ReasonCode = "NYXID_KEY_CREATION_REQUIRED",
+                    SafeMessage = "Create the least-scope key.",
+                    KeyCreate = new WorkflowInteractiveKeyCreateRequirement
+                    {
+                        Name = "agent-alpha",
+                        Platform = "codex",
+                        AllowedServiceIds = { "m-github", "m-lark" },
+                    },
                 },
             };
 }

@@ -442,6 +442,13 @@ message NyxIdAuthorizationRequiredEvent {
   string safe_message = 5;
   optional string user_service_id = 6;
   repeated string requested_scopes = 7;
+  NyxIdKeyCreateActionRequirement key_create = 8;
+}
+
+message NyxIdKeyCreateActionRequirement {
+  string name = 1;
+  string platform = 2;
+  repeated string allowed_service_ids = 3;
 }
 
 message AgentToolReceipt {

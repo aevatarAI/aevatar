@@ -1049,6 +1049,14 @@ message WorkflowInteractiveAuthorizationRequirement
   repeated string requested_scopes = 2;
   string reason_code = 3;
   string safe_message = 4;
+  WorkflowInteractiveKeyCreateRequirement key_create = 5;
+}
+
+message WorkflowInteractiveKeyCreateRequirement
+{
+  string name = 1;
+  string platform = 2;
+  repeated string allowed_service_ids = 3;
 }
 
 message WorkflowInteractiveCatalogServiceActionParams
@@ -1060,6 +1068,14 @@ message WorkflowInteractiveCatalogServiceActionParams
 message WorkflowInteractiveActionParams
 {
   WorkflowInteractiveCatalogServiceActionParams catalog_service = 1;
+  WorkflowInteractiveKeyCreateActionParams key_create = 2;
+}
+
+message WorkflowInteractiveKeyCreateActionParams
+{
+  string name = 1;
+  string platform = 2;
+  repeated string allowed_service_ids = 3;
 }
 
 // Presentation-safe schema-v4 request. It intentionally mirrors NyxID's wire

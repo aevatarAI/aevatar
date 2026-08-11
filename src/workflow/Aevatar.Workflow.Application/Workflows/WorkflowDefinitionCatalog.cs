@@ -172,6 +172,11 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
                 a required external service is ready/connected or asks to connect, add, or authorize one.
                 A missing-service blocker from this tool is the authority for the interactive
                 `service.connect` handoff; prose and catalog results are not substitutes.
+              - For NyxID API key creation, first call `nyxid_services` with `action: "list"`, select
+                one or more exact caller-visible UserService `id` values, and then call
+                `nyxid_request_key_create` with a nonempty `allowed_service_ids` list. Never pass a
+                service slug, label, provider name, guessed id, or empty list, and never ask for or
+                expose key material. The typed result is the only `key.create` browser handoff producer.
               - For explicit current-turn API calls, use the admitted per-operation connected-service tool
                 exposed for the caller's NyxID services. For workflow authoring, use the structured operation discovery flow below
                 instead of copying current-turn proxy route arguments. Never ask the user for credentials,
@@ -439,6 +444,7 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
               - nyxid_llm_status
               - nyxid_services
               - nyxid_require_service
+              - nyxid_request_key_create
               - list_external_workflow_capabilities
               - inspect_external_workflow_capability_readiness
               - preview_workflow_explicit_requests

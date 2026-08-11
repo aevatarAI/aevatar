@@ -22,6 +22,12 @@ public sealed class AgentProfileTurnCatalogMaterializer
             "nyxid_catalog",
             "nyxid_require_service",
         };
+    private static readonly IReadOnlySet<string> KeyCreateToolNames =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "nyxid_services",
+            "nyxid_request_key_create",
+        };
 
     private readonly IToolSetRegistry _toolSetRegistry;
     private readonly IAgentProfileTurnClassifier _classifier;
@@ -374,7 +380,8 @@ public sealed class AgentProfileTurnCatalogMaterializer
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(toolContext);
-        if (intent != NyxIdChatTurnIntent.ServiceConnect)
+        var builtIn = ResolveBuiltInIntent(intent);
+        if (builtIn is null)
             return RestrictedEmptyCatalog();
 
         var diagnostics = new List<AgentProfileTurnDiagnostic>();
@@ -388,21 +395,21 @@ public sealed class AgentProfileTurnCatalogMaterializer
             return RestrictedEmptyCatalog(diagnostics);
 
         var selectedTools = routeTools.Tools
-            .Where(pair => ServiceConnectToolNames.Contains(pair.Key) &&
+            .Where(pair => builtIn.ToolNames.Contains(pair.Key) &&
                            toolContext.ToolVisibility.Allows(pair.Key))
             .ToDictionary(static pair => pair.Key, static pair => pair.Value, StringComparer.OrdinalIgnoreCase);
-        if (selectedTools.Count != ServiceConnectToolNames.Count ||
-            !ServiceConnectToolNames.All(selectedTools.ContainsKey))
+        if (selectedTools.Count != builtIn.ToolNames.Count ||
+            !builtIn.ToolNames.All(selectedTools.ContainsKey))
         {
             return RestrictedEmptyCatalog(diagnostics);
         }
 
         return new AgentProfileTurnCatalog(
-            ServiceConnectToolNames,
+            builtIn.ToolNames,
             profilePromptLayer: null,
             selectedSkillPromptLayer: null,
-            NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
-            NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
+            builtIn.IntentId,
+            builtIn.IntentId,
             diagnostics,
             selectedTools.Values);
     }
@@ -413,19 +420,20 @@ public sealed class AgentProfileTurnCatalogMaterializer
         IEnumerable<string>? authorityCeilingToolNames = null)
     {
         ArgumentNullException.ThrowIfNull(catalog);
-        if (intent != NyxIdChatTurnIntent.ServiceConnect)
+        var builtIn = ResolveBuiltInIntent(intent);
+        if (builtIn is null)
             return RestrictedEmptyCatalog(catalog.Diagnostics);
 
-        var allowed = new HashSet<string>(ServiceConnectToolNames, StringComparer.OrdinalIgnoreCase);
+        var allowed = new HashSet<string>(builtIn.ToolNames, StringComparer.OrdinalIgnoreCase);
         allowed.IntersectWith(catalog.FinalAllowedToolNames);
         if (authorityCeilingToolNames is not null)
             allowed.IntersectWith(authorityCeilingToolNames);
         var selectedTools = catalog.RouteOwnedTools
             .Where(pair => allowed.Contains(pair.Key))
             .ToDictionary(static pair => pair.Key, static pair => pair.Value, StringComparer.OrdinalIgnoreCase);
-        if (allowed.Count != ServiceConnectToolNames.Count ||
-            selectedTools.Count != ServiceConnectToolNames.Count ||
-            !ServiceConnectToolNames.All(name =>
+        if (allowed.Count != builtIn.ToolNames.Count ||
+            selectedTools.Count != builtIn.ToolNames.Count ||
+            !builtIn.ToolNames.All(name =>
                 allowed.Contains(name) && selectedTools.ContainsKey(name)))
         {
             return RestrictedEmptyCatalog(catalog.Diagnostics);
@@ -435,7 +443,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
             allowed,
             catalog.ProfilePromptLayer,
             catalog.SelectedSkillPromptLayer,
-            NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
+            builtIn.IntentId,
             catalog.CandidateIntentId,
             catalog.Diagnostics,
             selectedTools.Values);
@@ -469,34 +477,43 @@ public sealed class AgentProfileTurnCatalogMaterializer
 
         if (includeBuiltInServiceConnectIntent)
         {
-            var serviceConnectMember = profile.Members.FirstOrDefault(member =>
-                                           string.Equals(
-                                               member.IntentId,
-                                               NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
-                                               StringComparison.Ordinal)) ??
-                                       CreateBuiltInServiceConnectMember();
-            var serviceConnectResult = await ClassifyAsync(
+            var builtInMembers = new[]
+            {
+                profile.Members.FirstOrDefault(member => string.Equals(
+                    member.IntentId,
+                    NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
+                    StringComparison.Ordinal)) ?? CreateBuiltInServiceConnectMember(),
+                profile.Members.FirstOrDefault(member => string.Equals(
+                    member.IntentId,
+                    NyxIdChatTurnIntentClassifier.KeyCreateIntentId,
+                    StringComparison.Ordinal)) ?? CreateBuiltInKeyCreateMember(),
+            };
+            var builtInResult = await ClassifyAsync(
                 userMessage,
-                [NyxIdChatTurnIntentClassifier.ServiceConnectCandidate],
+                [
+                    NyxIdChatTurnIntentClassifier.ServiceConnectCandidate,
+                    NyxIdChatTurnIntentClassifier.KeyCreateCandidate,
+                ],
                 profile.ClassifierTimeoutMs,
                 llmControl,
                 ct);
-            if (serviceConnectResult.Status == AgentProfileTurnClassificationStatus.Matched &&
-                string.Equals(
-                    serviceConnectResult.IntentId,
-                    NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
-                    StringComparison.Ordinal))
+            var builtInMember = builtInMembers.SingleOrDefault(member => string.Equals(
+                member.IntentId,
+                builtInResult.IntentId,
+                StringComparison.Ordinal));
+            if (builtInResult.Status == AgentProfileTurnClassificationStatus.Matched &&
+                builtInMember is not null)
             {
                 diagnostics.Add(new AgentProfileTurnDiagnostic(
                     AgentProfileTurnDiagnosticCode.ClassifierMatched,
-                    serviceConnectMember.IntentId));
-                return serviceConnectMember;
+                    builtInMember.IntentId));
+                return builtInMember;
             }
-            if (serviceConnectResult.Status != AgentProfileTurnClassificationStatus.NoMatch)
+            if (builtInResult.Status != AgentProfileTurnClassificationStatus.NoMatch)
             {
                 diagnostics.Add(new AgentProfileTurnDiagnostic(
                     AgentProfileTurnDiagnosticCode.ClassifierFailed,
-                    serviceConnectResult.FailureCode ?? "service_connect_classifier_failed"));
+                    builtInResult.FailureCode ?? "nyxid_builtin_classifier_failed"));
                 return null;
             }
         }
@@ -595,6 +612,31 @@ public sealed class AgentProfileTurnCatalogMaterializer
             },
             SideEffectClass = AgentProfileSideEffectClass.ExternalHandoff,
         };
+
+    private static AgentProfileSkillMember CreateBuiltInKeyCreateMember() =>
+        new()
+        {
+            IntentId = NyxIdChatTurnIntentClassifier.KeyCreateIntentId,
+            RoutingDescription = NyxIdChatTurnIntentClassifier.KeyCreateRoutingDescription,
+            TaskToolPolicy = new AgentProfileToolPolicy
+            {
+                ToolNames = { "nyxid_services", "nyxid_request_key_create" },
+            },
+            SideEffectClass = AgentProfileSideEffectClass.ExternalHandoff,
+        };
+
+    private static BuiltInIntent? ResolveBuiltInIntent(NyxIdChatTurnIntent intent) => intent switch
+    {
+        NyxIdChatTurnIntent.ServiceConnect => new BuiltInIntent(
+            NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
+            ServiceConnectToolNames),
+        NyxIdChatTurnIntent.KeyCreate => new BuiltInIntent(
+            NyxIdChatTurnIntentClassifier.KeyCreateIntentId,
+            KeyCreateToolNames),
+        _ => null,
+    };
+
+    private sealed record BuiltInIntent(string IntentId, IReadOnlySet<string> ToolNames);
 
     private async Task<string?> FetchSelectedSkillAsync(
         AgentProfileSnapshot profile,
