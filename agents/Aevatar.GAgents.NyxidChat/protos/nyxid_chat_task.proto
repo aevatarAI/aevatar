@@ -803,6 +803,7 @@ message NyxIdChatPendingApprovalState {
   google.protobuf.Timestamp asked_at = 7;
   NyxIdChatApprovalPresentation presentation = 8;
   string tool_call_id = 9;
+  aevatar.ai.NyxIdExactServiceApprovalAuthority exact_service_approval = 10;
 }
 
 message NyxIdChatApprovalPresentation {
@@ -1642,6 +1643,9 @@ message NyxIdChatToolApprovalContinuationInput {
   bool may_change_external_state = 4;
   string idempotency_key = 5;
   aevatar.ai.tool_providers.AgentToolOperationAdmissionPayload operation_admission = 6;
+  aevatar.ai.NyxIdExactServiceApprovalAuthority exact_service_approval = 7;
+  string tool_call_id = 8;
+  string tool_name = 9;
 }
 
 // Initial plan confirmation carries no raw tool arguments and matches the

@@ -45,7 +45,8 @@ public sealed class AgentToolReceiptWireContractTests
                 (19, "provider_resource_id"),
                 (20, "nyx_id_approval_decision_mode"),
                 (21, "mutation_stage"),
-                (22, "nyx_id_approval_terminal_outcome"));
+                (22, "nyx_id_approval_terminal_outcome"),
+                (23, "exact_service_approval"));
         ((int)NyxIdApprovalTerminalOutcome.Unspecified).Should().Be(0);
         ((int)NyxIdApprovalTerminalOutcome.Rejected).Should().Be(1);
         ((int)NyxIdApprovalTerminalOutcome.Expired).Should().Be(2);
