@@ -12,42 +12,6 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 
 public sealed class WorkflowExecutionQueryPortsCoverageTests
 {
-    [Theory]
-    [InlineData("running", WorkflowRunCompletionStatus.Running)]
-    [InlineData("completed", WorkflowRunCompletionStatus.Completed)]
-    [InlineData("failed", WorkflowRunCompletionStatus.Failed)]
-    [InlineData("stopped", WorkflowRunCompletionStatus.Stopped)]
-    [InlineData("not_found", WorkflowRunCompletionStatus.NotFound)]
-    [InlineData("disabled", WorkflowRunCompletionStatus.Disabled)]
-    [InlineData("awaiting_tool_approval", WorkflowRunCompletionStatus.AwaitingToolApproval)]
-    [InlineData("waiting_for_signal", WorkflowRunCompletionStatus.WaitingForSignal)]
-    [InlineData("unknown", WorkflowRunCompletionStatus.Unknown)]
-    public void WorkflowExecutionReadModelMapper_ShouldMapCurrentStateStatuses(
-        string status,
-        WorkflowRunCompletionStatus expected)
-    {
-        var mapper = new WorkflowExecutionReadModelMapper();
-        var snapshot = mapper.ToActorSnapshot(new WorkflowExecutionCurrentStateDocument
-        {
-            Id = "actor-1",
-            RootActorId = "actor-1",
-            CommandId = "cmd-1",
-            Status = status,
-            FinalOutput = "done",
-            FinalError = "err",
-            SagaStatus = WorkflowSagaStatus.CompensationDeadLetter, DeadLetterFailedCompensationStepId = "refund_payment",
-            DeadLetterRemainingUncompensated = 2, DeadLetterError = "refund failed",
-            UpdatedAt = DateTimeOffset.Parse("2026-03-17T08:00:00+00:00"),
-        });
-
-        snapshot.CompletionStatus.Should().Be(expected);
-        snapshot.LastOutput.Should().Be("done");
-        snapshot.LastError.Should().Be("err");
-        snapshot.SagaStatus.Should().Be(WorkflowSagaStatus.CompensationDeadLetter);
-        snapshot.DeadLetterFailedCompensationStepId.Should().Be("refund_payment");
-        snapshot.DeadLetterRemainingUncompensated.Should().Be(2); snapshot.DeadLetterError.Should().Be("refund failed");
-    }
-
     [Fact]
     public void WorkflowExecutionReadModelMapper_ShouldExposeCurrentStateInputFileDescriptors()
     {

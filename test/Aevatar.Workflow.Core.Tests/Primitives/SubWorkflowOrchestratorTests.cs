@@ -158,6 +158,38 @@ public sealed class SubWorkflowOrchestratorTests
     }
 
     [Fact]
+    public void ApplySubWorkflowInvocationRegistered_ShouldClearUnavailableReasonWhenLineageBecomesAvailable()
+    {
+        var current = new WorkflowRunState
+        {
+            Lineage = WorkflowRunGAgent.CreateUnavailableLineage("Run lineage is unavailable for this run."),
+        };
+
+        var next = SubWorkflowOrchestrator.ApplySubWorkflowInvocationRegistered(
+            current,
+            new SubWorkflowInvocationRegisteredEvent
+            {
+                InvocationId = "invoke-child-beta",
+                ParentRunId = "run-parent-alpha",
+                ParentStepId = "step-call-child",
+                WorkflowName = "child_workflow",
+                ChildActorId = "actor-child-delta",
+                ChildRunId = "run-child-beta",
+                RootRunId = "run-root-omega",
+                Depth = 2,
+            });
+
+        next.Lineage.Availability.Should().Be(WorkflowRunLineageAvailability.Available);
+        next.Lineage.UnavailableReason.Should().BeEmpty();
+        next.Lineage.SubWorkflow.Availability.Should().Be(WorkflowRunLineageAvailability.Available);
+        next.Lineage.SubWorkflow.ChildRuns.Should().ContainSingle(child =>
+            child.RunId == "run-child-beta" &&
+            child.ActorId == "actor-child-delta" &&
+            child.RelationshipId == "invoke-child-beta" &&
+            child.RelationKind == WorkflowRunLineageRelationKind.SubWorkflow);
+    }
+
+    [Fact]
     public async Task HandleInvokeRequestedAsync_WhenDefinitionActorMustBeResolved_ShouldRegisterResolutionAndScheduleTimeout()
     {
         var harness = CreateHarness();
@@ -1311,6 +1343,40 @@ public sealed class SubWorkflowOrchestratorTests
         state.PendingSubWorkflowInvocationIndexByChildRunId.Should().ContainKey("child-run-b");
         state.PendingSubWorkflowInvocationIndexByChildRunId.Should().NotContainKey("child-run-a");
         state.PendingChildRunIdsByParentRunId["parent-run"].ChildRunIds.Should().ContainSingle(x => x == "child-run-b");
+    }
+
+    [Fact]
+    public void ApplySubWorkflowInvocationRegistered_ShouldAppendTypedSubWorkflowChildLineage()
+    {
+        var state = SubWorkflowOrchestrator.ApplySubWorkflowInvocationRegistered(
+            new WorkflowRunState
+            {
+                RunId = "run-parent-alpha",
+            },
+            new SubWorkflowInvocationRegisteredEvent
+            {
+                InvocationId = "invoke-sub-001",
+                ParentRunId = "run-parent-alpha",
+                ParentStepId = "step-call-child",
+                WorkflowName = "sub_flow",
+                ChildActorId = "actor-child-delta",
+                ChildRunId = "run-child-beta",
+                Lifecycle = WorkflowCallLifecycle.Transient,
+                DefinitionActorId = "workflow-definition:sub_flow",
+                DefinitionVersion = 2,
+                RootRunId = "run-root-omega",
+                Depth = 1,
+            });
+
+        state.Lineage.Availability.Should().Be(WorkflowRunLineageAvailability.Available);
+        state.Lineage.SubWorkflow.Availability.Should().Be(WorkflowRunLineageAvailability.Available);
+        state.Lineage.RetryFork.Availability.Should().Be(WorkflowRunLineageAvailability.Unavailable);
+        var child = state.Lineage.SubWorkflow.ChildRuns.Should().ContainSingle().Subject;
+        child.RunId.Should().Be("run-child-beta");
+        child.ActorId.Should().Be("actor-child-delta");
+        child.RelationshipId.Should().Be("invoke-sub-001");
+        child.StepId.Should().Be("step-call-child");
+        child.RelationKind.Should().Be(WorkflowRunLineageRelationKind.SubWorkflow);
     }
 
     [Fact]

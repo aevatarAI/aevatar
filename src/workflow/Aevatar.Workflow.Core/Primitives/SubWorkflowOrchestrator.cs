@@ -743,6 +743,21 @@ internal sealed class SubWorkflowOrchestrator
         RemovePendingDefinitionResolution(next, invocationId);
         RemovePendingInvocation(next, invocationId, childRunId);
         AddPendingInvocation(next, pending);
+        // Implement (issue #3252):
+        //   Behavior: parent workflow runs expose durable sub-workflow child run identities separately from retry/fork lineage.
+        //   Why this shape: the committed invocation registration is the parent-owned fact; graph/topology edges remain execution-path data.
+        next.Lineage = WorkflowRunGAgent.EnsureLineage(next.Lineage);
+        WorkflowRunGAgent.MarkLineageAvailable(next.Lineage);
+        next.Lineage.SubWorkflow ??= new WorkflowRunSubWorkflowLineage();
+        next.Lineage.SubWorkflow.Availability = WorkflowRunLineageAvailability.Available;
+        WorkflowRunGAgent.UpsertLineageChild(
+            next.Lineage.SubWorkflow.ChildRuns,
+            childRunId,
+            pending.ChildActorId,
+            invocationId,
+            pending.ParentStepId,
+            attempt: 0,
+            WorkflowRunLineageRelationKind.SubWorkflow);
         return next;
     }
 
@@ -919,7 +934,7 @@ internal sealed class SubWorkflowOrchestrator
 
         if (pending.HandoffPhase < SubWorkflowInvocationHandoffPhase.Bound)
         {
-            await BindSubWorkflowActorAsync(childActor.Id, definition, pending.ChildRunId, state, ct);
+            await BindSubWorkflowActorAsync(childActor.Id, definition, pending, state, ct);
             if (persistBinding)
             {
                 await PersistBindingUpsertedAsync(
@@ -1085,13 +1100,13 @@ internal sealed class SubWorkflowOrchestrator
     private Task BindSubWorkflowActorAsync(
         string actorId,
         WorkflowDefinitionSnapshot definition,
-        string runId,
+        WorkflowRunState.Types.PendingSubWorkflowInvocation pending,
         WorkflowRunState state,
         CancellationToken ct)
     {
         return _dispatchPort.DispatchAsync(
             actorId,
-            CreateWorkflowRunBindEnvelope(definition, runId, state),
+            CreateWorkflowRunBindEnvelope(definition, pending, state),
             ct);
     }
 
@@ -1466,7 +1481,7 @@ internal sealed class SubWorkflowOrchestrator
 
     private EventEnvelope CreateWorkflowRunBindEnvelope(
         WorkflowDefinitionSnapshot definition,
-        string runId,
+        WorkflowRunState.Types.PendingSubWorkflowInvocation pending,
         WorkflowRunState state)
     {
         var inlineWorkflowYamls = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -1486,7 +1501,7 @@ internal sealed class SubWorkflowOrchestrator
             DefinitionActorId = definition.DefinitionActorId ?? string.Empty,
             WorkflowYaml = definition.WorkflowYaml ?? string.Empty,
             WorkflowName = definition.WorkflowName ?? string.Empty,
-            RunId = runId ?? string.Empty,
+            RunId = pending.ChildRunId ?? string.Empty,
             ScopeId = string.IsNullOrWhiteSpace(definition.ScopeId)
                 ? state.ScopeId ?? string.Empty
                 : definition.ScopeId,
@@ -1494,6 +1509,10 @@ internal sealed class SubWorkflowOrchestrator
             RevisionId = definition.RevisionId ?? string.Empty,
             DefinitionVersion = Math.Max(0, definition.DefinitionVersion),
             ExpectedExecutionMode = state.ExpectedExecutionMode,
+            // Implement (issue #3252):
+            //   Behavior: child workflow runs expose their parent/root run lineage as typed bind facts.
+            //   Why this shape: the child actor commits lineage from the call-site handoff instead of deriving it from runtime topology.
+            InitialLineage = BuildChildInitialLineage(pending, _ownerActorIdAccessor()),
         };
 
         return new EventEnvelope
@@ -1505,6 +1524,30 @@ internal sealed class SubWorkflowOrchestrator
             Propagation = new EnvelopePropagation
             {
                 CorrelationId = Guid.NewGuid().ToString("N"),
+            },
+        };
+    }
+
+    private static WorkflowRunLineage BuildChildInitialLineage(
+        WorkflowRunState.Types.PendingSubWorkflowInvocation pending,
+        string parentActorId)
+    {
+        var parentRunId = WorkflowRunIdNormalizer.Normalize(pending.ParentRunId);
+        return new WorkflowRunLineage
+        {
+            Availability = WorkflowRunLineageAvailability.Available,
+            RetryFork = new WorkflowRunRetryForkLineage
+            {
+                Availability = WorkflowRunLineageAvailability.Unavailable,
+            },
+            SubWorkflow = new WorkflowRunSubWorkflowLineage
+            {
+                Availability = WorkflowRunLineageAvailability.Available,
+                ParentRunId = parentRunId,
+                ParentActorId = parentActorId?.Trim() ?? string.Empty,
+                ParentStepId = pending.ParentStepId?.Trim() ?? string.Empty,
+                RootRunId = NormalizeRootRunId(pending.RootRunId, parentRunId),
+                Depth = Math.Max(0, pending.Depth),
             },
         };
     }

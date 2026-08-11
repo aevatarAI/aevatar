@@ -276,6 +276,7 @@ public sealed class WorkflowRunObservatoryQueryService
                 Diagnostics = BuildDiagnostics(snapshot, report: null, steps: [], viewEvents: []),
                 UsageTotals = new ObservatoryUsageTotals(),
                 RecoveryCapability = CloneRecoveryCapability(snapshot),
+                Lineage = CloneLineage(snapshot),
             };
         }
 
@@ -311,6 +312,7 @@ public sealed class WorkflowRunObservatoryQueryService
             Statistics = ToStatistics(report.Summary),
             UsageTotals = WorkflowRunObservatoryTimelineMapper.ToUsageTotals(report.Usage),
             RecoveryCapability = CloneRecoveryCapability(snapshot),
+            Lineage = CloneLineage(snapshot),
         };
     }
 
@@ -423,6 +425,7 @@ public sealed class WorkflowRunObservatoryQueryService
             StateVersion = snapshot.StateVersion,
             ScopeId = snapshot.ScopeId,
             RunOrigin = snapshot.RunOrigin,
+            Lineage = CloneLineage(snapshot),
         };
     }
 
@@ -453,11 +456,27 @@ public sealed class WorkflowRunObservatoryQueryService
             DurationMs = completedAtUtc == null || !snapshot.HasDurationMs ? null : snapshot.DurationMs,
             StateVersion = snapshot.StateVersion,
             RecoveryCapability = CloneRecoveryCapability(snapshot),
+            Lineage = CloneLineage(snapshot),
         };
     }
 
     private static WorkflowRunRecoveryCapability CloneRecoveryCapability(WorkflowActorSnapshot snapshot) =>
         snapshot.RecoveryCapability?.Clone() ?? new WorkflowRunRecoveryCapability();
+
+    private static Aevatar.Workflow.Abstractions.WorkflowRunLineage CloneLineage(WorkflowActorSnapshot snapshot) =>
+        snapshot.Lineage?.Clone() ?? new Aevatar.Workflow.Abstractions.WorkflowRunLineage
+        {
+            Availability = Aevatar.Workflow.Abstractions.WorkflowRunLineageAvailability.LegacyUnavailable,
+            UnavailableReason = "Run lineage is unavailable for this legacy run.",
+            RetryFork = new Aevatar.Workflow.Abstractions.WorkflowRunRetryForkLineage
+            {
+                Availability = Aevatar.Workflow.Abstractions.WorkflowRunLineageAvailability.LegacyUnavailable,
+            },
+            SubWorkflow = new Aevatar.Workflow.Abstractions.WorkflowRunSubWorkflowLineage
+            {
+                Availability = Aevatar.Workflow.Abstractions.WorkflowRunLineageAvailability.LegacyUnavailable,
+            },
+        };
 
     private static WorkflowActivityRunInitiatorSummary ToActivityInitiatorSummary(
         WorkflowRunActivityInitiatorSnapshot? source) =>

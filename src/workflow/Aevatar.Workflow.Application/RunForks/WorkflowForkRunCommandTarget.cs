@@ -10,6 +10,7 @@ internal sealed class WorkflowForkRunCommandTarget : ICommandDispatchTarget, ICo
 
     public WorkflowForkRunCommandTarget(
         string sourceRunId,
+        string originalRunId,
         string startAtStepId,
         string actorId,
         string runId,
@@ -19,6 +20,7 @@ internal sealed class WorkflowForkRunCommandTarget : ICommandDispatchTarget, ICo
         IWorkflowRunProvisioningPort runProvisioningPort)
     {
         SourceRunId = Normalize(sourceRunId);
+        OriginalRunId = Normalize(originalRunId);
         StartAtStepId = Normalize(startAtStepId);
         RunId = Normalize(runId);
         PreparedRequest = preparedRequest ?? throw new ArgumentNullException(nameof(preparedRequest));
@@ -30,6 +32,8 @@ internal sealed class WorkflowForkRunCommandTarget : ICommandDispatchTarget, ICo
     }
 
     public string SourceRunId { get; }
+
+    public string OriginalRunId { get; }
 
     public string StartAtStepId { get; }
 

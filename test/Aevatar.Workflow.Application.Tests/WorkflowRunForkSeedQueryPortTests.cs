@@ -61,6 +61,32 @@ public sealed class WorkflowRunForkSeedQueryPortTests
     }
 
     [Fact]
+    public void ForkSeedReadModelMapper_ShouldCarryOriginalRunIdFromLineage()
+    {
+        var mapper = new WorkflowRunForkSeedReadModelMapper();
+
+        var view = mapper.ToSeedView(new WorkflowExecutionCurrentStateDocument
+        {
+            RunId = "run-source-gamma",
+            Status = "failed",
+            ScopeId = "scope-alpha",
+            Lineage = new WorkflowRunLineage
+            {
+                Availability = WorkflowRunLineageAvailability.Available,
+                RetryFork = new WorkflowRunRetryForkLineage
+                {
+                    Availability = WorkflowRunLineageAvailability.Available,
+                    SourceRunId = "run-source-gamma",
+                    OriginalRunId = "run-original-alpha",
+                },
+            },
+        });
+
+        view.SourceRunId.Should().Be("run-source-gamma");
+        view.OriginalRunId.Should().Be("run-original-alpha");
+    }
+
+    [Fact]
     public async Task GetForkSeedAsync_ShouldReadFailedRunForkSeedThroughCurrentStateReadModel()
     {
         var state = BuildWorkflowRunState("run-failed", "failed", "step boom");

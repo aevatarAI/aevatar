@@ -30,7 +30,8 @@ public sealed partial class WorkflowRunGAgent
                 binding.RevisionId,
                 binding.DefinitionVersion,
                 binding.CapabilityAdmissionPlan,
-                binding.ExpectedExecutionMode);
+                binding.ExpectedExecutionMode,
+                binding.InitialLineage);
         }
         else
         {

@@ -13,6 +13,7 @@ using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Core.Primitives;
 using Google.Protobuf;
+using Google.Protobuf.Collections;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 using System.Diagnostics.CodeAnalysis;
@@ -481,6 +482,7 @@ public sealed partial class WorkflowRunGAgent
         long definitionVersion,
         WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan,
         ExternalCapabilityExecutionMode expectedExecutionMode,
+        WorkflowRunLineage? initialLineage = null,
         CancellationToken ct = default)
     {
         if (expectedExecutionMode == ExternalCapabilityExecutionMode.Unspecified ||
@@ -514,6 +516,13 @@ public sealed partial class WorkflowRunGAgent
             CapabilityAdmissionPlan = capabilityAdmissionPlan?.Clone(),
             ExpectedExecutionMode = expectedExecutionMode,
         };
+        if (initialLineage != null)
+        {
+            // Fix (review round 1, F1):
+            //   Sub-workflow child lineage was stamped before dispatch but dropped before bind commit.
+            //   Preserve InitialLineage in the authoritative bind event and cover the bind handler path.
+            bindDefinitionEvent.InitialLineage = initialLineage.Clone();
+        }
         if (inlineWorkflowYamls != null)
         {
             foreach (var (key, value) in inlineWorkflowYamls)
@@ -542,7 +551,8 @@ public sealed partial class WorkflowRunGAgent
             request.RevisionId,
             request.DefinitionVersion,
             request.CapabilityAdmissionPlan,
-            request.ExpectedExecutionMode);
+            request.ExpectedExecutionMode,
+            request.InitialLineage);
 
     public override Task<string> GetDescriptionAsync()
     {
@@ -712,6 +722,7 @@ public sealed partial class WorkflowRunGAgent
             CurrentTurnId = string.IsNullOrWhiteSpace(request.CurrentTurnId)
                 ? request.ConversationContext?.CurrentTurnId ?? string.Empty
                 : request.CurrentTurnId,
+            Lineage = BuildExecutionStartLineage(request.ForkSeed, State.Lineage, runId),
         };
         if (request.CompletionNotificationTarget != null)
             executionStarted.CompletionNotificationTarget = request.CompletionNotificationTarget.Clone();
@@ -2090,6 +2101,7 @@ public sealed partial class WorkflowRunGAgent
             .On<WorkflowRunExecutionContextClearedEvent>(ApplyWorkflowRunExecutionContextCleared)
             .On<WorkflowExecutionStateUpsertedEvent>(ApplyWorkflowExecutionStateUpserted)
             .On<WorkflowExecutionStateClearedEvent>(ApplyWorkflowExecutionStateCleared)
+            .On<WorkflowRunLineageRecordedEvent>(ApplyWorkflowRunLineageRecorded)
             .On<CompensableStepDispatchedEvent>(ApplyCompensableStepDispatched)
             .On<StepCompletedEvent>(ApplyStepCompleted)
             .On<CompensationRequestEvent>(ApplyCompensationRequest)
@@ -2281,6 +2293,9 @@ public sealed partial class WorkflowRunGAgent
         next.TerminalNotificationAttempt = 0;
         next.TerminalNotificationDeliveryStatus = WorkflowRunTerminalNotificationDeliveryStatus.Unspecified;
         next.TerminalNotificationRetryCallbackId = string.Empty;
+        next.Lineage = evt.InitialLineage == null
+            ? CreateUnavailableLineage("Run lineage is unavailable for this run.")
+            : EnsureLineage(evt.InitialLineage);
         next.InlineWorkflowYamls.Clear();
         foreach (var (workflowNameKey, workflowYamlValue) in evt.InlineWorkflowYamls)
         {
@@ -2367,6 +2382,7 @@ public sealed partial class WorkflowRunGAgent
         next.TerminalNotificationDeliveryStatus = WorkflowRunTerminalNotificationDeliveryStatus.Unspecified;
         next.TerminalNotificationRetryCallbackId = string.Empty;
         next.CurrentTurnId = evt.CurrentTurnId?.Trim() ?? string.Empty;
+        next.Lineage = evt.Lineage?.Clone() ?? current.Lineage?.Clone() ?? CreateUnavailableLineage("Run lineage is unavailable for this run.");
         next.InteractiveActionHandoffs.Clear();
         next.ExecutionContext ??= new WorkflowRunExecutionContextState();
         ApplyExecutionContextDelta(next.ExecutionContext, evt.ExecutionContextDelta);
@@ -2378,6 +2394,206 @@ public sealed partial class WorkflowRunGAgent
         if (next.StartedAtUtc == null && evt.StartedAtUtc != null)
             next.StartedAtUtc = evt.StartedAtUtc;
         return next;
+    }
+
+    [EventHandler]
+    public async Task HandleWorkflowRunLineageRecorded(WorkflowRunLineageRecordedEvent evt)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+
+        var sourceRunId = WorkflowRunIdNormalizer.Normalize(evt.SourceRunId);
+        var currentRunId = WorkflowRunIdNormalizer.Normalize(RunId);
+        if (string.IsNullOrWhiteSpace(sourceRunId) ||
+            string.IsNullOrWhiteSpace(currentRunId) ||
+            !string.Equals(sourceRunId, currentRunId, StringComparison.Ordinal))
+        {
+            Logger.LogWarning(
+                "Reject workflow lineage record for mismatched source run. actor={ActorId} currentRun={CurrentRunId} sourceRun={SourceRunId}",
+                Id,
+                currentRunId,
+                sourceRunId);
+            return;
+        }
+
+        if (evt.RelationKind != WorkflowRunLineageRelationKind.RetryFork ||
+            string.IsNullOrWhiteSpace(evt.ChildRunId))
+        {
+            Logger.LogWarning(
+                "Reject workflow lineage record with unsupported or missing relation. sourceRun={SourceRunId} childRun={ChildRunId} relation={RelationKind}",
+                sourceRunId,
+                evt.ChildRunId,
+                evt.RelationKind);
+            return;
+        }
+
+        // Implement (issue #3252):
+        //   Behavior: source/original runs expose retried or forked child run identities from committed facts.
+        //   Why this shape: the source actor records its own lineage instead of queries deriving children from actor IDs or graph topology.
+        await PersistDomainEventAsync(new WorkflowRunLineageRecordedEvent
+        {
+            SourceRunId = sourceRunId,
+            ChildRunId = WorkflowRunIdNormalizer.Normalize(evt.ChildRunId),
+            ChildActorId = evt.ChildActorId?.Trim() ?? string.Empty,
+            StartAtStepId = evt.StartAtStepId?.Trim() ?? string.Empty,
+            Attempt = Math.Max(0, evt.Attempt),
+            RelationKind = WorkflowRunLineageRelationKind.RetryFork,
+            OriginalRunId = WorkflowRunIdNormalizer.Normalize(evt.OriginalRunId),
+        });
+    }
+
+    private static WorkflowRunState ApplyWorkflowRunLineageRecorded(
+        WorkflowRunState current,
+        WorkflowRunLineageRecordedEvent evt)
+    {
+        if (evt.RelationKind != WorkflowRunLineageRelationKind.RetryFork)
+            return current;
+
+        var childRunId = WorkflowRunIdNormalizer.Normalize(evt.ChildRunId);
+        if (string.IsNullOrWhiteSpace(childRunId))
+            return current;
+
+        var next = current.Clone();
+        next.Lineage = EnsureLineage(next.Lineage);
+        MarkLineageAvailable(next.Lineage);
+        next.Lineage.RetryFork ??= new WorkflowRunRetryForkLineage();
+        next.Lineage.RetryFork.Availability = WorkflowRunLineageAvailability.Available;
+        if (string.IsNullOrWhiteSpace(next.Lineage.RetryFork.SourceRunId))
+            next.Lineage.RetryFork.SourceRunId = WorkflowRunIdNormalizer.Normalize(evt.SourceRunId);
+        if (string.IsNullOrWhiteSpace(next.Lineage.RetryFork.OriginalRunId))
+        {
+            var originalRunId = WorkflowRunIdNormalizer.Normalize(evt.OriginalRunId);
+            next.Lineage.RetryFork.OriginalRunId = string.IsNullOrWhiteSpace(originalRunId)
+                ? next.Lineage.RetryFork.SourceRunId
+                : originalRunId;
+        }
+
+        UpsertLineageChild(
+            next.Lineage.RetryFork.ChildRuns,
+            childRunId,
+            evt.ChildActorId,
+            relationshipId: string.Empty,
+            stepId: evt.StartAtStepId,
+            Math.Max(0, evt.Attempt),
+            WorkflowRunLineageRelationKind.RetryFork);
+        return next;
+    }
+
+    internal static WorkflowRunLineage BuildExecutionStartLineage(
+        WorkflowRunForkSeed? forkSeed,
+        WorkflowRunLineage? currentLineage,
+        string runId)
+    {
+        if (forkSeed == null || string.IsNullOrWhiteSpace(forkSeed.SourceRunId))
+            return currentLineage?.Clone() ?? CreateUnavailableLineage("Run lineage is unavailable for this run.");
+
+        var sourceRunId = WorkflowRunIdNormalizer.Normalize(forkSeed.SourceRunId);
+        var originalRunId = WorkflowRunIdNormalizer.Normalize(forkSeed.OriginalRunId);
+        if (string.IsNullOrWhiteSpace(originalRunId))
+            originalRunId = sourceRunId;
+
+        // Implement (issue #3252):
+        //   Behavior: retried and forked child runs carry source and original run IDs as typed lineage.
+        //   Why this shape: fork lineage is stamped from the accepted fork seed instead of inferred from routes or run ID strings.
+        return new WorkflowRunLineage
+        {
+            Availability = WorkflowRunLineageAvailability.Available,
+            RetryFork = new WorkflowRunRetryForkLineage
+            {
+                Availability = WorkflowRunLineageAvailability.Available,
+                SourceRunId = sourceRunId,
+                OriginalRunId = originalRunId,
+                Attempt = Math.Max(0, forkSeed.Attempt),
+                StartAtStepId = forkSeed.StartAtStepId?.Trim() ?? string.Empty,
+            },
+            SubWorkflow = currentLineage?.SubWorkflow?.Clone() ?? new WorkflowRunSubWorkflowLineage
+            {
+                Availability = WorkflowRunLineageAvailability.Unavailable,
+            },
+        };
+    }
+
+    internal static void MarkLineageAvailable(WorkflowRunLineage lineage)
+    {
+        lineage.Availability = WorkflowRunLineageAvailability.Available;
+        lineage.UnavailableReason = string.Empty;
+    }
+
+    internal static WorkflowRunLineage CreateUnavailableLineage(string reason) =>
+        new()
+        {
+            Availability = WorkflowRunLineageAvailability.Unavailable,
+            UnavailableReason = string.IsNullOrWhiteSpace(reason)
+                ? "Run lineage is unavailable for this run."
+                : reason,
+            RetryFork = new WorkflowRunRetryForkLineage
+            {
+                Availability = WorkflowRunLineageAvailability.Unavailable,
+            },
+            SubWorkflow = new WorkflowRunSubWorkflowLineage
+            {
+                Availability = WorkflowRunLineageAvailability.Unavailable,
+            },
+        };
+
+    internal static WorkflowRunLineage EnsureLineage(WorkflowRunLineage? lineage)
+    {
+        var next = lineage?.Clone() ?? CreateUnavailableLineage("Run lineage is unavailable for this run.");
+        next.RetryFork ??= new WorkflowRunRetryForkLineage
+        {
+            Availability = WorkflowRunLineageAvailability.Unavailable,
+        };
+        next.SubWorkflow ??= new WorkflowRunSubWorkflowLineage
+        {
+            Availability = WorkflowRunLineageAvailability.Unavailable,
+        };
+        if (next.Availability == WorkflowRunLineageAvailability.Available)
+            next.UnavailableReason = string.Empty;
+        return next;
+    }
+
+    internal static void UpsertLineageChild(
+        RepeatedField<WorkflowRunLineageRunRef> childRuns,
+        string runId,
+        string? actorId,
+        string relationshipId,
+        string? stepId,
+        int attempt,
+        WorkflowRunLineageRelationKind relationKind)
+    {
+        var normalizedRunId = WorkflowRunIdNormalizer.Normalize(runId);
+        if (string.IsNullOrWhiteSpace(normalizedRunId))
+            return;
+
+        var normalizedActorId = actorId?.Trim() ?? string.Empty;
+        for (var i = 0; i < childRuns.Count; i++)
+        {
+            if (!string.Equals(childRuns[i].RunId, normalizedRunId, StringComparison.Ordinal) ||
+                childRuns[i].RelationKind != relationKind)
+            {
+                continue;
+            }
+
+            childRuns[i] = new WorkflowRunLineageRunRef
+            {
+                RunId = normalizedRunId,
+                ActorId = string.IsNullOrWhiteSpace(normalizedActorId) ? childRuns[i].ActorId ?? string.Empty : normalizedActorId,
+                RelationshipId = string.IsNullOrWhiteSpace(relationshipId) ? childRuns[i].RelationshipId : relationshipId,
+                StepId = string.IsNullOrWhiteSpace(stepId) ? childRuns[i].StepId : stepId.Trim(),
+                Attempt = Math.Max(0, attempt),
+                RelationKind = relationKind,
+            };
+            return;
+        }
+
+        childRuns.Add(new WorkflowRunLineageRunRef
+        {
+            RunId = normalizedRunId,
+            ActorId = normalizedActorId,
+            RelationshipId = relationshipId ?? string.Empty,
+            StepId = stepId?.Trim() ?? string.Empty,
+            Attempt = Math.Max(0, attempt),
+            RelationKind = relationKind,
+        });
     }
 
     private static WorkflowRunState ApplyWorkflowRunExecutionContextUpdated(
@@ -3724,6 +3940,7 @@ public sealed partial class WorkflowRunGAgent
             DefinitionVersion = Math.Max(0, State.DefinitionVersion),
             CapabilityAdmissionPlan = State.CapabilityAdmissionPlan?.Clone(),
             ExpectedExecutionMode = State.ExpectedExecutionMode,
+            InitialLineage = State.Lineage?.Clone(),
             InlineWorkflowYamls = { State.InlineWorkflowYamls },
         }, ct);
         await _subWorkflowOrchestrator.CancelPendingDefinitionResolutionTimeoutsAsync(stateBeforeBind, CancellationToken.None);

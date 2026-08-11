@@ -192,6 +192,7 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             SourceRunId = Normalize(source.SourceRunId),
             StartAtStepId = Normalize(source.StartAtStepId),
             Attempt = Math.Max(0, source.Attempt),
+            OriginalRunId = Normalize(source.OriginalRunId),
         };
         if (source.StartStepIdempotency != null)
         {
