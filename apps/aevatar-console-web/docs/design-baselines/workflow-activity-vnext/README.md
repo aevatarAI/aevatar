@@ -9,7 +9,10 @@ Any implementation or review of routes below
 with the
 [`design specification`](../../superpowers/specs/2026-08-04-workflow-activity-vnext-design.md)
 and
-[`user paths`](../../superpowers/specs/2026-08-04-workflow-activity-vnext-user-paths.md).
+[`user paths`](../../superpowers/specs/2026-08-04-workflow-activity-vnext-user-paths.md),
+plus the
+[`published-workflow schedule supplement`](../../superpowers/specs/2026-08-11-workflow-schedule-design.md)
+when Schedule is in scope.
 
 Use the sources in this order:
 
@@ -17,11 +20,15 @@ Use the sources in this order:
    information-architecture, and interaction reference.
 2. The design specification is the normative product, route, identity, API,
    state, and backend-compatibility contract.
-3. The user-path specification is the normative end-to-end journey, decision,
+3. The published-workflow schedule supplement is normative whenever a
+   Schedule entry, panel, resource, or Activity origin is changed. It defines
+   Schedule as a published-service-owned `ScheduledDispatch`, not a graph
+   node, draft property, or Run property.
+4. The user-path specification is the normative end-to-end journey, decision,
    recovery, and completion-evidence contract.
-4. The PNG files are viewport references for individual states.
-5. `prototype.html` is an interaction demonstration only.
-6. `aevatar-workflow-activity-vnext.gen.py` is the source generator for these
+5. The PNG files are viewport references for individual states.
+6. `prototype.html` is an interaction demonstration only.
+7. `aevatar-workflow-activity-vnext.gen.py` is the source generator for these
    reference artifacts; it is not application runtime code.
 
 If the Excalidraw or prototype conflicts with a real API contract, follow the
@@ -99,10 +106,13 @@ Design baseline:
 Primary design:
   aevatar-workflow-activity-vnext.excalidraw
 Design SHA-256:
-  30e74d7b410ae72c4c91432355436679033679c54c10b1702908435b001577de
+  50a443a89287ad0bdf86b64cb79ea96e62664a8e82a519762be9b36da87f89ca
 Contract specification:
   apps/aevatar-console-web/docs/superpowers/specs/
   2026-08-04-workflow-activity-vnext-design.md
+Schedule supplement, when Schedule is in scope:
+  apps/aevatar-console-web/docs/superpowers/specs/
+  2026-08-11-workflow-schedule-design.md
 User paths:
   apps/aevatar-console-web/docs/superpowers/specs/
   2026-08-04-workflow-activity-vnext-user-paths.md
@@ -121,13 +131,13 @@ failures rather than undocumented implementation choices.
 
 ## Imported Source
 
-这个目录是根据 2026-08-03 会议结论重新整理的独立版本。用户提供的原始画板、生成器、HTML 和 PNG 作为来源资产逐字节导入，没有修改。仓库额外增加的 `README.md` 和 `verify-baseline.py` 负责说明规范优先级并验证基线完整性，不属于原始原型资产。仓库内副本是后续实现与评审的唯一可移植基准；本机来源路径不构成依赖。
+这个目录最初根据 2026-08-03 会议结论重新整理为独立版本。用户提供的原始画板、生成器、HTML 和 PNG 是来源资产；后续经评审批准的设计演进会同时修改生成器、画板、校验器和本文档。仓库内副本是后续实现与评审的唯一可移植基准；本机来源路径不构成依赖。
 
 ## 文件
 
-- `aevatar-workflow-activity-vnext.excalidraw`：合并后的 Excalidraw，包含 Workflows、Activity 与 Settings，共 17 个 frame。
+- `aevatar-workflow-activity-vnext.excalidraw`：合并后的 Excalidraw，包含 Workflows、Activity、Settings 与已发布 Workflow 的 Schedule 配置，共 18 个 frame。
 - `aevatar-workflow-activity-vnext.gen.py`：画板生成器，内含画框边界、ID 唯一性和废弃术语检查。
-- `verify-baseline.py`：仓库内校验器，验证画板 SHA-256、生成器确定性输出和 17 个 frame 的精确清单。
+- `verify-baseline.py`：仓库内校验器，验证画板 SHA-256、生成器确定性输出和 18 个 frame 的精确清单。
 - `prototype.html`：可直接在浏览器打开的交互原型，不需要安装依赖或启动服务。
 - `prototype-workflows.png`：Workflows 桌面视图截图。
 - `prototype-activity.png`：Activity 桌面视图截图。
@@ -169,7 +179,7 @@ Production Data Truth Rule，也不覆盖设计规范中的
 `Excalidraw-To-Backend Deviations`。后续实现必须应用这些强制偏差：
 
 - 用户从 Workflows 直接创建 Workflow 草稿，没有其他资源的创建前置步骤。
-- `Run` 是唯一的常规执行入口。
+- `Run` 是唯一的手动执行入口。`Schedule` 是已发布服务拥有的独立后台触发资源，不是 Run 对话框、草稿属性或画布节点。
 - Run 请求开始后先显示真实的 Accepted/Running 状态；只有 Observatory
   返回权威记录后，才能显示为 Activity 记录。
 - `Current draft · revision N`、`Published · vN`、来源、耗时、用量和
@@ -183,7 +193,7 @@ Production Data Truth Rule，也不覆盖设计规范中的
 
 ## Excalidraw 阅读顺序
 
-导入 `aevatar-workflow-activity-vnext.excalidraw` 后，建议先缩放到全部内容，再按 frame 名称从 01 看到 17：
+导入 `aevatar-workflow-activity-vnext.excalidraw` 后，建议先缩放到全部内容，再按 frame 名称从 01 看到 18：
 
 1. `01 Workflows - catalogue`：日常入口、搜索、筛选、Run 和 Open。
 2. `02 New workflow - direct creation`：四种入口都直接创建 Workflow 草稿。
@@ -193,7 +203,7 @@ Production Data Truth Rule，也不覆盖设计规范中的
 6. `06 Template - populated Workflow draft`：模板创建独立草稿，并以连接节点显示。
 7. `07 Run - unified execution dialog`：确认修订、输入、连接和外部影响；底部文案表达保留本次 Run 的产品意图，生产实现仍需等待真实 Activity 观察结果。
 8. `08 Running draft - Studio canvas and Run console`：仍在同一个节点画布中显示运行状态，底部打开 Run console；画板中的 Activity 记录只表达目标状态，生产实现不得在权威查询返回前声称记录已存在。
-9. `09 Activity - filtered by Workflow`：从 Activity 菜单进入，并用 Workflow 筛选历史。
+9. `09 Activity - filtered by Workflow`：从 Schedule 面板进入，并同时用当前 Workflow 与通用 `Source: Schedule` 筛选历史；它不按某个命名 Schedule 声称 Run 归属。
 10. `10 Activity - all retained Runs`：全局、最新优先的所有 Run 记录。
 11. `11 Run detail - immutable record`：展示 Run 详情的信息层级；修订、来源、耗时、用量、步骤时间线与关联记录仅在真实详情响应提供对应字段时显示。
 12. `12 Failed Run - recovery creates a new record`：失败解释和恢复；Retry 预览明确展示新旧 Run 的关系。
@@ -202,6 +212,7 @@ Production Data Truth Rule，也不覆盖设计规范中的
 15. `15 Settings - save and recovery states`：dirty save bar、accepted observation、fallback、catalog unavailable 和保存失败恢复。
 16. `16 Settings - Account`：Profile、claims、Authentication、Sign out 与 Manage service access。
 17. `17 Settings - Advanced and responsive`：单份只读 effective request values 与完整移动端操作布局。
+18. `18 Schedule - published workflow configuration`：已发布 Workflow 的右侧 Schedule 管理面；它固定目标服务与修订，显示周期、时区、必填 Run input、服务端预览和调度状态，不把 Schedule 画成图节点。
 
 重点不是逐个查看控件，而是沿着这条主路径检查语义是否连贯：
 
@@ -225,11 +236,12 @@ Workflows
 1. 打开 `prototype.html`，默认进入 Workflows。
 2. 点击 `New workflow`，分别检查四种方式：描述会生成匹配节点；空白会进入画布空状态；导入会先校验 YAML；模板会先要求选择模板。
 3. 在画布点击节点，右侧打开 Node configuration；`Add node` 从左侧打开 Node library；`Edit YAML` 从右侧打开 YAML 面板。
-4. 在列表或编辑器点击 `Run`，确认修订、输入、连接和外部影响。
-5. 勾选外部影响确认后点击 `Run`。记录会立即写入浏览器 `localStorage`，编辑器显示运行状态。
-6. 打开 Activity，点击任意一行查看详情。
-7. 对成功记录点击 `Run again`，或对失败记录点击 `Retry`，然后在确认框里创建新的关联记录。
-8. 点击 Settings，在 `AI defaults` 中切换 exact service 和 model。修改后页面底部才会出现 Discard / Save changes；再分别检查 `Account` 和只读的 `Advanced`。
+4. 打开一个已发布 Workflow，点击 `Schedule` 检查右侧 Schedule 面板，再点击 `View scheduled runs` 检查当前 Workflow 的通用 `Source: Schedule` Activity 筛选；未发布 Workflow 的同一动作保持禁用，并显示 `Publish this workflow before scheduling it.`。面板中的 Schedule 数据是演示数据，不能视为 API 行为。
+5. 在列表或编辑器点击 `Run`，确认修订、输入、连接和外部影响。
+6. 勾选外部影响确认后点击 `Run`。记录会立即写入浏览器 `localStorage`，编辑器显示运行状态。
+7. 打开 Activity，点击任意一行查看详情。
+8. 对成功记录点击 `Run again`，或对失败记录点击 `Retry`，然后在确认框里创建新的关联记录。
+9. 点击 Settings，在 `AI defaults` 中切换 exact service 和 model。修改后页面底部才会出现 Discard / Save changes；再分别检查 `Account` 和只读的 `Advanced`。
 
 原型数据会保留在当前浏览器中；重新打开页面后，新建的 Run 历史仍然存在。
 
@@ -262,5 +274,5 @@ python3 apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/v
 ```
 
 校验器会在临时目录运行导入的生成器，不修改仓库文件，并验证生成结果与
-主画板逐字节一致、SHA-256 与声明一致，以及 17 个 frame 的名称和顺序
+主画板逐字节一致、SHA-256 与声明一致，以及 18 个 frame 的名称和顺序
 完整。任何失败都表示设计基线或声明已经漂移，必须在实现或评审前处理。

@@ -3,7 +3,7 @@
 
 The board implements the product decisions from the 2026-08-03 meeting:
 - Workflow is the only user-authored resource in scope.
-- Run is the only execution action.
+- Run is the manual execution action; Schedule is a published-service-owned trigger.
 - Every Run is retained in Activity, including draft revisions.
 - Retry and Run again create linked records instead of rewriting history.
 - Settings follows the current Aevatar Console LLM and Account behavior.
@@ -134,9 +134,12 @@ def text(x: float, y: float, value: str, size: int = FS_BODY, color: str = INK,
 def line(x: float, y: float, w: float, h: float, *, color: str = LINE,
          style: str = "solid", arrowhead: str | None = None, sw: int = 1) -> dict:
     kind = "arrow" if arrowhead else "line"
-    item = base(kind, x, y, abs(w), abs(h), stroke=color, style=style, sw=sw)
+    origin_x = x + min(0, w)
+    origin_y = y + min(0, h)
+    item = base(kind, origin_x, origin_y, abs(w), abs(h), stroke=color, style=style, sw=sw)
     item.update({
-        "points": [[0, 0], [float(w), float(h)]],
+        "points": [[float(x - origin_x), float(y - origin_y)],
+                   [float(x + w - origin_x), float(y + h - origin_y)]],
         "lastCommittedPoint": None,
         "startBinding": None,
         "endBinding": None,
@@ -260,7 +263,8 @@ def table_header(x: float, y: float, widths: list[float], labels: list[str]) -> 
 
 
 def workflow_row(x: float, y: float, name: str, description: str, revision: str,
-                 last_run: str, run_status: str, state: str) -> None:
+                 last_run: str, run_status: str, state: str,
+                 schedule_summary: str | None = None) -> None:
     widths = [410, 170, 220, 150, 190]
     rect(x, y, sum(widths), 82, bg=SURFACE, stroke=LINE, radius=False)
     text(x + 16, y + 15, name, FS_BODY, INK, width=360)
@@ -273,6 +277,8 @@ def workflow_row(x: float, y: float, name: str, description: str, revision: str,
     text(cursor + 115, y + 31, last_run, FS_SMALL, MUTED, width=95)
     cursor += widths[2]
     badge(cursor + 14, y + 26, state, "ok" if state == "Published" else "muted")
+    if schedule_summary:
+        text(cursor + 14, y + 52, schedule_summary, 11, BLUE, width=130)
     cursor += widths[3]
     button(cursor + 12, y + 22, 72, "Run")
     button(cursor + 94, y + 22, 76, "Open", color=BLUE, bg=BLUE_BG)
@@ -308,8 +314,6 @@ def node_appearance(kind: str) -> tuple[str, str]:
     normalized = kind.casefold()
     if "ai" in normalized:
         return BLUE, "AI"
-    if "schedule" in normalized:
-        return PURPLE, "T"
     if "condition" in normalized:
         return "#9333ea", "C"
     if "approval" in normalized:
@@ -349,7 +353,8 @@ def studio_canvas(cx: float, cy: float, cw: float, ch: float,
                   steps: list[tuple[str, str]], *, selected: int | None = None,
                   fields: list[tuple[str, str]] | None = None,
                   empty: bool = False, source: str = "",
-                  statuses: list[str] | None = None) -> None:
+                  statuses: list[str] | None = None,
+                  layout: str = "auto") -> None:
     canvas_x = cx + 10
     canvas_y = cy + 10
     canvas_w = cw - 20
@@ -382,7 +387,22 @@ def studio_canvas(cx: float, cy: float, cw: float, ch: float,
     graph_w = canvas_w - (400 if inspector_open else 0)
     node_w = 214
     positions: list[tuple[float, float]] = []
-    if len(steps) <= 5 and not inspector_open:
+    if layout == "compact":
+        assert len(steps) <= 4, "compact canvas layout supports up to four steps"
+        assert graph_w >= node_w * 2 + 64, "compact canvas is too narrow for two nodes"
+        horizontal_inset = (graph_w - node_w * 2) / 3
+        left_x = canvas_x + horizontal_inset
+        right_x = canvas_x + graph_w - horizontal_inset - node_w
+        first_row_y = canvas_y + 170
+        second_row_y = first_row_y + 226
+        compact_positions = [
+            (left_x, first_row_y),
+            (right_x, first_row_y),
+            (right_x, second_row_y),
+            (left_x, second_row_y),
+        ]
+        positions = compact_positions[:len(steps)]
+    elif len(steps) <= 5 and not inspector_open and graph_w >= len(steps) * node_w + 56:
         gap = min(48, (graph_w - 56 - len(steps) * node_w) / max(1, len(steps) - 1))
         total_w = len(steps) * node_w + max(0, len(steps) - 1) * gap
         start_x = canvas_x + (graph_w - total_w) / 2
@@ -438,18 +458,41 @@ def studio_canvas(cx: float, cy: float, cw: float, ch: float,
            primary=True, color=BLUE, h=34)
 
 
+def workflow_editor_actions(cx: float, fy: float, cw: float, *, empty: bool,
+                            published: bool = False) -> None:
+    action_x = cx + cw - 612
+    button(action_x, fy + 24, 72, "Run", color=MUTED if empty else INK, h=32)
+    button(action_x + 82, fy + 24, 92, "Schedule",
+           color=INK if published else MUTED, h=32)
+    button(action_x + 184, fy + 24, 92, "Add node", color=INK, h=32)
+    button(action_x + 286, fy + 24, 92, "Edit YAML", color=INK, h=32)
+    button(action_x + 388, fy + 24, 82, "Save", primary=True, color=BLUE, h=32)
+    button(action_x + 480, fy + 24, 102, "Publish",
+           color=MUTED if empty else INK, h=32)
+
+
+def workflow_editor_header(fx: float, fy: float, *, title: str, subtitle: str,
+                           empty: bool, published: bool = False) -> tuple[float, float, float]:
+    cx, cy, cw = app_shell(fx, fy, "Workflows", title=title)
+    action_x = cx + cw - 612
+    subtitle_width = action_x - (cx + 30) - 20
+    text(cx + 30, fy + 49, subtitle, FS_SMALL, MUTED, width=subtitle_width)
+    if not published:
+        text(cx + 30, fy + 68, "Publish this workflow before scheduling it.",
+             11, MUTED, width=subtitle_width)
+    workflow_editor_actions(cx, fy, cw, empty=empty, published=published)
+    return cx, cy, cw
+
+
 def workflow_editor_frame(index: int, frame_name: str, *, title: str,
                           subtitle: str, source: str,
                           steps: list[tuple[str, str]], selected: int | None = None,
                           fields: list[tuple[str, str]] | None = None,
-                          empty: bool = False) -> None:
+                          empty: bool = False, published: bool = False) -> None:
     fx, fy = begin_frame(index, frame_name)
-    cx, cy, cw = app_shell(fx, fy, "Workflows", title=title, subtitle=subtitle)
-    button(cx + cw - 510, fy + 24, 72, "Run", color=MUTED if empty else INK, h=32)
-    button(cx + cw - 428, fy + 24, 92, "Add node", color=INK, h=32)
-    button(cx + cw - 326, fy + 24, 92, "Edit YAML", color=INK, h=32)
-    button(cx + cw - 224, fy + 24, 82, "Save", primary=True, color=BLUE, h=32)
-    button(cx + cw - 132, fy + 24, 102, "Publish", color=MUTED if empty else INK, h=32)
+    cx, cy, cw = workflow_editor_header(
+        fx, fy, title=title, subtitle=subtitle, empty=empty, published=published
+    )
     studio_canvas(cx, cy, cw, FRAME_H - (cy - fy), steps,
                   selected=selected, fields=fields, empty=empty, source=source)
     end_frame()
@@ -492,11 +535,11 @@ def settings_panel_heading(x: float, y: float, w: float, title_value: str,
 # Board title and semantic contract
 text(ORIGIN_X, 80, "Aevatar Workflow + Activity + Settings vNext", FS_TITLE, INK, width=1040)
 text(ORIGIN_X, 132,
-     "One authoring resource. One Run action. One immutable Activity history.",
-     FS_HEAD, BLUE, width=980)
+     "One authoring resource. One manual Run action. One schedule resource. One immutable Activity history.",
+     FS_HEAD, BLUE, width=1120)
 text(ORIGIN_X, 180,
-     "Primary path: Workflows -> direct draft -> Run -> Activity. Settings owns LLM defaults and browser identity.",
-     FS_BODY, MUTED, width=1180)
+     "Primary path: Workflows -> direct draft -> Publish -> manual Run or Schedule -> Activity. Settings owns LLM defaults and browser identity.",
+     FS_BODY, MUTED, width=1200)
 
 
 # 01 Workflows catalogue
@@ -513,10 +556,10 @@ table_y = cy + 112
 table_header(table_x, table_y, [410, 170, 220, 150, 190],
              ["Workflow", "Version", "Last run", "State", "Actions"])
 rows = [
-    ("Weekly feedback digest", "Group feedback and post a weekly summary", "v7", "12 min ago", "ok", "Published"),
+    ("Weekly feedback digest", "Group feedback and post a weekly summary", "v7", "12 min ago", "ok", "Published", "Scheduled · next Mon 09:00"),
     ("Customer escalation triage", "Classify urgent conversations and prepare replies", "draft r12", "4 min ago", "run", "Draft"),
     ("Invoice follow-up", "Prepare overdue invoice reminders for approval", "v4", "42 min ago", "ok", "Published"),
-    ("Nightly order sync", "Move completed orders into the warehouse", "v9", "3:04 AM", "fail", "Published"),
+    ("Nightly order sync", "Move completed orders into the warehouse", "v9", "3:04 AM", "fail", "Published", "Scheduled · next 03:00"),
     ("Contract review", "Flag unusual clauses and prepare a review note", "draft r3", "-", "muted", "Draft"),
 ]
 for idx, row in enumerate(rows):
@@ -573,15 +616,14 @@ workflow_editor_frame(
     subtitle="Current draft · revision 1 · Saved just now",
     source="Description",
     steps=[
-        ("Schedule every Monday", "Schedule"),
         ("Collect recent feedback", "Lark messages"),
         ("Group feedback themes", "AI task"),
         ("Draft concise summary", "AI task"),
         ("Post feedback summary", "Lark message"),
     ],
     selected=0,
-    fields=[("Frequency", "Every Monday at 09:00"),
-            ("Timezone", "Asia/Shanghai")],
+    fields=[("Channel", "Customer feedback"),
+            ("Window", "Last 7 days")],
 )
 
 workflow_editor_frame(
@@ -599,12 +641,11 @@ workflow_editor_frame(
     subtitle="Current draft · revision 1 · Imported just now",
     source="Import",
     steps=[
-        ("Schedule every weekday", "Schedule"),
         ("Find order exceptions", "Data query"),
         ("Summarize exceptions", "AI task"),
         ("Send operations summary", "Lark message"),
     ],
-    selected=1,
+    selected=0,
     fields=[("Source", "Orders"),
             ("Filter", "status = exception")],
 )
@@ -615,7 +656,6 @@ workflow_editor_frame(
     subtitle="Current draft · revision 1 · Saved just now",
     source="Template",
     steps=[
-        ("Schedule every weekday", "Schedule"),
         ("Collect contributor updates", "Lark messages"),
         ("Draft standup digest", "AI task"),
         ("Post standup digest", "Lark message"),
@@ -628,13 +668,10 @@ workflow_editor_frame(
 
 # 07 Unified Run dialog
 fx, fy = begin_frame(6, "07 Run - unified execution dialog")
-cx, cy, cw = app_shell(fx, fy, "Workflows", title="Customer escalation triage",
-                       subtitle="Draft revision 12  |  Saved just now")
-button(cx + cw - 510, fy + 24, 72, "Run", color=INK, h=32)
-button(cx + cw - 428, fy + 24, 92, "Add node", color=INK, h=32)
-button(cx + cw - 326, fy + 24, 92, "Edit YAML", color=INK, h=32)
-button(cx + cw - 224, fy + 24, 82, "Save", primary=True, color=BLUE, h=32)
-button(cx + cw - 132, fy + 24, 102, "Publish", color=INK, h=32)
+cx, cy, cw = workflow_editor_header(
+    fx, fy, title="Customer escalation triage",
+    subtitle="Draft revision 12  |  Saved just now", empty=False
+)
 studio_canvas(cx, cy, cw, FRAME_H - (cy - fy), [
     ("Receive conversation", "Lark message"),
     ("Classify severity", "AI task"),
@@ -676,13 +713,10 @@ end_frame()
 
 # 08 Running in the same Workflow Studio canvas
 fx, fy = begin_frame(7, "08 Running draft - Studio canvas and Run console")
-cx, cy, cw = app_shell(fx, fy, "Workflows", title="Customer escalation triage",
-                       subtitle="Current draft · revision 12 · Run R-1042")
-button(cx + cw - 510, fy + 24, 72, "Run", color=INK, h=32)
-button(cx + cw - 428, fy + 24, 92, "Add node", color=INK, h=32)
-button(cx + cw - 326, fy + 24, 92, "Edit YAML", color=INK, h=32)
-button(cx + cw - 224, fy + 24, 82, "Save", primary=True, color=BLUE, h=32)
-button(cx + cw - 132, fy + 24, 102, "Publish", color=INK, h=32)
+cx, cy, cw = workflow_editor_header(
+    fx, fy, title="Customer escalation triage",
+    subtitle="Current draft · revision 12 · Run R-1042", empty=False
+)
 running_steps = [
     ("Receive conversation", "Lark message"),
     ("Classify severity", "AI task"),
@@ -722,25 +756,22 @@ text(cx + 708, console_y + 120,
 end_frame()
 
 
-# 09 Activity with a Workflow filter
+# 09 Activity with a Workflow and generic Schedule-origin filter
 fx, fy = begin_frame(8, "09 Activity - filtered by Workflow")
 cx, cy, cw = app_shell(fx, fy, "Activity", title="Activity",
-                       subtitle="Every Run, newest first. Filtered to Weekly feedback digest.")
+                       subtitle="Scheduled runs for Weekly feedback digest.")
 field(cx + 30, cy + 24, 330, "Search", "Search Run or outcome")
 px = cx + 386
 px = chip(px, cy + 46, "Workflow: Weekly feedback digest", selected=True)
-for label, selected in (("All  24", True), ("Needs you  1", False), ("Running  1", False), ("Failed  2", False)):
-    px = chip(px, cy + 46, label, selected=selected)
+px = chip(px, cy + 46, "Source: Schedule", selected=True)
+chip(px, cy + 46, "All  2")
 table_x = cx + 30
 table_y = cy + 112
 table_header(table_x, table_y, [105, 235, 120, 175, 115, 75, 90, 255],
              ["Status", "Workflow", "Origin", "Revision", "When", "Took", "Usage", "Outcome"])
 runs = [
-    ("Running", "Weekly feedback digest", "Manual · you", "Current draft · revision 12", "18s ago", "00:18", "$0.03", "Preparing summary"),
     ("Succeeded", "Weekly feedback digest", "Schedule · weekly", "Published · v7", "2h ago", "01:42", "$0.18", "Posted 1 summary"),
     ("Needs you", "Weekly feedback digest", "Schedule · weekly", "Published · v7", "1w ago", "00:56", "$0.11", "Approval requested"),
-    ("Failed", "Weekly feedback digest", "Manual · Calvin", "Draft · revision 9", "8d ago", "00:12", "$0.02", "Lark connection expired"),
-    ("Succeeded", "Weekly feedback digest", "Run again · R-1001", "Published · v6", "15d ago", "01:37", "$0.17", "Posted 1 summary"),
 ]
 for idx, run in enumerate(runs):
     activity_row(table_x, table_y + 42 + idx * 70, *run)
@@ -1151,6 +1182,79 @@ button(mobile_x + 202, mobile_y + 686, 116, "Save changes", primary=True, color=
 end_frame()
 
 
+# 18 Schedule management for a published Workflow
+fx, fy = begin_frame(17, "18 Schedule - published workflow configuration")
+cx, cy, cw = workflow_editor_header(
+    fx, fy, title="Weekly feedback digest",
+    subtitle="Published · v7 · 1 schedule · Updated 12 minutes ago",
+    empty=False, published=True
+)
+canvas_w = cw - 410
+studio_canvas(cx, cy, canvas_w, FRAME_H - (cy - fy), [
+    ("Collect recent feedback", "Lark messages"),
+    ("Group feedback themes", "AI task"),
+    ("Draft concise summary", "AI task"),
+    ("Post feedback summary", "Lark message"),
+], source="Template", layout="compact")
+
+panel_x = cx + cw - 390
+panel_y = cy
+panel_w = 390
+panel_h = FRAME_H - (cy - fy)
+rect(panel_x, panel_y, panel_w, panel_h, bg=SURFACE, stroke="#d8e0ea", radius=False)
+text(panel_x + 18, panel_y + 18, "Schedules", FS_HEAD, INK, width=190)
+text(panel_x + 18, panel_y + 48, "Recurring triggers for this published workflow.",
+     FS_SMALL, MUTED, width=246)
+button(panel_x + 270, panel_y + 20, 102, "New schedule", color=BLUE, bg=BLUE_BG, h=32)
+line(panel_x, panel_y + 78, panel_w, 0, color="#eef2f7")
+
+rect(panel_x + 18, panel_y + 96, panel_w - 36, 72, bg=BLUE_BG, stroke=BLUE)
+text(panel_x + 32, panel_y + 110, "Morning digest", FS_BODY, INK, width=190)
+badge(panel_x + 264, panel_y + 108, "Active", "ok")
+text(panel_x + 32, panel_y + 138, "Every weekday at 09:00 · Asia/Shanghai",
+     FS_SMALL, MUTED, width=292)
+text(panel_x + 32, panel_y + 158, "Next run Tue 09:00", 11, BLUE, width=180)
+text(panel_x + 220, panel_y + 158, "View scheduled runs", 11, BLUE, width=140)
+
+line(panel_x + 18, panel_y + 188, panel_w - 36, 0, color=LINE)
+text(panel_x + 18, panel_y + 206, "SCHEDULE DETAILS", FS_SMALL, MUTED,
+     font=FONT_MONO, width=180)
+field(panel_x + 18, panel_y + 228, panel_w - 36, "Schedule name", "Morning digest")
+field(panel_x + 18, panel_y + 286, panel_w - 36, "Frequency", "Every weekday at 09:00")
+field(panel_x + 18, panel_y + 344, panel_w - 36, "Time zone", "Asia/Shanghai")
+field(panel_x + 18, panel_y + 402, panel_w - 36, "Run input", "Summarize new feedback.")
+field(panel_x + 18, panel_y + 460, panel_w - 36, "Pinned revision", "Published · v7")
+
+text(panel_x + 18, panel_y + 522, "EXECUTION", FS_SMALL, MUTED,
+     font=FONT_MONO, width=140)
+text(panel_x + 18, panel_y + 548, "Schedule is active", FS_SMALL, INK, width=176)
+rect(panel_x + 316, panel_y + 540, 52, 26, bg=GREEN, stroke=GREEN)
+dot(panel_x + 346, panel_y + 545, 16, SURFACE, bg=SURFACE)
+text(panel_x + 18, panel_y + 576, "Next run · Tue, Aug 12 at 09:00", FS_SMALL, INK, width=290)
+text(panel_x + 18, panel_y + 598, "Last run · Failed yesterday", FS_SMALL, RED, width=270)
+
+text(panel_x + 18, panel_y + 616, "NEXT FIVE RUNS · SERVER PREVIEW", 11, MUTED,
+     font=FONT_MONO, width=280)
+preview_rows = [
+    "Tue, Aug 12 · 09:00",
+    "Wed, Aug 13 · 09:00",
+    "Thu, Aug 14 · 09:00",
+    "Fri, Aug 15 · 09:00",
+    "Mon, Aug 18 · 09:00",
+]
+for idx, preview in enumerate(preview_rows):
+    text(panel_x + 18, panel_y + 638 + idx * 15, preview, 11, MUTED, width=230)
+
+rect(panel_x + 18, panel_y + 716, panel_w - 36, 40, bg=RED_BG, stroke=RED)
+text(panel_x + 30, panel_y + 728, "Last run couldn't be completed. Review input or pause this schedule.",
+     10, RED, width=320)
+line(panel_x, panel_y + panel_h - 62, panel_w, 0, color="#eef2f7")
+button(panel_x + 18, panel_y + panel_h - 48, 92, "Delete", color=RED, bg=RED_BG, h=34)
+button(panel_x + 120, panel_y + panel_h - 48, 82, "Run now", color=INK, h=34)
+button(panel_x + 212, panel_y + panel_h - 48, 160, "Save changes", primary=True, color=BLUE, h=34)
+end_frame()
+
+
 document = {
     "type": "excalidraw",
     "version": 2,
@@ -1172,7 +1276,7 @@ OUT.write_text(json.dumps(document, indent=2, ensure_ascii=True) + "\n", encodin
 ids = [item["id"] for item in elements]
 assert len(ids) == len(set(ids)), "duplicate Excalidraw element IDs"
 frames = {item["id"]: item for item in elements if item["type"] == "frame"}
-assert len(frames) == 17, f"expected 17 frames, got {len(frames)}"
+assert len(frames) == 18, f"expected 18 frames, got {len(frames)}"
 
 escaped = []
 for item in elements:
