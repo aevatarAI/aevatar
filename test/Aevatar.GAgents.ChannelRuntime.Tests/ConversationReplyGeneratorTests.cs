@@ -1059,6 +1059,7 @@ public sealed class ConversationReplyGeneratorTests
             "nyxid_providers",
             "nyxid_require_service",
             "nyxid_request_key_create",
+            "nyxid_request_key_rotate",
             "nyxid_service_pools",
             "nyxid_services",
             "nyxid_sessions",
@@ -1158,7 +1159,6 @@ public sealed class ConversationReplyGeneratorTests
             "nyxid_catalog",
             "nyxid_llm_status",
             "nyxid_require_service",
-            "nyxid_request_key_create",
             "use_skill");
     }
 
