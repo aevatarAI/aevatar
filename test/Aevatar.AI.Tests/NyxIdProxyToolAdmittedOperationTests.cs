@@ -25,6 +25,7 @@ namespace Aevatar.AI.Tests;
 /// </summary>
 public sealed class NyxIdProxyToolAdmittedOperationTests
 {
+    private const int ConnectedServiceReadLimitBytes = 16 * 1024;
     private const string CatalogDigest =
         "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
@@ -801,6 +802,46 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
         outcome.Receipt.SubjectId.Should().Be("us-calendar-alpha");
     }
 
+    [Fact]
+    public async Task ExecuteWithOutcomeAsync_ShouldReturnReadTooLargeForOversizedGitHubAssignedIssuesRead()
+    {
+        var oversizedIssuesJson = JsonSerializer.Serialize(Enumerable.Range(0, 80).Select(index => new
+        {
+            id = index + 1,
+            number = 1000 + index,
+            title = $"Assigned issue {index}",
+            html_url = $"https://github.com/aevatarAI/aevatar/issues/{1000 + index}",
+            state = "open",
+            body = new string('x', 300),
+        }));
+        Encoding.UTF8.GetByteCount(oversizedIssuesJson)
+            .Should().BeGreaterThan(ConnectedServiceReadLimitBytes);
+        var handler = new RecordingHandler
+        {
+            ProxyStatusCode = HttpStatusCode.OK,
+            ProxyResponseBody = oversizedIssuesJson,
+        };
+        var tool = CreateTool(handler);
+        using var scope = PushContext(GitHubAssignedIssuesAdmission());
+
+        var outcome = await ((IAgentTool)tool).ExecuteWithOutcomeAsync(
+            "call-github-assigned-issues",
+            tool.Name,
+            """{"query":{"filter":"assigned","per_page":"100"}}""");
+
+        outcome.ResultJson.Should().Contain("NYXID_CONNECTED_SERVICE_READ_TOO_LARGE");
+        outcome.ResultJson.Should().NotContain("Assigned issue");
+        Encoding.UTF8.GetByteCount(outcome.ResultJson)
+            .Should().BeLessThan(ConnectedServiceReadLimitBytes);
+        outcome.Receipt.Should().NotBeNull();
+        outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        outcome.Receipt.ErrorCode.Should().Be("NYXID_CONNECTED_SERVICE_READ_TOO_LARGE");
+        outcome.Receipt.SubjectKind.Should().Be("nyxid.user-service");
+        outcome.Receipt.SubjectId.Should().Be("us-github-alpha");
+        handler.ProxyRequests.Should().ContainSingle().Which.Path
+            .Should().Be("/api/v1/proxy/s/api-github/issues");
+    }
+
     [Theory]
     [InlineData(HttpStatusCode.BadRequest, "bad_request", 1000, "Bad request: _nyxid_via UserService 'us-calendar-alpha' has slug 'calendar-beta', but the route requested 'calendar-alpha'", "NYXID_OPERATION_AUTHORITY_DRIFT")]
     [InlineData(HttpStatusCode.NotFound, "not_found", 1003, "Not found: UserService 'us-calendar-alpha' not found", "NYXID_OPERATION_AUTHORITY_DRIFT")]
@@ -1530,6 +1571,34 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
             [
                 QueryParameter("container_id", required: true),
                 QueryParameter("page_size", required: false),
+            ],
+            null,
+            AgentToolOperationResponsePolicy.TextOnly,
+            ReadOnlyPolicy());
+        var catalog = NyxIdMcpOperationCatalog.Parse(
+            McpConfig(admission),
+            "test",
+            DateTimeOffset.UnixEpoch,
+            TimeSpan.FromMinutes(5));
+        return admission with
+        {
+            ContractDigest = catalog.Services.Single().Endpoints.Single().ContractDigest,
+        };
+    }
+
+    private static AgentToolOperationAdmission GitHubAssignedIssuesAdmission()
+    {
+        var admission = new AgentToolOperationAdmission(
+            "us-github-alpha",
+            "api-github",
+            new AgentToolOperationIdentity.PublishedEndpoint("github_list_assigned_issues"),
+            AgentToolOperationAuthorizationBasis.PublishedContract,
+            "GET",
+            "/issues",
+            "sha256:github-assigned-issues",
+            [
+                QueryParameter("filter", required: true, TextSchema("assigned")),
+                QueryParameter("per_page", required: false),
             ],
             null,
             AgentToolOperationResponsePolicy.TextOnly,

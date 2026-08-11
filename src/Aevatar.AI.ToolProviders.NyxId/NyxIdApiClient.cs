@@ -417,6 +417,30 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
         return await SendTextResponseAsync(request, ct);
     }
 
+    internal async Task<NyxIdProxyTextResponse> ProxyRequestResponseBoundedAsync(
+        string token,
+        string slug,
+        string userServiceId,
+        string path,
+        string method,
+        string? body,
+        Dictionary<string, string>? extraHeaders,
+        long maxBytes,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(userServiceId);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxBytes);
+        using var request = CreateProxyRequest(
+            token,
+            slug,
+            userServiceId.Trim(),
+            path,
+            method,
+            body,
+            extraHeaders);
+        return await SendTextResponseAsync(request, maxBytes, ct, preserveErrorBody: true);
+    }
+
     private async Task<string> ProxyRequestCoreAsync(
         string token,
         string slug,
@@ -1583,7 +1607,8 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
     private async Task<NyxIdProxyTextResponse> SendTextResponseAsync(
         HttpRequestMessage request,
         long maxBytes,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool preserveErrorBody = false)
     {
         try
         {
@@ -1591,7 +1616,7 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
                 request,
                 HttpCompletionOption.ResponseHeadersRead,
                 ct);
-            if (!response.IsSuccessStatusCode)
+            if (!response.IsSuccessStatusCode && !preserveErrorBody)
             {
                 _logger.LogWarning(
                     "NyxID bounded proxy request failed: {Method} -> {Status}",
@@ -1633,9 +1658,38 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
                     HttpStatus: (int)response.StatusCode);
             }
 
+            var contentText = Encoding.UTF8.GetString(content.Content);
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogWarning(
+                    "NyxID bounded proxy request failed: {Method} -> {Status}",
+                    request.Method,
+                    (int)response.StatusCode);
+                var retryAfter = response.Headers.RetryAfter?.Delta;
+                var retryAfterJson = retryAfter.HasValue
+                    ? $", \"retry_after_seconds\": {(int)Math.Ceiling(retryAfter.Value.TotalSeconds)}"
+                    : string.Empty;
+                var wrapped =
+                    $"{{\"error\": true, \"status\": {(int)response.StatusCode}, \"body\": {EscapeJsonString(contentText)}{retryAfterJson}}}";
+                if (Encoding.UTF8.GetByteCount(wrapped) > maxBytes)
+                {
+                    return new NyxIdProxyTextResponse(
+                        false,
+                        string.Empty,
+                        Detail: "projection_exceeds_max_bytes",
+                        HttpStatus: (int)response.StatusCode);
+                }
+
+                return new NyxIdProxyTextResponse(
+                    false,
+                    wrapped,
+                    Detail: "http_error",
+                    HttpStatus: (int)response.StatusCode);
+            }
+
             return new NyxIdProxyTextResponse(
                 true,
-                Encoding.UTF8.GetString(content.Content),
+                contentText,
                 HttpStatus: (int)response.StatusCode);
         }
         catch (OperationCanceledException)
