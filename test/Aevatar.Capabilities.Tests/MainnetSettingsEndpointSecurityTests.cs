@@ -323,6 +323,7 @@ public sealed class MainnetSettingsEndpointSecurityTests
                 new EnvironmentVariableScope("Projection__Policies__DenyInMemoryDocumentReadStore", "false"),
                 new EnvironmentVariableScope("Projection__Policies__DenyInMemoryGraphFactStore", "false"),
                 new EnvironmentVariableScope("AEVATAR_Aevatar__Authentication__Enabled", "true"),
+                new EnvironmentVariableScope("AEVATAR_Aevatar__NyxId__AssistantActions__Enabled", "false"),
             ];
             var rsa = RSA.Create(2048);
             var signingKey = new RsaSecurityKey(rsa) { KeyId = "mainnet-settings-security-test" };
