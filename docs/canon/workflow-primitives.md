@@ -229,6 +229,9 @@ steps:
 
 - 作用：给 workflow 变量赋值（运行时写入变量上下文）。
 - 常用参数：`target`、`value`（可用 `$input`）。
+- 成功输出仍是解析后的 `value` 本身，并作为下一步的输入；`target` 只保存同一值到 workflow 变量，
+  不会把输出包装成 `{ "<target>": <value> }`。例如把 `{"a":"X"}` 赋给 `target: d` 后，
+  紧接的 template transform 应读取 `data.a`，而不是 `data.d.a`。
 
 ```yaml
 steps:
