@@ -2220,15 +2220,22 @@ public sealed partial class NyxIdChatTurnGAgentTests
     }
 
     [Theory]
-    [InlineData("general_nyxid_assistant")]
-    [InlineData(NyxIdChatTurnIntentClassifier.ServiceConnectIntentId)]
-    public async Task OperationExecutor_ProfiledServiceConnectIntent_ShouldNarrowToAdmissionTools(
+    [InlineData(NyxIdChatTurnIntent.ServiceConnect, "general_nyxid_assistant")]
+    [InlineData(
+        NyxIdChatTurnIntent.ServiceConnect,
+        NyxIdChatTurnIntentClassifier.ServiceConnectIntentId)]
+    [InlineData(
+        NyxIdChatTurnIntent.KeyCreate,
+        NyxIdChatTurnIntentClassifier.KeyCreateIntentId)]
+    public async Task OperationExecutor_ProfiledBuiltInIntent_ShouldNarrowToIntentTools(
+        NyxIdChatTurnIntent intent,
         string candidateIntentId)
     {
         IAgentTool[] tools =
         [
             new NamedProfileTool("use_skill"),
             new NamedProfileTool("nyxid_services"),
+            new NamedProfileTool("nyxid_request_key_create"),
             new NamedProfileTool("nyxid_catalog"),
             new NamedProfileTool("nyxid_require_service"),
             new NamedProfileTool("github_get_current_user"),
@@ -2246,6 +2253,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
                 {
                     "use_skill",
                     "nyxid_services",
+                    "nyxid_request_key_create",
                     "nyxid_catalog",
                     "nyxid_require_service",
                     "github_get_current_user",
@@ -2284,12 +2292,14 @@ public sealed partial class NyxIdChatTurnGAgentTests
                 Key = CreateKey(),
                 Llm = new NyxIdChatLLMOperationInput
                 {
-                    Intent = NyxIdChatTurnIntent.ServiceConnect,
+                    Intent = intent,
                     AgentProfile = profile,
                     AgentProfileTurnAuthority = authority,
                     Request = new ChatRequestEvent
                     {
-                        Prompt = "Connect GitHub and verify the connection",
+                        Prompt = intent == NyxIdChatTurnIntent.ServiceConnect
+                            ? "Connect GitHub and verify the connection"
+                            : "Create a least-scope key for one exact service",
                         SessionId = "turn-alpha",
                     },
                 },
@@ -2299,14 +2309,15 @@ public sealed partial class NyxIdChatTurnGAgentTests
             CancellationToken.None);
 
         generationExecutor.LastTurnCatalog.Should().NotBeNull();
-        generationExecutor.LastTurnCatalog!.FinalAllowedToolNames.Should().BeEquivalentTo(
-            "nyxid_catalog",
-            "nyxid_require_service");
-        generationExecutor.LastTurnCatalog.RouteOwnedTools.Keys.Should().BeEquivalentTo(
-            "nyxid_catalog",
-            "nyxid_require_service");
+        var expected = intent == NyxIdChatTurnIntent.ServiceConnect
+            ? new[] { "nyxid_catalog", "nyxid_require_service" }
+            : ["nyxid_services", "nyxid_request_key_create"];
+        generationExecutor.LastTurnCatalog!.FinalAllowedToolNames.Should()
+            .BeEquivalentTo(expected);
+        generationExecutor.LastTurnCatalog.RouteOwnedTools.Keys.Should()
+            .BeEquivalentTo(expected);
         generationExecutor.LastTurnCatalog.FinalAllowedToolNames.Should().NotContain(
-            ["use_skill", "nyxid_services", "github_get_current_user"]);
+            ["use_skill", "github_get_current_user"]);
     }
 
     [Fact]
