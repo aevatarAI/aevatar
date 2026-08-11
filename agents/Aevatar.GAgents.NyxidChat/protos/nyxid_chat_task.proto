@@ -1696,17 +1696,6 @@ message NyxIdChatOperationDispatchCommand {
   }
 }
 
-// Vault-only recovery material. The actor state stores only the durable secret
-// reference and recovery stage, never credentials or raw tool arguments.
-message NyxIdChatRecoverySecretPayload {
-  // High field numbers keep this wrapper distinguishable from the legacy
-  // AgentToolCredentialsPayload (fields 1-5) stored in the same vault slot.
-  string format = 100;
-  uint32 schema_version = 101;
-  aevatar.ai.AgentToolCredentialsPayload credentials = 102;
-  NyxIdChatOperationDispatchCommand exact_service_command = 103;
-}
-
 enum NyxIdChatToolVerificationDisposition {
   NYX_ID_CHAT_TOOL_VERIFICATION_DISPOSITION_UNSPECIFIED = 0;
   NYX_ID_CHAT_TOOL_VERIFICATION_DISPOSITION_APPLIED = 1;
