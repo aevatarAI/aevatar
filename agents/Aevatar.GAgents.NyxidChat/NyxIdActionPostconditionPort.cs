@@ -64,16 +64,16 @@ public sealed class NyxIdActionPostconditionPort : INyxIdActionPostconditionPort
         if (!IsValidCommonInput(input))
             return Unverified(input, InvalidInputCode, "The action postcondition input is invalid.");
 
-        return input.Action switch
+        return ResolveEvidenceStrategy(input.Action) switch
         {
-            NyxIdAssistantActionKind.ServiceConnect =>
+            NyxIdAssistantActionEvidenceStrategy.UserServiceCurrentState =>
                 await VerifyServiceConnectAsync(input, ct).ConfigureAwait(false),
-            NyxIdAssistantActionKind.ServiceReauthorize =>
+            NyxIdAssistantActionEvidenceStrategy.UserServiceAuthorization =>
                 await VerifyServiceReauthorizeAsync(input, transientToolContext, ct)
                     .ConfigureAwait(false),
-            NyxIdAssistantActionKind.KeyCreate =>
+            NyxIdAssistantActionEvidenceStrategy.AgentApiKeyCurrentState =>
                 await VerifyKeyCreateAsync(input, transientToolContext, ct).ConfigureAwait(false),
-            NyxIdAssistantActionKind.KeyRotate =>
+            NyxIdAssistantActionEvidenceStrategy.KeyRotationLineage =>
                 await VerifyKeyRotateAsync(input, transientToolContext, ct).ConfigureAwait(false),
             _ => Unverified(
                 input,
@@ -81,6 +81,21 @@ public sealed class NyxIdActionPostconditionPort : INyxIdActionPostconditionPort
                 "No typed read model is configured for this action postcondition."),
         };
     }
+
+    internal static NyxIdAssistantActionEvidenceStrategy? ResolveEvidenceStrategy(
+        NyxIdAssistantActionKind action) =>
+        action switch
+        {
+            NyxIdAssistantActionKind.ServiceConnect =>
+                NyxIdAssistantActionEvidenceStrategy.UserServiceCurrentState,
+            NyxIdAssistantActionKind.ServiceReauthorize =>
+                NyxIdAssistantActionEvidenceStrategy.UserServiceAuthorization,
+            NyxIdAssistantActionKind.KeyCreate =>
+                NyxIdAssistantActionEvidenceStrategy.AgentApiKeyCurrentState,
+            NyxIdAssistantActionKind.KeyRotate =>
+                NyxIdAssistantActionEvidenceStrategy.KeyRotationLineage,
+            _ => null,
+        };
 
     private async Task<NyxIdChatActionPostconditionResult> VerifyServiceConnectAsync(
         NyxIdChatActionPostconditionInput input,

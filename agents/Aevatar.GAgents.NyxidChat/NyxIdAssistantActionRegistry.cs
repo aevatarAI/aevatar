@@ -266,6 +266,7 @@ public sealed class NyxIdAssistantActionRegistry
                 }
 
                 capabilities.TryGetAdmissionParser(semantic, descriptorSnapshot, out var parser);
+                capabilities.TryGetRequestProducer(semantic, out var requestProducer);
                 var definition = new NyxIdAssistantActionDefinitionSnapshot
                 {
                     SchemaVersion = schemaVersion,
@@ -284,7 +285,8 @@ public sealed class NyxIdAssistantActionRegistry
                             paramsSchema,
                             semantic,
                             descriptorSnapshot,
-                            parser)))
+                            parser,
+                            requestProducer)))
                 {
                     throw Error(RegistryInvalid, "The NyxID action registry contains a duplicate action.");
                 }
@@ -401,33 +403,28 @@ public sealed class NyxIdAssistantActionRegistry
     {
         if (!_entries.TryGetValue("service.connect", out var entry) ||
             !_executableActions.Contains("service.connect") ||
-            entry.Definition.Action != NyxIdAssistantActionKind.ServiceConnect)
+            entry.Definition.Action != NyxIdAssistantActionKind.ServiceConnect ||
+            entry.RequestProducer is null)
         {
             throw Error(ActionUnsupported, "Catalog service connect is not present in the pinned registry.");
         }
 
-        var normalizedSlug = NormalizeString(serviceSlug, 128, required: true);
-        if (!normalizedSlug.All(static character =>
-                char.IsAsciiLetterOrDigit(character) ||
-                character is '-' or '_' or '.'))
+        var input = new NyxIdAssistantActionParams
         {
-            throw Error(ParamsInvalid, "The catalog service slug is invalid.");
-        }
-
-        var value = new NyxIdCatalogServiceConnectParams
-        {
-            ServiceSlug = normalizedSlug,
+            CatalogServiceConnect = new NyxIdCatalogServiceConnectParams
+            {
+                ServiceSlug = serviceSlug ?? string.Empty,
+            },
         };
         if (requestedScopes is not null)
         {
-            value.RequestedScopes.AddRange(requestedScopes
-                .Select(scope => NormalizeString(scope, 256, required: true))
-                .Distinct(StringComparer.Ordinal));
+            foreach (var scope in requestedScopes)
+                input.CatalogServiceConnect.RequestedScopes.Add(scope ?? string.Empty);
         }
 
         return new NyxIdAssistantActionValidation(
             entry.Definition.Clone(),
-            new NyxIdAssistantActionParams { CatalogServiceConnect = value });
+            entry.RequestProducer(input));
     }
 
     public NyxIdAssistantActionValidation ResolveKeyCreate(
@@ -436,11 +433,85 @@ public sealed class NyxIdAssistantActionRegistry
         ArgumentNullException.ThrowIfNull(requirement);
         if (!_entries.TryGetValue("key.create", out var entry) ||
             !_executableActions.Contains("key.create") ||
-            entry.Definition.Action != NyxIdAssistantActionKind.KeyCreate)
+            entry.Definition.Action != NyxIdAssistantActionKind.KeyCreate ||
+            entry.RequestProducer is null)
         {
             throw Error(ActionUnsupported, "Key creation is not present in the pinned registry.");
         }
 
+        var input = new NyxIdAssistantActionParams
+        {
+            KeyCreate = new NyxIdKeyCreateParams
+            {
+                Name = requirement.Name ?? string.Empty,
+                Platform = requirement.Platform ?? string.Empty,
+            },
+        };
+        input.KeyCreate.AllowedServiceIds.Add(requirement.AllowedServiceIds);
+        return new NyxIdAssistantActionValidation(
+            entry.Definition.Clone(),
+            entry.RequestProducer(input));
+    }
+
+    public NyxIdAssistantActionValidation ResolveKeyRotate(
+        NyxIdKeyRotateActionRequirement requirement)
+    {
+        ArgumentNullException.ThrowIfNull(requirement);
+        if (!_entries.TryGetValue("key.rotate", out var entry) ||
+            !_executableActions.Contains("key.rotate") ||
+            entry.Definition.Action != NyxIdAssistantActionKind.KeyRotate ||
+            entry.RequestProducer is null)
+        {
+            throw Error(ActionUnsupported, "Key rotation is not present in the pinned registry.");
+        }
+
+        return new NyxIdAssistantActionValidation(
+            entry.Definition.Clone(),
+            entry.RequestProducer(new NyxIdAssistantActionParams
+            {
+                KeyRotate = new NyxIdKeyRotateParams
+                {
+                    KeyId = requirement.KeyId ?? string.Empty,
+                },
+            }));
+    }
+
+    internal static NyxIdAssistantActionParams ProduceCatalogServiceConnect(
+        NyxIdAssistantActionParams input)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        if (input.ParamsCase !=
+            NyxIdAssistantActionParams.ParamsOneofCase.CatalogServiceConnect)
+        {
+            throw Error(ParamsInvalid, "The catalog service connect producer input is invalid.");
+        }
+
+        var normalizedSlug = NormalizeString(
+            input.CatalogServiceConnect.ServiceSlug,
+            128,
+            required: true);
+        if (!normalizedSlug.All(static character =>
+                char.IsAsciiLetterOrDigit(character) ||
+                character is '-' or '_' or '.'))
+        {
+            throw Error(ParamsInvalid, "The catalog service slug is invalid.");
+        }
+
+        var value = new NyxIdCatalogServiceConnectParams { ServiceSlug = normalizedSlug };
+        value.RequestedScopes.AddRange(input.CatalogServiceConnect.RequestedScopes
+            .Select(scope => NormalizeString(scope, 256, required: true))
+            .Distinct(StringComparer.Ordinal));
+        return new NyxIdAssistantActionParams { CatalogServiceConnect = value };
+    }
+
+    internal static NyxIdAssistantActionParams ProduceKeyCreate(
+        NyxIdAssistantActionParams input)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        if (input.ParamsCase != NyxIdAssistantActionParams.ParamsOneofCase.KeyCreate)
+            throw Error(ParamsInvalid, "The key creation producer input is invalid.");
+
+        var requirement = input.KeyCreate;
         var name = NormalizeString(requirement.Name, 256, required: true);
         var platform = NormalizeString(requirement.Platform, 128, required: true);
         if (requirement.AllowedServiceIds.Count is < 1 or > 64)
@@ -466,36 +537,28 @@ public sealed class NyxIdAssistantActionRegistry
             Platform = platform,
         };
         value.AllowedServiceIds.Add(allowedServiceIds);
-        return new NyxIdAssistantActionValidation(
-            entry.Definition.Clone(),
-            new NyxIdAssistantActionParams { KeyCreate = value });
+        return new NyxIdAssistantActionParams { KeyCreate = value };
     }
 
-    public NyxIdAssistantActionValidation ResolveKeyRotate(
-        NyxIdKeyRotateActionRequirement requirement)
+    internal static NyxIdAssistantActionParams ProduceKeyRotate(
+        NyxIdAssistantActionParams input)
     {
-        ArgumentNullException.ThrowIfNull(requirement);
-        if (!_entries.TryGetValue("key.rotate", out var entry) ||
-            !_executableActions.Contains("key.rotate") ||
-            entry.Definition.Action != NyxIdAssistantActionKind.KeyRotate)
-        {
-            throw Error(ActionUnsupported, "Key rotation is not present in the pinned registry.");
-        }
+        ArgumentNullException.ThrowIfNull(input);
+        if (input.ParamsCase != NyxIdAssistantActionParams.ParamsOneofCase.KeyRotate)
+            throw Error(ParamsInvalid, "The key rotation producer input is invalid.");
 
-        var keyId = NormalizeString(requirement.KeyId, 256, required: true);
-        if (!string.Equals(requirement.KeyId, keyId, StringComparison.Ordinal) ||
+        var keyId = NormalizeString(input.KeyRotate.KeyId, 256, required: true);
+        if (!string.Equals(input.KeyRotate.KeyId, keyId, StringComparison.Ordinal) ||
             keyId.Any(char.IsWhiteSpace) ||
             keyId.Any(static character => character is '/' or '\\' or '?' or '#'))
         {
             throw Error(ParamsInvalid, "The key rotation identity is invalid.");
         }
 
-        return new NyxIdAssistantActionValidation(
-            entry.Definition.Clone(),
-            new NyxIdAssistantActionParams
-            {
-                KeyRotate = new NyxIdKeyRotateParams { KeyId = keyId },
-            });
+        return new NyxIdAssistantActionParams
+        {
+            KeyRotate = new NyxIdKeyRotateParams { KeyId = keyId },
+        };
     }
 
     internal static NyxIdAssistantActionParams ParseServiceConnect(JsonElement root)
@@ -1157,5 +1220,6 @@ public sealed class NyxIdAssistantActionRegistry
         JsonElement ParamsSchema,
         NyxIdAssistantActionSemanticContract Semantic,
         NyxIdAssistantActionRevisionDescriptorSnapshot Descriptor,
-        Func<JsonElement, NyxIdAssistantActionParams>? Parser);
+        Func<JsonElement, NyxIdAssistantActionParams>? Parser,
+        Func<NyxIdAssistantActionParams, NyxIdAssistantActionParams>? RequestProducer);
 }

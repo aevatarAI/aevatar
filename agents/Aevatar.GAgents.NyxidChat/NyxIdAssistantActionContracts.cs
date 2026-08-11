@@ -138,48 +138,58 @@ internal static class NyxIdAssistantActionSemanticContracts
             replayPolicy);
 }
 
+// One registration proves one real construction path. Admission and AGUI
+// registrations separately cover every legal params variant for the action.
 internal sealed record NyxIdAssistantActionRequestProducerRegistration(
     NyxIdAssistantActionKind Action,
     string WireAction,
-    Type ImplementationType);
+    NyxIdAssistantActionParams.ParamsOneofCase ProducedParamsCase,
+    Func<NyxIdAssistantActionParams, NyxIdAssistantActionParams> Producer,
+    NyxIdAssistantActionParams ProbeInput);
 
 internal sealed record NyxIdAssistantActionAdmissionParserRegistration(
     NyxIdAssistantActionKind Action,
     FrozenSet<NyxIdAssistantActionParams.ParamsOneofCase> ParamsCases,
     FrozenSet<NyxIdAssistantActionParamsSchemaVariant> ParamsSchemaVariants,
     Func<JsonElement, NyxIdAssistantActionParams> Parser,
-    Type ImplementationType);
+    FrozenDictionary<NyxIdAssistantActionParams.ParamsOneofCase, string> ProbeParamsJson);
 
 internal sealed record NyxIdAssistantActionAGUIMapperRegistration(
     NyxIdAssistantActionKind Action,
     FrozenSet<NyxIdAssistantActionParams.ParamsOneofCase> ParamsCases,
-    Type ImplementationType);
+    Func<NyxIdChatActionRequestState, NyxIdAssistantActionRequestWirePayload?> Mapper);
 
 internal sealed record NyxIdAssistantActionSafeResourcePredicateRegistration(
     NyxIdAssistantActionKind Action,
     NyxIdChatSafeResourceRef.ResourceOneofCase CompletedResourceCase,
-    Type ImplementationType);
+    Func<
+        NyxIdAssistantActionKind,
+        NyxIdChatActionDisposition,
+        NyxIdChatSafeResourceRef?,
+        bool> Predicate);
 
 internal sealed record NyxIdAssistantActionPostconditionVerifierRegistration(
     NyxIdAssistantActionKind Action,
     NyxIdAssistantActionEvidenceStrategy EvidenceStrategy,
-    Type ImplementationType);
+    Func<NyxIdAssistantActionKind, NyxIdAssistantActionEvidenceStrategy?>
+        EvidenceStrategyResolver);
 
 internal sealed record NyxIdAssistantActionEvidencePredicateRegistration(
     NyxIdAssistantActionKind Action,
     NyxIdAssistantActionEvidenceStrategy EvidenceStrategy,
-    Type ImplementationType);
+    Func<NyxIdAssistantActionKind, NyxIdAssistantActionEvidenceStrategy?>
+        EvidenceStrategyResolver);
 
 internal sealed record NyxIdAssistantActionAuthorityResolverRegistration(
     NyxIdAssistantActionKind Action,
     NyxIdAssistantActionAuthorityRequirement AuthorityRequirement,
-    Type ImplementationType);
+    Func<string, string, bool> OwnerSubjectMatches);
 
 internal sealed record NyxIdAssistantActionRetryGenerationPolicyRegistration(
     NyxIdAssistantActionKind Action,
     NyxIdAssistantActionRetryStrategy RetryStrategy,
     NyxIdAssistantActionReplayPolicy ReplayPolicy,
-    Type ImplementationType);
+    Func<string, string[], string> StableIdentityBuilder);
 
 internal sealed record NyxIdAssistantActionCapabilityReadinessSnapshot(
     NyxIdAssistantActionKind Action,
@@ -261,7 +271,7 @@ internal sealed class NyxIdAssistantActionCapabilityRegistrations
         ArgumentNullException.ThrowIfNull(registration.ParamsCases);
         ArgumentNullException.ThrowIfNull(registration.ParamsSchemaVariants);
         ArgumentNullException.ThrowIfNull(registration.Parser);
-        ArgumentNullException.ThrowIfNull(registration.ImplementationType);
+        ArgumentNullException.ThrowIfNull(registration.ProbeParamsJson);
         return Copy(
             admissionParsers: _admissionParsers.Values
                 .Where(item => item.Action != registration.Action)
@@ -272,7 +282,7 @@ internal sealed class NyxIdAssistantActionCapabilityRegistrations
         NyxIdAssistantActionSafeResourcePredicateRegistration registration)
     {
         ArgumentNullException.ThrowIfNull(registration);
-        ArgumentNullException.ThrowIfNull(registration.ImplementationType);
+        ArgumentNullException.ThrowIfNull(registration.Predicate);
         return Copy(
             safeResourcePredicates: _safeResourcePredicates.Values
                 .Where(item => item.Action != registration.Action)
@@ -290,44 +300,59 @@ internal sealed class NyxIdAssistantActionCapabilityRegistrations
     {
         var missing = new List<NyxIdAssistantActionCapabilityKind>(8);
         if (!_requestProducers.TryGetValue(semantic.Action, out var producer) ||
-            !string.Equals(producer.WireAction, semantic.WireAction, StringComparison.Ordinal))
+            !string.Equals(producer.WireAction, semantic.WireAction, StringComparison.Ordinal) ||
+            !semantic.AllowedParamsCases.Contains(producer.ProducedParamsCase) ||
+            !RequestProducerMatches(producer))
         {
             missing.Add(NyxIdAssistantActionCapabilityKind.RequestProducer);
         }
         if (!_admissionParsers.TryGetValue(semantic.Action, out var parser) ||
             !parser.ParamsCases.SetEquals(semantic.AllowedParamsCases) ||
-            !parser.ParamsSchemaVariants.Contains(descriptor.ParamsSchemaVariant))
+            !parser.ParamsSchemaVariants.Contains(descriptor.ParamsSchemaVariant) ||
+            !ParserMatchesDeclaredCases(parser))
         {
             missing.Add(NyxIdAssistantActionCapabilityKind.AdmissionParser);
         }
         if (!_aguiMappers.TryGetValue(semantic.Action, out var mapper) ||
-            !mapper.ParamsCases.SetEquals(semantic.AllowedParamsCases))
+            !mapper.ParamsCases.SetEquals(semantic.AllowedParamsCases) ||
+            !AGUIMapperMatches(mapper, semantic.WireAction))
         {
             missing.Add(NyxIdAssistantActionCapabilityKind.AGUIMapper);
         }
         if (!_safeResourcePredicates.TryGetValue(semantic.Action, out var resource) ||
-            resource.CompletedResourceCase != semantic.CompletedResourceCase)
+            resource.CompletedResourceCase != semantic.CompletedResourceCase ||
+            !SafeResourcePredicateMatches(resource))
         {
             missing.Add(NyxIdAssistantActionCapabilityKind.SafeResourcePredicate);
         }
         if (!_postconditionVerifiers.TryGetValue(semantic.Action, out var verifier) ||
-            verifier.EvidenceStrategy != semantic.EvidenceStrategy)
+            verifier.EvidenceStrategy != semantic.EvidenceStrategy ||
+            !EvidenceStrategyMatches(
+                verifier.Action,
+                verifier.EvidenceStrategy,
+                verifier.EvidenceStrategyResolver))
         {
             missing.Add(NyxIdAssistantActionCapabilityKind.PostconditionVerifier);
         }
         if (!_evidencePredicates.TryGetValue(semantic.Action, out var evidence) ||
-            evidence.EvidenceStrategy != semantic.EvidenceStrategy)
+            evidence.EvidenceStrategy != semantic.EvidenceStrategy ||
+            !EvidenceStrategyMatches(
+                evidence.Action,
+                evidence.EvidenceStrategy,
+                evidence.EvidenceStrategyResolver))
         {
             missing.Add(NyxIdAssistantActionCapabilityKind.EvidencePredicate);
         }
         if (!_authorityResolvers.TryGetValue(semantic.Action, out var authority) ||
-            authority.AuthorityRequirement != semantic.AuthorityRequirement)
+            authority.AuthorityRequirement != semantic.AuthorityRequirement ||
+            !AuthorityResolverMatches(authority))
         {
             missing.Add(NyxIdAssistantActionCapabilityKind.AuthorityResolver);
         }
         if (!_retryGenerationPolicies.TryGetValue(semantic.Action, out var retry) ||
             retry.RetryStrategy != semantic.RetryStrategy ||
-            retry.ReplayPolicy != semantic.ReplayPolicy)
+            retry.ReplayPolicy != semantic.ReplayPolicy ||
+            !RetryGenerationPolicyMatches(retry))
         {
             missing.Add(NyxIdAssistantActionCapabilityKind.RetryGenerationPolicy);
         }
@@ -341,13 +366,31 @@ internal sealed class NyxIdAssistantActionCapabilityRegistrations
     {
         if (_admissionParsers.TryGetValue(semantic.Action, out var registration) &&
             registration.ParamsCases.SetEquals(semantic.AllowedParamsCases) &&
-            registration.ParamsSchemaVariants.Contains(descriptor.ParamsSchemaVariant))
+            registration.ParamsSchemaVariants.Contains(descriptor.ParamsSchemaVariant) &&
+            ParserMatchesDeclaredCases(registration))
         {
             parser = registration.Parser;
             return true;
         }
 
         parser = null!;
+        return false;
+    }
+
+    public bool TryGetRequestProducer(
+        NyxIdAssistantActionSemanticContract semantic,
+        out Func<NyxIdAssistantActionParams, NyxIdAssistantActionParams> producer)
+    {
+        if (_requestProducers.TryGetValue(semantic.Action, out var registration) &&
+            string.Equals(registration.WireAction, semantic.WireAction, StringComparison.Ordinal) &&
+            semantic.AllowedParamsCases.Contains(registration.ProducedParamsCase) &&
+            RequestProducerMatches(registration))
+        {
+            producer = registration.Producer;
+            return true;
+        }
+
+        producer = null!;
         return false;
     }
 
@@ -369,6 +412,242 @@ internal sealed class NyxIdAssistantActionCapabilityRegistrations
             evidencePredicates ?? _evidencePredicates.Values,
             authorityResolvers ?? _authorityResolvers.Values,
             retryGenerationPolicies ?? _retryGenerationPolicies.Values);
+
+    private static bool ParserMatchesDeclaredCases(
+        NyxIdAssistantActionAdmissionParserRegistration registration)
+    {
+        if (registration.ProbeParamsJson.Count != registration.ParamsCases.Count ||
+            registration.ParamsCases.Any(paramsCase =>
+                !registration.ProbeParamsJson.ContainsKey(paramsCase)))
+        {
+            return false;
+        }
+
+        try
+        {
+            foreach (var (expectedCase, paramsJson) in registration.ProbeParamsJson)
+            {
+                using var document = JsonDocument.Parse(paramsJson);
+                if (registration.Parser(document.RootElement).ParamsCase != expectedCase)
+                    return false;
+            }
+
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool RequestProducerMatches(
+        NyxIdAssistantActionRequestProducerRegistration registration)
+    {
+        if (registration.ProbeInput.ParamsCase != registration.ProducedParamsCase)
+            return false;
+
+        try
+        {
+            return registration.Producer(registration.ProbeInput.Clone()).ParamsCase ==
+                   registration.ProducedParamsCase;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool AGUIMapperMatches(
+        NyxIdAssistantActionAGUIMapperRegistration registration,
+        string expectedWireAction)
+    {
+        try
+        {
+            return registration.ParamsCases.All(paramsCase =>
+            {
+                var mapped = registration.Mapper(new NyxIdChatActionRequestState
+                {
+                    SchemaVersion = NyxIdAssistantActionRegistry.SupportedSchemaVersion,
+                    Action = registration.Action,
+                    Params = ProbeActionParams(paramsCase),
+                });
+                return mapped is not null &&
+                       string.Equals(mapped.Action, expectedWireAction, StringComparison.Ordinal) &&
+                       WireParamsMatch(paramsCase, mapped.Params);
+            });
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool EvidenceStrategyMatches(
+        NyxIdAssistantActionKind action,
+        NyxIdAssistantActionEvidenceStrategy evidenceStrategy,
+        Func<NyxIdAssistantActionKind, NyxIdAssistantActionEvidenceStrategy?> resolver)
+    {
+        try
+        {
+            return resolver(action) == evidenceStrategy;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool AuthorityResolverMatches(
+        NyxIdAssistantActionAuthorityResolverRegistration registration)
+    {
+        try
+        {
+            return registration.OwnerSubjectMatches("owner-probe", "owner-probe") &&
+                   !registration.OwnerSubjectMatches("owner-probe", "owner-other");
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool RetryGenerationPolicyMatches(
+        NyxIdAssistantActionRetryGenerationPolicyRegistration registration)
+    {
+        try
+        {
+            var first = registration.StableIdentityBuilder(
+                "action",
+                ["actor-probe", "turn-probe"]);
+            var repeated = registration.StableIdentityBuilder(
+                "action",
+                ["actor-probe", "turn-probe"]);
+            var changed = registration.StableIdentityBuilder(
+                "action",
+                ["actor-probe", "turn-other"]);
+            return string.Equals(first, repeated, StringComparison.Ordinal) &&
+                   !string.Equals(first, changed, StringComparison.Ordinal) &&
+                   first.StartsWith("action-", StringComparison.Ordinal);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool SafeResourcePredicateMatches(
+        NyxIdAssistantActionSafeResourcePredicateRegistration registration)
+    {
+        var matchingResource = ProbeResource(registration.CompletedResourceCase);
+        var mismatchedResource = ProbeResource(
+            registration.CompletedResourceCase ==
+                NyxIdChatSafeResourceRef.ResourceOneofCase.UserService
+                ? NyxIdChatSafeResourceRef.ResourceOneofCase.Key
+                : NyxIdChatSafeResourceRef.ResourceOneofCase.UserService);
+        try
+        {
+            return registration.Predicate(
+                       registration.Action,
+                       NyxIdChatActionDisposition.Completed,
+                       matchingResource) &&
+                   !registration.Predicate(
+                       registration.Action,
+                       NyxIdChatActionDisposition.Completed,
+                       mismatchedResource);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static NyxIdChatSafeResourceRef ProbeResource(
+        NyxIdChatSafeResourceRef.ResourceOneofCase resourceCase) =>
+        resourceCase switch
+        {
+            NyxIdChatSafeResourceRef.ResourceOneofCase.UserService => new NyxIdChatSafeResourceRef
+            {
+                UserService = new NyxIdChatUserServiceRef { UserServiceId = "us-probe" },
+            },
+            NyxIdChatSafeResourceRef.ResourceOneofCase.Key => new NyxIdChatSafeResourceRef
+            {
+                Key = new NyxIdChatKeyRef { KeyId = "key-probe" },
+            },
+            _ => new NyxIdChatSafeResourceRef(),
+        };
+
+    private static NyxIdAssistantActionParams ProbeActionParams(
+        NyxIdAssistantActionParams.ParamsOneofCase paramsCase) =>
+        paramsCase switch
+        {
+            NyxIdAssistantActionParams.ParamsOneofCase.CatalogServiceConnect =>
+                new NyxIdAssistantActionParams
+                {
+                    CatalogServiceConnect = new NyxIdCatalogServiceConnectParams
+                    {
+                        ServiceSlug = "api-probe",
+                    },
+                },
+            NyxIdAssistantActionParams.ParamsOneofCase.CustomServiceConnect =>
+                new NyxIdAssistantActionParams
+                {
+                    CustomServiceConnect = new NyxIdCustomServiceConnectParams
+                    {
+                        Name = "Probe",
+                        EndpointUrl = "https://probe.example.com/",
+                        AuthMethod = "none",
+                    },
+                },
+            NyxIdAssistantActionParams.ParamsOneofCase.ServiceReauthorize =>
+                new NyxIdAssistantActionParams
+                {
+                    ServiceReauthorize = new NyxIdServiceReauthorizeParams
+                    {
+                        UserServiceId = "us-probe",
+                    },
+                },
+            NyxIdAssistantActionParams.ParamsOneofCase.KeyCreate =>
+                new NyxIdAssistantActionParams
+                {
+                    KeyCreate = new NyxIdKeyCreateParams
+                    {
+                        Name = "agent-probe",
+                        Platform = "codex",
+                        AllowedServiceIds = { "us-probe" },
+                    },
+                },
+            NyxIdAssistantActionParams.ParamsOneofCase.KeyRotate =>
+                new NyxIdAssistantActionParams
+                {
+                    KeyRotate = new NyxIdKeyRotateParams { KeyId = "key-probe" },
+                },
+            _ => new NyxIdAssistantActionParams(),
+        };
+
+    private static bool WireParamsMatch(
+        NyxIdAssistantActionParams.ParamsOneofCase paramsCase,
+        NyxIdAssistantActionWireParams? wireParams) =>
+        wireParams is not null && paramsCase switch
+        {
+            NyxIdAssistantActionParams.ParamsOneofCase.CatalogServiceConnect =>
+                wireParams.ParamsCase ==
+                NyxIdAssistantActionWireParams.ParamsOneofCase.CatalogService,
+            NyxIdAssistantActionParams.ParamsOneofCase.CustomServiceConnect =>
+                wireParams.ParamsCase ==
+                NyxIdAssistantActionWireParams.ParamsOneofCase.CustomService,
+            NyxIdAssistantActionParams.ParamsOneofCase.ServiceReauthorize =>
+                wireParams.ParamsCase ==
+                NyxIdAssistantActionWireParams.ParamsOneofCase.ServiceReauthorize,
+            NyxIdAssistantActionParams.ParamsOneofCase.KeyCreate =>
+                wireParams.ParamsCase == NyxIdAssistantActionWireParams.ParamsOneofCase.None &&
+                !string.IsNullOrWhiteSpace(wireParams.KeyCreateName) &&
+                !string.IsNullOrWhiteSpace(wireParams.KeyCreatePlatform) &&
+                wireParams.KeyCreateAllowedServiceIds.Count > 0,
+            NyxIdAssistantActionParams.ParamsOneofCase.KeyRotate =>
+                wireParams.ParamsCase == NyxIdAssistantActionWireParams.ParamsOneofCase.None &&
+                !string.IsNullOrWhiteSpace(wireParams.KeyRotateKeyId),
+            _ => false,
+        };
 
     private static NyxIdAssistantActionCapabilityRegistrations CreateCurrent()
     {
@@ -393,15 +672,22 @@ internal sealed class NyxIdAssistantActionCapabilityRegistrations
                 new(
                     NyxIdAssistantActionKind.ServiceConnect,
                     "service.connect",
-                    typeof(NyxIdAssistantActionRegistry)),
+                    NyxIdAssistantActionParams.ParamsOneofCase.CatalogServiceConnect,
+                    NyxIdAssistantActionRegistry.ProduceCatalogServiceConnect,
+                    ProbeActionParams(
+                        NyxIdAssistantActionParams.ParamsOneofCase.CatalogServiceConnect)),
                 new(
                     NyxIdAssistantActionKind.KeyCreate,
                     "key.create",
-                    typeof(NyxIdAssistantActionRegistry)),
+                    NyxIdAssistantActionParams.ParamsOneofCase.KeyCreate,
+                    NyxIdAssistantActionRegistry.ProduceKeyCreate,
+                    ProbeActionParams(NyxIdAssistantActionParams.ParamsOneofCase.KeyCreate)),
                 new(
                     NyxIdAssistantActionKind.KeyRotate,
                     "key.rotate",
-                    typeof(NyxIdAssistantActionRegistry)),
+                    NyxIdAssistantActionParams.ParamsOneofCase.KeyRotate,
+                    NyxIdAssistantActionRegistry.ProduceKeyRotate,
+                    ProbeActionParams(NyxIdAssistantActionParams.ParamsOneofCase.KeyRotate)),
             ],
             [
                 new(
@@ -409,88 +695,98 @@ internal sealed class NyxIdAssistantActionCapabilityRegistrations
                     serviceConnectCases,
                     serviceConnectVariants,
                     NyxIdAssistantActionRegistry.ParseServiceConnect,
-                    typeof(NyxIdAssistantActionRegistry)),
+                    ProbeParams(
+                        (NyxIdAssistantActionParams.ParamsOneofCase.CatalogServiceConnect,
+                            "{\"catalogService\":{\"serviceSlug\":\"api-probe\"}}"),
+                        (NyxIdAssistantActionParams.ParamsOneofCase.CustomServiceConnect,
+                            "{\"customService\":{\"name\":\"Probe\",\"endpointUrl\":\"https://probe.example.com\",\"authMethod\":\"none\"}}"))),
                 new(
                     NyxIdAssistantActionKind.ServiceReauthorize,
                     serviceReauthorizeCases,
                     serviceReauthorizeVariants,
                     NyxIdAssistantActionRegistry.ParseServiceReauthorize,
-                    typeof(NyxIdAssistantActionRegistry)),
+                    ProbeParams(
+                        (NyxIdAssistantActionParams.ParamsOneofCase.ServiceReauthorize,
+                            "{\"userServiceId\":\"us-probe\",\"requestedScopes\":[\"read\"]}"))),
                 new(
                     NyxIdAssistantActionKind.KeyCreate,
                     keyCreateCases,
                     keyCreateVariants,
                     NyxIdAssistantActionRegistry.ParseKeyCreate,
-                    typeof(NyxIdAssistantActionRegistry)),
+                    ProbeParams(
+                        (NyxIdAssistantActionParams.ParamsOneofCase.KeyCreate,
+                            "{\"name\":\"agent-probe\",\"platform\":\"codex\",\"allowedServiceIds\":[\"us-probe\"]}"))),
                 new(
                     NyxIdAssistantActionKind.KeyRotate,
                     keyRotateCases,
                     keyRotateVariants,
                     NyxIdAssistantActionRegistry.ParseKeyRotate,
-                    typeof(NyxIdAssistantActionRegistry)),
+                    ProbeParams(
+                        (NyxIdAssistantActionParams.ParamsOneofCase.KeyRotate,
+                            "{\"keyId\":\"key-probe\"}"))),
             ],
             [
                 new(NyxIdAssistantActionKind.ServiceConnect, serviceConnectCases,
-                    typeof(NyxIdChatConversationAguiFrameBuilder)),
+                    NyxIdChatConversationAguiFrameBuilder.MapActionRequestWirePayload),
                 new(NyxIdAssistantActionKind.ServiceReauthorize, serviceReauthorizeCases,
-                    typeof(NyxIdChatConversationAguiFrameBuilder)),
+                    NyxIdChatConversationAguiFrameBuilder.MapActionRequestWirePayload),
                 new(NyxIdAssistantActionKind.KeyCreate, keyCreateCases,
-                    typeof(NyxIdChatConversationAguiFrameBuilder)),
+                    NyxIdChatConversationAguiFrameBuilder.MapActionRequestWirePayload),
                 new(NyxIdAssistantActionKind.KeyRotate, keyRotateCases,
-                    typeof(NyxIdChatConversationAguiFrameBuilder)),
+                    NyxIdChatConversationAguiFrameBuilder.MapActionRequestWirePayload),
             ],
             [
                 new(NyxIdAssistantActionKind.ServiceConnect,
                     NyxIdChatSafeResourceRef.ResourceOneofCase.UserService,
-                    typeof(NyxIdChatBrowserActions)),
+                    NyxIdChatBrowserActions.ResourceMatchesAction),
                 new(NyxIdAssistantActionKind.ServiceReauthorize,
                     NyxIdChatSafeResourceRef.ResourceOneofCase.UserService,
-                    typeof(NyxIdChatBrowserActions)),
+                    NyxIdChatBrowserActions.ResourceMatchesAction),
                 new(NyxIdAssistantActionKind.KeyCreate,
                     NyxIdChatSafeResourceRef.ResourceOneofCase.Key,
-                    typeof(NyxIdChatBrowserActions)),
+                    NyxIdChatBrowserActions.ResourceMatchesAction),
                 new(NyxIdAssistantActionKind.KeyRotate,
                     NyxIdChatSafeResourceRef.ResourceOneofCase.Key,
-                    typeof(NyxIdChatBrowserActions)),
+                    NyxIdChatBrowserActions.ResourceMatchesAction),
             ],
             [
                 new(NyxIdAssistantActionKind.ServiceConnect,
                     NyxIdAssistantActionEvidenceStrategy.UserServiceCurrentState,
-                    typeof(NyxIdActionPostconditionPort)),
+                    NyxIdActionPostconditionPort.ResolveEvidenceStrategy),
                 new(NyxIdAssistantActionKind.ServiceReauthorize,
                     NyxIdAssistantActionEvidenceStrategy.UserServiceAuthorization,
-                    typeof(NyxIdActionPostconditionPort)),
+                    NyxIdActionPostconditionPort.ResolveEvidenceStrategy),
                 new(NyxIdAssistantActionKind.KeyCreate,
                     NyxIdAssistantActionEvidenceStrategy.AgentApiKeyCurrentState,
-                    typeof(NyxIdActionPostconditionPort)),
+                    NyxIdActionPostconditionPort.ResolveEvidenceStrategy),
                 new(NyxIdAssistantActionKind.KeyRotate,
                     NyxIdAssistantActionEvidenceStrategy.KeyRotationLineage,
-                    typeof(NyxIdActionPostconditionPort)),
+                    NyxIdActionPostconditionPort.ResolveEvidenceStrategy),
             ],
             [
                 new(NyxIdAssistantActionKind.ServiceConnect,
                     NyxIdAssistantActionEvidenceStrategy.UserServiceCurrentState,
-                    typeof(NyxIdActionPostconditionPort)),
+                    NyxIdActionPostconditionPort.ResolveEvidenceStrategy),
                 new(NyxIdAssistantActionKind.ServiceReauthorize,
                     NyxIdAssistantActionEvidenceStrategy.UserServiceAuthorization,
-                    typeof(NyxIdActionPostconditionPort)),
+                    NyxIdActionPostconditionPort.ResolveEvidenceStrategy),
                 new(NyxIdAssistantActionKind.KeyCreate,
                     NyxIdAssistantActionEvidenceStrategy.AgentApiKeyCurrentState,
-                    typeof(NyxIdActionPostconditionPort)),
+                    NyxIdActionPostconditionPort.ResolveEvidenceStrategy),
                 new(NyxIdAssistantActionKind.KeyRotate,
                     NyxIdAssistantActionEvidenceStrategy.KeyRotationLineage,
-                    typeof(NyxIdActionPostconditionPort)),
+                    NyxIdActionPostconditionPort.ResolveEvidenceStrategy),
             ],
             [
                 new(NyxIdAssistantActionKind.ServiceConnect,
                     NyxIdAssistantActionAuthorityRequirement.BrowserOwnerSubject,
-                    typeof(NyxIdChatBrowserActions)),
+                    NyxIdChatBrowserActions.OwnerSubjectsMatch),
             ],
             [
                 new(NyxIdAssistantActionKind.ServiceConnect,
                     NyxIdAssistantActionRetryStrategy.StableBrowserActionRequest,
                     NyxIdAssistantActionReplayPolicy.StableActionRequestIdentity,
-                    typeof(NyxIdChatBrowserActions)),
+                    NyxIdChatBrowserActions.BuildStableIdentity),
             ]);
     }
 
@@ -501,4 +797,9 @@ internal sealed class NyxIdAssistantActionCapabilityRegistrations
     private static FrozenSet<NyxIdAssistantActionParamsSchemaVariant> SchemaVariants(
         params NyxIdAssistantActionParamsSchemaVariant[] values) =>
         values.ToFrozenSet();
+
+    private static FrozenDictionary<NyxIdAssistantActionParams.ParamsOneofCase, string>
+        ProbeParams(
+            params (NyxIdAssistantActionParams.ParamsOneofCase ParamsCase, string Json)[] values) =>
+        values.ToFrozenDictionary(static value => value.ParamsCase, static value => value.Json);
 }

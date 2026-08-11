@@ -208,7 +208,12 @@ public sealed class NyxIdAssistantActionRegistryTests
                 new[] { NyxIdAssistantActionParamsSchemaVariant.ServiceConnect }
                     .ToFrozenSet(),
                 NyxIdAssistantActionRegistry.ParseServiceConnect,
-                typeof(NyxIdAssistantActionRegistryTests)));
+                new[]
+                {
+                    KeyValuePair.Create(
+                        NyxIdAssistantActionParams.ParamsOneofCase.KeyCreate,
+                        "{\"name\":\"agent-alpha\",\"platform\":\"codex\",\"allowedServiceIds\":[\"us-github-alpha\"]}"),
+                }.ToFrozenDictionary()));
 
         var registry = NyxIdAssistantActionRegistry.Load(
             RegistryJsonWithKeyRotation(),
@@ -229,7 +234,7 @@ public sealed class NyxIdAssistantActionRegistryTests
             .With(new NyxIdAssistantActionSafeResourcePredicateRegistration(
                 NyxIdAssistantActionKind.ServiceConnect,
                 NyxIdChatSafeResourceRef.ResourceOneofCase.Key,
-                typeof(NyxIdAssistantActionRegistryTests)));
+                NyxIdChatBrowserActions.ResourceMatchesAction));
 
         var registry = NyxIdAssistantActionRegistry.Load(
             RegistryJsonWithKeyRotation(),
@@ -239,6 +244,83 @@ public sealed class NyxIdAssistantActionRegistryTests
         Action resolve = () => registry.ResolveCatalogServiceConnect("api-github");
         resolve.Should().Throw<NyxIdAssistantActionRegistryException>()
             .Which.Code.Should().Be("NYXID_ACTION_UNSUPPORTED");
+    }
+
+    [Fact]
+    public void ExecutableComposition_ShouldRejectUnrelatedImplementationWhenSemanticFieldsMatch()
+    {
+        var unrelated = NyxIdAssistantActionCapabilityRegistrations.Current
+            .With(new NyxIdAssistantActionSafeResourcePredicateRegistration(
+                NyxIdAssistantActionKind.ServiceConnect,
+                NyxIdChatSafeResourceRef.ResourceOneofCase.UserService,
+                static (_, _, _) => false));
+
+        var registry = NyxIdAssistantActionRegistry.Load(
+            RegistryJsonWithKeyRotation(),
+            unrelated);
+
+        registry.TryGetDefinition("service.connect", out _).Should().BeFalse();
+        registry.CapabilityReadiness["service.connect"].MissingCapabilities.Should()
+            .Contain(NyxIdAssistantActionCapabilityKind.SafeResourcePredicate);
+    }
+
+    [Fact]
+    public void ExecutableComposition_ShouldRejectProducerActionWireActionMismatch()
+    {
+        NyxIdAssistantActionSemanticContracts.TryGet(
+                NyxIdAssistantActionKind.ServiceConnect,
+                out var semantic)
+            .Should().BeTrue();
+        var mismatched = semantic with { WireAction = "key.create" };
+        var descriptor = NyxIdAssistantActionRegistry
+            .GetRevisionContractSnapshot(LegacyRevision)
+            .Actions["service.connect"];
+
+        var missing = NyxIdAssistantActionCapabilityRegistrations.Current
+            .MissingCapabilities(mismatched, descriptor);
+
+        missing.Should().Contain(NyxIdAssistantActionCapabilityKind.RequestProducer);
+    }
+
+    [Fact]
+    public void ExecutableComposition_ShouldRejectParserThatReturnsWrongParamsCase()
+    {
+        var incompatible = NyxIdAssistantActionCapabilityRegistrations.Current
+            .With(new NyxIdAssistantActionAdmissionParserRegistration(
+                NyxIdAssistantActionKind.ServiceConnect,
+                new[]
+                {
+                    NyxIdAssistantActionParams.ParamsOneofCase.CatalogServiceConnect,
+                    NyxIdAssistantActionParams.ParamsOneofCase.CustomServiceConnect,
+                }.ToFrozenSet(),
+                new[] { NyxIdAssistantActionParamsSchemaVariant.ServiceConnect }
+                    .ToFrozenSet(),
+                static _ => new NyxIdAssistantActionParams
+                {
+                    KeyCreate = new NyxIdKeyCreateParams
+                    {
+                        Name = "agent-alpha",
+                        Platform = "codex",
+                        AllowedServiceIds = { "us-github-alpha" },
+                    },
+                },
+                new[]
+                {
+                    KeyValuePair.Create(
+                        NyxIdAssistantActionParams.ParamsOneofCase.CatalogServiceConnect,
+                        "{\"catalogService\":{\"serviceSlug\":\"api-github\"}}"),
+                    KeyValuePair.Create(
+                        NyxIdAssistantActionParams.ParamsOneofCase.CustomServiceConnect,
+                        "{\"customService\":{\"name\":\"Internal API\",\"endpointUrl\":\"https://api.internal.example.com\",\"authMethod\":\"none\"}}"),
+                }.ToFrozenDictionary()));
+
+        var registry = NyxIdAssistantActionRegistry.Load(
+            RegistryJsonWithKeyRotation(),
+            incompatible);
+
+        registry.TryGetDefinition("service.connect", out _).Should().BeFalse();
+        registry.CapabilityReadiness["service.connect"].MissingCapabilities.Should()
+            .Contain(NyxIdAssistantActionCapabilityKind.AdmissionParser);
     }
 
     [Fact]

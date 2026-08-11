@@ -1128,7 +1128,7 @@ public static class NyxIdChatBrowserActions
     {
         if (!string.Equals(admission.OriginTurnId, Normalize(command.OriginTurnId), StringComparison.Ordinal) ||
             !string.Equals(admission.ContinuationTurnId, Normalize(command.ContinuationTurnId), StringComparison.Ordinal) ||
-            !string.Equals(admission.OwnerSubject, Normalize(command.OwnerSubject), StringComparison.Ordinal) ||
+            !OwnerSubjectsMatch(admission.OwnerSubject, command.OwnerSubject) ||
             admission.ActionReports.Count != sanitizedReports.Count)
         {
             return false;
@@ -1358,7 +1358,10 @@ public static class NyxIdChatBrowserActions
             : fallback;
     }
 
-    private static string BuildStableIdentity(string prefix, params string[] parts)
+    internal static bool OwnerSubjectsMatch(string expectedOwnerSubject, string ownerSubject) =>
+        string.Equals(expectedOwnerSubject, Normalize(ownerSubject), StringComparison.Ordinal);
+
+    internal static string BuildStableIdentity(string prefix, params string[] parts)
     {
         var identity = string.Concat(parts.Select(static part => $"{part.Length}:{part}"));
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(identity));

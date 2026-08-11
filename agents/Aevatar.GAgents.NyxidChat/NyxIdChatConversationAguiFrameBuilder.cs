@@ -408,7 +408,7 @@ internal static class NyxIdChatConversationAguiFrameBuilder
         return frames;
     }
 
-    private static NyxIdAssistantActionRequestWirePayload? MapActionRequestWirePayload(
+    internal static NyxIdAssistantActionRequestWirePayload? MapActionRequestWirePayload(
         NyxIdChatActionRequestState request)
     {
         if (request.SchemaVersion != NyxIdAssistantActionRegistry.SupportedSchemaVersion ||
