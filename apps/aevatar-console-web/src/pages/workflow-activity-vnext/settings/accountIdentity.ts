@@ -113,7 +113,7 @@ export function buildAccountIdentity(
     support: {
       groups: auth.profile?.groups ?? [],
       roles: auth.profile?.roles ?? [],
-      subject: auth.profile?.subject?.trim() || null,
+      subject: auth.profile?.subject?.trim() || auth.subject?.trim() || null,
     },
   };
 }

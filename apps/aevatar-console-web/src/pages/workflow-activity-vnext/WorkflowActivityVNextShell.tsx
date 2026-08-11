@@ -12,6 +12,7 @@ import {
   ConsoleAuthActions,
   ConsoleLanguageSwitch,
 } from '@/shared/ui/ConsoleHeaderActions';
+import { useWorkflowActivityAccount } from './account/useWorkflowActivityAccount';
 import {
   buildWorkflowActivitySectionHref,
   type WorkflowActivitySection,
@@ -19,11 +20,6 @@ import {
 import { workflowActivityVNextCss } from './styles';
 
 type ShellProps = {
-  readonly accountPrincipal?: {
-    readonly authenticated: boolean;
-    readonly displayName: string;
-    readonly picture: string | null;
-  } | null;
   readonly activeSection: WorkflowActivitySection;
   readonly children: React.ReactNode;
   readonly description?: string;
@@ -108,7 +104,6 @@ function Navigation({
 }
 
 const WorkflowActivityVNextShell: React.FC<ShellProps> = ({
-  accountPrincipal,
   activeSection,
   children,
   description,
@@ -120,6 +115,7 @@ const WorkflowActivityVNextShell: React.FC<ShellProps> = ({
   scopeId,
   title,
 }) => {
+  const { principal: accountPrincipal } = useWorkflowActivityAccount();
   const [mobileNavigationOpen, setMobileNavigationOpen] = React.useState(false);
   const activeItem = items.find((item) => item.key === activeSection);
   const activeLabel = activeItem

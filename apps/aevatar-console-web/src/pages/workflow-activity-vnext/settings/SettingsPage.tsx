@@ -25,6 +25,7 @@ import { t } from '@/shared/i18n/messages';
 import { history } from '@/shared/navigation/history';
 import { isStudioApiStatus, studioApi } from '@/shared/studio/api';
 import { useConsoleToast } from '@/shared/ui/ConsoleToast';
+import { useWorkflowActivityAccount } from '../account/useWorkflowActivityAccount';
 import { useConsoleLocation } from '../hooks/useConsoleLocation';
 import TechnicalDetails from '../TechnicalDetails';
 import WorkflowActivityVNextShell from '../WorkflowActivityVNextShell';
@@ -107,11 +108,7 @@ const SettingsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
     queryFn: ({ signal }) => studioApi.getUserLlmSettings(signal),
     retry: false,
   });
-  const auth = useQuery({
-    queryKey: ['workflow-activity-vnext', 'settings', 'auth'],
-    queryFn: () => studioApi.getAuthSession(),
-    retry: false,
-  });
+  const { auth: resolvedAuth, query: auth } = useWorkflowActivityAccount();
   const runtime = useQuery({
     queryKey: ['workflow-activity-vnext', 'settings', 'runtime'],
     queryFn: () => studioApi.getUserConfigRuntime(),
@@ -119,10 +116,10 @@ const SettingsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
   });
   const accountIdentity = React.useMemo(
     () =>
-      auth.data
-        ? buildAccountIdentity(auth.data, Date.now(), getLocale())
+      resolvedAuth
+        ? buildAccountIdentity(resolvedAuth, Date.now(), getLocale())
         : null,
-    [auth.data],
+    [resolvedAuth],
   );
   const [draft, setDraft] = React.useState<UserLlmSelectionDraft | undefined>(
     undefined,
@@ -536,7 +533,7 @@ const SettingsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
       onRetry={() => void auth.refetch()}
       title={t('workflowActivityVNext.settings.notLoaded', 'Not loaded')}
     />
-  ) : auth.data && accountIdentity ? (
+  ) : resolvedAuth && accountIdentity ? (
     <AccountPanel
       identity={accountIdentity}
       returnTo={`${location.pathname}?section=account`}
@@ -691,20 +688,6 @@ const SettingsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
 
   return (
     <WorkflowActivityVNextShell
-      accountPrincipal={
-        accountIdentity
-          ? {
-              authenticated:
-                accountIdentity.sessionState === 'active' ||
-                accountIdentity.sessionState === 'expiring_soon',
-              displayName:
-                accountIdentity.displayName.kind === 'value'
-                  ? accountIdentity.displayName.value
-                  : t('workflowActivityVNext.settings.account', 'Account'),
-              picture: accountIdentity.picture,
-            }
-          : null
-      }
       activeSection="settings"
       description={t(
         'workflowActivityVNext.settings.description',

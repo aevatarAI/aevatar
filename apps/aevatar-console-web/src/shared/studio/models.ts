@@ -52,6 +52,7 @@ export interface StudioAppContext {
 export interface StudioAuthSession {
   readonly enabled: boolean;
   readonly authenticated: boolean;
+  readonly subject?: string | null;
   readonly providerDisplayName?: string;
   readonly loginUrl?: string;
   readonly logoutUrl?: string;
