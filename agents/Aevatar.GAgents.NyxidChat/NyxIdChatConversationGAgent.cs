@@ -3140,7 +3140,7 @@ public sealed class NyxIdChatConversationGAgent
         }
         else
         {
-            var cancelledSteps = ResolveSteeringCancelledSteps(task);
+            var cancelledSteps = ResolveSteeringCancelledSteps(task, now);
             NyxIdChatPlanRevisions.CommitChange(
                 task,
                 NyxIdChatPlanRevisionCause.Steering,
@@ -3202,7 +3202,8 @@ public sealed class NyxIdChatConversationGAgent
     }
 
     private IReadOnlyCollection<NyxIdChatTaskStepState> ResolveSteeringCancelledSteps(
-        NyxIdChatTaskState task)
+        NyxIdChatTaskState task,
+        Timestamp now)
     {
         var fence = State.ControlFence;
         if (fence is null ||
@@ -3222,9 +3223,47 @@ public sealed class NyxIdChatConversationGAgent
                 "The committed steering fence step does not belong to the active task.");
         }
 
-        return fencedStep.Status == NyxIdChatStepStatus.Cancelled
-            ? [fencedStep]
-            : [];
+        if (fencedStep.Status != NyxIdChatStepStatus.Cancelled)
+            return [];
+
+        var cancelledSteps = new List<NyxIdChatTaskStepState> { fencedStep };
+        var cancelledStepIds = new HashSet<string>(StringComparer.Ordinal)
+        {
+            fencedStep.StepId,
+        };
+        var changed = true;
+        while (changed)
+        {
+            changed = false;
+            foreach (var dependent in task.Steps.Where(candidate =>
+                         candidate.Status is
+                             NyxIdChatStepStatus.Planned or
+                             NyxIdChatStepStatus.Waiting &&
+                         candidate.DependsOn.Any(cancelledStepIds.Contains)))
+            {
+                dependent.Status = NyxIdChatStepStatus.Cancelled;
+                dependent.ExternalEffect = NyxIdChatEffectEvidence.NotApplied;
+                dependent.FailureCode = fence.ReasonCode;
+                dependent.SafeMessage = fence.SafeMessage;
+                dependent.AvailableActions = new NyxIdChatAvailableActions();
+                dependent.UpdatedAt = now.Clone();
+                if (dependent.Operation is not null)
+                {
+                    dependent.Operation.Phase = NyxIdChatOperationPhase.Cancelled;
+                    dependent.Operation.TerminalCode = fence.ReasonCode;
+                    dependent.Operation.SafeMessage = fence.SafeMessage;
+                    dependent.Operation.CompletedAt = now.Clone();
+                }
+
+                if (cancelledStepIds.Add(dependent.StepId))
+                {
+                    cancelledSteps.Add(dependent);
+                    changed = true;
+                }
+            }
+        }
+
+        return cancelledSteps;
     }
 
     private static Aevatar.AI.Abstractions.ChatContentPart SanitizeInputPart(

@@ -4650,8 +4650,51 @@ public sealed partial class NyxIdChatConversationGAgentTests
             AddedInPlanRevision = 1,
             UpdatedAt = completed.UpdatedAt.Clone(),
         };
+        var supersededFollowUp = new NyxIdChatTaskStepState
+        {
+            StepId = "step-uc2-superseded-follow-up",
+            Order = 4,
+            Kind = NyxIdChatStepKind.Llm,
+            Status = NyxIdChatStepStatus.Planned,
+            Required = true,
+            Description = "Communicate the superseded comparison.",
+            Source = new NyxIdChatStepSource
+            {
+                Llm = new NyxIdChatLLMStepSource(),
+            },
+            ExternalEffect = NyxIdChatEffectEvidence.NotStarted,
+            Operation = new NyxIdChatOperationState
+            {
+                Key = new NyxIdChatOperationKey
+                {
+                    ConversationActorId = conversationActorId,
+                    TurnId = originalTurnId,
+                    TaskId = task.TaskId,
+                    StepId = "step-uc2-superseded-follow-up",
+                    OperationId = "operation-uc2-superseded-follow-up",
+                    OperationGeneration = 1,
+                },
+                Kind = NyxIdChatStepKind.Llm,
+                Phase = NyxIdChatOperationPhase.Requested,
+                RequestedAt = completed.UpdatedAt.Clone(),
+            },
+            AddedBy = NyxIdChatStepAddedBy.Replan,
+            AddedInPlanRevision = 2,
+            UpdatedAt = completed.UpdatedAt.Clone(),
+        };
+        supersededFollowUp.DependsOn.Add(superseded.StepId);
+        var supersededArtifact = supersededFollowUp.Clone();
+        supersededArtifact.StepId = "step-uc2-superseded-artifact";
+        supersededArtifact.Order = 5;
+        supersededArtifact.Description = "Produce the superseded research artifact.";
+        supersededArtifact.Operation.Key.StepId = supersededArtifact.StepId;
+        supersededArtifact.Operation.Key.OperationId = "operation-uc2-superseded-artifact";
+        supersededArtifact.DependsOn.Clear();
+        supersededArtifact.DependsOn.Add(supersededFollowUp.StepId);
         task.Steps.Insert(0, completed);
         task.Steps.Insert(0, completedInput);
+        task.Steps.Add(supersededArtifact);
+        task.Steps.Add(supersededFollowUp);
         const string committedCompositeAnswer =
             "Party size: 4; dietary needs: one vegetarian; budget cap: SGD 200 total; " +
             "research only: do not reserve, contact, or message venues.";
@@ -4684,7 +4727,12 @@ public sealed partial class NyxIdChatConversationGAgentTests
             PlanRevision = 2,
             RevisionCause = NyxIdChatPlanRevisionCause.FailureRecovery,
             CommittedAt = completed.UpdatedAt.Clone(),
-            AddedStepIds = { superseded.StepId },
+            AddedStepIds =
+            {
+                superseded.StepId,
+                supersededArtifact.StepId,
+                supersededFollowUp.StepId,
+            },
         });
         var taskId = task.TaskId;
         var completedBytes = completed.ToByteString();
@@ -4740,8 +4788,26 @@ public sealed partial class NyxIdChatConversationGAgentTests
             step.StepId == supersededKey.StepId);
         cancelled.Status.Should().Be(NyxIdChatStepStatus.Cancelled);
         cancelled.CancelledInPlanRevision.Should().Be(3);
+        var cancelledFollowUp = agent.State.ActiveTask.Steps.Single(step =>
+            step.StepId == supersededFollowUp.StepId);
+        cancelledFollowUp.Status.Should().Be(NyxIdChatStepStatus.Cancelled);
+        cancelledFollowUp.Operation.Phase.Should().Be(NyxIdChatOperationPhase.Cancelled);
+        cancelledFollowUp.ExternalEffect.Should().Be(NyxIdChatEffectEvidence.NotApplied);
+        cancelledFollowUp.CancelledInPlanRevision.Should().Be(3);
+        var cancelledArtifact = agent.State.ActiveTask.Steps.Single(step =>
+            step.StepId == supersededArtifact.StepId);
+        cancelledArtifact.Status.Should().Be(NyxIdChatStepStatus.Cancelled);
+        cancelledArtifact.Operation.Phase.Should().Be(NyxIdChatOperationPhase.Cancelled);
+        cancelledArtifact.ExternalEffect.Should().Be(NyxIdChatEffectEvidence.NotApplied);
+        cancelledArtifact.CancelledInPlanRevision.Should().Be(3);
         agent.State.ActiveTask.PlanRevisions[^1].CancelledStepIds.Should()
-            .Equal(supersededKey.StepId);
+            .Equal([
+                supersededKey.StepId,
+                supersededFollowUp.StepId,
+                supersededArtifact.StepId,
+            ],
+                "transitive cancellation order must be deterministic even when dependents " +
+                "appear before their prerequisites in the stored step list");
         agent.State.ActiveTask.PlanRevisions[^1].AddedStepIds.Should().ContainSingle();
         var addedStepId = agent.State.ActiveTask.PlanRevisions[^1].AddedStepIds.Single();
         agent.State.ActiveTask.Steps.Single(step => step.StepId == addedStepId)
@@ -4761,7 +4827,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
         snapshot.ToByteString().Should().Equal(
             revisionStarted.State.ActiveTask.ToByteString(),
             "every revision must emit the complete committed task snapshot");
-        snapshot.Steps.Should().HaveCount(4);
+        snapshot.Steps.Should().HaveCount(6);
         snapshot.Steps.Single(step => step.StepId == completed.StepId)
             .ToByteString().Should().Equal(completedBytes);
         var continuation = dispatch.OperationCalls.Last().Envelope.Payload
@@ -4790,6 +4856,22 @@ public sealed partial class NyxIdChatConversationGAgentTests
             "routing and execution must use the same steering context");
         agent.State.LatestInputResolution.Answer.FreeText.Should().Be(
             committedCompositeAnswer);
+        var originTerminalDispatch = dispatch.Calls.Single(call =>
+            call.Envelope.Payload.Is(NyxIdChatHistoryTerminalDispatchRequested.Descriptor));
+        await agent.HandleEventAsync(originTerminalDispatch.Envelope);
+        await agent.HandleEventAsync(CreateEnvelope(
+            conversationActorId,
+            new NyxIdChatOperationResultSignal
+            {
+                Key = continuation.Key.Clone(),
+                Llm = new NyxIdChatLLMOperationResult
+                {
+                    Content = "The steered research artifact is complete.",
+                },
+            }));
+        agent.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Succeeded,
+            "cancelled old-turn descendants cannot keep the continuation task active");
+        agent.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Succeeded);
         var committedEvents = await eventStore.GetEventsAsync(conversationActorId);
         committedEvents.Should().OnlyContain(item =>
             !item.EventData.ToString().Contains(
