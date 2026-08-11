@@ -336,6 +336,10 @@ public sealed class MainnetSettingsEndpointSecurityTests
                     options.EnableConnectorBootstrap = false;
                     options.EnableCors = false;
                 });
+                builder.Services
+                    .AddHttpClient("NyxIdAssistantActionRegistry")
+                    .ConfigurePrimaryHttpMessageHandler(static () =>
+                        new NyxIdAssistantActionRegistryHandler());
                 builder.Services.PostConfigure<JwtBearerOptions>(
                     JwtBearerDefaults.AuthenticationScheme,
                     options => ConfigureTestTokenValidation(options, signingKey));
@@ -495,6 +499,88 @@ public sealed class MainnetSettingsEndpointSecurityTests
             string provisionEndpointId,
             CancellationToken ct) =>
             throw new NotSupportedException("Provisioning is not part of the owner-scope security test.");
+    }
+
+    private sealed class NyxIdAssistantActionRegistryHandler : HttpMessageHandler
+    {
+        private const string RegistryJson = """
+            {
+              "schema_version": 4,
+              "revision": "nyxid-assistant-actions.v4",
+              "actions": [
+                {
+                  "action": "service.connect",
+                  "description": "Connect a service through the NyxID browser journey.",
+                  "params_schema": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["catalogService"],
+                        "properties": {
+                          "catalogService": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["serviceSlug"],
+                            "properties": {
+                              "serviceSlug": {"type": "string"},
+                              "requestedScopes": {
+                                "type": "array",
+                                "items": {"type": "string"}
+                              },
+                              "viaNodeId": {"type": "string"},
+                              "targetOrgId": {"type": "string"}
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["customService"],
+                        "properties": {
+                          "customService": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["name", "endpointUrl", "authMethod"],
+                            "properties": {
+                              "name": {"type": "string"},
+                              "endpointUrl": {"type": "string"},
+                              "authMethod": {"type": "string"},
+                              "authKeyName": {"type": "string"},
+                              "viaNodeId": {"type": "string"},
+                              "targetOrgId": {"type": "string"}
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  "risk": "grant",
+                  "tier": "v1",
+                  "remember_eligible": true
+                }
+              ]
+            }
+            """;
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (request.Method != HttpMethod.Get ||
+                request.RequestUri?.AbsolutePath != "/api/v1/assistant/actions" ||
+                request.Headers.Authorization is not null)
+            {
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.BadRequest));
+            }
+
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(RegistryJson, Encoding.UTF8, "application/json"),
+            });
+        }
     }
 
     private sealed class TemporaryAevatarHomeScope : IDisposable
