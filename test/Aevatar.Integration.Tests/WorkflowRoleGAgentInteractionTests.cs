@@ -640,6 +640,39 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
         }
 
         [Fact]
+        public async Task WorkflowRoleGAgent_WhenKeyCreateIsRequired_ShouldMapTypedRequirement()
+        {
+            var eventStore = new InMemoryEventStore();
+            var (agent, publisher) = await CreateActivatedWorkflowRoleAgentAsync(
+                eventStore,
+                new KeyCreateAuthorizationRequiredWorkflowIntentLlmProvider(),
+                "workflow-role-agent-key-create");
+
+            await agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
+            {
+                RunId = "run-key-create",
+                StepId = "reply",
+                SessionId = "session-key-create",
+                Prompt = "create a least-scope key",
+            });
+
+            var terminal = agent.State.Sessions["session-key-create"];
+            terminal.Outcome.Should().Be(RoleChatSessionOutcome.Blocked);
+            terminal.AuthorizationRequired.Should().NotBeNull();
+            terminal.AuthorizationRequired!.ServiceSlug.Should().BeEmpty();
+            terminal.AuthorizationRequired.KeyCreate.AllowedServiceIds
+                .Should().Equal("m-github", "m-lark");
+            var completion = publisher.Published.Select(static item => item.evt)
+                .OfType<WorkflowLlmInvocationCompletedEvent>()
+                .Should().ContainSingle().Which;
+            completion.AuthorizationRequirement.ServiceSlug.Should().BeEmpty();
+            completion.AuthorizationRequirement.KeyCreate.Name.Should().Be("agent-alpha");
+            completion.AuthorizationRequirement.KeyCreate.Platform.Should().Be("codex");
+            completion.AuthorizationRequirement.KeyCreate.AllowedServiceIds
+                .Should().Equal("m-github", "m-lark");
+        }
+
+        [Fact]
         public async Task WorkflowRoleGAgent_WhenProxyDelegationRequiresGitHub_ShouldCommitConnectRequirement()
         {
             const string arguments =
@@ -3245,6 +3278,42 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
                             ReasonCode = "service_not_connected",
                             SafeMessage = "Connect Calendar to continue.",
                             RequestedScopes = { "calendar.read" },
+                        },
+                    },
+                };
+                yield return new LLMStreamChunk { IsLast = true, FinishReason = "tool_calls" };
+                await Task.CompletedTask;
+            }
+        }
+
+        private sealed class KeyCreateAuthorizationRequiredWorkflowIntentLlmProvider
+            : WorkflowIntentLlmProviderBase
+        {
+            public override async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+                LLMRequest request,
+                [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+            {
+                _ = request;
+                ct.ThrowIfCancellationRequested();
+                yield return new LLMStreamChunk
+                {
+                    ToolReceipt = new AgentToolReceipt
+                    {
+                        CallId = "call-key-create",
+                        ToolName = "nyxid_request_key_create",
+                        Status = AgentToolReceiptStatus.AuthorizationRequired,
+                        ErrorCode = "NYXID_KEY_CREATION_REQUIRED",
+                        ErrorMessage = "Create the least-scope key.",
+                        AuthorizationRequired = new NyxIdAuthorizationRequiredEvent
+                        {
+                            ReasonCode = "NYXID_KEY_CREATION_REQUIRED",
+                            SafeMessage = "Create the least-scope key.",
+                            KeyCreate = new NyxIdKeyCreateActionRequirement
+                            {
+                                Name = "agent-alpha",
+                                Platform = "codex",
+                                AllowedServiceIds = { "m-github", "m-lark" },
+                            },
                         },
                     },
                 };

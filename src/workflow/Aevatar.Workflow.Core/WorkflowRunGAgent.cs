@@ -890,7 +890,19 @@ public sealed partial class WorkflowRunGAgent
         }
 
         var existing = State.InteractiveActionHandoffs.FirstOrDefault(candidate =>
-            string.Equals(candidate.HandoffId, handoff.HandoffId, StringComparison.Ordinal));
+            string.Equals(candidate.HandoffId, handoff.HandoffId, StringComparison.Ordinal) ||
+            (string.Equals(
+                 candidate.TerminalContinuation?.RunId,
+                 handoff.TerminalContinuation.RunId,
+                 StringComparison.Ordinal) &&
+             string.Equals(
+                 candidate.TerminalContinuation?.StepId,
+                 handoff.TerminalContinuation.StepId,
+                 StringComparison.Ordinal) &&
+             string.Equals(
+                 candidate.TerminalContinuation?.SessionId,
+                 handoff.TerminalContinuation.SessionId,
+                 StringComparison.Ordinal)));
         if (existing is not null)
         {
             if (!existing.Request.ToByteString().Equals(handoff.Request.ToByteString()))
@@ -957,44 +969,61 @@ public sealed partial class WorkflowRunGAgent
         handoff = null!;
         command = null!;
         var callerAuthority = CallerNyxIdAuthority;
-        var serviceSlug = NormalizeInteractiveValue(requirement.ServiceSlug, 128);
         var currentTurnId = NormalizeInteractiveValue(State.CurrentTurnId, 256);
         var scopeId = NormalizeInteractiveValue(State.ScopeId, 256);
         if (State.ExpectedExecutionMode != ExternalCapabilityExecutionMode.Interactive ||
             callerAuthority is null ||
-            serviceSlug is null ||
             currentTurnId is null ||
-            scopeId is null ||
-            !serviceSlug.All(static character =>
-                char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.'))
+            scopeId is null)
         {
             return false;
         }
 
-        var requestedScopes = requirement.RequestedScopes
-            .Select(scope => NormalizeInteractiveValue(scope, 256))
-            .Where(static scope => scope is not null)
-            .Cast<string>()
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
-        if (requestedScopes.Length != requirement.RequestedScopes.Count)
+        if (!TryBuildInteractiveActionRequestParts(
+                requirement,
+                out var wireAction,
+                out var wireParams,
+                out var identityParts))
+        {
             return false;
+        }
 
-        var actionActorId = BuildStableIdentity(
-            "nyxid-chat",
-            scopeId,
-            callerAuthority.ExternalUserId,
-            Id,
-            currentTurnId,
-            serviceSlug);
+        var actionActorId = wireAction == "service.connect"
+            ? BuildStableIdentity(
+                "nyxid-chat",
+                scopeId,
+                callerAuthority.ExternalUserId,
+                Id,
+                currentTurnId,
+                identityParts[0])
+            : BuildStableIdentity(
+                "nyxid-chat",
+                [
+                    scopeId,
+                    callerAuthority.ExternalUserId,
+                    Id,
+                    currentTurnId,
+                    wireAction,
+                    .. identityParts,
+                ]);
         var taskId = BuildStableIdentity("task", actionActorId, currentTurnId, completed.SessionId);
-        var actionRequestId = BuildStableIdentity(
-            "action",
-            actionActorId,
-            currentTurnId,
-            taskId,
-            serviceSlug,
-            string.Join("\n", requestedScopes));
+        var actionRequestId = wireAction == "service.connect"
+            ? BuildStableIdentity(
+                "action",
+                actionActorId,
+                currentTurnId,
+                taskId,
+                identityParts[0],
+                identityParts[1])
+            : BuildStableIdentity(
+                "action",
+                [
+                    actionActorId,
+                    currentTurnId,
+                    taskId,
+                    wireAction,
+                    .. identityParts,
+                ]);
         var stepId = BuildStableIdentity(
             "step",
             actionActorId,
@@ -1010,15 +1039,8 @@ public sealed partial class WorkflowRunGAgent
             TaskId = taskId,
             StepId = stepId,
             ActionRequestId = actionRequestId,
-            Action = "service.connect",
-            Params = new WorkflowInteractiveActionParams
-            {
-                CatalogService = new WorkflowInteractiveCatalogServiceActionParams
-                {
-                    ServiceSlug = serviceSlug,
-                    RequestedScopes = { requestedScopes },
-                },
-            },
+            Action = wireAction,
+            Params = wireParams,
         };
         var handoffId = BuildStableIdentity(
             "handoff",
@@ -1041,6 +1063,84 @@ public sealed partial class WorkflowRunGAgent
             SourceWorkflowActorId = Id,
             Request = request.Clone(),
         };
+        return true;
+    }
+
+    private static bool TryBuildInteractiveActionRequestParts(
+        WorkflowInteractiveAuthorizationRequirement requirement,
+        out string wireAction,
+        out WorkflowInteractiveActionParams wireParams,
+        out string[] identityParts)
+    {
+        wireAction = string.Empty;
+        wireParams = null!;
+        identityParts = [];
+        var serviceSlug = NormalizeInteractiveValue(requirement.ServiceSlug, 128);
+        var hasServiceConnect = serviceSlug is not null;
+        var hasKeyCreate = requirement.KeyCreate is not null;
+        if (hasServiceConnect == hasKeyCreate)
+            return false;
+
+        if (hasServiceConnect)
+        {
+            if (!serviceSlug!.All(static character =>
+                    char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.'))
+            {
+                return false;
+            }
+
+            var requestedScopes = requirement.RequestedScopes
+                .Select(scope => NormalizeInteractiveValue(scope, 256))
+                .Where(static scope => scope is not null)
+                .Cast<string>()
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            if (requestedScopes.Length != requirement.RequestedScopes.Count)
+                return false;
+
+            wireAction = "service.connect";
+            wireParams = new WorkflowInteractiveActionParams
+            {
+                CatalogService = new WorkflowInteractiveCatalogServiceActionParams
+                {
+                    ServiceSlug = serviceSlug,
+                    RequestedScopes = { requestedScopes },
+                },
+            };
+            identityParts = [serviceSlug!, string.Join("\n", requestedScopes)];
+            return true;
+        }
+
+        var keyCreate = requirement.KeyCreate;
+        if (requirement.RequestedScopes.Count > 0 || keyCreate is null)
+            return false;
+        var name = NormalizeInteractiveValue(keyCreate.Name, 256);
+        var platform = NormalizeInteractiveValue(keyCreate.Platform, 128);
+        var allowedServiceIds = keyCreate.AllowedServiceIds
+            .Select(id => NormalizeInteractiveValue(id, 256))
+            .Where(static id => id is not null)
+            .Cast<string>()
+            .ToArray();
+        if (name is null || platform is null ||
+            allowedServiceIds.Length is < 1 or > 64 ||
+            allowedServiceIds.Length != keyCreate.AllowedServiceIds.Count ||
+            !allowedServiceIds.SequenceEqual(keyCreate.AllowedServiceIds, StringComparer.Ordinal) ||
+            allowedServiceIds.Distinct(StringComparer.Ordinal).Count() != allowedServiceIds.Length)
+        {
+            return false;
+        }
+
+        wireAction = "key.create";
+        wireParams = new WorkflowInteractiveActionParams
+        {
+            KeyCreate = new WorkflowInteractiveKeyCreateActionParams
+            {
+                Name = name,
+                Platform = platform,
+                AllowedServiceIds = { allowedServiceIds },
+            },
+        };
+        identityParts = [name, platform, string.Join("\n", allowedServiceIds)];
         return true;
     }
 

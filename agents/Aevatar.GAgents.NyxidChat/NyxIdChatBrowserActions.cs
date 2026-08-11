@@ -962,14 +962,43 @@ public static class NyxIdChatBrowserActions
         NyxIdAssistantActionRegistry.IsActionExecutable(
             request.RegistryRevision,
             request.Action) &&
-        request.Params?.ParamsCase is
-            NyxIdAssistantActionParams.ParamsOneofCase.CatalogServiceConnect or
-            NyxIdAssistantActionParams.ParamsOneofCase.CustomServiceConnect &&
+        RequestParamsMatchAction(request) &&
         !string.IsNullOrWhiteSpace(request.ActionRequestId) &&
         !string.IsNullOrWhiteSpace(request.StepId) &&
         string.Equals(state.ConversationActorId, request.ConversationActorId, StringComparison.Ordinal) &&
         string.Equals(state.ActiveTurn.TurnId, request.OriginTurnId, StringComparison.Ordinal) &&
         string.Equals(state.ActiveTask.TaskId, request.TaskId, StringComparison.Ordinal);
+
+    private static bool RequestParamsMatchAction(NyxIdChatActionRequestState request) =>
+        request.Action switch
+        {
+            NyxIdAssistantActionKind.ServiceConnect => request.Params?.ParamsCase is
+                NyxIdAssistantActionParams.ParamsOneofCase.CatalogServiceConnect or
+                NyxIdAssistantActionParams.ParamsOneofCase.CustomServiceConnect,
+            NyxIdAssistantActionKind.KeyCreate => IsValidKeyCreateParams(request.Params?.KeyCreate),
+            _ => false,
+        };
+
+    private static bool IsValidKeyCreateParams(NyxIdKeyCreateParams? value)
+    {
+        if (value is null ||
+            !IsNormalizedActionValue(value.Name, 256) ||
+            !IsNormalizedActionValue(value.Platform, 128) ||
+            value.AllowedServiceIds.Count is < 1 or > 64)
+        {
+            return false;
+        }
+
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        return value.AllowedServiceIds.All(id =>
+            IsNormalizedActionValue(id, 256) && ids.Add(id));
+    }
+
+    private static bool IsNormalizedActionValue(string? value, int maxLength) =>
+        !string.IsNullOrWhiteSpace(value) &&
+        value.Length <= maxLength &&
+        string.Equals(value, value.Trim(), StringComparison.Ordinal) &&
+        !value.Any(char.IsControl);
 
     private static NyxIdChatActionReport? FindAdmissionReport(
         NyxIdChatContinuationAdmissionState admission,

@@ -252,6 +252,70 @@ public sealed partial class NyxIdChatConversationGAgentTests
     }
 
     [Fact]
+    public async Task WorkflowInteractiveKeyCreateHandoff_ShouldValidateRegistryBeforeFirstEvent()
+    {
+        const string actorId = "nyxid-chat-workflow-key-create";
+        var invalidStore = new InMemoryEventStoreForTests();
+        using var invalidServices = BuildEventSourcingServices(
+            invalidStore,
+            actionRegistry: CreateLeastScopeActionRegistry());
+        var invalidAgent = CreateController(invalidServices, actorId);
+        await invalidAgent.ActivateAsync();
+        var invalid = KeyCreateHandoff(actorId);
+        invalid.Request.Params.KeyCreate.AllowedServiceIds.Clear();
+
+        var invalidAct = () => invalidAgent.HandleWorkflowInteractiveActionHandoffAsync(invalid);
+
+        await invalidAct.Should().ThrowAsync<NyxIdAssistantActionRegistryException>();
+        (await invalidStore.GetEventsAsync(actorId)).Should().BeEmpty();
+
+        var eventStore = new InMemoryEventStoreForTests();
+        using var services = BuildEventSourcingServices(
+            eventStore,
+            actionRegistry: CreateLeastScopeActionRegistry());
+        var agent = CreateController(services, actorId);
+        await agent.ActivateAsync();
+        var valid = KeyCreateHandoff(actorId);
+
+        await agent.HandleWorkflowInteractiveActionHandoffAsync(valid);
+
+        var action = agent.State.PendingActions.Should().ContainSingle().Which;
+        action.Action.Should().Be(NyxIdAssistantActionKind.KeyCreate);
+        action.Params.KeyCreate.Name.Should().Be("agent-alpha");
+        action.Params.KeyCreate.Platform.Should().Be("codex");
+        action.Params.KeyCreate.AllowedServiceIds.Should().Equal("m-github", "m-lark");
+        action.RegistryRevision.Should().Be(NyxIdAssistantActionRegistry.SupportedRegistryRevision);
+    }
+
+    private static WorkflowInteractiveActionHandoffCommand KeyCreateHandoff(string actorId) =>
+        new()
+        {
+            HandoffId = "handoff-key-create",
+            ScopeId = "scope-alpha",
+            OwnerSubject = "owner-alpha",
+            SourceWorkflowActorId = "workflow-run-alpha",
+            Request = new WorkflowInteractiveActionRequestWirePayload
+            {
+                SchemaVersion = 4,
+                ActorId = actorId,
+                OriginTurnId = "turn-studio-alpha",
+                TaskId = "task-key-create",
+                StepId = "step-key-create",
+                ActionRequestId = "action-key-create",
+                Action = "key.create",
+                Params = new WorkflowInteractiveActionParams
+                {
+                    KeyCreate = new WorkflowInteractiveKeyCreateActionParams
+                    {
+                        Name = "agent-alpha",
+                        Platform = "codex",
+                        AllowedServiceIds = { "m-github", "m-lark" },
+                    },
+                },
+            },
+        };
+
+    [Fact]
     public async Task StartTurn_WithConflictingOwner_ShouldCommitSafeRejectionWithoutDispatch()
     {
         const string actorId = "conversation-owner-conflict";
@@ -852,8 +916,11 @@ public sealed partial class NyxIdChatConversationGAgentTests
         await DispatchPendingCreationFirstTurnAsync(agent, dispatch);
 
         var classification = profileClassifier.Requests.Should().ContainSingle().Which;
-        classification.Candidates.Should().ContainSingle().Which.Should().BeEquivalentTo(
-            NyxIdChatTurnIntentClassifier.ServiceConnectCandidate);
+        classification.Candidates.Should().BeEquivalentTo(new[]
+        {
+            NyxIdChatTurnIntentClassifier.ServiceConnectCandidate,
+            NyxIdChatTurnIntentClassifier.KeyCreateCandidate,
+        });
         serverClassifier.UserMessages.Should().BeEmpty();
         agent.State.ActiveTurn.AgentProfileTurnAuthority.CandidateRoute.IntentId.Should()
             .Be(NyxIdChatTurnIntentClassifier.ServiceConnectIntentId);
@@ -1127,8 +1194,13 @@ public sealed partial class NyxIdChatConversationGAgentTests
         using var classificationDocument = JsonDocument.Parse(classificationInput!);
         classificationDocument.RootElement.GetProperty("user_message").GetString()
             .Should().Be("我要连接 AWS Cost Explorer");
-        classificationDocument.RootElement.GetProperty("intents").GetArrayLength().Should().Be(1);
-        classificationDocument.RootElement.GetProperty("intents")[0]
+        var intents = classificationDocument.RootElement.GetProperty("intents");
+        intents.EnumerateArray()
+            .Select(static intent => intent.GetProperty("intent_id").GetString())
+            .Should().Equal(
+                NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
+                NyxIdChatTurnIntentClassifier.KeyCreateIntentId);
+        intents[0]
             .GetProperty("side_effect_class").GetString().Should().Be("external_handoff");
         provider.Requests.Should().HaveCount(2);
         foreach (var llmRequest in provider.Requests)
@@ -6892,13 +6964,17 @@ public sealed partial class NyxIdChatConversationGAgentTests
         {
             ct.ThrowIfCancellationRequested();
             Requests.Add(request);
-            var onlyServiceConnect = request.Candidates.Count == 1 &&
-                                     string.Equals(
-                                         request.Candidates[0].IntentId,
-                                         NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
-                                         StringComparison.Ordinal);
+            var builtInNyxIdIntents = request.Candidates.Count == 2 &&
+                                      request.Candidates.Any(candidate => string.Equals(
+                                          candidate.IntentId,
+                                          NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
+                                          StringComparison.Ordinal)) &&
+                                      request.Candidates.Any(candidate => string.Equals(
+                                          candidate.IntentId,
+                                          NyxIdChatTurnIntentClassifier.KeyCreateIntentId,
+                                          StringComparison.Ordinal));
             return Task.FromResult(AgentProfileTurnClassificationResult.Matched(
-                onlyServiceConnect
+                builtInNyxIdIntents
                     ? NyxIdChatTurnIntentClassifier.ServiceConnectIntentId
                     : broadIntentId));
         }
@@ -7280,6 +7356,88 @@ public sealed partial class NyxIdChatConversationGAgentTests
               "risk": "grant",
               "tier": "v1",
               "remember_eligible": true
+            }
+          ]
+        }
+        """);
+
+    private static NyxIdAssistantActionRegistry CreateLeastScopeActionRegistry() =>
+        NyxIdAssistantActionRegistry.Load("""
+        {
+          "schema_version": 4,
+          "revision": "nyxid-assistant-actions.v6",
+          "actions": [
+            {
+              "action": "service.connect",
+              "description": "Connect a catalog service in NyxID.",
+              "params_schema": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["catalogService"],
+                    "properties": {
+                      "catalogService": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["serviceSlug"],
+                        "properties": {
+                          "serviceSlug": {"type": "string"},
+                          "requestedScopes": {"type": "array", "items": {"type": "string"}},
+                          "viaNodeId": {"type": "string"},
+                          "targetOrgId": {"type": "string"}
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["customService"],
+                    "properties": {
+                      "customService": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["name", "endpointUrl", "authMethod"],
+                        "properties": {
+                          "name": {"type": "string"},
+                          "endpointUrl": {"type": "string"},
+                          "authMethod": {"type": "string"},
+                          "authKeyName": {"type": "string"},
+                          "viaNodeId": {"type": "string"},
+                          "targetOrgId": {"type": "string"}
+                        }
+                      }
+                    }
+                  }
+                ]
+              },
+              "risk": "grant",
+              "tier": "v1",
+              "remember_eligible": true
+            },
+            {
+              "action": "key.create",
+              "description": "Create a least-scope API key.",
+              "params_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "platform", "allowedServiceIds"],
+                "properties": {
+                  "name": {"type": "string"},
+                  "platform": {"type": "string"},
+                  "allowedServiceIds": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 64,
+                    "uniqueItems": true,
+                    "items": {"type": "string"}
+                  }
+                }
+              },
+              "risk": "grant",
+              "tier": "v1",
+              "remember_eligible": false
             }
           ]
         }

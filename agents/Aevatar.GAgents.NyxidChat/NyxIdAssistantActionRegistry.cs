@@ -229,7 +229,7 @@ public sealed class NyxIdAssistantActionRegistry
                 .ToFrozenSet(StringComparer.Ordinal),
             [WaveOneDraftRegistryRevision] = new[] { "service.connect" }
                 .ToFrozenSet(StringComparer.Ordinal),
-            [SupportedRegistryRevision] = new[] { "service.connect" }
+            [SupportedRegistryRevision] = new[] { "service.connect", "key.create" }
                 .ToFrozenSet(StringComparer.Ordinal),
         }.ToFrozenDictionary(StringComparer.Ordinal);
 
@@ -263,10 +263,18 @@ public sealed class NyxIdAssistantActionRegistry
 
     internal static bool IsActionExecutable(
         string revision,
-        NyxIdAssistantActionKind action) =>
-        ExecutableActionsByRevision.TryGetValue(revision, out var executableActions) &&
-        action == NyxIdAssistantActionKind.ServiceConnect &&
-        executableActions.Contains("service.connect");
+        NyxIdAssistantActionKind action)
+    {
+        var wireAction = action switch
+        {
+            NyxIdAssistantActionKind.ServiceConnect => "service.connect",
+            NyxIdAssistantActionKind.KeyCreate => "key.create",
+            _ => null,
+        };
+        return wireAction is not null &&
+               ExecutableActionsByRevision.TryGetValue(revision, out var executableActions) &&
+               executableActions.Contains(wireAction);
+    }
 
     public static NyxIdAssistantActionRegistry Load(string registryJson)
     {
@@ -551,7 +559,8 @@ public sealed class NyxIdAssistantActionRegistry
             "allowedServiceIds",
             64,
             256,
-            rejectDuplicates: true);
+            rejectDuplicates: true,
+            rejectNormalizationChanges: true);
         if (allowedServiceIds.Count == 0)
         {
             throw Error(
@@ -928,7 +937,8 @@ public sealed class NyxIdAssistantActionRegistry
         string name,
         int maxCount,
         int maxItemLength,
-        bool rejectDuplicates = false)
+        bool rejectDuplicates = false,
+        bool rejectNormalizationChanges = false)
     {
         if (!element.TryGetProperty(name, out var property))
             return [];
@@ -936,9 +946,17 @@ public sealed class NyxIdAssistantActionRegistry
             throw Error(ParamsInvalid, "An action string array is invalid.");
 
         var values = property.EnumerateArray()
-            .Select(item => item.ValueKind == JsonValueKind.String
-                ? NormalizeString(item.GetString(), maxItemLength, required: true)
-                : throw Error(ParamsInvalid, "An action string array item is invalid."))
+            .Select(item =>
+            {
+                if (item.ValueKind != JsonValueKind.String)
+                    throw Error(ParamsInvalid, "An action string array item is invalid.");
+
+                var raw = item.GetString();
+                var normalized = NormalizeString(raw, maxItemLength, required: true);
+                if (rejectNormalizationChanges && !string.Equals(raw, normalized, StringComparison.Ordinal))
+                    throw Error(ParamsInvalid, "An action string array item is not canonical.");
+                return normalized;
+            })
             .ToArray();
         var distinctValues = values.Distinct(StringComparer.Ordinal).ToArray();
         if (rejectDuplicates && distinctValues.Length != values.Length)

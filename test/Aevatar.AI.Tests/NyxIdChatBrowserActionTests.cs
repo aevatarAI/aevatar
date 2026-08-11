@@ -299,7 +299,7 @@ public sealed class NyxIdChatBrowserActionTests
     }
 
     [Fact]
-    public void CommitRequest_ShouldRejectKeyCreateUntilProducerAndWireAreImplemented()
+    public void CommitRequest_ShouldAcceptLeastScopeKeyCreateOnlyOnV6()
     {
         var state = AuthorizationWaitingState();
         var request = NyxIdChatBrowserActions.RequestAuthorization(
@@ -321,9 +321,14 @@ public sealed class NyxIdChatBrowserActionTests
 
         var accepted = NyxIdChatBrowserActions.CommitRequest(state, request, Now);
 
-        accepted.ShouldCommit.Should().BeFalse();
-        accepted.Outcome.Should().Be(NyxIdChatTransitionOutcome.Rejected);
-        accepted.ReasonCode.Should().Be(NyxIdChatBrowserActions.ActionRequestInvalid);
+        accepted.ShouldCommit.Should().BeTrue();
+        accepted.Outcome.Should().Be(NyxIdChatTransitionOutcome.Accepted);
+        accepted.Request.Params.KeyCreate.AllowedServiceIds.Should().Equal("us-github-alpha");
+
+        request.RegistryRevision = "nyxid-assistant-actions.v5";
+        var rejectedLegacy = NyxIdChatBrowserActions.CommitRequest(state, request, Now);
+        rejectedLegacy.ShouldCommit.Should().BeFalse();
+        rejectedLegacy.ReasonCode.Should().Be(NyxIdChatBrowserActions.ActionRequestInvalid);
     }
 
     [Fact]

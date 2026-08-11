@@ -94,19 +94,19 @@ public sealed class NyxIdAssistantActionRegistryTests
     }
 
     [Fact]
-    public void Load_ShouldPinLeastScopeKeyCreateInV6WithoutAdvertisingItAsExecutable()
+    public void Load_ShouldExposeLeastScopeKeyCreateOnlyInV6()
     {
         var registry = NyxIdAssistantActionRegistry.Load(
             RegistryJsonWithLeastScopeKeyCreate());
 
         registry.TryGetDefinition("service.connect", out _).Should().BeTrue();
-        registry.TryGetDefinition("key.create", out _).Should().BeFalse();
+        registry.TryGetDefinition("key.create", out _).Should().BeTrue();
         registry.TryGetDefinition("service.reauthorize", out _).Should().BeFalse();
         registry.TryGetDefinition("key.rotate", out _).Should().BeFalse();
         NyxIdAssistantActionRegistry.IsActionExecutable(
                 SupportedRevision,
                 NyxIdAssistantActionKind.KeyCreate)
-            .Should().BeFalse();
+            .Should().BeTrue();
         NyxIdAssistantActionRegistry.IsActionExecutable(
                 TransitionRevision,
                 NyxIdAssistantActionKind.KeyCreate)
@@ -307,6 +307,13 @@ public sealed class NyxIdAssistantActionRegistryTests
         Action parseDuplicates = () =>
             NyxIdAssistantActionRegistry.ParseKeyCreate(duplicateServices.RootElement);
         parseDuplicates.Should().Throw<NyxIdAssistantActionRegistryException>()
+            .Which.Code.Should().Be("NYXID_ACTION_PARAMS_INVALID");
+
+        using var nonCanonicalService = JsonDocument.Parse(
+            """{"name":"agent-alpha","platform":"codex","allowedServiceIds":[" us-github-alpha"]}""");
+        Action parseNonCanonical = () =>
+            NyxIdAssistantActionRegistry.ParseKeyCreate(nonCanonicalService.RootElement);
+        parseNonCanonical.Should().Throw<NyxIdAssistantActionRegistryException>()
             .Which.Code.Should().Be("NYXID_ACTION_PARAMS_INVALID");
 
         var overLimitJson = JsonSerializer.Serialize(new

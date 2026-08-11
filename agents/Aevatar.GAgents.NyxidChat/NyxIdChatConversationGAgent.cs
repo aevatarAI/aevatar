@@ -17,6 +17,7 @@ using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using System.Security.Cryptography;
+using System.Text.Json;
 
 namespace Aevatar.GAgents.NyxidChat;
 
@@ -1030,9 +1031,7 @@ public sealed class NyxIdChatConversationGAgent
         ValidateWorkflowInteractiveActionHandoff(command);
         var wireRequest = command.Request;
         var registry = Services.GetRequiredService<NyxIdAssistantActionRegistry>();
-        var validated = registry.ResolveCatalogServiceConnect(
-            wireRequest.Params.CatalogService.ServiceSlug,
-            wireRequest.Params.CatalogService.RequestedScopes);
+        var validated = ValidateWorkflowInteractiveActionRequest(registry, wireRequest);
 
         if (!string.IsNullOrWhiteSpace(State.ConversationActorId))
         {
@@ -1169,6 +1168,16 @@ public sealed class NyxIdChatConversationGAgent
         WorkflowInteractiveActionHandoffCommand command)
     {
         var request = command.Request;
+        var requestParams = request?.Params;
+        var hasCatalogServiceConnect =
+            string.Equals(request?.Action, "service.connect", StringComparison.Ordinal) &&
+            requestParams?.CatalogService is not null &&
+            requestParams.KeyCreate is null &&
+            !string.IsNullOrWhiteSpace(requestParams.CatalogService.ServiceSlug);
+        var hasKeyCreate =
+            string.Equals(request?.Action, "key.create", StringComparison.Ordinal) &&
+            requestParams?.KeyCreate is not null &&
+            requestParams.CatalogService is null;
         if (request is null ||
             !IsValidWorkflowActionActorId(Id) ||
             !string.Equals(request.ActorId, Id, StringComparison.Ordinal) ||
@@ -1177,9 +1186,7 @@ public sealed class NyxIdChatConversationGAgent
             string.IsNullOrWhiteSpace(command.OwnerSubject) ||
             string.IsNullOrWhiteSpace(command.SourceWorkflowActorId) ||
             request.SchemaVersion != NyxIdAssistantActionRegistry.SupportedSchemaVersion ||
-            !string.Equals(request.Action, "service.connect", StringComparison.Ordinal) ||
-            request.Params?.CatalogService is null ||
-            string.IsNullOrWhiteSpace(request.Params.CatalogService.ServiceSlug) ||
+            (!hasCatalogServiceConnect && !hasKeyCreate) ||
             string.IsNullOrWhiteSpace(request.OriginTurnId) ||
             string.IsNullOrWhiteSpace(request.TaskId) ||
             string.IsNullOrWhiteSpace(request.StepId) ||
@@ -1188,6 +1195,27 @@ public sealed class NyxIdChatConversationGAgent
             throw new InvalidOperationException(
                 "The workflow interactive action handoff is invalid.");
         }
+    }
+
+    private static NyxIdAssistantActionValidation ValidateWorkflowInteractiveActionRequest(
+        NyxIdAssistantActionRegistry registry,
+        WorkflowInteractiveActionRequestWirePayload request)
+    {
+        if (string.Equals(request.Action, "service.connect", StringComparison.Ordinal))
+        {
+            return registry.ResolveCatalogServiceConnect(
+                request.Params.CatalogService.ServiceSlug,
+                request.Params.CatalogService.RequestedScopes);
+        }
+
+        var keyCreate = request.Params.KeyCreate;
+        var paramsJson = JsonSerializer.Serialize(new
+        {
+            name = keyCreate.Name,
+            platform = keyCreate.Platform,
+            allowedServiceIds = keyCreate.AllowedServiceIds.ToArray(),
+        });
+        return registry.ValidateRequest("key.create", paramsJson);
     }
 
     private static bool IsValidWorkflowActionActorId(string actorId)
@@ -3176,12 +3204,14 @@ public sealed class NyxIdChatConversationGAgent
     {
         if (turnAuthority is not null)
         {
-            return string.Equals(
-                turnAuthority.CandidateRoute?.IntentId,
-                NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
-                StringComparison.Ordinal)
-                ? NyxIdChatTurnIntent.ServiceConnect
-                : NyxIdChatTurnIntent.Unspecified;
+            return turnAuthority.CandidateRoute?.IntentId switch
+            {
+                NyxIdChatTurnIntentClassifier.ServiceConnectIntentId =>
+                    NyxIdChatTurnIntent.ServiceConnect,
+                NyxIdChatTurnIntentClassifier.KeyCreateIntentId =>
+                    NyxIdChatTurnIntent.KeyCreate,
+                _ => NyxIdChatTurnIntent.Unspecified,
+            };
         }
 
         if (_turnIntentClassifier is null)
