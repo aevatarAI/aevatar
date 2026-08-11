@@ -8,6 +8,11 @@ public sealed class ToolExecutionAuditErrorCodeTests
     [Theory]
     [InlineData("NYXID_PROXY_HTTP_429")]
     [InlineData("NYXID_PROXY_HTTP_502")]
+    [InlineData("code_execution_route_missing")]
+    [InlineData("code_execution_route_inactive")]
+    [InlineData("code_execution_route_policy_mismatch")]
+    [InlineData("code_execution_route_ambiguous")]
+    [InlineData("code_execution_route_access_denied")]
     public void Resolve_CodeExecutionProxyStableCode_ShouldPreserveExactCode(string failureCode)
     {
         ToolExecutionAuditErrorCode.Resolve(failureCode).Should().Be(failureCode);

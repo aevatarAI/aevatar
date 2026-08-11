@@ -144,7 +144,7 @@ flowchart LR
     T --> U["Exact proxy route _nyxid_via=user_service_id"]
 ```
 
-所有普通 write entry（Scope upsert、Studio draft/provision/bind、skill mount、prepare、publish、startup file materialization）统一调用 `IWorkflowExternalCapabilityAdmissionService`，但契约明确区分两条路径。首次 live admission 在 mutation 前重新 parse YAML，以 authenticated caller 的 transient authority/credential 读取 live sources，并生成 `external-capability-admission.v4` plan。Actor 已持有 v4 plan 的后续 prepare、publish 或 Studio handoff 只调用 credential-free persisted revalidation；每个调用点必须按当前业务契约独立提供 expected execution mode，并与 plan 精确匹配，禁止从待验证 plan 自身回读 mode。该路径不伪造 caller、不使用 `appId`/`serviceId` 替代 owner，也不重复外部 readiness read。
+所有普通 write entry（Scope upsert、Studio draft/provision/bind、skill mount、prepare、publish、startup file materialization）统一调用 `IWorkflowExternalCapabilityAdmissionService`，但契约明确区分两条路径。首次 live admission 在 mutation 前重新 parse YAML，以 authenticated caller 的 transient authority/credential 读取 live sources，并生成 `external-capability-admission.v5` plan。Actor 已持有 plan 的后续 prepare、publish 或 Studio handoff 只调用 credential-free persisted revalidation；每个调用点必须按当前业务契约独立提供 expected execution mode，并与 plan 精确匹配，禁止从待验证 plan 自身回读 mode。该路径不伪造 caller、不使用 `appId`/`serviceId` 替代 owner，也不重复外部 readiness read。既有 v4 NyxID proof 继续有效；v4 尚未表达的 `code_execute` 调用由 runtime 每次按 canonical contract 解析和复核，不要求用户 rebind。V2 与 v3 plan 仍需 rebind。
 
 其中 Aevatar 所有权上下文与 NyxID authority 是两个独立 contract：`scope_id`、`owner_scope_id`、`owner_subject` 不得填入 NyxID caller；live admission 只接受认证入口提供的 typed NyxID user identity，缺失即返回 typed blocker。
 
@@ -509,10 +509,12 @@ steps:
 
 `code_execute` 与 `codex_exec` 是 NyxID tool provider 暴露的两个独立执行动词，不是独立 workflow primitive，也不使用 Aevatar CLI connector 或 `~/.aevatar/connectors.json`。一个 chrono 部署可以同时实现两条上游 path，但必须由两个不同的 exact NyxID UserService ID 暴露，禁止共享 scope、凭据或 fallback：
 
-- `code_execute`：执行调用方给出的精确源码；固定使用 `chrono-sandbox`、`/execute`、`forward_access_token=false`、`inject_delegation_token=true`、`sandbox:execute`，source-readable caller bearer 只用于 NyxID 鉴权并终止于 NyxID。
+- `code_execute`：执行调用方给出的精确源码；固定使用 `chrono-sandbox` 与 `/execute`。新 route contract 使用 `forward_access_token=false`、`inject_delegation_token=true`、`sandbox:execute`；迁移期继续接受已发布的 `forward_access_token=true + proxy:*` 与 combined-scope snapshot，source-readable caller bearer 只用于 NyxID 鉴权并终止于 NyxID。
 - `codex_exec.managed_sandbox`：委托自然语言任务；固定使用 `chrono-managed-codex`、`/codex/execute`、`forward_access_token=false`、`inject_delegation_token=true`、`proxy:*`，Vault agent key 只作为 NyxID `X-API-Key` 并终止于 NyxID。
 
 两条路由都必须使用结构化 inventory 中的 exact UserService ID。`/execute` 不回退 `/run`，managed 路由不回退 `chrono-sandbox`，任一 identity 缺失、重复或 policy 不匹配都 fail closed。`codex_exec` 只接受强类型 target；workflow 不能选择镜像、provider、Codex flags 或 sandbox/isolation 配置。
+
+`code_execute` 的 canonical identity 必须同时具有 exact slug 与非空 `catalog_service_id`；同 slug 的 custom route 不参与候选。`credential_source` 只表达 provenance 和 access：personal route 可用，org/member route 仅在 NyxID typed inventory 明确给出 `allowed=true` 时可用，禁止再把 `personal` 当作平台能力资格。该 resolver 只服务 `code_execute`，不得用于筛选普通 connected service、`nyxid_proxy` 或 managed `codex_exec`。Workflow 不 author route selector；新 admission 自动解析 exact route，并在 v5 proof 中冻结 UserService ID、slug snapshot、catalog identity 与 contract digest。readiness 的 missing、inactive、policy mismatch、ambiguous、access denied 必须分开报告，runtime 继续复用同一 resolver 复核。
 
 - `managed_sandbox`：Aevatar 通过 `ICodexExecutionPort` 使用用户级 Vault agent key 调用固定 NyxID `chrono-managed-codex` proxy 路由，只接受 `empty_git` workspace 和最长 `180s` timeout。内部 canary 阶段 NyxID 为该请求注入五分钟 `proxy:*` delegation token，Codex 只配置固定 `chrono-llm-public` proxy URL；chrono-sandbox 部署负责 OpenSandbox、runner 镜像、gVisor 隔离、provider 配置与清理（ADR-0044）。用户必须先通过 authenticated self-service endpoint 完成 allowlisted credential provisioning；在 NyxID 提供窄 scope 前禁止扩大到全用户。
 - `private_ssh`：`target.private_ssh.service` 是 NyxID SSH UserService 的 slug/UUID，不是 `node_id`；`principal` 是该 service 允许的 Unix principal。Codex 登录态、workspace 与 sandbox policy 由目标机固定 wrapper 负责，最长 `300s`。

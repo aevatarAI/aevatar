@@ -12,10 +12,10 @@ namespace Aevatar.Workflow.Application.Tests;
 public sealed class WorkflowExternalCapabilityAdmissionServiceTests
 {
     [Fact]
-    public void AdmissionPlanContract_ShouldUseV4McpEndpointAdmissionsAsTheOnlyCurrentFactSource()
+    public void AdmissionPlanContract_ShouldUseV5CodeRouteAdmissionsAsTheOnlyCurrentFactSource()
     {
         WorkflowCapabilityAdmissionPlanIntegrity.SchemaVersion.Should()
-            .Be("external-capability-admission.v4");
+            .Be("external-capability-admission.v5");
 
         var create = typeof(WorkflowCapabilityAdmissionPlanIntegrity)
             .GetMethods()
@@ -792,6 +792,70 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
     }
 
     [Fact]
+    public async Task AdmitAsync_CodeExecute_ShouldCommitExactRouteProof()
+    {
+        const string yaml = "name: code-workflow\nsteps: []\n";
+        var selector = new ExternalWorkflowCapabilitySelector
+        {
+            CodeExecution = new CodeExecutionSelector(),
+        };
+        var dependencies = new WorkflowAuthorizationDependencies
+        {
+            ServiceGrantPolicy = WorkflowServiceGrantPolicy.Required,
+        };
+        dependencies.ExternalInvocations.Add(new ExternalToolInvocationSpec
+        {
+            CallSiteId = "code-workflow/run-code",
+            ToolName = "code_execute",
+            Selector = selector,
+        });
+        var proof = new CodeExecutionCapabilityRef
+        {
+            UserServiceId = "us-code-alpha",
+            ServiceSlugSnapshot = "chrono-sandbox",
+            CatalogServiceId = "catalog-chrono-sandbox",
+        };
+        proof.ContractDigest = WorkflowCapabilityAdmissionPlanIntegrity
+            .ComputeCodeExecutionCapabilityDigest(
+                proof.UserServiceId,
+                proof.ServiceSlugSnapshot,
+                proof.CatalogServiceId);
+        proof.AllowedExecutionModes.Add(ExternalCapabilityExecutionMode.Interactive);
+        proof.AllowedExecutionModes.Add(ExternalCapabilityExecutionMode.Durable);
+        var capability = new ExternalWorkflowCapabilityRef { CodeExecution = proof };
+        var readiness = new ExternalCapabilityReadiness
+        {
+            ExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+            Status = ExternalCapabilityReadinessStatus.Ready,
+            SelectedSelector = selector,
+            SelectedCapability = capability,
+            Sources =
+            {
+                new ExternalCapabilitySourceStamp
+                {
+                    SourceKind = ExternalCapabilitySourceKind.NyxIdUserServices,
+                    SourceId = "nyxid-user-services:caller:caller-alpha",
+                    ObservedAt = Timestamp.FromDateTimeOffset(FixedTimeProvider.Now),
+                    FreshUntil = Timestamp.FromDateTimeOffset(FixedTimeProvider.Now.AddMinutes(5)),
+                    ContentDigest = "code-route-inventory-digest",
+                },
+            },
+        };
+        var service = new WorkflowExternalCapabilityAdmissionService(
+            new StubParser(WorkflowYamlParseResult.Success("code-workflow", dependencies)),
+            new StubReadinessPort(readiness),
+            new FixedTimeProvider());
+
+        var plan = await service.AdmitAsync(Request(yaml));
+
+        plan.SchemaVersion.Should().Be("external-capability-admission.v5");
+        plan.InvocationAdmissions.Should().ContainSingle().Which
+            .Capability.CodeExecution.UserServiceId.Should().Be("us-code-alpha");
+        plan.SourceStamps.Should().ContainSingle().Which.SourceKind.Should()
+            .Be(ExternalCapabilitySourceKind.NyxIdUserServices);
+    }
+
+    [Fact]
     public async Task AdmitAsync_ShouldClassifyUnresolvedNyxIdInvocationAsOperationSelectionRequired()
     {
         var dependencies = new WorkflowAuthorizationDependencies
@@ -1096,6 +1160,72 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
 
         verified.Should().BeEquivalentTo(initial);
         readiness.Calls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task RevalidatePersistedAsync_ExistingV4NyxIdPlan_ShouldRemainValid()
+    {
+        var capability = NyxIdCapability();
+        var parser = new StubParser(WorkflowYamlParseResult.Success("wf-alpha", Dependencies(capability)));
+        var readiness = new StubReadinessPort(Ready(capability));
+        var service = new WorkflowExternalCapabilityAdmissionService(parser, readiness, new FixedTimeProvider());
+        var existing = await service.AdmitAsync(Request("name: wf-alpha\nsteps: []\n"));
+        existing.SchemaVersion = WorkflowCapabilityAdmissionPlanIntegrity.PreviousSchemaVersion;
+        existing.AdmissionDigest = WorkflowCapabilityAdmissionPlanIntegrity.ComputeAdmissionDigest(existing);
+
+        var verified = await service.RevalidatePersistedAsync(
+            new PersistedWorkflowCapabilityAdmissionRequest(
+                existing,
+                "name: wf-alpha\nsteps: []\n",
+                new Dictionary<string, string>(),
+                "scope-workflow",
+                ExternalCapabilityExecutionMode.Interactive));
+
+        verified.Should().BeEquivalentTo(existing);
+        readiness.Calls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task RevalidatePersistedAsync_ExistingV4CodeExecutePlan_ShouldNotRequireRebind()
+    {
+        const string yaml = "name: code-workflow\nsteps: []\n";
+        var dependencies = new WorkflowAuthorizationDependencies
+        {
+            ServiceGrantPolicy = WorkflowServiceGrantPolicy.Required,
+        };
+        dependencies.ExternalInvocations.Add(new ExternalToolInvocationSpec
+        {
+            CallSiteId = "code-workflow/run-code",
+            ToolName = "code_execute",
+            Selector = new ExternalWorkflowCapabilitySelector
+            {
+                CodeExecution = new CodeExecutionSelector(),
+            },
+        });
+        var existing = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            yaml,
+            new Dictionary<string, string>(),
+            ExternalCapabilityExecutionMode.Interactive,
+            [],
+            []);
+        existing.SchemaVersion = WorkflowCapabilityAdmissionPlanIntegrity.PreviousSchemaVersion;
+        existing.AdmissionDigest = WorkflowCapabilityAdmissionPlanIntegrity.ComputeAdmissionDigest(existing);
+        var readiness = new StubReadinessPort();
+        var service = new WorkflowExternalCapabilityAdmissionService(
+            new StubParser(WorkflowYamlParseResult.Success("code-workflow", dependencies)),
+            readiness,
+            new FixedTimeProvider());
+
+        var verified = await service.RevalidatePersistedAsync(
+            new PersistedWorkflowCapabilityAdmissionRequest(
+                existing,
+                yaml,
+                new Dictionary<string, string>(),
+                "scope-workflow",
+                ExternalCapabilityExecutionMode.Interactive));
+
+        verified.Should().BeEquivalentTo(existing);
+        readiness.Calls.Should().Be(0);
     }
 
     [Fact]

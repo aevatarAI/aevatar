@@ -60,15 +60,30 @@ internal static class WorkflowCapabilityAdmissionRuntimeAccess
         ExternalToolInvocationSpec invocation)
     {
         ArgumentNullException.ThrowIfNull(invocation);
-        if (plan is null || plan.InvocationAdmissions.Count == 0)
+        if (plan is null)
             return new WorkflowCapabilityAdmissionLookup(WorkflowCapabilityAdmissionResolution.PlanMissing, null);
+
+        if (plan.InvocationAdmissions.Count == 0)
+        {
+            return IsPreviousSchemaCodeExecution(plan, invocation)
+                ? PreviousSchemaCodeExecution()
+                : new WorkflowCapabilityAdmissionLookup(
+                    WorkflowCapabilityAdmissionResolution.PlanMissing,
+                    null);
+        }
 
         var callSiteId = invocation.CallSiteId?.Trim() ?? string.Empty;
         var matches = plan.InvocationAdmissions
             .Where(admission => string.Equals(admission.CallSiteId, callSiteId, StringComparison.Ordinal))
             .ToArray();
         if (matches.Length == 0)
-            return new WorkflowCapabilityAdmissionLookup(WorkflowCapabilityAdmissionResolution.CallSiteMissing, null);
+        {
+            return IsPreviousSchemaCodeExecution(plan, invocation)
+                ? PreviousSchemaCodeExecution()
+                : new WorkflowCapabilityAdmissionLookup(
+                    WorkflowCapabilityAdmissionResolution.CallSiteMissing,
+                    null);
+        }
         if (matches.Length > 1)
             return new WorkflowCapabilityAdmissionLookup(WorkflowCapabilityAdmissionResolution.CallSiteAmbiguous, null);
 
@@ -86,6 +101,23 @@ internal static class WorkflowCapabilityAdmissionRuntimeAccess
             WorkflowCapabilityAdmissionResolution.Resolved,
             admission.Clone());
     }
+
+    private static bool IsPreviousSchemaCodeExecution(
+        WorkflowCapabilityAdmissionPlan plan,
+        ExternalToolInvocationSpec invocation) =>
+        string.Equals(
+            plan.SchemaVersion,
+            WorkflowCapabilityAdmissionPlanIntegrity.PreviousSchemaVersion,
+            StringComparison.Ordinal) &&
+        string.Equals(
+            invocation.ToolName,
+            WorkflowAuthorizationDependencyEvaluator.CodeExecuteToolName,
+            StringComparison.OrdinalIgnoreCase) &&
+        invocation.Selector.SelectorCase ==
+        ExternalWorkflowCapabilitySelector.SelectorOneofCase.CodeExecution;
+
+    private static WorkflowCapabilityAdmissionLookup PreviousSchemaCodeExecution() =>
+        new(WorkflowCapabilityAdmissionResolution.Resolved, null);
 
     private static WorkflowCapabilityAdmissionPlan? GetPlan(IWorkflowExecutionContext ctx) =>
         ctx switch

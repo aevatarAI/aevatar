@@ -76,7 +76,11 @@ public sealed class NyxIdApiAccessContractTests
                   "slug": "api-github",
                   "label": "GitHub",
                   "catalog_service_name": "GitHub API",
+                  "catalog_service_id": "catalog-github",
                   "is_active": true,
+                  "forward_access_token": false,
+                  "inject_delegation_token": true,
+                  "delegation_token_scope": "sandbox:execute",
                   "credential_source": { "type": "personal" },
                   "default_model": "gpt-5.5",
                   "endpoint_id": "ignored"
@@ -124,6 +128,63 @@ public sealed class NyxIdApiAccessContractTests
                 NyxIdOrganizationRole.Admin,
                 true));
         result.Value.Services[1].DefaultModel.Should().Be("claude-opus-4-6");
+    }
+
+    [Fact]
+    public void ParseCodeExecutionUserServices_ShouldMapRouteContractWithoutChangingOrdinaryParser()
+    {
+        const string response = """
+            {
+              "services": [{
+                "id": "service-code",
+                "slug": "chrono-sandbox",
+                "catalog_service_id": "catalog-chrono-sandbox",
+                "is_active": true,
+                "forward_access_token": false,
+                "inject_delegation_token": true,
+                "delegation_token_scope": "sandbox:execute",
+                "credential_source": { "type": "personal" }
+              }]
+            }
+            """;
+
+        var ordinary = NyxIdApiAccessResponseParser.ParseUserServices(response);
+        var codeExecution = NyxIdApiAccessResponseParser.ParseCodeExecutionUserServices(response);
+
+        ordinary.Succeeded.Should().BeTrue();
+        ordinary.Value!.Services.Single().Should().BeEquivalentTo(new
+        {
+            CatalogServiceId = (string?)null,
+            ForwardAccessToken = (bool?)null,
+            InjectDelegationToken = (bool?)null,
+            DelegationTokenScope = (string?)null,
+        });
+        codeExecution.Succeeded.Should().BeTrue();
+        codeExecution.Value!.Services.Single().Should().BeEquivalentTo(new
+        {
+            CatalogServiceId = "catalog-chrono-sandbox",
+            ForwardAccessToken = (bool?)false,
+            InjectDelegationToken = (bool?)true,
+            DelegationTokenScope = "sandbox:execute",
+        });
+    }
+
+    [Fact]
+    public void ParseUserServices_WhenCodeExecutionOnlyFieldIsMalformed_ShouldRemainCompatible()
+    {
+        const string response = """
+            {"services":[{
+              "id":"service-github",
+              "slug":"api-github",
+              "is_active":true,
+              "forward_access_token":"invalid",
+              "credential_source":{"type":"personal"}
+            }]}
+            """;
+
+        NyxIdApiAccessResponseParser.ParseUserServices(response).Succeeded.Should().BeTrue();
+        NyxIdApiAccessResponseParser.ParseCodeExecutionUserServices(response).Succeeded
+            .Should().BeFalse();
     }
 
     [Fact]

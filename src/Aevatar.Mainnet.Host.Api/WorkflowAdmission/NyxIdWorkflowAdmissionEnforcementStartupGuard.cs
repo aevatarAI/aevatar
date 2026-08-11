@@ -203,10 +203,7 @@ internal sealed class NyxIdWorkflowAdmissionEnforcementStartupGuard(
                 return true;
             }
             if (plan is null ||
-                !string.Equals(
-                    plan.SchemaVersion,
-                    WorkflowCapabilityAdmissionPlanIntegrity.SchemaVersion,
-                    StringComparison.Ordinal))
+                !WorkflowCapabilityAdmissionPlanIntegrity.IsSupportedSchemaVersion(plan.SchemaVersion))
             {
                 return false;
             }

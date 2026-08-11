@@ -25,6 +25,7 @@ public static class WorkflowServiceGrantRequirementClassifier
                     break;
                 case ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService:
                 case ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest:
+                case ExternalWorkflowCapabilityRef.CapabilityOneofCase.CodeExecution:
                     requiresServiceGrant = true;
                     break;
                 default:

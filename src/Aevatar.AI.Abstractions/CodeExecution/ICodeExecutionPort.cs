@@ -38,6 +38,7 @@ public enum CodeExecutionRouteIdentitySource
     Unspecified = 0,
     CodeExecutionContract = 1,
     NyxIdUserServiceCatalog = 2,
+    WorkflowCapabilityAdmission = 3,
 }
 
 public sealed record CodeExecutionRouteIdentity(

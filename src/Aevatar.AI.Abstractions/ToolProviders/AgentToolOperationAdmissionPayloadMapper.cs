@@ -32,6 +32,12 @@ public static class AgentToolOperationAdmissionPayloadMapper
                     RequestContractDigest = authored.RequestContractDigest ?? string.Empty,
                 };
                 break;
+            case AgentToolOperationIdentity.PlatformBuiltIn platform:
+                payload.PlatformBuiltIn = new AgentToolPlatformBuiltInIdentityPayload
+                {
+                    CapabilityId = platform.CapabilityId ?? string.Empty,
+                };
+                break;
         }
 
         payload.Parameters.AddRange(admission.Parameters.Select(ToParameter));
@@ -57,6 +63,10 @@ public static class AgentToolOperationAdmissionPayloadMapper
                 when !string.IsNullOrWhiteSpace(payload.AuthoredRequest.RequestContractDigest) =>
                 new AgentToolOperationIdentity.AuthoredRequest(
                     payload.AuthoredRequest.RequestContractDigest ?? string.Empty),
+            AgentToolOperationAdmissionPayload.IdentityOneofCase.PlatformBuiltIn
+                when !string.IsNullOrWhiteSpace(payload.PlatformBuiltIn.CapabilityId) =>
+                new AgentToolOperationIdentity.PlatformBuiltIn(
+                    payload.PlatformBuiltIn.CapabilityId ?? string.Empty),
             _ => null,
         };
         if (identity is null)
@@ -312,6 +322,8 @@ public static class AgentToolOperationAdmissionPayloadMapper
                 AgentToolOperationAuthorizationBasisPayload.PublishedContract,
             AgentToolOperationAuthorizationBasis.ExplicitRequest =>
                 AgentToolOperationAuthorizationBasisPayload.ExplicitRequest,
+            AgentToolOperationAuthorizationBasis.PlatformContract =>
+                AgentToolOperationAuthorizationBasisPayload.PlatformContract,
             _ => AgentToolOperationAuthorizationBasisPayload.Unspecified,
         };
 
@@ -322,6 +334,8 @@ public static class AgentToolOperationAdmissionPayloadMapper
                 AgentToolOperationAuthorizationBasis.PublishedContract,
             AgentToolOperationAuthorizationBasisPayload.ExplicitRequest =>
                 AgentToolOperationAuthorizationBasis.ExplicitRequest,
+            AgentToolOperationAuthorizationBasisPayload.PlatformContract =>
+                AgentToolOperationAuthorizationBasis.PlatformContract,
             _ => default,
         };
 

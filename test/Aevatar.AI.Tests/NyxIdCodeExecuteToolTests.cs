@@ -114,6 +114,66 @@ public sealed class NyxIdCodeExecuteToolTests : IDisposable
     }
 
     [Fact]
+    public async Task ExecuteWithOutcomeAsync_WorkflowAdmissionPinsExactUserServiceRoute()
+    {
+        var port = new StubCodeExecutionPort(CodeExecutionOutcome.Succeeded(
+            new CodeExecutionResult("ok", string.Empty, 0),
+            ResolvedRoute));
+        var tool = new NyxIdCodeExecuteTool(port);
+        AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
+        {
+            Credentials = new AgentToolCredentials(
+                "source-readable-bearer",
+                null,
+                null,
+                AgentToolNyxIdCredentialKind.SourceReadableUserBearer),
+            OperationAdmission = CodeExecutionAdmission("us-code-admitted"),
+        };
+
+        await tool.ExecuteWithOutcomeAsync(
+            "call-admitted",
+            tool.Name,
+            """{"language":"javascript","code":"console.log('ok')"}""");
+
+        port.Request!.Route.Should().Be(new CodeExecutionRouteIdentity(
+            "chrono-sandbox",
+            "us-code-admitted",
+            CodeExecutionRouteIdentitySource.WorkflowCapabilityAdmission));
+    }
+
+    [Fact]
+    public async Task ExecuteWithOutcomeAsync_MismatchedWorkflowAdmissionFailsBeforeDispatch()
+    {
+        var port = new StubCodeExecutionPort(CodeExecutionOutcome.Succeeded(
+            new CodeExecutionResult("ok", string.Empty, 0),
+            ResolvedRoute));
+        var tool = new NyxIdCodeExecuteTool(port);
+        AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
+        {
+            Credentials = new AgentToolCredentials(
+                "source-readable-bearer",
+                null,
+                null,
+                AgentToolNyxIdCredentialKind.SourceReadableUserBearer),
+            OperationAdmission = CodeExecutionAdmission("us-code-admitted") with
+            {
+                ServiceSlug = "arbitrary-shadow",
+            },
+        };
+
+        var outcome = await tool.ExecuteWithOutcomeAsync(
+            "call-invalid-admission",
+            tool.Name,
+            """{"language":"javascript","code":"console.log('ok')"}""");
+
+        port.Request.Should().BeNull();
+        AssertFailure(
+            outcome,
+            "code_execution_admission_invalid",
+            "The workflow code execution admission proof is invalid.");
+    }
+
+    [Fact]
     public async Task ExecuteWithOutcomeAsync_IgnoresConnectedServicesPresentationText()
     {
         var port = new StubCodeExecutionPort(CodeExecutionOutcome.Succeeded(
@@ -372,6 +432,25 @@ public sealed class NyxIdCodeExecuteToolTests : IDisposable
 
     private static NyxIdCodeExecuteTool CreateTool(CodeExecutionOutcome outcome) =>
         new(new StubCodeExecutionPort(outcome));
+
+    private static AgentToolOperationAdmission CodeExecutionAdmission(string userServiceId) =>
+        new(
+            userServiceId,
+            "chrono-sandbox",
+            new AgentToolOperationIdentity.PlatformBuiltIn("code_execute"),
+            AgentToolOperationAuthorizationBasis.PlatformContract,
+            "POST",
+            "/execute",
+            "code-execution-contract-digest",
+            [],
+            null,
+            AgentToolOperationResponsePolicy.TextOnly,
+            new AgentToolOperationExecutionPolicy(
+                AgentToolOperationRisk.ReadOnly,
+                AgentToolOperationApproval.None,
+                AgentToolOperationEnforcementOwner.Aevatar,
+                [AgentToolOperationExecutionMode.Interactive,
+                    AgentToolOperationExecutionMode.Durable]));
 
     private static void AssertFailure(
         AgentToolTerminalOutcome terminal,

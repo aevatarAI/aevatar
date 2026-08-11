@@ -10,6 +10,31 @@ namespace Aevatar.Workflow.Core.Tests;
 public sealed class WorkflowAuthorizationDependenciesTests
 {
     [Fact]
+    public void EvaluateAuthorizationDependencies_CodeExecute_ShouldCompileCanonicalPlatformSelector()
+    {
+        const string yaml = """
+            name: code-workflow
+            roles: []
+            steps:
+              - id: run-code
+                type: tool_call
+                parameters:
+                  tool: code_execute
+                  arguments: '{"language":"javascript","code":"console.log(2)"}'
+            """;
+
+        var dependencies = new WorkflowGAgent().EvaluateAuthorizationDependencies(yaml);
+
+        dependencies.Should().NotBeNull();
+        dependencies!.ServiceGrantPolicy.Should().Be(WorkflowServiceGrantPolicy.Required);
+        var invocation = dependencies.ExternalInvocations.Should().ContainSingle().Subject;
+        invocation.CallSiteId.Should().Be("code-workflow/run-code");
+        invocation.ToolName.Should().Be("code_execute");
+        invocation.Selector.SelectorCase.Should()
+            .Be(ExternalWorkflowCapabilitySelector.SelectorOneofCase.CodeExecution);
+    }
+
+    [Fact]
     public void WorkflowParser_ShouldMapStepLevelNyxIdOperationSelector()
     {
         const string yaml = """

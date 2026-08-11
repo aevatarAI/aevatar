@@ -121,6 +121,11 @@ internal static class ExternalWorkflowCapabilityToolSupport
                 {
                     ["nyxid_request"] = BuildNyxIdRequestSelectorNode(selector.NyxIdRequest),
                 },
+            ExternalWorkflowCapabilitySelector.SelectorOneofCase.CodeExecution =>
+                new JsonObject
+                {
+                    ["code_execution"] = new JsonObject(),
+                },
             _ => null,
         };
     }

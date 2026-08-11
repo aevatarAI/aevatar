@@ -130,8 +130,9 @@ public sealed class NyxIdCodeExecutionPortTests
         outcome.Failure.Should().BeEquivalentTo(new
         {
             Kind = CodeExecutionFailureKind.TargetNotConfigured,
-            Code = "code_execution_route_unavailable",
+            Code = "code_execution_route_policy_mismatch",
         });
+        outcome.Failure!.DiagnosticId.Should().MatchRegex("^aevatar-[0-9a-f]{32}$");
         handler.Requests.Should().ContainSingle();
         handler.Requests[0].PathAndQuery.Should().Be("/api/v1/user-services");
     }
@@ -142,6 +143,7 @@ public sealed class NyxIdCodeExecutionPortTests
     [InlineData(true, "sandbox:execute proxy:*")]
     [InlineData(false, "proxy:* sandbox:execute")]
     [InlineData(false, "sandbox:execute proxy:*")]
+    [InlineData(false, "sandbox:execute")]
     public async Task ExecuteAsync_WhenSharedServiceHasAllowedTransitionPolicy_UsesExactRoute(
         bool forwardAccessToken,
         string delegationTokenScope)
@@ -189,24 +191,58 @@ public sealed class NyxIdCodeExecutionPortTests
 
         var outcome = await port.ExecuteAsync(Request(CodeServiceId));
 
-        AssertRouteUnavailable(outcome, handler);
+        AssertRouteFailure(
+            outcome,
+            handler,
+            CodeExecutionFailureKind.TargetNotConfigured,
+            "code_execution_route_inactive");
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenSharedServiceIsNotPersonal_FailsClosedBeforeProxy()
+    public async Task ExecuteAsync_WhenCanonicalOrganizationMemberServiceIsAllowed_UsesExactRoute()
     {
-        var handler = new SequenceHandler(JsonResponse(Inventory(Service(
-            CodeServiceId,
-            "chrono-sandbox",
-            true,
-            true,
-            "proxy:*",
-            credentialSourceType: "platform"))));
+        var handler = new SequenceHandler(
+            JsonResponse(Inventory(Service(
+                CodeServiceId,
+                "chrono-sandbox",
+                false,
+                true,
+                "sandbox:execute",
+                credentialSourceType: "org"))),
+            JsonResponse(
+                """
+                {"success":true,"output":{"stdout":"ok","stderr":"","exit_code":0}}
+                """));
         var port = CreatePort(handler);
 
         var outcome = await port.ExecuteAsync(Request(CodeServiceId));
 
-        AssertRouteUnavailable(outcome, handler);
+        outcome.Failure.Should().BeNull();
+        outcome.ResolvedRoute!.UserServiceId.Should().Be(CodeServiceId);
+        handler.Requests[1].PathAndQuery.Should().Be(
+            "/api/v1/proxy/s/chrono-sandbox/execute?_nyxid_via=us-code-alpha");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenCanonicalOrganizationServiceIsDenied_ReturnsAccessDenied()
+    {
+        var handler = new SequenceHandler(JsonResponse(Inventory(Service(
+            CodeServiceId,
+            "chrono-sandbox",
+            false,
+            true,
+            "sandbox:execute",
+            credentialSourceType: "org",
+            allowed: false))));
+        var port = CreatePort(handler);
+
+        var outcome = await port.ExecuteAsync(Request(CodeServiceId));
+
+        AssertRouteFailure(
+            outcome,
+            handler,
+            CodeExecutionFailureKind.AdmissionDenied,
+            "code_execution_route_access_denied");
     }
 
     [Fact]
@@ -218,6 +254,7 @@ public sealed class NyxIdCodeExecutionPortTests
               "services": [{
                 "id": "us-code-alpha",
                 "slug": "chrono-sandbox",
+                "catalog_service_id": "catalog-chrono-sandbox",
                 "is_active": true,
                 "inject_delegation_token": true,
                 "delegation_token_scope": "proxy:* sandbox:execute",
@@ -229,7 +266,11 @@ public sealed class NyxIdCodeExecutionPortTests
 
         var outcome = await port.ExecuteAsync(Request(CodeServiceId));
 
-        AssertRouteUnavailable(outcome, handler);
+        AssertRouteFailure(
+            outcome,
+            handler,
+            CodeExecutionFailureKind.TargetNotConfigured,
+            "code_execution_route_policy_mismatch");
     }
 
     [Fact]
@@ -241,6 +282,7 @@ public sealed class NyxIdCodeExecutionPortTests
               "services": [{
                 "id": "us-code-alpha",
                 "slug": "chrono-sandbox",
+                "catalog_service_id": "catalog-chrono-sandbox",
                 "is_active": true,
                 "forward_access_token": true,
                 "inject_delegation_token": true,
@@ -252,7 +294,11 @@ public sealed class NyxIdCodeExecutionPortTests
 
         var outcome = await port.ExecuteAsync(Request(CodeServiceId));
 
-        AssertRouteUnavailable(outcome, handler);
+        AssertRouteFailure(
+            outcome,
+            handler,
+            CodeExecutionFailureKind.TransportUnavailable,
+            "code_execution_route_resolution_failed");
     }
 
     [Fact]
@@ -265,7 +311,63 @@ public sealed class NyxIdCodeExecutionPortTests
 
         var outcome = await port.ExecuteAsync(Request(userServiceId: null));
 
-        AssertRouteUnavailable(outcome, handler);
+        AssertRouteFailure(
+            outcome,
+            handler,
+            CodeExecutionFailureKind.TargetNotConfigured,
+            "code_execution_route_ambiguous");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenCustomSameSlugRouteExists_IgnoresItAndUsesCanonicalRoute()
+    {
+        var handler = new SequenceHandler(
+            JsonResponse(Inventory(
+                Service(
+                    "us-custom-shadow",
+                    "chrono-sandbox",
+                    false,
+                    true,
+                    "sandbox:execute",
+                    catalogServiceId: null),
+                Service(
+                    CodeServiceId,
+                    "chrono-sandbox",
+                    false,
+                    true,
+                    "sandbox:execute"))),
+            JsonResponse(
+                """
+                {"success":true,"output":{"stdout":"ok","stderr":"","exit_code":0}}
+                """));
+        var port = CreatePort(handler);
+
+        var outcome = await port.ExecuteAsync(Request(userServiceId: null));
+
+        outcome.Failure.Should().BeNull();
+        outcome.ResolvedRoute!.UserServiceId.Should().Be(CodeServiceId);
+        handler.Requests[1].PathAndQuery.Should().EndWith("?_nyxid_via=us-code-alpha");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenNoCanonicalCatalogRouteExists_ReturnsMissing()
+    {
+        var handler = new SequenceHandler(JsonResponse(Inventory(Service(
+            "us-custom-only",
+            "chrono-sandbox",
+            false,
+            true,
+            "sandbox:execute",
+            catalogServiceId: null))));
+        var port = CreatePort(handler);
+
+        var outcome = await port.ExecuteAsync(Request(userServiceId: null));
+
+        AssertRouteFailure(
+            outcome,
+            handler,
+            CodeExecutionFailureKind.TargetNotConfigured,
+            "code_execution_route_missing");
     }
 
     [Fact]
@@ -675,29 +777,47 @@ public sealed class NyxIdCodeExecutionPortTests
         bool injectDelegationToken,
         string delegationTokenScope,
         bool isActive = true,
-        string credentialSourceType = "personal") =>
-        new
+        string credentialSourceType = "personal",
+        bool allowed = true,
+        string? catalogServiceId = "catalog-chrono-sandbox")
+    {
+        var credentialSource = credentialSourceType == "personal"
+            ? (object)new { type = "personal" }
+            : new
+            {
+                type = "org",
+                org_id = "org-platform",
+                org_name = "Aevatar Platform",
+                role = "member",
+                allowed,
+            };
+        return new
         {
             id,
             slug,
+            catalog_service_id = catalogServiceId,
             is_active = isActive,
             forward_access_token = forwardAccessToken,
             inject_delegation_token = injectDelegationToken,
             delegation_token_scope = delegationTokenScope,
-            credential_source = new { type = credentialSourceType },
+            credential_source = credentialSource,
         };
+    }
 
-    private static void AssertRouteUnavailable(
+    private static void AssertRouteFailure(
         CodeExecutionOutcome outcome,
-        SequenceHandler handler)
+        SequenceHandler handler,
+        CodeExecutionFailureKind kind,
+        string code)
     {
         outcome.Result.Should().BeNull();
         outcome.ResolvedRoute.Should().BeNull();
         outcome.Failure.Should().BeEquivalentTo(new
         {
-            Kind = CodeExecutionFailureKind.TargetNotConfigured,
-            Code = "code_execution_route_unavailable",
+            Kind = kind,
+            Code = code,
         });
+        outcome.Failure!.DiagnosticId.Should().MatchRegex("^aevatar-[0-9a-f]{32}$");
         handler.Requests.Should().ContainSingle();
         handler.Requests[0].PathAndQuery.Should().Be("/api/v1/user-services");
     }

@@ -623,10 +623,7 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
 
         var plan = workflow.CapabilityAdmissionPlan;
         if (plan is null ||
-            !string.Equals(
-                plan.SchemaVersion,
-                WorkflowCapabilityAdmissionPlanIntegrity.SchemaVersion,
-                StringComparison.Ordinal) ||
+            !WorkflowCapabilityAdmissionPlanIntegrity.IsSupportedSchemaVersion(plan.SchemaVersion) ||
             plan.ExternalCapabilities.Count != 0 ||
             string.IsNullOrWhiteSpace(plan.AdmissionDigest) ||
             !string.Equals(
@@ -1269,6 +1266,13 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
                     services.Add(new NyxIdUserServiceCapabilityRef
                     {
                         UserServiceId = capability.NyxIdUserRequest.Request?.UserServiceId ?? string.Empty,
+                    });
+                    break;
+                case ExternalWorkflowCapabilityRef.CapabilityOneofCase.CodeExecution:
+                    services.Add(new NyxIdUserServiceCapabilityRef
+                    {
+                        UserServiceId = capability.CodeExecution.UserServiceId,
+                        ServiceSlugSnapshot = capability.CodeExecution.ServiceSlugSnapshot,
                     });
                     break;
                 default:

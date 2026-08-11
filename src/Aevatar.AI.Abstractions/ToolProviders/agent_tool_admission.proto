@@ -47,6 +47,7 @@ enum AgentToolOperationAuthorizationBasisPayload {
   AGENT_TOOL_OPERATION_AUTHORIZATION_BASIS_PAYLOAD_UNSPECIFIED = 0;
   AGENT_TOOL_OPERATION_AUTHORIZATION_BASIS_PAYLOAD_PUBLISHED_CONTRACT = 1;
   AGENT_TOOL_OPERATION_AUTHORIZATION_BASIS_PAYLOAD_EXPLICIT_REQUEST = 2;
+  AGENT_TOOL_OPERATION_AUTHORIZATION_BASIS_PAYLOAD_PLATFORM_CONTRACT = 3;
 }
 
 enum AgentToolOperationRiskPayload {
@@ -97,6 +98,10 @@ message AgentToolPublishedEndpointIdentityPayload {
 
 message AgentToolAuthoredRequestIdentityPayload {
   string request_contract_digest = 1;
+}
+
+message AgentToolPlatformBuiltInIdentityPayload {
+  string capability_id = 1;
 }
 
 message AgentToolOperationSchemaPropertyPayload {
@@ -208,6 +213,7 @@ message AgentToolOperationAdmissionPayload {
   oneof identity {
     AgentToolPublishedEndpointIdentityPayload published_endpoint = 3;
     AgentToolAuthoredRequestIdentityPayload authored_request = 4;
+    AgentToolPlatformBuiltInIdentityPayload platform_built_in = 16;
   }
   AgentToolOperationAuthorizationBasisPayload authorization_basis = 5;
   string http_method = 6;
