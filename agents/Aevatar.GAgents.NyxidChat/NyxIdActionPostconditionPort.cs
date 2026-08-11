@@ -348,7 +348,8 @@ public sealed class NyxIdActionPostconditionPort : INyxIdActionPostconditionPort
         var versionEvidence = evidence.VersionEvidence;
         if (versionEvidence is null ||
             versionEvidence.RotationPredecessorId is not { } predecessorId ||
-            !ValidIdentity(predecessorId))
+            !ValidIdentity(predecessorId) ||
+            versionEvidence.StateVersion <= 0)
         {
             return Unverified(
                 input,

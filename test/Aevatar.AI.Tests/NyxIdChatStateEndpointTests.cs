@@ -583,6 +583,93 @@ public sealed class NyxIdChatStateEndpointTests
     }
 
     [Fact]
+    public async Task GetState_ShouldExposeFlatReloadableKeyActionParameters()
+    {
+        var keyCreate = new NyxIdChatActionSnapshot(
+            4,
+            "action-key-create",
+            "turn-alpha",
+            "task-alpha",
+            "step-key-create",
+            "key.create",
+            DateTimeOffset.Parse("2026-08-12T04:00:00Z"),
+            [],
+            null,
+            new NyxIdChatActionRequestSnapshot(
+                4,
+                "conversation-alpha",
+                "turn-alpha",
+                "task-alpha",
+                "step-key-create",
+                "action-key-create",
+                "key.create",
+                new NyxIdChatActionParamsSnapshot(
+                    Name: "agent-alpha",
+                    Platform: "codex",
+                    AllowedServiceIds: ["service-github", "service-lark"])));
+        var keyRotate = new NyxIdChatActionSnapshot(
+            4,
+            "action-key-rotate",
+            "turn-alpha",
+            "task-alpha",
+            "step-key-rotate",
+            "key.rotate",
+            DateTimeOffset.Parse("2026-08-12T04:01:00Z"),
+            [],
+            null,
+            new NyxIdChatActionRequestSnapshot(
+                4,
+                "conversation-alpha",
+                "turn-alpha",
+                "task-alpha",
+                "step-key-rotate",
+                "action-key-rotate",
+                "key.rotate",
+                new NyxIdChatActionParamsSnapshot(KeyId: "key-predecessor")));
+        var queryPort = new RecordingQueryPort
+        {
+            Result = NyxIdChatConversationStateQueryResult.Current(
+                new NyxIdChatConversationStateSnapshot(
+                    ActorId: "conversation-alpha",
+                    ScopeId: "scope-alpha",
+                    StateVersion: 12,
+                    ProgressSequence: 41,
+                    UpdatedAt: DateTimeOffset.Parse("2026-08-12T04:02:00Z"),
+                    ActiveTurn: null,
+                    LatestTurn: null,
+                    RecentTerminalTurns: [],
+                    ActiveTask: null,
+                    PendingApproval: null,
+                    PendingActions: [keyCreate],
+                    ControlFence: null,
+                    LatestControlResult: null,
+                    ContinuationAdmission: null,
+                    RecentActions: [keyRotate])),
+        };
+
+        var response = await ExecuteAsync(queryPort, string.Empty);
+
+        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        using var json = JsonDocument.Parse(response.Body);
+        var snapshot = json.RootElement.GetProperty("snapshot");
+        var createParams = snapshot.GetProperty("pendingActions")[0]
+            .GetProperty("request")
+            .GetProperty("params");
+        createParams.GetProperty("name").GetString().Should().Be("agent-alpha");
+        createParams.GetProperty("platform").GetString().Should().Be("codex");
+        createParams.GetProperty("allowedServiceIds").EnumerateArray()
+            .Select(static value => value.GetString())
+            .Should().Equal("service-github", "service-lark");
+        createParams.TryGetProperty("keyCreate", out _).Should().BeFalse();
+        var rotateParams = snapshot.GetProperty("recentActions")[0]
+            .GetProperty("request")
+            .GetProperty("params");
+        rotateParams.GetProperty("keyId").GetString().Should().Be("key-predecessor");
+        rotateParams.TryGetProperty("keyRotate", out _).Should().BeFalse();
+        response.Body.Should().NotContain("fullKey").And.NotContain("keyMaterial");
+    }
+
+    [Fact]
     public async Task GetState_ShouldReturnReloadRequiredForInvalidNumericCursorWithoutQuerying()
     {
         var queryPort = new RecordingQueryPort();

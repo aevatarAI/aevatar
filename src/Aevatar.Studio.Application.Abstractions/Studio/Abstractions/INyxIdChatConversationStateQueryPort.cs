@@ -532,7 +532,11 @@ public sealed record NyxIdChatActionRequestSnapshot(
 
 public sealed record NyxIdChatActionParamsSnapshot(
     NyxIdChatCatalogServiceConnectSnapshot? CatalogService = null,
-    NyxIdChatCustomServiceConnectSnapshot? CustomService = null);
+    NyxIdChatCustomServiceConnectSnapshot? CustomService = null,
+    string? Name = null,
+    string? Platform = null,
+    IReadOnlyList<string>? AllowedServiceIds = null,
+    string? KeyId = null);
 
 public sealed record NyxIdChatCatalogServiceConnectSnapshot(
     string ServiceSlug,

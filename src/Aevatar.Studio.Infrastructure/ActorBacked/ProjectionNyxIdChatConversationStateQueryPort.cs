@@ -665,6 +665,14 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
                         NullIfEmpty(request.Params.CustomService.AuthKeyName),
                         NullIfEmpty(request.Params.CustomService.ViaNodeId),
                         NullIfEmpty(request.Params.CustomService.TargetOrgId))),
+            NyxIdChatConversationActionParamsDocument.ParamsOneofCase.KeyCreate =>
+                new NyxIdChatActionParamsSnapshot(
+                    Name: request.Params.KeyCreate.Name,
+                    Platform: request.Params.KeyCreate.Platform,
+                    AllowedServiceIds: request.Params.KeyCreate.AllowedServiceIds.ToArray()),
+            NyxIdChatConversationActionParamsDocument.ParamsOneofCase.KeyRotate =>
+                new NyxIdChatActionParamsSnapshot(
+                    KeyId: request.Params.KeyRotate.KeyId),
             _ => null,
         };
         return parameters is null

@@ -256,6 +256,7 @@ public static class NyxIdApiAccessResponseParser
 
     private static readonly HashSet<string> SecretBearingReadFieldNames = new(StringComparer.Ordinal)
     {
+        "apikey",
         "fullkey",
         "keyhash",
         "credential",
@@ -269,6 +270,7 @@ public static class NyxIdApiAccessResponseParser
         "secrets",
         "clientsecret",
         "password",
+        "token",
         "passphrase",
         "usercode",
         "devicecode",
@@ -283,6 +285,10 @@ public static class NyxIdApiAccessResponseParser
     private static readonly Regex ScopePlanDigestPattern = new(
         @"^sha256:[0-9a-f]{64}$",
         RegexOptions.CultureInvariant);
+
+    private static readonly Regex SecretBearingReadValuePattern = new(
+        @"(?:Bearer\s+\S+|nyxid_(?:ag_)?[A-Za-z0-9_-]{16,})",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     public static NyxIdApiAccessResult<NyxIdUserServices> ParseUserServices(string response) =>
         Parse(response, UserServicesFailurePrefix, ParseUserServicesDocument);
@@ -565,6 +571,10 @@ public static class NyxIdApiAccessResponseParser
             case JsonValueKind.Array:
                 foreach (var item in root.EnumerateArray())
                     RejectSecretBearingRead(item);
+                break;
+            case JsonValueKind.String:
+                if (SecretBearingReadValuePattern.IsMatch(root.GetString() ?? string.Empty))
+                    throw new NyxIdContractException();
                 break;
         }
     }

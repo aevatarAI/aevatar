@@ -788,6 +788,8 @@ message NyxIdChatConversationActionParamsDocument {
   oneof params {
     NyxIdChatConversationCatalogServiceConnectDocument catalog_service = 1;
     NyxIdChatConversationCustomServiceConnectDocument custom_service = 2;
+    NyxIdChatConversationKeyCreateDocument key_create = 3;
+    NyxIdChatConversationKeyRotateDocument key_rotate = 4;
   }
 }
 
@@ -805,6 +807,16 @@ message NyxIdChatConversationCustomServiceConnectDocument {
   string auth_key_name = 4;
   string via_node_id = 5;
   string target_org_id = 6;
+}
+
+message NyxIdChatConversationKeyCreateDocument {
+  string name = 1;
+  string platform = 2;
+  repeated string allowed_service_ids = 3;
+}
+
+message NyxIdChatConversationKeyRotateDocument {
+  string key_id = 1;
 }
 
 message NyxIdChatConversationCurrentStateDocument {

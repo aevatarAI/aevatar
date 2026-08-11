@@ -70,6 +70,53 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
     }
 
     [Fact]
+    public async Task ProjectAsync_ShouldHydrateReloadableKeyActionParameters()
+    {
+        var dispatcher = new RecordingWriteDispatcher();
+        var projector = new NyxIdChatConversationCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-08-12T04:00:00Z")));
+        var state = BuildState();
+        state.ActiveTask.Gate = null;
+        var keyCreate = state.PendingActions.Single();
+        keyCreate.Action = NyxIdAssistantActionKind.KeyCreate;
+        keyCreate.Params = new NyxIdAssistantActionParams
+        {
+            KeyCreate = new NyxIdKeyCreateParams
+            {
+                Name = "agent-alpha",
+                Platform = "codex",
+                AllowedServiceIds = { "service-github", "service-lark" },
+            },
+        };
+        var keyRotate = keyCreate.Clone();
+        keyRotate.ActionRequestId = "action-key-rotate";
+        keyRotate.Action = NyxIdAssistantActionKind.KeyRotate;
+        keyRotate.Params = new NyxIdAssistantActionParams
+        {
+            KeyRotate = new NyxIdKeyRotateParams { KeyId = "key-predecessor" },
+        };
+        state.RecentActions.Add(keyRotate);
+
+        await projector.ProjectAsync(
+            NewContext(),
+            WrapCommitted(
+                new NyxIdChatActionRequestedEvent(),
+                state,
+                version: 19,
+                eventId: "event-alpha-19",
+                stateEventTimestamp: DateTimeOffset.Parse("2026-08-12T04:00:00Z")));
+
+        var document = dispatcher.Upserts.Should().ContainSingle().Subject;
+        var createParams = document.PendingActions.Should().ContainSingle().Which.Request.Params.KeyCreate;
+        createParams.Name.Should().Be("agent-alpha");
+        createParams.Platform.Should().Be("codex");
+        createParams.AllowedServiceIds.Should().Equal("service-github", "service-lark");
+        document.RecentActions.Should().ContainSingle().Which.Request.Params.KeyRotate.KeyId
+            .Should().Be("key-predecessor");
+    }
+
+    [Fact]
     public async Task ProjectAsync_ShouldCopySafeQueryStateAndAuthoritativeVersion()
     {
         var dispatcher = new RecordingWriteDispatcher();

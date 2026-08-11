@@ -29,7 +29,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ChronoAIProject/NyxID
-          ref: d1a042c2ace163ba5dd11c80ea76c99c5f81d879
+          ref: 47f2e0086c6c2117f644f8559d871a01d2a61982
           path: external/nyxid
 
       - name: Checkout pinned support contract

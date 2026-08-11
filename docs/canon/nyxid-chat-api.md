@@ -664,6 +664,12 @@ effect evidence, available actions, pending input, approval presentation,
 latest safe input/approval resolution facts, typed `pendingActions` and bounded
 `recentActions`, control fences, continuation admission, progress sequence,
 actor-authored attention, and actor version. It also exposes
+the exact safe typed parameters needed to resume browser actions after reload:
+`key.create` preserves `name`, `platform`, and the nonempty
+`allowedServiceIds`; `key.rotate` preserves only `keyId`. These values come
+from the committed actor state through the same current-state projection and
+never include full key material, credentials, or an alternate query-time
+reconstruction path. It also exposes
 `latestStepControlResult` and bounded `recentStepControlResults`; each result
 preserves the typed retry/skip kind, request and client identities, exact
 turn/task/step identity, expected and resulting operation generations,

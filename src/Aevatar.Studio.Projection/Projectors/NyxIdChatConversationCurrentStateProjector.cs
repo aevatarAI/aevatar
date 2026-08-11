@@ -765,6 +765,24 @@ public sealed class NyxIdChatConversationCurrentStateProjector
                         TargetOrgId = action.Params.CustomServiceConnect.TargetOrgId,
                     },
                 },
+            NyxIdAssistantActionParams.ParamsOneofCase.KeyCreate =>
+                new NyxIdChatConversationActionParamsDocument
+                {
+                    KeyCreate = new NyxIdChatConversationKeyCreateDocument
+                    {
+                        Name = action.Params.KeyCreate.Name,
+                        Platform = action.Params.KeyCreate.Platform,
+                        AllowedServiceIds = { action.Params.KeyCreate.AllowedServiceIds },
+                    },
+                },
+            NyxIdAssistantActionParams.ParamsOneofCase.KeyRotate =>
+                new NyxIdChatConversationActionParamsDocument
+                {
+                    KeyRotate = new NyxIdChatConversationKeyRotateDocument
+                    {
+                        KeyId = action.Params.KeyRotate.KeyId,
+                    },
+                },
             _ => null,
         };
         return parameters is null

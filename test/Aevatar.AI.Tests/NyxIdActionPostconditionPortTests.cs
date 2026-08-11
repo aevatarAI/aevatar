@@ -391,6 +391,30 @@ public sealed class NyxIdActionPostconditionPortTests
         result.Resource.Key.KeyId.Should().Be("key-beta");
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public async Task VerifyAsync_KeyRotateNonPositiveAuthorityVersion_ShouldFailClosed(
+        long stateVersion)
+    {
+        var evidence = new StubActionEvidenceReadPort
+        {
+            AgentApiKey = AgentKey("key-beta") with
+            {
+                VersionEvidence = new NyxIdApiKeyVersionEvidence(
+                    "key-alpha",
+                    stateVersion,
+                    Now.AddMinutes(-1)),
+            },
+        };
+        var port = CreatePort(new StubCatalogQueryPort(ReadySnapshot()), evidence);
+
+        var result = await port.VerifyAsync(KeyRotateInput(), ReadContext());
+
+        result.Verified.Should().BeFalse();
+        result.FailureCode.Should().Be(NyxIdActionPostconditionPort.LineageUnavailableCode);
+    }
+
     [Fact]
     public async Task VerifyAsync_KeyRotateLineageBeforeRequest_ShouldBeStale()
     {

@@ -156,6 +156,50 @@ public sealed class ProjectionNyxIdChatConversationStateQueryPortTests
     }
 
     [Fact]
+    public async Task GetAsync_ShouldExposeFlatReloadableKeyActionParameters()
+    {
+        var document = BuildDocument(stateVersion: 8);
+        var keyCreate = document.PendingActions.Single();
+        keyCreate.Action = "key.create";
+        keyCreate.Request.Action = "key.create";
+        keyCreate.Request.Params = new NyxIdChatConversationActionParamsDocument
+        {
+            KeyCreate = new NyxIdChatConversationKeyCreateDocument
+            {
+                Name = "agent-alpha",
+                Platform = "codex",
+                AllowedServiceIds = { "service-github", "service-lark" },
+            },
+        };
+        var keyRotate = document.RecentActions.Single();
+        keyRotate.Action = "key.rotate";
+        keyRotate.Request.Action = "key.rotate";
+        keyRotate.Request.Params = new NyxIdChatConversationActionParamsDocument
+        {
+            KeyRotate = new NyxIdChatConversationKeyRotateDocument
+            {
+                KeyId = "key-predecessor",
+            },
+        };
+        var port = new ProjectionNyxIdChatConversationStateQueryPort(
+            new RecordingReader { Document = document });
+
+        var result = await port.GetAsync(new NyxIdChatConversationStateQuery(
+            "scope-alpha",
+            "conversation-alpha"));
+
+        var createParams = result.Snapshot!.PendingActions.Single().Request!.Params;
+        createParams.Name.Should().Be("agent-alpha");
+        createParams.Platform.Should().Be("codex");
+        createParams.AllowedServiceIds.Should().Equal("service-github", "service-lark");
+        createParams.KeyId.Should().BeNull();
+        var rotateParams = result.Snapshot.RecentActions!.Single().Request!.Params;
+        rotateParams.KeyId.Should().Be("key-predecessor");
+        rotateParams.Name.Should().BeNull();
+        rotateParams.AllowedServiceIds.Should().BeNull();
+    }
+
+    [Fact]
     public async Task GetAsync_ShouldPreserveAvailableActionsMessagePresence()
     {
         var document = BuildDocument(stateVersion: 8);
