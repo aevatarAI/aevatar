@@ -8,7 +8,8 @@ public sealed partial class ScopeWorkflowCatalogueSourceDocument
     : IProjectionReadModel<ScopeWorkflowCatalogueSourceDocument>
 {
     public const string DraftSourceKind = "draft";
-    public const string CommittedSourceKind = "committed";
+    public const string ServiceSourceKind = "service";
+    public const string CommittedSourceKind = ServiceSourceKind;
 
     string IProjectionReadModel.ActorId => ActorId;
 

@@ -1,3 +1,4 @@
+using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
@@ -35,9 +36,11 @@ using Aevatar.GAgentService.Infrastructure.Schedules;
 using Aevatar.GAgentService.Infrastructure.Schedules.Authorization;
 using Aevatar.GAgentService.Infrastructure.Credentials;
 using Aevatar.Workflow.Abstractions.Credentials;
+using Aevatar.GAgentService.Hosting.Backfill;
 using Aevatar.GAgentService.Hosting.Demo;
 using Aevatar.GAgentService.Hosting.Responses;
 using Aevatar.GAgentService.Hosting.Endpoints.Schedules;
+using Aevatar.GAgentService.Projection.Contexts;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Hosting.DependencyInjection;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
@@ -146,6 +149,10 @@ public static class ServiceCollectionExtensions
         services.AddOptions<LlmRunExecutionWorkerOptions>()
             .Bind(configuration.GetSection(LlmRunExecutionWorkerOptions.SectionName));
         services.TryAddSingleton<ILlmRunExecutionQueue, LlmRunExecutionQueue>();
+        services.AddProjectionArtifactMaterializer<
+            ServiceDeploymentCatalogProjectionContext,
+            ScopeWorkflowCatalogueServiceSourceProjector>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, ScopeWorkflowCatalogueBackfillHostedService>());
         services.TryAddSingleton<LlmRunExecutionScheduler>();
         services.TryAddSingleton<ILlmRunExecutionScheduler>(sp => sp.GetRequiredService<LlmRunExecutionScheduler>());
         services.AddHostedService<LlmRunExecutionWorker>();

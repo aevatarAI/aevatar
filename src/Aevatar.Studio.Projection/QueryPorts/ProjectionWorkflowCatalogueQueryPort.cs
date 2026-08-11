@@ -12,7 +12,7 @@ public sealed class ProjectionWorkflowCatalogueQueryPort : IWorkflowCatalogueQue
     private const int DefaultTake = 50;
     private const int MaxTake = 100;
     private const int MaxQueryLength = 128;
-    private const int SourceReadTake = 10_000;
+    private const int RowReadTake = 10_000;
 
     private static readonly ScopeWorkflowCatalogueSearchContract SearchContract = new(
         ["name", "description", "workflowId"],
@@ -22,10 +22,10 @@ public sealed class ProjectionWorkflowCatalogueQueryPort : IWorkflowCatalogueQue
         "An omitted, null, empty, or whitespace-only query is equivalent to no search filter.",
         "workflowId participates only by exact match or ordinal case-insensitive prefix match.");
 
-    private readonly IProjectionDocumentReader<ScopeWorkflowCatalogueSourceDocument, string> _documentReader;
+    private readonly IProjectionDocumentReader<ScopeWorkflowCatalogueRowDocument, string> _documentReader;
 
     public ProjectionWorkflowCatalogueQueryPort(
-        IProjectionDocumentReader<ScopeWorkflowCatalogueSourceDocument, string> documentReader)
+        IProjectionDocumentReader<ScopeWorkflowCatalogueRowDocument, string> documentReader)
     {
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
     }
@@ -41,14 +41,12 @@ public sealed class ProjectionWorkflowCatalogueQueryPort : IWorkflowCatalogueQue
         var offset = ParseCursor(query.Cursor);
         var take = NormalizeTake(query.Take);
 
-        var sourceDocuments = await QuerySourceDocumentsAsync(scopeId, ct);
-        DateTimeOffset? watermark = sourceDocuments.Count == 0
+        var rowDocuments = await QueryRowDocumentsAsync(scopeId, ct);
+        DateTimeOffset? watermark = rowDocuments.Count == 0
             ? null
-            : sourceDocuments.Max(static document => document.SourceUpdatedAtUtc);
-
-        var rows = sourceDocuments
-            .GroupBy(static document => document.WorkflowId, StringComparer.Ordinal)
-            .Select(group => BuildRow(scopeId, group.Key, group))
+            : rowDocuments.Max(static document => document.SourceWatermarkUtc);
+        var rows = rowDocuments
+            .Select(BuildRow)
             .Where(row => query.View != ScopeWorkflowCatalogueView.Drafts || row.HasDraftSource)
             .Where(row => Matches(row, normalizedSearch))
             .OrderByDescending(static row => row.UpdatedAtUtc)
@@ -64,28 +62,28 @@ public sealed class ProjectionWorkflowCatalogueQueryPort : IWorkflowCatalogueQue
             nextPageToken,
             new ScopeWorkflowCatalogueFreshness(
                 watermark,
-                "Refresh watermark is the maximum authoritative source UpdatedAt materialized into the workflow catalogue read model; it is not a synthetic local StateVersion."),
+                "Refresh watermark is the maximum authoritative source UpdatedAt materialized into the workflow catalogue row read model; it is not a synthetic local StateVersion."),
             SearchContract);
     }
 
-    private async Task<IReadOnlyList<ScopeWorkflowCatalogueSourceDocument>> QuerySourceDocumentsAsync(
+    private async Task<IReadOnlyList<ScopeWorkflowCatalogueRowDocument>> QueryRowDocumentsAsync(
         string scopeId,
         CancellationToken ct)
     {
-        var documents = new List<ScopeWorkflowCatalogueSourceDocument>();
+        var documents = new List<ScopeWorkflowCatalogueRowDocument>();
         string? cursor = null;
         do
         {
             var result = await _documentReader.QueryAsync(
                 new ProjectionDocumentQuery
                 {
-                    Take = SourceReadTake,
+                    Take = RowReadTake,
                     Cursor = cursor,
                     Filters =
                     [
                         new ProjectionDocumentFilter
                         {
-                            FieldPath = nameof(ScopeWorkflowCatalogueSourceDocument.ScopeId),
+                            FieldPath = nameof(ScopeWorkflowCatalogueRowDocument.ScopeId),
                             Operator = ProjectionDocumentFilterOperator.Eq,
                             Value = ProjectionDocumentValue.FromString(scopeId),
                         },
@@ -100,56 +98,42 @@ public sealed class ProjectionWorkflowCatalogueQueryPort : IWorkflowCatalogueQue
         return documents;
     }
 
-    private static ScopeWorkflowCatalogueRow BuildRow(
-        string scopeId,
-        string workflowId,
-        IEnumerable<ScopeWorkflowCatalogueSourceDocument> sourceDocuments)
+    private static ScopeWorkflowCatalogueRow BuildRow(ScopeWorkflowCatalogueRowDocument document)
     {
-        var sources = sourceDocuments.ToArray();
-        var draft = sources
-            .Where(static source => IsDraftSource(source.SourceKind))
-            .OrderByDescending(static source => source.SourceUpdatedAtUtc)
-            .FirstOrDefault();
-        var committed = sources
-            .Where(static source => IsCommittedSource(source.SourceKind))
-            .OrderByDescending(static source => source.SourceUpdatedAtUtc)
-            .FirstOrDefault();
-
-        var updatedAtUtc = ResolveUpdatedAt(draft, committed);
+        var updatedAtUtc = document.RowUpdatedAtUtc;
         return new ScopeWorkflowCatalogueRow(
-            scopeId,
-            workflowId,
-            ResolveName(workflowId, draft, committed),
-            draft?.Description ?? string.Empty,
-            draft != null,
-            committed != null,
+            document.ScopeId,
+            document.WorkflowId,
+            ResolveName(document),
+            document.Description,
+            document.HasDraftSource,
+            document.HasPublishedSource,
             updatedAtUtc,
-            ResolveUpdatedAtSource(draft, committed),
-            BuildCapabilities(draft != null, committed != null),
-            updatedAtUtc,
-            committed == null
-                ? null
-                : new ScopeWorkflowCatalogueCommittedFacts(
-                    committed.ServiceKey,
-                    committed.WorkflowName,
-                    committed.CommittedActorId,
-                    committed.ActiveRevisionId,
-                    committed.DeploymentId,
-                    committed.DeploymentStatus),
-            TeamId: ResolveOptional(committed?.TeamId),
-            MemberId: ResolveOptional(committed?.MemberId),
-            PublishedServiceId: ResolveOptional(committed?.PublishedServiceId),
-            LastBoundRevisionId: ResolveOptional(committed?.LastBoundRevisionId));
+            document.UpdatedAtSource,
+            BuildCapabilities(document.HasDraftSource, document.HasPublishedSource),
+            document.SourceWatermarkUtc,
+            document.HasPublishedSource
+                ? new ScopeWorkflowCatalogueCommittedFacts(
+                    document.ServiceKey,
+                    document.WorkflowName,
+                    document.CommittedActorId,
+                    document.ActiveRevisionId,
+                    document.DeploymentId,
+                    document.DeploymentStatus)
+                : null,
+            PublishedServiceId: ResolveOptional(document.PublishedServiceId));
     }
 
-    private static ScopeWorkflowCatalogueRowCapabilities BuildCapabilities(bool hasDraftSource, bool hasCommittedSource) =>
+    private static ScopeWorkflowCatalogueRowCapabilities BuildCapabilities(
+        bool hasDraftSource,
+        bool hasPublishedSource) =>
         new(
             Open: new ScopeWorkflowCatalogueActionCapability(
-                hasDraftSource || hasCommittedSource,
-                hasDraftSource || hasCommittedSource ? null : "workflow_source_missing"),
+                hasDraftSource || hasPublishedSource,
+                hasDraftSource || hasPublishedSource ? null : "workflow_source_missing"),
             Activity: new ScopeWorkflowCatalogueActionCapability(
-                hasCommittedSource,
-                hasCommittedSource ? null : "committed_source_missing"),
+                hasPublishedSource,
+                hasPublishedSource ? null : "published_service_source_missing"),
             Rename: new ScopeWorkflowCatalogueActionCapability(
                 hasDraftSource,
                 hasDraftSource ? null : "draft_source_missing"),
@@ -157,47 +141,14 @@ public sealed class ProjectionWorkflowCatalogueQueryPort : IWorkflowCatalogueQue
                 hasDraftSource,
                 hasDraftSource ? null : "draft_source_missing"));
 
-    private static DateTimeOffset ResolveUpdatedAt(
-        ScopeWorkflowCatalogueSourceDocument? draft,
-        ScopeWorkflowCatalogueSourceDocument? committed)
+    private static string ResolveName(ScopeWorkflowCatalogueRowDocument document)
     {
-        if (draft == null)
-            return committed!.SourceUpdatedAtUtc;
-        if (committed == null)
-            return draft.SourceUpdatedAtUtc;
+        if (!string.IsNullOrWhiteSpace(document.Name))
+            return document.Name.Trim();
+        if (!string.IsNullOrWhiteSpace(document.WorkflowName))
+            return document.WorkflowName.Trim();
 
-        return draft.SourceUpdatedAtUtc >= committed.SourceUpdatedAtUtc
-            ? draft.SourceUpdatedAtUtc
-            : committed.SourceUpdatedAtUtc;
-    }
-
-    private static string ResolveUpdatedAtSource(
-        ScopeWorkflowCatalogueSourceDocument? draft,
-        ScopeWorkflowCatalogueSourceDocument? committed)
-    {
-        if (draft == null)
-            return ScopeWorkflowCatalogueSourceDocument.CommittedSourceKind;
-        if (committed == null)
-            return ScopeWorkflowCatalogueSourceDocument.DraftSourceKind;
-
-        return draft.SourceUpdatedAtUtc >= committed.SourceUpdatedAtUtc
-            ? ScopeWorkflowCatalogueSourceDocument.DraftSourceKind
-            : ScopeWorkflowCatalogueSourceDocument.CommittedSourceKind;
-    }
-
-    private static string ResolveName(
-        string workflowId,
-        ScopeWorkflowCatalogueSourceDocument? draft,
-        ScopeWorkflowCatalogueSourceDocument? committed)
-    {
-        if (!string.IsNullOrWhiteSpace(draft?.Name))
-            return draft.Name.Trim();
-        if (!string.IsNullOrWhiteSpace(committed?.Name))
-            return committed.Name.Trim();
-        if (!string.IsNullOrWhiteSpace(committed?.WorkflowName))
-            return committed.WorkflowName.Trim();
-
-        return workflowId;
+        return document.WorkflowId;
     }
 
     private static bool Matches(ScopeWorkflowCatalogueRow row, string normalizedSearch)
@@ -258,12 +209,6 @@ public sealed class ProjectionWorkflowCatalogueQueryPort : IWorkflowCatalogueQue
 
         return offset;
     }
-
-    private static bool IsDraftSource(string sourceKind) =>
-        string.Equals(sourceKind, ScopeWorkflowCatalogueSourceDocument.DraftSourceKind, StringComparison.Ordinal);
-
-    private static bool IsCommittedSource(string sourceKind) =>
-        string.Equals(sourceKind, ScopeWorkflowCatalogueSourceDocument.CommittedSourceKind, StringComparison.Ordinal);
 
     private static string? ResolveOptional(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

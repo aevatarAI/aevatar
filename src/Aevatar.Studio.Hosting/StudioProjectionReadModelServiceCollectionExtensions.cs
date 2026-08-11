@@ -60,6 +60,10 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
                 services,
                 configuration,
                 static document => document.Id);
+            RegisterElasticsearch<ScopeWorkflowCatalogueRowDocument>(
+                services,
+                configuration,
+                static document => document.Id);
             RegisterElasticsearch<RoleCatalogCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<ConnectorCatalogCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<ChatConversationCurrentStateDocument>(services, configuration);
@@ -94,6 +98,10 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
                 static document => document.RootActorId,
                 static document => document.UpdatedAt);
             RegisterInMemory<ScopeWorkflowCatalogueSourceDocument>(
+                services,
+                static document => document.Id,
+                static document => document.UpdatedAt);
+            RegisterInMemory<ScopeWorkflowCatalogueRowDocument>(
                 services,
                 static document => document.Id,
                 static document => document.UpdatedAt);
@@ -180,6 +188,7 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
     {
         return HasDocumentReaderForProvider<WorkflowExecutionBoardDocument>(services, providerKind)
                && HasDocumentReaderForProvider<ScopeWorkflowCatalogueSourceDocument>(services, providerKind)
+               && HasDocumentReaderForProvider<ScopeWorkflowCatalogueRowDocument>(services, providerKind)
                && HasDocumentReaderForProvider<RoleCatalogCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<ConnectorCatalogCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<ChatConversationCurrentStateDocument>(services, providerKind)

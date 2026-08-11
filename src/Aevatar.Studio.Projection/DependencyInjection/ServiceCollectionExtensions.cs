@@ -244,7 +244,11 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<
             IProjectionDocumentMetadataProvider<StudioWorkspaceCurrentStateDocument>,
             StudioWorkspaceCurrentStateDocumentMetadataProvider>();
+        services.TryAddSingleton<
+            IProjectionDocumentMetadataProvider<ScopeWorkflowCatalogueRowDocument>,
+            ScopeWorkflowCatalogueRowDocumentMetadataProvider>();
 
+        services.TryAddSingleton<ScopeWorkflowCatalogueRowMaterializer>();
         services.TryAddSingleton<ProjectionActivationPlanDispatcher>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             ICommittedStatePublicationHook,

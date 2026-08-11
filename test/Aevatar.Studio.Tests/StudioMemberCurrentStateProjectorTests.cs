@@ -27,9 +27,8 @@ public sealed class StudioMemberCurrentStateProjectorTests
     public async Task ProjectAsync_ShouldUpsertDocument_WhenCommittedStateEventArrives()
     {
         var dispatcher = new RecordingWriteDispatcher<StudioMemberCurrentStateDocument>();
-        var catalogueDispatcher = new RecordingWriteDispatcher<ScopeWorkflowCatalogueSourceDocument>();
         var clock = new FixedProjectionClock(DateTimeOffset.Parse("2026-04-27T00:00:00Z"));
-        var projector = CreateProjector(dispatcher, clock, catalogueDispatcher);
+        var projector = CreateProjector(dispatcher, clock);
 
         var state = new StudioMemberState
         {
@@ -141,16 +140,6 @@ public sealed class StudioMemberCurrentStateProjectorTests
             .Be("workflow_authorization_evidence_not_found");
         written.ScheduleProvisioningFailureMessage.Should().Be("projection pending");
         written.ScheduleProvisioningUpdatedAt.Should().NotBeNull();
-
-        var catalogueSource = catalogueDispatcher.Upserts.Should().ContainSingle().Subject;
-        catalogueSource.SourceKind.Should().Be(ScopeWorkflowCatalogueSourceDocument.CommittedSourceKind);
-        catalogueSource.ScopeId.Should().Be("scope-1");
-        catalogueSource.WorkflowId.Should().Be("wf-1");
-        catalogueSource.MemberId.Should().Be("m-1");
-        catalogueSource.PublishedServiceId.Should().Be("member-m-1");
-        catalogueSource.CommittedActorId.Should().Be("scope-workflow:scope-1:m-1");
-        catalogueSource.WorkflowId.Should().NotBe(catalogueSource.MemberId);
-        catalogueSource.WorkflowId.Should().NotBe(catalogueSource.PublishedServiceId);
     }
 
     [Fact]
@@ -318,43 +307,19 @@ public sealed class StudioMemberCurrentStateProjectorTests
         FluentActions
             .Invoking(() => new StudioMemberCurrentStateProjector(
                 null!,
-                new RecordingWriteDispatcher<ScopeWorkflowCatalogueSourceDocument>(),
-                new StubCatalogueSourceReader(),
                 clock))
             .Should().Throw<ArgumentNullException>();
         FluentActions
             .Invoking(() => new StudioMemberCurrentStateProjector(
                 dispatcher,
-                null!,
-                new StubCatalogueSourceReader(),
-                clock))
-            .Should().Throw<ArgumentNullException>();
-        FluentActions
-            .Invoking(() => new StudioMemberCurrentStateProjector(
-                dispatcher,
-                new RecordingWriteDispatcher<ScopeWorkflowCatalogueSourceDocument>(),
-                null!,
-                clock))
-            .Should().Throw<ArgumentNullException>();
-        FluentActions
-            .Invoking(() => new StudioMemberCurrentStateProjector(
-                dispatcher,
-                new RecordingWriteDispatcher<ScopeWorkflowCatalogueSourceDocument>(),
-                new StubCatalogueSourceReader(),
                 null!))
             .Should().Throw<ArgumentNullException>();
     }
 
     private static StudioMemberCurrentStateProjector CreateProjector(
         RecordingWriteDispatcher<StudioMemberCurrentStateDocument> dispatcher,
-        IProjectionClock clock,
-        RecordingWriteDispatcher<ScopeWorkflowCatalogueSourceDocument>? catalogueDispatcher = null,
-        StubCatalogueSourceReader? catalogueReader = null) =>
-        new(
-            dispatcher,
-            catalogueDispatcher ?? new RecordingWriteDispatcher<ScopeWorkflowCatalogueSourceDocument>(),
-            catalogueReader ?? new StubCatalogueSourceReader(),
-            clock);
+        IProjectionClock clock) =>
+        new(dispatcher, clock);
 
     private static StudioMaterializationContext NewContext() => new()
     {
@@ -419,23 +384,6 @@ public sealed class StudioMemberCurrentStateProjectorTests
             DeleteMarkers.Add(marker);
             return Task.FromResult(ProjectionWriteResult.Applied());
         }
-    }
-
-    private sealed class StubCatalogueSourceReader(IReadOnlyList<ScopeWorkflowCatalogueSourceDocument>? documents = null)
-        : IProjectionDocumentReader<ScopeWorkflowCatalogueSourceDocument, string>
-    {
-        private readonly IReadOnlyList<ScopeWorkflowCatalogueSourceDocument> _documents = documents ?? [];
-
-        public Task<ScopeWorkflowCatalogueSourceDocument?> GetAsync(string key, CancellationToken ct = default) =>
-            Task.FromResult(_documents.FirstOrDefault(document => string.Equals(document.Id, key, StringComparison.Ordinal)));
-
-        public Task<ProjectionDocumentQueryResult<ScopeWorkflowCatalogueSourceDocument>> QueryAsync(
-            ProjectionDocumentQuery query,
-            CancellationToken ct = default) =>
-            Task.FromResult(new ProjectionDocumentQueryResult<ScopeWorkflowCatalogueSourceDocument>
-            {
-                Items = _documents,
-            });
     }
 
     private sealed class FixedProjectionClock(DateTimeOffset utcNow) : IProjectionClock

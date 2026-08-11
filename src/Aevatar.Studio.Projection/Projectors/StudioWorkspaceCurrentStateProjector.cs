@@ -25,20 +25,20 @@ public sealed class StudioWorkspaceCurrentStateProjector
 
     private readonly IProjectionWriteDispatcher<StudioWorkspaceCurrentStateDocument> _writeDispatcher;
     private readonly IProjectionWriteDispatcher<ScopeWorkflowCatalogueSourceDocument> _catalogueWriteDispatcher;
-    private readonly IProjectionDocumentReader<ScopeWorkflowCatalogueSourceDocument, string> _catalogueDocumentReader;
+    private readonly ScopeWorkflowCatalogueRowMaterializer _catalogueRowMaterializer;
     private readonly IWorkflowYamlDocumentService _yamlDocumentService;
     private readonly IProjectionClock _clock;
 
     public StudioWorkspaceCurrentStateProjector(
         IProjectionWriteDispatcher<StudioWorkspaceCurrentStateDocument> writeDispatcher,
         IProjectionWriteDispatcher<ScopeWorkflowCatalogueSourceDocument> catalogueWriteDispatcher,
-        IProjectionDocumentReader<ScopeWorkflowCatalogueSourceDocument, string> catalogueDocumentReader,
+        ScopeWorkflowCatalogueRowMaterializer catalogueRowMaterializer,
         IWorkflowYamlDocumentService yamlDocumentService,
         IProjectionClock clock)
     {
         _writeDispatcher = writeDispatcher ?? throw new ArgumentNullException(nameof(writeDispatcher));
         _catalogueWriteDispatcher = catalogueWriteDispatcher ?? throw new ArgumentNullException(nameof(catalogueWriteDispatcher));
-        _catalogueDocumentReader = catalogueDocumentReader ?? throw new ArgumentNullException(nameof(catalogueDocumentReader));
+        _catalogueRowMaterializer = catalogueRowMaterializer ?? throw new ArgumentNullException(nameof(catalogueRowMaterializer));
         _yamlDocumentService = yamlDocumentService ?? throw new ArgumentNullException(nameof(yamlDocumentService));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
     }
@@ -75,73 +75,61 @@ public sealed class StudioWorkspaceCurrentStateProjector
         document.DraftSummaries.AddRange(state.Drafts.Values.Select(ToDraftSummary));
 
         await _writeDispatcher.UpsertAsync(document, ct);
-        await MaterializeCatalogueDraftSourcesAsync(context, state, stateEvent.Version, stateEvent.EventId ?? string.Empty, updatedAt, ct);
+        await MaterializeCatalogueDraftSourceAsync(context, state, stateEvent.Version, stateEvent.EventId ?? string.Empty, updatedAt, stateEvent.EventData, ct);
     }
 
-    private async Task MaterializeCatalogueDraftSourcesAsync(
+    private async Task MaterializeCatalogueDraftSourceAsync(
         StudioMaterializationContext context,
         StudioWorkspaceState state,
         long stateVersion,
         string eventId,
         DateTimeOffset updatedAt,
+        Any eventData,
         CancellationToken ct)
     {
-        var currentWorkflowIds = state.Drafts.Values
-            .Select(static draft => draft.WorkflowId)
-            .Where(static workflowId => !string.IsNullOrWhiteSpace(workflowId))
-            .ToHashSet(StringComparer.Ordinal);
-
-        foreach (var draft in state.Drafts.Values)
+        if (eventData.Is(StudioWorkflowDraftSaved.Descriptor))
         {
-            if (string.IsNullOrWhiteSpace(draft.WorkflowId))
-                continue;
-
-            await _catalogueWriteDispatcher.UpsertAsync(
-                ToCatalogueDraftSource(context.RootActorId, state.ScopeId, draft, stateVersion, eventId, updatedAt),
-                ct);
-        }
-
-        var existingDraftSources = await _catalogueDocumentReader.QueryAsync(
-            new ProjectionDocumentQuery
+            var saved = eventData.Unpack<StudioWorkflowDraftSaved>();
+            if (saved.Draft != null && !string.IsNullOrWhiteSpace(saved.Draft.WorkflowId))
             {
-                Take = 10_000,
-                Filters =
-                [
-                    new ProjectionDocumentFilter
-                    {
-                        FieldPath = nameof(ScopeWorkflowCatalogueSourceDocument.ScopeId),
-                        Operator = ProjectionDocumentFilterOperator.Eq,
-                        Value = ProjectionDocumentValue.FromString(state.ScopeId),
-                    },
-                    new ProjectionDocumentFilter
-                    {
-                        FieldPath = nameof(ScopeWorkflowCatalogueSourceDocument.SourceKind),
-                        Operator = ProjectionDocumentFilterOperator.Eq,
-                        Value = ProjectionDocumentValue.FromString(ScopeWorkflowCatalogueSourceDocument.DraftSourceKind),
-                    },
-                    new ProjectionDocumentFilter
-                    {
-                        FieldPath = nameof(ScopeWorkflowCatalogueSourceDocument.ActorId),
-                        Operator = ProjectionDocumentFilterOperator.Eq,
-                        Value = ProjectionDocumentValue.FromString(context.RootActorId),
-                    },
-                ],
-            },
-            ct);
-
-        foreach (var existing in existingDraftSources.Items)
-        {
-            if (currentWorkflowIds.Contains(existing.WorkflowId))
-                continue;
-
-            await _catalogueWriteDispatcher.DeleteAsync(
-                new ProjectionDocumentDeleteMarker(
-                    existing.Id,
+                await _catalogueWriteDispatcher.UpsertAsync(
+                    ToCatalogueDraftSource(context.RootActorId, state.ScopeId, saved.Draft, stateVersion, eventId, updatedAt),
+                    ct);
+                await _catalogueRowMaterializer.RefreshAsync(
+                    state.ScopeId,
+                    saved.Draft.WorkflowId,
                     context.RootActorId,
                     stateVersion,
                     eventId,
-                    updatedAt),
-                ct);
+                    updatedAt,
+                    ct);
+            }
+
+            return;
+        }
+
+        if (eventData.Is(StudioWorkflowDraftDeleted.Descriptor))
+        {
+            var deleted = eventData.Unpack<StudioWorkflowDraftDeleted>();
+            if (!string.IsNullOrWhiteSpace(deleted.WorkflowId))
+            {
+                await _catalogueWriteDispatcher.DeleteAsync(
+                    new ProjectionDocumentDeleteMarker(
+                        ScopeWorkflowCatalogueRowMaterializer.BuildDraftSourceDocumentId(state.ScopeId, deleted.WorkflowId),
+                        context.RootActorId,
+                        stateVersion,
+                        eventId,
+                        updatedAt),
+                    ct);
+                await _catalogueRowMaterializer.RefreshAsync(
+                    state.ScopeId,
+                    deleted.WorkflowId,
+                    context.RootActorId,
+                    stateVersion,
+                    eventId,
+                    updatedAt,
+                    ct);
+            }
         }
     }
 
@@ -160,7 +148,7 @@ public sealed class StudioWorkspaceCurrentStateProjector
 
         return new ScopeWorkflowCatalogueSourceDocument
         {
-            Id = BuildCatalogueSourceDocumentId(scopeId, draft.WorkflowId, ScopeWorkflowCatalogueSourceDocument.DraftSourceKind),
+            Id = ScopeWorkflowCatalogueRowMaterializer.BuildDraftSourceDocumentId(scopeId, draft.WorkflowId),
             ActorId = actorId,
             StateVersion = stateVersion,
             LastEventId = eventId,
@@ -173,9 +161,6 @@ public sealed class StudioWorkspaceCurrentStateProjector
             SourceUpdatedAtUtc = draft.UpdatedAtUtc?.ToDateTimeOffset() ?? projectedAt,
         };
     }
-
-    private static string BuildCatalogueSourceDocumentId(string scopeId, string workflowId, string sourceKind) =>
-        $"{scopeId}:{workflowId}:{sourceKind}";
 
     private static StudioWorkspaceDraftSummary ToDraftSummary(StudioWorkflowDraft draft) => new()
     {

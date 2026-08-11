@@ -3,11 +3,11 @@ using Aevatar.Studio.Projection.ReadModels;
 
 namespace Aevatar.Studio.Projection.Metadata;
 
-public sealed class ScopeWorkflowCatalogueSourceDocumentMetadataProvider
-    : IProjectionDocumentMetadataProvider<ScopeWorkflowCatalogueSourceDocument>
+public sealed class ScopeWorkflowCatalogueRowDocumentMetadataProvider
+    : IProjectionDocumentMetadataProvider<ScopeWorkflowCatalogueRowDocument>
 {
     public DocumentIndexMetadata Metadata { get; } = new(
-        IndexName: "scope-workflow-catalogue-sources",
+        IndexName: "scope-workflow-catalogue-rows",
         Mappings: new Dictionary<string, object?>(StringComparer.Ordinal)
         {
             ["dynamic"] = false,
@@ -20,18 +20,19 @@ public sealed class ScopeWorkflowCatalogueSourceDocumentMetadataProvider
                 ["updated_at"] = Date(),
                 ["scope_id"] = Keyword(),
                 ["workflow_id"] = Keyword(),
-                ["source_kind"] = Keyword(),
                 ["name"] = Keyword(),
                 ["description"] = Keyword(index: false),
-                ["source_updated_at_utc_value"] = Date(),
+                ["has_draft_source"] = Boolean(),
+                ["has_published_source"] = Boolean(),
+                ["row_updated_at_utc_value"] = Date(),
+                ["updated_at_source"] = Keyword(),
+                ["source_watermark_utc_value"] = Date(),
                 ["service_key"] = Keyword(),
                 ["workflow_name"] = Keyword(),
                 ["committed_actor_id"] = Keyword(),
                 ["active_revision_id"] = Keyword(),
                 ["deployment_id"] = Keyword(),
                 ["deployment_status"] = Keyword(),
-                ["service_app_id"] = Keyword(),
-                ["service_namespace"] = Keyword(),
                 ["published_service_id"] = Keyword(),
             },
         },
@@ -52,5 +53,10 @@ public sealed class ScopeWorkflowCatalogueSourceDocumentMetadataProvider
     private static Dictionary<string, object?> Long() => new(StringComparer.Ordinal)
     {
         ["type"] = "long",
+    };
+
+    private static Dictionary<string, object?> Boolean() => new(StringComparer.Ordinal)
+    {
+        ["type"] = "boolean",
     };
 }

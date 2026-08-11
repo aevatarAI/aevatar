@@ -32,13 +32,12 @@ public sealed class AppScopedWorkflowCatalogueServiceTests
     }
 
     [Fact]
-    public async Task QueryAsync_ShouldMergeDraftOnlyCommittedOnlyAndOverlappingRowsByWorkflowId()
+    public async Task QueryAsync_ShouldReadAggregateRowsWithoutJoiningSources()
     {
         var port = CreatePort(
-            Draft("wf-alpha", "Draft Alpha", "draft alpha description", DateTimeOffset.Parse("2026-08-01T00:00:00Z")),
-            Draft("wf-overlap", "Draft Overlap", "draft overlap description", DateTimeOffset.Parse("2026-08-03T00:00:00Z")),
-            Committed("wf-beta", "Committed Beta", "m-beta", "svc-beta", DateTimeOffset.Parse("2026-08-02T00:00:00Z")),
-            Committed("wf-overlap", "Committed Overlap", "m-overlap", "svc-overlap", DateTimeOffset.Parse("2026-08-04T00:00:00Z")));
+            Row("wf-alpha", "Draft Alpha", "draft alpha description", true, false, DateTimeOffset.Parse("2026-08-01T00:00:00Z")),
+            Row("wf-beta", "Published Beta", "", false, true, DateTimeOffset.Parse("2026-08-02T00:00:00Z"), "published-service-beta"),
+            Row("wf-overlap", "Draft Overlap", "draft overlap description", true, true, DateTimeOffset.Parse("2026-08-03T00:00:00Z"), "published-service-overlap"));
 
         var response = await port.QueryAsync(new ScopeWorkflowCatalogueQuery(ScopeId));
 
@@ -48,27 +47,25 @@ public sealed class AppScopedWorkflowCatalogueServiceTests
         overlap.HasCommittedSource.Should().BeTrue();
         overlap.Name.Should().Be("Draft Overlap");
         overlap.Description.Should().Be("draft overlap description");
-        overlap.UpdatedAtSource.Should().Be("committed");
+        overlap.UpdatedAtSource.Should().Be(ScopeWorkflowCatalogueSourceDocument.ServiceSourceKind);
         overlap.Capabilities.Open.Available.Should().BeTrue();
         overlap.Capabilities.Activity.Available.Should().BeTrue();
         overlap.Capabilities.Rename.Available.Should().BeTrue();
         overlap.Capabilities.Delete.Available.Should().BeTrue();
         overlap.Committed.Should().NotBeNull();
-        overlap.Committed!.ActorId.Should().Be("actor-svc-overlap");
-        overlap.Committed.DeploymentId.Should().Be("dep-svc-overlap");
-        overlap.MemberId.Should().Be("m-overlap");
-        overlap.PublishedServiceId.Should().Be("svc-overlap");
-        response.Freshness.RefreshWatermarkUtc.Should().Be(DateTimeOffset.Parse("2026-08-04T00:00:00Z"));
+        overlap.Committed!.ActorId.Should().Be("actor-wf-overlap");
+        overlap.Committed.DeploymentId.Should().Be("dep-wf-overlap");
+        overlap.PublishedServiceId.Should().Be("published-service-overlap");
+        response.Freshness.RefreshWatermarkUtc.Should().Be(DateTimeOffset.Parse("2026-08-03T00:00:00Z"));
     }
 
     [Fact]
-    public async Task QueryAsync_WithDraftView_ShouldReturnDraftSubsetWithCommittedFacts()
+    public async Task QueryAsync_WithDraftView_ShouldReturnDraftSubsetWithPublishedFacts()
     {
         var port = CreatePort(
-            Draft("wf-alpha", "Draft Alpha", "draft alpha description", DateTimeOffset.Parse("2026-08-01T00:00:00Z")),
-            Draft("wf-overlap", "Draft Overlap", "draft overlap description", DateTimeOffset.Parse("2026-08-03T00:00:00Z")),
-            Committed("wf-beta", "Committed Beta", "m-beta", "svc-beta", DateTimeOffset.Parse("2026-08-02T00:00:00Z")),
-            Committed("wf-overlap", "Committed Overlap", "m-overlap", "svc-overlap", DateTimeOffset.Parse("2026-08-04T00:00:00Z")));
+            Row("wf-alpha", "Draft Alpha", "draft alpha description", true, false, DateTimeOffset.Parse("2026-08-01T00:00:00Z")),
+            Row("wf-beta", "Published Beta", "", false, true, DateTimeOffset.Parse("2026-08-02T00:00:00Z")),
+            Row("wf-overlap", "Draft Overlap", "draft overlap description", true, true, DateTimeOffset.Parse("2026-08-03T00:00:00Z")));
 
         var response = await port.QueryAsync(new ScopeWorkflowCatalogueQuery(
             ScopeId,
@@ -83,9 +80,9 @@ public sealed class AppScopedWorkflowCatalogueServiceTests
     public async Task QueryAsync_ShouldSearchNameDescriptionChineseTextAndWorkflowIdPrefix()
     {
         var port = CreatePort(
-            Draft("wf-alpha", "Alpha Draft", "Handles 审批 flow", DateTimeOffset.Parse("2026-08-01T00:00:00Z")),
-            Draft("wf-gamma", "Gamma Draft", "Other", DateTimeOffset.Parse("2026-08-02T00:00:00Z")),
-            Committed("wf-beta", "Billing Review", "m-beta", "svc-beta", DateTimeOffset.Parse("2026-08-03T00:00:00Z")));
+            Row("wf-alpha", "Alpha Draft", "Handles 审批 flow", true, false, DateTimeOffset.Parse("2026-08-01T00:00:00Z")),
+            Row("wf-gamma", "Gamma Draft", "Other", true, false, DateTimeOffset.Parse("2026-08-02T00:00:00Z")),
+            Row("wf-beta", "Billing Service", "", false, true, DateTimeOffset.Parse("2026-08-03T00:00:00Z")));
 
         (await port.QueryAsync(new ScopeWorkflowCatalogueQuery(ScopeId, Query: "alpha")))
             .Items.Should().ContainSingle().Which.WorkflowId.Should().Be("wf-alpha");
@@ -101,9 +98,9 @@ public sealed class AppScopedWorkflowCatalogueServiceTests
     public async Task QueryAsync_ShouldSearchBeforeCursorPagination()
     {
         var port = CreatePort(
-            Draft("wf-alpha", "Searchable Alpha", "same", DateTimeOffset.Parse("2026-08-01T00:00:00Z")),
-            Draft("wf-beta", "Searchable Beta", "same", DateTimeOffset.Parse("2026-08-02T00:00:00Z")),
-            Draft("wf-gamma", "Other", "same", DateTimeOffset.Parse("2026-08-03T00:00:00Z")));
+            Row("wf-alpha", "Searchable Alpha", "same", true, false, DateTimeOffset.Parse("2026-08-01T00:00:00Z")),
+            Row("wf-beta", "Searchable Beta", "same", true, false, DateTimeOffset.Parse("2026-08-02T00:00:00Z")),
+            Row("wf-gamma", "Other", "same", true, false, DateTimeOffset.Parse("2026-08-03T00:00:00Z")));
 
         var firstPage = await port.QueryAsync(new ScopeWorkflowCatalogueQuery(
             ScopeId,
@@ -125,8 +122,8 @@ public sealed class AppScopedWorkflowCatalogueServiceTests
     public async Task QueryAsync_WithDraftViewAndSearch_ShouldSearchOnlyDraftSubset()
     {
         var port = CreatePort(
-            Draft("wf-alpha", "Draft Alpha", "", DateTimeOffset.Parse("2026-08-01T00:00:00Z")),
-            Committed("wf-beta", "Draft Alpha", "m-beta", "svc-beta", DateTimeOffset.Parse("2026-08-02T00:00:00Z")));
+            Row("wf-alpha", "Draft Alpha", "", true, false, DateTimeOffset.Parse("2026-08-01T00:00:00Z")),
+            Row("wf-beta", "Draft Alpha", "", false, true, DateTimeOffset.Parse("2026-08-02T00:00:00Z")));
 
         var response = await port.QueryAsync(new ScopeWorkflowCatalogueQuery(
             ScopeId,
@@ -140,8 +137,8 @@ public sealed class AppScopedWorkflowCatalogueServiceTests
     public async Task QueryAsync_ShouldReportSourceWatermarkBeforeViewAndSearchFiltering()
     {
         var port = CreatePort(
-            Draft("wf-alpha", "Draft Alpha", "", DateTimeOffset.Parse("2026-08-01T00:00:00Z")),
-            Committed("wf-beta", "Committed Beta", "m-beta", "svc-beta", DateTimeOffset.Parse("2026-08-05T00:00:00Z")));
+            Row("wf-alpha", "Draft Alpha", "", true, false, DateTimeOffset.Parse("2026-08-01T00:00:00Z")),
+            Row("wf-beta", "Published Beta", "", false, true, DateTimeOffset.Parse("2026-08-05T00:00:00Z")));
 
         var response = await port.QueryAsync(new ScopeWorkflowCatalogueQuery(
             ScopeId,
@@ -153,128 +150,103 @@ public sealed class AppScopedWorkflowCatalogueServiceTests
     }
 
     [Fact]
-    public async Task QueryAsync_ShouldKeepSameNameWorkflowsAndTypedIdentitiesSeparate()
+    public async Task QueryAsync_ShouldDisablePublishedOnlyDraftActions()
     {
         var port = CreatePort(
-            Draft("wf-alpha", "Review", "draft", DateTimeOffset.Parse("2026-08-01T00:00:00Z")),
-            Committed("wf-beta", "Review", "m-alpha", "svc-alpha", DateTimeOffset.Parse("2026-08-02T00:00:00Z"), teamId: "team-a", lastBoundRevisionId: "rev-alpha"));
+            Row("wf-beta", "Published Beta", "", false, true, DateTimeOffset.Parse("2026-08-02T00:00:00Z")));
 
-        var response = await port.QueryAsync(new ScopeWorkflowCatalogueQuery(ScopeId, Query: "Review"));
+        var response = await port.QueryAsync(new ScopeWorkflowCatalogueQuery(ScopeId));
+
+        var row = response.Items.Should().ContainSingle().Subject;
+        row.HasCommittedSource.Should().BeTrue();
+        row.Capabilities.Activity.Available.Should().BeTrue();
+        row.Capabilities.Rename.Available.Should().BeFalse();
+        row.Capabilities.Rename.UnavailableReason.Should().Be("draft_source_missing");
+        row.Capabilities.Delete.Available.Should().BeFalse();
+        row.Capabilities.Delete.UnavailableReason.Should().Be("draft_source_missing");
+    }
+
+    [Fact]
+    public async Task QueryAsync_ShouldDrainRowReaderPagesBeforeFiltering()
+    {
+        var reader = new StubScopeWorkflowCatalogueRowReader([
+            Row("wf-alpha", "Draft Alpha", "", true, false, DateTimeOffset.Parse("2026-08-01T00:00:00Z")),
+            Row("wf-beta", "Draft Beta", "", true, false, DateTimeOffset.Parse("2026-08-02T00:00:00Z")),
+        ], pageSize: 1);
+        var port = new ProjectionWorkflowCatalogueQueryPort(reader);
+
+        var response = await port.QueryAsync(new ScopeWorkflowCatalogueQuery(ScopeId));
 
         response.Items.Select(static item => item.WorkflowId).Should().Equal("wf-beta", "wf-alpha");
-        var committed = response.Items[0];
-        committed.WorkflowId.Should().Be("wf-beta");
-        committed.MemberId.Should().Be("m-alpha");
-        committed.PublishedServiceId.Should().Be("svc-alpha");
-        committed.TeamId.Should().Be("team-a");
-        committed.LastBoundRevisionId.Should().Be("rev-alpha");
-        committed.Committed!.DeploymentId.Should().Be("dep-svc-alpha");
     }
 
     private static ProjectionWorkflowCatalogueQueryPort CreatePort(
-        params ScopeWorkflowCatalogueSourceDocument[] documents) =>
-        new(new StubScopeWorkflowCatalogueSourceReader(documents));
+        params ScopeWorkflowCatalogueRowDocument[] documents) =>
+        new(new StubScopeWorkflowCatalogueRowReader(documents));
 
-    private static ScopeWorkflowCatalogueSourceDocument Draft(
+    private static ScopeWorkflowCatalogueRowDocument Row(
         string workflowId,
         string name,
         string description,
-        DateTimeOffset updatedAtUtc) =>
-        Source(
-            workflowId,
-            ScopeWorkflowCatalogueSourceDocument.DraftSourceKind,
-            name,
-            description,
-            updatedAtUtc);
-
-    private static ScopeWorkflowCatalogueSourceDocument Committed(
-        string workflowId,
-        string displayName,
-        string memberId,
-        string publishedServiceId,
+        bool hasDraftSource,
+        bool hasPublishedSource,
         DateTimeOffset updatedAtUtc,
-        string teamId = "team-alpha",
-        string lastBoundRevisionId = "rev-alpha") =>
-        Source(
-            workflowId,
-            ScopeWorkflowCatalogueSourceDocument.CommittedSourceKind,
-            displayName,
-            string.Empty,
-            updatedAtUtc,
-            serviceKey: $"scope-alpha:workflow-app:user:scope-alpha-token:{publishedServiceId}",
-            workflowName: displayName,
-            committedActorId: $"actor-{publishedServiceId}",
-            activeRevisionId: $"active-{publishedServiceId}",
-            deploymentId: $"dep-{publishedServiceId}",
-            deploymentStatus: "Active",
-            publishedServiceId: publishedServiceId,
-            teamId: teamId,
-            memberId: memberId,
-            lastBoundRevisionId: lastBoundRevisionId);
-
-    private static ScopeWorkflowCatalogueSourceDocument Source(
-        string workflowId,
-        string sourceKind,
-        string name,
-        string description,
-        DateTimeOffset updatedAtUtc,
-        string serviceKey = "",
-        string workflowName = "",
-        string committedActorId = "",
-        string activeRevisionId = "",
-        string deploymentId = "",
-        string deploymentStatus = "",
-        string publishedServiceId = "",
-        string teamId = "",
-        string memberId = "",
-        string lastBoundRevisionId = "") =>
+        string? publishedServiceId = null) =>
         new()
         {
-            Id = $"{ScopeId}:{workflowId}:{sourceKind}:{publishedServiceId}",
-            ActorId = $"catalogue-source:{ScopeId}:{workflowId}:{sourceKind}:{publishedServiceId}",
+            Id = $"{ScopeId}:workflow:{workflowId}",
+            ActorId = $"catalogue-row:{workflowId}",
             StateVersion = updatedAtUtc.ToUnixTimeMilliseconds(),
-            LastEventId = $"event-{workflowId}-{sourceKind}-{publishedServiceId}",
+            LastEventId = $"event-{workflowId}",
             UpdatedAt = Timestamp.FromDateTimeOffset(updatedAtUtc),
             ScopeId = ScopeId,
             WorkflowId = workflowId,
-            SourceKind = sourceKind,
             Name = name,
             Description = description,
-            SourceUpdatedAtUtc = updatedAtUtc,
-            ServiceKey = serviceKey,
-            WorkflowName = workflowName,
-            CommittedActorId = committedActorId,
-            ActiveRevisionId = activeRevisionId,
-            DeploymentId = deploymentId,
-            DeploymentStatus = deploymentStatus,
-            PublishedServiceId = publishedServiceId,
-            TeamId = teamId,
-            MemberId = memberId,
-            LastBoundRevisionId = lastBoundRevisionId,
+            HasDraftSource = hasDraftSource,
+            HasPublishedSource = hasPublishedSource,
+            RowUpdatedAtUtc = updatedAtUtc,
+            UpdatedAtSource = hasPublishedSource
+                ? ScopeWorkflowCatalogueSourceDocument.ServiceSourceKind
+                : ScopeWorkflowCatalogueSourceDocument.DraftSourceKind,
+            SourceWatermarkUtc = updatedAtUtc,
+            ServiceKey = hasPublishedSource ? $"service-key:{workflowId}" : string.Empty,
+            WorkflowName = hasPublishedSource ? workflowId : string.Empty,
+            CommittedActorId = hasPublishedSource ? $"actor-{workflowId}" : string.Empty,
+            ActiveRevisionId = hasPublishedSource ? $"active-{workflowId}" : string.Empty,
+            DeploymentId = hasPublishedSource ? $"dep-{workflowId}" : string.Empty,
+            DeploymentStatus = hasPublishedSource ? "Active" : string.Empty,
+            PublishedServiceId = hasPublishedSource ? publishedServiceId ?? workflowId : string.Empty,
         };
 
-    private sealed class StubScopeWorkflowCatalogueSourceReader(IReadOnlyList<ScopeWorkflowCatalogueSourceDocument> documents)
-        : IProjectionDocumentReader<ScopeWorkflowCatalogueSourceDocument, string>
+    private sealed class StubScopeWorkflowCatalogueRowReader(
+        IReadOnlyList<ScopeWorkflowCatalogueRowDocument> documents,
+        int pageSize = 10_000)
+        : IProjectionDocumentReader<ScopeWorkflowCatalogueRowDocument, string>
     {
-        public Task<ScopeWorkflowCatalogueSourceDocument?> GetAsync(string key, CancellationToken ct = default) =>
+        public Task<ScopeWorkflowCatalogueRowDocument?> GetAsync(string key, CancellationToken ct = default) =>
             Task.FromResult(documents.FirstOrDefault(document => string.Equals(document.Id, key, StringComparison.Ordinal)));
 
-        public Task<ProjectionDocumentQueryResult<ScopeWorkflowCatalogueSourceDocument>> QueryAsync(
+        public Task<ProjectionDocumentQueryResult<ScopeWorkflowCatalogueRowDocument>> QueryAsync(
             ProjectionDocumentQuery query,
             CancellationToken ct = default)
         {
             var scopeFilter = query.Filters.FirstOrDefault(filter =>
-                string.Equals(filter.FieldPath, nameof(ScopeWorkflowCatalogueSourceDocument.ScopeId), StringComparison.Ordinal));
+                string.Equals(filter.FieldPath, nameof(ScopeWorkflowCatalogueRowDocument.ScopeId), StringComparison.Ordinal));
             var scopeId = scopeFilter?.Value.RawValue as string;
-            var items = string.IsNullOrWhiteSpace(scopeId)
+            var filteredItems = string.IsNullOrWhiteSpace(scopeId)
                 ? documents
                 : documents.Where(document => string.Equals(document.ScopeId, scopeId, StringComparison.Ordinal)).ToList();
+            var offset = string.IsNullOrWhiteSpace(query.Cursor) ? 0 : int.Parse(query.Cursor);
+            var take = Math.Min(query.Take, pageSize);
+            var items = filteredItems.Skip(offset).Take(take).ToList();
+            var nextOffset = offset + items.Count;
 
-            return Task.FromResult(new ProjectionDocumentQueryResult<ScopeWorkflowCatalogueSourceDocument>
+            return Task.FromResult(new ProjectionDocumentQueryResult<ScopeWorkflowCatalogueRowDocument>
             {
-                Items = items.Take(query.Take).ToList(),
-                NextCursor = null,
-                TotalCount = items.Count,
+                Items = items,
+                NextCursor = nextOffset < filteredItems.Count ? nextOffset.ToString() : null,
+                TotalCount = filteredItems.Count,
             });
         }
     }

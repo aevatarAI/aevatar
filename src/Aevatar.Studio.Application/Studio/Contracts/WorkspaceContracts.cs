@@ -101,10 +101,7 @@ public sealed record ScopeWorkflowCatalogueRow(
     ScopeWorkflowCatalogueRowCapabilities Capabilities,
     DateTimeOffset SourceWatermarkUtc,
     ScopeWorkflowCatalogueCommittedFacts? Committed = null,
-    string? TeamId = null,
-    string? MemberId = null,
-    string? PublishedServiceId = null,
-    string? LastBoundRevisionId = null);
+    string? PublishedServiceId = null);
 
 public sealed record ScopeWorkflowCatalogueCommittedFacts(
     string ServiceKey,
