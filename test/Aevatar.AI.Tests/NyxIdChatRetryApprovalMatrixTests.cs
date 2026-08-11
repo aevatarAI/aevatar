@@ -291,6 +291,9 @@ public sealed partial class NyxIdChatConversationGAgentTests
             MatrixRetryCommand(actorId, MatrixEffectStep(initial.State), beforeRetry[^1].Version)));
         var delivery = initial.State.PendingPlanGateAdmissionDelivery;
         delivery.Should().NotBeNull();
+        initial.State.PendingPlanGateContinuation.Should().BeNull();
+        MatrixEffectStep(initial.State).Operation.Phase.Should().Be(
+            NyxIdChatOperationPhase.Requested);
         var admission = delivery.Admission.Clone();
         callbacks.TimeoutRequests.Should().ContainSingle(request =>
             request.TriggerEnvelope.Payload.Is(
@@ -304,6 +307,8 @@ public sealed partial class NyxIdChatConversationGAgentTests
                 request.TriggerEnvelope.Payload.Is(
                     NyxIdChatPlanGateAdmissionDeliveryDispatchRequested.Descriptor))
             .Which.TriggerEnvelope.Clone();
+        callbacks.TimeoutRequests.Should().NotContain(request =>
+            request.TriggerEnvelope.Payload.Is(NyxIdChatRecoveryRequestedSignal.Descriptor));
 
         await recovered.HandleEventAsync(activationRetry);
 
@@ -410,6 +415,19 @@ public sealed partial class NyxIdChatConversationGAgentTests
         initial.State.ToString().Should().NotContain("retry-capability-alpha");
 
         callbacks.TimeoutRequests.Clear();
+        var beforeAckDispatch = new RecordingActorDispatchPort([], static (_, _) => Task.CompletedTask);
+        var beforeAckRecovery = CreateController(services, actorId, beforeAckDispatch);
+        await beforeAckRecovery.ActivateAsync();
+
+        callbacks.TimeoutRequests.Should().ContainSingle(request =>
+            request.TriggerEnvelope.Payload.Is(
+                NyxIdChatPlanGateAdmissionDeliveryDispatchRequested.Descriptor));
+        callbacks.TimeoutRequests.Should().NotContain(request =>
+            request.TriggerEnvelope.Payload.Is(NyxIdChatRecoveryRequestedSignal.Descriptor),
+            "the durable plan-gate delivery must finish before interrupted recovery can classify the operation");
+        beforeAckDispatch.OperationCalls.Should().BeEmpty();
+
+        callbacks.TimeoutRequests.Clear();
         var afterConfirm = await eventStore.GetEventsAsync(actorId);
         await eventStore.AppendAsync(
             actorId,
@@ -437,10 +455,17 @@ public sealed partial class NyxIdChatConversationGAgentTests
         var recoveredDispatch = new RecordingActorDispatchPort([], static (_, _) => Task.CompletedTask);
         var recovered = CreateController(services, actorId, recoveredDispatch);
         await recovered.ActivateAsync();
+        recovered.State.PendingPlanGateAdmissionDelivery.Should().BeNull();
+        recovered.State.PendingPlanGateContinuation.Should().NotBeNull();
+        MatrixEffectStep(recovered.State).Operation.Phase.Should().Be(
+            NyxIdChatOperationPhase.Requested);
         var activationResume = callbacks.TimeoutRequests.Should().ContainSingle(request =>
                 request.TriggerEnvelope.Payload.Is(
                     NyxIdChatPendingPlanGateContinuationDispatchRequested.Descriptor))
             .Which.TriggerEnvelope.Clone();
+        callbacks.TimeoutRequests.Should().NotContain(request =>
+            request.TriggerEnvelope.Payload.Is(NyxIdChatRecoveryRequestedSignal.Descriptor),
+            "the durable continuation owns recovery after the admission ACK is committed");
         await recovered.HandleEventAsync(activationResume);
 
         recovered.State.PendingPlanGateAdmissionDelivery.Should().BeNull();
@@ -452,6 +477,73 @@ public sealed partial class NyxIdChatConversationGAgentTests
         retry.PlanGateContinuation.ToolContext.Credentials.NyxIdAccessToken.Should().Be(
             "retry-capability-alpha");
         recovered.State.ToString().Should().NotContain("retry-capability-alpha");
+    }
+
+    [Fact]
+    public async Task RetryPlanGateAdmission_WhenHistoryReservationCompletes_ShouldKeepRecoveryBlocked()
+    {
+        const string actorId = "conversation-retry-history-plan-gate-barrier";
+        var sourceStore = new InMemoryEventStoreForTests();
+        await PersistTestStateAsync(sourceStore, actorId, 1, CreateFailedRetryMatrixState(actorId));
+        using var sourceServices = BuildEventSourcingServices(sourceStore);
+        var source = CreateController(
+            sourceServices,
+            actorId,
+            new RecordingActorDispatchPort([], static (_, _) => Task.CompletedTask));
+        await source.ActivateAsync();
+        var beforeRetry = await sourceStore.GetEventsAsync(actorId);
+        await source.HandleEventAsync(CreateEnvelope(
+            actorId,
+            MatrixRetryCommand(actorId, MatrixEffectStep(source.State), beforeRetry[^1].Version)));
+        var beforeConfirm = await sourceStore.GetEventsAsync(actorId);
+        await source.HandleEventAsync(CreateEnvelope(
+            actorId,
+            MatrixPlanResolveCommand(
+                actorId,
+                source.State.ActiveTask.Gate,
+                beforeConfirm[^1].Version)));
+
+        var recoveryState = source.State.Clone();
+        recoveryState.PendingPlanGateAdmissionDelivery.Should().NotBeNull();
+        recoveryState.PendingPlanGateContinuation.Should().NotBeNull();
+        MatrixEffectStep(recoveryState).Operation.Phase.Should().Be(
+            NyxIdChatOperationPhase.Requested);
+        recoveryState.HistoryDeliveryReservation.Dispatched = false;
+        recoveryState.HistoryDeliveryReservation.DispatchedAt = null;
+
+        var recoveryStore = new InMemoryEventStoreForTests();
+        await PersistTestStateAsync(recoveryStore, actorId, 1, recoveryState);
+        var callbacks = new RecordingRuntimeCallbackScheduler();
+        var historyOperations = new List<string>();
+        var history = new RecordingChatHistoryCommandPort(historyOperations);
+        using var recoveryServices = BuildEventSourcingServices(
+            recoveryStore,
+            history,
+            callbacks);
+        var recovered = CreateController(
+            recoveryServices,
+            actorId,
+            new RecordingActorDispatchPort([], static (_, _) => Task.CompletedTask));
+
+        await recovered.ActivateAsync();
+
+        var historyRetry = callbacks.TimeoutRequests.Should().ContainSingle(request =>
+                request.TriggerEnvelope.Payload.Is(
+                    NyxIdChatHistoryDeliveryReservationDispatchRequested.Descriptor))
+            .Which.TriggerEnvelope.Clone();
+        callbacks.TimeoutRequests.Should().ContainSingle(request =>
+            request.TriggerEnvelope.Payload.Is(
+                NyxIdChatPlanGateAdmissionDeliveryDispatchRequested.Descriptor));
+        callbacks.TimeoutRequests.Should().NotContain(request =>
+            request.TriggerEnvelope.Payload.Is(NyxIdChatRecoveryRequestedSignal.Descriptor));
+
+        await recovered.HandleEventAsync(historyRetry);
+
+        recovered.State.HistoryDeliveryReservation.Dispatched.Should().BeTrue();
+        historyOperations.Should().Equal("history.reserve");
+        callbacks.TimeoutRequests.Should().NotContain(request =>
+            request.TriggerEnvelope.Payload.Is(NyxIdChatRecoveryRequestedSignal.Descriptor),
+            "the history callback must honor the same plan-gate recovery barrier as activation");
     }
 
     [Fact]
@@ -703,14 +795,30 @@ public sealed partial class NyxIdChatConversationGAgentTests
             request.TriggerEnvelope.Payload.Is(
                 NyxIdChatPlanGateAdmissionRevocationDispatchRequested.Descriptor));
 
+        var recoveryState = initial.State.Clone();
+        var recoveryEffect = MatrixEffectStep(recoveryState);
+        recoveryState.ActiveTurn.Status = NyxIdChatTurnStatus.Active;
+        recoveryState.ActiveTask.Status = NyxIdChatTaskStatus.Active;
+        recoveryState.ActiveTask.ActiveStepId = recoveryEffect.StepId;
+        recoveryState.ActiveTask.ActiveOperationId = recoveryEffect.Operation.Key.OperationId;
+        recoveryEffect.Status = NyxIdChatStepStatus.Waiting;
+        recoveryEffect.Operation.Phase = NyxIdChatOperationPhase.Requested;
+        recoveryEffect.Operation.CompletedAt = null;
+        var recoveryStore = new InMemoryEventStoreForTests();
+        await PersistTestStateAsync(recoveryStore, actorId, 1, recoveryState);
         callbacks.TimeoutRequests.Clear();
+        using var recoveryServices = BuildEventSourcingServices(
+            recoveryStore,
+            callbackScheduler: callbacks);
         var recoveredDispatch = new RecordingActorDispatchPort([], static (_, _) => Task.CompletedTask);
-        var recovered = CreateController(services, actorId, recoveredDispatch);
+        var recovered = CreateController(recoveryServices, actorId, recoveredDispatch);
         await recovered.ActivateAsync();
         var activationRetry = callbacks.TimeoutRequests.Should().ContainSingle(request =>
                 request.TriggerEnvelope.Payload.Is(
                     NyxIdChatPlanGateAdmissionRevocationDispatchRequested.Descriptor))
             .Which.TriggerEnvelope.Clone();
+        callbacks.TimeoutRequests.Should().NotContain(request =>
+            request.TriggerEnvelope.Payload.Is(NyxIdChatRecoveryRequestedSignal.Descriptor));
 
         await recovered.HandleEventAsync(activationRetry);
 

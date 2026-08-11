@@ -209,8 +209,10 @@ public sealed class NyxIdChatConversationGAgent
         if (State.PendingOperationDeliveryProbe is not null)
             await ScheduleOperationDeliveryProbeAsync(ActivationRecoveryDelay, ct);
 
-        if (hasPendingHistoryReservation || State.PendingOperationDeliveryProbe is not null)
+        if (hasPendingHistoryReservation || HasPendingOperationRecoveryBarrier(State))
+        {
             return;
+        }
 
         await ScheduleOutstandingOperationRecoveryAsync(ct);
         await ScheduleOutstandingOperationStepChangedAsync(ct);
@@ -4407,7 +4409,7 @@ public sealed class NyxIdChatConversationGAgent
 
     private Task ScheduleOutstandingOperationRecoveryAsync(CancellationToken ct)
     {
-        if (State.PendingOperationDeliveryProbe is not null)
+        if (HasPendingOperationRecoveryBarrier(State))
             return Task.CompletedTask;
 
         var operation = ResolveOutstandingRecoveryOperation(State);
@@ -4415,6 +4417,13 @@ public sealed class NyxIdChatConversationGAgent
             ? Task.CompletedTask
             : ScheduleActivationRecoveryAsync(operation, ct);
     }
+
+    private static bool HasPendingOperationRecoveryBarrier(
+        NyxIdChatConversationGAgentState state) =>
+        state.PendingOperationDeliveryProbe is not null ||
+        state.PendingPlanGateAdmissionRevocation is not null ||
+        state.PendingPlanGateAdmissionDelivery is not null ||
+        state.PendingPlanGateContinuation is not null;
 
     private Task ScheduleOutstandingOperationStepChangedAsync(CancellationToken ct)
     {
