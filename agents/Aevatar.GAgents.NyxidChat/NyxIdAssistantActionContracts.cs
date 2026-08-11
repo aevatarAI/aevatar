@@ -1,5 +1,9 @@
 using System.Collections.Frozen;
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
+using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgents.NyxidChat;
 
@@ -168,17 +172,64 @@ internal sealed record NyxIdAssistantActionSafeResourcePredicateRegistration(
         NyxIdChatSafeResourceRef?,
         bool> Predicate);
 
+internal delegate Task<NyxIdChatActionPostconditionResult>
+    NyxIdAssistantActionPostconditionVerifier(
+        NyxIdActionPostconditionPort port,
+        NyxIdChatActionPostconditionInput input,
+        AgentToolExecutionContextPayload? transientToolContext,
+        CancellationToken ct);
+
 internal sealed record NyxIdAssistantActionPostconditionVerifierRegistration(
     NyxIdAssistantActionKind Action,
     NyxIdAssistantActionEvidenceStrategy EvidenceStrategy,
-    Func<NyxIdAssistantActionKind, NyxIdAssistantActionEvidenceStrategy?>
-        EvidenceStrategyResolver);
+    NyxIdAssistantActionPostconditionVerifier Verifier,
+    NyxIdChatActionPostconditionInput ProbeInput);
 
-internal sealed record NyxIdAssistantActionEvidencePredicateRegistration(
+internal abstract record NyxIdAssistantActionEvidencePredicateRegistration(
+    NyxIdAssistantActionKind Action,
+    NyxIdAssistantActionEvidenceStrategy EvidenceStrategy)
+{
+    internal abstract bool MatchesProbe();
+}
+
+internal sealed record NyxIdAssistantActionEvidencePredicateProbeCase<
+    TExpectation,
+    TEvidence>(
+    TExpectation Expectation,
+    TEvidence MatchingEvidence,
+    TEvidence MismatchedEvidence);
+
+internal sealed record NyxIdAssistantActionEvidencePredicateRegistration<
+    TExpectation,
+    TEvidence>(
     NyxIdAssistantActionKind Action,
     NyxIdAssistantActionEvidenceStrategy EvidenceStrategy,
-    Func<NyxIdAssistantActionKind, NyxIdAssistantActionEvidenceStrategy?>
-        EvidenceStrategyResolver);
+    Func<TExpectation, TEvidence, bool> Predicate,
+    IReadOnlyList<
+        NyxIdAssistantActionEvidencePredicateProbeCase<TExpectation, TEvidence>> ProbeCases)
+    : NyxIdAssistantActionEvidencePredicateRegistration(Action, EvidenceStrategy)
+{
+    internal override bool MatchesProbe() =>
+        ProbeCases.Count > 0 &&
+        ProbeCases.All(probe =>
+            Predicate(probe.Expectation, probe.MatchingEvidence) &&
+            !Predicate(probe.Expectation, probe.MismatchedEvidence));
+}
+
+internal readonly record struct NyxIdServiceConnectEvidenceExpectation(
+    NyxIdAssistantActionParams Params,
+    string? ExpectedUserServiceId);
+
+internal readonly record struct NyxIdServiceReauthorizeEvidenceExpectation(
+    NyxIdServiceReauthorizeParams Requested);
+
+internal readonly record struct NyxIdKeyCreateEvidenceExpectation(
+    NyxIdKeyCreateParams Requested,
+    string ExpectedKeyId);
+
+internal readonly record struct NyxIdKeyRotateEvidenceExpectation(
+    NyxIdKeyRotateParams Requested,
+    string ExpectedKeyId);
 
 internal sealed record NyxIdAssistantActionAuthorityResolverRegistration(
     NyxIdAssistantActionKind Action,
@@ -289,6 +340,28 @@ internal sealed class NyxIdAssistantActionCapabilityRegistrations
                 .Append(registration));
     }
 
+    public NyxIdAssistantActionCapabilityRegistrations With(
+        NyxIdAssistantActionPostconditionVerifierRegistration registration)
+    {
+        ArgumentNullException.ThrowIfNull(registration);
+        ArgumentNullException.ThrowIfNull(registration.Verifier);
+        ArgumentNullException.ThrowIfNull(registration.ProbeInput);
+        return Copy(
+            postconditionVerifiers: _postconditionVerifiers.Values
+                .Where(item => item.Action != registration.Action)
+                .Append(registration));
+    }
+
+    public NyxIdAssistantActionCapabilityRegistrations With(
+        NyxIdAssistantActionEvidencePredicateRegistration registration)
+    {
+        ArgumentNullException.ThrowIfNull(registration);
+        return Copy(
+            evidencePredicates: _evidencePredicates.Values
+                .Where(item => item.Action != registration.Action)
+                .Append(registration));
+    }
+
     public bool IsExecutable(
         NyxIdAssistantActionSemanticContract semantic,
         NyxIdAssistantActionRevisionDescriptorSnapshot descriptor) =>
@@ -327,19 +400,13 @@ internal sealed class NyxIdAssistantActionCapabilityRegistrations
         }
         if (!_postconditionVerifiers.TryGetValue(semantic.Action, out var verifier) ||
             verifier.EvidenceStrategy != semantic.EvidenceStrategy ||
-            !EvidenceStrategyMatches(
-                verifier.Action,
-                verifier.EvidenceStrategy,
-                verifier.EvidenceStrategyResolver))
+            !PostconditionVerifierMatches(verifier))
         {
             missing.Add(NyxIdAssistantActionCapabilityKind.PostconditionVerifier);
         }
         if (!_evidencePredicates.TryGetValue(semantic.Action, out var evidence) ||
             evidence.EvidenceStrategy != semantic.EvidenceStrategy ||
-            !EvidenceStrategyMatches(
-                evidence.Action,
-                evidence.EvidenceStrategy,
-                evidence.EvidenceStrategyResolver))
+            !EvidencePredicateMatches(evidence))
         {
             missing.Add(NyxIdAssistantActionCapabilityKind.EvidencePredicate);
         }
@@ -391,6 +458,37 @@ internal sealed class NyxIdAssistantActionCapabilityRegistrations
         }
 
         producer = null!;
+        return false;
+    }
+
+    public bool TryResolvePostconditionVerifier(
+        NyxIdAssistantActionKind action,
+        out NyxIdAssistantActionPostconditionVerifier verifier)
+    {
+        if (_postconditionVerifiers.TryGetValue(action, out var registration))
+        {
+            verifier = registration.Verifier;
+            return true;
+        }
+
+        verifier = null!;
+        return false;
+    }
+
+    public bool TryResolveEvidencePredicate<TExpectation, TEvidence>(
+        NyxIdAssistantActionKind action,
+        out Func<TExpectation, TEvidence, bool> predicate)
+    {
+        if (_evidencePredicates.TryGetValue(action, out var registration) &&
+            registration is NyxIdAssistantActionEvidencePredicateRegistration<
+                TExpectation,
+                TEvidence> typed)
+        {
+            predicate = typed.Predicate;
+            return true;
+        }
+
+        predicate = null!;
         return false;
     }
 
@@ -482,14 +580,38 @@ internal sealed class NyxIdAssistantActionCapabilityRegistrations
         }
     }
 
-    private static bool EvidenceStrategyMatches(
-        NyxIdAssistantActionKind action,
-        NyxIdAssistantActionEvidenceStrategy evidenceStrategy,
-        Func<NyxIdAssistantActionKind, NyxIdAssistantActionEvidenceStrategy?> resolver)
+    private static bool PostconditionVerifierMatches(
+        NyxIdAssistantActionPostconditionVerifierRegistration registration)
+    {
+        if (registration.ProbeInput.Action != registration.Action)
+            return false;
+
+        try
+        {
+            var verification = registration.Verifier(
+                new NyxIdActionPostconditionPort(null, null, TimeProvider.System),
+                registration.ProbeInput.Clone(),
+                null,
+                CancellationToken.None);
+            return verification.IsCompletedSuccessfully &&
+                   !verification.Result.Verified &&
+                   string.Equals(
+                       verification.Result.FailureCode,
+                       NyxIdActionPostconditionPort.UnavailableCode,
+                       StringComparison.Ordinal);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool EvidencePredicateMatches(
+        NyxIdAssistantActionEvidencePredicateRegistration registration)
     {
         try
         {
-            return resolver(action) == evidenceStrategy;
+            return registration.MatchesProbe();
         }
         catch
         {
@@ -604,6 +726,7 @@ internal sealed class NyxIdAssistantActionCapabilityRegistrations
                     ServiceReauthorize = new NyxIdServiceReauthorizeParams
                     {
                         UserServiceId = "us-probe",
+                        RequestedScopes = { "read" },
                     },
                 },
             NyxIdAssistantActionParams.ParamsOneofCase.KeyCreate =>
@@ -623,6 +746,59 @@ internal sealed class NyxIdAssistantActionCapabilityRegistrations
                 },
             _ => new NyxIdAssistantActionParams(),
         };
+
+    private static NyxIdChatActionPostconditionInput ProbePostconditionInput(
+        NyxIdAssistantActionKind action)
+    {
+        var input = new NyxIdChatActionPostconditionInput
+        {
+            ScopeId = "scope-probe",
+            OwnerSubject = "owner-probe",
+            OriginTurnId = "turn-probe",
+            ActionRequestId = "action-request-probe",
+            Action = action,
+            ReportedDisposition = NyxIdChatActionDisposition.Completed,
+            RequestedAt = Timestamp.FromDateTimeOffset(
+                DateTimeOffset.FromUnixTimeSeconds(1_700_000_000)),
+        };
+
+        switch (action)
+        {
+            case NyxIdAssistantActionKind.ServiceConnect:
+                input.Params = ProbeActionParams(
+                    NyxIdAssistantActionParams.ParamsOneofCase.CatalogServiceConnect);
+                break;
+            case NyxIdAssistantActionKind.ServiceReauthorize:
+                input.Params = ProbeActionParams(
+                    NyxIdAssistantActionParams.ParamsOneofCase.ServiceReauthorize);
+                input.ResourceHint = new NyxIdChatSafeResourceRef
+                {
+                    UserService = new NyxIdChatUserServiceRef
+                    {
+                        UserServiceId = "us-probe",
+                    },
+                };
+                break;
+            case NyxIdAssistantActionKind.KeyCreate:
+                input.Params = ProbeActionParams(
+                    NyxIdAssistantActionParams.ParamsOneofCase.KeyCreate);
+                input.ResourceHint = new NyxIdChatSafeResourceRef
+                {
+                    Key = new NyxIdChatKeyRef { KeyId = "key-probe" },
+                };
+                break;
+            case NyxIdAssistantActionKind.KeyRotate:
+                input.Params = ProbeActionParams(
+                    NyxIdAssistantActionParams.ParamsOneofCase.KeyRotate);
+                input.ResourceHint = new NyxIdChatSafeResourceRef
+                {
+                    Key = new NyxIdChatKeyRef { KeyId = "key-replacement" },
+                };
+                break;
+        }
+
+        return input;
+    }
 
     private static bool WireParamsMatch(
         NyxIdAssistantActionParams.ParamsOneofCase paramsCase,
@@ -752,30 +928,176 @@ internal sealed class NyxIdAssistantActionCapabilityRegistrations
             [
                 new(NyxIdAssistantActionKind.ServiceConnect,
                     NyxIdAssistantActionEvidenceStrategy.UserServiceCurrentState,
-                    NyxIdActionPostconditionPort.ResolveEvidenceStrategy),
+                    NyxIdActionPostconditionPort.VerifyServiceConnectPostconditionAsync,
+                    ProbePostconditionInput(NyxIdAssistantActionKind.ServiceConnect)),
                 new(NyxIdAssistantActionKind.ServiceReauthorize,
                     NyxIdAssistantActionEvidenceStrategy.UserServiceAuthorization,
-                    NyxIdActionPostconditionPort.ResolveEvidenceStrategy),
+                    NyxIdActionPostconditionPort.VerifyServiceReauthorizePostconditionAsync,
+                    ProbePostconditionInput(NyxIdAssistantActionKind.ServiceReauthorize)),
                 new(NyxIdAssistantActionKind.KeyCreate,
                     NyxIdAssistantActionEvidenceStrategy.AgentApiKeyCurrentState,
-                    NyxIdActionPostconditionPort.ResolveEvidenceStrategy),
+                    NyxIdActionPostconditionPort.VerifyKeyCreatePostconditionAsync,
+                    ProbePostconditionInput(NyxIdAssistantActionKind.KeyCreate)),
                 new(NyxIdAssistantActionKind.KeyRotate,
                     NyxIdAssistantActionEvidenceStrategy.KeyRotationLineage,
-                    NyxIdActionPostconditionPort.ResolveEvidenceStrategy),
+                    NyxIdActionPostconditionPort.VerifyKeyRotatePostconditionAsync,
+                    ProbePostconditionInput(NyxIdAssistantActionKind.KeyRotate)),
             ],
             [
-                new(NyxIdAssistantActionKind.ServiceConnect,
+                new NyxIdAssistantActionEvidencePredicateRegistration<
+                    NyxIdServiceConnectEvidenceExpectation,
+                    NyxIdAuthorizationServiceEvidence>(
+                    NyxIdAssistantActionKind.ServiceConnect,
                     NyxIdAssistantActionEvidenceStrategy.UserServiceCurrentState,
-                    NyxIdActionPostconditionPort.ResolveEvidenceStrategy),
-                new(NyxIdAssistantActionKind.ServiceReauthorize,
+                    NyxIdActionPostconditionPort.ServiceConnectEvidenceMatches,
+                    [
+                        new(
+                            new NyxIdServiceConnectEvidenceExpectation(
+                                ProbeActionParams(
+                                    NyxIdAssistantActionParams.ParamsOneofCase
+                                        .CatalogServiceConnect),
+                                null),
+                            new NyxIdAuthorizationServiceEvidence
+                            {
+                                UserServiceId = "us-probe",
+                                ServiceSlug = "api-probe",
+                                Access = NyxIdAuthorizationAccess.Permitted,
+                            },
+                            new NyxIdAuthorizationServiceEvidence
+                            {
+                                UserServiceId = "us-probe",
+                                ServiceSlug = "api-other",
+                                Access = NyxIdAuthorizationAccess.Permitted,
+                            }),
+                        new(
+                            new NyxIdServiceConnectEvidenceExpectation(
+                                ProbeActionParams(
+                                    NyxIdAssistantActionParams.ParamsOneofCase
+                                        .CustomServiceConnect),
+                                "us-probe"),
+                            new NyxIdAuthorizationServiceEvidence
+                            {
+                                UserServiceId = "us-probe",
+                                Access = NyxIdAuthorizationAccess.Permitted,
+                            },
+                            new NyxIdAuthorizationServiceEvidence
+                            {
+                                UserServiceId = "us-other",
+                                Access = NyxIdAuthorizationAccess.Permitted,
+                            }),
+                    ]),
+                new NyxIdAssistantActionEvidencePredicateRegistration<
+                    NyxIdServiceReauthorizeEvidenceExpectation,
+                    NyxIdUserServiceAuthorizationEvidence>(
+                    NyxIdAssistantActionKind.ServiceReauthorize,
                     NyxIdAssistantActionEvidenceStrategy.UserServiceAuthorization,
-                    NyxIdActionPostconditionPort.ResolveEvidenceStrategy),
-                new(NyxIdAssistantActionKind.KeyCreate,
+                    NyxIdActionPostconditionPort.ServiceReauthorizeEvidenceMatches,
+                    [
+                        new(
+                            new NyxIdServiceReauthorizeEvidenceExpectation(
+                                ProbeActionParams(
+                                        NyxIdAssistantActionParams.ParamsOneofCase
+                                            .ServiceReauthorize)
+                                    .ServiceReauthorize),
+                            new NyxIdUserServiceAuthorizationEvidence(
+                                "us-probe",
+                                "credential-probe",
+                                true,
+                                NyxIdUserServiceCredentialStatus.Active,
+                                NyxIdOAuthConnectionStatus.Active,
+                                ["read"],
+                                DateTimeOffset.UnixEpoch),
+                            new NyxIdUserServiceAuthorizationEvidence(
+                                "us-probe",
+                                "credential-probe",
+                                true,
+                                NyxIdUserServiceCredentialStatus.Active,
+                                NyxIdOAuthConnectionStatus.Active,
+                                [],
+                                DateTimeOffset.UnixEpoch)),
+                    ]),
+                new NyxIdAssistantActionEvidencePredicateRegistration<
+                    NyxIdKeyCreateEvidenceExpectation,
+                    NyxIdAgentApiKeyEvidence>(
+                    NyxIdAssistantActionKind.KeyCreate,
                     NyxIdAssistantActionEvidenceStrategy.AgentApiKeyCurrentState,
-                    NyxIdActionPostconditionPort.ResolveEvidenceStrategy),
-                new(NyxIdAssistantActionKind.KeyRotate,
+                    NyxIdActionPostconditionPort.KeyCreateEvidenceMatches,
+                    [
+                        new(
+                            new NyxIdKeyCreateEvidenceExpectation(
+                                ProbeActionParams(
+                                        NyxIdAssistantActionParams.ParamsOneofCase.KeyCreate)
+                                    .KeyCreate,
+                                "key-probe"),
+                            new NyxIdAgentApiKeyEvidence(
+                                "key-probe",
+                                "agent-probe",
+                                ["proxy"],
+                                "codex",
+                                true,
+                                ["us-probe"],
+                                false,
+                                [],
+                                false,
+                                DateTimeOffset.UnixEpoch,
+                                null),
+                            new NyxIdAgentApiKeyEvidence(
+                                "key-probe",
+                                "agent-probe",
+                                ["proxy"],
+                                "codex",
+                                true,
+                                ["us-probe"],
+                                true,
+                                [],
+                                false,
+                                DateTimeOffset.UnixEpoch,
+                                null)),
+                    ]),
+                new NyxIdAssistantActionEvidencePredicateRegistration<
+                    NyxIdKeyRotateEvidenceExpectation,
+                    NyxIdAgentApiKeyEvidence>(
+                    NyxIdAssistantActionKind.KeyRotate,
                     NyxIdAssistantActionEvidenceStrategy.KeyRotationLineage,
-                    NyxIdActionPostconditionPort.ResolveEvidenceStrategy),
+                    NyxIdActionPostconditionPort.KeyRotateEvidenceMatches,
+                    [
+                        new(
+                            new NyxIdKeyRotateEvidenceExpectation(
+                                ProbeActionParams(
+                                        NyxIdAssistantActionParams.ParamsOneofCase.KeyRotate)
+                                    .KeyRotate,
+                                "key-replacement"),
+                            new NyxIdAgentApiKeyEvidence(
+                                "key-replacement",
+                                "agent-probe",
+                                ["proxy"],
+                                "codex",
+                                true,
+                                ["us-probe"],
+                                false,
+                                [],
+                                false,
+                                DateTimeOffset.UnixEpoch,
+                                new NyxIdApiKeyVersionEvidence(
+                                    "key-probe",
+                                    2,
+                                    DateTimeOffset.UnixEpoch)),
+                            new NyxIdAgentApiKeyEvidence(
+                                "key-replacement",
+                                "agent-probe",
+                                ["proxy"],
+                                "codex",
+                                true,
+                                ["us-probe"],
+                                false,
+                                [],
+                                false,
+                                DateTimeOffset.UnixEpoch,
+                                new NyxIdApiKeyVersionEvidence(
+                                    "key-other",
+                                    2,
+                                    DateTimeOffset.UnixEpoch))),
+                    ]),
             ],
             [
                 new(NyxIdAssistantActionKind.ServiceConnect,

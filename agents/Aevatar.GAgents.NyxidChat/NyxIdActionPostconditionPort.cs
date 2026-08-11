@@ -64,38 +64,133 @@ public sealed class NyxIdActionPostconditionPort : INyxIdActionPostconditionPort
         if (!IsValidCommonInput(input))
             return Unverified(input, InvalidInputCode, "The action postcondition input is invalid.");
 
-        return ResolveEvidenceStrategy(input.Action) switch
+        if (!NyxIdAssistantActionCapabilityRegistrations.Current
+                .TryResolvePostconditionVerifier(input.Action, out var verifier))
         {
-            NyxIdAssistantActionEvidenceStrategy.UserServiceCurrentState =>
-                await VerifyServiceConnectAsync(input, ct).ConfigureAwait(false),
-            NyxIdAssistantActionEvidenceStrategy.UserServiceAuthorization =>
-                await VerifyServiceReauthorizeAsync(input, transientToolContext, ct)
-                    .ConfigureAwait(false),
-            NyxIdAssistantActionEvidenceStrategy.AgentApiKeyCurrentState =>
-                await VerifyKeyCreateAsync(input, transientToolContext, ct).ConfigureAwait(false),
-            NyxIdAssistantActionEvidenceStrategy.KeyRotationLineage =>
-                await VerifyKeyRotateAsync(input, transientToolContext, ct).ConfigureAwait(false),
-            _ => Unverified(
+            return Unverified(
                 input,
                 UnsupportedCode,
-                "No typed read model is configured for this action postcondition."),
-        };
+                "No typed read model is configured for this action postcondition.");
+        }
+
+        return await verifier(this, input, transientToolContext, ct).ConfigureAwait(false);
     }
 
-    internal static NyxIdAssistantActionEvidenceStrategy? ResolveEvidenceStrategy(
-        NyxIdAssistantActionKind action) =>
-        action switch
+    internal static Task<NyxIdChatActionPostconditionResult>
+        VerifyServiceConnectPostconditionAsync(
+            NyxIdActionPostconditionPort port,
+            NyxIdChatActionPostconditionInput input,
+            AgentToolExecutionContextPayload? transientToolContext,
+            CancellationToken ct) =>
+        input.Action == NyxIdAssistantActionKind.ServiceConnect
+            ? port.VerifyServiceConnectAsync(input, ct)
+            : Task.FromResult(InvalidDispatch(input));
+
+    internal static Task<NyxIdChatActionPostconditionResult>
+        VerifyServiceReauthorizePostconditionAsync(
+            NyxIdActionPostconditionPort port,
+            NyxIdChatActionPostconditionInput input,
+            AgentToolExecutionContextPayload? transientToolContext,
+            CancellationToken ct) =>
+        input.Action == NyxIdAssistantActionKind.ServiceReauthorize
+            ? port.VerifyServiceReauthorizeAsync(input, transientToolContext, ct)
+            : Task.FromResult(InvalidDispatch(input));
+
+    internal static Task<NyxIdChatActionPostconditionResult>
+        VerifyKeyCreatePostconditionAsync(
+            NyxIdActionPostconditionPort port,
+            NyxIdChatActionPostconditionInput input,
+            AgentToolExecutionContextPayload? transientToolContext,
+            CancellationToken ct) =>
+        input.Action == NyxIdAssistantActionKind.KeyCreate
+            ? port.VerifyKeyCreateAsync(input, transientToolContext, ct)
+            : Task.FromResult(InvalidDispatch(input));
+
+    internal static Task<NyxIdChatActionPostconditionResult>
+        VerifyKeyRotatePostconditionAsync(
+            NyxIdActionPostconditionPort port,
+            NyxIdChatActionPostconditionInput input,
+            AgentToolExecutionContextPayload? transientToolContext,
+            CancellationToken ct) =>
+        input.Action == NyxIdAssistantActionKind.KeyRotate
+            ? port.VerifyKeyRotateAsync(input, transientToolContext, ct)
+            : Task.FromResult(InvalidDispatch(input));
+
+    private static NyxIdChatActionPostconditionResult InvalidDispatch(
+        NyxIdChatActionPostconditionInput input) =>
+        Unverified(
+            input,
+            InvalidInputCode,
+            "The action postcondition input does not match the verifier.");
+
+    private static bool MatchesEvidence<TExpectation, TEvidence>(
+        NyxIdAssistantActionKind action,
+        TExpectation expectation,
+        TEvidence evidence) =>
+        NyxIdAssistantActionCapabilityRegistrations.Current
+            .TryResolveEvidencePredicate<TExpectation, TEvidence>(action, out var predicate) &&
+        predicate(expectation, evidence);
+
+    internal static bool ServiceConnectEvidenceMatches(
+        NyxIdServiceConnectEvidenceExpectation expectation,
+        NyxIdAuthorizationServiceEvidence evidence) =>
+        evidence.Access == NyxIdAuthorizationAccess.Permitted &&
+        ValidIdentity(evidence.UserServiceId) &&
+        (expectation.ExpectedUserServiceId is null || string.Equals(
+            evidence.UserServiceId,
+            expectation.ExpectedUserServiceId,
+            StringComparison.Ordinal)) &&
+        expectation.Params.ParamsCase switch
         {
-            NyxIdAssistantActionKind.ServiceConnect =>
-                NyxIdAssistantActionEvidenceStrategy.UserServiceCurrentState,
-            NyxIdAssistantActionKind.ServiceReauthorize =>
-                NyxIdAssistantActionEvidenceStrategy.UserServiceAuthorization,
-            NyxIdAssistantActionKind.KeyCreate =>
-                NyxIdAssistantActionEvidenceStrategy.AgentApiKeyCurrentState,
-            NyxIdAssistantActionKind.KeyRotate =>
-                NyxIdAssistantActionEvidenceStrategy.KeyRotationLineage,
-            _ => null,
+            NyxIdAssistantActionParams.ParamsOneofCase.CatalogServiceConnect =>
+                ValidIdentity(expectation.Params.CatalogServiceConnect.ServiceSlug) &&
+                string.Equals(
+                    evidence.ServiceSlug,
+                    expectation.Params.CatalogServiceConnect.ServiceSlug,
+                    StringComparison.Ordinal),
+            NyxIdAssistantActionParams.ParamsOneofCase.CustomServiceConnect =>
+                ValidIdentity(expectation.ExpectedUserServiceId ?? string.Empty),
+            _ => false,
         };
+
+    internal static bool ServiceReauthorizeEvidenceMatches(
+        NyxIdServiceReauthorizeEvidenceExpectation expectation,
+        NyxIdUserServiceAuthorizationEvidence evidence) =>
+        string.Equals(
+            evidence.UserServiceId,
+            expectation.Requested.UserServiceId,
+            StringComparison.Ordinal) &&
+        evidence.IsActive &&
+        evidence.CredentialStatus == NyxIdUserServiceCredentialStatus.Active &&
+        evidence.OAuthConnectionStatus == NyxIdOAuthConnectionStatus.Active &&
+        evidence.GrantedScopes is not null &&
+        expectation.Requested.RequestedScopes.All(scope =>
+            evidence.GrantedScopes.Contains(scope, StringComparer.Ordinal));
+
+    internal static bool KeyCreateEvidenceMatches(
+        NyxIdKeyCreateEvidenceExpectation expectation,
+        NyxIdAgentApiKeyEvidence evidence) =>
+        evidence.IsActive &&
+        string.Equals(evidence.Id, expectation.ExpectedKeyId, StringComparison.Ordinal) &&
+        string.Equals(evidence.Name, expectation.Requested.Name, StringComparison.Ordinal) &&
+        string.Equals(
+            evidence.Platform,
+            expectation.Requested.Platform,
+            StringComparison.Ordinal) &&
+        SetEquals(evidence.Scopes, ["proxy"]) &&
+        !evidence.AllowAllServices &&
+        SetEquals(evidence.AllowedServiceIds, expectation.Requested.AllowedServiceIds) &&
+        !evidence.AllowAllNodes &&
+        evidence.AllowedNodeIds.Count == 0;
+
+    internal static bool KeyRotateEvidenceMatches(
+        NyxIdKeyRotateEvidenceExpectation expectation,
+        NyxIdAgentApiKeyEvidence evidence) =>
+        evidence.IsActive &&
+        string.Equals(evidence.Id, expectation.ExpectedKeyId, StringComparison.Ordinal) &&
+        evidence.VersionEvidence?.RotationPredecessorId is { } predecessorId &&
+        ValidIdentity(predecessorId) &&
+        string.Equals(predecessorId, expectation.Requested.KeyId, StringComparison.Ordinal);
 
     private async Task<NyxIdChatActionPostconditionResult> VerifyServiceConnectAsync(
         NyxIdChatActionPostconditionInput input,
@@ -125,14 +220,10 @@ public sealed class NyxIdActionPostconditionPort : INyxIdActionPostconditionPort
             return invalid;
 
         var matches = snapshot!.Services
-            .Where(static service =>
-                service.Access == NyxIdAuthorizationAccess.Permitted &&
-                !string.IsNullOrWhiteSpace(service.UserServiceId))
-            .Where(service => exactHint is null || string.Equals(
-                service.UserServiceId,
-                exactHint,
-                StringComparison.Ordinal))
-            .Where(service => ServiceConnectParamsMatch(input.Params, service))
+            .Where(service => MatchesEvidence(
+                NyxIdAssistantActionKind.ServiceConnect,
+                new NyxIdServiceConnectEvidenceExpectation(input.Params, exactHint),
+                service))
             .ToArray();
 
         if (matches.Length == 0)
@@ -215,13 +306,11 @@ public sealed class NyxIdActionPostconditionPort : INyxIdActionPostconditionPort
             return ProviderReadFailure(input, read.Failure);
 
         var evidence = read.Value!;
-        if (!string.Equals(evidence.UserServiceId, expectedUserServiceId, StringComparison.Ordinal) ||
-            !evidence.IsActive ||
-            evidence.CredentialStatus != NyxIdUserServiceCredentialStatus.Active ||
-            evidence.OAuthConnectionStatus != NyxIdOAuthConnectionStatus.Active ||
-            evidence.GrantedScopes is null ||
-            !input.Params.ServiceReauthorize.RequestedScopes.All(scope =>
-                evidence.GrantedScopes.Contains(scope, StringComparer.Ordinal)))
+        if (!MatchesEvidence(
+                NyxIdAssistantActionKind.ServiceReauthorize,
+                new NyxIdServiceReauthorizeEvidenceExpectation(
+                    input.Params.ServiceReauthorize),
+                evidence))
         {
             return Unverified(
                 input,
@@ -288,15 +377,10 @@ public sealed class NyxIdActionPostconditionPort : INyxIdActionPostconditionPort
             return ProviderReadFailure(input, read.Failure);
 
         var evidence = read.Value!;
-        if (!evidence.IsActive ||
-            !string.Equals(evidence.Id, keyId, StringComparison.Ordinal) ||
-            !string.Equals(evidence.Name, input.Params.KeyCreate.Name, StringComparison.Ordinal) ||
-            !string.Equals(evidence.Platform, input.Params.KeyCreate.Platform, StringComparison.Ordinal) ||
-            !SetEquals(evidence.Scopes, ["proxy"]) ||
-            evidence.AllowAllServices ||
-            !SetEquals(evidence.AllowedServiceIds, input.Params.KeyCreate.AllowedServiceIds) ||
-            evidence.AllowAllNodes ||
-            evidence.AllowedNodeIds.Count != 0)
+        if (!MatchesEvidence(
+                NyxIdAssistantActionKind.KeyCreate,
+                new NyxIdKeyCreateEvidenceExpectation(input.Params.KeyCreate, keyId),
+                evidence))
         {
             return Unverified(
                 input,
@@ -371,10 +455,10 @@ public sealed class NyxIdActionPostconditionPort : INyxIdActionPostconditionPort
                 "NyxID did not expose authoritative key rotation lineage.");
         }
 
-        if (!string.Equals(
-                predecessorId,
-                input.Params.KeyRotate.KeyId,
-                StringComparison.Ordinal))
+        if (!MatchesEvidence(
+                NyxIdAssistantActionKind.KeyRotate,
+                new NyxIdKeyRotateEvidenceExpectation(input.Params.KeyRotate, newKeyId),
+                evidence))
         {
             return Unverified(
                 input,
@@ -566,24 +650,6 @@ public sealed class NyxIdActionPostconditionPort : INyxIdActionPostconditionPort
         input.Action != NyxIdAssistantActionKind.Unspecified &&
         input.Params?.ParamsCase != NyxIdAssistantActionParams.ParamsOneofCase.None &&
         ValidResourceHint(input.ResourceHint);
-
-    private static bool ServiceConnectParamsMatch(
-        NyxIdAssistantActionParams actionParams,
-        NyxIdAuthorizationServiceEvidence service) =>
-        actionParams.ParamsCase switch
-        {
-            NyxIdAssistantActionParams.ParamsOneofCase.CatalogServiceConnect =>
-                !string.IsNullOrWhiteSpace(actionParams.CatalogServiceConnect.ServiceSlug) &&
-                string.Equals(
-                    service.ServiceSlug,
-                    actionParams.CatalogServiceConnect.ServiceSlug,
-                    StringComparison.Ordinal),
-            // Custom endpoint identity cannot be inferred from display text or a
-            // URL. It therefore requires an exact typed resource hint and only
-            // proves that exact visible service exists.
-            NyxIdAssistantActionParams.ParamsOneofCase.CustomServiceConnect => true,
-            _ => false,
-        };
 
     private static string? ResolveUserServiceHint(NyxIdChatSafeResourceRef? resource) =>
         resource?.ResourceCase == NyxIdChatSafeResourceRef.ResourceOneofCase.UserService &&

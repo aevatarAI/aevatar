@@ -5,6 +5,7 @@ using System.Text.Json.Nodes;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.GAgents.NyxidChat;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using FluentAssertions;
 
 namespace Aevatar.AI.Tests;
@@ -262,6 +263,61 @@ public sealed class NyxIdAssistantActionRegistryTests
         registry.TryGetDefinition("service.connect", out _).Should().BeFalse();
         registry.CapabilityReadiness["service.connect"].MissingCapabilities.Should()
             .Contain(NyxIdAssistantActionCapabilityKind.SafeResourcePredicate);
+    }
+
+    [Fact]
+    public void ExecutableComposition_ShouldRejectUnrelatedPostconditionVerifierCallable()
+    {
+        var unrelated = NyxIdAssistantActionCapabilityRegistrations.Current
+            .With(new NyxIdAssistantActionPostconditionVerifierRegistration(
+                NyxIdAssistantActionKind.ServiceConnect,
+                NyxIdAssistantActionEvidenceStrategy.UserServiceCurrentState,
+                NyxIdActionPostconditionPort.VerifyKeyCreatePostconditionAsync,
+                ServiceConnectPostconditionProbe()));
+
+        var registry = NyxIdAssistantActionRegistry.Load(
+            RegistryJsonWithKeyRotation(),
+            unrelated);
+
+        registry.CapabilityReadiness["service.connect"].MissingCapabilities.Should()
+            .Equal(NyxIdAssistantActionCapabilityKind.PostconditionVerifier);
+    }
+
+    [Fact]
+    public void ExecutableComposition_ShouldRejectUnrelatedEvidencePredicateCallable()
+    {
+        var unrelated = NyxIdAssistantActionCapabilityRegistrations.Current
+            .With(new NyxIdAssistantActionEvidencePredicateRegistration<
+                NyxIdServiceConnectEvidenceExpectation,
+                NyxIdAuthorizationServiceEvidence>(
+                NyxIdAssistantActionKind.ServiceConnect,
+                NyxIdAssistantActionEvidenceStrategy.UserServiceCurrentState,
+                static (_, _) => false,
+                [
+                    new(
+                        new NyxIdServiceConnectEvidenceExpectation(
+                            ServiceConnectPostconditionProbe().Params,
+                            null),
+                        new NyxIdAuthorizationServiceEvidence
+                        {
+                            UserServiceId = "us-probe",
+                            ServiceSlug = "api-probe",
+                            Access = NyxIdAuthorizationAccess.Permitted,
+                        },
+                        new NyxIdAuthorizationServiceEvidence
+                        {
+                            UserServiceId = "us-probe",
+                            ServiceSlug = "api-other",
+                            Access = NyxIdAuthorizationAccess.Permitted,
+                        }),
+                ]));
+
+        var registry = NyxIdAssistantActionRegistry.Load(
+            RegistryJsonWithKeyRotation(),
+            unrelated);
+
+        registry.CapabilityReadiness["service.connect"].MissingCapabilities.Should()
+            .Equal(NyxIdAssistantActionCapabilityKind.EvidencePredicate);
     }
 
     [Fact]
@@ -1258,6 +1314,23 @@ public sealed class NyxIdAssistantActionRegistryTests
             "nyxid-assistant-conformance",
             "v1",
             fixtureName));
+
+    private static NyxIdChatActionPostconditionInput ServiceConnectPostconditionProbe() => new()
+    {
+        ScopeId = "scope-probe",
+        OwnerSubject = "owner-probe",
+        OriginTurnId = "turn-probe",
+        ActionRequestId = "action-request-probe",
+        Action = NyxIdAssistantActionKind.ServiceConnect,
+        ReportedDisposition = NyxIdChatActionDisposition.Completed,
+        Params = new NyxIdAssistantActionParams
+        {
+            CatalogServiceConnect = new NyxIdCatalogServiceConnectParams
+            {
+                ServiceSlug = "api-probe",
+            },
+        },
+    };
 
     private static string FindRepositoryRoot()
     {
