@@ -258,6 +258,7 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
         serialized.Should().NotContain("history-reservation-outbox-sentinel");
         serialized.Should().NotContain("history-terminal-outbox-sentinel");
         serialized.Should().NotContain("credential-outbox-sentinel");
+        serialized.Should().NotContain("opaque-authority-ref-alpha");
         NyxIdChatConversationCurrentStateDocument.Descriptor.Fields.InFieldNumberOrder()
             .Should().NotContain(field =>
                 field.Name == "state_root" || field.Name == "owner_subject");
@@ -777,6 +778,15 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
                 SafeMessage = "Continuation accepted for later.",
                 CommittedAt = now.Clone(),
                 Instruction = "owner-subject-alpha access-token-alpha",
+                ReadAuthority = new NyxIdReadAuthorityRef
+                {
+                    SecretRef = "opaque-authority-ref-alpha",
+                    Purpose = "nyxid-chat-action-read-authority",
+                    ScopeId = "scope-alpha",
+                    OwnerSubject = "owner-alpha",
+                    Version = 1,
+                    ExpiresAtUnixMs = 1_800_000_000_000,
+                },
             },
             PendingHistoryInitialization = new NyxIdChatHistoryInitializationOutbox
             {

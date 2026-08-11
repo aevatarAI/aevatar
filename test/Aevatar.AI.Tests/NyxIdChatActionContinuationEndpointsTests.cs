@@ -1,8 +1,10 @@
 using System.Security.Claims;
 using System.Text.Json;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.AGUI.Contracts;
 using Aevatar.Studio.Application.Studio.Abstractions;
@@ -392,11 +394,15 @@ public partial class NyxIdChatEndpointsCoverageTests
     [Fact]
     public async Task HandleStreamMessageAsync_ActionContinue_ShouldUseAuthenticatedSubjectAndServerTurn()
     {
+        var authorityPort = new RecordingReadAuthorityPort();
         var context = new DefaultHttpContext
         {
             User = new ClaimsPrincipal(new ClaimsIdentity(
                 [new Claim("sub", "owner-alpha")],
                 authenticationType: "test")),
+            RequestServices = new ServiceCollection()
+                .AddSingleton<INyxIdActionReadAuthorityPort>(authorityPort)
+                .BuildServiceProvider(),
         };
         context.Request.Headers.Authorization = "Bearer valid-token";
         context.Response.Body = new MemoryStream();
@@ -445,6 +451,10 @@ public partial class NyxIdChatEndpointsCoverageTests
             .And.NotBe("turn-origin-alpha");
         command.OwnerSubject.Should().Be("owner-alpha");
         command.ClientRequestId.Should().Be("client-action-alpha");
+        command.ReadAuthority.Should().BeNull(
+            "service actions do not require owner bearer authority for postcondition reads");
+        authorityPort.IssueCalls.Should().Be(0);
+        command.ToString().Should().NotContain("valid-token");
         var report = command.Actions.Should().ContainSingle().Which;
         report.ActionRequestId.Should().Be("action-alpha");
         report.OriginTurnId.Should().Be("turn-origin-alpha");
@@ -455,6 +465,118 @@ public partial class NyxIdChatEndpointsCoverageTests
             .And.Contain(command.ContinuationTurnId);
     }
 
+    [Fact]
+    public async Task HandleStreamMessageAsync_ServiceActionWithoutAuthorityPort_ShouldStillDispatch()
+    {
+        var context = AuthorizedActionContext();
+        var actionInteraction = CompletedActionInteraction();
+        var request = new NyxIdChatEndpoints.NyxIdChatStreamRequest(
+            Prompt: null,
+            ClientRequestId: "client-action-alpha",
+            Type: "action.continue",
+            OriginTurnId: "turn-origin-alpha",
+            Actions:
+            [
+                new NyxIdChatEndpoints.NyxIdChatActionReportDto(
+                    "action-alpha",
+                    "turn-origin-alpha",
+                    "completed",
+                    new NyxIdChatEndpoints.NyxIdChatActionResourceDto(
+                        UserService: new NyxIdChatEndpoints.NyxIdChatUserServiceRefDto(
+                            "service-alpha"))),
+            ]);
+
+        await InvokeActionEndpointAsync(context, request, actionInteraction);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        actionInteraction.Commands.Should().ContainSingle()
+            .Which.ReadAuthority.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task HandleStreamMessageAsync_KeyActionWithoutAuthorityPort_ShouldReturnUnavailable()
+    {
+        var context = AuthorizedActionContext();
+        var actionInteraction = CompletedActionInteraction();
+        var request = new NyxIdChatEndpoints.NyxIdChatStreamRequest(
+            Prompt: null,
+            ClientRequestId: "client-action-alpha",
+            Type: "action.continue",
+            OriginTurnId: "turn-origin-alpha",
+            Actions:
+            [
+                new NyxIdChatEndpoints.NyxIdChatActionReportDto(
+                    "action-alpha",
+                    "turn-origin-alpha",
+                    "completed",
+                    new NyxIdChatEndpoints.NyxIdChatActionResourceDto(
+                        Key: new NyxIdChatEndpoints.NyxIdChatKeyRefDto("key-alpha"))),
+            ]);
+
+        await InvokeActionEndpointAsync(context, request, actionInteraction);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        actionInteraction.Commands.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleStreamMessageAsync_StateChangeWakeWithoutAuthorityPort_ShouldReachActorAdmission()
+    {
+        var context = AuthorizedActionContext();
+        var actionInteraction = CompletedActionInteraction();
+        var request = new NyxIdChatEndpoints.NyxIdChatStreamRequest(
+            Prompt: null,
+            ClientRequestId: "client-action-alpha",
+            Type: "action.continue",
+            OriginTurnId: null,
+            Actions: []);
+
+        await InvokeActionEndpointAsync(context, request, actionInteraction);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        actionInteraction.Commands.Should().ContainSingle()
+            .Which.ReadAuthority.Should().BeNull();
+    }
+
+    private static DefaultHttpContext AuthorizedActionContext()
+    {
+        var context = new DefaultHttpContext
+        {
+            User = new ClaimsPrincipal(new ClaimsIdentity(
+                [new Claim("sub", "owner-alpha")],
+                authenticationType: "test")),
+        };
+        context.Request.Headers.Authorization = "Bearer valid-token";
+        context.Response.Body = new MemoryStream();
+        return context;
+    }
+
+    private static StubNyxIdChatInteractionService<NyxIdActionContinuationCommand>
+        CompletedActionInteraction() =>
+        new()
+        {
+            Frames =
+            {
+                new AGUIEvent { RunFinished = new RunFinishedEvent() },
+            },
+        };
+
+    private static Task InvokeActionEndpointAsync(
+        DefaultHttpContext context,
+        NyxIdChatEndpoints.NyxIdChatStreamRequest request,
+        StubNyxIdChatInteractionService<NyxIdActionContinuationCommand> interaction) =>
+        InvokeTaskAsync(
+            "HandleStreamMessageAsync",
+            context,
+            "scope-alpha",
+            "conversation-alpha",
+            request,
+            new StubGAgentActorStore(),
+            new StubNyxIdChatInteractionService<NyxIdChatCommand>(),
+            interaction,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
     private static async Task InvokeActionContinuationAsync(
         NyxIdChatEndpoints.NyxIdChatStreamRequest request,
         StubNyxIdChatInteractionService<NyxIdActionContinuationCommand> interaction)
@@ -464,6 +586,9 @@ public partial class NyxIdChatEndpointsCoverageTests
             User = new ClaimsPrincipal(new ClaimsIdentity(
                 [new Claim("sub", "owner-alpha")],
                 authenticationType: "test")),
+            RequestServices = new ServiceCollection()
+                .AddSingleton<INyxIdActionReadAuthorityPort>(CreateAuthorityPort())
+                .BuildServiceProvider(),
         };
         context.Request.Headers.Authorization = "Bearer valid-token";
         context.Response.Body = new MemoryStream();
@@ -793,7 +918,8 @@ public partial class NyxIdChatEndpointsCoverageTests
                 },
             ],
             CommandId: "command-alpha",
-            CorrelationId: "correlation-alpha");
+            CorrelationId: "correlation-alpha",
+            ReadAuthority: AuthorityRef());
 
         var envelope = factory.CreateEnvelope(
             command,
@@ -814,9 +940,62 @@ public partial class NyxIdChatEndpointsCoverageTests
         message.ClientRequestId.Should().Be("client-request-alpha");
         message.CommandId.Should().Be("command-alpha");
         message.CorrelationId.Should().Be("correlation-alpha");
+        message.ReadAuthority.Should().BeEquivalentTo(command.ReadAuthority);
+        message.ToString().Should().NotContain("bearer-alpha");
         message.Actions.Should().ContainSingle().Which.Resource.UserService.UserServiceId
             .Should().Be("service-alpha");
     }
+
+    private static NyxIdActionReadAuthorityPort CreateAuthorityPort() =>
+        new(
+            new InMemorySecretVault(),
+            TimeProvider.System,
+            TimeSpan.FromMinutes(10),
+            TimeSpan.FromHours(24));
+
+    private sealed class RecordingReadAuthorityPort : INyxIdActionReadAuthorityPort
+    {
+        public int IssueCalls { get; private set; }
+
+        public Task<NyxIdActionReadAuthorityIssueResult> IssueAsync(
+            string bearerToken,
+            string scopeId,
+            string ownerSubject,
+            string requestIdentity,
+            CancellationToken ct = default)
+        {
+            IssueCalls++;
+            return Task.FromResult(new NyxIdActionReadAuthorityIssueResult(
+                true,
+                AuthorityRef()));
+        }
+
+        public Task<NyxIdActionReadAuthorityResolution> ResolveAsync(
+            NyxIdReadAuthorityRef? authority,
+            string expectedScopeId,
+            string expectedOwnerSubject,
+            CancellationToken ct = default) =>
+            Task.FromResult(NyxIdActionReadAuthorityResolution.Failed(
+                NyxIdActionReadAuthorityPort.UnavailableCode));
+
+        public Task<bool> RevokeAsync(
+            NyxIdReadAuthorityRef? authority,
+            string expectedScopeId,
+            string expectedOwnerSubject,
+            CancellationToken ct = default) =>
+            Task.FromResult(false);
+    }
+
+    private static NyxIdReadAuthorityRef AuthorityRef() =>
+        new()
+        {
+            SecretRef = "opaque-authority-alpha",
+            Purpose = "nyxid-chat.action-read-authority",
+            ScopeId = "scope-alpha",
+            OwnerSubject = "owner-alpha",
+            Version = 1,
+            ExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(10).ToUnixTimeMilliseconds(),
+        };
 
     [Fact]
     public async Task NyxIdActionContinuationInteraction_ShouldUseCanonicalObservationAndDispatchPipeline()

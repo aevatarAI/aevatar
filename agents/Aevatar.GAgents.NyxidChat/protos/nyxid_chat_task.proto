@@ -83,6 +83,17 @@ enum NyxIdChatActionDisposition {
   NYX_ID_CHAT_ACTION_DISPOSITION_EXPIRED = 5;
 }
 
+// Opaque, owner-bound authority for exact NyxID action read-back. This ref may
+// be durable; the raw bearer remains exclusively in the secret vault.
+message NyxIdReadAuthorityRef {
+  string secret_ref = 1;
+  string purpose = 2;
+  string scope_id = 3;
+  string owner_subject = 4;
+  int64 version = 5;
+  int64 expires_at_unix_ms = 6;
+}
+
 enum NyxIdChatStepKind {
   NYX_ID_CHAT_STEP_KIND_UNSPECIFIED = 0;
   NYX_ID_CHAT_STEP_KIND_LLM = 1;
@@ -925,6 +936,9 @@ message NyxIdChatContinuationAdmissionState {
   // reports. Steering admissions leave these fields empty.
   string owner_subject = 12;
   repeated NyxIdChatActionReport action_reports = 13;
+  // Durable opaque authority for key-action read-back. Public projectors must
+  // remove this field before publishing the admission.
+  NyxIdReadAuthorityRef read_authority = 14;
 }
 
 message NyxIdChatStepControlResultState {
@@ -1610,6 +1624,7 @@ message NyxIdChatActionPostconditionInput {
   // Authoritative action-request time captured by the conversation actor.
   // Provider evidence predating this value cannot prove the requested effect.
   google.protobuf.Timestamp requested_at = 9;
+  NyxIdReadAuthorityRef read_authority = 10;
 }
 
 // Transient continuation payloads. Raw user input and credentials are carried
@@ -2050,6 +2065,7 @@ message NyxIdChatActionContinueCommand {
   // Authenticated NyxID subject used only to select the typed read-model
   // authority. It is an identity, not a credential or bearer token.
   string owner_subject = 9;
+  NyxIdReadAuthorityRef read_authority = 10;
 }
 
 message NyxIdChatOperationRequestedEvent {

@@ -70,6 +70,8 @@ public static partial class NyxIdChatEndpoints
         AgentProfileReference? agentProfileReference = null;
         IReadOnlyList<NyxIdChatActionReport> actionReports = [];
         IReadOnlyList<ChatContentPart> inputParts = [];
+        var actionContinuationCommandId = string.Empty;
+        NyxIdReadAuthorityRef? actionReadAuthority = null;
 
         try
         {
@@ -152,6 +154,55 @@ public static partial class NyxIdChatEndpoints
 
                 inputParts = normalizedInput.Parts;
             }
+            else
+            {
+                actionContinuationCommandId = NyxIdChatPublicIdentity.CreateActionContinuationCommandId(
+                    actorId,
+                    scopeId,
+                    ownerSubject,
+                    clientRequestId!,
+                    request.OriginTurnId?.Trim() ?? string.Empty,
+                    actionReports);
+                var requiresReadAuthority = RequiresReadAuthorityAtHttpBoundary(actionReports);
+                var shouldIssueReadAuthority = requiresReadAuthority || actionReports.Count == 0;
+                if (shouldIssueReadAuthority)
+                {
+                    var authorityPort = http.RequestServices.GetService<INyxIdActionReadAuthorityPort>();
+                    if (authorityPort is null)
+                    {
+                        if (requiresReadAuthority)
+                        {
+                            http.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                            return;
+                        }
+                    }
+                    else
+                    {
+                        var issuedAuthority = await authorityPort.IssueAsync(
+                            accessToken,
+                            scopeId,
+                            ownerSubject,
+                            actionContinuationCommandId,
+                            ct);
+                        if (!issuedAuthority.Succeeded || issuedAuthority.Authority is null)
+                        {
+                            logger.LogWarning(
+                                "NyxID action read authority issuance failed for actor {ActorId}: {FailureCode}",
+                                actorId,
+                                issuedAuthority.FailureCode ?? NyxIdActionReadAuthorityPort.UnavailableCode);
+                            if (requiresReadAuthority)
+                            {
+                                http.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                                return;
+                            }
+                        }
+                        else
+                        {
+                            actionReadAuthority = issuedAuthority.Authority;
+                        }
+                    }
+                }
+            }
         }
         catch (OperationCanceledException)
         {
@@ -222,13 +273,6 @@ public static partial class NyxIdChatEndpoints
             CommandInteractionResult<NyxIdChatAcceptedReceipt, NyxIdChatStartError, NyxIdChatCompletionStatus> result;
             if (string.Equals(streamType, "action.continue", StringComparison.Ordinal))
             {
-                var commandId = NyxIdChatPublicIdentity.CreateActionContinuationCommandId(
-                    actorId,
-                    scopeId,
-                    ownerSubject,
-                    clientRequestId!,
-                    request.OriginTurnId?.Trim() ?? string.Empty,
-                    actionReports);
                 interactionTask = actionContinuationInteractionService.ExecuteAsync(
                     new NyxIdActionContinuationCommand(
                         actorId,
@@ -238,8 +282,9 @@ public static partial class NyxIdChatEndpoints
                         ownerSubject,
                         clientRequestId!,
                         actionReports,
-                        CommandId: commandId,
-                        CorrelationId: commandId),
+                        CommandId: actionContinuationCommandId,
+                        CorrelationId: actionContinuationCommandId,
+                        ReadAuthority: actionReadAuthority),
                     EmitAsync,
                     null,
                     interactionCancellation.Token);
@@ -363,6 +408,12 @@ public static partial class NyxIdChatEndpoints
                 interactionCancellation.Dispose();
         }
     }
+
+    private static bool RequiresReadAuthorityAtHttpBoundary(
+        IReadOnlyList<NyxIdChatActionReport> reports) =>
+        reports.Any(static report =>
+            report.Disposition == NyxIdChatActionDisposition.Completed &&
+            report.Resource?.ResourceCase == NyxIdChatSafeResourceRef.ResourceOneofCase.Key);
 
     /// <summary>
     /// Handles tool approval decisions from the frontend.

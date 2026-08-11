@@ -32,6 +32,7 @@ using Aevatar.GAgents.NyxidChat.Voice;
 using Aevatar.GAgents.NyxidChat.WorkflowDraftRun;
 using Aevatar.GAgents.NyxidChat.WorkflowRunDelivery;
 using Aevatar.AGUI.Contracts;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.GAgentService.Abstractions.AgentProfiles;
@@ -208,6 +209,12 @@ public static class ServiceCollectionExtensions
                 sp.GetService<INyxIdAuthorizationCatalogQueryPort>(),
                 sp.GetService<INyxIdActionEvidenceReadPort>(),
                 sp.GetRequiredService<TimeProvider>()));
+        services.TryAddSingleton<INyxIdActionReadAuthorityPort>(sp =>
+            new NyxIdActionReadAuthorityPort(
+                sp.GetRequiredService<ISecretVault>(),
+                sp.GetRequiredService<TimeProvider>(),
+                TimeSpan.FromMinutes(10),
+                TimeSpan.FromHours(24)));
         services.TryAddSingleton<INyxIdChatDelegationCredentialLifecyclePort,
             NyxIdChatDelegationCredentialLifecyclePort>();
         services.TryAddSingleton<INyxIdChatTurnOperationExecutor, NyxIdChatTurnOperationExecutor>();

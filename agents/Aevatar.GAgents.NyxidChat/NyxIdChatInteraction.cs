@@ -163,7 +163,8 @@ public sealed record NyxIdActionContinuationCommand(
     string ClientRequestId,
     IReadOnlyList<NyxIdChatActionReport> Actions,
     string? CommandId = null,
-    string? CorrelationId = null)
+    string? CorrelationId = null,
+    NyxIdReadAuthorityRef? ReadAuthority = null)
     : ICommandContextSeed
 {
     public IReadOnlyDictionary<string, string>? Headers => null;
@@ -661,6 +662,7 @@ internal sealed class NyxIdActionContinuationCommandEnvelopeFactory
             ClientRequestId = command.ClientRequestId,
             CommandId = context.CommandId,
             CorrelationId = context.CorrelationId,
+            ReadAuthority = command.ReadAuthority?.Clone(),
         };
         message.Actions.Add(command.Actions.Select(static action => action.Clone()));
 

@@ -430,6 +430,15 @@ public sealed class NyxIdChatProjectionSessionTests
             Status = NyxIdChatContinuationAdmissionStatus.Accepted,
             ReasonCode = NyxIdChatBrowserActions.ActionContinuationAccepted,
             OwnerSubject = "owner-alpha",
+            ReadAuthority = new NyxIdReadAuthorityRef
+            {
+                SecretRef = "opaque-authority-ref-alpha",
+                Purpose = "nyxid-chat-action-read-authority",
+                ScopeId = "scope-alpha",
+                OwnerSubject = "owner-alpha",
+                Version = 1,
+                ExpiresAtUnixMs = 1_800_000_000_000,
+            },
         };
         var active = ControllerState(NyxIdChatTaskStatus.Active, NyxIdChatTurnStatus.Active);
         active.ProgressSequence = 5;
@@ -478,6 +487,14 @@ public sealed class NyxIdChatProjectionSessionTests
             await hub.Handler!(published.Event);
 
         sink.Events.Select(static entry => entry.Sequence).Should().Equal(5, 5, 5, 6, 6, 6, 6);
+        var publicAdmission = sink.Events.First(entry =>
+                entry.EventCase == AGUIEvent.EventOneofCase.Custom &&
+                entry.Custom.Name ==
+                NyxIdChatConversationAguiFrameBuilder.ContinuationChangedEventName)
+            .Custom.Payload.Unpack<NyxIdChatContinuationAdmissionState>();
+        publicAdmission.ReadAuthority.Should().BeNull();
+        sink.Events.Should().OnlyContain(entry =>
+            !entry.ToString().Contains("opaque-authority-ref-alpha", StringComparison.Ordinal));
         sink.Events.Should().Contain(entry =>
             entry.EventCase == AGUIEvent.EventOneofCase.RunFinished &&
             entry.RunFinished.RunId == context.SessionId &&

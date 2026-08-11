@@ -1142,6 +1142,12 @@ internal sealed class NyxIdAssistantActionCapabilityRegistrations
                 new(NyxIdAssistantActionKind.ServiceConnect,
                     NyxIdAssistantActionAuthorityRequirement.BrowserOwnerSubject,
                     NyxIdChatBrowserActions.OwnerSubjectsMatch),
+                new(NyxIdAssistantActionKind.KeyCreate,
+                    NyxIdAssistantActionAuthorityRequirement.ExactKeyMutationAuthority,
+                    NyxIdActionReadAuthorityPort.OwnerSubjectsMatch),
+                new(NyxIdAssistantActionKind.KeyRotate,
+                    NyxIdAssistantActionAuthorityRequirement.ExactKeyMutationAuthority,
+                    NyxIdActionReadAuthorityPort.OwnerSubjectsMatch),
             ],
             [
                 new(NyxIdAssistantActionKind.ServiceConnect,

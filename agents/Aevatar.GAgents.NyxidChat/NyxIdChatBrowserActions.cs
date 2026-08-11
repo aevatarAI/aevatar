@@ -254,6 +254,17 @@ public static class NyxIdChatBrowserActions
 
         if (!TryNormalizeReports(command.Actions, now, out var sanitizedReports))
             return RejectContinuation(state, ActionContinuationConflict);
+        var requiresReadAuthority = RequiresContinuationReadAuthority(
+            state,
+            sanitizedReports,
+            isStateChangeWake);
+        if (!ValidContinuationReadAuthority(command, requiresReadAuthority, now))
+        {
+            return RejectContinuation(state, ActionContinuationInvalid);
+        }
+        var acceptedReadAuthority = requiresReadAuthority
+            ? command.ReadAuthority
+            : null;
 
         var existingAdmission = state.ContinuationAdmission;
         if (existingAdmission is
@@ -265,7 +276,11 @@ public static class NyxIdChatBrowserActions
                 Normalize(command.ClientRequestId),
                 StringComparison.Ordinal))
         {
-            if (!AdmissionMatches(existingAdmission, command, sanitizedReports))
+            if (!AdmissionMatches(
+                    existingAdmission,
+                    command,
+                    sanitizedReports,
+                    acceptedReadAuthority))
                 return RejectContinuation(state, ActionContinuationConflict);
 
             var replay = TryBuildReplayDispatch(state, existingAdmission);
@@ -394,6 +409,7 @@ public static class NyxIdChatBrowserActions
             ReasonCode = ActionContinuationAccepted,
             CommittedAt = now.Clone(),
             OwnerSubject = Normalize(command.OwnerSubject),
+            ReadAuthority = acceptedReadAuthority?.Clone(),
         };
         admission.ActionReports.Add(sanitizedReports.Select(static report => report.Clone()));
         next.ContinuationAdmission = admission.Clone();
@@ -450,7 +466,8 @@ public static class NyxIdChatBrowserActions
                     admission.OwnerSubject,
                     pending[index],
                     report: null,
-                    step.Operation.Key);
+                    step.Operation.Key,
+                    admission.ReadAuthority);
             }
         }
         for (var reportIndex = 0; reportIndex < sanitizedReports.Length; reportIndex++)
@@ -471,7 +488,8 @@ public static class NyxIdChatBrowserActions
                         admission.OwnerSubject,
                         request,
                         report,
-                        step.Operation.Key);
+                        step.Operation.Key,
+                        admission.ReadAuthority);
                 }
                 continue;
             }
@@ -826,7 +844,8 @@ public static class NyxIdChatBrowserActions
         string ownerSubject,
         NyxIdChatActionRequestState request,
         NyxIdChatActionReport? report,
-        NyxIdChatOperationKey key) =>
+        NyxIdChatOperationKey key,
+        NyxIdReadAuthorityRef? readAuthority) =>
         new()
         {
             Key = key.Clone(),
@@ -841,6 +860,7 @@ public static class NyxIdChatBrowserActions
                 ResourceHint = report?.Resource?.Clone(),
                 Params = request.Params?.Clone(),
                 RequestedAt = request.RequestedAt?.Clone(),
+                ReadAuthority = readAuthority?.Clone(),
             },
         };
 
@@ -876,7 +896,8 @@ public static class NyxIdChatBrowserActions
             state.ContinuationAdmission.OwnerSubject,
             request,
             report,
-            step.Operation.Key);
+            step.Operation.Key,
+            state.ContinuationAdmission.ReadAuthority);
     }
 
     private static NyxIdChatOperationDispatchCommand? TryBuildReplayDispatch(
@@ -903,7 +924,8 @@ public static class NyxIdChatBrowserActions
                 admission.OwnerSubject,
                 request,
                 report,
-                step.Operation.Key);
+                step.Operation.Key,
+                admission.ReadAuthority);
     }
 
     internal static NyxIdChatOperationDispatchCommand? TryBuildRecoveryDispatch(
@@ -959,7 +981,8 @@ public static class NyxIdChatBrowserActions
                 admission.OwnerSubject,
                 request,
                 report,
-                key);
+                key,
+                admission.ReadAuthority);
     }
 
     private static bool RequestMatchesState(
@@ -1043,6 +1066,44 @@ public static class NyxIdChatBrowserActions
             command.ConversationActorId.Trim(),
             StringComparison.Ordinal);
 
+    private static bool RequiresContinuationReadAuthority(
+        NyxIdChatConversationGAgentState state,
+        IReadOnlyList<NyxIdChatActionReport> reports,
+        bool isStateChangeWake)
+    {
+        var pendingById = state.PendingActions.ToDictionary(
+            static action => action.ActionRequestId,
+            StringComparer.Ordinal);
+        return isStateChangeWake
+            ? state.PendingActions.Any(static action => RequiresExactReadAuthority(action.Action))
+            : reports.Any(report =>
+                report.Disposition == NyxIdChatActionDisposition.Completed &&
+                pendingById.TryGetValue(report.ActionRequestId, out var pending) &&
+                RequiresExactReadAuthority(pending.Action));
+    }
+
+    private static bool ValidContinuationReadAuthority(
+        NyxIdChatActionContinueCommand command,
+        bool requiresReadAuthority,
+        Timestamp now)
+    {
+        if (command.ReadAuthority is null)
+            return !requiresReadAuthority;
+
+        return NyxIdActionReadAuthorityPort.ValidateReference(
+                command.ReadAuthority,
+                Normalize(command.ScopeId),
+                Normalize(command.OwnerSubject),
+                now.ToDateTimeOffset(),
+                checkExpiration: true,
+                Normalize(command.CommandId)) is null;
+    }
+
+    private static bool RequiresExactReadAuthority(NyxIdAssistantActionKind action) =>
+        NyxIdAssistantActionSemanticContracts.TryGet(action, out var semantic) &&
+        semantic.AuthorityRequirement ==
+        NyxIdAssistantActionAuthorityRequirement.ExactKeyMutationAuthority;
+
     private static bool ValidReport(NyxIdChatActionReport report, string originTurnId) =>
         !string.IsNullOrWhiteSpace(report.ActionRequestId) &&
         !string.IsNullOrWhiteSpace(report.OriginTurnId) &&
@@ -1124,11 +1185,13 @@ public static class NyxIdChatBrowserActions
     private static bool AdmissionMatches(
         NyxIdChatContinuationAdmissionState admission,
         NyxIdChatActionContinueCommand command,
-        IReadOnlyList<NyxIdChatActionReport> sanitizedReports)
+        IReadOnlyList<NyxIdChatActionReport> sanitizedReports,
+        NyxIdReadAuthorityRef? acceptedReadAuthority)
     {
         if (!string.Equals(admission.OriginTurnId, Normalize(command.OriginTurnId), StringComparison.Ordinal) ||
             !string.Equals(admission.ContinuationTurnId, Normalize(command.ContinuationTurnId), StringComparison.Ordinal) ||
             !OwnerSubjectsMatch(admission.OwnerSubject, command.OwnerSubject) ||
+            !EqualsBytes(admission.ReadAuthority, acceptedReadAuthority) ||
             admission.ActionReports.Count != sanitizedReports.Count)
         {
             return false;

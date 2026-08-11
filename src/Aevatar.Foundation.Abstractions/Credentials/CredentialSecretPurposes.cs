@@ -19,4 +19,8 @@ public static class CredentialSecretPurposes
     public const string NyxIdChatPendingFirstTurn = "nyxid-chat.pending-first-turn";
     public const string NyxIdChatPendingSteeringContinuation =
         "nyxid-chat.pending-steering-continuation";
+    public const string NyxIdChatActionReadAuthority =
+        "nyxid-chat.action-read-authority";
+    public const string NyxIdChatActionReadAuthorityFence =
+        "nyxid-chat.action-read-authority-fence";
 }

@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using Aevatar.AI.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgents.NyxidChat;
 using FluentAssertions;
 using Google.Protobuf;
@@ -499,6 +500,7 @@ public sealed class NyxIdChatBrowserActionTests
         var command = ContinueCommand(
             blocked.PendingActions.Single().ActionRequestId,
             NyxIdChatActionDisposition.Completed);
+        command.ReadAuthority = ReadAuthority(command.CommandId);
 
         var decision = NyxIdChatBrowserActions.Continue(blocked, command, Now);
 
@@ -539,9 +541,132 @@ public sealed class NyxIdChatBrowserActionTests
             NyxIdChatActionDisposition.Completed);
         decision.NextCommand.ActionPostcondition.Params.ParamsCase.Should().Be(
             NyxIdAssistantActionParams.ParamsOneofCase.CatalogServiceConnect);
+        decision.Admission.ReadAuthority.Should().BeNull();
+        decision.State.ContinuationAdmission.ReadAuthority.Should().BeNull();
+        decision.NextCommand.ActionPostcondition.ReadAuthority.Should().BeNull();
         decision.State.PendingActions.Single().Reports.Should().ContainSingle()
             .Which.SafeMessage.Should().BeEmpty(
             "browser supplied prose is not durable action evidence");
+    }
+
+    [Fact]
+    public void KeyCompletedReport_ShouldPersistCanonicalReadAuthorityThroughRecovery()
+    {
+        var blocked = BlockedKeyCreateActionState();
+        var command = ContinueCommand(
+            blocked.PendingActions.Single().ActionRequestId,
+            NyxIdChatActionDisposition.Completed);
+        command.Actions[0].Resource = new NyxIdChatSafeResourceRef
+        {
+            Key = new NyxIdChatKeyRef { KeyId = "key-alpha" },
+        };
+        command.ReadAuthority = ReadAuthority(command.CommandId);
+
+        var decision = NyxIdChatBrowserActions.Continue(blocked, command, Now);
+
+        decision.ShouldCommit.Should().BeTrue();
+        decision.ShouldDispatch.Should().BeTrue();
+        decision.Admission.ReadAuthority.Should().BeEquivalentTo(command.ReadAuthority);
+        decision.State.ContinuationAdmission.ReadAuthority.Should()
+            .BeEquivalentTo(command.ReadAuthority);
+        decision.NextCommand!.ActionPostcondition.ReadAuthority.Should()
+            .BeEquivalentTo(command.ReadAuthority);
+
+        var restarted = NyxIdChatConversationGAgentState.Parser.ParseFrom(
+            decision.State.ToByteArray());
+        var recovery = NyxIdChatBrowserActions.TryBuildRecoveryDispatch(
+            restarted,
+            decision.NextCommand.Key);
+
+        recovery.Should().NotBeNull();
+        recovery!.ActionPostcondition.ReadAuthority.Should()
+            .BeEquivalentTo(command.ReadAuthority);
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("scope")]
+    [InlineData("owner")]
+    [InlineData("purpose")]
+    [InlineData("request")]
+    [InlineData("expired")]
+    public void KeyCompletedReport_ShouldRejectInvalidReadAuthority(string mutation)
+    {
+        var blocked = BlockedKeyCreateActionState();
+        var command = ContinueCommand(
+            blocked.PendingActions.Single().ActionRequestId,
+            NyxIdChatActionDisposition.Completed);
+        command.Actions[0].Resource = new NyxIdChatSafeResourceRef
+        {
+            Key = new NyxIdChatKeyRef { KeyId = "key-alpha" },
+        };
+        command.ReadAuthority = mutation == "missing"
+            ? null
+            : ReadAuthority(command.CommandId);
+        switch (mutation)
+        {
+            case "scope":
+                command.ReadAuthority!.ScopeId = "scope-other";
+                break;
+            case "owner":
+                command.ReadAuthority!.OwnerSubject = "owner-other";
+                break;
+            case "purpose":
+                command.ReadAuthority!.Purpose = "wrong-purpose";
+                break;
+            case "request":
+                command.ReadAuthority!.SecretRef = ReadAuthority("command-action-other").SecretRef;
+                break;
+            case "expired":
+                command.ReadAuthority!.ExpiresAtUnixMs = Now.ToDateTimeOffset()
+                    .AddMilliseconds(-1)
+                    .ToUnixTimeMilliseconds();
+                break;
+        }
+
+        var decision = NyxIdChatBrowserActions.Continue(blocked, command, Now);
+
+        decision.ShouldCommit.Should().BeFalse();
+        decision.ShouldDispatch.Should().BeFalse();
+        decision.Outcome.Should().Be(NyxIdChatTransitionOutcome.Rejected);
+        decision.ReasonCode.Should().Be(NyxIdChatBrowserActions.ActionContinuationInvalid);
+    }
+
+    [Fact]
+    public void KeyStateChangeWakeWithoutReadAuthority_ShouldRejectWithoutDispatch()
+    {
+        var blocked = BlockedKeyCreateActionState();
+        var command = ContinueCommand(
+            blocked.PendingActions.Single().ActionRequestId,
+            NyxIdChatActionDisposition.Completed);
+        command.OriginTurnId = string.Empty;
+        command.Actions.Clear();
+
+        var decision = NyxIdChatBrowserActions.Continue(blocked, command, Now);
+
+        decision.ShouldCommit.Should().BeFalse();
+        decision.ShouldDispatch.Should().BeFalse();
+        decision.ReasonCode.Should().Be(NyxIdChatBrowserActions.ActionContinuationInvalid);
+    }
+
+    [Fact]
+    public void KeyStateChangeWakeWithReadAuthority_ShouldDispatchWithAuthority()
+    {
+        var blocked = BlockedKeyCreateActionState();
+        var command = ContinueCommand(
+            blocked.PendingActions.Single().ActionRequestId,
+            NyxIdChatActionDisposition.Completed);
+        command.OriginTurnId = string.Empty;
+        command.Actions.Clear();
+        command.ReadAuthority = ReadAuthority(command.CommandId);
+
+        var decision = NyxIdChatBrowserActions.Continue(blocked, command, Now);
+
+        decision.ShouldCommit.Should().BeTrue();
+        decision.ShouldDispatch.Should().BeTrue();
+        decision.Admission.ReadAuthority.Should().BeEquivalentTo(command.ReadAuthority);
+        decision.NextCommand!.ActionPostcondition.ReadAuthority.Should()
+            .BeEquivalentTo(command.ReadAuthority);
     }
 
     [Fact]
@@ -654,6 +779,9 @@ public sealed class NyxIdChatBrowserActionTests
         decision.NextCommand.ActionPostcondition.ResourceHint.Should().BeNull();
         decision.NextCommand.ActionPostcondition.Params.CatalogServiceConnect.ServiceSlug
             .Should().Be("api-github");
+        decision.Admission.ReadAuthority.Should().BeNull();
+        decision.State.ContinuationAdmission.ReadAuthority.Should().BeNull();
+        decision.NextCommand.ActionPostcondition.ReadAuthority.Should().BeNull();
     }
 
     [Fact]
@@ -692,6 +820,7 @@ public sealed class NyxIdChatBrowserActionTests
         var command = ContinueCommand(
             blocked.PendingActions.Single().ActionRequestId,
             NyxIdChatActionDisposition.Completed);
+        command.ReadAuthority = ReadAuthority(command.CommandId);
         var first = NyxIdChatBrowserActions.Continue(blocked, command, Now);
 
         var replay = NyxIdChatBrowserActions.Continue(first.State, command.Clone(), Now);
@@ -705,6 +834,8 @@ public sealed class NyxIdChatBrowserActionTests
             blocked.ActiveTask.PlanRevisions);
         replay.State.ActiveTask.Steps.Select(static step => step.StepId).Should()
             .OnlyHaveUniqueItems();
+        first.Admission.ReadAuthority.Should().BeNull();
+        replay.Admission.ReadAuthority.Should().BeNull();
     }
 
     [Fact]
@@ -1112,6 +1243,27 @@ public sealed class NyxIdChatBrowserActionTests
         return state;
     }
 
+    private static NyxIdChatConversationGAgentState BlockedKeyCreateActionState()
+    {
+        var state = BlockedActionState();
+        var request = state.PendingActions.Single();
+        request.RegistryRevision = NyxIdAssistantActionRegistry.LeastScopeRegistryRevision;
+        request.Action = NyxIdAssistantActionKind.KeyCreate;
+        request.Params = new NyxIdAssistantActionParams
+        {
+            KeyCreate = new NyxIdKeyCreateParams
+            {
+                Name = "agent-alpha",
+                Platform = "codex",
+                AllowedServiceIds = { "service-alpha" },
+            },
+        };
+        state.ActiveTask.Steps.Single(step =>
+                step.Kind == NyxIdChatStepKind.BrowserAction)
+            .Source.BrowserAction.Action = NyxIdAssistantActionKind.KeyCreate;
+        return state;
+    }
+
     private static NyxIdChatConversationGAgentState BlockedActionStateWithPendingGate() =>
         NyxIdChatBrowserActions.RequestAuthorization(
             AuthorizationWaitingState(),
@@ -1260,6 +1412,20 @@ public sealed class NyxIdChatBrowserActionTests
         command.Actions.Add(ActionReport(actionRequestId, disposition));
         return command;
     }
+
+    private static NyxIdReadAuthorityRef ReadAuthority(string commandId) => new()
+    {
+        SecretRef = NyxIdActionReadAuthorityPort.BuildRequestedRef(
+            CredentialSecretPurposes.NyxIdChatActionReadAuthority,
+            "scope-alpha",
+            "owner-alpha",
+            commandId),
+        Purpose = CredentialSecretPurposes.NyxIdChatActionReadAuthority,
+        ScopeId = "scope-alpha",
+        OwnerSubject = "owner-alpha",
+        Version = 1,
+        ExpiresAtUnixMs = Now.ToDateTimeOffset().AddMinutes(10).ToUnixTimeMilliseconds(),
+    };
 
     private static NyxIdChatPlanResolveCommand ResolvePlanCommand(
         NyxIdChatPlanGate gate,

@@ -327,6 +327,8 @@ public sealed class NyxIdChatTurnOperationExecutor
         "NYXID_ACTION_POSTCONDITION_INPUT_INVALID";
     private const string InvalidPostconditionInputMessage =
         "The action postcondition input was invalid.";
+    private const string ActionReadAuthorityUnavailableMessage =
+        "The action read authority was unavailable.";
     private const string PrepareOperationSubstepId = "prepare-operation";
     private const string ExecuteOperationSubstepId = "execute-operation";
     private const string WebSearchToolName = "web_search";
@@ -335,6 +337,7 @@ public sealed class NyxIdChatTurnOperationExecutor
 
     private readonly IAgentRunReplyGenerationExecutorPort _generationExecutor;
     private readonly INyxIdActionPostconditionPort _actionPostconditionPort;
+    private readonly INyxIdActionReadAuthorityPort? _actionReadAuthorityPort;
     private readonly AgentProfileTurnCatalogMaterializer? _turnCatalogMaterializer;
     private readonly INyxIdChatDelegationCredentialLifecyclePort _delegationCredentialLifecycle;
     private readonly INyxIdChatToolVerificationPort _toolVerificationPort;
@@ -374,6 +377,26 @@ public sealed class NyxIdChatTurnOperationExecutor
             turnCatalogMaterializer,
             new NyxIdChatDelegationCredentialLifecyclePort(TimeProvider.System),
             new NyxIdChatToolVerificationPort())
+    {
+    }
+
+    public NyxIdChatTurnOperationExecutor(
+        IAgentRunReplyGenerationExecutorPort generationExecutor,
+        INyxIdActionPostconditionPort actionPostconditionPort,
+        AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer,
+        INyxIdChatDelegationCredentialLifecyclePort delegationCredentialLifecycle,
+        INyxIdChatToolVerificationPort toolVerificationPort,
+        INyxIdActionReadAuthorityPort actionReadAuthorityPort,
+        ILogger<NyxIdChatTurnOperationExecutor> logger)
+        : this(
+            generationExecutor,
+            actionPostconditionPort,
+            turnCatalogMaterializer,
+            delegationCredentialLifecycle,
+            toolVerificationPort,
+            actionReadAuthorityPort,
+            TimeProvider.System,
+            logger)
     {
     }
 
@@ -439,6 +462,7 @@ public sealed class NyxIdChatTurnOperationExecutor
             turnCatalogMaterializer,
             delegationCredentialLifecycle,
             toolVerificationPort,
+            null,
             timeProvider,
             NullLogger<NyxIdChatTurnOperationExecutor>.Instance)
     {
@@ -452,10 +476,32 @@ public sealed class NyxIdChatTurnOperationExecutor
         INyxIdChatToolVerificationPort toolVerificationPort,
         TimeProvider timeProvider,
         ILogger<NyxIdChatTurnOperationExecutor> logger)
+        : this(
+            generationExecutor,
+            actionPostconditionPort,
+            turnCatalogMaterializer,
+            delegationCredentialLifecycle,
+            toolVerificationPort,
+            null,
+            timeProvider,
+            logger)
+    {
+    }
+
+    internal NyxIdChatTurnOperationExecutor(
+        IAgentRunReplyGenerationExecutorPort generationExecutor,
+        INyxIdActionPostconditionPort actionPostconditionPort,
+        AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer,
+        INyxIdChatDelegationCredentialLifecyclePort delegationCredentialLifecycle,
+        INyxIdChatToolVerificationPort toolVerificationPort,
+        INyxIdActionReadAuthorityPort? actionReadAuthorityPort,
+        TimeProvider timeProvider,
+        ILogger<NyxIdChatTurnOperationExecutor> logger)
     {
         _generationExecutor = generationExecutor ?? throw new ArgumentNullException(nameof(generationExecutor));
         _actionPostconditionPort = actionPostconditionPort ??
                                    throw new ArgumentNullException(nameof(actionPostconditionPort));
+        _actionReadAuthorityPort = actionReadAuthorityPort;
         _turnCatalogMaterializer = turnCatalogMaterializer;
         _delegationCredentialLifecycle = delegationCredentialLifecycle ??
                                          throw new ArgumentNullException(nameof(delegationCredentialLifecycle));
@@ -565,8 +611,75 @@ public sealed class NyxIdChatTurnOperationExecutor
                 InvalidPostconditionInputMessage);
         }
 
+        AgentToolExecutionContextPayload? transientToolContext;
+        if (RequiresExactReadAuthority(input.Action))
+        {
+            if (_actionReadAuthorityPort is null)
+            {
+                return Postcondition(
+                    command.Key,
+                    input,
+                    verified: false,
+                    NyxIdActionReadAuthorityPort.UnavailableCode,
+                    ActionReadAuthorityUnavailableMessage);
+            }
+
+            NyxIdActionReadAuthorityResolution? resolution;
+            try
+            {
+                resolution = await _actionReadAuthorityPort.ResolveAsync(
+                        input.ReadAuthority,
+                        input.ScopeId,
+                        input.OwnerSubject,
+                        ct)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "NyxID action read authority resolution failed for action request {ActionRequestId}",
+                    input.ActionRequestId);
+                return Postcondition(
+                    command.Key,
+                    input,
+                    verified: false,
+                    NyxIdActionReadAuthorityPort.UnavailableCode,
+                    ActionReadAuthorityUnavailableMessage);
+            }
+
+            if (resolution is null || !resolution.Resolved)
+            {
+                return Postcondition(
+                    command.Key,
+                    input,
+                    verified: false,
+                    resolution?.FailureCode ?? NyxIdActionReadAuthorityPort.UnavailableCode,
+                    ActionReadAuthorityUnavailableMessage);
+            }
+
+            transientToolContext = resolution.CloneTransientToolContext();
+            if (transientToolContext is null)
+            {
+                return Postcondition(
+                    command.Key,
+                    input,
+                    verified: false,
+                    NyxIdActionReadAuthorityPort.UnavailableCode,
+                    ActionReadAuthorityUnavailableMessage);
+            }
+        }
+        else
+        {
+            transientToolContext = session.Request?.ToolContext?.Clone();
+        }
+
         var result = await _actionPostconditionPort
-            .VerifyAsync(input.Clone(), session.Request?.ToolContext?.Clone(), ct)
+            .VerifyAsync(input.Clone(), transientToolContext, ct)
             .ConfigureAwait(false);
         if (result is null ||
             !string.Equals(
@@ -591,6 +704,11 @@ public sealed class NyxIdChatTurnOperationExecutor
             ActionPostcondition = result.Clone(),
         });
     }
+
+    private static bool RequiresExactReadAuthority(NyxIdAssistantActionKind action) =>
+        NyxIdAssistantActionSemanticContracts.TryGet(action, out var semantic) &&
+        semantic.AuthorityRequirement ==
+        NyxIdAssistantActionAuthorityRequirement.ExactKeyMutationAuthority;
 
     private static NyxIdChatTurnOperationExecution Postcondition(
         NyxIdChatOperationKey key,

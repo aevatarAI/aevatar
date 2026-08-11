@@ -883,16 +883,16 @@ public sealed class NyxIdAssistantActionRegistryTests
             if (revision is LeastScopeRevision or SupportedRevision)
             {
                 readiness.Actions["key.create"].MissingCapabilities.Should().BeEquivalentTo([
-                    NyxIdAssistantActionCapabilityKind.AuthorityResolver,
                     NyxIdAssistantActionCapabilityKind.RetryGenerationPolicy,
                 ]);
+                readiness.Actions["key.create"].Executable.Should().BeFalse();
             }
             if (revision == SupportedRevision)
             {
                 readiness.Actions["key.rotate"].MissingCapabilities.Should().BeEquivalentTo([
-                    NyxIdAssistantActionCapabilityKind.AuthorityResolver,
                     NyxIdAssistantActionCapabilityKind.RetryGenerationPolicy,
                 ]);
+                readiness.Actions["key.rotate"].Executable.Should().BeFalse();
             }
             await service.StopAsync(CancellationToken.None);
             source.FetchCount.Should().Be(1);

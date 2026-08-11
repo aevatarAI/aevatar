@@ -498,9 +498,11 @@ internal static class NyxIdChatConversationAguiFrameBuilder
         if (committed.Admission is null || sequence <= 0)
             return [];
 
+        var publicAdmission = committed.Admission.Clone();
+        publicAdmission.ReadAuthority = null;
         var frames = new List<AGUIEvent>
         {
-            Custom(ContinuationChangedEventName, committed.Admission, sequence),
+            Custom(ContinuationChangedEventName, publicAdmission, sequence),
         };
         if (committed.Admission.Kind == NyxIdChatContinuationKind.Action &&
             committed.Admission.Status == NyxIdChatContinuationAdmissionStatus.Rejected)
