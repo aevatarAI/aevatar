@@ -106,11 +106,20 @@ public sealed class NyxIdExactServiceApprovalPort : INyxIdExactServiceApprovalPo
             return new(NyxIdExactServiceApprovalCreateDisposition.Rejected,
                 FailureCode: "exact_selector_required");
 
+        var mapped = NyxIdExactServiceArgumentsMapper.Map(admission, arguments);
+        if (!mapped.Succeeded)
+        {
+            return new(
+                NyxIdExactServiceApprovalCreateDisposition.Rejected,
+                FailureCode: SafeFailureCode(mapped.FailureCode!));
+        }
+        var exactArguments = mapped.Arguments!;
+
         var operationDigest = ComputeOperationDigest(
             admission.ServiceInstanceId,
             endpoint.EndpointId,
             admission.ContractDigest,
-            arguments);
+            exactArguments);
         var body = new JsonObject
         {
             ["user_service_id"] = admission.ServiceInstanceId,
@@ -121,7 +130,7 @@ public sealed class NyxIdExactServiceApprovalPort : INyxIdExactServiceApprovalPo
             ["operation_id"] = operationId,
             ["operation_generation"] = operationGeneration,
             ["idempotency_key"] = idempotencyKey,
-            ["arguments"] = arguments.DeepClone(),
+            ["arguments"] = exactArguments.DeepClone(),
         }.ToJsonString();
         var response = await _client.CreateExactServiceApprovalRequestAsync(
             accessToken, body, ct).ConfigureAwait(false);

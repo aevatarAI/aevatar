@@ -361,6 +361,25 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
             item.Code == ExternalCapabilityDiscoveryDiagnosticCode.UnsupportedParameter);
     }
 
+    [Fact]
+    public async Task ListAsync_ShouldRejectOptionalHeaderOutsideExactInvocationContract()
+    {
+        var endpoint = Endpoint();
+        endpoint["parameters"] = new JsonArray(
+            Parameter("Content-Type", "header", false));
+        var source = CreateSource(new CatalogHandler
+        {
+            Body = Config(Service(endpoints: [endpoint])),
+        });
+
+        var discovery = await source.ListAsync(Access(), CancellationToken.None);
+
+        discovery.Capabilities.Should().BeEmpty();
+        discovery.RejectedCount.Should().Be(1);
+        discovery.Diagnostics.Should().Contain(item =>
+            item.Code == ExternalCapabilityDiscoveryDiagnosticCode.UnsupportedParameter);
+    }
+
     [Theory]
     [MemberData(nameof(UnsupportedEndpointCases))]
     public async Task Admission_ShouldFailClosedForUnsupportedEndpointContracts(
@@ -765,7 +784,7 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
                 { Config(Service(endpoints: [cookie])), ExternalCapabilityDiscoveryDiagnosticCode.UnsupportedParameter, "NYXID_ENDPOINT_PARAMETER_UNSUPPORTED" },
                 { Config(Service(endpoints: [sensitiveHeader])), ExternalCapabilityDiscoveryDiagnosticCode.UnsupportedParameter, "NYXID_ENDPOINT_PARAMETER_UNSUPPORTED" },
                 { Config(Service(endpoints: [contentTypeHeader])), ExternalCapabilityDiscoveryDiagnosticCode.UnsupportedParameter, "NYXID_ENDPOINT_PARAMETER_UNSUPPORTED" },
-                { Config(Service(endpoints: [unsatisfiableAcceptHeader])), ExternalCapabilityDiscoveryDiagnosticCode.UnsupportedSchema, "NYXID_ENDPOINT_SCHEMA_UNSUPPORTED" },
+                { Config(Service(endpoints: [unsatisfiableAcceptHeader])), ExternalCapabilityDiscoveryDiagnosticCode.UnsupportedParameter, "NYXID_ENDPOINT_PARAMETER_UNSUPPORTED" },
                 { Config(Service(endpoints: [unsupportedBody])), ExternalCapabilityDiscoveryDiagnosticCode.UnsupportedRequestBody, "NYXID_ENDPOINT_BODY_UNSUPPORTED" },
                 { Config(Service(endpoints: [unsupportedSchema])), ExternalCapabilityDiscoveryDiagnosticCode.UnsupportedSchema, "NYXID_ENDPOINT_SCHEMA_UNSUPPORTED" },
                 { Config(Service(endpoints: [malformedSchema])), ExternalCapabilityDiscoveryDiagnosticCode.UnsupportedSchema, "NYXID_ENDPOINT_SCHEMA_UNSUPPORTED" },
