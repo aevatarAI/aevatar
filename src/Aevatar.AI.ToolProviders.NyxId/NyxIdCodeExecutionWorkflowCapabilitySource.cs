@@ -57,7 +57,8 @@ public sealed class NyxIdCodeExecutionWorkflowCapabilitySource(
                 "Select the canonical platform code execution capability.");
         }
 
-        var bearerToken = access.NyxIdCallerCredential?.SourceReadableUserBearerToken;
+        var bearerToken = access.NyxIdCallerCredential?.SourceReadableUserBearerToken ??
+                          access.NyxIdCallerCredential?.ProxyDelegationToken;
         if (string.IsNullOrWhiteSpace(bearerToken))
         {
             return Failure(
@@ -65,7 +66,7 @@ public sealed class NyxIdCodeExecutionWorkflowCapabilitySource(
                 executionMode,
                 ExternalCapabilityReadinessStatus.ServiceAccessDenied,
                 "CODE_EXECUTION_SOURCE_CREDENTIAL_REQUIRED",
-                "A source-readable caller NyxID credential is required.");
+                "A NyxID caller credential authorized to read the code execution route is required.");
         }
         if (string.IsNullOrWhiteSpace(options.BaseUrl))
         {
