@@ -1,3 +1,4 @@
+import { QueryClient } from '@tanstack/react-query';
 import {
   act,
   fireEvent,
@@ -556,6 +557,59 @@ describe('Workflow Activity vNext catalogue', () => {
     expect(
       screen.queryByRole('option', { name: 'Archived' }),
     ).not.toBeInTheDocument();
+  });
+
+  it('refreshes the workflow catalogue when returning from the editor', async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: {
+          gcTime: Infinity,
+          refetchOnWindowFocus: false,
+          retry: false,
+          staleTime: 30_000,
+        },
+      },
+    });
+    mockStudioApi.getWorkspaceSettings.mockResolvedValue({
+      runtimeBaseUrl: '',
+      directories: [],
+    });
+    mockStudioApi.getWorkflow.mockResolvedValue({
+      workflowId: 'wf-alpha',
+      name: 'Workflow alpha',
+      fileName: 'workflow-alpha.yaml',
+      filePath: '/workflows/workflow-alpha.yaml',
+      directoryId: 'directory-alpha',
+      directoryLabel: 'Workflows',
+      yaml: 'name: workflow_alpha\nroles: []\nsteps: []\n',
+      updatedAtUtc: '2026-08-11T10:00:00Z',
+      document: { name: 'workflow_alpha', roles: [], steps: [] },
+      draftExists: true,
+      findings: [],
+    });
+    mockScopesApi.getWorkflowDetail.mockResolvedValue({
+      available: false,
+      scopeId: 'scope-alpha',
+      workflow: null,
+      source: null,
+    });
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />, queryClient);
+
+    await waitFor(() =>
+      expect(mockScopesApi.queryWorkflowCatalogue).toHaveBeenCalledTimes(1),
+    );
+
+    setMockLocation(
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-alpha',
+    );
+    expect(await screen.findByDisplayValue('Workflow alpha')).toBeVisible();
+
+    setMockLocation('/scopes/scope-alpha/workflow-activity-vnext/workflows');
+
+    await waitFor(() =>
+      expect(mockScopesApi.queryWorkflowCatalogue).toHaveBeenCalledTimes(2),
+    );
   });
 
   it('maps unsupported legacy views to the backend all view', async () => {

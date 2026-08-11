@@ -142,6 +142,7 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
         take: 100,
       }),
     enabled: workflowFilterReady,
+    refetchOnMount: 'always',
     retry: false,
   });
 

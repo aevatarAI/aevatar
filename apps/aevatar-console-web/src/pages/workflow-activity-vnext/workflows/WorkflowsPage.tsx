@@ -191,6 +191,7 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
         signal,
       ),
     getNextPageParam: (lastPage) => lastPage.nextPageToken ?? undefined,
+    refetchOnMount: 'always',
     retry: false,
   });
 
