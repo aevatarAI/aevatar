@@ -21,6 +21,8 @@ import type {
   ChatApprovalObservation,
   ChatExternalEffect,
   ChatPlanGate,
+  ChatTaskDomain,
+  ChatVerifiedArtifact,
 } from './chatTaskPlan';
 
 type ActionReport = {
@@ -449,6 +451,8 @@ function TaskPlanLedger({
           </Button>
         </div>
       ) : null}
+      {plan.domain ? <DomainEvidenceBand domain={plan.domain} /> : null}
+      {plan.artifact ? <VerifiedArtifactBand artifact={plan.artifact} /> : null}
       <ol style={{ listStyle: 'none', margin: 0, padding: 0 }}>
         {plan.steps.map((step) => {
           const stalled = isActorReportedStalled(step);
@@ -678,6 +682,168 @@ function TaskPlanLedger({
       </ol>
     </section>
   );
+}
+
+function DomainEvidenceBand({
+  domain,
+}: {
+  domain: ChatTaskDomain;
+}): React.ReactElement {
+  return (
+    <section
+      aria-label={t(
+        'pages.chat.actorControls.domainEvidence',
+        'Committed domain evidence',
+      )}
+      style={{
+        borderBottom: '1px solid #eef2f7',
+        color: '#475569',
+        display: 'grid',
+        fontSize: 11,
+        gap: 7,
+        padding: '10px 14px',
+      }}
+    >
+      <strong style={{ color: '#334155', textTransform: 'uppercase' }}>
+        {t(
+          'pages.chat.actorControls.domainEvidence',
+          'Committed domain evidence',
+        )}
+      </strong>
+      {domain.kind === 'reimbursement' ? (
+        <>
+          <EvidenceFacts
+            facts={[
+              domain.evidenceId,
+              domain.expenseCategory,
+              domain.costCenter,
+              domain.reimbursementCurrencyInstruction,
+              `${domain.sourceInvoices.length} source invoices`,
+              `${domain.retainedSourceOrdinals.length} retained`,
+              `${domain.duplicateInvoices.length} duplicate`,
+              domain.guardedToolName,
+            ]}
+          />
+          {domain.sourceInvoices.map((invoice) => (
+            <div
+              key={invoice.sourceOrdinal}
+              style={{ overflowWrap: 'anywhere' }}
+            >
+              {`#${invoice.sourceOrdinal} · ${invoice.vendor} · ${invoice.invoiceNumber} · ${invoice.invoiceDate} · ${formatMoney(invoice.amount)}`}
+            </div>
+          ))}
+          {domain.duplicateInvoices.map((duplicate) => (
+            <div
+              key={duplicate.duplicateSourceOrdinal}
+              style={{ overflowWrap: 'anywhere' }}
+            >
+              {`duplicate #${duplicate.duplicateSourceOrdinal} = retained #${duplicate.retainedSourceOrdinal}`}
+            </div>
+          ))}
+        </>
+      ) : (
+        <>
+          <EvidenceFacts
+            facts={[
+              domain.evidenceId,
+              domain.candidateName,
+              domain.roleTitle,
+              `score ${domain.totalScore}`,
+              `${domain.trackerTable} · ${domain.trackerTableId}`,
+              domain.stage,
+              domain.guardedToolName,
+            ]}
+          />
+          {domain.rubric.map((criterion) => {
+            const score = domain.scores.find(
+              (item) => item.criterionId === criterion.criterionId,
+            );
+            return (
+              <div
+                key={criterion.criterionId}
+                style={{ overflowWrap: 'anywhere' }}
+              >
+                {`${criterion.title}: ${score?.awardedPoints ?? 0}/${criterion.maximumPoints}`}
+                {score?.evidence ? ` · ${score.evidence}` : ''}
+              </div>
+            );
+          })}
+        </>
+      )}
+    </section>
+  );
+}
+
+function VerifiedArtifactBand({
+  artifact,
+}: {
+  artifact: ChatVerifiedArtifact;
+}): React.ReactElement {
+  const facts =
+    artifact.kind === 'reimbursement'
+      ? [
+          artifact.checkName,
+          artifact.providerInstanceId,
+          artifact.costCenter,
+          `${artifact.retainedItemCount} retained`,
+          `${artifact.duplicateItemCount} duplicate`,
+        ]
+      : [
+          artifact.checkName,
+          artifact.providerRecordId,
+          artifact.candidateName,
+          `score ${artifact.score}`,
+          `threshold ${artifact.threshold}`,
+          `${artifact.trackerTable} · ${artifact.trackerTableId}`,
+          artifact.stage,
+        ];
+  return (
+    <section
+      aria-label={t(
+        'pages.chat.actorControls.verifiedArtifact',
+        'Verified artifact',
+      )}
+      style={{
+        borderBottom: '1px solid #eef2f7',
+        color: '#047857',
+        display: 'grid',
+        fontSize: 11,
+        gap: 7,
+        padding: '10px 14px',
+      }}
+    >
+      <strong style={{ textTransform: 'uppercase' }}>
+        {t('pages.chat.actorControls.verifiedArtifact', 'Verified artifact')}
+      </strong>
+      <EvidenceFacts facts={facts} />
+    </section>
+  );
+}
+
+function EvidenceFacts({
+  facts,
+}: {
+  facts: readonly string[];
+}): React.ReactElement {
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 10px' }}>
+      {facts.map((fact) => (
+        <span key={fact} style={{ overflowWrap: 'anywhere' }}>
+          {fact}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function formatMoney(amount: {
+  currencyCode: string;
+  minorUnits: number;
+  fractionDigits: number;
+}): string {
+  return `${amount.currencyCode} ${(
+    amount.minorUnits / 10 ** amount.fractionDigits
+  ).toFixed(amount.fractionDigits)}`;
 }
 
 function CommittedResults({
