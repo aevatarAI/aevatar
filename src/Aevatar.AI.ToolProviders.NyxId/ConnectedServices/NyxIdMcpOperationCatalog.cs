@@ -102,7 +102,7 @@ internal static class NyxIdMcpOperationCatalog
 
     private static readonly HashSet<string> AllowedHeaders = new(StringComparer.OrdinalIgnoreCase)
     {
-        "Accept", "If-Match", "If-None-Match",
+        "If-Match", "If-None-Match",
     };
 
     private static readonly HashSet<string> SupportedParameterKeywords = new(StringComparer.Ordinal)
@@ -404,12 +404,10 @@ internal static class NyxIdMcpOperationCatalog
             if (!TryReadOptionalBool(item, "required", out var required))
                 return UnsupportedParameters(issues, serviceId, endpointId);
             if (location == ParameterLocation.Header &&
-                (required && (!AllowedHeaders.Contains(name) || NyxIdProxyHeaderPolicy.IsSensitive(name))))
+                (!AllowedHeaders.Contains(name) || NyxIdProxyHeaderPolicy.IsSensitive(name)))
             {
                 return UnsupportedParameters(issues, serviceId, endpointId);
             }
-            if (location == ParameterLocation.Header && !AllowedHeaders.Contains(name))
-                continue;
             var identityName = location == ParameterLocation.Header ? name.ToUpperInvariant() : name;
             if (!identities.Add((identityName, location)))
                 return UnsupportedParameters(issues, serviceId, endpointId);

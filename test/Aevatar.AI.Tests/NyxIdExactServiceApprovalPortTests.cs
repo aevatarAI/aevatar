@@ -31,11 +31,21 @@ public sealed class NyxIdExactServiceApprovalPortTests
                 captured["operation_digest"]!.GetValue<string>()));
         });
         var port = CreatePort(handler);
-        var arguments = JsonNode.Parse("""{"z":2,"a":{"y":true,"x":"one"}}""")!;
+        var arguments = JsonNode.Parse("""
+            {
+              "query": { "receive_id_type": "chat_id" },
+              "body": {
+                "receive_id": "oc_alpha",
+                "msg_type": "text",
+                "content": "{\"text\":\"marker-alpha\"}",
+                "uuid": "idem-alpha"
+              }
+            }
+            """)!;
 
         var result = await port.CreateAsync(
             "user-token",
-            ExactAdmission(),
+            LarkMessageAdmission(),
             arguments,
             "operation-alpha",
             7,
@@ -52,12 +62,22 @@ public sealed class NyxIdExactServiceApprovalPortTests
         captured["operation_id"]!.GetValue<string>().Should().Be("operation-alpha");
         captured["operation_generation"]!.GetValue<long>().Should().Be(7);
         captured["idempotency_key"]!.GetValue<string>().Should().Be("idem-alpha");
+        var exactArguments = JsonNode.Parse("""
+            {
+              "receive_id_type": "chat_id",
+              "receive_id": "oc_alpha",
+              "msg_type": "text",
+              "content": "{\"text\":\"marker-alpha\"}",
+              "uuid": "idem-alpha"
+            }
+            """)!;
+        JsonNode.DeepEquals(captured["arguments"], exactArguments).Should().BeTrue();
         captured["operation_digest"]!.GetValue<string>().Should().Be(
             NyxIdExactServiceApprovalPort.ComputeOperationDigest(
                 "us-alpha",
                 "message.create",
                 "sha256:contract",
-                JsonNode.Parse("""{"a":{"x":"one","y":true},"z":2}""")!));
+                exactArguments));
         NyxIdExactServiceApprovalPort.ComputeOperationDigest(
                 "us-alpha",
                 "message.create",
@@ -65,6 +85,292 @@ public sealed class NyxIdExactServiceApprovalPortTests
                 JsonNode.Parse("""{"message":"你好 <team>"}""")!)
             .Should().Be(
                 "sha256:1bcaa1b49841edd6af5c6787659938cfe47196f3c6d2e38b460d955c4ccad4e3");
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenArgumentsWrapperIsNotAnObject_ShouldRejectBeforeRequest()
+    {
+        var handler = new RecordingHandler(_ => throw new InvalidOperationException(
+            "An invalid argument wrapper must not reach NyxID."));
+        var port = CreatePort(handler);
+
+        var result = await port.CreateAsync(
+            "user-token",
+            ExactAdmission(),
+            new JsonArray("invalid"),
+            "operation-alpha",
+            1,
+            "idem-alpha",
+            CancellationToken.None);
+
+        result.Disposition.Should().Be(NyxIdExactServiceApprovalCreateDisposition.Rejected);
+        result.FailureCode.Should().Be("exact_service_arguments_invalid");
+        handler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenPublishedParameterNamesCollide_ShouldRejectBeforeRequest()
+    {
+        var handler = new RecordingHandler(_ => throw new InvalidOperationException(
+            "Ambiguous endpoint arguments must not reach NyxID."));
+        var port = CreatePort(handler);
+        var admission = ExactAdmission() with
+        {
+            Parameters =
+            [
+                new AgentToolOperationParameter(
+                    "identity",
+                    AgentToolOperationParameterLocation.Path,
+                    false,
+                    AgentToolOperationValueSchema.Text),
+                new AgentToolOperationParameter(
+                    "identity",
+                    AgentToolOperationParameterLocation.Query,
+                    false,
+                    AgentToolOperationValueSchema.Text),
+            ],
+        };
+
+        var result = await port.CreateAsync(
+            "user-token",
+            admission,
+            new JsonObject(),
+            "operation-alpha",
+            1,
+            "idem-alpha",
+            CancellationToken.None);
+
+        result.Disposition.Should().Be(NyxIdExactServiceApprovalCreateDisposition.Rejected);
+        result.FailureCode.Should().Be("exact_service_argument_name_collision");
+        handler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenOptionalJsonBodyIsPresent_ShouldKeepNyxIdBodyWrapper()
+    {
+        JsonObject? captured = null;
+        var handler = new RecordingHandler(async request =>
+        {
+            captured = JsonNode.Parse(await request.Content!.ReadAsStringAsync())!.AsObject();
+            return JsonResponse(SnapshotJson(
+                "pending",
+                captured["operation_digest"]!.GetValue<string>()));
+        });
+        var port = CreatePort(handler);
+        var admission = ExactAdmission() with
+        {
+            RequestBody = new AgentToolOperationRequestBody(
+                false,
+                "application/json",
+                ObjectSchema(
+                    false,
+                    ("value", AgentToolOperationValueSchema.Text))),
+        };
+
+        var result = await port.CreateAsync(
+            "user-token",
+            admission,
+            JsonNode.Parse("""{"body":{"value":"alpha"}}""")!,
+            "operation-alpha",
+            7,
+            "idem-alpha",
+            CancellationToken.None);
+
+        result.Disposition.Should().Be(NyxIdExactServiceApprovalCreateDisposition.Created);
+        JsonNode.DeepEquals(
+            captured!["arguments"],
+            JsonNode.Parse("""{"body":{"value":"alpha"}}""")).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenAdditionalBodyFieldConflictsWithHeader_ShouldRejectBeforeRequest()
+    {
+        var handler = new RecordingHandler(_ => throw new InvalidOperationException(
+            "Case-insensitive header/body collisions must not reach NyxID."));
+        var port = CreatePort(handler);
+        var admission = ExactAdmission() with
+        {
+            Parameters =
+            [
+                new AgentToolOperationParameter(
+                    "If-Match",
+                    AgentToolOperationParameterLocation.Header,
+                    true,
+                    AgentToolOperationValueSchema.Text),
+            ],
+            RequestBody = new AgentToolOperationRequestBody(
+                true,
+                "application/json",
+                ObjectSchema(
+                    true,
+                    ("value", AgentToolOperationValueSchema.Text))),
+        };
+        var arguments = JsonNode.Parse("""
+            {
+              "headers": { "If-Match": "etag-alpha" },
+              "body": { "value": "alpha", "if-match": "body-value" }
+            }
+            """)!;
+
+        var result = await port.CreateAsync(
+            "user-token",
+            admission,
+            arguments,
+            "operation-alpha",
+            7,
+            "idem-alpha",
+            CancellationToken.None);
+
+        result.Disposition.Should().Be(NyxIdExactServiceApprovalCreateDisposition.Rejected);
+        result.FailureCode.Should().Be("exact_service_argument_name_collision");
+        handler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldExcludeResponseModeWithoutMutatingGroupedArguments()
+    {
+        JsonObject? captured = null;
+        var handler = new RecordingHandler(async request =>
+        {
+            captured = JsonNode.Parse(await request.Content!.ReadAsStringAsync())!.AsObject();
+            return JsonResponse(SnapshotJson(
+                "pending",
+                captured["operation_digest"]!.GetValue<string>()));
+        });
+        var port = CreatePort(handler);
+        var admission = ExactAdmission() with
+        {
+            HttpMethod = "GET",
+            ResponsePolicy = new AgentToolOperationResponsePolicy(
+                true,
+                true,
+                ["application/octet-stream"]),
+        };
+        var arguments = JsonNode.Parse("""{"response_mode":"file_artifact"}""")!;
+        var originalArguments = arguments.ToJsonString();
+
+        var result = await port.CreateAsync(
+            "user-token",
+            admission,
+            arguments,
+            "operation-alpha",
+            7,
+            "idem-alpha",
+            CancellationToken.None);
+
+        result.Disposition.Should().Be(NyxIdExactServiceApprovalCreateDisposition.Created);
+        captured!["arguments"]!.AsObject().Count.Should().Be(0);
+        arguments.ToJsonString().Should().Be(originalArguments);
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenBodyPropertyCollidesWithPath_ShouldUseNyxIdBodyWrapper()
+    {
+        JsonObject? captured = null;
+        var handler = new RecordingHandler(async request =>
+        {
+            captured = JsonNode.Parse(await request.Content!.ReadAsStringAsync())!.AsObject();
+            return JsonResponse(SnapshotJson(
+                "pending",
+                captured["operation_digest"]!.GetValue<string>()));
+        });
+        var port = CreatePort(handler);
+        var admission = ExactAdmission() with
+        {
+            PathTemplate = "/messages/{identity}",
+            Parameters =
+            [
+                new AgentToolOperationParameter(
+                    "identity",
+                    AgentToolOperationParameterLocation.Path,
+                    true,
+                    AgentToolOperationValueSchema.Text),
+            ],
+            RequestBody = new AgentToolOperationRequestBody(
+                true,
+                "application/json",
+                ObjectSchema(
+                    false,
+                    ("identity", AgentToolOperationValueSchema.Text),
+                    ("value", AgentToolOperationValueSchema.Text))),
+        };
+        var arguments = JsonNode.Parse("""
+            {
+              "path_params": { "identity": "path-alpha" },
+              "body": { "identity": "body-alpha", "value": "payload-alpha" }
+            }
+            """)!;
+
+        var result = await port.CreateAsync(
+            "user-token",
+            admission,
+            arguments,
+            "operation-alpha",
+            7,
+            "idem-alpha",
+            CancellationToken.None);
+
+        result.Disposition.Should().Be(NyxIdExactServiceApprovalCreateDisposition.Created);
+        JsonNode.DeepEquals(
+            captured!["arguments"],
+            JsonNode.Parse("""
+                {
+                  "identity": "path-alpha",
+                  "body": { "identity": "body-alpha", "value": "payload-alpha" }
+                }
+                """)).Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("{\"unknown\":{}}")]
+    [InlineData("{\"query\":{\"unknown\":\"value\"}}")]
+    public async Task CreateAsync_WhenGroupedArgumentsAreNotAdmitted_ShouldRejectBeforeRequest(
+        string argumentsJson)
+    {
+        var handler = new RecordingHandler(_ => throw new InvalidOperationException(
+            "Unadmitted grouped arguments must not reach NyxID."));
+        var port = CreatePort(handler);
+
+        var result = await port.CreateAsync(
+            "user-token",
+            ExactAdmission(),
+            JsonNode.Parse(argumentsJson)!,
+            "operation-alpha",
+            7,
+            "idem-alpha",
+            CancellationToken.None);
+
+        result.Disposition.Should().Be(NyxIdExactServiceApprovalCreateDisposition.Rejected);
+        result.FailureCode.Should().StartWith("nyxid_operation_");
+        handler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenJsonObjectSchemaHasNoProperties_ShouldFailClosed()
+    {
+        var handler = new RecordingHandler(_ => throw new InvalidOperationException(
+            "An ambiguous JSON body contract must not reach NyxID."));
+        var port = CreatePort(handler);
+        var admission = ExactAdmission() with
+        {
+            RequestBody = new AgentToolOperationRequestBody(
+                true,
+                "application/json",
+                ObjectSchema(additionalPropertiesAllowed: true)),
+        };
+
+        var result = await port.CreateAsync(
+            "user-token",
+            admission,
+            JsonNode.Parse("""{"body":{"value":"alpha"}}""")!,
+            "operation-alpha",
+            7,
+            "idem-alpha",
+            CancellationToken.None);
+
+        result.Disposition.Should().Be(NyxIdExactServiceApprovalCreateDisposition.Rejected);
+        result.FailureCode.Should().Be("exact_service_body_contract_ambiguous");
+        handler.Requests.Should().BeEmpty();
     }
 
     [Theory]
@@ -259,6 +565,42 @@ public sealed class NyxIdExactServiceApprovalPortTests
             [AgentToolOperationExecutionMode.Interactive]),
         "sha256:catalog");
 
+    private static AgentToolOperationAdmission LarkMessageAdmission() => ExactAdmission() with
+    {
+        Parameters =
+        [
+            new AgentToolOperationParameter(
+                "receive_id_type",
+                AgentToolOperationParameterLocation.Query,
+                true,
+                AgentToolOperationValueSchema.Text),
+        ],
+        RequestBody = new AgentToolOperationRequestBody(
+            true,
+            "application/json",
+            ObjectSchema(
+                false,
+                ("receive_id", AgentToolOperationValueSchema.Text),
+                ("msg_type", AgentToolOperationValueSchema.Text),
+                ("content", AgentToolOperationValueSchema.Text),
+                ("uuid", AgentToolOperationValueSchema.Text))),
+    };
+
+    private static AgentToolOperationValueSchema ObjectSchema(
+        bool additionalPropertiesAllowed,
+        params (string Name, AgentToolOperationValueSchema Schema)[] properties) => new(
+        AgentToolOperationValueKind.Object,
+        properties
+            .Select(static property => new AgentToolOperationSchemaProperty(
+                property.Name,
+                property.Schema))
+            .ToArray(),
+        new HashSet<string>(properties.Select(static property => property.Name),
+            StringComparer.Ordinal),
+        null,
+        [],
+        additionalPropertiesAllowed);
+
     private static NyxIdExactServiceApprovalAuthority Authority() => new()
     {
         RequestId = "request-alpha",
@@ -303,9 +645,9 @@ public sealed class NyxIdExactServiceApprovalPortTests
     private static HttpResponseMessage JsonResponse(
         string body,
         HttpStatusCode status = HttpStatusCode.OK) => new(status)
-    {
-        Content = new StringContent(body, Encoding.UTF8, "application/json"),
-    };
+        {
+            Content = new StringContent(body, Encoding.UTF8, "application/json"),
+        };
 
     private sealed class RecordingHandler(
         Func<HttpRequestMessage, Task<HttpResponseMessage>> responder) : HttpMessageHandler
