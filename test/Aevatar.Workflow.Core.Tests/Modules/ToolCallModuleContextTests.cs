@@ -635,6 +635,8 @@ public sealed class ToolCallModuleContextTests
 
         tool.Requests.Select(request => request.CallerCredential.BearerToken)
             .Should().Equal("token-1", "token-2");
+        tool.Requests.Select(request => request.CallerCredential.Kind)
+            .Should().OnlyContain(kind => kind == NyxIdCallerCredentialKind.ProxyDelegation);
         tokenProvider.Authorities.Should().HaveCount(2);
     }
 

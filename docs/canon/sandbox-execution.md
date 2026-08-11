@@ -63,8 +63,10 @@ UserService ID, slug snapshot, catalog identity, and contract digest into an
 existing actor-owned NyxID authorization catalog to prove that exact service grant. Interactive
 runtime re-reads NyxID facts when it has a source-readable caller credential. With delegation-only
 interactive ingress, runtime does not read inventory again and may call only the exact UserService
-ID sealed in the valid admission proof. Scheduled runtime follows the same exact-proof rule because
-its restricted scheduled-invocation Agent Key must not read inventory or auto-resolve a slug.
+ID sealed in the valid admission proof. Scheduled runtime follows the same exact-proof rule: both
+an authority-refreshed short-lived proxy delegation token and a restricted scheduled-invocation
+Agent Key are execution credentials, not source-readable inventory credentials, so neither may
+auto-resolve a slug.
 NyxID then enforces the exact route's slug constraint and credential allowlist on the proxy
 request. Without either a source-readable credential or an exact admitted route, execution fails
 before network access. Existing v4 plans did not contain code-execution proofs; they remain
