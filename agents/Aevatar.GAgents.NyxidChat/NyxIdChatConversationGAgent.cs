@@ -17,7 +17,6 @@ using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using System.Security.Cryptography;
-using System.Text.Json;
 
 namespace Aevatar.GAgents.NyxidChat;
 
@@ -1205,21 +1204,16 @@ public sealed class NyxIdChatConversationGAgent
         NyxIdAssistantActionRegistry registry,
         WorkflowInteractiveActionRequestWirePayload request)
     {
-        if (string.Equals(request.Action, "service.connect", StringComparison.Ordinal))
+        if (!string.Equals(request.Action, "service.connect", StringComparison.Ordinal))
         {
-            return registry.ResolveCatalogServiceConnect(
-                request.Params.CatalogService.ServiceSlug,
-                request.Params.CatalogService.RequestedScopes);
+            throw new NyxIdAssistantActionRegistryException(
+                "NYXID_ACTION_UNSUPPORTED",
+                "The workflow interactive action is not enabled in this contract revision.");
         }
 
-        var keyCreate = request.Params.KeyCreate;
-        var paramsJson = JsonSerializer.Serialize(new
-        {
-            name = keyCreate.Name,
-            platform = keyCreate.Platform,
-            allowedServiceIds = keyCreate.AllowedServiceIds.ToArray(),
-        });
-        return registry.ValidateRequest("key.create", paramsJson);
+        return registry.ResolveCatalogServiceConnect(
+            request.Params.CatalogService.ServiceSlug,
+            request.Params.CatalogService.RequestedScopes);
     }
 
     private static bool IsValidWorkflowActionActorId(string actorId)
@@ -3812,16 +3806,24 @@ public sealed class NyxIdChatConversationGAgent
         var committedOperation = evt.State.ActiveTask?.Steps
             .Select(static step => step.Operation)
             .FirstOrDefault(candidate => KeysEqual(candidate?.Key, currentOperation.Key));
-        var acknowledgementFence = evt.State.ResultAcknowledgementFences.FirstOrDefault(fence =>
-            KeysEqual(fence.Key, evt.Key) &&
-            fence.ResultSha256.Length == SHA256.HashSizeInBytes);
+        var acknowledgementFences = evt.State.ResultAcknowledgementFences
+            .Where(fence =>
+                KeysEqual(fence.Key, evt.Key) &&
+                fence.ResultSha256.Length == SHA256.HashSizeInBytes &&
+                !current.ResultAcknowledgementFences.Any(existing =>
+                    KeysEqual(existing.Key, fence.Key) &&
+                    CryptographicOperations.FixedTimeEquals(
+                        existing.ResultSha256.Span,
+                        fence.ResultSha256.Span)))
+            .ToArray();
         if (committedOperation is null ||
             !committedOperation.ToByteString().Equals(currentOperation.ToByteString()) ||
-            acknowledgementFence is null)
+            acknowledgementFences.Length != 1)
         {
             return current;
         }
 
+        var acknowledgementFence = acknowledgementFences[0];
         var next = current.Clone();
         next.ProgressSequence = evt.ProgressSequence;
         next.UpdatedAt = evt.CommittedAt.Clone();

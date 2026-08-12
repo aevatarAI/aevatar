@@ -252,13 +252,13 @@ public sealed partial class NyxIdChatConversationGAgentTests
     }
 
     [Fact]
-    public async Task WorkflowInteractiveKeyCreateHandoff_WithoutRetryCapability_ShouldFailClosedBeforeFirstEvent()
+    public async Task WorkflowInteractiveKeyCreateHandoff_WithCompleteRegistry_ShouldFailClosedBeforeFirstEvent()
     {
         const string actorId = "nyxid-chat-workflow-key-create";
         var eventStore = new InMemoryEventStoreForTests();
         using var services = BuildEventSourcingServices(
             eventStore,
-            actionRegistry: CreateIncompleteLeastScopeActionRegistry());
+            actionRegistry: CreateLeastScopeActionRegistry());
         var agent = CreateController(services, actorId);
         await agent.ActivateAsync();
         var valid = KeyCreateHandoff(actorId);
@@ -2072,6 +2072,76 @@ public sealed partial class NyxIdChatConversationGAgentTests
         acknowledgement.Key.Should().BeEquivalentTo(failed.PreviousKey);
         acknowledgement.ResultSha256.ToByteArray().Should()
             .Equal(SHA256.HashData(staleSuccess.ToByteArray()));
+    }
+
+    [Fact]
+    public async Task SupersededPostconditionDistinctDigests_ShouldPersistExactFencesAndReplaySecondIdempotently()
+    {
+        const string conversationActorId = "conversation-alpha";
+        var failed = CreateFailedKeyPostconditionState();
+        var eventStore = new InMemoryEventStoreForTests();
+        await PersistTestStateAsync(eventStore, conversationActorId, 1, failed.State);
+        var dispatch = new RecordingActorDispatchPort(
+            [],
+            static (_, _) => Task.CompletedTask);
+        using var services = BuildEventSourcingServices(eventStore);
+        var agent = CreateController(services, conversationActorId, dispatch);
+        await agent.ActivateAsync();
+        await agent.HandleEventAsync(CreateEnvelope(
+            conversationActorId,
+            CreateKeyStateChangeWake("distinct-digests")));
+        var before = (await eventStore.GetEventsAsync(conversationActorId)).Count;
+        var staleSuccessA = new NyxIdChatOperationResultSignal
+        {
+            Key = failed.PreviousKey.Clone(),
+            ActionPostcondition = new NyxIdChatActionPostconditionResult
+            {
+                ActionRequestId = failed.ActionRequestId,
+                Disposition = NyxIdChatActionDisposition.Completed,
+                Verified = true,
+                Resource = new NyxIdChatSafeResourceRef
+                {
+                    Key = new NyxIdChatKeyRef { KeyId = "key-alpha" },
+                },
+            },
+        };
+        var staleSuccessB = staleSuccessA.Clone();
+        staleSuccessB.ActionPostcondition.Resource.Key.KeyId = "key-beta";
+        var digestA = SHA256.HashData(staleSuccessA.ToByteArray());
+        var digestB = SHA256.HashData(staleSuccessB.ToByteArray());
+        digestB.Should().NotEqual(digestA);
+
+        await agent.HandleOperationResultAsync(staleSuccessA);
+        await agent.HandleOperationResultAsync(staleSuccessB);
+
+        var committed = await eventStore.GetEventsAsync(conversationActorId);
+        committed.Should().HaveCount(before + 2);
+        committed.Skip(before).Should().OnlyContain(item =>
+            item.EventData.Is(NyxIdChatLateOperationEvidenceCommittedEvent.Descriptor));
+        var recoveredDispatch = new RecordingActorDispatchPort(
+            [],
+            static (_, _) => Task.CompletedTask);
+        var recovered = CreateController(services, conversationActorId, recoveredDispatch);
+        await recovered.ActivateAsync();
+        recovered.State.ResultAcknowledgementFences.Should().HaveCount(2);
+        recovered.State.ResultAcknowledgementFences.Should().ContainSingle(fence =>
+            fence.Key.Equals(failed.PreviousKey) &&
+            fence.ResultSha256.ToByteArray().SequenceEqual(digestA));
+        recovered.State.ResultAcknowledgementFences.Should().ContainSingle(fence =>
+            fence.Key.Equals(failed.PreviousKey) &&
+            fence.ResultSha256.ToByteArray().SequenceEqual(digestB));
+        var beforeReplay = committed.Count;
+        recoveredDispatch.Calls.Clear();
+
+        await recovered.HandleOperationResultAsync(staleSuccessB.Clone());
+
+        (await eventStore.GetEventsAsync(conversationActorId)).Should().HaveCount(beforeReplay);
+        var acknowledgement = recoveredDispatch.Calls.Should().ContainSingle(call =>
+                call.Envelope.Payload.Is(
+                    NyxIdChatTurnOperationResultAcknowledgedSignal.Descriptor))
+            .Which.Envelope.Payload.Unpack<NyxIdChatTurnOperationResultAcknowledgedSignal>();
+        acknowledgement.Key.Should().BeEquivalentTo(failed.PreviousKey);
+        acknowledgement.ResultSha256.ToByteArray().Should().Equal(digestB);
     }
 
     [Theory]
@@ -7760,7 +7830,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
         }
         """);
 
-    private static NyxIdAssistantActionRegistry CreateIncompleteLeastScopeActionRegistry() =>
+    private static NyxIdAssistantActionRegistry CreateLeastScopeActionRegistry() =>
         NyxIdAssistantActionRegistry.Load("""
         {
           "schema_version": 4,
@@ -7840,10 +7910,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
             }
           ]
         }
-        """,
-        NyxIdAssistantActionCapabilityRegistrations.Current.Without(
-            NyxIdAssistantActionKind.KeyCreate,
-            NyxIdAssistantActionCapabilityKind.RetryGenerationPolicy));
+        """);
 
     private static EventEnvelope CreateEnvelope(string actorId, IMessage payload) => new()
     {

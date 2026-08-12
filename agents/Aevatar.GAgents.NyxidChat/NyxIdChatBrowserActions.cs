@@ -459,6 +459,9 @@ public static class NyxIdChatBrowserActions
                     return RejectContinuation(state, ActionContinuationInvalid);
                 if (firstDispatch is not null)
                     continue;
+                var report = FindCompletedReport(pending[index]);
+                if (RequiresExactReadAuthority(pending[index].Action) && report is null)
+                    return RejectContinuation(state, ActionContinuationInvalid);
 
                 ActivatePostconditionForStateChange(
                     task,
@@ -469,7 +472,7 @@ public static class NyxIdChatBrowserActions
                     next.ScopeId,
                     admission.OwnerSubject,
                     pending[index],
-                    report: null,
+                    report,
                     step.Operation.Key,
                     admission.ReadAuthority);
             }
@@ -974,7 +977,8 @@ public static class NyxIdChatBrowserActions
             StringComparison.Ordinal));
         var report = request is null
             ? null
-            : FindAdmissionReport(admission, request.ActionRequestId);
+            : FindAdmissionReport(admission, request.ActionRequestId) ??
+              FindCompletedReport(request);
         return request is null
             ? null
             : BuildPostconditionCommand(
@@ -1033,7 +1037,8 @@ public static class NyxIdChatBrowserActions
         }
         var report = request is null
             ? null
-            : FindAdmissionReport(admission, request.ActionRequestId);
+            : FindAdmissionReport(admission, request.ActionRequestId) ??
+              FindCompletedReport(request);
         return request is null
             ? null
             : BuildPostconditionCommand(
@@ -1105,6 +1110,12 @@ public static class NyxIdChatBrowserActions
         admission.ActionReports.FirstOrDefault(report =>
             string.Equals(report.ActionRequestId, actionRequestId, StringComparison.Ordinal) &&
             report.Disposition == NyxIdChatActionDisposition.Completed);
+
+    private static NyxIdChatActionReport? FindCompletedReport(
+        NyxIdChatActionRequestState request) =>
+        request.Reports.LastOrDefault(report =>
+            report.Disposition == NyxIdChatActionDisposition.Completed &&
+            ResourceMatchesAction(request.Action, report.Disposition, report.Resource));
 
     private static bool ValidContinuationIdentity(
         NyxIdChatConversationGAgentState state,
