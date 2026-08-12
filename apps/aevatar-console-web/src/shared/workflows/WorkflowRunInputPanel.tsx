@@ -262,7 +262,7 @@ const WorkflowRunInputPanel: React.FC<WorkflowRunInputPanelProps> = ({
                   : 'workflowActivityVNext.editor.publishedRunPanel.inputHint',
                 variant.kind === 'draft'
                   ? 'Leave blank to run this draft without user input.'
-                  : 'Enter the input for this published workflow run.',
+                  : 'Leave blank to start this published workflow without user input.',
               )}
             </Typography.Text>
           </div>
@@ -285,7 +285,7 @@ const WorkflowRunInputPanel: React.FC<WorkflowRunInputPanelProps> = ({
                 : 'workflowActivityVNext.editor.publishedRunPanel.messagePlaceholder',
               variant.kind === 'draft'
                 ? 'Optional input sent to this workflow draft run'
-                : 'Input sent to this published workflow run',
+                : 'Optional input sent to this published workflow run',
             )}
             style={{ fontSize: 15 }}
             value={runMessage}

@@ -150,7 +150,7 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.editor.openRunDetails': 'Open run details',
   'workflowActivityVNext.editor.outputSummary': 'Output summary',
   'workflowActivityVNext.editor.publishedRunPanel.inputRequired':
-    'Enter an input or attach a file to start this published workflow run.',
+    'Published workflow runs can start without manual input.',
   'workflowActivityVNext.editor.publishedRunPanel.removeEmptyFile':
     'Remove empty file {name} before starting the published run.',
   'workflowActivityVNext.editor.resizePublishedRunPanel':

@@ -4182,6 +4182,34 @@ describe('Workflow Activity vNext editor', () => {
     expect(mockRuntimeRunsApi.streamDraftRun).not.toHaveBeenCalled();
   });
 
+  it('starts the exact published workflow service with empty input', async () => {
+    arrangeObservedWorkflowPublication();
+    mockRuntimeRunsApi.streamChat.mockResolvedValue(createSseResponse([]));
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+    await publishObservedWorkflow();
+
+    const run = screen.getByRole('button', { name: 'Run' });
+    await waitFor(() => expect(run).toBeEnabled());
+    fireEvent.click(run);
+
+    const startRun = await screen.findByRole('button', {
+      name: 'Start published run',
+    });
+    expect(startRun).toBeEnabled();
+    fireEvent.click(startRun);
+
+    await waitFor(() =>
+      expect(mockRuntimeRunsApi.streamChat).toHaveBeenCalledWith(
+        'scope-alpha',
+        { prompt: '' },
+        expect.any(AbortSignal),
+        { serviceId: 'svc-alpha' },
+      ),
+    );
+    expect(mockRuntimeRunsApi.streamEndpoint).not.toHaveBeenCalled();
+    expect(mockRuntimeRunsApi.streamDraftRun).not.toHaveBeenCalled();
+  });
+
   it('uploads published run files through the exact published service', async () => {
     arrangeObservedWorkflowPublication();
     mockRuntimeRunsApi.streamEndpoint.mockResolvedValue(createSseResponse([]));
@@ -4371,7 +4399,7 @@ describe('Workflow Activity vNext editor', () => {
     });
   });
 
-  it('requires text or a file before invoking a published workflow', async () => {
+  it('allows a published workflow to start empty and still submits typed input', async () => {
     mockRuntimeRunsApi.streamChat.mockResolvedValue(createSseResponse([]));
 
     await renderPublishedWorkflowPage();
@@ -4384,25 +4412,55 @@ describe('Workflow Activity vNext editor', () => {
       name: 'Start published run',
     });
 
-    expect(startRun).toBeDisabled();
-    expect(
-      screen.getByText(
-        'Enter an input or attach a file to start this published workflow run.',
+    expect(startRun).toBeEnabled();
+    fireEvent.click(startRun);
+
+    await waitFor(() =>
+      expect(mockRuntimeRunsApi.streamChat).toHaveBeenCalledWith(
+        'scope-alpha',
+        { prompt: '' },
+        expect.any(AbortSignal),
+        { serviceId: 'svc-alpha' },
       ),
-    ).toBeInTheDocument();
+    );
+
     fireEvent.change(input, { target: { value: 'Review order 42' } });
     expect(startRun).toBeEnabled();
 
     fireEvent.click(startRun);
 
     await waitFor(() =>
-      expect(mockRuntimeRunsApi.streamChat).toHaveBeenCalledWith(
-        'scope-alpha',
-        { prompt: 'Review order 42' },
-        expect.any(AbortSignal),
-        { serviceId: 'svc-alpha' },
-      ),
+      expect(mockRuntimeRunsApi.streamChat).toHaveBeenCalledTimes(2),
     );
+    expect(mockRuntimeRunsApi.streamChat).toHaveBeenLastCalledWith(
+      'scope-alpha',
+      { prompt: 'Review order 42' },
+      expect.any(AbortSignal),
+      { serviceId: 'svc-alpha' },
+    );
+  });
+
+  it('keeps empty files blocked before invoking a published workflow', async () => {
+    mockRuntimeRunsApi.streamEndpoint.mockResolvedValue(createSseResponse([]));
+
+    await renderPublishedWorkflowPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Run' }));
+    const emptyFile = new File([''], 'empty.txt', { type: 'text/plain' });
+    fireEvent.change(await screen.findByTestId('workflow-run-file-input'), {
+      target: { files: [emptyFile] },
+    });
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Start published run' }),
+    );
+
+    expect(
+      await screen.findByText(
+        'Remove empty file empty.txt before starting the published run.',
+      ),
+    ).toBeInTheDocument();
+    expect(mockRuntimeRunsApi.streamChat).not.toHaveBeenCalled();
+    expect(mockRuntimeRunsApi.streamEndpoint).not.toHaveBeenCalled();
   });
 
   it('maps backend prompt validation to the run input without losing it', async () => {
