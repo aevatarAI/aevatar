@@ -17,6 +17,18 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparer(
     public ExternalWorkflowCapabilitySelector.SelectorOneofCase SelectorKind =>
         ExternalWorkflowCapabilitySelector.SelectorOneofCase.CodeExecution;
 
+    public bool CanConverge(ExternalCapabilityReadiness readiness)
+    {
+        ArgumentNullException.ThrowIfNull(readiness);
+        return readiness.Status == ExternalCapabilityReadinessStatus.ContractDrift &&
+               readiness.Sources.Count > 0 &&
+               readiness.Blockers.Count == 1 &&
+               string.Equals(
+                   readiness.Blockers[0].Code,
+                   "CODE_EXECUTION_ROUTE_POLICY_MISMATCH",
+                   StringComparison.Ordinal);
+    }
+
     public async Task PrepareAsync(
         ExternalWorkflowCapabilityAccessContext access,
         ExternalWorkflowCapabilitySelector selector,
@@ -32,15 +44,18 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparer(
             return;
         }
 
-        var bearerToken = access.NyxIdCallerCredential?.SourceReadableUserBearerToken;
-        if (string.IsNullOrWhiteSpace(bearerToken) ||
-            access.NyxIdCallerCredential?.CanManageUserServices != true)
+        if (!NyxIdUserServiceRouteMutationAuthority.TryCreate(
+                access.NyxIdCallerCredential,
+                out var mutationAuthority) ||
+            mutationAuthority is null)
+        {
             return;
+        }
 
         try
         {
             var result = await reconciler.ReconcileAsync(
-                    bearerToken,
+                    mutationAuthority,
                     cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
             if (result.Attempted && !result.Verified)

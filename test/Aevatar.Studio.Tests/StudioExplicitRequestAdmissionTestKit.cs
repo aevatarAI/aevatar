@@ -58,10 +58,13 @@ internal static class StudioExplicitRequestAdmissionTestKit
     public static WorkflowCapabilityAdmissionContext Context(
         IEnumerable<NyxIdExplicitRequestConfirmation>? confirmations = null,
         ExternalCapabilityExecutionMode executionMode = ExternalCapabilityExecutionMode.Interactive,
-        WorkflowCapabilityAdmissionPlan? existingPlan = null) =>
+        WorkflowCapabilityAdmissionPlan? existingPlan = null,
+        bool includeCallerCredential = true) =>
         new(
             CallerId,
-            NyxIdCallerCredentialSelection.SourceReadableUserBearer(CallerBearer),
+            includeCallerCredential
+                ? NyxIdCallerCredentialSelection.SourceReadableUserBearer(CallerBearer)
+                : null,
             OrganizationBearer,
             executionMode: executionMode,
             existingPlan: existingPlan,

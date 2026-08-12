@@ -545,6 +545,7 @@ Workflow engine 不新增：
 错误码要点：
 
 - `INVALID_WORKFLOW_YAML`（400）：`workflowYaml` 解析/校验失败。
+- `EXTERNAL_WORKFLOW_CAPABILITY_NOT_READY`（409）：定义有效，但外部能力 admission 未就绪。
 - `WORKFLOW_NAME_MISMATCH`（400）：`workflow` 与 `workflowYaml.name` 不一致。
 - `WORKFLOW_BINDING_MISMATCH`（409）：目标 actor 已绑定其它 workflow。
 - `AGENT_WORKFLOW_NOT_CONFIGURED`（409）：typed source 指定的 actor 未绑定且未提供 inline YAML。

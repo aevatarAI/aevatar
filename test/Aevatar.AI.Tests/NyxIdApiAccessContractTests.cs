@@ -131,7 +131,7 @@ public sealed class NyxIdApiAccessContractTests
     }
 
     [Fact]
-    public void ParseCodeExecutionUserServices_ShouldMapRouteContractWithoutChangingOrdinaryParser()
+    public void ParseUserServiceRoutes_ShouldMapRouteContractWithoutChangingOrdinaryParser()
     {
         const string response = """
             {
@@ -149,7 +149,7 @@ public sealed class NyxIdApiAccessContractTests
             """;
 
         var ordinary = NyxIdApiAccessResponseParser.ParseUserServices(response);
-        var codeExecution = NyxIdApiAccessResponseParser.ParseCodeExecutionUserServices(response);
+        var routes = NyxIdApiAccessResponseParser.ParseUserServiceRoutes(response);
 
         ordinary.Succeeded.Should().BeTrue();
         ordinary.Value!.Services.Single().Should().BeEquivalentTo(new
@@ -159,8 +159,8 @@ public sealed class NyxIdApiAccessContractTests
             InjectDelegationToken = (bool?)null,
             DelegationTokenScope = (string?)null,
         });
-        codeExecution.Succeeded.Should().BeTrue();
-        codeExecution.Value!.Services.Single().Should().BeEquivalentTo(new
+        routes.Succeeded.Should().BeTrue();
+        routes.Value!.Services.Single().Should().BeEquivalentTo(new
         {
             CatalogServiceId = "catalog-chrono-sandbox",
             ForwardAccessToken = (bool?)false,
@@ -183,7 +183,7 @@ public sealed class NyxIdApiAccessContractTests
             """;
 
         NyxIdApiAccessResponseParser.ParseUserServices(response).Succeeded.Should().BeTrue();
-        NyxIdApiAccessResponseParser.ParseCodeExecutionUserServices(response).Succeeded
+        NyxIdApiAccessResponseParser.ParseUserServiceRoutes(response).Succeeded
             .Should().BeFalse();
     }
 
@@ -210,6 +210,7 @@ public sealed class NyxIdApiAccessContractTests
                 {
                   "id": "service-direct",
                   "slug": "api-github",
+                  "catalog_service_id": "catalog-api-github",
                   "catalog_service_slug": "api-github",
                   "label": "GitHub",
                   "catalog_service_name": "GitHub API",
@@ -262,6 +263,7 @@ public sealed class NyxIdApiAccessContractTests
                 NyxIdUserServiceNodeStatus.NotBound,
                 new NyxIdUserServiceCredentialSource(
                     NyxIdUserServiceCredentialSourceKind.Personal),
+                "catalog-api-github",
                 "api-github",
                 true),
             new NyxIdUserServiceKey(
@@ -280,6 +282,7 @@ public sealed class NyxIdApiAccessContractTests
                     null,
                     NyxIdOrganizationRole.Member,
                     true),
+                null,
                 null,
                 true));
     }

@@ -246,6 +246,11 @@ internal sealed class NyxIdCodeExecutionPort(
                 "code_execution_route_policy_mismatch",
                 "The canonical code execution route policy is incompatible.",
                 diagnosticId),
+            NyxIdCodeExecutionRouteResolutionKind.ExecutionNotReady => Failed(
+                CodeExecutionFailureKind.TargetNotConfigured,
+                "code_execution_route_not_ready",
+                "The canonical code execution service is not executable for this caller.",
+                diagnosticId),
             NyxIdCodeExecutionRouteResolutionKind.Ambiguous => Failed(
                 CodeExecutionFailureKind.TargetNotConfigured,
                 "code_execution_route_ambiguous",

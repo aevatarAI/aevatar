@@ -441,6 +441,8 @@ public sealed class ScopeWorkflowApplicationServicesTests
 
         public PersistedWorkflowCapabilityAdmissionRequest? PersistedRequest { get; private set; }
 
+        public RefreshPersistedWorkflowCapabilityAdmissionRequest? RefreshRequest { get; private set; }
+
         public Exception? Exception { get; init; }
 
         public WorkflowCapabilityAdmissionPlan Plan { get; } =
@@ -471,6 +473,17 @@ public sealed class ScopeWorkflowApplicationServicesTests
                 throw Exception;
 
             return Task.FromResult(request.Plan.Clone());
+        }
+
+        public Task<WorkflowCapabilityAdmissionPlan> RefreshPersistedAsync(
+            RefreshPersistedWorkflowCapabilityAdmissionRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            RefreshRequest = request;
+            if (Exception is not null)
+                throw Exception;
+
+            return Task.FromResult(request.Persisted.Plan.Clone());
         }
     }
 

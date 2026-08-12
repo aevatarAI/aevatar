@@ -178,6 +178,63 @@ public class NyxIdConnectedServiceToolSourceTests
         handler.ProxyRequests.Should().BeEmpty();
     }
 
+    [Theory]
+    [InlineData("expired", true, null, null)]
+    [InlineData("pending_auth", true, null, null)]
+    [InlineData("active", false, null, null)]
+    [InlineData("active", true, "node-alpha", "offline")]
+    public async Task DiscoverToolsAsync_NonExecutableKeyReadiness_DoesNotExposeOperations(
+        string status,
+        bool connected,
+        string? nodeId,
+        string? nodeStatus)
+    {
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = Keys(
+            Instance(
+                "usvc-alpha",
+                "api-shop",
+                "svc-shop",
+                status: status,
+                connected: connected,
+                nodeId: nodeId,
+                nodeStatus: nodeStatus));
+        handler.McpConfigByToken["user-token"] = ExactMcpCatalog;
+        var source = CreateSource(handler);
+
+        using var scope = PushContext("user-token");
+        var tools = await source.DiscoverToolsAsync();
+
+        tools.Should().BeEmpty();
+        handler.McpConfigRequests.Should().Be(0);
+        handler.ProxyRequests.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(null, null)]
+    [InlineData("node-alpha", "online")]
+    public async Task DiscoverToolsAsync_ExecutableKeyReadiness_ExposesOperation(
+        string? nodeId,
+        string? nodeStatus)
+    {
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = Keys(
+            Instance(
+                "usvc-alpha",
+                "api-shop",
+                "svc-shop",
+                nodeId: nodeId,
+                nodeStatus: nodeStatus));
+        handler.McpConfigByToken["user-token"] = ExactMcpCatalog;
+        var source = CreateSource(handler);
+
+        using var scope = PushContext("user-token");
+        var tools = await source.DiscoverToolsAsync();
+
+        tools.Should().ContainSingle();
+        handler.McpConfigRequests.Should().Be(1);
+    }
+
     [Fact]
     public async Task DiscoverToolsAsync_AuthoritativeReadinessBinding_ProjectsDistinctNyxIdIdentities()
     {
@@ -1512,7 +1569,11 @@ public class NyxIdConnectedServiceToolSourceTests
         string id,
         string slug,
         string catalogServiceId,
-        string credentialSource = PersonalCredentialSource) => $$"""
+        string credentialSource = PersonalCredentialSource,
+        string status = "active",
+        bool connected = true,
+        string? nodeId = null,
+        string? nodeStatus = null) => $$"""
         {
           "id": "{{id}}",
           "slug": "{{slug}}",
@@ -1521,7 +1582,9 @@ public class NyxIdConnectedServiceToolSourceTests
           "endpoint_id": "instance-endpoint-alpha",
           "endpoint_url": "https://shop.test",
           "is_active": true,
-          "credential_source": {{credentialSource}}
+          "status": "{{status}}",
+          "connected": {{connected.ToString().ToLowerInvariant()}},
+          "credential_source": {{credentialSource}}{{NodeRouteFields(nodeId, nodeStatus)}}
         }
         """;
 
@@ -1539,6 +1602,8 @@ public class NyxIdConnectedServiceToolSourceTests
           "endpoint_url": "https://shop.test",
           "openapi_url": "{{openApiUrl}}",
           "is_active": true,
+          "status": "active",
+          "connected": true,
           "credential_source": {{PersonalCredentialSource}}
         }
         """;
@@ -1557,9 +1622,20 @@ public class NyxIdConnectedServiceToolSourceTests
           "endpoint_id": "instance-endpoint-alpha",
           "endpoint_url": "https://shop.test",
           "is_active": true,
+          "status": "active",
+          "connected": true,
           "credential_source": {{PersonalCredentialSource}}
         }
         """;
+
+    private static string NodeRouteFields(string? nodeId, string? nodeStatus) =>
+        nodeId is null
+            ? string.Empty
+            : $$"""
+              ,
+              "node_id": "{{nodeId}}",
+              "node_status": "{{nodeStatus}}"
+              """;
 
     private static string OrganizationCredentialSource(bool allowed) => $$"""
         {

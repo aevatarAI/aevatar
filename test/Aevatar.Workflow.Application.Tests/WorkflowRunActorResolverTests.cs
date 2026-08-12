@@ -426,7 +426,7 @@ public sealed class WorkflowRunActorResolverTests
                 CommandIdSeed: "command-alpha"),
             CancellationToken.None);
 
-        result.Error.Should().Be(WorkflowChatRunStartError.InvalidWorkflowYaml);
+        result.Error.Should().Be(WorkflowChatRunStartError.ExternalCapabilityNotReady);
         result.Target.Should().BeNull();
         result.FailureDetail.Should().NotBeNull();
         result.FailureDetail!.ExternalCapabilityReadiness.Should().NotBeSameAs(blockedReadiness);

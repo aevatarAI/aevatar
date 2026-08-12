@@ -1960,6 +1960,11 @@ public sealed class ScopeWorkflowEndpointsTests
             PersistedWorkflowCapabilityAdmissionRequest request,
             CancellationToken cancellationToken = default) =>
             Task.FromResult(request.Plan.Clone());
+
+        public Task<WorkflowCapabilityAdmissionPlan> RefreshPersistedAsync(
+            RefreshPersistedWorkflowCapabilityAdmissionRequest request,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(request.Persisted.Plan.Clone());
     }
 
     private sealed class NoOpServiceGovernanceCommandPort : IServiceGovernanceCommandPort
