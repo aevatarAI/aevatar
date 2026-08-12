@@ -17,6 +17,7 @@ using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using System.Security.Cryptography;
+using System.Text.Json;
 
 namespace Aevatar.GAgents.NyxidChat;
 
@@ -1204,16 +1205,21 @@ public sealed class NyxIdChatConversationGAgent
         NyxIdAssistantActionRegistry registry,
         WorkflowInteractiveActionRequestWirePayload request)
     {
-        if (!string.Equals(request.Action, "service.connect", StringComparison.Ordinal))
+        if (string.Equals(request.Action, "service.connect", StringComparison.Ordinal))
         {
-            throw new NyxIdAssistantActionRegistryException(
-                "NYXID_ACTION_UNSUPPORTED",
-                "The workflow interactive action is not enabled in this contract revision.");
+            return registry.ResolveCatalogServiceConnect(
+                request.Params.CatalogService.ServiceSlug,
+                request.Params.CatalogService.RequestedScopes);
         }
 
-        return registry.ResolveCatalogServiceConnect(
-            request.Params.CatalogService.ServiceSlug,
-            request.Params.CatalogService.RequestedScopes);
+        var keyCreate = request.Params.KeyCreate;
+        var paramsJson = JsonSerializer.Serialize(new
+        {
+            name = keyCreate.Name,
+            platform = keyCreate.Platform,
+            allowedServiceIds = keyCreate.AllowedServiceIds.ToArray(),
+        });
+        return registry.ValidateRequest("key.create", paramsJson);
     }
 
     private static bool IsValidWorkflowActionActorId(string actorId)
