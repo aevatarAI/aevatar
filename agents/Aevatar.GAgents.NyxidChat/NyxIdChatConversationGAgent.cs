@@ -3491,10 +3491,7 @@ public sealed class NyxIdChatConversationGAgent
         if (step?.Operation is null)
             return current;
 
-        if (step.Operation.Phase == NyxIdChatOperationPhase.Requested)
-            step.Operation.Phase = NyxIdChatOperationPhase.Dispatched;
-        step.Operation.DispatchedAt ??= evt.DispatchedAt?.Clone();
-        step.Operation.LastProgressAt ??= evt.DispatchedAt?.Clone();
+        ApplyMonotonicDispatchObservation(step.Operation, evt.DispatchedAt);
         if (evt.EffectDispatchWaterline != NyxIdChatEffectEvidence.Unspecified)
             step.ExternalEffect = evt.EffectDispatchWaterline;
         if (next.ActiveTurnPlanGateAdmission?.Key is { } admissionKey &&
@@ -3525,9 +3522,20 @@ public sealed class NyxIdChatConversationGAgent
         var operation = evt.State.ActiveTask.Steps
             .Select(static step => step.Operation)
             .FirstOrDefault(candidate => KeysEqual(candidate?.Key, evt.Key));
-        return operation?.Phase != NyxIdChatOperationPhase.Dispatched
+        return operation?.Phase is not (
+            NyxIdChatOperationPhase.Dispatched or NyxIdChatOperationPhase.Running)
             ? current
             : evt.State.Clone();
+    }
+
+    private static void ApplyMonotonicDispatchObservation(
+        NyxIdChatOperationState operation,
+        Timestamp? dispatchedAt)
+    {
+        if (operation.Phase == NyxIdChatOperationPhase.Requested)
+            operation.Phase = NyxIdChatOperationPhase.Dispatched;
+        operation.DispatchedAt ??= dispatchedAt?.Clone();
+        operation.LastProgressAt ??= dispatchedAt?.Clone();
     }
 
     private static NyxIdChatConversationGAgentState ApplyOperationProgressed(
@@ -4802,9 +4810,7 @@ public sealed class NyxIdChatConversationGAgent
         step.ExternalEffect = mayChangeExternalState
             ? NyxIdChatEffectEvidence.MayHaveChanged
             : NyxIdChatEffectEvidence.NotApplied;
-        step.Operation.Phase = NyxIdChatOperationPhase.Dispatched;
-        step.Operation.DispatchedAt = now.Clone();
-        step.Operation.LastProgressAt ??= now.Clone();
+        ApplyMonotonicDispatchObservation(step.Operation, now);
         step.UpdatedAt = now.Clone();
         next.ActiveTask!.UpdatedAt = now.Clone();
         next.UpdatedAt = now.Clone();

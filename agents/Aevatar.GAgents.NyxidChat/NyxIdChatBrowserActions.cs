@@ -388,7 +388,6 @@ public static class NyxIdChatBrowserActions
         }
         if (state.ActiveTask is { } activeTask &&
             sanitizedReports.Any(report =>
-                report.Disposition == NyxIdChatActionDisposition.Completed &&
                 IsTerminalPostconditionGeneration(
                     FindPostconditionStep(activeTask, report.ActionRequestId))))
         {

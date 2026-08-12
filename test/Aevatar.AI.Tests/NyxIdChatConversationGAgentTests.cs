@@ -1984,6 +1984,86 @@ public sealed partial class NyxIdChatConversationGAgentTests
                 : firstDispatchedAt);
     }
 
+    [Theory]
+    [InlineData(NyxIdChatOperationPhase.Requested)]
+    [InlineData(NyxIdChatOperationPhase.Dispatched)]
+    [InlineData(NyxIdChatOperationPhase.Running)]
+    public async Task ActivateAsync_WithInFlightPostcondition_WhenRedispatchThrows_ShouldPersistMonotonicUncertainty(
+        NyxIdChatOperationPhase phase)
+    {
+        const string conversationActorId = "conversation-alpha";
+        var blocked = CreateBlockedActionState();
+        var admitted = NyxIdChatBrowserActions.Continue(
+            blocked,
+            CreateActionContinueCommand(blocked.PendingActions.Single().ActionRequestId),
+            Timestamp.FromDateTimeOffset(
+                new DateTimeOffset(2026, 7, 24, 8, 0, 0, TimeSpan.Zero)));
+        var state = admitted.State.Clone();
+        var postcondition = state.ActiveTask.Steps.Single(step =>
+            step.Kind == NyxIdChatStepKind.Postcondition);
+        postcondition.Operation.Phase = phase;
+        var firstDispatchedAt = Timestamp.FromDateTimeOffset(
+            new DateTimeOffset(2026, 7, 24, 8, 0, 1, TimeSpan.Zero));
+        if (phase is NyxIdChatOperationPhase.Dispatched or NyxIdChatOperationPhase.Running)
+        {
+            postcondition.Operation.DispatchedAt = firstDispatchedAt.Clone();
+            postcondition.Operation.LastProgressAt = firstDispatchedAt.Clone();
+        }
+        var expectedKey = postcondition.Operation.Key.Clone();
+
+        var eventStore = new InMemoryEventStoreForTests();
+        await PersistTestStateAsync(eventStore, conversationActorId, 1, state);
+        var callbacks = new RecordingRuntimeCallbackScheduler();
+        var dispatch = new RecordingActorDispatchPort(
+            [],
+            (_, envelope) =>
+            {
+                if (envelope.Payload.Is(NyxIdChatOperationDispatchCommand.Descriptor))
+                    throw new InvalidOperationException("recovery dispatch unavailable");
+                return Task.CompletedTask;
+            });
+        using var services = BuildEventSourcingServices(
+            eventStore,
+            callbackScheduler: callbacks);
+        var recovered = CreateController(services, conversationActorId, dispatch);
+        await recovered.ActivateAsync();
+        var recoveryRequest = callbacks.TimeoutRequests.Should().ContainSingle(request =>
+                request.TriggerEnvelope.Payload.Is(NyxIdChatRecoveryRequestedSignal.Descriptor))
+            .Which;
+
+        await recovered.HandleEventAsync(recoveryRequest.TriggerEnvelope.Clone());
+
+        var committed = await eventStore.GetEventsAsync(conversationActorId);
+        var uncertain = committed.Should().ContainSingle(item =>
+                item.EventData.Is(NyxIdChatOperationDispatchUncertainEvent.Descriptor))
+            .Which.EventData.Unpack<NyxIdChatOperationDispatchUncertainEvent>();
+        uncertain.Key.Should().BeEquivalentTo(expectedKey);
+        uncertain.State.PendingOperationDeliveryProbe.Should().BeEquivalentTo(expectedKey);
+        var expectedPhase = phase == NyxIdChatOperationPhase.Requested
+            ? NyxIdChatOperationPhase.Dispatched
+            : phase;
+        var expectedDispatchedAt = phase == NyxIdChatOperationPhase.Requested
+            ? uncertain.ObservedAt
+            : firstDispatchedAt;
+        var persistedPostcondition = uncertain.State.ActiveTask.Steps.Single(step =>
+            step.Kind == NyxIdChatStepKind.Postcondition);
+        persistedPostcondition.Status.Should().Be(NyxIdChatStepStatus.Running);
+        persistedPostcondition.ExternalEffect.Should().Be(NyxIdChatEffectEvidence.NotApplied);
+        persistedPostcondition.Operation.Phase.Should().Be(expectedPhase);
+        persistedPostcondition.Operation.DispatchedAt.Should()
+            .BeEquivalentTo(expectedDispatchedAt);
+
+        recovered.State.PendingOperationDeliveryProbe.Should().BeEquivalentTo(expectedKey);
+        var appliedPostcondition = recovered.State.ActiveTask.Steps.Single(step =>
+            step.Kind == NyxIdChatStepKind.Postcondition);
+        appliedPostcondition.Status.Should().Be(NyxIdChatStepStatus.Running);
+        appliedPostcondition.ExternalEffect.Should().Be(NyxIdChatEffectEvidence.NotApplied);
+        appliedPostcondition.Operation.Phase.Should().Be(expectedPhase);
+        appliedPostcondition.Operation.DispatchedAt.Should()
+            .BeEquivalentTo(expectedDispatchedAt);
+        AssertSingleOperationDeliveryProbe(dispatch, expectedKey);
+    }
+
     [Fact]
     public async Task ActivateAsync_WithFailedWaitingPostcondition_ShouldWaitForAuthenticatedWake()
     {
@@ -2024,16 +2104,23 @@ public sealed partial class NyxIdChatConversationGAgentTests
             .BeEquivalentTo(wake.ReadAuthority);
     }
 
-    [Fact]
-    public async Task TerminalPostconditionGeneration_ShouldNotBeResurrected()
+    [Theory]
+    [InlineData(NyxIdChatActionDisposition.Completed)]
+    [InlineData(NyxIdChatActionDisposition.Failed)]
+    [InlineData(NyxIdChatActionDisposition.Declined)]
+    [InlineData(NyxIdChatActionDisposition.Cancelled)]
+    [InlineData(NyxIdChatActionDisposition.Expired)]
+    public async Task TerminalPostconditionGeneration_ShouldNotBeResurrected(
+        NyxIdChatActionDisposition disposition)
     {
         const string conversationActorId = "conversation-alpha";
         var failed = CreateFailedKeyPostconditionState();
+        var previousRequest = failed.State.PendingActions.Single().Clone();
+        var previousTask = failed.State.ActiveTask.Clone();
+        var previousTurn = failed.State.ActiveTurn.Clone();
         var previousPostcondition = failed.State.ActiveTask.Steps.Single(step =>
             step.Kind == NyxIdChatStepKind.Postcondition).Clone();
         var previousResult = failed.State.PendingActions.Single().PostconditionResult.Clone();
-        var previousTaskStatus = failed.State.ActiveTask.Status;
-        var previousTurnStatus = failed.State.ActiveTurn.Status;
         var eventStore = new InMemoryEventStoreForTests();
         await PersistTestStateAsync(eventStore, conversationActorId, 1, failed.State);
         var dispatch = new RecordingActorDispatchPort(
@@ -2048,10 +2135,14 @@ public sealed partial class NyxIdChatConversationGAgentTests
         continuation.ClientRequestId = "client-action-terminal-retry";
         continuation.CommandId = "command-action-terminal-retry";
         continuation.CorrelationId = "correlation-action-terminal-retry";
-        continuation.Actions.Single().Resource = new NyxIdChatSafeResourceRef
-        {
-            Key = new NyxIdChatKeyRef { KeyId = "key-alpha" },
-        };
+        var report = continuation.Actions.Single();
+        report.Disposition = disposition;
+        report.Resource = disposition == NyxIdChatActionDisposition.Completed
+            ? new NyxIdChatSafeResourceRef
+            {
+                Key = new NyxIdChatKeyRef { KeyId = "key-alpha" },
+            }
+            : null;
         continuation.ReadAuthority = CreateActionReadAuthority(continuation.CommandId);
 
         await agent.HandleEventAsync(CreateEnvelope(conversationActorId, continuation));
@@ -2066,8 +2157,16 @@ public sealed partial class NyxIdChatConversationGAgentTests
         postcondition.Status.Should().Be(previousPostcondition.Status);
         postcondition.Operation.Phase.Should().Be(previousPostcondition.Operation.Phase);
         postcondition.Operation.Key.Should().BeEquivalentTo(previousPostcondition.Operation.Key);
-        agent.State.PendingActions.Should().ContainSingle()
-            .Which.ActionRequestId.Should().Be(failed.ActionRequestId);
+        var pending = agent.State.PendingActions.Should().ContainSingle().Which;
+        pending.ToByteArray().Should().Equal(previousRequest.ToByteArray());
+        pending.Reports.Should().HaveCount(previousRequest.Reports.Count);
+        pending.ConversationActorId.Should().Be(previousRequest.ConversationActorId);
+        pending.OriginTurnId.Should().Be(previousRequest.OriginTurnId);
+        pending.TaskId.Should().Be(previousRequest.TaskId);
+        pending.StepId.Should().Be(previousRequest.StepId);
+        pending.Action.Should().Be(previousRequest.Action);
+        agent.State.ActiveTask.ToByteArray().Should().Equal(previousTask.ToByteArray());
+        agent.State.ActiveTurn.ToByteArray().Should().Equal(previousTurn.ToByteArray());
         agent.State.RecentActions.Should().BeEmpty();
 
         var lateSuccess = new NyxIdChatOperationResultSignal
@@ -2101,8 +2200,8 @@ public sealed partial class NyxIdChatConversationGAgentTests
         agent.State.PendingActions.Should().ContainSingle()
             .Which.PostconditionResult.Should().BeEquivalentTo(previousResult);
         agent.State.RecentActions.Should().BeEmpty();
-        agent.State.ActiveTask.Status.Should().Be(previousTaskStatus);
-        agent.State.ActiveTurn.Status.Should().Be(previousTurnStatus);
+        agent.State.ActiveTask.ToByteArray().Should().Equal(previousTask.ToByteArray());
+        agent.State.ActiveTurn.ToByteArray().Should().Equal(previousTurn.ToByteArray());
         dispatch.OperationCalls.Should().BeEmpty();
     }
 
