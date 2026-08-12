@@ -20,6 +20,7 @@ namespace Aevatar.Foundation.Core.EventSourcing;
 /// </summary>
 public class EventSourcingBehavior<TState> :
     IEventSourcingBehavior<TState>,
+    ICommittedEventStreamVersionProbe,
     ICommittedStatePublicationRecoveryBehavior
     where TState : class, IMessage<TState>, new()
 {
@@ -61,6 +62,10 @@ public class EventSourcingBehavior<TState> :
 
     /// <inheritdoc />
     public long CurrentVersion => _currentVersion;
+
+    /// <inheritdoc />
+    public Task<long> GetCommittedVersionAsync(CancellationToken ct = default) =>
+        _eventStore.GetVersionAsync(_agentId, ct);
 
     IReadOnlyList<CommittedStateEventPublished>
         ICommittedStatePublicationRecoveryBehavior.PendingCommittedStatePublications =>

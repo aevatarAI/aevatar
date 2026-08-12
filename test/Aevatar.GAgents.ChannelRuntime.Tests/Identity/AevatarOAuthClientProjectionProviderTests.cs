@@ -7,6 +7,7 @@ using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Broker;
 using FluentAssertions;
 using Google.Protobuf;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Xunit;
 
@@ -218,6 +219,31 @@ public sealed class AevatarOAuthClientProjectionProviderTests
     }
 
     [Fact]
+    public async Task GetAsync_WhenRefCannotResolve_LogsFailureReasonWithoutVaultReference()
+    {
+        const string vaultReference = "sec-sensitive-reference-do-not-log";
+        var document = ProvisionedDocument();
+        document.StateVersion = 3;
+        document.HmacKey = ByteString.Empty;
+        document.HmacKeyRef = new SecretReference
+        {
+            Ref = vaultReference,
+            Purpose = CredentialSecretPurposes.OAuthStateTokenHmacKey,
+            OwnerScopeKey = AevatarOAuthClientGAgent.WellKnownId,
+        };
+        var logger = new RecordingLogger<AevatarOAuthClientProjectionProvider>();
+        var provider = CreateProvider(document, new InMemorySecretVault(), logger: logger);
+
+        await Assert.ThrowsAsync<AevatarOAuthClientNotProvisionedException>(() => provider.GetAsync());
+
+        logger.Messages.Should().ContainSingle();
+        logger.Messages[0].Should()
+            .Contain("NotFound")
+            .And.Contain("document_state_version=3")
+            .And.NotContain(vaultReference);
+    }
+
+    [Fact]
     public async Task GetAsync_DoesNotCombineConfiguredClientWithStaleProjectedClient()
     {
         var document = ProvisionedDocument();
@@ -254,11 +280,13 @@ public sealed class AevatarOAuthClientProjectionProviderTests
     private static AevatarOAuthClientProjectionProvider CreateProvider(
         AevatarOAuthClientDocument document,
         ISecretVault vault,
-        string clientId = "client-id") =>
+        string clientId = "client-id",
+        ILogger<AevatarOAuthClientProjectionProvider>? logger = null) =>
         new(
             new StubReader(document),
             vault,
-            Options.Create(new AevatarOAuthClientOptions { ClientId = clientId }));
+            Options.Create(new AevatarOAuthClientOptions { ClientId = clientId }),
+            logger);
 
     private static AevatarOAuthClientDocument ProvisionedDocument() => new()
     {
@@ -288,5 +316,23 @@ public sealed class AevatarOAuthClientProjectionProviderTests
             ProjectionDocumentQuery query,
             CancellationToken ct = default) =>
             throw new NotSupportedException();
+    }
+
+    private sealed class RecordingLogger<T> : ILogger<T>
+    {
+        public List<string> Messages { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            Messages.Add(formatter(state, exception));
     }
 }

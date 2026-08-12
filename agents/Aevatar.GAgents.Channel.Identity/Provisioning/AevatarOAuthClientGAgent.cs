@@ -748,6 +748,64 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
             return;
         }
 
+        await RepublishCurrentProjectionStateAsync();
+
+        Logger.LogInformation(
+            "Rebuilt aevatar OAuth client readmodel from surviving actor state: client_id={ClientId}",
+            State.ClientId);
+    }
+
+    /// <summary>
+    /// Re-materializes a projection document that an operator conditionally
+    /// removed after proving its version exceeded the authoritative event
+    /// stream. The inspected version is a lower bound: a legitimate commit that
+    /// wins after inspection is re-published at its newer version. The handler
+    /// independently requires the actor's in-memory version to equal the
+    /// durable stream commit point, so an ahead zombie activation cannot publish.
+    /// No OAuth client fact is appended or changed.
+    /// </summary>
+    [EventHandler]
+    public async Task HandleRepairProjection(RepairAevatarOAuthClientProjectionCommand cmd)
+    {
+        ArgumentNullException.ThrowIfNull(cmd);
+        var repairRequestId = cmd.RepairRequestId?.Trim() ?? string.Empty;
+        if (repairRequestId.Length == 0)
+            throw new InvalidOperationException("OAuth client projection repair identity is required.");
+
+        var currentVersion = EventSourcing?.CurrentVersion
+            ?? throw new InvalidOperationException("OAuth client event sourcing is unavailable.");
+        if (cmd.ExpectedStateVersion <= 0 || currentVersion < cmd.ExpectedStateVersion)
+            throw new InvalidOperationException("OAuth client projection repair source version changed.");
+
+        // This is an actor-owned maintenance invariant, not a query-side replay:
+        // verify that the state about to be published is still backed by the
+        // actor's own authoritative commit point. It closes both the interrupted-
+        // commit zombie shape and a legitimate write racing the ES CAS delete.
+        if (EventSourcing is not ICommittedEventStreamVersionProbe committedVersionProbe)
+        {
+            throw new InvalidOperationException(
+                "OAuth client projection repair committed source probe is unavailable.");
+        }
+
+        var committedVersion = await committedVersionProbe.GetCommittedVersionAsync();
+        if (committedVersion != currentVersion)
+        {
+            throw new InvalidOperationException(
+                "OAuth client projection repair actor state does not match the committed source.");
+        }
+        if (string.IsNullOrEmpty(State.ClientId))
+            throw new InvalidOperationException("OAuth client projection repair found no provisioned client.");
+
+        await RepublishCurrentProjectionStateAsync();
+
+        Logger.LogWarning(
+            "Repaired aevatar OAuth client projection from authoritative actor state: source_version={SourceVersion}, repair_request_id={RepairRequestId}",
+            currentVersion,
+            repairRequestId);
+    }
+
+    private async Task RepublishCurrentProjectionStateAsync()
+    {
         // Routing payload only: the activation plan provider recognizes the
         // Provisioned descriptor; the materialized document comes from the
         // current state snapshot, not this reconstructed event.
@@ -761,10 +819,6 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
         };
         provisioned.RedirectUris.AddRange(State.RedirectUris);
         await RepublishCommittedStateAsync(provisioned);
-
-        Logger.LogInformation(
-            "Rebuilt aevatar OAuth client readmodel from surviving actor state: client_id={ClientId}",
-            State.ClientId);
     }
 
     /// <summary>
