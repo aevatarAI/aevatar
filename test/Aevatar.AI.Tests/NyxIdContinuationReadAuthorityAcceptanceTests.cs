@@ -40,6 +40,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
     private const string P0COriginTurnId = "turn-alpha";
     private const string P0CActionRequestId = "action-key-alpha";
     private const string P0CKeyId = "key-alpha";
+    private const string P0CRotatedKeyId = "key-beta";
     private const string P0CRawBearer = "raw-bearer-sentinel-p0c";
 
     private static readonly DateTimeOffset P0CNow =
@@ -121,6 +122,100 @@ public sealed partial class NyxIdChatConversationGAgentTests
         reconciled.State.PendingActions.Should().BeEmpty();
         reconciled.State.RecentActions.Should().ContainSingle(action =>
             action.ActionRequestId == P0CActionRequestId &&
+            action.PostconditionResult.Verified);
+        reconciled.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Succeeded);
+        reconciled.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Succeeded);
+        actor.State.Should().BeEquivalentTo(reconciled.State);
+    }
+
+    [Fact]
+    public async Task AuthenticatedKeyRotateContinuation_ShouldReconcileThroughRealActor()
+    {
+        var clock = new FakeTimeProvider(P0CNow);
+        var vault = new InMemorySecretVault(clock);
+        var authorityPort = P0CCreateAuthorityPort(vault, clock);
+        var endpoint = await P0CIssueEndpointContinuationAsync(authorityPort, P0CRotatedKeyId);
+        var eventStore = new InMemoryEventStoreForTests();
+        await P0CPersistBlockedKeyCreateAsync(
+            eventStore,
+            clock.GetUtcNow(),
+            NyxIdAssistantActionKind.KeyRotate);
+        var dispatch = new RecordingActorDispatchPort([], static (_, _) => Task.CompletedTask);
+        using var services = BuildEventSourcingServices(eventStore, secretVault: vault);
+        var actor = CreateController(services, P0CActorId, dispatch, timeProvider: clock);
+        await actor.ActivateAsync();
+        actor.State.PendingActions.Should().ContainSingle(action =>
+            action.ActionRequestId == P0CActionRequestId &&
+            action.Action == NyxIdAssistantActionKind.KeyRotate);
+        actor.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Blocked);
+        actor.State.ActiveTask.Steps.Should().ContainSingle(step =>
+            step.Kind == NyxIdChatStepKind.Postcondition &&
+            step.ActionRequestId == P0CActionRequestId);
+
+        await actor.HandleEventAsync(endpoint.Envelope);
+
+        var committedAfterAdmission = await eventStore.GetEventsAsync(P0CActorId);
+        var committedTypes = string.Join(
+            ", ",
+            committedAfterAdmission.Select(static item =>
+            {
+                if (!item.EventData.Is(NyxIdChatTurnAdmissionRejectedEvent.Descriptor))
+                    return item.EventType;
+
+                var rejection = item.EventData.Unpack<NyxIdChatTurnAdmissionRejectedEvent>();
+                return $"{item.EventType}({rejection.ReasonCode}: {rejection.SafeMessage})";
+            }));
+        var admissionStateEvent = committedAfterAdmission.Should().ContainSingle(item =>
+                item.EventData.Is(NyxIdChatContinuationAdmissionCommittedEvent.Descriptor),
+                "the actual committed event types were {0}",
+                committedTypes)
+            .Which;
+        var admission = admissionStateEvent.EventData
+            .Unpack<NyxIdChatContinuationAdmissionCommittedEvent>();
+        admission.Admission.ReadAuthority.Should().BeEquivalentTo(endpoint.Command.ReadAuthority);
+        admission.State.ContinuationAdmission.ReadAuthority.Should()
+            .BeEquivalentTo(endpoint.Command.ReadAuthority);
+        var admittedStep = admission.State.ActiveTask.Steps.Should()
+            .ContainSingle(step => step.Kind == NyxIdChatStepKind.Postcondition).Which;
+        admittedStep.Operation.Phase.Should().Be(NyxIdChatOperationPhase.Requested);
+
+        var operation = dispatch.OperationCalls.Should().ContainSingle().Which.Envelope.Payload
+            .Unpack<NyxIdChatOperationDispatchCommand>();
+        operation.Key.Should().BeEquivalentTo(admittedStep.Operation.Key);
+        operation.ActionPostcondition.Action.Should().Be(NyxIdAssistantActionKind.KeyRotate);
+        operation.ActionPostcondition.Params.KeyRotate.KeyId.Should().Be(P0CKeyId);
+        operation.ActionPostcondition.ResourceHint.Key.KeyId.Should().Be(P0CRotatedKeyId);
+        operation.ActionPostcondition.ReadAuthority.Should()
+            .BeEquivalentTo(endpoint.Command.ReadAuthority);
+        var evidence = P0CCreateEvidence(
+            clock.GetUtcNow(),
+            NyxIdAssistantActionKind.KeyRotate,
+            P0CRotatedKeyId);
+        var execution = await P0CExecutePostconditionAsync(
+            operation,
+            authorityPort,
+            clock,
+            evidence);
+
+        await actor.HandleEventAsync(CreateEnvelope(P0CActorId, execution.Result));
+
+        evidence.BearerTokens.Should().ContainSingle().Which.Should().Be(P0CRawBearer);
+        evidence.KeyIds.Should().ContainSingle().Which.Should().Be(P0CRotatedKeyId);
+        evidence.Evidence.VersionEvidence.Should().NotBeNull();
+        evidence.Evidence.VersionEvidence!.RotationPredecessorId.Should().Be(P0CKeyId);
+        evidence.Evidence.VersionEvidence.StateVersion.Should().Be(2);
+        var committed = await eventStore.GetEventsAsync(P0CActorId);
+        var reconciledStateEvent = committed.Should().ContainSingle(item =>
+                item.EventData.Is(NyxIdChatOperationReconciledEvent.Descriptor))
+            .Which;
+        var reconciled = reconciledStateEvent.EventData
+            .Unpack<NyxIdChatOperationReconciledEvent>();
+        reconciled.Result.ActionPostcondition.Verified.Should().BeTrue();
+        reconciled.Result.ActionPostcondition.Resource.Key.KeyId.Should().Be(P0CRotatedKeyId);
+        reconciled.State.PendingActions.Should().BeEmpty();
+        reconciled.State.RecentActions.Should().ContainSingle(action =>
+            action.ActionRequestId == P0CActionRequestId &&
+            action.Action == NyxIdAssistantActionKind.KeyRotate &&
             action.PostconditionResult.Verified);
         reconciled.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Succeeded);
         reconciled.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Succeeded);
@@ -221,6 +316,117 @@ public sealed partial class NyxIdChatConversationGAgentTests
     }
 
     [Fact]
+    public async Task UnexpiredKeyRotateAuthority_AfterRealActorReactivation_ShouldRecoverAndReconcile()
+    {
+        var clock = new FakeTimeProvider(P0CNow);
+        var vault = new InMemorySecretVault(clock);
+        var endpointAuthorityPort = P0CCreateAuthorityPort(vault, clock);
+        var endpoint = await P0CIssueEndpointContinuationAsync(
+            endpointAuthorityPort,
+            P0CRotatedKeyId);
+        var eventStore = new InMemoryEventStoreForTests();
+        await P0CPersistBlockedKeyCreateAsync(
+            eventStore,
+            clock.GetUtcNow(),
+            NyxIdAssistantActionKind.KeyRotate);
+        var callbacks = new RecordingRuntimeCallbackScheduler();
+        var interruptedDispatch = new RecordingActorDispatchPort(
+            [],
+            static (_, envelope) => envelope.Payload.Is(
+                    NyxIdChatOperationDispatchCommand.Descriptor)
+                ? Task.FromException(new OperationCanceledException(
+                    "simulate process loss after durable admission"))
+                : Task.CompletedTask);
+        using var services = BuildEventSourcingServices(
+            eventStore,
+            callbackScheduler: callbacks,
+            secretVault: vault);
+        var initial = CreateController(
+            services,
+            P0CActorId,
+            interruptedDispatch,
+            timeProvider: clock);
+        await initial.ActivateAsync();
+
+        var interrupted = () => initial.HandleEventAsync(endpoint.Envelope);
+        await interrupted.Should().ThrowAsync<OperationCanceledException>();
+
+        var initiallyDispatched = interruptedDispatch.OperationCalls.Should()
+            .ContainSingle().Which.Envelope.Payload
+            .Unpack<NyxIdChatOperationDispatchCommand>();
+        var beforeRestart = await eventStore.GetEventsAsync(P0CActorId);
+        beforeRestart.Should().ContainSingle(item =>
+            item.EventData.Is(NyxIdChatContinuationAdmissionCommittedEvent.Descriptor));
+        beforeRestart.Should().NotContain(item =>
+            item.EventData.Is(NyxIdChatOperationDispatchedEvent.Descriptor));
+        initial.State.ActiveTask.Steps.Single(step =>
+                step.Kind == NyxIdChatStepKind.Postcondition)
+            .Operation.Phase.Should().Be(NyxIdChatOperationPhase.Requested);
+
+        callbacks.TimeoutRequests.Clear();
+        var recoveryDispatch = new RecordingActorDispatchPort(
+            [],
+            static (_, _) => Task.CompletedTask);
+        var recovered = CreateController(
+            services,
+            P0CActorId,
+            recoveryDispatch,
+            timeProvider: clock);
+        await recovered.ActivateAsync();
+        var recoveryEnvelope = callbacks.TimeoutRequests.Should().ContainSingle(request =>
+                request.TriggerEnvelope.Payload.Is(NyxIdChatRecoveryRequestedSignal.Descriptor))
+            .Which.TriggerEnvelope.Clone();
+        var recoverySignal = recoveryEnvelope.Payload.Unpack<NyxIdChatRecoveryRequestedSignal>();
+        recoverySignal.Kind.Should().Be(NyxIdChatRecoveryKind.PostconditionRedispatch);
+        recoverySignal.ExpectedStateVersion.Should().Be(beforeRestart[^1].Version);
+
+        await recovered.HandleEventAsync(recoveryEnvelope);
+
+        var recoveredOperation = recoveryDispatch.OperationCalls.Should()
+            .ContainSingle().Which.Envelope.Payload
+            .Unpack<NyxIdChatOperationDispatchCommand>();
+        recoveredOperation.Key.Should().BeEquivalentTo(initiallyDispatched.Key);
+        recoveredOperation.ActionPostcondition.Action.Should().Be(NyxIdAssistantActionKind.KeyRotate);
+        recoveredOperation.ActionPostcondition.Params.KeyRotate.KeyId.Should().Be(P0CKeyId);
+        recoveredOperation.ActionPostcondition.ResourceHint.Key.KeyId.Should().Be(P0CRotatedKeyId);
+        recoveredOperation.ActionPostcondition.ReadAuthority.Should()
+            .BeEquivalentTo(endpoint.Command.ReadAuthority);
+        var restartedAuthorityPort = P0CCreateAuthorityPort(vault, clock);
+        var evidence = P0CCreateEvidence(
+            clock.GetUtcNow(),
+            NyxIdAssistantActionKind.KeyRotate,
+            P0CRotatedKeyId);
+        var execution = await P0CExecutePostconditionAsync(
+            recoveredOperation,
+            restartedAuthorityPort,
+            clock,
+            evidence);
+
+        await recovered.HandleEventAsync(CreateEnvelope(P0CActorId, execution.Result));
+
+        evidence.BearerTokens.Should().ContainSingle().Which.Should().Be(P0CRawBearer);
+        evidence.KeyIds.Should().ContainSingle().Which.Should().Be(P0CRotatedKeyId);
+        evidence.Evidence.VersionEvidence.Should().NotBeNull();
+        evidence.Evidence.VersionEvidence!.RotationPredecessorId.Should().Be(P0CKeyId);
+        evidence.Evidence.VersionEvidence.StateVersion.Should().Be(2);
+        var committed = await eventStore.GetEventsAsync(P0CActorId);
+        committed.Should().Contain(item =>
+            item.EventData.Is(NyxIdChatOperationDispatchedEvent.Descriptor));
+        var reconciled = committed.Should().ContainSingle(item =>
+                item.EventData.Is(NyxIdChatOperationReconciledEvent.Descriptor))
+            .Which.EventData.Unpack<NyxIdChatOperationReconciledEvent>();
+        reconciled.Result.ActionPostcondition.Verified.Should().BeTrue();
+        reconciled.Result.ActionPostcondition.Resource.Key.KeyId.Should().Be(P0CRotatedKeyId);
+        reconciled.State.PendingActions.Should().BeEmpty();
+        reconciled.State.RecentActions.Should().ContainSingle(action =>
+            action.ActionRequestId == P0CActionRequestId &&
+            action.Action == NyxIdAssistantActionKind.KeyRotate &&
+            action.PostconditionResult.Verified);
+        reconciled.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Succeeded);
+        reconciled.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Succeeded);
+    }
+
+    [Fact]
     public async Task ExpiredAuthority_ShouldPersistBlockedActorStateWithStableCode()
     {
         const string expectedExpiredCode = "NYXID_ACTION_READ_AUTHORITY_EXPIRED";
@@ -301,15 +507,115 @@ public sealed partial class NyxIdChatConversationGAgentTests
         actorPostconditionStep.Operation.TerminalCode.Should().Be(expectedExpiredCode);
     }
 
-    [Fact]
-    public async Task RawBearer_ShouldRemainVaultOnlyAcrossActualActorAndProjectionSurfaces()
+    [Theory]
+    [InlineData("missing", NyxIdActionReadAuthorityPort.MissingCode)]
+    [InlineData("expired", NyxIdActionReadAuthorityPort.ExpiredCode)]
+    [InlineData("revoked", NyxIdActionReadAuthorityPort.RevokedCode)]
+    [InlineData("scope", NyxIdActionReadAuthorityPort.ScopeMismatchCode)]
+    [InlineData("owner", NyxIdActionReadAuthorityPort.OwnerMismatchCode)]
+    [InlineData("unavailable", NyxIdActionReadAuthorityPort.UnavailableCode)]
+    public async Task KeyRotateAuthorityFailure_ShouldLeaveActorBlockedAndSkipProviderRead(
+        string variant,
+        string expectedFailureCode)
     {
         var clock = new FakeTimeProvider(P0CNow);
         var vault = new InMemorySecretVault(clock);
         var authorityPort = P0CCreateAuthorityPort(vault, clock);
-        var endpoint = await P0CIssueEndpointContinuationAsync(authorityPort);
+        var endpoint = await P0CIssueEndpointContinuationAsync(
+            authorityPort,
+            P0CRotatedKeyId);
         var eventStore = new InMemoryEventStoreForTests();
-        await P0CPersistBlockedKeyCreateAsync(eventStore, clock.GetUtcNow());
+        await P0CPersistBlockedKeyCreateAsync(
+            eventStore,
+            clock.GetUtcNow(),
+            NyxIdAssistantActionKind.KeyRotate);
+        var dispatch = new RecordingActorDispatchPort([], static (_, _) => Task.CompletedTask);
+        using var services = BuildEventSourcingServices(eventStore, secretVault: vault);
+        var actor = CreateController(services, P0CActorId, dispatch, timeProvider: clock);
+        await actor.ActivateAsync();
+        await actor.HandleEventAsync(endpoint.Envelope);
+        var operation = dispatch.OperationCalls.Should().ContainSingle().Which.Envelope.Payload
+            .Unpack<NyxIdChatOperationDispatchCommand>();
+        INyxIdActionReadAuthorityPort executionAuthorityPort = variant switch
+        {
+            "unavailable" => new P0CThrowingReadAuthorityPort(),
+            _ => authorityPort,
+        };
+        switch (variant)
+        {
+            case "missing":
+                operation.ActionPostcondition.ReadAuthority = null;
+                break;
+            case "expired":
+                clock.Advance(TimeSpan.FromMinutes(11));
+                break;
+            case "revoked":
+                (await authorityPort.RevokeAsync(
+                        operation.ActionPostcondition.ReadAuthority,
+                        P0CScopeId,
+                        P0COwnerSubject))
+                    .Should().BeTrue();
+                break;
+            case "scope":
+                operation.ActionPostcondition.ReadAuthority!.ScopeId = "scope-other";
+                break;
+            case "owner":
+                operation.ActionPostcondition.ReadAuthority!.OwnerSubject = "owner-other";
+                break;
+        }
+        operation.ActionPostcondition.Action.Should().Be(NyxIdAssistantActionKind.KeyRotate);
+        operation.ActionPostcondition.Params.KeyRotate.KeyId.Should().Be(P0CKeyId);
+        operation.ActionPostcondition.ResourceHint.Key.KeyId.Should().Be(P0CRotatedKeyId);
+        if (variant == "missing")
+            operation.ActionPostcondition.ReadAuthority.Should().BeNull();
+        else
+            operation.ActionPostcondition.ReadAuthority.Should().NotBeNull();
+
+        var evidence = P0CCreateEvidence(
+            clock.GetUtcNow(),
+            NyxIdAssistantActionKind.KeyRotate,
+            P0CRotatedKeyId);
+        var execution = await P0CExecutePostconditionAsync(
+            operation,
+            executionAuthorityPort,
+            clock,
+            evidence);
+
+        await actor.HandleEventAsync(CreateEnvelope(P0CActorId, execution.Result));
+
+        evidence.BearerTokens.Should().BeEmpty();
+        evidence.KeyIds.Should().BeEmpty();
+        execution.Result.ActionPostcondition.Verified.Should().BeFalse();
+        execution.Result.ActionPostcondition.FailureCode.Should().Be(expectedFailureCode);
+        var committed = await eventStore.GetEventsAsync(P0CActorId);
+        var reconciled = committed.Should().ContainSingle(item =>
+                item.EventData.Is(NyxIdChatOperationReconciledEvent.Descriptor))
+            .Which.EventData.Unpack<NyxIdChatOperationReconciledEvent>();
+        reconciled.Result.ActionPostcondition.Verified.Should().BeFalse();
+        reconciled.Result.ActionPostcondition.FailureCode.Should().Be(expectedFailureCode);
+        reconciled.State.PendingActions.Should().ContainSingle(action =>
+            action.ActionRequestId == P0CActionRequestId &&
+            action.Action == NyxIdAssistantActionKind.KeyRotate &&
+            action.PostconditionResult.FailureCode == expectedFailureCode);
+        reconciled.State.RecentActions.Should().BeEmpty();
+        reconciled.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Blocked);
+        reconciled.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Blocked);
+        actor.State.Should().BeEquivalentTo(reconciled.State);
+    }
+
+    [Theory]
+    [InlineData(NyxIdAssistantActionKind.KeyCreate, P0CKeyId)]
+    [InlineData(NyxIdAssistantActionKind.KeyRotate, P0CRotatedKeyId)]
+    public async Task RawBearer_ShouldRemainVaultOnlyAcrossActualActorAndProjectionSurfaces(
+        NyxIdAssistantActionKind action,
+        string resourceKeyId)
+    {
+        var clock = new FakeTimeProvider(P0CNow);
+        var vault = new InMemorySecretVault(clock);
+        var authorityPort = P0CCreateAuthorityPort(vault, clock);
+        var endpoint = await P0CIssueEndpointContinuationAsync(authorityPort, resourceKeyId);
+        var eventStore = new InMemoryEventStoreForTests();
+        await P0CPersistBlockedKeyCreateAsync(eventStore, clock.GetUtcNow(), action);
         var dispatch = new RecordingActorDispatchPort([], static (_, _) => Task.CompletedTask);
         using var services = BuildEventSourcingServices(eventStore, secretVault: vault);
         var actor = CreateController(services, P0CActorId, dispatch, timeProvider: clock);
@@ -319,7 +625,10 @@ public sealed partial class NyxIdChatConversationGAgentTests
         await actor.HandleEventAsync(endpoint.Envelope);
         var operation = dispatch.OperationCalls.Should().ContainSingle().Which.Envelope.Payload
             .Unpack<NyxIdChatOperationDispatchCommand>();
-        var evidence = P0CCreateEvidence(clock.GetUtcNow());
+        var evidence = P0CCreateEvidence(
+            clock.GetUtcNow(),
+            action,
+            resourceKeyId);
         var execution = await P0CExecutePostconditionAsync(
             operation,
             authorityPort,
@@ -404,12 +713,15 @@ public sealed partial class NyxIdChatConversationGAgentTests
         var document = dispatcher.Upserts.Should().ContainSingle().Which;
         document.RecentActions.Should().ContainSingle().Which.ActionRequestId.Should()
             .Be(P0CActionRequestId);
+        document.RecentActions.Single().Action.Should().Be(
+            action == NyxIdAssistantActionKind.KeyRotate ? "key.rotate" : "key.create");
         P0CAssertSerializedBoundary(document, P0CRawBearer, absent: true);
         P0CAssertSerializedBoundary(document, opaqueRef, absent: true);
     }
 
     private static async Task<P0CEndpointContinuation> P0CIssueEndpointContinuationAsync(
-        NyxIdActionReadAuthorityPort authorityPort)
+        NyxIdActionReadAuthorityPort authorityPort,
+        string resourceKeyId = P0CKeyId)
     {
         using var requestServices = new ServiceCollection()
             .AddSingleton<INyxIdActionReadAuthorityPort>(authorityPort)
@@ -445,7 +757,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
                     P0COriginTurnId,
                     "completed",
                     new NyxIdChatEndpoints.NyxIdChatActionResourceDto(
-                        Key: new NyxIdChatEndpoints.NyxIdChatKeyRefDto(P0CKeyId))),
+                        Key: new NyxIdChatEndpoints.NyxIdChatKeyRefDto(resourceKeyId))),
             ]);
         var method = typeof(NyxIdChatEndpoints).GetMethod(
             "HandleStreamMessageAsync",
@@ -491,7 +803,8 @@ public sealed partial class NyxIdChatConversationGAgentTests
 
     private static async Task P0CPersistBlockedKeyCreateAsync(
         InMemoryEventStoreForTests eventStore,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        NyxIdAssistantActionKind action = NyxIdAssistantActionKind.KeyCreate)
     {
         var blocked = CreateBlockedActionState();
         var timestamp = Timestamp.FromDateTimeOffset(now);
@@ -504,12 +817,19 @@ public sealed partial class NyxIdChatConversationGAgentTests
         blocked.ActiveTask.Gate.DecidedAt = timestamp.Clone();
         var pending = blocked.PendingActions.Single();
         pending.SchemaVersion = NyxIdAssistantActionRegistry.SupportedSchemaVersion;
-        pending.RegistryRevision = NyxIdAssistantActionRegistry.LeastScopeRegistryRevision;
+        pending.RegistryRevision = action == NyxIdAssistantActionKind.KeyRotate
+            ? NyxIdAssistantActionRegistry.SupportedRegistryRevision
+            : NyxIdAssistantActionRegistry.LeastScopeRegistryRevision;
         pending.ActionRequestId = P0CActionRequestId;
-        pending.Action = NyxIdAssistantActionKind.KeyCreate;
+        pending.Action = action;
         pending.RequestedAt = Timestamp.FromDateTimeOffset(now.AddMinutes(-2));
         pending.RememberEligible = false;
-        pending.Params = new NyxIdAssistantActionParams
+        pending.Params = action == NyxIdAssistantActionKind.KeyRotate
+            ? new NyxIdAssistantActionParams
+            {
+                KeyRotate = new NyxIdKeyRotateParams { KeyId = P0CKeyId },
+            }
+            : new NyxIdAssistantActionParams
         {
             KeyCreate = new NyxIdKeyCreateParams
             {
@@ -522,12 +842,12 @@ public sealed partial class NyxIdChatConversationGAgentTests
             step.Kind == NyxIdChatStepKind.BrowserAction);
         browserStep.ActionRequestId = P0CActionRequestId;
         browserStep.Source.BrowserAction.ActionRequestId = P0CActionRequestId;
-        browserStep.Source.BrowserAction.Action = NyxIdAssistantActionKind.KeyCreate;
+        browserStep.Source.BrowserAction.Action = action;
         var postconditionStep = blocked.ActiveTask.Steps.Single(step =>
             step.Kind == NyxIdChatStepKind.Postcondition);
         postconditionStep.ActionRequestId = P0CActionRequestId;
         postconditionStep.Source.Postcondition.ActionRequestId = P0CActionRequestId;
-        postconditionStep.Source.Postcondition.Check = NyxIdAssistantActionKind.KeyCreate.ToString();
+        postconditionStep.Source.Postcondition.Check = action.ToString();
         blocked.ActiveTask.Gate = NyxIdChatPlanGateDecisions.BuildActionGate(blocked, pending);
         blocked.ActiveTask.Gate.Status = NyxIdChatPlanGateStatus.Satisfied;
         blocked.ActiveTask.Gate.DecidedAt = timestamp.Clone();
@@ -567,8 +887,23 @@ public sealed partial class NyxIdChatConversationGAgentTests
         new(vault, clock, TimeSpan.FromMinutes(10), TimeSpan.FromHours(24));
 
     private static P0CActionEvidenceReadPort P0CCreateEvidence(DateTimeOffset now) =>
-        new(new NyxIdAgentApiKeyEvidence(
-            P0CKeyId,
+        P0CCreateEvidence(now, NyxIdAssistantActionKind.KeyCreate, P0CKeyId);
+
+    private static P0CActionEvidenceReadPort P0CCreateEvidence(
+        DateTimeOffset now,
+        NyxIdAssistantActionKind action,
+        string keyId,
+        string predecessorKeyId = P0CKeyId,
+        long version = 2)
+    {
+        var versionEvidence = action == NyxIdAssistantActionKind.KeyRotate
+            ? new NyxIdApiKeyVersionEvidence(
+                predecessorKeyId,
+                version,
+                now.AddMinutes(-1))
+            : null;
+        return new P0CActionEvidenceReadPort(new NyxIdAgentApiKeyEvidence(
+            keyId,
             "agent-alpha",
             ["proxy"],
             "codex",
@@ -578,7 +913,8 @@ public sealed partial class NyxIdChatConversationGAgentTests
             [],
             false,
             now.AddMinutes(-1),
-            null));
+            versionEvidence));
+    }
 
     private static P0CRecordingCommittedStatePublisher P0CAttachCommittedPublisher(
         NyxIdChatConversationGAgent actor)
@@ -713,6 +1049,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
     private sealed class P0CActionEvidenceReadPort(NyxIdAgentApiKeyEvidence evidence)
         : INyxIdActionEvidenceReadPort
     {
+        public NyxIdAgentApiKeyEvidence Evidence { get; } = evidence;
         public List<string> BearerTokens { get; } = [];
         public List<string> KeyIds { get; } = [];
 
@@ -732,9 +1069,34 @@ public sealed partial class NyxIdChatConversationGAgentTests
             BearerTokens.Add(bearerToken);
             KeyIds.Add(keyId);
             return Task.FromResult(new NyxIdApiAccessResult<NyxIdAgentApiKeyEvidence>(
-                evidence,
+                Evidence,
                 null));
         }
+    }
+
+    private sealed class P0CThrowingReadAuthorityPort : INyxIdActionReadAuthorityPort
+    {
+        public Task<NyxIdActionReadAuthorityIssueResult> IssueAsync(
+            string bearerToken,
+            string scopeId,
+            string ownerSubject,
+            string requestIdentity,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<NyxIdActionReadAuthorityResolution> ResolveAsync(
+            NyxIdReadAuthorityRef? authority,
+            string expectedScopeId,
+            string expectedOwnerSubject,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("authority resolution unavailable");
+
+        public Task<bool> RevokeAsync(
+            NyxIdReadAuthorityRef? authority,
+            string expectedScopeId,
+            string expectedOwnerSubject,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
     }
 
     private sealed class P0CUnusedGenerationExecutor
