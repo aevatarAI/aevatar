@@ -32,7 +32,6 @@ public sealed record NyxIdCodeExecutionRouteResolution(
 /// </summary>
 public static class NyxIdCodeExecutionRouteResolver
 {
-    private const string SharedDelegationScope = "proxy:*";
     private const string CodeDelegationScope = "sandbox:execute";
 
     public static async Task<NyxIdCodeExecutionRouteResolution> ResolveAsync(
@@ -101,7 +100,7 @@ public static class NyxIdCodeExecutionRouteResolver
                 active,
                 []);
 
-        var eligible = active.Where(HasTransitionExecutionPolicy).ToArray();
+        var eligible = active.Where(HasUsableExecutionCredential).ToArray();
         if (eligible.Length == 0)
             return Result(
                 NyxIdCodeExecutionRouteResolutionKind.PolicyMismatch,
@@ -126,31 +125,28 @@ public static class NyxIdCodeExecutionRouteResolver
             eligible.Length);
     }
 
-    public static bool HasTransitionExecutionPolicy(NyxIdUserService service)
+    /// <summary>
+    /// Whether the route delivers a credential the platform code runtime accepts on its execute
+    /// endpoint. The runtime authenticates a forwarded caller bearer, and falls back to NyxID's
+    /// injected delegation token only when that bearer is absent and the delegated scope carries
+    /// <c>sandbox:execute</c>. NyxID keeps forwarding and delegation independent, so neither the
+    /// pairing of the two nor the presence of unrelated delegated scopes constrains admission.
+    /// </summary>
+    public static bool HasUsableExecutionCredential(NyxIdUserService service)
     {
         ArgumentNullException.ThrowIfNull(service);
-        if (service.InjectDelegationToken != true ||
-            service.ForwardAccessToken is null ||
-            string.IsNullOrWhiteSpace(service.DelegationTokenScope))
-        {
-            return false;
-        }
-
-        var scopes = service.DelegationTokenScope.Split(
-            (char[]?)null,
-            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        var isCodeOnlyScope = scopes.Length == 1 &&
-                              string.Equals(scopes[0], CodeDelegationScope, StringComparison.Ordinal);
-        var isLegacyScope = scopes.Length == 1 &&
-                            string.Equals(scopes[0], SharedDelegationScope, StringComparison.Ordinal);
-        var isCombinedScope = scopes.Length == 2 &&
-                              scopes.Contains(SharedDelegationScope, StringComparer.Ordinal) &&
-                              scopes.Contains(CodeDelegationScope, StringComparer.Ordinal);
-
-        return service.ForwardAccessToken.Value
-            ? isLegacyScope || isCombinedScope
-            : isCodeOnlyScope || isCombinedScope;
+        return service.ForwardAccessToken == true ||
+               (service.InjectDelegationToken == true &&
+                GrantsCodeExecutionDelegation(service.DelegationTokenScope));
     }
+
+    private static bool GrantsCodeExecutionDelegation(string? delegationTokenScope) =>
+        !string.IsNullOrWhiteSpace(delegationTokenScope) &&
+        delegationTokenScope
+            .Split(
+                (char[]?)null,
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Contains(CodeDelegationScope, StringComparer.Ordinal);
 
     private static bool IsAccessible(NyxIdUserService service) =>
         service.CredentialSource.Kind switch

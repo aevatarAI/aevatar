@@ -41,20 +41,47 @@ run outside that runtime. Do not present it as a natural-language agent delegati
 
 Route selection is fail closed, but credential provenance is not a capability lifecycle. During
 interactive admission, Aevatar reads the caller-visible typed NyxID UserService inventory and
-selects exactly one active, catalog-backed `chrono-sandbox` route whose access and delegation
-policy satisfy the platform contract. A personal route is accessible by ownership; an
+selects exactly one active, catalog-backed `chrono-sandbox` route that delivers an execution
+credential the code runtime accepts. A personal route is accessible by ownership; an
 organization/member route is accessible only when NyxID reports
 `credential_source.allowed=true`. An arbitrary custom UserService with the same slug has no
 canonical `catalog_service_id` and cannot shadow the platform route. The resolved exact
 UserService ID is sent through `_nyxid_via`; there is no slug fallback or first-candidate
 selection.
 
+### Accepted execution credential
+
+The code runtime authenticates the request itself; the route only decides which credential
+reaches it. NyxID delivers the two credentials through different headers and keeps their settings
+independent, so the accepted route policy is a disjunction, not a matched pair:
+
+- `forward_access_token=true` re-sends the caller's own bearer as `Authorization`. The runtime
+  introspects it and requires the caller to hold the `sandbox:execute` permission. This is the
+  authoritative credential whenever it is present.
+- Otherwise `inject_delegation_token=true` with `sandbox:execute` among the whitespace-separated
+  `delegation_token_scope` values. NyxID mints a short-lived delegated token in
+  `X-NyxID-Delegation-Token`, which the runtime accepts only as the fallback when no bearer was
+  forwarded.
+
+A route satisfying neither is rejected as `CODE_EXECUTION_ROUTE_POLICY_MISMATCH`, and the blocker
+names the unsatisfied setting so the owner can repair the service without reading logs. Admission
+reads scope membership, never an exact scope set: unrelated delegated scopes on the same route do
+not affect code execution and must not block it. `delegation_token_scope` is a NyxID delegation
+scope and is a different namespace from the runtime's `sandbox:execute` RBAC permission, which
+Aevatar cannot observe — a route can therefore pass admission and still be refused by the runtime
+for a caller who lacks that permission.
+
+Managed `codex_exec` reads the same UserService but targets a different runtime route with its own
+required scope, so it keeps its own eligibility policy. Neither policy is the other's contract.
+
 Interactive NyxID ingress may authorize that admission read with either a source-readable user
 bearer or the short-lived proxy delegation token injected for Aevatar when it carries NyxID's
 `account:read` grant. The delegation token remains the execution credential for the exact proxy
-route; it terminates at NyxID and is never forwarded to the sandbox. This code-execution admission
-rule is not shared by connected-service discovery, ordinary `nyxid_proxy`, LLM, or managed Codex
-paths.
+route. It is presented to NyxID as the request bearer, so on a route that forwards access tokens
+NyxID re-sends it to the runtime, which introspects it as the caller. Reason about its blast radius
+as a short-lived caller credential the runtime sees, not as one that stops at NyxID. This
+code-execution admission rule is not shared by connected-service discovery, ordinary `nyxid_proxy`,
+LLM, or managed Codex paths.
 
 For workflows, `code_execute` is compiled as an external capability with no caller-authored route
 selector. Save and bind readiness reads the same typed inventory resolver and commits the exact
