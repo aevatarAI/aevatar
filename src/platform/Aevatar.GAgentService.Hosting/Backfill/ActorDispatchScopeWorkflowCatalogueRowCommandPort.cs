@@ -2,7 +2,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.ScopeWorkflows;
-using Aevatar.GAgentService.Core.GAgents;
+using Aevatar.Studio.Projection.Orchestration;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgentService.Hosting.Backfill;
@@ -27,6 +27,8 @@ internal sealed class ActorDispatchScopeWorkflowCatalogueRowCommandPort : IScope
         string workflowId,
         ScopeWorkflowCatalogueSourceSnapshot? draftSource,
         ScopeWorkflowCatalogueSourceSnapshot? serviceSource,
+        DateTimeOffset draftWatermarkUtc,
+        DateTimeOffset serviceWatermarkUtc,
         string observationEventId,
         DateTimeOffset observedAt,
         CancellationToken ct = default)
@@ -52,6 +54,8 @@ internal sealed class ActorDispatchScopeWorkflowCatalogueRowCommandPort : IScope
                     ServiceSource = serviceSource?.Clone(),
                     ObservationEventId = observationEventId ?? string.Empty,
                     ObservedAt = Timestamp.FromDateTimeOffset(observedAt),
+                    DraftWatermarkUtc = Timestamp.FromDateTimeOffset(draftWatermarkUtc),
+                    ServiceWatermarkUtc = Timestamp.FromDateTimeOffset(serviceWatermarkUtc),
                 }),
                 Route = EnvelopeRouteSemantics.CreateDirect(PublisherId, actorId),
             },

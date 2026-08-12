@@ -38,6 +38,8 @@ public sealed class ScopeWorkflowCatalogueRowMaterializer
             workflowId,
             ToSnapshot(draft),
             ToSnapshot(service),
+            draft?.SourceUpdatedAtUtc ?? updatedAt,
+            service?.SourceUpdatedAtUtc ?? updatedAt,
             eventId,
             updatedAt,
             ct);

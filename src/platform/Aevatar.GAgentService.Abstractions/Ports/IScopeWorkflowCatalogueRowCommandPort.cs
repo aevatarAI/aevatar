@@ -9,6 +9,8 @@ public interface IScopeWorkflowCatalogueRowCommandPort
         string workflowId,
         ScopeWorkflowCatalogueSourceSnapshot? draftSource,
         ScopeWorkflowCatalogueSourceSnapshot? serviceSource,
+        DateTimeOffset draftWatermarkUtc,
+        DateTimeOffset serviceWatermarkUtc,
         string observationEventId,
         DateTimeOffset observedAt,
         CancellationToken ct = default);

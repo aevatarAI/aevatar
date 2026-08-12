@@ -72,6 +72,81 @@ public sealed class ScopeWorkflowCatalogueRowActorProjectionTests
     }
 
     [Fact]
+    public void Transition_ShouldIgnoreStaleSourceSnapshot_WhenNewerSourceAlreadyApplied()
+    {
+        var current = new ScopeWorkflowCatalogueRowState
+        {
+            ScopeId = "scope-1",
+            WorkflowId = "wf-shared",
+            DraftSource = Source(ScopeWorkflowCatalogueSourceDocument.DraftSourceKind, "new draft", "2026-08-06T00:00:00Z"),
+            DraftWatermarkUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-06T00:00:00Z")),
+        };
+
+        var next = ScopeWorkflowCatalogueRowGAgent.Transition(current, new ScopeWorkflowCatalogueRowSourcesObservedEvent
+        {
+            ScopeId = "scope-1",
+            WorkflowId = "wf-shared",
+            DraftSource = Source(ScopeWorkflowCatalogueSourceDocument.DraftSourceKind, "old draft", "2026-08-05T00:00:00Z"),
+            DraftWatermarkUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-05T00:00:00Z")),
+            ObservationEventId = "evt-old",
+            ObservedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-06T01:00:00Z")),
+        });
+
+        next.DraftSource.Should().NotBeNull();
+        next.DraftSource!.Name.Should().Be("new draft");
+        next.DraftWatermarkUtc.ToDateTimeOffset().Should().Be(DateTimeOffset.Parse("2026-08-06T00:00:00Z"));
+    }
+
+    [Fact]
+    public void Transition_ShouldIgnoreStaleSourceTombstone_WhenNewerSourceAlreadyApplied()
+    {
+        var current = new ScopeWorkflowCatalogueRowState
+        {
+            ScopeId = "scope-1",
+            WorkflowId = "wf-shared",
+            ServiceSource = Source(ScopeWorkflowCatalogueSourceDocument.ServiceSourceKind, "published", "2026-08-06T00:00:00Z"),
+            ServiceWatermarkUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-06T00:00:00Z")),
+        };
+
+        var next = ScopeWorkflowCatalogueRowGAgent.Transition(current, new ScopeWorkflowCatalogueRowSourcesObservedEvent
+        {
+            ScopeId = "scope-1",
+            WorkflowId = "wf-shared",
+            ServiceWatermarkUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-05T00:00:00Z")),
+            ObservationEventId = "evt-old-delete",
+            ObservedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-06T01:00:00Z")),
+        });
+
+        next.ServiceSource.Should().NotBeNull();
+        next.ServiceSource!.Name.Should().Be("published");
+        next.ServiceWatermarkUtc.ToDateTimeOffset().Should().Be(DateTimeOffset.Parse("2026-08-06T00:00:00Z"));
+    }
+
+    [Fact]
+    public void Transition_ShouldApplyFreshSourceTombstone_WhenDeleteWatermarkIsNewer()
+    {
+        var current = new ScopeWorkflowCatalogueRowState
+        {
+            ScopeId = "scope-1",
+            WorkflowId = "wf-shared",
+            ServiceSource = Source(ScopeWorkflowCatalogueSourceDocument.ServiceSourceKind, "published", "2026-08-05T00:00:00Z"),
+            ServiceWatermarkUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-05T00:00:00Z")),
+        };
+
+        var next = ScopeWorkflowCatalogueRowGAgent.Transition(current, new ScopeWorkflowCatalogueRowSourcesObservedEvent
+        {
+            ScopeId = "scope-1",
+            WorkflowId = "wf-shared",
+            ServiceWatermarkUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-06T00:00:00Z")),
+            ObservationEventId = "evt-delete",
+            ObservedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-06T01:00:00Z")),
+        });
+
+        next.ServiceSource.Should().BeNull();
+        next.ServiceWatermarkUtc.ToDateTimeOffset().Should().Be(DateTimeOffset.Parse("2026-08-06T00:00:00Z"));
+    }
+
+    [Fact]
     public async Task ProjectAsync_ShouldDeleteRow_WhenActorStateHasNoSources()
     {
         var dispatcher = new RecordingRowDispatcher();
@@ -104,6 +179,17 @@ public sealed class ScopeWorkflowCatalogueRowActorProjectionTests
                 "evt-row-empty",
                 observedAt));
     }
+
+    private static ScopeWorkflowCatalogueSourceSnapshot Source(
+        string sourceKind,
+        string name,
+        string sourceUpdatedAtUtc) =>
+        new()
+        {
+            SourceKind = sourceKind,
+            Name = name,
+            SourceUpdatedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse(sourceUpdatedAtUtc)),
+        };
 
     private static EventEnvelope WrapCommitted(
         ScopeWorkflowCatalogueRowState state,

@@ -37,6 +37,7 @@ public sealed class StudioCommittedStateProjectionActivationPlanProvider : IProj
             [typeof(ContentArtifactGAgent)] = ContentArtifactGAgent.ProjectionKind,
             [typeof(WorkOrderGAgent)] = WorkOrderGAgent.ProjectionKind,
             [typeof(StudioWorkspaceGAgent)] = StudioWorkspaceGAgent.ProjectionKind,
+            [typeof(ScopeWorkflowCatalogueRowGAgent)] = ScopeWorkflowCatalogueRowGAgent.ProjectionKind,
         };
 
     public IEnumerable<ProjectionActivationPlan> GetPlans(CommittedStatePublicationContext context)

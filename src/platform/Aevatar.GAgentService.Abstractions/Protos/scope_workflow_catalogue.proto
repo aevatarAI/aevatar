@@ -30,6 +30,8 @@ message ObserveScopeWorkflowCatalogueSourcesCommand {
   ScopeWorkflowCatalogueSourceSnapshot service_source = 4;
   string observation_event_id = 5;
   google.protobuf.Timestamp observed_at = 6;
+  google.protobuf.Timestamp draft_watermark_utc = 7;
+  google.protobuf.Timestamp service_watermark_utc = 8;
 }
 
 message ScopeWorkflowCatalogueRowState {
@@ -40,6 +42,8 @@ message ScopeWorkflowCatalogueRowState {
   int64 last_applied_event_version = 5;
   string last_event_id = 6;
   google.protobuf.Timestamp observed_at = 7;
+  google.protobuf.Timestamp draft_watermark_utc = 8;
+  google.protobuf.Timestamp service_watermark_utc = 9;
 }
 
 message ScopeWorkflowCatalogueRowSourcesObservedEvent {
@@ -49,4 +53,6 @@ message ScopeWorkflowCatalogueRowSourcesObservedEvent {
   ScopeWorkflowCatalogueSourceSnapshot service_source = 4;
   string observation_event_id = 5;
   google.protobuf.Timestamp observed_at = 6;
+  google.protobuf.Timestamp draft_watermark_utc = 7;
+  google.protobuf.Timestamp service_watermark_utc = 8;
 }

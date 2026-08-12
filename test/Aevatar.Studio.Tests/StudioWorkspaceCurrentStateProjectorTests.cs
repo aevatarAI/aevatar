@@ -432,6 +432,8 @@ public sealed class StudioWorkspaceCurrentStateProjectorTests
             string workflowId,
             ScopeWorkflowCatalogueSourceSnapshot? draftSource,
             ScopeWorkflowCatalogueSourceSnapshot? serviceSource,
+            DateTimeOffset draftWatermarkUtc,
+            DateTimeOffset serviceWatermarkUtc,
             string observationEventId,
             DateTimeOffset observedAt,
             CancellationToken ct = default)
@@ -444,6 +446,8 @@ public sealed class StudioWorkspaceCurrentStateProjectorTests
                 ServiceSource = serviceSource?.Clone(),
                 ObservationEventId = observationEventId ?? string.Empty,
                 ObservedAt = Timestamp.FromDateTimeOffset(observedAt),
+                DraftWatermarkUtc = Timestamp.FromDateTimeOffset(draftWatermarkUtc),
+                ServiceWatermarkUtc = Timestamp.FromDateTimeOffset(serviceWatermarkUtc),
             });
             return Task.CompletedTask;
         }
