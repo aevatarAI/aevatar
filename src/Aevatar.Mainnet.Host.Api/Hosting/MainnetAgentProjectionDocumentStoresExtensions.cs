@@ -155,9 +155,14 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         services.TryAddSingleton<
             IAevatarOAuthClientVersionRegressionStorePort,
             ElasticsearchAevatarOAuthClientVersionRegressionStorePort>();
-        services.TryAddSingleton<
-            IAevatarOAuthClientVersionRegressionRepairService,
-            AevatarOAuthClientVersionRegressionRepairService>();
+        if (services.Any(static descriptor =>
+                descriptor.ServiceType == typeof(IAevatarOAuthClientProjectionRepublishPort)) &&
+            services.Any(static descriptor => descriptor.ServiceType == typeof(IActorRuntime)))
+        {
+            services.TryAddSingleton<
+                IAevatarOAuthClientVersionRegressionRepairService,
+                AevatarOAuthClientVersionRegressionRepairService>();
+        }
     }
 
     private static void AddInMemoryStores(IServiceCollection services)
