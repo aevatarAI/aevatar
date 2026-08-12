@@ -301,12 +301,11 @@ public sealed class ProjectionNyxIdChatConversationStateQueryPortTests
     }
 
     [Theory]
-    [InlineData("scope-other", "conversation-alpha", "scope_mismatch")]
-    [InlineData("scope-alpha", "conversation-other", "conversation_mismatch")]
-    public async Task GetAsync_ShouldReturnReloadRequiredForDocumentIdentityMismatch(
+    [InlineData("scope-other", "conversation-alpha")]
+    [InlineData("scope-alpha", "conversation-other")]
+    public async Task GetAsync_ShouldFailClosedForDocumentIdentityMismatch(
         string documentScopeId,
-        string documentActorId,
-        string reasonCode)
+        string documentActorId)
     {
         var document = BuildDocument(stateVersion: 8);
         document.ScopeId = documentScopeId;
@@ -320,8 +319,8 @@ public sealed class ProjectionNyxIdChatConversationStateQueryPortTests
             AfterStateVersion: 7,
             TurnId: "turn-alpha"));
 
-        result.Status.Should().Be(NyxIdChatConversationStateQueryStatus.ReloadRequired);
-        result.ReasonCode.Should().Be(reasonCode);
+        result.Status.Should().Be(NyxIdChatConversationStateQueryStatus.NotFound);
+        result.ReasonCode.Should().BeNull();
         result.Snapshot.Should().BeNull();
     }
 

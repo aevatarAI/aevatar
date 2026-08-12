@@ -57,22 +57,12 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
 
         var serverTurnId = ResolveTurnId(document);
         if (!string.Equals(document.ScopeId, scopeId, StringComparison.Ordinal))
-        {
-            return NyxIdChatConversationStateQueryResult.ReloadRequired(
-                document.StateVersion,
-                serverTurnId,
-                "scope_mismatch");
-        }
+            return NyxIdChatConversationStateQueryResult.NotFound();
 
         if (!string.Equals(document.Id, actorId, StringComparison.Ordinal) ||
             !string.Equals(document.ActorId, actorId, StringComparison.Ordinal) ||
             !string.Equals(document.ConversationActorId, actorId, StringComparison.Ordinal))
-        {
-            return NyxIdChatConversationStateQueryResult.ReloadRequired(
-                document.StateVersion,
-                serverTurnId,
-                "conversation_mismatch");
-        }
+            return NyxIdChatConversationStateQueryResult.NotFound();
 
         if (document.StateVersion <= 0)
         {

@@ -1,6 +1,5 @@
 using System.Text.Json.Serialization;
 using Aevatar.Capabilities;
-using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -13,7 +12,6 @@ public static partial class NyxIdChatEndpoints
         HttpContext http,
         string scopeId,
         string actorId,
-        [FromServices] IGAgentActorRegistryQueryPort registryQueryPort,
         [FromServices] INyxIdChatConversationStateQueryPort stateQueryPort,
         CancellationToken ct)
     {
@@ -28,23 +26,6 @@ public static partial class NyxIdChatEndpoints
 
         if (!TryParseStateCursor(http, out var afterStateVersion, out var turnId))
             return ReloadRequired(0, turnId, "invalid_state_version");
-
-        var registry = await registryQueryPort
-            .ListActorsAsync(normalizedScopeId, ct)
-            .ConfigureAwait(false);
-        var owned = string.Equals(registry.ScopeId, normalizedScopeId, StringComparison.Ordinal) &&
-                    registry.Groups.Any(group =>
-                        string.Equals(
-                            group.AgentKind,
-                            NyxIdChatServiceDefaults.GAgentKind,
-                            StringComparison.Ordinal) &&
-                        group.ActorIds.Contains(normalizedActorId, StringComparer.Ordinal));
-        if (!owned)
-        {
-            return Results.Json(
-                new NyxIdChatConversationStateNotFoundResponse("not_found"),
-                statusCode: StatusCodes.Status404NotFound);
-        }
 
         var result = await stateQueryPort.GetAsync(
                 new NyxIdChatConversationStateQuery(

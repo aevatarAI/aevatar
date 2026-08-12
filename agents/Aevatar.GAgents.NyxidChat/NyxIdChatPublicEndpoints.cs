@@ -178,7 +178,6 @@ public static partial class NyxIdChatEndpoints
     private static async Task<IResult> HandlePublicGetStateAsync(
         HttpContext http,
         string conversationId,
-        [FromServices] IGAgentActorRegistryQueryPort registryQueryPort,
         [FromServices] INyxIdChatConversationStateQueryPort stateQueryPort,
         CancellationToken ct)
     {
@@ -188,7 +187,6 @@ public static partial class NyxIdChatEndpoints
             http,
             scopeId,
             conversationId,
-            registryQueryPort,
             stateQueryPort,
             ct);
     }
