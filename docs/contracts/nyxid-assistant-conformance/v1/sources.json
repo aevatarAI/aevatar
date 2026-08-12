@@ -22,8 +22,8 @@
   },
   "nyxid": {
     "repository": "https://github.com/ChronoAIProject/NyxID.git",
-    "revision": "76a22aca3eda9ecb2ca25c52b4bb893342b5dbf6",
-    "tree": "a48e6d6ace55c636e62a62cb5488a0e0203e59d4",
+    "revision": "47f2e0086c6c2117f644f8559d871a01d2a61982",
+    "tree": "b26638257388b65d55c47a1fa57268436cdda8d5",
     "cli_source": "cli/src/cli.rs",
     "cli_source_sha256": "51dd82101d7671859351e9989e8d554b4aa1cb898a4e04d948df28aa37de0195",
     "cargo_lock_sha256": "a7f1bb375e4d5135b369caea4b803273956c96b63125d4221da70dd8115638b8"
