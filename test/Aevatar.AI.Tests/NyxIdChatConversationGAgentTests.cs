@@ -2164,9 +2164,16 @@ public sealed partial class NyxIdChatConversationGAgentTests
         await agent.HandleEventAsync(CreateEnvelope(conversationActorId, continuation));
 
         var committed = await eventStore.GetEventsAsync(conversationActorId);
-        committed.Should().HaveCount(before + 1);
-        committed[^1].EventData.Unpack<NyxIdChatTurnAdmissionRejectedEvent>()
-            .ReasonCode.Should().Be(NyxIdChatBrowserActions.ActionContinuationInvalid);
+        if (disposition == NyxIdChatActionDisposition.Completed)
+        {
+            committed.Should().HaveCount(before);
+        }
+        else
+        {
+            committed.Should().HaveCount(before + 1);
+            committed[^1].EventData.Unpack<NyxIdChatTurnAdmissionRejectedEvent>()
+                .ReasonCode.Should().Be(NyxIdChatBrowserActions.ActionContinuationConflict);
+        }
         dispatch.OperationCalls.Should().BeEmpty();
         var postcondition = agent.State.ActiveTask.Steps.Single(step =>
             step.Kind == NyxIdChatStepKind.Postcondition);
@@ -2941,6 +2948,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
         {
             ConversationActorId = conversationActorId,
             ScopeId = "scope-alpha",
+            OwnerSubject = "owner-alpha",
             ActiveTurn = new NyxIdChatTurnState
             {
                 TurnId = "turn-alpha",
@@ -3696,6 +3704,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
         nextTurn.ClientRequestId = "client-beta";
         nextTurn.CommandId = "command-beta";
         nextTurn.CorrelationId = "correlation-beta";
+        SetOwner(nextTurn, "owner-alpha");
 
         await agent.HandleEventAsync(CreateEnvelope(conversationActorId, nextTurn));
 
@@ -7080,6 +7089,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
         {
             ConversationActorId = "conversation-alpha",
             ScopeId = "scope-alpha",
+            OwnerSubject = "owner-alpha",
             ActiveTurn = new NyxIdChatTurnState
             {
                 TurnId = "turn-alpha",
