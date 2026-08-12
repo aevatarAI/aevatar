@@ -254,6 +254,21 @@ public static class NyxIdChatBrowserActions
 
         if (!TryNormalizeReports(command.Actions, now, out var sanitizedReports))
             return RejectContinuation(state, ActionContinuationConflict);
+        var existingAdmission = state.ContinuationAdmission;
+        var matchesExistingClient = existingAdmission is
+            {
+                Kind: NyxIdChatContinuationKind.Action,
+                ClientRequestId.Length: > 0,
+            } && string.Equals(
+                existingAdmission.ClientRequestId,
+                Normalize(command.ClientRequestId),
+                StringComparison.Ordinal);
+        if (!matchesExistingClient &&
+            !isStateChangeWake &&
+            ResolveReportedActionBatch(state, command, sanitizedReports) is { } reportDecision)
+        {
+            return reportDecision;
+        }
         var requiresReadAuthority = RequiresContinuationReadAuthority(
             state,
             sanitizedReports,
@@ -266,28 +281,20 @@ public static class NyxIdChatBrowserActions
             ? command.ReadAuthority
             : null;
 
-        var existingAdmission = state.ContinuationAdmission;
-        if (existingAdmission is
-            {
-                Kind: NyxIdChatContinuationKind.Action,
-                ClientRequestId.Length: > 0,
-            } && string.Equals(
-                existingAdmission.ClientRequestId,
-                Normalize(command.ClientRequestId),
-                StringComparison.Ordinal))
+        if (matchesExistingClient)
         {
             if (!AdmissionMatches(
-                    existingAdmission,
+                    existingAdmission!,
                     command,
                     sanitizedReports,
                     acceptedReadAuthority))
                 return RejectContinuation(state, ActionContinuationConflict);
 
-            var replay = TryBuildReplayDispatch(state, existingAdmission);
+            var replay = TryBuildReplayDispatch(state, existingAdmission!);
             return new NyxIdChatBrowserActionDecision(
                 ShouldCommit: false,
                 ShouldDispatch:
-                    existingAdmission.Status !=
+                    existingAdmission!.Status !=
                         NyxIdChatContinuationAdmissionStatus.Rejected &&
                     replay is not null,
                 NyxIdChatTransitionOutcome.Idempotent,
@@ -375,17 +382,6 @@ public static class NyxIdChatBrowserActions
                 NextCommand: null);
         }
 
-        var pendingById = state.PendingActions.ToDictionary(
-            static action => action.ActionRequestId,
-            StringComparer.Ordinal);
-        if (command.Actions.Any(report =>
-                !pendingById.TryGetValue(report.ActionRequestId, out var pending) ||
-                !string.Equals(pending.OriginTurnId, command.OriginTurnId, StringComparison.Ordinal) ||
-                !string.Equals(pending.ConversationActorId, command.ConversationActorId, StringComparison.Ordinal) ||
-                !ResourceMatchesAction(pending.Action, report.Disposition, report.Resource)))
-        {
-            return RejectContinuation(state, ActionContinuationInvalid);
-        }
         if (state.ActiveTask is { } activeTask &&
             sanitizedReports.Any(report =>
                 IsTerminalPostconditionGeneration(
@@ -1285,6 +1281,66 @@ public static class NyxIdChatBrowserActions
             .All(static equal => equal);
     }
 
+    private static NyxIdChatBrowserActionDecision? ResolveReportedActionBatch(
+        NyxIdChatConversationGAgentState state,
+        NyxIdChatActionContinueCommand command,
+        IReadOnlyList<NyxIdChatActionReport> reports)
+    {
+        var pendingIds = state.PendingActions
+            .Select(static action => action.ActionRequestId)
+            .ToHashSet(StringComparer.Ordinal);
+        var actionsById = new Dictionary<string, NyxIdChatActionRequestState>(StringComparer.Ordinal);
+        foreach (var action in state.PendingActions.Concat(state.RecentActions))
+        {
+            if (!actionsById.TryAdd(action.ActionRequestId, action))
+                return RejectContinuation(state, ActionContinuationConflict);
+        }
+        var hasFreshReport = false;
+        var hasPersistedReport = false;
+        NyxIdChatActionRequestState? firstAction = null;
+
+        foreach (var report in reports)
+        {
+            if (!actionsById.TryGetValue(report.ActionRequestId, out var action) ||
+                !string.Equals(action.OriginTurnId, report.OriginTurnId, StringComparison.Ordinal) ||
+                !string.Equals(
+                    action.ConversationActorId,
+                    Normalize(command.ConversationActorId),
+                    StringComparison.Ordinal))
+            {
+                return RejectContinuation(state, ActionContinuationInvalid);
+            }
+
+            firstAction ??= action;
+            if (action.Reports.Count == 0)
+            {
+                if (!pendingIds.Contains(action.ActionRequestId))
+                    return RejectContinuation(state, ActionContinuationInvalid);
+                if (!ResourceMatchesAction(action.Action, report.Disposition, report.Resource))
+                    return RejectContinuation(state, ActionContinuationInvalid);
+
+                hasFreshReport = true;
+                continue;
+            }
+
+            if (action.Reports.Any(existing => !ReportsEqual(existing, report)))
+                return RejectContinuation(state, ActionContinuationConflict);
+
+            hasPersistedReport = true;
+        }
+
+        if (hasFreshReport && hasPersistedReport)
+            return RejectContinuation(state, ActionContinuationConflict);
+
+        return hasPersistedReport
+            ? NoCommit(
+                state,
+                NyxIdChatTransitionOutcome.Idempotent,
+                ActionContinuationAccepted,
+                firstAction!)
+            : null;
+    }
+
     private static bool TryNormalizeReports(
         IEnumerable<NyxIdChatActionReport> reports,
         Timestamp now,
@@ -1294,18 +1350,11 @@ public static class NyxIdChatBrowserActions
         foreach (var report in reports)
         {
             var sanitized = SanitizeReport(report, now);
-            if (byIdentity.TryGetValue(sanitized.ActionRequestId, out var existing))
+            if (!byIdentity.TryAdd(sanitized.ActionRequestId, sanitized))
             {
-                if (!ReportsEqual(existing, sanitized))
-                {
-                    normalized = [];
-                    return false;
-                }
-
-                continue;
+                normalized = [];
+                return false;
             }
-
-            byIdentity.Add(sanitized.ActionRequestId, sanitized);
         }
 
         normalized = byIdentity.Values

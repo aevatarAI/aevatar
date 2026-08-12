@@ -494,6 +494,39 @@ public partial class NyxIdChatEndpointsCoverageTests
     }
 
     [Fact]
+    public async Task HandleStreamMessageAsync_DuplicateActionReports_ShouldReturnBadRequest()
+    {
+        var context = AuthorizedActionContext();
+        var actionInteraction = CompletedActionInteraction();
+        var resource = new NyxIdChatEndpoints.NyxIdChatActionResourceDto(
+            UserService: new NyxIdChatEndpoints.NyxIdChatUserServiceRefDto(
+                "service-alpha"));
+        var request = new NyxIdChatEndpoints.NyxIdChatStreamRequest(
+            Prompt: null,
+            ClientRequestId: "client-action-alpha",
+            Type: "action.continue",
+            OriginTurnId: "turn-origin-alpha",
+            Actions:
+            [
+                new NyxIdChatEndpoints.NyxIdChatActionReportDto(
+                    "action-alpha",
+                    "turn-origin-alpha",
+                    "completed",
+                    resource),
+                new NyxIdChatEndpoints.NyxIdChatActionReportDto(
+                    " action-alpha ",
+                    " turn-origin-alpha ",
+                    "completed",
+                    resource),
+            ]);
+
+        await InvokeActionEndpointAsync(context, request, actionInteraction);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        actionInteraction.Commands.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task HandleStreamMessageAsync_KeyActionWithoutAuthorityPort_ShouldReturnUnavailable()
     {
         var context = AuthorizedActionContext();

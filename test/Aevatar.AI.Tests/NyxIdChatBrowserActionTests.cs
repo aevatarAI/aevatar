@@ -942,6 +942,11 @@ public sealed class NyxIdChatBrowserActionTests
             Now);
 
         firstTurnId.Should().NotBe("turn-alpha");
+        second.Outcome.Should().Be(NyxIdChatTransitionOutcome.Accepted);
+        second.ShouldCommit.Should().BeTrue();
+        second.ShouldDispatch.Should().BeTrue();
+        second.Admission.Status.Should().Be(
+            NyxIdChatContinuationAdmissionStatus.Accepted);
         second.State.ActiveTurn.TurnId.Should().Be("turn-action-beta");
         second.State.ActiveTurn.TurnId.Should().NotBe(firstTurnId);
         second.State.ActiveTask.TaskId.Should().Be(taskId);
@@ -1030,6 +1035,100 @@ public sealed class NyxIdChatBrowserActionTests
         decision.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Succeeded);
         decision.State.ActiveTask.Steps.Should().BeEmpty();
         decision.NextCommand.Should().BeNull();
+    }
+
+    [Fact]
+    public void DifferentClientWithSamePersistedReport_ShouldBeIdempotentBeforeActiveTurnCheck()
+    {
+        var blocked = BlockedActionState();
+        var command = ContinueCommand(
+            blocked.PendingActions.Single().ActionRequestId,
+            NyxIdChatActionDisposition.Completed);
+        var first = NyxIdChatBrowserActions.Continue(blocked, command, Now);
+        var retry = command.Clone();
+        retry.ClientRequestId = "client-action-beta";
+        retry.CommandId = "command-action-beta";
+        retry.CorrelationId = "correlation-action-beta";
+        retry.ContinuationTurnId = "turn-action-beta";
+        retry.OriginTurnId = " turn-alpha ";
+        retry.Actions[0].ActionRequestId = $" {retry.Actions[0].ActionRequestId} ";
+        retry.Actions[0].OriginTurnId = " turn-alpha ";
+
+        var decision = NyxIdChatBrowserActions.Continue(first.State, retry, Now);
+
+        first.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Active);
+        first.State.PendingActions.Single().Reports.Should().ContainSingle();
+        decision.Outcome.Should().Be(NyxIdChatTransitionOutcome.Idempotent);
+        decision.ShouldCommit.Should().BeFalse();
+        decision.ShouldDispatch.Should().BeFalse();
+        decision.ReasonCode.Should().Be(
+            NyxIdChatBrowserActions.ActionContinuationAccepted);
+        decision.State.Should().BeEquivalentTo(first.State);
+    }
+
+    [Fact]
+    public void DifferentClientWithConflictingRecentReport_ShouldFailClosed()
+    {
+        var blocked = BlockedActionState();
+        var command = ContinueCommand(
+            blocked.PendingActions.Single().ActionRequestId,
+            NyxIdChatActionDisposition.Completed);
+        var first = NyxIdChatBrowserActions.Continue(blocked, command, Now);
+        var reconciled = NyxIdChatBrowserActions.ReconcilePostcondition(
+            first.State,
+            VerifiedPostcondition(first.NextCommand!.Key, command.Actions[0].ActionRequestId),
+            Now);
+        var retry = command.Clone();
+        retry.ClientRequestId = "client-action-beta";
+        retry.CommandId = "command-action-beta";
+        retry.CorrelationId = "correlation-action-beta";
+        retry.ContinuationTurnId = "turn-action-beta";
+        retry.Actions[0].Disposition = NyxIdChatActionDisposition.Declined;
+
+        var decision = NyxIdChatBrowserActions.Continue(reconciled.State, retry, Now);
+
+        reconciled.State.PendingActions.Should().BeEmpty();
+        reconciled.State.RecentActions.Should().ContainSingle(action =>
+            action.ActionRequestId == command.Actions[0].ActionRequestId &&
+            action.Reports.Count == 1);
+        decision.Outcome.Should().Be(NyxIdChatTransitionOutcome.Rejected);
+        decision.ShouldCommit.Should().BeFalse();
+        decision.ShouldDispatch.Should().BeFalse();
+        decision.ReasonCode.Should().Be(
+            NyxIdChatBrowserActions.ActionContinuationConflict);
+        decision.State.Should().BeEquivalentTo(reconciled.State);
+    }
+
+    [Fact]
+    public void DifferentClientWithPersistedAndFreshReports_ShouldFailClosed()
+    {
+        var blocked = BlockedActionStateWithTwoRequests();
+        var reportedId = blocked.PendingActions[0].ActionRequestId;
+        var freshId = blocked.PendingActions[1].ActionRequestId;
+        var firstCommand = ContinueCommand(
+            reportedId,
+            NyxIdChatActionDisposition.Completed);
+        var first = NyxIdChatBrowserActions.Continue(blocked, firstCommand, Now);
+        var mixed = firstCommand.Clone();
+        mixed.ClientRequestId = "client-action-beta";
+        mixed.CommandId = "command-action-beta";
+        mixed.CorrelationId = "correlation-action-beta";
+        mixed.ContinuationTurnId = "turn-action-beta";
+        mixed.Actions.Add(ActionReport(
+            freshId,
+            NyxIdChatActionDisposition.Completed));
+
+        var decision = NyxIdChatBrowserActions.Continue(first.State, mixed, Now);
+
+        decision.Outcome.Should().Be(NyxIdChatTransitionOutcome.Rejected);
+        decision.ShouldCommit.Should().BeFalse();
+        decision.ShouldDispatch.Should().BeFalse();
+        decision.ReasonCode.Should().Be(
+            NyxIdChatBrowserActions.ActionContinuationConflict);
+        decision.State.Should().BeEquivalentTo(first.State);
+        decision.State.PendingActions.Single(action =>
+                action.ActionRequestId == freshId)
+            .Reports.Should().BeEmpty();
     }
 
     [Fact]
@@ -1331,13 +1430,12 @@ public sealed class NyxIdChatBrowserActionTests
     }
 
     [Fact]
-    public void DuplicateAndOutOfOrderReports_ShouldNormalizeByActionIdentity()
+    public void OutOfOrderReports_ShouldNormalizeByActionIdentity()
     {
         var blocked = BlockedActionStateWithTwoRequests();
         var firstId = blocked.PendingActions[0].ActionRequestId;
         var secondId = blocked.PendingActions[1].ActionRequestId;
-        var command = ContinueCommand(firstId, NyxIdChatActionDisposition.Completed);
-        command.Actions.Add(ActionReport(secondId, NyxIdChatActionDisposition.Completed));
+        var command = ContinueCommand(secondId, NyxIdChatActionDisposition.Completed);
         command.Actions.Add(ActionReport(firstId, NyxIdChatActionDisposition.Completed));
 
         var admitted = NyxIdChatBrowserActions.Continue(blocked, command, Now);
@@ -1354,8 +1452,8 @@ public sealed class NyxIdChatBrowserActionTests
 
         var reorderedReplay = command.Clone();
         reorderedReplay.Actions.Clear();
-        reorderedReplay.Actions.Add(ActionReport(secondId, NyxIdChatActionDisposition.Completed));
         reorderedReplay.Actions.Add(ActionReport(firstId, NyxIdChatActionDisposition.Completed));
+        reorderedReplay.Actions.Add(ActionReport(secondId, NyxIdChatActionDisposition.Completed));
         var replay = NyxIdChatBrowserActions.Continue(
             admitted.State,
             reorderedReplay,
@@ -1364,6 +1462,29 @@ public sealed class NyxIdChatBrowserActionTests
         replay.Outcome.Should().Be(NyxIdChatTransitionOutcome.Idempotent);
         replay.ShouldCommit.Should().BeFalse();
         replay.NextCommand!.Key.Should().BeEquivalentTo(admitted.NextCommand!.Key);
+    }
+
+    [Fact]
+    public void IdenticalDuplicateReport_ShouldFailClosedWithoutChangingState()
+    {
+        var blocked = BlockedActionState();
+        var actionRequestId = blocked.PendingActions.Single().ActionRequestId;
+        var command = ContinueCommand(
+            actionRequestId,
+            NyxIdChatActionDisposition.Completed);
+        var duplicate = command.Actions.Single().Clone();
+        duplicate.ActionRequestId = $" {duplicate.ActionRequestId} ";
+        duplicate.OriginTurnId = $" {duplicate.OriginTurnId} ";
+        command.Actions.Add(duplicate);
+
+        var decision = NyxIdChatBrowserActions.Continue(blocked, command, Now);
+
+        decision.ShouldCommit.Should().BeFalse();
+        decision.ShouldDispatch.Should().BeFalse();
+        decision.Outcome.Should().Be(NyxIdChatTransitionOutcome.Rejected);
+        decision.ReasonCode.Should().Be(
+            NyxIdChatBrowserActions.ActionContinuationConflict);
+        decision.State.Should().BeEquivalentTo(blocked);
     }
 
     [Fact]
