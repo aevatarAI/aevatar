@@ -72,6 +72,68 @@ public sealed record WorkflowCommittedResponse(
     IReadOnlyList<ValidationFinding> Findings,
     DateTimeOffset? UpdatedAtUtc = null);
 
+public sealed record ScopeWorkflowCatalogueQuery(
+    string ScopeId,
+    ScopeWorkflowCatalogueView View = ScopeWorkflowCatalogueView.All,
+    string? Query = null,
+    string? Cursor = null,
+    int Take = 50);
+
+public enum ScopeWorkflowCatalogueView
+{
+    All = 0,
+    Drafts = 1,
+}
+
+public sealed record ScopeWorkflowCatalogueResponse(
+    IReadOnlyList<ScopeWorkflowCatalogueRow> Items,
+    string? NextPageToken,
+    ScopeWorkflowCatalogueFreshness Freshness,
+    ScopeWorkflowCatalogueSearchContract Search);
+
+public sealed record ScopeWorkflowCatalogueRow(
+    string ScopeId,
+    string WorkflowId,
+    string Name,
+    string Description,
+    bool HasDraftSource,
+    bool HasCommittedSource,
+    DateTimeOffset UpdatedAtUtc,
+    string UpdatedAtSource,
+    ScopeWorkflowCatalogueRowCapabilities Capabilities,
+    DateTimeOffset SourceWatermarkUtc,
+    ScopeWorkflowCatalogueCommittedFacts? Committed = null);
+
+public sealed record ScopeWorkflowCatalogueCommittedFacts(
+    string ServiceKey,
+    string WorkflowName,
+    string ActorId,
+    string ActiveRevisionId,
+    string DeploymentId,
+    string DeploymentStatus);
+
+public sealed record ScopeWorkflowCatalogueRowCapabilities(
+    ScopeWorkflowCatalogueActionCapability Open,
+    ScopeWorkflowCatalogueActionCapability Activity,
+    ScopeWorkflowCatalogueActionCapability Rename,
+    ScopeWorkflowCatalogueActionCapability Delete);
+
+public sealed record ScopeWorkflowCatalogueActionCapability(
+    bool Available,
+    string? UnavailableReason = null);
+
+public sealed record ScopeWorkflowCatalogueFreshness(
+    DateTimeOffset? RefreshWatermarkUtc,
+    string SourceVersionSemantics);
+
+public sealed record ScopeWorkflowCatalogueSearchContract(
+    IReadOnlyList<string> SearchableFields,
+    string CaseSemantics,
+    string UnicodeNormalization,
+    int MaximumQueryLength,
+    string EmptyQuerySemantics,
+    string WorkflowIdSemantics);
+
 public sealed record SaveWorkflowDraftRequest(
     string DirectoryId,
     string WorkflowName,

@@ -345,6 +345,7 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
               - ornn_search_skills
               - use_skill
             tool_sets:
+              - studio.local
               - nyxid.connected_services
         steps:
           - id: reply

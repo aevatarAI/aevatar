@@ -169,14 +169,36 @@ public sealed class UserLlmSettingsViewBuilderTests
                 "shared-llm"),
             "gpt-saved");
 
-        view.RouteOptions.Single(option => option.UserServiceId == "us-alpha")
-            .DefaultModel.Should().Be("gpt-alpha");
-        view.RouteOptions.Single(option => option.UserServiceId == "us-beta")
-            .DefaultModel.Should().Be("gpt-beta");
-        view.RouteOptions.Single(option => option.UserServiceId == "us-blank")
-            .DefaultModel.Should().BeNull();
-        view.RouteOptions.Single(option => option.Source == UserLlmRouteSource.GatewayProvider)
-            .DefaultModel.Should().BeNull();
+        var alpha = view.RouteOptions.Single(option => option.UserServiceId == "us-alpha");
+        alpha.DefaultModel.Should().Be("gpt-alpha");
+        alpha.ModelCatalog.Should().Be(new UserLlmModelCatalog("gpt-alpha"));
+
+        var beta = view.RouteOptions.Single(option => option.UserServiceId == "us-beta");
+        beta.DefaultModel.Should().Be("gpt-beta");
+        beta.ModelCatalog.Should().Be(new UserLlmModelCatalog("gpt-beta"));
+
+        var blank = view.RouteOptions.Single(option => option.UserServiceId == "us-blank");
+        blank.DefaultModel.Should().BeNull();
+        blank.ModelCatalog.Should().Be(new UserLlmModelCatalog(null));
+
+        var gateway = view.RouteOptions.Single(option => option.Source == UserLlmRouteSource.GatewayProvider);
+        gateway.DefaultModel.Should().BeNull();
+        gateway.ModelCatalog.Should().Be(new UserLlmModelCatalog(null));
+    }
+
+    [Fact]
+    public void BuildAvailable_WithGatewayDefault_ShouldExposeGatewayRouteDefaultModel()
+    {
+        var view = _builder.BuildAvailable(
+            new NyxIdLlmServicesResult(
+                [GatewayService(" gpt-gateway ")],
+                null),
+            savedSelection: null,
+            defaultModel: string.Empty);
+
+        var gateway = view.RouteOptions.Single(option => option.Source == UserLlmRouteSource.GatewayProvider);
+        gateway.DefaultModel.Should().Be("gpt-gateway");
+        gateway.ModelCatalog.Should().Be(new UserLlmModelCatalog("gpt-gateway"));
     }
 
     private UserLlmSettingsView Build(UserLlmSelectionValue selection) =>
@@ -208,4 +230,16 @@ public sealed class UserLlmSettingsViewBuilderTests
         Identity: new UserLlmServiceIdentity(
             UserLlmIdentityAuthority.NyxIdUserServicesInventory,
             id));
+
+    private static NyxIdLlmService GatewayService(string? defaultModel) => new(
+        CatalogEntryId: "gateway",
+        ServiceSlug: "nyxid-gateway",
+        DisplayName: "NyxID Gateway",
+        RouteValue: UserConfigLlmRouteDefaults.Gateway,
+        DefaultModel: defaultModel,
+        Models: ["gpt-gateway"],
+        Status: UserLlmRouteStatus.Ready,
+        Source: UserLlmRouteSource.GatewayProvider,
+        Allowed: true,
+        Description: null);
 }

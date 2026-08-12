@@ -52,7 +52,8 @@ public sealed class NyxIdLlmCatalogHttpClient : IUserLlmCatalogPort
         var result = NyxIdLlmServiceCatalogParser.ParseServicesResult(response.Body);
         result = await MergeUserKeyRouteCandidatesAsync(result, bearerToken, ct).ConfigureAwait(false);
         result = await MergeProxyRouteCandidatesAsync(result, bearerToken, ct).ConfigureAwait(false);
-        return await ComposeUserServiceInventoryAsync(result, bearerToken, ct).ConfigureAwait(false);
+        result = await ComposeUserServiceInventoryAsync(result, bearerToken, ct).ConfigureAwait(false);
+        return await MergeObservedProxyModelsAsync(result, bearerToken, ct).ConfigureAwait(false);
     }
 
     public async Task<NyxIdLlmService> ProvisionAsync(
@@ -211,6 +212,58 @@ public sealed class NyxIdLlmCatalogHttpClient : IUserLlmCatalogPort
         }
 
         return NyxIdLlmServiceCatalogParser.ComposeUserServiceInventory(diagnostics, inventory.Value!);
+    }
+
+    private async Task<NyxIdLlmServicesResult> MergeObservedProxyModelsAsync(
+        NyxIdLlmServicesResult result,
+        string bearerToken,
+        CancellationToken ct)
+    {
+        foreach (var service in result.Services.Where(NyxIdLlmServiceCatalogParser.ShouldProbeProxyModels))
+        {
+            result = await MergeObservedProxyModelsAsync(result, service, bearerToken, ct).ConfigureAwait(false);
+        }
+
+        return result;
+    }
+
+    private async Task<NyxIdLlmServicesResult> MergeObservedProxyModelsAsync(
+        NyxIdLlmServicesResult result,
+        NyxIdLlmService service,
+        string bearerToken,
+        CancellationToken ct)
+    {
+        try
+        {
+            var response = await SendNyxIdAsync(
+                HttpMethod.Get,
+                $"/api/v1/proxy/s/{Uri.EscapeDataString(service.ServiceSlug)}/models",
+                bearerToken,
+                body: null,
+                ct).ConfigureAwait(false);
+            if ((int)response.StatusCode is < 200 or > 299)
+            {
+                var scrubbedBody = SecretScrubber.Scrub(response.Body);
+                _logger.LogWarning(
+                    "NyxID proxy models endpoint for {ServiceSlug} returned {StatusCode}: {Body}",
+                    service.ServiceSlug,
+                    response.StatusCode,
+                    scrubbedBody.Length > 500 ? scrubbedBody[..500] : scrubbedBody);
+                return result;
+            }
+
+            var models = NyxIdLlmServiceCatalogParser.ParseOpenAiCompatibleModels(response.Body);
+            return NyxIdLlmServiceCatalogParser.MergeObservedModels(result, service.ServiceSlug, models);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to merge NyxID proxy models for {ServiceSlug}", service.ServiceSlug);
+            return result;
+        }
     }
 
     private string? ResolveNyxIdAuthorityBase()

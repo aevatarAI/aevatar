@@ -995,8 +995,13 @@ export interface StudioUserLlmRouteOption {
   readonly ready: boolean;
   readonly userServiceId?: string | null;
   readonly serviceSlug?: string | null;
+  readonly modelCatalog?: StudioUserLlmModelCatalog | null;
   readonly defaultModel: string | null;
   readonly description?: string | null;
+}
+
+export interface StudioUserLlmModelCatalog {
+  readonly defaultModelId: string | null;
 }
 
 export interface StudioUserLlmModelGroup {

@@ -659,10 +659,17 @@ public class WorkflowRoleGAgent(
                 collisions);
         }
 
-        var allowedNames = (scope.RestrictAllowedToolNames || scope.AllowedToolNames.Count > 0
+        var restrictAllowedToolNames = scope.RestrictAllowedToolNames || scope.AllowedToolNames.Count > 0;
+        var allowedToolNames = restrictAllowedToolNames
+            ? new HashSet<string>(scope.AllowedToolNames, StringComparer.OrdinalIgnoreCase)
+            : null;
+        var visibleExactTools = allowedToolNames is null
+            ? exactTools
+            : exactTools.Where(tool => allowedToolNames.Contains(tool.Name.Trim())).ToList();
+        var allowedNames = (restrictAllowedToolNames
                 ? scope.AllowedToolNames
                 : Tools.GetAll().Select(static tool => tool.Name))
-            .Concat(exactTools.Select(static tool => tool.Name));
+            .Concat(visibleExactTools.Select(static tool => tool.Name));
         return new AgentProfileTurnCatalog(
             allowedNames,
             profilePromptLayer: null,
@@ -670,7 +677,7 @@ public class WorkflowRoleGAgent(
             selectedIntentId: null,
             candidateIntentId: null,
             diagnostics: null,
-            exactTools);
+            visibleExactTools);
     }
 
     private static AgentToolExecutionContext AddRequestToolsToVisibility(

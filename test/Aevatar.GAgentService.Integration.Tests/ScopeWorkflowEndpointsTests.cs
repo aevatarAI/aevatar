@@ -10,7 +10,9 @@ using Aevatar.GAgentService.Governance.Abstractions;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Abstractions.Queries;
 using Aevatar.GAgentService.Hosting.Endpoints;
+using Aevatar.Studio.Application;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Workflow.Abstractions;
@@ -295,6 +297,36 @@ public sealed class ScopeWorkflowEndpointsTests
         http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
         body.Should().Contain("\"workflowId\":\"approval\"");
         body.Should().Contain("\"source\":{\"workflowYaml\":\"name: approval\\nsteps: []\\n\"");
+    }
+
+    [Fact]
+    public async Task HandleQueryWorkflowCatalogueAsync_ShouldDelegateServerSideFilterQuery()
+    {
+        var http = CreateHttpContext();
+        var catalogueService = new RecordingWorkflowCatalogueService();
+
+        var result = await ScopeWorkflowEndpoints.HandleQueryWorkflowCatalogueAsync(
+            http,
+            "user-1",
+            view: "drafts",
+            query: "审批",
+            cursor: "2",
+            take: 25,
+            catalogueService,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        catalogueService.Request.Should().NotBeNull();
+        catalogueService.Request!.ScopeId.Should().Be("user-1");
+        catalogueService.Request.View.Should().Be(ScopeWorkflowCatalogueView.Drafts);
+        catalogueService.Request.Query.Should().Be("审批");
+        catalogueService.Request.Cursor.Should().Be("2");
+        catalogueService.Request.Take.Should().Be(25);
+        body.Should().Contain("\"workflowId\":\"wf-alpha\"");
+        body.Should().Contain("\"nextPageToken\":\"next-token\"");
     }
 
     [Fact]
@@ -1118,6 +1150,45 @@ public sealed class ScopeWorkflowEndpointsTests
                 }),
             },
         };
+    }
+
+    private sealed class RecordingWorkflowCatalogueService : IAppScopedWorkflowCatalogueService
+    {
+        public ScopeWorkflowCatalogueQuery? Request { get; private set; }
+
+        public Task<ScopeWorkflowCatalogueResponse> QueryAsync(
+            ScopeWorkflowCatalogueQuery query,
+            CancellationToken ct = default)
+        {
+            Request = query;
+            return Task.FromResult(new ScopeWorkflowCatalogueResponse(
+                [new ScopeWorkflowCatalogueRow(
+                    query.ScopeId,
+                    "wf-alpha",
+                    "Alpha",
+                    "Description",
+                    HasDraftSource: true,
+                    HasCommittedSource: false,
+                    DateTimeOffset.Parse("2026-08-01T00:00:00Z"),
+                    "draft",
+                    new ScopeWorkflowCatalogueRowCapabilities(
+                        new ScopeWorkflowCatalogueActionCapability(true),
+                        new ScopeWorkflowCatalogueActionCapability(false, "committed_source_missing"),
+                        new ScopeWorkflowCatalogueActionCapability(true),
+                        new ScopeWorkflowCatalogueActionCapability(true)),
+                    DateTimeOffset.Parse("2026-08-01T00:00:00Z"))],
+                "next-token",
+                new ScopeWorkflowCatalogueFreshness(
+                    DateTimeOffset.Parse("2026-08-01T00:00:00Z"),
+                    "test watermark"),
+                new ScopeWorkflowCatalogueSearchContract(
+                    ["name", "description", "workflowId"],
+                    "test case semantics",
+                    "FormKC",
+                    128,
+                    "empty query is no filter",
+                    "workflowId prefix or exact")));
+        }
     }
 
     private sealed class FakeCommandInteractionService : IWorkflowChatRunInteractionPort

@@ -75,6 +75,7 @@ public sealed record UserLlmRouteOptionResponse(
     [property: JsonPropertyName("ready")] bool Ready,
     [property: JsonPropertyName("userServiceId")] string? UserServiceId,
     [property: JsonPropertyName("serviceSlug")] string? ServiceSlug,
+    [property: JsonPropertyName("modelCatalog")] UserLlmModelCatalogResponse ModelCatalog,
     [property: JsonPropertyName("defaultModel")] string? DefaultModel,
     [property: JsonPropertyName("description")] string? Description)
 {
@@ -87,8 +88,17 @@ public sealed record UserLlmRouteOptionResponse(
         option.Ready,
         option.UserServiceId,
         option.ServiceSlug,
+        UserLlmModelCatalogResponse.FromApplication(option.ModelCatalog, option.DefaultModel),
         option.DefaultModel,
         option.Description);
+}
+
+public sealed record UserLlmModelCatalogResponse(
+    [property: JsonPropertyName("defaultModelId")] string? DefaultModelId)
+{
+    public static UserLlmModelCatalogResponse FromApplication(
+        UserLlmModelCatalog? catalog,
+        string? fallbackDefaultModel) => new(catalog?.DefaultModelId ?? fallbackDefaultModel);
 }
 
 public sealed record UserLlmModelGroupResponse(

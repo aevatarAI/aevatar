@@ -78,6 +78,29 @@ public sealed class NyxIdLlmServiceCatalogUserKeyMergeTests
     }
 
     [Fact]
+    public void ComposeInventory_ShouldPreferTypedInventoryDefaultModel()
+    {
+        var diagnostics = new NyxIdLlmServicesResult(
+            [Diagnostic("key-alpha", "chrono-llm")],
+            null);
+        var inventory = new NyxIdUserServices(
+        [
+            Inventory("us-alpha", "chrono-llm", defaultModel: " gpt-inventory "),
+            Inventory("us-beta", "custom-llm", defaultModel: null),
+            Inventory("us-gamma", "blank-llm", defaultModel: " "),
+        ]);
+
+        var result = NyxIdLlmServiceCatalogParser.ComposeUserServiceInventory(diagnostics, inventory);
+
+        result.Services.Single(service => service.Identity!.NyxIdUserServiceId == "us-alpha")
+            .DefaultModel.Should().Be("gpt-inventory");
+        result.Services.Single(service => service.Identity!.NyxIdUserServiceId == "us-beta")
+            .DefaultModel.Should().BeNull();
+        result.Services.Single(service => service.Identity!.NyxIdUserServiceId == "us-gamma")
+            .DefaultModel.Should().BeNull();
+    }
+
+    [Fact]
     public void ToOption_ShouldCopyOnlyExplicitInventoryIdentity()
     {
         var identity = new UserLlmServiceIdentity(
@@ -130,7 +153,8 @@ public sealed class NyxIdLlmServiceCatalogUserKeyMergeTests
         string id,
         string slug,
         bool isActive = true,
-        bool? organizationAllowed = null) => new(
+        bool? organizationAllowed = null,
+        string? defaultModel = null) => new(
         Id: id,
         Slug: slug,
         Label: $"Inventory {id}",
@@ -144,7 +168,8 @@ public sealed class NyxIdLlmServiceCatalogUserKeyMergeTests
                 OrganizationRole: NyxIdOrganizationRole.Member,
                 Allowed: allowed)
             : new NyxIdUserServiceCredentialSource(
-                NyxIdUserServiceCredentialSourceKind.Personal));
+                NyxIdUserServiceCredentialSourceKind.Personal),
+        DefaultModel: defaultModel);
 
     [Fact]
     public void ActiveKeyReplacesNotConnectedProxyEntryAsSelectable()

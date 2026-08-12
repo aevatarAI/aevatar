@@ -78,6 +78,7 @@ public sealed class NyxIdApiAccessContractTests
                   "catalog_service_name": "GitHub API",
                   "is_active": true,
                   "credential_source": { "type": "personal" },
+                  "default_model": "gpt-5.4",
                   "endpoint_id": "ignored"
                 },
                 {
@@ -111,7 +112,8 @@ public sealed class NyxIdApiAccessContractTests
             "GitHub API",
             true,
             new NyxIdUserServiceCredentialSource(
-                NyxIdUserServiceCredentialSourceKind.Personal)));
+                NyxIdUserServiceCredentialSourceKind.Personal),
+            "gpt-5.4"));
         result.Value.Services[1].CredentialSource.Should().BeEquivalentTo(
             new NyxIdUserServiceCredentialSource(
                 NyxIdUserServiceCredentialSourceKind.Organization,

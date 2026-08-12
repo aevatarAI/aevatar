@@ -4,6 +4,7 @@ public static class ToolSetNames
 {
     public const string WorkspaceDefault = "workspace.default";
     public const string LarkSelfNotify = "lark.self_notify";
+    public const string StudioLocal = "studio.local";
 
     /// <summary>
     /// Opt-in tool set that exposes the caller's <c>x-aevatar-tool</c>-marked NyxID

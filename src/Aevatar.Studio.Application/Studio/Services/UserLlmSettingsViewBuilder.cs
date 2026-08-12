@@ -99,7 +99,8 @@ internal sealed class UserLlmSettingsViewBuilder
                     UserServiceId: saved.UserServiceId,
                     ServiceSlug: saved.ServiceSlug,
                     DefaultModel: null,
-                    Description: null),
+                    Description: null,
+                    ModelCatalog: new UserLlmModelCatalog(null)),
             ],
             ModelGroupsByRoute: [],
             CatalogStatus: UserLlmCatalogStatusValue.Unavailable.ToWireValue(),
@@ -143,6 +144,9 @@ internal sealed class UserLlmSettingsViewBuilder
                     continue;
             }
 
+            var defaultModelId = userServiceId is null
+                ? null
+                : UserLlmPreferenceWriteCore.NormalizeOptional(service.DefaultModel);
             options.Add(new UserLlmRouteOption(
                 RouteValue: route,
                 Label: NormalizeDisplayName(service.DisplayName, service.ServiceSlug),
@@ -152,10 +156,9 @@ internal sealed class UserLlmSettingsViewBuilder
                 Ready: UserLlmCatalogNormalization.IsReady(service),
                 UserServiceId: userServiceId,
                 ServiceSlug: service.ServiceSlug,
-                DefaultModel: userServiceId is null
-                    ? null
-                    : UserLlmPreferenceWriteCore.NormalizeOptional(service.DefaultModel),
-                Description: UserLlmPreferenceWriteCore.NormalizeOptional(service.Description)));
+                DefaultModel: defaultModelId,
+                Description: UserLlmPreferenceWriteCore.NormalizeOptional(service.Description),
+                ModelCatalog: new UserLlmModelCatalog(defaultModelId)));
         }
 
         return options;
@@ -173,6 +176,7 @@ internal sealed class UserLlmSettingsViewBuilder
                 ? UserLlmRouteStatusValue.Ready
                 : UserLlmCatalogNormalization.NormalizeStatus(gatewayServices[0].Status);
 
+        var defaultModelId = ResolveGatewayDefaultModel(gatewayServices);
         return new UserLlmRouteOption(
             RouteValue: UserConfigLlmRouteDefaults.Gateway,
             Label: _gatewayRouteLabel,
@@ -182,9 +186,15 @@ internal sealed class UserLlmSettingsViewBuilder
             Ready: !hasAny || ready,
             UserServiceId: null,
             ServiceSlug: null,
-            DefaultModel: null,
-            Description: null);
+            DefaultModel: defaultModelId,
+            Description: null,
+            ModelCatalog: new UserLlmModelCatalog(defaultModelId));
     }
+
+    private static string? ResolveGatewayDefaultModel(IReadOnlyList<NyxIdLlmService> gatewayServices) =>
+        gatewayServices
+            .Select(service => UserLlmPreferenceWriteCore.NormalizeOptional(service.DefaultModel))
+            .FirstOrDefault(defaultModel => defaultModel is not null);
 
     private static string ResolveEffectiveRoute(
         SavedSelection saved,
