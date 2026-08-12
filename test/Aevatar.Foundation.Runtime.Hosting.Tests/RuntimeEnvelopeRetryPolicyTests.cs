@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventSourcing;
+using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 using FluentAssertions;
@@ -33,5 +34,53 @@ public sealed class RuntimeEnvelopeRetryPolicyTests
         retryable.Should().BeTrue();
         nextAttempt.Should().Be(1);
         retry.Runtime.Retry.LastErrorType.Should().Be(nameof(CommittedStatePublicationException));
+    }
+
+    [Theory]
+    [InlineData(typeof(EventStoreOptimisticConcurrencyException))]
+    [InlineData(typeof(EventStoreVersionDriftException))]
+    [InlineData(typeof(CommittedStatePublicationException))]
+    public void ContainsCommitConsistencyFailure_MatchesCommitBoundaryExceptions(Type exceptionType)
+    {
+        var exception = BuildCommitBoundaryException(exceptionType);
+
+        RuntimeEnvelopeRetryPolicy.ContainsCommitConsistencyFailure(exception).Should().BeTrue();
+        RuntimeEnvelopeRetryPolicy
+            .ContainsCommitConsistencyFailure(new InvalidOperationException("wrap", exception))
+            .Should().BeTrue();
+        RuntimeEnvelopeRetryPolicy
+            .ContainsCommitConsistencyFailure(new AggregateException(exception))
+            .Should().BeTrue();
+    }
+
+    [Fact]
+    public void ContainsCommitConsistencyFailure_IgnoresUnrelatedFailures()
+    {
+        RuntimeEnvelopeRetryPolicy
+            .ContainsCommitConsistencyFailure(new InvalidOperationException("unrelated"))
+            .Should().BeFalse();
+        RuntimeEnvelopeRetryPolicy
+            .ContainsCommitConsistencyFailure(new TimeoutException("slow"))
+            .Should().BeFalse();
+    }
+
+    private static Exception BuildCommitBoundaryException(Type exceptionType)
+    {
+        if (exceptionType == typeof(EventStoreOptimisticConcurrencyException))
+            return new EventStoreOptimisticConcurrencyException("actor", expectedVersion: 4, actualVersion: 2);
+        if (exceptionType == typeof(EventStoreVersionDriftException))
+            return new EventStoreVersionDriftException("actor", replayedVersion: 6, storeVersion: 4);
+
+        var stateEvent = new StateEvent
+        {
+            AgentId = "actor",
+            EventId = "committed-event",
+            Version = 1,
+        };
+        return new CommittedStatePublicationException(
+            "actor",
+            stateEvent,
+            CommittedStatePublicationFailureStage.AdapterAcceptance,
+            new InvalidOperationException("injected"));
     }
 }
