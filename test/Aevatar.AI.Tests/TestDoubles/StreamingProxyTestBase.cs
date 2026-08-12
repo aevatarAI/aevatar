@@ -1039,12 +1039,23 @@ public abstract class StreamingProxyTestBase
 
         internal sealed class StubActorEventSubscriptionProvider(StubStreamProvider streams) : IActorEventSubscriptionProvider
         {
-            public Task<IAsyncDisposable> SubscribeAsync<TMessage>(
+            private readonly TaskCompletionSource _subscriptionsReady =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+            private int _subscriptionCount;
+
+            public Task WaitUntilSubscriptionsReadyAsync() => _subscriptionsReady.Task;
+
+            public async Task<IAsyncDisposable> SubscribeAsync<TMessage>(
                 string actorId,
                 Func<TMessage, Task> handler,
                 CancellationToken ct = default)
-                where TMessage : class, IMessage, new() =>
-                streams.GetTypedStream(actorId).SubscribeAsync(handler, ct);
+                where TMessage : class, IMessage, new()
+            {
+                var subscription = await streams.GetTypedStream(actorId).SubscribeAsync(handler, ct);
+                if (Interlocked.Increment(ref _subscriptionCount) >= 2)
+                    _subscriptionsReady.TrySetResult();
+                return subscription;
+            }
         }
 
         internal sealed class StubTerminalQueryPort : IStreamingProxyChatSessionTerminalQueryPort
