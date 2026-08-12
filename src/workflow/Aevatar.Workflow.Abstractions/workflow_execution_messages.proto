@@ -1079,8 +1079,11 @@ message WorkflowInteractiveCatalogServiceActionParams
 
 message WorkflowInteractiveActionParams
 {
-  WorkflowInteractiveCatalogServiceActionParams catalog_service = 1;
-  WorkflowInteractiveKeyCreateActionParams key_create = 2;
+  oneof action_params
+  {
+    WorkflowInteractiveCatalogServiceActionParams catalog_service = 1;
+    WorkflowInteractiveKeyCreateActionParams key_create = 2;
+  }
 }
 
 message WorkflowInteractiveKeyCreateActionParams

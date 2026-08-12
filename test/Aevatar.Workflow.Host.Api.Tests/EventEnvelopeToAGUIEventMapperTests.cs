@@ -108,14 +108,23 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
         events.Should().BeEmpty();
     }
 
-    [Fact]
-    public void WorkflowInteractiveActionHandoff_ShouldMapOnlyTheSchemaV4ActionRequest()
+    [Theory]
+    [InlineData(
+        "service.connect",
+        WorkflowInteractiveActionParams.ActionParamsOneofCase.CatalogService)]
+    [InlineData(
+        "key.create",
+        WorkflowInteractiveActionParams.ActionParamsOneofCase.KeyCreate)]
+    public void WorkflowInteractiveActionHandoff_ShouldMapOnlyTheTypedSchemaV4ActionRequest(
+        string wireAction,
+        WorkflowInteractiveActionParams.ActionParamsOneofCase expectedParamsCase)
     {
+        var expected = InteractiveActionRequest(wireAction);
         var events = CreateMapper().Map(WrapCommitted(
             new WorkflowInteractiveActionHandoffDispatchedEvent
             {
                 HandoffId = "handoff-alpha",
-                Request = InteractiveActionRequest(),
+                Request = expected,
                 TerminalContinuation = new WorkflowLlmInvocationCompletedEvent
                 {
                     RunId = "run-alpha",
@@ -132,7 +141,9 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
         mapped.Custom.Payload.Is(WorkflowInteractiveActionRequestWirePayload.Descriptor)
             .Should().BeTrue();
         var request = mapped.Custom.Payload.Unpack<WorkflowInteractiveActionRequestWirePayload>();
-        request.Should().BeEquivalentTo(InteractiveActionRequest());
+        request.Should().BeEquivalentTo(expected);
+        request.Action.Should().Be(wireAction);
+        request.Params.ActionParamsCase.Should().Be(expectedParamsCase);
         mapped.Custom.Payload.ToString().Should().NotContain("private-terminal-continuation");
     }
 
@@ -867,8 +878,10 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
         ]);
     }
 
-    private static WorkflowInteractiveActionRequestWirePayload InteractiveActionRequest() =>
-        new()
+    private static WorkflowInteractiveActionRequestWirePayload InteractiveActionRequest(
+        string wireAction = "service.connect")
+    {
+        var request = new WorkflowInteractiveActionRequestWirePayload
         {
             SchemaVersion = 4,
             ActorId = "nyxid-chat-alpha",
@@ -876,8 +889,12 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
             TaskId = "task-alpha",
             StepId = "step-alpha",
             ActionRequestId = "action-alpha",
-            Action = "service.connect",
-            Params = new WorkflowInteractiveActionParams
+            Action = wireAction,
+            Params = new WorkflowInteractiveActionParams(),
+        };
+        request.Params = wireAction switch
+        {
+            "service.connect" => new WorkflowInteractiveActionParams
             {
                 CatalogService = new WorkflowInteractiveCatalogServiceActionParams
                 {
@@ -885,5 +902,18 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
                     RequestedScopes = { "repo" },
                 },
             },
+            "key.create" => new WorkflowInteractiveActionParams
+            {
+                KeyCreate = new WorkflowInteractiveKeyCreateActionParams
+                {
+                    Name = "agent-alpha",
+                    Platform = "codex",
+                    AllowedServiceIds = { "m-github", "m-lark" },
+                },
+            },
+            _ => throw new InvalidOperationException($"Unknown wire action '{wireAction}'."),
         };
+
+        return request;
+    }
 }

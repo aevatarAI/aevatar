@@ -189,7 +189,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
     [Fact]
     public async Task WorkflowInteractiveActionHandoff_ShouldCreateActionOnlyStateAndRejectConflictingReplay()
     {
-        const string actorId = "nyxid-chat-workflow-alpha";
+        const string actorId = "chat-action-alpha";
         var eventStore = new InMemoryEventStoreForTests();
         using var services = BuildEventSourcingServices(eventStore);
         var agent = CreateController(services, actorId);
@@ -220,7 +220,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
             },
         };
 
-        await agent.HandleWorkflowInteractiveActionHandoffAsync(command);
+        await agent.HandleEventAsync(CreateWorkflowHandoffEnvelope(actorId, command));
 
         agent.State.ConversationActorId.Should().Be(actorId);
         agent.State.ScopeId.Should().Be("scope-alpha");
@@ -237,14 +237,14 @@ public sealed partial class NyxIdChatConversationGAgentTests
         action.Params.CatalogServiceConnect.RequestedScopes.Should().Equal("repo");
         var committedCount = (await eventStore.GetEventsAsync(actorId)).Count;
 
-        await agent.HandleWorkflowInteractiveActionHandoffAsync(command.Clone());
+        await agent.HandleEventAsync(CreateWorkflowHandoffEnvelope(actorId, command.Clone()));
 
         (await eventStore.GetEventsAsync(actorId)).Should().HaveCount(committedCount);
 
         var conflicting = command.Clone();
         conflicting.Request.Params.CatalogService.RequestedScopes.Clear();
         conflicting.Request.Params.CatalogService.RequestedScopes.Add("read:org");
-        var act = () => agent.HandleWorkflowInteractiveActionHandoffAsync(conflicting);
+        var act = () => agent.HandleEventAsync(CreateWorkflowHandoffEnvelope(actorId, conflicting));
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*identity was reused with different content*");
@@ -252,9 +252,33 @@ public sealed partial class NyxIdChatConversationGAgentTests
     }
 
     [Fact]
-    public async Task WorkflowInteractiveKeyCreateHandoff_WithCompleteRegistry_ShouldFailClosedBeforeFirstEvent()
+    public async Task WorkflowInteractiveActionHandoff_ReplayedByDifferentEnvelopeSender_ShouldRejectWithoutAppendingEvents()
     {
-        const string actorId = "nyxid-chat-workflow-key-create";
+        const string actorId = "chat-action-replay-sender";
+        var eventStore = new InMemoryEventStoreForTests();
+        using var services = BuildEventSourcingServices(eventStore);
+        var agent = CreateController(services, actorId);
+        await agent.ActivateAsync();
+        var command = ServiceConnectHandoff(actorId);
+        await agent.HandleEventAsync(CreateWorkflowHandoffEnvelope(actorId, command));
+        var committedCount = (await eventStore.GetEventsAsync(actorId)).Count;
+
+        var act = () => agent.HandleEventAsync(CreateWorkflowHandoffEnvelope(
+            actorId,
+            command.Clone(),
+            publisherActorId: "workflow-run-beta",
+            sourceActorId: "workflow-run-beta"));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*sender authority*");
+        (await eventStore.GetEventsAsync(actorId)).Should().HaveCount(committedCount);
+        agent.State.PendingActions.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task WorkflowInteractiveKeyCreateHandoff_WithCompleteRegistry_ShouldCreateTypedPendingAction()
+    {
+        const string actorId = "chat-action-key-create";
         var eventStore = new InMemoryEventStoreForTests();
         using var services = BuildEventSourcingServices(
             eventStore,
@@ -263,12 +287,15 @@ public sealed partial class NyxIdChatConversationGAgentTests
         await agent.ActivateAsync();
         var valid = KeyCreateHandoff(actorId);
 
-        var act = () => agent.HandleWorkflowInteractiveActionHandoffAsync(valid);
+        await agent.HandleEventAsync(CreateWorkflowHandoffEnvelope(actorId, valid));
 
-        (await act.Should().ThrowAsync<NyxIdAssistantActionRegistryException>())
-            .Which.Code.Should().Be("NYXID_ACTION_UNSUPPORTED");
-        (await eventStore.GetEventsAsync(actorId)).Should().BeEmpty();
-        agent.State.PendingActions.Should().BeEmpty();
+        var pending = agent.State.PendingActions.Should().ContainSingle().Which;
+        pending.Action.Should().Be(NyxIdAssistantActionKind.KeyCreate);
+        pending.Params.ParamsCase.Should().Be(NyxIdAssistantActionParams.ParamsOneofCase.KeyCreate);
+        pending.Params.KeyCreate.Name.Should().Be("agent-alpha");
+        pending.Params.KeyCreate.Platform.Should().Be("codex");
+        pending.Params.KeyCreate.AllowedServiceIds.Should().Equal("m-github", "m-lark");
+        (await eventStore.GetEventsAsync(actorId)).Should().NotBeEmpty();
     }
 
     private static WorkflowInteractiveActionHandoffCommand KeyCreateHandoff(string actorId) =>
@@ -294,6 +321,156 @@ public sealed partial class NyxIdChatConversationGAgentTests
                         Name = "agent-alpha",
                         Platform = "codex",
                         AllowedServiceIds = { "m-github", "m-lark" },
+                    },
+                },
+            },
+        };
+
+    [Theory]
+    [InlineData("missing-envelope")]
+    [InlineData("missing-publisher")]
+    [InlineData("missing-runtime-source")]
+    [InlineData("sender-mismatch")]
+    [InlineData("claim-mismatch")]
+    [InlineData("padded-publisher")]
+    [InlineData("padded-runtime-source")]
+    [InlineData("padded-claim")]
+    public async Task WorkflowInteractiveActionHandoff_WithoutExactEnvelopeSenderAuthority_ShouldFailBeforeFirstEvent(
+        string scenario)
+    {
+        var actorId = $"chat-action-{scenario}";
+        var eventStore = new InMemoryEventStoreForTests();
+        using var services = BuildEventSourcingServices(eventStore);
+        var agent = CreateController(services, actorId);
+        await agent.ActivateAsync();
+        var command = ServiceConnectHandoff(actorId);
+        Func<Task> act = scenario switch
+        {
+            "missing-envelope" => () => agent.HandleWorkflowInteractiveActionHandoffAsync(command),
+            "missing-publisher" => () => agent.HandleEventAsync(
+                CreateWorkflowHandoffEnvelope(actorId, command, publisherActorId: string.Empty)),
+            "missing-runtime-source" => () => agent.HandleEventAsync(
+                CreateWorkflowHandoffEnvelope(actorId, command, sourceActorId: string.Empty)),
+            "sender-mismatch" => () => agent.HandleEventAsync(
+                CreateWorkflowHandoffEnvelope(actorId, command, sourceActorId: "workflow-run-beta")),
+            "claim-mismatch" => () => agent.HandleEventAsync(
+                CreateWorkflowHandoffEnvelope(
+                    actorId,
+                    WithSourceWorkflowActorId(command, "workflow-run-claim-beta"))),
+            "padded-publisher" => () => agent.HandleEventAsync(
+                CreateWorkflowHandoffEnvelope(
+                    actorId,
+                    command,
+                    publisherActorId: " workflow-run-alpha")),
+            "padded-runtime-source" => () => agent.HandleEventAsync(
+                CreateWorkflowHandoffEnvelope(
+                    actorId,
+                    command,
+                    sourceActorId: "workflow-run-alpha ")),
+            "padded-claim" => () => agent.HandleEventAsync(
+                CreateWorkflowHandoffEnvelope(
+                    actorId,
+                    WithSourceWorkflowActorId(command, " workflow-run-alpha"))),
+            _ => throw new InvalidOperationException($"Unknown test scenario '{scenario}'."),
+        };
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*sender authority*");
+        (await eventStore.GetEventsAsync(actorId)).Should().BeEmpty();
+        agent.State.PendingActions.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("service-connect-with-key-create", "NYXID_ACTION_PARAMS_INVALID")]
+    [InlineData("key-create-with-catalog-service", "NYXID_ACTION_PARAMS_INVALID")]
+    [InlineData("missing-action-params", "NYXID_ACTION_UNSUPPORTED")]
+    [InlineData("key-rotate-without-variant", "NYXID_ACTION_UNSUPPORTED")]
+    public async Task WorkflowInteractiveActionHandoff_WithoutRegisteredActionVariantMatch_ShouldFailBeforeFirstEvent(
+        string scenario,
+        string expectedCode)
+    {
+        var actorId = $"chat-action-{scenario}";
+        var eventStore = new InMemoryEventStoreForTests();
+        var actionRegistry = scenario == "key-rotate-without-variant"
+            ? CreateSupportedActionRegistry()
+            : CreateLeastScopeActionRegistry();
+        using var services = BuildEventSourcingServices(eventStore, actionRegistry: actionRegistry);
+        var agent = CreateController(services, actorId);
+        await agent.ActivateAsync();
+        var command = scenario switch
+        {
+            "service-connect-with-key-create" => WithWireAction(
+                KeyCreateHandoff(actorId),
+                "service.connect"),
+            "key-create-with-catalog-service" => WithWireAction(
+                ServiceConnectHandoff(actorId),
+                "key.create"),
+            "missing-action-params" => WithoutActionParams(
+                ServiceConnectHandoff(actorId),
+                "service.connect"),
+            "key-rotate-without-variant" => WithoutActionParams(
+                ServiceConnectHandoff(actorId),
+                "key.rotate"),
+            _ => throw new InvalidOperationException($"Unknown test scenario '{scenario}'."),
+        };
+
+        var act = () => agent.HandleEventAsync(CreateWorkflowHandoffEnvelope(actorId, command));
+
+        var exception = await act.Should().ThrowAsync<NyxIdAssistantActionRegistryException>();
+        exception.Which.Code.Should().Be(expectedCode);
+        (await eventStore.GetEventsAsync(actorId)).Should().BeEmpty();
+        agent.State.PendingActions.Should().BeEmpty();
+    }
+
+    private static WorkflowInteractiveActionHandoffCommand WithWireAction(
+        WorkflowInteractiveActionHandoffCommand command,
+        string wireAction)
+    {
+        var clone = command.Clone();
+        clone.Request.Action = wireAction;
+        return clone;
+    }
+
+    private static WorkflowInteractiveActionHandoffCommand WithoutActionParams(
+        WorkflowInteractiveActionHandoffCommand command,
+        string wireAction)
+    {
+        var clone = WithWireAction(command, wireAction);
+        clone.Request.Params = new WorkflowInteractiveActionParams();
+        return clone;
+    }
+
+    private static WorkflowInteractiveActionHandoffCommand WithSourceWorkflowActorId(
+        WorkflowInteractiveActionHandoffCommand command,
+        string sourceWorkflowActorId)
+    {
+        var clone = command.Clone();
+        clone.SourceWorkflowActorId = sourceWorkflowActorId;
+        return clone;
+    }
+
+    private static WorkflowInteractiveActionHandoffCommand ServiceConnectHandoff(string actorId) =>
+        new()
+        {
+            HandoffId = "handoff-alpha",
+            ScopeId = "scope-alpha",
+            OwnerSubject = "owner-alpha",
+            SourceWorkflowActorId = "workflow-run-alpha",
+            Request = new WorkflowInteractiveActionRequestWirePayload
+            {
+                SchemaVersion = 4,
+                ActorId = actorId,
+                OriginTurnId = "turn-studio-alpha",
+                TaskId = "task-action-alpha",
+                StepId = "step-action-alpha",
+                ActionRequestId = "action-request-alpha",
+                Action = "service.connect",
+                Params = new WorkflowInteractiveActionParams
+                {
+                    CatalogService = new WorkflowInteractiveCatalogServiceActionParams
+                    {
+                        ServiceSlug = "api-github",
+                        RequestedScopes = { "repo" },
                     },
                 },
             },
@@ -8108,6 +8285,29 @@ public sealed partial class NyxIdChatConversationGAgentTests
         }
         """);
 
+    private static NyxIdAssistantActionRegistry CreateSupportedActionRegistry() =>
+        NyxIdAssistantActionRegistry.Load(File.ReadAllText(Path.Combine(
+            FindRepositoryRoot(),
+            "docs",
+            "contracts",
+            "nyxid-assistant-conformance",
+            "v1",
+            "registry-v7.json")));
+
+    private static string FindRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "aevatar.slnx")))
+                return directory.FullName;
+            directory = directory.Parent;
+        }
+
+        throw new DirectoryNotFoundException(
+            "Could not locate the Aevatar repository root.");
+    }
+
     private static EventEnvelope CreateEnvelope(string actorId, IMessage payload) => new()
     {
         Id = "envelope-alpha",
@@ -8115,6 +8315,24 @@ public sealed partial class NyxIdChatConversationGAgentTests
         Payload = Any.Pack(payload),
         Route = new EnvelopeRoute { Direct = new DirectRoute { TargetActorId = actorId } },
         Propagation = new EnvelopePropagation { CorrelationId = "correlation-alpha" },
+    };
+
+    private static EventEnvelope CreateWorkflowHandoffEnvelope(
+        string targetActorId,
+        WorkflowInteractiveActionHandoffCommand command,
+        string publisherActorId = "workflow-run-alpha",
+        string sourceActorId = "workflow-run-alpha") => new()
+    {
+        Id = "workflow-handoff-envelope-alpha",
+        Timestamp = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 8, 12, 8, 0, 0, TimeSpan.Zero)),
+        Payload = Any.Pack(command),
+        Route = new EnvelopeRoute
+        {
+            PublisherActorId = publisherActorId,
+            Direct = new DirectRoute { TargetActorId = targetActorId },
+        },
+        Propagation = new EnvelopePropagation { CorrelationId = "workflow-handoff-correlation-alpha" },
+        Runtime = new EnvelopeRuntime { SourceActorId = sourceActorId },
     };
 
     private static async Task<NyxIdChatOperationDispatchCommand> ConfirmPendingWritePlanGateAsync(

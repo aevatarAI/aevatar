@@ -36,6 +36,44 @@ public sealed class WorkflowRunGAgentSourceRegressionTests
         executableSource.Should().NotContain("IWorkflowAgentTypeAliasProvider");
     }
 
+    [Fact]
+    public async Task WorkflowInteractiveActionIdentity_Source_ShouldBranchOnTypedParamsCase()
+    {
+        var repoRoot = FindRepositoryRoot();
+        var sourcePath = Path.Combine(repoRoot, "src", "workflow", "Aevatar.Workflow.Core", "WorkflowRunGAgent.cs");
+
+        var source = await File.ReadAllTextAsync(sourcePath);
+
+        source.Should().Contain("wireParams.ActionParamsCase");
+        source.Should().NotContain("wireAction == \"service.connect\"");
+    }
+
+    [Fact]
+    public async Task WorkflowInteractiveActionProducer_Source_ShouldNotAdvertiseKeyRotate()
+    {
+        var repoRoot = FindRepositoryRoot();
+        var sourcePath = Path.Combine(repoRoot, "src", "workflow", "Aevatar.Workflow.Core", "WorkflowRunGAgent.cs");
+
+        var source = await File.ReadAllTextAsync(sourcePath);
+        var handoffStart = source.IndexOf(
+            "private bool TryBuildInteractiveActionHandoff(",
+            StringComparison.Ordinal);
+        var requestPartsStart = source.IndexOf(
+            "private static bool TryBuildInteractiveActionRequestParts(",
+            StringComparison.Ordinal);
+        var producerEnd = source.IndexOf(
+            "private async Task EnsureInteractiveActionActorHandoffAsync(",
+            StringComparison.Ordinal);
+
+        handoffStart.Should().BeGreaterThanOrEqualTo(0);
+        requestPartsStart.Should().BeGreaterThan(handoffStart);
+        producerEnd.Should().BeGreaterThan(requestPartsStart);
+
+        var producerSource = source[handoffStart..producerEnd];
+        producerSource.Should().NotContain("ActionParamsOneofCase.KeyRotate");
+        producerSource.Should().NotContain("\"key.rotate\"");
+    }
+
     private static string FindRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
