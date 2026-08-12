@@ -78,6 +78,17 @@ public sealed class ChannelRegistrationToolTests
                     NyxAgentApiKeyId = "key-1",
                     NyxConversationRouteId = "route-1",
                 },
+                new ChannelBotRegistrationEntry
+                {
+                    Id = "reg-foreign",
+                    Platform = "lark",
+                    NyxProviderSlug = "api-lark-bot",
+                    ScopeId = "scope-other",
+                    WebhookUrl = "https://nyx.example.com/api/v1/webhooks/channel/lark/bot-2",
+                    NyxChannelBotId = "bot-2",
+                    NyxAgentApiKeyId = "key-2",
+                    NyxConversationRouteId = "route-2",
+                },
             ]));
 
         using var serviceProvider = new ServiceCollection()
@@ -91,9 +102,28 @@ public sealed class ChannelRegistrationToolTests
 
         doc.RootElement.GetProperty("total").GetInt32().Should().Be(1);
         var registration = doc.RootElement.GetProperty("registrations")[0];
+        registration.GetProperty("id").GetString().Should().Be("reg-1");
         registration.GetProperty("registration_mode").GetString().Should().Be("nyx_relay_webhook");
         registration.GetProperty("callback_url").GetString().Should().BeEmpty();
         registration.GetProperty("nyx_channel_bot_id").GetString().Should().Be("bot-1");
+        json.Should().NotContain("reg-foreign");
+        json.Should().NotContain("scope-other");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_List_RequiresScopeContext()
+    {
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        using var serviceProvider = new ServiceCollection()
+            .AddSingleton(queryPort)
+            .BuildServiceProvider();
+        var tool = CreateTool(serviceProvider);
+
+        using var scope = PushNyxToken(null);
+        var json = await tool.ExecuteAsync("""{"action":"list"}""");
+
+        json.Should().Contain("scope_id is required");
+        await queryPort.DidNotReceive().QueryAllAsync(Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -255,6 +285,7 @@ public sealed class ChannelRegistrationToolTests
                 Id = "reg-1",
                 Platform = "lark",
                 NyxProviderSlug = "api-lark-bot",
+                ScopeId = "scope-1",
                 NyxChannelBotId = "bot-1",
                 NyxAgentApiKeyId = "key-1",
                 NyxConversationRouteId = "route-1",
@@ -287,6 +318,7 @@ public sealed class ChannelRegistrationToolTests
         {
             Id = "reg-1",
             Platform = "lark",
+            ScopeId = "scope-1",
         };
         queryPort.GetAsync("reg-1", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(registration));
@@ -317,6 +349,96 @@ public sealed class ChannelRegistrationToolTests
         capturedEnvelope.Should().NotBeNull();
         capturedEnvelope!.Payload.Unpack<ChannelBotUnregisterCommand>().RegistrationId.Should().Be("reg-1");
         await queryPort.Received(1).GetAsync("reg-1", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_Delete_ForeignScope_IsIndistinguishableFromMissingRegistration()
+    {
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        queryPort.GetAsync("reg-foreign", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
+            {
+                Id = "reg-foreign",
+                Platform = "lark",
+                ScopeId = "scope-other",
+                NyxChannelBotId = "bot-2",
+            }));
+        queryPort.GetAsync("reg-missing", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(null));
+
+        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
+        using var serviceProvider = new ServiceCollection()
+            .AddSingleton(queryPort)
+            .AddSingleton(ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime))
+            .BuildServiceProvider();
+        var tool = CreateTool(serviceProvider);
+
+        using var scope = PushNyxToken();
+        var foreignJson = await tool.ExecuteAsync("""{"action":"delete","registration_id":"reg-foreign","confirm":true}""");
+        var missingJson = await tool.ExecuteAsync("""{"action":"delete","registration_id":"reg-missing","confirm":true}""");
+
+        // A caller probing another tenant's registration id must get the exact same
+        // payload as for an id that does not exist at all.
+        foreignJson.Should().Be(missingJson.Replace("reg-missing", "reg-foreign"));
+        foreignJson.Should().Contain("not found");
+        foreignJson.Should().NotContain("scope-other");
+        await ((IActorDispatchPort)actorRuntime).DidNotReceive().DispatchAsync(
+            Arg.Any<string>(),
+            Arg.Any<EventEnvelope>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_Delete_ForeignScope_WithoutConfirm_DoesNotRevealRegistration()
+    {
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        queryPort.GetAsync("reg-foreign", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
+            {
+                Id = "reg-foreign",
+                Platform = "lark",
+                ScopeId = "scope-other",
+                NyxChannelBotId = "bot-2",
+                NyxAgentApiKeyId = "key-2",
+                NyxConversationRouteId = "route-2",
+            }));
+
+        using var serviceProvider = new ServiceCollection()
+            .AddSingleton(queryPort)
+            .BuildServiceProvider();
+        var tool = CreateTool(serviceProvider);
+
+        using var scope = PushNyxToken();
+        var json = await tool.ExecuteAsync("""{"action":"delete","registration_id":"reg-foreign"}""");
+
+        json.Should().Contain("not found");
+        json.Should().NotContain("confirm_required");
+        json.Should().NotContain("scope-other");
+        json.Should().NotContain("bot-2");
+        json.Should().NotContain("key-2");
+        json.Should().NotContain("route-2");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_Delete_RequiresScopeContext()
+    {
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
+        using var serviceProvider = new ServiceCollection()
+            .AddSingleton(queryPort)
+            .AddSingleton(ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime))
+            .BuildServiceProvider();
+        var tool = CreateTool(serviceProvider);
+
+        using var scope = PushNyxToken(null);
+        var json = await tool.ExecuteAsync("""{"action":"delete","registration_id":"reg-1","confirm":true}""");
+
+        json.Should().Contain("scope_id is required");
+        await queryPort.DidNotReceive().GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await ((IActorDispatchPort)actorRuntime).DidNotReceive().DispatchAsync(
+            Arg.Any<string>(),
+            Arg.Any<EventEnvelope>(),
+            Arg.Any<CancellationToken>());
     }
 
     [Fact]
