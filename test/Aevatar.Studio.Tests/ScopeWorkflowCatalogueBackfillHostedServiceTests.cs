@@ -1,7 +1,13 @@
+using Aevatar.CQRS.Core.Abstractions;
+using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Hosting.Backfill;
+using Aevatar.GAgentService.Hosting.DependencyInjection;
+using Aevatar.GAgentService.Projection.Contexts;
 using Aevatar.GAgentService.Projection.ReadModels;
 using Aevatar.Studio.Domain.Studio.Models;
 using Aevatar.Studio.Projection.Projectors;
@@ -11,6 +17,8 @@ using Aevatar.Workflow.Abstractions;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using IWorkflowYamlDocumentService = Aevatar.Studio.Application.Studio.Abstractions.IWorkflowYamlDocumentService;
 using WorkflowParseResult = Aevatar.Studio.Application.Studio.Abstractions.WorkflowParseResult;
@@ -262,6 +270,147 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
     }
 
     [Fact]
+    public async Task RevisionSourceProjector_ShouldRefreshCatalogueRow_WhenDeploymentWasMaterializedBeforeRevision()
+    {
+        var identity = ServiceIdentity("scope-1", "workflow-app", "user", "published-service-1");
+        var serviceKey = ServiceKeys.Build(identity);
+        var deploymentCatalog = new ServiceDeploymentCatalogReadModel
+        {
+            Id = serviceKey,
+            ActorId = "service-deployment:scope-1:published-service-1",
+            StateVersion = 8,
+            LastEventId = "evt-deployment",
+            UpdatedAt = DateTimeOffset.Parse("2026-08-05T00:00:00Z"),
+            Deployments =
+            [
+                new ServiceDeploymentReadModel
+                {
+                    DeploymentId = "dep-1",
+                    RevisionId = "rev-live",
+                    PrimaryActorId = "workflow-actor-live",
+                    Status = ServiceDeploymentStatus.Active.ToString(),
+                    UpdatedAt = DateTimeOffset.Parse("2026-08-05T01:00:00Z"),
+                },
+            ],
+        };
+        var sourceWriter = new RecordingCatalogueSourceDispatcher();
+        var rowWriter = new RecordingCatalogueRowDispatcher();
+        var sourceReader = new RecordingCatalogueSourceReader([], sourceWriter);
+        var serviceProjector = new ScopeWorkflowCatalogueServiceSourceProjector(
+            new KeyedProjectionDocumentReader<ServiceRevisionCatalogReadModel>([]),
+            new KeyedProjectionDocumentReader<ServiceDeploymentCatalogReadModel>([deploymentCatalog]),
+            sourceWriter,
+            new ScopeWorkflowCatalogueRowMaterializer(sourceReader, rowWriter),
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-08-05T02:00:00Z")));
+        var revisionProjector = new ScopeWorkflowCatalogueRevisionSourceProjector(serviceProjector);
+        var revisionCatalog = WorkflowRevisionCatalog(serviceKey, "rev-live", "wf-published", "Published Workflow");
+        var revisionState = ToRevisionCatalogState(identity, revisionCatalog);
+
+        await revisionProjector.ProjectAsync(
+            new ServiceRevisionCatalogProjectionContext
+            {
+                RootActorId = "service-revisions:svc-key",
+                ProjectionKind = "service-revisions",
+            },
+            BuildRevisionEnvelope(
+                new ServiceRevisionPublishedEvent
+                {
+                    Identity = revisionState.Identity.Clone(),
+                    RevisionId = "rev-live",
+                    PublishedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-05T00:30:00Z")),
+                },
+                revisionState,
+                "evt-revision"));
+
+        var source = sourceWriter.Upserts.Should().ContainSingle().Subject;
+        source.Id.Should().Be("scope-1:wf-published:service");
+        source.WorkflowId.Should().Be("wf-published");
+        source.SourceUpdatedAtUtc.Should().Be(DateTimeOffset.Parse("2026-08-05T01:00:00Z"));
+        source.DeploymentId.Should().Be("dep-1");
+
+        var row = rowWriter.Upserts.Should().ContainSingle().Subject;
+        row.Id.Should().Be("scope-1:workflow:wf-published");
+        row.HasPublishedSource.Should().BeTrue();
+        row.ActiveRevisionId.Should().Be("rev-live");
+    }
+
+    [Fact]
+    public async Task ServiceSourceProjector_ShouldUsePublishedServiceId_WhenWorkflowPlanHasNoExplicitBindingIdentity()
+    {
+        var identity = ServiceIdentity("scope-1", "workflow-app", "user", "published-service-1");
+        var serviceKey = ServiceKeys.Build(identity);
+        var revisionCatalog = WorkflowRevisionCatalog(
+            serviceKey,
+            "rev-live",
+            identity.ServiceId,
+            "Published Workflow",
+            includeExplicitBindingIdentity: false);
+        var deployment = new ServiceDeploymentRecord
+        {
+            DeploymentId = "dep-1",
+            RevisionId = "rev-live",
+            PrimaryActorId = "workflow-actor-live",
+            Status = ServiceDeploymentStatus.Active,
+            UpdatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-05T01:00:00Z")),
+        };
+        var deploymentState = new ServiceDeploymentState
+        {
+            Identity = identity.Clone(),
+        };
+        deploymentState.Deployments[deployment.DeploymentId] = deployment;
+        var sourceWriter = new RecordingCatalogueSourceDispatcher();
+        var rowWriter = new RecordingCatalogueRowDispatcher();
+        var sourceReader = new RecordingCatalogueSourceReader([], sourceWriter);
+        var projector = new ScopeWorkflowCatalogueServiceSourceProjector(
+            new KeyedProjectionDocumentReader<ServiceRevisionCatalogReadModel>([revisionCatalog]),
+            new KeyedProjectionDocumentReader<ServiceDeploymentCatalogReadModel>([]),
+            sourceWriter,
+            new ScopeWorkflowCatalogueRowMaterializer(sourceReader, rowWriter),
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-08-05T02:00:00Z")));
+
+        await projector.ProjectAsync(
+            new ServiceDeploymentCatalogProjectionContext
+            {
+                RootActorId = "service-deployment:svc-key",
+                ProjectionKind = "service-deployments",
+            },
+            BuildDeploymentEnvelope(
+                new ServiceDeploymentActivatedEvent
+                {
+                    Identity = identity.Clone(),
+                    RevisionId = "rev-live",
+                    DeploymentId = "dep-1",
+                    PrimaryActorId = "workflow-actor-live",
+                },
+                deploymentState,
+                "evt-deployment"));
+
+        var source = sourceWriter.Upserts.Should().ContainSingle().Subject;
+        source.WorkflowId.Should().Be("published-service-1");
+        source.Id.Should().Be("scope-1:published-service-1:service");
+
+        var row = rowWriter.Upserts.Should().ContainSingle().Subject;
+        row.Id.Should().Be("scope-1:workflow:published-service-1");
+        row.PublishedServiceId.Should().Be("published-service-1");
+    }
+
+    [Fact]
+    public void ServiceCapabilityRegistration_ShouldAttachWorkflowCatalogueRevisionMaterializer()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddGAgentServiceCapability(new ConfigurationBuilder().Build());
+
+        using var provider = services.BuildServiceProvider();
+
+        var materializers = provider.GetServices<IProjectionMaterializer<ServiceRevisionCatalogProjectionContext>>()
+            .Select(static materializer => materializer.GetType().FullName ?? materializer.GetType().Name)
+            .ToList();
+
+        materializers.Should().Contain(name => name.Contains(nameof(ScopeWorkflowCatalogueRevisionSourceProjector), StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task RowMaterializer_ShouldComposeDraftAndServiceSourcesIntoStableAggregateRow()
     {
         var draft = ExistingDraftSource("scope-1", "wf-shared");
@@ -449,7 +598,8 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
         string serviceKey,
         string revisionId,
         string workflowId,
-        string workflowName) =>
+        string workflowName,
+        bool includeExplicitBindingIdentity = true) =>
         new()
         {
             Id = serviceKey,
@@ -472,8 +622,8 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
                             WorkflowPlan = new WorkflowServiceDeploymentPlan
                             {
                                 WorkflowName = workflowName,
-                                WorkflowId = workflowId,
-                                RevisionId = revisionId,
+                                WorkflowId = includeExplicitBindingIdentity ? workflowId : string.Empty,
+                                RevisionId = includeExplicitBindingIdentity ? revisionId : string.Empty,
                                 ExecutionMode = ExternalCapabilityExecutionMode.Durable,
                                 CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
                                 {
@@ -484,6 +634,88 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
                     },
                 },
             ],
+        };
+
+    private static ServiceRevisionCatalogState ToRevisionCatalogState(
+        ServiceIdentity identity,
+        ServiceRevisionCatalogReadModel revisionCatalog)
+    {
+        var state = new ServiceRevisionCatalogState
+        {
+            Identity = identity.Clone(),
+        };
+
+        foreach (var revision in revisionCatalog.Revisions)
+        {
+            state.Revisions[revision.RevisionId] = new ServiceRevisionRecordState
+            {
+                Spec = new ServiceRevisionSpec
+                {
+                    Identity = identity.Clone(),
+                    RevisionId = revision.RevisionId,
+                    ImplementationKind = ServiceImplementationKind.Workflow,
+                    WorkflowSpec = new WorkflowServiceRevisionSpec
+                    {
+                        WorkflowName = revision.WorkflowName,
+                        DefinitionActorId = revision.PreparedArtifact?.DeploymentPlan.WorkflowPlan.DefinitionActorId ?? string.Empty,
+                    },
+                },
+                Status = ServiceRevisionStatus.Published,
+                PreparedArtifact = revision.PreparedArtifact?.Clone(),
+            };
+        }
+
+        return state;
+    }
+
+    private static EventEnvelope BuildRevisionEnvelope<T>(
+        T evt,
+        ServiceRevisionCatalogState state,
+        string eventId)
+        where T : IMessage =>
+        BuildCommittedStateEnvelope(evt, state, eventId);
+
+    private static EventEnvelope BuildDeploymentEnvelope<T>(
+        T evt,
+        ServiceDeploymentState state,
+        string eventId)
+        where T : IMessage =>
+        BuildCommittedStateEnvelope(evt, state, eventId);
+
+    private static EventEnvelope BuildCommittedStateEnvelope<TEvent, TState>(
+        TEvent evt,
+        TState state,
+        string eventId)
+        where TEvent : IMessage
+        where TState : IMessage =>
+        new()
+        {
+            Id = $"outer-{eventId}",
+            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-05T02:05:00Z")),
+            Payload = Any.Pack(new CommittedStateEventPublished
+            {
+                StateEvent = new StateEvent
+                {
+                    EventId = eventId,
+                    Version = 9,
+                    Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-05T02:00:00Z")),
+                    EventData = Any.Pack(evt),
+                },
+                StateRoot = Any.Pack(state),
+            }),
+        };
+
+    private static ServiceIdentity ServiceIdentity(
+        string tenantId,
+        string appId,
+        string serviceNamespace,
+        string serviceId) =>
+        new()
+        {
+            TenantId = tenantId,
+            AppId = appId,
+            Namespace = serviceNamespace,
+            ServiceId = serviceId,
         };
 
     private static ServiceRevisionCatalogReadModel MalformedWorkflowRevisionCatalog(
@@ -558,6 +790,29 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
             DeploymentStatus = ServiceDeploymentStatus.Active.ToString(),
             PublishedServiceId = publishedServiceId,
         };
+
+    private sealed class FixedProjectionClock(DateTimeOffset utcNow) : IProjectionClock
+    {
+        public DateTimeOffset UtcNow { get; } = utcNow;
+    }
+
+    private sealed class KeyedProjectionDocumentReader<TReadModel>(IReadOnlyList<TReadModel> documents)
+        : IProjectionDocumentReader<TReadModel, string>
+        where TReadModel : class, IProjectionReadModel
+    {
+        public Task<TReadModel?> GetAsync(string key, CancellationToken ct = default) =>
+            Task.FromResult(documents.FirstOrDefault(document => string.Equals(document.Id, key, StringComparison.Ordinal)));
+
+        public Task<ProjectionDocumentQueryResult<TReadModel>> QueryAsync(
+            ProjectionDocumentQuery query,
+            CancellationToken ct = default) =>
+            Task.FromResult(new ProjectionDocumentQueryResult<TReadModel>
+            {
+                Items = documents,
+                NextCursor = null,
+                TotalCount = documents.Count,
+            });
+    }
 
     private sealed class StubProjectionDocumentReader<TReadModel>(IReadOnlyList<TReadModel> documents)
         : IProjectionDocumentReader<TReadModel, string>

@@ -160,6 +160,9 @@ public static class ServiceCollectionExtensions
         services.AddProjectionArtifactMaterializer<
             ServiceDeploymentCatalogProjectionContext,
             ScopeWorkflowCatalogueServiceSourceProjector>();
+        services.AddProjectionArtifactMaterializer<
+            ServiceRevisionCatalogProjectionContext,
+            ScopeWorkflowCatalogueRevisionSourceProjector>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, ScopeWorkflowCatalogueBackfillHostedService>());
         services.TryAddSingleton<LlmRunExecutionScheduler>();
         services.TryAddSingleton<ILlmRunExecutionScheduler>(sp => sp.GetRequiredService<LlmRunExecutionScheduler>());
