@@ -11,7 +11,8 @@ namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 
 internal sealed class OrleansActorStream : IStream
 {
-    private const int SubscribeAttemptLimit = 3;
+    private const int SubscribeAttemptLimit = 5;
+    private static readonly TimeSpan SubscribeRetryDelay = TimeSpan.FromMilliseconds(250);
 
     private readonly string _streamId;
     private readonly string _streamNamespace;
@@ -67,7 +68,9 @@ internal sealed class OrleansActorStream : IStream
                 var handle = await ResolveStream().SubscribeAsync(observer);
                 return new OrleansSubscriptionLease(handle);
             }
-            catch (OrleansMessageRejectionException ex) when (attempt < SubscribeAttemptLimit)
+            catch (Exception ex) when (
+                attempt < SubscribeAttemptLimit &&
+                ex is OrleansMessageRejectionException or SiloUnavailableException)
             {
                 _logger.LogWarning(
                     ex,
@@ -76,6 +79,7 @@ internal sealed class OrleansActorStream : IStream
                     _streamId,
                     attempt,
                     SubscribeAttemptLimit);
+                await Task.Delay(SubscribeRetryDelay, ct);
             }
         }
 

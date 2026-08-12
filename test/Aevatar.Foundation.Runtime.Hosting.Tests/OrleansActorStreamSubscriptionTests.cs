@@ -53,7 +53,22 @@ public sealed class OrleansActorStreamSubscriptionTests
 
         await act.Should().ThrowAsync<OrleansMessageRejectionException>()
             .WithMessage("stale silo route");
-        provider.SubscribeAttemptCount.Should().Be(3);
+        provider.SubscribeAttemptCount.Should().Be(5);
+    }
+
+    [Fact]
+    public async Task SubscribeAsync_WhenTargetSiloIsTemporarilyUnavailable_ShouldRetry()
+    {
+        var provider = new SubscriptionStreamProvider
+        {
+            SubscriptionFailuresRemaining = 1,
+            TransientSubscriptionException = CreateSiloUnavailableException(),
+        };
+        var stream = CreateStream(provider);
+
+        await using var lease = await stream.SubscribeAsync<StringValue>(_ => Task.CompletedTask);
+
+        provider.SubscribeAttemptCount.Should().Be(2);
     }
 
     private static OrleansActorStream CreateStream(SubscriptionStreamProvider provider) =>
@@ -61,6 +76,14 @@ public sealed class OrleansActorStreamSubscriptionTests
             streamId: "actor-1",
             streamNamespace: "aevatar.events",
             streamProvider: provider);
+
+    private static SiloUnavailableException CreateSiloUnavailableException() =>
+        (SiloUnavailableException)Activator.CreateInstance(
+            typeof(SiloUnavailableException),
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+            binder: null,
+            args: ["stale silo route"],
+            culture: null)!;
 
     private sealed class SubscriptionStreamProvider : global::Orleans.Streams.IStreamProvider
     {
@@ -76,6 +99,8 @@ public sealed class OrleansActorStreamSubscriptionTests
         public int SubscriptionFailuresRemaining { get; set; }
 
         public Exception? SubscriptionException { get; set; }
+
+        public Exception? TransientSubscriptionException { get; set; }
 
         public string Name => "subscription-provider";
 
@@ -113,7 +138,7 @@ public sealed class OrleansActorStreamSubscriptionTests
                 if (_owner.SubscriptionFailuresRemaining > 0)
                 {
                     _owner.SubscriptionFailuresRemaining--;
-                    throw CreateMessageRejectionException();
+                    throw _owner.TransientSubscriptionException ?? CreateMessageRejectionException();
                 }
 
                 return Task.FromResult<StreamSubscriptionHandle<EventEnvelope>>(
