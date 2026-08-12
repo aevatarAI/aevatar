@@ -465,7 +465,6 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
         <>
           <TableScrollRegion
             ariaLabel={t('workflowActivityVNext.activity.title', 'Activity')}
-            minWidth={1080}
           >
             <table className="wa-vnext__table">
               <thead>

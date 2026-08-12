@@ -36,6 +36,49 @@ function createRun(runId: string): WorkflowActivityRunDetail {
       totalTokens: 0,
       cost: 0,
     },
+    recoveryCapability: {
+      retryFailedStep: {
+        eligibility: 0,
+        unavailableReasonCode: 0,
+        unavailableReason: '',
+        recommendedActions: [],
+        startingStepId: '',
+        reusesPriorStepOutputs: false,
+        mayIncurModelOrToolCost: false,
+      },
+      runAgain: {
+        eligibility: 0,
+        unavailableReasonCode: 0,
+        unavailableReason: '',
+        recommendedActions: [],
+        startingStepId: '',
+        reusesPriorStepOutputs: false,
+        mayIncurModelOrToolCost: false,
+      },
+      workflowDefinitionRevisionId: 'revision-alpha',
+      workflowDefinitionVersion: 3,
+    },
+    lineage: {
+      availability: 0,
+      retryFork: {
+        availability: 0,
+        sourceRunId: '',
+        originalRunId: '',
+        attempt: 0,
+        startAtStepId: '',
+        childRuns: [],
+      },
+      subWorkflow: {
+        availability: 0,
+        parentRunId: '',
+        parentActorId: '',
+        parentStepId: '',
+        rootRunId: '',
+        depth: 0,
+        childRuns: [],
+      },
+      unavailableReason: '',
+    },
   };
 }
 
