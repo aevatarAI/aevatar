@@ -71,11 +71,37 @@ public sealed class OrleansActorStreamSubscriptionTests
         provider.SubscribeAttemptCount.Should().Be(2);
     }
 
+    [Fact]
+    public async Task SubscribeAsync_WhenTopologyRetryIsCancelled_ShouldStopWaiting()
+    {
+        var provider = new SubscriptionStreamProvider
+        {
+            SubscriptionFailuresRemaining = int.MaxValue,
+        };
+        var stream = new OrleansActorStream(
+            streamId: "actor-1",
+            streamNamespace: "aevatar.events",
+            streamProvider: provider,
+            subscribeAttemptLimit: 30,
+            subscribeRetryDelay: TimeSpan.FromMinutes(1));
+        using var cancellation = new CancellationTokenSource();
+        cancellation.CancelAfter(TimeSpan.FromMilliseconds(20));
+
+        var act = () => stream.SubscribeAsync<StringValue>(
+            _ => Task.CompletedTask,
+            cancellation.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        provider.SubscribeAttemptCount.Should().Be(1);
+    }
+
     private static OrleansActorStream CreateStream(SubscriptionStreamProvider provider) =>
         new(
             streamId: "actor-1",
             streamNamespace: "aevatar.events",
-            streamProvider: provider);
+            streamProvider: provider,
+            subscribeAttemptLimit: 5,
+            subscribeRetryDelay: TimeSpan.Zero);
 
     private static SiloUnavailableException CreateSiloUnavailableException() =>
         (SiloUnavailableException)Activator.CreateInstance(
