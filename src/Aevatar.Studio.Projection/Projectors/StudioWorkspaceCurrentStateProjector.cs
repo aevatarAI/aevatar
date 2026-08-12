@@ -138,11 +138,13 @@ public sealed class StudioWorkspaceCurrentStateProjector
         if (string.IsNullOrWhiteSpace(name))
             name = string.IsNullOrWhiteSpace(draft.Name) ? draft.WorkflowId : draft.Name.Trim();
 
+        var sourceUpdatedAt = draft.UpdatedAtUtc?.ToDateTimeOffset() ?? projectedAt;
+
         return new ScopeWorkflowCatalogueSourceDocument
         {
             Id = ScopeWorkflowCatalogueRowMaterializer.BuildDraftSourceDocumentId(scopeId, draft.WorkflowId),
             ActorId = ScopeWorkflowCatalogueRowMaterializer.BuildDraftSourceActorId(scopeId, draft.WorkflowId),
-            StateVersion = ScopeWorkflowCatalogueRowMaterializer.BuildSourceStateVersion(projectedAt),
+            StateVersion = ScopeWorkflowCatalogueRowMaterializer.BuildSourceStateVersion(sourceUpdatedAt),
             LastEventId = eventId,
             UpdatedAt = Timestamp.FromDateTimeOffset(projectedAt),
             ScopeId = scopeId,
@@ -150,7 +152,7 @@ public sealed class StudioWorkspaceCurrentStateProjector
             SourceKind = ScopeWorkflowCatalogueSourceDocument.DraftSourceKind,
             Name = name,
             Description = parse.Document?.Description ?? string.Empty,
-            SourceUpdatedAtUtc = draft.UpdatedAtUtc?.ToDateTimeOffset() ?? projectedAt,
+            SourceUpdatedAtUtc = sourceUpdatedAt,
         };
     }
 

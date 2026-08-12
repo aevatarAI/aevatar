@@ -215,7 +215,7 @@ internal sealed class ScopeWorkflowCatalogueServiceSourceProjector
         {
             Id = ScopeWorkflowCatalogueRowMaterializer.BuildServiceSourceDocumentId(identity.TenantId, workflowId),
             ActorId = ScopeWorkflowCatalogueRowMaterializer.BuildServiceSourceActorId(identity.TenantId, workflowId),
-            StateVersion = ScopeWorkflowCatalogueRowMaterializer.BuildSourceStateVersion(observedAt),
+            StateVersion = ScopeWorkflowCatalogueRowMaterializer.BuildSourceStateVersion(sourceUpdatedAt),
             LastEventId = eventId,
             UpdatedAt = Timestamp.FromDateTimeOffset(observedAt),
             ScopeId = identity.TenantId,

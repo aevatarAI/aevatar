@@ -134,7 +134,7 @@ public sealed class ScopeWorkflowCatalogueRowMaterializer
 
         foreach (var source in new[] { draft, service }.Where(static source => source != null))
         {
-            var sourceUpdatedAt = source!.UpdatedAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue;
+            var sourceUpdatedAt = source!.SourceUpdatedAtUtc;
             var sourceWatermark = new RowAuthorityWatermark(
                 ToWatermarkStateVersion(sourceUpdatedAt),
                 source.LastEventId,

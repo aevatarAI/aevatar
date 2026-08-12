@@ -104,7 +104,7 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
         var serviceSource = sourceWriter.Upserts.Single(static source => source.SourceKind == ScopeWorkflowCatalogueSourceDocument.ServiceSourceKind);
         serviceSource.Id.Should().Be("scope-1:wf-published:service");
         serviceSource.ActorId.Should().Be("scope-workflow-catalogue-source:scope-1:wf-published:service");
-        serviceSource.StateVersion.Should().Be(WatermarkStateVersion("2026-08-05T00:00:00Z"));
+        serviceSource.StateVersion.Should().Be(WatermarkStateVersion("2026-08-05T01:00:00Z"));
         serviceSource.WorkflowId.Should().Be("wf-published");
         serviceSource.PublishedServiceId.Should().Be("published-service-1");
         serviceSource.Name.Should().Be("Published Workflow");
@@ -114,7 +114,7 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
         var draftSource = sourceWriter.Upserts.Single(static source => source.SourceKind == ScopeWorkflowCatalogueSourceDocument.DraftSourceKind);
         draftSource.Id.Should().Be("scope-1:wf-draft:draft");
         draftSource.ActorId.Should().Be("scope-workflow-catalogue-source:scope-1:wf-draft:draft");
-        draftSource.StateVersion.Should().Be(WatermarkStateVersion("2026-08-02T01:00:00Z"));
+        draftSource.StateVersion.Should().Be(WatermarkStateVersion("2026-08-02T00:00:00Z"));
         draftSource.Name.Should().Be("Draft From Yaml");
         draftSource.Description.Should().Be("draft desc");
 
@@ -400,10 +400,11 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
     }
 
     [Fact]
-    public async Task RowMaterializer_ShouldUseSourceUpdatedAtWatermarkWhenSourceIsNewerThanRefreshEvent()
+    public async Task RowMaterializer_ShouldUseSourceAuthorityWatermarkWhenSourceUpdatedAtDiffersFromProjectionObservation()
     {
         var draft = ExistingDraftSource("scope-1", "wf-source-watermark");
-        draft.UpdatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-07T00:00:00Z"));
+        draft.UpdatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-06T01:00:00Z"));
+        draft.SourceUpdatedAtUtc = DateTimeOffset.Parse("2026-08-07T00:00:00Z");
         draft.LastEventId = "evt-source-newer";
         var rowWriter = new RecordingCatalogueRowDispatcher();
         var materializer = new ScopeWorkflowCatalogueRowMaterializer(

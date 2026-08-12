@@ -325,7 +325,7 @@ internal sealed class ScopeWorkflowCatalogueBackfillHostedService : IHostedServi
         {
             Id = ScopeWorkflowCatalogueRowMaterializer.BuildServiceSourceDocumentId(serviceCatalog.TenantId, workflowId),
             ActorId = ScopeWorkflowCatalogueRowMaterializer.BuildServiceSourceActorId(serviceCatalog.TenantId, workflowId),
-            StateVersion = ScopeWorkflowCatalogueRowMaterializer.BuildSourceStateVersion(deploymentCatalog.UpdatedAt),
+            StateVersion = ScopeWorkflowCatalogueRowMaterializer.BuildSourceStateVersion(deployment.UpdatedAt),
             LastEventId = deploymentCatalog.LastEventId,
             UpdatedAt = Timestamp.FromDateTimeOffset(deploymentCatalog.UpdatedAt),
             ScopeId = serviceCatalog.TenantId,
@@ -362,7 +362,7 @@ internal sealed class ScopeWorkflowCatalogueBackfillHostedService : IHostedServi
         {
             Id = ScopeWorkflowCatalogueRowMaterializer.BuildDraftSourceDocumentId(scopeId, draft.WorkflowId),
             ActorId = ScopeWorkflowCatalogueRowMaterializer.BuildDraftSourceActorId(scopeId, draft.WorkflowId),
-            StateVersion = ScopeWorkflowCatalogueRowMaterializer.BuildSourceStateVersion(updatedAt),
+            StateVersion = ScopeWorkflowCatalogueRowMaterializer.BuildSourceStateVersion(sourceUpdatedAt),
             LastEventId = workspace.LastEventId,
             UpdatedAt = workspace.UpdatedAt,
             ScopeId = scopeId,
