@@ -851,7 +851,172 @@ public sealed partial class NyxIdChatConversationGAgentTests
     }
 
     [Fact]
-    public async Task StartTurn_EnforcedGeneralProfile_ShouldClassifyServerServiceConnectBeforeBroadProfileIntent()
+    public async Task StartTurn_EnforcedConnectedServiceOperation_ShouldCommitOrdinaryExactRoute()
+    {
+        const string conversationActorId = "conversation-connected-service-write";
+        const string connectedServiceIntentId = "connected-service-write";
+        const string prompt =
+            "Use exact UserService us-lark-alpha endpoint im-message-create through " +
+            "tool lark-message-create.";
+        IAgentTool[] routeTools = [new CanonicalProfileTool("lark-message-create")];
+        var classifierProvider = new ExactConnectedServiceRoutingClassifierProvider(
+            connectedServiceIntentId);
+        var profileClassifier = new StreamingAgentProfileTurnClassifier(
+            new FixedLlmProviderFactory(classifierProvider));
+        var materializer = new AgentProfileTurnCatalogMaterializer(
+            new FixedToolSetRegistry("profile.route", new FixedToolSource(routeTools)),
+            profileClassifier);
+        var independentClassifier =
+            new RecordingTurnIntentClassifier(NyxIdChatTurnIntent.ServiceConnect);
+        var profile = new AgentProfileSnapshot
+        {
+            ProfileId = "profile-mainnet-connected-service",
+            ProfileVersion = "profile-v1",
+            AgentKind = NyxIdChatServiceDefaults.GAgentKind,
+            PolicyRevision = "policy-v1",
+            RouteToolSetRef = "profile.route",
+            MaximumToolPolicy = new AgentProfileToolPolicy
+            {
+                ToolNames = { "lark-message-create" },
+            },
+            RecoveryToolPolicy = new AgentProfileToolPolicy(),
+            ClassifierTimeoutMs = 1_000,
+            ActivationMode = AgentProfileActivationMode.Enforced,
+        };
+        profile.Members.Add(new AgentProfileSkillMember
+        {
+            IntentId = connectedServiceIntentId,
+            RoutingDescription = "Write through an already-connected exact UserService operation.",
+            TaskToolPolicy = new AgentProfileToolPolicy
+            {
+                ToolNames = { "lark-message-create" },
+            },
+            SideEffectClass = AgentProfileSideEffectClass.ExternalHandoff,
+        });
+        profile = AgentProfileSnapshotCodec.Seal(profile);
+        var eventStore = new InMemoryEventStoreForTests();
+        var dispatch = new RecordingActorDispatchPort([], static (_, _) => Task.CompletedTask);
+        using var services = BuildEventSourcingServices(
+            eventStore,
+            registryCommandPort: new RecordingGAgentActorRegistryCommandPort());
+        var agent = CreateController(
+            services,
+            conversationActorId,
+            dispatch,
+            materializer,
+            turnIntentClassifier: independentClassifier);
+        await agent.ActivateAsync();
+        var start = WithOwner(CreateStartTurnCommand(), "owner-alpha");
+        start.ConversationActorId = conversationActorId;
+        start.Prompt = prompt;
+
+        await agent.HandleEventAsync(CreateEnvelope(
+            conversationActorId,
+            new NyxIdChatConversationCreateCommand
+            {
+                ScopeId = start.ScopeId,
+                CreatedLocally = true,
+                RequestedActorId = conversationActorId,
+                AgentProfile = profile,
+                FirstTurn = start,
+            }));
+        await DispatchPendingCreationFirstTurnAsync(agent, dispatch);
+
+        classifierProvider.Requests.Should().HaveCount(2);
+        using var phaseOneInput = JsonDocument.Parse(classifierProvider.Requests[0].Messages
+            .Single(static message => message.Role == "user").Content!);
+        phaseOneInput.RootElement.GetProperty("intents").EnumerateArray()
+            .Select(static candidate => candidate.GetProperty("intent_id").GetString()).Should().Equal(
+            NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
+            NyxIdChatTurnIntentClassifier.KeyCreateIntentId,
+            NyxIdChatTurnIntentClassifier.KeyRotateIntentId,
+            AgentProfileTurnCatalogMaterializer.ProfileTaskRouteIntentId);
+        phaseOneInput.RootElement.GetProperty("intents")[0]
+            .GetProperty("routing_description").GetString().Should()
+            .Contain("already-connected exact UserService");
+        using var phaseTwoInput = JsonDocument.Parse(classifierProvider.Requests[1].Messages
+            .Single(static message => message.Role == "user").Content!);
+        phaseTwoInput.RootElement.GetProperty("intents").EnumerateArray()
+            .Select(static candidate => candidate.GetProperty("intent_id").GetString())
+            .Should().Equal(connectedServiceIntentId);
+        independentClassifier.UserMessages.Should().BeEmpty();
+        agent.State.ActiveTurn.AgentProfileTurnAuthority.CandidateRoute.IntentId.Should()
+            .Be(connectedServiceIntentId);
+        agent.State.ActiveTurn.AgentProfileTurnAuthority.AuthorityCeilingToolNames.Should()
+            .Equal("lark-message-create");
+        agent.State.ActiveTurn.Intent.Should().Be(NyxIdChatTurnIntent.Unspecified);
+        var command = dispatch.OperationCalls.Should().ContainSingle().Which.Envelope.Payload
+            .Unpack<NyxIdChatOperationDispatchCommand>();
+        command.Llm.Intent.Should().Be(NyxIdChatTurnIntent.Unspecified);
+        command.Llm.AgentProfileTurnAuthority.CandidateRoute.IntentId.Should()
+            .Be(connectedServiceIntentId);
+        command.Llm.AgentProfileTurnAuthority.AuthorityCeilingToolNames.Should()
+            .Equal("lark-message-create");
+
+        var admission = CreateConnectedServiceWriteAdmission();
+        var llmKey = agent.State.ActiveTask.Steps.Single().Operation.Key.Clone();
+        await agent.HandleEventAsync(CreateEnvelope(
+            conversationActorId,
+            new NyxIdChatOperationResultSignal
+            {
+                Key = llmKey,
+                Llm = new NyxIdChatLLMOperationResult
+                {
+                    ToolCalls =
+                    {
+                        new NyxIdChatToolCall
+                        {
+                            CallId = "call-connected-service-write",
+                            ToolName = "lark-message-create",
+                            ArgumentsJson = "{\"receiveId\":\"chat-alpha\",\"text\":\"weekly update\"}",
+                            Safety = new NyxIdChatToolCallSafety
+                            {
+                                SideEffectKind = "lark.message.create",
+                                MayChangeExternalState = true,
+                            },
+                            NyxIdProvenance = new NyxIdOperationRef
+                            {
+                                ConnectedServiceId = admission.ServiceInstanceId,
+                                ServiceSlug = admission.ServiceSlug,
+                                CatalogServiceSlug = "lark",
+                                OperationId = admission.PublishedEndpoint.EndpointId,
+                                ReadinessCapabilityId = "lark-message-create-ready",
+                            },
+                            OperationAdmission = admission.Clone(),
+                        },
+                    },
+                },
+            }));
+
+        agent.State.ActiveTask.Gate.Mode.Should().Be(NyxIdChatPlanGateMode.Confirm);
+        dispatch.OperationCalls.Should().ContainSingle(
+            "the connected-service effect cannot dispatch before the plan gate is confirmed");
+        var gateAdmission = dispatch.Calls.Last(call => call.Envelope.Payload.Is(
+                NyxIdChatTurnPlanGateAdmissionCommand.Descriptor))
+            .Envelope.Payload.Unpack<NyxIdChatTurnPlanGateAdmissionCommand>()
+            .Admission.OperationAdmission;
+        gateAdmission.Should().BeEquivalentTo(admission);
+        gateAdmission.ServiceInstanceId.Should().Be("connected-service-lark");
+        gateAdmission.PublishedEndpoint.EndpointId.Should().Be("lark-message-create");
+        gateAdmission.CatalogDigest.Should().Be($"sha256:{new string('a', 64)}");
+        gateAdmission.ContractDigest.Should().Be(new string('b', 64));
+        gateAdmission.ExecutionPolicy.Approval.Should().Be(
+            AgentToolOperationApprovalPayload.Required);
+
+        var continuation = await ConfirmPendingWritePlanGateAsync(
+            agent,
+            eventStore,
+            dispatch,
+            conversationActorId);
+
+        continuation.InputCase.Should().Be(
+            NyxIdChatOperationDispatchCommand.InputOneofCase.PlanGateContinuation);
+        continuation.PlanGateContinuation.OperationAdmission.Should().BeEquivalentTo(admission);
+        dispatch.OperationCalls.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task StartTurn_EnforcedGeneralProfile_ShouldSelectServiceConnectAgainstBroadProfileIntent()
     {
         const string conversationActorId = "conversation-profile-general-connect-intent";
         const string generalIntentId = "general_nyxid_assistant";
@@ -864,7 +1029,8 @@ public sealed partial class NyxIdChatConversationGAgentTests
             new CanonicalProfileTool("nyxid_require_service"),
             new CanonicalProfileTool("github_get_current_user"),
         ];
-        var profileClassifier = new ServerIntentFirstProfileClassifier(generalIntentId);
+        var profileClassifier = new FixedProfileClassifier(
+            NyxIdChatTurnIntentClassifier.ServiceConnectIntentId);
         var materializer = new AgentProfileTurnCatalogMaterializer(
             new FixedToolSetRegistry("profile.route", new FixedToolSource(routeTools)),
             profileClassifier);
@@ -937,12 +1103,11 @@ public sealed partial class NyxIdChatConversationGAgentTests
         await DispatchPendingCreationFirstTurnAsync(agent, dispatch);
 
         var classification = profileClassifier.Requests.Should().ContainSingle().Which;
-        classification.Candidates.Should().BeEquivalentTo(new[]
-        {
-            NyxIdChatTurnIntentClassifier.ServiceConnectCandidate,
-            NyxIdChatTurnIntentClassifier.KeyCreateCandidate,
-            NyxIdChatTurnIntentClassifier.KeyRotateCandidate,
-        });
+        classification.Candidates.Select(static candidate => candidate.IntentId).Should().Equal(
+            NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
+            NyxIdChatTurnIntentClassifier.KeyCreateIntentId,
+            NyxIdChatTurnIntentClassifier.KeyRotateIntentId,
+            AgentProfileTurnCatalogMaterializer.ProfileTaskRouteIntentId);
         serverClassifier.UserMessages.Should().BeEmpty();
         agent.State.ActiveTurn.AgentProfileTurnAuthority.CandidateRoute.IntentId.Should()
             .Be(NyxIdChatTurnIntentClassifier.ServiceConnectIntentId);
@@ -1222,7 +1387,8 @@ public sealed partial class NyxIdChatConversationGAgentTests
             .Should().Equal(
                 NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
                 NyxIdChatTurnIntentClassifier.KeyCreateIntentId,
-                NyxIdChatTurnIntentClassifier.KeyRotateIntentId);
+                NyxIdChatTurnIntentClassifier.KeyRotateIntentId,
+                AgentProfileTurnCatalogMaterializer.ProfileTaskRouteIntentId);
         intents[0]
             .GetProperty("side_effect_class").GetString().Should().Be("external_handoff");
         provider.Requests.Should().HaveCount(2);
@@ -7293,34 +7459,58 @@ public sealed partial class NyxIdChatConversationGAgentTests
         }
     }
 
-    private sealed class ServerIntentFirstProfileClassifier(string broadIntentId)
-        : IAgentProfileTurnClassifier
+    private sealed class ExactConnectedServiceRoutingClassifierProvider(string profileIntentId)
+        : ILLMProvider
     {
-        public List<AgentProfileTurnClassificationRequest> Requests { get; } = [];
+        public string Name => "exact-connected-service-routing-classifier-test";
+        public List<LLMRequest> Requests { get; } = [];
 
-        public Task<AgentProfileTurnClassificationResult> ClassifyAsync(
-            AgentProfileTurnClassificationRequest request,
-            CancellationToken ct = default)
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             Requests.Add(request);
-            var builtInNyxIdIntents = request.Candidates.Count == 3 &&
-                                      request.Candidates.Any(candidate => string.Equals(
-                                          candidate.IntentId,
-                                          NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
-                                          StringComparison.Ordinal)) &&
-                                      request.Candidates.Any(candidate => string.Equals(
-                                          candidate.IntentId,
-                                          NyxIdChatTurnIntentClassifier.KeyCreateIntentId,
-                                          StringComparison.Ordinal)) &&
-                                      request.Candidates.Any(candidate => string.Equals(
-                                          candidate.IntentId,
-                                          NyxIdChatTurnIntentClassifier.KeyRotateIntentId,
-                                          StringComparison.Ordinal));
-            return Task.FromResult(AgentProfileTurnClassificationResult.Matched(
-                builtInNyxIdIntents
-                    ? NyxIdChatTurnIntentClassifier.ServiceConnectIntentId
-                    : broadIntentId));
+            using var input = JsonDocument.Parse(request.Messages
+                .Single(static message => message.Role == "user").Content!);
+            var root = input.RootElement;
+            root.GetProperty("user_message").GetString().Should()
+                .Contain("exact UserService");
+            var intents = root.GetProperty("intents");
+            var intentIds = intents.EnumerateArray()
+                .Select(static intent => intent.GetProperty("intent_id").GetString())
+                .ToArray();
+            var phaseOne = intentIds.Contains(
+                AgentProfileTurnCatalogMaterializer.ProfileTaskRouteIntentId,
+                StringComparer.Ordinal);
+            if (phaseOne)
+            {
+                intents.EnumerateArray().Single(intent => string.Equals(
+                        intent.GetProperty("intent_id").GetString(),
+                        NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
+                        StringComparison.Ordinal))
+                    .GetProperty("routing_description").GetString().Should()
+                    .Contain("Do not select this intent");
+                intents.EnumerateArray().Single(intent => string.Equals(
+                        intent.GetProperty("intent_id").GetString(),
+                        AgentProfileTurnCatalogMaterializer.ProfileTaskRouteIntentId,
+                        StringComparison.Ordinal))
+                    .GetProperty("routing_description").GetString().Should()
+                    .Contain("already-connected exact UserService");
+            }
+
+            yield return new LLMStreamChunk
+            {
+                DeltaContent = JsonSerializer.Serialize(new
+                {
+                    status = "matched",
+                    intent_id = phaseOne
+                        ? AgentProfileTurnCatalogMaterializer.ProfileTaskRouteIntentId
+                        : profileIntentId,
+                }),
+                IsLast = true,
+            };
+            await Task.CompletedTask;
         }
     }
 
@@ -8051,6 +8241,32 @@ public sealed partial class NyxIdChatConversationGAgentTests
             },
         };
     }
+
+    private static AgentToolOperationAdmissionPayload CreateConnectedServiceWriteAdmission() =>
+        new()
+        {
+            ServiceInstanceId = "connected-service-lark",
+            ServiceSlug = "lark",
+            PublishedEndpoint = new AgentToolPublishedEndpointIdentityPayload
+            {
+                EndpointId = "lark-message-create",
+            },
+            AuthorizationBasis = AgentToolOperationAuthorizationBasisPayload.PublishedContract,
+            HttpMethod = "POST",
+            PathTemplate = "/messages",
+            ContractDigest = new string('b', 64),
+            CatalogDigest = $"sha256:{new string('a', 64)}",
+            ExecutionPolicy = new AgentToolOperationExecutionPolicyPayload
+            {
+                Risk = AgentToolOperationRiskPayload.Write,
+                Approval = AgentToolOperationApprovalPayload.Required,
+                EnforcementOwner = AgentToolOperationEnforcementOwnerPayload.Aevatar,
+                AllowedExecutionModes =
+                {
+                    AgentToolOperationExecutionModePayload.Interactive,
+                },
+            },
+        };
 
     private static void AssignActorId(
         NyxIdChatConversationGAgent agent,

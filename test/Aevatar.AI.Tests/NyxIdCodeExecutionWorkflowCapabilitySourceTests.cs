@@ -86,9 +86,66 @@ public sealed class NyxIdCodeExecutionWorkflowCapabilitySourceTests
     }
 
     [Theory]
+    // A forwarded caller bearer is what the platform code runtime authenticates, so the
+    // delegation policy alongside it never constrains admission.
+    [InlineData(true, "llm:proxy")]
+    [InlineData(false, "llm:proxy")]
+    [InlineData(true, "proxy:*")]
+    [InlineData(true, "proxy:* sandbox:execute")]
+    [InlineData(false, "sandbox:execute")]
+    public async Task InspectAsync_RouteForwardingCallerBearer_IsAdmittedRegardlessOfDelegation(
+        bool injectDelegationToken,
+        string scope)
+    {
+        var source = CreateSource(Inventory(Service(
+            "us-code-alpha",
+            "personal",
+            allowed: true,
+            injectDelegationToken: injectDelegationToken,
+            scope: scope,
+            forwardAccessToken: true)));
+
+        var readiness = await source.InspectAsync(
+            Access(),
+            Selector(),
+            ExternalCapabilityExecutionMode.Interactive);
+
+        readiness.Status.Should().Be(ExternalCapabilityReadinessStatus.Ready);
+        readiness.SelectedCapability.CodeExecution.UserServiceId.Should().Be("us-code-alpha");
+    }
+
+    [Fact]
+    public async Task InspectAsync_PolicyMismatch_NamesTheUnsatisfiedSettingAndLocatesTheService()
+    {
+        var source = CreateSource(Inventory(Service(
+            "us-code-alpha",
+            "personal",
+            allowed: true,
+            injectDelegationToken: true,
+            scope: "llm:proxy")));
+
+        var readiness = await source.InspectAsync(
+            Access(),
+            Selector(),
+            ExternalCapabilityExecutionMode.Interactive);
+
+        var blocker = readiness.Blockers.Should().ContainSingle().Subject;
+        blocker.Code.Should().Be("CODE_EXECUTION_ROUTE_POLICY_MISMATCH");
+        blocker.SafeMessage.Should().Contain("forward_access_token")
+            .And.Contain("inject_delegation_token")
+            .And.Contain("sandbox:execute");
+        var remediation = readiness.Remediations.Should().ContainSingle().Subject;
+        remediation.ActionKind.Should()
+            .Be(ExternalCapabilityRemediationActionKind.ConnectCredential);
+        remediation.TrustedLocator.Should().Be("https://nyx.example");
+        readiness.ToString().Should().NotContain("caller-bearer").And.NotContain("us-code-alpha");
+    }
+
+    [Theory]
     [InlineData(false, true, "sandbox:execute", true, "CODE_EXECUTION_ROUTE_ACCESS_DENIED")]
     [InlineData(true, false, "sandbox:execute", false, "CODE_EXECUTION_ROUTE_POLICY_MISMATCH")]
     [InlineData(true, true, "wrong:scope", false, "CODE_EXECUTION_ROUTE_POLICY_MISMATCH")]
+    [InlineData(true, true, "llm:proxy account:read", false, "CODE_EXECUTION_ROUTE_POLICY_MISMATCH")]
     public async Task InspectAsync_UnusableCanonicalRoute_ReturnsTypedPlatformBlocker(
         bool allowed,
         bool injectDelegationToken,
@@ -182,7 +239,8 @@ public sealed class NyxIdCodeExecutionWorkflowCapabilitySourceTests
         string? catalogServiceId = "catalog-chrono-sandbox",
         bool injectDelegationToken = true,
         string scope = "sandbox:execute",
-        bool isActive = true)
+        bool isActive = true,
+        bool forwardAccessToken = false)
     {
         var credentialSource = credentialSourceType == "personal"
             ? (object)new { type = "personal" }
@@ -200,7 +258,7 @@ public sealed class NyxIdCodeExecutionWorkflowCapabilitySourceTests
             slug = "chrono-sandbox",
             catalog_service_id = catalogServiceId,
             is_active = isActive,
-            forward_access_token = false,
+            forward_access_token = forwardAccessToken,
             inject_delegation_token = injectDelegationToken,
             delegation_token_scope = scope,
             credential_source = credentialSource,

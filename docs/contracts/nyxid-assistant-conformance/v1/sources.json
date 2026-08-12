@@ -2,7 +2,7 @@
   "schema_version": 1,
   "aevatar": {
     "repository": "https://github.com/AevatarAI/aevatar.git",
-    "revision": "0c1822223a30380fc5a1d7479368836d4e833a51",
+    "revision": "ff6800689592c82efd775f600b391da2cd8fe35a",
     "contract_files_sha256": "1d6e33188398633f112a8c0edb1d1b2c45e8e6c77f30f05ff32e54af684d0f2b",
     "files": {
       "agents/Aevatar.GAgents.NyxidChat/NyxIdActionPostconditionPort.cs": "7e5da0c90f8537037fc03de8d67cdf36356485f4ccd650f794b0e5cfb6d5bb94",
@@ -22,8 +22,8 @@
   },
   "nyxid": {
     "repository": "https://github.com/ChronoAIProject/NyxID.git",
-    "revision": "47f2e0086c6c2117f644f8559d871a01d2a61982",
-    "tree": "b26638257388b65d55c47a1fa57268436cdda8d5",
+    "revision": "17e2b5ff65cb4651eeaf7dad8e728c76250ca75d",
+    "tree": "a48e6d6ace55c636e62a62cb5488a0e0203e59d4",
     "cli_source": "cli/src/cli.rs",
     "cli_source_sha256": "51dd82101d7671859351e9989e8d554b4aa1cb898a4e04d948df28aa37de0195",
     "cargo_lock_sha256": "a7f1bb375e4d5135b369caea4b803273956c96b63125d4221da70dd8115638b8"

@@ -16,6 +16,16 @@ namespace Aevatar.GAgents.NyxidChat.AgentProfiles;
 
 public sealed class AgentProfileTurnCatalogMaterializer
 {
+    internal const string ProfileTaskRouteIntentId = "nyxid_profile_task_route";
+    internal const string ProfileTaskRouteRoutingDescription =
+        "Perform an ordinary NyxID Assistant task, including invoking, reading from, or " +
+        "writing through an already-connected exact UserService. This route does not " +
+        "establish, add, reauthorize, or repair a missing service connection.";
+    internal static AgentProfileTurnClassificationCandidate ProfileTaskRouteCandidate { get; } =
+        new(
+            ProfileTaskRouteIntentId,
+            ProfileTaskRouteRoutingDescription,
+            AgentProfileSideEffectClass.ExternalHandoff);
     private static readonly IReadOnlySet<string> ServiceConnectToolNames =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -504,6 +514,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
                     NyxIdChatTurnIntentClassifier.ServiceConnectCandidate,
                     NyxIdChatTurnIntentClassifier.KeyCreateCandidate,
                     NyxIdChatTurnIntentClassifier.KeyRotateCandidate,
+                    ProfileTaskRouteCandidate,
                 ],
                 profile.ClassifierTimeoutMs,
                 llmControl,
@@ -520,7 +531,12 @@ public sealed class AgentProfileTurnCatalogMaterializer
                     builtInMember.IntentId));
                 return builtInMember;
             }
-            if (builtInResult.Status != AgentProfileTurnClassificationStatus.NoMatch)
+            if (builtInResult.Status != AgentProfileTurnClassificationStatus.NoMatch &&
+                !(builtInResult.Status == AgentProfileTurnClassificationStatus.Matched &&
+                  string.Equals(
+                      builtInResult.IntentId,
+                      ProfileTaskRouteIntentId,
+                      StringComparison.Ordinal)))
             {
                 diagnostics.Add(new AgentProfileTurnDiagnostic(
                     AgentProfileTurnDiagnosticCode.ClassifierFailed,
@@ -529,7 +545,9 @@ public sealed class AgentProfileTurnCatalogMaterializer
             }
         }
 
-        var candidates = profile.Members.Take(32).ToArray();
+        var candidates = profile.Members
+            .Take(StreamingAgentProfileTurnClassifier.MaximumCandidates)
+            .ToArray();
         if (candidates.Length == 0 || profile.ClassifierTimeoutMs <= 0)
         {
             diagnostics.Add(new AgentProfileTurnDiagnostic(
