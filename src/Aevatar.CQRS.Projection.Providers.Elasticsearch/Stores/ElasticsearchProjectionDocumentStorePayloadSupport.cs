@@ -211,7 +211,7 @@ internal static class ElasticsearchProjectionDocumentStorePayloadSupport
             {
                 ["wildcard"] = new Dictionary<string, object?>
                 {
-                    [resolvedFieldPath] = new Dictionary<string, object?>
+                    [exactMatchFieldPath] = new Dictionary<string, object?>
                     {
                         ["value"] = $"*{EscapeWildcardValue(ConvertScalarValue(filter.Value)?.ToString() ?? string.Empty)}*",
                         ["case_insensitive"] = true,

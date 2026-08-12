@@ -523,6 +523,7 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
 
         var body = handler.CapturedRequests.Should().ContainSingle().Subject.Body;
         body.Should().Contain("\"wildcard\"");
+        body.Should().Contain("\"value.keyword\"");
         body.Should().Contain("\"value\":\"*run\\\\*alpha\\\\?*\"");
         body.Should().Contain("\"case_insensitive\":true");
     }
