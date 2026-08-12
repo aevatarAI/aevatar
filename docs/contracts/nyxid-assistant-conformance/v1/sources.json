@@ -2,21 +2,21 @@
   "schema_version": 1,
   "aevatar": {
     "repository": "https://github.com/AevatarAI/aevatar.git",
-    "revision": "ebd6dd3c537bf5a472f184ff61657223a60baa98",
-    "contract_files_sha256": "fabf222736d2c59e8ae5605404bbc3deccd8f64442ca0cdf8c1cf806ef539755",
+    "revision": "4a2deec413018d831239f1e8104266cc9b973267",
+    "contract_files_sha256": "c0d6bc2f550114a2cfed951e942cf003c13da7b95e31aca335ac5cb54b3497f7",
     "files": {
-      "agents/Aevatar.GAgents.NyxidChat/NyxIdActionPostconditionPort.cs": "ce28ba40efc8f863ae6cc42d35442d3c9cc30a4aa0be548394939a556497881e",
-      "agents/Aevatar.GAgents.NyxidChat/NyxIdAssistantActionRegistry.cs": "1daa67dc2cad48249268990e525ada39b65a580d150a9ae8ed896d5392f6a130",
-      "agents/Aevatar.GAgents.NyxidChat/NyxIdChatBrowserActions.cs": "ed34d2ea4f13058f1a80b9809baf05a3ac4694606d89945cae15da57a13639e5",
-      "agents/Aevatar.GAgents.NyxidChat/NyxIdChatConversationAguiFrameBuilder.cs": "24b36e1a4e43f611dbcec3c48415a184752886fed6d7369a58c006bed554a567",
-      "agents/Aevatar.GAgents.NyxidChat/protos/nyxid_chat_task.proto": "cfe588fa13ac119d232149ebe1add1180e5de2adb2834c42aea824a099842710",
+      "agents/Aevatar.GAgents.NyxidChat/NyxIdActionPostconditionPort.cs": "29fc8e3d72fe0863b473b96cb7a8e0d8539c66eefcefb83aa78eb527b6663cb8",
+      "agents/Aevatar.GAgents.NyxidChat/NyxIdAssistantActionRegistry.cs": "8503cd183aab274546e10cd9eefaee57d340c33514006db70793f0a4a659afad",
+      "agents/Aevatar.GAgents.NyxidChat/NyxIdChatBrowserActions.cs": "0397ed6f26d034a49de3d9cc7d42e083b23900ca26267798ffaf4fe9ae49b6f7",
+      "agents/Aevatar.GAgents.NyxidChat/NyxIdChatConversationAguiFrameBuilder.cs": "a7b59bbb460b1048d4cbad774ad34abe48f3577bf0f4648b2e4886a2055bdff6",
+      "agents/Aevatar.GAgents.NyxidChat/protos/nyxid_chat_task.proto": "ea7b800d88225cde707344b1256499ad3e242ede28a12ae73a2b9ba560938889",
       "docs/adr/0048-nyxid-assistant-operation-class-boundary.md": "30c9de6c6e77a7aee14f0eb4a2f74bd15b8874bcfed88ba957cdd8213b9114eb",
       "src/Aevatar.AI.Abstractions/ai_messages.proto": "5306093e11fd445ec85f132a8f0bedfc8d1c6e6171878604a48d816d0961f9b8",
       "src/Aevatar.AI.ToolProviders.NyxId/NyxIdApiAccessContracts.cs": "20134044c6c3091e8c701100813cd7e058f51e19e301c5ed493e42e677170572",
       "src/Aevatar.AI.ToolProviders.NyxId/NyxIdAssistantToolSource.cs": "15c4e5b98b90e8a6739240ba1a045a1a1feec60e40ada48fa2d381069b343486",
       "src/Aevatar.AI.ToolProviders.NyxId/Tools/NyxIdRequestKeyCreateTool.cs": "7b860f59aafaf66f26b6b7a3a0885902f4d8760047b49cd6a9303cb8e4a210b2",
       "src/Aevatar.AI.ToolProviders.NyxId/Tools/NyxIdRequestKeyRotateTool.cs": "601937987b539a9fcd7c2a6c640e64c28103d00a7edf85e186973e1578e2efb4",
-      "src/Aevatar.Mainnet.Host.Api/Hosting/MainnetHostBuilderExtensions.cs": "3e6ac92b555d2c0b2c83b2d0cc029788e03174f12fe4bc8feb06599469836c26"
+      "src/Aevatar.Mainnet.Host.Api/Hosting/MainnetHostBuilderExtensions.cs": "c00dee2549e3287fdeebc5e34cd9db7d7c1e22db3778c59612bd930841b2b272"
     }
   },
   "nyxid": {
