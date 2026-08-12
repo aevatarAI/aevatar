@@ -213,6 +213,63 @@ message WorkflowExecutionBoardSummaryReadModel {
   optional int32 definition_step_count = 5;
 }
 
+// Materialized workflow-native source fact for the scope workflow catalogue.
+// source_kind distinguishes draft-owned and service-owned facts; Team/Member
+// bindings are not part of this catalogue surface.
+message ScopeWorkflowCatalogueSourceDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at = 5;
+
+  string scope_id = 20;
+  string workflow_id = 21;
+  string source_kind = 22;
+  string name = 23;
+  string description = 24;
+  google.protobuf.Timestamp source_updated_at_utc_value = 25;
+
+  string service_key = 30;
+  string workflow_name = 31;
+  string committed_actor_id = 32;
+  string active_revision_id = 33;
+  string deployment_id = 34;
+  string deployment_status = 35;
+  string service_app_id = 36;
+  string service_namespace = 37;
+  string published_service_id = 38;
+}
+
+// Aggregate workflow catalogue row keyed by scope_id + workflow_id. The request
+// path reads this row document only; source documents remain an internal
+// materialization input for converging draft and published service facts.
+message ScopeWorkflowCatalogueRowDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at = 5;
+
+  string scope_id = 20;
+  string workflow_id = 21;
+  string name = 22;
+  string description = 23;
+  bool has_draft_source = 24;
+  bool has_published_source = 25;
+  google.protobuf.Timestamp row_updated_at_utc_value = 26;
+  string updated_at_source = 27;
+  google.protobuf.Timestamp source_watermark_utc_value = 28;
+
+  string service_key = 30;
+  string workflow_name = 31;
+  string committed_actor_id = 32;
+  string active_revision_id = 33;
+  string deployment_id = 34;
+  string deployment_status = 35;
+  string published_service_id = 36;
+}
+
 // ─── UserConfig Current State ReadModel ───
 
 message UserConfigCurrentStateDocument {

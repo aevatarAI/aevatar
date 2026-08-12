@@ -22,6 +22,7 @@ import type {
   ChatExternalEffect,
   ChatPlanGate,
   ChatTaskDomain,
+  ChatTaskStepSource,
   ChatVerifiedArtifact,
 } from './chatTaskPlan';
 
@@ -519,7 +520,7 @@ function TaskPlanLedger({
                       marginTop: 5,
                     }}
                   >
-                    <span>{step.source.label}</span>
+                    <span>{formatStepSourceLabel(step.source)}</span>
                     {step.source.kind === 'tool' && step.source.serviceSlug ? (
                       <span>{step.source.serviceSlug}</span>
                     ) : null}
@@ -1030,6 +1031,26 @@ function isActorReportedStalled(step: ChatActorStep): boolean {
         step.availableActions.skip ||
         step.availableActions.stop),
   );
+}
+
+function formatStepSourceLabel(source: ChatTaskStepSource): string {
+  if (source.kind === 'browserAction' && !source.label) {
+    return t('pages.chat.actorControls.stepSourceBrowserAction', 'Browser action');
+  }
+  if (source.kind === 'postcondition' && !source.label) {
+    return t('pages.chat.actorControls.stepSourcePostcondition', 'Postcondition');
+  }
+  if (source.kind === 'input') {
+    return t('pages.chat.actorControls.stepSourceUserInput', 'User input');
+  }
+  if (source.kind === 'approval') {
+    return t('pages.chat.actorControls.stepSourceApproval', 'Approval');
+  }
+  if (source.kind === 'web') {
+    return t('pages.chat.actorControls.stepSourceWeb', 'Web');
+  }
+
+  return source.label;
 }
 
 function ApprovalObservation({

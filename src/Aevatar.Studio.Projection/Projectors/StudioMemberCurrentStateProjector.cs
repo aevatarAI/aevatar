@@ -56,14 +56,13 @@ public sealed class StudioMemberCurrentStateProjector
 
         if (state.Deleted)
         {
-            await _writeDispatcher.DeleteAsync(
-                new ProjectionDocumentDeleteMarker(
-                    context.RootActorId,
-                    context.RootActorId,
-                    stateEvent.Version,
-                    stateEvent.EventId ?? string.Empty,
-                    updatedAt),
-                ct);
+            var deleteMarker = new ProjectionDocumentDeleteMarker(
+                context.RootActorId,
+                context.RootActorId,
+                stateEvent.Version,
+                stateEvent.EventId ?? string.Empty,
+                updatedAt);
+            await _writeDispatcher.DeleteAsync(deleteMarker, ct);
             return;
         }
 

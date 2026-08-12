@@ -13,6 +13,7 @@
     <ProjectReference Include="..\Aevatar.GAgentService.Infrastructure\Aevatar.GAgentService.Infrastructure.csproj" />
     <ProjectReference Include="..\Aevatar.GAgentService.Projection\Aevatar.GAgentService.Projection.csproj" />
     <ProjectReference Include="..\Aevatar.GAgentService.Governance.Hosting\Aevatar.GAgentService.Governance.Hosting.csproj" />
+    <ProjectReference Include="..\..\Aevatar.CQRS.Projection.Core.Abstractions\Aevatar.CQRS.Projection.Core.Abstractions.csproj" />
     <ProjectReference Include="..\..\Aevatar.CQRS.Projection.Providers.Elasticsearch\Aevatar.CQRS.Projection.Providers.Elasticsearch.csproj" />
     <ProjectReference Include="..\..\Aevatar.CQRS.Projection.Providers.InMemory\Aevatar.CQRS.Projection.Providers.InMemory.csproj" />
     <ProjectReference Include="..\..\Aevatar.Capabilities\Aevatar.Capabilities.csproj" />
@@ -21,6 +22,7 @@
     <ProjectReference Include="..\..\Aevatar.AGUI.Contracts\Aevatar.AGUI.Contracts.csproj" />
     <ProjectReference Include="..\..\Aevatar.AI.ToolProviders.ServiceInvoke\Aevatar.AI.ToolProviders.ServiceInvoke.csproj" />
     <ProjectReference Include="..\..\Aevatar.Studio.Application\Aevatar.Studio.Application.csproj" />
+    <ProjectReference Include="..\..\Aevatar.Studio.Infrastructure\Aevatar.Studio.Infrastructure.csproj" />
     <ProjectReference Include="..\..\Aevatar.Studio.Projection\Aevatar.Studio.Projection.csproj" />
     <ProjectReference Include="..\..\Aevatar.Scripting.Hosting\Aevatar.Scripting.Hosting.csproj" />
     <ProjectReference Include="..\..\workflow\Aevatar.Workflow.Application.Abstractions\Aevatar.Workflow.Application.Abstractions.csproj" />

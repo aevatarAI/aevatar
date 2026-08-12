@@ -100,7 +100,8 @@ public sealed record ScopeWorkflowCatalogueRow(
     string UpdatedAtSource,
     ScopeWorkflowCatalogueRowCapabilities Capabilities,
     DateTimeOffset SourceWatermarkUtc,
-    ScopeWorkflowCatalogueCommittedFacts? Committed = null);
+    ScopeWorkflowCatalogueCommittedFacts? Committed = null,
+    string? PublishedServiceId = null);
 
 public sealed record ScopeWorkflowCatalogueCommittedFacts(
     string ServiceKey,
