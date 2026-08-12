@@ -29,13 +29,16 @@ public sealed class ChannelCardConversationTurnRunnerTests
             outboundClientFactory: null,
             nyxClient,
             NullLogger<ChannelCardConversationTurnRunner>.Instance);
-        var chunk = BuildChunk("corr-relay-card-1");
+        var chunk = BuildInboundRelayChunk(
+            "stream-correlation-1",
+            "relay-correlation-1",
+            "relay-message-1");
 
         var result = await runner.RunCardCreateAsync(
             chunk,
             "streaming_main",
             RelayRuntimeContext(
-                chunk.CorrelationId,
+                "relay-correlation-1",
                 "relay-token-1",
                 "relay-message-1",
                 "runtime-card-token-1"),
@@ -78,14 +81,58 @@ public sealed class ChannelCardConversationTurnRunnerTests
             nyxClient,
             NullLogger<ChannelCardConversationTurnRunner>.Instance);
 
+        var chunk = BuildInboundRelayChunk(
+            "stream-correlation-2",
+            "relay-correlation-2",
+            "relay-message-2");
         var result = await runner.RunCardCreateAsync(
-            BuildChunk("corr-relay-card-2"),
+            chunk,
             "streaming_main",
             RelayRuntimeContext(
                 "different-correlation",
                 "relay-token-2",
                 "relay-message-2",
                 "runtime-card-token-2"),
+            CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.ErrorCode.Should().Be("reply_authority_mismatch");
+        relayHandler.Requests.Should().BeEmpty();
+        lark.SendCalls.Should().BeEmpty();
+        lark.ReplyCalls.Should().BeEmpty();
+        cardKit.CreateCalls.Should().BeEmpty();
+        cardKit.StreamCalls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunCardCreateAsync_ShouldFailClosed_WhenRelayAuthorityTargetsAnotherMessage()
+    {
+        var cardKit = new RecordingCardKitClient();
+        var lark = new RecordingLarkNyxClient();
+        var relayHandler = new RecordingRelayHandler(
+            """{"message_id":"unexpected","platform_message_id":"om_unexpected"}""");
+        using var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
+            new HttpClient(relayHandler));
+        var runner = new ChannelCardConversationTurnRunner(
+            cardKit,
+            lark,
+            outboundClientFactory: null,
+            nyxClient,
+            NullLogger<ChannelCardConversationTurnRunner>.Instance);
+        var chunk = BuildInboundRelayChunk(
+            "stream-correlation-message-mismatch",
+            "relay-correlation-message-mismatch",
+            "relay-message-expected");
+
+        var result = await runner.RunCardCreateAsync(
+            chunk,
+            "streaming_main",
+            RelayRuntimeContext(
+                "relay-correlation-message-mismatch",
+                "relay-token-message-mismatch",
+                "relay-message-different",
+                "runtime-card-token-message-mismatch"),
             CancellationToken.None);
 
         result.Success.Should().BeFalse();
@@ -144,13 +191,16 @@ public sealed class ChannelCardConversationTurnRunnerTests
             outboundClientFactory: null,
             nyxClient,
             NullLogger<ChannelCardConversationTurnRunner>.Instance);
-        var chunk = BuildChunk("corr-relay-card-4");
+        var chunk = BuildInboundRelayChunk(
+            "stream-correlation-4",
+            "relay-correlation-4",
+            "relay-message-4");
 
         var result = await runner.RunCardCreateAsync(
             chunk,
             "streaming_main",
             RelayRuntimeContext(
-                chunk.CorrelationId,
+                "relay-correlation-4",
                 "relay-token-4",
                 "relay-message-4",
                 "runtime-card-token-4"),
@@ -647,6 +697,20 @@ public sealed class ChannelCardConversationTurnRunnerTests
             AccumulatedText = "hello card",
             ChunkAtUnixMs = 42,
         };
+
+    private static LlmReplyCardStreamChunkEvent BuildInboundRelayChunk(
+        string streamCorrelationId,
+        string relayCorrelationId,
+        string replyMessageId)
+    {
+        var chunk = BuildChunk(streamCorrelationId);
+        chunk.Activity.OutboundDelivery = new OutboundDeliveryContext
+        {
+            CorrelationId = relayCorrelationId,
+            ReplyMessageId = replyMessageId,
+        };
+        return chunk;
+    }
 
     private static ChatActivity BuildSanitizedActivity(
         ConversationScope scope = ConversationScope.Group,

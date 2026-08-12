@@ -89,11 +89,11 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
 
         if (runtimeContext.NyxRelayReplyToken is { } replyAuthority)
         {
-            if (!string.Equals(replyAuthority.CorrelationId, chunk.CorrelationId, StringComparison.Ordinal))
+            if (!ReplyAuthorityMatchesActivity(replyAuthority, chunk.Activity))
             {
                 return ConversationCardCreateResult.Failed(
                     "reply_authority_mismatch",
-                    "The channel reply authority does not belong to this card turn.");
+                    "The channel reply authority does not belong to this inbound activity.");
             }
 
             if (_nyxClient is null)
@@ -536,11 +536,11 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
         object cardPayload,
         CancellationToken ct)
     {
-        if (!string.Equals(replyAuthority.CorrelationId, chunk.CorrelationId, StringComparison.Ordinal))
+        if (!ReplyAuthorityMatchesActivity(replyAuthority, chunk.Activity))
         {
             return ConversationCardCreateResult.Failed(
                 "reply_authority_mismatch",
-                "The channel reply authority does not belong to this card turn.");
+                "The channel reply authority does not belong to this inbound activity.");
         }
 
         if (_nyxClient is null)
@@ -588,6 +588,24 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
                 "card_relay_reply_threw",
                 ex.Message);
         }
+    }
+
+    private static bool ReplyAuthorityMatchesActivity(
+        NyxRelayReplyTokenContext replyAuthority,
+        ChatActivity activity)
+    {
+        var delivery = activity.OutboundDelivery;
+        return delivery is not null &&
+               !string.IsNullOrWhiteSpace(delivery.CorrelationId) &&
+               !string.IsNullOrWhiteSpace(delivery.ReplyMessageId) &&
+               string.Equals(
+                   replyAuthority.CorrelationId,
+                   delivery.CorrelationId.Trim(),
+                   StringComparison.Ordinal) &&
+               string.Equals(
+                   replyAuthority.ReplyMessageId,
+                   delivery.ReplyMessageId.Trim(),
+                   StringComparison.Ordinal);
     }
 
     private static string? ResolveInboundMessageId(ChatActivity? activity)
