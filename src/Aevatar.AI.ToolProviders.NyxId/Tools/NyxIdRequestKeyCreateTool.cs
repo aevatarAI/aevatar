@@ -225,34 +225,13 @@ public sealed class NyxIdRequestKeyCreateTool : INyxIdBuiltInTool, IAgentToolCap
     }
 
     private static string? ResolveOwnerReadToken()
-    {
-        var credentials = AgentToolRequestContext.Current?.Credentials;
-        var sourceReadable = AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(credentials);
-        if (sourceReadable is not null)
-            return sourceReadable;
-        return credentials?.NyxIdCredentialKind == AgentToolNyxIdCredentialKind.ProxyDelegation
-            ? NormalizeBearerToken(credentials.NyxIdAccessToken)
-            : null;
-    }
+        => AgentToolHumanSessionNyxIdCredential.ResolveBearerToken(
+            AgentToolRequestContext.Current);
 
     private static bool HasVerifiedOwnerAuthority() =>
         !string.IsNullOrWhiteSpace(AgentToolRequestContext.OwnerScopeId) &&
         AgentToolRequestContext.NyxIdAuthority.IsComplete &&
         !string.IsNullOrWhiteSpace(AgentToolRequestContext.NyxIdAuthority.ExternalUserId);
-
-    private static string? NormalizeBearerToken(string? value)
-    {
-        var normalized = value?.Trim();
-        if (string.IsNullOrEmpty(normalized) ||
-            normalized.Equals("Bearer", StringComparison.OrdinalIgnoreCase) ||
-            normalized.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) ||
-            normalized.Any(char.IsWhiteSpace))
-        {
-            return null;
-        }
-
-        return normalized;
-    }
 
     private static bool ResultMatches(string resultJson, KeyCreateRequest request)
     {
