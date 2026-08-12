@@ -14,6 +14,7 @@ using Aevatar.GAgentService.Projection.Projectors;
 using Aevatar.GAgentService.Projection.Queries;
 using Aevatar.GAgentService.Projection.ReadModels;
 using Aevatar.Studio.Hosting;
+using Aevatar.Studio.Hosting.Auth;
 using Aevatar.Studio.Application.Studio.ProjectionRecovery;
 using Aevatar.Studio.Projection.ReadModels;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
@@ -50,6 +51,11 @@ public sealed class StudioHostingNyxIdAuthorizationCatalogCompositionTests
             descriptor.ImplementationType == typeof(ScheduledInvocationAuthorizationRevalidator));
         services.Should().ContainSingle(static descriptor =>
             descriptor.ServiceType == typeof(INyxIdApiClientFactory));
+        services.Should().ContainSingle(static descriptor =>
+            descriptor.ServiceType == typeof(INyxIdUserReadApi));
+        services.Should().ContainSingle(static descriptor =>
+            descriptor.ServiceType == typeof(IAppAuthProfileResolver) &&
+            descriptor.ImplementationType == typeof(NyxIdAppAuthProfileResolver));
         services.Should().ContainSingle(static descriptor =>
             descriptor.ServiceType == typeof(INyxIdAuthorizationCatalogQueryPort) &&
             descriptor.ImplementationType == typeof(ProjectionNyxIdAuthorizationCatalogQueryPort));
@@ -106,6 +112,9 @@ public sealed class StudioHostingNyxIdAuthorizationCatalogCompositionTests
         provider.GetRequiredService<IScheduledInvocationAuthorizationRevalidator>()
             .Should().BeOfType<ScheduledInvocationAuthorizationRevalidator>();
         provider.GetRequiredService<INyxIdApiClientFactory>().Should().NotBeNull();
+        provider.GetRequiredService<INyxIdUserReadApi>().Should().NotBeNull();
+        provider.GetRequiredService<IAppAuthProfileResolver>()
+            .Should().BeOfType<NyxIdAppAuthProfileResolver>();
         provider.GetRequiredService<INyxIdAuthorizationCatalogQueryPort>()
             .Should().BeOfType<ProjectionNyxIdAuthorizationCatalogQueryPort>();
         provider.GetRequiredService<INyxIdAuthorizationCatalogRefreshObservationScopeLeasePreparationPort>()

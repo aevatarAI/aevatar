@@ -26,13 +26,13 @@ internal sealed class NyxIdAppAuthProfileResolver(
         AppAuthProfileResponse? claimsProfile,
         CancellationToken ct)
     {
-        var bearerToken = ExtractBearerToken(http);
-        if (string.IsNullOrWhiteSpace(bearerToken))
+        var userAccessToken = ExtractUserAccessToken(http);
+        if (string.IsNullOrWhiteSpace(userAccessToken))
             return claimsProfile;
 
         try
         {
-            var raw = await _userReadApi.GetCurrentUserAsync(bearerToken, ct).ConfigureAwait(false);
+            var raw = await _userReadApi.GetCurrentUserAsync(userAccessToken, ct).ConfigureAwait(false);
             var providerProfile = ParseCurrentUser(raw);
             return Merge(providerProfile, claimsProfile);
         }
@@ -102,15 +102,23 @@ internal sealed class NyxIdAppAuthProfileResolver(
             Groups: providerProfile.Groups.Count > 0 ? providerProfile.Groups : claimsProfile.Groups);
     }
 
-    private static string? ExtractBearerToken(HttpContext http)
+    private static string? ExtractUserAccessToken(HttpContext http)
     {
         var header = http.Request.Headers.Authorization.FirstOrDefault()?.Trim();
-        const string prefix = "Bearer ";
-        if (string.IsNullOrWhiteSpace(header) || !header.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        if (string.IsNullOrWhiteSpace(header))
             return null;
 
-        var token = header[prefix.Length..].Trim();
-        return string.IsNullOrWhiteSpace(token) ? null : token;
+        foreach (var scheme in new[] { "Bearer", "DPoP" })
+        {
+            var prefix = scheme + " ";
+            if (!header.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var token = header[prefix.Length..].Trim();
+            return string.IsNullOrWhiteSpace(token) ? null : token;
+        }
+
+        return null;
     }
 
     private static string? FirstNonEmpty(string? first, string? second) =>

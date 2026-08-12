@@ -52,6 +52,24 @@ public sealed class AppAuthProfileResolverTests
     }
 
     [Fact]
+    public async Task ResolveAsync_WithDpopAuthorization_ShouldUseProviderProfile()
+    {
+        var nyxId = new RecordingNyxIdUserReadApi("""{"id":"nyx-user-1","name":"Abigail Deng"}""");
+        var resolver = new NyxIdAppAuthProfileResolver(
+            nyxId,
+            NullLogger<NyxIdAppAuthProfileResolver>.Instance);
+        var http = new DefaultHttpContext();
+        http.Request.Headers.Authorization = "DPoP local-dpop-token";
+
+        var profile = await resolver.ResolveAsync(http, null, CancellationToken.None);
+
+        profile.Should().NotBeNull();
+        profile!.Subject.Should().Be("nyx-user-1");
+        profile.Name.Should().Be("Abigail Deng");
+        nyxId.ObservedToken.Should().Be("local-dpop-token");
+    }
+
+    [Fact]
     public void ParseCurrentUser_WithMissingProviderFields_ShouldKeepMissingFieldsEmpty()
     {
         var profile = NyxIdAppAuthProfileResolver.ParseCurrentUser("""{"id":"nyx-user-1"}""");
