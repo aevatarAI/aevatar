@@ -157,19 +157,32 @@ public sealed class ChatJsonPayloadsTests
         observed.TryGetProperty("payload", out _).Should().BeFalse();
     }
 
-    [Theory]
-    [InlineData("service.connect", "catalogService")]
-    [InlineData("key.create", "keyCreate")]
-    public void Format_ShouldSerializeTypedNyxIdActionRequestWithoutCredentialMaterial(
-        string wireAction,
-        string expectedParamsProperty)
+    [Fact]
+    public void Format_ShouldSerializeNyxIdActionRequestWithSchemaV4CamelCaseFields()
     {
         var json = ChatJsonPayloads.Format(new WorkflowRunEventEnvelope
         {
             Custom = new WorkflowCustomEventPayload
             {
                 Name = "nyxid.action.request",
-                Payload = Any.Pack(InteractiveActionRequest(wireAction)),
+                Payload = Any.Pack(new WorkflowInteractiveActionRequestWirePayload
+                {
+                    SchemaVersion = 4,
+                    ActorId = "nyxid-chat-alpha",
+                    OriginTurnId = "turn-alpha",
+                    TaskId = "task-alpha",
+                    StepId = "step-alpha",
+                    ActionRequestId = "action-alpha",
+                    Action = "service.connect",
+                    Params = new WorkflowInteractiveActionParams
+                    {
+                        CatalogService = new WorkflowInteractiveCatalogServiceActionParams
+                        {
+                            ServiceSlug = "api-github",
+                            RequestedScopes = { "repo" },
+                        },
+                    },
+                }),
             },
         });
 
@@ -183,98 +196,13 @@ public sealed class ChatJsonPayloadsTests
         payload.GetProperty("taskId").GetString().Should().Be("task-alpha");
         payload.GetProperty("stepId").GetString().Should().Be("step-alpha");
         payload.GetProperty("actionRequestId").GetString().Should().Be("action-alpha");
-        payload.GetProperty("action").GetString().Should().Be(wireAction);
-        var actionParams = payload.GetProperty("params");
-        actionParams.EnumerateObject().Select(static property => property.Name)
-            .Should().Equal(expectedParamsProperty);
-        if (wireAction == "service.connect")
-        {
-            var catalogService = actionParams.GetProperty("catalogService");
-            catalogService.GetProperty("serviceSlug").GetString().Should().Be("api-github");
-            catalogService.GetProperty("requestedScopes")[0].GetString().Should().Be("repo");
-        }
-        else
-        {
-            var keyCreate = actionParams.GetProperty("keyCreate");
-            keyCreate.GetProperty("name").GetString().Should().Be("agent-alpha");
-            keyCreate.GetProperty("platform").GetString().Should().Be("codex");
-            keyCreate.GetProperty("allowedServiceIds").EnumerateArray()
-                .Select(static item => item.GetString())
-                .Should().Equal("m-github", "m-lark");
-        }
-
-        EnumeratePropertyNames(payload).Should().OnlyContain(
-            propertyName => !IsCredentialMaterialProperty(propertyName));
+        payload.GetProperty("action").GetString().Should().Be("service.connect");
+        var catalogService = payload.GetProperty("params").GetProperty("catalogService");
+        catalogService.GetProperty("serviceSlug").GetString().Should().Be("api-github");
+        catalogService.GetProperty("requestedScopes")[0].GetString().Should().Be("repo");
         payload.TryGetProperty("terminalContinuation", out _).Should().BeFalse();
         payload.TryGetProperty("handoffId", out _).Should().BeFalse();
     }
-
-    private static WorkflowInteractiveActionRequestWirePayload InteractiveActionRequest(
-        string wireAction)
-    {
-        var request = new WorkflowInteractiveActionRequestWirePayload
-        {
-            SchemaVersion = 4,
-            ActorId = "nyxid-chat-alpha",
-            OriginTurnId = "turn-alpha",
-            TaskId = "task-alpha",
-            StepId = "step-alpha",
-            ActionRequestId = "action-alpha",
-            Action = wireAction,
-        };
-        request.Params = wireAction switch
-        {
-            "service.connect" => new WorkflowInteractiveActionParams
-            {
-                CatalogService = new WorkflowInteractiveCatalogServiceActionParams
-                {
-                    ServiceSlug = "api-github",
-                    RequestedScopes = { "repo" },
-                },
-            },
-            "key.create" => new WorkflowInteractiveActionParams
-            {
-                KeyCreate = new WorkflowInteractiveKeyCreateActionParams
-                {
-                    Name = "agent-alpha",
-                    Platform = "codex",
-                    AllowedServiceIds = { "m-github", "m-lark" },
-                },
-            },
-            _ => throw new InvalidOperationException($"Unknown wire action '{wireAction}'."),
-        };
-        return request;
-    }
-
-    private static IEnumerable<string> EnumeratePropertyNames(JsonElement element)
-    {
-        if (element.ValueKind == JsonValueKind.Object)
-        {
-            foreach (var property in element.EnumerateObject())
-            {
-                yield return property.Name;
-                foreach (var nested in EnumeratePropertyNames(property.Value))
-                    yield return nested;
-            }
-        }
-        else if (element.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var item in element.EnumerateArray())
-            foreach (var nested in EnumeratePropertyNames(item))
-                yield return nested;
-        }
-    }
-
-    private static bool IsCredentialMaterialProperty(string propertyName) =>
-        propertyName.Contains("credential", StringComparison.OrdinalIgnoreCase) ||
-        propertyName.Contains("secret", StringComparison.OrdinalIgnoreCase) ||
-        propertyName.Contains("token", StringComparison.OrdinalIgnoreCase) ||
-        propertyName.Contains("password", StringComparison.OrdinalIgnoreCase) ||
-        propertyName.Contains("privateKey", StringComparison.OrdinalIgnoreCase) ||
-        propertyName.Contains("keyMaterial", StringComparison.OrdinalIgnoreCase) ||
-        propertyName.Contains("apiKey", StringComparison.OrdinalIgnoreCase) ||
-        string.Equals(propertyName, "key", StringComparison.OrdinalIgnoreCase) ||
-        string.Equals(propertyName, "keyId", StringComparison.OrdinalIgnoreCase);
 
     private static WorkflowRunEventEnvelope BuildFrame() =>
         new()

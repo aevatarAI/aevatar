@@ -1170,27 +1170,26 @@ public sealed class NyxIdChatConversationGAgent
     private void ValidateWorkflowInteractiveActionHandoff(
         WorkflowInteractiveActionHandoffCommand command)
     {
-        var inboundEnvelope = ActiveInboundEnvelope;
-        var publisherActorId = inboundEnvelope?.Route?.PublisherActorId;
-        var runtimeSourceActorId = inboundEnvelope?.Runtime?.SourceActorId;
-        if (inboundEnvelope is null ||
-            string.IsNullOrWhiteSpace(publisherActorId) ||
-            string.IsNullOrWhiteSpace(runtimeSourceActorId) ||
-            !string.Equals(publisherActorId, runtimeSourceActorId, StringComparison.Ordinal) ||
-            !string.Equals(runtimeSourceActorId, command.SourceWorkflowActorId, StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException(
-                "The workflow interactive action sender authority is invalid.");
-        }
-
         var request = command.Request;
+        var requestParams = request?.Params;
+        var hasCatalogServiceConnect =
+            string.Equals(request?.Action, "service.connect", StringComparison.Ordinal) &&
+            requestParams?.CatalogService is not null &&
+            requestParams.KeyCreate is null &&
+            !string.IsNullOrWhiteSpace(requestParams.CatalogService.ServiceSlug);
+        var hasKeyCreate =
+            string.Equals(request?.Action, "key.create", StringComparison.Ordinal) &&
+            requestParams?.KeyCreate is not null &&
+            requestParams.CatalogService is null;
         if (request is null ||
+            !IsValidWorkflowActionActorId(Id) ||
             !string.Equals(request.ActorId, Id, StringComparison.Ordinal) ||
             string.IsNullOrWhiteSpace(command.HandoffId) ||
             string.IsNullOrWhiteSpace(command.ScopeId) ||
             string.IsNullOrWhiteSpace(command.OwnerSubject) ||
             string.IsNullOrWhiteSpace(command.SourceWorkflowActorId) ||
             request.SchemaVersion != NyxIdAssistantActionRegistry.SupportedSchemaVersion ||
+            (!hasCatalogServiceConnect && !hasKeyCreate) ||
             string.IsNullOrWhiteSpace(request.OriginTurnId) ||
             string.IsNullOrWhiteSpace(request.TaskId) ||
             string.IsNullOrWhiteSpace(request.StepId) ||
@@ -1203,8 +1202,33 @@ public sealed class NyxIdChatConversationGAgent
 
     private static NyxIdAssistantActionValidation ValidateWorkflowInteractiveActionRequest(
         NyxIdAssistantActionRegistry registry,
-        WorkflowInteractiveActionRequestWirePayload request) =>
-        WorkflowInteractiveActionSurfaceCapabilities.Resolve(registry, request);
+        WorkflowInteractiveActionRequestWirePayload request)
+    {
+        if (!string.Equals(request.Action, "service.connect", StringComparison.Ordinal))
+        {
+            throw new NyxIdAssistantActionRegistryException(
+                "NYXID_ACTION_UNSUPPORTED",
+                "The workflow interactive action is not enabled in this contract revision.");
+        }
+
+        return registry.ResolveCatalogServiceConnect(
+            request.Params.CatalogService.ServiceSlug,
+            request.Params.CatalogService.RequestedScopes);
+    }
+
+    private static bool IsValidWorkflowActionActorId(string actorId)
+    {
+        const string prefix = "nyxid-chat-";
+        if (!actorId.StartsWith(prefix, StringComparison.Ordinal) ||
+            actorId.Length <= prefix.Length ||
+            actorId.Length > 128)
+        {
+            return false;
+        }
+
+        return actorId[prefix.Length..].All(static character =>
+            char.IsAsciiLetterOrDigit(character) || character is '_' or '-');
+    }
 
     private static bool WorkflowInteractiveActionMatches(
         NyxIdChatActionRequestState existing,

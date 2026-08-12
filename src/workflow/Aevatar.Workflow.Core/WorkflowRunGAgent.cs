@@ -981,62 +981,49 @@ public sealed partial class WorkflowRunGAgent
 
         if (!TryBuildInteractiveActionRequestParts(
                 requirement,
+                out var wireAction,
                 out var wireParams,
                 out var identityParts))
         {
             return false;
         }
 
-        var actionParamsCase = wireParams.ActionParamsCase;
-        const string keyCreateStableIdentitySemantic = "key.create";
-        var actionActorId = actionParamsCase switch
-        {
-            WorkflowInteractiveActionParams.ActionParamsOneofCase.CatalogService =>
-                BuildStableIdentity(
-                    "nyxid-chat",
+        var actionActorId = wireAction == "service.connect"
+            ? BuildStableIdentity(
+                "nyxid-chat",
+                scopeId,
+                callerAuthority.ExternalUserId,
+                Id,
+                currentTurnId,
+                identityParts[0])
+            : BuildStableIdentity(
+                "nyxid-chat",
+                [
                     scopeId,
                     callerAuthority.ExternalUserId,
                     Id,
                     currentTurnId,
-                    identityParts[0]),
-            WorkflowInteractiveActionParams.ActionParamsOneofCase.KeyCreate =>
-                BuildStableIdentity(
-                    "nyxid-chat",
-                    [
-                        scopeId,
-                        callerAuthority.ExternalUserId,
-                        Id,
-                        currentTurnId,
-                        keyCreateStableIdentitySemantic,
-                        .. identityParts,
-                    ]),
-            _ => throw new InvalidOperationException(
-                "The workflow interactive action params variant is unsupported."),
-        };
+                    wireAction,
+                    .. identityParts,
+                ]);
         var taskId = BuildStableIdentity("task", actionActorId, currentTurnId, completed.SessionId);
-        var actionRequestId = actionParamsCase switch
-        {
-            WorkflowInteractiveActionParams.ActionParamsOneofCase.CatalogService =>
-                BuildStableIdentity(
-                    "action",
+        var actionRequestId = wireAction == "service.connect"
+            ? BuildStableIdentity(
+                "action",
+                actionActorId,
+                currentTurnId,
+                taskId,
+                identityParts[0],
+                identityParts[1])
+            : BuildStableIdentity(
+                "action",
+                [
                     actionActorId,
                     currentTurnId,
                     taskId,
-                    identityParts[0],
-                    identityParts[1]),
-            WorkflowInteractiveActionParams.ActionParamsOneofCase.KeyCreate =>
-                BuildStableIdentity(
-                    "action",
-                    [
-                        actionActorId,
-                        currentTurnId,
-                        taskId,
-                        keyCreateStableIdentitySemantic,
-                        .. identityParts,
-                    ]),
-            _ => throw new InvalidOperationException(
-                "The workflow interactive action params variant is unsupported."),
-        };
+                    wireAction,
+                    .. identityParts,
+                ]);
         var stepId = BuildStableIdentity(
             "step",
             actionActorId,
@@ -1052,15 +1039,7 @@ public sealed partial class WorkflowRunGAgent
             TaskId = taskId,
             StepId = stepId,
             ActionRequestId = actionRequestId,
-            Action = actionParamsCase switch
-            {
-                WorkflowInteractiveActionParams.ActionParamsOneofCase.CatalogService =>
-                    "service.connect",
-                WorkflowInteractiveActionParams.ActionParamsOneofCase.KeyCreate =>
-                    "key.create",
-                _ => throw new InvalidOperationException(
-                    "The workflow interactive action params variant is unsupported."),
-            },
+            Action = wireAction,
             Params = wireParams,
         };
         var handoffId = BuildStableIdentity(
@@ -1089,9 +1068,11 @@ public sealed partial class WorkflowRunGAgent
 
     private static bool TryBuildInteractiveActionRequestParts(
         WorkflowInteractiveAuthorizationRequirement requirement,
+        out string wireAction,
         out WorkflowInteractiveActionParams wireParams,
         out string[] identityParts)
     {
+        wireAction = string.Empty;
         wireParams = null!;
         identityParts = [];
         var serviceSlug = NormalizeInteractiveValue(requirement.ServiceSlug, 128);
@@ -1117,6 +1098,7 @@ public sealed partial class WorkflowRunGAgent
             if (requestedScopes.Length != requirement.RequestedScopes.Count)
                 return false;
 
+            wireAction = "service.connect";
             wireParams = new WorkflowInteractiveActionParams
             {
                 CatalogService = new WorkflowInteractiveCatalogServiceActionParams
@@ -1148,6 +1130,7 @@ public sealed partial class WorkflowRunGAgent
             return false;
         }
 
+        wireAction = "key.create";
         wireParams = new WorkflowInteractiveActionParams
         {
             KeyCreate = new WorkflowInteractiveKeyCreateActionParams

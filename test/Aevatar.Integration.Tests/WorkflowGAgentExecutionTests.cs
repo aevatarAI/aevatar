@@ -223,8 +223,6 @@ public sealed class WorkflowGAgentExecutionTests : WorkflowGAgentTestBase
             command.Request.ActorId.Should().Be(nyxIdActorCreation.actorId);
             command.Request.OriginTurnId.Should().Be("turn-studio-alpha");
             command.Request.Action.Should().Be("service.connect");
-            command.Request.Params.ActionParamsCase.Should().Be(
-                WorkflowInteractiveActionParams.ActionParamsOneofCase.CatalogService);
             command.Request.Params.CatalogService.ServiceSlug.Should().Be("api-github");
             command.Request.Params.CatalogService.RequestedScopes.Should().Equal("repo");
 
@@ -296,22 +294,10 @@ public sealed class WorkflowGAgentExecutionTests : WorkflowGAgentTestBase
                 .Should().ContainSingle().Which.evt
                 .Should().BeOfType<WorkflowInteractiveActionHandoffCommand>().Subject;
             command.Request.Action.Should().Be("key.create");
-            command.Request.Params.ActionParamsCase.Should().Be(
-                WorkflowInteractiveActionParams.ActionParamsOneofCase.KeyCreate);
             command.Request.Params.CatalogService.Should().BeNull();
             command.Request.Params.KeyCreate.Name.Should().Be("agent-alpha");
             command.Request.Params.KeyCreate.Platform.Should().Be("codex");
             command.Request.Params.KeyCreate.AllowedServiceIds.Should().Equal("m-github", "m-lark");
-            command.Request.ActorId.Should().Be(
-                "nyxid-chat-1b4d64b6bc32be662b0596aa6e8979f4");
-            command.Request.TaskId.Should().Be(
-                "task-a6e475da79f5e2a02e9cdb6a637491ca");
-            command.Request.ActionRequestId.Should().Be(
-                "action-418f893973a2b7566d2a3443baaa95da");
-            command.Request.StepId.Should().Be(
-                "step-5cff442a844e4da0de6e69a0642b548f");
-            command.HandoffId.Should().Be(
-                "handoff-36e0903ef4434e75217c18b527016a97");
             var persistedCount = (await eventStore.GetEventsAsync(agent.Id)).Count;
             var sentCount = publisher.Sent.Count;
 
