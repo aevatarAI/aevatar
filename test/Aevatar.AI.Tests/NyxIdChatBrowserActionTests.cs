@@ -599,6 +599,118 @@ public sealed class NyxIdChatBrowserActionTests
             .BeEquivalentTo(command.ReadAuthority);
     }
 
+    [Fact]
+    public void VerifiedKeyActionExactReplayAfterAuthorityExpiry_ShouldBeIdempotentWithoutDispatch()
+    {
+        var blocked = BlockedKeyCreateActionState();
+        var actionRequestId = blocked.PendingActions.Single().ActionRequestId;
+        var command = ContinueCommand(
+            actionRequestId,
+            NyxIdChatActionDisposition.Completed);
+        command.Actions[0].Resource = new NyxIdChatSafeResourceRef
+        {
+            Key = new NyxIdChatKeyRef { KeyId = "key-alpha" },
+        };
+        command.ReadAuthority = ReadAuthority(command.CommandId);
+        var admitted = NyxIdChatBrowserActions.Continue(blocked, command, Now);
+        var reconciled = NyxIdChatBrowserActions.ReconcilePostcondition(
+            admitted.State,
+            new NyxIdChatOperationResultSignal
+            {
+                Key = admitted.NextCommand!.Key.Clone(),
+                ActionPostcondition = new NyxIdChatActionPostconditionResult
+                {
+                    ActionRequestId = actionRequestId,
+                    Disposition = NyxIdChatActionDisposition.Completed,
+                    Verified = true,
+                    Resource = new NyxIdChatSafeResourceRef
+                    {
+                        Key = new NyxIdChatKeyRef { KeyId = "key-alpha" },
+                    },
+                },
+            },
+            Now);
+
+        var replay = NyxIdChatBrowserActions.Continue(
+            reconciled.State,
+            command.Clone(),
+            Timestamp.FromDateTimeOffset(
+                DateTimeOffset.FromUnixTimeMilliseconds(command.ReadAuthority.ExpiresAtUnixMs)
+                    .AddMilliseconds(1)));
+
+        reconciled.State.PendingActions.Should().BeEmpty();
+        reconciled.State.RecentActions.Should().ContainSingle(action =>
+            action.ActionRequestId == actionRequestId &&
+            action.PostconditionResult.Verified);
+        replay.Outcome.Should().Be(NyxIdChatTransitionOutcome.Idempotent);
+        replay.ShouldCommit.Should().BeFalse();
+        replay.ShouldDispatch.Should().BeFalse();
+        replay.NextCommand.Should().BeNull();
+        replay.State.Should().BeEquivalentTo(reconciled.State);
+    }
+
+    [Fact]
+    public void InFlightKeyActionExactReplayAfterAuthorityExpiry_ShouldRejectWithoutDispatch()
+    {
+        var blocked = BlockedKeyCreateActionState();
+        var command = ContinueCommand(
+            blocked.PendingActions.Single().ActionRequestId,
+            NyxIdChatActionDisposition.Completed);
+        command.Actions[0].Resource = new NyxIdChatSafeResourceRef
+        {
+            Key = new NyxIdChatKeyRef { KeyId = "key-alpha" },
+        };
+        command.ReadAuthority = ReadAuthority(command.CommandId);
+        var admitted = NyxIdChatBrowserActions.Continue(blocked, command, Now);
+
+        var replay = NyxIdChatBrowserActions.Continue(
+            admitted.State,
+            command.Clone(),
+            Timestamp.FromDateTimeOffset(
+                DateTimeOffset.FromUnixTimeMilliseconds(command.ReadAuthority.ExpiresAtUnixMs)
+                    .AddMilliseconds(1)));
+
+        replay.Outcome.Should().Be(NyxIdChatTransitionOutcome.Rejected);
+        replay.ShouldCommit.Should().BeFalse();
+        replay.ShouldDispatch.Should().BeFalse();
+        replay.ReasonCode.Should().Be(
+            NyxIdChatBrowserActions.ActionContinuationInvalid);
+        replay.State.Should().BeEquivalentTo(admitted.State);
+    }
+
+    [Fact]
+    public void SameClientKeyReplayWithChangedReportAndMissingAuthority_ShouldConflict()
+    {
+        var blocked = BlockedKeyCreateActionState();
+        var command = ContinueCommand(
+            blocked.PendingActions.Single().ActionRequestId,
+            NyxIdChatActionDisposition.Completed);
+        command.Actions[0].Resource = new NyxIdChatSafeResourceRef
+        {
+            Key = new NyxIdChatKeyRef { KeyId = "key-alpha" },
+        };
+        command.ReadAuthority = ReadAuthority(command.CommandId);
+        var admitted = NyxIdChatBrowserActions.Continue(blocked, command, Now);
+        var tampered = command.Clone();
+        tampered.Actions[0].Resource = new NyxIdChatSafeResourceRef
+        {
+            UserService = new NyxIdChatUserServiceRef
+            {
+                UserServiceId = "service-alpha",
+            },
+        };
+        tampered.ReadAuthority = null;
+
+        var replay = NyxIdChatBrowserActions.Continue(admitted.State, tampered, Now);
+
+        replay.Outcome.Should().Be(NyxIdChatTransitionOutcome.Rejected);
+        replay.ShouldCommit.Should().BeFalse();
+        replay.ShouldDispatch.Should().BeFalse();
+        replay.ReasonCode.Should().Be(
+            NyxIdChatBrowserActions.ActionContinuationConflict);
+        replay.State.Should().BeEquivalentTo(admitted.State);
+    }
+
     [Theory]
     [InlineData("missing")]
     [InlineData("scope")]

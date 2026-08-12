@@ -269,32 +269,41 @@ public static class NyxIdChatBrowserActions
         {
             return reportDecision;
         }
-        var requiresReadAuthority = RequiresContinuationReadAuthority(
-            state,
-            sanitizedReports,
-            isStateChangeWake);
-        if (!ValidContinuationReadAuthority(command, requiresReadAuthority, now))
-        {
-            return RejectContinuation(state, ActionContinuationInvalid);
-        }
-        var acceptedReadAuthority = requiresReadAuthority
-            ? command.ReadAuthority
-            : null;
 
         if (matchesExistingClient)
         {
+            var requiresReplayReadAuthority = RequiresContinuationReadAuthority(
+                state,
+                sanitizedReports,
+                isStateChangeWake);
+            var replayReadAuthority = requiresReplayReadAuthority
+                ? command.ReadAuthority
+                : null;
             if (!AdmissionMatches(
                     existingAdmission!,
                     command,
                     sanitizedReports,
-                    acceptedReadAuthority))
+                    replayReadAuthority))
+            {
                 return RejectContinuation(state, ActionContinuationConflict);
+            }
 
             var replay = TryBuildReplayDispatch(state, existingAdmission!);
+            var checkAuthorityExpiration =
+                replay is not null || existingAdmission!.ReadAuthority is null;
+            if (!ValidContinuationReadAuthority(
+                    command,
+                    requiresReplayReadAuthority,
+                    now,
+                    checkAuthorityExpiration))
+            {
+                return RejectContinuation(state, ActionContinuationInvalid);
+            }
+
             return new NyxIdChatBrowserActionDecision(
                 ShouldCommit: false,
                 ShouldDispatch:
-                    existingAdmission!.Status !=
+                    existingAdmission.Status !=
                         NyxIdChatContinuationAdmissionStatus.Rejected &&
                     replay is not null,
                 NyxIdChatTransitionOutcome.Idempotent,
@@ -308,6 +317,22 @@ public static class NyxIdChatBrowserActions
                 existingAdmission.Clone(),
                 replay);
         }
+
+        var requiresReadAuthority = RequiresContinuationReadAuthority(
+            state,
+            sanitizedReports,
+            isStateChangeWake);
+        if (!ValidContinuationReadAuthority(
+                command,
+                requiresReadAuthority,
+                now,
+                checkExpiration: true))
+        {
+            return RejectContinuation(state, ActionContinuationInvalid);
+        }
+        var acceptedReadAuthority = requiresReadAuthority
+            ? command.ReadAuthority
+            : null;
 
         if (state.ActiveTask?.Gate is
             {
@@ -1151,21 +1176,24 @@ public static class NyxIdChatBrowserActions
         IReadOnlyList<NyxIdChatActionReport> reports,
         bool isStateChangeWake)
     {
-        var pendingById = state.PendingActions.ToDictionary(
+        var actionsById = state.PendingActions
+            .Concat(state.RecentActions)
+            .ToDictionary(
             static action => action.ActionRequestId,
             StringComparer.Ordinal);
         return isStateChangeWake
             ? state.PendingActions.Any(static action => RequiresExactReadAuthority(action.Action))
             : reports.Any(report =>
                 report.Disposition == NyxIdChatActionDisposition.Completed &&
-                pendingById.TryGetValue(report.ActionRequestId, out var pending) &&
-                RequiresExactReadAuthority(pending.Action));
+                actionsById.TryGetValue(report.ActionRequestId, out var action) &&
+                RequiresExactReadAuthority(action.Action));
     }
 
     private static bool ValidContinuationReadAuthority(
         NyxIdChatActionContinueCommand command,
         bool requiresReadAuthority,
-        Timestamp now)
+        Timestamp now,
+        bool checkExpiration)
     {
         if (command.ReadAuthority is null)
             return !requiresReadAuthority;
@@ -1175,7 +1203,7 @@ public static class NyxIdChatBrowserActions
                 Normalize(command.ScopeId),
                 Normalize(command.OwnerSubject),
                 now.ToDateTimeOffset(),
-                checkExpiration: true,
+                checkExpiration,
                 Normalize(command.CommandId)) is null;
     }
 
