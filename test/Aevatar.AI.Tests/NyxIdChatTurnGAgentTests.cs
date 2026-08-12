@@ -2339,6 +2339,11 @@ public sealed partial class NyxIdChatTurnGAgentTests
         afterDelete[^1].EventData.Is(NyxIdChatConversationHistoryDeletedEvent.Descriptor)
             .Should().BeTrue(
                 "cleanup is handled after only three bounded progress deliveries and one stop");
+        conversation.State.Deleted.Should().BeTrue();
+        conversation.State.DeletedAt.Should().NotBeNull();
+        conversation.State.DeletedAt.Should().Be(
+            afterDelete[^1].EventData.Unpack<NyxIdChatConversationHistoryDeletedEvent>()
+                .DeletedAt);
     }
 
     [Fact]

@@ -117,6 +117,34 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
     }
 
     [Fact]
+    public async Task ProjectAsync_ShouldCopyAuthoritativeDeletionTombstone()
+    {
+        var dispatcher = new RecordingWriteDispatcher();
+        var projector = new NyxIdChatConversationCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-08-12T04:30:00Z")));
+        var state = BuildState();
+        state.Deleted = true;
+        state.DeletedAt = Timestamp.FromDateTimeOffset(
+            DateTimeOffset.Parse("2026-08-12T04:29:00Z"));
+
+        await projector.ProjectAsync(
+            NewContext(),
+            WrapCommitted(
+                new NyxIdChatConversationHistoryDeletedEvent(),
+                state,
+                version: 20,
+                eventId: "event-alpha-20",
+                stateEventTimestamp: DateTimeOffset.Parse("2026-08-12T04:30:00Z")));
+
+        var document = dispatcher.Upserts.Should().ContainSingle().Subject;
+        document.Deleted.Should().BeTrue();
+        document.DeletedAt.ToDateTimeOffset().Should().Be(
+            DateTimeOffset.Parse("2026-08-12T04:29:00Z"));
+        document.StateVersion.Should().Be(20);
+    }
+
+    [Fact]
     public async Task ProjectAsync_ShouldCopySafeQueryStateAndAuthoritativeVersion()
     {
         var dispatcher = new RecordingWriteDispatcher();

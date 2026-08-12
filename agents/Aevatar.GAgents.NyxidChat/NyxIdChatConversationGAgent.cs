@@ -148,6 +148,7 @@ public sealed class NyxIdChatConversationGAgent
                 ApplyPlanGateAdmissionRevocationAcknowledged)
             .On<NyxIdChatPlanGateAdmissionDeliveryAcknowledgedEvent>(
                 ApplyPlanGateAdmissionDeliveryAcknowledged)
+            .On<NyxIdChatConversationHistoryDeletedEvent>(ApplyConversationHistoryDeleted)
             .OrCurrent();
         return NyxIdChatNeedsYouDecisions.RefreshAttention(next);
     }
@@ -1530,6 +1531,7 @@ public sealed class NyxIdChatConversationGAgent
                 ActorId = Id,
                 CommandId = commandId,
                 CorrelationId = correlationId,
+                DeletedAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
             }, CancellationToken.None);
         }
         catch
@@ -4062,6 +4064,18 @@ public sealed class NyxIdChatConversationGAgent
         NyxIdChatConversationGAgentState current,
         NyxIdChatInputRequestedEvent evt) =>
         evt.State?.Clone() ?? current;
+
+    private static NyxIdChatConversationGAgentState ApplyConversationHistoryDeleted(
+        NyxIdChatConversationGAgentState current,
+        NyxIdChatConversationHistoryDeletedEvent evt)
+    {
+        var deletedAt = evt.DeletedAt?.Clone() ?? current.UpdatedAt?.Clone();
+        var next = current.Clone();
+        next.Deleted = true;
+        next.DeletedAt = deletedAt;
+        next.UpdatedAt = deletedAt?.Clone();
+        return next;
+    }
 
     private static NyxIdChatConversationGAgentState ApplyInputResolutionCommitted(
         NyxIdChatConversationGAgentState current,

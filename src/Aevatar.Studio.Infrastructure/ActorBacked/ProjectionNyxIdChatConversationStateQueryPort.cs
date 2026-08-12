@@ -64,6 +64,9 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
             !string.Equals(document.ConversationActorId, actorId, StringComparison.Ordinal))
             return NyxIdChatConversationStateQueryResult.NotFound();
 
+        if (document.Deleted)
+            return NyxIdChatConversationStateQueryResult.NotFound();
+
         if (document.StateVersion <= 0)
         {
             return NyxIdChatConversationStateQueryResult.ReloadRequired(
@@ -143,6 +146,7 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
                 string.Equals(document.Id, document.ActorId, StringComparison.Ordinal) &&
                 string.Equals(document.ActorId, document.ConversationActorId, StringComparison.Ordinal) &&
                 string.Equals(document.ScopeId, normalizedScopeId, StringComparison.Ordinal) &&
+                !document.Deleted &&
                 document.StateVersion > 0)
             .ToDictionary(
                 static document => document.ConversationActorId,

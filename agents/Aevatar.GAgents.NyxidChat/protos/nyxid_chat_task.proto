@@ -1244,6 +1244,11 @@ message NyxIdChatConversationGAgentState {
   // remains outside actor state until that admission barrier is satisfied.
   aevatar.credentials.DurableCallerCredentialRef pending_plan_gate_continuation = 44;
   NyxIdChatOperationKey pending_plan_gate_continuation_key = 45;
+  // Authoritative actor-owned deletion tombstone. The current-state
+  // projection copies this fact; query paths must not infer deletion by
+  // joining the registry or replaying events.
+  bool deleted = 46;
+  google.protobuf.Timestamp deleted_at = 47;
 }
 
 message NyxIdChatOperationResultAcknowledgementFence {
