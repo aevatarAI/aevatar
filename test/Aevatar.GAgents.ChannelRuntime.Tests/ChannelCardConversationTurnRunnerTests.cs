@@ -1,5 +1,7 @@
+using System.Net;
 using System.Text.Json;
 using Aevatar.AI.ToolProviders.Lark;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat;
@@ -11,6 +13,159 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
 public sealed class ChannelCardConversationTurnRunnerTests
 {
+    [Fact]
+    public async Task RunCardCreateAsync_ShouldBindInboundCardThroughRelayReplyAuthority()
+    {
+        var cardKit = new RecordingCardKitClient();
+        var lark = new RecordingLarkNyxClient();
+        var relayHandler = new RecordingRelayHandler(
+            """{"message_id":"relay-delivery-1","platform_message_id":"om_relay_card_1"}""");
+        using var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
+            new HttpClient(relayHandler));
+        var runner = new ChannelCardConversationTurnRunner(
+            cardKit,
+            lark,
+            outboundClientFactory: null,
+            nyxClient,
+            NullLogger<ChannelCardConversationTurnRunner>.Instance);
+        var chunk = BuildChunk("corr-relay-card-1");
+
+        var result = await runner.RunCardCreateAsync(
+            chunk,
+            "streaming_main",
+            RelayRuntimeContext(
+                chunk.CorrelationId,
+                "relay-token-1",
+                "relay-message-1",
+                "runtime-card-token-1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.CardMessageId.Should().Be("om_relay_card_1");
+        lark.SendCalls.Should().BeEmpty();
+        lark.ReplyCalls.Should().BeEmpty();
+        cardKit.CreateCalls.Should().ContainSingle();
+        cardKit.StreamCalls.Should().ContainSingle();
+
+        var request = relayHandler.Requests.Should().ContainSingle().Subject;
+        request.Method.Should().Be(HttpMethod.Post);
+        request.Path.Should().Be("/api/v1/channel-relay/reply");
+        request.Authorization.Should().Be("Bearer relay-token-1");
+        using var body = JsonDocument.Parse(request.Body);
+        body.RootElement.GetProperty("message_id").GetString().Should().Be("relay-message-1");
+        var reply = body.RootElement.GetProperty("reply");
+        reply.GetProperty("text").GetString().Should().Be(chunk.AccumulatedText);
+        var card = reply.GetProperty("metadata").GetProperty("card");
+        card.GetProperty("type").GetString().Should().Be("card");
+        card.GetProperty("data").GetProperty("card_id").GetString().Should().Be("card-runtime-1");
+    }
+
+    [Fact]
+    public async Task RunCardCreateAsync_ShouldFailClosed_WhenRelayAuthorityBelongsToAnotherTurn()
+    {
+        var cardKit = new RecordingCardKitClient();
+        var lark = new RecordingLarkNyxClient();
+        var relayHandler = new RecordingRelayHandler(
+            """{"message_id":"unexpected","platform_message_id":"om_unexpected"}""");
+        using var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
+            new HttpClient(relayHandler));
+        var runner = new ChannelCardConversationTurnRunner(
+            cardKit,
+            lark,
+            outboundClientFactory: null,
+            nyxClient,
+            NullLogger<ChannelCardConversationTurnRunner>.Instance);
+
+        var result = await runner.RunCardCreateAsync(
+            BuildChunk("corr-relay-card-2"),
+            "streaming_main",
+            RelayRuntimeContext(
+                "different-correlation",
+                "relay-token-2",
+                "relay-message-2",
+                "runtime-card-token-2"),
+            CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.ErrorCode.Should().Be("reply_authority_mismatch");
+        relayHandler.Requests.Should().BeEmpty();
+        lark.SendCalls.Should().BeEmpty();
+        lark.ReplyCalls.Should().BeEmpty();
+        cardKit.CreateCalls.Should().BeEmpty();
+        cardKit.StreamCalls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunCardCreateAsync_ShouldNotUseRawProxy_WhenInboundMarkerHasNoRelayAuthority()
+    {
+        var cardKit = new RecordingCardKitClient();
+        var lark = new RecordingLarkNyxClient();
+        var runner = new ChannelCardConversationTurnRunner(
+            cardKit,
+            lark,
+            outboundClientFactory: null,
+            nyxClient: null,
+            NullLogger<ChannelCardConversationTurnRunner>.Instance);
+        var chunk = BuildChunk("corr-relay-card-3");
+        chunk.Activity.OutboundDelivery = new OutboundDeliveryContext
+        {
+            CorrelationId = chunk.CorrelationId,
+            ReplyMessageId = "relay-message-3",
+        };
+
+        var result = await runner.RunCardCreateAsync(
+            chunk,
+            "streaming_main",
+            RuntimeContext("runtime-card-token-3"),
+            CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.ErrorCode.Should().Be("relay_reply_authority_missing");
+        cardKit.CreateCalls.Should().BeEmpty();
+        lark.SendCalls.Should().BeEmpty();
+        lark.ReplyCalls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunCardCreateAsync_ShouldMarkRelayFailureAsDeliveryAmbiguous()
+    {
+        var cardKit = new RecordingCardKitClient();
+        var lark = new RecordingLarkNyxClient();
+        var relayHandler = new RecordingRelayHandler(
+            """{"error":true,"status":503,"message":"downstream unavailable"}""");
+        using var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
+            new HttpClient(relayHandler));
+        var runner = new ChannelCardConversationTurnRunner(
+            cardKit,
+            lark,
+            outboundClientFactory: null,
+            nyxClient,
+            NullLogger<ChannelCardConversationTurnRunner>.Instance);
+        var chunk = BuildChunk("corr-relay-card-4");
+
+        var result = await runner.RunCardCreateAsync(
+            chunk,
+            "streaming_main",
+            RelayRuntimeContext(
+                chunk.CorrelationId,
+                "relay-token-4",
+                "relay-message-4",
+                "runtime-card-token-4"),
+            CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.DeliveryDisposition.Should().Be(
+            LarkCardCreateDeliveryDisposition.ReplyAuthoritySpentDeliveryUnknown);
+        result.ErrorCode.Should().Be("card_relay_reply_failed");
+        result.CardId.Should().Be("card-runtime-1");
+        lark.SendCalls.Should().BeEmpty();
+        lark.ReplyCalls.Should().BeEmpty();
+        cardKit.StreamCalls.Should().BeEmpty();
+    }
+
     [Fact]
     public async Task Source_ShouldUseLarkStreamingCardShellHelper_ForCloseStreamingSettings()
     {
@@ -452,6 +607,20 @@ public sealed class ChannelCardConversationTurnRunnerTests
     private static ConversationTurnRuntimeContext RuntimeContext(string token) =>
         new(NyxRelayReplyToken: null, NyxUserAccessToken: token);
 
+    private static ConversationTurnRuntimeContext RelayRuntimeContext(
+        string correlationId,
+        string replyToken,
+        string replyMessageId,
+        string userAccessToken) =>
+        new(
+            new NyxRelayReplyTokenContext(
+                correlationId,
+                replyToken,
+                replyMessageId,
+                DateTimeOffset.UtcNow.AddMinutes(5),
+                userAccessToken),
+            userAccessToken);
+
     private static string GetRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
@@ -550,6 +719,34 @@ public sealed class ChannelCardConversationTurnRunnerTests
             return Task.FromResult("""{"code":0,"data":{}}""");
         }
     }
+
+    private sealed class RecordingRelayHandler(string responseBody) : HttpMessageHandler
+    {
+        public List<RelayRequest> Requests { get; } = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            Requests.Add(new RelayRequest(
+                request.Method,
+                request.RequestUri?.AbsolutePath ?? string.Empty,
+                request.Headers.Authorization?.ToString() ?? string.Empty,
+                request.Content is null
+                    ? string.Empty
+                    : await request.Content.ReadAsStringAsync(cancellationToken)));
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(responseBody),
+            };
+        }
+    }
+
+    private sealed record RelayRequest(
+        HttpMethod Method,
+        string Path,
+        string Authorization,
+        string Body);
 
     private sealed class RecordingLarkNyxClient : ILarkNyxClient
     {
