@@ -1067,6 +1067,31 @@ public sealed class NyxIdChatBrowserActionTests
     }
 
     [Fact]
+    public void DifferentClientWithSamePersistedReportFromForeignOwner_ShouldFailClosed()
+    {
+        var blocked = BlockedActionState();
+        var command = ContinueCommand(
+            blocked.PendingActions.Single().ActionRequestId,
+            NyxIdChatActionDisposition.Completed);
+        var first = NyxIdChatBrowserActions.Continue(blocked, command, Now);
+        var retry = command.Clone();
+        retry.ClientRequestId = "client-action-beta";
+        retry.CommandId = "command-action-beta";
+        retry.CorrelationId = "correlation-action-beta";
+        retry.ContinuationTurnId = "turn-action-beta";
+        retry.OwnerSubject = "owner-other";
+
+        var decision = NyxIdChatBrowserActions.Continue(first.State, retry, Now);
+
+        decision.Outcome.Should().Be(NyxIdChatTransitionOutcome.Rejected);
+        decision.ShouldCommit.Should().BeFalse();
+        decision.ShouldDispatch.Should().BeFalse();
+        decision.ReasonCode.Should().Be(
+            NyxIdChatBrowserActions.ActionContinuationInvalid);
+        decision.State.Should().BeEquivalentTo(first.State);
+    }
+
+    [Fact]
     public void DifferentClientWithConflictingRecentReport_ShouldFailClosed()
     {
         var blocked = BlockedActionState();
@@ -1097,6 +1122,34 @@ public sealed class NyxIdChatBrowserActionTests
         decision.ReasonCode.Should().Be(
             NyxIdChatBrowserActions.ActionContinuationConflict);
         decision.State.Should().BeEquivalentTo(reconciled.State);
+    }
+
+    [Fact]
+    public void DifferentClientWithPersistedReportUsingWrongResourceVariant_ShouldBeInvalid()
+    {
+        var blocked = BlockedActionState();
+        var command = ContinueCommand(
+            blocked.PendingActions.Single().ActionRequestId,
+            NyxIdChatActionDisposition.Completed);
+        var first = NyxIdChatBrowserActions.Continue(blocked, command, Now);
+        var retry = command.Clone();
+        retry.ClientRequestId = "client-action-beta";
+        retry.CommandId = "command-action-beta";
+        retry.CorrelationId = "correlation-action-beta";
+        retry.ContinuationTurnId = "turn-action-beta";
+        retry.Actions[0].Resource = new NyxIdChatSafeResourceRef
+        {
+            Key = new NyxIdChatKeyRef { KeyId = "key-alpha" },
+        };
+
+        var decision = NyxIdChatBrowserActions.Continue(first.State, retry, Now);
+
+        decision.Outcome.Should().Be(NyxIdChatTransitionOutcome.Rejected);
+        decision.ShouldCommit.Should().BeFalse();
+        decision.ShouldDispatch.Should().BeFalse();
+        decision.ReasonCode.Should().Be(
+            NyxIdChatBrowserActions.ActionContinuationInvalid);
+        decision.State.Should().BeEquivalentTo(first.State);
     }
 
     [Fact]
@@ -1847,6 +1900,7 @@ public sealed class NyxIdChatBrowserActionTests
         {
             ConversationActorId = "conversation-alpha",
             ScopeId = "scope-alpha",
+            OwnerSubject = "owner-alpha",
             ActiveTurn = new NyxIdChatTurnState
             {
                 TurnId = "turn-alpha",

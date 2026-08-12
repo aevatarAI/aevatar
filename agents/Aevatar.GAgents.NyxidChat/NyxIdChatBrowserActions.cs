@@ -1140,6 +1140,7 @@ public static class NyxIdChatBrowserActions
         !string.IsNullOrWhiteSpace(command.CommandId) &&
         !string.IsNullOrWhiteSpace(command.CorrelationId) &&
         string.Equals(state.ScopeId, command.ScopeId.Trim(), StringComparison.Ordinal) &&
+        OwnerSubjectsMatch(state.OwnerSubject, command.OwnerSubject) &&
         string.Equals(
             state.ConversationActorId,
             command.ConversationActorId.Trim(),
@@ -1310,13 +1311,13 @@ public static class NyxIdChatBrowserActions
             {
                 return RejectContinuation(state, ActionContinuationInvalid);
             }
+            if (!ResourceMatchesAction(action.Action, report.Disposition, report.Resource))
+                return RejectContinuation(state, ActionContinuationInvalid);
 
             firstAction ??= action;
             if (action.Reports.Count == 0)
             {
                 if (!pendingIds.Contains(action.ActionRequestId))
-                    return RejectContinuation(state, ActionContinuationInvalid);
-                if (!ResourceMatchesAction(action.Action, report.Disposition, report.Resource))
                     return RejectContinuation(state, ActionContinuationInvalid);
 
                 hasFreshReport = true;
