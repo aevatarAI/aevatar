@@ -240,62 +240,6 @@ public sealed class MainnetHostCompositionTests
     }
 
     [Fact]
-    public void AddAevatarMainnetHost_ShouldKeepStudioLocalToolsOutOfPublicToolSets()
-    {
-        using var home = new TemporaryAevatarHomeScope();
-        using var runtimeProvider = new EnvironmentVariableScope(
-            "AEVATAR_ActorRuntime__Provider", "InMemory");
-        using var documentProvider = new EnvironmentVariableScope(
-            "AEVATAR_Projection__Document__Providers__InMemory__Enabled", "true");
-        using var documentElasticsearch = new EnvironmentVariableScope(
-            "AEVATAR_Projection__Document__Providers__Elasticsearch__Enabled", "false");
-        using var graphProvider = new EnvironmentVariableScope(
-            "AEVATAR_Projection__Graph__Providers__InMemory__Enabled", "true");
-        using var graphNeo4j = new EnvironmentVariableScope(
-            "AEVATAR_Projection__Graph__Providers__Neo4j__Enabled", "false");
-        using var projectionEnvironment = new EnvironmentVariableScope(
-            "Projection__Policies__Environment", "Development");
-        using var denyInMemoryDocument = new EnvironmentVariableScope(
-            "Projection__Policies__DenyInMemoryDocumentReadStore", "false");
-        using var denyInMemoryGraph = new EnvironmentVariableScope(
-            "Projection__Policies__DenyInMemoryGraphFactStore", "false");
-        var builder = CreateBuilder();
-        builder.AddAevatarMainnetHost(options =>
-        {
-            options.EnableConnectorBootstrap = false;
-            options.EnableCors = false;
-        });
-
-        using var app = builder.Build();
-        var registry = app.Services.GetRequiredService<IToolSetRegistry>();
-
-        registry.GetRegisteredNames().Should().Contain(ToolSetNames.StudioLocal);
-        var workspace = registry.Resolve(ToolSetNames.WorkspaceDefault);
-        var larkSelfNotify = registry.Resolve(ToolSetNames.LarkSelfNotify);
-        var studioLocal = registry.Resolve(ToolSetNames.StudioLocal);
-
-        workspace.IsSuccess.Should().BeTrue();
-        larkSelfNotify.IsSuccess.Should().BeTrue();
-        studioLocal.IsSuccess.Should().BeTrue();
-
-        var studioLocalSourceTypes = StudioLocalToolSourceTypes();
-        workspace.Sources.Select(static source => source.GetType())
-            .Should()
-            .NotIntersectWith(studioLocalSourceTypes);
-        larkSelfNotify.Sources.Select(static source => source.GetType())
-            .Should()
-            .NotIntersectWith(studioLocalSourceTypes);
-        studioLocal.Sources.Select(static source => source.GetType())
-            .Should()
-            .Equal(studioLocalSourceTypes);
-
-        app.Services.GetServices<IAgentToolSource>()
-            .Select(static source => source.GetType())
-            .Should()
-            .NotIntersectWith(studioLocalSourceTypes);
-    }
-
-    [Fact]
     public async Task AddAevatarMainnetHost_WithInMemoryDependencies_ShouldBuildAndStartFullComposition()
     {
         using var home = new TemporaryAevatarHomeScope();
@@ -710,7 +654,6 @@ public sealed class MainnetHostCompositionTests
         registry.GetRegisteredNames().Should().Equal(
             ToolSetNames.LarkSelfNotify,
             ToolSetNames.NyxIdConnectedServices,
-            ToolSetNames.StudioLocal,
             ToolSetNames.WorkspaceDefault);
 
         var workspace = registry.Resolve(new ChatRouteToolSetRef { Name = ToolSetNames.WorkspaceDefault });
@@ -721,10 +664,16 @@ public sealed class MainnetHostCompositionTests
         workspace.Sources.Should().Contain(source => source is StartWorkflowToolSource);
         workspace.Sources.Should().Contain(source => source is ObserveRunToolSource);
         workspace.Sources.Should().Contain(source => source is ReadWorkflowRunArtifactToolSource);
+        workspace.Sources.Should().Contain(source => source is ProvisionWorkflowScheduleToolSource);
+        workspace.Sources.Should().Contain(source => source is CreateStudioTeamToolSource);
+        workspace.Sources.Should().Contain(source => source is StudioTeamQueryToolSource);
+        workspace.Sources.Should().Contain(source => source is CreateStudioMemberToolSource);
+        workspace.Sources.Should().Contain(source => source is StudioMemberQueryToolSource);
+        workspace.Sources.Should().Contain(source => source is StudioScheduleQueryToolSource);
+        workspace.Sources.Should().Contain(source => source is StudioWorkflowQueryToolSource);
         workspace.Sources.Should().Contain(source => source is WorkflowCatalogAgentToolSource);
-        workspace.Sources.Select(static source => source.GetType())
-            .Should()
-            .NotIntersectWith(StudioLocalToolSourceTypes());
+        workspace.Sources.Should().Contain(source => source is BindStudioMemberWorkflowToolSource);
+        workspace.Sources.Should().Contain(source => source is ScheduleStudioMemberWorkflowToolSource);
         workspace.Sources.Should().Contain(source => source.GetType().Name == "ResponsesAevatarToolProvider");
         workspace.Sources.Should().Contain(source => source is ChannelInteractiveReplyToolSource);
         workspace.Sources.Should().Contain(source => source is ChannelRegistrationToolSource);
@@ -1456,19 +1405,6 @@ public sealed class MainnetHostCompositionTests
         => services.Where(descriptor =>
             descriptor.ServiceType == typeof(IHostedService) &&
             descriptor.ImplementationType == typeof(THostedService));
-
-    private static System.Type[] StudioLocalToolSourceTypes() =>
-    [
-        typeof(ProvisionWorkflowScheduleToolSource),
-        typeof(CreateStudioTeamToolSource),
-        typeof(StudioTeamQueryToolSource),
-        typeof(CreateStudioMemberToolSource),
-        typeof(StudioMemberQueryToolSource),
-        typeof(StudioScheduleQueryToolSource),
-        typeof(StudioWorkflowQueryToolSource),
-        typeof(BindStudioMemberWorkflowToolSource),
-        typeof(ScheduleStudioMemberWorkflowToolSource),
-    ];
 
     private sealed class BrokenMainnetService(MissingMainnetDependency dependency)
     {

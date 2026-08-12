@@ -37,11 +37,7 @@ public sealed record UserLlmRouteOption(
     string? UserServiceId,
     string? ServiceSlug,
     string? DefaultModel,
-    string? Description,
-    UserLlmModelCatalog? ModelCatalog = null);
-
-public sealed record UserLlmModelCatalog(
-    string? DefaultModelId);
+    string? Description);
 
 public sealed record UserLlmModelGroup(
     string RouteValue,

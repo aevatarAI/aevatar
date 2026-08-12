@@ -66,8 +66,7 @@ public sealed record NyxIdUserService(
     string? Label,
     string? CatalogServiceName,
     bool IsActive,
-    NyxIdUserServiceCredentialSource CredentialSource,
-    string? DefaultModel = null);
+    NyxIdUserServiceCredentialSource CredentialSource);
 
 public sealed record NyxIdUserServices(IReadOnlyList<NyxIdUserService> Services);
 
@@ -237,8 +236,7 @@ public static class NyxIdApiAccessResponseParser
                 ParseCredentialSource(RequireProperty(
                     serviceElement,
                     "credential_source",
-                    JsonValueKind.Object)),
-                ReadOptionalString(serviceElement, "default_model", "defaultModel")));
+                    JsonValueKind.Object))));
         }
 
         return new NyxIdUserServices(services);
@@ -609,29 +607,15 @@ public static class NyxIdApiAccessResponseParser
         return true;
     }
 
-    private static string? ReadOptionalString(JsonElement root, string propertyName, params string[] alternativePropertyNames)
+    private static string? ReadOptionalString(JsonElement root, string propertyName)
     {
-        if (TryReadOptionalString(root, propertyName, out var value))
-            return value;
-        foreach (var alternativePropertyName in alternativePropertyNames)
+        if (!root.TryGetProperty(propertyName, out var property) ||
+            property.ValueKind == JsonValueKind.Null)
         {
-            if (TryReadOptionalString(root, alternativePropertyName, out value))
-                return value;
+            return null;
         }
-
-        return null;
-    }
-
-    private static bool TryReadOptionalString(JsonElement root, string propertyName, out string? value)
-    {
-        value = null;
-        if (!root.TryGetProperty(propertyName, out var property))
-            return false;
-        if (property.ValueKind == JsonValueKind.Null)
-            return true;
         RequireKind(property, JsonValueKind.String);
-        value = property.GetString();
-        return true;
+        return property.GetString();
     }
 
     private static bool RequireBoolean(JsonElement root, string propertyName)

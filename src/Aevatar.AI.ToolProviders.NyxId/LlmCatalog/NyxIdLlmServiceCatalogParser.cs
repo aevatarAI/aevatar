@@ -6,7 +6,6 @@ namespace Aevatar.AI.ToolProviders.NyxId.LlmCatalog;
 
 public static class NyxIdLlmServiceCatalogParser
 {
-    private const string PreferredObservedDefaultModel = "gpt-5.5";
     private const string ReadyStatus = "ready";
 
     public static NyxIdLlmServicesResult ParseServicesResult(string response)
@@ -56,69 +55,12 @@ public static class NyxIdLlmServiceCatalogParser
         ArgumentNullException.ThrowIfNull(diagnostics);
         ArgumentNullException.ThrowIfNull(inventory);
 
-        var gatewayServices = diagnostics.Services
-            .Where(IsGatewayProvider)
-            .ToArray();
-        var userServices = inventory.Services
+        var services = inventory.Services
             .Where(IsEligible)
             .OrderBy(static service => service.Id, StringComparer.Ordinal)
-            .Select(service => ComposeUserService(diagnostics.Services, service));
-        return diagnostics with { Services = gatewayServices.Concat(userServices).ToArray() };
-    }
-
-    public static IReadOnlyList<string> ParseOpenAiCompatibleModels(string response)
-    {
-        using var document = ParseSuccessDocument(response);
-        var root = document.RootElement;
-        return root.ValueKind switch
-        {
-            JsonValueKind.Array => ReadModelIds(root),
-            JsonValueKind.Object => ReadModelIds(
-                TryGetProperty(root, "data", "models", "items") ?? root),
-            _ => [],
-        };
-    }
-
-    public static NyxIdLlmServicesResult MergeObservedModels(
-        NyxIdLlmServicesResult result,
-        string serviceSlug,
-        IReadOnlyList<string> observedModels)
-    {
-        ArgumentNullException.ThrowIfNull(result);
-        var normalizedSlug = UserLlmPreferenceWriteCore.NormalizeOptional(serviceSlug);
-        if (normalizedSlug is null || observedModels.Count == 0)
-            return result;
-
-        var models = NormalizeModelIds(observedModels);
-        if (models.Count == 0)
-            return result;
-
-        var observedDefaultModel = SelectObservedDefaultModel(models);
-        var services = result.Services
-            .Select(service => string.Equals(service.ServiceSlug, normalizedSlug, StringComparison.OrdinalIgnoreCase)
-                ? service with
-                {
-                    DefaultModel = FirstKnownOptional(service.DefaultModel, observedDefaultModel),
-                    Models = MergeModels(service.Models, models),
-                }
-                : service)
+            .Select(service => ComposeUserService(diagnostics.Services, service))
             .ToArray();
-        return result with { Services = services };
-    }
-
-    public static bool ShouldProbeProxyModels(NyxIdLlmService service)
-    {
-        if (!UserLlmCatalogNormalization.IsReady(service) ||
-            !UserLlmCatalogNormalization.NormalizeSource(service.Source).IsUserServiceRoute ||
-            service.Identity is null)
-        {
-            return false;
-        }
-
-        if (service.Models.Count > 0 && !string.IsNullOrWhiteSpace(service.DefaultModel))
-            return false;
-
-        return LooksLikeLlmRouteCandidate(service.ServiceSlug, service.DisplayName, service.Description);
+        return diagnostics with { Services = services };
     }
 
     private static NyxIdLlmServicesResult MergeRouteCandidates(
@@ -161,7 +103,7 @@ public static class NyxIdLlmServiceCatalogParser
                 diagnostic?.DisplayName,
                 inventoryService.Slug),
             RouteValue: $"/api/v1/proxy/s/{inventoryService.Slug}",
-            DefaultModel: FirstKnownOptional(inventoryService.DefaultModel, diagnostic?.DefaultModel),
+            DefaultModel: diagnostic?.DefaultModel,
             Models: diagnostic?.Models ?? [],
             Status: diagnostic?.Status ?? ReadyStatus,
             Source: NyxIdLlmProviderSource.UserService,
@@ -176,31 +118,11 @@ public static class NyxIdLlmServiceCatalogParser
          service.CredentialSource.Kind == NyxIdUserServiceCredentialSourceKind.Organization &&
          service.CredentialSource.Allowed);
 
-    private static bool IsGatewayProvider(NyxIdLlmService service) =>
-        UserLlmCatalogNormalization.NormalizeSource(service.Source) == UserLlmRouteSourceValue.GatewayProvider;
-
     private static UserLlmServiceIdentity InventoryIdentity(NyxIdUserService service) =>
         new(UserLlmIdentityAuthority.NyxIdUserServicesInventory, service.Id);
 
     private static string FirstNonEmpty(params string?[] candidates) =>
         candidates.First(candidate => !string.IsNullOrWhiteSpace(candidate))!.Trim();
-
-    private static string? FirstKnownOptional(params string?[] candidates) =>
-        candidates.FirstOrDefault(candidate => !string.IsNullOrWhiteSpace(candidate))?.Trim();
-
-    private static string SelectObservedDefaultModel(IReadOnlyList<string> models) =>
-        models.FirstOrDefault(
-            model => string.Equals(model, PreferredObservedDefaultModel, StringComparison.OrdinalIgnoreCase)) ?? models[0];
-
-    private static IReadOnlyList<string> MergeModels(
-        IReadOnlyList<string> existingModels,
-        IReadOnlyList<string> observedModels) =>
-        existingModels
-            .Concat(observedModels)
-            .Where(model => !string.IsNullOrWhiteSpace(model))
-            .Select(model => model.Trim())
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
 
     public static IReadOnlyList<NyxIdLlmService> ParseProxyRouteCandidates(string response)
     {
@@ -632,21 +554,6 @@ public static class NyxIdLlmServiceCatalogParser
             .Count() >= 2;
     }
 
-    private static bool LooksLikeLlmRouteCandidate(string slug, string displayName, string? description)
-    {
-        var signals = new[] { slug, displayName, description };
-        if (signals.Any(ContainsNegativeLlmRouteSignal))
-            return false;
-
-        if (signals.Any(ContainsStrongLlmRouteSignal))
-            return true;
-
-        return signals
-            .SelectMany(EnumerateWeakLlmRouteSignals)
-            .Distinct(StringComparer.Ordinal)
-            .Count() >= 2;
-    }
-
     private static bool ContainsStrongLlmRouteSignal(string? value)
     {
         if (string.IsNullOrWhiteSpace(value))
@@ -897,45 +804,6 @@ public static class NyxIdLlmServiceCatalogParser
 
         return [];
     }
-
-    private static IReadOnlyList<string> ReadModelIds(JsonElement element)
-    {
-        if (element.ValueKind == JsonValueKind.Array)
-        {
-            return NormalizeModelIds(element.EnumerateArray()
-                .Select(ReadModelId)
-                .Where(model => !string.IsNullOrWhiteSpace(model))
-                .Select(model => model!));
-        }
-
-        if (element.ValueKind == JsonValueKind.Object)
-        {
-            return NormalizeModelIds(element.EnumerateObject()
-                .Select(property => property.Value.ValueKind == JsonValueKind.Object
-                    ? ReadOptionalString(property.Value, "id", "name", "model")
-                    : property.Value.ValueKind == JsonValueKind.String
-                        ? property.Value.GetString()
-                        : null)
-                .Where(model => !string.IsNullOrWhiteSpace(model))
-                .Select(model => model!));
-        }
-
-        return [];
-    }
-
-    private static string? ReadModelId(JsonElement element) => element.ValueKind switch
-    {
-        JsonValueKind.String => element.GetString(),
-        JsonValueKind.Object => ReadOptionalString(element, "id", "name", "model"),
-        _ => null,
-    };
-
-    private static IReadOnlyList<string> NormalizeModelIds(IEnumerable<string> models) =>
-        models
-            .Where(model => !string.IsNullOrWhiteSpace(model))
-            .Select(model => model.Trim())
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
 
     private static IReadOnlyDictionary<string, IReadOnlyList<string>> ReadStringMapArray(
         JsonElement element,

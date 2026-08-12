@@ -30,16 +30,6 @@ function trimOptional(value: unknown): string | undefined {
   return normalized || undefined;
 }
 
-function routeOptionDefaultModelId(
-  option: StudioUserLlmRouteOption,
-): string | null {
-  return (
-    trimOptional(option.modelCatalog?.defaultModelId) ??
-    trimOptional(option.defaultModel) ??
-    null
-  );
-}
-
 export function encodeUserLlmSelectionValue(
   selection: UserLlmSelectionDraft,
 ): string {
@@ -100,7 +90,7 @@ export function buildUserLlmSelectionOptions(
       selection,
       ready: option.ready,
       allowed: option.allowed,
-      defaultModel: routeOptionDefaultModelId(option),
+      defaultModel: trimOptional(option.defaultModel) ?? null,
     });
   }
 

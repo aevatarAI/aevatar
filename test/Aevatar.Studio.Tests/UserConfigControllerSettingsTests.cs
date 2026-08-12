@@ -71,126 +71,6 @@ public sealed class UserConfigControllerSettingsTests
     }
 
     [Fact]
-    public async Task GetLlmSettings_ShouldReturnGatewayAndInventoryDefaultModels()
-    {
-        var httpHandler = new RecordingHttpHandler(
-            (HttpStatusCode.OK, """
-            {
-              "services": [
-                {
-                  "user_service_id": "gateway-catalog",
-                  "service_slug": "nyxid-gateway",
-                  "display_name": "NyxID Gateway",
-                  "route_value": "/api/v1/llm/gateway/v1",
-                  "default_model": "gpt-gateway",
-                  "models": ["gpt-gateway"],
-                  "status": "ready",
-                  "source": "gateway_provider",
-                  "allowed": true
-                },
-                {
-                  "user_service_id": "diagnostic-openai",
-                  "service_slug": "openai-work",
-                  "display_name": "OpenAI Work",
-                  "route_value": "/api/v1/proxy/s/openai-work",
-                  "default_model": "gpt-diagnostic",
-                  "models": ["gpt-diagnostic"],
-                  "status": "ready",
-                  "source": "user_service",
-                  "allowed": true
-                }
-              ]
-            }
-            """),
-            (HttpStatusCode.OK, """{"keys":[]}"""),
-            (HttpStatusCode.OK, """{"services":[]}"""))
-            .RespondToUserServicesWith("""
-            {
-              "services": [
-                {
-                  "id": "us-openai",
-                  "slug": "openai-work",
-                  "label": "OpenAI Work",
-                  "catalog_service_name": "OpenAI Work",
-                  "is_active": true,
-                  "credential_source": { "type": "personal" },
-                  "default_model": "gpt-inventory"
-                }
-              ]
-            }
-            """);
-        var controller = CreateController(
-            current: UserServiceConfig("", "openai-work", "us-openai"),
-            httpHandler: httpHandler,
-            bearerToken: "user-token-1");
-
-        var response = await controller.GetLlmSettings(CancellationToken.None);
-
-        var ok = response.Result.Should().BeOfType<OkObjectResult>().Subject;
-        var payload = ok.Value.Should().BeOfType<UserLlmSettingsResponse>().Subject;
-        var gateway = payload.RouteOptions.Should()
-            .ContainSingle(option => option.RouteValue == UserConfigLlmRouteDefaults.Gateway)
-            .Subject;
-        gateway.DefaultModel.Should().Be("gpt-gateway");
-        gateway.ModelCatalog.DefaultModelId.Should().Be("gpt-gateway");
-
-        var inventory = payload.RouteOptions.Should()
-            .ContainSingle(option => option.UserServiceId == "us-openai")
-            .Subject;
-        inventory.DefaultModel.Should().Be("gpt-inventory");
-        inventory.ModelCatalog.DefaultModelId.Should().Be("gpt-inventory");
-    }
-
-    [Fact]
-    public async Task GetLlmSettings_WhenInventoryLacksModels_ShouldProbeProxyModels()
-    {
-        var httpHandler = new RecordingHttpHandler(
-            (HttpStatusCode.OK, """{"services":[]}"""),
-            (HttpStatusCode.OK, """{"keys":[]}"""),
-            (HttpStatusCode.OK, """{"services":[]}"""))
-            .RespondToUserServicesWith(PersonalUserServicesJson(
-                "us-chrono-public",
-                "chrono-llm-public",
-                "Chrono LLM (public)"))
-            .RespondToPathWith(
-                "/api/v1/proxy/s/chrono-llm-public/models",
-                """
-                {
-                  "object": "list",
-                  "data": [
-                    { "id": "gpt-5.4", "object": "model" },
-                    { "id": "gpt-5.5", "object": "model" }
-                  ]
-                }
-                """);
-        var controller = CreateController(
-            current: UserServiceConfig("", "chrono-llm-public", "us-chrono-public"),
-            httpHandler: httpHandler,
-            bearerToken: "user-token-1");
-
-        var response = await controller.GetLlmSettings(CancellationToken.None);
-
-        var ok = response.Result.Should().BeOfType<OkObjectResult>().Subject;
-        var payload = ok.Value.Should().BeOfType<UserLlmSettingsResponse>().Subject;
-        var option = payload.RouteOptions.Should()
-            .ContainSingle(candidate => candidate.UserServiceId == "us-chrono-public")
-            .Subject;
-        option.DefaultModel.Should().Be("gpt-5.5");
-        option.ModelCatalog.DefaultModelId.Should().Be("gpt-5.5");
-        payload.ModelGroupsByRoute.Should()
-            .ContainSingle(group => group.RouteValue == "/api/v1/proxy/s/chrono-llm-public")
-            .Which.Models.Should().Equal("gpt-5.4", "gpt-5.5");
-        httpHandler.Requests.Select(request => request.Path)
-            .Should()
-            .Equal(
-                "/api/v1/llm/services",
-                "/api/v1/keys",
-                "/api/v1/proxy/services?per_page=100",
-                "/api/v1/user-services",
-                "/api/v1/proxy/s/chrono-llm-public/models");
-    }
-
-    [Fact]
     public async Task GetServicesAsync_ShouldMintOnlyStrictInventoryIdentities()
     {
         var httpHandler = new RecordingHttpHandler(
@@ -414,8 +294,7 @@ public sealed class UserConfigControllerSettingsTests
                 option.Status == UserLlmRouteStatus.Ready &&
                 option.Allowed &&
                 option.Ready &&
-                option.UserServiceId == "us-openai" &&
-                option.ModelCatalog.DefaultModelId == "gpt-5.4");
+                option.UserServiceId == "us-openai");
         payload.Capabilities.CanSave.Should().BeTrue();
     }
 
@@ -504,11 +383,8 @@ public sealed class UserConfigControllerSettingsTests
                 option.Source == UserLlmRouteSource.GatewayProvider &&
                 option.Status == UserLlmRouteStatus.Ready &&
                 option.Allowed &&
-                option.Ready &&
-                option.DefaultModel == "gpt-5.4" &&
-                option.ModelCatalog.DefaultModelId == "gpt-5.4");
-        payload.ModelGroupsByRoute.Should()
-            .Contain(group => group.RouteValue == UserConfigLlmRouteDefaults.Gateway && group.Models.Contains("gpt-5.4"));
+                option.Ready);
+        payload.ModelGroupsByRoute.Should().BeEmpty();
         payload.EffectiveRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
         httpHandler.Requests.Select(request => request.Path)
             .Should()
@@ -557,8 +433,7 @@ public sealed class UserConfigControllerSettingsTests
               ]
             }
             """))
-            .RespondToUserServicesWith(PersonalUserServicesJson("us-chrono", "chrono-llm", "Chrono LLM"))
-            .RespondToPathWith("/api/v1/proxy/s/chrono-llm/models", """{"data":[]}""");
+            .RespondToUserServicesWith(PersonalUserServicesJson("us-chrono", "chrono-llm", "Chrono LLM"));
         var controller = CreateController(
             current: UserServiceConfig("gpt-5.5", "chrono-llm", "us-chrono"),
             httpHandler: httpHandler,
@@ -581,8 +456,7 @@ public sealed class UserConfigControllerSettingsTests
                 "/api/v1/llm/services",
                 "/api/v1/keys",
                 "/api/v1/proxy/services?per_page=100",
-                "/api/v1/user-services",
-                "/api/v1/proxy/s/chrono-llm/models");
+                "/api/v1/user-services");
     }
 
     [Fact]
@@ -1038,7 +912,6 @@ public sealed class UserConfigControllerSettingsTests
     {
         private readonly Queue<(HttpStatusCode StatusCode, string Body)> _responses;
         private readonly (HttpStatusCode StatusCode, string Body) _fallback;
-        private readonly Dictionary<string, (HttpStatusCode StatusCode, string Body)> _pathResponses = new(StringComparer.Ordinal);
         private (HttpStatusCode StatusCode, string Body) _userServicesResponse =
             (HttpStatusCode.OK, """{"services":[]}""");
 
@@ -1065,32 +938,20 @@ public sealed class UserConfigControllerSettingsTests
             return this;
         }
 
-        public RecordingHttpHandler RespondToPathWith(
-            string path,
-            string body,
-            HttpStatusCode statusCode = HttpStatusCode.OK)
-        {
-            _pathResponses[path] = (statusCode, body);
-            return this;
-        }
-
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken)
         {
-            var pathAndQuery = request.RequestUri?.PathAndQuery ?? string.Empty;
             Requests.Add((
-                pathAndQuery,
+                request.RequestUri?.PathAndQuery ?? string.Empty,
                 request.Method.Method,
                 request.Headers.Authorization?.ToString(),
                 request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(cancellationToken)));
-            var response = _pathResponses.TryGetValue(pathAndQuery, out var pathResponse)
-                ? pathResponse
-                : request.RequestUri?.AbsolutePath == "/api/v1/user-services"
-                    ? _userServicesResponse
-                    : _responses.Count > 0
-                        ? _responses.Dequeue()
-                        : _fallback;
+            var response = request.RequestUri?.AbsolutePath == "/api/v1/user-services"
+                ? _userServicesResponse
+                : _responses.Count > 0
+                    ? _responses.Dequeue()
+                    : _fallback;
             return new HttpResponseMessage(response.StatusCode)
             {
                 Content = new StringContent(response.Body, System.Text.Encoding.UTF8, "application/json"),

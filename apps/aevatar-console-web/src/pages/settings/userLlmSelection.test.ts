@@ -42,8 +42,7 @@ const routeOptions: StudioUserLlmRouteOption[] = [
     ready: true,
     userServiceId: "us-beta",
     serviceSlug: "shared-openai",
-    modelCatalog: { defaultModelId: "gpt-beta-catalog" },
-    defaultModel: "gpt-beta-legacy",
+    defaultModel: "gpt-beta",
     description: null,
   },
   {
@@ -80,7 +79,7 @@ describe("userLlmSelection", () => {
       routeValue: duplicateRoute,
     });
     expect(options.find((option) => option.value === "user-service:us-beta"))
-      .toMatchObject({ defaultModel: "gpt-beta-catalog" });
+      .toMatchObject({ defaultModel: "gpt-beta" });
   });
 
   it("encodes exact user service IDs without using their route", () => {

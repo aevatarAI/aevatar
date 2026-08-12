@@ -1,25 +1,14 @@
-using System.Runtime.CompilerServices;
-using Aevatar.AI.Abstractions;
-using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.AI.ToolProviders.StudioProvisioning;
-using Aevatar.AI.ToolProviders.ToolSetRegistry;
-using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
-using Aevatar.Studio.Application.Provisioning;
-using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Workflows;
 using Aevatar.Workflow.Application.Workflows;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Infrastructure.Workflows;
-using Aevatar.Workflow.Integration.AI;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
@@ -338,9 +327,7 @@ public class WorkflowDefinitionCatalogTests
         allowed.Should().Contain("nyxid_llm_status");
         allowed.Should().Contain("nyxid_services");
         allowed.Should().NotContain("nyxid_proxy");
-        role.AgentToolScope.ToolSetRefs.Should().Equal(
-            ToolSetNames.StudioLocal,
-            ToolSetNames.NyxIdConnectedServices);
+        role.AgentToolScope.ToolSetRefs.Should().Equal("nyxid.connected_services");
         allowed.Should().Contain("nyxid_require_service");
         allowed.Should().Contain("list_external_workflow_capabilities");
         allowed.Should().Contain("inspect_external_workflow_capability_readiness");
@@ -360,63 +347,6 @@ public class WorkflowDefinitionCatalogTests
         allowed.Should().NotContain("ssh_exec");
         allowed.Should().NotContain("codex_exec");
         allowed.Should().NotContain("code_execute");
-    }
-
-    [Fact]
-    public async Task BuiltInStudioYaml_ShouldExposeStudioLocalToolsThroughLlmCallToolSetScope()
-    {
-        var workflow = new WorkflowParser().Parse(WorkflowDefinitionCatalog.BuiltInStudioYaml);
-        var role = workflow.Roles.Should().ContainSingle().Subject;
-        role.AgentToolScope.Should().NotBeNull();
-        role.AgentToolScope!.ToolSetRefs.Should().Equal(
-            ToolSetNames.StudioLocal,
-            ToolSetNames.NyxIdConnectedServices);
-
-        var services = new ServiceCollection();
-        services.AddSingleton<IStudioTeamProvisioningPort, RecordingTeamProvisioningPort>();
-        services.AddToolSetRegistry(options =>
-        {
-            options.AddToolSet(
-                ToolSetNames.StudioLocal,
-                [
-                    static sp => ActivatorUtilities.CreateInstance<CreateStudioTeamToolSource>(sp),
-                    static _ => new FixedAgentToolSource(new FixedAgentTool("studio_hidden_tool")),
-                ]);
-        });
-        using var serviceProvider = services.BuildServiceProvider();
-        serviceProvider.GetServices<IAgentToolSource>().Should().BeEmpty();
-
-        var provider = new RecordingLlmProvider();
-        var agent = new WorkflowRoleGAgent(
-            provider,
-            toolSetRegistry: serviceProvider.GetRequiredService<IToolSetRegistry>())
-        {
-            EventPublisher = new RecordingEventPublisher(),
-        };
-
-        await agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
-        {
-            RunId = "run-studio-local",
-            StepId = "reply",
-            SessionId = "session-studio-local",
-            Prompt = "create a team",
-            AgentToolScope = new WorkflowAgentToolScope
-            {
-                RestrictAllowedToolNames = true,
-                RestrictToolSets = true,
-                AllowedToolNames = { role.AgentToolScope.AllowedToolNames },
-                ToolSetRefs = { ToolSetNames.StudioLocal },
-            },
-        });
-
-        provider.LastRequest.Should().NotBeNull();
-        provider.LastRequest!.Tools.Should().ContainSingle(tool => tool.Name == "aevatar_create_team");
-        provider.LastRequest.Tools.Should().NotContain(tool => tool.Name == "studio_hidden_tool");
-        provider.LastRequest.ToolContext.Should().NotBeNull();
-        provider.LastRequest.ToolContext!.InvocationSurface.Should()
-            .Be(AgentToolInvocationSurface.WorkflowLlmToolLoop);
-        provider.LastRequest.ToolContext.ToolVisibility.Allows("aevatar_create_team").Should().BeTrue();
-        provider.LastRequest.ToolContext.ToolVisibility.Allows("studio_hidden_tool").Should().BeFalse();
     }
 
     [Fact]
@@ -750,115 +680,5 @@ public class WorkflowDefinitionCatalogTests
     private sealed class NullServiceProvider : IServiceProvider
     {
         public object? GetService(System.Type serviceType) => null;
-    }
-
-    private sealed class FixedAgentToolSource(params IAgentTool[] tools) : IAgentToolSource
-    {
-        public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult<IReadOnlyList<IAgentTool>>(tools);
-        }
-    }
-
-    private sealed class FixedAgentTool(string name) : IAgentTool
-    {
-        public string Name { get; } = name;
-
-        public string Description => "Hidden test tool.";
-
-        public string ParametersSchema => "{\"type\":\"object\"}";
-
-        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult("{}");
-        }
-    }
-
-    private sealed class RecordingLlmProvider : ILLMProviderFactory, ILLMProvider
-    {
-        public LLMRequest? LastRequest { get; private set; }
-
-        public string Name => "recording";
-
-        public ILLMProvider GetProvider(string name)
-        {
-            _ = name;
-            return this;
-        }
-
-        public ILLMProvider GetDefault() => this;
-
-        public IReadOnlyList<string> GetAvailableProviders() => [Name];
-
-        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
-            LLMRequest request,
-            [EnumeratorCancellation] CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            LastRequest = request;
-            await Task.Yield();
-            yield return new LLMStreamChunk
-            {
-                DeltaContent = "ok",
-            };
-            yield return new LLMStreamChunk
-            {
-                IsLast = true,
-                FinishReason = "stop",
-            };
-        }
-    }
-
-    private sealed class RecordingEventPublisher : IEventPublisher
-    {
-        public Task PublishAsync<TEvent>(
-            TEvent evt,
-            TopologyAudience audience = TopologyAudience.Children,
-            CancellationToken ct = default,
-            EventEnvelope? sourceEnvelope = null,
-            EventEnvelopePublishOptions? options = null)
-            where TEvent : IMessage
-        {
-            _ = evt;
-            _ = audience;
-            _ = ct;
-            _ = sourceEnvelope;
-            _ = options;
-            return Task.CompletedTask;
-        }
-
-        public Task SendToAsync<TEvent>(
-            string targetActorId,
-            TEvent evt,
-            CancellationToken ct = default,
-            EventEnvelope? sourceEnvelope = null,
-            EventEnvelopePublishOptions? options = null)
-            where TEvent : IMessage
-        {
-            _ = targetActorId;
-            return PublishAsync(evt, TopologyAudience.Children, ct, sourceEnvelope, options);
-        }
-    }
-
-    private sealed class RecordingTeamProvisioningPort : IStudioTeamProvisioningPort
-    {
-        public Task<StudioTeamProvisioningResult> CreateAsync(
-            StudioTeamProvisioningRequest request,
-            CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(new StudioTeamProvisioningResult(
-                Success: true,
-                ScopeId: request.ScopeId,
-                TeamId: request.TeamId ?? "team-generated",
-                DisplayName: request.DisplayName,
-                Description: request.Description ?? string.Empty,
-                LifecycleStage: "active",
-                MemberCount: 0,
-                CreatedAt: DateTimeOffset.Parse("2026-07-01T00:00:00Z"),
-                UpdatedAt: DateTimeOffset.Parse("2026-07-01T00:00:00Z")));
-        }
     }
 }
