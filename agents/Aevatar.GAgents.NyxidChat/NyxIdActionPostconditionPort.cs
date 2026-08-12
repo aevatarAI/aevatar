@@ -469,8 +469,7 @@ public sealed class NyxIdActionPostconditionPort : INyxIdActionPostconditionPort
             return null;
         }
 
-        var bearerToken = AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(
-            context.Credentials);
+        var bearerToken = AgentToolHumanSessionNyxIdCredential.ResolveBearerToken(context);
         if (bearerToken is null)
             failure = ProviderReadUnavailable(input);
         return bearerToken;
