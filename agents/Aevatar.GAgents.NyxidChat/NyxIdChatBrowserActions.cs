@@ -276,26 +276,27 @@ public static class NyxIdChatBrowserActions
                 state,
                 sanitizedReports,
                 isStateChangeWake);
-            var replayReadAuthority = requiresReplayReadAuthority
-                ? command.ReadAuthority
-                : null;
+            var replayReadAuthority = existingAdmission!.ReadAuthority is null
+                ? null
+                : command.ReadAuthority;
             if (!AdmissionMatches(
-                    existingAdmission!,
+                    existingAdmission,
                     command,
                     sanitizedReports,
                     replayReadAuthority))
             {
                 return RejectContinuation(state, ActionContinuationConflict);
             }
+            if (requiresReplayReadAuthority && existingAdmission.ReadAuthority is null)
+                return RejectContinuation(state, ActionContinuationInvalid);
 
-            var replay = TryBuildReplayDispatch(state, existingAdmission!);
-            var checkAuthorityExpiration =
-                replay is not null || existingAdmission!.ReadAuthority is null;
+            var replay = TryBuildReplayDispatch(state, existingAdmission);
             if (!ValidContinuationReadAuthority(
                     command,
-                    requiresReplayReadAuthority,
+                    existingAdmission.ReadAuthority is not null,
                     now,
-                    checkAuthorityExpiration))
+                    checkExpiration:
+                        replay is not null && existingAdmission.ReadAuthority is not null))
             {
                 return RejectContinuation(state, ActionContinuationInvalid);
             }
