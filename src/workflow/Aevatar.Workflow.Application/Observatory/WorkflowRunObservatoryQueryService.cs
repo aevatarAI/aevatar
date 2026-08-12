@@ -201,6 +201,7 @@ public sealed class WorkflowRunObservatoryQueryService
                 DefinitionActorIds = filter.DefinitionActorIds,
                 ScheduleIds = filter.ScheduleIds,
                 WorkflowId = filter.WorkflowId?.Trim() ?? string.Empty,
+                SearchText = filter.SearchText?.Trim() ?? string.Empty,
                 UpdatedFromUtc = filter.FromUtc,
                 UpdatedToUtc = filter.ToUtc,
                 Cursor = cursor,

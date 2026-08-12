@@ -1,6 +1,7 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Projections;
+using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Projection.Configuration;
 using Aevatar.Workflow.Projection.Orchestration;
 using Aevatar.Workflow.Projection.ReadModels;
@@ -132,6 +133,39 @@ public sealed class WorkflowExecutionCurrentStateQueryPortFilterTests
         rangeFilters.Should().HaveCount(2);
         rangeFilters.Should().Contain(filter => filter.Operator == ProjectionDocumentFilterOperator.Gte);
         rangeFilters.Should().Contain(filter => filter.Operator == ProjectionDocumentFilterOperator.Lte);
+    }
+
+    [Fact]
+    public async Task ListWorkflowActorCurrentStatesAsync_ShouldEmitActivitySearchAnyOfFilters()
+    {
+        var reader = new RecordingCurrentStateReader();
+        var port = CreatePort(reader);
+
+        await port.ListWorkflowActorCurrentStatesAsync(
+            new WorkflowActorCurrentStateListQuery
+            {
+                Take = 50,
+                SearchText = "  Test Member  ",
+                Status = "completed",
+            });
+
+        reader.LastQuery.Should().NotBeNull();
+        reader.LastQuery!.Filters.Should().ContainSingle(filter =>
+            filter.FieldPath == nameof(WorkflowExecutionCurrentStateDocument.Status) &&
+            filter.Operator == ProjectionDocumentFilterOperator.Eq);
+        reader.LastQuery.AnyOfFilters.Should().HaveCount(5);
+        reader.LastQuery.AnyOfFilters.Should().OnlyContain(filter =>
+            filter.Operator == ProjectionDocumentFilterOperator.ContainsText &&
+            filter.Value.Kind == ProjectionDocumentValueKind.String &&
+            Equals(filter.Value.RawValue, "Test Member"));
+        reader.LastQuery.AnyOfFilters.Select(filter => filter.FieldPath).Should().BeEquivalentTo(
+            [
+                nameof(WorkflowExecutionCurrentStateDocument.WorkflowName),
+                nameof(WorkflowExecutionCurrentStateDocument.RunId),
+                nameof(WorkflowExecutionCurrentStateDocument.Status),
+                nameof(WorkflowExecutionCurrentStateDocument.InputSummary),
+                nameof(WorkflowExecutionCurrentStateDocument.ActivityInitiator) + "." + nameof(WorkflowRunActivityInitiatorSnapshot.DisplayValue),
+            ]);
     }
 
     [Fact]

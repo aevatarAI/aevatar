@@ -132,6 +132,7 @@ public sealed class WorkflowRunObservatoryEndpointsAdminTests
             scope: null,
             status: "completed",
             workflowId: "wf-alpha",
+            q: "Test Member",
             take: 25,
             cursor: "cursor-current",
             includeTotalCount: true);
@@ -144,6 +145,7 @@ public sealed class WorkflowRunObservatoryEndpointsAdminTests
         observatory.ActivityListScopes.Should().ContainSingle().Which.Should().Be(OwnScope);
         observatory.LastActivityFilter.Should().NotBeNull();
         observatory.LastActivityFilter!.WorkflowId.Should().Be("wf-alpha");
+        observatory.LastActivityFilter.SearchText.Should().Be("Test Member");
         observatory.LastActivityFilter.Cursor.Should().Be("cursor-current");
         observatory.LastActivityFilter.IncludeTotalCount.Should().BeTrue();
         observatory.LastActivityFilter.Take.Should().Be(25);
@@ -265,12 +267,14 @@ public sealed class WorkflowRunObservatoryEndpointsAdminTests
             NullLoggerFactory.Instance,
             scope: WorkflowRunObservatoryEndpoints.AllScopesToken,
             workflowId: "wf-alpha",
+            q: "run-alpha",
             cursor: "cursor-current",
             includeTotalCount: true);
 
         adminQuery.ListAllActivityCalls.Should().Be(1);
         adminQuery.LastActivityFilter.Should().NotBeNull();
         adminQuery.LastActivityFilter!.WorkflowId.Should().Be("wf-alpha");
+        adminQuery.LastActivityFilter.SearchText.Should().Be("run-alpha");
         adminQuery.LastActivityFilter.Cursor.Should().Be("cursor-current");
         adminQuery.LastActivityFilter.IncludeTotalCount.Should().BeTrue();
         authorizer.Calls.Should().Be(1);
