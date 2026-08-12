@@ -703,6 +703,7 @@ public sealed class MainnetHostCompositionTests
         registry.GetRegisteredNames().Should().Equal(
             AgentProfilePolicies.NyxIdChatRouteToolSet,
             ToolSetNames.LarkSelfNotify,
+            ToolSetNames.NyxIdAssistantAdmission,
             ToolSetNames.NyxIdConnectedServices,
             ToolSetNames.WorkspaceDefault);
 
@@ -810,6 +811,12 @@ public sealed class MainnetHostCompositionTests
         nyxIdConnectedServices.IsSuccess.Should().BeTrue(nyxIdConnectedServices.Error?.Message);
         nyxIdConnectedServices.Sources.Should().ContainSingle(source => source is NyxIdConnectedServiceToolSource);
         workspace.Sources.Should().NotContain(source => source is NyxIdConnectedServiceToolSource);
+
+        var nyxIdAssistantAdmission = registry.Resolve(ToolSetNames.NyxIdAssistantAdmission);
+        nyxIdAssistantAdmission.IsSuccess.Should().BeTrue(nyxIdAssistantAdmission.Error?.Message);
+        nyxIdAssistantAdmission.Sources.Should().ContainSingle(source => source is NyxIdAssistantToolSource);
+        nyxIdAssistantAdmission.Sources.Should().NotContain(source =>
+            source is NyxIdConnectedServiceToolSource);
 
         var nyxIdChatProfile = registry.Resolve(AgentProfilePolicies.NyxIdChatRouteToolSet);
         nyxIdChatProfile.IsSuccess.Should().BeTrue(nyxIdChatProfile.Error?.Message);

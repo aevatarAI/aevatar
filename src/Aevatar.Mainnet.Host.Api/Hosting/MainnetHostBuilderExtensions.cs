@@ -561,6 +561,10 @@ public static class MainnetHostBuilderExtensions
                 [CreateToolSource<NyxIdConnectedServiceToolSource>],
                 "NyxID request-local operations admitted from the exact MCP and connected-service inventory intersection.");
             options.AddToolSet(
+                ToolSetNames.NyxIdAssistantAdmission,
+                [CreateToolSource<NyxIdAssistantToolSource>],
+                "Pinned local NyxID Assistant tools used by built-in admission intents without external discovery dependencies.");
+            options.AddToolSet(
                 AgentProfilePolicies.NyxIdChatRouteToolSet,
                 [
                     CreateToolSource<NyxIdAssistantToolSource>,

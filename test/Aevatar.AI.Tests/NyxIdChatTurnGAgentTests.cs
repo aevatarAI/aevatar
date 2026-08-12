@@ -2445,7 +2445,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
             static (_, _) => Task.CompletedTask,
             CancellationToken.None);
 
-        registry.RequestedNames.Should().Equal(AgentProfilePolicies.NyxIdChatRouteToolSet);
+        registry.RequestedNames.Should().Equal(ToolSetNames.NyxIdAssistantAdmission);
         generationExecutor.LastTurnCatalog.Should().NotBeNull();
         string[] expected = intent switch
         {
@@ -4091,14 +4091,14 @@ public sealed partial class NyxIdChatTurnGAgentTests
         public List<string> RequestedNames { get; } = [];
 
         public IReadOnlyList<string> GetRegisteredNames() =>
-            [AgentProfilePolicies.NyxIdChatRouteToolSet];
+            [AgentProfilePolicies.NyxIdChatRouteToolSet, ToolSetNames.NyxIdAssistantAdmission];
 
         public ToolSetResolveResult Resolve(string? name)
         {
             RequestedNames.Add(name ?? string.Empty);
-            return string.Equals(name, AgentProfilePolicies.NyxIdChatRouteToolSet, StringComparison.Ordinal)
+            return GetRegisteredNames().Contains(name, StringComparer.Ordinal)
                 ? ToolSetResolveResult.Success(
-                    AgentProfilePolicies.NyxIdChatRouteToolSet,
+                    name!,
                     [new ToolListSource(tools)])
                 : ToolSetResolveResult.Failure(new ToolSetResolveError(
                     ToolSetResolveError.UnknownNameCode,

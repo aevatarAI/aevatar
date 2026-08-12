@@ -117,7 +117,7 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
             "request-token",
             [catalogTool, requireServiceTool, unrelatedTool]);
         var registry = new RecordingToolSetRegistry();
-        registry.Add(AgentProfilePolicies.NyxIdChatRouteToolSet, source);
+        registry.Add(ToolSetNames.NyxIdAssistantAdmission, source);
         var materializer = NewMaterializer(
             registry,
             new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
@@ -128,7 +128,7 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
             ToolContext("request-token"),
             CancellationToken.None);
 
-        registry.ResolveCalls.Should().Equal(AgentProfilePolicies.NyxIdChatRouteToolSet);
+        registry.ResolveCalls.Should().Equal(ToolSetNames.NyxIdAssistantAdmission);
         source.ObservedTokens.Should().Equal("request-token");
         catalog.FinalAllowedToolNames.Should().BeEquivalentTo(
             "nyxid_catalog",
@@ -152,7 +152,7 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
             "request-token",
             [servicesTool, keyCreateTool, unrelatedTool]);
         var registry = new RecordingToolSetRegistry();
-        registry.Add(AgentProfilePolicies.NyxIdChatRouteToolSet, source);
+        registry.Add(ToolSetNames.NyxIdAssistantAdmission, source);
         var materializer = NewMaterializer(
             registry,
             new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
@@ -181,7 +181,7 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
             "request-token",
             [keysTool, keyRotateTool, unrelatedTool]);
         var registry = new RecordingToolSetRegistry();
-        registry.Add(AgentProfilePolicies.NyxIdChatRouteToolSet, source);
+        registry.Add(ToolSetNames.NyxIdAssistantAdmission, source);
         var materializer = NewMaterializer(
             registry,
             new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
@@ -205,7 +205,7 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
     {
         var registry = new RecordingToolSetRegistry();
         registry.Add(
-            AgentProfilePolicies.NyxIdChatRouteToolSet,
+            ToolSetNames.NyxIdAssistantAdmission,
             new StaticToolSource([new TestTool("nyxid_catalog"), new TestTool("nyxid_services")]));
         var materializer = NewMaterializer(
             registry,

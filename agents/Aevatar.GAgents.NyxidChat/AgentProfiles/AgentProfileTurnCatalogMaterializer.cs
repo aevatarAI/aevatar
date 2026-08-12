@@ -402,7 +402,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
 
         var diagnostics = new List<AgentProfileTurnDiagnostic>();
         var routeTools = await DiscoverToolSetAsync(
-            AgentProfilePolicies.NyxIdChatRouteToolSet,
+            ToolSetNames.NyxIdAssistantAdmission,
             toolContext,
             AgentProfileTurnDiagnosticCode.RouteToolSetUnavailable,
             diagnostics,
