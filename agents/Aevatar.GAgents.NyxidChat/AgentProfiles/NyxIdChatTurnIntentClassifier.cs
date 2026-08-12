@@ -19,7 +19,10 @@ public sealed class NyxIdChatTurnIntentClassifier : INyxIdChatTurnIntentClassifi
 {
     internal const string ServiceConnectIntentId = "service_connect";
     internal const string ServiceConnectRoutingDescription =
-        "Connect, add, or authorize a hosted external service account and verify that connection.";
+        "Establish, add, reauthorize, or repair a missing hosted external service account " +
+        "connection, then verify that connection. Do not select this intent when the user asks " +
+        "to invoke, read from, or write through an already-connected exact UserService; that " +
+        "request must use the ordinary task route for the connected service operation.";
     internal const string KeyCreateIntentId = "key_create";
     internal const string KeyCreateRoutingDescription =
         "Create a least-scope NyxID API key for an exact nonempty set of caller-visible services.";
