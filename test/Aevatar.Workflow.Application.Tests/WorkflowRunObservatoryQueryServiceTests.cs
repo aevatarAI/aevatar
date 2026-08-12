@@ -195,6 +195,7 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         var firstQuery = currentState.PageQueries[0];
         firstQuery.ScopeId.Should().Be(CallerScope);
         firstQuery.WorkflowId.Should().Be(workflowId);
+        firstQuery.SearchText.Should().BeEmpty();
         firstQuery.Cursor.Should().Be("cursor-current");
         firstQuery.IncludeTotalCount.Should().BeTrue();
         firstQuery.Take.Should().Be(1);
@@ -229,6 +230,31 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         row.Lineage.RetryFork.OriginalRunId.Should().Be("run-original-alpha");
         row.Lineage.RetryFork.StartAtStepId.Should().Be("step-failed");
         row.Lineage.SubWorkflow.Availability.Should().Be(WorkflowRunLineageAvailability.Unavailable);
+    }
+
+    [Fact]
+    public async Task ListActivityRunsForScopeAsync_ShouldPassSearchTextToCurrentStatePageQuery()
+    {
+        var currentState = new FakeCurrentStateQueryPort
+        {
+            PageResult = new WorkflowActorCurrentStatePage([], null, null),
+        };
+        var service = new WorkflowRunObservatoryQueryService(currentState, new FakeArtifactQueryPort());
+
+        await service.ListActivityRunsForScopeAsync(
+            CallerScope,
+            new WorkflowActivityRunFeedFilter
+            {
+                SearchText = "  Test Member  ",
+                Status = "completed",
+                WorkflowId = "workflow-alpha",
+                Take = 25,
+            });
+
+        currentState.PageQueries.Should().HaveCount(1);
+        currentState.PageQueries[0].SearchText.Should().Be("Test Member");
+        currentState.PageQueries[0].Status.Should().Be("completed");
+        currentState.PageQueries[0].WorkflowId.Should().Be("workflow-alpha");
     }
 
     [Fact]

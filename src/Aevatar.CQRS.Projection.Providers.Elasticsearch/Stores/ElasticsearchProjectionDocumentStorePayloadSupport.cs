@@ -207,6 +207,17 @@ internal static class ElasticsearchProjectionDocumentStorePayloadSupport
                     [exactMatchFieldPath] = ConvertCollectionValue(filter.Value),
                 },
             },
+            ProjectionDocumentFilterOperator.ContainsText => new Dictionary<string, object?>
+            {
+                ["wildcard"] = new Dictionary<string, object?>
+                {
+                    [resolvedFieldPath] = new Dictionary<string, object?>
+                    {
+                        ["value"] = $"*{EscapeWildcardValue(ConvertScalarValue(filter.Value)?.ToString() ?? string.Empty)}*",
+                        ["case_insensitive"] = true,
+                    },
+                },
+            },
             ProjectionDocumentFilterOperator.Gt or
             ProjectionDocumentFilterOperator.Gte or
             ProjectionDocumentFilterOperator.Lt or
@@ -316,6 +327,19 @@ internal static class ElasticsearchProjectionDocumentStorePayloadSupport
             _ => throw new InvalidOperationException(
                 $"Unsupported range projection document filter operator '{filterOperator}'."),
         };
+    }
+
+    private static string EscapeWildcardValue(string value)
+    {
+        var builder = new StringBuilder(value.Length);
+        foreach (var ch in value)
+        {
+            if (ch is '*' or '?' or '\\')
+                builder.Append('\\');
+            builder.Append(ch);
+        }
+
+        return builder.ToString();
     }
 
     private static object? ConvertScalarValue(ProjectionDocumentValue value)

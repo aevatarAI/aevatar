@@ -498,6 +498,36 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
     }
 
     [Fact]
+    public async Task QueryAsync_ShouldTranslateContainsTextFilterToCaseInsensitiveWildcard()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """{"hits":{"hits":[]}}"""));
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = false },
+            handler);
+
+        _ = await store.QueryAsync(new ProjectionDocumentQuery
+        {
+            Filters =
+            [
+                new ProjectionDocumentFilter
+                {
+                    FieldPath = nameof(TestStoreReadModel.Value),
+                    Operator = ProjectionDocumentFilterOperator.ContainsText,
+                    Value = ProjectionDocumentValue.FromString("run*alpha?"),
+                },
+            ],
+        });
+
+        var body = handler.CapturedRequests.Should().ContainSingle().Subject.Body;
+        body.Should().Contain("\"wildcard\"");
+        body.Should().Contain("\"value\":\"*run\\\\*alpha\\\\?*\"");
+        body.Should().Contain("\"case_insensitive\":true");
+    }
+
+    [Fact]
     public async Task UpsertAsync_WhenTimestampDescriptorFieldIsUnmapped_ShouldInitializeItAsDate()
     {
         var handler = CreateSuccessfulUpsertHandler();
