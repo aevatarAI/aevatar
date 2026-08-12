@@ -228,8 +228,11 @@ public sealed class ScopeBindingCommandApplicationServiceTests
             revision.Spec.WorkflowSpec.CapabilityAdmissionPlan);
     }
 
-    [Fact]
-    public async Task UpsertAsync_WithExistingPlanAndNoFreshConfirmation_ShouldRevalidateAndDispatch()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task UpsertAsync_WithExistingPlan_ShouldUseCredentialAwareAdmissionPathAndDispatch(
+        bool includeCallerCredential)
     {
         var existingPlan = await ScopeExplicitRequestAdmissionTestFixture.CreatePersistedPlanAsync(
             "scope_binding_upsert");
@@ -255,11 +258,14 @@ public sealed class ScopeBindingCommandApplicationServiceTests
             RevisionId: ScopeExplicitRequestAdmissionTestFixture.RevisionId,
             ServiceId: ScopeExplicitRequestAdmissionTestFixture.ServiceId)
         {
-            CapabilityAdmission = ScopeExplicitRequestAdmissionTestFixture.CreatePersistedContext(existingPlan),
+            CapabilityAdmission = ScopeExplicitRequestAdmissionTestFixture.CreatePersistedContext(
+                existingPlan,
+                includeCallerCredential),
         });
 
         result.RevisionId.Should().Be(ScopeExplicitRequestAdmissionTestFixture.RevisionId);
-        admission.RevalidatePersistedCallCount.Should().Be(1);
+        admission.RefreshPersistedCallCount.Should().Be(includeCallerCredential ? 1 : 0);
+        admission.RevalidatePersistedCallCount.Should().Be(includeCallerCredential ? 0 : 1);
         admission.AdmitCallCount.Should().Be(0);
         commandPort.Calls.Should().Contain(call => call.Method == "CreateRevisionAsync");
     }
@@ -2676,6 +2682,8 @@ public sealed class ScopeBindingCommandApplicationServiceTests
 
         public PersistedWorkflowCapabilityAdmissionRequest? PersistedRequest { get; private set; }
 
+        public RefreshPersistedWorkflowCapabilityAdmissionRequest? RefreshRequest { get; private set; }
+
         public WorkflowCapabilityAdmissionPlan? Plan { get; private set; }
 
         public Exception? Exception { get; init; }
@@ -2706,6 +2714,18 @@ public sealed class ScopeBindingCommandApplicationServiceTests
                 throw Exception;
 
             Plan = request.Plan.Clone();
+            return Task.FromResult(Plan.Clone());
+        }
+
+        public Task<WorkflowCapabilityAdmissionPlan> RefreshPersistedAsync(
+            RefreshPersistedWorkflowCapabilityAdmissionRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            RefreshRequest = request;
+            if (Exception is not null)
+                throw Exception;
+
+            Plan = request.Persisted.Plan.Clone();
             return Task.FromResult(Plan.Clone());
         }
     }

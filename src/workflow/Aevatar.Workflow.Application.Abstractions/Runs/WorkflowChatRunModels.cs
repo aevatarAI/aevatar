@@ -298,6 +298,7 @@ public enum WorkflowChatRunStartError
     ProjectionUnavailable = 10,
     InvalidCallerCredential = 11,
     InvalidFileInput = 12,
+    ExternalCapabilityNotReady = 13,
     InvalidConversationInput = 14,
     InvalidConversationId = 15,
     ConversationNotFound = 16,

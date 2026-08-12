@@ -191,6 +191,76 @@ public sealed class NyxIdCodeExecutionWorkflowCapabilitySourceTests
     }
 
     [Fact]
+    public async Task InspectAsync_ExecutionInventoryNotReady_PrecedesConvergableRoutePolicyDrift()
+    {
+        var routeInventory = Inventory(Service(
+            "us-code-alpha",
+            "personal",
+            allowed: true,
+            scope: "proxy:*"));
+        var handler = new InventoryHandler(
+            routeInventory,
+            """
+            {
+              "keys": [{
+                "id": "us-code-alpha",
+                "slug": "chrono-sandbox",
+                "catalog_service_id": "catalog-chrono-sandbox",
+                "catalog_service_slug": "chrono-sandbox",
+                "is_active": true,
+                "status": "expired",
+                "connected": true,
+                "credential_source": { "type": "personal" }
+              }]
+            }
+            """);
+        var source = CreateSource(handler);
+
+        var readiness = await source.InspectAsync(
+            Access(),
+            Selector(),
+            ExternalCapabilityExecutionMode.Interactive);
+
+        readiness.Status.Should().Be(
+            ExternalCapabilityReadinessStatus.CredentialConnectionRequired);
+        readiness.Blockers.Should().ContainSingle().Which.Code.Should()
+            .Be("CODE_EXECUTION_ROUTE_NOT_READY");
+    }
+
+    [Fact]
+    public async Task InspectAsync_SameSlugFromDifferentCatalogCannotShadowPlatformRoute()
+    {
+        var routeInventory = Inventory(Service("us-code-alpha", "personal", allowed: true));
+        var handler = new InventoryHandler(
+            routeInventory,
+            """
+            {
+              "keys": [{
+                "id": "us-code-alpha",
+                "slug": "chrono-sandbox",
+                "catalog_service_id": "catalog-shadow",
+                "catalog_service_slug": "other-sandbox",
+                "is_active": true,
+                "status": "active",
+                "connected": true,
+                "credential_source": { "type": "personal" }
+              }]
+            }
+            """);
+        var source = CreateSource(handler);
+
+        var readiness = await source.InspectAsync(
+            Access(),
+            Selector(),
+            ExternalCapabilityExecutionMode.Interactive);
+
+        readiness.Status.Should().Be(
+            ExternalCapabilityReadinessStatus.CredentialConnectionRequired);
+        readiness.Blockers.Should().ContainSingle().Which.Code.Should()
+            .Be("CODE_EXECUTION_ROUTE_NOT_READY");
+    }
+
+    [Fact]
     public async Task InspectAsync_DurableWithoutCommittedGrant_DoesNotReportReady()
     {
         var source = CreateSource(Inventory(Service("us-code-alpha", "org", true)));
@@ -270,8 +340,17 @@ public sealed class NyxIdCodeExecutionWorkflowCapabilitySourceTests
         public NyxIdApiClient CreateClient() => client;
     }
 
-    private sealed class InventoryHandler(string inventory) : HttpMessageHandler
+    private sealed class InventoryHandler : HttpMessageHandler
     {
+        private readonly string _routeInventory;
+        private readonly string _executionInventory;
+
+        public InventoryHandler(string routeInventory, string? executionInventory = null)
+        {
+            _routeInventory = routeInventory;
+            _executionInventory = executionInventory ?? BuildExecutionInventory(routeInventory);
+        }
+
         public string? Authorization { get; private set; }
 
         protected override Task<HttpResponseMessage> SendAsync(
@@ -279,10 +358,40 @@ public sealed class NyxIdCodeExecutionWorkflowCapabilitySourceTests
             CancellationToken cancellationToken)
         {
             Authorization = request.Headers.Authorization?.ToString();
+            var content = request.RequestUri?.AbsolutePath switch
+            {
+                "/api/v1/user-services" => _routeInventory,
+                "/api/v1/keys" => _executionInventory,
+                _ => throw new InvalidOperationException("Unexpected NyxID request."),
+            };
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent(inventory, Encoding.UTF8, "application/json"),
+                Content = new StringContent(content, Encoding.UTF8, "application/json"),
             });
+        }
+
+        private static string BuildExecutionInventory(string routeInventory)
+        {
+            using var document = JsonDocument.Parse(routeInventory);
+            var keys = document.RootElement.GetProperty("services")
+                .EnumerateArray()
+                .Select(static service => new Dictionary<string, object?>
+                {
+                    ["id"] = service.GetProperty("id").GetString(),
+                    ["slug"] = service.GetProperty("slug").GetString(),
+                    ["catalog_service_id"] = service.TryGetProperty(
+                        "catalog_service_id",
+                        out var catalogServiceId)
+                        ? catalogServiceId.GetString()
+                        : null,
+                    ["catalog_service_slug"] = service.GetProperty("slug").GetString(),
+                    ["is_active"] = service.GetProperty("is_active").GetBoolean(),
+                    ["status"] = "active",
+                    ["connected"] = true,
+                    ["credential_source"] = service.GetProperty("credential_source").Clone(),
+                })
+                .ToArray();
+            return JsonSerializer.Serialize(new { keys });
         }
     }
 }

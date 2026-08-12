@@ -15,6 +15,7 @@ using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.GAgents.Channel.Abstractions.Slash;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Broker;
+using Aevatar.GAgents.Channel.Identity.ProjectionRecovery;
 using Aevatar.GAgents.Channel.Identity.Slash;
 using Google.Protobuf;
 using Microsoft.Extensions.Configuration;
@@ -242,6 +243,13 @@ public static class IdentityServiceCollectionExtensions
             static _ => new ChannelIdentityOAuthCommandTarget(
                 AevatarOAuthClientGAgent.WellKnownId,
                 "channel-identity.oauth-projection-rebuild"));
+        services.AddIdentityOAuthCommandDispatch<RepairAevatarOAuthClientProjectionCommand, AevatarOAuthClientGAgent>(
+            static _ => new ChannelIdentityOAuthCommandTarget(
+                AevatarOAuthClientGAgent.WellKnownId,
+                "channel-identity.oauth-projection-repair"));
+        services.TryAddSingleton<
+            IAevatarOAuthClientProjectionRepublishPort,
+            ActorDispatchAevatarOAuthClientProjectionRepublishPort>();
         services.AddIdentityOAuthCommandDispatch<RotateAevatarOAuthClientHmacKeyCommand, AevatarOAuthClientGAgent>(
             static _ => new ChannelIdentityOAuthCommandTarget(
                 AevatarOAuthClientGAgent.WellKnownId,

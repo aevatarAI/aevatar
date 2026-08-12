@@ -405,25 +405,40 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
             : ScopeWorkflowCapabilityConventions.NormalizeWorkflowId(suppliedWorkflowId);
         var admissionContext = request.CapabilityAdmission;
         var executionMode = admissionContext?.ExecutionMode ?? ExternalCapabilityExecutionMode.Interactive;
+        var capabilityAccess = new ExternalWorkflowCapabilityAccessContext(
+            normalizedScopeId,
+            admissionContext?.CallerId ?? string.Empty,
+            admissionContext?.NyxIdCallerCredential,
+            admissionContext?.NyxIdOrganizationBearerToken);
         var capabilityAdmissionPlan = admissionContext?.ExistingPlan is { } existingPlan
-            ? await _capabilityAdmissionService.RevalidatePersistedAsync(
-                new PersistedWorkflowCapabilityAdmissionRequest(
-                    existingPlan,
-                    workflowBundle.EntryWorkflowYaml,
-                    workflowBundle.SubWorkflowYamls,
-                    "scope_binding_upsert",
-                    executionMode,
-                    workflowId,
-                    revisionId),
-                ct)
+            ? admissionContext.NyxIdCallerCredential is not null
+                ? await _capabilityAdmissionService.RefreshPersistedAsync(
+                    new RefreshPersistedWorkflowCapabilityAdmissionRequest(
+                        new PersistedWorkflowCapabilityAdmissionRequest(
+                            existingPlan,
+                            workflowBundle.EntryWorkflowYaml,
+                            workflowBundle.SubWorkflowYamls,
+                            "scope_binding_upsert",
+                            executionMode,
+                            workflowId,
+                            revisionId),
+                        capabilityAccess,
+                        explicitRequestConfirmations),
+                    ct)
+                : await _capabilityAdmissionService.RevalidatePersistedAsync(
+                    new PersistedWorkflowCapabilityAdmissionRequest(
+                        existingPlan,
+                        workflowBundle.EntryWorkflowYaml,
+                        workflowBundle.SubWorkflowYamls,
+                        "scope_binding_upsert",
+                        executionMode,
+                        workflowId,
+                        revisionId),
+                    ct)
             : await _capabilityAdmissionService.AdmitAsync(
                 new WorkflowExternalCapabilityAdmissionRequest(
-                new ExternalWorkflowCapabilityAccessContext(
-                    normalizedScopeId,
-                    admissionContext?.CallerId ?? string.Empty,
-                    admissionContext?.NyxIdCallerCredential,
-                    admissionContext?.NyxIdOrganizationBearerToken),
-                workflowBundle.EntryWorkflowYaml,
+                    capabilityAccess,
+                    workflowBundle.EntryWorkflowYaml,
                 workflowBundle.SubWorkflowYamls,
                 "scope_binding_upsert",
                 executionMode,

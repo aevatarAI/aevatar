@@ -59,45 +59,79 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
             EnsureSelectorIsAdmissible(invocation, request.ExecutionMode);
 
         var invocations = definition.Invocations.ToArray();
-        var verifiedInvocations = new VerifiedInvocationAdmission?[invocations.Length];
+        var initialReadiness = new ExternalCapabilityReadiness[invocations.Length];
         for (var index = 0; index < invocations.Length; index++)
         {
-            var invocation = invocations[index];
-            if (_preparers.ContainsKey(invocation.Selector.SelectorCase))
-                continue;
-
-            verifiedInvocations[index] = await InspectAndVerifyAsync(
+            initialReadiness[index] = await InspectAsync(
                 request,
-                invocation,
+                invocations[index],
                 cancellationToken);
         }
 
-        var preparedSelectorKinds = new HashSet<
-            ExternalWorkflowCapabilitySelector.SelectorOneofCase>();
-        foreach (var invocation in invocations)
+        var verifiedInvocations = new VerifiedInvocationAdmission?[invocations.Length];
+        var pendingConvergence = new List<PendingInvocationConvergence>();
+        for (var index = 0; index < invocations.Length; index++)
         {
-            var selectorKind = invocation.Selector.SelectorCase;
-            if (!preparedSelectorKinds.Add(selectorKind) ||
-                !_preparers.TryGetValue(selectorKind, out var preparer))
+            var invocation = invocations[index];
+            var readiness = initialReadiness[index];
+            if (readiness.Status == ExternalCapabilityReadinessStatus.Ready)
             {
+                verifiedInvocations[index] = VerifyReadiness(request, invocation, readiness);
                 continue;
             }
 
-            await preparer.PrepareAsync(
-                request.Access,
+            var selectorKind = invocation.Selector.SelectorCase;
+            if (!_preparers.TryGetValue(selectorKind, out var preparer) ||
+                !preparer.CanConverge(readiness))
+            {
+                throw new WorkflowExternalCapabilityAdmissionException(readiness);
+            }
+
+            var proofFailure = ValidateConvergenceReadinessProof(
                 invocation.Selector,
                 request.ExecutionMode,
+                readiness);
+            if (proofFailure is not null)
+                throw new WorkflowExternalCapabilityAdmissionException(proofFailure);
+            EnsureSourcesAreFresh(
+                readiness.Sources,
+                request.ExecutionMode,
+                invocation.Selector,
+                readiness.SelectedCapability);
+            pendingConvergence.Add(new PendingInvocationConvergence(invocation, preparer));
+        }
+
+        foreach (var pending in pendingConvergence
+                     .GroupBy(
+                         static item => WorkflowCapabilityAdmissionPlanIntegrity.SelectorKey(
+                             item.Invocation.Selector),
+                         StringComparer.Ordinal)
+                     .Select(static group => group.First()))
+        {
+            await pending.Preparer.PrepareAsync(
+                request.Access,
+                pending.Invocation.Selector,
+                request.ExecutionMode,
                 cancellationToken);
+        }
+
+        if (pendingConvergence.Count > 0)
+        {
+            for (var index = 0; index < invocations.Length; index++)
+            {
+                verifiedInvocations[index] = await InspectAndVerifyAsync(
+                    request,
+                    invocations[index],
+                    cancellationToken);
+            }
         }
 
         var admissions = new List<WorkflowCapabilityInvocationAdmission>();
         var sources = new List<ExternalCapabilitySourceStamp>();
         for (var index = 0; index < invocations.Length; index++)
         {
-            var verified = verifiedInvocations[index] ?? await InspectAndVerifyAsync(
-                request,
-                invocations[index],
-                cancellationToken);
+            var verified = verifiedInvocations[index] ?? throw new InvalidOperationException(
+                "Workflow external capability readiness was not verified.");
             admissions.Add(verified.Admission);
             sources.AddRange(verified.Readiness.Sources.Select(static source => source.Clone()));
         }
@@ -121,12 +155,26 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
         ExternalToolInvocationSpec invocation,
         CancellationToken cancellationToken)
     {
-        var readiness = await _readinessPort.InspectAsync(
+        var readiness = await InspectAsync(request, invocation, cancellationToken);
+        return VerifyReadiness(request, invocation, readiness);
+    }
+
+    private Task<ExternalCapabilityReadiness> InspectAsync(
+        WorkflowExternalCapabilityAdmissionRequest request,
+        ExternalToolInvocationSpec invocation,
+        CancellationToken cancellationToken) =>
+        _readinessPort.InspectAsync(
             new InspectExternalWorkflowCapabilityReadinessRequest(
                 request.Access,
                 invocation.Selector,
                 request.ExecutionMode),
             cancellationToken);
+
+    private VerifiedInvocationAdmission VerifyReadiness(
+        WorkflowExternalCapabilityAdmissionRequest request,
+        ExternalToolInvocationSpec invocation,
+        ExternalCapabilityReadiness readiness)
+    {
         if (readiness.Status != ExternalCapabilityReadinessStatus.Ready)
             throw new WorkflowExternalCapabilityAdmissionException(readiness);
         var proofFailure = ValidateReadinessIdentityProof(
@@ -170,6 +218,10 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
     private sealed record VerifiedInvocationAdmission(
         ExternalCapabilityReadiness Readiness,
         WorkflowCapabilityInvocationAdmission Admission);
+
+    private sealed record PendingInvocationConvergence(
+        ExternalToolInvocationSpec Invocation,
+        IExternalWorkflowCapabilityAdmissionPreparer Preparer);
 
     private static WorkflowCapabilityInvocationAdmission BuildInvocationAdmission(
         WorkflowExternalCapabilityAdmissionRequest request,
@@ -385,6 +437,49 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        await ValidatePersistedIntegrityAsync(request, cancellationToken);
+        EnsureSourcesAreFresh(request.Plan);
+        return request.Plan.Clone();
+    }
+
+    public async Task<WorkflowCapabilityAdmissionPlan> RefreshPersistedAsync(
+        RefreshPersistedWorkflowCapabilityAdmissionRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var persisted = request.Persisted;
+        await ValidatePersistedIntegrityAsync(persisted, cancellationToken);
+
+        var confirmations = request.ExplicitRequestConfirmations.Count > 0
+            ? request.ExplicitRequestConfirmations
+            : RestorePersistedExplicitRequestConfirmations(persisted, request.Access);
+        var liveRequest = persisted.WorkflowYamls is { Count: > 0 } workflowYamls
+            ? WorkflowExternalCapabilityAdmissionRequest.FromWorkflowYamls(
+                request.Access,
+                workflowYamls,
+                persisted.SourceKind,
+                persisted.ExpectedExecutionMode,
+                confirmations,
+                persisted.WorkflowId,
+                persisted.RevisionId,
+                persisted.ExpectedExecutionMode)
+            : new WorkflowExternalCapabilityAdmissionRequest(
+                request.Access,
+                persisted.WorkflowYaml,
+                persisted.InlineWorkflowYamls,
+                persisted.SourceKind,
+                persisted.ExpectedExecutionMode,
+                confirmations,
+                persisted.WorkflowId,
+                persisted.RevisionId,
+                persisted.ExpectedExecutionMode);
+        return await AdmitAsync(liveRequest, cancellationToken);
+    }
+
+    private async Task ValidatePersistedIntegrityAsync(
+        PersistedWorkflowCapabilityAdmissionRequest request,
+        CancellationToken cancellationToken)
+    {
         if (WorkflowCapabilityAdmissionPlanIntegrity.RequiresRebind(request.Plan.SchemaVersion))
         {
             throw new WorkflowExternalCapabilityAdmissionException(
@@ -414,8 +509,45 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
                 BuildRebindRequiredReadiness(request.ExpectedExecutionMode));
         }
         EnsureDurableCatalogMatchesPlanOwner(request.Plan);
-        EnsureSourcesAreFresh(request.Plan);
-        return request.Plan.Clone();
+    }
+
+    private static IReadOnlyList<NyxIdExplicitRequestConfirmation>
+        RestorePersistedExplicitRequestConfirmations(
+            PersistedWorkflowCapabilityAdmissionRequest request,
+            ExternalWorkflowCapabilityAccessContext access)
+    {
+        var confirmations = new List<NyxIdExplicitRequestConfirmation>();
+        foreach (var admission in request.Plan.InvocationAdmissions.Where(static admission =>
+                     admission.Capability?.CapabilityCase ==
+                     ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest))
+        {
+            var grant = admission.NyxIdExplicitRequestGrant;
+            if (grant is null ||
+                grant.GrantorAuthority !=
+                NyxIdExplicitRequestGrantorAuthority.AevatarWorkflowBinder ||
+                grant.GrantorOwnerKind != ExternalCapabilityAuthorizationOwnerKind.Personal ||
+                string.IsNullOrWhiteSpace(access.CallerId) ||
+                !string.Equals(grant.GrantorOwnerSubject, access.CallerId, StringComparison.Ordinal) ||
+                string.IsNullOrWhiteSpace(request.WorkflowId) ||
+                string.IsNullOrWhiteSpace(request.RevisionId) ||
+                !string.Equals(grant.WorkflowId, request.WorkflowId, StringComparison.Ordinal) ||
+                !string.Equals(grant.RevisionId, request.RevisionId, StringComparison.Ordinal))
+            {
+                throw new WorkflowExternalCapabilityAdmissionException(
+                    BuildRebindRequiredReadiness(request.ExpectedExecutionMode));
+            }
+
+            confirmations.Add(new NyxIdExplicitRequestConfirmation
+            {
+                CallSiteId = grant.CallSiteId,
+                RequestContractDigest = grant.RequestContractDigest,
+                AttestedRisk = grant.Risk,
+                WorkflowId = grant.WorkflowId,
+                RevisionId = grant.RevisionId,
+            });
+        }
+
+        return confirmations;
     }
 
     private static ExternalCapabilityReadiness BuildNyxIdOperationSelectionRequiredReadiness(
@@ -486,6 +618,51 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
             !WorkflowCapabilityAdmissionPlanIntegrity.SelectorMatchesCapability(
                 selector,
                 readiness.SelectedCapability))
+        {
+            return ReadinessProofFailure(
+                selector,
+                readiness.SelectedCapability,
+                executionMode,
+                ExternalCapabilityReadinessStatus.ContractDrift,
+                "READINESS_SELECTOR_PROOF_MISMATCH",
+                "External capability readiness proof does not match the selected operation.");
+        }
+
+        if (readiness.Sources.Count == 0)
+        {
+            return ReadinessProofFailure(
+                selector,
+                readiness.SelectedCapability,
+                executionMode,
+                ExternalCapabilityReadinessStatus.ContractDrift,
+                "READINESS_SOURCE_REQUIRED",
+                "External capability convergence requires current source evidence.");
+        }
+
+        return null;
+    }
+
+    private static ExternalCapabilityReadiness? ValidateConvergenceReadinessProof(
+        ExternalWorkflowCapabilitySelector selector,
+        ExternalCapabilityExecutionMode executionMode,
+        ExternalCapabilityReadiness readiness)
+    {
+        if (readiness.ExecutionMode != executionMode)
+        {
+            return ReadinessProofFailure(
+                selector,
+                readiness.SelectedCapability,
+                executionMode,
+                ExternalCapabilityReadinessStatus.ContractDrift,
+                "READINESS_EXECUTION_MODE_MISMATCH",
+                "External capability readiness was evaluated for a different execution mode.");
+        }
+
+        if (readiness.SelectedSelector is null ||
+            !string.Equals(
+                WorkflowCapabilityAdmissionPlanIntegrity.SelectorKey(readiness.SelectedSelector),
+                WorkflowCapabilityAdmissionPlanIntegrity.SelectorKey(selector),
+                StringComparison.Ordinal))
         {
             return ReadinessProofFailure(
                 selector,

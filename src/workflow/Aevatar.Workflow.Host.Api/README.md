@@ -43,6 +43,7 @@
 常见错误码：
 
 - `INVALID_WORKFLOW_YAML`：`workflowYamls` 任一 YAML 解析或校验失败（400）
+- `EXTERNAL_WORKFLOW_CAPABILITY_NOT_READY`：YAML 已通过校验，但所需外部能力尚未就绪（409）
 - `WORKFLOW_BINDING_MISMATCH`：目标 actor 已绑定其它 workflow（409）
 - `WORKFLOW_NOT_FOUND`：`workflow` 未命中注册表名称（404）
 - `AGENT_WORKFLOW_NOT_CONFIGURED`：typed source 指定的 actor 未绑定且未提供 inline YAML（409）

@@ -421,7 +421,8 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
         var result = ToCreateResult(evt);
         if (!result.Success)
         {
-            if (result.IsPostSendFailure)
+            if (result.DeliveryDisposition is LarkCardCreateDeliveryDisposition.Sent or
+                LarkCardCreateDeliveryDisposition.ReplyAuthoritySpentDeliveryUnknown)
             {
                 _logger.LogWarning(
                     "Card post-send failure; terminating turn without text-edit fallback. runId={RunId} correlation={CorrelationId} code={ErrorCode} cardId={CardId}",
@@ -441,13 +442,24 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
                         OriginalCardId = NormalizeOptional(result.CardId),
                         InFlight = null,
                     });
+                var deliveryFailure = result.DeliveryDisposition is
+                    LarkCardCreateDeliveryDisposition.ReplyAuthoritySpentDeliveryUnknown
+                    ? new LlmReplyDeliveryFailedEvent
+                    {
+                        CorrelationId = correlationId,
+                        RunId = State.RunId ?? string.Empty,
+                        FailedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+                        ErrorCode = result.ErrorCode,
+                        ErrorMessage = result.ErrorSummary,
+                    }
+                    : null;
                 await CompleteCardStreamedDeliveryAsync(
                     correlationId,
                     BuildLlmReplyCommandId(correlationId),
                     evt.Chunk?.Activity,
                     terminated.CardMessageId ?? string.Empty,
                     terminated.LastFlushedText,
-                    deliveryFailure: null,
+                    deliveryFailure,
                     appendedHistory: []);
                 return;
             }
@@ -1766,21 +1778,29 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
                 BuildFaultErrorCode(LarkCardOperationPhase.Create, raw),
                 raw.ExceptionMessage);
 
-        return raw.IsPostSendFailure
-            ? ConversationCardCreateResult.PostSendFailed(
+        return raw.CreateDeliveryDisposition switch
+        {
+            LarkCardCreateDeliveryDisposition.ReplyAuthoritySpentDeliveryUnknown =>
+                ConversationCardCreateResult.ReplyAuthoritySpentDeliveryUnknown(
+                    raw.CardId,
+                    raw.CardMessageId,
+                    raw.RawErrorCode,
+                    raw.RawErrorSummary),
+            LarkCardCreateDeliveryDisposition.Sent => ConversationCardCreateResult.PostSendFailed(
                 raw.CardId,
                 raw.CardMessageId,
                 raw.RawErrorCode,
                 raw.RawErrorSummary,
                 raw.IsRateLimited,
                 raw.IsTableLimitExceeded,
-                raw.IsCardUnavailable)
-            : ConversationCardCreateResult.Failed(
+                raw.IsCardUnavailable),
+            _ => ConversationCardCreateResult.Failed(
                 raw.RawErrorCode,
                 raw.RawErrorSummary,
                 raw.IsRateLimited,
                 raw.IsTableLimitExceeded,
-                raw.IsCardUnavailable);
+                raw.IsCardUnavailable),
+        };
     }
 
     private static ConversationCardStreamResult ToStreamResult(LarkCardOperationCompletedEvent evt)
