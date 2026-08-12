@@ -386,6 +386,14 @@ public static class NyxIdChatBrowserActions
         {
             return RejectContinuation(state, ActionContinuationInvalid);
         }
+        if (state.ActiveTask is { } activeTask &&
+            sanitizedReports.Any(report =>
+                report.Disposition == NyxIdChatActionDisposition.Completed &&
+                IsTerminalPostconditionGeneration(
+                    FindPostconditionStep(activeTask, report.ActionRequestId))))
+        {
+            return RejectContinuation(state, ActionContinuationInvalid);
+        }
 
         var next = state.Clone();
         foreach (var report in sanitizedReports)
@@ -554,6 +562,7 @@ public static class NyxIdChatBrowserActions
             !KeysEqual(step.Operation.Key, signal.Key) ||
             step.Kind != NyxIdChatStepKind.Postcondition ||
             request is null ||
+            IsTerminalPostconditionGeneration(step) ||
             !PostconditionResourceMatchesAction(request.Action, result))
         {
             return RejectContinuation(state, ActionContinuationInvalid);
@@ -722,6 +731,10 @@ public static class NyxIdChatBrowserActions
         task.Steps.FirstOrDefault(step =>
             step.Kind == NyxIdChatStepKind.Postcondition &&
             string.Equals(step.ActionRequestId, actionRequestId, StringComparison.Ordinal));
+
+    private static bool IsTerminalPostconditionGeneration(NyxIdChatTaskStepState? step) =>
+        step?.Operation?.Phase == NyxIdChatOperationPhase.Failed &&
+        step.Status is NyxIdChatStepStatus.Waiting or NyxIdChatStepStatus.Failed;
 
     private static void ActivatePostcondition(
         NyxIdChatTaskState task,

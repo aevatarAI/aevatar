@@ -3491,8 +3491,9 @@ public sealed class NyxIdChatConversationGAgent
         if (step?.Operation is null)
             return current;
 
-        step.Operation.Phase = NyxIdChatOperationPhase.Dispatched;
-        step.Operation.DispatchedAt = evt.DispatchedAt?.Clone();
+        if (step.Operation.Phase == NyxIdChatOperationPhase.Requested)
+            step.Operation.Phase = NyxIdChatOperationPhase.Dispatched;
+        step.Operation.DispatchedAt ??= evt.DispatchedAt?.Clone();
         step.Operation.LastProgressAt ??= evt.DispatchedAt?.Clone();
         if (evt.EffectDispatchWaterline != NyxIdChatEffectEvidence.Unspecified)
             step.ExternalEffect = evt.EffectDispatchWaterline;
