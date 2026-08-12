@@ -3,7 +3,7 @@
 
 The board implements the product decisions from the 2026-08-03 meeting:
 - Workflow is the only user-authored resource in scope.
-- Run is the manual execution action; Schedule is a published-service-owned trigger.
+- Run is the manual execution action; Schedule is a Team Automation-backed trigger.
 - Every Run is retained in Activity, including draft revisions.
 - Retry and Run again create linked records instead of rewriting history.
 - Settings follows the current Aevatar Console LLM and Account behavior.
@@ -535,10 +535,10 @@ def settings_panel_heading(x: float, y: float, w: float, title_value: str,
 # Board title and semantic contract
 text(ORIGIN_X, 80, "Aevatar Workflow + Activity + Settings vNext", FS_TITLE, INK, width=1040)
 text(ORIGIN_X, 132,
-     "One authoring resource. One manual Run action. One schedule resource. One immutable Activity history.",
+     "One authoring resource. One manual Run action. One Team Automation schedule. One immutable Activity history.",
      FS_HEAD, BLUE, width=1120)
 text(ORIGIN_X, 180,
-     "Primary path: Workflows -> direct draft -> Publish -> manual Run or Schedule -> Activity. Settings owns LLM defaults and browser identity.",
+     "Primary path: Workflows -> direct draft -> Publish -> manual Run or Team Automation Schedule -> Activity. Settings owns LLM defaults and browser identity.",
      FS_BODY, MUTED, width=1200)
 
 
@@ -1182,11 +1182,11 @@ button(mobile_x + 202, mobile_y + 686, 116, "Save changes", primary=True, color=
 end_frame()
 
 
-# 18 Schedule management for a published Workflow
+# 18 Schedule management for a published Team member Workflow
 fx, fy = begin_frame(17, "18 Schedule - published workflow configuration")
 cx, cy, cw = workflow_editor_header(
     fx, fy, title="Weekly feedback digest",
-    subtitle="Published · v7 · 1 schedule · Updated 12 minutes ago",
+    subtitle="Published · v7 · 1 member automation · Updated 12 minutes ago",
     empty=False, published=True
 )
 canvas_w = cw - 410
@@ -1202,56 +1202,71 @@ panel_y = cy
 panel_w = 390
 panel_h = FRAME_H - (cy - fy)
 rect(panel_x, panel_y, panel_w, panel_h, bg=SURFACE, stroke="#d8e0ea", radius=False)
-text(panel_x + 18, panel_y + 18, "Schedules", FS_HEAD, INK, width=190)
-text(panel_x + 18, panel_y + 48, "Recurring triggers for this published workflow.",
+text(panel_x + 18, panel_y + 18, "Member automations", FS_HEAD, INK, width=236)
+text(panel_x + 18, panel_y + 48, "Recurring work for this Team member workflow.",
      FS_SMALL, MUTED, width=246)
-button(panel_x + 270, panel_y + 20, 102, "New schedule", color=BLUE, bg=BLUE_BG, h=32)
+button(panel_x + 268, panel_y + 20, 104, "New automation", color=BLUE, bg=BLUE_BG, h=32)
 line(panel_x, panel_y + 78, panel_w, 0, color="#eef2f7")
 
-rect(panel_x + 18, panel_y + 96, panel_w - 36, 72, bg=BLUE_BG, stroke=BLUE)
+rect(panel_x + 18, panel_y + 96, panel_w - 36, 84, bg=BLUE_BG, stroke=BLUE)
 text(panel_x + 32, panel_y + 110, "Morning digest", FS_BODY, INK, width=190)
-badge(panel_x + 264, panel_y + 108, "Active", "ok")
+badge(panel_x + 228, panel_y + 108, "Credential active", "ok")
 text(panel_x + 32, panel_y + 138, "Every weekday at 09:00 · Asia/Shanghai",
      FS_SMALL, MUTED, width=292)
-text(panel_x + 32, panel_y + 158, "Next run Tue 09:00", 11, BLUE, width=180)
-text(panel_x + 220, panel_y + 158, "View scheduled runs", 11, BLUE, width=140)
+text(panel_x + 32, panel_y + 160, "Next run Tue 09:00 · m-feedback",
+     11, BLUE, width=210)
+text(panel_x + 242, panel_y + 160, "View scheduled runs", 11, BLUE, width=120)
 
-line(panel_x + 18, panel_y + 188, panel_w - 36, 0, color=LINE)
-text(panel_x + 18, panel_y + 206, "SCHEDULE DETAILS", FS_SMALL, MUTED,
+line(panel_x + 18, panel_y + 196, panel_w - 36, 0, color=LINE)
+text(panel_x + 18, panel_y + 210, "TARGET", FS_SMALL, MUTED,
      font=FONT_MONO, width=180)
-field(panel_x + 18, panel_y + 228, panel_w - 36, "Schedule name", "Morning digest")
-field(panel_x + 18, panel_y + 286, panel_w - 36, "Frequency", "Every weekday at 09:00")
-field(panel_x + 18, panel_y + 344, panel_w - 36, "Time zone", "Asia/Shanghai")
-field(panel_x + 18, panel_y + 402, panel_w - 36, "Run input", "Summarize new feedback.")
-field(panel_x + 18, panel_y + 460, panel_w - 36, "Pinned revision", "Published · v7")
+rect(panel_x + 18, panel_y + 232, panel_w - 36, 64, bg=SUBTLE, stroke=LINE)
+text(panel_x + 32, panel_y + 244, "Team member", 11, MUTED, width=120)
+text(panel_x + 146, panel_y + 244, "m-feedback", 11, INK, font=FONT_MONO, width=190)
+text(panel_x + 32, panel_y + 264, "Published service", 11, MUTED, width=120)
+text(panel_x + 146, panel_y + 264, "svc-feedback-digest", 11, INK, font=FONT_MONO, width=190)
+text(panel_x + 32, panel_y + 282, "Pinned revision", 11, MUTED, width=120)
+text(panel_x + 146, panel_y + 282, "rev-feedback-v7", 11, INK, font=FONT_MONO, width=190)
 
-text(panel_x + 18, panel_y + 522, "EXECUTION", FS_SMALL, MUTED,
+text(panel_x + 18, panel_y + 312, "AUTOMATION DETAILS", FS_SMALL, MUTED,
+     font=FONT_MONO, width=210)
+field(panel_x + 18, panel_y + 332, panel_w - 36, "Automation name", "Morning digest", h=34)
+field(panel_x + 18, panel_y + 382, panel_w - 36, "Cadence", "Every weekday at 09:00", h=34)
+field(panel_x + 18, panel_y + 432, panel_w - 36, "Cron expression", "0 9 * * 1-5", mono=True, h=34)
+field(panel_x + 18, panel_y + 482, panel_w - 36, "Prompt (optional)", "Summarize new feedback.", h=34)
+
+rect(panel_x + 18, panel_y + 548, panel_w - 36, 60, bg=AMBER_BG, stroke=AMBER)
+text(panel_x + 32, panel_y + 558, "Dedicated Agent Key", FS_SMALL, AMBER, width=180)
+text(panel_x + 32, panel_y + 580,
+     "read + proxy · browser never receives raw key",
+     11, INK, width=300)
+text(panel_x + 32, panel_y + 594,
+     "Pause preserves credential · delete revokes it",
+     11, MUTED, width=300)
+
+text(panel_x + 18, panel_y + 622, "EXECUTION", FS_SMALL, MUTED,
      font=FONT_MONO, width=140)
-text(panel_x + 18, panel_y + 548, "Schedule is active", FS_SMALL, INK, width=176)
-rect(panel_x + 316, panel_y + 540, 52, 26, bg=GREEN, stroke=GREEN)
-dot(panel_x + 346, panel_y + 545, 16, SURFACE, bg=SURFACE)
-text(panel_x + 18, panel_y + 576, "Next run · Tue, Aug 12 at 09:00", FS_SMALL, INK, width=290)
-text(panel_x + 18, panel_y + 598, "Last run · Failed yesterday", FS_SMALL, RED, width=270)
+text(panel_x + 18, panel_y + 646, "Firing enabled", FS_SMALL, INK, width=176)
+rect(panel_x + 316, panel_y + 638, 52, 26, bg=GREEN, stroke=GREEN)
+dot(panel_x + 346, panel_y + 643, 16, SURFACE, bg=SURFACE)
+text(panel_x + 18, panel_y + 672, "Next run · Tue, Aug 12 at 09:00", 11, INK, width=290)
+text(panel_x + 18, panel_y + 690, "Last run · Failed yesterday", 11, RED, width=270)
 
-text(panel_x + 18, panel_y + 616, "NEXT FIVE RUNS · SERVER PREVIEW", 11, MUTED,
+rect(panel_x + 18, panel_y + 712, panel_w - 36, 24, bg=RED_BG, stroke=RED)
+text(panel_x + 30, panel_y + 719, "Last run failed. Review prompt or pause this automation.",
+     9, RED, width=320)
+
+text(panel_x + 18, panel_y + 748, "NEXT FIVE RUNS · SERVER PREVIEW", 10, MUTED,
      font=FONT_MONO, width=280)
-preview_rows = [
-    "Tue, Aug 12 · 09:00",
-    "Wed, Aug 13 · 09:00",
-    "Thu, Aug 14 · 09:00",
-    "Fri, Aug 15 · 09:00",
-    "Mon, Aug 18 · 09:00",
-]
-for idx, preview in enumerate(preview_rows):
-    text(panel_x + 18, panel_y + 638 + idx * 15, preview, 11, MUTED, width=230)
+text(panel_x + 18, panel_y + 764,
+     "Tue, Aug 12 · 09:00\nWed, Aug 13 · 09:00 · Thu +2 more",
+     9, MUTED, width=300)
 
-rect(panel_x + 18, panel_y + 716, panel_w - 36, 40, bg=RED_BG, stroke=RED)
-text(panel_x + 30, panel_y + 728, "Last run couldn't be completed. Review input or pause this schedule.",
-     10, RED, width=320)
-line(panel_x, panel_y + panel_h - 62, panel_w, 0, color="#eef2f7")
-button(panel_x + 18, panel_y + panel_h - 48, 92, "Delete", color=RED, bg=RED_BG, h=34)
-button(panel_x + 120, panel_y + panel_h - 48, 82, "Run now", color=INK, h=34)
-button(panel_x + 212, panel_y + panel_h - 48, 160, "Save changes", primary=True, color=BLUE, h=34)
+line(panel_x, panel_y + panel_h - 50, panel_w, 0, color="#eef2f7")
+button(panel_x + 18, panel_y + panel_h - 38, 72, "Delete", color=RED, bg=RED_BG, h=30)
+button(panel_x + 98, panel_y + panel_h - 38, 78, "Run now", color=INK, h=30)
+button(panel_x + 184, panel_y + panel_h - 38, 70, "Review", color=AMBER, bg=AMBER_BG, h=30)
+button(panel_x + 262, panel_y + panel_h - 38, 110, "Save", primary=True, color=BLUE, h=30)
 end_frame()
 
 

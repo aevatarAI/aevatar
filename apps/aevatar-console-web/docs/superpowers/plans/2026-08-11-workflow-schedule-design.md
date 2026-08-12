@@ -2,16 +2,16 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Extend the Workflow Activity vNext design baseline with an honest,
-published-service-owned recurring schedule experience and its backend contract
-boundary.
+**Goal:** Extend the Workflow Activity vNext design baseline with an honest
+Workflow editor Schedule entry that reuses the existing Team member automation
+and `ScheduledDispatch` contracts.
 
 **Architecture:** Keep `ScheduledDispatch` outside the Workflow graph and make
-the published service the only schedule target. The PR changes reference
-documents, the deterministic Excalidraw generator and its generated board, and
-the standalone interaction prototype. It deliberately does not add a runtime
-route, client API, or backend endpoint because scoped service-owned schedule
-reads and actions are absent.
+the canonical Team member automation owner (`scopeId + teamId + memberId`) the
+Schedule owner. The published service and active revision remain read-only
+targets. The PR changes reference documents, the deterministic Excalidraw
+generator and its generated board, and the standalone interaction prototype.
+It deliberately does not add a runtime route, client API, or backend endpoint.
 
 **Tech Stack:** Markdown, Mermaid, Python 3 Excalidraw generator, static HTML,
 CSS, vanilla JavaScript, repository documentation lint.
@@ -36,33 +36,36 @@ CSS, vanilla JavaScript, repository documentation lint.
 
 - [ ] **Step 1: Record the resource boundary**
 
-Add the exact published-service lineage:
+Add the exact existing lineage:
 
 ```text
-Workflow draft -> Publish -> Published Service -> ScheduledDispatch -> Workflow Run -> Activity
+Team member Workflow draft -> Publish -> Published Service -> Team member automation -> ScheduledDispatch -> Workflow Run -> Activity
 ```
 
 State that `workflowId`, `memberId`, and `publishedServiceId` are never
 interchangeable, and schedule creation uses the Workflow detail's real
-`scopeId`, `activeRevisionId`, and `publishedServiceId`.
+`scopeId`, `teamId`, `memberId`, `activeRevisionId`, and
+`publishedServiceId`.
 
 - [ ] **Step 2: Define the UI contract**
 
 Specify `Schedule` beside `Run`, a disabled draft action with `Publish this
-workflow before scheduling it.`, a right-side manager panel, the
-recurring-cron form, pinned revision behavior, `202 Accepted` observation
-treatment, and Activity's generic Schedule origin filter.
+workflow before scheduling it.`, a right-side manager panel that mirrors
+Team Automation, the recurring-cron form, optional prompt behavior, Dedicated
+Agent Key authorization review, pinned revision behavior, `202 Accepted`
+observation treatment, and Activity's generic Schedule origin filter.
 
 - [ ] **Step 3: Record the server boundary**
 
-Document scoped routes rooted at:
+Document the existing member automation routes rooted at:
 
 ```text
-/api/scopes/{scopeId}/services/{publishedServiceId}/schedules
+/api/scopes/{scopeId}/teams/{teamId}/members/{memberId}/automations
 ```
 
-Explicitly prohibit global ownerless schedule list reads plus browser-side
-filtering.
+Also document the generic `/api/schedules` scheduled dispatch capability as a
+lower-level implementation detail. Explicitly prohibit global ownerless
+schedule list reads plus browser-side filtering.
 
 ### Task 2: Correct The Excalidraw Product Model
 
@@ -110,12 +113,12 @@ Add `18 Schedule - published workflow configuration` with the editor canvas
 still visible and a right panel showing:
 
 ```text
-Schedules
-Published workflow / Pinned revision
-Schedule name / Frequency / Time zone / Run input
-Next five scheduled times
-Enabled / Next run / Last run
-Run now / Pause / Save changes
+Member automations
+Team member / Published service / Pinned revision
+Automation name / Cadence / Cron expression / Time zone / Optional prompt
+Dedicated Agent Key review
+Credential active / Next run / Last run / Server preview
+Run now / Pause / Review and reauthorize / Save changes
 ```
 
 Include a compact failed-dispatch state inside the same frame without claiming
@@ -159,9 +162,11 @@ to `Publish this workflow before scheduling it.`.
 - [ ] **Step 3: Render only prototype-owned sample states**
 
 Keep schedule records in a clearly named prototype state object. Render a
-right panel with cadence, timezone, required input, pinned revision, preview,
-enabled switch, next and last run, and a failure message. Label the prototype
-state as demonstration data and never describe it as production API behavior.
+right panel with Team member owner, published service, cadence, timezone,
+optional prompt, Dedicated Agent Key authorization review, pinned revision,
+preview, enabled switch, next and last run, credential status, and a failure
+message. Label the prototype state as demonstration data and never describe it
+as production API behavior.
 
 ### Task 4: Regenerate And Declare The Baseline
 

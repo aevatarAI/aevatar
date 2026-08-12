@@ -22,8 +22,9 @@ Use the sources in this order:
    state, and backend-compatibility contract.
 3. The published-workflow schedule supplement is normative whenever a
    Schedule entry, panel, resource, or Activity origin is changed. It defines
-   Schedule as a published-service-owned `ScheduledDispatch`, not a graph
-   node, draft property, or Run property.
+   Schedule as a Team member automation backed by `ScheduledDispatch`, not a
+   standalone schedule collection, graph node, draft property, or Run
+   property.
 4. The user-path specification is the normative end-to-end journey, decision,
    recovery, and completion-evidence contract.
 5. The PNG files are viewport references for individual states.
@@ -106,7 +107,7 @@ Design baseline:
 Primary design:
   aevatar-workflow-activity-vnext.excalidraw
 Design SHA-256:
-  50a443a89287ad0bdf86b64cb79ea96e62664a8e82a519762be9b36da87f89ca
+  88b29f952a07ec170408623a70fd17da8706eaf0ec4b119a8e91f4d5b48fc644
 Contract specification:
   apps/aevatar-console-web/docs/superpowers/specs/
   2026-08-04-workflow-activity-vnext-design.md
@@ -179,7 +180,7 @@ Production Data Truth Rule，也不覆盖设计规范中的
 `Excalidraw-To-Backend Deviations`。后续实现必须应用这些强制偏差：
 
 - 用户从 Workflows 直接创建 Workflow 草稿，没有其他资源的创建前置步骤。
-- `Run` 是唯一的手动执行入口。`Schedule` 是已发布服务拥有的独立后台触发资源，不是 Run 对话框、草稿属性或画布节点。
+- `Run` 是唯一的手动执行入口。`Schedule` 是当前 Team member automation 能力在 Workflow 编辑器里的入口，并由 `ScheduledDispatch` 承接后台触发；它不是一套独立 Schedule 集合、Run 对话框、草稿属性或画布节点。
 - Run 请求开始后先显示真实的 Accepted/Running 状态；只有 Observatory
   返回权威记录后，才能显示为 Activity 记录。
 - `Current draft · revision N`、`Published · vN`、来源、耗时、用量和
@@ -212,7 +213,7 @@ Production Data Truth Rule，也不覆盖设计规范中的
 15. `15 Settings - save and recovery states`：dirty save bar、accepted observation、fallback、catalog unavailable 和保存失败恢复。
 16. `16 Settings - Account`：Profile、claims、Authentication、Sign out 与 Manage service access。
 17. `17 Settings - Advanced and responsive`：单份只读 effective request values 与完整移动端操作布局。
-18. `18 Schedule - published workflow configuration`：已发布 Workflow 的右侧 Schedule 管理面；它固定目标服务与修订，显示周期、时区、必填 Run input、服务端预览和调度状态，不把 Schedule 画成图节点。
+18. `18 Schedule - published workflow configuration`：已发布 Team member Workflow 的右侧 Schedule 管理面；它复用现有 Team Automation 语义，显示 member owner、published service、pinned revision、周期、时区、可选 prompt、Dedicated Agent Key 审查、服务端预览、credential 状态和调度状态，不把 Schedule 画成图节点。
 
 重点不是逐个查看控件，而是沿着这条主路径检查语义是否连贯：
 
@@ -236,7 +237,7 @@ Workflows
 1. 打开 `prototype.html`，默认进入 Workflows。
 2. 点击 `New workflow`，分别检查四种方式：描述会生成匹配节点；空白会进入画布空状态；导入会先校验 YAML；模板会先要求选择模板。
 3. 在画布点击节点，右侧打开 Node configuration；`Add node` 从左侧打开 Node library；`Edit YAML` 从右侧打开 YAML 面板。
-4. 打开一个已发布 Workflow，点击 `Schedule` 检查右侧 Schedule 面板，再点击 `View scheduled runs` 检查当前 Workflow 的通用 `Source: Schedule` Activity 筛选；未发布 Workflow 的同一动作保持禁用，并显示 `Publish this workflow before scheduling it.`。面板中的 Schedule 数据是演示数据，不能视为 API 行为。
+4. 打开一个已发布 Team member Workflow，点击 `Schedule` 检查右侧 Member automations 面板，再点击 `View scheduled runs` 检查当前 Workflow 的通用 `Source: Schedule` Activity 筛选；未发布 Workflow 或缺少权威 `teamId/memberId/publishedServiceId` 的同一动作保持禁用，并显示 `Publish this workflow before scheduling it.` 或 `Open the Team member workflow before scheduling it.`。面板中的 automation 数据是演示数据，不能视为 API 行为；生产实现读取 `/api/scopes/{scopeId}/teams/{teamId}/members/{memberId}/automations`。
 5. 在列表或编辑器点击 `Run`，确认修订、输入、连接和外部影响。
 6. 勾选外部影响确认后点击 `Run`。记录会立即写入浏览器 `localStorage`，编辑器显示运行状态。
 7. 打开 Activity，点击任意一行查看详情。

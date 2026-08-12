@@ -15,7 +15,7 @@ BASELINE_DIR = Path(__file__).resolve().parent
 BOARD_NAME = "aevatar-workflow-activity-vnext.excalidraw"
 GENERATOR_NAME = "aevatar-workflow-activity-vnext.gen.py"
 PROTOTYPE_NAME = "prototype.html"
-EXPECTED_SHA256 = "50a443a89287ad0bdf86b64cb79ea96e62664a8e82a519762be9b36da87f89ca"
+EXPECTED_SHA256 = "88b29f952a07ec170408623a70fd17da8706eaf0ec4b119a8e91f4d5b48fc644"
 EXPECTED_FRAMES = (
     "01 Workflows - catalogue",
     "02 New workflow - direct creation",
@@ -56,12 +56,21 @@ def main() -> None:
         for element in document["elements"]
         if element.get("type") == "text"
     )
+    visible_text_casefolded = visible_text.casefold()
     if "Publish this workflow before scheduling it." not in visible_text:
         raise SystemExit("schedule draft-state copy is missing from the design board")
     if "Source: Schedule" not in visible_text:
         raise SystemExit("scheduled Activity filter is missing from the design board")
     if "View scheduled runs" not in visible_text:
         raise SystemExit("scheduled Activity entry point is missing from the design board")
+    if "Member automations" not in visible_text:
+        raise SystemExit("schedule frame does not use the Team Automation owner model")
+    if "Dedicated Agent Key" not in visible_text:
+        raise SystemExit("schedule frame is missing Team Automation authorization review")
+    if "prompt (optional)" not in visible_text_casefolded:
+        raise SystemExit("schedule frame incorrectly hides optional recurring prompt semantics")
+    if "Credential active" not in visible_text:
+        raise SystemExit("schedule frame is missing observed credential state")
     if "18 Schedule - published workflow configuration" not in {
         element.get("name")
         for element in document["elements"]
@@ -124,14 +133,31 @@ def main() -> None:
         raise SystemExit("prototype treats an accepted Schedule update as authoritative")
     if "prototypeSchedules[currentWorkflow.id] = []" in prototype_text:
         raise SystemExit("prototype treats an accepted Schedule delete as authoritative")
-    if "currentWorkflow.scopeId" not in prototype_text or "currentWorkflow.publishedServiceId" not in prototype_text:
-        raise SystemExit("prototype does not model the published service Schedule owner")
+    if (
+        "currentWorkflow.scopeId" not in prototype_text
+        or "currentWorkflow.teamId" not in prototype_text
+        or "currentWorkflow.memberId" not in prototype_text
+        or "currentWorkflow.publishedServiceId" not in prototype_text
+    ):
+        raise SystemExit("prototype does not model the Team member automation owner")
     if "currentWorkflow.activeRevisionId" not in prototype_text:
         raise SystemExit("prototype does not model the active published revision identity")
     if "prototypeSchedules[currentWorkflow.id]" in prototype_text:
         raise SystemExit("prototype indexes Schedules by workflow identity instead of published service identity")
-    if "prototypeSchedules[currentWorkflow.scopeId]?.[currentWorkflow.publishedServiceId]" not in prototype_text:
-        raise SystemExit("prototype does not scope Schedules to the published service owner")
+    if "prototypeSchedules" in prototype_text:
+        raise SystemExit("prototype still uses standalone Schedule state instead of Team automations")
+    if "prototypeTeamAutomations[currentWorkflow.scopeId]?.[currentWorkflow.teamId]?.[currentWorkflow.memberId]" not in prototype_text:
+        raise SystemExit("prototype does not scope automations to the Team member owner")
+    if "/api/scopes/{scopeId}/teams/{teamId}/members/{memberId}/automations" not in prototype_text:
+        raise SystemExit("prototype does not point production reads at Team Automation endpoints")
+    if "Prompt (optional)" not in prototype_text:
+        raise SystemExit("prototype does not expose prompt as optional")
+    if "Dedicated Agent Key" not in prototype_text:
+        raise SystemExit("prototype is missing Team Automation authorization review")
+    if "Schedule update accepted." in prototype_text or "Schedule deletion accepted." in prototype_text:
+        raise SystemExit("prototype still names accepted mutations as standalone Schedule changes")
+    if "Automation update accepted." not in prototype_text or "Automation deletion accepted." not in prototype_text:
+        raise SystemExit("prototype does not model accepted Team Automation mutations")
     if "revision: currentWorkflow.revision" in prototype_text:
         raise SystemExit("prototype uses a revision display label as the Schedule pin identity")
     if "revisionId: currentWorkflow.activeRevisionId" not in prototype_text:

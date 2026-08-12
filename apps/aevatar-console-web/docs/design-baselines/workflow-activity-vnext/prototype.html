@@ -611,9 +611,9 @@
     <aside class="sidebar" aria-label="Primary navigation">
       <div class="brand"><strong>AEVATAR</strong><span>AUTOMATION</span></div>
       <nav class="nav">
-        <button class="nav-button active" data-nav="workflows"><span class="nav-icon"></span>Workflows</button>
-        <button class="nav-button" data-nav="activity"><span class="nav-icon"></span>Activity</button>
-        <button class="nav-button" data-nav="settings"><span class="nav-icon"></span>Settings</button>
+        <button type="button" class="nav-button active" data-nav="workflows"><span class="nav-icon"></span>Workflows</button>
+        <button type="button" class="nav-button" data-nav="activity"><span class="nav-icon"></span>Activity</button>
+        <button type="button" class="nav-button" data-nav="settings"><span class="nav-icon"></span>Settings</button>
       </nav>
       <div class="workspace"><span>Workspace</span><strong>Acme Operations</strong></div>
     </aside>
@@ -622,16 +622,16 @@
       <section class="view" id="workflows-view">
         <header class="page-header">
           <div><h1>Workflows</h1><p>Create, edit, publish, and run automations.</p></div>
-          <div class="header-actions"><button class="button primary" id="new-workflow">New workflow</button></div>
+          <div class="header-actions"><button type="button" class="button primary" id="new-workflow">New workflow</button></div>
         </header>
         <div class="content">
           <div class="toolbar">
             <label class="search"><span class="field-label">Search</span><input class="input" id="workflow-search" placeholder="Search workflows"></label>
             <div class="filters" id="workflow-filters" aria-label="Workflow filters">
-              <button class="filter active" data-workflow-filter="All">All</button>
-              <button class="filter" data-workflow-filter="Published">Published</button>
-              <button class="filter" data-workflow-filter="Draft">Drafts</button>
-              <button class="filter" data-workflow-filter="Failing">Failing</button>
+              <button type="button" class="filter active" data-workflow-filter="All">All</button>
+              <button type="button" class="filter" data-workflow-filter="Published">Published</button>
+              <button type="button" class="filter" data-workflow-filter="Draft">Drafts</button>
+              <button type="button" class="filter" data-workflow-filter="Failing">Failing</button>
             </div>
           </div>
           <div id="workflow-table-wrap"></div>
@@ -641,22 +641,22 @@
       <section class="view" id="editor-view" hidden>
         <header class="page-header studio-header">
           <div class="studio-identity">
-            <button class="button studio-back" id="back-workflows" aria-label="Back to Workflows" title="Back">←</button>
+            <button type="button" class="button studio-back" id="back-workflows" aria-label="Back to Workflows" title="Back">←</button>
             <div class="studio-identity-copy"><h1 id="editor-title">Customer escalation triage</h1><p id="editor-subtitle">Current draft · revision 12 · Saved just now</p></div>
             <span class="studio-status" id="editor-status">Draft</span>
           </div>
           <div class="studio-actions" aria-label="Workflow editor actions">
             <div class="studio-action-group">
-              <button class="button studio-button" id="editor-run"><span class="studio-button-icon">▶</span><span class="studio-action-label">Run</span></button>
-              <button class="button studio-button" id="editor-schedule" title="Publish this workflow before scheduling it."><span class="studio-button-icon">◷</span><span class="studio-action-label">Schedule</span></button>
+              <button type="button" class="button studio-button" id="editor-run"><span class="studio-button-icon">▶</span><span class="studio-action-label">Run</span></button>
+              <button type="button" class="button studio-button" id="editor-schedule" title="Publish this workflow before scheduling it."><span class="studio-button-icon">◷</span><span class="studio-action-label">Schedule</span></button>
             </div>
             <div class="studio-action-group">
-              <button class="button studio-button" id="add-step"><span class="studio-button-icon">+</span><span class="studio-action-label secondary">Add node</span></button>
-              <button class="button studio-button" id="editor-yaml"><span class="studio-button-icon">&lt;/&gt;</span><span class="studio-action-label">Edit YAML</span></button>
+              <button type="button" class="button studio-button" id="add-step"><span class="studio-button-icon">+</span><span class="studio-action-label secondary">Add node</span></button>
+              <button type="button" class="button studio-button" id="editor-yaml"><span class="studio-button-icon">&lt;/&gt;</span><span class="studio-action-label">Edit YAML</span></button>
             </div>
             <div class="studio-action-group">
-              <button class="button studio-button primary" id="editor-save"><span class="studio-button-icon">▣</span><span class="studio-action-label">Save</span></button>
-              <button class="button studio-button" id="editor-publish"><span class="studio-button-icon">↑</span><span class="studio-action-label">Publish</span></button>
+              <button type="button" class="button studio-button primary" id="editor-save"><span class="studio-button-icon">▣</span><span class="studio-action-label">Save</span></button>
+              <button type="button" class="button studio-button" id="editor-publish"><span class="studio-button-icon">↑</span><span class="studio-action-label">Publish</span></button>
             </div>
           </div>
         </header>
@@ -665,12 +665,12 @@
           <div id="active-run-banner"></div>
           <aside class="studio-inspector" id="config-panel" hidden></aside>
           <aside class="studio-yaml-panel" id="yaml-panel" hidden aria-label="Workflow YAML editor">
-            <header class="studio-panel-header"><div><h2>Edit YAML</h2><p>Review and apply this workflow document.</p></div><button class="icon-button" id="close-yaml" aria-label="Close YAML editor" title="Close">×</button></header>
+            <header class="studio-panel-header"><div><h2>Edit YAML</h2><p>Review and apply this workflow document.</p></div><button type="button" class="icon-button" id="close-yaml" aria-label="Close YAML editor" title="Close">×</button></header>
             <textarea class="textarea yaml-editor" id="workflow-yaml-editor" aria-label="Workflow YAML"></textarea>
             <p class="validation" id="yaml-editor-error" role="alert" hidden style="margin:10px 20px 0"></p>
-            <footer class="studio-panel-footer"><button class="button small" id="cancel-yaml">Cancel</button><button class="button small primary" id="apply-yaml">Apply changes</button></footer>
+            <footer class="studio-panel-footer"><button type="button" class="button small" id="cancel-yaml">Cancel</button><button type="button" class="button small primary" id="apply-yaml">Apply changes</button></footer>
           </aside>
-          <aside class="studio-schedule-panel" id="schedule-panel" hidden aria-label="Workflow schedules"></aside>
+          <aside class="studio-schedule-panel" id="schedule-panel" hidden aria-label="Workflow automations"></aside>
         </div>
       </section>
 
@@ -682,12 +682,12 @@
           <div class="toolbar">
             <label class="search"><span class="field-label">Search</span><input class="input" id="activity-search" placeholder="Search workflow, Run, or outcome"></label>
             <div class="filters" id="activity-filters" aria-label="Activity filters">
-              <button class="filter active" data-activity-filter="All">All</button>
-              <button class="filter" data-activity-filter="Needs you">Needs you</button>
-              <button class="filter" data-activity-filter="Running">Running</button>
-              <button class="filter" data-activity-filter="Failed">Failed</button>
-              <button class="filter" data-activity-filter="Scheduled">Scheduled</button>
-              <button class="filter" data-activity-filter="Mine">Mine</button>
+              <button type="button" class="filter active" data-activity-filter="All">All</button>
+              <button type="button" class="filter" data-activity-filter="Needs you">Needs you</button>
+              <button type="button" class="filter" data-activity-filter="Running">Running</button>
+              <button type="button" class="filter" data-activity-filter="Failed">Failed</button>
+              <button type="button" class="filter" data-activity-filter="Scheduled">Scheduled</button>
+              <button type="button" class="filter" data-activity-filter="Mine">Mine</button>
             </div>
           </div>
           <div id="activity-table-wrap"></div>
@@ -701,9 +701,9 @@
         <div class="content settings-content">
           <div class="settings-layout">
             <aside class="settings-section-nav" role="tablist" aria-label="Settings sections" aria-orientation="vertical">
-              <button class="settings-section-tab active" id="ai-defaults-tab" data-settings-section="ai" role="tab" aria-selected="true" aria-controls="ai-settings-panel" tabindex="0">AI defaults</button>
-              <button class="settings-section-tab" id="account-tab" data-settings-section="account" role="tab" aria-selected="false" aria-controls="account-settings-panel" tabindex="-1">Account</button>
-              <button class="settings-section-tab" id="advanced-tab" data-settings-section="advanced" role="tab" aria-selected="false" aria-controls="advanced-settings-panel" tabindex="-1">Advanced</button>
+              <button type="button" class="settings-section-tab active" id="ai-defaults-tab" data-settings-section="ai" role="tab" aria-selected="true" aria-controls="ai-settings-panel" tabindex="0">AI defaults</button>
+              <button type="button" class="settings-section-tab" id="account-tab" data-settings-section="account" role="tab" aria-selected="false" aria-controls="account-settings-panel" tabindex="-1">Account</button>
+              <button type="button" class="settings-section-tab" id="advanced-tab" data-settings-section="advanced" role="tab" aria-selected="false" aria-controls="advanced-settings-panel" tabindex="-1">Advanced</button>
             </aside>
 
             <div class="settings-main">
@@ -736,7 +736,7 @@
                 </div>
                 <div class="settings-savebar" id="settings-savebar" hidden>
                   <div><strong id="settings-savebar-title">Unsaved changes</strong><span id="settings-savebar-copy">Your AI defaults have not been saved.</span></div>
-                  <div class="settings-savebar-actions"><button class="button small" id="reset-settings">Discard</button><button class="button small primary" id="save-settings">Save changes</button></div>
+                  <div class="settings-savebar-actions"><button type="button" class="button small" id="reset-settings">Discard</button><button type="button" class="button small primary" id="save-settings">Save changes</button></div>
                 </div>
               </div>
 
@@ -745,11 +745,11 @@
                 <div id="account-dirty-alert"></div>
                 <div class="settings-stack">
                   <section class="settings-section">
-                    <header class="settings-section-header"><h3>Profile</h3><button class="button danger small" id="account-signout">Sign out</button></header>
+                    <header class="settings-section-header"><h3>Profile</h3><button type="button" class="button danger small" id="account-signout">Sign out</button></header>
                     <div id="account-profile-body"></div>
                   </section>
                   <section class="settings-section">
-                    <header class="settings-section-header"><h3>Authentication</h3><button class="button small" id="manage-service-access">Manage service access</button></header>
+                    <header class="settings-section-header"><h3>Authentication</h3><button type="button" class="button small" id="manage-service-access">Manage service access</button></header>
                     <div class="settings-details" id="authentication-fields">
                       <div class="settings-detail"><span>Session expires</span><strong>2026/8/4 18:30</strong></div>
                       <div class="settings-detail"><span>Provider</span><strong>NyxID</strong></div>
@@ -786,13 +786,13 @@
       <header class="modal-header"><h2 id="create-title">New workflow</h2><p>Each starting point creates a workflow draft directly.</p></header>
       <div class="modal-body">
         <div class="create-grid">
-          <button class="create-choice primary-choice" data-create="describe"><strong>Describe what you need</strong><span>Turn a plain-language goal into a reviewable first draft.</span><em>Describe</em></button>
-          <button class="create-choice" data-create="blank"><strong>Start blank</strong><span>Open an empty workflow canvas and add the first node.</span><em>Start blank</em></button>
-          <button class="create-choice" data-create="import"><strong>Import YAML</strong><span>Create a draft from an existing workflow definition.</span><em>Import</em></button>
-          <button class="create-choice" data-create="template"><strong>Use a template</strong><span>Choose a proven starting point, then review its steps.</span><em>Browse templates</em></button>
+          <button type="button" class="create-choice primary-choice" data-create="describe"><strong>Describe what you need</strong><span>Turn a plain-language goal into a reviewable first draft.</span><em>Describe</em></button>
+          <button type="button" class="create-choice" data-create="blank"><strong>Start blank</strong><span>Open an empty workflow canvas and add the first node.</span><em>Start blank</em></button>
+          <button type="button" class="create-choice" data-create="import"><strong>Import YAML</strong><span>Create a draft from an existing workflow definition.</span><em>Import</em></button>
+          <button type="button" class="create-choice" data-create="template"><strong>Use a template</strong><span>Choose a proven starting point, then review its steps.</span><em>Browse templates</em></button>
         </div>
       </div>
-      <footer class="modal-footer"><button class="button" data-close-modal="create-modal">Cancel</button></footer>
+      <footer class="modal-footer"><button type="button" class="button" data-close-modal="create-modal">Cancel</button></footer>
     </section>
   </div>
 
@@ -800,7 +800,7 @@
     <section class="modal" role="dialog" aria-modal="true" aria-labelledby="describe-title">
       <header class="modal-header"><h2 id="describe-title">Describe your workflow</h2><p>A draft will open immediately for review.</p></header>
       <div class="modal-body"><label><span class="field-label">Goal</span><textarea class="textarea" id="workflow-goal">Every Monday, group feedback themes and post a concise summary.</textarea></label><p class="validation" id="goal-error" role="alert" hidden></p></div>
-      <footer class="modal-footer"><button class="button" data-close-modal="describe-modal">Cancel</button><button class="button primary" id="create-from-description">Create workflow</button></footer>
+      <footer class="modal-footer"><button type="button" class="button" data-close-modal="describe-modal">Cancel</button><button type="button" class="button primary" id="create-from-description">Create workflow</button></footer>
     </section>
   </div>
 
@@ -819,7 +819,7 @@ steps:
     type: Lark message</textarea></label>
         <p class="validation" id="yaml-error" role="alert" hidden></p>
       </div>
-      <footer class="modal-footer"><button class="button" data-close-modal="import-modal">Cancel</button><button class="button primary" id="create-from-yaml">Import workflow</button></footer>
+      <footer class="modal-footer"><button type="button" class="button" data-close-modal="import-modal">Cancel</button><button type="button" class="button primary" id="create-from-yaml">Import workflow</button></footer>
     </section>
   </div>
 
@@ -827,21 +827,21 @@ steps:
     <section class="modal wide" role="dialog" aria-modal="true" aria-labelledby="template-title">
       <header class="modal-header"><h2 id="template-title">Choose a workflow template</h2><p>Templates create an editable draft with connected nodes and configuration.</p></header>
       <div class="modal-body"><div class="template-grid" id="template-list"></div></div>
-      <footer class="modal-footer"><button class="button" data-close-modal="template-modal">Cancel</button></footer>
+      <footer class="modal-footer"><button type="button" class="button" data-close-modal="template-modal">Cancel</button></footer>
     </section>
   </div>
 
   <div class="node-library-layer" id="step-modal" hidden>
     <aside class="node-library" role="dialog" aria-modal="true" aria-labelledby="step-title">
-      <header class="studio-panel-header"><div><h2 id="step-title">Node library</h2><p>Add a node to the workflow canvas.</p></div><button class="icon-button" data-close-modal="step-modal" aria-label="Close node library" title="Close">×</button></header>
+      <header class="studio-panel-header"><div><h2 id="step-title">Node library</h2><p>Add a node to the workflow canvas.</p></div><button type="button" class="icon-button" data-close-modal="step-modal" aria-label="Close node library" title="Close">×</button></header>
       <div class="node-library-list">
         <label><span class="field-label">Search nodes</span><input class="input" id="node-search" placeholder="Search nodes"></label>
         <section class="node-category" data-node-category><div class="node-category-title">Data and AI <span>2</span></div>
-          <button class="node-library-item" data-step-type="data" data-node-search="data query records source"><i class="node-library-dot" style="--node-color:#0891b2"></i><span><strong>Data query</strong><small>Data</small></span></button>
-          <button class="node-library-item" data-step-type="ai" data-node-search="ai task transform summarize"><i class="node-library-dot" style="--node-color:#2563eb"></i><span><strong>AI task</strong><small>AI</small></span></button>
+          <button type="button" class="node-library-item" data-step-type="data" data-node-search="data query records source"><i class="node-library-dot" style="--node-color:#0891b2"></i><span><strong>Data query</strong><small>Data</small></span></button>
+          <button type="button" class="node-library-item" data-step-type="ai" data-node-search="ai task transform summarize"><i class="node-library-dot" style="--node-color:#2563eb"></i><span><strong>AI task</strong><small>AI</small></span></button>
         </section>
         <section class="node-category" data-node-category><div class="node-category-title">Integrations <span>1</span></div>
-          <button class="node-library-item" data-step-type="message" data-node-search="send message lark integration"><i class="node-library-dot" style="--node-color:#16a34a"></i><span><strong>Send message</strong><small>Integration</small></span></button>
+          <button type="button" class="node-library-item" data-step-type="message" data-node-search="send message lark integration"><i class="node-library-dot" style="--node-color:#16a34a"></i><span><strong>Send message</strong><small>Integration</small></span></button>
         </section>
       </div>
     </aside>
@@ -864,13 +864,13 @@ steps:
         <label class="check"><input type="checkbox" id="effects-check"><span>I understand this workflow may change external systems.</span></label>
         <div class="history-note">This Run will be saved in Activity.</div>
       </div>
-      <footer class="modal-footer"><button class="button" data-close-modal="run-modal">Cancel</button><button class="button primary" id="confirm-run" disabled>Run</button></footer>
+      <footer class="modal-footer"><button type="button" class="button" data-close-modal="run-modal">Cancel</button><button type="button" class="button primary" id="confirm-run" disabled>Run</button></footer>
     </section>
   </div>
 
   <div class="drawer-backdrop" id="run-drawer" hidden>
     <aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title">
-      <header class="drawer-header"><div class="drawer-header-top"><div><h2 id="drawer-title">Run detail</h2><p id="drawer-subtitle"></p></div><button class="icon-button" id="close-drawer" aria-label="Close Run detail" title="Close">×</button></div></header>
+      <header class="drawer-header"><div class="drawer-header-top"><div><h2 id="drawer-title">Run detail</h2><p id="drawer-subtitle"></p></div><button type="button" class="icon-button" id="close-drawer" aria-label="Close Run detail" title="Close">×</button></div></header>
       <div class="drawer-body" id="drawer-body"></div>
       <footer class="drawer-footer" id="drawer-footer"></footer>
     </aside>
@@ -904,7 +904,7 @@ steps:
 
     const seedWorkflows = [
       {
-        id: "wf-feedback", scopeId: "scope-demo", publishedServiceId: "svc-feedback-digest", activeRevisionId: "rev-feedback-v7", name: "Weekly feedback digest", description: "Group feedback and post a weekly summary",
+        id: "wf-feedback", scopeId: "scope-demo", teamId: "team-ops", memberId: "m-feedback", publishedServiceId: "svc-feedback-digest", activeRevisionId: "rev-feedback-v7", name: "Weekly feedback digest", description: "Group feedback and post a weekly summary",
         state: "Published", revision: "Published · v7", last: "2h ago", lastStatus: "Succeeded", creation: "Template",
         runInput: '{\n  "week": "2026-W32"\n}', effects: "Posts one summary to the weekly feedback channel.",
         steps: [
@@ -915,7 +915,7 @@ steps:
         ]
       },
       {
-        id: "wf-escalation", scopeId: "scope-demo", publishedServiceId: null, activeRevisionId: null, name: "Customer escalation triage", description: "Classify urgent conversations and prepare replies",
+        id: "wf-escalation", scopeId: "scope-demo", teamId: "team-ops", memberId: "m-escalation", publishedServiceId: null, activeRevisionId: null, name: "Customer escalation triage", description: "Classify urgent conversations and prepare replies",
         state: "Draft", revision: "Current draft · revision 12", last: "4m ago", lastStatus: "Running", creation: "Description",
         runInput: '{\n  "conversation": "support-thread-4821"\n}', effects: "May post a Lark reply and create a Linear issue.",
         steps: [
@@ -927,7 +927,7 @@ steps:
         ]
       },
       {
-        id: "wf-invoice", scopeId: "scope-demo", publishedServiceId: "svc-invoice-follow-up", activeRevisionId: "rev-invoice-v4", name: "Invoice follow-up", description: "Prepare overdue invoice reminders for approval",
+        id: "wf-invoice", scopeId: "scope-demo", teamId: "team-finance", memberId: "m-invoice", publishedServiceId: "svc-invoice-follow-up", activeRevisionId: "rev-invoice-v4", name: "Invoice follow-up", description: "Prepare overdue invoice reminders for approval",
         state: "Published", revision: "Published · v4", last: "42m ago", lastStatus: "Needs you", creation: "Template",
         runInput: '{\n  "asOf": "2026-08-03"\n}', effects: "May send approved reminder emails.",
         steps: [
@@ -938,7 +938,7 @@ steps:
         ]
       },
       {
-        id: "wf-orders", scopeId: "scope-demo", publishedServiceId: "svc-nightly-order-sync", activeRevisionId: "rev-orders-v9", name: "Nightly order sync", description: "Move completed orders into the warehouse",
+        id: "wf-orders", scopeId: "scope-demo", teamId: "team-ops", memberId: "m-orders", publishedServiceId: "svc-nightly-order-sync", activeRevisionId: "rev-orders-v9", name: "Nightly order sync", description: "Move completed orders into the warehouse",
         state: "Published", revision: "Published · v9", last: "3:04 AM", lastStatus: "Failed", creation: "Import",
         runInput: '{\n  "date": "2026-08-02"\n}', effects: "Writes completed order rows to the warehouse.",
         steps: [
@@ -948,7 +948,7 @@ steps:
         ]
       },
       {
-        id: "wf-contract", scopeId: "scope-demo", publishedServiceId: null, activeRevisionId: null, name: "Contract review", description: "Flag unusual clauses and prepare a review note",
+        id: "wf-contract", scopeId: "scope-demo", teamId: "team-legal", memberId: "m-contract", publishedServiceId: null, activeRevisionId: null, name: "Contract review", description: "Flag unusual clauses and prepare a review note",
         state: "Draft", revision: "Current draft · revision 3", last: "Never", lastStatus: "Never", creation: "Blank",
         runInput: '{\n  "document": "contract.pdf"\n}', effects: "Creates a private review note.",
         steps: [
@@ -987,44 +987,55 @@ steps:
       { id: "R-1028", workflowId: "wf-invoice", workflow: "Invoice follow-up", status: "Succeeded", origin: "Manual · you", revision: "Published · v4", when: "2d ago", took: "02:04", usage: "$0.20", outcome: "Sent 6 reminders", startedBy: "You", sourceId: null }
     ];
 
-    // This is isolated prototype state. Production reads schedules from a scoped service resource.
-    const prototypeSchedules = {
+    // This is isolated prototype state. Production reads member automations from
+    // /api/scopes/{scopeId}/teams/{teamId}/members/{memberId}/automations.
+    const prototypeTeamAutomations = {
       "scope-demo": {
-        "svc-feedback-digest": [
-          {
-            id: "sch-feedback-morning",
-            name: "Morning digest",
-            cadence: "Every weekday at 09:00",
-            timeZone: "Asia/Shanghai",
-            input: "Summarize new feedback.",
-            revisionId: "rev-feedback-v7",
-            revisionLabel: "Published · v7",
-            enabled: true,
-            nextRun: "Tue, Aug 12 at 09:00",
-            lastRun: "Failed yesterday",
-            preview: ["Tue, Aug 12 · 09:00", "Wed, Aug 13 · 09:00", "Thu, Aug 14 · 09:00", "Fri, Aug 15 · 09:00", "Mon, Aug 18 · 09:00"],
-            lastError: "Last run couldn't be completed. Review input or pause this schedule."
-          },
-          {
-            id: "sch-feedback-weekly",
-            name: "Weekly review",
-            cadence: "Every Monday at 10:00",
-            timeZone: "Asia/Shanghai",
-            input: "Review the latest feedback trends.",
-            revisionId: "rev-feedback-v7",
-            revisionLabel: "Published · v7",
-            enabled: false,
-            nextRun: "No upcoming run",
-            lastRun: "Succeeded Mon, Aug 4",
-            preview: ["Mon, Aug 18 · 10:00", "Mon, Aug 25 · 10:00", "Mon, Sep 1 · 10:00", "Mon, Sep 8 · 10:00", "Mon, Sep 15 · 10:00"],
-            lastError: ""
-          }
-        ]
+        "team-ops": {
+          "m-feedback": [
+            {
+              id: "sch-feedback-morning",
+              name: "Morning digest",
+              cadence: "Every weekday at 09:00",
+              cronExpression: "0 9 * * 1-5",
+              timeZone: "Asia/Shanghai",
+              prompt: "Summarize new feedback.",
+              revisionId: "rev-feedback-v7",
+              revisionLabel: "Published · v7",
+              publishedServiceId: "svc-feedback-digest",
+              enabled: true,
+              authorizationStatus: "Credential active",
+              credentialExpiry: "Expires Oct 12, 2026",
+              nextRun: "Tue, Aug 12 at 09:00",
+              lastRun: "Failed yesterday",
+              preview: ["Tue, Aug 12 · 09:00", "Wed, Aug 13 · 09:00", "Thu, Aug 14 · 09:00", "Fri, Aug 15 · 09:00", "Mon, Aug 18 · 09:00"],
+              lastError: "Last run couldn't be completed. Review prompt or pause this automation."
+            },
+            {
+              id: "sch-feedback-weekly",
+              name: "Weekly review",
+              cadence: "Every Monday at 10:00",
+              cronExpression: "0 10 * * 1",
+              timeZone: "Asia/Shanghai",
+              prompt: "",
+              revisionId: "rev-feedback-v7",
+              revisionLabel: "Published · v7",
+              publishedServiceId: "svc-feedback-digest",
+              enabled: false,
+              authorizationStatus: "Credential active",
+              credentialExpiry: "Expires Oct 12, 2026",
+              nextRun: "No upcoming run",
+              lastRun: "Succeeded Mon, Aug 4",
+              preview: ["Mon, Aug 18 · 10:00", "Mon, Aug 25 · 10:00", "Mon, Sep 1 · 10:00", "Mon, Sep 8 · 10:00", "Mon, Sep 15 · 10:00"],
+              lastError: ""
+            }
+          ]
+        }
       }
     };
 
-    let workflows = loadWorkflows();
-    let runs = loadRuns();
+    const workflows = loadWorkflows();
+    const runs = loadRuns();
     let currentView = "workflows";
     let currentWorkflow = workflows[1] || workflows[0];
     let workflowFilter = "All";
@@ -1114,7 +1125,7 @@ steps:
         manageAccess.hidden = false;
         authenticationFields.innerHTML = `<div class="settings-detail"><span>Session expires</span><strong>2026/8/4 18:30</strong></div><div class="settings-detail"><span>Provider</span><strong>NyxID</strong></div><div class="settings-detail"><span>Scope</span><strong>openid profile email</strong></div><div class="settings-detail"><span>Browser token refresh</span><strong>Disabled</strong></div>`;
       } else {
-        profileBody.innerHTML = `<div class="settings-empty"><h3>No active session</h3><p>This browser does not have a restorable sign-in session.</p><button class="button primary" id="account-signin">Sign in</button></div>`;
+        profileBody.innerHTML = `<div class="settings-empty"><h3>No active session</h3><p>This browser does not have a restorable sign-in session.</p><button type="button" class="button primary" id="account-signin">Sign in</button></div>`;
         signOut.hidden = true;
         manageAccess.hidden = true;
         authenticationFields.innerHTML = `<div class="settings-detail"><span>Session expires</span><strong>Unavailable</strong></div><div class="settings-detail"><span>Provider</span><strong>Unavailable</strong></div><div class="settings-detail"><span>Scope</span><strong>Unavailable</strong></div><div class="settings-detail"><span>Browser token refresh</span><strong>Disabled</strong></div>`;
@@ -1210,7 +1221,7 @@ steps:
       });
       const wrap = document.querySelector("#workflow-table-wrap");
       if (!filtered.length) {
-        wrap.innerHTML = `<div class="empty"><div><h2>No workflows match</h2><p>Change the search or filter.</p><button class="button" id="clear-workflow-filter">Clear filters</button></div></div>`;
+        wrap.innerHTML = `<div class="empty"><div><h2>No workflows match</h2><p>Change the search or filter.</p><button type="button" class="button" id="clear-workflow-filter">Clear filters</button></div></div>`;
         document.querySelector("#clear-workflow-filter").onclick = () => {
           workflowFilter = "All";
           document.querySelector("#workflow-search").value = "";
@@ -1225,17 +1236,19 @@ steps:
           <td><span class="mono">${escapeHtml(item.revision)}</span></td>
           <td><span class="status ${statusClass(item.lastStatus === "Never" ? "Draft" : item.lastStatus)}">${escapeHtml(item.lastStatus)}</span><span class="sub">${escapeHtml(item.last)}</span></td>
           <td><span class="status ${statusClass(item.state)}">${escapeHtml(item.state)}</span></td>
-          <td><div class="row-actions"><button class="button small" data-run-workflow="${item.id}" ${item.steps.length ? "" : 'disabled title="Add a step before running"'}>Run</button><button class="button small" data-open-workflow="${item.id}">Open</button></div></td>
+          <td><div class="row-actions"><button type="button" class="button small" data-run-workflow="${item.id}" ${item.steps.length ? "" : 'disabled title="Add a step before running"'}>Run</button><button type="button" class="button small" data-open-workflow="${item.id}">Open</button></div></td>
         </tr>`).join("");
       wrap.innerHTML = `
         <div class="desktop-table"><table class="data-table"><colgroup><col style="width:34%"><col style="width:19%"><col style="width:19%"><col style="width:13%"><col style="width:15%"></colgroup><thead><tr><th>Workflow</th><th>Version</th><th>Last Run</th><th>State</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div>
-        <div class="mobile-runs">${filtered.map(item => `<article class="mobile-run"><div class="mobile-run-top"><span class="status ${statusClass(item.state)}">${escapeHtml(item.state)}</span><span class="mono muted">${escapeHtml(item.revision)}</span></div><strong>${escapeHtml(item.name)}</strong><p>${escapeHtml(item.description)}</p><div class="row-actions" style="margin-top:14px"><button class="button small" data-run-workflow="${item.id}" ${item.steps.length ? "" : 'disabled title="Add a step before running"'}>Run</button><button class="button small" data-open-workflow="${item.id}">Open</button></div></article>`).join("")}</div>
+        <div class="mobile-runs">${filtered.map(item => `<article class="mobile-run"><div class="mobile-run-top"><span class="status ${statusClass(item.state)}">${escapeHtml(item.state)}</span><span class="mono muted">${escapeHtml(item.revision)}</span></div><strong>${escapeHtml(item.name)}</strong><p>${escapeHtml(item.description)}</p><div class="row-actions" style="margin-top:14px"><button type="button" class="button small" data-run-workflow="${item.id}" ${item.steps.length ? "" : 'disabled title="Add a step before running"'}>Run</button><button type="button" class="button small" data-open-workflow="${item.id}">Open</button></div></article>`).join("")}</div>
         <p class="table-foot">${filtered.length} workflows · Every Run, including a draft revision, is retained in Activity.</p>`;
       bindWorkflowRows();
     }
 
     function bindWorkflowRows() {
-      document.querySelectorAll("[data-open-workflow]").forEach(button => button.onclick = () => openWorkflow(button.dataset.openWorkflow));
+      document.querySelectorAll("[data-open-workflow]").forEach(button => {
+        button.onclick = () => openWorkflow(button.dataset.openWorkflow);
+      });
       document.querySelectorAll("[data-run-workflow]").forEach(button => {
         button.onclick = () => openRunModal(workflows.find(item => item.id === button.dataset.runWorkflow));
       });
@@ -1306,19 +1319,21 @@ steps:
 
     function canvasChrome(positions) {
       const minimap = positions.map(position => `<span class="minimap-node" style="left:${8 + position.x * .105}px;top:${10 + position.y * .105}px"></span>`).join("");
-      return `<div class="canvas-controls" aria-label="Canvas controls"><button data-canvas-action="zoom-in" aria-label="Zoom in" title="Zoom in">+</button><button data-canvas-action="zoom-out" aria-label="Zoom out" title="Zoom out">−</button><button data-canvas-action="fit" aria-label="Fit view" title="Fit view">⌗</button></div><div class="canvas-minimap" aria-hidden="true">${minimap}</div>`;
+      return `<div class="canvas-controls" aria-label="Canvas controls"><button type="button" data-canvas-action="zoom-in" aria-label="Zoom in" title="Zoom in">+</button><button type="button" data-canvas-action="zoom-out" aria-label="Zoom out" title="Zoom out">−</button><button type="button" data-canvas-action="fit" aria-label="Fit view" title="Fit view">⌗</button></div><div class="canvas-minimap" aria-hidden="true">${minimap}</div>`;
     }
 
     function bindCanvasControls() {
-      document.querySelectorAll("[data-canvas-action]").forEach(button => button.onclick = event => {
-        event.stopPropagation();
-        const base = window.innerWidth <= 620 ? .28 : window.innerWidth <= 980 ? .58 : 1;
-        if (canvasZoom === null) canvasZoom = base;
-        if (button.dataset.canvasAction === "zoom-in") canvasZoom = Math.min(1.45, canvasZoom + .12);
-        if (button.dataset.canvasAction === "zoom-out") canvasZoom = Math.max(.34, canvasZoom - .12);
-        if (button.dataset.canvasAction === "fit") canvasZoom = base;
-        const stage = document.querySelector(".canvas-stage");
-        if (stage) stage.style.transform = `scale(${canvasZoom})`;
+      document.querySelectorAll("[data-canvas-action]").forEach(button => {
+        button.onclick = event => {
+          event.stopPropagation();
+          const base = window.innerWidth <= 620 ? .28 : window.innerWidth <= 980 ? .58 : 1;
+          if (canvasZoom === null) canvasZoom = base;
+          if (button.dataset.canvasAction === "zoom-in") canvasZoom = Math.min(1.45, canvasZoom + .12);
+          if (button.dataset.canvasAction === "zoom-out") canvasZoom = Math.max(.34, canvasZoom - .12);
+          if (button.dataset.canvasAction === "fit") canvasZoom = base;
+          const stage = document.querySelector(".canvas-stage");
+          if (stage) stage.style.transform = `scale(${canvasZoom})`;
+        };
       });
     }
 
@@ -1326,7 +1341,8 @@ steps:
       const workflowSteps = currentWorkflow.steps;
       const canRun = workflowSteps.length > 0;
       const canSchedule = canRun && currentWorkflow.state === "Published"
-        && Boolean(currentWorkflow.scopeId && currentWorkflow.publishedServiceId && currentWorkflow.activeRevisionId);
+        && Boolean(currentWorkflow.scopeId && currentWorkflow.teamId && currentWorkflow.memberId
+          && currentWorkflow.publishedServiceId && currentWorkflow.activeRevisionId);
       document.querySelector("#editor-title").textContent = currentWorkflow.name;
       document.querySelector("#editor-subtitle").textContent = `${currentWorkflow.revision} · Saved just now`;
       document.querySelector("#editor-status").textContent = currentWorkflow.state;
@@ -1338,6 +1354,8 @@ steps:
         ? "Manage published workflow schedules"
         : currentWorkflow.state !== "Published"
           ? "Publish this workflow before scheduling it."
+          : !currentWorkflow.teamId || !currentWorkflow.memberId
+            ? "Open the Team member workflow before scheduling it."
           : !currentWorkflow.publishedServiceId
             ? "Wait for the published service to become available."
             : "Wait for the published revision to become available.";
@@ -1345,14 +1363,14 @@ steps:
       if (!canSchedule) schedulePanelOpen = false;
       const canvas = document.querySelector("#workflow-canvas");
       if (!workflowSteps.length) {
-        canvas.innerHTML = `<div class="canvas-empty"><button class="add-first" id="add-first-step" aria-label="Add first step">+</button><h2>Add first step</h2><p>Start this workflow by adding the first step.</p></div>${canvasChrome([])}`;
+        canvas.innerHTML = `<div class="canvas-empty"><button type="button" class="add-first" id="add-first-step" aria-label="Add first step">+</button><h2>Add first step</h2><p>Start this workflow by adding the first step.</p></div>${canvasChrome([])}`;
         document.querySelector("#add-first-step").onclick = () => openModal("step-modal");
       } else {
         const positions = graphLayout(workflowSteps, schedulePanelOpen);
         const edges = positions.slice(0, -1).map((position, index) => `<path class="graph-edge" d="${edgePath(position, positions[index + 1])}" marker-end="url(#arrowhead)"></path>`).join("");
         const nodes = workflowSteps.map((step, index) => {
           const appearance = nodeAppearance(step.kind);
-          return `<button class="graph-node ${index === selectedStep ? "selected" : ""}" data-step="${index}" title="${escapeHtml(step.name)}" style="left:${positions[index].x}px;top:${positions[index].y}px;--node-accent:${appearance.color}">
+          return `<button type="button" class="graph-node ${index === selectedStep ? "selected" : ""}" data-step="${index}" title="${escapeHtml(step.name)}" style="left:${positions[index].x}px;top:${positions[index].y}px;--node-accent:${appearance.color}">
             <span class="node-handle in" aria-hidden="true"></span><span class="node-handle out" aria-hidden="true"></span>
             <span class="graph-node-header"><span class="graph-node-icon">${appearance.icon}</span><span class="graph-node-title"><strong>${escapeHtml(step.name)}</strong><span>${escapeHtml(step.kind)}</span></span></span>
             <span class="graph-node-body">${escapeHtml(stepSummary(step))}</span>
@@ -1360,12 +1378,14 @@ steps:
         }).join("");
         canvas.innerHTML = `<div class="canvas-stage"><svg class="edge-layer" viewBox="0 0 1200 620" aria-hidden="true"><defs><marker id="arrowhead" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#94a3b8"></path></marker></defs>${edges}</svg>${nodes}</div>${canvasChrome(positions)}`;
         if (canvasZoom !== null) document.querySelector(".canvas-stage").style.transform = `scale(${canvasZoom})`;
-        document.querySelectorAll("[data-step]").forEach(button => button.onclick = event => {
-          event.stopPropagation();
-          selectedStep = Number(button.dataset.step);
-          schedulePanelOpen = false;
-          document.querySelector("#yaml-panel").hidden = true;
-          renderEditor();
+        document.querySelectorAll("[data-step]").forEach(button => {
+          button.onclick = event => {
+            event.stopPropagation();
+            selectedStep = Number(button.dataset.step);
+            schedulePanelOpen = false;
+            document.querySelector("#yaml-panel").hidden = true;
+            renderEditor();
+          };
         });
       }
       canvas.onclick = event => {
@@ -1393,11 +1413,11 @@ steps:
         <label class="form-row"><span class="field-label">${escapeHtml(item.label)}</span>${item.multiline
           ? `<textarea class="textarea" data-config-field="${index}">${escapeHtml(item.value)}</textarea>`
           : `<input class="input" data-config-field="${index}" value="${escapeHtml(item.value)}">`}</label>`).join("");
-      panel.innerHTML = `<header class="studio-panel-header"><div><h2>Node configuration</h2><p>${escapeHtml(step.name)}</p></div><button class="icon-button" id="close-inspector" aria-label="Close node configuration" title="Close">×</button></header>
+      panel.innerHTML = `<header class="studio-panel-header"><div><h2>Node configuration</h2><p>${escapeHtml(step.name)}</p></div><button type="button" class="icon-button" id="close-inspector" aria-label="Close node configuration" title="Close">×</button></header>
         <div class="studio-panel-body"><div class="inspector-summary"><div><span>Node ID</span><strong>${escapeHtml(step.id)}</strong></div><div><span>Type</span><strong>${escapeHtml(step.kind)}</strong></div></div>
         <label class="form-row"><span class="field-label">Node name</span><input class="input" id="step-name" value="${escapeHtml(step.name)}"></label>${fields}
         <label class="form-row"><span class="field-label">Next</span><input class="input" value="${escapeHtml(workflowSteps[selectedStep + 1]?.name || "End of workflow")}" disabled></label></div>
-        <footer class="studio-panel-footer"><button class="button small danger" id="delete-node">Delete node</button><button class="button small primary" id="apply-node">Apply</button></footer>`;
+        <footer class="studio-panel-footer"><button type="button" class="button small danger" id="delete-node">Delete node</button><button type="button" class="button small primary" id="apply-node">Apply</button></footer>`;
       document.querySelector("#close-inspector").onclick = () => { selectedStep = -1; renderEditor(); };
       document.querySelector("#delete-node").onclick = () => {
         const removed = currentWorkflow.steps.splice(selectedStep, 1)[0];
@@ -1414,10 +1434,12 @@ steps:
         saveWorkflows();
         renderEditor();
       };
-      document.querySelectorAll("[data-config-field]").forEach(input => input.onchange = event => {
-        step.fields[Number(input.dataset.configField)].value = event.target.value;
-        saveWorkflows();
-        showToast(`${step.name} saved.`);
+      document.querySelectorAll("[data-config-field]").forEach(input => {
+        input.onchange = event => {
+          step.fields[Number(input.dataset.configField)].value = event.target.value;
+          saveWorkflows();
+          showToast(`${step.name} saved.`);
+        };
       });
     }
 
@@ -1431,7 +1453,8 @@ steps:
 
     function openSchedulePanel() {
       if (currentWorkflow.state !== "Published" || !currentWorkflow.steps.length
-        || !currentWorkflow.scopeId || !currentWorkflow.publishedServiceId
+        || !currentWorkflow.scopeId || !currentWorkflow.teamId || !currentWorkflow.memberId
+        || !currentWorkflow.publishedServiceId
         || !currentWorkflow.activeRevisionId) return;
       selectedStep = -1;
       schedulePanelOpen = true;
@@ -1470,37 +1493,42 @@ steps:
 
     function scheduleListRow(schedule) {
       const pending = schedulePending(schedule);
-      return `<li><button class="schedule-list-select" data-schedule-id="${escapeHtml(schedule.id)}"><div class="schedule-row"><div class="schedule-row-top"><strong>${escapeHtml(schedule.name)}</strong><span class="schedule-state${scheduleStateClass(schedule)}">${scheduleState(schedule)}</span></div><p>${escapeHtml(schedule.cadence)} · ${escapeHtml(schedule.timeZone)}<br>Next: ${escapeHtml(schedule.nextRun)}</p>${pending ? `<p class="muted">${escapeHtml(pending.label)} Waiting for the latest status.</p>` : ""}</div></button></li>`;
+      return `<li><button type="button" class="schedule-list-select" data-schedule-id="${escapeHtml(schedule.id)}"><div class="schedule-row"><div class="schedule-row-top"><strong>${escapeHtml(schedule.name)}</strong><span class="schedule-state${scheduleStateClass(schedule)}">${scheduleState(schedule)}</span></div><p>${escapeHtml(schedule.cadence)} · ${escapeHtml(schedule.timeZone)}<br>Next: ${escapeHtml(schedule.nextRun)}</p>${pending ? `<p class="muted">${escapeHtml(pending.label)} Waiting for the latest status.</p>` : ""}</div></button></li>`;
     }
 
     function renderSchedulePanel() {
       const panel = document.querySelector("#schedule-panel");
       if (!schedulePanelOpen || currentWorkflow.state !== "Published"
-        || !currentWorkflow.scopeId || !currentWorkflow.publishedServiceId
+        || !currentWorkflow.scopeId || !currentWorkflow.teamId || !currentWorkflow.memberId
+        || !currentWorkflow.publishedServiceId
         || !currentWorkflow.activeRevisionId) {
         panel.hidden = true;
         panel.innerHTML = "";
         return;
       }
 
-      const schedules = prototypeSchedules[currentWorkflow.scopeId]?.[currentWorkflow.publishedServiceId] || [];
+      const schedules = prototypeTeamAutomations[currentWorkflow.scopeId]?.[currentWorkflow.teamId]?.[currentWorkflow.memberId] || [];
       panel.hidden = false;
       if (schedulePanelMode === "list") {
         const rows = schedules.map(scheduleListRow).join("");
-        panel.innerHTML = `<header class="studio-panel-header"><div><h2>Schedules</h2><p>Recurring triggers for this published workflow.</p></div><button class="icon-button" id="close-schedule" aria-label="Close schedules" title="Close">×</button></header>
+        panel.innerHTML = `<header class="studio-panel-header"><div><h2>Member automations</h2><p>Recurring work for this Team member workflow.</p></div><button type="button" class="icon-button" id="close-schedule" aria-label="Close automations" title="Close">×</button></header>
           <div class="studio-panel-body">
-            <div class="section-heading" style="margin:0 0 10px"><div><h2>${schedules.length ? "Schedules" : "No schedules yet"}</h2><p>${schedules.length ? "Select a schedule to review its configuration." : "Create a schedule to run this workflow automatically."}</p></div><button class="button small primary" id="schedule-new">New schedule</button></div>
+            <div class="section-heading" style="margin:0 0 10px"><div><h2>${schedules.length ? "Automations" : "No automations yet"}</h2><p>${schedules.length ? "Select an automation to review its configuration." : "Create recurring work for this published member."}</p></div><button type="button" class="button small primary" id="schedule-new">New automation</button></div>
             ${schedules.length ? `<ul class="schedule-list">${rows}</ul>` : ""}
-            <button class="button small" id="schedule-activity">View scheduled runs</button>
-            <p class="muted" style="margin-top:14px">Prototype data only. Production requires a scoped service schedule resource.</p>
+            <button type="button" class="button small" id="schedule-all">View all automations</button>
+            <button type="button" class="button small" id="schedule-activity">View scheduled runs</button>
+            <p class="muted" style="margin-top:14px">Prototype data only. Production reads /api/scopes/{scopeId}/teams/{teamId}/members/{memberId}/automations.</p>
           </div>`;
         document.querySelector("#close-schedule").onclick = closeSchedulePanel;
         document.querySelector("#schedule-new").onclick = () => { schedulePanelMode = "new"; renderSchedulePanel(); };
+        document.querySelector("#schedule-all").onclick = () => showToast("Full management lives at the Team member Automations route.");
         document.querySelector("#schedule-activity").onclick = openScheduledRuns;
-        document.querySelectorAll("[data-schedule-id]").forEach(button => button.onclick = () => {
-          selectedScheduleId = button.dataset.scheduleId;
-          schedulePanelMode = "detail";
-          renderSchedulePanel();
+        document.querySelectorAll("[data-schedule-id]").forEach(button => {
+          button.onclick = () => {
+            selectedScheduleId = button.dataset.scheduleId;
+            schedulePanelMode = "detail";
+            renderSchedulePanel();
+          };
         });
         return;
       }
@@ -1509,13 +1537,17 @@ steps:
       const schedule = isNew
         ? {
           id: "new-schedule",
-          name: `${currentWorkflow.name} schedule`,
+          name: `${currentWorkflow.name} recurring work`,
           cadence: "Every weekday at 09:00",
+          cronExpression: "0 9 * * 1-5",
           timeZone: "Asia/Shanghai",
-          input: "",
+          prompt: "",
           revisionId: currentWorkflow.activeRevisionId,
           revisionLabel: currentWorkflow.revision,
+          publishedServiceId: currentWorkflow.publishedServiceId,
           enabled: true,
+          authorizationStatus: "Review required",
+          credentialExpiry: "Created after authorization",
           nextRun: "Preview after cadence validation",
           lastRun: "No previous run",
           preview: ["Server preview required"],
@@ -1531,26 +1563,28 @@ steps:
       const pending = !isNew && schedulePending(schedule);
       const state = scheduleState(schedule);
       const previewLabel = schedule.enabled ? "Next five runs" : "Upcoming runs";
-      panel.innerHTML = `<header class="studio-panel-header"><div><h2>${isNew ? "New schedule" : escapeHtml(schedule.name)}</h2><p>${isNew ? "Configure a recurring trigger for this published workflow." : "Recurring trigger for this published workflow."}</p></div><div><button class="icon-button" id="schedule-back" aria-label="Back to schedules" title="Back">←</button><button class="icon-button" id="close-schedule" aria-label="Close schedules" title="Close">×</button></div></header>
+      panel.innerHTML = `<header class="studio-panel-header"><div><h2>${isNew ? "New automation" : escapeHtml(schedule.name)}</h2><p>${isNew ? "Configure recurring work for this Team member." : "Recurring work for this Team member workflow."}</p></div><div><button type="button" class="icon-button" id="schedule-back" aria-label="Back to automations" title="Back">←</button><button type="button" class="icon-button" id="close-schedule" aria-label="Close automations" title="Close">×</button></div></header>
         <div class="studio-panel-body">
-          <section class="schedule-summary"><div class="schedule-summary-top"><strong>Published workflow</strong><span class="schedule-state${scheduleStateClass(schedule)}">${state}</span></div><p>${escapeHtml(currentWorkflow.name)} · ${escapeHtml(schedule.revisionLabel)}</p></section>
-          <label class="form-row"><span class="field-label">Schedule name</span><input class="input" value="${escapeHtml(schedule.name)}" ${pending ? "disabled" : ""}></label>
-          <label class="form-row"><span class="field-label">Frequency</span><input class="input" value="${escapeHtml(schedule.cadence)}" ${pending ? "disabled" : ""}></label>
+          <section class="schedule-summary"><div class="schedule-summary-top"><strong>Team member automation</strong><span class="schedule-state${scheduleStateClass(schedule)}">${state}</span></div><p>${escapeHtml(currentWorkflow.memberId)} · ${escapeHtml(schedule.publishedServiceId)} · ${escapeHtml(schedule.revisionId)}</p></section>
+          <label class="form-row"><span class="field-label">Automation name</span><input class="input" value="${escapeHtml(schedule.name)}" ${pending ? "disabled" : ""}></label>
+          <label class="form-row"><span class="field-label">Cadence</span><input class="input" value="${escapeHtml(schedule.cadence)}" ${pending ? "disabled" : ""}></label>
+          <label class="form-row"><span class="field-label">Cron expression</span><input class="input" value="${escapeHtml(schedule.cronExpression)}" ${pending ? "disabled" : ""}></label>
           <label class="form-row"><span class="field-label">Time zone</span><input class="input" value="${escapeHtml(schedule.timeZone)}" ${pending ? "disabled" : ""}></label>
-          <label class="form-row"><span class="field-label">Run input</span><textarea class="textarea" required ${pending ? "disabled" : ""}>${escapeHtml(schedule.input)}</textarea><small>This input is sent every time this schedule runs.</small></label>
+          <label class="form-row"><span class="field-label">Prompt (optional)</span><textarea class="textarea" ${pending ? "disabled" : ""}>${escapeHtml(schedule.prompt)}</textarea><small>Sent with each scheduled run only when provided.</small></label>
           <label class="form-row"><span class="field-label">Pinned revision</span><input class="input" value="${escapeHtml(schedule.revisionLabel)}" disabled></label>
+          <section class="schedule-summary"><div class="schedule-summary-top"><strong>Dedicated Agent Key</strong><span class="schedule-state">${escapeHtml(schedule.authorizationStatus)}</span></div><p>${escapeHtml(schedule.credentialExpiry)} · browser never receives the raw key</p></section>
           <label class="schedule-toggle"><span>Schedule is active</span><input id="schedule-enabled" type="checkbox" role="switch" ${schedule.enabled ? "checked" : ""} ${pending || isNew ? "disabled" : ""}></label>
           <div class="form-row"><span class="field-label">${previewLabel}</span><ul class="schedule-preview">${schedulePreview(schedule).map(value => `<li>${escapeHtml(value)}</li>`).join("")}</ul></div>
           <div class="form-row"><span class="field-label">Last run</span><p class="muted" style="margin:4px 0 0">${escapeHtml(schedule.lastRun)}</p></div>
           ${schedule.lastError ? `<div class="schedule-alert"><strong>Last run</strong>${escapeHtml(schedule.lastError)}</div>` : ""}
-          ${pending ? `<div class="schedule-pending"><strong>${escapeHtml(pending.label)}</strong>Waiting for the latest status from the scoped Schedule read model.</div>` : "<p class=\"muted\" style=\"margin-top:14px\">Prototype data only. Production waits for a scoped read model before it reports a changed schedule or a new Run.</p>"}
+          ${pending ? `<div class="schedule-pending"><strong>${escapeHtml(pending.label)}</strong>Waiting for the latest automation status.</div>` : "<p class=\"muted\" style=\"margin-top:14px\">Prototype data only. Production waits for Team Automation or Activity before it reports a changed automation or a new Run.</p>"}
         </div>
-        <footer class="studio-panel-footer">${isNew ? "" : `<button class="button small danger" id="schedule-delete" ${pending ? "disabled" : ""}>Delete</button><button class="button small" id="schedule-run-now" ${pending ? "disabled" : ""}>Run now</button>`}<button class="button small primary" id="schedule-save" ${pending ? "disabled" : ""}>${isNew ? "Create schedule" : "Save changes"}</button></footer>`;
+        <footer class="studio-panel-footer">${isNew ? "" : `<button type="button" class="button small danger" id="schedule-delete" ${pending ? "disabled" : ""}>Delete</button><button type="button" class="button small" id="schedule-run-now" ${pending ? "disabled" : ""}>Run now</button><button type="button" class="button small" id="schedule-reauthorize" ${pending ? "disabled" : ""}>Review</button>`}<button type="button" class="button small primary" id="schedule-save" ${pending ? "disabled" : ""}>${isNew ? "Review authorization" : "Save changes"}</button></footer>`;
 
       document.querySelector("#close-schedule").onclick = closeSchedulePanel;
       document.querySelector("#schedule-back").onclick = () => { schedulePanelMode = "list"; selectedScheduleId = null; renderSchedulePanel(); };
       if (isNew) {
-        document.querySelector("#schedule-save").onclick = () => showToast("A scoped schedule API is required before a new schedule can be persisted.");
+        document.querySelector("#schedule-save").onclick = () => showToast("Dedicated Agent Key review is required before creating this automation.");
         return;
       }
       document.querySelector("#schedule-enabled").onchange = event => {
@@ -1559,19 +1593,20 @@ steps:
         showToast(`${scheduleMutation.label} Waiting for the latest status.`);
       };
       document.querySelector("#schedule-save").onclick = () => {
-        scheduleMutation = { scheduleId: schedule.id, label: "Schedule update accepted." };
+        scheduleMutation = { scheduleId: schedule.id, label: "Automation update accepted." };
         renderSchedulePanel();
-        showToast("Schedule update accepted. Waiting for the latest status.");
+        showToast("Automation update accepted. Waiting for the latest status.");
       };
       document.querySelector("#schedule-run-now").onclick = () => {
         if (!window.confirm("Run this published workflow now? It may change external systems.")) return;
         showToast("Run requested. It will appear in Activity when available.");
       };
+      document.querySelector("#schedule-reauthorize").onclick = () => showToast("Review and reauthorize uses the Team Automation authorization flow.");
       document.querySelector("#schedule-delete").onclick = () => {
-        if (!window.confirm("Delete this schedule? This cannot be undone.")) return;
-        scheduleMutation = { scheduleId: schedule.id, label: "Schedule deletion accepted." };
+        if (!window.confirm("Delete this automation? The dedicated credential will be revoked.")) return;
+        scheduleMutation = { scheduleId: schedule.id, label: "Automation deletion accepted." };
         renderSchedulePanel();
-        showToast("Schedule deletion accepted. Waiting for the latest status.");
+        showToast("Automation deletion accepted. Waiting for the latest status.");
       };
     }
 
@@ -1579,7 +1614,7 @@ steps:
       const active = runs.find(run => run.workflowId === currentWorkflow.id && run.status === "Running");
       const root = document.querySelector("#active-run-banner");
       if (!active) { root.innerHTML = ""; return; }
-      root.innerHTML = `<div class="run-banner"><span class="pulse"></span><div><strong>Run in progress</strong><br><span>${escapeHtml(active.id)} · ${escapeHtml(active.revision)} · Started by you just now</span></div><button class="button small" data-banner-run="${active.id}">Open Activity</button></div>`;
+      root.innerHTML = `<div class="run-banner"><span class="pulse"></span><div><strong>Run in progress</strong><br><span>${escapeHtml(active.id)} · ${escapeHtml(active.revision)} · Started by you just now</span></div><button type="button" class="button small" data-banner-run="${active.id}">Open Activity</button></div>`;
       document.querySelector("[data-banner-run]").onclick = () => openRunDetail(active.id);
     }
 
@@ -1615,7 +1650,7 @@ steps:
       });
       const wrap = document.querySelector("#activity-table-wrap");
       if (!filtered.length) {
-        wrap.innerHTML = `<div class="empty"><div><h2>No Runs match</h2><p>Change the search or filter.</p><button class="button" id="clear-activity-filter">Clear filters</button></div></div>`;
+        wrap.innerHTML = `<div class="empty"><div><h2>No Runs match</h2><p>Change the search or filter.</p><button type="button" class="button" id="clear-activity-filter">Clear filters</button></div></div>`;
         document.querySelector("#clear-activity-filter").onclick = () => {
           activityFilter = "All";
           activityWorkflowId = null;
@@ -1667,8 +1702,8 @@ steps:
         ${run.sourceId ? `<div class="link-panel"><strong>Linked source Run</strong><p>${escapeHtml(run.id)} was created from ${escapeHtml(run.sourceId)}. Both records are retained.</p></div>` : ""}
         <div class="timeline"><h3>STEP TIMELINE</h3>${timeline}</div>`;
       document.querySelector("#drawer-footer").innerHTML = `
-        <button class="button" data-open-from-run="${run.workflowId}">Open workflow</button>
-        <button class="button primary" data-repeat-run="${run.id}">${run.status === "Failed" ? "Retry" : "Run again"}</button>`;
+        <button type="button" class="button" data-open-from-run="${run.workflowId}">Open workflow</button>
+        <button type="button" class="button primary" data-repeat-run="${run.id}">${run.status === "Failed" ? "Retry" : "Run again"}</button>`;
       document.querySelector("[data-open-from-run]").onclick = () => { closeDrawer(); openWorkflow(run.workflowId); };
       document.querySelector("[data-repeat-run]").onclick = () => { closeDrawer(); openRunModal(workflows.find(item => item.id === run.workflowId), run); };
       document.querySelector("#run-drawer").hidden = false;
@@ -1756,6 +1791,8 @@ steps:
       const item = {
         id,
         scopeId: "scope-demo",
+        teamId: "team-draft",
+        memberId: `m-draft-${Date.now().toString(36)}`,
         publishedServiceId: null,
         activeRevisionId: null,
         name,
@@ -1911,22 +1948,24 @@ steps:
 
     function renderTemplates() {
       document.querySelector("#template-list").innerHTML = workflowTemplates.map(template => `
-        <button class="template-card" data-template-id="${template.id}">
+        <button type="button" class="template-card" data-template-id="${template.id}">
           <strong>${escapeHtml(template.name)}</strong>
           <p>${escapeHtml(template.description)}</p>
           <span>${escapeHtml(template.integrations)}</span>
           <em>Use template</em>
         </button>`).join("");
-      document.querySelectorAll("[data-template-id]").forEach(button => button.onclick = () => {
-        const template = workflowTemplates.find(item => item.id === button.dataset.templateId);
-        createWorkflowDocument({
-          name: `${template.name} copy`,
-          description: template.description,
-          creation: "Template",
-          steps: template.steps,
-          runInput: "{}",
-          effects: `Uses the connections configured by the ${template.name} template.`
-        });
+      document.querySelectorAll("[data-template-id]").forEach(button => {
+        button.onclick = () => {
+          const template = workflowTemplates.find(item => item.id === button.dataset.templateId);
+          createWorkflowDocument({
+            name: `${template.name} copy`,
+            description: template.description,
+            creation: "Template",
+            steps: template.steps,
+            runInput: "{}",
+            effects: `Uses the connections configured by the ${template.name} template.`
+          });
+        };
       });
     }
 
@@ -1958,10 +1997,14 @@ steps:
 
     function syncFilterButtons(scope) {
       const value = scope === "workflow" ? workflowFilter : activityFilter;
-      document.querySelectorAll(`[data-${scope}-filter]`).forEach(button => button.classList.toggle("active", button.dataset[`${scope}Filter`] === value));
+      document.querySelectorAll(`[data-${scope}-filter]`).forEach(button => {
+        button.classList.toggle("active", button.dataset[`${scope}Filter`] === value);
+      });
     }
 
-    document.querySelectorAll("[data-nav]").forEach(button => button.onclick = () => showView(button.dataset.nav));
+    document.querySelectorAll("[data-nav]").forEach(button => {
+      button.onclick = () => showView(button.dataset.nav);
+    });
     document.querySelector("#new-workflow").onclick = () => openModal("create-modal");
     document.querySelector("#back-workflows").onclick = () => showView("workflows");
     document.querySelector("#editor-run").onclick = () => openRunModal(currentWorkflow);
@@ -2044,33 +2087,51 @@ steps:
         category.querySelector(".node-category-title span").textContent = count;
       });
     };
-    document.querySelectorAll("[data-workflow-filter]").forEach(button => button.onclick = () => { workflowFilter = button.dataset.workflowFilter; syncFilterButtons("workflow"); renderWorkflows(); });
-    document.querySelectorAll("[data-activity-filter]").forEach(button => button.onclick = () => {
-      activityFilter = button.dataset.activityFilter;
-      if (activityFilter !== "Scheduled") activityWorkflowId = null;
-      syncFilterButtons("activity");
-      renderActivity();
+    document.querySelectorAll("[data-workflow-filter]").forEach(button => {
+      button.onclick = () => {
+        workflowFilter = button.dataset.workflowFilter;
+        syncFilterButtons("workflow");
+        renderWorkflows();
+      };
     });
-    document.querySelectorAll("[data-close-modal]").forEach(button => button.onclick = () => closeModal(button.dataset.closeModal));
-    document.querySelectorAll("[data-create]").forEach(button => button.onclick = () => {
-      const kind = button.dataset.create;
-      if (kind === "describe") { closeModal("create-modal"); openModal("describe-modal"); }
-      if (kind === "blank") createBlankWorkflow();
-      if (kind === "import") { closeModal("create-modal"); openModal("import-modal"); }
-      if (kind === "template") { closeModal("create-modal"); renderTemplates(); openModal("template-modal"); }
+    document.querySelectorAll("[data-activity-filter]").forEach(button => {
+      button.onclick = () => {
+        activityFilter = button.dataset.activityFilter;
+        if (activityFilter !== "Scheduled") activityWorkflowId = null;
+        syncFilterButtons("activity");
+        renderActivity();
+      };
+    });
+    document.querySelectorAll("[data-close-modal]").forEach(button => {
+      button.onclick = () => closeModal(button.dataset.closeModal);
+    });
+    document.querySelectorAll("[data-create]").forEach(button => {
+      button.onclick = () => {
+        const kind = button.dataset.create;
+        if (kind === "describe") { closeModal("create-modal"); openModal("describe-modal"); }
+        if (kind === "blank") createBlankWorkflow();
+        if (kind === "import") { closeModal("create-modal"); openModal("import-modal"); }
+        if (kind === "template") { closeModal("create-modal"); renderTemplates(); openModal("template-modal"); }
+      };
     });
     document.querySelector("#create-from-description").onclick = createFromDescription;
     document.querySelector("#create-from-yaml").onclick = createFromYaml;
-    document.querySelectorAll("[data-step-type]").forEach(button => button.onclick = () => addStep(button.dataset.stepType));
+    document.querySelectorAll("[data-step-type]").forEach(button => {
+      button.onclick = () => addStep(button.dataset.stepType);
+    });
     document.querySelector("#effects-check").onchange = event => { document.querySelector("#confirm-run").disabled = !event.target.checked; };
     document.querySelector("#confirm-run").onclick = createRun;
     document.querySelector("#close-drawer").onclick = closeDrawer;
     document.querySelector("#run-drawer").onclick = event => { if (event.target.id === "run-drawer") closeDrawer(); };
-    document.querySelectorAll(".modal-backdrop").forEach(backdrop => backdrop.onclick = event => { if (event.target === backdrop) closeModal(backdrop.id); });
+    document.querySelectorAll(".modal-backdrop").forEach(backdrop => {
+      backdrop.onclick = event => { if (event.target === backdrop) closeModal(backdrop.id); };
+    });
     document.querySelector("#step-modal").onclick = event => { if (event.target.id === "step-modal") closeModal("step-modal"); };
     document.addEventListener("keydown", event => {
       if (event.key !== "Escape") return;
-      document.querySelectorAll(".modal-backdrop:not([hidden])").forEach(modal => closeModal(modal.id));
+      document.querySelectorAll(".modal-backdrop:not([hidden])").forEach(modal => {
+        closeModal(modal.id);
+      });
       closeModal("step-modal");
       closeYamlEditor();
       closeSchedulePanel();
