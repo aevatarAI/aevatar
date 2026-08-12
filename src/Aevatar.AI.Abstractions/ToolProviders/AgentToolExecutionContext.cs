@@ -181,7 +181,8 @@ public sealed record AgentToolRequestIdentity(
     string? CallId,
     string? IdempotencyKey,
     long IssuedAtUnixMs,
-    string? OperationId = null)
+    string? OperationId = null,
+    long OperationGeneration = 0)
 {
     public AgentToolRequestIdentity(
         string? requestId,

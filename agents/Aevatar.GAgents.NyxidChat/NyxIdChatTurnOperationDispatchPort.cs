@@ -2,10 +2,13 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.NyxId.ExactServiceApprovals;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace Aevatar.GAgents.NyxidChat;
 
@@ -16,6 +19,8 @@ public interface INyxIdChatTurnOperationDispatchPort
 
 public interface INyxIdChatTurnOperationDispatchSession
 {
+    AgentToolExecutionContextPayload? CaptureToolContext() => null;
+
     Task DispatchExecutionAsync(
         string turnActorId,
         NyxIdChatOperationDispatchCommand command,
@@ -65,9 +70,9 @@ public sealed class UnavailableNyxIdChatTurnOperationReconciliationPort
 }
 
 /// <summary>
-/// Production Tier-B recovery path. It executes only the read operation frozen
-/// in the original effect admission; missing credentials or proof stay honest
-/// uncertainty and never cause the effect to be dispatched again.
+/// Production recovery path. It resumes a frozen exact-service admission or
+/// executes the Tier-B read operation; missing credentials or proof stay
+/// honest uncertainty and never cause the provider effect to be dispatched again.
 /// </summary>
 public sealed class AdmittedNyxIdChatTurnOperationReconciliationPort
     : INyxIdChatTurnOperationReconciliationPort
@@ -75,6 +80,7 @@ public sealed class AdmittedNyxIdChatTurnOperationReconciliationPort
     private readonly INyxIdChatToolVerificationPort _verificationPort;
     private readonly ISecretVault? _secretVault;
     private readonly INyxIdChatDelegationCredentialLifecyclePort _delegationCredentialLifecycle;
+    private readonly INyxIdExactServiceApprovalPort _exactServiceApprovalPort;
     private readonly ILogger<AdmittedNyxIdChatTurnOperationReconciliationPort> _logger;
 
     public AdmittedNyxIdChatTurnOperationReconciliationPort(
@@ -83,6 +89,7 @@ public sealed class AdmittedNyxIdChatTurnOperationReconciliationPort
             verificationPort,
             null,
             new NyxIdChatDelegationCredentialLifecyclePort(TimeProvider.System),
+            new UnavailableNyxIdExactServiceApprovalPort(),
             NullLogger<AdmittedNyxIdChatTurnOperationReconciliationPort>.Instance)
     {
     }
@@ -95,6 +102,7 @@ public sealed class AdmittedNyxIdChatTurnOperationReconciliationPort
             verificationPort,
             secretVault,
             delegationCredentialLifecycle,
+            new UnavailableNyxIdExactServiceApprovalPort(),
             NullLogger<AdmittedNyxIdChatTurnOperationReconciliationPort>.Instance)
     {
     }
@@ -104,10 +112,27 @@ public sealed class AdmittedNyxIdChatTurnOperationReconciliationPort
         ISecretVault? secretVault,
         INyxIdChatDelegationCredentialLifecyclePort delegationCredentialLifecycle,
         ILogger<AdmittedNyxIdChatTurnOperationReconciliationPort> logger)
+        : this(
+            verificationPort,
+            secretVault,
+            delegationCredentialLifecycle,
+            new UnavailableNyxIdExactServiceApprovalPort(),
+            logger)
+    {
+    }
+
+    public AdmittedNyxIdChatTurnOperationReconciliationPort(
+        INyxIdChatToolVerificationPort verificationPort,
+        ISecretVault? secretVault,
+        INyxIdChatDelegationCredentialLifecyclePort delegationCredentialLifecycle,
+        INyxIdExactServiceApprovalPort exactServiceApprovalPort,
+        ILogger<AdmittedNyxIdChatTurnOperationReconciliationPort> logger)
     {
         _verificationPort = verificationPort;
         _secretVault = secretVault;
         _delegationCredentialLifecycle = delegationCredentialLifecycle;
+        _exactServiceApprovalPort = exactServiceApprovalPort ??
+                                    throw new ArgumentNullException(nameof(exactServiceApprovalPort));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -117,7 +142,9 @@ public sealed class AdmittedNyxIdChatTurnOperationReconciliationPort
     {
         ArgumentNullException.ThrowIfNull(input);
         if (input.Key is null ||
-            !NyxIdChatOperationAdmissionPolicy.IsValidReadBack(input.ReadBack) ||
+            (input.ExactServiceRecoveryStage ==
+             NyxIdChatExactServiceRecoveryStage.Unspecified &&
+             !NyxIdChatOperationAdmissionPolicy.IsValidReadBack(input.ReadBack)) ||
             !IsValidCredentialReference(input))
             return Uncertain(input.Key);
 
@@ -127,8 +154,11 @@ public sealed class AdmittedNyxIdChatTurnOperationReconciliationPort
             input.RecoveryCredential.OwnerScopeKey,
             input.RecoveryCredential.SubjectId,
             "nyxid chat effect read-back recovery"), ct).ConfigureAwait(false);
-        if (!resolved.Resolved || !TryParseCredentials(resolved.Secret, out var credentials))
+        if (!resolved.Resolved ||
+            !NyxIdChatRecoverySecretPayloadCodec.TryDecode(resolved.Secret, out var recoverySecret))
             return Uncertain(input.Key);
+
+        var credentials = recoverySecret.Credentials;
 
         if (credentials.NyxIdCredentialKind == AgentToolNyxIdCredentialKindPayload.ProxyDelegation)
         {
@@ -148,7 +178,7 @@ public sealed class AdmittedNyxIdChatTurnOperationReconciliationPort
                         CredentialSecretPurposes.NyxIdChatRecoveryCredential,
                         input.RecoveryCredential.OwnerScopeKey,
                         input.RecoveryCredential.SubjectId,
-                        Convert.ToBase64String(credentials.ToByteArray()),
+                        NyxIdChatRecoverySecretPayloadCodec.Encode(recoverySecret, credentials),
                         "rotate refreshed nyxid chat recovery credential"), ct).ConfigureAwait(false);
                 }
                 catch (Exception exception) when (exception is not OperationCanceledException)
@@ -159,6 +189,20 @@ public sealed class AdmittedNyxIdChatTurnOperationReconciliationPort
                         input.Key.OperationId);
                 }
             }
+        }
+
+        if (input.ExactServiceRecoveryStage !=
+            NyxIdChatExactServiceRecoveryStage.Unspecified)
+        {
+            var result = await ReconcileExactServiceAsync(
+                    input,
+                    recoverySecret.ExactServiceCommand,
+                    credentials,
+                    ct)
+                .ConfigureAwait(false);
+            if (!IsOutcomeUncertain(result))
+                await RevokeRecoveryCredentialAsync(input, ct).ConfigureAwait(false);
+            return result;
         }
 
         var context = AgentToolExecutionContextMapper.FromRecoveryPayload(input.RecoveryContext) with
@@ -183,22 +227,7 @@ public sealed class AdmittedNyxIdChatTurnOperationReconciliationPort
             NyxIdChatToolVerificationDisposition.Applied or
             NyxIdChatToolVerificationDisposition.NotApplied)
         {
-            try
-            {
-                await _secretVault.RevokeAsync(new RevokeSecretRequest(
-                    input.RecoveryCredential.Ref,
-                    CredentialSecretPurposes.NyxIdChatRecoveryCredential,
-                    input.RecoveryCredential.OwnerScopeKey,
-                    input.RecoveryCredential.SubjectId,
-                    "nyxid chat recovery reached terminal proof"), ct).ConfigureAwait(false);
-            }
-            catch (Exception exception) when (exception is not OperationCanceledException)
-            {
-                _logger.LogWarning(
-                    exception,
-                    "NyxIdChat terminal recovery credential revocation failed: operation={OperationId}",
-                    input.Key.OperationId);
-            }
+            await RevokeRecoveryCredentialAsync(input, ct).ConfigureAwait(false);
         }
         return new NyxIdChatOperationResultSignal
         {
@@ -206,6 +235,230 @@ public sealed class AdmittedNyxIdChatTurnOperationReconciliationPort
             ToolVerification = verification,
         };
     }
+
+    private async Task<NyxIdChatOperationResultSignal> ReconcileExactServiceAsync(
+        NyxIdChatTurnOperationReconciliationInput input,
+        NyxIdChatOperationDispatchCommand? command,
+        AgentToolCredentialsPayload credentials,
+        CancellationToken ct)
+    {
+        if (command?.Key is null ||
+            !command.Key.Equals(input.Key) ||
+            string.IsNullOrWhiteSpace(credentials.NyxIdAccessToken))
+        {
+            return Uncertain(input.Key);
+        }
+
+        return input.ExactServiceRecoveryStage switch
+        {
+            NyxIdChatExactServiceRecoveryStage.Create =>
+                await ReconcileExactServiceCreateAsync(input.Key, command, credentials, ct)
+                    .ConfigureAwait(false),
+            NyxIdChatExactServiceRecoveryStage.DecideRedeem =>
+                await ReconcileExactServiceDecisionAsync(input.Key, command, credentials, ct)
+                    .ConfigureAwait(false),
+            _ => Uncertain(input.Key),
+        };
+    }
+
+    private async Task<NyxIdChatOperationResultSignal> ReconcileExactServiceCreateAsync(
+        NyxIdChatOperationKey key,
+        NyxIdChatOperationDispatchCommand command,
+        AgentToolCredentialsPayload credentials,
+        CancellationToken ct)
+    {
+        var tool = command.Tool;
+        var admission = AgentToolOperationAdmissionPayloadMapper.FromPayload(
+            tool?.OperationAdmission);
+        JsonNode? arguments;
+        try
+        {
+            arguments = JsonNode.Parse(tool?.ArgumentsJson ?? string.Empty);
+        }
+        catch (JsonException)
+        {
+            arguments = null;
+        }
+
+        if (tool is not { MayChangeExternalState: true } ||
+            admission?.Identity is not AgentToolOperationIdentity.PublishedEndpoint ||
+            arguments is not JsonObject)
+        {
+            return ExactFailure(
+                key,
+                "The exact-service recovery command was invalid.",
+                NyxIdChatEffectEvidence.NotStarted);
+        }
+
+        NyxIdExactServiceApprovalCreateResult created;
+        try
+        {
+            created = await _exactServiceApprovalPort.CreateAsync(
+                    credentials.NyxIdAccessToken,
+                    admission,
+                    arguments,
+                    key.OperationId,
+                    key.OperationGeneration,
+                    tool.IdempotencyKey,
+                    ct)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(
+                exception,
+                "Exact-service approval create recovery remained uncertain: operation={OperationId}",
+                key.OperationId);
+            return Uncertain(key);
+        }
+
+        if (created.Disposition is
+            NyxIdExactServiceApprovalCreateDisposition.TierAUnavailable or
+            NyxIdExactServiceApprovalCreateDisposition.ApprovalNotRequired)
+        {
+            return Uncertain(key);
+        }
+
+        if (created.Disposition != NyxIdExactServiceApprovalCreateDisposition.Created ||
+            created.Snapshot is null)
+        {
+            return ExactFailure(
+                key,
+                "The exact-service approval authority could not be recovered.",
+                NyxIdChatEffectEvidence.NotStarted);
+        }
+
+        return NyxIdChatTurnOperationExecutor.BuildExactServiceApprovalExecution(
+                key,
+                tool.CallId,
+                tool.ToolName,
+                created.Snapshot,
+                tool.OperationAdmission?.ReadBack,
+                new NyxIdChatTransientExecutionSession())
+            .Result;
+    }
+
+    private async Task<NyxIdChatOperationResultSignal> ReconcileExactServiceDecisionAsync(
+        NyxIdChatOperationKey key,
+        NyxIdChatOperationDispatchCommand command,
+        AgentToolCredentialsPayload credentials,
+        CancellationToken ct)
+    {
+        var continuation = command.ToolApprovalContinuation;
+        var authority = continuation?.ExactServiceApproval;
+        if (continuation is null || authority is null ||
+            !string.Equals(
+                continuation.ApprovalRequestId,
+                authority.RequestId,
+                StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(continuation.ToolCallId) ||
+            string.IsNullOrWhiteSpace(continuation.ToolName))
+        {
+            return ExactFailure(
+                key,
+                "The exact-service recovery authority was invalid.",
+                NyxIdChatEffectEvidence.NotStarted);
+        }
+
+        NyxIdExactServiceApprovalSnapshot snapshot;
+        try
+        {
+            snapshot = await _exactServiceApprovalPort.ObserveAsync(
+                    credentials.NyxIdAccessToken,
+                    authority,
+                    ct)
+                .ConfigureAwait(false);
+            if (snapshot.State == NyxIdExactServiceApprovalState.Pending ||
+                (!continuation.Approved &&
+                 snapshot.State == NyxIdExactServiceApprovalState.Approved))
+            {
+                snapshot = await _exactServiceApprovalPort.DecideAsync(
+                        credentials.NyxIdAccessToken,
+                        authority,
+                        continuation.Approved,
+                        ct)
+                    .ConfigureAwait(false);
+            }
+
+            if (continuation.Approved &&
+                snapshot.State == NyxIdExactServiceApprovalState.Approved)
+            {
+                snapshot = await _exactServiceApprovalPort.RedeemAsync(
+                        credentials.NyxIdAccessToken,
+                        authority,
+                        ct)
+                    .ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(
+                exception,
+                "Exact-service approval decision recovery remained uncertain: request={RequestId}",
+                authority.RequestId);
+            return Uncertain(key);
+        }
+
+        return NyxIdChatTurnOperationExecutor.BuildExactServiceApprovalExecution(
+                key,
+                continuation.ToolCallId,
+                continuation.ToolName,
+                snapshot,
+                continuation.OperationAdmission?.ReadBack,
+                new NyxIdChatTransientExecutionSession())
+            .Result;
+    }
+
+    private static NyxIdChatOperationResultSignal ExactFailure(
+        NyxIdChatOperationKey key,
+        string safeMessage,
+        NyxIdChatEffectEvidence effect) => new()
+    {
+        Key = key.Clone(),
+        Failure = new NyxIdChatOperationFailure
+        {
+            FailureCode = NyxIdChatTurnOperationExecutor.ExactServiceApprovalFailedCode,
+            SafeMessage = safeMessage,
+            ExternalEffect = effect,
+        },
+    };
+
+    private async Task RevokeRecoveryCredentialAsync(
+        NyxIdChatTurnOperationReconciliationInput input,
+        CancellationToken ct)
+    {
+        try
+        {
+            await _secretVault!.RevokeAsync(new RevokeSecretRequest(
+                input.RecoveryCredential.Ref,
+                CredentialSecretPurposes.NyxIdChatRecoveryCredential,
+                input.RecoveryCredential.OwnerScopeKey,
+                input.RecoveryCredential.SubjectId,
+                "nyxid chat recovery reached terminal proof"), ct).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                exception,
+                "NyxIdChat terminal recovery credential revocation failed: operation={OperationId}",
+                input.Key.OperationId);
+        }
+    }
+
+    private static bool IsOutcomeUncertain(NyxIdChatOperationResultSignal result) =>
+        result.ResultCase == NyxIdChatOperationResultSignal.ResultOneofCase.Failure &&
+        string.Equals(
+            result.Failure.FailureCode,
+            UnavailableNyxIdChatTurnOperationReconciliationPort.OutcomeUncertainCode,
+            StringComparison.Ordinal);
 
     private bool IsValidCredentialReference(NyxIdChatTurnOperationReconciliationInput input) =>
         _secretVault is not null &&
@@ -229,23 +482,6 @@ public sealed class AdmittedNyxIdChatTurnOperationReconciliationPort
             credential.SubjectId,
             input.RecoveryContext.Caller?.OwnerSubject,
             StringComparison.Ordinal);
-
-    private static bool TryParseCredentials(
-        string? encoded,
-        out AgentToolCredentialsPayload credentials)
-    {
-        credentials = null!;
-        try
-        {
-            credentials = AgentToolCredentialsPayload.Parser.ParseFrom(
-                Convert.FromBase64String(encoded ?? string.Empty));
-            return credentials is not null;
-        }
-        catch (Exception exception) when (exception is FormatException or InvalidProtocolBufferException)
-        {
-            return false;
-        }
-    }
 
     private static NyxIdChatOperationResultSignal Uncertain(NyxIdChatOperationKey? key) => new()
     {
@@ -635,6 +871,10 @@ public sealed class NyxIdChatTurnOperationDispatchPort
     {
         private NyxIdChatTransientExecutionSession _executionSession = new();
         private ExecutionLease? _activeLease;
+
+        public AgentToolExecutionContextPayload? CaptureToolContext() =>
+            _executionSession.Request?.ToolContext?.Clone() ??
+            _executionSession.StepState?.ToolContext?.Clone();
 
         public Task DispatchExecutionAsync(
             string turnActorId,

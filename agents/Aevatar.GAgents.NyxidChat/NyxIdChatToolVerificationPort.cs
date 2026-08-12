@@ -42,7 +42,8 @@ public sealed class NyxIdChatToolVerificationPort : INyxIdChatToolVerificationPo
             !AgentToolReadBackExpectedValueSourcePayloadCanonicalizer.TryGetCanonicalSource(
                 contract.Assertion,
                 out var expectedValueSource) ||
-            expectedValueSource == AgentToolReadBackExpectedValueSourcePayload.ProviderResourceId &&
+            (expectedValueSource == AgentToolReadBackExpectedValueSourcePayload.ProviderResourceId ||
+             contract.ProviderResourceArgument is not null) &&
             string.IsNullOrWhiteSpace(input.ProviderResourceId) ||
             _toolFactory?.CreateRead(contract.ReadOperation) is not { } tool ||
             _executionPort is null)
@@ -67,6 +68,14 @@ public sealed class NyxIdChatToolVerificationPort : INyxIdChatToolVerificationPo
                 null),
         };
         var arguments = contract.Arguments.Clone();
+        if (!TryWriteProviderResourceArgument(
+                arguments,
+                contract.ProviderResourceArgument,
+                input.ProviderResourceId))
+        {
+            return Unavailable(input, UnavailableCode,
+                "The provider resource identity could not be applied to the verification read.");
+        }
         var seenPageTokens = new HashSet<string>(StringComparer.Ordinal);
         var maxPages = contract.Pagination is null ? 1 : checked((int)contract.Pagination.MaxPages);
         for (var page = 1; page <= maxPages; page++)
@@ -292,6 +301,45 @@ public sealed class NyxIdChatToolVerificationPort : INyxIdChatToolVerificationPo
         }
         query.Fields[pagination.PageTokenArgumentName] =
             Google.Protobuf.WellKnownTypes.Value.ForString(pageToken);
+        return true;
+    }
+
+    private static bool TryWriteProviderResourceArgument(
+        Google.Protobuf.WellKnownTypes.Struct arguments,
+        AgentToolReadBackProviderResourceArgumentPayload? binding,
+        string providerResourceId)
+    {
+        if (binding is null)
+            return true;
+        if (string.IsNullOrWhiteSpace(providerResourceId) ||
+            string.IsNullOrWhiteSpace(binding.ArgumentName))
+        {
+            return false;
+        }
+
+        var slot = binding.Location switch
+        {
+            AgentToolOperationParameterLocationPayload.Path => "path_params",
+            AgentToolOperationParameterLocationPayload.Query => "query",
+            AgentToolOperationParameterLocationPayload.Header => "headers",
+            _ => null,
+        };
+        if (slot is null)
+            return false;
+
+        Google.Protobuf.WellKnownTypes.Struct values;
+        if (!arguments.Fields.TryGetValue(slot, out var value) ||
+            value.KindCase != Google.Protobuf.WellKnownTypes.Value.KindOneofCase.StructValue)
+        {
+            values = new Google.Protobuf.WellKnownTypes.Struct();
+            arguments.Fields[slot] = Google.Protobuf.WellKnownTypes.Value.ForStruct(values);
+        }
+        else
+        {
+            values = value.StructValue;
+        }
+        values.Fields[binding.ArgumentName] =
+            Google.Protobuf.WellKnownTypes.Value.ForString(providerResourceId.Trim());
         return true;
     }
 

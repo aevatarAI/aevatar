@@ -380,7 +380,10 @@ public sealed class NyxIdApiAccessContractTests
               "allow_all_services": false,
               "allowed_node_ids": [],
               "allow_all_nodes": false,
-              "created_at": "2026-08-10T07:00:00Z"
+              "created_at": "2026-08-10T07:00:00Z",
+              "future_safe_field": { "authority_source": "api_keys" },
+              "note": "Bearer",
+              "short_key_hint": "nyxid_ag_short"
             }
             """;
 
@@ -466,6 +469,12 @@ public sealed class NyxIdApiAccessContractTests
     [InlineData("\"ignored\":{\"access_token\":\"nested-secret\"},")]
     [InlineData("\"ignored\":{\"AccessToken\":\"nested-secret\"},")]
     [InlineData("\"Authorization\":\"Bearer nested-secret\",")]
+    [InlineData("\"note\":\"Bearer secret-in-innocuous-field\",")]
+    [InlineData("\"note\":\"nyxid_ag_1234567890abcdef\",")]
+    [InlineData("\"ignored\":{\"note\":\"Bearer nested-secret-value\"},")]
+    [InlineData("\"ignored\":[\"safe\",\"nyxid_ag_1234567890abcdef\"],")]
+    [InlineData("\"api_key\":\"nested-secret\",")]
+    [InlineData("\"token\":\"nested-secret\",")]
     [InlineData("\"rotation_predecessor_id\":\"key-old\",")]
     public void ParseAgentApiKey_SecretOrPartialLineage_ShouldFailClosed(string injectedField)
     {

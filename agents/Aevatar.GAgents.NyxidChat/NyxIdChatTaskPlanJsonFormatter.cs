@@ -11,6 +11,7 @@ internal static class NyxIdChatTaskPlanJsonFormatter
     public static JsonNode FormatTaskPlan(IMessage payload)
     {
         var node = FormatProtobuf(payload);
+        IncludeDecoderRequiredStepBooleans(payload, node);
         NormalizeBrowserSafeIntegers(node);
         return node;
     }
@@ -23,6 +24,34 @@ internal static class NyxIdChatTaskPlanJsonFormatter
                        "Typed custom payload must serialize to JSON.");
         NormalizeNyxIdEnumValues(node);
         return node;
+    }
+
+    private static void IncludeDecoderRequiredStepBooleans(IMessage payload, JsonNode node)
+    {
+        switch (payload)
+        {
+            case NyxIdChatTaskPlan plan when node["steps"] is JsonArray steps:
+                if (steps.Count != plan.Steps.Count)
+                    throw new InvalidOperationException("TaskPlan step serialization is inconsistent.");
+
+                for (var index = 0; index < plan.Steps.Count; index++)
+                    IncludeDecoderRequiredStepBooleans(steps[index], plan.Steps[index]);
+                break;
+            case NyxIdChatTaskPlanStepChanged changed when changed.Step is not null:
+                IncludeDecoderRequiredStepBooleans(node["step"], changed.Step);
+                break;
+        }
+    }
+
+    private static void IncludeDecoderRequiredStepBooleans(
+        JsonNode? node,
+        NyxIdChatTaskPlanStep step)
+    {
+        if (node is not JsonObject stepNode)
+            throw new InvalidOperationException("TaskPlan step must serialize to a JSON object.");
+
+        stepNode["required"] = step.Required;
+        stepNode["mayChangeExternalState"] = step.MayChangeExternalState;
     }
 
     private static void NormalizeBrowserSafeIntegers(JsonNode node)
@@ -73,7 +102,9 @@ internal static class NyxIdChatTaskPlanJsonFormatter
             "observedValue" or
             "suggestedValue" or
             "minimumValue" or
-            "maximumValue";
+            "maximumValue" or
+            "minorUnits" or
+            "threshold";
 
     private static void NormalizeNyxIdEnumValues(JsonNode node)
     {

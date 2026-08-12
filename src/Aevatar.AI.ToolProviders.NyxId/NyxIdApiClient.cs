@@ -1238,6 +1238,29 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
     public Task<string> GetApprovalStatusAsync(string token, string id, CancellationToken ct) =>
         GetAsync(token, $"/api/v1/approvals/requests/{Uri.EscapeDataString(id)}/status", ct);
 
+    public Task<string> CreateExactServiceApprovalRequestAsync(
+        string token,
+        string body,
+        CancellationToken ct) =>
+        PostAsync(token, "/api/v1/approvals/exact-service/requests", body, ct);
+
+    public Task<string> GetExactServiceApprovalStatusAsync(
+        string token,
+        string id,
+        CancellationToken ct) =>
+        GetAsync(token,
+            $"/api/v1/approvals/exact-service/requests/{Uri.EscapeDataString(id)}/status", ct);
+
+    public Task<string> RedeemExactServiceApprovalAsync(
+        string token,
+        string id,
+        string body,
+        CancellationToken ct) =>
+        PostAsync(token,
+            $"/api/v1/approvals/exact-service/requests/{Uri.EscapeDataString(id)}/redeem",
+            body,
+            ct);
+
     public Task<string> ListApprovalGrantsAsync(string token, CancellationToken ct) =>
         GetAsync(token, "/api/v1/approvals/grants", ct);
 

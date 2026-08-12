@@ -822,6 +822,120 @@ public sealed class ToolProviderHttpClientRegistrationTests
         }
     }
 
+    [Fact]
+    public async Task NyxIdRequestKeyRotateTool_ShouldEmitTypedRequirementForExactOwnerKey()
+    {
+        var handler = new StubUserServiceListHandler(
+            """
+            {
+              "id": "key-alpha",
+              "name": "Agent Alpha",
+              "scopes": "proxy",
+              "platform": "codex",
+              "is_active": true,
+              "allowed_service_ids": ["m-github"],
+              "allow_all_services": false,
+              "allowed_node_ids": [],
+              "allow_all_nodes": false,
+              "created_at": "2026-08-11T08:00:00Z",
+              "rotation_predecessor_id": null,
+              "state_version": 1,
+              "updated_at": "2026-08-11T08:00:00Z"
+            }
+            """);
+        var tool = CreateKeyRotateTool(handler);
+        const string arguments = """{"key_id":"key-alpha"}""";
+        var previous = AgentToolRequestContext.Current;
+        AgentToolRequestContext.Current = CapabilityContext();
+        try
+        {
+            var result = await tool.ExecuteAsync(arguments);
+            var receipt = tool.CreateResultReceipt("call-key", tool.Name, arguments, result);
+
+            handler.Requests.Should().Equal("/api/v1/api-keys/key-alpha");
+            handler.Methods.Should().OnlyContain(static method => method == HttpMethod.Get);
+            receipt.Should().NotBeNull();
+            receipt!.Status.Should().Be(AgentToolReceiptStatus.AuthorizationRequired);
+            receipt.AuthorizationRequired.ServiceSlug.Should().BeEmpty();
+            receipt.AuthorizationRequired.KeyRotate.KeyId.Should().Be("key-alpha");
+            receipt.ToString().Should().NotContain("token").And.NotContain("secret");
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = previous;
+        }
+    }
+
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("{\"key_id\":\" key-alpha\"}")]
+    [InlineData("{\"key_id\":\"key/alpha\"}")]
+    [InlineData("{\"key_id\":\"Bearer secret\"}")]
+    public async Task NyxIdRequestKeyRotateTool_ShouldRejectInvalidIdentityBeforeRead(
+        string arguments)
+    {
+        var handler = new StubUserServiceListHandler("{}");
+        var tool = CreateKeyRotateTool(handler);
+        var previous = AgentToolRequestContext.Current;
+        AgentToolRequestContext.Current = CapabilityContext();
+        try
+        {
+            var result = await tool.ExecuteAsync(arguments);
+            var receipt = tool.CreateResultReceipt("call-key", tool.Name, arguments, result);
+
+            handler.Requests.Should().BeEmpty();
+            result.Should().Contain("NYXID_KEY_ROTATE_ARGUMENTS_INVALID");
+            receipt.Should().NotBeNull();
+            receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+            receipt.AuthorizationRequired.Should().BeNull();
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = previous;
+        }
+    }
+
+    [Fact]
+    public async Task NyxIdRequestKeyRotateTool_ShouldRejectKeyOutsideExactOwnerRead()
+    {
+        var handler = new StubUserServiceListHandler(
+            """
+            {
+              "id": "key-other",
+              "name": "Other Key",
+              "scopes": "proxy",
+              "is_active": true,
+              "allowed_service_ids": [],
+              "allow_all_services": false,
+              "allowed_node_ids": [],
+              "allow_all_nodes": false,
+              "created_at": "2026-08-11T08:00:00Z",
+              "rotation_predecessor_id": null,
+              "state_version": 1,
+              "updated_at": "2026-08-11T08:00:00Z"
+            }
+            """);
+        var tool = CreateKeyRotateTool(handler);
+        const string arguments = """{"key_id":"key-alpha"}""";
+        var previous = AgentToolRequestContext.Current;
+        AgentToolRequestContext.Current = CapabilityContext();
+        try
+        {
+            var result = await tool.ExecuteAsync(arguments);
+            var receipt = tool.CreateResultReceipt("call-key", tool.Name, arguments, result);
+
+            handler.Requests.Should().Equal("/api/v1/api-keys/key-alpha");
+            result.Should().Contain("NYXID_KEY_ROTATE_KEY_UNAVAILABLE");
+            receipt.Should().NotBeNull();
+            receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+            receipt.AuthorizationRequired.Should().BeNull();
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = previous;
+        }
+    }
+
     private static IAgentTool CreateRequireServiceTool(StubUserServiceListHandler handler)
     {
         var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
@@ -834,6 +948,13 @@ public sealed class ToolProviderHttpClientRegistrationTests
         var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
         var client = new NyxIdApiClient(options, new HttpClient(handler));
         return new NyxIdRequestKeyCreateTool(client);
+    }
+
+    private static IAgentTool CreateKeyRotateTool(StubUserServiceListHandler handler)
+    {
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
+        var client = new NyxIdApiClient(options, new HttpClient(handler));
+        return new NyxIdRequestKeyRotateTool(client);
     }
 
     private sealed class StubUserServiceListHandler(string responseJson) : HttpMessageHandler

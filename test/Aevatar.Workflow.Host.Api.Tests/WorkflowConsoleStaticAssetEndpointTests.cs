@@ -448,6 +448,143 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
     }
 
     [Fact]
+    public async Task WorkflowStudio_TaskStepProtocol_ShouldDecodeConditionStepsAndExpiredNeedsYouOutcomes()
+    {
+        var protocol = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantProtocol);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8').replace(/^export /gm, '');
+            const context = { structuredClone, TextDecoder, URL, console };
+            vm.createContext(context);
+            vm.runInContext(source, context);
+
+            // Conditional branches commit a condition step, and local approval expiry commits an
+            // expired needs-you resolution. normalizeEnum throws NYXID_ENUM_INVALID on any value
+            // the decoder never declared, and consumeSse then degrades the whole frame to a
+            // protocol error, so an undeclared value silently stops the run card from rendering.
+            const conditionStep = context.normalizeFrame({
+              type:'CUSTOM', sequence:51, custom:{name:'nyxid.task.step.changed', payload:{
+                taskId:'task-alpha', planRevision:3,
+                changeKind:'NYX_ID_CHAT_STEP_CHANGE_KIND_STATUS',
+                step:{
+                  stepId:'step-condition', order:3, kind:'NYX_ID_CHAT_STEP_KIND_CONDITION',
+                  status:'NYX_ID_CHAT_STEP_STATUS_DONE',
+                  externalEffect:'NYX_ID_CHAT_EFFECT_EVIDENCE_NOT_APPLIED',
+                  addedBy:'NYX_ID_CHAT_STEP_ADDED_BY_INITIAL'
+                }
+              }}
+            });
+
+            assert.equal(conditionStep.type, 'task_step_changed');
+            assert.equal(conditionStep.payload.step.kind, 'condition');
+            assert.equal(conditionStep.payload.step.externalEffect, 'not_applied');
+
+            // The numeric wire form resolves positionally, so the declared order must stay in
+            // proto field-number order (condition is 8).
+            const numericConditionStep = context.normalizeFrame({
+              type:'CUSTOM', sequence:52, custom:{name:'nyxid.task.step.changed', payload:{
+                taskId:'task-alpha', planRevision:3, changeKind:1,
+                step:{ stepId:'step-condition', order:3, kind:8, status:4,
+                  externalEffect:2, addedBy:1 }
+              }}
+            });
+
+            assert.equal(numericConditionStep.payload.step.kind, 'condition');
+
+            const expiredNeedsYou = context.normalizeFrame({
+              type:'CUSTOM', sequence:53, custom:{name:'nyxid.input.changed', payload:{
+                requestId:'input-alpha', clientRequestId:'client-input',
+                outcome:'NYX_ID_CHAT_NEEDS_YOU_RESOLUTION_OUTCOME_EXPIRED'
+              }}
+            });
+
+            assert.equal(expiredNeedsYou.type, 'input_changed');
+            assert.equal(expiredNeedsYou.payload.outcome, 'expired');
+            """;
+
+        var result = await RunNodeAsync(script, protocol);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_Protocol_ShouldNormalizePlanGateStatusFromEveryWireForm()
+    {
+        var protocol = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantProtocol);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8').replace(/^export /gm, '');
+            const context = { structuredClone, TextDecoder, URL, console };
+            vm.createContext(context);
+            vm.runInContext(source, context);
+
+            const snapshotWith = (gate) => context.normalizeFrame({
+              type:'CUSTOM', sequence:61, custom:{name:'nyxid.task.snapshot', payload:{
+                schemaVersion:4, actorId:'conversation-alpha', turnId:'turn-alpha',
+                taskId:'task-alpha', planId:'plan-alpha', planRevision:2,
+                title:'Post the update', status:'active', gate,
+                steps:[{stepId:'step-plan',order:1,kind:'llm',status:'done',
+                  externalEffect:'not_started',addedBy:'initial'}]
+              }}
+            });
+
+            const prefixed = snapshotWith({
+              mode:'NYX_ID_CHAT_PLAN_GATE_MODE_CONFIRM',
+              status:'NYX_ID_CHAT_PLAN_GATE_STATUS_PENDING',
+              reason:'Effect-capable step', requestId:'gate-alpha',
+              planId:'plan-alpha', planRevision:2
+            });
+            assert.equal(prefixed.payload.gate.mode, 'confirm');
+            assert.equal(prefixed.payload.gate.status, 'pending');
+            assert.equal(prefixed.payload.gate.planRevision, 2);
+
+            const lowercase = snapshotWith({ mode:'confirm', status:'satisfied' });
+            assert.equal(lowercase.payload.gate.status, 'satisfied');
+
+            const numeric = snapshotWith({ mode:2, status:3 });
+            assert.equal(numeric.payload.gate.status, 'rejected');
+
+            // The projected gate defaults status to an empty string before the actor decides
+            // anything; that must stay absent rather than throwing or resolving to a decision.
+            const empty = snapshotWith({ mode:'auto', status:'' });
+            assert.equal(empty.payload.gate.status, '');
+
+            // An undeclared status fails the frame closed rather than rendering an invented
+            // decision: the decoder degrades it to a typed protocol error.
+            const invalid = snapshotWith({ mode:'confirm', status:'approved' });
+            assert.equal(invalid.type, 'protocol_error');
+            assert.equal(invalid.code, 'NYXID_ENUM_INVALID');
+            """;
+
+        var result = await RunNodeAsync(script, protocol);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_PlanGate_ShouldDecideThroughTheActorOwnedPlanResolveCommand()
+    {
+        var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
+
+        // The decision must ride the typed plan.resolve command with the gate's own requestId
+        // and the exact plan identity, never a synthesized local admission.
+        app.Should().Contain("type: \"plan.resolve\"");
+        app.Should().Contain("submitNeedsYouDecision(entry, \"plan\", gate.requestId");
+        app.Should().Contain("planRevision: gate.planRevision");
+
+        // Availability is actor-owned: the affordance exists only while the committed gate
+        // status is pending, and an unknown status never reads as satisfied.
+        app.Should().Contain("actorPendingPlanGate");
+        app.Should().Contain("actorPlanGateStatus(projection.task) !== \"pending\"");
+
+        // Confirming a plan is local admission only; it must not be presented as NyxID
+        // authorization or as proof that an external effect happened.
+        app.Should().Contain("不授予 NyxID 访问权限");
+    }
+
+    [Fact]
     public async Task WorkflowStudio_TaskStepSourceLabel_ShouldUseTypedPostconditionCheck()
     {
         var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
@@ -1061,6 +1198,167 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
             assert.equal(applied.projection.task.planRevision, 2);
             assert.equal(applied.projection.steps.get('step-tool').substeps[0].status, 'done');
             assert.equal(applied.reloadWithoutCursor, false);
+            """;
+
+        var result = await RunNodeAsync(script, actorState);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_Uc2Projection_ShouldConvergeSteerStopReloadAndDistinctRestart()
+    {
+        var actorState = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantActorState);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8')
+              .replace(/^import[^;]+;\s*/m, '')
+              .replace(/^export /gm, '');
+            const context = { structuredClone, validateActionRequest:value => value };
+            vm.createContext(context);
+            vm.runInContext(source, context);
+
+            const completedSearch = {
+              stepId:'step-uc2-search',order:2,kind:'tool',status:'done',
+              description:'Aevatar web search - find Greek dinner candidates.',
+              source:{tool:{toolName:'web_search'}},externalEffect:'not_applied',
+              operation:{key:{conversationActorId:'conversation-uc2',turnId:'turn-uc2-1',
+                taskId:'task-uc2',stepId:'step-uc2-search',
+                operationId:'operation-uc2-search',operationGeneration:1},
+                kind:'tool',phase:'succeeded',mayChangeExternalState:false,
+                idempotent:true,idempotencyKey:'operation-uc2-search'},
+              addedBy:'replan',dependsOn:['step-uc2-gaps'],availableActions:{},
+              substeps:[
+                {substepId:'prepare-operation',title:'Build search query',status:'done'},
+                {substepId:'execute-operation',title:'Search current web results',status:'done'}
+              ]
+            };
+            const inputStep = {
+              stepId:'step-uc2-gaps',order:1,kind:'input',status:'done',
+              source:{input:{requestId:'input-uc2-gaps'}},externalEffect:'not_applied',
+              addedBy:'initial',availableActions:{}
+            };
+            let live = context.createActorProjection('conversation-uc2');
+            live = context.reduceActorEvent(live, {type:'task_snapshot',sequence:20,payload:{
+              schemaVersion:4,actorId:'conversation-uc2',turnId:'turn-uc2-1',
+              taskId:'task-uc2',planId:'plan-uc2',planRevision:2,
+              title:'Research a ready-to-book dinner shortlist',status:'active',
+              gate:{mode:'auto',reason:'Read and draft only.'},steps:[
+                inputStep,completedSearch,{
+                  stepId:'step-uc2-compare',order:3,kind:'llm',status:'running',
+                  source:{llm:{}},externalEffect:'not_started',addedBy:'replan',
+                  dependsOn:['step-uc2-search'],availableActions:{stop:true}
+                }
+              ]
+            }});
+            live = context.reduceActorEvent(live, {type:'task_snapshot',sequence:31,payload:{
+              schemaVersion:4,actorId:'conversation-uc2',turnId:'turn-uc2-2',
+              taskId:'task-uc2',planId:'plan-uc2',planRevision:3,
+              title:'Refine for 7 pm and a private room',status:'active',
+              gate:{mode:'auto',reason:'Read and draft only.'},steps:[
+                inputStep,completedSearch,{
+                  stepId:'step-uc2-compare',order:3,kind:'llm',status:'cancelled',
+                  source:{llm:{}},externalEffect:'not_started',addedBy:'replan',availableActions:{}
+                },{
+                  stepId:'step-uc2-refine',order:4,kind:'llm',status:'running',
+                  source:{llm:{}},externalEffect:'not_started',addedBy:'steering',
+                  operation:{key:{conversationActorId:'conversation-uc2',turnId:'turn-uc2-2',
+                    taskId:'task-uc2',stepId:'step-uc2-refine',
+                    operationId:'operation-uc2-refine',operationGeneration:1},
+                    kind:'llm',phase:'running',mayChangeExternalState:false,
+                    idempotent:true,idempotencyKey:'operation-uc2-refine'},
+                  dependsOn:['step-uc2-search'],availableActions:{stop:true}
+                }
+              ]
+            }});
+            assert.equal(live.task.taskId, 'task-uc2');
+            assert.equal(live.task.turnId, 'turn-uc2-2');
+            assert.equal(live.task.planRevision, 3);
+            assert.equal(live.steps.get('step-uc2-search').source.tool.toolName, 'web_search');
+            assert.equal(live.steps.get('step-uc2-search').substeps.length, 2);
+            assert.equal(live.steps.get('step-uc2-search').substeps[0].substepId, 'prepare-operation');
+            assert.equal(live.steps.get('step-uc2-search').operation.key.operationId, 'operation-uc2-search');
+            assert.equal(live.steps.get('step-uc2-compare').status, 'cancelled');
+            assert.equal(live.steps.get('step-uc2-refine').addedBy, 'steering');
+
+            const receipt = 'Stopped. Partial-work receipt: 2 completed steps were retained. ' +
+              'Retained: Answer logistics and agree to research-only scope; ' +
+              'Aevatar web search - find Greek dinner candidates. ' +
+              'Unfinished work was fenced; the in-flight operation could not be proven cancelled. ' +
+              'Fenced: Refine for 7 pm and a private room. No external effect was applied. ' +
+              'Late evidence cannot advance this stopped task.';
+            const stopped = context.applyCurrentStateResult(
+              context.createActorProjection('conversation-uc2'), {
+                status:'current',stateVersion:36,snapshot:{
+                  actorId:'conversation-uc2',scopeId:'scope-uc2',stateVersion:36,
+                  progressSequence:36,
+                  activeTurn:{turnId:'turn-uc2-2',taskId:'task-uc2',status:'stopped'},
+                  latestTurn:{turnId:'turn-uc2-2',taskId:'task-uc2',status:'stopped',safeMessage:receipt},
+                  recentTerminalTurns:[{turnId:'turn-uc2-2',taskId:'task-uc2',status:'stopped'}],
+                  activeTask:{schemaVersion:4,actorId:'conversation-uc2',turnId:'turn-uc2-2',
+                    taskId:'task-uc2',planId:'plan-uc2',planRevision:3,status:'stopped',
+                    safeMessage:receipt,gate:{mode:'auto',reason:'Read and draft only.'},steps:[
+                      inputStep,completedSearch,{
+                        stepId:'step-uc2-compare',order:3,kind:'llm',status:'cancelled',
+                        source:{llm:{}},externalEffect:'not_started',addedBy:'replan',availableActions:{}
+                      },{
+                        stepId:'step-uc2-refine',order:4,kind:'llm',status:'cancelled',
+                        source:{llm:{}},externalEffect:'not_applied',addedBy:'steering',
+                        operation:{key:{conversationActorId:'conversation-uc2',turnId:'turn-uc2-2',
+                          taskId:'task-uc2',stepId:'step-uc2-refine',
+                          operationId:'operation-uc2-refine',operationGeneration:1},
+                          kind:'llm',phase:'running',mayChangeExternalState:false,
+                          idempotent:true,idempotencyKey:'operation-uc2-refine'},availableActions:{}
+                      }
+                    ]},
+                  pendingInput:null,pendingApproval:null,latestInputResolution:null,
+                  latestApprovalResolution:null,taskStatus:'stopped',attentionKind:'none',
+                  activeStepSummary:null,pendingActions:[],
+                  controlFence:{kind:'stop',requestId:'stop-uc2-1',clientRequestId:'client-stop-uc2-1',
+                    turnId:'turn-uc2-2',taskId:'task-uc2',outcome:'uncancellable',safeMessage:receipt},
+                  latestControlResult:null,continuationAdmission:null
+                }
+              });
+            assert.equal(stopped.reloadWithoutCursor, false);
+            assert.equal(stopped.projection.task.status, 'stopped');
+            assert.equal(stopped.projection.controlFence.requestId, 'stop-uc2-1');
+            assert.equal(stopped.projection.controlFence.outcome, 'uncancellable');
+            assert.match(stopped.projection.controlFence.safeMessage, /No external effect was applied/);
+            assert.equal(stopped.projection.steps.get('step-uc2-search').substeps.length, 2);
+            assert.equal(stopped.projection.steps.get('step-uc2-search').operation.phase, 'succeeded');
+            assert.equal(stopped.projection.steps.get('step-uc2-refine').status, 'cancelled');
+
+            const restarted = context.applyCurrentStateResult(stopped.projection, {
+              status:'current',stateVersion:48,snapshot:{
+                actorId:'conversation-uc2',scopeId:'scope-uc2',stateVersion:48,progressSequence:48,
+                activeTurn:{turnId:'turn-uc2b-1',taskId:'task-uc2b',status:'active'},
+                latestTurn:{turnId:'turn-uc2b-1',taskId:'task-uc2b',status:'active'},
+                recentTerminalTurns:[{turnId:'turn-uc2-2',taskId:'task-uc2',status:'stopped'}],
+                activeTask:{schemaVersion:4,actorId:'conversation-uc2',turnId:'turn-uc2b-1',
+                  taskId:'task-uc2b',planId:'plan-uc2b',planRevision:1,status:'active',
+                  gate:{mode:'auto',reason:'Read and draft only.'},steps:[{
+                    stepId:'step-uc2b-search',order:1,kind:'tool',status:'running',
+                    source:{tool:{toolName:'web_search'}},externalEffect:'not_started',
+                    operation:{key:{conversationActorId:'conversation-uc2',turnId:'turn-uc2b-1',
+                      taskId:'task-uc2b',stepId:'step-uc2b-search',
+                      operationId:'operation-uc2b-search',operationGeneration:1},
+                      kind:'tool',phase:'running',mayChangeExternalState:false,
+                      idempotent:true,idempotencyKey:'operation-uc2b-search'},
+                    addedBy:'initial',availableActions:{stop:true}
+                  }]},
+                pendingInput:null,pendingApproval:null,latestInputResolution:null,
+                latestApprovalResolution:null,taskStatus:'active',attentionKind:'none',
+                activeStepSummary:null,pendingActions:[],controlFence:null,
+                latestControlResult:null,continuationAdmission:null
+              }
+            });
+            assert.equal(restarted.projection.task.taskId, 'task-uc2b');
+            assert.equal(restarted.projection.task.turnId, 'turn-uc2b-1');
+            assert.equal(restarted.projection.steps.has('step-uc2-refine'), false);
+            assert.equal(restarted.projection.steps.get('step-uc2b-search').source.tool.toolName, 'web_search');
+            assert.equal(restarted.projection.steps.get('step-uc2b-search').operation.key.taskId, 'task-uc2b');
+            assert.equal(restarted.projection.controlFence, null);
             """;
 
         var result = await RunNodeAsync(script, actorState);

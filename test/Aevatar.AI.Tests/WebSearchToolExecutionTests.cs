@@ -85,6 +85,45 @@ public sealed class WebSearchToolExecutionTests
     }
 
     [Fact]
+    public async Task Uc2DinnerResearch_ShouldExecuteOneReadOnlySearchWithTypedEvidence()
+    {
+        var handler = new RecordingHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("""
+                {
+                  "results": [
+                    {
+                      "title": "North Olive",
+                      "url": "https://example.test/north-olive",
+                      "snippet": "Greek menu, vegetarian choices, Friday dinner hours"
+                    }
+                  ]
+                }
+                """),
+        });
+        using var http = new HttpClient(handler);
+        var search = CreateTool(http);
+        using var _ = AgentToolContextScope.Push(WithNyxIdAccessToken("token-uc2"));
+
+        const string arguments =
+            "{\"query\":\"Greek dinner northern Singapore Friday 6 to 7 pm\",\"max_results\":5}";
+        var result = await search.ExecuteAsync(arguments);
+        var receipt = search.CreateResultReceipt("call-uc2-search", search.Name, arguments, result);
+
+        search.Name.Should().Be("web_search");
+        search.IsReadOnly.Should().BeTrue();
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        receipt.ToolName.Should().Be("web_search");
+        using var document = JsonDocument.Parse(receipt.ResultJson);
+        document.RootElement.GetProperty("results")[0].GetProperty("title").GetString()
+            .Should().Be("North Olive");
+        var request = handler.Requests.Should().ContainSingle().Subject;
+        request.RequestUri!.AbsoluteUri.Should().Be(
+            "https://search.test/search?q=Greek%20dinner%20northern%20Singapore%20Friday%206%20to%207%20pm&limit=5");
+    }
+
+    [Fact]
     public async Task ExecuteAsync_NonJsonStringPayload_ReturnsTypedErrorJson()
     {
         var handler = new RecordingHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)

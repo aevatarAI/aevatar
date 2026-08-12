@@ -284,7 +284,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
         action.Params.KeyCreate.Name.Should().Be("agent-alpha");
         action.Params.KeyCreate.Platform.Should().Be("codex");
         action.Params.KeyCreate.AllowedServiceIds.Should().Equal("m-github", "m-lark");
-        action.RegistryRevision.Should().Be(NyxIdAssistantActionRegistry.SupportedRegistryRevision);
+        action.RegistryRevision.Should().Be(NyxIdAssistantActionRegistry.LeastScopeRegistryRevision);
     }
 
     private static WorkflowInteractiveActionHandoffCommand KeyCreateHandoff(string actorId) =>
@@ -726,6 +726,23 @@ public sealed partial class NyxIdChatConversationGAgentTests
             NyxIdAccessToken = "caller-token",
             ModelOverride = "model-a",
         };
+        start.SteeringExecutionContext = new NyxIdChatSteeringExecutionContext
+        {
+            OriginPrompt = "caller-forged execution context",
+            TaskId = "forged-task",
+            InputResolutions =
+            {
+                new NyxIdChatSteeringInputResolutionFact
+                {
+                    RequestId = "forged-input",
+                    Outcome = NyxIdChatNeedsYouResolutionOutcome.Accepted,
+                    Answer = new NyxIdChatInputAnswer
+                    {
+                        FreeText = "caller-forged committed answer",
+                    },
+                },
+            },
+        };
 
         await agent.HandleEventAsync(CreateEnvelope(conversationActorId, start));
 
@@ -739,6 +756,10 @@ public sealed partial class NyxIdChatConversationGAgentTests
         command.Llm.Intent.Should().Be(NyxIdChatTurnIntent.ServiceConnect);
         command.Llm.AgentProfile.Should().BeNull();
         command.Llm.AgentProfileTurnAuthority.Should().BeNull();
+        command.Llm.Request.Prompt.Should().Be("Connect GitHub and verify the connection");
+        agent.State.ToString().Should()
+            .NotContain("caller-forged execution context")
+            .And.NotContain("caller-forged committed answer");
     }
 
     [Fact]
@@ -920,6 +941,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
         {
             NyxIdChatTurnIntentClassifier.ServiceConnectCandidate,
             NyxIdChatTurnIntentClassifier.KeyCreateCandidate,
+            NyxIdChatTurnIntentClassifier.KeyRotateCandidate,
         });
         serverClassifier.UserMessages.Should().BeEmpty();
         agent.State.ActiveTurn.AgentProfileTurnAuthority.CandidateRoute.IntentId.Should()
@@ -1199,7 +1221,8 @@ public sealed partial class NyxIdChatConversationGAgentTests
             .Select(static intent => intent.GetProperty("intent_id").GetString())
             .Should().Equal(
                 NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
-                NyxIdChatTurnIntentClassifier.KeyCreateIntentId);
+                NyxIdChatTurnIntentClassifier.KeyCreateIntentId,
+                NyxIdChatTurnIntentClassifier.KeyRotateIntentId);
         intents[0]
             .GetProperty("side_effect_class").GetString().Should().Be("external_handoff");
         provider.Requests.Should().HaveCount(2);
@@ -4190,9 +4213,17 @@ public sealed partial class NyxIdChatConversationGAgentTests
     }
 
     [Fact]
-    public async Task StoppedTask_ShouldNeverResumeAndNewGoalShouldUseNewTaskIdentity()
+    public async Task Uc2StoppedTask_ShouldNeverResumeAndDistinctRestartShouldPublishHonestArtifact()
     {
-        const string conversationActorId = "conversation-stopped-new-goal";
+        const string conversationActorId = "conversation-uc2";
+        const string artifact = """
+            Verified facts:
+            - North Olive lists a private room for 6, vegetarian choices, and Friday 7 pm.
+
+            Cannot check right now: Atlas Taverna's Friday hours were not present in the successful search evidence.
+
+            Research artifact only: no reservation was made.
+            """;
         var eventStore = new InMemoryEventStoreForTests();
         using var services = BuildEventSourcingServices(eventStore);
         var dispatch = new RecordingActorDispatchPort([], static (_, _) => Task.CompletedTask);
@@ -4200,27 +4231,43 @@ public sealed partial class NyxIdChatConversationGAgentTests
         await agent.ActivateAsync();
         var original = CreateStartTurnCommand();
         original.ConversationActorId = conversationActorId;
+        original.TurnId = "turn-uc2-2";
+        original.TaskId = "task-uc2";
+        original.ClientRequestId = "client-uc2-2";
+        original.CommandId = "command-uc2-2";
+        original.CorrelationId = "correlation-uc2-2";
+        original.Prompt = "Refine the dinner shortlist for 7 pm and a private room.";
         await agent.HandleEventAsync(CreateEnvelope(conversationActorId, original));
         var beforeStop = await eventStore.GetEventsAsync(conversationActorId);
         var stop = CreateStopCommand(beforeStop[^1].Version);
         stop.ConversationActorId = conversationActorId;
+        stop.TurnId = original.TurnId;
+        stop.StopRequestId = "stop-uc2-1";
+        stop.ClientRequestId = "client-stop-uc2-1";
+        stop.CommandId = "command-stop-uc2-1";
+        stop.CorrelationId = "correlation-stop-uc2-1";
 
         await agent.HandleEventAsync(CreateEnvelope(conversationActorId, stop));
 
         agent.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Stopped);
         var stoppedTask = agent.State.ActiveTask.Clone();
+        var stoppedTerminalDispatch = dispatch.Calls.Should().ContainSingle(call =>
+                call.Envelope.Payload.Is(NyxIdChatHistoryTerminalDispatchRequested.Descriptor))
+            .Which.Envelope.Clone();
+        await agent.HandleEventAsync(stoppedTerminalDispatch);
+        agent.State.PendingHistoryTerminal.Should().BeNull();
         var next = CreateStartTurnCommand();
         next.ConversationActorId = conversationActorId;
-        next.TurnId = "turn-new-goal";
-        next.TaskId = "task-new-goal";
-        next.ClientRequestId = "client-new-goal";
-        next.CommandId = "command-new-goal";
-        next.CorrelationId = "correlation-new-goal";
-        next.Prompt = "Dinner is back on.";
+        next.TurnId = "turn-uc2b-1";
+        next.TaskId = "task-uc2b";
+        next.ClientRequestId = "client-uc2b-1";
+        next.CommandId = "command-uc2b-1";
+        next.CorrelationId = "correlation-uc2b-1";
+        next.Prompt = "Finish the research-only dinner shortlist; do not place a reservation.";
 
         await agent.HandleEventAsync(CreateEnvelope(conversationActorId, next));
 
-        agent.State.ActiveTask.TaskId.Should().Be("task-new-goal");
+        agent.State.ActiveTask.TaskId.Should().Be("task-uc2b");
         agent.State.ActiveTask.TaskId.Should().NotBe(stoppedTask.TaskId);
         agent.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Active);
         agent.State.ActiveTask.Steps.Should().NotContain(step =>
@@ -4231,6 +4278,33 @@ public sealed partial class NyxIdChatConversationGAgentTests
             summary.Status == NyxIdChatTurnStatus.Stopped);
         dispatch.OperationCalls.Should().HaveCount(2,
             "the new goal starts one new operation and never redispatches the stopped task");
+
+        var restartKey = agent.State.ActiveTask.Steps.Single().Operation.Key.Clone();
+        await agent.HandleEventAsync(CreateEnvelope(
+            conversationActorId,
+            new NyxIdChatOperationResultSignal
+            {
+                Key = restartKey,
+                Llm = new NyxIdChatLLMOperationResult
+                {
+                    Content = artifact,
+                    FinishReason = "stop",
+                },
+            }));
+
+        agent.State.ActiveTask.TaskId.Should().Be("task-uc2b");
+        agent.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Succeeded);
+        agent.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Succeeded);
+        agent.State.PendingHistoryTerminal.Should().NotBeNull();
+        agent.State.PendingHistoryTerminal.TurnId.Should().Be("turn-uc2b-1");
+        agent.State.PendingHistoryTerminal.Text.Should().Be(artifact)
+            .And.Contain("Verified facts:")
+            .And.Contain("Cannot check right now:")
+            .And.EndWith("Research artifact only: no reservation was made.");
+        agent.State.RecentTerminalTurns.Should().Contain(summary =>
+            summary.TurnId == "turn-uc2-2" &&
+            summary.TaskId == "task-uc2" &&
+            summary.Status == NyxIdChatTurnStatus.Stopped);
     }
 
     [Fact]
@@ -4489,7 +4563,11 @@ public sealed partial class NyxIdChatConversationGAgentTests
         var continuation = dispatch.OperationCalls.Last().Envelope.Payload
             .Unpack<NyxIdChatOperationDispatchCommand>();
         continuation.Key.TurnId.Should().Be(continuationTurnId);
-        continuation.Llm.Request.Prompt.Should().Be("Use the safer read-only approach.");
+        continuation.Llm.Request.Prompt.Should()
+            .Contain("Steering instruction: Use the safer read-only approach.")
+            .And.Contain("Original task: hello");
+        agent.State.ActiveTurn.Prompt.Should().Be("Use the safer read-only approach.",
+            "the transcript-visible prompt remains the user's steering instruction");
         continuation.Llm.Request.LlmControl.NyxIdAccessToken.Should().Be(
             "steering-runtime-token-alpha");
         continuation.Llm.Request.ToolContext.Credentials.NyxIdAccessToken.Should().Be(
@@ -4515,27 +4593,125 @@ public sealed partial class NyxIdChatConversationGAgentTests
     }
 
     [Fact]
-    public async Task SteeringRevision_ShouldPreserveCompletedEffectEvidenceAndEmitFullTaskSnapshot()
+    public async Task Uc2SteeringRevision_ShouldPreserveCompletedSearchEvidenceAndEmitFullTaskSnapshot()
     {
-        const string conversationActorId = "conversation-alpha";
+        const string conversationActorId = "conversation-uc2";
+        const string originalTurnId = "turn-uc2-1";
         var eventStore = new InMemoryEventStoreForTests();
         using var services = BuildEventSourcingServices(eventStore);
         var dispatch = new RecordingActorDispatchPort([], static (_, _) => Task.CompletedTask);
-        var agent = CreateController(services, conversationActorId, dispatch);
+        var classifier = new RecordingTurnIntentClassifier(NyxIdChatTurnIntent.Unspecified);
+        var agent = CreateController(
+            services,
+            conversationActorId,
+            dispatch,
+            turnIntentClassifier: classifier);
         await agent.ActivateAsync();
         agent.State.OwnerSubject = "owner-alpha";
+        var start = CreateStartTurnCommand();
+        start.ConversationActorId = conversationActorId;
+        start.TurnId = originalTurnId;
+        start.TaskId = "task-uc2";
+        start.ClientRequestId = "client-uc2-1";
+        start.CommandId = "command-uc2-1";
+        start.CorrelationId = "correlation-uc2-1";
+        start.Prompt = "Research Greek dinner options for Friday in northern Singapore.";
         await agent.HandleEventAsync(CreateEnvelope(
             conversationActorId,
-            WithOwner(CreateStartTurnCommand(), "owner-alpha")));
+            WithOwner(start, "owner-alpha")));
 
         var task = agent.State.ActiveTask;
         var superseded = task.Steps.Should().ContainSingle().Which;
-        superseded.Order = 2;
+        superseded.Order = 3;
         superseded.AddedBy = NyxIdChatStepAddedBy.Replan;
         superseded.AddedInPlanRevision = 2;
         superseded.Description = "Compare the current service state.";
-        var completed = CreateCompletedEffectStep(task.TaskId);
+        var completed = CreateCompletedReadOnlySearchStep(
+            conversationActorId,
+            originalTurnId,
+            task.TaskId);
+        completed.Order = 2;
+        var completedInput = new NyxIdChatTaskStepState
+        {
+            StepId = "step-uc2-input",
+            Order = 1,
+            Kind = NyxIdChatStepKind.Input,
+            Status = NyxIdChatStepStatus.Done,
+            Description = "Resolve dinner logistics and research-only scope.",
+            Source = new NyxIdChatStepSource
+            {
+                Input = new NyxIdChatInputStepSource
+                {
+                    RequestId = "input-uc2-logistics",
+                },
+            },
+            ExternalEffect = NyxIdChatEffectEvidence.NotApplied,
+            AddedBy = NyxIdChatStepAddedBy.Initial,
+            AddedInPlanRevision = 1,
+            UpdatedAt = completed.UpdatedAt.Clone(),
+        };
+        var supersededFollowUp = new NyxIdChatTaskStepState
+        {
+            StepId = "step-uc2-superseded-follow-up",
+            Order = 4,
+            Kind = NyxIdChatStepKind.Llm,
+            Status = NyxIdChatStepStatus.Planned,
+            Required = true,
+            Description = "Communicate the superseded comparison.",
+            Source = new NyxIdChatStepSource
+            {
+                Llm = new NyxIdChatLLMStepSource(),
+            },
+            ExternalEffect = NyxIdChatEffectEvidence.NotStarted,
+            Operation = new NyxIdChatOperationState
+            {
+                Key = new NyxIdChatOperationKey
+                {
+                    ConversationActorId = conversationActorId,
+                    TurnId = originalTurnId,
+                    TaskId = task.TaskId,
+                    StepId = "step-uc2-superseded-follow-up",
+                    OperationId = "operation-uc2-superseded-follow-up",
+                    OperationGeneration = 1,
+                },
+                Kind = NyxIdChatStepKind.Llm,
+                Phase = NyxIdChatOperationPhase.Requested,
+                RequestedAt = completed.UpdatedAt.Clone(),
+            },
+            AddedBy = NyxIdChatStepAddedBy.Replan,
+            AddedInPlanRevision = 2,
+            UpdatedAt = completed.UpdatedAt.Clone(),
+        };
+        supersededFollowUp.DependsOn.Add(superseded.StepId);
+        var supersededArtifact = supersededFollowUp.Clone();
+        supersededArtifact.StepId = "step-uc2-superseded-artifact";
+        supersededArtifact.Order = 5;
+        supersededArtifact.Description = "Produce the superseded research artifact.";
+        supersededArtifact.Operation.Key.StepId = supersededArtifact.StepId;
+        supersededArtifact.Operation.Key.OperationId = "operation-uc2-superseded-artifact";
+        supersededArtifact.DependsOn.Clear();
+        supersededArtifact.DependsOn.Add(supersededFollowUp.StepId);
         task.Steps.Insert(0, completed);
+        task.Steps.Insert(0, completedInput);
+        task.Steps.Add(supersededArtifact);
+        task.Steps.Add(supersededFollowUp);
+        const string committedCompositeAnswer =
+            "Party size: 4; dietary needs: one vegetarian; budget cap: SGD 200 total; " +
+            "research only: do not reserve, contact, or message venues.";
+        var committedInputResolution = new NyxIdChatInputResolutionState
+        {
+            RequestId = "input-uc2-logistics",
+            ClientRequestId = "client-input-uc2-logistics",
+            Outcome = NyxIdChatNeedsYouResolutionOutcome.Accepted,
+            AnswerSha256 = ByteString.CopyFromUtf8("committed-answer-fingerprint"),
+            Answer = new NyxIdChatInputAnswer
+            {
+                FreeText = committedCompositeAnswer,
+            },
+            CommittedAt = completed.UpdatedAt.Clone(),
+        };
+        agent.State.RecentInputResolutions.Add(committedInputResolution.Clone());
+        agent.State.LatestInputResolution = committedInputResolution.Clone();
         task.PlanRevision = 2;
         task.PlanRevisionHistoryStart = 1;
         task.PlanRevisions.Clear();
@@ -4551,7 +4727,12 @@ public sealed partial class NyxIdChatConversationGAgentTests
             PlanRevision = 2,
             RevisionCause = NyxIdChatPlanRevisionCause.FailureRecovery,
             CommittedAt = completed.UpdatedAt.Clone(),
-            AddedStepIds = { superseded.StepId },
+            AddedStepIds =
+            {
+                superseded.StepId,
+                supersededArtifact.StepId,
+                supersededFollowUp.StepId,
+            },
         });
         var taskId = task.TaskId;
         var completedBytes = completed.ToByteString();
@@ -4559,6 +4740,13 @@ public sealed partial class NyxIdChatConversationGAgentTests
         var supersededKey = superseded.Operation.Key.Clone();
         var committedBeforeSteering = await eventStore.GetEventsAsync(conversationActorId);
         var steering = CreateSteeringCommand(committedBeforeSteering[^1].Version);
+        steering.ConversationActorId = conversationActorId;
+        steering.TurnId = originalTurnId;
+        steering.SteeringId = "steering-uc2-1";
+        steering.ClientRequestId = "client-steering-uc2-1";
+        steering.CommandId = "command-steering-uc2-1";
+        steering.CorrelationId = "correlation-steering-uc2-1";
+        steering.Instruction = "Use 7 pm sharp and require a private room.";
         steering.ToolContext.Caller = new Aevatar.AI.Abstractions.AgentToolCallerContextPayload
         {
             OwnerSubject = "owner-alpha",
@@ -4591,14 +4779,35 @@ public sealed partial class NyxIdChatConversationGAgentTests
         preserved.Source.ToByteString().Should().Equal(completedSourceBytes,
             "provider-authored service and operation provenance must remain verbatim");
         preserved.Status.Should().Be(NyxIdChatStepStatus.Done);
-        preserved.ExternalEffect.Should().Be(NyxIdChatEffectEvidence.Confirmed);
+        preserved.Source.Tool.ToolName.Should().Be("web_search");
+        preserved.ExternalEffect.Should().Be(NyxIdChatEffectEvidence.NotApplied);
         preserved.Operation.Phase.Should().Be(NyxIdChatOperationPhase.Succeeded);
+        preserved.Substeps.Should().OnlyContain(substep =>
+            substep.Status == NyxIdChatSubstepStatus.Done);
         var cancelled = agent.State.ActiveTask.Steps.Single(step =>
             step.StepId == supersededKey.StepId);
         cancelled.Status.Should().Be(NyxIdChatStepStatus.Cancelled);
         cancelled.CancelledInPlanRevision.Should().Be(3);
+        var cancelledFollowUp = agent.State.ActiveTask.Steps.Single(step =>
+            step.StepId == supersededFollowUp.StepId);
+        cancelledFollowUp.Status.Should().Be(NyxIdChatStepStatus.Cancelled);
+        cancelledFollowUp.Operation.Phase.Should().Be(NyxIdChatOperationPhase.Cancelled);
+        cancelledFollowUp.ExternalEffect.Should().Be(NyxIdChatEffectEvidence.NotApplied);
+        cancelledFollowUp.CancelledInPlanRevision.Should().Be(3);
+        var cancelledArtifact = agent.State.ActiveTask.Steps.Single(step =>
+            step.StepId == supersededArtifact.StepId);
+        cancelledArtifact.Status.Should().Be(NyxIdChatStepStatus.Cancelled);
+        cancelledArtifact.Operation.Phase.Should().Be(NyxIdChatOperationPhase.Cancelled);
+        cancelledArtifact.ExternalEffect.Should().Be(NyxIdChatEffectEvidence.NotApplied);
+        cancelledArtifact.CancelledInPlanRevision.Should().Be(3);
         agent.State.ActiveTask.PlanRevisions[^1].CancelledStepIds.Should()
-            .Equal(supersededKey.StepId);
+            .Equal([
+                supersededKey.StepId,
+                supersededFollowUp.StepId,
+                supersededArtifact.StepId,
+            ],
+                "transitive cancellation order must be deterministic even when dependents " +
+                "appear before their prerequisites in the stored step list");
         agent.State.ActiveTask.PlanRevisions[^1].AddedStepIds.Should().ContainSingle();
         var addedStepId = agent.State.ActiveTask.PlanRevisions[^1].AddedStepIds.Single();
         agent.State.ActiveTask.Steps.Single(step => step.StepId == addedStepId)
@@ -4618,9 +4827,57 @@ public sealed partial class NyxIdChatConversationGAgentTests
         snapshot.ToByteString().Should().Equal(
             revisionStarted.State.ActiveTask.ToByteString(),
             "every revision must emit the complete committed task snapshot");
-        snapshot.Steps.Should().HaveCount(3);
+        snapshot.Steps.Should().HaveCount(6);
         snapshot.Steps.Single(step => step.StepId == completed.StepId)
             .ToByteString().Should().Equal(completedBytes);
+        var continuation = dispatch.OperationCalls.Last().Envelope.Payload
+            .Unpack<NyxIdChatOperationDispatchCommand>();
+        continuation.Key.TurnId.Should().NotBe(originalTurnId);
+        continuation.Llm.Request.Prompt.Should()
+            .Contain("Steering instruction: Use 7 pm sharp and require a private room.")
+            .And.Contain(
+                "Original task: Research Greek dinner options for Friday in northern Singapore.")
+            .And.Contain(
+                "Committed input resolution: input-uc2-logistics; outcome: Accepted")
+            .And.Contain(
+                $"answer: free text \"{committedCompositeAnswer}\"")
+            .And.Contain(
+                "Completed step 2: Aevatar web search - find Greek dinner candidates.")
+            .And.Contain("tool web_search")
+            .And.Contain("Completed substep: Search current web results [status: Done]")
+            .And.NotContain("The superseded comparison completed too late.");
+        agent.State.ActiveTurn.Prompt.Should().Be(
+            "Use 7 pm sharp and require a private room.");
+        agent.State.ToString().Should().NotContain(
+            "Continue the same committed task",
+            "execution context must remain transient");
+        classifier.UserMessages.Should().HaveCount(2);
+        classifier.UserMessages[^1].Should().Be(continuation.Llm.Request.Prompt,
+            "routing and execution must use the same steering context");
+        agent.State.LatestInputResolution.Answer.FreeText.Should().Be(
+            committedCompositeAnswer);
+        var originTerminalDispatch = dispatch.Calls.Single(call =>
+            call.Envelope.Payload.Is(NyxIdChatHistoryTerminalDispatchRequested.Descriptor));
+        await agent.HandleEventAsync(originTerminalDispatch.Envelope);
+        await agent.HandleEventAsync(CreateEnvelope(
+            conversationActorId,
+            new NyxIdChatOperationResultSignal
+            {
+                Key = continuation.Key.Clone(),
+                Llm = new NyxIdChatLLMOperationResult
+                {
+                    Content = "The steered research artifact is complete.",
+                },
+            }));
+        agent.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Succeeded,
+            "cancelled old-turn descendants cannot keep the continuation task active");
+        agent.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Succeeded);
+        var committedEvents = await eventStore.GetEventsAsync(conversationActorId);
+        committedEvents.Should().OnlyContain(item =>
+            !item.EventData.ToString().Contains(
+                "steering-runtime-token-alpha",
+                StringComparison.Ordinal));
+        agent.State.ToString().Should().NotContain("steering-runtime-token-alpha");
     }
 
     [Theory]
@@ -6035,21 +6292,29 @@ public sealed partial class NyxIdChatConversationGAgentTests
     }
 
     [Fact]
-    public async Task AskUserFreeTextOnly_ShouldPreserveOneCompositeQuestionAndResumeExactInputStep()
+    public async Task Uc2CompositeInput_ShouldResolveResearchScopeOnceAndResumeAfterReload()
     {
-        const string conversationActorId = "conversation-alpha";
+        const string conversationActorId = "conversation-uc2";
         const string compositeQuestion =
-            "Which region, budget, and launch date should I use for this deployment?";
+            "Please answer together: party size, dietary restrictions, budget cap, and whether you accept a research-only shortlist because no reservation can be placed.";
         const string rawAnswer =
-            "Singapore; budget SGD 200; launch 2026-08-20. Keep those defaults editable.";
+            "Party of 6, one vegetarian, no budget cap. Yes - research and prepare a ready-to-book shortlist.";
+        const string runtimeToken = "uc2-composite-runtime-token";
         var eventStore = new InMemoryEventStoreForTests();
         var dispatch = new RecordingActorDispatchPort([], static (_, _) => Task.CompletedTask);
         using var services = BuildEventSourcingServices(eventStore);
         var initial = CreateController(services, conversationActorId, dispatch);
         await initial.ActivateAsync();
-        await initial.HandleEventAsync(CreateEnvelope(
-            conversationActorId,
-            CreateStartTurnCommand()));
+        var start = CreateStartTurnCommand();
+        start.ConversationActorId = conversationActorId;
+        start.TurnId = "turn-uc2-1";
+        start.TaskId = "task-uc2";
+        start.ClientRequestId = "client-uc2-1";
+        start.CommandId = "command-uc2-1";
+        start.CorrelationId = "correlation-uc2-1";
+        start.Prompt =
+            "Book a dinner reservation for the team on Friday - Greek food, northern Singapore, 6-7 pm.";
+        await initial.HandleEventAsync(CreateEnvelope(conversationActorId, start));
         var llmKey = initial.State.ActiveTask.Steps.Single().Operation.Key.Clone();
         await initial.HandleEventAsync(CreateEnvelope(
             conversationActorId,
@@ -6087,6 +6352,8 @@ public sealed partial class NyxIdChatConversationGAgentTests
         initial.State.PendingInput.Should().NotBeNull();
         var pending = initial.State.PendingInput!;
         pending.Prompt.Should().Be(compositeQuestion);
+        pending.TurnId.Should().Be("turn-uc2-1");
+        pending.TaskId.Should().Be("task-uc2");
         pending.Options.Should().BeEmpty();
         pending.AllowFreeText.Should().BeTrue();
         pending.MultiSelect.Should().BeFalse();
@@ -6110,6 +6377,13 @@ public sealed partial class NyxIdChatConversationGAgentTests
                 ExpectedStateVersion = committedBeforeResolution.Count,
                 CommandId = "command-input-composite",
                 CorrelationId = "correlation-input-composite",
+                ToolContext = new AgentToolExecutionContextPayload
+                {
+                    Credentials = new AgentToolCredentialsPayload
+                    {
+                        NyxIdAccessToken = runtimeToken,
+                    },
+                },
             }));
 
         recovered.State.PendingInput.Should().BeNull();
@@ -6120,19 +6394,91 @@ public sealed partial class NyxIdChatConversationGAgentTests
             step.Kind == NyxIdChatStepKind.Llm &&
             step.Status == NyxIdChatStepStatus.Running &&
             step.AddedBy == NyxIdChatStepAddedBy.Replan);
+        recovered.State.ActiveTask.TaskId.Should().Be("task-uc2");
+        recovered.State.ActiveTask.PlanRevision.Should().Be(3);
         var continuation = recoveryDispatch.OperationCalls.Should().ContainSingle().Which.Envelope.Payload
             .Unpack<NyxIdChatOperationDispatchCommand>();
         continuation.InputCase.Should().Be(
             NyxIdChatOperationDispatchCommand.InputOneofCase.InputContinuation);
         continuation.InputContinuation.Answer.FreeText.Should().Be(rawAnswer);
         continuation.InputContinuation.ToolCallId.Should().Be("call-ask-user-composite");
+        continuation.InputContinuation.ToolContext.Credentials.NyxIdAccessToken.Should()
+            .Be(runtimeToken);
+
+        const string searchArguments =
+            "{\"query\":\"Greek dinner northern Singapore Friday 6 to 7 pm\",\"max_results\":5}";
+        const string communicatedPlan =
+            "Plan: use Aevatar web_search, then draft a verified research-only shortlist. " +
+            "Gate: auto (read and draft only). No reservation will be made by this task.";
+        await recovered.HandleOperationProgressAsync(new NyxIdChatOperationProgressSignal
+        {
+            Key = continuation.Key.Clone(),
+            Sequence = 1,
+            Text = new NyxIdChatTextProgress { Delta = communicatedPlan },
+        });
+        var planProgress = (await eventStore.GetEventsAsync(conversationActorId))[^1]
+            .EventData.Unpack<NyxIdChatOperationProgressedEvent>();
+        NyxIdChatConversationAguiFrameBuilder.BuildProgressed("turn-uc2-1", planProgress)
+            .Should().ContainSingle(frame =>
+                frame.TextMessageContent != null &&
+                frame.TextMessageContent.Delta == communicatedPlan);
+        await recovered.HandleEventAsync(CreateEnvelope(
+            conversationActorId,
+            new NyxIdChatOperationResultSignal
+            {
+                Key = continuation.Key.Clone(),
+                Llm = new NyxIdChatLLMOperationResult
+                {
+                    Content = communicatedPlan,
+                    ToolCalls =
+                    {
+                        new NyxIdChatToolCall
+                        {
+                            CallId = "call-uc2-search",
+                            ToolName = "web_search",
+                            ArgumentsJson = searchArguments,
+                            Safety = new NyxIdChatToolCallSafety
+                            {
+                                IsReadOnly = true,
+                                MayChangeExternalState = false,
+                                SideEffectKind = "web.search",
+                            },
+                        },
+                    },
+                },
+            }));
+
+        recovered.State.ActiveTask.Gate.Mode.Should().Be(NyxIdChatPlanGateMode.Auto);
+        recovered.State.ActiveTask.Gate.Status.Should().Be(NyxIdChatPlanGateStatus.Satisfied);
+        var search = recovered.State.ActiveTask.Steps.Single(step =>
+            step.Source?.SourceCase == NyxIdChatStepSource.SourceOneofCase.Tool &&
+            step.Source.Tool.ToolName == "web_search");
+        search.MayChangeExternalState.Should().BeFalse();
+        search.Status.Should().Be(NyxIdChatStepStatus.Running);
+        var searchDispatch = recoveryDispatch.OperationCalls.Last().Envelope.Payload
+            .Unpack<NyxIdChatOperationDispatchCommand>();
+        searchDispatch.InputCase.Should().Be(
+            NyxIdChatOperationDispatchCommand.InputOneofCase.Tool);
+        searchDispatch.Tool.ToolName.Should().Be("web_search");
+        searchDispatch.Tool.ArgumentsJson.Should().Be(searchArguments);
+        recoveryDispatch.OperationCalls.Should().HaveCount(2,
+            "one input continuation and one exact read-only search must run after consent");
 
         var committed = await eventStore.GetEventsAsync(conversationActorId);
-        committed.Should().ContainSingle(item =>
-            item.EventData.Is(NyxIdChatInputResolutionCommittedEvent.Descriptor));
+        var indexedEvents = committed.Select(static (item, index) => (item, index)).ToArray();
+        indexedEvents.Single(entry =>
+                entry.item.EventData.Is(NyxIdChatOperationProgressedEvent.Descriptor)).index
+            .Should().BeLessThan(indexedEvents.Last(entry =>
+                    entry.item.EventData.Is(NyxIdChatOperationReconciledEvent.Descriptor)).index,
+                "the communicated plan must be observable before the tool plan dispatches");
+        var inputResolution = committed.Should().ContainSingle(item =>
+                item.EventData.Is(NyxIdChatInputResolutionCommittedEvent.Descriptor))
+            .Which.EventData.Unpack<NyxIdChatInputResolutionCommittedEvent>();
+        inputResolution.Resolution.Answer.FreeText.Should().Be(rawAnswer);
         committed.Should().OnlyContain(item =>
-            !item.EventData.ToString().Contains(rawAnswer, StringComparison.Ordinal));
-        recovered.State.ToString().Should().NotContain(rawAnswer);
+            !item.EventData.ToString().Contains(runtimeToken, StringComparison.Ordinal));
+        recovered.State.LatestInputResolution.Answer.FreeText.Should().Be(rawAnswer);
+        recovered.State.ToString().Should().NotContain(runtimeToken);
     }
 
     [Fact]
@@ -6303,49 +6649,46 @@ public sealed partial class NyxIdChatConversationGAgentTests
         },
     };
 
-    private static NyxIdChatTaskStepState CreateCompletedEffectStep(string taskId)
+    private static NyxIdChatTaskStepState CreateCompletedReadOnlySearchStep(
+        string conversationActorId,
+        string turnId,
+        string taskId)
     {
         var completedAt = Timestamp.FromDateTimeOffset(
             new DateTimeOffset(2026, 7, 24, 7, 59, 0, TimeSpan.Zero));
-        var operationAdmission = CreateEffectAdmissionWithReadBack();
-        return new NyxIdChatTaskStepState
+        var step = new NyxIdChatTaskStepState
         {
-            StepId = "step-completed-effect-alpha",
+            StepId = "step-uc2-search",
             Order = 1,
             Kind = NyxIdChatStepKind.Tool,
             Status = NyxIdChatStepStatus.Done,
             Required = true,
-            Description = "Update the repository settings.",
+            Description = "Aevatar web search - find Greek dinner candidates.",
             Source = new NyxIdChatStepSource
             {
                 Tool = new NyxIdChatToolStepSource
                 {
-                    ToolName = "repository_update",
-                    ServiceSlug = "repository-service",
-                    ServiceId = "svc-repository-alpha",
-                    ReadinessCapabilityId = "capability-repository-alpha",
-                    ProviderResourceId = "repository-alpha",
-                    OperationAdmission = operationAdmission.Clone(),
+                    ToolName = "web_search",
                 },
             },
-            MayChangeExternalState = true,
-            ExternalEffect = NyxIdChatEffectEvidence.Confirmed,
+            MayChangeExternalState = false,
+            ExternalEffect = NyxIdChatEffectEvidence.NotApplied,
             Operation = new NyxIdChatOperationState
             {
                 Key = new NyxIdChatOperationKey
                 {
-                    ConversationActorId = "conversation-alpha",
-                    TurnId = "turn-effect-alpha",
+                    ConversationActorId = conversationActorId,
+                    TurnId = turnId,
                     TaskId = taskId,
-                    StepId = "step-completed-effect-alpha",
-                    OperationId = "operation-completed-effect-alpha",
+                    StepId = "step-uc2-search",
+                    OperationId = "operation-uc2-search",
                     OperationGeneration = 1,
                 },
                 Kind = NyxIdChatStepKind.Tool,
                 Phase = NyxIdChatOperationPhase.Succeeded,
-                MayChangeExternalState = true,
+                MayChangeExternalState = false,
                 Idempotent = true,
-                IdempotencyKey = "idempotency-completed-effect-alpha",
+                IdempotencyKey = "operation-uc2-search",
                 RequestedAt = completedAt.Clone(),
                 DispatchedAt = completedAt.Clone(),
                 CompletedAt = completedAt.Clone(),
@@ -6353,26 +6696,23 @@ public sealed partial class NyxIdChatConversationGAgentTests
                 LatestProgressSequence = 7,
                 LastProgressAt = completedAt.Clone(),
             },
-            ApprovalRequestId = "approval-completed-effect-alpha",
-            RetryToolInput = new NyxIdChatRetryToolInputState
-            {
-                CallId = "call-completed-effect-alpha",
-                ToolName = "repository_update",
-                Arguments = JsonParser.Default.Parse<Struct>(
-                    "{\"repositoryId\":\"repository-alpha\"}"),
-                OperationAdmission = operationAdmission.Clone(),
-            },
-            ApprovalObservation = new NyxIdChatPostReturnApprovalObservation
-            {
-                ApprovalRequestId = "approval-completed-effect-alpha",
-                DecisionMode = NyxIdApprovalDecisionMode.PerRequest,
-                ReceiptStatus = AgentToolReceiptStatus.Success,
-                ObservedAt = completedAt.Clone(),
-            },
             AddedBy = NyxIdChatStepAddedBy.Initial,
             AddedInPlanRevision = 1,
             UpdatedAt = completedAt.Clone(),
         };
+        step.Substeps.Add(new NyxIdChatSubstepState
+        {
+            SubstepId = "prepare-operation",
+            Title = "Build search query",
+            Status = NyxIdChatSubstepStatus.Done,
+        });
+        step.Substeps.Add(new NyxIdChatSubstepState
+        {
+            SubstepId = "execute-operation",
+            Title = "Search current web results",
+            Status = NyxIdChatSubstepStatus.Done,
+        });
+        return step;
     }
 
     private static void SetOwner(NyxIdChatStartTurnCommand command, string ownerSubject)
@@ -6964,7 +7304,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
         {
             ct.ThrowIfCancellationRequested();
             Requests.Add(request);
-            var builtInNyxIdIntents = request.Candidates.Count == 2 &&
+            var builtInNyxIdIntents = request.Candidates.Count == 3 &&
                                       request.Candidates.Any(candidate => string.Equals(
                                           candidate.IntentId,
                                           NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
@@ -6972,6 +7312,10 @@ public sealed partial class NyxIdChatConversationGAgentTests
                                       request.Candidates.Any(candidate => string.Equals(
                                           candidate.IntentId,
                                           NyxIdChatTurnIntentClassifier.KeyCreateIntentId,
+                                          StringComparison.Ordinal)) &&
+                                      request.Candidates.Any(candidate => string.Equals(
+                                          candidate.IntentId,
+                                          NyxIdChatTurnIntentClassifier.KeyRotateIntentId,
                                           StringComparison.Ordinal));
             return Task.FromResult(AgentProfileTurnClassificationResult.Matched(
                 builtInNyxIdIntents

@@ -230,8 +230,8 @@ public sealed class ChannelIdentityOrleansDispatchProjectionTests
                         {
                             [$"{AevatarOAuthClientBootstrapOptions.SectionName}:Enabled"] = "false",
                             [AevatarOAuthClientOptions.ClientIdConfigurationKey] = "channel-identity-projection-test-client",
-                            [NyxIdBrokerOptions.ApiBaseUrlConfigurationKey] = "https://api.example.test",
-                            [NyxIdBrokerOptions.ResourceServerBaseUrlConfigurationKey] = "https://api.example.test",
+                            [NyxIdBrokerOptions.InternalApiBaseUrlConfigurationKey] = "http://nyxid.internal.test",
+                            [NyxIdBrokerOptions.ResourceServerBaseUrlConfigurationKey] = "https://nyxid.test",
                         })
                         .Build();
                     services.AddSingleton(forwardingObserver);

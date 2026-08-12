@@ -515,6 +515,80 @@ public sealed class NyxIdChatControlCommandTests
             .Attention.AttentionKind.Should().Be(NyxIdChatAttentionKind.None);
     }
 
+    [Fact]
+    public void Uc2Stop_ShouldReturnDurablePartialWorkReceiptWithNoExternalEffect()
+    {
+        var state = FailedStepState(
+            NyxIdChatStepKind.Llm,
+            required: true,
+            safeToSkip: false,
+            retryInputRebuildable: true);
+        var active = state.ActiveTask.Steps.Single();
+        active.Order = 3;
+        active.Status = NyxIdChatStepStatus.Running;
+        active.Operation.Phase = NyxIdChatOperationPhase.Running;
+        active.Operation.CompletedAt = null;
+        active.ExternalEffect = NyxIdChatEffectEvidence.NotStarted;
+        active.FailureCode = string.Empty;
+        active.SafeMessage = string.Empty;
+        active.Description = "Refine the shortlist for 7 pm and a private room.";
+        state.ActiveTask.Steps.Insert(0, CompletedReadOnlyStep(
+            "step-uc2-input",
+            1,
+            NyxIdChatStepKind.Input,
+            "Collect all dinner constraints and accept research-only scope."));
+        state.ActiveTask.Steps.Insert(1, CompletedReadOnlyStep(
+            "step-uc2-search",
+            2,
+            NyxIdChatStepKind.Tool,
+            "Aevatar web_search found the candidate set."));
+        state.ActiveTask.Steps[1].Source = new NyxIdChatStepSource
+        {
+            Tool = new NyxIdChatToolStepSource { ToolName = "web_search" },
+        };
+        var completedBytes = state.ActiveTask.Steps.Take(2)
+            .Select(static step => step.ToByteString())
+            .ToArray();
+
+        var decision = NyxIdChatControlCommands.Stop(
+            state,
+            new NyxIdChatStopCommand
+            {
+                ScopeId = "scope-alpha",
+                ConversationActorId = "conversation-alpha",
+                TurnId = "turn-alpha",
+                StopRequestId = "stop-uc2-1",
+                ClientRequestId = "client-stop-uc2-1",
+                ExpectedStateVersion = 17,
+            },
+            stateVersion: 17,
+            Now);
+
+        decision.ShouldCommit.Should().BeTrue();
+        decision.Result.Outcome.Should().Be(NyxIdChatControlOutcome.Uncancellable);
+        decision.Result.SafeMessage.Should().Contain("Partial-work receipt");
+        decision.Result.SafeMessage.Should().Contain("2 completed steps were retained");
+        decision.Result.SafeMessage.Should().Contain(
+            "Retained: Collect all dinner constraints and accept research-only scope; " +
+            "Aevatar web_search found the candidate set.");
+        decision.Result.SafeMessage.Should().Contain(
+            "Fenced: Refine the shortlist for 7 pm and a private room.");
+        decision.Result.SafeMessage.Should().Contain("No external effect was applied");
+        decision.Result.SafeMessage.Should().Contain("Late evidence cannot advance this stopped task");
+        decision.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Stopped);
+        decision.State.ActiveTask.Steps[2].Status.Should().Be(NyxIdChatStepStatus.Cancelled);
+        decision.State.ActiveTask.Steps.Take(2).Select(static step => step.ToByteString())
+            .Should().Equal(completedBytes);
+
+        var reloaded = NyxIdChatConversationGAgentState.Parser.ParseFrom(
+            decision.State.ToByteArray());
+        reloaded.ControlFence.SafeMessage.Should().Be(decision.Result.SafeMessage);
+        reloaded.ActiveTask.SafeMessage.Should().Be(decision.Result.SafeMessage);
+        reloaded.LatestTurn.SafeMessage.Should().Be(decision.Result.SafeMessage);
+        reloaded.ActiveTask.Steps.Single(step => step.StepId == "step-uc2-search")
+            .Source.Tool.ToolName.Should().Be("web_search");
+    }
+
     [Theory]
     [InlineData(NyxIdChatControlKind.Stop)]
     [InlineData(NyxIdChatControlKind.Steering)]
@@ -755,6 +829,39 @@ public sealed class NyxIdChatControlCommandTests
         state.ActiveTask.ActiveStepId = step.StepId;
         return state;
     }
+
+    private static NyxIdChatTaskStepState CompletedReadOnlyStep(
+        string stepId,
+        int order,
+        NyxIdChatStepKind kind,
+        string description) => new()
+    {
+        StepId = stepId,
+        Order = order,
+        Kind = kind,
+        Status = NyxIdChatStepStatus.Done,
+        Required = true,
+        Description = description,
+        ExternalEffect = NyxIdChatEffectEvidence.NotApplied,
+        Operation = new NyxIdChatOperationState
+        {
+            Key = new NyxIdChatOperationKey
+            {
+                ConversationActorId = "conversation-alpha",
+                TurnId = "turn-alpha",
+                TaskId = "task-alpha",
+                StepId = stepId,
+                OperationId = $"operation-{stepId}",
+                OperationGeneration = 1,
+            },
+            Kind = kind,
+            Phase = NyxIdChatOperationPhase.Succeeded,
+            Idempotent = true,
+            CompletedAt = Now.Clone(),
+        },
+        AddedBy = NyxIdChatStepAddedBy.Initial,
+        UpdatedAt = Now.Clone(),
+    };
 
     private static NyxIdChatConversationGAgentState TerminalFailedStepState(
         NyxIdChatStepKind kind,

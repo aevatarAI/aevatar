@@ -10,13 +10,14 @@ public sealed class NyxIdAssistantActionRegistryTests
 {
     private const string LegacyRevision = "nyxid-assistant-actions.v4";
     private const string TransitionRevision = "nyxid-assistant-actions.v5";
-    private const string SupportedRevision = "nyxid-assistant-actions.v6";
+    private const string LeastScopeRevision = "nyxid-assistant-actions.v6";
+    private const string SupportedRevision = "nyxid-assistant-actions.v7";
 
     [Fact]
     public void Load_ShouldPinSchemaVersionAndRevision()
     {
         var registry = NyxIdAssistantActionRegistry.Load(
-            RegistryJsonWithLeastScopeKeyCreate());
+            RegistryJsonWithKeyRotation());
 
         registry.SchemaVersion.Should().Be(4);
         registry.RegistryRevision.Should().Be(SupportedRevision);
@@ -104,7 +105,7 @@ public sealed class NyxIdAssistantActionRegistryTests
         registry.TryGetDefinition("service.reauthorize", out _).Should().BeFalse();
         registry.TryGetDefinition("key.rotate", out _).Should().BeFalse();
         NyxIdAssistantActionRegistry.IsActionExecutable(
-                SupportedRevision,
+                LeastScopeRevision,
                 NyxIdAssistantActionKind.KeyCreate)
             .Should().BeTrue();
         NyxIdAssistantActionRegistry.IsActionExecutable(
@@ -116,6 +117,26 @@ public sealed class NyxIdAssistantActionRegistryTests
             RegistryJsonWithLeastScopeKeyCreate(KeyCreateSchema));
         staleSchema.Should().Throw<NyxIdAssistantActionRegistryException>()
             .Which.Code.Should().Be("NYXID_ACTION_REGISTRY_INVALID");
+    }
+
+    [Fact]
+    public void Load_ShouldExposeKeyRotationOnlyInV7()
+    {
+        var registry = NyxIdAssistantActionRegistry.Load(
+            RegistryJsonWithKeyRotation());
+
+        registry.TryGetDefinition("service.connect", out _).Should().BeTrue();
+        registry.TryGetDefinition("key.create", out _).Should().BeTrue();
+        registry.TryGetDefinition("key.rotate", out _).Should().BeTrue();
+        registry.TryGetDefinition("service.reauthorize", out _).Should().BeFalse();
+        NyxIdAssistantActionRegistry.IsActionExecutable(
+                SupportedRevision,
+                NyxIdAssistantActionKind.KeyRotate)
+            .Should().BeTrue();
+        NyxIdAssistantActionRegistry.IsActionExecutable(
+                LeastScopeRevision,
+                NyxIdAssistantActionKind.KeyRotate)
+            .Should().BeFalse();
     }
 
     [Fact]
@@ -369,7 +390,8 @@ public sealed class NyxIdAssistantActionRegistryTests
                  {
                      (RegistryJson(), LegacyRevision),
                      (RegistryJsonWithWaveOneActions(), TransitionRevision),
-                     (RegistryJsonWithLeastScopeKeyCreate(), SupportedRevision),
+                     (RegistryJsonWithLeastScopeKeyCreate(), LeastScopeRevision),
+                     (RegistryJsonWithKeyRotation(), SupportedRevision),
                  })
         {
             var source = new RecordingRegistrySource(payload);
@@ -616,7 +638,7 @@ public sealed class NyxIdAssistantActionRegistryTests
         string keyCreateSchema = LeastScopeKeyCreateSchema) => $$"""
         {
           "schema_version": 4,
-          "revision": "{{SupportedRevision}}",
+          "revision": "{{LeastScopeRevision}}",
           "actions": [
             {
               "action": "service.connect",
@@ -630,6 +652,39 @@ public sealed class NyxIdAssistantActionRegistryTests
               "action": "key.create",
               "description": "Create a least-scope API key.",
               "params_schema": {{keyCreateSchema}},
+              "risk": "grant",
+              "tier": "v1",
+              "remember_eligible": false
+            }
+          ]
+        }
+        """;
+
+    private static string RegistryJsonWithKeyRotation() => $$"""
+        {
+          "schema_version": 4,
+          "revision": "{{SupportedRevision}}",
+          "actions": [
+            {
+              "action": "service.connect",
+              "description": "Connect a service.",
+              "params_schema": {{ServiceConnectSchema}},
+              "risk": "grant",
+              "tier": "v1",
+              "remember_eligible": true
+            },
+            {
+              "action": "key.create",
+              "description": "Create a least-scope API key.",
+              "params_schema": {{LeastScopeKeyCreateSchema}},
+              "risk": "grant",
+              "tier": "v1",
+              "remember_eligible": false
+            },
+            {
+              "action": "key.rotate",
+              "description": "Rotate an API key.",
+              "params_schema": {{KeyRotateSchema}},
               "risk": "grant",
               "tier": "v1",
               "remember_eligible": false

@@ -868,15 +868,23 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
             session,
             static (_, _) => Task.CompletedTask,
             CancellationToken.None);
+        llmResult.Result.ResultCase.Should().Be(NyxIdChatOperationResultSignal.ResultOneofCase.Llm);
+        llmResult.Result.Llm.ToolCalls.Should().ContainSingle();
         var call = llmResult.Result.Llm.ToolCalls.Should().ContainSingle().Subject;
         call.OperationAdmission.DurableAuthorization.Should().NotBeNull();
         call.OperationAdmission.DurableAuthorization.ToolDefinitionFingerprint.Should().NotBeNullOrWhiteSpace();
+        NyxIdChatOperationAdmissionPolicy.IsValid(call.OperationAdmission, call.Safety).Should().BeTrue();
 
         var planned = NyxIdChatTaskLifecycle.ApplyOperationResult(
             initialState,
             llmResult.Result,
             Now,
             planGateConfirmationThresholdSeconds: 1);
+        planned.Outcome.Should().Be(
+            NyxIdChatTransitionOutcome.Accepted,
+            "the initial exact-service plan should not be rejected: {0} {1}",
+            planned.ReasonCode,
+            planned.SafeMessage);
         planned.State.ActiveTask.Gate.Status.Should().Be(NyxIdChatPlanGateStatus.Pending);
         var firstConfirmation = NyxIdChatPlanGateDecisions.Resolve(
             planned.State,
@@ -950,19 +958,14 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
         ReadHttpMethod = "GET",
         ReadPathTemplate = "/open-apis/approval/v4/instances/{instance_id}",
         CheckName = "lark_approval_instance_exists_by_caller_uuid",
-        Match = AgentToolReadBackMatch.Exists,
+        Match = AgentToolReadBackMatch.Equals,
         JsonPointer = "/data/instance_code",
         EffectResultIdentityJsonPointer = "/data/instance_code",
-        ArgumentBindings =
-        [
-            new NyxIdAssistantReadBackArgumentBinding
-            {
-                EffectLocation = NyxIdAssistantOperationArgumentLocation.Body,
-                EffectArgumentName = "uuid",
-                ReadLocation = NyxIdAssistantOperationArgumentLocation.Path,
-                ReadArgumentName = "instance_id",
-            },
-        ],
+        ProviderResourceArgument = new NyxIdAssistantReadBackProviderResourceArgument
+        {
+            ReadLocation = NyxIdAssistantOperationArgumentLocation.Path,
+            ReadArgumentName = "instance_id",
+        },
         NotAppliedEvidence = new NyxIdAssistantReadBackNotAppliedEvidence
         {
             JsonPointer = "/code",
@@ -1612,11 +1615,11 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
         ServiceSlug = "lark",
         PublishedEndpoint = new AgentToolPublishedEndpointIdentityPayload
         {
-            EndpointId = "approval.create",
+            EndpointId = "lark-create-approval",
         },
         AuthorizationBasis = AgentToolOperationAuthorizationBasisPayload.PublishedContract,
         HttpMethod = "POST",
-        PathTemplate = "/approvals",
+        PathTemplate = "/open-apis/approval/v4/instances",
         ContractDigest = new string('b', 64),
         CatalogDigest = $"sha256:{new string('a', 64)}",
         ExecutionPolicy = new AgentToolOperationExecutionPolicyPayload
@@ -1634,11 +1637,11 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
                 ServiceSlug = "lark",
                 PublishedEndpoint = new AgentToolPublishedEndpointIdentityPayload
                 {
-                    EndpointId = "approval.list",
+                    EndpointId = "lark-get-approval",
                 },
                 AuthorizationBasis = AgentToolOperationAuthorizationBasisPayload.PublishedContract,
                 HttpMethod = "GET",
-                PathTemplate = "/approvals",
+                PathTemplate = "/open-apis/approval/v4/instances/{instance_id}",
                 ContractDigest = new string('c', 64),
                 CatalogDigest = $"sha256:{new string('a', 64)}",
                 ExecutionPolicy = new AgentToolOperationExecutionPolicyPayload
@@ -1648,16 +1651,34 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
                     EnforcementOwner = AgentToolOperationEnforcementOwnerPayload.Aevatar,
                     AllowedExecutionModes = { AgentToolOperationExecutionModePayload.Interactive },
                 },
+                Parameters =
+                {
+                    new AgentToolOperationParameterPayload
+                    {
+                        Name = "instance_id",
+                        Location = AgentToolOperationParameterLocationPayload.Path,
+                        Required = true,
+                        Schema = new AgentToolOperationValueSchemaPayload
+                        {
+                            Kind = AgentToolOperationValueKindPayload.String,
+                        },
+                    },
+                },
             },
-            Arguments = JsonParser.Default.Parse<Struct>("{\"approvalCode\":\"canary\"}"),
+            Arguments = new Struct(),
             Assertion = new AgentToolReadBackAssertionPayload
             {
-                Match = AgentToolReadBackMatchPayload.ArrayContainsEquals,
-                JsonPointer = "/items",
-                ElementJsonPointer = "/approvalCode",
-                ExpectedValue = Google.Protobuf.WellKnownTypes.Value.ForString("canary"),
+                Match = AgentToolReadBackMatchPayload.Equals,
+                JsonPointer = "/data/instance_code",
+                ExpectedValueSource = AgentToolReadBackExpectedValueSourcePayload.ProviderResourceId,
+            },
+            ProviderResourceArgument = new AgentToolReadBackProviderResourceArgumentPayload
+            {
+                Location = AgentToolOperationParameterLocationPayload.Path,
+                ArgumentName = "instance_id",
             },
             CheckName = "approval_exists",
+            EffectResultIdentityJsonPointer = "/data/instance_code",
         },
     };
 }

@@ -5,7 +5,8 @@ namespace Aevatar.GAgents.NyxidChat;
 internal sealed record NyxIdChatConditionProposal(
     string SourceInputRequestId,
     long ObservedValue,
-    string GuardedToolName);
+    string GuardedToolName,
+    string? SourceEvidenceId);
 
 internal static class NyxIdChatConditionEvaluateContract
 {
@@ -29,7 +30,8 @@ internal static class NyxIdChatConditionEvaluateContract
             var root = document.RootElement;
             if (root.ValueKind != JsonValueKind.Object ||
                 root.EnumerateObject().Any(static property => property.Name is not
-                    ("source_input_request_id" or "observed_value" or "guarded_tool_name")) ||
+                    ("source_input_request_id" or "observed_value" or "guarded_tool_name" or
+                    "source_evidence_id")) ||
                 !root.TryGetProperty("source_input_request_id", out var source) ||
                 source.ValueKind != JsonValueKind.String ||
                 string.IsNullOrWhiteSpace(source.GetString()) ||
@@ -49,7 +51,12 @@ internal static class NyxIdChatConditionEvaluateContract
             proposal = new NyxIdChatConditionProposal(
                 source.GetString()!.Trim(),
                 observedValue,
-                guardedTool.GetString()!.Trim());
+                guardedTool.GetString()!.Trim(),
+                root.TryGetProperty("source_evidence_id", out var sourceEvidence) &&
+                sourceEvidence.ValueKind == JsonValueKind.String &&
+                !string.IsNullOrWhiteSpace(sourceEvidence.GetString())
+                    ? sourceEvidence.GetString()!.Trim()
+                    : null);
             return true;
         }
         catch (JsonException)

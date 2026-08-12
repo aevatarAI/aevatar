@@ -226,6 +226,20 @@ message AgentToolRequestIdentityPayload {
   string idempotency_key = 3;
   int64 issued_at_unix_ms = 4;
   string operation_id = 5;
+  int64 operation_generation = 6;
+}
+
+message NyxIdExactServiceApprovalAuthority {
+  string request_id = 1;
+  string user_service_id = 2;
+  string endpoint_id = 3;
+  string catalog_digest = 4;
+  string endpoint_contract_digest = 5;
+  string operation_digest = 6;
+  string operation_id = 7;
+  int64 operation_generation = 8;
+  string idempotency_key = 9;
+  google.protobuf.Timestamp expires_at = 10;
 }
 
 // Recovery-safe subset of tool execution context. Credential material and
@@ -443,12 +457,17 @@ message NyxIdAuthorizationRequiredEvent {
   optional string user_service_id = 6;
   repeated string requested_scopes = 7;
   NyxIdKeyCreateActionRequirement key_create = 8;
+  NyxIdKeyRotateActionRequirement key_rotate = 9;
 }
 
 message NyxIdKeyCreateActionRequirement {
   string name = 1;
   string platform = 2;
   repeated string allowed_service_ids = 3;
+}
+
+message NyxIdKeyRotateActionRequirement {
+  string key_id = 1;
 }
 
 message AgentToolReceipt {
@@ -478,6 +497,7 @@ message AgentToolReceipt {
   NyxIdApprovalDecisionMode nyx_id_approval_decision_mode = 20;
   AgentToolReceiptMutationStage mutation_stage = 21;
   NyxIdApprovalTerminalOutcome nyx_id_approval_terminal_outcome = 22;
+  NyxIdExactServiceApprovalAuthority exact_service_approval = 23;
 }
 
 message ManagedWorkflowHandoffReceipt {

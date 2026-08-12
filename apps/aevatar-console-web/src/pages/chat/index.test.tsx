@@ -160,6 +160,111 @@ function taskPlan(
   };
 }
 
+function reimbursementDomain() {
+  return {
+    reimbursement: {
+      evidenceId: 'reimbursement-evidence-alpha',
+      sourceInputRequestId: 'input-reimbursement-alpha',
+      expenseCategory: 'travel',
+      costCenter: 'cc-42',
+      reimbursementCurrencyInstruction: 'Submit in SGD',
+      guardedToolName: 'approval_instance_create',
+      committedAt: '2026-08-11T12:00:00Z',
+      sourceInvoices: [
+        {
+          sourceOrdinal: 1,
+          vendor: 'Northwind Air',
+          invoiceNumber: 'INV-001',
+          invoiceDate: '2026-08-01',
+          amount: {
+            currencyCode: 'SGD',
+            minorUnits: 12500,
+            fractionDigits: 2,
+          },
+        },
+        {
+          sourceOrdinal: 2,
+          vendor: 'Contoso Hotel',
+          invoiceNumber: 'INV-002',
+          invoiceDate: '2026-08-02',
+          amount: {
+            currencyCode: 'SGD',
+            minorUnits: 24000,
+            fractionDigits: 2,
+          },
+        },
+        {
+          sourceOrdinal: 3,
+          vendor: 'Northwind Air',
+          invoiceNumber: 'INV-001',
+          invoiceDate: '2026-08-01',
+          amount: {
+            currencyCode: 'SGD',
+            minorUnits: 12500,
+            fractionDigits: 2,
+          },
+        },
+      ],
+      retainedSourceOrdinals: [1, 2],
+      duplicateInvoices: [
+        { duplicateSourceOrdinal: 3, retainedSourceOrdinal: 1 },
+      ],
+    },
+  };
+}
+
+function candidateDomain(totalScore: number, candidateName: string) {
+  return {
+    candidateScreening: {
+      evidenceId: `candidate-evidence-${candidateName.toLowerCase().replaceAll(' ', '-')}`,
+      sourceInputRequestId: 'input-threshold',
+      candidateName,
+      roleTitle: 'Platform Engineer',
+      rubric: [
+        { criterionId: 'systems', title: 'Systems', maximumPoints: 60 },
+        { criterionId: 'delivery', title: 'Delivery', maximumPoints: 40 },
+      ],
+      scores: [
+        {
+          criterionId: 'systems',
+          awardedPoints: totalScore - 32,
+          evidence: 'Designed actor protocols.',
+        },
+        {
+          criterionId: 'delivery',
+          awardedPoints: 32,
+          evidence: 'Shipped production changes.',
+        },
+      ],
+      totalScore,
+      trackerTable: 'Candidate Tracker',
+      trackerTableId: 'tbl-candidates',
+      stage: 'accepted',
+      guardedToolName: 'bitable_record_create',
+      committedAt: '2026-08-11T13:00:00Z',
+    },
+  };
+}
+
+function numericCondition(observedValue: number, outcome: 'true' | 'false') {
+  return {
+    condition: {
+      condition: {
+        conditionId: `condition-${outcome}`,
+        sourceInputRequestId: 'input-threshold',
+        suggestedThreshold: 70,
+        effectiveThreshold: 75,
+        thresholdOrigin: 'user_override',
+        observedValue,
+        comparison: 'gte',
+        outcome,
+        evaluatedAt: '2026-08-11T13:01:00Z',
+        guardedToolName: 'bitable_record_create',
+      },
+    },
+  };
+}
+
 function sseResponse(frames: readonly unknown[]): Response {
   const encoder = new TextEncoder();
   return {
@@ -897,21 +1002,52 @@ describe('ChatPage canonical NyxID Assistant', () => {
     (chatHistoryApi.listConversationMetas as jest.Mock).mockResolvedValue([
       serverConversation,
     ]);
-    const original = taskStep('step-original', {
-      description: 'Compare original candidates',
-    });
-    const completedEvidence = taskStep('step-completed-search', {
-      order: 2,
-      kind: 'web',
+    const completedInput = taskStep('step-uc2-gaps', {
+      kind: 'input',
       status: 'done',
-      description: 'Completed search evidence: Marina Bay options',
-      source: { web: {} },
+      description: 'Answer logistics and agree to research-only scope',
+      source: { input: { requestId: 'input-uc2-gaps' } },
       externalEffect: 'not_applied',
       availableActions: undefined,
       operation: null,
     });
+    const original = taskStep('step-original', {
+      order: 3,
+      description: 'Compare original candidates',
+    });
+    const completedEvidence = taskStep('step-uc2-search', {
+      order: 2,
+      status: 'done',
+      description: 'Aevatar web_search found the candidate set',
+      source: { tool: { toolName: 'web_search' } },
+      externalEffect: 'not_applied',
+      availableActions: undefined,
+      operation: {
+        conversationActorId: 'conversation-alpha',
+        turnId: 'turn-alpha',
+        taskId: 'task-alpha',
+        stepId: 'step-uc2-search',
+        operationId: 'operation-uc2-search',
+        operationGeneration: 1,
+        kind: 'tool',
+        phase: 'succeeded',
+      },
+      substeps: [
+        {
+          substepId: 'prepare-operation',
+          title: 'Build search query',
+          status: 'done',
+        },
+        {
+          substepId: 'execute-operation',
+          title: 'Search current web results',
+          status: 'done',
+        },
+      ],
+    });
     const steered = taskPlan(
       [
+        completedInput,
         completedEvidence,
         {
           ...original,
@@ -933,7 +1069,7 @@ describe('ChatPage canonical NyxID Assistant', () => {
           {
             planRevision: 1,
             revisionCause: 'initial',
-            addedStepIds: ['step-original', 'step-completed-search'],
+            addedStepIds: ['step-uc2-gaps', 'step-original', 'step-uc2-search'],
             cancelledStepIds: [],
           },
           {
@@ -946,6 +1082,13 @@ describe('ChatPage canonical NyxID Assistant', () => {
         title: 'Dinner research',
       },
     );
+    const stopReceipt =
+      'Stopped. Partial-work receipt: 2 completed steps were retained. ' +
+      'Retained: Answer logistics and agree to research-only scope; ' +
+      'Aevatar web_search found the candidate set. ' +
+      'Unfinished work was fenced; the in-flight operation could not be proven cancelled. ' +
+      'Fenced: Compare for 7 PM and a private room. No external effect was applied. ' +
+      'Late evidence cannot advance this stopped task.';
     const stopped = {
       ...steered,
       status: 'stopped',
@@ -954,7 +1097,6 @@ describe('ChatPage canonical NyxID Assistant', () => {
         ...step,
         status: step.status === 'running' ? 'cancelled' : step.status,
         availableActions: undefined,
-        operation: null,
       })),
     };
     const stoppedState = currentState(
@@ -963,38 +1105,47 @@ describe('ChatPage canonical NyxID Assistant', () => {
           turnId: 'turn-alpha',
           taskId: 'task-alpha',
           status: 'stopped',
-          safeMessage: 'Partial research preserved.',
+          safeMessage: stopReceipt,
         },
         activeTask: stopped,
-        latestControlResult: { outcome: 'stopped' },
+        controlFence: {
+          kind: 'stop',
+          requestId: 'stop-uc2-1',
+          clientRequestId: 'client-stop-uc2-1',
+          turnId: 'turn-alpha',
+          taskId: 'task-alpha',
+          outcome: 'uncancellable',
+          safeMessage: stopReceipt,
+        },
       },
       12,
     );
-    const newGoalStep = taskStep('step-new-search', {
+    const newGoalStep = taskStep('step-uc2b-search', {
       description: 'Find Friday dinner options',
+      source: { tool: { toolName: 'web_search' } },
       operation: {
         conversationActorId: 'conversation-alpha',
-        turnId: 'turn-beta',
-        taskId: 'task-beta',
-        stepId: 'step-new-search',
-        operationId: 'operation-new-search',
+        turnId: 'turn-uc2b-1',
+        taskId: 'task-uc2b',
+        stepId: 'step-uc2b-search',
+        operationId: 'operation-uc2b-search',
         operationGeneration: 1,
-        kind: 'web',
+        kind: 'tool',
         phase: 'running',
       },
     });
     const newGoalPlan = taskPlan([newGoalStep], {
-      taskId: 'task-beta',
-      turnId: 'turn-beta',
-      planId: 'plan-beta',
+      taskId: 'task-uc2b',
+      turnId: 'turn-uc2b-1',
+      planId: 'plan-uc2b',
       title: 'Friday dinner research',
     });
     const newGoalState = {
       ...currentState(
         {
           activeTurn: {
-            turnId: 'turn-beta',
-            taskId: 'task-beta',
+            turnId: 'turn-uc2b-1',
+            taskId: 'task-uc2b',
             status: 'active',
           },
           latestTurn: null,
@@ -1003,19 +1154,21 @@ describe('ChatPage canonical NyxID Assistant', () => {
               turnId: 'turn-alpha',
               taskId: 'task-alpha',
               status: 'stopped',
-              safeMessage: 'Partial research preserved.',
+              safeMessage: stopReceipt,
             },
           ],
           activeTask: newGoalPlan,
         },
         13,
       ),
-      turnId: 'turn-beta',
+      turnId: 'turn-uc2b-1',
     };
     (chatHistoryApi.loadConversationState as jest.Mock)
       .mockResolvedValueOnce(
         activeTaskState(
-          taskPlan([original, completedEvidence], { title: 'Dinner research' }),
+          taskPlan([completedInput, original, completedEvidence], {
+            title: 'Dinner research',
+          }),
           10,
         ),
       )
@@ -1031,7 +1184,7 @@ describe('ChatPage canonical NyxID Assistant', () => {
             ? completedStream(
                 'Friday dinner research started.',
                 'conversation-alpha',
-                'turn-beta',
+                'turn-uc2b-1',
                 [
                   {
                     type: 'CUSTOM',
@@ -1073,16 +1226,29 @@ describe('ChatPage canonical NyxID Assistant', () => {
       within(taskRow('Compare original candidates')).getByText('cancelled'),
     ).toBeInTheDocument();
     expect(
-      within(
-        taskRow('Completed search evidence: Marina Bay options'),
-      ).getByText('done'),
+      within(taskRow('Aevatar web_search found the candidate set')).getByText(
+        'done',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(taskRow('Aevatar web_search found the candidate set')).getByText(
+        'web_search',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(taskRow('Aevatar web_search found the candidate set')).getByText(
+        'Build search query · done',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(taskRow('Aevatar web_search found the candidate set')).getByText(
+        'Search current web results · done',
+      ),
     ).toBeInTheDocument();
     const stop = screen.getByRole('button', { name: 'Stop task' });
     await waitFor(() => expect(stop).toBeEnabled());
     fireEvent.click(stop);
-    expect(
-      await screen.findByText('Partial research preserved.'),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(stopReceipt)).toBeInTheDocument();
     expect(requestBodies()).toEqual([
       {
         type: 'task.steer',
@@ -1106,14 +1272,12 @@ describe('ChatPage canonical NyxID Assistant', () => {
     firstView.unmount();
     renderWithQueryClient(<ChatPage />);
     await openCanonicalConversation();
-    expect(
-      await screen.findByText('Partial research preserved.'),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(stopReceipt)).toBeInTheDocument();
     expect(screen.getAllByText('Task result')).toHaveLength(1);
     expect(
-      within(
-        taskRow('Completed search evidence: Marina Bay options'),
-      ).getByText('done'),
+      within(taskRow('Aevatar web_search found the candidate set')).getByText(
+        'done',
+      ),
     ).toBeInTheDocument();
     expect(
       screen.queryByRole('button', { name: 'Stop task' }),
@@ -1127,8 +1291,8 @@ describe('ChatPage canonical NyxID Assistant', () => {
     expect(newGoalState).toEqual(
       expect.objectContaining({
         snapshot: expect.objectContaining({
-          activeTurn: expect.objectContaining({ taskId: 'task-beta' }),
-          activeTask: expect.objectContaining({ taskId: 'task-beta' }),
+          activeTurn: expect.objectContaining({ taskId: 'task-uc2b' }),
+          activeTask: expect.objectContaining({ taskId: 'task-uc2b' }),
         }),
       }),
     );
@@ -1555,6 +1719,90 @@ describe('ChatPage canonical NyxID Assistant', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('UC3 renders normalized invoices and the exact verified approval instance after reload', async () => {
+    (chatHistoryApi.listConversationMetas as jest.Mock).mockResolvedValue([
+      serverConversation,
+    ]);
+    const terminalPlan = taskPlan(
+      [
+        taskStep('step-write', {
+          status: 'done',
+          description: 'Submit two unique reimbursement invoices',
+          source: {
+            tool: {
+              toolName: 'approval_instance_create',
+              serviceSlug: 'approval-service',
+              serviceId: 'usvc-approval-alpha',
+            },
+          },
+          mayChangeExternalState: true,
+          externalEffect: 'confirmed',
+          availableActions: undefined,
+          operation: {
+            conversationActorId: 'conversation-alpha',
+            turnId: 'turn-alpha',
+            taskId: 'task-alpha',
+            stepId: 'step-write',
+            operationId: 'operation-reimbursement-write',
+            operationGeneration: 2,
+            kind: 'tool',
+            phase: 'succeeded',
+          },
+        }),
+        taskStep('step-verify', {
+          order: 2,
+          kind: 'postcondition',
+          status: 'done',
+          description: 'Read the exact approval instance back',
+          source: { postcondition: { check: 'approval.instance.exists' } },
+          externalEffect: 'confirmed',
+          availableActions: undefined,
+          operation: null,
+        }),
+      ],
+      {
+        schemaVersion: 6,
+        status: 'succeeded',
+        title: 'Reimbursement complete',
+        domain: reimbursementDomain(),
+        artifact: {
+          checkName: 'approval.instance.exists',
+          verifiedAt: '2026-08-11T12:03:00Z',
+          reimbursement: {
+            providerInstanceId: 'approval-instance-alpha',
+            costCenter: 'cc-42',
+            retainedItemCount: 2,
+            duplicateItemCount: 1,
+          },
+        },
+      },
+    );
+    (chatHistoryApi.loadConversationState as jest.Mock).mockResolvedValue(
+      currentState({ activeTask: terminalPlan }, 48),
+    );
+
+    renderWithQueryClient(<ChatPage />);
+    await openCanonicalConversation();
+
+    const domain = await screen.findByRole('region', {
+      name: 'Committed domain evidence',
+    });
+    expect(domain).toHaveTextContent('3 source invoices');
+    expect(domain).toHaveTextContent('2 retained');
+    expect(domain).toHaveTextContent('1 duplicate');
+    expect(domain).toHaveTextContent('duplicate #3 = retained #1');
+    expect(domain).toHaveTextContent('Northwind Air');
+    expect(domain).toHaveTextContent('INV-001');
+    expect(domain).toHaveTextContent('SGD 125.00');
+    expect(screen.getByText(/generation 2/)).toBeInTheDocument();
+    const artifact = screen.getByRole('region', {
+      name: 'Verified artifact',
+    });
+    expect(artifact).toHaveTextContent('approval.instance.exists');
+    expect(artifact).toHaveTextContent('approval-instance-alpha');
+    expect(artifact).toHaveTextContent('cc-42');
+  });
+
   it('UC4 renders a below-threshold conditional write as skipped', async () => {
     (chatHistoryApi.listConversationMetas as jest.Mock).mockResolvedValue([
       serverConversation,
@@ -1572,10 +1820,10 @@ describe('ChatPage canonical NyxID Assistant', () => {
         }),
         taskStep('step-condition', {
           order: 2,
-          kind: 'web',
+          kind: 'condition',
           status: 'done',
           description: 'Candidate score 72 is below 75',
-          source: { web: {} },
+          source: numericCondition(72, 'false'),
           externalEffect: 'not_applied',
           availableActions: undefined,
           operation: null,
@@ -1584,25 +1832,36 @@ describe('ChatPage canonical NyxID Assistant', () => {
           order: 3,
           status: 'skipped',
           description: 'Write accepted candidate',
+          source: { tool: { toolName: 'bitable_record_create' } },
           mayChangeExternalState: true,
           externalEffect: 'not_applied',
           availableActions: undefined,
           operation: null,
+          guard: {
+            conditionStepId: 'step-condition',
+            requiredOutcome: 'true',
+          },
         }),
         taskStep('step-verify', {
           order: 4,
           kind: 'postcondition',
           status: 'skipped',
           description: 'Read candidate row back',
-          source: { postcondition: { check: 'bitable.row.exists' } },
+          source: { postcondition: { check: 'bitable.record.exists' } },
           externalEffect: 'not_applied',
           availableActions: undefined,
           operation: null,
+          guard: {
+            conditionStepId: 'step-condition',
+            requiredOutcome: 'true',
+          },
         }),
       ],
       {
+        schemaVersion: 6,
         status: 'succeeded',
         title: 'Candidate screening at 75',
+        domain: candidateDomain(72, 'Candidate Below'),
       },
     );
     (chatHistoryApi.loadConversationState as jest.Mock).mockResolvedValue(
@@ -1630,7 +1889,22 @@ describe('ChatPage canonical NyxID Assistant', () => {
     expect(write.getByText('skipped')).toBeInTheDocument();
     expect(write.getByText('not_applied')).toBeInTheDocument();
     expect(
-      screen.queryByText('Verified against bitable.row.exists'),
+      screen.getByRole('region', { name: 'Committed condition facts' }),
+    ).toHaveTextContent('72 >= 75');
+    expect(
+      screen.getByRole('region', { name: 'Committed condition facts' }),
+    ).toHaveTextContent('false');
+    expect(
+      screen.getByRole('region', { name: 'Committed domain evidence' }),
+    ).toHaveTextContent('score 72');
+    expect(
+      screen.getByRole('region', { name: 'Committed domain evidence' }),
+    ).toHaveTextContent('Candidate Below');
+    expect(
+      screen.queryByText('Verified against bitable.record.exists'),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('region', { name: 'Verified artifact' }),
     ).not.toBeInTheDocument();
     expect(
       screen.queryByRole('region', { name: 'NyxID approval observation' }),
@@ -1654,10 +1928,10 @@ describe('ChatPage canonical NyxID Assistant', () => {
         }),
         taskStep('step-condition-true', {
           order: 2,
-          kind: 'web',
+          kind: 'condition',
           status: 'done',
           description: 'Conditional score at least 75 executed',
-          source: { web: {} },
+          source: numericCondition(80, 'true'),
           externalEffect: 'not_applied',
           availableActions: undefined,
           operation: null,
@@ -1666,33 +1940,33 @@ describe('ChatPage canonical NyxID Assistant', () => {
           order: 3,
           status: 'done',
           description: 'Write accepted candidate',
+          source: { tool: { toolName: 'bitable_record_create' } },
           mayChangeExternalState: true,
           externalEffect: 'confirmed',
           availableActions: undefined,
           operation: null,
-        }),
-        taskStep('step-condition-false', {
-          order: 4,
-          kind: 'web',
-          status: 'skipped',
-          description: 'Conditional score below 75 skipped',
-          source: { web: {} },
-          externalEffect: 'not_applied',
-          availableActions: undefined,
-          operation: null,
+          guard: {
+            conditionStepId: 'step-condition-true',
+            requiredOutcome: 'true',
+          },
         }),
         taskStep('step-verify', {
-          order: 5,
+          order: 4,
           kind: 'postcondition',
           status: 'done',
           description: 'Read candidate row back',
-          source: { postcondition: { check: 'bitable.row.exists' } },
+          source: { postcondition: { check: 'bitable.record.exists' } },
           externalEffect: 'confirmed',
           availableActions: undefined,
           operation: null,
+          guard: {
+            conditionStepId: 'step-condition-true',
+            requiredOutcome: 'true',
+          },
         }),
       ],
       {
+        schemaVersion: 6,
         status: 'succeeded',
         planRevision: 2,
         planRevisions: [
@@ -1705,16 +1979,25 @@ describe('ChatPage canonical NyxID Assistant', () => {
           {
             planRevision: 2,
             revisionCause: 'scope_resolution',
-            addedStepIds: [
-              'step-condition-true',
-              'step-write',
-              'step-condition-false',
-              'step-verify',
-            ],
+            addedStepIds: ['step-condition-true', 'step-write', 'step-verify'],
             cancelledStepIds: [],
           },
         ],
         title: 'Candidate screening at 75',
+        domain: candidateDomain(80, 'Candidate Alpha'),
+        artifact: {
+          checkName: 'bitable.record.exists',
+          verifiedAt: '2026-08-11T13:03:00Z',
+          candidateTracker: {
+            providerRecordId: 'rec-candidate-alpha',
+            candidateName: 'Candidate Alpha',
+            score: 80,
+            threshold: 75,
+            trackerTable: 'Candidate Tracker',
+            trackerTableId: 'tbl-candidates',
+            stage: 'accepted',
+          },
+        },
       },
     );
     const waitingPlan = taskPlan(
@@ -1739,10 +2022,7 @@ describe('ChatPage canonical NyxID Assistant', () => {
             },
           };
         }
-        if (
-          step.stepId === 'step-condition-false' ||
-          step.stepId === 'step-verify'
-        ) {
+        if (step.stepId === 'step-verify') {
           return {
             ...step,
             status: 'planned',
@@ -1752,9 +2032,11 @@ describe('ChatPage canonical NyxID Assistant', () => {
         return step;
       }),
       {
+        schemaVersion: 6,
         planRevision: 2,
         planRevisions: finalPlan.planRevisions,
         title: 'Candidate screening at 75',
+        domain: candidateDomain(80, 'Candidate Alpha'),
       },
     );
     const waitingState = activeTaskState(waitingPlan, 31, {
@@ -1793,9 +2075,11 @@ describe('ChatPage canonical NyxID Assistant', () => {
           : step,
       ),
       {
+        schemaVersion: 6,
         planRevision: 2,
         planRevisions: finalPlan.planRevisions,
         title: 'Candidate screening at 75',
+        domain: candidateDomain(80, 'Candidate Alpha'),
       },
     );
     const returnedState = activeTaskState(returnedPlan, 32, {
@@ -1981,13 +2265,29 @@ describe('ChatPage canonical NyxID Assistant', () => {
       ),
     ).toBeInTheDocument();
     expect(
-      within(taskRow('Conditional score below 75 skipped')).getByText(
-        'skipped',
-      ),
-    ).toBeInTheDocument();
+      screen.getByRole('region', { name: 'Committed condition facts' }),
+    ).toHaveTextContent('80 >= 75');
     expect(
-      screen.getByText('Verified against bitable.row.exists'),
+      screen.getByRole('region', { name: 'Committed condition facts' }),
+    ).toHaveTextContent('user_override');
+    expect(
+      screen.getByText('Verified against bitable.record.exists'),
     ).toBeInTheDocument();
+    const candidateEvidence = screen.getByRole('region', {
+      name: 'Committed domain evidence',
+    });
+    expect(candidateEvidence).toHaveTextContent('Candidate Alpha');
+    expect(candidateEvidence).toHaveTextContent('Systems: 48/60');
+    expect(candidateEvidence).toHaveTextContent('score 80');
+    const candidateArtifact = screen.getByRole('region', {
+      name: 'Verified artifact',
+    });
+    expect(candidateArtifact).toHaveTextContent('rec-candidate-alpha');
+    expect(candidateArtifact).toHaveTextContent('score 80');
+    expect(candidateArtifact).toHaveTextContent('threshold 75');
+    expect(candidateArtifact).toHaveTextContent(
+      'Candidate Tracker · tbl-candidates',
+    );
     expect(screen.getAllByText('Task result')).toHaveLength(1);
     const terminalApprovalObservation = within(
       taskRow('Write accepted candidate'),

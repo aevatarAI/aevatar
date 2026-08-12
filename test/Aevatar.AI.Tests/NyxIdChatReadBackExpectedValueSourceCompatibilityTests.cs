@@ -12,6 +12,46 @@ namespace Aevatar.AI.Tests;
 public sealed class NyxIdChatReadBackExpectedValueSourceCompatibilityTests
 {
     [Theory]
+    [InlineData("", true)]
+    [InlineData("/data/message_id", true)]
+    [InlineData("data/message_id", false)]
+    [InlineData("/data/~2message_id", false)]
+    [InlineData("/data/message_id~", false)]
+    public void EffectResultIdentityJsonPointer_ShouldAcceptLegacyEmptyOrValidRfc6901Only(
+        string pointer,
+        bool expected)
+    {
+        var admission = ParseWireAdmission(1, false);
+        admission.ReadBack.EffectResultIdentityJsonPointer = pointer;
+
+        NyxIdChatOperationAdmissionPolicy.IsValidReadBack(
+                admission.ReadBack,
+                admission)
+            .Should().Be(expected);
+    }
+
+    [Fact]
+    public void EffectResultIdentityJsonPointer_WithFrozenExpectedValue_ShouldFailClosed()
+    {
+        var admission = ParseWireAdmission(1, true);
+        admission.ReadBack.EffectResultIdentityJsonPointer = "/data/message_id";
+
+        NyxIdChatOperationAdmissionPolicy.IsValidReadBack(
+                admission.ReadBack,
+                admission)
+            .Should().BeFalse();
+    }
+
+    [Fact]
+    public void ProviderResourceIdentityExtractor_ShouldResolveEscapedPointerAndTrimIdentity()
+    {
+        NyxIdEffectResultIdentityExtractor.ExtractAtPointer(
+                """{"data":{"message/id":"  message-alpha  "}}""",
+                "/data/message~1id")
+            .Should().Be("message-alpha");
+    }
+
+    [Theory]
     [InlineData(0, true, AgentToolReadBackExpectedValueSource.FrozenValue, 1)]
     [InlineData(1, false, AgentToolReadBackExpectedValueSource.ProviderResourceId, 2)]
     [InlineData(1, true, AgentToolReadBackExpectedValueSource.FrozenValue, 1)]

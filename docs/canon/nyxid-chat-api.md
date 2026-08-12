@@ -193,11 +193,18 @@ typed `source`, effect evidence, actor-computed `availableActions`, and its
 actor-authored update time. Planning provenance is typed as `addedBy`,
 `addedInPlanRevision`, `cancelledInPlanRevision`, `dependsOn`, optional
 `estimate`, and typed `substeps`. The closed source union
-is `llm`, `tool`, `browserAction`, `postcondition`, `input`, `approval`, or the
-reserved `web` source. Tool source keeps `toolName`, exact `serviceSlug`, exact
-`serviceId`, and optional producer-authored `readinessCapabilityId` separate.
-Postcondition source carries `actionRequestId` plus the stable `check`; approval
-source carries the exact `approvalRequestId`.
+is `llm`, `tool`, `browserAction`, `postcondition`, `input`, `approval`,
+`condition`, or the reserved `web` source. Tool source keeps `toolName`, exact
+`serviceSlug`, exact `serviceId`, and optional producer-authored
+`readinessCapabilityId` separate. Postcondition source carries `actionRequestId`
+plus the stable `check`; approval source carries the exact `approvalRequestId`.
+Condition source carries the committed numeric threshold evaluation — effective
+threshold, threshold origin, observed value, comparison, and outcome — that a
+guarded step depends on through its typed `guard`.
+
+Every renderer must decode the complete union. A client that omits a member
+cannot render any task that reaches it, on the live frame path and the state
+path alike, so adding a member to the union is a client-visible change.
 
 `planRevision` identifies the frozen semantic plan, not a conversation turn or
 status transition. Revision 1 has cause `initial`; later records use exactly one
@@ -407,7 +414,7 @@ Example stop request:
 
 The controller commits a stop or steering fence before any successor decision. Once accepted, no later old-plan LLM round, tool, retry, or step may start. Stop outcomes are typed: `accepted`, `rejected`, `already_terminal`, or `uncancellable`. Cancellation is best effort. A late LLM result is discarded. Exact late tool evidence may refine `external_effect`, but it cannot remove the fence, change the stopped terminal, or authorize a successor. An unprovable effect-capable operation becomes `uncertain / may_have_changed`.
 
-Steering is serialized by the actor. If an operation is physically in flight, the controller may commit `accepted_for_later`; the server starts the new `continuationTurnId` only after a safe checkpoint. Completed steps and prior effect evidence are preserved and never re-executed.
+Steering is serialized by the actor. If an operation is physically in flight, the controller may commit `accepted_for_later`; the server starts the new `continuationTurnId` only after a safe checkpoint. Completed steps, prior effect evidence, and the typed answers of committed input resolutions are carried into the server-authored transient steering context, so the continuation does not ask the owner to restate already accepted facts. Completed work is never re-executed.
 
 Retry and skip validate the body `conversationId`, `turnId`, `taskId`, `stepId`, expected generation, expected actor version, and current actor-computed availability. Replaying the same request and content is idempotent. Reusing an identity with different content fails closed.
 
@@ -470,7 +477,7 @@ The caller resolves input through the same public command surface:
 
 An accepted dispatch returns `202 Accepted` with `requestId`, `commandId`, `correlationId`, and `stateUrl`. This proves transport acceptance only. The first matching decision committed at the expected actor version wins and emits `nyxid.input.changed`; an exact duplicate is idempotent, while a stale version, unknown request, invalid option ID, or conflicting reuse cannot advance actor state. Acceptance completes the exact waiting input step, appends one LLM continuation step, injects the typed answer as the matching `ask_user` tool result, and resumes that exact transient turn session.
 
-The actor persists only the answer fingerprint and safe resolution facts. Raw free text, selected option IDs, fresh NyxID credentials, and the resulting tool message exist only in the transient continuation. If that turn capability was lost through passivation, or if the continuation cannot be accepted for dispatch, the operation fails closed and terminalizes the task; it is never left as an orphaned waiting or running step.
+The accepted typed answer is an owner-scoped, actor-owned durable input fact alongside its answer fingerprint. A selection persists only opaque `optionId` values and never copies presentation labels into the resolution. Accepted free text persists as the owner's submitted input because later same-task steering must preserve composite facts such as party size, dietary needs, and budget. Fresh NyxID credentials and the generated tool-result message remain transient and never enter actor state. The committed `nyxid.input.changed` payload and current-state `latestInputResolution` are projections of this same typed resolution, including the same `answer` union; reload does not reconstruct it from browser state. If the transient turn capability is lost through passivation, or if the continuation cannot be accepted for dispatch, the operation fails closed and terminalizes the task; it is never left as an orphaned waiting or running step.
 
 Pending approval carries the exact `requestId / turnId / taskId / stepId / toolName / askedAt` correlation plus `expiresAt`, the deadline the owning actor stamps when it parks the approval (`askedAt` plus the fixed local approval window), and a safe `presentation`:
 
@@ -503,11 +510,11 @@ Expiry always fails closed as denial, never as approval. At or after `expiresAt`
 
 Aevatar owns action intent, task correlation, safe parameter references, and the decision to continue. NyxID owns the browser card and journey, consent copy, auth modality, mutation, credential storage, and final authorization.
 
-Aevatar snapshots `GET /api/v1/assistant/actions` at startup and accepts schema version `4` with registry revision `nyxid-assistant-actions.v4`, `nyxid-assistant-actions.v5`, or `nyxid-assistant-actions.v6` during the bounded rollout transition. Revision v4 recognizes only `service.connect`. Revision v5 pins `service.connect`, `service.reauthorize`, `key.create`, and `key.rotate` but keeps the three new actions non-executable. Revision v6 is a new immutable least-scope contract containing `service.connect` and `key.create`; its `allowedServiceIds` schema requires 1 to 64 unique string identities. Aevatar validates that descriptor even while the action remains non-executable, so an incompatible registry fails startup before any action can be committed. Each revision validates every present descriptor's exact parameter schema and registry-owned risk/remember policy. The registry's `risk` and `remember_eligible` values are advisory inputs to Aevatar presentation/planning. The caller cannot submit or lower them, and NyxID recomputes and enforces authorization at execution time.
+Aevatar snapshots `GET /api/v1/assistant/actions` at startup and accepts schema version `4` with registry revision `nyxid-assistant-actions.v4`, `nyxid-assistant-actions.v5`, `nyxid-assistant-actions.v6`, or `nyxid-assistant-actions.v7` during the bounded rollout transition. Revision v4 recognizes only `service.connect`. Revision v5 pins `service.connect`, `service.reauthorize`, `key.create`, and `key.rotate` but keeps the three new actions non-executable. Revision v6 is the immutable least-scope contract containing `service.connect` and `key.create`; its `allowedServiceIds` schema requires 1 to 64 unique string identities. Revision v7 retains that least-scope contract and adds executable `key.rotate` with one exact predecessor key ID. Each revision validates every present descriptor's exact parameter schema and registry-owned risk/remember policy. The registry's `risk` and `remember_eligible` values are advisory inputs to Aevatar presentation/planning. The caller cannot submit or lower them, and NyxID recomputes and enforces authorization at execution time.
 
 This startup dependency is active only when `Aevatar:NyxId:AssistantActions:Enabled=true`. The reusable NyxIdChat composition default is `false`: a host that does not opt in does not call the registry endpoint and injects an immutable registry with no executable actions, so browser-action requests fail closed with `NYXID_ACTION_UNSUPPORTED` without preventing unrelated capabilities from starting. Mainnet explicitly enables assistant actions and therefore fails startup unless the registry fetch and schema/revision validation succeed.
 
-The typed registry recognizes closed action schemas, but executable handoff is narrower: an action must also have an Aevatar producer, wire mapper, and typed postcondition reader. Revisions v4 and v5 execute only `service.connect`. Revision v6 executes `service.connect` and least-scope `key.create`; the key-create parser rejects missing, empty, over-limit, or duplicate service identities, and the producer emits only exact nonempty owner-visible UserService IDs. The AG-UI mapper carries that typed request without key material, and completion becomes verified only after an owner-scoped exact-key read proves the safe key ID, `proxy`-only scope, the exact requested service set, `allow_all_services=false`, no node IDs, `allow_all_nodes=false`, and a creation timestamp no earlier than the committed action request. `service.reauthorize` and `key.rotate` remain fail closed at the executable gate. A browser completion report or permitted service access value alone is never effect proof. Catalog and custom connection are distinct variants; a boolean such as `custom: true` never changes the meaning of one shared field set.
+The typed registry recognizes closed action schemas, but executable handoff is narrower: an action must also have an Aevatar producer, wire mapper, and typed postcondition reader. Revisions v4 and v5 execute only `service.connect`. Revision v6 executes `service.connect` and least-scope `key.create`; the key-create parser rejects missing, empty, over-limit, or duplicate service identities, and the producer emits only exact nonempty owner-visible UserService IDs. Revision v7 additionally executes `key.rotate`: the producer first resolves one exact owner-visible active key, emits only its safe ID, and completion is verified only after an owner-scoped exact replacement-key read proves the reported successor ID, the requested predecessor ID, a positive authority version, and immutable `created_at` plus authoritative `updated_at` no earlier than the committed action request. A later update to an older successor cannot satisfy the immutable creation-time fence. The AG-UI mapper carries these typed requests without key material. `service.reauthorize` remains fail closed at the executable gate. A browser completion report or permitted service access value alone is never effect proof. Catalog and custom connection are distinct variants; a boolean such as `custom: true` never changes the meaning of one shared field set.
 
 ### Request wire frame
 
@@ -657,6 +664,12 @@ effect evidence, available actions, pending input, approval presentation,
 latest safe input/approval resolution facts, typed `pendingActions` and bounded
 `recentActions`, control fences, continuation admission, progress sequence,
 actor-authored attention, and actor version. It also exposes
+the exact safe typed parameters needed to resume browser actions after reload:
+`key.create` preserves `name`, `platform`, and the nonempty
+`allowedServiceIds`; `key.rotate` preserves only `keyId`. These values come
+from the committed actor state through the same current-state projection and
+never include full key material, credentials, or an alternate query-time
+reconstruction path. It also exposes
 `latestStepControlResult` and bounded `recentStepControlResults`; each result
 preserves the typed retry/skip kind, request and client identities, exact
 turn/task/step identity, expected and resulting operation generations,
@@ -664,8 +677,9 @@ expected state version, outcome, safe reason, command/correlation identities,
 and commit time. These fields are copied from the same actor current-state
 fact and are not reconstructed by the query adapter. A NyxID tool source may
 include the exact optional `readinessCapabilityId` described above. The
-snapshot excludes submitted answers and reasons, transient capabilities, raw
-LLM/tool results, credentials, and actor runtime internals.
+snapshot includes the latest accepted typed input answer as described above,
+but excludes approval reasons, transient capabilities, raw LLM/tool results,
+credentials, and actor runtime internals.
 
 The read model is eventually consistent and says so through its actor-derived `stateVersion`. Writes are monotonic overwrite: newer replaces older, byte-equivalent equal-version duplicates are idempotent, equal-version conflicts fail, and older versions cannot overwrite newer state. Query-time priming and replay are forbidden.
 

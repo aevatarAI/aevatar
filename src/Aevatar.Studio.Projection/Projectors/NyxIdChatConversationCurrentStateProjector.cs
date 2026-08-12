@@ -177,6 +177,8 @@ public sealed class NyxIdChatConversationCurrentStateProjector
             PlanRevision = task.PlanRevision,
             PlanRevisionHistoryStart = task.PlanRevisionHistoryStart,
             Title = task.Title,
+            Domain = ToDomain(task.Domain),
+            Artifact = ToArtifact(task.Artifact),
             Gate = task.Gate == null
                 ? null
                 : new NyxIdChatConversationPlanGateDocument
@@ -213,6 +215,129 @@ public sealed class NyxIdChatConversationCurrentStateProjector
         }));
         return document;
     }
+
+    private static NyxIdChatTaskDomainDocument? ToDomain(NyxIdChatTaskDomainState? domain) =>
+        domain?.DomainCase switch
+        {
+            NyxIdChatTaskDomainState.DomainOneofCase.Reimbursement =>
+                new NyxIdChatTaskDomainDocument
+                {
+                    Reimbursement = new NyxIdChatReimbursementEvidenceDocument
+                    {
+                        EvidenceId = domain.Reimbursement.EvidenceId,
+                        SourceInputRequestId = domain.Reimbursement.SourceInputRequestId,
+                        ExpenseCategory = domain.Reimbursement.ExpenseCategory,
+                        CostCenter = domain.Reimbursement.CostCenter,
+                        ReimbursementCurrencyInstruction =
+                            domain.Reimbursement.ReimbursementCurrencyInstruction,
+                        CommittedAt = domain.Reimbursement.CommittedAt?.Clone(),
+                        GuardedToolName = domain.Reimbursement.GuardedToolName,
+                        SourceInvoices =
+                        {
+                            domain.Reimbursement.SourceInvoices.Select(static invoice =>
+                                new NyxIdChatInvoiceEvidenceDocument
+                                {
+                                    SourceOrdinal = invoice.SourceOrdinal,
+                                    Vendor = invoice.Vendor,
+                                    InvoiceNumber = invoice.InvoiceNumber,
+                                    InvoiceDate = invoice.InvoiceDate,
+                                    Amount = invoice.Amount is null
+                                        ? null
+                                        : new NyxIdChatMoneyValueDocument
+                                        {
+                                            CurrencyCode = invoice.Amount.CurrencyCode,
+                                            MinorUnits = invoice.Amount.MinorUnits,
+                                            FractionDigits = invoice.Amount.FractionDigits,
+                                        },
+                                }),
+                        },
+                        RetainedSourceOrdinals = { domain.Reimbursement.RetainedSourceOrdinals },
+                        DuplicateInvoices =
+                        {
+                            domain.Reimbursement.DuplicateInvoices.Select(static duplicate =>
+                                new NyxIdChatInvoiceDuplicateEvidenceDocument
+                                {
+                                    DuplicateSourceOrdinal = duplicate.DuplicateSourceOrdinal,
+                                    RetainedSourceOrdinal = duplicate.RetainedSourceOrdinal,
+                                }),
+                        },
+                    },
+                },
+            NyxIdChatTaskDomainState.DomainOneofCase.CandidateScreening =>
+                new NyxIdChatTaskDomainDocument
+                {
+                    CandidateScreening = new NyxIdChatCandidateScreeningEvidenceDocument
+                    {
+                        EvidenceId = domain.CandidateScreening.EvidenceId,
+                        SourceInputRequestId = domain.CandidateScreening.SourceInputRequestId,
+                        CandidateName = domain.CandidateScreening.CandidateName,
+                        RoleTitle = domain.CandidateScreening.RoleTitle,
+                        TotalScore = domain.CandidateScreening.TotalScore,
+                        TrackerTable = domain.CandidateScreening.TrackerTable,
+                        TrackerTableId = domain.CandidateScreening.TrackerTableId,
+                        Stage = domain.CandidateScreening.Stage,
+                        GuardedToolName = domain.CandidateScreening.GuardedToolName,
+                        CommittedAt = domain.CandidateScreening.CommittedAt?.Clone(),
+                        Rubric =
+                        {
+                            domain.CandidateScreening.Rubric.Select(static criterion =>
+                                new NyxIdChatCandidateRubricCriterionDocument
+                                {
+                                    CriterionId = criterion.CriterionId,
+                                    Title = criterion.Title,
+                                    MaximumPoints = criterion.MaximumPoints,
+                                }),
+                        },
+                        Scores =
+                        {
+                            domain.CandidateScreening.Scores.Select(static score =>
+                                new NyxIdChatCandidateCriterionScoreDocument
+                                {
+                                    CriterionId = score.CriterionId,
+                                    AwardedPoints = score.AwardedPoints,
+                                    Evidence = score.Evidence,
+                                }),
+                        },
+                    },
+                },
+            _ => null,
+        };
+
+    private static NyxIdChatVerifiedArtifactDocument? ToArtifact(
+        NyxIdChatVerifiedArtifactState? artifact) =>
+        artifact?.ArtifactCase switch
+        {
+            NyxIdChatVerifiedArtifactState.ArtifactOneofCase.Reimbursement =>
+                new NyxIdChatVerifiedArtifactDocument
+                {
+                    CheckName = artifact.CheckName,
+                    VerifiedAt = artifact.VerifiedAt?.Clone(),
+                    Reimbursement = new NyxIdChatReimbursementArtifactDocument
+                    {
+                        ProviderInstanceId = artifact.Reimbursement.ProviderInstanceId,
+                        CostCenter = artifact.Reimbursement.CostCenter,
+                        RetainedItemCount = artifact.Reimbursement.RetainedItemCount,
+                        DuplicateItemCount = artifact.Reimbursement.DuplicateItemCount,
+                    },
+                },
+            NyxIdChatVerifiedArtifactState.ArtifactOneofCase.CandidateTracker =>
+                new NyxIdChatVerifiedArtifactDocument
+                {
+                    CheckName = artifact.CheckName,
+                    VerifiedAt = artifact.VerifiedAt?.Clone(),
+                    CandidateTracker = new NyxIdChatCandidateTrackerArtifactDocument
+                    {
+                        ProviderRecordId = artifact.CandidateTracker.ProviderRecordId,
+                        CandidateName = artifact.CandidateTracker.CandidateName,
+                        Score = artifact.CandidateTracker.Score,
+                        Threshold = artifact.CandidateTracker.Threshold,
+                        TrackerTable = artifact.CandidateTracker.TrackerTable,
+                        TrackerTableId = artifact.CandidateTracker.TrackerTableId,
+                        Stage = artifact.CandidateTracker.Stage,
+                    },
+                },
+            _ => null,
+        };
 
     private static NyxIdChatConversationPlanOperationAdmissionDocument ToPlanAdmission(
         NyxIdChatPlanOperationAdmission admission)
@@ -516,6 +641,27 @@ public sealed class NyxIdChatConversationCurrentStateProjector
                     Origin = ToWireName(resolution.NumericThreshold.Origin),
                 };
         }
+        if (resolution.Answer is not null)
+        {
+            switch (resolution.Answer.AnswerCase)
+            {
+                case NyxIdChatInputAnswer.AnswerOneofCase.FreeText:
+                    document.Answer = new NyxIdChatConversationInputAnswerDocument
+                    {
+                        FreeText = resolution.Answer.FreeText,
+                    };
+                    break;
+                case NyxIdChatInputAnswer.AnswerOneofCase.Selection:
+                    document.Answer = new NyxIdChatConversationInputAnswerDocument
+                    {
+                        Selection = new NyxIdChatConversationInputSelectionAnswerDocument
+                        {
+                            OptionIds = { resolution.Answer.Selection.OptionIds },
+                        },
+                    };
+                    break;
+            }
+        }
         return document;
     }
 
@@ -638,6 +784,24 @@ public sealed class NyxIdChatConversationCurrentStateProjector
                         AuthKeyName = action.Params.CustomServiceConnect.AuthKeyName,
                         ViaNodeId = action.Params.CustomServiceConnect.ViaNodeId,
                         TargetOrgId = action.Params.CustomServiceConnect.TargetOrgId,
+                    },
+                },
+            NyxIdAssistantActionParams.ParamsOneofCase.KeyCreate =>
+                new NyxIdChatConversationActionParamsDocument
+                {
+                    KeyCreate = new NyxIdChatConversationKeyCreateDocument
+                    {
+                        Name = action.Params.KeyCreate.Name,
+                        Platform = action.Params.KeyCreate.Platform,
+                        AllowedServiceIds = { action.Params.KeyCreate.AllowedServiceIds },
+                    },
+                },
+            NyxIdAssistantActionParams.ParamsOneofCase.KeyRotate =>
+                new NyxIdChatConversationActionParamsDocument
+                {
+                    KeyRotate = new NyxIdChatConversationKeyRotateDocument
+                    {
+                        KeyId = action.Params.KeyRotate.KeyId,
                     },
                 },
             _ => null,

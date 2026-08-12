@@ -565,6 +565,98 @@ message NyxIdChatConversationPlanRevisionDocument {
   repeated string cancelled_step_ids = 5;
 }
 
+message NyxIdChatMoneyValueDocument {
+  string currency_code = 1;
+  int64 minor_units = 2;
+  uint32 fraction_digits = 3;
+}
+
+message NyxIdChatInvoiceEvidenceDocument {
+  int32 source_ordinal = 1;
+  string vendor = 2;
+  string invoice_number = 3;
+  string invoice_date = 4;
+  NyxIdChatMoneyValueDocument amount = 5;
+}
+
+message NyxIdChatInvoiceDuplicateEvidenceDocument {
+  int32 duplicate_source_ordinal = 1;
+  int32 retained_source_ordinal = 2;
+}
+
+message NyxIdChatReimbursementEvidenceDocument {
+  string evidence_id = 1;
+  string source_input_request_id = 2;
+  string expense_category = 3;
+  string cost_center = 4;
+  string reimbursement_currency_instruction = 5;
+  repeated NyxIdChatInvoiceEvidenceDocument source_invoices = 6;
+  repeated int32 retained_source_ordinals = 7;
+  repeated NyxIdChatInvoiceDuplicateEvidenceDocument duplicate_invoices = 8;
+  google.protobuf.Timestamp committed_at = 9;
+  string guarded_tool_name = 10;
+}
+
+message NyxIdChatCandidateRubricCriterionDocument {
+  string criterion_id = 1;
+  string title = 2;
+  int32 maximum_points = 3;
+}
+
+message NyxIdChatCandidateCriterionScoreDocument {
+  string criterion_id = 1;
+  int32 awarded_points = 2;
+  string evidence = 3;
+}
+
+message NyxIdChatCandidateScreeningEvidenceDocument {
+  string evidence_id = 1;
+  string source_input_request_id = 2;
+  string candidate_name = 3;
+  string role_title = 4;
+  repeated NyxIdChatCandidateRubricCriterionDocument rubric = 5;
+  repeated NyxIdChatCandidateCriterionScoreDocument scores = 6;
+  int32 total_score = 7;
+  string tracker_table = 8;
+  string tracker_table_id = 9;
+  string stage = 10;
+  string guarded_tool_name = 11;
+  google.protobuf.Timestamp committed_at = 12;
+}
+
+message NyxIdChatTaskDomainDocument {
+  oneof domain {
+    NyxIdChatReimbursementEvidenceDocument reimbursement = 1;
+    NyxIdChatCandidateScreeningEvidenceDocument candidate_screening = 2;
+  }
+}
+
+message NyxIdChatReimbursementArtifactDocument {
+  string provider_instance_id = 1;
+  string cost_center = 2;
+  int32 retained_item_count = 3;
+  int32 duplicate_item_count = 4;
+}
+
+message NyxIdChatCandidateTrackerArtifactDocument {
+  string provider_record_id = 1;
+  string candidate_name = 2;
+  int32 score = 3;
+  int64 threshold = 4;
+  string tracker_table = 5;
+  string tracker_table_id = 6;
+  string stage = 7;
+}
+
+message NyxIdChatVerifiedArtifactDocument {
+  string check_name = 1;
+  google.protobuf.Timestamp verified_at = 2;
+  oneof artifact {
+    NyxIdChatReimbursementArtifactDocument reimbursement = 3;
+    NyxIdChatCandidateTrackerArtifactDocument candidate_tracker = 4;
+  }
+}
+
 message NyxIdChatConversationTaskDocument {
   string task_id = 1;
   string turn_id = 2;
@@ -584,6 +676,8 @@ message NyxIdChatConversationTaskDocument {
   NyxIdChatConversationPlanGateDocument gate = 16;
   repeated NyxIdChatConversationPlanRevisionDocument plan_revisions = 17;
   int32 plan_revision_history_start = 18;
+  NyxIdChatTaskDomainDocument domain = 19;
+  NyxIdChatVerifiedArtifactDocument artifact = 20;
 }
 
 message NyxIdChatConversationPendingApprovalDocument {
@@ -633,12 +727,24 @@ message NyxIdChatConversationNumericThresholdResolutionDocument {
   string origin = 3;
 }
 
+message NyxIdChatConversationInputSelectionAnswerDocument {
+  repeated string option_ids = 1;
+}
+
+message NyxIdChatConversationInputAnswerDocument {
+  oneof answer {
+    string free_text = 1;
+    NyxIdChatConversationInputSelectionAnswerDocument selection = 2;
+  }
+}
+
 message NyxIdChatConversationInputResolutionDocument {
   string request_id = 1;
   string client_request_id = 2;
   string outcome = 3;
   google.protobuf.Timestamp committed_at = 4;
   NyxIdChatConversationNumericThresholdResolutionDocument numeric_threshold = 5;
+  NyxIdChatConversationInputAnswerDocument answer = 6;
 }
 
 message NyxIdChatConversationApprovalResolutionDocument {
@@ -751,6 +857,8 @@ message NyxIdChatConversationActionParamsDocument {
   oneof params {
     NyxIdChatConversationCatalogServiceConnectDocument catalog_service = 1;
     NyxIdChatConversationCustomServiceConnectDocument custom_service = 2;
+    NyxIdChatConversationKeyCreateDocument key_create = 3;
+    NyxIdChatConversationKeyRotateDocument key_rotate = 4;
   }
 }
 
@@ -768,6 +876,16 @@ message NyxIdChatConversationCustomServiceConnectDocument {
   string auth_key_name = 4;
   string via_node_id = 5;
   string target_org_id = 6;
+}
+
+message NyxIdChatConversationKeyCreateDocument {
+  string name = 1;
+  string platform = 2;
+  repeated string allowed_service_ids = 3;
+}
+
+message NyxIdChatConversationKeyRotateDocument {
+  string key_id = 1;
 }
 
 message NyxIdChatConversationCurrentStateDocument {

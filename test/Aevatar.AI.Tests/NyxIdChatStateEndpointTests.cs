@@ -37,6 +37,56 @@ public sealed class NyxIdChatStateEndpointTests
     public async Task GetState_ActiveTask_ShouldExactlyMatchLiveTaskPlanAndStepChanged()
     {
         var task = BuildConvergenceTask();
+        task.SchemaVersion = 6;
+        task.Domain = new NyxIdChatTaskDomainState
+        {
+            Reimbursement = new NyxIdChatReimbursementEvidence
+            {
+                EvidenceId = "reimbursement-evidence-alpha",
+                SourceInputRequestId = "input-reimbursement-alpha",
+                ExpenseCategory = "travel",
+                CostCenter = "cc-42",
+                ReimbursementCurrencyInstruction = "Submit in SGD",
+                RetainedSourceOrdinals = { 1, 2 },
+                DuplicateInvoices =
+                {
+                    new NyxIdChatInvoiceDuplicateEvidence
+                    {
+                        DuplicateSourceOrdinal = 3,
+                        RetainedSourceOrdinal = 1,
+                    },
+                },
+                CommittedAt = Timestamp.FromDateTimeOffset(
+                    DateTimeOffset.Parse("2026-08-07T12:25:07Z")),
+                GuardedToolName = "approval_instance_create",
+            },
+        };
+        task.Domain.Reimbursement.SourceInvoices.Add(new NyxIdChatInvoiceEvidence
+        {
+            SourceOrdinal = 1,
+            Vendor = "Northwind Air",
+            InvoiceNumber = "INV-001",
+            InvoiceDate = "2026-08-01",
+            Amount = new NyxIdChatMoneyValue
+            {
+                CurrencyCode = "SGD",
+                MinorUnits = 12_500,
+                FractionDigits = 2,
+            },
+        });
+        task.Artifact = new NyxIdChatVerifiedArtifactState
+        {
+            CheckName = "approval.instance.exists",
+            VerifiedAt = Timestamp.FromDateTimeOffset(
+                DateTimeOffset.Parse("2026-08-07T12:25:09Z")),
+            Reimbursement = new NyxIdChatReimbursementArtifact
+            {
+                ProviderInstanceId = "approval-instance-alpha",
+                CostCenter = "cc-42",
+                RetainedItemCount = 2,
+                DuplicateItemCount = 1,
+            },
+        };
         task.Steps[0].Kind = NyxIdChatStepKind.Tool;
         task.Steps[0].Operation.Kind = NyxIdChatStepKind.Tool;
         task.Steps[0].Source = new NyxIdChatStepSource
@@ -165,6 +215,15 @@ public sealed class NyxIdChatStateEndpointTests
             .GetValue<string>().Should().Be("repository-alpha");
         currentTask["steps"]![1]!["source"]!["postcondition"]!["providerResourceId"]!
             .GetValue<string>().Should().Be("repository-alpha");
+        currentTask["schemaVersion"]!.GetValue<int>().Should().Be(6);
+        currentTask["domain"]!["reimbursement"]!["evidenceId"]!
+            .GetValue<string>().Should().Be("reimbursement-evidence-alpha");
+        currentTask["domain"]!["reimbursement"]!["sourceInvoices"]![0]!["amount"]!["minorUnits"]!
+            .GetValue<long>().Should().Be(12_500);
+        currentTask["artifact"]!["reimbursement"]!["providerInstanceId"]!
+            .GetValue<string>().Should().Be("approval-instance-alpha");
+        currentTask["artifact"]!["reimbursement"]!["retainedItemCount"]!
+            .GetValue<int>().Should().Be(2);
     }
 
     [Fact]
@@ -173,7 +232,56 @@ public sealed class NyxIdChatStateEndpointTests
         var evaluatedAt = Timestamp.FromDateTimeOffset(
             DateTimeOffset.Parse("2026-08-09T08:00:00Z"));
         var task = BuildConvergenceTask();
-        task.SchemaVersion = 5;
+        task.SchemaVersion = 6;
+        task.Domain = new NyxIdChatTaskDomainState
+        {
+            CandidateScreening = new NyxIdChatCandidateScreeningEvidence
+            {
+                EvidenceId = "candidate-evidence-alpha",
+                SourceInputRequestId = "input-threshold",
+                CandidateName = "Candidate Alpha",
+                RoleTitle = "Platform Engineer",
+                Rubric =
+                {
+                    new NyxIdChatCandidateRubricCriterion
+                    {
+                        CriterionId = "systems",
+                        Title = "Systems",
+                        MaximumPoints = 100,
+                    },
+                },
+                Scores =
+                {
+                    new NyxIdChatCandidateCriterionScore
+                    {
+                        CriterionId = "systems",
+                        AwardedPoints = 80,
+                        Evidence = "Designed actor protocols.",
+                    },
+                },
+                TotalScore = 80,
+                TrackerTable = "Candidate Tracker",
+                TrackerTableId = "tbl-candidates",
+                Stage = "accepted",
+                GuardedToolName = "bitable_record_create",
+                CommittedAt = evaluatedAt.Clone(),
+            },
+        };
+        task.Artifact = new NyxIdChatVerifiedArtifactState
+        {
+            CheckName = "bitable.record.exists",
+            VerifiedAt = evaluatedAt.Clone(),
+            CandidateTracker = new NyxIdChatCandidateTrackerArtifact
+            {
+                ProviderRecordId = "rec-candidate-alpha",
+                CandidateName = "Candidate Alpha",
+                Score = 80,
+                Threshold = 75,
+                TrackerTable = "Candidate Tracker",
+                TrackerTableId = "tbl-candidates",
+                Stage = "accepted",
+            },
+        };
         task.Steps[1].Guard = new NyxIdChatStepGuard
         {
             ConditionStepId = "step-condition",
@@ -249,6 +357,11 @@ public sealed class NyxIdChatStateEndpointTests
                 RequestId = "input-threshold",
                 ClientRequestId = "client-threshold",
                 Outcome = NyxIdChatNeedsYouResolutionOutcome.Accepted,
+                Answer = new NyxIdChatInputAnswer
+                {
+                    FreeText =
+                        "Party size 4; one vegetarian; SGD 200 total; research only.",
+                },
                 CommittedAt = evaluatedAt.Clone(),
                 NumericThreshold = new NyxIdChatNumericThresholdResolution
                 {
@@ -279,7 +392,7 @@ public sealed class NyxIdChatStateEndpointTests
 
         response.StatusCode.Should().Be(StatusCodes.Status200OK);
         var snapshot = JsonNode.Parse(response.Body)!["snapshot"]!;
-        snapshot["activeTask"]!["schemaVersion"]!.GetValue<int>().Should().Be(5);
+        snapshot["activeTask"]!["schemaVersion"]!.GetValue<int>().Should().Be(6);
         var conditionStep = snapshot["activeTask"]!["steps"]![1]!;
         conditionStep["kind"]!.GetValue<string>().Should().Be("condition");
         var condition = conditionStep["source"]!["condition"]!["condition"]!;
@@ -310,6 +423,24 @@ public sealed class NyxIdChatStateEndpointTests
             .GetValue<long>().Should().Be(75);
         snapshot["latestInputResolution"]!["numericThreshold"]!["origin"]!
             .GetValue<string>().Should().Be("user_override");
+        snapshot["latestInputResolution"]!["answer"]!["freeText"]!
+            .GetValue<string>().Should().Be(
+                "Party size 4; one vegetarian; SGD 200 total; research only.");
+        var liveInputChanged = JsonNode.Parse(
+            JsonFormatter.Default.Format(state.LatestInputResolution))!;
+        JsonNode.DeepEquals(
+                liveInputChanged["answer"],
+                snapshot["latestInputResolution"]!["answer"])
+            .Should().BeTrue(
+                "live input.changed and current-state reload expose the same typed answer");
+        snapshot["activeTask"]!["domain"]!["candidateScreening"]!["totalScore"]!
+            .GetValue<int>().Should().Be(80);
+        snapshot["activeTask"]!["domain"]!["candidateScreening"]!["scores"]![0]!["evidence"]!
+            .GetValue<string>().Should().Be("Designed actor protocols.");
+        snapshot["activeTask"]!["artifact"]!["candidateTracker"]!["providerRecordId"]!
+            .GetValue<string>().Should().Be("rec-candidate-alpha");
+        snapshot["activeTask"]!["artifact"]!["candidateTracker"]!["threshold"]!
+            .GetValue<long>().Should().Be(75);
     }
 
     [Fact]
@@ -464,6 +595,97 @@ public sealed class NyxIdChatStateEndpointTests
             .GetProperty("source")
             .GetProperty("tool");
         sourceWithoutReadiness.TryGetProperty("readinessCapabilityId", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task GetState_ShouldExposeFlatReloadableKeyActionParameters()
+    {
+        var keyCreate = new NyxIdChatActionSnapshot(
+            4,
+            "action-key-create",
+            "turn-alpha",
+            "task-alpha",
+            "step-key-create",
+            "key.create",
+            DateTimeOffset.Parse("2026-08-12T04:00:00Z"),
+            [],
+            null,
+            new NyxIdChatActionRequestSnapshot(
+                4,
+                "conversation-alpha",
+                "turn-alpha",
+                "task-alpha",
+                "step-key-create",
+                "action-key-create",
+                "key.create",
+                new NyxIdChatActionParamsSnapshot(
+                    Name: "agent-alpha",
+                    Platform: "codex",
+                    AllowedServiceIds: ["service-github", "service-lark"])));
+        var keyRotate = new NyxIdChatActionSnapshot(
+            4,
+            "action-key-rotate",
+            "turn-alpha",
+            "task-alpha",
+            "step-key-rotate",
+            "key.rotate",
+            DateTimeOffset.Parse("2026-08-12T04:01:00Z"),
+            [],
+            null,
+            new NyxIdChatActionRequestSnapshot(
+                4,
+                "conversation-alpha",
+                "turn-alpha",
+                "task-alpha",
+                "step-key-rotate",
+                "action-key-rotate",
+                "key.rotate",
+                new NyxIdChatActionParamsSnapshot(KeyId: "key-predecessor")));
+        var queryPort = new RecordingQueryPort
+        {
+            Result = NyxIdChatConversationStateQueryResult.Current(
+                new NyxIdChatConversationStateSnapshot(
+                    ActorId: "conversation-alpha",
+                    ScopeId: "scope-alpha",
+                    StateVersion: 12,
+                    ProgressSequence: 41,
+                    UpdatedAt: DateTimeOffset.Parse("2026-08-12T04:02:00Z"),
+                    ActiveTurn: null,
+                    LatestTurn: null,
+                    RecentTerminalTurns: [],
+                    ActiveTask: null,
+                    PendingApproval: null,
+                    PendingActions: [keyCreate],
+                    ControlFence: null,
+                    LatestControlResult: null,
+                    ContinuationAdmission: null,
+                    RecentActions: [keyRotate])),
+        };
+
+        var response = await ExecuteAsync(queryPort, string.Empty);
+
+        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        using var json = JsonDocument.Parse(response.Body);
+        var snapshot = json.RootElement.GetProperty("snapshot");
+        var createParams = snapshot.GetProperty("pendingActions")[0]
+            .GetProperty("request")
+            .GetProperty("params");
+        createParams.GetProperty("name").GetString().Should().Be("agent-alpha");
+        createParams.GetProperty("platform").GetString().Should().Be("codex");
+        createParams.GetProperty("allowedServiceIds").EnumerateArray()
+            .Select(static value => value.GetString())
+            .Should().Equal("service-github", "service-lark");
+        createParams.EnumerateObject().Select(static property => property.Name)
+            .Should().Equal("name", "platform", "allowedServiceIds");
+        createParams.TryGetProperty("keyCreate", out _).Should().BeFalse();
+        var rotateParams = snapshot.GetProperty("recentActions")[0]
+            .GetProperty("request")
+            .GetProperty("params");
+        rotateParams.GetProperty("keyId").GetString().Should().Be("key-predecessor");
+        rotateParams.EnumerateObject().Select(static property => property.Name)
+            .Should().Equal("keyId");
+        rotateParams.TryGetProperty("keyRotate", out _).Should().BeFalse();
+        response.Body.Should().NotContain("fullKey").And.NotContain("keyMaterial");
     }
 
     [Fact]

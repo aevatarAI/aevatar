@@ -2315,6 +2315,32 @@ function renderActorRecovery(projection) {
   return recovery.childElementCount ? recovery : null;
 }
 
+// The gate status is actor-owned. An absent status is rendered as unknown rather than as
+// satisfied, so a decoder that has not seen the fact never implies the plan may run.
+function actorPlanGateStatus(task) {
+  const status = String(task?.gate?.status || "").toLowerCase();
+  return status === "pending" || status === "satisfied" || status === "rejected" ? status : "";
+}
+
+function actorPlanGateCopy(status) {
+  return {
+    pending: "待确认",
+    satisfied: "已确认",
+    rejected: "已拒绝",
+  }[status] || "需确认";
+}
+
+// A plan gate decision is an Aevatar-scoped local admission, not a NyxID authorization: it
+// admits the already-communicated plan and never grants service access, approves a tool
+// request, or proves an external effect.
+function actorPendingPlanGate(projection) {
+  const gate = projection?.task?.gate;
+  if (!gate || actorPlanGateStatus(projection.task) !== "pending") return null;
+  const identified = (value) => typeof value === "string" && value.trim().length > 0;
+  if (!identified(gate.requestId) || !identified(projection.task.taskId)) return null;
+  return gate;
+}
+
 function needsYouKey(kind, requestId) {
   return `${kind}:${requestId}`;
 }
@@ -2327,6 +2353,8 @@ function pruneNeedsYouState(entry, projection) {
   if (projection.pendingApproval?.approvalRequestId) {
     activeKeys.add(needsYouKey("approval", projection.pendingApproval.approvalRequestId));
   }
+  const pendingGate = actorPendingPlanGate(projection);
+  if (pendingGate) activeKeys.add(needsYouKey("plan", pendingGate.requestId));
   for (const key of entry.needsYouDrafts.keys()) {
     if (!activeKeys.has(key)) entry.needsYouDrafts.delete(key);
   }
@@ -2422,6 +2450,82 @@ function renderPendingInput(entry, projection) {
     ));
   }
   return section;
+}
+
+function renderPlanGateDecision(entry, projection) {
+  const gate = actorPendingPlanGate(projection);
+  if (!gate) return null;
+  const requestId = gate.requestId;
+  const key = needsYouKey("plan", requestId);
+  const submission = entry.needsYouSubmissions.get(key);
+  const locked = submission?.status === "pending" || submission?.status === "accepted";
+  const reliableVersion = Number.isSafeInteger(projection.stateVersion) && projection.stateVersion > 0;
+  const section = el("section", "needs-you-panel plan-gate-required");
+  section.dataset.requestId = requestId;
+  const heading = el("div", "needs-you-heading");
+  heading.append(iconNode("list-checks"), el("strong", "", "需要你确认计划"));
+  section.append(heading);
+
+  section.append(el(
+    "p",
+    "needs-you-boundary",
+    "确认后 Actor 才会执行已说明的计划。这是 Aevatar 本地准入，不授予 NyxID 访问权限，" +
+    "也不代表外部变更已经发生。",
+  ));
+  if (gate.reason) section.append(el("p", "actor-plan-gate-reason", gate.reason));
+
+  const facts = el("dl", "approval-facts");
+  const appendFact = (label, value) => {
+    if (!value) return;
+    facts.append(el("dt", "", label), el("dd", "", value));
+  };
+  appendFact("计划", gate.planId || projection.task.planId);
+  appendFact("修订", Number.isSafeInteger(gate.planRevision) && gate.planRevision > 0
+    ? `Revision ${gate.planRevision}`
+    : "");
+  // Admissions are the exact operations this decision admits. Naming them keeps the
+  // confirmation specific instead of a blanket "go ahead".
+  const admissions = Array.isArray(gate.admissions) ? gate.admissions : [];
+  appendFact("准入操作", admissions.length ? String(admissions.length) : "");
+  if (facts.childElementCount) section.append(facts);
+
+  for (const admission of admissions.slice(0, 8)) {
+    const label = admission?.toolName || admission?.stepId;
+    if (!label) continue;
+    section.append(el("div", "actor-plan-admission mono", label));
+  }
+
+  const footer = el("div", "needs-you-actions");
+  const confirm = el("button", "needs-you-primary", "确认执行");
+  confirm.type = "button";
+  confirm.disabled = locked || !reliableVersion;
+  confirm.addEventListener("click", () => void submitPlanGateDecision(entry, gate, true));
+  const reject = el("button", "needs-you-secondary", "拒绝");
+  reject.type = "button";
+  reject.disabled = locked || !reliableVersion;
+  reject.addEventListener("click", () => void submitPlanGateDecision(entry, gate, false));
+  const status = el("span", `needs-you-state ${submission?.status || ""}`,
+    submission?.message || (!reliableVersion ? "正在同步 Actor 状态…" : ""));
+  footer.append(confirm, reject, status);
+  section.append(footer);
+  // Free-text objection is steering, not a gate decision: the composer already routes a
+  // message during an active task to task.steer, which re-plans instead of admitting.
+  section.append(el(
+    "p",
+    "needs-you-hint",
+    "想改计划就直接发消息，Actor 会按调整重新规划。",
+  ));
+  return section;
+}
+
+function submitPlanGateDecision(entry, gate, confirmed) {
+  return submitNeedsYouDecision(entry, "plan", gate.requestId, {
+    type: "plan.resolve",
+    confirmed,
+    taskId: entryActorProjection(entry)?.task?.taskId,
+    planId: gate.planId,
+    planRevision: gate.planRevision,
+  });
 }
 
 function renderPendingApproval(entry, projection) {
@@ -2659,10 +2763,11 @@ function renderActorProjection(entry) {
       meta.append(planId);
     }
     const gateMode = String(task.gate?.mode || "auto").toLowerCase();
+    const gateStatus = actorPlanGateStatus(task);
     const gate = el(
       "span",
-      `actor-plan-gate ${gateMode}`,
-      gateMode === "confirm" ? "需确认" : "自动执行",
+      `actor-plan-gate ${gateMode}${gateStatus ? ` ${gateStatus}` : ""}`,
+      gateMode === "confirm" ? actorPlanGateCopy(gateStatus) : "自动执行",
     );
     if (task.gate?.reason) gate.title = task.gate.reason;
     meta.append(gate);
@@ -2671,8 +2776,11 @@ function renderActorProjection(entry) {
   }
 
   pruneNeedsYouState(entry, projection);
+  // The plan gate is the "may I start" decision, so it precedes the per-step decisions.
+  const planGate = renderPlanGateDecision(entry, projection);
   const pendingInput = renderPendingInput(entry, projection);
   const pendingApproval = renderPendingApproval(entry, projection);
+  if (planGate) root.append(planGate);
   if (pendingInput) root.append(pendingInput);
   if (pendingApproval) root.append(pendingApproval);
 
