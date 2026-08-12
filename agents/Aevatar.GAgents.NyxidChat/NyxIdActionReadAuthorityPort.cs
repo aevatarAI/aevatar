@@ -28,10 +28,20 @@ public interface INyxIdActionReadAuthorityPort
         CancellationToken ct = default);
 }
 
+public enum NyxIdActionReadAuthorityIssueStatus
+{
+    Failed = 0,
+    Active = 1,
+    ReplayOnlyExpired = 2,
+}
+
 public sealed record NyxIdActionReadAuthorityIssueResult(
-    bool Succeeded,
+    NyxIdActionReadAuthorityIssueStatus Status,
     NyxIdReadAuthorityRef? Authority = null,
-    string? FailureCode = null);
+    string? FailureCode = null)
+{
+    public bool Succeeded => Status == NyxIdActionReadAuthorityIssueStatus.Active;
+}
 
 public sealed class NyxIdActionReadAuthorityResolution
 {
@@ -99,6 +109,8 @@ public sealed class NyxIdActionReadAuthorityPort : INyxIdActionReadAuthorityPort
     private const string AuditResolve = "nyxid-chat-action-read-authority-resolve";
     private const string AuditFence = "nyxid-chat-action-read-authority-fence";
     private const string AuditRevoke = "nyxid-chat-action-read-authority-revoke";
+    private const string RevocationPurpose =
+        "nyxid-chat.action-read-authority-revocation";
     private readonly ISecretVault _secretVault;
     private readonly TimeProvider _timeProvider;
     private readonly TimeSpan _authorityTtl;
@@ -150,9 +162,24 @@ public sealed class NyxIdActionReadAuthorityPort : INyxIdActionReadAuthorityPort
             scope,
             owner,
             request);
+        var requestedRevocationRef = BuildRequestedRef(
+            RevocationPurpose,
+            scope,
+            owner,
+            requestedAuthorityRef);
 
         try
         {
+            var revocationCode = await ResolveRevocationCodeAsync(
+                    requestedRevocationRef,
+                    requestedAuthorityRef,
+                    scope,
+                    owner,
+                    ct)
+                .ConfigureAwait(false);
+            if (revocationCode is not null)
+                return FailedIssue(revocationCode);
+
             var fence = await ResolveVaultAsync(
                     requestedFenceRef,
                     CredentialSecretPurposes.NyxIdChatActionReadAuthorityFence,
@@ -162,9 +189,18 @@ public sealed class NyxIdActionReadAuthorityPort : INyxIdActionReadAuthorityPort
                 .ConfigureAwait(false);
             if (fence.Resolved)
             {
-                return await ResolveFencedIssueAsync(
+                var fencedIssue = await ResolveFencedIssueAsync(
                         fence.Secret,
                         requestedAuthorityRef,
+                        scope,
+                        owner,
+                        ct)
+                    .ConfigureAwait(false);
+                return await FinalizeIssueAsync(
+                        fencedIssue,
+                        requestedAuthorityRef,
+                        requestedFenceRef,
+                        requestedRevocationRef,
                         scope,
                         owner,
                         ct)
@@ -181,7 +217,15 @@ public sealed class NyxIdActionReadAuthorityPort : INyxIdActionReadAuthorityPort
                 var existingAuthority = CreateAuthority(existing.Reference!, owner);
                 await PutFenceAsync(requestedFenceRef, existingAuthority, scope, owner, ct)
                     .ConfigureAwait(false);
-                return Succeeded(existingAuthority);
+                return await FinalizeIssueAsync(
+                        ActiveIssue(existingAuthority),
+                        requestedAuthorityRef,
+                        requestedFenceRef,
+                        requestedRevocationRef,
+                        scope,
+                        owner,
+                        ct)
+                    .ConfigureAwait(false);
             }
 
             if (existing.FailureReason is not SecretResolutionFailureReason.NotFound)
@@ -201,7 +245,15 @@ public sealed class NyxIdActionReadAuthorityPort : INyxIdActionReadAuthorityPort
             var authority = CreateAuthority(stored.Reference, owner);
             await PutFenceAsync(requestedFenceRef, authority, scope, owner, ct)
                 .ConfigureAwait(false);
-            return Succeeded(authority);
+            return await FinalizeIssueAsync(
+                    ActiveIssue(authority),
+                    requestedAuthorityRef,
+                    requestedFenceRef,
+                    requestedRevocationRef,
+                    scope,
+                    owner,
+                    ct)
+                .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -212,6 +264,7 @@ public sealed class NyxIdActionReadAuthorityPort : INyxIdActionReadAuthorityPort
             return await ResolveRaceAsync(
                     requestedAuthorityRef,
                     requestedFenceRef,
+                    requestedRevocationRef,
                     scope,
                     owner,
                     ct)
@@ -236,12 +289,36 @@ public sealed class NyxIdActionReadAuthorityPort : INyxIdActionReadAuthorityPort
             scope,
             owner,
             _timeProvider.GetUtcNow(),
-            checkExpiration: true);
+            checkExpiration: false);
         if (validationCode is not null)
             return FailedResolution(validationCode);
 
         try
         {
+            var revocationRef = BuildRequestedRef(
+                RevocationPurpose,
+                scope,
+                owner,
+                authority!.SecretRef);
+            var revocationCode = await ResolveRevocationCodeAsync(
+                    revocationRef,
+                    authority.SecretRef,
+                    scope,
+                    owner,
+                    ct)
+                .ConfigureAwait(false);
+            if (revocationCode is not null)
+                return FailedResolution(revocationCode);
+
+            validationCode = ValidateReference(
+                authority,
+                scope,
+                owner,
+                _timeProvider.GetUtcNow(),
+                checkExpiration: true);
+            if (validationCode is not null)
+                return FailedResolution(validationCode);
+
             var resolved = await ResolveAuthorityVaultAsync(authority!.SecretRef, scope, owner, ct)
                 .ConfigureAwait(false);
             if (!resolved.Resolved || resolved.Secret is null)
@@ -282,16 +359,32 @@ public sealed class NyxIdActionReadAuthorityPort : INyxIdActionReadAuthorityPort
 
         try
         {
-            var revoked = await _secretVault.RevokeAsync(
+            var revocationRef = BuildRequestedRef(
+                RevocationPurpose,
+                scope,
+                owner,
+                authority!.SecretRef);
+            await _secretVault.PutAsync(
+                    new StoreSecretRequest(
+                        Purpose: RevocationPurpose,
+                        OwnerScopeKey: scope,
+                        SubjectId: owner,
+                        Secret: Convert.ToBase64String(authority.ToByteArray()),
+                        AuditReason: AuditRevoke,
+                        RequestedRef: revocationRef),
+                    ct)
+                .ConfigureAwait(false);
+
+            var authorityRevoked = await _secretVault.RevokeAsync(
                     new RevokeSecretRequest(
-                        authority!.SecretRef,
+                        authority.SecretRef,
                         CredentialSecretPurposes.NyxIdChatActionReadAuthority,
                         scope,
                         owner,
                         AuditRevoke),
                     ct)
                 .ConfigureAwait(false);
-            return revoked.Revoked;
+            return authorityRevoked.Revoked;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -310,7 +403,7 @@ public sealed class NyxIdActionReadAuthorityPort : INyxIdActionReadAuthorityPort
         string ownerSubject,
         CancellationToken ct)
     {
-        if (!TryParseFence(serializedAuthority, out var authority) ||
+        if (!TryParseAuthorityReference(serializedAuthority, out var authority) ||
             !string.Equals(authority.SecretRef, expectedAuthorityRef, StringComparison.Ordinal))
         {
             return FailedIssue(InvalidCode);
@@ -321,9 +414,11 @@ public sealed class NyxIdActionReadAuthorityPort : INyxIdActionReadAuthorityPort
             scopeId,
             ownerSubject,
             _timeProvider.GetUtcNow(),
-            checkExpiration: true);
+            checkExpiration: false);
         if (validationCode is not null)
             return FailedIssue(validationCode);
+        if (authority.ExpiresAtUnixMs <= _timeProvider.GetUtcNow().ToUnixTimeMilliseconds())
+            return ReplayOnlyExpired(authority);
 
         var resolved = await ResolveAuthorityVaultAsync(authority.SecretRef, scopeId, ownerSubject, ct)
             .ConfigureAwait(false);
@@ -332,18 +427,38 @@ public sealed class NyxIdActionReadAuthorityPort : INyxIdActionReadAuthorityPort
         if (!Matches(authority, resolved.Reference!))
             return FailedIssue(InvalidCode);
 
-        return Succeeded(authority);
+        return ActiveIssue(authority);
     }
 
     private async Task<NyxIdActionReadAuthorityIssueResult> ResolveRaceAsync(
         string requestedAuthorityRef,
         string requestedFenceRef,
+        string requestedRevocationRef,
         string scopeId,
         string ownerSubject,
         CancellationToken ct)
     {
         try
         {
+            var revocationCode = await ResolveRevocationCodeAsync(
+                    requestedRevocationRef,
+                    requestedAuthorityRef,
+                    scopeId,
+                    ownerSubject,
+                    ct)
+                .ConfigureAwait(false);
+            if (revocationCode is not null)
+            {
+                return await FailIssueAndCleanupAsync(
+                        revocationCode,
+                        requestedAuthorityRef,
+                        requestedFenceRef,
+                        scopeId,
+                        ownerSubject,
+                        ct)
+                    .ConfigureAwait(false);
+            }
+
             var fence = await ResolveVaultAsync(
                     requestedFenceRef,
                     CredentialSecretPurposes.NyxIdChatActionReadAuthorityFence,
@@ -353,9 +468,18 @@ public sealed class NyxIdActionReadAuthorityPort : INyxIdActionReadAuthorityPort
                 .ConfigureAwait(false);
             if (fence.Resolved)
             {
-                return await ResolveFencedIssueAsync(
+                var fencedIssue = await ResolveFencedIssueAsync(
                         fence.Secret,
                         requestedAuthorityRef,
+                        scopeId,
+                        ownerSubject,
+                        ct)
+                    .ConfigureAwait(false);
+                return await FinalizeIssueAsync(
+                        fencedIssue,
+                        requestedAuthorityRef,
+                        requestedFenceRef,
+                        requestedRevocationRef,
                         scopeId,
                         ownerSubject,
                         ct)
@@ -374,7 +498,15 @@ public sealed class NyxIdActionReadAuthorityPort : INyxIdActionReadAuthorityPort
             var authorityRef = CreateAuthority(authority.Reference!, ownerSubject);
             await PutFenceAsync(requestedFenceRef, authorityRef, scopeId, ownerSubject, ct)
                 .ConfigureAwait(false);
-            return Succeeded(authorityRef);
+            return await FinalizeIssueAsync(
+                    ActiveIssue(authorityRef),
+                    requestedAuthorityRef,
+                    requestedFenceRef,
+                    requestedRevocationRef,
+                    scopeId,
+                    ownerSubject,
+                    ct)
+                .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -384,6 +516,141 @@ public sealed class NyxIdActionReadAuthorityPort : INyxIdActionReadAuthorityPort
         {
             return FailedIssue(UnavailableCode);
         }
+    }
+
+    private async Task<NyxIdActionReadAuthorityIssueResult> FinalizeIssueAsync(
+        NyxIdActionReadAuthorityIssueResult issue,
+        string authorityRef,
+        string fenceRef,
+        string revocationRef,
+        string scopeId,
+        string ownerSubject,
+        CancellationToken ct)
+    {
+        if (issue.Status is NyxIdActionReadAuthorityIssueStatus.Failed)
+            return issue;
+
+        string? revocationCode;
+        try
+        {
+            revocationCode = await ResolveRevocationCodeAsync(
+                    revocationRef,
+                    authorityRef,
+                    scopeId,
+                    ownerSubject,
+                    ct)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            revocationCode = UnavailableCode;
+        }
+
+        return revocationCode is null
+            ? issue
+            : await FailIssueAndCleanupAsync(
+                    revocationCode,
+                    authorityRef,
+                    fenceRef,
+                    scopeId,
+                    ownerSubject,
+                    ct)
+                .ConfigureAwait(false);
+    }
+
+    private async Task<NyxIdActionReadAuthorityIssueResult> FailIssueAndCleanupAsync(
+        string failureCode,
+        string authorityRef,
+        string fenceRef,
+        string scopeId,
+        string ownerSubject,
+        CancellationToken ct)
+    {
+        var authorityRevoked = await TryRevokeIssueRecordAsync(
+                authorityRef,
+                CredentialSecretPurposes.NyxIdChatActionReadAuthority,
+                scopeId,
+                ownerSubject,
+                ct)
+            .ConfigureAwait(false);
+        var fenceRevoked = await TryRevokeIssueRecordAsync(
+                fenceRef,
+                CredentialSecretPurposes.NyxIdChatActionReadAuthorityFence,
+                scopeId,
+                ownerSubject,
+                ct)
+            .ConfigureAwait(false);
+
+        return FailedIssue(authorityRevoked && fenceRevoked
+            ? failureCode
+            : UnavailableCode);
+    }
+
+    private async Task<bool> TryRevokeIssueRecordAsync(
+        string reference,
+        string purpose,
+        string scopeId,
+        string ownerSubject,
+        CancellationToken ct)
+    {
+        try
+        {
+            var revoked = await _secretVault.RevokeAsync(
+                    new RevokeSecretRequest(
+                        reference,
+                        purpose,
+                        scopeId,
+                        ownerSubject,
+                        AuditRevoke),
+                    ct)
+                .ConfigureAwait(false);
+            return revoked.Revoked;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private async Task<string?> ResolveRevocationCodeAsync(
+        string revocationRef,
+        string expectedAuthorityRef,
+        string scopeId,
+        string ownerSubject,
+        CancellationToken ct)
+    {
+        var revocation = await ResolveVaultAsync(
+                revocationRef,
+                RevocationPurpose,
+                scopeId,
+                ownerSubject,
+                ct)
+            .ConfigureAwait(false);
+        if (revocation.FailureReason is SecretResolutionFailureReason.NotFound)
+            return null;
+        if (!revocation.Resolved)
+            return MapVaultFailure(revocation.FailureReason);
+        if (!TryParseAuthorityReference(revocation.Secret, out var authority) ||
+            !string.Equals(authority.SecretRef, expectedAuthorityRef, StringComparison.Ordinal))
+        {
+            return InvalidCode;
+        }
+
+        return ValidateReference(
+                   authority,
+                   scopeId,
+                   ownerSubject,
+                   _timeProvider.GetUtcNow(),
+                   checkExpiration: false) ??
+               RevokedCode;
     }
 
     private Task<ResolveSecretResult> ResolveAuthorityVaultAsync(
@@ -480,7 +747,9 @@ public sealed class NyxIdActionReadAuthorityPort : INyxIdActionReadAuthorityPort
         string ownerSubject) =>
         string.Equals(expectedOwnerSubject, ownerSubject, StringComparison.Ordinal);
 
-    private static bool TryParseFence(string? serializedAuthority, out NyxIdReadAuthorityRef authority)
+    private static bool TryParseAuthorityReference(
+        string? serializedAuthority,
+        out NyxIdReadAuthorityRef authority)
     {
         authority = new NyxIdReadAuthorityRef();
         if (string.IsNullOrWhiteSpace(serializedAuthority))
@@ -519,12 +788,16 @@ public sealed class NyxIdActionReadAuthorityPort : INyxIdActionReadAuthorityPort
             ExpiresAtUnixMs = reference.ExpiresAtUnixMs,
         };
 
-    private static NyxIdActionReadAuthorityIssueResult Succeeded(
+    private static NyxIdActionReadAuthorityIssueResult ActiveIssue(
         NyxIdReadAuthorityRef authority) =>
-        new(true, authority.Clone());
+        new(NyxIdActionReadAuthorityIssueStatus.Active, authority.Clone());
+
+    private static NyxIdActionReadAuthorityIssueResult ReplayOnlyExpired(
+        NyxIdReadAuthorityRef authority) =>
+        new(NyxIdActionReadAuthorityIssueStatus.ReplayOnlyExpired, authority.Clone());
 
     private static NyxIdActionReadAuthorityIssueResult FailedIssue(string failureCode) =>
-        new(false, FailureCode: failureCode);
+        new(NyxIdActionReadAuthorityIssueStatus.Failed, FailureCode: failureCode);
 
     private static NyxIdActionReadAuthorityResolution FailedResolution(string failureCode) =>
         NyxIdActionReadAuthorityResolution.Failed(failureCode);

@@ -553,6 +553,56 @@ public partial class NyxIdChatEndpointsCoverageTests
     }
 
     [Fact]
+    public async Task HandleStreamMessageAsync_KeyActionWithReplayOnlyExpiredAuthority_ShouldReachActor()
+    {
+        var authority = AuthorityRef();
+        authority.ExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(-1).ToUnixTimeMilliseconds();
+        var authorityPort = new RecordingReadAuthorityPort
+        {
+            IssueResult = new NyxIdActionReadAuthorityIssueResult(
+                NyxIdActionReadAuthorityIssueStatus.ReplayOnlyExpired,
+                authority),
+        };
+        var context = AuthorizedActionContext(authorityPort);
+        var actionInteraction = CompletedActionInteraction();
+
+        await InvokeActionEndpointAsync(
+            context,
+            CompletedKeyActionRequest(),
+            actionInteraction);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        authorityPort.IssueCalls.Should().Be(1);
+        actionInteraction.Commands.Should().ContainSingle()
+            .Which.ReadAuthority.Should().BeEquivalentTo(authority);
+    }
+
+    [Theory]
+    [InlineData(NyxIdActionReadAuthorityPort.UnavailableCode)]
+    [InlineData(NyxIdActionReadAuthorityPort.RevokedCode)]
+    public async Task HandleStreamMessageAsync_KeyActionWithFailedAuthorityIssue_ShouldReturnUnavailable(
+        string failureCode)
+    {
+        var authorityPort = new RecordingReadAuthorityPort
+        {
+            IssueResult = new NyxIdActionReadAuthorityIssueResult(
+                NyxIdActionReadAuthorityIssueStatus.Failed,
+                FailureCode: failureCode),
+        };
+        var context = AuthorizedActionContext(authorityPort);
+        var actionInteraction = CompletedActionInteraction();
+
+        await InvokeActionEndpointAsync(
+            context,
+            CompletedKeyActionRequest(),
+            actionInteraction);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        authorityPort.IssueCalls.Should().Be(1);
+        actionInteraction.Commands.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task HandleStreamMessageAsync_StateChangeWakeWithoutAuthorityPort_ShouldReachActorAdmission()
     {
         var context = AuthorizedActionContext();
@@ -571,7 +621,8 @@ public partial class NyxIdChatEndpointsCoverageTests
             .Which.ReadAuthority.Should().BeNull();
     }
 
-    private static DefaultHttpContext AuthorizedActionContext()
+    private static DefaultHttpContext AuthorizedActionContext(
+        INyxIdActionReadAuthorityPort? authorityPort = null)
     {
         var context = new DefaultHttpContext
         {
@@ -579,10 +630,32 @@ public partial class NyxIdChatEndpointsCoverageTests
                 [new Claim("sub", "owner-alpha")],
                 authenticationType: "test")),
         };
+        if (authorityPort is not null)
+        {
+            context.RequestServices = new ServiceCollection()
+                .AddSingleton(authorityPort)
+                .BuildServiceProvider();
+        }
         context.Request.Headers.Authorization = "Bearer valid-token";
         context.Response.Body = new MemoryStream();
         return context;
     }
+
+    private static NyxIdChatEndpoints.NyxIdChatStreamRequest CompletedKeyActionRequest() =>
+        new(
+            Prompt: null,
+            ClientRequestId: "client-action-alpha",
+            Type: "action.continue",
+            OriginTurnId: "turn-origin-alpha",
+            Actions:
+            [
+                new NyxIdChatEndpoints.NyxIdChatActionReportDto(
+                    "action-alpha",
+                    "turn-origin-alpha",
+                    "completed",
+                    new NyxIdChatEndpoints.NyxIdChatActionResourceDto(
+                        Key: new NyxIdChatEndpoints.NyxIdChatKeyRefDto("key-alpha"))),
+            ]);
 
     private static StubNyxIdChatInteractionService<NyxIdActionContinuationCommand>
         CompletedActionInteraction() =>
@@ -990,6 +1063,11 @@ public partial class NyxIdChatEndpointsCoverageTests
     {
         public int IssueCalls { get; private set; }
 
+        public NyxIdActionReadAuthorityIssueResult IssueResult { get; init; } =
+            new(
+                NyxIdActionReadAuthorityIssueStatus.Active,
+                AuthorityRef());
+
         public Task<NyxIdActionReadAuthorityIssueResult> IssueAsync(
             string bearerToken,
             string scopeId,
@@ -998,9 +1076,7 @@ public partial class NyxIdChatEndpointsCoverageTests
             CancellationToken ct = default)
         {
             IssueCalls++;
-            return Task.FromResult(new NyxIdActionReadAuthorityIssueResult(
-                true,
-                AuthorityRef()));
+            return Task.FromResult(IssueResult);
         }
 
         public Task<NyxIdActionReadAuthorityResolution> ResolveAsync(

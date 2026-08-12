@@ -184,21 +184,28 @@ public static partial class NyxIdChatEndpoints
                             ownerSubject,
                             actionContinuationCommandId,
                             ct);
-                        if (!issuedAuthority.Succeeded || issuedAuthority.Authority is null)
+                        switch (issuedAuthority.Status)
                         {
-                            logger.LogWarning(
-                                "NyxID action read authority issuance failed for actor {ActorId}: {FailureCode}",
-                                actorId,
-                                issuedAuthority.FailureCode ?? NyxIdActionReadAuthorityPort.UnavailableCode);
-                            if (requiresReadAuthority)
-                            {
-                                http.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
-                                return;
-                            }
-                        }
-                        else
-                        {
-                            actionReadAuthority = issuedAuthority.Authority;
+                            case NyxIdActionReadAuthorityIssueStatus.Active:
+                            case NyxIdActionReadAuthorityIssueStatus.ReplayOnlyExpired:
+                                if (issuedAuthority.Authority is not null)
+                                {
+                                    actionReadAuthority = issuedAuthority.Authority;
+                                    break;
+                                }
+                                goto default;
+                            case NyxIdActionReadAuthorityIssueStatus.Failed:
+                            default:
+                                logger.LogWarning(
+                                    "NyxID action read authority issuance failed for actor {ActorId}: {FailureCode}",
+                                    actorId,
+                                    issuedAuthority.FailureCode ?? NyxIdActionReadAuthorityPort.UnavailableCode);
+                                if (requiresReadAuthority)
+                                {
+                                    http.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                                    return;
+                                }
+                                break;
                         }
                     }
                 }
