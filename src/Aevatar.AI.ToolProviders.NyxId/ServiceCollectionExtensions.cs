@@ -40,6 +40,10 @@ public static class ServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Transient<
             IExternalWorkflowCapabilitySource,
             NyxIdCodeExecutionWorkflowCapabilitySource>());
+        services.TryAddTransient<NyxIdCodeExecutionRoutePolicyReconciler>();
+        services.TryAddEnumerable(ServiceDescriptor.Transient<
+            IExternalWorkflowCapabilityAdmissionPreparer,
+            NyxIdCodeExecutionRouteAdmissionPreparer>());
         services.Replace(ServiceDescriptor.Singleton<
             IWorkflowFileMultipartUploadPort,
             NyxIdWorkflowFileMultipartUploadPort>());

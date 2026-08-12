@@ -236,6 +236,22 @@ public interface IExternalWorkflowCapabilityReadinessPort
         CancellationToken cancellationToken = default);
 }
 
+/// <summary>
+/// Performs command-side preparation required before a workflow capability can be admitted.
+/// Readiness inspection remains side-effect free; implementations must use only transient caller
+/// authority and the following live inspection must verify the authoritative result.
+/// </summary>
+public interface IExternalWorkflowCapabilityAdmissionPreparer
+{
+    ExternalWorkflowCapabilitySelector.SelectorOneofCase SelectorKind { get; }
+
+    Task PrepareAsync(
+        ExternalWorkflowCapabilityAccessContext access,
+        ExternalWorkflowCapabilitySelector selector,
+        ExternalCapabilityExecutionMode executionMode,
+        CancellationToken cancellationToken = default);
+}
+
 public sealed record WorkflowArtifactCompatibilityRequest(
     string WorkflowYaml,
     IReadOnlyDictionary<string, string> InlineWorkflowYamls,

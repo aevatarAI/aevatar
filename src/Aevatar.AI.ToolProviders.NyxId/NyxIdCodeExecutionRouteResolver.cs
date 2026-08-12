@@ -126,11 +126,10 @@ public static class NyxIdCodeExecutionRouteResolver
     }
 
     /// <summary>
-    /// Whether the route delivers a credential the platform code runtime accepts on its execute
-    /// endpoint. The runtime authenticates a forwarded caller bearer, and falls back to NyxID's
-    /// injected delegation token only when that bearer is absent and the delegated scope carries
-    /// <c>sandbox:execute</c>. NyxID keeps forwarding and delegation independent, so neither the
-    /// pairing of the two nor the presence of unrelated delegated scopes constrains admission.
+    /// Whether the route delivers a credential the deployed platform runtime accepts. Existing
+    /// forwarding routes remain valid; otherwise NyxID must inject a short-lived token whose
+    /// whitespace scope membership includes <c>sandbox:execute</c>. Command-side reconciliation
+    /// targets the non-forwarding delegated shape without invalidating already-admitted routes.
     /// </summary>
     public static bool HasUsableExecutionCredential(NyxIdUserService service)
     {
@@ -138,6 +137,21 @@ public static class NyxIdCodeExecutionRouteResolver
         return service.ForwardAccessToken == true ||
                (service.InjectDelegationToken == true &&
                 GrantsCodeExecutionDelegation(service.DelegationTokenScope));
+    }
+
+    public static string AddCodeExecutionDelegationScope(string? delegationTokenScope)
+    {
+        var scopes = string.IsNullOrWhiteSpace(delegationTokenScope)
+            ? []
+            : delegationTokenScope
+                .Split(
+                    (char[]?)null,
+                    StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
+        if (!scopes.Contains(CodeDelegationScope, StringComparer.Ordinal))
+            scopes.Add(CodeDelegationScope);
+        return string.Join(' ', scopes);
     }
 
     private static bool GrantsCodeExecutionDelegation(string? delegationTokenScope) =>

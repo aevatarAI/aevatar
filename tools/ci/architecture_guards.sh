@@ -119,6 +119,7 @@ check_code_execution_nyxid_route_boundary() {
 
   expected_files="$(printf '%s\n' \
     'src/Aevatar.AI.Infrastructure.ChronoSandbox/NyxIdCodeExecutionPort.cs' \
+    'src/Aevatar.AI.ToolProviders.NyxId/NyxIdCodeExecutionRoutePolicyReconciler.cs' \
     'src/Aevatar.AI.ToolProviders.NyxId/NyxIdCodeExecutionRouteResolver.cs' \
     'src/Aevatar.AI.ToolProviders.NyxId/NyxIdCodeExecutionWorkflowCapabilitySource.cs' \
     | sort)"
@@ -144,6 +145,7 @@ check_code_execution_nyxid_route_boundary() {
   local expected_parser_files
   expected_parser_files="$(printf '%s\n' \
     'src/Aevatar.AI.ToolProviders.NyxId/NyxIdApiAccessContracts.cs' \
+    'src/Aevatar.AI.ToolProviders.NyxId/NyxIdCodeExecutionRoutePolicyReconciler.cs' \
     'src/Aevatar.AI.ToolProviders.NyxId/NyxIdCodeExecutionRouteResolver.cs' \
     'src/Aevatar.AI.ToolProviders.NyxId/NyxIdCodeExecutionWorkflowCapabilitySource.cs' \
     | sort)"

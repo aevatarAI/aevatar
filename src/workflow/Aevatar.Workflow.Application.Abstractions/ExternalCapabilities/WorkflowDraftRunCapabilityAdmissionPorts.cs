@@ -7,7 +7,9 @@ public sealed record WorkflowDraftRunCapabilityAdmissionRequest(
     string CommandId,
     Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential? CallerCredential,
     string WorkflowYaml,
-    IReadOnlyDictionary<string, string> InlineWorkflowYamls);
+    IReadOnlyDictionary<string, string> InlineWorkflowYamls,
+    [property: System.Text.Json.Serialization.JsonIgnore]
+    NyxIdCallerCredentialSelection? CallerNyxIdCredentialSelection = null);
 
 public sealed record WorkflowDraftRunCapabilityAdmissionResult(
     string SourceKind,

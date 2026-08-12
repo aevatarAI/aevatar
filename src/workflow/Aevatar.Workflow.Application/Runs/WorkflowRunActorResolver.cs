@@ -494,7 +494,8 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
                     request.CommandIdSeed ?? string.Empty,
                     request.CallerCredential,
                     workflowYaml,
-                    inlineWorkflowYamls),
+                    inlineWorkflowYamls,
+                    request.CallerNyxIdCredentialSelection),
                 ct);
             return new DraftRunCapabilityAdmissionPreparation(admission, null);
         }

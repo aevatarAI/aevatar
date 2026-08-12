@@ -71,6 +71,19 @@ scope and is a different namespace from the runtime's `sandbox:execute` RBAC per
 Aevatar cannot observe — a route can therefore pass admission and still be refused by the runtime
 for a caller who lacks that permission.
 
+Fresh workflow command admission may self-repair this mismatch without a platform administrator.
+When the authenticated ingress supplies a verified direct human NyxID access token and there is
+exactly one active, catalog-backed, caller-owned personal candidate, Aevatar updates that exact
+UserService to `forward_access_token=false`, `inject_delegation_token=true`, preserves its existing
+unique delegation scopes, and appends `sandbox:execute`. It then rereads NyxID and admits only when
+the exact route identity, catalog identity, credential policy, and preserved scopes verify. An
+already accepted forwarding or delegated route remains unchanged.
+
+Readiness queries never write. Neither proxy delegation, a broker-issued read token, API key,
+service account, relay credential, nor organization-shared route authorizes this reconciliation.
+The write-authority marker is transient ingress evidence: it is not serialized into a workflow
+command envelope, admission plan, actor state, or read model.
+
 Managed `codex_exec` reads the same UserService but targets a different runtime route with its own
 required scope, so it keeps its own eligibility policy. Neither policy is the other's contract.
 
@@ -84,8 +97,9 @@ code-execution admission rule is not shared by connected-service discovery, ordi
 LLM, or managed Codex paths.
 
 For workflows, `code_execute` is compiled as an external capability with no caller-authored route
-selector. Save and bind readiness reads the same typed inventory resolver and commits the exact
-UserService ID, slug snapshot, catalog identity, and contract digest into an
+selector. Fresh draft-run, save, and bind command admission performs the bounded personal-route
+reconciliation before live readiness; standalone readiness remains read-only. Admission commits
+the exact UserService ID, slug snapshot, catalog identity, and contract digest into an
 `external-capability-admission.v5` call-site proof. Durable bind/invoke additionally requires the
 existing actor-owned NyxID authorization catalog to prove that exact service grant. Interactive
 runtime re-reads NyxID facts when it has a source-readable caller credential. With delegation-only

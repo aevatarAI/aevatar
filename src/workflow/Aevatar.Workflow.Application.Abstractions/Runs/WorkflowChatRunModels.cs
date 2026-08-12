@@ -267,7 +267,8 @@ public sealed record WorkflowChatRunRequest(
     [property: JsonIgnore] string? CurrentTurnId = null,
     [property: JsonIgnore] WorkflowRunTargetSeed? TargetSeed = null,
     [property: JsonIgnore] WorkflowCompletionNotificationTarget? CompletionNotificationTarget = null,
-    [property: JsonIgnore] WorkflowDefinitionBinding? ResolvedDefinitionBinding = null) : ICommandContextSeed
+    [property: JsonIgnore] WorkflowDefinitionBinding? ResolvedDefinitionBinding = null,
+    [property: JsonIgnore] NyxIdCallerCredentialSelection? CallerNyxIdCredentialSelection = null) : ICommandContextSeed
 {
     string? ICommandContextSeed.CommandId => CommandIdSeed;
 
