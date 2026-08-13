@@ -39,7 +39,7 @@ function createBackendSession(
 }
 
 describe('resolveWorkflowActivityAccount', () => {
-  it('fills missing profile fields from a stored session with the same subject', () => {
+  it('keeps backend profile facts authoritative when local storage has the same subject', () => {
     const result = resolveWorkflowActivityAccount(
       createBackendSession({ subject: 'user-abigail', profile: null }),
       createStoredSession(),
@@ -47,18 +47,13 @@ describe('resolveWorkflowActivityAccount', () => {
 
     expect(result.principal).toEqual({
       authenticated: true,
-      displayName: 'Abigail Deng',
-      picture: 'https://example.test/abigail.png',
+      displayName: '',
+      picture: null,
     });
-    expect(result.auth?.profile).toEqual({
-      email: 'abigail@example.test',
-      emailVerified: true,
-      groups: ['platform'],
-      name: 'Abigail Deng',
-      picture: 'https://example.test/abigail.png',
-      roles: ['operator'],
-      subject: 'user-abigail',
-    });
+    expect(result.auth?.profile).toBeNull();
+    expect(result.auth?.name).toBeUndefined();
+    expect(result.auth?.email).toBeUndefined();
+    expect(result.auth?.picture).toBeUndefined();
   });
 
   it('does not reuse a stored profile for a different backend subject', () => {
