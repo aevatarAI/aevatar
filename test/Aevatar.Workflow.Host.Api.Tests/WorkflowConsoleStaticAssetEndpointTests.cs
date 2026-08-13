@@ -585,6 +585,85 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
     }
 
     [Fact]
+    public async Task WorkflowStudio_PendingPlanSnapshot_ShouldRefreshCurrentStateBeforeDecision()
+    {
+        var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8');
+            const planStart = source.indexOf('function actorPlanGateStatus(');
+            const planEnd = source.indexOf('\nfunction needsYouKey(', planStart);
+            const frameStart = source.indexOf('function handleFrame(');
+            const frameEnd = source.indexOf('\nfunction pickContext(', frameStart);
+            assert.notEqual(planStart, -1);
+            assert.notEqual(planEnd, -1);
+            assert.notEqual(frameStart, -1);
+            assert.notEqual(frameEnd, -1);
+
+            const timers = [];
+            let refreshes = 0;
+            let conversationLoads = 0;
+            const entry = {
+              actorId:'conversation-alpha',
+              actorProjection:{stateVersion:0},
+              actorStateRefreshTimer:null
+            };
+            const context = {
+              conversationContext:null,
+              state:{activeConversation:entry,run:{}},
+              normalizeFrame:(raw) => raw,
+              recordEvent:() => {},
+              entryActorProjection:(candidate) => candidate.actorProjection,
+              reduceActorEvent:(_projection, event) => event.projection,
+              renderActorProjection:() => {},
+              renderActionCards:() => {},
+              renderActiveConversationState:() => {},
+              renderInspector:() => {},
+              refreshActorState:() => { refreshes += 1; },
+              loadConversations:() => { conversationLoads += 1; },
+              window:{
+                clearTimeout:() => {},
+                setTimeout:(callback, delay) => {
+                  timers.push({callback, delay});
+                  return timers.length;
+                }
+              }
+            };
+            vm.createContext(context);
+            vm.runInContext(
+              source.slice(planStart, planEnd) + '\n' + source.slice(frameStart, frameEnd),
+              context
+            );
+
+            const snapshot = (status) => ({
+              type:'task_snapshot',
+              projection:{
+                stateVersion:0,
+                task:{taskId:'task-alpha',gate:{
+                  status, requestId:'gate-alpha', planId:'plan-alpha', planRevision:2
+                }}
+              }
+            });
+
+            context.handleFrame(snapshot('pending'));
+            assert.equal(timers.length, 1);
+            assert.equal(timers[0].delay, 300);
+            timers[0].callback();
+            assert.equal(refreshes, 1);
+            assert.equal(conversationLoads, 1);
+
+            timers.length = 0;
+            context.handleFrame(snapshot('satisfied'));
+            assert.equal(timers.length, 0);
+            """;
+
+        var result = await RunNodeAsync(script, app);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
     public async Task WorkflowStudio_TaskStepSourceLabel_ShouldUseTypedPostconditionCheck()
     {
         var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
