@@ -330,7 +330,7 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
           ) {
             return;
           }
-          if (!pageData.hasMore || !pageData.nextCursor) {
+          if (!pageData || !pageData.hasMore || !pageData.nextCursor) {
             throw new Error('The requested activity page is unavailable.');
           }
           cursors[page] = pageData.nextCursor;

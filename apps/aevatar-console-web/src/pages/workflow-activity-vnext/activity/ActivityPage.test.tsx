@@ -288,11 +288,6 @@ describe('Workflow Activity vNext Activity ledger', () => {
             runId: 'workflow-definition:studio:run:internal-alpha',
             workflowName: 'Customer follow-up',
             runOrigin: 'backend-native-origin.v2',
-            currentStep: {
-              availability: 'available',
-              inputSummary: 'Connector request',
-              stepId: 'generate_weekly_report',
-            },
           }),
         ],
         { totalCount: 42 },
