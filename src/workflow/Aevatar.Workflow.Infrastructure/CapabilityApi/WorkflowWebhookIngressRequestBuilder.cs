@@ -21,9 +21,12 @@ internal sealed class WorkflowWebhookIngressRequestBuilder
         HttpRequest httpRequest,
         string routeKey,
         ReadOnlySpan<byte> rawBody,
-        DateTimeOffset receivedAt)
+        DateTimeOffset receivedAt,
+        WorkflowWebhookIngressBindingOptions? resolvedBinding = null)
     {
-        var binding = ResolveBinding(routeKey);
+        // Scope-registered dynamic bindings take precedence; the static
+        // appsettings list remains as an operator fallback.
+        var binding = resolvedBinding ?? ResolveBinding(routeKey);
         if (binding == null)
             return WorkflowWebhookIngressBuildResult.Failure(
                 "WEBHOOK_ROUTE_NOT_FOUND",
@@ -33,10 +36,11 @@ internal sealed class WorkflowWebhookIngressRequestBuilder
         var route = Normalize(binding.RouteKey) ?? string.Empty;
         var sourceId = Normalize(binding.SourceId) ?? route;
         var workflowName = Normalize(binding.WorkflowName);
-        if (workflowName == null)
+        var definitionActorId = Normalize(binding.DefinitionActorId);
+        if (workflowName == null && definitionActorId == null)
             return WorkflowWebhookIngressBuildResult.Failure(
                 "WEBHOOK_WORKFLOW_REQUIRED",
-                "Webhook binding workflow name is required.",
+                "Webhook binding workflow name or definition actor id is required.",
                 StatusCodes.Status500InternalServerError);
 
         if (Normalize(binding.HmacSecret) == null)
@@ -59,7 +63,7 @@ internal sealed class WorkflowWebhookIngressRequestBuilder
                 "Webhook delivery id is required.",
                 StatusCodes.Status400BadRequest);
 
-        var prompt = ResolvePrompt(binding, rawBody);
+        var prompt = ResolvePrompt(binding, rawBody, receivedAt);
         if (prompt == null)
             return WorkflowWebhookIngressBuildResult.Failure(
                 "WEBHOOK_PROMPT_REQUIRED",
@@ -80,7 +84,11 @@ internal sealed class WorkflowWebhookIngressRequestBuilder
 
         var command = new WorkflowChatRunRequest(
             Prompt: prompt,
-            Source: WorkflowChatSource.CatalogWorkflow(workflowName),
+            // A scope-published target is addressed by its definition actor;
+            // the catalog-name path stays for host-catalog workflows.
+            Source: definitionActorId != null
+                ? WorkflowChatSource.DefinitionActor(definitionActorId, workflowName)
+                : WorkflowChatSource.CatalogWorkflow(workflowName!),
             ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
             ScopeId: Normalize(binding.ScopeId),
             CommandIdSeed: commandId,
@@ -128,11 +136,12 @@ internal sealed class WorkflowWebhookIngressRequestBuilder
 
     private static string? ResolvePrompt(
         WorkflowWebhookIngressBindingOptions binding,
-        ReadOnlySpan<byte> rawBody)
+        ReadOnlySpan<byte> rawBody,
+        DateTimeOffset receivedAt)
     {
         var template = Normalize(binding.PromptTemplate);
         if (template != null)
-            return ApplyTemplate(template, rawBody);
+            return ApplyTemplate(template, rawBody, receivedAt);
 
         var path = Normalize(binding.PromptJsonPath);
         if (path != null)
@@ -141,17 +150,32 @@ internal sealed class WorkflowWebhookIngressRequestBuilder
         return null;
     }
 
-    private static string? ApplyTemplate(string template, ReadOnlySpan<byte> rawBody)
+    private static string? ApplyTemplate(string template, ReadOnlySpan<byte> rawBody, DateTimeOffset receivedAt)
     {
         var result = template;
         foreach (var placeholder in EnumeratePlaceholders(template))
         {
-            var value = ExtractJsonString(rawBody, placeholder);
+            var value = placeholder.StartsWith('@')
+                ? ResolveIngressPlaceholder(placeholder, receivedAt)
+                : ExtractJsonString(rawBody, placeholder);
             result = result.Replace("{{" + placeholder + "}}", value ?? string.Empty, StringComparison.Ordinal);
         }
 
         return Normalize(result);
     }
+
+    // Tenant local time is UTC+8. Senders such as Lark Base automation cannot
+    // supply "today", so bindings derive it from the trusted ingress
+    // received_at instead of trusting a payload-provided date.
+    private static readonly TimeSpan TenantUtcOffset = TimeSpan.FromHours(8);
+
+    private static string? ResolveIngressPlaceholder(string placeholder, DateTimeOffset receivedAt) =>
+        placeholder switch
+        {
+            "@run_date" => receivedAt.ToOffset(TenantUtcOffset).ToString("yyyy-MM-dd"),
+            "@received_at_unix_ms" => receivedAt.ToUnixTimeMilliseconds().ToString(),
+            _ => null,
+        };
 
     private static IEnumerable<string> EnumeratePlaceholders(string template)
     {

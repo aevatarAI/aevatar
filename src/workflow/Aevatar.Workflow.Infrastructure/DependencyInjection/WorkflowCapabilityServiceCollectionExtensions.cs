@@ -66,15 +66,51 @@ public static class WorkflowCapabilityServiceCollectionExtensions
             .ValidateOnStart();
         services.TryAddSingleton<WorkflowWebhookIngressRequestBuilder>();
         services.TryAddSingleton<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowWebhookReplayAdmissionPort, WorkflowWebhookReplayAdmissionPort>();
+        // Zero-config default: hosts that already run on Garnet reuse the
+        // actor-runtime connection for webhook replay/binding storage, and the
+        // mounted secret-store keyring supplies (via domain-separated
+        // derivation) the binding-secret encryption key. Explicit
+        // WorkflowWebhookIngress values override both.
         var webhookReplayRedisConnectionString = configuration[$"{WorkflowWebhookIngressOptions.SectionName}:RedisConnectionString"];
+        if (string.IsNullOrWhiteSpace(webhookReplayRedisConnectionString))
+        {
+            webhookReplayRedisConnectionString = configuration["ActorRuntime:OrleansGarnetConnectionString"];
+            if (!string.IsNullOrWhiteSpace(webhookReplayRedisConnectionString))
+            {
+                var fallbackConnectionString = webhookReplayRedisConnectionString;
+                services.PostConfigure<WorkflowWebhookIngressOptions>(options =>
+                {
+                    if (string.IsNullOrWhiteSpace(options.RedisConnectionString))
+                        options.RedisConnectionString = fallbackConnectionString;
+                });
+            }
+        }
+
+        var bindingSecretEncryptionKey = configuration[$"{WorkflowWebhookIngressOptions.SectionName}:BindingSecretEncryptionKey"];
+        if (string.IsNullOrWhiteSpace(bindingSecretEncryptionKey))
+        {
+            bindingSecretEncryptionKey = AesGcmWorkflowWebhookBindingSecretCipher.TryDerivePassphraseFromKeyring(
+                configuration["ActorRuntime:SecretStoreKeyringPath"]);
+        }
+
         if (!string.IsNullOrWhiteSpace(webhookReplayRedisConnectionString))
         {
             services.TryAddSingleton<WorkflowWebhookReplayRedisConnection>();
             services.TryAddSingleton<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowWebhookReplayStore, RedisWorkflowWebhookReplayStore>();
+            // Fail closed: without a host encryption key the Redis-backed
+            // binding store stays unregistered (management API answers 503)
+            // rather than persisting scope-submitted secrets in plaintext.
+            if (!string.IsNullOrWhiteSpace(bindingSecretEncryptionKey))
+            {
+                services.TryAddSingleton<IWorkflowWebhookBindingSecretCipher>(
+                    new AesGcmWorkflowWebhookBindingSecretCipher(bindingSecretEncryptionKey));
+                services.TryAddSingleton<IWorkflowWebhookBindingStore, RedisWorkflowWebhookBindingStore>();
+            }
         }
         else if (configuration.GetValue<bool>($"{WorkflowWebhookIngressOptions.SectionName}:UseInMemoryReplayStore"))
         {
             services.TryAddSingleton<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowWebhookReplayStore, InMemoryWorkflowWebhookReplayStore>();
+            services.TryAddSingleton<IWorkflowWebhookBindingStore, InMemoryWorkflowWebhookBindingStore>();
         }
         services.AddWorkflowDefinitionFileSource(options =>
         {

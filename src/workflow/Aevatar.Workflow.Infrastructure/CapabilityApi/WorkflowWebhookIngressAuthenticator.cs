@@ -41,8 +41,13 @@ internal static class WorkflowWebhookIngressAuthenticator
                 "WEBHOOK_AUTH_EXPIRED",
                 "Webhook timestamp is outside the accepted window.");
 
-        var expected = ComputeSignature(secret, timestampValue, rawBody);
-        if (!FixedTimeEquals(signature, expected))
+        // During secret rotation both the current and the retired secret
+        // authenticate, so senders can be migrated without dropped deliveries.
+        var matched = FixedTimeEquals(signature, ComputeSignature(secret, timestampValue, rawBody));
+        var previousSecret = Normalize(binding.PreviousHmacSecret);
+        if (!matched && previousSecret != null)
+            matched = FixedTimeEquals(signature, ComputeSignature(previousSecret, timestampValue, rawBody));
+        if (!matched)
             return WorkflowWebhookAuthenticationResult.Failure(
                 "WEBHOOK_AUTH_INVALID",
                 "Webhook signature is invalid.");

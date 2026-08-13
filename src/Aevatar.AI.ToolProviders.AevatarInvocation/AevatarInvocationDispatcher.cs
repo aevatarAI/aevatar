@@ -485,6 +485,25 @@ public sealed class AevatarInvocationDispatcher
         var scope = workflowScope.Value!;
 
         var backgroundDelivery = ResolveWorkflowBackgroundDelivery(AgentToolRequestContext.Current);
+        if (wait == InvocationWaitMode.Complete)
+        {
+            // wait=complete is the caller's explicit promise to observe the run
+            // to its terminal state in-turn (via the observe tools) and compose
+            // the user-facing reply itself. Registering the background channel
+            // relay here would post the run's raw final output as a second,
+            // unformatted message — the exact behavior wait=complete opts out
+            // of. Skip the relay entirely; delivery-credential problems are
+            // then also irrelevant to this start.
+            if (backgroundDelivery.ShouldRegister)
+            {
+                _logger.LogInformation(
+                    "Channel workflow background delivery skipped: reason=wait_complete_caller_observes platform={Platform}",
+                    AgentToolRequestContext.Current?.Channel.Platform ?? string.Empty);
+            }
+
+            backgroundDelivery = WorkflowBackgroundDeliveryResolution.Disabled();
+        }
+
         if (backgroundDelivery.Error != null)
             return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(backgroundDelivery.Error), backgroundDelivery.Error);
         if (backgroundDelivery.ShouldRegister && _workflowRunDeliveryRegistrationPort is null)

@@ -17,6 +17,12 @@ internal static class WorkflowWebhookIngressEndpoints
     {
         group.MapPost("/workflow-webhooks/{routeKey}", HandleAsync)
             .WithName("PostWorkflowWebhook")
+            // External senders (e.g. the NyxID trigger delivery) carry no
+            // bearer identity; authentication for this route is the per-binding
+            // HMAC signature verified inside the handler. Without this
+            // exemption the host's fallback authorization policy rejects every
+            // delivery with an empty 401 before the handler runs.
+            .AllowAnonymous()
             .WithEndpointAudit(
                 "workflow.webhook.ingress",
                 AuditSensitivityLevel.Confidential,
@@ -24,6 +30,8 @@ internal static class WorkflowWebhookIngressEndpoints
                 // Static target: {routeKey} is an opaque webhook key, never recorded.
                 EndpointAuditTargetResolvers.Static("workflow_run", "webhook-ingress"),
                 captureUnauthenticated: true);
+
+        WorkflowWebhookBindingEndpoints.Map(group);
     }
 
     internal static async Task<IResult> HandleAsync(
@@ -37,7 +45,15 @@ internal static class WorkflowWebhookIngressEndpoints
     {
         using var scope = ApiRequestScope.BeginHttp();
         var logger = loggerFactory.CreateLogger("Aevatar.Workflow.Host.Api.Webhook");
-        if (!options.Value.Enabled)
+
+        // Scope-registered bindings are data, always live. The Enabled flag
+        // gates only the static appsettings binding list.
+        var bindingStore = http.RequestServices.GetService<IWorkflowWebhookBindingStore>();
+        var dynamicBinding = bindingStore is null
+            ? null
+            : (await bindingStore.GetAsync(routeKey, ct))?.ToBindingOptions();
+
+        if (dynamicBinding is null && !options.Value.Enabled)
         {
             scope.MarkResult(StatusCodes.Status404NotFound);
             return Results.Json(
@@ -65,7 +81,7 @@ internal static class WorkflowWebhookIngressEndpoints
         }
 
         var receivedAt = DateTimeOffset.UtcNow;
-        var build = requestBuilder.Build(http.Request, routeKey, rawBody, receivedAt);
+        var build = requestBuilder.Build(http.Request, routeKey, rawBody, receivedAt, dynamicBinding);
         if (!build.Succeeded)
         {
             scope.MarkResult(build.StatusCode);
