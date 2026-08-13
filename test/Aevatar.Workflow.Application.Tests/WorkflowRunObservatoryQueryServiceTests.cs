@@ -285,7 +285,51 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         row.Waiting.Availability.Should().Be("unavailable");
         row.CompletedAtUtc.Should().BeNull();
         row.DurationMs.Should().BeNull();
+        row.RecoveryCapability.RetryFailedStep.Should().NotBeNull();
+        row.RecoveryCapability.RetryFailedStep.Eligibility.Should().Be(WorkflowRecoveryEligibility.Unavailable);
+        row.RecoveryCapability.RetryFailedStep.UnavailableReasonCode.Should()
+            .Be(WorkflowRecoveryUnavailableReasonCode.LegacyUnavailable);
+        row.RecoveryCapability.RunAgain.Should().NotBeNull();
+        row.RecoveryCapability.RunAgain.Eligibility.Should().Be(WorkflowRecoveryEligibility.Unavailable);
+        row.RecoveryCapability.RunAgain.UnavailableReasonCode.Should()
+            .Be(WorkflowRecoveryUnavailableReasonCode.LegacyUnavailable);
         row.Lineage.Availability.Should().Be(WorkflowRunLineageAvailability.LegacyUnavailable);
+    }
+
+    [Fact]
+    public async Task ListActivityRunsForScopeAsync_ShouldNormalizeLegacyRecoveryActions_WhenCapabilityExistsWithoutActions()
+    {
+        var snapshot = Snapshot("actor-legacy-recovery", CallerScope, WorkflowRunCompletionStatus.Completed, updated: 300);
+        snapshot.RecoveryCapability = new WorkflowRunRecoveryCapability
+        {
+            WorkflowDefinitionRevisionId = "rev-legacy",
+            WorkflowDefinitionVersion = 3,
+        };
+        var currentState = new FakeCurrentStateQueryPort
+        {
+            PageResult = new WorkflowActorCurrentStatePage([snapshot], null, null),
+        };
+        var service = new WorkflowRunObservatoryQueryService(currentState, new FakeArtifactQueryPort());
+
+        var page = await service.ListActivityRunsForScopeAsync(
+            CallerScope,
+            new WorkflowActivityRunFeedFilter());
+
+        var row = page.Items.Should().ContainSingle().Subject;
+        row.RecoveryCapability.WorkflowDefinitionRevisionId.Should().Be("rev-legacy");
+        row.RecoveryCapability.WorkflowDefinitionVersion.Should().Be(3);
+        row.RecoveryCapability.RetryFailedStep.Should().NotBeNull();
+        row.RecoveryCapability.RetryFailedStep.Eligibility.Should().Be(WorkflowRecoveryEligibility.Unavailable);
+        row.RecoveryCapability.RetryFailedStep.UnavailableReasonCode.Should()
+            .Be(WorkflowRecoveryUnavailableReasonCode.LegacyUnavailable);
+        row.RecoveryCapability.RetryFailedStep.UnavailableReason.Should()
+            .Be("Recovery capability is unavailable for this legacy run.");
+        row.RecoveryCapability.RunAgain.Should().NotBeNull();
+        row.RecoveryCapability.RunAgain.Eligibility.Should().Be(WorkflowRecoveryEligibility.Unavailable);
+        row.RecoveryCapability.RunAgain.UnavailableReasonCode.Should()
+            .Be(WorkflowRecoveryUnavailableReasonCode.LegacyUnavailable);
+        row.RecoveryCapability.RunAgain.UnavailableReason.Should()
+            .Be("Recovery capability is unavailable for this legacy run.");
     }
 
     [Fact]
