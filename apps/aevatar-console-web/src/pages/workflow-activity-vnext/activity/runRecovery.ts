@@ -1,38 +1,52 @@
-export type RecoveryStepCandidate = {
-  readonly stepId: string;
-  readonly success: boolean | null;
-};
+import type {
+  WorkflowRecoveryActionCapability,
+  WorkflowRecoveryRecommendedAction,
+  WorkflowRunRecoveryCapability,
+} from '@/shared/models/workflowActivity';
 
-export type RecoveryGraphCandidate = {
-  readonly nodes: readonly {
-    readonly nodeId: string;
-    readonly stepId: string;
-  }[];
-  readonly rootNodeId: string;
-};
+export interface RecoveryActionPresentation {
+  readonly enabled: boolean;
+  readonly mayIncurModelOrToolCost: boolean;
+  readonly reason: string;
+  readonly recommendedActions: readonly WorkflowRecoveryRecommendedAction[];
+  readonly reusesPriorStepOutputs: boolean;
+  readonly startingStepId: string;
+}
+
+export interface RunRecoveryPresentation {
+  readonly retry: RecoveryActionPresentation;
+  readonly runAgain: RecoveryActionPresentation;
+  readonly workflowDefinitionRevisionId: string;
+  readonly workflowDefinitionVersion: number;
+}
+
+function resolveAction(
+  capability: WorkflowRecoveryActionCapability,
+): RecoveryActionPresentation {
+  const startingStepId = capability.startingStepId.trim();
+  const eligible = capability.eligibility === 1;
+  return {
+    enabled: eligible && Boolean(startingStepId),
+    mayIncurModelOrToolCost: capability.mayIncurModelOrToolCost,
+    reason:
+      capability.unavailableReason.trim() ||
+      (eligible && !startingStepId
+        ? 'Recovery starting step is unavailable.'
+        : ''),
+    recommendedActions: capability.recommendedActions,
+    reusesPriorStepOutputs: capability.reusesPriorStepOutputs,
+    startingStepId,
+  };
+}
 
 export function resolveRunRecovery(
-  steps: readonly RecoveryStepCandidate[],
-  graph?: RecoveryGraphCandidate,
-): {
-  readonly retryStepId: string | null;
-  readonly runAgainStepId: string | null;
-} {
-  const failed = steps.filter(
-    (step) => step.success === false && step.stepId.trim(),
-  );
-  const rootNodeId = graph?.rootNodeId.trim() ?? '';
-  const rootStepId = rootNodeId
-    ? (graph?.nodes
-        .find((node) => node.nodeId.trim() === rootNodeId)
-        ?.stepId.trim() ?? '')
-    : '';
-  const explicitRootStepId =
-    rootStepId && steps.some((step) => step.stepId.trim() === rootStepId)
-      ? rootStepId
-      : null;
+  capability: WorkflowRunRecoveryCapability,
+): RunRecoveryPresentation {
   return {
-    retryStepId: failed.length === 1 ? failed[0].stepId : null,
-    runAgainStepId: explicitRootStepId,
+    retry: resolveAction(capability.retryFailedStep),
+    runAgain: resolveAction(capability.runAgain),
+    workflowDefinitionRevisionId:
+      capability.workflowDefinitionRevisionId.trim(),
+    workflowDefinitionVersion: capability.workflowDefinitionVersion,
   };
 }

@@ -3,16 +3,21 @@ import {
   ReloadOutlined,
   SearchOutlined,
 } from '@ant-design/icons';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getLocale } from '@umijs/max';
-import { Button, Input, Select, Space } from 'antd';
+import { Button, DatePicker, Input, Pagination, Select, Space } from 'antd';
+import dayjs from 'dayjs';
 import React from 'react';
-import { scopesApi } from '@/shared/api/scopesApi';
 import {
   WorkflowActivityApiError,
   workflowActivityApi,
 } from '@/shared/api/workflowActivityApi';
 import { t } from '@/shared/i18n/messages';
+import type {
+  WorkflowActivityRunFeedFilter,
+  WorkflowActivityRunFeedPage,
+  WorkflowActivityRunFeedRow,
+} from '@/shared/models/workflowActivity';
 import { history } from '@/shared/navigation/history';
 import AevatarContentSkeleton from '@/shared/ui/AevatarContentSkeleton';
 import { useConsoleLocation } from '../hooks/useConsoleLocation';
@@ -23,6 +28,9 @@ import WorkflowActivityVNextShell from '../WorkflowActivityVNextShell';
 import { getRunStatusPresentation } from './runPresentation';
 
 const supportedRunStatuses = new Set(['running', 'completed', 'failed']);
+const activityPageSize = 25;
+const activitySearchDebounceMs = 300;
+const activityRunsQueryPrefix = ['workflow-activity-vnext', 'activity-runs'];
 
 function normalizeRunStatusFilter(value: string | null): string {
   const normalized = value?.trim().toLowerCase() ?? '';
@@ -39,6 +47,38 @@ function formatDate(value: string | null): string {
         dateStyle: 'medium',
         timeStyle: 'short',
       }).format(date);
+}
+
+function formatDuration(milliseconds: number | null): string {
+  if (milliseconds === null || !Number.isFinite(milliseconds)) return '-';
+  const seconds = Math.max(0, Math.round(milliseconds / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return remainingMinutes ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
+}
+
+function runDuration(run: WorkflowActivityRunFeedRow, now: number): string {
+  if (run.durationMs !== null) return formatDuration(run.durationMs);
+  if (!run.startedAtUtc || run.completedAtUtc) return '-';
+  const startedAt = new Date(run.startedAtUtc).getTime();
+  return Number.isNaN(startedAt) ? '-' : formatDuration(now - startedAt);
+}
+
+function isAvailable(value: string): boolean {
+  return value.trim().toLowerCase() === 'available';
+}
+
+function runContext(run: WorkflowActivityRunFeedRow): string | null {
+  if (isAvailable(run.firstFailure.availability)) {
+    return run.firstFailure.message || null;
+  }
+  if (isAvailable(run.waiting.availability)) {
+    return run.waiting.prompt || run.waiting.waitingKind || null;
+  }
+  return null;
 }
 
 function failureTitle(error: unknown): string {
@@ -60,8 +100,21 @@ function failureTitle(error: unknown): string {
   );
 }
 
+interface ActivityPaginationState {
+  readonly filterKey: string;
+  readonly page: number;
+  readonly cursors: readonly (string | undefined)[];
+}
+
+function createActivityPaginationState(
+  filterKey: string,
+): ActivityPaginationState {
+  return { filterKey, page: 1, cursors: [undefined] };
+}
+
 const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
   const location = useConsoleLocation();
+  const queryClient = useQueryClient();
   const params = React.useMemo(
     () => new URLSearchParams(location.search),
     [location.search],
@@ -70,9 +123,55 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
   const status = normalizeRunStatusFilter(rawStatus);
   const origin = params.get('origin') ?? '';
   const definition = params.get('definition')?.trim() ?? '';
+  const schedule = params.get('schedule')?.trim() ?? '';
   const workflowFilterPresent = params.has('workflowId');
   const workflowId = params.get('workflowId')?.trim() ?? '';
+  const fromUtc = params.get('from')?.trim() ?? '';
+  const toUtc = params.get('to')?.trim() ?? '';
   const search = params.get('q') ?? '';
+  const [searchInput, setSearchInput] = React.useState(search);
+  const [now, setNow] = React.useState(() => Date.now());
+  const filterKey = React.useMemo(
+    () =>
+      JSON.stringify([
+        scopeId,
+        status,
+        origin,
+        definition,
+        schedule,
+        workflowId,
+        search,
+        fromUtc,
+        toUtc,
+      ]),
+    [
+      definition,
+      fromUtc,
+      origin,
+      schedule,
+      scopeId,
+      search,
+      status,
+      toUtc,
+      workflowId,
+    ],
+  );
+  const [pagination, setPagination] = React.useState<ActivityPaginationState>(
+    () => createActivityPaginationState(filterKey),
+  );
+  const [isResolvingPage, setIsResolvingPage] = React.useState(false);
+  const [pageNavigationError, setPageNavigationError] = React.useState<
+    unknown | null
+  >(null);
+  const [pendingPage, setPendingPage] = React.useState<number | null>(null);
+  const navigationRequestId = React.useRef(0);
+  const currentFilterKey = React.useRef(filterKey);
+  currentFilterKey.current = filterKey;
+  const activePagination =
+    pagination.filterKey === filterKey
+      ? pagination
+      : createActivityPaginationState(filterKey);
+  const currentCursor = activePagination.cursors[activePagination.page - 1];
 
   const replaceParams = React.useCallback(
     (update: (next: URLSearchParams) => void) => {
@@ -105,64 +204,176 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
     replaceParam('status', '');
   }, [rawStatus, replaceParam, status]);
 
-  const workflow = useQuery({
-    queryKey: [
-      'workflow-activity-vnext',
-      'activity-workflow',
-      scopeId,
-      workflowId,
-    ],
-    queryFn: () => scopesApi.getWorkflowDetail(scopeId, workflowId),
-    enabled: workflowFilterPresent && Boolean(workflowId),
-    retry: false,
-  });
-  const resolvedDefinition =
-    workflow.data?.source?.definitionActorId.trim() ?? '';
-  const effectiveDefinition = workflowFilterPresent
-    ? resolvedDefinition
-    : definition;
-  const workflowFilterReady =
-    !workflowFilterPresent || Boolean(resolvedDefinition);
+  React.useEffect(() => {
+    setSearchInput(search);
+  }, [search]);
+
+  React.useEffect(() => {
+    if (searchInput === search) return;
+    const timer = window.setTimeout(
+      () => replaceParam('q', searchInput),
+      activitySearchDebounceMs,
+    );
+    return () => window.clearTimeout(timer);
+  }, [replaceParam, search, searchInput]);
+
+  React.useEffect(() => {
+    if (pagination.filterKey === filterKey) return;
+    navigationRequestId.current += 1;
+    setIsResolvingPage(false);
+    setPageNavigationError(null);
+    setPendingPage(null);
+    setPagination(createActivityPaginationState(filterKey));
+  }, [filterKey, pagination.filterKey]);
+
+  const buildActivityRunFilter = React.useCallback(
+    (cursor: string | undefined): WorkflowActivityRunFeedFilter => ({
+      status: status || undefined,
+      origins: origin ? [origin] : undefined,
+      definitionActorIds: definition ? [definition] : undefined,
+      scheduleIds: schedule ? [schedule] : undefined,
+      workflowId: workflowId || undefined,
+      searchText: search.trim() || undefined,
+      fromUtc: fromUtc || undefined,
+      toUtc: toUtc || undefined,
+      take: activityPageSize,
+      cursor,
+      includeTotalCount: true,
+    }),
+    [definition, fromUtc, origin, schedule, search, status, toUtc, workflowId],
+  );
+  const activityRunsQueryKey = React.useCallback(
+    (cursor: string | undefined) =>
+      [...activityRunsQueryPrefix, filterKey, cursor] as const,
+    [filterKey],
+  );
+  const fetchActivityPage = React.useCallback(
+    (cursor: string | undefined) =>
+      workflowActivityApi.listActivityRuns(
+        scopeId,
+        buildActivityRunFilter(cursor),
+      ),
+    [buildActivityRunFilter, scopeId],
+  );
+  const canQueryActivityRuns = !workflowFilterPresent || Boolean(workflowId);
+
   const runs = useQuery({
-    queryKey: [
-      'workflow-activity-vnext',
-      'runs',
-      scopeId,
-      status,
-      origin,
-      effectiveDefinition,
-    ],
-    queryFn: () =>
-      workflowActivityApi.listRuns(scopeId, {
-        status: status || undefined,
-        origins: origin ? [origin] : undefined,
-        definitionActorIds: effectiveDefinition
-          ? [effectiveDefinition]
-          : undefined,
-        take: 100,
-      }),
-    enabled: workflowFilterReady,
+    queryKey: activityRunsQueryKey(currentCursor),
+    queryFn: () => fetchActivityPage(currentCursor),
+    enabled: canQueryActivityRuns,
     refetchOnMount: 'always',
     retry: false,
   });
 
-  const refresh = () => {
-    if (workflowFilterPresent && !resolvedDefinition) {
-      if (workflowId) void workflow.refetch();
-      return;
-    }
-    void runs.refetch();
-  };
+  const currentRuns = runs.data?.items ?? [];
+  const hasRunningRun = currentRuns.some(
+    (run) => run.status.trim().toLowerCase() === 'running',
+  );
+  React.useEffect(() => {
+    if (!hasRunningRun) return;
+    const interval = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(interval);
+  }, [hasRunningRun]);
 
-  const filtered = (runs.data ?? []).filter((run) => {
-    const normalized = search.trim().toLowerCase();
-    return (
-      !normalized ||
-      [run.workflowName, run.runId, run.status].some((value) =>
-        value.toLowerCase().includes(normalized),
-      )
-    );
-  });
+  const totalCount = runs.data?.totalCount ?? null;
+  const totalPages =
+    totalCount === null
+      ? null
+      : Math.max(1, Math.ceil(totalCount / activityPageSize));
+  const paginationTotal =
+    totalCount ??
+    activePagination.page * activityPageSize + (runs.data?.hasMore ? 1 : 0);
+  const hasFilters = Boolean(
+    status ||
+      origin ||
+      definition ||
+      schedule ||
+      workflowId ||
+      search ||
+      fromUtc ||
+      toUtc,
+  );
+  const goToPage = React.useCallback(
+    async (requestedPage: number) => {
+      if (
+        !canQueryActivityRuns ||
+        requestedPage < 1 ||
+        requestedPage === activePagination.page ||
+        (totalPages !== null && requestedPage > totalPages)
+      ) {
+        return;
+      }
+
+      const requestId = navigationRequestId.current + 1;
+      navigationRequestId.current = requestId;
+      setIsResolvingPage(true);
+      setPageNavigationError(null);
+      setPendingPage(requestedPage);
+
+      try {
+        const cursors = [...activePagination.cursors];
+        for (let page = 1; page < requestedPage; page += 1) {
+          if (cursors[page] !== undefined) continue;
+
+          const cursor = cursors[page - 1];
+          const queryKey = activityRunsQueryKey(cursor);
+          const pageData =
+            queryClient.getQueryData<WorkflowActivityRunFeedPage>(queryKey) ??
+            (await queryClient.fetchQuery({
+              queryKey,
+              queryFn: () => fetchActivityPage(cursor),
+            }));
+
+          if (
+            navigationRequestId.current !== requestId ||
+            currentFilterKey.current !== filterKey
+          ) {
+            return;
+          }
+          if (!pageData || !pageData.hasMore || !pageData.nextCursor) {
+            throw new Error('The requested activity page is unavailable.');
+          }
+          cursors[page] = pageData.nextCursor;
+        }
+
+        if (
+          navigationRequestId.current !== requestId ||
+          currentFilterKey.current !== filterKey
+        ) {
+          return;
+        }
+        setPagination({ filterKey, page: requestedPage, cursors });
+        setPendingPage(null);
+      } catch (error) {
+        if (
+          navigationRequestId.current === requestId &&
+          currentFilterKey.current === filterKey
+        ) {
+          setPageNavigationError(error);
+        }
+      } finally {
+        if (
+          navigationRequestId.current === requestId &&
+          currentFilterKey.current === filterKey
+        ) {
+          setIsResolvingPage(false);
+        }
+      }
+    },
+    [
+      activePagination,
+      activityRunsQueryKey,
+      canQueryActivityRuns,
+      fetchActivityPage,
+      filterKey,
+      queryClient,
+      totalPages,
+    ],
+  );
+  const retryPageNavigation = React.useCallback(() => {
+    if (pendingPage === null) return;
+    void goToPage(pendingPage);
+  }, [goToPage, pendingPage]);
 
   return (
     <WorkflowActivityVNextShell
@@ -172,7 +383,7 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
         'Review recent workflow runs and open one for details.',
       )}
       headerActions={
-        <Button icon={<ReloadOutlined />} onClick={refresh}>
+        <Button icon={<ReloadOutlined />} onClick={() => void runs.refetch()}>
           {t('workflowActivityVNext.common.refresh', 'Refresh')}
         </Button>
       }
@@ -206,14 +417,14 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
             'Search runs',
           )}
           className="wa-vnext__toolbar-search"
-          onChange={(event) => replaceParam('q', event.target.value)}
+          onChange={(event) => setSearchInput(event.target.value)}
           placeholder={t(
             'workflowActivityVNext.activity.search',
             'Search runs',
           )}
           prefix={<SearchOutlined />}
           role="searchbox"
-          value={search}
+          value={searchInput}
         />
         <Space className="wa-vnext__toolbar-filters" wrap>
           <Select
@@ -300,6 +511,33 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
             ]}
             value={origin}
           />
+          <DatePicker.RangePicker
+            allowEmpty={[true, true]}
+            onChange={(range) =>
+              replaceParams((next) => {
+                const [after, before] = range ?? [];
+                if (after) next.set('from', after.toISOString());
+                else next.delete('from');
+                if (before) next.set('to', before.toISOString());
+                else next.delete('to');
+              })
+            }
+            placeholder={[
+              t(
+                'workflowActivityVNext.activity.afterPlaceholder',
+                'Activity after',
+              ),
+              t(
+                'workflowActivityVNext.activity.beforePlaceholder',
+                'Activity before',
+              ),
+            ]}
+            showTime
+            value={[
+              fromUtc && dayjs(fromUtc).isValid() ? dayjs(fromUtc) : null,
+              toUtc && dayjs(toUtc).isValid() ? dayjs(toUtc) : null,
+            ]}
+          />
           {definition && !workflowFilterPresent ? (
             <Button onClick={() => replaceParam('definition', '')}>
               {t(
@@ -327,74 +565,28 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
             </p>
           </div>
         </div>
-      ) : workflowFilterPresent && workflow.isPending ? (
-        <AevatarContentSkeleton
-          ariaLabel={t(
-            'workflowActivityVNext.activity.workflowFilterLoading',
-            'Loading workflow activity…',
-          )}
-          columnWidths={['minmax(240px, 1fr)', 120, 120, 190]}
-          rows={4}
-          tableMinWidth={900}
-          variant="table"
-        />
-      ) : workflowFilterPresent && workflow.isError ? (
-        <div className="wa-vnext__state" role="alert">
-          <div>
-            <h2>
-              {t(
-                'workflowActivityVNext.activity.workflowFilterResolutionFailed',
-                'Workflow activity unavailable',
-              )}
-            </h2>
-            <p>
-              {t(
-                'workflowActivityVNext.activity.workflowFilterResolutionFailedDescription',
-                'Try again or remove the workflow filter.',
-              )}
-            </p>
-            <Button onClick={() => void workflow.refetch()}>
-              {t('workflowActivityVNext.common.retry', 'Retry')}
-            </Button>
-            <TechnicalDetails>
-              {workflow.error instanceof Error
-                ? workflow.error.message
-                : String(workflow.error)}
-            </TechnicalDetails>
-          </div>
-        </div>
-      ) : workflowFilterPresent && !resolvedDefinition ? (
-        <div className="wa-vnext__state">
-          <div>
-            <h2>
-              {t(
-                'workflowActivityVNext.activity.workflowFilterUnavailableTitle',
-                'Activity filtering is unavailable',
-              )}
-            </h2>
-            <p>
-              {t(
-                'workflowActivityVNext.activity.workflowFilterUnavailableDescription',
-                'No runs are shown because this workflow does not expose an Activity filter.',
-              )}
-            </p>
-          </div>
-        </div>
       ) : runs.isPending ? (
         <AevatarContentSkeleton
           ariaLabel={t(
             'workflowActivityVNext.activity.loading',
             'Loading activity…',
           )}
-          columnWidths={['minmax(240px, 1fr)', 120, 120, 190]}
+          columnWidths={['minmax(220px, 1fr)', 180, 190, 180, 220]}
           rows={4}
-          tableMinWidth={900}
+          tableMinWidth={1080}
           variant="table"
         />
-      ) : runs.isError ? (
+      ) : runs.isError && !runs.data ? (
         <div className="wa-vnext__state" role="alert">
           <div>
-            <h2>{failureTitle(runs.error)}</h2>
+            <h2>
+              {activePagination.page === 1
+                ? failureTitle(runs.error)
+                : t(
+                    'workflowActivityVNext.activity.pageUnavailable',
+                    "Couldn't load this page",
+                  )}
+            </h2>
             <p>
               {t(
                 'workflowActivityVNext.activity.unavailableDescription',
@@ -411,11 +603,11 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
             </TechnicalDetails>
           </div>
         </div>
-      ) : filtered.length === 0 ? (
+      ) : currentRuns.length === 0 ? (
         <div className="wa-vnext__state">
           <div>
             <h2>
-              {runs.data?.length
+              {hasFilters
                 ? t(
                     'workflowActivityVNext.activity.noMatch',
                     'No matching runs',
@@ -431,102 +623,173 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
           </div>
         </div>
       ) : (
-        <TableScrollRegion
-          ariaLabel={t('workflowActivityVNext.activity.title', 'Activity')}
-          className="wa-vnext__activity-table"
-        >
-          <table className="wa-vnext__table">
-            <thead>
-              <tr>
-                <th>
-                  {t('workflowActivityVNext.activity.columnRun', 'Workflow')}
-                </th>
-                <th>
-                  {t('workflowActivityVNext.activity.columnStatus', 'Status')}
-                </th>
-                <th>
-                  {t('workflowActivityVNext.activity.columnOrigin', 'Source')}
-                </th>
-                <th>
-                  {t('workflowActivityVNext.activity.columnUpdated', 'Updated')}
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((run) => {
-                const statusPresentation = getRunStatusPresentation(run.status);
-                const workflowName =
-                  run.workflowName ||
-                  t(
-                    'workflowActivityVNext.activity.unnamed',
-                    'Unnamed workflow',
+        <>
+          <TableScrollRegion
+            ariaLabel={t('workflowActivityVNext.activity.title', 'Activity')}
+          >
+            <table className="wa-vnext__table">
+              <colgroup>
+                <col className="wa-vnext__activity-column--workflow" />
+                <col className="wa-vnext__activity-column--status" />
+                <col className="wa-vnext__activity-column--started" />
+                <col className="wa-vnext__activity-column--duration" />
+                <col className="wa-vnext__activity-column--input" />
+              </colgroup>
+              <thead>
+                <tr>
+                  <th>
+                    {t('workflowActivityVNext.activity.columnRun', 'Workflow')}
+                  </th>
+                  <th>
+                    {t('workflowActivityVNext.activity.columnStatus', 'Status')}
+                  </th>
+                  <th>
+                    {t(
+                      'workflowActivityVNext.activity.columnStarted',
+                      'Started',
+                    )}
+                  </th>
+                  <th>
+                    {t(
+                      'workflowActivityVNext.activity.columnDuration',
+                      'Duration',
+                    )}
+                  </th>
+                  <th>
+                    {t(
+                      'workflowActivityVNext.activity.columnInputPreview',
+                      'Input preview',
+                    )}
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {currentRuns.map((run) => {
+                  const statusPresentation = getRunStatusPresentation(
+                    run.status,
                   );
-                return (
-                  <tr key={run.runId}>
-                    <td
-                      data-label={t(
-                        'workflowActivityVNext.activity.columnRun',
-                        'Workflow',
-                      )}
+                  const workflowName =
+                    run.workflowName ||
+                    t(
+                      'workflowActivityVNext.activity.unnamed',
+                      'Unnamed workflow',
+                    );
+                  const context = runContext(run);
+                  return (
+                    <tr
+                      className="wa-vnext__activity-row"
+                      key={run.runId}
+                      onClick={() =>
+                        history.push(
+                          buildWorkflowActivityRunHref(scopeId, run.runId),
+                        )
+                      }
+                      onKeyDown={(event) => {
+                        if (event.key !== 'Enter' && event.key !== ' ') return;
+                        event.preventDefault();
+                        history.push(
+                          buildWorkflowActivityRunHref(scopeId, run.runId),
+                        );
+                      }}
+                      tabIndex={0}
                     >
-                      <button
-                        aria-label={t(
-                          'workflowActivityVNext.activity.openRunAria',
-                          'Open {name}',
-                          { name: workflowName },
+                      <td
+                        data-label={t(
+                          'workflowActivityVNext.activity.columnRun',
+                          'Workflow',
                         )}
-                        className="wa-vnext__run-link"
-                        onClick={() =>
-                          history.push(
-                            buildWorkflowActivityRunHref(scopeId, run.runId),
-                          )
-                        }
-                        style={{
-                          background: 'transparent',
-                          border: 0,
-                          color: 'var(--wa-blue)',
-                          padding: 0,
-                          textAlign: 'left',
-                        }}
-                        type="button"
                       >
                         <span className="wa-vnext__title">{workflowName}</span>
-                      </button>
-                    </td>
-                    <td
-                      data-label={t(
-                        'workflowActivityVNext.activity.columnStatus',
-                        'Status',
-                      )}
-                    >
-                      <span
-                        className={`wa-vnext__status wa-vnext__status--${statusPresentation.className}`}
+                      </td>
+                      <td
+                        data-label={t(
+                          'workflowActivityVNext.activity.columnStatus',
+                          'Status',
+                        )}
                       >
-                        {statusPresentation.label}
-                      </span>
-                    </td>
-                    <td
-                      data-label={t(
-                        'workflowActivityVNext.activity.columnOrigin',
-                        'Source',
-                      )}
-                    >
-                      {run.runOrigin || '-'}
-                    </td>
-                    <td
-                      data-label={t(
-                        'workflowActivityVNext.activity.columnUpdated',
-                        'Updated',
-                      )}
-                    >
-                      {formatDate(run.updatedAtUtc)}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </TableScrollRegion>
+                        <span
+                          className={`wa-vnext__status wa-vnext__status--${statusPresentation.className}`}
+                        >
+                          {statusPresentation.label}
+                        </span>
+                        {context ? (
+                          <span className="wa-vnext__sub">{context}</span>
+                        ) : null}
+                      </td>
+                      <td
+                        data-label={t(
+                          'workflowActivityVNext.activity.columnStarted',
+                          'Started',
+                        )}
+                      >
+                        {formatDate(run.startedAtUtc)}
+                      </td>
+                      <td
+                        data-label={t(
+                          'workflowActivityVNext.activity.columnDuration',
+                          'Duration',
+                        )}
+                      >
+                        {runDuration(run, now)}
+                      </td>
+                      <td
+                        data-label={t(
+                          'workflowActivityVNext.activity.columnInputPreview',
+                          'Input preview',
+                        )}
+                      >
+                        <span className="wa-vnext__input-preview">
+                          {run.inputSummary || '-'}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </TableScrollRegion>
+          <div className="wa-vnext__activity-footer">
+            <span aria-live="polite">
+              {totalCount === null
+                ? t('workflowActivityVNext.activity.page', 'Page {page}', {
+                    page: activePagination.page,
+                  })
+                : t(
+                    'workflowActivityVNext.activity.pageOf',
+                    'Page {page} of {total}',
+                    { page: activePagination.page, total: totalPages },
+                  )}
+            </span>
+            <Pagination
+              current={activePagination.page}
+              data-testid="activity-pagination"
+              disabled={isResolvingPage || runs.isFetching}
+              onChange={(page) => void goToPage(page)}
+              pageSize={activityPageSize}
+              showQuickJumper={totalCount !== null}
+              showSizeChanger={false}
+              total={paginationTotal}
+            />
+          </div>
+          {pageNavigationError ? (
+            <div className="wa-vnext__pagination-actions" role="alert">
+              <p>
+                {t(
+                  'workflowActivityVNext.activity.pageUnavailable',
+                  "Couldn't load this page",
+                )}
+              </p>
+              <Button onClick={retryPageNavigation}>
+                {t('workflowActivityVNext.common.retry', 'Retry')}
+              </Button>
+              <TechnicalDetails>
+                {pageNavigationError instanceof Error
+                  ? pageNavigationError.message
+                  : String(pageNavigationError)}
+              </TechnicalDetails>
+            </div>
+          ) : null}
+        </>
       )}
     </WorkflowActivityVNextShell>
   );
