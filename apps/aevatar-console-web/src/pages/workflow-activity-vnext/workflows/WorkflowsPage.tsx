@@ -38,6 +38,7 @@ import {
   isWorkflowArchived,
   observeWorkflowArchival,
 } from './workflowArchival';
+import { observeWorkflowRemoval } from './workflowRemoval';
 
 type WorkflowRow = {
   readonly activeRevisionId: string;
@@ -448,6 +449,23 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
           removed = true;
           setDeleteSucceeded(true);
         }
+      }
+
+      const observation = await observeWorkflowRemoval({
+        readWorkflows: () =>
+          readWorkflowCatalogueMatch(scopeId, deleteTarget.workflowId),
+        workflowId: deleteTarget.workflowId,
+      });
+      if (observation.kind === 'delayed') {
+        toast.error(
+          t(
+            'workflowActivityVNext.workflows.deleteObservationDelayed',
+            'Draft was deleted, but the workflow catalogue has not confirmed its removal yet',
+          ),
+        );
+        setDeleteFailed(true);
+        setDeleteSucceeded(true);
+        return;
       }
 
       const refreshed = await catalogue.refetch();

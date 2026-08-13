@@ -544,6 +544,8 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.workflows.deleteFailed': "Draft couldn't be deleted",
   'workflowActivityVNext.workflows.deleteRefreshFailed':
     "Draft was deleted, but workflows couldn't refresh",
+  'workflowActivityVNext.workflows.deleteObservationDelayed':
+    'Draft was deleted, but the workflow catalogue has not confirmed its removal yet',
   'workflowActivityVNext.workflows.deleteRetry': 'Try again',
   'workflowActivityVNext.workflows.deleteTitle': 'Delete editable draft?',
   'workflowActivityVNext.workflows.empty': 'No workflows yet',

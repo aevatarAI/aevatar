@@ -504,6 +504,8 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.workflows.deleteFailed': '无法删除草稿',
     'workflowActivityVNext.workflows.deleteRefreshFailed':
       '草稿已删除，但工作流列表刷新失败',
+    'workflowActivityVNext.workflows.deleteObservationDelayed':
+      '草稿已删除，但工作流目录尚未确认其移除',
     'workflowActivityVNext.workflows.deleteRetry': '重试',
     'workflowActivityVNext.workflows.deleteTitle': '删除可编辑草稿？',
     'workflowActivityVNext.workflows.empty': '暂无工作流',

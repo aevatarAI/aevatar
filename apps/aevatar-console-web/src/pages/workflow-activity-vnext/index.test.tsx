@@ -1292,7 +1292,7 @@ describe('Workflow Activity vNext catalogue', () => {
       'wf-support',
       'scope-alpha',
     );
-    expect(mockScopesApi.queryWorkflowCatalogue).toHaveBeenCalledTimes(2);
+    expect(mockScopesApi.queryWorkflowCatalogue).toHaveBeenCalledTimes(3);
   });
 
   it('archives by workflow identity and observes the exact row across catalogue pages', async () => {
