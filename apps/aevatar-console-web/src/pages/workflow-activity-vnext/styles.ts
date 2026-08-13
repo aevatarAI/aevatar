@@ -128,6 +128,9 @@ export const workflowActivityVNextCss = `
   overflow: auto;
   scrollbar-gutter: stable;
 }
+.wa-vnext__activity-table-region {
+  height: clamp(420px, calc(100dvh - 300px), 720px);
+}
 .wa-vnext__table { border-collapse: separate; border-spacing: 0; font-size: 12px; line-height: 17px; min-width: 900px; table-layout: fixed; width: 100%; }
 .wa-vnext__table th {
   background: var(--wa-subtle);

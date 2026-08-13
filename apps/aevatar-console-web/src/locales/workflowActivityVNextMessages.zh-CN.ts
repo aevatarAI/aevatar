@@ -35,6 +35,7 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.activity.previousPage': '上一页',
     'workflowActivityVNext.activity.search': '搜索运行记录',
     'workflowActivityVNext.activity.searchAria': '搜索运行记录',
+    'workflowActivityVNext.activity.searchButton': '搜索',
     'workflowActivityVNext.activity.statusCancelled': '已取消',
     'workflowActivityVNext.activity.statusCompleted': '已完成',
     'workflowActivityVNext.activity.statusFilter': '运行状态',

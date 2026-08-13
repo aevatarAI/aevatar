@@ -31,6 +31,7 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.activity.previousPage': 'Previous page',
   'workflowActivityVNext.activity.search': 'Search runs',
   'workflowActivityVNext.activity.searchAria': 'Search runs',
+  'workflowActivityVNext.activity.searchButton': 'Search',
   'workflowActivityVNext.activity.statusCancelled': 'Cancelled',
   'workflowActivityVNext.activity.statusCompleted': 'Completed',
   'workflowActivityVNext.activity.statusFilter': 'Run status',
