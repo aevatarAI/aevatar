@@ -82,7 +82,12 @@ internal sealed class ScopeWorkflowCatalogueBackfillHostedService : IHostedServi
             if (!deploymentCatalogsByServiceKey.TryGetValue(serviceCatalog.Id, out var deploymentCatalog) ||
                 ResolveActiveDeployment(deploymentCatalog) is not { } activeDeployment ||
                 !revisionCatalogsByServiceKey.TryGetValue(serviceCatalog.Id, out var revisionCatalog) ||
-                !TryResolveWorkflowRevision(revisionCatalog, activeDeployment.RevisionId, out var revision, out var workflowId))
+                !TryResolveWorkflowRevision(
+                    revisionCatalog,
+                    activeDeployment.RevisionId,
+                    serviceCatalog.ServiceId,
+                    out var revision,
+                    out var workflowId))
             {
                 continue;
             }
@@ -285,6 +290,7 @@ internal sealed class ScopeWorkflowCatalogueBackfillHostedService : IHostedServi
     private static bool TryResolveWorkflowRevision(
         ServiceRevisionCatalogReadModel revisionCatalog,
         string revisionId,
+        string fallbackWorkflowId,
         out ServiceRevisionEntryReadModel revision,
         out string workflowId)
     {
@@ -299,7 +305,9 @@ internal sealed class ScopeWorkflowCatalogueBackfillHostedService : IHostedServi
             var bindingIdentity = WorkflowServiceDeploymentPlanIntegrity.ResolveBindingIdentity(
                 revision.PreparedArtifact,
                 revisionId);
-            workflowId = bindingIdentity.WorkflowId;
+            workflowId = string.IsNullOrWhiteSpace(bindingIdentity.WorkflowId)
+                ? fallbackWorkflowId
+                : bindingIdentity.WorkflowId;
             return !string.IsNullOrWhiteSpace(workflowId);
         }
         catch (InvalidOperationException)

@@ -156,7 +156,8 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
             IAevatarOAuthClientVersionRegressionStorePort,
             ElasticsearchAevatarOAuthClientVersionRegressionStorePort>();
         if (services.Any(static descriptor =>
-                descriptor.ServiceType == typeof(IAevatarOAuthClientProjectionRepublishPort)))
+                descriptor.ServiceType == typeof(IAevatarOAuthClientProjectionRepublishPort)) &&
+            services.Any(static descriptor => descriptor.ServiceType == typeof(IActorRuntime)))
         {
             services.TryAddSingleton<
                 IAevatarOAuthClientVersionRegressionRepairService,

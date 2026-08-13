@@ -82,10 +82,9 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
         AssertProviderStore<ProjectionScopeStatusDocument, ElasticsearchProjectionDocumentStore<ProjectionScopeStatusDocument, string>>(provider);
         AssertProviderStore<ExternalIdentityBindingDocument, ElasticsearchProjectionDocumentStore<ExternalIdentityBindingDocument, string>>(provider);
         AssertProviderStore<AevatarOAuthClientDocument, ElasticsearchProjectionDocumentStore<AevatarOAuthClientDocument, string>>(provider);
-        Assert.Contains(
-            services,
-            descriptor => descriptor.ServiceType ==
-                typeof(IAevatarOAuthClientVersionRegressionRepairService));
+        Assert.Null(provider.GetService<IAevatarOAuthClientVersionRegressionRepairService>());
+        Assert.NotNull(provider.GetRequiredService<
+            IAevatarOAuthClientVersionRegressionStorePort>());
         Assert.NotNull(provider.GetRequiredService<
             IElasticsearchProjectionDocumentRepairStore<AevatarOAuthClientDocument, string>>());
         AssertProviderStore<ManagedCodexCredentialDocument, ElasticsearchProjectionDocumentStore<ManagedCodexCredentialDocument, string>>(provider);
