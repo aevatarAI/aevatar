@@ -563,9 +563,15 @@ public static class ScheduledDispatchEndpoints
 
         var normalizedScopeId = NormalizeOptional(ownerScopeId)
             ?? throw new ArgumentException("Owner scopeId is required.", nameof(ownerScopeId));
-        var normalizedTeamId = NormalizeOptional(ownerTeamId)
-            ?? throw new ArgumentException("Owner teamId is required.", nameof(ownerTeamId));
+        var normalizedTeamId = NormalizeOptional(ownerTeamId);
         var normalizedMemberId = NormalizeOptional(ownerMemberId);
+        if (normalizedMemberId is not null && normalizedTeamId is null)
+        {
+            throw new ArgumentException(
+                "Owner teamId is required when owner memberId is supplied.",
+                nameof(ownerTeamId));
+        }
+
         if (normalizedMemberId is not null)
         {
             return new ScheduledDispatchListQuery(
@@ -575,7 +581,7 @@ public static class ScheduledDispatchEndpoints
                 TeamAutomationOwner: new TeamMemberAutomationOwner(
                     normalizedScopeId,
                     normalizedMemberId,
-                    normalizedTeamId));
+                    normalizedTeamId!));
         }
 
         return new ScheduledDispatchListQuery(

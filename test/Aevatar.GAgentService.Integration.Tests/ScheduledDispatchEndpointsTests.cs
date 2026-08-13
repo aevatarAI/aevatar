@@ -238,6 +238,25 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
+    public async Task List_HttpRoute_ShouldBindScopeWideTeamAutomationQuery()
+    {
+        await using var host = await ScheduleEndpointTestHost.StartAsync();
+
+        var response = await host.Client.GetAsync(
+            "/api/schedules?ownerKind=studio_member_automation&ownerScopeId=tenant&take=200&includeTotalCount=true");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        host.Schedules.LastListQuery.Should().Be(new ScheduledDispatchListQuery(
+            Take: 200,
+            Cursor: null,
+            IncludeTotalCount: true,
+            TeamAutomationScopeId: "tenant",
+            TeamAutomationTeamId: null,
+            TeamAutomationMemberId: null,
+            ExcludeCompletedTeamAutomationDeletions: true));
+    }
+
+    [Fact]
     public async Task RunNow_HttpRoute_ShouldBindTypedOwnerBodyAndReturnOwnerAwareLocation()
     {
         await using var host = await ScheduleEndpointTestHost.StartAsync();
@@ -1639,10 +1658,54 @@ public sealed class ScheduledDispatchEndpointsTests
             ExcludeCompletedTeamAutomationDeletions: true));
     }
 
+    [Fact]
+    public async Task List_WhenOwnerTeamIdMissing_ShouldForwardScopeWideOwnerQuery()
+    {
+        var service = new RecordingScheduledDispatchApplicationService();
+
+        var result = await ScheduledDispatchEndpoints.List(
+            CreateHttpContext(scopeId: "scope-alpha", authenticationEnabled: true),
+            service,
+            ownerKind: ScheduledDispatchOwnerKinds.StudioMemberAutomation,
+            ownerScopeId: " scope-alpha ",
+            take: 200,
+            includeTotalCount: true);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        service.LastListQuery.Should().Be(new ScheduledDispatchListQuery(
+            Take: 200,
+            Cursor: null,
+            IncludeTotalCount: true,
+            TeamAutomationScopeId: "scope-alpha",
+            TeamAutomationTeamId: null,
+            TeamAutomationMemberId: null,
+            ExcludeCompletedTeamAutomationDeletions: true));
+    }
+
+    [Fact]
+    public async Task List_WhenScopeWideOwnerDiffersFromAuthenticatedScope_ShouldReject()
+    {
+        var service = new RecordingScheduledDispatchApplicationService();
+
+        var result = await ScheduledDispatchEndpoints.List(
+            CreateHttpContext(scopeId: "scope-beta", authenticationEnabled: true),
+            service,
+            ownerKind: ScheduledDispatchOwnerKinds.StudioMemberAutomation,
+            ownerScopeId: "scope-alpha");
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
+        service.LastListQuery.Should().BeNull();
+    }
+
     [Theory]
     [InlineData(null, "scope-alpha", "team-alpha")]
     [InlineData(ScheduledDispatchOwnerKinds.StudioMemberAutomation, null, "team-alpha")]
-    [InlineData(ScheduledDispatchOwnerKinds.StudioMemberAutomation, "scope-alpha", null)]
     [InlineData("unsupported_owner", "scope-alpha", "team-alpha")]
     public async Task List_WhenOwnerQueryIsPartialOrUnsupported_ShouldReject(
         string? ownerKind,
@@ -1657,6 +1720,25 @@ public sealed class ScheduledDispatchEndpointsTests
             ownerKind: ownerKind,
             ownerScopeId: ownerScopeId,
             ownerTeamId: ownerTeamId);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        service.LastListQuery.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task List_WhenOwnerMemberIdHasNoTeamId_ShouldReject()
+    {
+        var service = new RecordingScheduledDispatchApplicationService();
+
+        var result = await ScheduledDispatchEndpoints.List(
+            CreateHttpContext(),
+            service,
+            ownerKind: ScheduledDispatchOwnerKinds.StudioMemberAutomation,
+            ownerScopeId: "scope-alpha",
+            ownerMemberId: "m-alpha");
 
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);

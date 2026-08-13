@@ -2743,6 +2743,130 @@ public sealed class BackendConsoleStaticAssetEndpointTests
     }
 
     [Fact]
+    public async Task AdminShell_Schedules_ShouldLoadScopeOwnedTeamAutomationsAndUseCanonicalActions()
+    {
+        await using var app = await CreateAppAsync();
+        var admin = await app.GetTestClient().GetStringAsync("/admin");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+            const start = html.indexOf('var SCHEDULES_DATA=[];');
+            const end = html.indexOf('/* cron 预览', start);
+            assert.notEqual(start, -1, 'schedule state must exist');
+            assert.notEqual(end, -1, 'schedule preview must follow schedule actions');
+
+            const listCalls = [];
+            const actionCalls = [];
+            const current = {
+              scheduleId:'sch-current',displayName:'Current automation',cronExpression:'0 9 * * *',
+              timezone:'Asia/Singapore',enabled:true,scheduleKind:1,targetKind:1,
+              fireCount:6,failureCount:1,lastError:'',lastErrorCode:'',lastAuthorizationErrorCode:'',
+              teamAutomationLifecycleStatus:2,teamOwnerScopeId:'scope/alpha',teamId:'team-alpha',
+              teamOwnerMemberId:'m-alpha',stateVersion:17
+            };
+            const legacy = {
+              scheduleId:'sch-legacy',displayName:'Legacy generic',cronExpression:'0 8 * * *',
+              timezone:'UTC',enabled:true,scheduleKind:1,targetKind:1,fireCount:4,failureCount:2,
+              lastError:'legacy failure',lastErrorCode:'LEGACY_FAILURE'
+            };
+            const context = {
+              Promise, Date, JSON, encodeURIComponent,
+              ACCOUNT:{scope:'scope/alpha',admin:true},
+              adminJson(url) {
+                listCalls.push(url);
+                return Promise.resolve(url.includes('ownerKind=studio_member_automation')
+                  ? {items:[current]} : {items:[legacy]});
+              },
+              adminApi(url, options) { actionCalls.push({url,options}); return Promise.resolve({ok:true}); },
+              toast() {}, _rand(){ return 'nonce-alpha'; }, confirm(){ return true; },
+              setInterval(){ return 1; }, clearInterval() {}, document:{hidden:false}
+            };
+            vm.createContext(context);
+            vm.runInContext(html.slice(start, end), context);
+
+            (async () => {
+              await context.loadSchedules();
+              assert.deepEqual(listCalls, [
+                '/api/schedules?ownerKind=studio_member_automation&ownerScopeId=scope%2Falpha&take=200&includeTotalCount=true',
+                '/api/schedules?take=50'
+              ]);
+              assert.equal(context.SCHEDULES_DATA.length, 1);
+              assert.equal(context.SCHEDULES_DATA[0].ownerScopeId, 'scope/alpha');
+              assert.equal(context.SCHEDULES_DATA[0].teamId, 'team-alpha');
+              assert.equal(context.SCHEDULES_DATA[0].memberId, 'm-alpha');
+              assert.equal(context.SCHEDULES_LEGACY_DATA.length, 1);
+              assert.equal(context.SCHEDULES_LEGACY_DATA[0].legacy, true);
+
+              await context.schedAction('sch-current', 'pause');
+              assert.equal(actionCalls.length, 1);
+              assert.equal(actionCalls[0].url,
+                '/api/scopes/scope%2Falpha/teams/team-alpha/members/m-alpha/automations/sch-current/pause');
+              assert.equal(actionCalls[0].options.method, 'POST');
+              const body = JSON.parse(actionCalls[0].options.body);
+              assert.equal(body.operationId, 'admin-schedule-pause-nonce-alpha');
+              assert.equal(body.idempotencyKey,
+                'admin-schedule:sch-current:admin-schedule-pause-nonce-alpha');
+            })().catch(error => { console.error(error); process.exitCode = 1; });
+            """;
+
+        var result = await RunNodeAsync(script, admin);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+        admin.Should().Contain("历史 Generic 任务（只读）");
+        admin.Should().Contain("这些资源来自旧 Generic 调度入口，不是当前 Team/member automation");
+    }
+
+    [Fact]
+    public async Task AdminShell_Schedules_ShouldDistinguishCurrentFailuresFromHistoricalFailuresAndOverdueFires()
+    {
+        await using var app = await CreateAppAsync();
+        var admin = await app.GetTestClient().GetStringAsync("/admin");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+            const start = html.indexOf('var SCHEDULES_DATA=[];');
+            const end = html.indexOf('/* cron 预览', start);
+            const context = {Promise, Date, JSON, encodeURIComponent};
+            vm.createContext(context);
+            vm.runInContext(html.slice(start, end), context);
+
+            const recovered = context.mapSchedRow({
+              scheduleId:'recovered',displayName:'Recovered',enabled:true,
+              fireCount:6,failureCount:1,lastError:'',lastErrorCode:'',
+              lastAuthorizationErrorCode:'',teamAutomationLifecycleStatus:2
+            }, false);
+            const runFailed = context.mapSchedRow({
+              scheduleId:'run-failed',displayName:'Run failed',enabled:true,
+              fireCount:2,failureCount:1,lastError:'safe failure',lastErrorCode:'DISPATCH_FAILED',
+              teamAutomationLifecycleStatus:2
+            }, false);
+            const authorizationFailed = context.mapSchedRow({
+              scheduleId:'auth-failed',displayName:'Authorization failed',enabled:true,
+              fireCount:0,failureCount:0,lastAuthorizationErrorCode:'AUTH_REQUIRED',
+              teamAutomationLifecycleStatus:3
+            }, false);
+
+            assert.equal(recovered.currentFailure, false,
+              'a lifetime failure counter must not make a recovered schedule currently failed');
+            assert.equal(runFailed.currentFailure, true);
+            assert.equal(authorizationFailed.currentFailure, true);
+            context.SCHED_FILTER = 'failing';
+            assert.equal(context._schPass(recovered), false);
+            assert.equal(context._schPass(runFailed), true);
+            assert.equal(context._schPass(authorizationFailed), true);
+            assert.equal(context._schNext('2020-01-01T00:00:00Z'), '已逾期');
+            """;
+
+        var result = await RunNodeAsync(script, admin);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
     public async Task AdminShell_SkillsWithLegacyToken_ShouldOfferResourceReauthorization()
     {
         await using var app = await CreateAppAsync();
