@@ -58,7 +58,6 @@ public sealed partial class WorkflowRunGAgent
     private const int TerminalNotificationMaxRetryDelayMs = 30_000;
     private const string WorkflowNotExecutableError = "Workflow run is not definition-bound or compiled.";
     private const string InputFileBindingError = "workflow_input_file_binding_failed";
-    private const int ProcessedArtifactSourceLimit = 128;
     private const int InteractiveActionHandoffLimit = 32;
     private const string NyxIdChatAgentKind = "nyxid.chat";
     private WorkflowDefinition? _compiledWorkflow;
@@ -2021,8 +2020,9 @@ public sealed partial class WorkflowRunGAgent
         if (!WorkflowArtifactFactBuilder.TryBuild(envelope, Id, State.RunId, out var artifactFact))
             return;
 
-        if (artifactFact is WorkflowRoleReplyRecordedEvent roleReply &&
-            IsProcessedArtifactSource(State, roleReply.Source))
+        var source = ResolveArtifactSource(artifactFact);
+        if (source != null &&
+            (!IsValidArtifactSource(source) || IsProcessedArtifactSource(State, source)))
         {
             return;
         }
@@ -2294,6 +2294,7 @@ public sealed partial class WorkflowRunGAgent
             .On<WorkflowRunTerminalNotificationExpiredEvent>(ApplyWorkflowRunTerminalNotificationExpired)
             .On<WorkflowRunTerminalNotificationRetryFiredEvent>(KeepCurrentState)
             .On<WorkflowRoleReplyRecordedEvent>(ApplyWorkflowRoleReplyRecorded)
+            .On<WorkflowRuntimeOperationRecordedEvent>(ApplyWorkflowRuntimeOperationRecorded)
             .On<WorkflowInteractiveActionHandoffDispatchedEvent>(ApplyInteractiveActionHandoffDispatched)
             .On<WorkflowInteractiveActionContinuationDispatchedEvent>(ApplyInteractiveActionContinuationDispatched)
             .On<SubWorkflowDefinitionResolutionRegisteredEvent>(SubWorkflowOrchestrator.ApplySubWorkflowDefinitionResolutionRegistered)
@@ -2381,11 +2382,43 @@ public sealed partial class WorkflowRunGAgent
             return current;
 
         var next = current.Clone();
-        next.ProcessedArtifactSources.Add(evt.Source.Clone());
-        while (next.ProcessedArtifactSources.Count > ProcessedArtifactSourceLimit)
-            next.ProcessedArtifactSources.RemoveAt(0);
+        RecordProcessedArtifactSource(next, evt.Source);
         return next;
     }
+
+    private static WorkflowRunState ApplyWorkflowRuntimeOperationRecorded(
+        WorkflowRunState current,
+        WorkflowRuntimeOperationRecordedEvent evt)
+    {
+        if (!IsValidArtifactSource(evt.Source) || IsProcessedArtifactSource(current, evt.Source))
+            return current;
+
+        var next = current.Clone();
+        RecordProcessedArtifactSource(next, evt.Source);
+        return next;
+    }
+
+    private static void RecordProcessedArtifactSource(
+        WorkflowRunState state,
+        WorkflowArtifactSourceIdentity source)
+    {
+        state.ProcessedArtifactSources.Add(source.Clone());
+
+        var publisherActorId = source.PublisherActorId;
+        if (!state.ProcessedArtifactStateVersionsByPublisher.TryGetValue(publisherActorId, out var version) ||
+            source.CommittedStateVersion > version)
+        {
+            state.ProcessedArtifactStateVersionsByPublisher[publisherActorId] = source.CommittedStateVersion;
+        }
+    }
+
+    private static WorkflowArtifactSourceIdentity? ResolveArtifactSource(IMessage artifactFact) =>
+        artifactFact switch
+        {
+            WorkflowRoleReplyRecordedEvent roleReply => roleReply.Source,
+            WorkflowRuntimeOperationRecordedEvent operation => operation.Source,
+            _ => null,
+        };
 
     private static bool IsProcessedArtifactSource(
         WorkflowRunState state,

@@ -518,6 +518,120 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
     }
 
     [Fact]
+    public async Task GetRunForScopeAsync_ShouldExposeTypedOperationsInStableSequenceOrderWithHonestDuration()
+    {
+        var snapshot = Snapshot("run-1", CallerScope, WorkflowRunCompletionStatus.Running);
+        snapshot.InputSummary = "Original user request.";
+        var currentState = new FakeCurrentStateQueryPort
+        {
+            SingleResult = snapshot,
+        };
+        var report = new WorkflowRunReport
+        {
+            StateVersion = 7,
+            Operations =
+            [
+                new WorkflowRunOperation
+                {
+                    SessionId = "session-alpha",
+                    OperationId = "model-round-1",
+                    ProgressSequence = 0,
+                    Round = 1,
+                    Kind = WorkflowRuntimeOperationKind.Model,
+                    StartedAt = DateTimeOffset.UnixEpoch.AddSeconds(8),
+                    CompletedAt = DateTimeOffset.UnixEpoch.AddSeconds(7),
+                    Model = "deepseek-chat",
+                    Output = "done",
+                    FinishReason = "stop",
+                    Success = true,
+                },
+                new WorkflowRunOperation
+                {
+                    SessionId = "session-alpha",
+                    OperationId = "call-search-1",
+                    ProgressSequence = 20,
+                    Kind = WorkflowRuntimeOperationKind.Tool,
+                    StartedAt = DateTimeOffset.UnixEpoch.AddSeconds(8),
+                    CompletedAt = DateTimeOffset.UnixEpoch.AddSeconds(9),
+                    RoleActorId = "role-actor-alpha",
+                    ToolCallId = "call-search-1",
+                    ToolName = "search",
+                    ArgumentsJson = "{\"query\":\"status\"}",
+                    ResultJson = "{\"healthy\":true}",
+                    Success = true,
+                },
+                new WorkflowRunOperation
+                {
+                    SessionId = "session-alpha",
+                    OperationId = "model-round-0",
+                    ProgressSequence = 10,
+                    Round = 0,
+                    Kind = WorkflowRuntimeOperationKind.Model,
+                    StartedAt = DateTimeOffset.UnixEpoch.AddSeconds(10),
+                    CompletedAt = DateTimeOffset.UnixEpoch.AddSeconds(12.25),
+                    RoleActorId = "role-actor-alpha",
+                    Model = "deepseek-chat",
+                    Provider = "deepseek",
+                    InputSummary = "Check the deployment status.",
+                    AvailableToolNames = ["search", "status"],
+                    Output = string.Empty,
+                    ReasoningContent = "A tool is required.",
+                    FinishReason = "tool_calls",
+                    Usage = new WorkflowRunUsageMetrics
+                    {
+                        PromptTokens = 13,
+                        CompletionTokens = 2,
+                        TotalTokens = 15,
+                    },
+                    Success = true,
+                },
+            ],
+        };
+        var service = new WorkflowRunObservatoryQueryService(
+            currentState,
+            new FakeArtifactQueryPort { Report = report });
+
+        var detail = await service.GetRunForScopeAsync(CallerScope, "run-1");
+
+        detail.Should().NotBeNull();
+        detail!.InputSummary.Should().Be("Original user request.",
+            "the request Input lane is distinct from every provider invocation input");
+        detail.Operations.Select(operation => operation.OperationId).Should().Equal(
+            "model-round-0",
+            "call-search-1",
+            "model-round-1");
+
+        var firstModel = detail.Operations[0];
+        firstModel.Kind.Should().Be("model");
+        firstModel.Round.Should().Be(0);
+        firstModel.ProgressSequence.Should().Be(10);
+        firstModel.Model.Should().Be("deepseek-chat");
+        firstModel.Provider.Should().Be("deepseek");
+        firstModel.InputSummary.Should().Be("Check the deployment status.");
+        firstModel.AvailableToolNames.Should().Equal("search", "status");
+        firstModel.ReasoningContent.Should().Be("A tool is required.");
+        firstModel.FinishReason.Should().Be("tool_calls");
+        firstModel.Usage.TotalTokens.Should().Be(15);
+        firstModel.DurationMs.Should().Be(2250);
+
+        var tool = detail.Operations[1];
+        tool.Kind.Should().Be("tool");
+        tool.ToolCallId.Should().Be("call-search-1");
+        tool.ToolName.Should().Be("search");
+        tool.ArgumentsJson.Should().Be("{\"query\":\"status\"}");
+        tool.ResultJson.Should().Be("{\"healthy\":true}");
+        tool.DurationMs.Should().Be(1000);
+
+        var invalidModel = detail.Operations[2];
+        invalidModel.Kind.Should().Be("model");
+        invalidModel.ProgressSequence.Should().Be(0);
+        invalidModel.StartedAtUtc.Should().Be(DateTimeOffset.UnixEpoch.AddSeconds(8));
+        invalidModel.CompletedAtUtc.Should().Be(DateTimeOffset.UnixEpoch.AddSeconds(7));
+        invalidModel.DurationMs.Should().BeNull(
+            "an end timestamp before its start is invalid rather than a zero-duration operation");
+    }
+
+    [Fact]
     public async Task GetRunForScopeAsync_ShouldExposeActiveHumanApprovalFacts()
     {
         var snapshot = Snapshot(

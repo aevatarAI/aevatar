@@ -33,6 +33,9 @@ the caller's role badge.
 - Inside the selected container, present an ordered operation ledger in which
   each Input, model response, and tool call is independently selectable, with a
   three-lane `Input / Model / Tools` duration overview over the same records.
+- Preserve the original Timeline as the complete workflow-event view and add
+  Trajectory as a separate detail tab; operation presentation must not replace
+  or reduce Timeline information.
 - Default every caller, including an admin, to their own scope.
 - Make all-scope observation an explicit and continuously visible admin mode.
 - Give the selected run substantially more space without losing fast run
@@ -44,9 +47,9 @@ the caller's role badge.
 
 ## Non-Goals
 
-- No new observatory API or read model. Facts absent from the current contracts
-  remain explicitly unavailable; this iteration does not manufacture parity by
-  reconstructing model or tool requests in the browser.
+- No parallel observatory API or browser-owned durable read model. Typed
+  Model/Tool operations extend the existing run-report/detail projection path;
+  facts absent from that contract remain explicitly unavailable.
 - No change to authorization or the `__all__` backend sentinel.
 - No migration to `apps/aevatar-console-web` or a new frontend build chain.
 - No redesign of unrelated `/admin` modules.
@@ -110,7 +113,7 @@ Observatory state is encoded in the existing hash query:
   &from=<ISO-8601>
   &to=<ISO-8601>
   &run=<runId>
-  &tab=timeline|steps|diagnostics|logs|artifacts|graph
+  &tab=timeline|trajectory|steps|diagnostics|logs|artifacts|graph
 ```
 
 Empty/default values are omitted from generated links. Parsing accepts only
@@ -186,8 +189,8 @@ The approved direction is **collapsible run rail plus large detail canvas**.
 - The rail can be collapsed independently. Its collapsed state is a local UI
   preference and does not affect the URL.
 - The detail canvas owns the remaining width. Run identity and source facts
-  are compact; the Timeline/Steps/Diagnostics/Logs/Artifacts/Graph content is
-  the primary visual surface.
+  are compact; the Timeline/Trajectory/Steps/Diagnostics/Logs/Artifacts/Graph
+  content is the primary visual surface.
 
 ### Immersive Mode
 
@@ -218,18 +221,24 @@ authoritative workflow run and exposes enough request context to distinguish
 nearby calls without opening them: workflow, safe input summary when available,
 status, origin, update time, duration/current step, and a shortened run ID. The
 row is not an atomic trajectory event. Selecting it opens the container's
-operation workspace; events, steps, diagnostics, logs, artifacts, and graph
-remain children of the selected container rather than parallel top-level
-records.
+detail workspace; timeline events, trajectory operations, steps, diagnostics,
+logs, artifacts, and graph remain children of the selected container rather
+than parallel top-level records.
 
-The primary trajectory inside that workspace is a chronological operation
-ledger. It emits a distinct selectable record for each recorded input, each
-model response, and each tool call; nested tool work may remain linked beneath
-its owning tool operation. A fixed overview above the ledger has three aligned
-lanes: `Input`, `Model`, and `Tools`. Every overview bar and ledger row refers to
-the same stable operation identity. The run/request identity is used only to
-own and group those operations; it must not collapse a multi-step model/tool
-exchange into one summary row.
+Timeline and Trajectory are sibling tabs with different owners. Timeline is the
+default and keeps the original complete workflow-event presentation: timestamp,
+stage, message, actor/agent, step, event type, and event data remain available.
+Adding Trajectory must not filter, summarize, replace, or otherwise reduce that
+event view.
+
+The Trajectory tab owns the chronological operation ledger. It emits a distinct
+selectable record for the captured run input, each model response, and each tool
+call; nested tool work may remain linked beneath its owning tool operation. A
+fixed overview above the ledger has three aligned lanes: `Input`, `Model`, and
+`Tools`. Every overview marker/bar and ledger row refers to the same stable
+operation identity. The run/request identity is used only to own and group those
+operations; it must not collapse a multi-step model/tool exchange into one
+summary row.
 
 Clicking an operation opens a local inspector rather than replacing the run
 detail route. Input records expose captured content and source. Model records
@@ -245,32 +254,41 @@ record, not a growing duration bar. When either timing fact is absent, Duration
 is `unavailable`; the UI must not derive it from `updatedAtUtc`, polling time,
 adjacent event timestamps, list order, or the parent run duration.
 
-### Current Read-Model Gaps
+### Current Operation Contract And Gaps
 
-The existing activity-run projection provides the run container list, while the
-existing detail projection and run-report artifacts provide committed timeline
-events. Workflow steps remain in their dedicated workflow-oriented view and do
-not become Model or Tool operations. The projections do not currently provide all facts required for
-full DSH-equivalent operations:
+The activity-run projection provides the request/run container list. Separately,
+committed role progress is copied into run-owned
+`WorkflowRuntimeOperationRecordedEvent` facts and materialized into the existing
+run-report operation read model. The Observatory detail response exposes those
+typed Model/Tool operations with stable operation/session identity, progress
+sequence, kind, actual start/completion timestamps, and captured operation facts:
+model/provider, input summary, model-visible tool names, output/reasoning,
+finish reason, usage and errors for Model; tool call/name, arguments, result and
+errors for Tool. The Trajectory tab consumes this operation collection directly;
+it does not classify Timeline prose. Workflow steps remain in their dedicated
+workflow-oriented view and do not become Model or Tool operations.
 
-- no typed start/completion pair for every Input, Model, and Tool operation;
-- no stable per-model-response provider, model, usage, TTFT, and decoding
-  contract across every workflow path;
-- no request-time model-visible tools catalog or per-call tool schema in the
-  Observatory query contract.
+The remaining DSH-equivalence gaps are explicit:
 
-Consequently the Admin implementation may classify and display only operations
-supported by committed timeline evidence. Missing Duration, Model, usage,
-tools catalog, and schema values are shown as `unavailable`. It must not parse
-step prose, actor IDs, current-step summaries, or generic data-bag key spellings
-to fill those fields. A future parity change must add typed committed facts and
-materialize them through the normal projection pipeline; query-time event
-replay or browser-side state reconstruction is outside this design.
+- Input comes from the committed run input but has no independent typed
+  start/completion lifecycle, so it has no operation Duration bar;
+- a Model or Tool duration is available only when both typed lifecycle timestamps
+  were recorded for that exact operation;
+- the contract carries model-visible tool names but not the request-time tools
+  catalog with per-tool schemas;
+- the contract does not expose separate TTFT and decoding timestamps.
 
-The ledger reads the paged activity-run projection while detail and graph keep
-using their existing run endpoints. The page polls the current ledger and only
-the selected detail approximately every three seconds while visible. The live
-indicator describes this near-live projection refresh honestly; it does not
+Missing Duration, model, usage, tools-catalog, or schema values are shown as
+`unavailable`. The UI must not parse Timeline/step prose, actor IDs, current-step
+summaries, `updatedAtUtc`, or generic-bag key spellings to fill those fields.
+Query-time event replay or browser-side durable reconstruction remains outside
+this design.
+
+The rail reads the paged activity-run projection, while Timeline and Trajectory
+both arrive in the selected run detail response and graph keeps using its
+existing endpoint. The page polls the current rail and only the selected detail
+approximately every three seconds while visible. The live indicator describes
+this near-live projection refresh honestly; it does not
 claim that a transport ACK is committed or that the read model is strongly
 consistent. Incoming rows do not change an explicit selection. A selected run
 that is briefly absent from the eventually consistent detail projection remains
@@ -335,10 +353,16 @@ Static asset tests must fail before implementation and cover:
   with Escape;
 - stale list responses cannot replace a newer scope/filter result;
 - cached detail remains visible during polling.
+- the original Timeline remains the default, retains its complete event detail,
+  and is not replaced by the Trajectory renderer;
+- `tab=trajectory` selects the independent Trajectory tab and survives route
+  restoration;
 - a run/request row is treated as a container while Input, Model, and Tool
   operations remain independently selectable;
 - the three overview lanes and ledger rows share operation identities;
-- missing operation timing, model facts, and tools-catalog facts render as
+- typed Model/Tool operation facts are consumed from the detail contract rather
+  than reconstructed from Timeline or workflow-step prose;
+- Input and other missing operation timing or tools-catalog facts render as
   unavailable and are never inferred from refresh or update timestamps.
 
 Visual verification covers `1440x900`, `1920x1080`, `1024x768`, and `390x844`.

@@ -23,6 +23,7 @@ using Aevatar.AI.Core.Tools;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Foundation.Abstractions.Helpers;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Abstractions.Tools;
@@ -3139,6 +3140,51 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 streamCt);
         await foreach (var chunk in stream)
         {
+            if (chunk.LLMInvocationStarted != null)
+            {
+                await sessionDeltas.FlushAsync(CancellationToken.None);
+                var started = chunk.LLMInvocationStarted;
+                await PersistSessionProgressAsync(
+                    request.SessionId,
+                    progress =>
+                    {
+                        progress.ModelStarted = new RoleChatModelStartedProgress
+                        {
+                            OperationId = started.OperationId,
+                            Round = started.Round,
+                            Model = started.Model,
+                            Provider = started.Provider,
+                            InputSummary = started.InputSummary,
+                        };
+                        progress.ModelStarted.AvailableToolNames.Add(started.AvailableToolNames);
+                    },
+                    CancellationToken.None);
+                continue;
+            }
+
+            if (chunk.LLMInvocationCompleted != null)
+            {
+                await sessionDeltas.FlushAsync(CancellationToken.None);
+                var completed = chunk.LLMInvocationCompleted;
+                await PersistSessionProgressAsync(
+                    request.SessionId,
+                    progress => progress.ModelCompleted = new RoleChatModelCompletedProgress
+                    {
+                        OperationId = completed.OperationId,
+                        Round = completed.Round,
+                        Model = completed.Model,
+                        Content = completed.Content,
+                        ReasoningContent = completed.ReasoningContent,
+                        Usage = ToTokenUsagePayload(completed.Usage),
+                        FinishReason = completed.FinishReason,
+                        Success = completed.Success,
+                        Error = completed.Error,
+                    },
+                    CancellationToken.None);
+                streamCt.ThrowIfCancellationRequested();
+                continue;
+            }
+
             // A provider may observe cancellation and still yield a late chunk. The host deadline,
             // not provider conformance, remains the terminal authority for the turn.
             streamCt.ThrowIfCancellationRequested();
@@ -3196,7 +3242,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
 
             if (chunk.ToolCallStarted != null)
             {
-                await sessionDeltas.FlushAsync(streamCt);
+                await sessionDeltas.FlushAsync(CancellationToken.None);
                 var started = chunk.ToolCallStarted;
                 CaptureToolCallSnapshot(toolCallSnapshots, started);
                 await PersistSessionProgressAsync(
@@ -3210,13 +3256,12 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                             started.ToolCall.Name),
                         OperationId = started.OperationId,
                     },
-                    streamCt);
-                streamCt.ThrowIfCancellationRequested();
+                    CancellationToken.None);
             }
 
             if (chunk.ToolCallCompleted != null)
             {
-                await sessionDeltas.FlushAsync(streamCt);
+                await sessionDeltas.FlushAsync(CancellationToken.None);
                 var completed = chunk.ToolCallCompleted;
                 var toolResult = new ToolResultEvent
                 {
@@ -3235,9 +3280,11 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                         Result = toolResult.Clone(),
                         ToolName = completed.ToolName,
                         OperationId = completed.OperationId,
+                        SafeArgumentsJson = ResolveSafeToolCallArguments(
+                            completed,
+                            toolCallSnapshots),
                     },
-                    streamCt);
-                streamCt.ThrowIfCancellationRequested();
+                    CancellationToken.None);
             }
 
             var receipt = chunk.ToolCallCompleted?.Receipt ?? chunk.ToolReceipt;
@@ -5484,7 +5531,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         ArgumentsJson = toolCall.ArgumentsJson,
     };
 
-    private static bool ShouldRedactToolCallArguments(
+    protected static bool ShouldRedactToolCallArguments(
         string? callId,
         IReadOnlyList<AgentToolReceipt> toolReceipts) =>
         toolReceipts.Any(receipt =>
@@ -5492,6 +5539,20 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             receipt.Status is AgentToolReceiptStatus.Error or
                 AgentToolReceiptStatus.Denied or
                 AgentToolReceiptStatus.AuthorizationRequired);
+
+    private static string ResolveSafeToolCallArguments(
+        ToolCallCompletedChunk completed,
+        IReadOnlyList<ToolCallEvent> snapshots)
+    {
+        if (completed.Receipt is not null &&
+            ShouldRedactToolCallArguments(completed.CallId, [completed.Receipt]))
+        {
+            return string.Empty;
+        }
+
+        return SecretScrubber.ScrubJson(
+            FindToolCallSnapshot(snapshots, completed.CallId)?.ArgumentsJson);
+    }
 
     private Timestamp CreateTerminalTimestamp() =>
         Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow());

@@ -1,4 +1,4 @@
-import "./transport.js?v=20260807-m40-thread-polish";
+import "./transport.js?v=20260814-m45-model-operations";
 import {
   consumeSse,
   mergeUsage,
@@ -9,21 +9,21 @@ import {
   redact,
   safeJson,
   validateActionContinuation,
-} from "./protocol.js?v=20260807-m40-thread-polish";
+} from "./protocol.js?v=20260814-m45-model-operations";
 import {
   buildConnectCardBlock,
   connectCardSteps,
   connectorInitial,
   splitMessageSegments,
-} from "./blocks.js?v=20260807-m40-thread-polish";
+} from "./blocks.js?v=20260814-m45-model-operations";
 import {
   actorCan,
   applyCurrentStateResult,
   createActorProjection,
   reduceActorEvent,
   restoreCachedAction,
-} from "./actor-state.js?v=20260807-m40-thread-polish";
-import { describeReadinessFailure } from "./readiness.js?v=20260807-m40-thread-polish";
+} from "./actor-state.js?v=20260814-m45-model-operations";
+import { describeReadinessFailure } from "./readiness.js?v=20260814-m45-model-operations";
 
 const PREFERENCES_KEY = "aevatar-studio:assistant-preferences:v4";
 const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
@@ -378,7 +378,26 @@ function ensureTraceOperationState(trace) {
     );
   }
   if (typeof trace.followLatestOperation !== "boolean") trace.followLatestOperation = true;
+  if (typeof trace.typedModelLifecycleObserved !== "boolean") {
+    trace.typedModelLifecycleObserved = false;
+  }
   return trace;
+}
+
+function orderedTraceOperations(trace) {
+  ensureTraceOperationState(trace);
+  return [...(trace?.records || [])].sort((left, right) => {
+    if (left.kind === "input" && right.kind !== "input") return -1;
+    if (right.kind === "input" && left.kind !== "input") return 1;
+    const leftHasServerSequence = Number.isSafeInteger(left.serverSequence);
+    const rightHasServerSequence = Number.isSafeInteger(right.serverSequence);
+    if (leftHasServerSequence !== rightHasServerSequence) return leftHasServerSequence ? -1 : 1;
+    if (leftHasServerSequence && left.serverSequence !== right.serverSequence) {
+      return left.serverSequence - right.serverSequence;
+    }
+    const localOrder = (Number(left.sequence) || 0) - (Number(right.sequence) || 0);
+    return localOrder || String(left.key).localeCompare(String(right.key));
+  });
 }
 
 function traceOperationKey(kind, id) {
@@ -403,12 +422,20 @@ function upsertTraceOperation(trace, patch) {
       status: "running",
       input: "",
       output: "",
+      reasoning: "",
       model: "",
+      provider: "",
+      tools: [],
+      round: null,
+      sessionId: "",
+      finishReason: "",
+      error: "",
       usage: null,
       startedAt: null,
       completedAt: null,
       timingClock: null,
       sequence: trace.nextOperationSequence,
+      serverSequence: null,
       element: null,
       fields: null,
       barElement: null,
@@ -417,8 +444,18 @@ function upsertTraceOperation(trace, patch) {
     trace.recordIndex.set(key, record);
   }
 
-  for (const field of ["title", "status", "input", "output", "model"]) {
+  for (const field of [
+    "title", "status", "input", "output", "reasoning", "model", "provider", "round",
+    "sessionId", "finishReason", "error",
+  ]) {
     if (patch[field] !== undefined && patch[field] !== null) record[field] = patch[field];
+  }
+  if (Array.isArray(patch.tools)) record.tools = [...patch.tools];
+  const serverSequence = Number(patch.serverSequence);
+  if (Number.isSafeInteger(serverSequence) && serverSequence > 0) {
+    record.serverSequence = Number.isSafeInteger(record.serverSequence)
+      ? Math.min(record.serverSequence, serverSequence)
+      : serverSequence;
   }
   if (patch.usage) record.usage = mergeUsage(record.usage, patch.usage);
   if (patch.id) record.id = String(patch.id);
@@ -439,7 +476,6 @@ function createInputTraceOperation(trace) {
   });
   if (record && Number.isFinite(startedAt) && startedAt > 0 && record.startedAt == null) {
     record.startedAt = startedAt;
-    record.completedAt = startedAt;
     record.timingClock = "client";
   }
   return record;
@@ -450,7 +486,7 @@ function selectedTraceOperation(trace) {
   if (!trace?.records.length) return null;
   const selected = trace.recordIndex.get(trace.selectedOperationKey);
   if (selected) return selected;
-  const fallback = trace.records.at(-1);
+  const fallback = orderedTraceOperations(trace).at(-1);
   trace.selectedOperationKey = fallback.key;
   return fallback;
 }
@@ -487,7 +523,7 @@ function traceEventTiming(event) {
 function traceModelOperation(trace, event, { create = false } = {}) {
   ensureTraceOperationState(trace);
   if (!trace) return null;
-  const rawId = String(event?.messageId || event?.sessionId || "").trim();
+  const rawId = String(event?.operationId || event?.messageId || event?.sessionId || "").trim();
   const id = rawId.startsWith("msg:") ? rawId.slice(4) : rawId;
   const explicitKey = id ? traceOperationKey("model", id) : null;
   let record = explicitKey ? trace.recordIndex.get(explicitKey) : null;
@@ -505,6 +541,23 @@ function traceModelOperation(trace, event, { create = false } = {}) {
   });
   trace.activeModelOperationKey = record?.key || null;
   return record;
+}
+
+function traceStreamingModelOperation(trace, event, { create = false } = {}) {
+  if (trace?.activeModelOperationKey) {
+    const active = trace.recordIndex.get(trace.activeModelOperationKey);
+    if (active) return active;
+  }
+  const explicit = traceModelOperation(trace, event);
+  if (explicit) return explicit;
+  if (create && trace?.typedModelLifecycleObserved) return null;
+  return create ? traceModelOperation(trace, event, { create: true }) : null;
+}
+
+function traceOperationRound(value, fallback) {
+  if (value === null || value === undefined || value === "") return fallback;
+  const round = Number(value);
+  return Number.isSafeInteger(round) ? round : fallback;
 }
 
 function traceToolOperation(trace, event, { create = false } = {}) {
@@ -525,6 +578,7 @@ function traceToolOperation(trace, event, { create = false } = {}) {
 }
 
 function traceTerminalOperationStatus(event) {
+  if (event?.success == null && !event?.status && !event?.outcome && !event?.error) return "closed";
   const status = String(event?.status || event?.outcome || "").toUpperCase();
   return event?.success === false || /(ERROR|FAILED|DENIED)/.test(status) ? "error" : "done";
 }
@@ -539,7 +593,8 @@ function closeUnfinishedTraceOperations(trace, status) {
 }
 
 function applyRoleChatTraceSnapshot(trace, event) {
-  const model = traceModelOperation(trace, event, { create: true });
+  const existingModels = orderedTraceOperations(trace).filter((record) => record.kind === "model");
+  const model = existingModels.at(-1) || traceModelOperation(trace, event, { create: true });
   if (model) {
     if (!model.output && event.content) model.output = String(event.content);
     if (event.model) {
@@ -563,7 +618,7 @@ function applyRoleChatTraceSnapshot(trace, event) {
     tool.title = call.toolName || tool.title;
     if (!tool.input && call.argumentsJson) tool.input = String(call.argumentsJson);
     if (!tool.output && receipt?.resultJson) tool.output = String(receipt.resultJson);
-    if (receipt && tool.status === "running") tool.status = traceTerminalOperationStatus(receipt);
+    if (receipt) tool.status = traceTerminalOperationStatus(receipt);
   }
   for (const receipt of receipts) {
     const tool = traceToolOperation(trace, {
@@ -573,7 +628,7 @@ function applyRoleChatTraceSnapshot(trace, event) {
     if (!tool) continue;
     tool.title = receipt.toolName || tool.title;
     if (!tool.output && receipt.resultJson) tool.output = String(receipt.resultJson);
-    if (tool.status === "running") tool.status = traceTerminalOperationStatus(receipt);
+    tool.status = traceTerminalOperationStatus(receipt);
   }
 }
 
@@ -582,24 +637,72 @@ function applyRequestTraceEvent(entry, run, event) {
   if (!trace || !event) return;
   const timing = traceEventTiming(event);
   switch (event.type) {
-    case "text_start": {
+    case "model_start": {
+      trace.typedModelLifecycleObserved = true;
       const model = traceModelOperation(trace, event, { create: true });
       if (!model) break;
-      if (model.status !== "done" && model.status !== "error") model.status = "running";
+      const round = traceOperationRound(event.round, model.round);
+      upsertTraceOperation(trace, {
+        key: model.key,
+        kind: "model",
+        title: event.model || (round == null ? "LLM response" : `Model response ${round}`),
+        model: event.model || model.model,
+        provider: event.provider || model.provider,
+        input: event.inputSummary || model.input,
+        tools: Array.isArray(event.availableToolNames) ? event.availableToolNames : model.tools,
+        round,
+        sessionId: event.sessionId || model.sessionId,
+        serverSequence: event.sequence,
+      });
+      const terminal = isTraceOperationTerminal(model.status);
+      if (!terminal) model.status = "running";
+      startTraceOperation(model, timing);
+      if (!terminal) trace.activeModelOperationKey = model.key;
+      break;
+    }
+    case "model_end": {
+      trace.typedModelLifecycleObserved = true;
+      const model = traceModelOperation(trace, event, { create: true });
+      if (!model) break;
+      upsertTraceOperation(trace, {
+        key: model.key,
+        kind: "model",
+        title: event.model || model.title,
+        model: event.model || model.model,
+        output: event.content ?? model.output,
+        reasoning: event.reasoningContent ?? model.reasoning,
+        round: traceOperationRound(event.round, model.round),
+        sessionId: event.sessionId || model.sessionId,
+        finishReason: event.finishReason || model.finishReason,
+        error: event.error || model.error,
+        usage: event.usage,
+        serverSequence: event.sequence,
+      });
+      model.status = traceTerminalOperationStatus(event);
+      finishTraceOperation(model, timing);
+      if (trace.activeModelOperationKey === model.key) trace.activeModelOperationKey = null;
+      break;
+    }
+    case "text_start": {
+      const model = traceStreamingModelOperation(trace, event);
+      if (!model) break;
+      if (!isTraceOperationTerminal(model.status)) model.status = "running";
       startTraceOperation(model, timing);
       break;
     }
     case "text_delta": {
-      const model = traceModelOperation(trace, event, { create: true });
+      const model = traceStreamingModelOperation(trace, event, { create: true });
       if (!model) break;
       model.output += String(event.delta || "");
       break;
     }
     case "text_end": {
-      const model = traceModelOperation(trace, event);
+      const model = traceStreamingModelOperation(trace, event);
       if (!model) break;
-      model.status = "done";
-      finishTraceOperation(model, timing);
+      if (!isTraceOperationTerminal(model.status)) {
+        model.status = "done";
+        finishTraceOperation(model, timing);
+      }
       if (trace.activeModelOperationKey === model.key) trace.activeModelOperationKey = null;
       break;
     }
@@ -607,8 +710,13 @@ function applyRequestTraceEvent(entry, run, event) {
       const tool = traceToolOperation(trace, event, { create: true });
       if (!tool) break;
       tool.title = event.toolName || tool.title;
-      if (event.argumentsJson) tool.input = String(event.argumentsJson);
-      if (tool.status !== "done" && tool.status !== "error") tool.status = "running";
+      upsertTraceOperation(trace, {
+        key: tool.key,
+        kind: "tool",
+        sessionId: event.sessionId || tool.sessionId,
+        serverSequence: event.sequence,
+      });
+      if (!isTraceOperationTerminal(tool.status)) tool.status = "running";
       startTraceOperation(tool, timing);
       break;
     }
@@ -616,8 +724,16 @@ function applyRequestTraceEvent(entry, run, event) {
       const tool = traceToolOperation(trace, event, { create: true });
       if (!tool) break;
       tool.title = event.toolName || tool.title;
+      if (event.argumentsJson) tool.input = String(event.argumentsJson);
       if (event.result !== undefined && event.result !== null) tool.output = String(event.result);
       else if (event.error) tool.output = String(event.error);
+      tool.error = String(event.error || "");
+      upsertTraceOperation(trace, {
+        key: tool.key,
+        kind: "tool",
+        sessionId: event.sessionId || tool.sessionId,
+        serverSequence: event.sequence,
+      });
       tool.status = traceTerminalOperationStatus(event);
       finishTraceOperation(tool, timing);
       break;
@@ -646,30 +762,6 @@ function applyRequestTraceEvent(entry, run, event) {
         }
       }
       break;
-    case "raw_observed": {
-      const observedType = String(event.observedType || "");
-      const observed = event.observed && typeof event.observed === "object" ? event.observed : {};
-      if (observedType === "WorkflowLlmInvocationStartedEvent") {
-        const model = traceModelOperation(trace, observed, { create: true });
-        if (!model) break;
-        model.title = observed.stepId || observed.roleActorId || model.title;
-        model.status = "running";
-        startTraceOperation(model, timing);
-      } else if (observedType === "WorkflowLlmInvocationCompletedEvent") {
-        const model = traceModelOperation(trace, observed, { create: true });
-        if (!model) break;
-        model.title = observed.usage?.model || observed.stepId || observed.roleActorId || model.title;
-        if (!model.output && observed.content) model.output = String(observed.content);
-        if (observed.usage) {
-          model.usage = mergeUsage(model.usage, observed.usage);
-          model.model = observed.usage.model || model.model;
-        }
-        model.status = observed.success === false ? "error" : "done";
-        finishTraceOperation(model, timing);
-        if (trace.activeModelOperationKey === model.key) trace.activeModelOperationKey = null;
-      }
-      break;
-    }
     case "run_finished":
       closeUnfinishedTraceOperations(trace, "closed");
       break;
@@ -694,10 +786,15 @@ function startTraceOperation(record, timing) {
 }
 
 function finishTraceOperation(record, timing) {
-  if (!record || record.completedAt != null || record.startedAt == null) return;
-  const completedAt = record.timingClock === "server" ? timing?.serverAt : null;
-  if (!Number.isFinite(completedAt) || completedAt < record.startedAt) return;
+  if (!record || record.completedAt != null) return;
+  const completedAt = timing?.serverAt;
+  if (!Number.isFinite(completedAt)) return;
   record.completedAt = completedAt;
+  record.timingClock ||= "server";
+}
+
+function isTraceOperationTerminal(status) {
+  return ["done", "error", "stopped", "closed", "blocked"].includes(String(status || ""));
 }
 
 function traceOperationDurationMs(record) {
@@ -804,7 +901,7 @@ function selectTraceOperation(entry, trace, key, { openDetails = false, focusRow
 function moveTraceOperationSelection(event, entry, trace, key) {
   if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
   event.preventDefault();
-  const keys = trace.records.map((record) => record.key);
+  const keys = orderedTraceOperations(trace).map((record) => record.key);
   const index = Math.max(0, keys.indexOf(key));
   const nextIndex = event.key === "Home"
     ? 0
@@ -841,8 +938,10 @@ function createTraceOperationBar(trace, record, range) {
   const comparable = range && record.timingClock === range.clock && Number.isFinite(record.startedAt);
   const duration = traceOperationDurationMs(record);
   const rangeDuration = range ? Math.max(1, range.end - range.start) : 1;
-  const sequenceDenominator = Math.max(1, trace.records.length - 1);
-  const sequenceLeft = trace.records.length === 1 ? 0 : (record.sequence - 1) / sequenceDenominator * 100;
+  const orderedRecords = orderedTraceOperations(trace);
+  const sequenceDenominator = Math.max(1, orderedRecords.length - 1);
+  const sequenceIndex = Math.max(0, orderedRecords.findIndex((candidate) => candidate.key === record.key));
+  const sequenceLeft = orderedRecords.length === 1 ? 0 : sequenceIndex / sequenceDenominator * 100;
   const left = comparable ? (record.startedAt - range.start) / rangeDuration * 100 : sequenceLeft;
   const width = comparable && duration != null ? duration / rangeDuration * 100 : 0;
   bar.style.setProperty("--trace-operation-left", `${Math.max(0, Math.min(100, left))}%`);
@@ -877,7 +976,7 @@ function renderTraceOperationOverview(trace) {
     const lane = el("div", `trace-operation-lane ${kind}`);
     const laneLabel = el("span", "trace-operation-lane-label", label);
     const track = el("div", "trace-operation-lane-track");
-    for (const record of trace.records.filter((candidate) => candidate.kind === kind)) {
+    for (const record of orderedTraceOperations(trace).filter((candidate) => candidate.kind === kind)) {
       track.append(createTraceOperationBar(trace, record, range));
     }
     lane.append(laneLabel, track);
@@ -889,7 +988,7 @@ function renderTraceOperationOverview(trace) {
 function renderTraceOperations(entry, trace) {
   if (!dom.traceOperationList) return;
   ensureTraceOperationState(trace);
-  const records = trace?.records || [];
+  const records = orderedTraceOperations(trace);
   if (dom.traceOperationCount) dom.traceOperationCount.textContent = String(records.length);
   if (!records.length) {
     dom.traceOperationEmpty?.classList.remove("hidden");
@@ -5277,9 +5376,13 @@ function inspectorRunState(entry = state.activeConversation) {
   return inspectorRequestTrace(entry)?.run || entry?.run || state.run;
 }
 
+function inspectorTraceOperation(entry = state.activeConversation, trace = inspectorRequestTrace(entry)) {
+  return entry?.mainView === "traces" ? selectedTraceOperation(trace) : null;
+}
+
 function renderTraceOperationInspector(trace) {
   if (!dom.traceOperationSection) return;
-  const record = selectedTraceOperation(trace);
+  const record = inspectorTraceOperation(state.activeConversation, trace);
   dom.traceOperationSection.classList.toggle("hidden", !record);
   if (!record) return;
   dom.traceOperationKindFact.textContent = traceOperationKindLabel(record.kind);
@@ -5290,20 +5393,33 @@ function renderTraceOperationInspector(trace) {
   dom.traceOperationStatusFact.textContent = traceOperationStatusLabel(record.status);
   dom.traceOperationStartedFact.textContent = traceOperationStartedAt(record);
   dom.traceOperationDurationFact.textContent = traceOperationDuration(record);
-  const usageFacts = record.kind === "model" && record.usage
-    ? [
+  const modelFacts = record.kind === "model"
+      ? [
         record.model ? `Model: ${record.model}` : "",
-        record.usage.promptTokens != null ? `Input tokens: ${record.usage.promptTokens}` : "",
-        record.usage.completionTokens != null ? `Output tokens: ${record.usage.completionTokens}` : "",
-        record.usage.totalTokens != null ? `Total tokens: ${record.usage.totalTokens}` : "",
+        record.provider ? `Provider: ${record.provider}` : "",
+        record.round != null ? `Round: ${record.round}` : "",
+        record.sessionId ? `Session: ${record.sessionId}` : "",
+        record.finishReason ? `Finish reason: ${record.finishReason}` : "",
+        record.usage?.promptTokens != null ? `Input tokens: ${record.usage.promptTokens}` : "",
+        record.usage?.completionTokens != null ? `Output tokens: ${record.usage.completionTokens}` : "",
+        record.usage?.totalTokens != null ? `Total tokens: ${record.usage.totalTokens}` : "",
       ].filter(Boolean).join("\n")
     : "";
-  const outputValue = [String(record.output || ""), usageFacts].filter(Boolean).join("\n\n");
-  const hasInput = String(record.input || "").length > 0;
+  const toolCatalog = record.kind === "model" && record.tools?.length
+    ? `Available tools:\n${record.tools.join("\n")}`
+    : "";
+  const outputValue = [
+    String(record.output || ""),
+    record.reasoning ? `Reasoning:\n${record.reasoning}` : "",
+    record.error ? `Error:\n${record.error}` : "",
+    modelFacts,
+  ].filter(Boolean).join("\n\n");
+  const inputValue = [String(record.input || ""), toolCatalog].filter(Boolean).join("\n\n");
+  const hasInput = inputValue.length > 0;
   const hasOutput = outputValue.length > 0;
   dom.traceOperationInputSection?.classList.toggle("hidden", !hasInput);
   dom.traceOperationOutputSection?.classList.toggle("hidden", !hasOutput);
-  if (dom.traceOperationInputFact) dom.traceOperationInputFact.textContent = hasInput ? String(record.input) : "";
+  if (dom.traceOperationInputFact) dom.traceOperationInputFact.textContent = inputValue;
   if (dom.traceOperationOutputFact) dom.traceOperationOutputFact.textContent = outputValue;
 }
 
@@ -5328,7 +5444,7 @@ function renderInspector() {
     ? actorTerminalRunStatus(projection)
     : null;
   const visibleStatus = projectionStatus || run.status || "idle";
-  const operation = selectedTraceOperation(trace);
+  const operation = inspectorTraceOperation(entry, trace);
   dom.inspectorEyebrow.textContent = operation ? traceOperationKindLabel(operation.kind) : trace ? "Request trace" : "Current run";
   dom.inspectorTitle.textContent = operation ? operation.title || "操作详情" : trace ? "轨迹详情" : "运行详情";
   paintRunStatus(visibleStatus);

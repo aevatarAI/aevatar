@@ -1052,6 +1052,50 @@ message WorkflowRoleReplyRecordedEvent
   WorkflowArtifactSourceIdentity source = 10;
 }
 
+enum WorkflowRuntimeOperationKind
+{
+  WORKFLOW_RUNTIME_OPERATION_KIND_UNSPECIFIED = 0;
+  WORKFLOW_RUNTIME_OPERATION_KIND_MODEL = 1;
+  WORKFLOW_RUNTIME_OPERATION_KIND_TOOL = 2;
+}
+
+enum WorkflowRuntimeOperationPhase
+{
+  WORKFLOW_RUNTIME_OPERATION_PHASE_UNSPECIFIED = 0;
+  WORKFLOW_RUNTIME_OPERATION_PHASE_STARTED = 1;
+  WORKFLOW_RUNTIME_OPERATION_PHASE_COMPLETED = 2;
+}
+
+// Run-owned audit fact copied from a linked role actor's committed progress.
+// event_time is the child event's source time, not the later parent commit time.
+message WorkflowRuntimeOperationRecordedEvent
+{
+  string run_id = 1;
+  string session_id = 2;
+  string operation_id = 3;
+  int32 round = 4;
+  WorkflowRuntimeOperationKind kind = 5;
+  WorkflowRuntimeOperationPhase phase = 6;
+  google.protobuf.Timestamp event_time = 7;
+  string role_actor_id = 8;
+  string model = 9;
+  string provider = 10;
+  string input_summary = 11;
+  repeated string available_tool_names = 12;
+  string output = 13;
+  string finish_reason = 14;
+  WorkflowUsageMetrics usage = 15;
+  bool success = 16;
+  string error = 17;
+  string tool_call_id = 18;
+  string tool_name = 19;
+  string arguments_json = 20;
+  string result_json = 21;
+  WorkflowArtifactSourceIdentity source = 22;
+  int64 progress_sequence = 23;
+  string reasoning_content = 24;
+}
+
 message WorkflowLlmExecutionIntent
 {
   reserved 11;

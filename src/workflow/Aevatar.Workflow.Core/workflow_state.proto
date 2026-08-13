@@ -192,6 +192,8 @@ message WorkflowRunState
   // Committed call-site admission proof owned by this Run for its whole lifetime.
   WorkflowCapabilityAdmissionPlan capability_admission_plan = 43;
   ExternalCapabilityExecutionMode expected_execution_mode = 44;
+  // Exact run-owned deduplication keys for child artifact facts. Entries are retained for the
+  // run lifetime because child committed-state publications may arrive out of version order.
   repeated WorkflowArtifactSourceIdentity processed_artifact_sources = 45;
   string current_turn_id = 46;
   repeated WorkflowInteractiveActionHandoffState interactive_action_handoffs = 47;
@@ -203,6 +205,9 @@ message WorkflowRunState
   int64 definition_version = 53;
   aevatar.workflow.WorkflowRecoveryFailureKind terminal_recovery_failure_kind = 54;
   aevatar.workflow.WorkflowRunLineage lineage = 55;
+  // Highest observed committed state version per child publisher. This is diagnostic only;
+  // exact deduplication uses processed_artifact_sources because delivery may be out of order.
+  map<string, int64> processed_artifact_state_versions_by_publisher = 56;
 }
 
 message WorkflowRunInitiatorState

@@ -236,6 +236,8 @@ public sealed class ObservatoryRunDetail
 
     public IReadOnlyList<ObservatoryViewEvent> Timeline { get; init; } = [];
 
+    public IReadOnlyList<ObservatoryOperationDetail> Operations { get; init; } = [];
+
     public ObservatoryRunGraph ExecutionPath { get; init; } = new();
 
     public ObservatoryRunStatistics Statistics { get; init; } = new();
@@ -245,6 +247,33 @@ public sealed class ObservatoryRunDetail
     public WorkflowRunRecoveryCapability RecoveryCapability { get; init; } = new();
 
     public WorkflowRunLineage Lineage { get; init; } = new();
+}
+
+public sealed class ObservatoryOperationDetail
+{
+    public string SessionId { get; init; } = string.Empty;
+    public string OperationId { get; init; } = string.Empty;
+    public long ProgressSequence { get; init; }
+    public int Round { get; init; }
+    public string Kind { get; init; } = string.Empty;
+    public DateTimeOffset? StartedAtUtc { get; init; }
+    public DateTimeOffset? CompletedAtUtc { get; init; }
+    public string RoleActorId { get; init; } = string.Empty;
+    public string Model { get; init; } = string.Empty;
+    public string Provider { get; init; } = string.Empty;
+    public string InputSummary { get; init; } = string.Empty;
+    public IReadOnlyList<string> AvailableToolNames { get; init; } = [];
+    public string Output { get; init; } = string.Empty;
+    public string ReasoningContent { get; init; } = string.Empty;
+    public string FinishReason { get; init; } = string.Empty;
+    public ObservatoryUsageTotals Usage { get; init; } = new();
+    public bool? Success { get; init; }
+    public string Error { get; init; } = string.Empty;
+    public string ToolCallId { get; init; } = string.Empty;
+    public string ToolName { get; init; } = string.Empty;
+    public string ArgumentsJson { get; init; } = string.Empty;
+    public string ResultJson { get; init; } = string.Empty;
+    public double? DurationMs { get; init; }
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter<ObservatoryRunDetailSectionVersionStatus>))]

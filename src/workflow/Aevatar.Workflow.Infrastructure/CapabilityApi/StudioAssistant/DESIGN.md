@@ -63,8 +63,11 @@ The page is a quiet operational transcript with confident workspace scale. A sub
   stable browser identity until the server's `runId` is attached; visible
   request numbers are never used for lookup. Inside the container, an ordered
   operation ledger creates one selectable record for the input, each model
-  response, and each tool call. Steering, approval, and continuation commands
-  advance the owning task instead of inventing unrelated top-level containers.
+  response, and each tool call. Live typed Model/Tool start/end frames upsert
+  those operations by their own identity; even a model response whose only
+  output is tool calls remains a Model record. Steering, approval, and
+  continuation commands advance the owning task instead of inventing unrelated
+  top-level containers.
 - Trajectory overview: a compact, shared time domain above the ledger with
   distinct `Input`, `Model`, and `Tools` lanes. A bar and its ledger row carry
   the same stable operation identity. Model bars may distinguish TTFT from
@@ -72,7 +75,9 @@ The page is a quiet operational transcript with confident workspace scale. A sub
 - Operation inspector: Input shows captured content/source; Model shows output,
   model/provider, usage, and timing; Tool shows payload, result, schema, and
   timing. Tabs and fields appear only when backed by the operation's captured
-  facts; missing facts are labeled unavailable.
+  facts; missing facts are labeled unavailable. The Input record does not have
+  an independent typed start/completion lifecycle and therefore has no honest
+  operation Duration bar.
 
 ## Page Patterns
 
@@ -90,7 +95,10 @@ The page is a quiet operational transcript with confident workspace scale. A sub
   state; absent timing is unavailable and is never synthesized from browser
   receipt time. The current ledger is page-local: reopening a stored transcript
   does not infer request identities or event traces from message positions.
-  Durable recovery requires a future typed request-trace read model.
+  Observatory now has a durable typed Model/Tool operation read model, but
+  Studio does not hydrate it or join it back to stored conversation/request
+  identity. Full Studio trajectory recovery after reopening a transcript is
+  therefore still unavailable.
 
 ## Content Style
 
@@ -112,6 +120,9 @@ The page is a quiet operational transcript with confident workspace scale. A sub
 - Treat timing, model/provider, usage, tool payload/result, and tool schema as
   recorded facts. Render unavailable when absent; do not infer them from event
   arrival time, adjacent records, display text, or mutable conversation state.
+- Do not assign an independent Input duration until the protocol provides a
+  typed Input start/completion lifecycle; request/container timing is not a
+  substitute.
 - Send clarification as one typed `input.resolve` from the shared composer.
 - Keep `task.steer`, `task.stop`, `step.retry`, and `step.skip` explicit and identity/version guarded.
 - Render final verification only when actor-owned postcondition or terminal facts prove it.

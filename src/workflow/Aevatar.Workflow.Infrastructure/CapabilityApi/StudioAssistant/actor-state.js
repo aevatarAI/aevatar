@@ -1,4 +1,4 @@
-import { validateActionRequest } from "./protocol.js?v=20260807-m40-thread-polish";
+import { validateActionRequest } from "./protocol.js?v=20260814-m45-model-operations";
 
 const ACTOR_EVENT_TYPES = new Set([
   "task_snapshot",

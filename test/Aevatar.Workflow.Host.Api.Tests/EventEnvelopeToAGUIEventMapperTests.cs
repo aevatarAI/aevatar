@@ -287,29 +287,69 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
             {
                 SessionId = sessionId,
                 Sequence = 5,
-                ToolStarted = new RoleChatToolStartedProgress
+                ModelStarted = new RoleChatModelStartedProgress
                 {
-                    CallId = "call-1",
-                    ToolName = "search",
+                    OperationId = "model-round-0",
+                    Round = 0,
+                    Model = "model-a",
+                    Provider = "provider-a",
+                    InputSummary = "safe model input",
+                    AvailableToolNames = { "lookup", "search" },
                 },
             },
             new()
             {
                 SessionId = sessionId,
                 Sequence = 6,
-                ToolCompleted = new RoleChatToolCompletedProgress
+                ToolStarted = new RoleChatToolStartedProgress
                 {
-                    Result = new ToolResultEvent
-                    {
-                        CallId = "call-1",
-                        ResultJson = "{\"ok\":true}",
-                    },
+                    CallId = "call-1",
+                    ToolName = "search",
+                    OperationId = "tool-operation-1",
                 },
             },
             new()
             {
                 SessionId = sessionId,
                 Sequence = 7,
+                ToolCompleted = new RoleChatToolCompletedProgress
+                {
+                    ToolName = "search",
+                    OperationId = "tool-operation-1",
+                    SafeArgumentsJson = "{\"query\":\"status\"}",
+                    Result = new ToolResultEvent
+                    {
+                        CallId = "call-1",
+                        ResultJson = "{\"ok\":true}",
+                        Success = true,
+                    },
+                },
+            },
+            new()
+            {
+                SessionId = sessionId,
+                Sequence = 8,
+                ModelCompleted = new RoleChatModelCompletedProgress
+                {
+                    OperationId = "model-round-0",
+                    Round = 0,
+                    Model = "model-a",
+                    Content = "",
+                    ReasoningContent = "tool required",
+                    Usage = new TokenUsagePayload
+                    {
+                        PromptTokens = 2,
+                        CompletionTokens = 3,
+                        TotalTokens = 5,
+                    },
+                    FinishReason = "tool_calls",
+                    Success = true,
+                },
+            },
+            new()
+            {
+                SessionId = sessionId,
+                Sequence = 9,
                 Usage = new RoleChatUsageProgress
                 {
                     Usage = new TokenUsagePayload
@@ -324,13 +364,13 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
             new()
             {
                 SessionId = sessionId,
-                Sequence = 8,
+                Sequence = 10,
                 TextEnded = new RoleChatTextEndedProgress { MessageId = sessionId },
             },
             new()
             {
                 SessionId = sessionId,
-                Sequence = 9,
+                Sequence = 11,
                 AuthorizationRequired = new RoleChatAuthorizationRequiredProgress
                 {
                     AuthorizationRequired = new NyxIdAuthorizationRequiredEvent
@@ -345,18 +385,44 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
             .SelectMany(item => CreateMapper().Map(WrapCommitted(item)))
             .ToArray();
 
-        events.Should().HaveCount(9);
+        events.Should().HaveCount(11);
         events[0].TextMessageStart.MessageId.Should().Be($"msg:{sessionId}");
         events[1].TextMessageContent.MessageId.Should().Be($"msg:{sessionId}");
         events[1].TextMessageContent.Delta.Should().Be("streamed text");
         events[2].Custom.Name.Should().Be("aevatar.llm.reasoning");
         events[2].Custom.Payload.Unpack<WorkflowReasoningCustomPayload>().Delta.Should().Be("thinking");
         events[3].Custom.Name.Should().Be("aevatar.media.chunk");
-        events[4].ToolCallStart.ToolCallId.Should().Be("call-1");
-        events[5].ToolCallEnd.Result.Should().Be("{\"ok\":true}");
-        events[6].Usage.TotalTokens.Should().Be(5);
-        events[7].TextMessageEnd.MessageId.Should().Be($"msg:{sessionId}");
-        events[8].Custom.Name.Should().Be("nyxid.authorization.required");
+        events[4].EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.ModelCallStart);
+        events[4].Sequence.Should().Be(5);
+        events[4].ModelCallStart.OperationId.Should().Be("model-round-0");
+        events[4].ModelCallStart.SessionId.Should().Be(sessionId);
+        events[4].ModelCallStart.Round.Should().Be(0);
+        events[4].ModelCallStart.Model.Should().Be("model-a");
+        events[4].ModelCallStart.Provider.Should().Be("provider-a");
+        events[4].ModelCallStart.InputSummary.Should().Be("safe model input");
+        events[4].ModelCallStart.AvailableToolNames.Should().Equal("lookup", "search");
+        events[5].ToolCallStart.ToolCallId.Should().Be("call-1");
+        events[5].ToolCallStart.ToolName.Should().Be("search");
+        events[5].Sequence.Should().Be(6);
+        events[6].ToolCallEnd.ToolCallId.Should().Be("call-1");
+        events[6].ToolCallEnd.Result.Should().Be("{\"ok\":true}");
+        events[6].ToolCallEnd.Success.Should().BeTrue();
+        events[6].ToolCallEnd.Error.Should().BeNull();
+        events[6].ToolCallEnd.ArgumentsJson.Should().Be("{\"query\":\"status\"}");
+        events[6].Sequence.Should().Be(7);
+        events[7].EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.ModelCallEnd);
+        events[7].Sequence.Should().Be(8);
+        events[7].ModelCallEnd.OperationId.Should().Be("model-round-0");
+        events[7].ModelCallEnd.SessionId.Should().Be(sessionId);
+        events[7].ModelCallEnd.Content.Should().BeEmpty(
+            "tool-call-only model rounds still need an explicit terminal operation");
+        events[7].ModelCallEnd.ReasoningContent.Should().Be("tool required");
+        events[7].ModelCallEnd.Usage.TotalTokens.Should().Be(5);
+        events[7].ModelCallEnd.FinishReason.Should().Be("tool_calls");
+        events[7].ModelCallEnd.Success.Should().BeTrue();
+        events[8].Usage.TotalTokens.Should().Be(5);
+        events[9].TextMessageEnd.MessageId.Should().Be($"msg:{sessionId}");
+        events[10].Custom.Name.Should().Be("nyxid.authorization.required");
     }
 
     [Fact]
@@ -700,22 +766,30 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
         {
             CallId = "call-1",
             ToolName = "search",
+            ArgumentsJson = "{\"secret\":\"raw\"}",
         }));
         var endEvents = mapper.Map(WrapCommitted(new ToolResultEvent
         {
             CallId = "call-1",
             ResultJson = "{\"ok\":true}",
+            Success = false,
+            Error = "upstream unavailable",
         }));
 
         startEvents.Should().ContainSingle();
         startEvents[0].EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.ToolCallStart);
         startEvents[0].ToolCallStart.ToolCallId.Should().Be("call-1");
         startEvents[0].ToolCallStart.ToolName.Should().Be("search");
+        WorkflowToolCallStartEventPayload.Descriptor.Fields.InDeclarationOrder()
+            .Should().NotContain(field => field.Name == "arguments_json",
+                "raw tool arguments must not be exposed on a live start frame");
 
         endEvents.Should().ContainSingle();
         endEvents[0].EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.ToolCallEnd);
         endEvents[0].ToolCallEnd.ToolCallId.Should().Be("call-1");
         endEvents[0].ToolCallEnd.Result.Should().Be("{\"ok\":true}");
+        endEvents[0].ToolCallEnd.Success.Should().BeFalse();
+        endEvents[0].ToolCallEnd.Error.Should().Be("upstream unavailable");
     }
 
     [Fact]

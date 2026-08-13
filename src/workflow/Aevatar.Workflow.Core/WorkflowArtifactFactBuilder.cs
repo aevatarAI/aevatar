@@ -42,6 +42,12 @@ internal static class WorkflowArtifactFactBuilder
             return true;
         }
 
+        if (TryBuildWorkflowRuntimeOperationRecordedEvent(envelope, normalizedRunId, out var operationFact))
+        {
+            artifactFact = operationFact;
+            return true;
+        }
+
         if (envelope.Payload.Is(WorkflowCompletedEvent.Descriptor))
             return false;
 
@@ -95,6 +101,107 @@ internal static class WorkflowArtifactFactBuilder
 
         return false;
     }
+
+    private static bool TryBuildWorkflowRuntimeOperationRecordedEvent(
+        EventEnvelope envelope,
+        string runId,
+        out WorkflowRuntimeOperationRecordedEvent evt)
+    {
+        evt = null!;
+        if (envelope.Payload?.Is(CommittedStateEventPublished.Descriptor) != true)
+            return false;
+
+        var published = envelope.Payload.Unpack<CommittedStateEventPublished>();
+        if (published?.StateEvent?.EventData?.Is(RoleChatSessionProgressedEvent.Descriptor) != true)
+            return false;
+
+        var progress = published.StateEvent.EventData.Unpack<RoleChatSessionProgressedEvent>();
+        var publisherActorId = envelope.Route?.PublisherActorId ?? string.Empty;
+        evt = new WorkflowRuntimeOperationRecordedEvent
+        {
+            RunId = runId,
+            SessionId = progress.SessionId ?? string.Empty,
+            RoleActorId = publisherActorId,
+            ProgressSequence = progress.Sequence,
+            Source = BuildSourceIdentity(publisherActorId, published.StateEvent),
+        };
+        if (published.StateEvent.Timestamp != null)
+            evt.EventTime = published.StateEvent.Timestamp.Clone();
+
+        switch (progress.PayloadCase)
+        {
+            case RoleChatSessionProgressedEvent.PayloadOneofCase.ModelStarted:
+                evt.OperationId = progress.ModelStarted.OperationId ?? string.Empty;
+                evt.Round = progress.ModelStarted.Round;
+                evt.Model = progress.ModelStarted.Model ?? string.Empty;
+                evt.Provider = progress.ModelStarted.Provider ?? string.Empty;
+                evt.InputSummary = SanitizeArtifactText(progress.ModelStarted.InputSummary);
+                evt.AvailableToolNames.Add(progress.ModelStarted.AvailableToolNames);
+                evt.Kind = WorkflowRuntimeOperationKind.Model;
+                evt.Phase = WorkflowRuntimeOperationPhase.Started;
+                break;
+            case RoleChatSessionProgressedEvent.PayloadOneofCase.ModelCompleted:
+                evt.OperationId = progress.ModelCompleted.OperationId ?? string.Empty;
+                evt.Round = progress.ModelCompleted.Round;
+                evt.Model = progress.ModelCompleted.Model ?? string.Empty;
+                evt.Kind = WorkflowRuntimeOperationKind.Model;
+                evt.Phase = WorkflowRuntimeOperationPhase.Completed;
+                evt.Output = SanitizeArtifactText(progress.ModelCompleted.Content);
+                evt.ReasoningContent = SanitizeArtifactText(progress.ModelCompleted.ReasoningContent);
+                evt.FinishReason = SanitizeArtifactText(progress.ModelCompleted.FinishReason);
+                evt.Success = progress.ModelCompleted.Success;
+                evt.Error = SanitizeArtifactText(progress.ModelCompleted.Error);
+                if (progress.ModelCompleted.Usage != null)
+                    evt.Usage = ToWorkflowUsage(progress.ModelCompleted.Usage, progress.ModelCompleted.Model);
+                break;
+            case RoleChatSessionProgressedEvent.PayloadOneofCase.ToolStarted:
+                evt.ToolCallId = progress.ToolStarted.CallId ?? string.Empty;
+                evt.OperationId = ResolveToolOperationId(
+                    progress.ToolStarted.CallId,
+                    progress.ToolStarted.OperationId);
+                evt.ToolName = progress.ToolStarted.ToolName ?? string.Empty;
+                evt.Kind = WorkflowRuntimeOperationKind.Tool;
+                evt.Phase = WorkflowRuntimeOperationPhase.Started;
+                break;
+            case RoleChatSessionProgressedEvent.PayloadOneofCase.ToolCompleted:
+                evt.ToolCallId = progress.ToolCompleted.Result?.CallId ?? string.Empty;
+                evt.OperationId = ResolveToolOperationId(
+                    evt.ToolCallId,
+                    progress.ToolCompleted.OperationId);
+                evt.ToolName = progress.ToolCompleted.ToolName ?? string.Empty;
+                evt.Kind = WorkflowRuntimeOperationKind.Tool;
+                evt.Phase = WorkflowRuntimeOperationPhase.Completed;
+                evt.ArgumentsJson = SanitizeToolDetail(progress.ToolCompleted.SafeArgumentsJson);
+                if (progress.ToolCompleted.Result != null)
+                {
+                    evt.ResultJson = SanitizeToolDetail(progress.ToolCompleted.Result.ResultJson);
+                    evt.Success = progress.ToolCompleted.Result.Success;
+                    evt.Error = SanitizeToolDetail(progress.ToolCompleted.Result.Error);
+                }
+                break;
+            default:
+                return false;
+        }
+
+        return !string.IsNullOrWhiteSpace(evt.SessionId) &&
+               !string.IsNullOrWhiteSpace(evt.OperationId) &&
+               evt.Kind != WorkflowRuntimeOperationKind.Unspecified &&
+               evt.Phase != WorkflowRuntimeOperationPhase.Unspecified;
+    }
+
+    private static string ResolveToolOperationId(string? callId, string? operationId) =>
+        !string.IsNullOrWhiteSpace(callId)
+            ? callId.Trim()
+            : operationId?.Trim() ?? string.Empty;
+
+    private static WorkflowUsageMetrics ToWorkflowUsage(TokenUsagePayload usage, string? model) =>
+        new()
+        {
+            PromptTokens = Math.Max(0, usage.PromptTokens),
+            CompletionTokens = Math.Max(0, usage.CompletionTokens),
+            TotalTokens = Math.Max(0, usage.TotalTokens),
+            Model = model ?? string.Empty,
+        };
 
     private static bool TryBuildWorkflowRoleReplyRecordedEvent(
         EventEnvelope envelope,

@@ -5985,7 +5985,7 @@ button.trace-operation-duration-bar {
   display: grid;
   width: 100%;
   min-height: 66px;
-  grid-template-columns: 10px 60px minmax(0, 1fr) auto;
+  grid-template-columns: 10px minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 10px;
   border: 0;
@@ -6193,7 +6193,7 @@ button.trace-operation-duration-bar {
   }
 
   .trace-operation-row {
-    grid-template-columns: 8px 50px minmax(0, 1fr);
+    grid-template-columns: 8px minmax(0, 1fr) auto auto;
     gap: 7px;
     padding-right: 5px;
     padding-left: 5px;

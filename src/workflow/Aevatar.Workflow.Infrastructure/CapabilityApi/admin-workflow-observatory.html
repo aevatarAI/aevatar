@@ -583,11 +583,16 @@
   .approval-actions .btn-primary { width:auto; padding:7px 12px; }
 
   /* ---- Tabs ------------------------------------------------------------- */
-  .tabs { display: inline-flex; gap: 3px; padding: 3px; margin: 20px 0 0; background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--r-pill); }
+  .tabs {
+    display: inline-flex; max-width: 100%; gap: 3px; padding: 3px; margin: 20px 0 0;
+    overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--r-pill);
+  }
+  .tabs::-webkit-scrollbar { display: none; }
   .tab {
     padding: 6px 16px; border-radius: var(--r-pill); border: 0; background: transparent;
     color: var(--muted); font-size: 13px; font-weight: 600; transition: color .15s, background .15s;
-    display: inline-flex; align-items: center; gap: 7px;
+    display: inline-flex; flex: 0 0 auto; align-items: center; gap: 7px;
   }
   .tab:hover { color: var(--fg); }
   .tab[aria-selected="true"] { background: var(--panel); color: var(--fg-strong); box-shadow: var(--shadow-sm); }
@@ -1364,7 +1369,7 @@ function readObservatoryRoute(search, hash){
   const query = new URLSearchParams(String(search || "").replace(/^\?/, ""));
   const legacyScope = /(?:^#|&)scope=([^&]+)/.exec(hash || "");
   const statusValues = new Set(["running","completed","failed","timed_out","stopped"]);
-  const tabValues = new Set(["timeline","steps","diagnostics","logs","artifacts","graph"]);
+  const tabValues = new Set(["timeline","trajectory","steps","diagnostics","logs","artifacts","graph"]);
   const status = (query.get("status") || "").trim();
   const tab = (query.get("tab") || "").trim();
   return {
@@ -2134,6 +2139,10 @@ function renderDetail(){
   timelinePanel.appendChild(renderTimeline(detail));
   if(state.activeTab !== "timeline") timelinePanel.hidden = true;
 
+  const trajectoryPanel = el("div", { class:"tabpanel", id:"panel-trajectory", role:"tabpanel", "aria-labelledby":"tab-trajectory", tabindex:"0" });
+  trajectoryPanel.appendChild(renderTrajectory(detail));
+  if(state.activeTab !== "trajectory") trajectoryPanel.hidden = true;
+
   const stepsPanel = el("div", { class:"tabpanel", id:"panel-steps", role:"tabpanel", "aria-labelledby":"tab-steps", tabindex:"0" });
   stepsPanel.appendChild(renderSteps(detail));
   if(state.activeTab !== "steps") stepsPanel.hidden = true;
@@ -2155,6 +2164,7 @@ function renderDetail(){
   if(state.activeTab !== "graph") graphPanel.hidden = true;
 
   tp.appendChild(timelinePanel);
+  tp.appendChild(trajectoryPanel);
   tp.appendChild(stepsPanel);
   tp.appendChild(diagnosticsPanel);
   tp.appendChild(logsPanel);
@@ -2444,10 +2454,10 @@ function renderApprovalPanel(detail){
   box.appendChild(actions); return box;
 }
 
-function detailTabIds(){ return ["timeline","steps","diagnostics","logs","artifacts","graph"]; }
+function detailTabIds(){ return ["timeline","trajectory","steps","diagnostics","logs","artifacts","graph"]; }
 function renderTabs(){
   const tablist = el("div", { class:"tabs", role:"tablist", "aria-label":"详情视图" });
-  const labels={timeline:["时间线",ICON.step],steps:["Steps",ICON.list],diagnostics:["诊断",ICON.alert],logs:["Logs",ICON.inbox],artifacts:["产出",ICON.flag],graph:["拓扑图",'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="5" cy="6" r="2.2"/><circle cx="5" cy="18" r="2.2"/><circle cx="19" cy="12" r="2.2"/><path d="M7 6.6 17 11M7 17.4 17 13"/></svg>']};
+  const labels={timeline:["时间线",ICON.step],trajectory:["轨迹",ICON.chat],steps:["Steps",ICON.list],diagnostics:["诊断",ICON.alert],logs:["Logs",ICON.inbox],artifacts:["产出",ICON.flag],graph:["拓扑图",'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="5" cy="6" r="2.2"/><circle cx="5" cy="18" r="2.2"/><circle cx="19" cy="12" r="2.2"/><path d="M7 6.6 17 11M7 17.4 17 13"/></svg>']};
   detailTabIds().forEach(id => {
     const [lab,ic]=labels[id];
     const t = el("button", { class:"tab", id:"tab-"+id, role:"tab", "aria-selected": String(state.activeTab===id), "aria-controls":"panel-"+id, tabindex: state.activeTab===id?"0":"-1" }, `${ic}<span>${lab}</span>`);
@@ -2538,9 +2548,8 @@ function renderDataDetails(data){
 }
 
 /* ---- Request operation trajectory --------------------------------------
-   The current read contract has one committed timestamp for each role.reply / tool.call, but no
-   operation start/end pair. Keep those records as points and say Duration is unavailable. Workflow
-   steps remain in the dedicated Steps view; they are not model or tool operations. */
+   Typed operations are the authoritative ledger. Their stable operation id lets polling upsert the
+   same row while preserving expansion state. Legacy timeline points are used only for old reports. */
 function operationTypeIcon(type){
   if(type==="input") return ICON.play;
   if(type==="model") return ICON.chat;
@@ -2563,8 +2572,13 @@ function operationRecordKey(type, preferred, timestamp, index){
   const stable=String(preferred||"").trim();
   return stable?[type,stable].join(":"):[type,String(timestamp||"unknown"),String(index)].join(":");
 }
+function operationDurationMs(startedAt,completedAt){
+  const start=operationTimestamp(startedAt),end=operationTimestamp(completedAt);
+  return start!=null&&end!=null&&end>=start?end-start:null;
+}
 function buildOperationRecords(detail){
   const timeline=Array.isArray(detail.timeline)?detail.timeline:[];
+  const operations=Array.isArray(detail.operations)?detail.operations:[];
   const runId=detail.summary&&detail.summary.runId||"run";
   const startEvent=timeline.find(event=>event&&event.stage==="workflow.start");
   const inputTimestamp=(startEvent&&startEvent.timestampUtc)||(detail.summary&&detail.summary.startedAtUtc)||null;
@@ -2575,44 +2589,104 @@ function buildOperationRecords(detail){
     title:"Request input",preview:(fullInput||inputSummary||"未记录输入内容").replace(/\s+/g," "),
     content:fullInput||inputSummary,status:fullInput||inputSummary?"已提交":"内容不可用",statusTone:fullInput||inputSummary?"ok":"",
     durationMs:null,durationSource:"当前详情契约没有 Input 的独立起止时间。",
-    fullInputAvailable:fullInput.length>0,sourceIndex:-1
+    fullInputAvailable:fullInput.length>0,sourceIndex:-1,anchorSequence:-1
   }];
 
-  timeline.forEach((event,index)=>{
-    if(!event) return;
-    const timestamp=event.timestampUtc||null;
-    if(REPLY_KINDS.has(event.kind)||event.stage==="role.reply"){
-      const data=event.data&&typeof event.data==="object"?event.data:{};
-      const sessionId=dataLookup(data,["session_id","sessionId"]);
-      const role=event.message||event.agentId||event.stepId||"assistant";
-      const content=String(event.content==null?"":event.content);
+  if(operations.length>0){
+    operations.forEach((operation,index)=>{
+      if(!operation||typeof operation!=="object") return;
+      const type=String(operation.kind||"").toLowerCase();
+      if(type!=="model"&&type!=="tool") return;
+      const sessionId=String(operation.sessionId||"");
+      const operationId=String(operation.operationId||operation.toolCallId||"");
+      const startedAt=operation.startedAtUtc||operation.startedAt||null;
+      const completedAt=operation.completedAtUtc||operation.completedAt||null;
+      const timestamp=startedAt||completedAt;
+      const durationMs=operationDurationMs(startedAt,completedAt);
+      const completed=operationTimestamp(completedAt)!=null;
+      const failed=completed&&operation.success===false;
+      const status=completed?(failed?"失败":"已完成"):"运行中";
+      const statusTone=completed?(failed?"bad":"ok"):"live";
+      const progressSequence=operation.progressSequence;
+      const anchorSequence=progressSequence!==null&&progressSequence!==undefined&&progressSequence!==""&&Number.isFinite(Number(progressSequence))
+        ?Number(progressSequence):index;
+
+      if(type==="model"){
+        const content=String(operation.output||"");
+        const reasoning=String(operation.reasoningContent||"");
+        const model=String(operation.model||"");
+        const tools=Array.isArray(operation.availableToolNames)?operation.availableToolNames.map(String).filter(Boolean):[];
+        const toolCallOnly=content.trim()==="";
+        const rawRound=operation.round;
+        const parsedRound=rawRound===null||rawRound===undefined||rawRound===""?null:Number(rawRound);
+        const round=Number.isSafeInteger(parsedRound)?parsedRound:null;
+        const event={agentId:String(operation.roleActorId||"assistant"),content};
+        const data={model,provider:operation.provider||"",finishReason:operation.finishReason||"",usage:operation.usage||{}};
+        records.push({
+          key:operationRecordKey("model",[sessionId||"session-unavailable",operationId||index].join(":"),timestamp,index),
+          type:"model",timestamp,startedAt,completedAt,title:model||(round==null?"Model response":`Model round ${round}`),
+          preview:(content||reasoning||"(tool call only)").replace(/\s+/g," "),content,reasoning,event,data,model,
+          provider:String(operation.provider||""),sessionId,operationId,round,
+          inputSummary:String(operation.inputSummary||""),availableToolNames:tools,usage:operation.usage||{},
+          finishReason:String(operation.finishReason||""),error:String(operation.error||""),
+          status,statusTone,durationMs,durationSource:durationMs==null?"仅在模型 start 与 completed 时间都已提交后显示 Duration。":"",
+          sourceIndex:index,anchorSequence,typed:true,toolCallOnly
+        });
+        return;
+      }
+
+      const tool={
+        callId:String(operation.toolCallId||operationId),toolName:String(operation.toolName||"unknown tool"),
+        argumentsJson:String(operation.argumentsJson||""),resultJson:String(operation.resultJson||""),
+        success:operation.success,error:String(operation.error||"")
+      };
       records.push({
-        key:operationRecordKey("model",runId+":"+(sessionId||[role,timestamp,index].join(":")),timestamp,index),type:"model",timestamp,
-        title:role,preview:(content||"该回复没有文本内容").replace(/\s+/g," "),content,event,data,
-        model:dataLookup(data,DATA_MODEL_KEYS),sessionId,status:"已提交",statusTone:"ok",durationMs:null,
-        durationSource:"当前详情契约只返回模型回复的 committed 时间点，没有 invocation started/completed。",
-        sourceIndex:index
+        key:operationRecordKey("tool",[sessionId||"session-unavailable",operationId||tool.callId||index].join(":"),timestamp,index),
+        type:"tool",timestamp,startedAt,completedAt,title:tool.toolName,
+        preview:(tool.error||tool.resultJson||tool.argumentsJson||"等待工具结果").replace(/\s+/g," "),tool,
+        sessionId,operationId,status,statusTone,durationMs,
+        durationSource:durationMs==null?"仅在工具 start 与 completed 时间都已提交后显示 Duration。":"",
+        sourceIndex:index,anchorSequence,typed:true
       });
-      return;
-    }
-    if(event.kind==="ToolCall"||event.stage==="tool.call"){
-      const tool=event.toolCall||{};
-      const callId=String(tool.callId||dataLookup(event.data||{},["call_id","callId"]));
-      const name=String(tool.toolName||event.message||"unknown tool");
-      const error=String(tool.error||"");
-      const success=tool.success===true;
-      records.push({
-        key:operationRecordKey("tool",runId+":"+(callId||[name,timestamp,index].join(":")),timestamp,index),type:"tool",timestamp,title:name,
-        preview:(error||(tool.resultJson||tool.argumentsJson)||"未返回工具详情").replace(/\s+/g," "),tool,event,
-        status:success?"成功":tool.success===false||error?"失败":"结果未确认",statusTone:success?"ok":tool.success===false||error?"bad":"",
-        durationMs:null,durationSource:"当前详情契约没有工具执行的 started/completed；该时间点是结果被投影的时间。",
-        sourceIndex:index
-      });
-    }
-  });
+    });
+  } else {
+    timeline.forEach((event,index)=>{
+      if(!event) return;
+      const timestamp=event.timestampUtc||null;
+      if(REPLY_KINDS.has(event.kind)||event.stage==="role.reply"){
+        const data=event.data&&typeof event.data==="object"?event.data:{};
+        const sessionId=dataLookup(data,["session_id","sessionId"]);
+        const role=event.message||event.agentId||event.stepId||"assistant";
+        const content=String(event.content==null?"":event.content);
+        records.push({
+          key:operationRecordKey("model",[runId,sessionId||"session-unavailable",timestamp||"time-unavailable",index].join(":"),timestamp,index),type:"model",timestamp,
+          title:role,preview:(content||"(tool call only)").replace(/\s+/g," "),content,reasoning:"",event,data,
+          model:dataLookup(data,DATA_MODEL_KEYS),sessionId,status:"已提交",statusTone:"ok",durationMs:null,
+          durationSource:"历史轨迹只保留 committed 时间点，无法还原真实模型 Duration。",
+          sourceIndex:index,anchorSequence:index,typed:false,toolCallOnly:content.trim()===""
+        });
+        return;
+      }
+      if(event.kind==="ToolCall"||event.stage==="tool.call"){
+        const tool=event.toolCall||{};
+        const callId=String(tool.callId||dataLookup(event.data||{},["call_id","callId"]));
+        const name=String(tool.toolName||event.message||"unknown tool");
+        const error=String(tool.error||"");
+        const success=tool.success===true;
+        records.push({
+          key:operationRecordKey("tool",runId+":"+(callId||[name,timestamp,index].join(":")),timestamp,index),type:"tool",timestamp,title:name,
+          preview:(error||(tool.resultJson||tool.argumentsJson)||"未返回工具详情").replace(/\s+/g," "),tool,event,
+          status:success?"成功":tool.success===false||error?"失败":"结果未确认",statusTone:success?"ok":tool.success===false||error?"bad":"",
+          durationMs:null,durationSource:"历史轨迹只保留 committed 时间点，无法还原真实工具 Duration。",
+          sourceIndex:index,anchorSequence:index,typed:false
+        });
+      }
+    });
+  }
 
   const typeOrder={input:0,model:1,tool:2};
   records.sort((left,right)=>{
+    if(left.anchorSequence!==right.anchorSequence) return left.anchorSequence-right.anchorSequence;
     const lt=operationTimestamp(left.timestamp),rt=operationTimestamp(right.timestamp);
     if(lt==null&&rt!=null) return 1;
     if(lt!=null&&rt==null) return -1;
@@ -2634,7 +2708,11 @@ function renderDurationOverview(detail,records){
   const overview=el("section",{class:"duration-overview","aria-label":"Input Model Tools Duration 总览"});
   const modelRecords=records.filter(record=>record.type==="model"),toolRecords=records.filter(record=>record.type==="tool");
   const timestamps=[];
-  records.forEach(record=>{const time=operationTimestamp(record.timestamp);if(time!=null)timestamps.push(time);});
+  records.forEach(record=>{
+    [record.timestamp,record.startedAt,record.completedAt].forEach(value=>{
+      const time=operationTimestamp(value);if(time!=null)timestamps.push(time);
+    });
+  });
   const runStart=operationTimestamp(detail.summary&&detail.summary.startedAtUtc);
   if(runStart!=null) timestamps.push(runStart);
   const scaleStart=timestamps.length?Math.min(...timestamps):0;
@@ -2642,7 +2720,7 @@ function renderDurationOverview(detail,records){
   if(scaleEnd<=scaleStart) scaleEnd=scaleStart+1000;
   const span=scaleEnd-scaleStart;
   const position=time=>Math.max(0,Math.min(99.2,((time-scaleStart)/span)*100));
-  const head=el("div",{class:"do-head"},`<div><div class="do-title">Duration overview</div><div class="do-sub">Input、模型回复与实际工具调用独立成记录。当前 Admin 契约仅提供 committed 时间点，因此不绘制伪造的耗时条。</div></div><div class="do-range">${scaleStart?clockUTC(new Date(scaleStart).toISOString())+" → "+clockUTC(new Date(scaleEnd).toISOString())+" UTC":"时间窗口不可用"}</div>`);
+  const head=el("div",{class:"do-head"},`<div><div class="do-title">Duration overview</div><div class="do-sub">Input、每轮 Model response 与每次 Tool call 独立成记录。条形只使用已提交的真实 start / completed 时间。</div></div><div class="do-range">${scaleStart?clockUTC(new Date(scaleStart).toISOString())+" → "+clockUTC(new Date(scaleEnd).toISOString())+" UTC":"时间窗口不可用"}</div>`);
   overview.appendChild(head);
   const lanes=el("div",{class:"duration-lanes"});
   const definitions=[
@@ -2658,7 +2736,12 @@ function renderDurationOverview(detail,records){
     definition.records.forEach((record,index)=>{
       const time=operationTimestamp(record.timestamp);
       if(time==null) return;
-      const mark=el("button",{class:"duration-mark point",type:"button","data-kind":record.type,title:`${OPERATION_TYPE[record.type].label} · ${record.title} · Duration 不可用`,style:`left:${position(time)}%;--mark-row:${index%3}`});
+      const start=operationTimestamp(record.startedAt),end=operationTimestamp(record.completedAt);
+      const interval=record.durationMs!=null&&start!=null&&end!=null;
+      const left=position(interval?start:time);
+      const width=interval?Math.max(.8,position(end)-left):0;
+      const duration=interval?operationDurationLabel(record.durationMs):"不可用";
+      const mark=el("button",{class:"duration-mark"+(interval?"":" point"),type:"button","data-kind":record.type,title:`${OPERATION_TYPE[record.type].label} · ${record.title} · Duration ${duration}`,style:`left:${left}%;${interval?`width:${width}%;`:""}--mark-row:${index%3}`});
       mark.addEventListener("click",()=>openOperationRecord(record.key));
       track.appendChild(mark);marks.push(mark);
     });
@@ -2670,7 +2753,7 @@ function renderDurationOverview(detail,records){
   axis.appendChild(el("span",{class:"do-axis-label"}));
   axis.appendChild(el("div",{class:"do-ticks"},`<span>+0</span><span>+${operationDurationLabel(span/2)}</span><span>+${operationDurationLabel(span)}</span>`));
   overview.appendChild(axis);
-  overview.appendChild(el("div",{class:"duration-legend"},'<span><i class="point"></i>单点记录 · Duration 不可用</span><span>Tools = 实际调用；模型可用工具清单未进入当前详情契约</span>'));
+  overview.appendChild(el("div",{class:"duration-legend"},'<span><i></i>真实 start → completed Duration</span><span><i class="point"></i>缺少任一端点 · Duration 不可用</span>'));
   return overview;
 }
 function operationMeta(entries){
@@ -2688,14 +2771,19 @@ function renderOperationDetail(record){
     detail.appendChild(el("div",{class:"op-unavailable"},esc(record.durationSource)));
     detail.appendChild(el("pre",{class:"op-text scroll",tabindex:"0"},esc(record.content||"输入内容未记录或为空。")));
   } else if(record.type==="model"){
-    detail.appendChild(operationMeta([["记录类型","Model response"],["Role",record.title],["Agent",record.event.agentId],["Session",record.sessionId],["Model",record.model||"不可用（当前详情契约未返回）"],["Committed 时间",record.timestamp||"不可用"],["Duration","不可用"]]));
-    detail.appendChild(el("div",{class:"op-unavailable"},esc(record.durationSource)));
+    const usage=record.usage||{};
+    detail.appendChild(operationMeta([["记录类型","Model response"],["Operation ID",record.operationId],["Round",record.round],["Agent",record.event.agentId],["Session",record.sessionId],["Model",record.model],["Provider",record.provider],["Started",record.startedAt||record.timestamp||"不可用"],["Completed",record.completedAt||"不可用"],["Duration",record.durationMs==null?"不可用":operationDurationLabel(record.durationMs)],["Finish reason",record.finishReason],["Prompt tokens",usage.promptTokens],["Completion tokens",usage.completionTokens],["Total tokens",usage.totalTokens]]));
+    if(record.durationMs==null) detail.appendChild(el("div",{class:"op-unavailable"},esc(record.durationSource)));
     detail.appendChild(renderReplyBubble(record.event));
+    if(record.reasoning) detail.appendChild(el("pre",{class:"op-text scroll",tabindex:"0","aria-label":"模型 reasoning"},esc(record.reasoning)));
+    if(record.inputSummary) detail.appendChild(el("pre",{class:"op-text scroll",tabindex:"0","aria-label":"模型输入摘要"},esc(record.inputSummary)));
+    if(record.availableToolNames&&record.availableToolNames.length) detail.appendChild(el("div",{class:"op-unavailable"},`Available tools · ${esc(record.availableToolNames.join(", "))}`));
+    if(record.error) detail.appendChild(el("pre",{class:"op-text scroll",tabindex:"0"},esc(record.error)));
     const data=renderDataDetails(record.data);if(data)detail.appendChild(data);
   } else if(record.type==="tool"){
     const tool=record.tool;
-    detail.appendChild(operationMeta([["记录类型","Tool call"],["Tool",record.title],["Call ID",tool.callId],["Committed 时间",record.timestamp||"不可用"],["Duration","不可用"],["结果状态",record.status]]));
-    detail.appendChild(el("div",{class:"op-unavailable"},esc(record.durationSource)));
+    detail.appendChild(operationMeta([["记录类型","Tool call"],["Operation ID",record.operationId],["Tool",record.title],["Call ID",tool.callId],["Session",record.sessionId],["Started",record.startedAt||record.timestamp||"不可用"],["Completed",record.completedAt||"不可用"],["Duration",record.durationMs==null?"不可用":operationDurationLabel(record.durationMs)],["结果状态",record.status]]));
+    if(record.durationMs==null) detail.appendChild(el("div",{class:"op-unavailable"},esc(record.durationSource)));
     detail.appendChild(jsonField("参数 · arguments",tool.argumentsJson));
     if(tool.resultJson) detail.appendChild(jsonField("结果 · result",tool.resultJson));
     if(tool.error) detail.appendChild(el("pre",{class:"op-text scroll",tabindex:"0"},esc(tool.error)));
@@ -2704,7 +2792,7 @@ function renderOperationDetail(record){
 }
 function renderOperationLedger(records){
   const ledger=el("section",{class:"operation-ledger","aria-label":"逐条 operation 记录"});
-  ledger.appendChild(el("div",{class:"ol-head"},`<span class="ol-title">Operation ledger</span><span class="ol-count">${records.length} records · 按 committed 时间排序</span>`));
+  ledger.appendChild(el("div",{class:"ol-head"},`<span class="ol-title">Operation ledger</span><span class="ol-count">${records.length} records · 按首次事件排序</span>`));
   if(records.length===0){ledger.appendChild(el("div",{class:"detail-empty"},'<div class="dt">暂无 operation 记录</div>'));return ledger;}
   records.forEach((record,index)=>{
     const open=state.expandedOperations.has(record.key);
@@ -2722,12 +2810,85 @@ function renderOperationLedger(records){
   return ledger;
 }
 
-function renderTimeline(detail){
+function renderTrajectory(detail){
   const wrap=el("div",{class:"operation-trajectory"});
   const records=buildOperationRecords(detail);
   wrap.appendChild(renderDurationOverview(detail,records));
   wrap.appendChild(renderOperationLedger(records));
   if(detail.summary.status==="running")wrap.appendChild(el("div",{class:"tl-tail",role:"status","aria-live":"polite"},'<span class="dot" aria-hidden="true"></span><span>运行进行中 · committed operation 将约每 3 秒追加</span>'));
+  return wrap;
+}
+
+/* ---- Timeline ---- */
+function renderTimeline(detail){
+  const wrap = el("div", {});
+  wrap.appendChild(el("p", { class:"tl-rail-note" }, "按时间自上而下 · 时间戳为 UTC"));
+  const tl = el("ol", { class:"timeline", "aria-label":"事件时间线", style:"list-style:none;margin:0;padding:0" });
+  const isRunning = detail.summary.status === "running";
+  const lastIdx = detail.timeline.length - 1;
+
+  detail.timeline.forEach((ev, i) => {
+    const isLast = i === lastIdx;
+    const li = el("li", { class:`ev k-${ev.kind}${(isRunning && isLast)?" is-new":""}` });
+
+    // gutter timestamp
+    const gutter = el("div", { class:"gutter" }, `<span class="ts">${clockUTC(ev.timestampUtc)}</span>`);
+
+    // rail + body
+    const rail = el("div", { class:"node-rail" });
+    rail.appendChild(el("span", { class:"marker", "aria-hidden":"true" }));
+    const body = el("div", { class:"ev-body" });
+
+    const headRow = el("div", { class:"ev-head" });
+    headRow.innerHTML = `<span class="kind">${kindIcon(ev.kind)}<span>${KIND[ev.kind]?.label||ev.kind}</span></span>`;
+    if(ev.stepId){
+      const stType = ev.stepType ? ` <span class="st">${STEPTYPE_LABEL[ev.stepType]||ev.stepType}</span>` : "";
+      headRow.insertAdjacentHTML("beforeend", `<span class="stepbadge">${esc(ev.stepId)}${stType}</span>`);
+    }
+    if(ev.agentId) headRow.insertAdjacentHTML("beforeend", `<span class="agentbadge">@${esc(ev.agentId)}</span>`);
+    body.appendChild(headRow);
+
+    // content by kind
+    if(REPLY_KINDS.has(ev.kind)){
+      // the real assistant/role response text (ev.content), beautified — NOT just the role id
+      body.appendChild(renderReplyBubble(ev));
+    } else if(ev.kind === "ToolCall"){
+      body.appendChild(renderToolCall(ev.toolCall));
+    } else if(ev.kind === "HumanInputRequest"){
+      const na = el("div", { class:"needs-attn", role:"note" });
+      na.innerHTML = `${ICON.human}<div><div class="na-l">需要关注 · 等待人工确认</div><div class="na-m">${esc(ev.message)}</div><div class="na-ro">${ICON.lock.replace('width="24" height="24"','width="11" height="11"')} 只读视图 —— 请到审批系统中处理</div></div>`;
+      body.appendChild(na);
+    } else if(ev.kind === "StepFinished" && ev.message){
+      const parts = String(ev.message).split("·").map(x=>x.trim());
+      body.appendChild(el("div", { class:"ev-cost" }, `<span class="costchip">${parts.map(p=>`<b>${esc(p)}</b>`).join(' <span style="color:var(--border)">·</span> ')}</span>`));
+    } else if(ev.message){
+      const cls = (ev.kind==="RunError") ? "ev-msg" : "ev-msg";
+      const node = el("div", { class:cls }, esc(ev.message));
+      if(ev.kind==="RunError") node.style.color = "var(--err)", node.style.fontWeight = "600";
+      body.appendChild(node);
+    }
+
+    // model + token-usage chips (and a collapsible 详情 for the rest) wherever the committed data bag
+    // carries them — typically llm_call StepFinished / Message events. Skipped for tool-call rows whose
+    // detail already lives in the tool-call panel.
+    if(ev.kind !== "ToolCall"){
+      const details = renderDataDetails(ev.data);
+      if(details) body.appendChild(details);
+    }
+
+    rail.appendChild(body);
+    li.appendChild(gutter);
+    li.appendChild(rail);
+    tl.appendChild(li);
+  });
+
+  wrap.appendChild(tl);
+
+  if(isRunning){
+    const tail = el("div", { class:"tl-tail", role:"status", "aria-live":"polite" });
+    tail.innerHTML = `<span class="dot" aria-hidden="true"></span><span>运行进行中 —— 新事件将自动追加在此</span>`;
+    wrap.appendChild(tail);
+  }
   return wrap;
 }
 
@@ -3376,7 +3537,15 @@ function runsSig(runs,feed){
   const meta=[page.hasMore?"more":"end",page.totalCount==null?"unknown":page.totalCount].join(":");
   return meta+"|"+(runs||[]).map(r => [r.runId,r.status,r.updatedAtUtc,r.stateVersion,r.inputSummary,r.durationMs,r.currentStep&&r.currentStep.stepId,r.currentStep&&r.currentStep.inputSummary].join(":")).join("|");
 }
-function detailSig(d){ return d ? (d.summary.status + ":" + d.summary.stateVersion + ":" + ((d.timeline && d.timeline.length) || 0) + ":" + ((d.diagnostics && d.diagnostics.length) || 0)) : "none"; }
+function detailSig(d){
+  if(!d) return "none";
+  const operationWatermark=(Array.isArray(d.operations)?d.operations:[]).map(operation=>[
+    operation.kind,operation.sessionId,operation.operationId,operation.progressSequence,
+    operation.startedAtUtc,operation.completedAtUtc,operation.success,
+    String(operation.output||"").length,String(operation.resultJson||"").length
+  ].join(":")).join("|");
+  return d.summary.status+":"+d.summary.stateVersion+":"+((d.timeline&&d.timeline.length)||0)+":"+((d.diagnostics&&d.diagnostics.length)||0)+":"+operationWatermark;
+}
 let lastRunsSig = "", lastDetailSig = "";
 
 async function poll(){

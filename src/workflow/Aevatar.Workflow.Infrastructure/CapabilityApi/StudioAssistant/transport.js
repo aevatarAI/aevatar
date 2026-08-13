@@ -1,4 +1,4 @@
-import { normalizeReadinessSnapshot } from "./readiness.js?v=20260807-m40-thread-polish";
+import { normalizeReadinessSnapshot } from "./readiness.js?v=20260814-m45-model-operations";
 
 const nativeFetch = globalThis.fetch.bind(globalThis);
 const backendConfig = globalThis.__AEVATAR_ASSISTANT_CONFIG__ || {};

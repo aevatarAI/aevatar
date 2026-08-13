@@ -110,6 +110,12 @@ public sealed partial class WorkflowRunInsightReportDocument
         set => WorkflowExecutionReadModelCollections.ReplaceCollection(TimelineEntries, value);
     }
 
+    public IList<WorkflowRuntimeOperationReadModel> Operations
+    {
+        get => OperationEntries;
+        set => WorkflowExecutionReadModelCollections.ReplaceCollection(OperationEntries, value);
+    }
+
     public WorkflowUsageMetricsReadModel Usage
     {
         get => UsageValue ??= new WorkflowUsageMetricsReadModel();
@@ -298,6 +304,43 @@ public sealed partial class WorkflowExecutionRoleReply
         get => TimestampUtcValue == null ? default : TimestampUtcValue.ToDateTimeOffset();
         set => TimestampUtcValue = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(value.ToUniversalTime());
     }
+}
+
+public sealed partial class WorkflowRuntimeOperationReadModel
+{
+    public DateTimeOffset? StartedAt
+    {
+        get => StartedAtUtcValue?.ToDateTimeOffset();
+        set => StartedAtUtcValue = value.HasValue
+            ? Timestamp.FromDateTimeOffset(value.Value.ToUniversalTime())
+            : null;
+    }
+
+    public DateTimeOffset? CompletedAt
+    {
+        get => CompletedAtUtcValue?.ToDateTimeOffset();
+        set => CompletedAtUtcValue = value.HasValue
+            ? Timestamp.FromDateTimeOffset(value.Value.ToUniversalTime())
+            : null;
+    }
+
+    public WorkflowUsageMetricsReadModel Usage
+    {
+        get => UsageValue ??= new WorkflowUsageMetricsReadModel();
+        set => UsageValue = value ?? new WorkflowUsageMetricsReadModel();
+    }
+
+    public bool? Success
+    {
+        get => SuccessWrapper;
+        set => SuccessWrapper = value;
+    }
+
+    public double? DurationMs => StartedAt.HasValue &&
+                                 CompletedAt.HasValue &&
+                                 CompletedAt.Value >= StartedAt.Value
+        ? (CompletedAt.Value - StartedAt.Value).TotalMilliseconds
+        : null;
 }
 
 public sealed partial class WorkflowExecutionTimelineEvent

@@ -1217,7 +1217,11 @@ public sealed class WorkflowGAgentExecutionTests : WorkflowGAgentTestBase
             fact.Source.PublisherActorId.Should().Be("workflow-run-role-reply:role_a");
             fact.Source.CommittedEventId.Should().Be("evt-role-reply");
             fact.Source.CommittedStateVersion.Should().Be(4);
-            agent.State.ProcessedArtifactSources.Should().ContainSingle();
+            agent.State.ProcessedArtifactSources.Should().ContainSingle()
+                .Which.Should().BeEquivalentTo(fact.Source);
+            agent.State.ProcessedArtifactStateVersionsByPublisher.Should().ContainSingle()
+                .Which.Should().Be(
+                    new KeyValuePair<string, long>("workflow-run-role-reply:role_a", 4));
         }
 
         [Fact]

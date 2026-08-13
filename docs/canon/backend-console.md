@@ -78,35 +78,45 @@ Static shell endpoint files must not introduce mutating data APIs. Data surfaces
 
 Workflow Observatory data endpoints are read-only. Normal run detail reads remain scope-bound under
 `GET /api/workflow/observatory/runs/{runId}` and `GET /api/workflow/observatory/runs/{runId}/graph`.
-The request-trajectory rail reads `GET /api/workflow/observatory/activity-runs`: one activity row per
-`runId`, returned as a bounded paged envelope with honest `hasMore` / `totalCount` coverage. That row is
-a selectable request/run container, not the trajectory's atomic record. Inside the selected container,
-the trajectory is an ordered operation ledger: each recorded input, each model response, and each tool
-call is an independently selectable operation. A three-lane `Input / Model / Tools` overview projects
-those same operations onto one time domain; the ledger below remains the chronological source for
-selection and inspection. The rail offers cursor-based loading for earlier pages instead of presenting
-the first window as complete, and polls that read model and the selected detail approximately every
-three seconds while the page is visible; it does not treat the refresh interval as a strong-consistency
-guarantee.
+The run rail reads `GET /api/workflow/observatory/activity-runs`: one activity row per `runId`, returned
+as a bounded paged envelope with honest `hasMore` / `totalCount` coverage. That row is a selectable
+request/run container, not a trajectory's atomic record. The rail offers cursor-based loading for
+earlier pages instead of presenting the first window as complete.
+
+The selected run keeps the original `Timeline` tab intact and adds a separate `Trajectory` tab.
+`Timeline` remains the complete chronological workflow-event view, including its existing timestamp,
+stage, message, actor/agent, step, event-type, and event-data detail; operation rows must not replace,
+filter, or reduce that information. `Trajectory` owns the request operation view. It presents the
+captured run input as one Input record and the selected detail's durable Model/Tool operations as an
+ordered ledger in which every model response and every tool call has its own stable operation identity.
+A three-lane `Input / Model / Tools` overview projects those same records onto one time domain, and
+selecting a bar or ledger row opens that operation's inspector. `Timeline` remains the default detail
+tab. The page polls the run rail and selected detail approximately every three seconds while visible;
+the refresh interval is not a strong-consistency guarantee.
 
 Operation timing is evidence, not decoration. A duration bar is rendered only from a recorded start and
 completion pair owned by that operation. A recorded start without a completion may render a start
 marker and running state, but never a fabricated live or final duration. Missing timing is displayed as
 `unavailable`; `updatedAtUtc`, polling time, event order, or the parent run's duration must not be used as
 a substitute. Selecting an operation opens its own inspector for the facts applicable to that kind:
-input content; model output, provider/model, usage, and timing; or tool payload, result, schema, and
-timing. Missing facts remain visibly unavailable.
+input content; model output, reasoning, provider/model, usage, available tool names, and timing; or tool
+payload, result, and timing. Missing facts remain visibly unavailable.
 
-The current Workflow Observatory read models do not yet provide full DSH-equivalent operation facts.
-The committed timeline can supply an ordered partial ledger and some timestamps, while workflow steps
-remain a separate workflow-oriented view and are never classified as Model or Tool operations. The read
-models do not expose a typed start/completion pair for every Input/Model/Tool operation, a stable
-per-response model/provider/usage contract, or the request-time model-visible tools catalog and tool
-schemas. The Admin page must therefore render only the evidence present in those read models and mark
-the remaining timing, model, and tools-catalog fields unavailable. It must not infer them from step
-labels, current-step summaries, `updatedAtUtc`, actor identity, or opportunistic keys in a generic data
-bag. Closing these gaps requires typed committed facts and their normal projection into an
-authoritative query surface, not query-time replay or browser reconstruction.
+Model and Tool operations are durable typed facts, not classifications reconstructed from Timeline.
+Committed role progress is copied into run-owned `WorkflowRuntimeOperationRecordedEvent` facts and
+materialized into the run-report operation read model; the Observatory detail contract exposes stable
+operation/session identity, progress sequence, kind, real start/completion timestamps, and the captured
+Model- or Tool-specific fields. Workflow steps remain a separate workflow-oriented view and are never
+reclassified as Model or Tool operations.
+
+This contract is not yet fully DSH-equivalent. Input is sourced from the committed run input and does not
+have its own typed start/completion lifecycle, so the Input row has no independent Duration bar. A
+Model/Tool duration exists only when that operation's typed start and completion were both recorded.
+Model operations expose the model-visible tool names captured at start, but the detail contract does not
+carry a request-time tools catalog with per-tool schemas, nor separate TTFT/decoding timestamps. The
+Admin page renders only the facts present in the operation read model and marks missing timing, model,
+usage, catalog, or schema fields unavailable. It must not infer them from Timeline prose, step labels,
+current-step summaries, `updatedAtUtc`, actor identity, or opportunistic generic-bag keys.
 Aevatar admins resolved by `IPlatformAdminAuthorizer` may use
 `GET /api/workflow/observatory/admin/runs/{runId}` and
 `GET /api/workflow/observatory/admin/runs/{runId}/graph` to resolve a known run id across scopes. These admin
@@ -145,9 +155,12 @@ settle the container's ordered Input/Model/Tool operations. Each model response 
 separate selectable ledger record rather than another top-level trace. The fixed three-lane overview
 and the ledger project the same operation identities, so selecting a bar or row opens that operation's
 own detail. Selecting an older container changes only the inspector data; Actor controls remain scoped
-to the current task. These Studio traces are explicitly page-local, while durable cross-session
-inspection remains the Observatory read model. Missing operation timing remains unavailable rather
-than being calculated from browser receipt time.
+to the current task. Studio consumes the live typed Model/Tool lifecycle frames, but its trajectory
+index is explicitly page-local: reopening a stored transcript does not hydrate the prior request ledger
+from the durable Observatory operation read model. Durable Model/Tool inspection is available in
+Observatory, but Studio does not yet join it back to stored conversation/request identity. The Input
+record likewise has no independent start/completion pair. Missing operation timing remains unavailable
+rather than being calculated from browser receipt time.
 
 Fleet links carry exact `scope + run`, and schedule links carry `schedule` while clearing an unrelated selected
 run. The embedded page writes canonical route changes back to the parent hash without reloading its iframe.

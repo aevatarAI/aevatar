@@ -195,7 +195,7 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         var marked = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantMarked);
         var purify = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantPurify);
 
-        app.Should().Contain("import \"./transport.js?v=20260807-m40-thread-polish\"");
+        app.Should().Contain("import \"./transport.js?v=20260814-m45-model-operations\"");
         app.Should().Contain("async function sendPrompt(");
         app.Should().Contain("async function loadConversations(");
         app.Should().Contain("async function refreshActorState(");
@@ -227,8 +227,9 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         app.Should().Contain("function renderTraceOperationInspector(trace)");
         app.Should().Contain("dom.traceOperationSection.classList.toggle(\"hidden\", !record);");
         app.Should().Contain("dom.traceOperationKindFact.textContent = traceOperationKindLabel(record.kind);");
-        app.Should().Contain("dom.traceOperationInputFact.textContent = hasInput ? String(record.input) : \"\"");
-        app.Should().Contain("const outputValue = [String(record.output || \"\"), usageFacts]");
+        app.Should().Contain("const inputValue = [String(record.input || \"\"), toolCatalog]");
+        app.Should().Contain("dom.traceOperationInputFact.textContent = inputValue;");
+        app.Should().Contain("record.reasoning ? `Reasoning:");
         app.Should().Contain("dom.traceOperationOutputFact.textContent = outputValue;");
         protocol.Should().Contain("export function normalizeFrame(");
         protocol.Should().Contain("export function validateActionContinuation(");
@@ -318,13 +319,13 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         app.Should().NotContain("freeText.className = \"needs-you-free-text\"");
         styles.Should().Contain("@media (max-width:");
         html.Should().Contain("<meta name=\"color-scheme\" content=\"only light\"");
-        html.Should().Contain("app.js?v=20260814-m44-operation-ledger");
-        html.Should().Contain("styles.css?v=20260814-m44-operation-ledger");
-        app.Should().Contain("transport.js?v=20260807-m40-thread-polish");
-        app.Should().Contain("readiness.js?v=20260807-m40-thread-polish");
-        transport.Should().Contain("readiness.js?v=20260807-m40-thread-polish");
-        actorState.Should().Contain("protocol.js?v=20260807-m40-thread-polish");
-        blocks.Should().Contain("protocol.js?v=20260807-m40-thread-polish");
+        html.Should().Contain("app.js?v=20260814-m45-model-operations");
+        html.Should().Contain("styles.css?v=20260814-m45-model-operations");
+        app.Should().Contain("transport.js?v=20260814-m45-model-operations");
+        app.Should().Contain("readiness.js?v=20260814-m45-model-operations");
+        transport.Should().Contain("readiness.js?v=20260814-m45-model-operations");
+        actorState.Should().Contain("protocol.js?v=20260814-m45-model-operations");
+        blocks.Should().Contain("protocol.js?v=20260814-m45-model-operations");
         html.Should().Contain("<span class=\"brand-name\">Aevatar Studio</span>");
         html.Should().NotContain("class=\"brand-mark\"");
         styles.Should().Contain("color-scheme: only light");
@@ -490,6 +491,338 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         ownerRunAssignment.Should().BeGreaterThan(sendPromptStart);
         firstTraceCreation.Should().BeGreaterThan(ownerRunAssignment,
             "the conversation must own the new request before its first trajectory render");
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_OperationInspector_ShouldStayIsolatedFromTheDefaultConversationView()
+    {
+        var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name, nextName) {
+              const start = source.indexOf('function ' + name + '(');
+              const end = source.indexOf('\nfunction ' + nextName + '(', start);
+              assert.notEqual(start, -1, name + ' must exist in the served Studio app');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return source.slice(start, end);
+            }
+
+            const toggles = [];
+            const fact = () => ({textContent:'', className:'', title:'', classList:{toggle(){}}});
+            const entry = {mainView:'conversation'};
+            const record = {
+              key:'model:model-0', id:'model-0', kind:'model', title:'deepseek-chat',
+              status:'done', model:'deepseek-chat', provider:'deepseek', round:0,
+              sessionId:'session-alpha',
+              finishReason:'stop', usage:{totalTokens:12}, input:'Prompt', output:'Answer',
+              reasoning:'', error:'', tools:['search'], startedAt:1700000000000,
+              completedAt:1700000000100,
+            };
+            const trace = {selected:record};
+            const context = {
+              state:{activeConversation:entry},
+              dom:{
+                traceOperationSection:{classList:{toggle(name, hidden){toggles.push([name, hidden]);}}},
+                traceOperationKindFact:fact(), traceOperationTitleFact:fact(),
+                traceOperationIdFact:fact(), traceOperationStatusFact:fact(),
+                traceOperationStartedFact:fact(), traceOperationDurationFact:fact(),
+                traceOperationInputSection:fact(), traceOperationOutputSection:fact(),
+                traceOperationInputFact:fact(), traceOperationOutputFact:fact(),
+              },
+              inspectorRequestTrace:() => trace,
+              selectedTraceOperation:candidate => candidate?.selected || null,
+              traceOperationKindLabel:kind => kind.toUpperCase(),
+              traceOperationStatusLabel:status => status,
+              traceOperationStartedAt:() => '22:13:20.000',
+              traceOperationDuration:() => '100ms',
+            };
+            vm.createContext(context);
+            vm.runInContext(`
+              ${functionSource('inspectorTraceOperation', 'renderTraceOperationInspector')}
+              ${functionSource('renderTraceOperationInspector', 'paintRunStatus')}
+            `, context);
+
+            assert.equal(context.inspectorTraceOperation(entry, trace), null,
+              'the default conversation view must not select an operation');
+            context.renderTraceOperationInspector(trace);
+            assert.deepEqual(toggles.at(-1), ['hidden', true]);
+            assert.equal(context.dom.traceOperationTitleFact.textContent, '',
+              'hidden trajectory facts must not overwrite the original inspector');
+
+            entry.mainView = 'traces';
+            assert.equal(context.inspectorTraceOperation(entry, trace), record);
+            context.renderTraceOperationInspector(trace);
+            assert.deepEqual(toggles.at(-1), ['hidden', false]);
+            assert.equal(context.dom.traceOperationTitleFact.textContent, 'deepseek-chat');
+            assert.equal(context.dom.traceOperationDurationFact.textContent, '100ms');
+            assert.match(context.dom.traceOperationInputFact.textContent, /Available tools:\nsearch/);
+            assert.match(context.dom.traceOperationOutputFact.textContent, /Provider: deepseek/);
+            assert.match(context.dom.traceOperationOutputFact.textContent, /Total tokens: 12/);
+            """;
+
+        var result = await RunNodeAsync(script, app);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+        app.Should().Contain("const operation = inspectorTraceOperation(entry, trace);");
+        app.Should().Contain("const record = inspectorTraceOperation(state.activeConversation, trace);");
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_OperationLedger_ShouldKeepEveryModelRoundAndToolCallAsAnIndependentLiveRecord()
+    {
+        var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8');
+            const start = source.indexOf('function ensureTraceOperationState(');
+            const end = source.indexOf('\nfunction traceOperationDuration(', start);
+            assert.notEqual(start, -1, 'the operation ledger reducer must exist');
+            assert.notEqual(end, -1, 'the operation ledger reducer must have a stable boundary');
+
+            const context = {
+              Map, Date, Number,
+              createId: prefix => prefix + '-generated',
+              mergeUsage: (current, next) => ({...(current || {}), ...(next || {})}),
+              requestTraceInput: trace => String(trace?.run?.request?.prompt || ''),
+              traceForRun: entry => entry.trace,
+            };
+            vm.createContext(context);
+            vm.runInContext(source.slice(start, end), context);
+
+            const run = {
+              clientRequestId: 'request-alpha',
+              startedAt: 1700000000000,
+              request: {prompt: 'Find the current deployment status'},
+            };
+            const trace = {
+              clientRequestId: run.clientRequestId,
+              run,
+              records: [],
+              recordIndex: new Map(),
+              selectedOperationKey: null,
+              activeModelOperationKey: null,
+              followLatestOperation: true,
+              nextOperationSequence: 0,
+            };
+            const entry = {trace};
+            const apply = context.applyRequestTraceEvent;
+            context.createInputTraceOperation(trace);
+            const input = trace.recordIndex.get('input:request-alpha');
+            assert.ok(input);
+            assert.equal(context.traceOperationDurationMs(input), null,
+              'request timing must not be presented as an independent Input duration');
+
+            apply(entry, run, {
+              type: 'model_start', operationId: 'model-round-0', sessionId: 'session-shared',
+              round: 0, model: 'deepseek-chat', provider: 'deepseek', sequence: 10,
+              timestamp: 1700000000100,
+            });
+            const firstModel = trace.recordIndex.get('model:model-round-0');
+            assert.ok(firstModel, 'model_start creates a record before any text exists');
+            assert.equal(firstModel.output, '');
+            assert.equal(firstModel.model, 'deepseek-chat');
+            assert.equal(firstModel.provider, 'deepseek');
+            assert.equal(firstModel.round, 0);
+            assert.equal(firstModel.serverSequence, 10);
+            assert.equal(context.traceOperationDurationMs(firstModel), null);
+
+            apply(entry, run, {
+              type: 'model_start', operationId: 'model-round-0', sessionId: 'session-shared',
+              round: 0, model: 'deepseek-chat', sequence: 10, timestamp: 1700000000100,
+            });
+            apply(entry, run, {
+              type: 'model_end', operationId: 'model-round-0', sessionId: 'session-shared',
+              round: 0, model: 'deepseek-chat', content: '', success: true,
+              usage: {promptTokens: 12, completionTokens: 0, totalTokens: 12},
+              sequence: 11, timestamp: 1700000000300,
+            });
+            apply(entry, run, {
+              type: 'model_end', operationId: 'model-round-0', sessionId: 'session-shared',
+              round: 0, model: 'deepseek-chat', content: '', success: true,
+              usage: {promptTokens: 12, completionTokens: 0, totalTokens: 12},
+              sequence: 11, timestamp: 1700000000300,
+            });
+            assert.equal(firstModel.status, 'done');
+            assert.equal(firstModel.output, '', 'a tool-call-only model round is still retained');
+            assert.equal(context.traceOperationDurationMs(firstModel), 200);
+            assert.equal(trace.records.length, 2, 'duplicate model frames upsert the stable operation');
+
+            trace.selectedOperationKey = firstModel.key;
+            trace.followLatestOperation = false;
+
+            // Delivery and clocks can disagree. The committed server sequence owns ledger ordering.
+            apply(entry, run, {
+              type: 'model_start', operationId: 'model-round-1', sessionId: 'session-shared',
+              round: 1, model: 'deepseek-chat', sequence: 20, timestamp: 1700000000400,
+            });
+            apply(entry, run, {
+              type: 'tool_start', toolCallId: 'call-search', toolName: 'search',
+              argumentsJson: '{"token":"raw-secret-must-not-leak"}',
+              sequence: 12, timestamp: 1700000000800,
+            });
+            const tool = trace.recordIndex.get('tool:call-search');
+            assert.ok(tool);
+            assert.equal(tool.input, '', 'tool_start never exposes raw arguments');
+            assert.equal(tool.serverSequence, 12);
+            assert.equal(context.traceOperationDurationMs(tool), null);
+
+            apply(entry, run, {
+              type: 'tool_start', toolCallId: 'call-search', toolName: 'search',
+              sequence: 12, timestamp: 1700000000800,
+            });
+            apply(entry, run, {
+              type: 'tool_end', toolCallId: 'call-search', toolName: 'search',
+              argumentsJson: '{"query":"deployment status"}', result: null,
+              success: false, error: 'upstream unavailable',
+              sequence: 13, timestamp: 1700000001100,
+            });
+            apply(entry, run, {
+              type: 'tool_end', toolCallId: 'call-search', toolName: 'search',
+              argumentsJson: '{"query":"deployment status"}', result: null,
+              success: false, error: 'upstream unavailable',
+              sequence: 13, timestamp: 1700000001100,
+            });
+            assert.equal(tool.input, '{"query":"deployment status"}');
+            assert.equal(tool.output, 'upstream unavailable');
+            assert.equal(tool.status, 'error');
+            assert.equal(context.traceOperationDurationMs(tool), 300);
+
+            apply(entry, run, {
+              type: 'model_end', operationId: 'model-round-1', sessionId: 'session-shared',
+              round: 1, model: 'deepseek-chat', content: 'Deployment is degraded.', success: true,
+              usage: {promptTokens: 16, completionTokens: 4, totalTokens: 20},
+              sequence: 21, timestamp: 1700000000600,
+            });
+            const secondModel = trace.recordIndex.get('model:model-round-1');
+            assert.ok(secondModel);
+            assert.notEqual(secondModel, firstModel, 'rounds in one role session are independent');
+            assert.equal(secondModel.output, 'Deployment is degraded.');
+            assert.equal(secondModel.round, 1);
+            assert.equal(secondModel.serverSequence, 20);
+            assert.equal(context.traceOperationDurationMs(secondModel), 200);
+            assert.equal(trace.selectedOperationKey, firstModel.key,
+              'live upserts do not steal selection while the operator inspects a record');
+
+            const records = context.orderedTraceOperations(trace);
+            assert.deepEqual(JSON.parse(JSON.stringify(records.map(record => record.key))), [
+              'input:request-alpha',
+              'model:model-round-0',
+              'tool:call-search',
+              'model:model-round-1',
+            ]);
+            assert.deepEqual(JSON.parse(JSON.stringify(records.map(record => record.kind))),
+              ['input', 'model', 'tool', 'model']);
+            assert.equal(trace.records.length, 4, 'each logical operation owns exactly one live row');
+
+            apply(entry, run, {
+              type: 'raw_observed', observedType: 'WorkflowLlmInvocationStartedEvent',
+              observed: {stepId: 'workflow-step', roleActorId: 'role-alpha'},
+              timestamp: 1700000001200,
+            });
+            assert.equal(trace.records.length, 4,
+              'a workflow-level invocation must not masquerade as a provider response');
+
+            apply(entry, run, {
+              type: 'model_end', operationId: 'model-out-of-order', sessionId: 'session-shared',
+              round: 2, model: 'deepseek-chat', content: 'Already complete', success: true,
+              sequence: 31, timestamp: 1700000001500,
+            });
+            apply(entry, run, {
+              type: 'model_start', operationId: 'model-out-of-order', sessionId: 'session-shared',
+              round: 2, model: 'deepseek-chat', sequence: 30, timestamp: 1700000001300,
+            });
+            const outOfOrder = trace.recordIndex.get('model:model-out-of-order');
+            assert.equal(outOfOrder.status, 'done', 'late start cannot reactivate a completed model');
+            assert.equal(context.traceOperationDurationMs(outOfOrder), 200);
+            assert.notEqual(trace.activeModelOperationKey, outOfOrder.key);
+            const beforeLegacyDelta = trace.records.length;
+            apply(entry, run, {type: 'text_delta', delta: 'duplicate legacy text'});
+            assert.equal(trace.records.length, beforeLegacyDelta,
+              'legacy text cannot create a second model after typed lifecycle is observed');
+            """;
+
+        var result = await RunNodeAsync(script, app);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_Protocol_ShouldPreserveTypedModelAndToolOperationFrames()
+    {
+        var protocol = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantProtocol);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8').replace(/^export /gm, '');
+            const context = {structuredClone, TextDecoder, URL, console};
+            vm.createContext(context);
+            vm.runInContext(source, context);
+
+            const modelStart = context.normalizeFrame({
+              type: 'MODEL_CALL_START', timestamp: 1700000000100, sequence: 10,
+              modelCallStart: {
+                operationId: 'model-round-0', sessionId: 'session-shared',
+                round: 0, model: 'deepseek-chat',
+              },
+            });
+            assert.equal(modelStart.type, 'model_start');
+            assert.equal(modelStart.operationId, 'model-round-0');
+            assert.equal(modelStart.sessionId, 'session-shared');
+            assert.equal(modelStart.round, 0);
+            assert.equal(modelStart.model, 'deepseek-chat');
+            assert.equal(modelStart.sequence, 10);
+            assert.equal(modelStart.raw.timestamp, 1700000000100);
+
+            const modelEnd = context.normalizeFrame({
+              modelCallEnd: {
+                operationId: 'model-round-0', sessionId: 'session-shared', round: 0,
+                model: 'deepseek-chat', content: '', reasoningContent: 'tool required',
+                usage: {promptTokens: 12, completionTokens: 0, totalTokens: 12},
+                finishReason: 'tool_calls', success: true, error: '',
+              },
+              timestamp: 1700000000300, sequence: 11,
+            });
+            assert.equal(modelEnd.type, 'model_end');
+            assert.equal(modelEnd.operationId, 'model-round-0');
+            assert.equal(modelEnd.content, '');
+            assert.equal(modelEnd.reasoningContent, 'tool required');
+            assert.equal(modelEnd.usage.totalTokens, 12);
+            assert.equal(modelEnd.finishReason, 'tool_calls');
+            assert.equal(modelEnd.success, true);
+            assert.equal(modelEnd.sequence, 11);
+
+            const toolStart = context.normalizeFrame({
+              type: 'TOOL_CALL_START', sequence: 12,
+              toolCallStart: {toolCallId: 'call-search', toolName: 'search'},
+            });
+            assert.equal(toolStart.type, 'tool_start');
+            assert.equal(toolStart.toolCallId, 'call-search');
+            assert.equal(toolStart.argumentsJson, undefined,
+              'tool start does not carry raw arguments');
+            assert.equal(toolStart.sequence, 12);
+
+            const toolEnd = context.normalizeFrame({
+              type: 'TOOL_CALL_END', sequence: 13,
+              toolCallEnd: {
+                toolCallId: 'call-search', argumentsJson: '{"query":"status"}',
+                result: null, success: false, error: 'upstream unavailable',
+              },
+            });
+            assert.equal(toolEnd.type, 'tool_end');
+            assert.equal(toolEnd.toolCallId, 'call-search');
+            assert.equal(toolEnd.argumentsJson, '{"query":"status"}');
+            assert.equal(toolEnd.success, false);
+            assert.equal(toolEnd.error, 'upstream unavailable');
+            assert.equal(toolEnd.sequence, 13);
+            """;
+
+        var result = await RunNodeAsync(script, protocol);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
     }
 
     [Fact]
@@ -1396,10 +1729,10 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
 
         entryVersions.Should().NotBeEmpty();
         entryVersions.Should().OnlyContain(static version =>
-            version == "20260814-m44-operation-ledger");
+            version == "20260814-m45-model-operations");
         transitiveVersions.Should().NotBeEmpty();
         transitiveVersions.Should().OnlyContain(static version =>
-            version == "20260807-m40-thread-polish");
+            version == "20260814-m45-model-operations");
         html.Should().Contain("styles.css?v=");
         html.Should().Contain("app.js?v=");
         app.Should().Contain("transport.js?v=");
@@ -1851,7 +2184,7 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
               }
             });
             assert.deepEqual(JSON.parse(JSON.stringify(vm.runInContext('detailTabIds()', context))),
-              ['timeline', 'steps', 'diagnostics', 'logs', 'artifacts', 'graph']);
+              ['timeline', 'trajectory', 'steps', 'diagnostics', 'logs', 'artifacts', 'graph']);
             """;
 
         var result = await RunNodeAsync(script, html);
@@ -1860,6 +2193,223 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         html.Should().Contain("批准并继续");
         html.Should().Contain("/api/scopes/");
         html.Should().Contain(":resume");
+        html.Should().Contain("function renderTimeline(detail)");
+        html.Should().Contain("function renderTrajectory(detail)");
+        html.Should().Contain("aria-label\":\"事件时间线\"");
+        html.Should().Contain("id:\"panel-trajectory\"");
+    }
+
+    [Fact]
+    public async Task WorkflowObservatory_Timeline_ShouldRemainDefaultAndKeepCompleteEventDetailsBesideTrajectory()
+    {
+        var html = await GetObservatoryHtmlAsync();
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name, nextName) {
+              const starts = [
+                html.indexOf('function ' + name + '('),
+                html.indexOf('async function ' + name + '('),
+              ].filter(index => index !== -1);
+              const start = starts.length ? Math.min(...starts) : -1;
+              const ends = [
+                html.indexOf('\nfunction ' + nextName + '(', start),
+                html.indexOf('\nasync function ' + nextName + '(', start),
+              ].filter(index => index !== -1);
+              const end = ends.length ? Math.min(...ends) : -1;
+              assert.notEqual(start, -1, name + ' must exist in the served observatory asset');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return html.slice(start, end);
+            }
+
+            function functionSourceToMarker(name, marker) {
+              const start = html.indexOf('function ' + name + '(');
+              const end = html.indexOf(marker, start);
+              assert.notEqual(start, -1, name + ' must exist in the served observatory asset');
+              assert.notEqual(end, -1, marker + ' must follow ' + name);
+              return html.slice(start, end);
+            }
+
+            function createNode(tag, attrs = {}, content) {
+              const node = {
+                tag, attrs: {...attrs}, className: attrs.class || '', children: [], style: {},
+                innerHTML: content == null ? '' : String(content),
+                appendChild(child) { this.children.push(child); return child; },
+                setAttribute(key, value) { this.attrs[key] = String(value); },
+                insertAdjacentHTML(_position, value) { this.innerHTML += String(value); },
+                addEventListener() {},
+                querySelector() { return null; },
+                classList: { add() {}, toggle() { return false; } },
+              };
+              return node;
+            }
+
+            function treeText(node) {
+              return [node.innerHTML, ...node.children.map(treeText)].filter(Boolean).join('\n');
+            }
+
+            const routeContext = {URLSearchParams, decodeURIComponent};
+            vm.createContext(routeContext);
+            vm.runInContext(functionSource('readObservatoryRoute', 'writeObservatoryRoute'), routeContext);
+            assert.equal(routeContext.readObservatoryRoute('', '').tab, 'timeline');
+            assert.equal(routeContext.readObservatoryRoute('?tab=trajectory', '').tab, 'trajectory');
+            assert.equal(routeContext.readObservatoryRoute('?tab=unknown', '').tab, 'timeline');
+
+            const detailSource = functionSource('renderDetail', 'parseRunId');
+            assert.match(detailSource,
+              /timelinePanel\.appendChild\(renderTimeline\(detail\)\)/,
+              'the original Timeline panel must remain wired to renderTimeline');
+            assert.match(detailSource,
+              /if\(state\.activeTab !== "timeline"\) timelinePanel\.hidden = true/,
+              'Timeline must remain visible for the default timeline tab');
+            assert.match(detailSource,
+              /trajectoryPanel\.appendChild\(renderTrajectory\(detail\)\)/,
+              'Trajectory must render through its own sibling panel');
+            assert.match(detailSource,
+              /if\(state\.activeTab !== "trajectory"\) trajectoryPanel\.hidden = true/,
+              'Trajectory visibility must be independent from Timeline');
+            assert.ok(
+              detailSource.indexOf('tp.appendChild(timelinePanel)') <
+                detailSource.indexOf('tp.appendChild(trajectoryPanel)'),
+              'Trajectory must be appended beside, not in place of, Timeline');
+
+            const selectionContext = {
+              state: {
+                selectedRunId: null, scenario: 'normal', activeTab: 'trajectory',
+                expandedOperations: new Set(['model:old']), selectedNodeId: 'node-old', graphView: {},
+              },
+              pendingDetailScrollReset: false,
+              routePatch: null,
+              writeObservatoryRoute: null,
+              document: {body: {setAttribute() {}}},
+              render() {},
+              loadDetail() {},
+            };
+            selectionContext.writeObservatoryRoute = patch => { selectionContext.routePatch = patch; };
+            vm.createContext(selectionContext);
+            vm.runInContext(functionSource('selectRun', 'fetchMe'), selectionContext);
+            selectionContext.selectRun('run-new');
+            assert.equal(selectionContext.state.activeTab, 'timeline');
+            assert.deepEqual(JSON.parse(JSON.stringify(selectionContext.routePatch)),
+              {run: 'run-new', tab: 'timeline'});
+            assert.equal(selectionContext.state.expandedOperations.size, 0);
+
+            const renderContext = {
+              el: createNode,
+              esc: value => String(value == null ? '' : value).replace(/[&<>\"]/g, character => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;',
+              })[character]),
+              initials: value => String(value || '').slice(0, 2).toUpperCase(),
+              clockUTC: value => String(value).slice(11, 19),
+              kindIcon: kind => '[' + kind + ']',
+              fmtNum: value => String(value),
+              colorJSON: value => 'JSON:' + String(value),
+              dataLookup(data, keys) {
+                if (!data) return '';
+                const entries = Object.entries(data);
+                for (const key of keys) {
+                  const found = entries.find(([candidate]) => candidate.toLowerCase() === key.toLowerCase());
+                  if (found && String(found[1]).trim()) return String(found[1]);
+                }
+                return '';
+              },
+              KIND: {
+                Message: {label: '模型回复'}, ToolCall: {label: '工具调用'},
+                HumanInputRequest: {label: '待人工确认'}, StepFinished: {label: '步骤完成'},
+                RunError: {label: '运行错误'},
+              },
+              REPLY_KINDS: new Set(['Message', 'TextMessage']),
+              STEPTYPE_LABEL: {llm: '模型', tool: '工具', human: '人工'},
+              DATA_MODEL_KEYS: ['model', 'model_id', 'modelId', 'provider'],
+              DATA_TOKEN_KEYS: [
+                ['prompt', ['prompt_tokens', 'promptTokens']],
+                ['completion', ['completion_tokens', 'completionTokens']],
+                ['total', ['total_tokens', 'totalTokens']],
+              ],
+              TOKEN_CHIP_LABEL: {prompt: '输入', completion: '输出', total: '合计'},
+              DATA_CHIP_KEYS: new Set([
+                'model', 'model_id', 'modelid', 'provider', 'prompt_tokens', 'prompttokens',
+                'completion_tokens', 'completiontokens', 'total_tokens', 'totaltokens',
+                'call_id', 'arguments_json', 'result_json', 'success', 'error',
+              ]),
+              ICON: {chevron: '[chevron]', human: '[human]', lock: '[lock]', check: '[check]', x: '[x]', copy: '[copy]'},
+              state: {expanded: new Set(['call-success', 'call-failure'])},
+              setTimeout,
+            };
+            vm.createContext(renderContext);
+            vm.runInContext(`
+              ${functionSource('renderReplyBubble', 'renderDataDetails')}
+              ${functionSource('renderDataDetails', 'operationTypeIcon')}
+              ${functionSource('renderTimeline', 'renderToolCall')}
+              ${functionSource('renderToolCall', 'jsonField')}
+              ${functionSourceToMarker('jsonField', '\n/* ---- Graph')}
+            `, renderContext);
+
+            const rendered = renderContext.renderTimeline({
+              summary: {status: 'completed'},
+              timeline: [
+                {
+                  kind: 'Message', timestampUtc: '2026-08-14T01:00:00Z', stepId: 'step-alpha',
+                  stepType: 'llm', agentId: 'agent-alpha', content: 'Deployment is degraded.',
+                  data: {
+                    model: 'deepseek-chat', prompt_tokens: '120', completion_tokens: '20',
+                    total_tokens: '140', finish_reason: 'stop',
+                  },
+                },
+                {
+                  kind: 'ToolCall', timestampUtc: '2026-08-14T01:00:01Z',
+                  toolCall: {
+                    callId: 'call-success', toolName: 'search', success: true,
+                    argumentsJson: '{\"query\":\"deployment status\"}',
+                    resultJson: '{\"status\":\"degraded\"}', error: '',
+                  },
+                },
+                {
+                  kind: 'ToolCall', timestampUtc: '2026-08-14T01:00:02Z',
+                  toolCall: {
+                    callId: 'call-failure', toolName: 'fetch_details', success: false,
+                    argumentsJson: '{\"id\":\"deployment-alpha\"}', resultJson: '',
+                    error: 'upstream unavailable',
+                  },
+                },
+                {
+                  kind: 'HumanInputRequest', timestampUtc: '2026-08-14T01:00:03Z',
+                  message: 'Approve deployment?',
+                },
+                {
+                  kind: 'StepFinished', timestampUtc: '2026-08-14T01:00:04Z',
+                  stepId: 'step-alpha', message: '120 ms · 140 tokens',
+                },
+                {
+                  kind: 'RunError', timestampUtc: '2026-08-14T01:00:05Z',
+                  message: 'provider unavailable',
+                },
+              ],
+            });
+
+            const timeline = rendered.children[1];
+            assert.equal(timeline.tag, 'ol');
+            assert.equal(timeline.attrs['aria-label'], '事件时间线');
+            assert.equal(timeline.children.length, 6, 'trajectory must not replace or filter timeline events');
+            const text = treeText(rendered);
+            for (const expected of [
+              '按时间自上而下 · 时间戳为 UTC', '模型回复', 'step-alpha', '@agent-alpha',
+              'Deployment is degraded.', 'deepseek-chat', '120', '20', '140',
+              '详情 · 1', 'finish_reason', 'search', 'call-success', '参数 · arguments',
+              'JSON:{\"query\":\"deployment status\"}', '结果 · result',
+              'JSON:{\"status\":\"degraded\"}', 'call-failure', '错误 · error',
+              'upstream unavailable', '需要关注 · 等待人工确认', 'Approve deployment?',
+              '120 ms', '140 tokens', 'provider unavailable',
+            ]) assert.ok(text.includes(expected), 'timeline must retain ' + expected);
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+        html.Should().Contain(".tabs::-webkit-scrollbar { display: none; }");
+        html.Should().Contain("display: inline-flex; flex: 0 0 auto; align-items: center; gap: 7px;");
     }
 
     [Fact]
@@ -2011,6 +2561,120 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         result.ExitCode.Should().Be(0, result.Error + result.Output);
         html.Should().Contain("throw new Error(\"invalid-activity-run-feed\")");
         html.Should().NotContain("/api/workflow/observatory/runs/activity");
+    }
+
+    [Fact]
+    public async Task WorkflowObservatory_OperationLedger_ShouldKeepRepeatedSessionRepliesAndHonestDurations()
+    {
+        var html = await GetObservatoryHtmlAsync();
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name, nextName) {
+              const start = html.indexOf('function ' + name + '(');
+              const end = html.indexOf('\nfunction ' + nextName + '(', start);
+              assert.notEqual(start, -1, name + ' must exist in the served observatory asset');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return html.slice(start, end);
+            }
+
+            const context = {
+              Date, Number,
+              REPLY_KINDS: new Set(['Message', 'TextMessage']),
+              DATA_MODEL_KEYS: ['model', 'model_id', 'modelId'],
+            };
+            vm.createContext(context);
+            vm.runInContext(`
+              ${functionSource('dataLookup', 'parseT')}
+              ${functionSource('parseT', 'clockUTC')}
+              ${functionSource('operationTimestamp', 'openOperationRecord')}
+            `, context);
+
+            const detail = {
+              summary: {
+                runId: 'run-alpha',
+                startedAtUtc: '2026-08-14T01:00:00.000Z',
+              },
+              input: 'Inspect deployment status',
+              inputSummary: 'Inspect deployment status',
+              timeline: [
+                {stage: 'workflow.start', timestampUtc: '2026-08-14T01:00:00.000Z'},
+                {
+                  kind: 'Message', stage: 'role.reply', agentId: 'assistant',
+                  timestampUtc: '2026-08-14T01:00:00.100Z', content: '',
+                  data: {sessionId: 'session-shared', model: 'deepseek-chat'},
+                },
+                {
+                  kind: 'ToolCall', stage: 'tool.call', message: 'search',
+                  timestampUtc: '2026-08-14T01:00:00.200Z',
+                  toolCall: {
+                    callId: 'call-search', toolName: 'search',
+                    argumentsJson: '{"query":"deployment status"}',
+                    resultJson: '{"status":"degraded"}', success: true, error: '',
+                  },
+                },
+                {
+                  kind: 'TextMessage', stage: 'role.reply', agentId: 'assistant',
+                  timestampUtc: '2026-08-14T01:00:00.300Z', content: 'Deployment is degraded.',
+                  data: {session_id: 'session-shared', model: 'deepseek-chat'},
+                },
+              ],
+            };
+
+            const records = context.buildOperationRecords(detail);
+            assert.deepEqual(JSON.parse(JSON.stringify(records.map(record => record.type))),
+              ['input', 'model', 'tool', 'model']);
+            assert.equal(records.length, 4);
+            const models = records.filter(record => record.type === 'model');
+            assert.equal(models.length, 2, 'each LLM reply is a separate historical operation');
+            assert.equal(models[0].sessionId, 'session-shared');
+            assert.equal(models[1].sessionId, 'session-shared');
+            assert.notEqual(models[0].key, models[1].key,
+              'a shared role-chat session cannot collapse separate LLM replies');
+            assert.equal(models[0].content, '', 'tool-call-only replies remain inspectable');
+            assert.equal(models[1].content, 'Deployment is degraded.');
+
+            const tool = records.find(record => record.type === 'tool');
+            assert.equal(tool.key, 'tool:run-alpha:call-search');
+            assert.equal(tool.tool.argumentsJson, '{"query":"deployment status"}');
+            assert.equal(tool.tool.resultJson, '{"status":"degraded"}');
+            assert.equal(tool.status, '成功');
+            for (const record of records) {
+              assert.equal(record.durationMs, null,
+                'a committed point must not be presented as an invented duration interval');
+            }
+
+            const typedRecords = context.buildOperationRecords({
+              summary: {runId: 'run-typed', startedAtUtc: '2026-08-14T01:00:00.000Z'},
+              inputSummary: 'Inspect deployment status',
+              timeline: [],
+              operations: [
+                {
+                  kind: 'tool', operationId: 'tool-1', toolCallId: 'call-1', toolName: 'search',
+                  progressSequence: 20,
+                  startedAtUtc: '2026-08-14T01:00:00.200Z',
+                  completedAtUtc: '2026-08-14T01:00:00.300Z', success: true,
+                },
+                {
+                  kind: 'model', operationId: 'model-0', round: 0,
+                  progressSequence: 12,
+                  startedAtUtc: '2026-08-14T01:00:00.800Z',
+                  completedAtUtc: '2026-08-14T01:00:00.900Z', success: true,
+                },
+              ],
+            });
+            assert.deepEqual(JSON.parse(JSON.stringify(typedRecords.map(record => record.type))),
+              ['input', 'model', 'tool'], 'committed sequence outranks skewed timestamps');
+            assert.equal(typedRecords[1].round, 0);
+            assert.equal(typedRecords[1].title, 'Model round 0');
+            assert.equal(typedRecords[1].durationMs, 100);
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
     }
 
     [Fact]
