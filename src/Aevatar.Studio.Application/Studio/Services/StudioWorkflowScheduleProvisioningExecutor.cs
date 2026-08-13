@@ -15,6 +15,7 @@ public sealed class StudioWorkflowScheduleProvisioningExecutor
     : IStudioWorkflowScheduleProvisioningExecutor
 {
     private const string CredentialProvisioningKind = "dedicated_scheduled_invocation_agent_key";
+    private const string ScheduleIdAllowedCharacters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-";
     private readonly IStudioMemberWorkflowSchedulePort _schedulePort;
 
     public StudioWorkflowScheduleProvisioningExecutor(IStudioMemberWorkflowSchedulePort schedulePort)
@@ -98,9 +99,7 @@ public sealed class StudioWorkflowScheduleProvisioningExecutor
         const int maxGenerations = 50;
         for (var generation = 1; generation <= maxGenerations; generation++)
         {
-            var scheduleId = generation == 1
-                ? $"provision-{intent.PublishedServiceId}"
-                : $"provision-{intent.PublishedServiceId}.{generation}";
+            var scheduleId = BuildProvisioningScheduleId(intent.PublishedServiceId, generation);
             var createOperationIdentity = BuildOperationIdentity(
                 intent,
                 scheduleId,
@@ -236,6 +235,17 @@ public sealed class StudioWorkflowScheduleProvisioningExecutor
                     ?? throw new InvalidOperationException("one_shot_fire_at_required")),
             _ => throw new InvalidOperationException("schedule_mode_invalid"),
         };
+    }
+
+    private static string BuildProvisioningScheduleId(string publishedServiceId, int generation)
+    {
+        var normalizedServiceId = NormalizeRequired(publishedServiceId, nameof(publishedServiceId));
+        var suffix = normalizedServiceId.All(static ch => ScheduleIdAllowedCharacters.IndexOf(ch) >= 0)
+            ? normalizedServiceId
+            : Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(normalizedServiceId)).AsSpan(0, 16));
+        return generation == 1
+            ? $"provision-{suffix}"
+            : $"provision-{suffix}.{generation}";
     }
 
     private static ProvisionScheduleOperationIdentity BuildOperationIdentity(

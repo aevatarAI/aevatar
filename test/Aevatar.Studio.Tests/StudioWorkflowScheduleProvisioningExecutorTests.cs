@@ -87,6 +87,22 @@ public sealed class StudioWorkflowScheduleProvisioningExecutorTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WhenPublishedServiceIdContainsUnsafeCharacters_ShouldCreateScheduleWithSafeStableId()
+    {
+        var port = new RecordingSchedulePort();
+        var sut = new StudioWorkflowScheduleProvisioningExecutor(port);
+
+        var result = await sut.ExecuteAsync(NewExecution(publishedServiceId: "scope-1/service:workflow-alpha"));
+
+        result.Success.Should().BeTrue();
+        result.ScheduleId.Should().StartWith("provision-");
+        result.ScheduleId.Should().MatchRegex("^provision-[a-f0-9]{32}$");
+        port.CreateRequests.Should().ContainSingle();
+        port.CreateRequests[0].ScheduleId.Should().Be(result.ScheduleId);
+        port.CreateRequests[0].AcceptedBinding!.PublishedServiceId.Should().Be("scope-1/service:workflow-alpha");
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WhenAuthorizationPlanChangesBeforeWrite_ShouldRetryWithFreshPreflight()
     {
         var port = new RecordingSchedulePort
@@ -208,14 +224,15 @@ public sealed class StudioWorkflowScheduleProvisioningExecutorTests
             .Equal("provision-svc-1", "provision-svc-1.2");
     }
 
-    private static StudioWorkflowScheduleProvisioningExecution NewExecution() =>
+    private static StudioWorkflowScheduleProvisioningExecution NewExecution(
+        string publishedServiceId = "svc-1") =>
         new(
             new StudioWorkflowScheduleProvisioningIntent(
                 "schedule-provisioning-1",
                 "scope-1",
                 "team-1",
                 "m-1",
-                "svc-1",
+                publishedServiceId,
                 "wf-1",
                 "rev-2",
                 "Monitor",
