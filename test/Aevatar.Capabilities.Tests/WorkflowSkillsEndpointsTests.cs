@@ -281,6 +281,52 @@ public sealed class WorkflowSkillsEndpointsTests
             message.Contains("ErrorCode=api_key_scope_plan_denied", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task ScheduleSkill_WhenRequiredRouteIsUnresolved_ShouldReturnTypedConflict()
+    {
+        var runService = new RecordingUserSkillRunService
+        {
+            ScheduleOutcome = SkillScheduleOutcome.Failed(
+                "schedule_authorization_route_unresolved",
+                "NyxID could not resolve a configured route required by this workflow. " +
+                "Repair or deactivate the route before retrying.",
+                ["service-beta", "service-alpha"]),
+        };
+        var bindingQuery = Substitute.For<IExternalIdentityBindingQueryPort>();
+        bindingQuery.ResolveAsync(Arg.Any<ExternalSubjectRef>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<BindingId?>(new BindingId { Value = "binding-alpha" }));
+        using var logs = new RecordingLoggerProvider();
+        using var services = CreateRequestServices(bindingQuery, logs);
+        var http = CreateHttpContext(
+            services,
+            "Bearer caller-token",
+            "{\"cronExpression\":\"0 9 * * *\",\"teamId\":\"team-alpha\",\"workflowConfirmationToken\":\"sha256:supplied\"}");
+
+        var result = await WorkflowSkillsEndpoints.ScheduleSkill(
+            http,
+            "skill-alpha",
+            runService,
+            CancellationToken.None);
+
+        StatusCode(result).Should().Be(StatusCodes.Status409Conflict);
+        var response = ((IValueHttpResult)result).Value;
+        response.Should().NotBeNull();
+        response!.GetType().GetProperty("code")!.GetValue(response)
+            .Should().Be("schedule_authorization_route_unresolved");
+        response.GetType().GetProperty("requiredUserServiceIds")!.GetValue(response)
+            .Should().BeEquivalentTo(new[] { "service-beta", "service-alpha" });
+        response.GetType().GetProperty("message")!.GetValue(response)
+            .Should().Be(
+                "NyxID could not resolve a configured route required by this workflow. " +
+                "Repair or deactivate the route before retrying.");
+        logs.Messages.Should().ContainSingle(message =>
+            message.Contains("Stage=authorization_catalog", StringComparison.Ordinal) &&
+            message.Contains("ErrorCode=schedule_authorization_route_unresolved", StringComparison.Ordinal));
+        logs.Messages.Should().NotContain(message =>
+            message.Contains("sha256:supplied", StringComparison.Ordinal) ||
+            message.Contains("caller-token", StringComparison.Ordinal));
+    }
+
     private static DefaultHttpContext CreateHttpContext(
         IServiceProvider services,
         string? authorization,

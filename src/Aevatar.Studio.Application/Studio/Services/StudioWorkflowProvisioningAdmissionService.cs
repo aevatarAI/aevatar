@@ -122,6 +122,15 @@ internal sealed class StudioWorkflowProvisioningAdmissionService
 
             if (refresh.Status == NyxIdAuthorizationCatalogRefreshStatus.Superseded)
                 throw new StudioMemberAutomationCatalogRefreshSupersededException();
+            if (refresh.Status == NyxIdAuthorizationCatalogRefreshStatus.CatalogUnstable &&
+                string.Equals(
+                    refresh.FailureCode,
+                    StudioMemberAutomationCatalogRouteUnresolvedException.NyxIdFailureCode,
+                    StringComparison.Ordinal))
+            {
+                throw new StudioMemberAutomationCatalogRouteUnresolvedException(
+                    requiredServices.Select(static service => service.UserServiceId));
+            }
             if (!refresh.Success)
                 throw new StudioMemberAutomationCatalogRefreshUnavailableException();
 

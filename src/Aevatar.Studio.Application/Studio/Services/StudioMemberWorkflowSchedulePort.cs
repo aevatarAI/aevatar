@@ -1034,6 +1034,16 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             throw new StudioMemberAutomationCatalogRefreshSupersededException();
         }
 
+        if (refresh.Status == NyxIdAuthorizationCatalogRefreshStatus.CatalogUnstable &&
+            string.Equals(
+                refresh.FailureCode,
+                StudioMemberAutomationCatalogRouteUnresolvedException.NyxIdFailureCode,
+                StringComparison.Ordinal))
+        {
+            throw new StudioMemberAutomationCatalogRouteUnresolvedException(
+                requiredServices.Select(static service => service.UserServiceId));
+        }
+
         if (refresh.Status is NyxIdAuthorizationCatalogRefreshStatus.Failed or
             NyxIdAuthorizationCatalogRefreshStatus.ObservationTimedOut or
             NyxIdAuthorizationCatalogRefreshStatus.CatalogUnstable)

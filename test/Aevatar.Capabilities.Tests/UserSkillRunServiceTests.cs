@@ -385,6 +385,40 @@ public sealed class UserSkillRunServiceTests
     }
 
     [Fact]
+    public async Task ScheduleAsync_WhenRequiredRouteIsUnresolved_ShouldReturnRepairableFailure()
+    {
+        var schedule = new RecordingScheduleProvisioningPort
+        {
+            Exception = new StudioMemberAutomationCatalogRouteUnresolvedException(
+                ["service-alpha"]),
+        };
+        var service = new UserSkillRunService(
+            new RecordingRemoteSkillFetcher(WorkflowSkill()),
+            new RecordingWorkflowChatDispatch(),
+            schedule,
+            new RecordingWorkflowConfirmationPort(ConfirmedWorkflow()));
+
+        var outcome = await service.ScheduleAsync(
+            "skill-alpha",
+            SourceReadableCallerCredential(),
+            "scope-alpha",
+            "run the check",
+            "*/15 * * * *",
+            "UTC",
+            "Codex Check",
+            "team-alpha",
+            "sha256:reviewed",
+            CancellationToken.None);
+
+        outcome.Succeeded.Should().BeFalse();
+        outcome.ErrorCode.Should().Be("schedule_authorization_route_unresolved");
+        outcome.ErrorMessage.Should().Be(
+            "NyxID could not resolve a configured route required by this workflow. " +
+            "Repair or deactivate the route before retrying.");
+        outcome.RequiredUserServiceIds.Should().Equal("service-alpha");
+    }
+
+    [Fact]
     public async Task ScheduleAsync_ShouldReturnSafeAdmissionBlockerCode()
     {
         var blockerCode = "NYXID_EXPLICIT_REQUEST_CONFIRMATION_BINDING_MISMATCH";
