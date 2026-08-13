@@ -328,13 +328,18 @@ public sealed class NyxIdChatTaskContractTests
     }
 
     [Fact]
-    public void FormatterOutput_ShouldIncludeDecoderRequiredStepBooleansWhenFalse()
+    public void FormatterOutput_ShouldIncludeWireRequiredBooleansWhenFalse()
     {
         var step = new NyxIdChatTaskPlanStep
         {
             StepId = "step-optional-read",
             Required = false,
             MayChangeExternalState = false,
+            Operation = new NyxIdChatTaskPlanOperation
+            {
+                OperationId = "operation-read",
+                MayChangeExternalState = false,
+            },
         };
         var plan = new NyxIdChatTaskPlan();
         plan.Steps.Add(step);
@@ -343,11 +348,15 @@ public sealed class NyxIdChatTaskContractTests
             .FormatTaskPlan(plan)["steps"]![0]!;
         planStep["required"]!.GetValue<bool>().Should().BeFalse();
         planStep["mayChangeExternalState"]!.GetValue<bool>().Should().BeFalse();
+        planStep["operation"]!["mayChangeExternalState"]!
+            .GetValue<bool>().Should().BeFalse();
 
         var changedStep = NyxIdChatTaskPlanJsonFormatter
             .FormatTaskPlan(new NyxIdChatTaskPlanStepChanged { Step = step })["step"]!;
         changedStep["required"]!.GetValue<bool>().Should().BeFalse();
         changedStep["mayChangeExternalState"]!.GetValue<bool>().Should().BeFalse();
+        changedStep["operation"]!["mayChangeExternalState"]!
+            .GetValue<bool>().Should().BeFalse();
     }
 
     [Fact]

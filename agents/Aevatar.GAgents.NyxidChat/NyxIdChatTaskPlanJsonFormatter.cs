@@ -11,7 +11,7 @@ internal static class NyxIdChatTaskPlanJsonFormatter
     public static JsonNode FormatTaskPlan(IMessage payload)
     {
         var node = FormatProtobuf(payload);
-        IncludeDecoderRequiredStepBooleans(payload, node);
+        IncludeWireRequiredBooleans(payload, node);
         NormalizeBrowserSafeIntegers(node);
         return node;
     }
@@ -26,7 +26,7 @@ internal static class NyxIdChatTaskPlanJsonFormatter
         return node;
     }
 
-    private static void IncludeDecoderRequiredStepBooleans(IMessage payload, JsonNode node)
+    private static void IncludeWireRequiredBooleans(IMessage payload, JsonNode node)
     {
         switch (payload)
         {
@@ -35,15 +35,15 @@ internal static class NyxIdChatTaskPlanJsonFormatter
                     throw new InvalidOperationException("TaskPlan step serialization is inconsistent.");
 
                 for (var index = 0; index < plan.Steps.Count; index++)
-                    IncludeDecoderRequiredStepBooleans(steps[index], plan.Steps[index]);
+                    IncludeWireRequiredBooleans(steps[index], plan.Steps[index]);
                 break;
             case NyxIdChatTaskPlanStepChanged changed when changed.Step is not null:
-                IncludeDecoderRequiredStepBooleans(node["step"], changed.Step);
+                IncludeWireRequiredBooleans(node["step"], changed.Step);
                 break;
         }
     }
 
-    private static void IncludeDecoderRequiredStepBooleans(
+    private static void IncludeWireRequiredBooleans(
         JsonNode? node,
         NyxIdChatTaskPlanStep step)
     {
@@ -52,6 +52,16 @@ internal static class NyxIdChatTaskPlanJsonFormatter
 
         stepNode["required"] = step.Required;
         stepNode["mayChangeExternalState"] = step.MayChangeExternalState;
+        if (step.Operation is not null)
+        {
+            if (stepNode["operation"] is not JsonObject operationNode)
+            {
+                throw new InvalidOperationException(
+                    "TaskPlan step operation must serialize to a JSON object.");
+            }
+
+            operationNode["mayChangeExternalState"] = step.Operation.MayChangeExternalState;
+        }
     }
 
     private static void NormalizeBrowserSafeIntegers(JsonNode node)
