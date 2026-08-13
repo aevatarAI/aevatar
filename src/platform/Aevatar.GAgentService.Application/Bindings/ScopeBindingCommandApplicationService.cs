@@ -328,8 +328,12 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
             ?? throw new InvalidOperationException("workflow authorization dependencies are required.");
         var capabilityAdmissionPlan = workflowSpec.CapabilityAdmissionPlan
             ?? throw new InvalidOperationException("workflow capability admission plan is required.");
+        var artifactRevisionSpec = revisionSpec.Clone();
+        artifactRevisionSpec.WorkflowSpec!.WorkflowId = string.IsNullOrWhiteSpace(workflowSpec.WorkflowId)
+            ? revisionSpec.RevisionId
+            : workflowSpec.WorkflowId;
         return WorkflowServiceRevisionArtifactBuilder.Build(
-            revisionSpec,
+            artifactRevisionSpec,
             resolvedWorkflowName,
             authorizationDependencies,
             capabilityAdmissionPlan);
