@@ -501,7 +501,10 @@ public sealed record ScheduledDispatchListQuery(
     string? TeamAutomationMemberId = null,
     bool ExcludeTeamOwned = false,
     bool IncludeDeleted = false,
-    bool ExcludeCompletedTeamAutomationDeletions = false);
+    bool ExcludeCompletedTeamAutomationDeletions = false,
+    string? ServiceKey = null,
+    string? ServiceId = null,
+    string? ServiceRevisionId = null);
 
 public interface IScheduledDispatchActorPort
 {

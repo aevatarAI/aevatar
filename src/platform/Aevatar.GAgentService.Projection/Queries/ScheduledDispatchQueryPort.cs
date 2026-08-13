@@ -120,6 +120,36 @@ public sealed class ScheduledDispatchQueryPort : IScheduledDispatchQueryPort
             });
         }
 
+        if (!string.IsNullOrWhiteSpace(query.ServiceKey))
+        {
+            filters.Add(new ProjectionDocumentFilter
+            {
+                FieldPath = nameof(ScheduledDispatchDocument.ServiceKey),
+                Operator = ProjectionDocumentFilterOperator.Eq,
+                Value = ProjectionDocumentValue.FromString(query.ServiceKey.Trim()),
+            });
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.ServiceId))
+        {
+            filters.Add(new ProjectionDocumentFilter
+            {
+                FieldPath = nameof(ScheduledDispatchDocument.ServiceId),
+                Operator = ProjectionDocumentFilterOperator.Eq,
+                Value = ProjectionDocumentValue.FromString(query.ServiceId.Trim()),
+            });
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.ServiceRevisionId))
+        {
+            filters.Add(new ProjectionDocumentFilter
+            {
+                FieldPath = nameof(ScheduledDispatchDocument.ServiceRevisionId),
+                Operator = ProjectionDocumentFilterOperator.Eq,
+                Value = ProjectionDocumentValue.FromString(query.ServiceRevisionId.Trim()),
+            });
+        }
+
         if (query.ScheduleKind != null)
         {
             filters.Add(new ProjectionDocumentFilter
