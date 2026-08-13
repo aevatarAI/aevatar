@@ -13,10 +13,10 @@
   location.replace("/admin#/observatory" + (target.toString() ? "?" + target.toString() : ""));
 })();
 </script>
-<title>Workflow Run Observatory · 工作流运行观测台</title>
+<title>Workflow Run Observatory · 工作流请求轨迹观测台</title>
 <style>
   /* =========================================================================
-     Workflow Run Observatory — 只读运行观测台
+     Workflow Run Observatory — 只读请求轨迹观测台
      单文件、零外部依赖。深色为主，浅色全量支持。
      所有颜色走 CSS 自定义属性（设计令牌），不散落硬编码。
      ========================================================================= */
@@ -412,7 +412,7 @@
   }
   .shell.has-banner { height: auto; min-height: calc(100dvh - var(--topbar-h) - var(--workspacebar-h)); }
 
-  /* ---- Runs list -------------------------------------------------------- */
+  /* ---- Request traces list --------------------------------------------- */
   .list-pane {
     border-right: 1px solid var(--border);
     display: flex; flex-direction: column; min-height: 0;
@@ -422,6 +422,7 @@
   .list-title-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
   .list-title { font-size: 13px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); display: inline-flex; align-items: center; gap: 8px; }
   .list-title .lt-ic { color: var(--muted-2); display: inline-grid; place-items: center; }
+  .list-coverage { margin-top: 5px; font-size: 11.5px; color: var(--muted-2); }
   /* count rendered as a small pill so the header reads as an intentional unit */
   .list-count {
     font-family: var(--mono); font-size: 11.5px; font-weight: 600; color: var(--muted);
@@ -438,6 +439,13 @@
   .chip[aria-pressed="true"] { color: var(--fg-strong); background: var(--panel-3); border-color: var(--muted-2); }
 
   .runlist { overflow-y: auto; flex: 1 1 auto; padding: 8px; min-height: 0; }
+  .trace-load-more {
+    display: block; width: calc(100% - 16px); margin: 8px; padding: 9px 12px;
+    border: 1px solid var(--border); border-radius: var(--r); background: var(--panel-2);
+    color: var(--muted); font-weight: 600; text-align: center;
+  }
+  .trace-load-more:hover:not(:disabled) { color: var(--fg); border-color: var(--muted-2); }
+  .trace-load-more:disabled { cursor: wait; opacity: .65; }
   .run-row {
     display: grid; grid-template-columns: auto 1fr; gap: 2px 11px;
     align-items: start; width: 100%; text-align: left;
@@ -446,9 +454,14 @@
     transition: background .12s, border-color .12s;
   }
   .run-row:hover { background: var(--panel-2); }
-  .run-row .dot { margin-top: 5px; grid-row: span 2; }
+  .run-row .dot { margin-top: 5px; grid-row: span 3; }
   .run-row .rn { font-weight: 640; color: var(--fg-strong); letter-spacing: -.005em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .run-row .rm { font-size: 12px; color: var(--muted); display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .run-row .rt-preview {
+    grid-column: 2; min-width: 0; margin-top: 2px; font-size: 11.5px; color: var(--muted-2);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .run-row .rt-preview .rt-label { margin-right: 6px; color: var(--muted); font-weight: 650; }
   .run-row .rm .id { font-family: var(--mono); font-size: 11.5px; color: var(--muted-2); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .run-row .rm .sep { color: var(--border); }
   .run-row .rm .rm-status { font-weight: 600; color: var(--muted); }
@@ -479,7 +492,7 @@
   .empty .es { font-size: 12.5px; max-width: 220px; }
 
   /* =========================================================================
-     Run detail
+     Request trace detail
      ========================================================================= */
   .detail-pane { overflow-y: auto; min-height: 0; display: flex; flex-direction: column; }
   .detail-inner { max-width: 980px; width: 100%; margin: 0 auto; padding: 22px 26px 64px; flex: 1 1 auto; }
@@ -487,6 +500,7 @@
   .backbar { display: none; }
 
   .run-header { display: flex; flex-direction: column; gap: 13px; }
+  .rh-eyebrow { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
   .rh-top { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
   .rh-title { font-size: 21px; font-weight: 700; letter-spacing: -.02em; color: var(--fg-strong); display: flex; align-items: center; gap: 10px; margin: 0; }
   .rh-title .dot { width: 11px; height: 11px; }
@@ -935,7 +949,7 @@
     .brand-sub { display: none; }
     .account .who { max-width: 92px; }
     /* topbar: stop secondary pills from being squeezed into ugly vertical char-wrap
-       (e.g. "已暂停"/"切换账户" stacking one glyph per line); let the brand truncate instead. */
+       (e.g. refresh/account labels stacking one glyph per line); let the brand truncate instead. */
     .topbar { gap: 8px; }
     .brand-name { overflow: hidden; text-overflow: ellipsis; }
     .workspacebar { padding:7px 10px; }
@@ -998,7 +1012,7 @@
    client; no server-side cookie/session, no NyxID change). All data flows through
    scope-gated bearer APIs; the page itself is the anonymous static shell.
    A small client cache backs the synchronous render contract (DataSource.*):
-     listRuns(status) <- GET /api/workflow/observatory/runs
+     listRuns(status) <- GET /api/workflow/observatory/activity-runs (paged request-trace feed)
      getRun(runId)    <- GET /api/workflow/observatory/runs/{runId}; admin drilldown uses /admin/runs/{runId}
      getGraph(runId)  <- GET /api/workflow/observatory/runs/{runId}/graph; admin drilldown uses /admin/runs/{runId}/graph
    Read-only: there are no edit/run/stop calls anywhere.
@@ -1147,14 +1161,32 @@ async function apiRequest(path, options){
 }
 async function api(path){ return apiRequest(path); }
 
+/* The Activity feed is a distinct envelope. Keep its normalization as a pure seam so rendering never
+   mistakes pagination metadata for a trace, and so static-asset tests can probe contract drift. */
+function isActivityRunFeedEnvelope(value){
+  return !!value&&typeof value==="object"&&Array.isArray(value.items)&&typeof value.hasMore==="boolean";
+}
+function normalizeActivityRunFeed(value){
+  const source=value&&typeof value==="object"?value:{};
+  const total=source.totalCount==null?NaN:Number(source.totalCount);
+  return {
+    items:Array.isArray(source.items)?source.items:[],
+    nextCursor:typeof source.nextCursor==="string"&&source.nextCursor?source.nextCursor:null,
+    hasMore:source.hasMore===true,
+    totalCount:Number.isSafeInteger(total)&&total>=0?total:null
+  };
+}
+function activityRunFeedRequestPath(query){ return "/api/workflow/observatory/activity-runs"+(query||""); }
+
 /* client cache backing the synchronous render contract */
-const cache = { account:null, runs:[], details:{}, graphs:{} };
+const cache = { account:null, runs:[], runFeed:normalizeActivityRunFeed(null), details:{}, graphs:{} };
 const DataSource = {
   now: () => new Date().toISOString(),
   getAccount: () => cache.account || { label:"已登录" },
   // Filtering (status/origin/time) is pushed to the server query via listQueryParams; the cache already
   // holds the filtered set, so the list reads it as-is (no second client-side status pass).
   listRuns: () => cache.runs.slice(),
+  getRunFeed: () => cache.runFeed,
   getRun: (runId) => cache.details[runId] || null,
   getGraph: (runId) => cache.graphs[runId] || null
 };
@@ -1328,9 +1360,10 @@ const filterState = (function(){
   return { status: pick(initialRoute.status, STATUS_VALUES), origin: initialRoute.origin, definition: initialRoute.definition, schedule: initialRoute.schedule, from: timestamp(initialRoute.from), to: timestamp(initialRoute.to), open };
 })();
 function originLabel(o){ return o ? (ORIGIN_LABEL[o] || o) : ""; }
-/* compose the runs LIST query: exact deep-link instants remain exact; native date input changes are
-   normalized before reaching this function. */
-function listQueryParams(){
+/* Compose the request-trace Activity feed query: exact deep-link instants remain exact; native date
+   input changes are normalized before reaching this function. totalCount is requested so the bounded
+   newest-N window and hasMore state can be labelled honestly. */
+function listQueryParams(cursor,take){
   const p = new URLSearchParams();
   if(adminState.isAdmin && adminState.currentScope) p.set("scope", adminState.currentScope);
   if(filterState.status) p.set("status", filterState.status);
@@ -1339,6 +1372,10 @@ function listQueryParams(){
   if(filterState.schedule) p.set("schedule", filterState.schedule);
   if(filterState.from) p.set("from", filterState.from);
   if(filterState.to) p.set("to", filterState.to);
+  const pageSize=Math.max(1,Math.min(500,Number(take)||100));
+  p.set("take", String(pageSize));
+  p.set("includeTotalCount", "true");
+  if(cursor) p.set("cursor", cursor);
   const s = p.toString();
   return s ? "?" + s : "";
 }
@@ -1369,17 +1406,23 @@ function toggleFilterPanel(){
 /* apply a single filter change: reset list scroll (existing convention), drop the stale run cache so
    the server-filtered set replaces it cleanly, and re-fetch + re-render. */
 function applyFilterChange(){
+  state.listRequestEpoch = (Number(state.listRequestEpoch) || 0) + 1;
+  state.loadingMore = false;
   pendingListScrollReset = true;
   state.selectedRunId = null;
-  cache.runs = []; cache.details = {}; cache.graphs = {};
+  cache.runs = []; cache.runFeed = normalizeActivityRunFeed(null); cache.details = {}; cache.graphs = {};
+  state.lastSyncedAtUtc = null;
   lastRunsSig = "";
   state.scenario = "listLoading";
   writeObservatoryRoute({ status:filterState.status, origin:filterState.origin, definition:filterState.definition, schedule:filterState.schedule, from:filterState.from, to:filterState.to, run:"" });
   render();
-  (async () => { await refreshRuns(); lastRunsSig = runsSig(cache.runs); render(); })();
+  (async () => { const ok=await refreshRuns(); if(ok) state.lastSyncedAtUtc=new Date().toISOString(); lastRunsSig = runsSig(cache.runs,cache.runFeed); render(); })();
 }
 function clearSession(){
-  cache.account=null; cache.runs=[]; cache.details={}; cache.graphs={};
+  state.listRequestEpoch = (Number(state.listRequestEpoch) || 0) + 1;
+  state.loadingMore = false;
+  cache.account=null; cache.runs=[]; cache.runFeed=normalizeActivityRunFeed(null); cache.details={}; cache.graphs={};
+  state.lastSyncedAtUtc=null;
   adminState.isAdmin=false; adminState.role=""; adminState.email=""; adminState.ownScope="";
   adminState.currentScope=null; adminState.inputDraft=""; adminState.runIdDraft=""; adminState.candidates=null; adminState.message="";
 }
@@ -1507,6 +1550,38 @@ function initials(label){ return (label||"?").trim().charAt(0).toUpperCase(); }
 /* compact id for list rows: keep the unique tail (the run/scope hash); full id stays in the title */
 function tailId(s, keep){ s = String(s==null?"":s); return s.length > keep+2 ? "…" + s.slice(-keep) : s; }
 function midTrunc(s, max){ s = String(s==null?"":s); if(s.length <= max) return s; const h = Math.ceil((max-1)*0.62), t = (max-1) - h; return s.slice(0, h) + "…" + s.slice(s.length - t); }
+function requestTraceCountLabel(feed, shown){
+  const page=normalizeActivityRunFeed(feed),count=Math.max(0,Number(shown)||0);
+  if(page.totalCount!=null) return count<page.totalCount?count+" / "+page.totalCount:String(page.totalCount);
+  return page.hasMore?count+"+":String(count);
+}
+function requestTraceCoverageLabel(feed, shown){
+  const page=normalizeActivityRunFeed(feed),count=Math.max(0,Number(shown)||0);
+  if(page.totalCount!=null){
+    if(page.hasMore||count<page.totalCount) return `显示最近 ${count} 条，共 ${page.totalCount} 条；仍有更多请求轨迹`;
+    return `共 ${page.totalCount} 条请求轨迹`;
+  }
+  return page.hasMore?`显示最近 ${count} 条；仍有更多请求轨迹`:`当前显示 ${count} 条请求轨迹`;
+}
+function requestTracePreview(run){
+  const source=run||{},input=String(source.inputSummary||"").trim();
+  if(input) return "输入 · "+input;
+  const step=source.currentStep||{},stepInput=String(step.inputSummary||"").trim(),stepId=String(step.stepId||"").trim();
+  if(stepInput) return "当前步骤 · "+stepInput;
+  if(stepId) return "当前步骤 · "+stepId;
+  const initiator=source.initiator||{},display=String(initiator.displayValue||"").trim();
+  return display&&display!=="Unknown"?"发起方 · "+display:"请求轨迹 · "+String(source.runId||"");
+}
+function requestTraceDurationLabel(run, currentMs){
+  const source=run||{},duration=source.durationMs==null?NaN:Number(source.durationMs);
+  if(Number.isFinite(duration)&&duration>=0) return fmtDur(duration);
+  const started=parseT(source.startedAtUtc);
+  return source.status==="running"&&!isNaN(started)?fmtDur((currentMs==null?nowMs():currentMs)-started):"";
+}
+function requestTraceAriaLabel(run){
+  const source=run||{},workflow=String(source.workflowName||"未命名工作流"),status=STATUS_LABEL[source.status]||source.status||"未知";
+  return `请求轨迹，${workflow}，${status}，${requestTracePreview(source)}，runId ${source.runId||"未知"}`;
+}
 
 /* JSON 着色（仅用于显示）。注意：先 esc() 转义，引号已变成 &quot;，
    因此高亮要匹配 &quot; 而非字面引号。本数据中字符串均为单行且不含 & 实体。 */
@@ -1579,6 +1654,10 @@ const state = {
   graphView: { zoom: 1, panX: 0, panY: 0, fitted: false }, // pan/zoom transform, survives polling re-renders
   immersive: sessionStorage.getItem(OBSERVATORY_IMMERSIVE_KEY) === "1",
   refreshing: false,
+  polling: false,
+  loadingMore: false,
+  listRequestEpoch: 0,
+  lastSyncedAtUtc: null,
 };
 function nowMs(){ return Date.now(); }
 
@@ -1602,16 +1681,18 @@ async function refreshObservatory(){
   if(state.refreshing) return;
   state.refreshing=true;
   try {
-    await refreshRuns();
-    lastRunsSig=runsSig(cache.runs);
-    if(state.selectedRunId){ await refreshDetail(state.selectedRunId); lastDetailSig=detailSig(cache.details[state.selectedRunId]); }
+    const listOk=await refreshRuns();
+    lastRunsSig=runsSig(cache.runs,cache.runFeed);
+    let detailOk=true;
+    if(state.selectedRunId){ detailOk=await refreshDetail(state.selectedRunId); lastDetailSig=detailSig(cache.details[state.selectedRunId]); }
+    if(listOk&&detailOk) state.lastSyncedAtUtc=new Date().toISOString();
   } finally { state.refreshing=false; render(); }
 }
 function renderWorkspaceBar(){
   const bar=el("div",{class:"workspacebar",role:"region","aria-label":"观测工作区"});
   const detail=currentDetail(),summary=detail&&detail.summary;
   const scope=adminState.currentScope===ALL_SCOPES?"全部 scope":(adminState.currentScope||adminState.ownScope||"我的 scope");
-  bar.appendChild(el("div",{class:"workspace-context"},`<span>${esc(scope)}</span><b title="${esc(summary&&summary.runId||"")}">${esc(summary&&summary.workflowName||summary&&summary.runId||"选择运行查看详情")}</b>`));
+  bar.appendChild(el("div",{class:"workspace-context"},`<span>${esc(scope)}</span><b title="${esc(summary&&summary.runId||"")}">${esc(summary&&summary.workflowName||summary&&summary.runId||"选择请求轨迹查看详情")}</b>`));
   const actions=el("div",{class:"workspace-actions"});
   const refresh=el("button",{class:"workspace-action",type:"button","aria-label":"刷新数据",title:"刷新数据"},`↻ <span>${state.refreshing?"刷新中…":"刷新数据"}</span>`);
   refresh.disabled=state.refreshing; refresh.addEventListener("click",refreshObservatory); actions.appendChild(refresh);
@@ -1656,14 +1737,14 @@ function renderTopbar(){
     ${suiteNavHtml("observatory")}
     <div class="spacer"></div>`;
 
-  // live indicator (hidden on login)
+  // Refresh indicator (hidden on login). Both the Activity list and the selected detail use the same
+  // visible-page ~3s poll regardless of whether the selected trace is running or terminal.
   if(state.signedIn){
-    const sel = currentDetail();
-    const isRunning = sel && sel.summary.status === "running";
-    const live = el("div", { class:"live"+(isRunning?" is-live":""), role:"status", "aria-live":"polite", id:"liveChip", title:"页面每约 3 秒轮询一次" });
+    const synced=state.lastSyncedAtUtc;
+    const live = el("div", { class:"live is-live", role:"status", "aria-live":"polite", id:"liveChip", title:"页面可见时，请求轨迹列表与已选详情每约 3 秒从权威读模型刷新" });
     live.innerHTML = `<span class="dot" aria-hidden="true"></span>
-      <span>${isRunning?"实时":"已暂停"}</span>
-      <span class="freshness" data-since="${sel?sel.summary.updatedAtUtc:DataSource.now()}">${sel?relTime(sel.summary.updatedAtUtc, nowMs()):""} 更新</span>`;
+      <span>约 3 秒刷新</span>
+      <span class="freshness"${synced?` data-since="${synced}"`:""}>${synced?relTime(synced, nowMs())+" 同步":"等待首次同步"}</span>`;
     bar.appendChild(live);
   }
 
@@ -1693,8 +1774,8 @@ function renderTopbar(){
    =========================================================================== */
 function renderBanner(){
   const b = el("div", { class:"banner", role:"alert" });
-  b.innerHTML = `${ICON.alert}<span class="b-title">加载运行失败</span>
-     <span class="b-msg">无法连接到观测服务（HTTP 503）。已显示上次成功获取的快照；将在下次轮询时自动重试。</span>`;
+  b.innerHTML = `${ICON.alert}<span class="b-title">加载请求轨迹失败</span>
+     <span class="b-msg">无法连接到观测服务。已显示上次成功获取的轨迹快照；将在下次约 3 秒轮询时自动重试。</span>`;
   return b;
 }
 
@@ -1706,8 +1787,8 @@ function renderLogin(){
   const card = el("section", { class:"login-card", role:"region", "aria-label":"登录" });
   card.innerHTML = `
     <div class="login-mark" aria-hidden="true">${ICON.lock}</div>
-    <h1>登录以查看你的工作流运行</h1>
-    <p>只读访问你账户下的运行 —— 观察执行过程，不可修改任何内容。</p>`;
+    <h1>登录以查看工作流请求轨迹</h1>
+    <p>每次请求对应一条只读轨迹；可查看执行详情，但不能修改运行事实。</p>`;
   const btn = el("button", { class:"btn-primary", id:"signinBtn" }, "使用 nyxid 登录");
   btn.addEventListener("click", () => { beginLogin(); });
   card.appendChild(btn);
@@ -1781,7 +1862,7 @@ function renderFilterBar(){
   }
 
   // --- the controls panel (hidden when collapsed) ---
-  const bar = el("div", { class:"filterbar", id:"filterPanel", role:"group", "aria-label":"按状态、来源、更新时间筛选运行" });
+  const bar = el("div", { class:"filterbar", id:"filterPanel", role:"group", "aria-label":"按状态、来源、更新时间筛选请求轨迹" });
   if(!filterState.open) bar.hidden = true;
   bar.appendChild(renderSelect("flt-status", "状态", STATUS_OPTIONS, filterState.status,
     v => { filterState.status = v; applyFilterChange(); }));
@@ -1807,17 +1888,19 @@ function renderFilterBar(){
 }
 
 /* ===========================================================================
-   Render — runs list
+   Render — request traces list (one authoritative run row per request)
    =========================================================================== */
 function renderList(){
-  const pane = el("aside", { class:"list-pane", "aria-label":"运行列表" });
+  const pane = el("aside", { class:"list-pane", "aria-label":"请求轨迹列表" });
   const head = el("div", { class:"list-head" });
   const shown = state.scenario==="empty" ? 0 : DataSource.listRuns().length;
-  head.innerHTML = `<div class="list-title-row"><span class="list-title"><span class="lt-ic" aria-hidden="true">${ICON.list}</span>运行</span><span class="list-count" title="当前筛选下返回的运行数（最近 N）">${shown}</span></div>`;
+  const feed = DataSource.getRunFeed();
+  const coverage = requestTraceCoverageLabel(feed, shown);
+  head.innerHTML = `<div class="list-title-row"><span class="list-title"><span class="lt-ic" aria-hidden="true">${ICON.list}</span>请求轨迹</span><span class="list-count" title="${esc(coverage)}">${esc(requestTraceCountLabel(feed, shown))}</span></div><div class="list-coverage">${esc(coverage)}</div>`;
   pane.appendChild(head);
   pane.appendChild(renderFilterBar());
 
-  const listbox = el("div", { class:"runlist scroll", role:"list", "aria-label":"运行", tabindex:"-1" });
+  const listbox = el("div", { class:"runlist scroll", role:"list", "aria-label":"请求轨迹，每次请求一条", tabindex:"-1" });
 
   if(state.scenario === "listLoading"){
     for(let i=0;i<5;i++){
@@ -1832,18 +1915,18 @@ function renderList(){
   const runs = state.scenario === "empty" ? [] : DataSource.listRuns();
 
   if(runs.length === 0){
-    const isFiltered = state.scenario !== "empty" && hasActiveFilters();
+    const isFiltered = hasActiveFilters();
     listbox.appendChild(el("div", { class:"empty" }, `
       <div class="ic" aria-hidden="true">${ICON.inbox}</div>
-      <div class="et">${isFiltered ? "没有匹配的运行" : "暂无运行"}</div>
-      <div class="es">${isFiltered ? "当前筛选条件下没有运行，放宽状态、来源或时间范围再看看。" : "你的账户下还没有任何工作流运行。一旦有运行启动，就会出现在这里。"}</div>`));
+      <div class="et">${isFiltered ? "没有匹配的请求轨迹" : "暂无请求轨迹"}</div>
+      <div class="es">${isFiltered ? "当前筛选条件下没有请求轨迹，放宽状态、来源或时间范围再看看。" : "每次工作流请求都会形成一条独立轨迹；新请求被读模型观测后会出现在这里。"}</div>`));
     pane.appendChild(listbox);
     return pane;
   }
 
   runs.forEach(r => {
     const sel = state.selectedRunId === r.runId && state.scenario==="normal";
-    const row = el("button", { class:"run-row", role:"listitem", "aria-current": String(sel) });
+    const row = el("button", { class:"run-row", type:"button", role:"listitem", "aria-current": String(sel), "aria-label":requestTraceAriaLabel(r) });
     // scope id per row is only meaningful in the cross-scope (全部 scope) view, where rows differ in
     // scope. When a single concrete scope is selected it's the same id on every row (already shown in
     // the admin bar) — pure noise — so it's hidden there.
@@ -1861,25 +1944,39 @@ function renderList(){
     const originCol = olabel
       ? `<span class="sep">·</span><span class="rm-origin" title="运行来源：${esc(olabel)}">${esc(olabel)}</span>`
       : "";
+    const duration = requestTraceDurationLabel(r, nowMs());
+    const runningDurationAttr = r.status === "running" && r.startedAtUtc
+      ? ` data-duration="${esc(r.startedAtUtc)}"`
+      : "";
+    const durationCol = duration ? `<span class="sep">·</span><span title="请求轨迹用时"${runningDurationAttr}>${esc(duration)}</span>` : "";
+    const preview = requestTracePreview(r);
     row.innerHTML = `
       <span class="dot s-${r.status}" aria-hidden="true"></span>
       <span class="rn" title="${esc(r.workflowName)}">${esc(r.workflowName)}</span>
       <span class="rm">
         <span class="rm-status s-${r.status}">${STATUS_LABEL[r.status]||r.status}</span>${originCol}
+        ${durationCol}
         <span class="sep">·</span>
         <span data-since="${r.updatedAtUtc}">${relTime(r.updatedAtUtc, nowMs())}</span>
         <span class="sep">·</span>
         <span class="id" title="run id: ${esc(r.runId)}">${esc(midTrunc(parseRunId(r.runId).run, 16) || tailId(r.runId, 12))}</span>${scopeCol}
-      </span>`;
+      </span>
+      <span class="rt-preview" title="${esc(preview)}"><span class="rt-label">请求</span>${esc(preview.replace(/^(输入|当前步骤|发起方|请求轨迹) · /,""))}</span>`;
     row.addEventListener("click", () => selectRun(r.runId));
     listbox.appendChild(row);
   });
+  if(feed.hasMore && feed.nextCursor){
+    const loadMore = el("button", { class:"trace-load-more", type:"button" }, state.loadingMore ? "正在加载…" : "加载更早的请求轨迹");
+    loadMore.disabled = state.loadingMore;
+    loadMore.addEventListener("click", () => loadMoreRequestTraces());
+    listbox.appendChild(loadMore);
+  }
   pane.appendChild(listbox);
   return pane;
 }
 
 /* ===========================================================================
-   Render — detail
+   Render — selected request trace detail
    =========================================================================== */
 function currentDetail(){
   if(state.scenario === "notFound") return null;
@@ -1887,11 +1984,11 @@ function currentDetail(){
 }
 
 function renderDetail(){
-  const pane = el("section", { class:"detail-pane scroll", "aria-label":"运行详情" });
+  const pane = el("section", { class:"detail-pane scroll", "aria-label":"请求轨迹详情" });
 
   // mobile back bar
   const back = el("div", { class:"backbar" });
-  const backBtn = el("button", {}, `${ICON.back}<span>运行</span>`);
+  const backBtn = el("button", { type:"button", "aria-label":"返回请求轨迹列表" }, `${ICON.back}<span>请求轨迹</span>`);
   backBtn.addEventListener("click", () => { document.body.setAttribute("data-mobile-view","list"); });
   back.appendChild(backBtn);
   pane.appendChild(back);
@@ -1912,8 +2009,8 @@ function renderDetail(){
   if(state.scenario === "notFound"){
     pane.appendChild(el("div", { class:"detail-empty nf" }, `
       <div class="ic" aria-hidden="true">${ICON.ghost}</div>
-      <div class="dt">运行未找到</div>
-      <div class="ds">运行 <span class="mono">${esc(state.selectedRunId||"run_unknown")}</span> 不存在，或已超出你账户的可见范围。可能已被清理，或属于其他账户。</div>`));
+      <div class="dt">请求轨迹未找到</div>
+      <div class="ds">轨迹 <span class="mono">${esc(state.selectedRunId||"run_unknown")}</span> 不存在，或已超出你账户的可见范围。它可能已被清理，或属于其他账户。</div>`));
     return pane;
   }
 
@@ -1921,8 +2018,8 @@ function renderDetail(){
   if(!detail){
     pane.appendChild(el("div", { class:"detail-empty" }, `
       <div class="ic" aria-hidden="true">${ICON.cursor}</div>
-      <div class="dt">选择一个运行以查看执行过程</div>
-      <div class="ds">从左侧列表选择任意运行，自上而下阅读它的执行故事 —— 每一步做了什么、模型说了什么、调用了哪些工具。</div>`));
+      <div class="dt">选择一条请求轨迹查看详情</div>
+      <div class="ds">左侧每个 run 对应一次独立请求。选择任意轨迹，可查看步骤、模型回复、工具调用与最终结果。</div>`));
     return pane;
   }
 
@@ -1996,9 +2093,9 @@ function renderRunIdChips(rid){
       : `<span class="rid-chip scope" title="scope: ${esc(rid.scope)}"><span class="rid-lab">scope</span><span class="rid-val">${esc(midTrunc(rid.scope, 14))}</span></span>`);
   }
   if(rid.def)   chips.push(`<span class="rid-chip def" title="workflow.definition: ${esc(rid.def)}"><span class="rid-lab">定义</span><span class="rid-val">${esc(midTrunc(rid.def, 16))}</span></span>`);
-  if(rid.run)   chips.push(`<span class="rid-chip run" title="run: ${esc(rid.run)}"><span class="rid-lab">运行</span><span class="rid-val">${esc(midTrunc(rid.run, 16))}</span></span>`);
+  if(rid.run)   chips.push(`<span class="rid-chip run" title="run: ${esc(rid.run)}"><span class="rid-lab">轨迹</span><span class="rid-val">${esc(midTrunc(rid.run, 16))}</span></span>`);
   if(chips.length === 0) chips.push(`<span class="rid-chip plain" title="${esc(rid.full)}"><span class="rid-val">${esc(midTrunc(rid.full, 30))}</span></span>`);
-  chips.push(`<button class="rid-copy" type="button" aria-label="复制完整运行 ID" title="复制完整运行 ID">${ICON.copy}</button>`);
+  chips.push(`<button class="rid-copy" type="button" aria-label="复制完整请求轨迹 runId" title="复制完整请求轨迹 runId">${ICON.copy}</button>`);
   return chips.join("");
 }
 
@@ -2016,12 +2113,13 @@ function renderRunHeader(detail){
 
   const head = el("header", { class:"run-header" });
   head.innerHTML = `
+    <div class="rh-eyebrow">请求轨迹详情</div>
     <div class="rh-top">
       <h1 class="rh-title"><span class="dot s-${s.status}" aria-hidden="true"></span>${esc(s.workflowName)}</h1>
       <span class="badge b-${s.status}"><span class="dot s-${s.status}" aria-hidden="true"></span>${STATUS_LABEL[s.status]||s.status}</span>
     </div>
     <div class="rh-meta">
-      <span class="grp rid-grp"><span class="k">运行 ID</span><span class="rid">${renderRunIdChips(parseRunId(s.runId))}</span></span>
+      <span class="grp rid-grp"><span class="k">轨迹 ID（runId）</span><span class="rid">${renderRunIdChips(parseRunId(s.runId))}</span></span>
       <span class="grp"><span class="k">用时</span><span class="v" ${(hasStart&&isRunning)?`data-duration="${s.startedAtUtc}"`:""}>${durStr}</span></span>
       <span class="grp"><span class="k">开始</span><span class="v">${startStr}</span></span>
     </div>`;
@@ -2139,8 +2237,8 @@ function renderDiagnostics(detail){
 }
 function renderNarrative(detail){
   const wrap=el("div",{class:"narrative"});
-  const input=el("details",{},`<summary>输入 · input</summary><pre class="issue-pre scroll">${esc(detail.input||"无输入")}</pre>`); input.open=true; wrap.appendChild(input);
-  const output=detail.finalOutput||(detail.summary.status==="running"?"运行尚未完成，最终输出尚未物化":"无最终输出");
+  const input=el("details",{},`<summary>请求输入 · input</summary><pre class="issue-pre scroll">${esc(detail.input||detail.inputSummary||"无输入")}</pre>`); input.open=true; wrap.appendChild(input);
+  const output=detail.finalOutput||(detail.summary.status==="running"?"请求轨迹仍在执行，最终输出尚未物化":"无最终输出");
   const final=el("details",{},`<summary>最终输出 · finalOutput</summary><pre class="issue-pre scroll">${esc(output)}</pre>`); final.open=true; wrap.appendChild(final);
   if(detail.finalError) wrap.appendChild(el("pre",{class:"issue-pre scroll"},esc(detail.finalError)));
   return wrap;
@@ -2221,7 +2319,7 @@ function renderApprovalPanel(detail){
     ${toolApproval?`<p class="mono">工具：${esc(toolApproval.toolName || "unknown")} · Step：${esc(approval.stepId || "unknown")}</p>`:""}
     <pre class="approval-content scroll" tabindex="0">${esc(approval.suspensionContent || (toolApproval ? "该操作将执行已准入的写入工具调用。" : "（无待审内容）"))}</pre>`;
   const actions = el("div", { class:"approval-actions" });
-  if(!owner) actions.appendChild(el("span", {}, "该 Run 属于其他 scope；管理员观测为只读"));
+  if(!owner) actions.appendChild(el("span", {}, "该请求轨迹属于其他 scope；管理员观测为只读"));
   else if(approvalState.accepted) actions.appendChild(el("span", {}, "决定已接受（202），等待 committed 状态更新"));
   else {
     const submit = async approved => {
@@ -2875,17 +2973,20 @@ async function fetchMe(){
 }
 
 function setScope(scope){
+  state.listRequestEpoch = (Number(state.listRequestEpoch) || 0) + 1;
+  state.loadingMore = false;
   adminState.currentScope = scope;       // null = my runs · ALL_SCOPES · or a concrete scope id
   adminState.candidates = null; adminState.message = ""; adminState.inputDraft = "";
   pendingListScrollReset = true;         // new scope → fresh list, start at the top
   pendingDetailScrollReset = true;
   state.selectedRunId = null;
-  cache.runs = []; cache.details = {}; cache.graphs = {};
+  cache.runs = []; cache.runFeed = normalizeActivityRunFeed(null); cache.details = {}; cache.graphs = {};
+  state.lastSyncedAtUtc = null;
   lastRunsSig = ""; lastDetailSig = "";
   state.scenario = "listLoading";
   writeObservatoryRoute({ scope:scope===ALL_SCOPES?"all":(scope||"mine"), run:"" });
   render();
-  (async () => { await refreshRuns(); lastRunsSig = runsSig(cache.runs); render(); })();
+  (async () => { const ok=await refreshRuns(); if(ok) state.lastSyncedAtUtc=new Date().toISOString(); lastRunsSig = runsSig(cache.runs,cache.runFeed); render(); })();
 }
 
 function goToInput(){
@@ -2918,7 +3019,7 @@ function renderAdminBar(){
   const view = el("span", { class:"ab-view" });
   view.innerHTML = adminState.currentScope === ALL_SCOPES
     ? "正在查看 <b>全部 scope</b>"
-    : (adminState.currentScope ? "正在查看 scope <b>" + esc(adminState.currentScope) + "</b>" : "正在查看 <b>我的运行</b>");
+    : (adminState.currentScope ? "正在查看 scope <b>" + esc(adminState.currentScope) + "</b>" : "正在查看 <b>我的请求轨迹</b>");
   bar.appendChild(view);
 
   const input = el("input", { class:"ab-input", type:"text", placeholder:"输入邮箱或 scope id…", "aria-label":"邮箱或 scope id", value: adminState.inputDraft || "" });
@@ -2931,11 +3032,11 @@ function renderAdminBar(){
   runInput.addEventListener("input", e => { adminState.runIdDraft = e.target.value; });
   runInput.addEventListener("keydown", e => { if(e.key === "Enter"){ e.preventDefault(); openRunInput(); } });
   bar.appendChild(runInput);
-  const openRun = el("button", { class:"chip" }, "打开运行"); openRun.addEventListener("click", openRunInput); bar.appendChild(openRun);
+  const openRun = el("button", { class:"chip" }, "打开请求轨迹"); openRun.addEventListener("click", openRunInput); bar.appendChild(openRun);
   const all = el("button", { class:"chip", "aria-pressed": String(adminState.currentScope === ALL_SCOPES) }, "全部 scope");
   all.addEventListener("click", () => setScope(ALL_SCOPES)); bar.appendChild(all);
   if(adminState.currentScope){
-    const back = el("button", { class:"linkbtn" }, "返回我的运行");
+    const back = el("button", { class:"linkbtn" }, "返回我的请求轨迹");
     back.addEventListener("click", () => setScope(null)); bar.appendChild(back);
   }
   if(adminState.message) bar.appendChild(el("span", { class:"ab-msg", role:"status" }, esc(adminState.message)));
@@ -2948,21 +3049,64 @@ function renderAdminBar(){
     });
     bar.appendChild(cands);
   }
-  bar.appendChild(el("div", { class:"ab-hint" }, "邮箱解析为该 NyxID 用户的 scope id（≈用户 id）；全部 scope 为最近若干条视图。"));
+  bar.appendChild(el("div", { class:"ab-hint" }, "邮箱解析为该 NyxID 用户的 scope id（≈用户 id）；全部 scope 显示 Activity feed 返回的最近请求轨迹，并明确标注是否还有更多。"));
   return bar;
 }
 
 async function refreshRuns(){
+  if(state.loadingMore) return false;
+  const requestEpoch=state.listRequestEpoch=(Number(state.listRequestEpoch)||0)+1;
   try {
-    const runs = await api("/api/workflow/observatory/runs" + listQueryParams());
-    cache.runs = runs || [];
+    const refreshTake=Math.min(Math.max(cache.runs.length,100),500);
+    const payload = await api(activityRunFeedRequestPath(listQueryParams(null,refreshTake)));
+    if(requestEpoch!==state.listRequestEpoch) return false;
+    if(!isActivityRunFeedEnvelope(payload)) throw new Error("invalid-activity-run-feed");
+    const feed = normalizeActivityRunFeed(payload);
+    if(cache.runs.length>refreshTake){
+      const previousFeed=cache.runFeed,byId=new Map(feed.items.map(run=>[run.runId,run]));
+      cache.runs.forEach(run=>{ if(!byId.has(run.runId)) byId.set(run.runId,run); });
+      cache.runs=Array.from(byId.values());
+      cache.runFeed={...feed,items:cache.runs,nextCursor:previousFeed.nextCursor,hasMore:previousFeed.hasMore};
+    } else {
+      cache.runFeed = feed;
+      cache.runs = feed.items;
+    }
     if(state.scenario === "listLoading" || state.scenario === "empty" || state.scenario === "globalError"){
       state.scenario = (cache.runs.length === 0) ? "empty" : "normal";
     }
     return true;
   } catch(e){
+    if(requestEpoch!==state.listRequestEpoch) return false;
     if(e.message !== "unauthorized") state.scenario = "globalError";
     return false;
+  }
+}
+
+async function loadMoreRequestTraces(){
+  const cursor=cache.runFeed&&cache.runFeed.nextCursor;
+  if(state.loadingMore||!cursor) return false;
+  const requestEpoch=state.listRequestEpoch=(Number(state.listRequestEpoch)||0)+1;
+  state.loadingMore=true;
+  render();
+  try {
+    const payload=await api(activityRunFeedRequestPath(listQueryParams(cursor)));
+    if(requestEpoch!==state.listRequestEpoch) return false;
+    if(!isActivityRunFeedEnvelope(payload)) throw new Error("invalid-activity-run-feed");
+    const next=normalizeActivityRunFeed(payload),byId=new Map(cache.runs.map(run=>[run.runId,run]));
+    next.items.forEach(run=>byId.set(run.runId,run));
+    cache.runs=Array.from(byId.values());
+    cache.runFeed={...next,items:cache.runs};
+    lastRunsSig=runsSig(cache.runs,cache.runFeed);
+    return true;
+  } catch(e){
+    if(requestEpoch!==state.listRequestEpoch) return false;
+    if(e.message!=="unauthorized") state.scenario="globalError";
+    return false;
+  } finally {
+    if(requestEpoch===state.listRequestEpoch){
+      state.loadingMore=false;
+      render();
+    }
   }
 }
 
@@ -2986,9 +3130,10 @@ async function refreshDetail(runId){
 }
 
 async function loadDetail(runId){
-  await refreshDetail(runId);
+  const ok=await refreshDetail(runId);
   lastDetailSig = detailSig(cache.details[runId]);
   render();
+  return ok;
 }
 
 async function loadGraph(runId){
@@ -3005,26 +3150,41 @@ async function loadGraph(runId){
 }
 
 /* ---- near-live polling (~3s, paused when tab hidden); history & live share it ---- */
-function runsSig(runs){ return runs.map(r => r.runId + ":" + r.status + ":" + r.updatedAtUtc + ":" + r.stateVersion).join("|"); }
+function runsSig(runs,feed){
+  const page=normalizeActivityRunFeed(feed);
+  const meta=[page.hasMore?"more":"end",page.totalCount==null?"unknown":page.totalCount].join(":");
+  return meta+"|"+(runs||[]).map(r => [r.runId,r.status,r.updatedAtUtc,r.stateVersion,r.inputSummary,r.durationMs,r.currentStep&&r.currentStep.stepId,r.currentStep&&r.currentStep.inputSummary].join(":")).join("|");
+}
 function detailSig(d){ return d ? (d.summary.status + ":" + d.summary.stateVersion + ":" + ((d.timeline && d.timeline.length) || 0) + ":" + ((d.diagnostics && d.diagnostics.length) || 0)) : "none"; }
 let lastRunsSig = "", lastDetailSig = "";
 
 async function poll(){
-  if(document.hidden || !state.signedIn) return;
-  let changed = false;
-  const before = state.scenario;
-  await refreshRuns();
-  const rs = runsSig(cache.runs);
-  if(rs !== lastRunsSig){ lastRunsSig = rs; changed = true; }
-  if(state.selectedRunId && state.scenario !== "notFound"){
-    await refreshDetail(state.selectedRunId);
-    const ds = detailSig(cache.details[state.selectedRunId]);
-    if(ds !== lastDetailSig){ lastDetailSig = ds; changed = true; }
+  if(document.hidden || !state.signedIn || state.polling) return;
+  state.polling=true;
+  try {
+    let changed = false;
+    const before = state.scenario;
+    const listOk=await refreshRuns();
+    const rs = runsSig(cache.runs,cache.runFeed);
+    if(rs !== lastRunsSig){ lastRunsSig = rs; changed = true; }
+    let detailOk=true;
+    if(state.selectedRunId){
+      detailOk=await refreshDetail(state.selectedRunId);
+      const ds = detailSig(cache.details[state.selectedRunId]);
+      if(ds !== lastDetailSig){ lastDetailSig = ds; changed = true; }
+    }
+    if(listOk&&detailOk) state.lastSyncedAtUtc=new Date().toISOString();
+    if(state.scenario !== before) changed = true;
+    if(changed){ render(); return; }
+    const chip = document.getElementById("liveChip");
+    if(chip && chip.classList.contains("is-live")){
+      const freshness=chip.querySelector(".freshness");
+      if(freshness&&state.lastSyncedAtUtc){ freshness.setAttribute("data-since",state.lastSyncedAtUtc); freshness.textContent="刚刚 同步"; }
+      chip.classList.add("is-polling"); setTimeout(() => chip.classList.remove("is-polling"), 600);
+    }
+  } finally {
+    state.polling=false;
   }
-  if(state.scenario !== before) changed = true;
-  if(changed){ render(); return; }
-  const chip = document.getElementById("liveChip");
-  if(chip && chip.classList.contains("is-live")){ chip.classList.add("is-polling"); setTimeout(() => chip.classList.remove("is-polling"), 600); }
 }
 let pollTimer = null;
 function startPolling(){ stopPolling(); pollTimer = setInterval(poll, CFG.pollMs); }
@@ -3037,7 +3197,7 @@ function updateRelTimes(){
   document.querySelectorAll("[data-since]").forEach(node => {
     const iso = node.getAttribute("data-since");
     const base = relTime(iso, now);
-    node.textContent = node.classList.contains("freshness") ? base + " 更新" : base;
+    node.textContent = node.classList.contains("freshness") ? base + " 同步" : base;
   });
   document.querySelectorAll("[data-duration]").forEach(node => {
     node.textContent = fmtDur(now - parseT(node.getAttribute("data-duration")));
@@ -3075,9 +3235,11 @@ window.addEventListener("pagehide", () => {
   cache.account = toAccount(await fetchUserInfo()) || cache.account;
   await fetchMe();
   if(adminState.isAdmin) adminState.currentScope = initialRoute.scope === "all" ? ALL_SCOPES : (initialRoute.scope === "mine" ? null : initialRoute.scope);
-  await refreshRuns();
-  lastRunsSig = runsSig(cache.runs);
-  if(state.selectedRunId) await loadDetail(state.selectedRunId);
+  const listOk=await refreshRuns();
+  lastRunsSig = runsSig(cache.runs,cache.runFeed);
+  let detailOk=true;
+  if(state.selectedRunId) detailOk=await loadDetail(state.selectedRunId);
+  if(listOk&&detailOk) state.lastSyncedAtUtc=new Date().toISOString();
   render();
   // Admin-only: resolve scopeIds to nyxid display names in the background, then re-render so the
   // names appear in cross-scope rows and the run-detail scope chip without delaying the runs list.

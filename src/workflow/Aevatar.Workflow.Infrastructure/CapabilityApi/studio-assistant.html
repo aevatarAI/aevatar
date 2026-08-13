@@ -6,12 +6,12 @@
     <meta name="color-scheme" content="only light" />
     <meta name="supported-color-schemes" content="light" />
     <title>Aevatar Studio</title>
-    <link rel="stylesheet" href="/workflow/studio/assets/styles.css?v=20260808-m42-card-scale-tighten" />
-    <script defer src="/workflow/studio/assets/vendor/lucide.min.js?v=20260808-m42-card-scale-tighten"></script>
-    <script defer src="/workflow/studio/assets/vendor/marked.min.js?v=20260808-m42-card-scale-tighten"></script>
-    <script defer src="/workflow/studio/assets/vendor/purify.min.js?v=20260808-m42-card-scale-tighten"></script>
+    <link rel="stylesheet" href="/workflow/studio/assets/styles.css?v=20260813-m43-request-traces" />
+    <script defer src="/workflow/studio/assets/vendor/lucide.min.js?v=20260813-m43-request-traces"></script>
+    <script defer src="/workflow/studio/assets/vendor/marked.min.js?v=20260813-m43-request-traces"></script>
+    <script defer src="/workflow/studio/assets/vendor/purify.min.js?v=20260813-m43-request-traces"></script>
     <script>globalThis.__AEVATAR_ASSISTANT_CONFIG__ = __BACKEND_CONSOLE_CONFIG__;</script>
-    <script type="module" src="/workflow/studio/assets/app.js?v=20260808-m42-card-scale-tighten"></script>
+    <script type="module" src="/workflow/studio/assets/app.js?v=20260813-m43-request-traces"></script>
   </head>
   <body>
     <div class="app-shell">
@@ -83,7 +83,19 @@
         </aside>
 
         <main class="chat-column">
-          <div class="thread" id="thread" aria-live="polite">
+          <div class="content-view-switch" role="tablist" aria-label="会话主视图">
+            <button class="active" id="conversationViewButton" type="button" role="tab" aria-selected="true" aria-controls="thread">
+              <i data-lucide="messages-square"></i>
+              <span>对话</span>
+            </button>
+            <button id="traceViewButton" type="button" role="tab" aria-selected="false" aria-controls="requestTracePanel">
+              <i data-lucide="waypoints"></i>
+              <span>轨迹</span>
+              <strong id="requestTraceCount">0</strong>
+            </button>
+          </div>
+
+          <div class="thread" id="thread" role="tabpanel" aria-labelledby="conversationViewButton" aria-live="polite">
             <section class="empty-state" id="emptyState">
               <div class="assistant-emblem" aria-hidden="true">
                 <i data-lucide="sparkles"></i>
@@ -145,7 +157,25 @@
             </section>
           </div>
 
-          <div class="composer-wrap">
+          <section class="request-trace-panel hidden" id="requestTracePanel" role="tabpanel" aria-labelledby="traceViewButton">
+            <header class="request-trace-header">
+              <div>
+                <span class="eyebrow">Request traces</span>
+                <h1>请求轨迹</h1>
+                <p>每次请求独立成轨迹；选择一条可在右侧查看实时详情。</p>
+              </div>
+              <span class="request-trace-live" id="requestTraceLive"><i data-lucide="radio"></i><span>本页会话</span></span>
+            </header>
+            <div class="request-trace-list" id="requestTraceList" role="listbox" aria-label="当前会话的请求轨迹" aria-live="polite">
+              <div class="request-trace-empty" id="requestTraceEmpty">
+                <i data-lucide="waypoints"></i>
+                <strong>尚无请求轨迹</strong>
+                <span>在“对话”视图发送请求后，轨迹会立即出现在这里。</span>
+              </div>
+            </div>
+          </section>
+
+          <div class="composer-wrap" id="composerWrap">
             <section class="composer-input-request hidden" id="composerInputRequest" aria-live="polite">
               <div class="composer-input-request-copy">
                 <span class="eyebrow">需要你的输入</span>
@@ -212,8 +242,8 @@
         <aside class="inspector" id="inspector" aria-label="运行详情">
           <div class="inspector-header">
             <div>
-              <span class="eyebrow">Current run</span>
-              <h2>运行详情</h2>
+              <span class="eyebrow" id="inspectorEyebrow">Current run</span>
+              <h2 id="inspectorTitle">运行详情</h2>
             </div>
             <div class="run-status idle" id="runStatus">
               <span></span>
@@ -232,7 +262,28 @@
           </div>
 
           <div class="inspector-body" id="runPanel" role="tabpanel">
-            <section class="inspector-section">
+            <section class="inspector-section request-trace-summary">
+              <div class="section-title section-title-row">
+                <span>Request</span>
+                <span class="section-meta mono" id="traceClientRequestFact">—</span>
+              </div>
+              <p class="request-trace-input" id="traceInputFact">尚未发送请求</p>
+              <dl class="request-trace-metrics">
+                <div><dt>状态</dt><dd id="traceStatusFact">待命</dd></div>
+                <div><dt>事件</dt><dd class="mono" id="traceEventFact">0</dd></div>
+                <div><dt>工具</dt><dd class="mono" id="traceToolFact">0</dd></div>
+                <div><dt>开始</dt><dd id="traceStartedFact">—</dd></div>
+                <div><dt>耗时</dt><dd id="traceDurationFact">—</dd></div>
+              </dl>
+              <p class="request-trace-readonly hidden" id="traceReadonlyNotice">
+                历史轨迹仅供查看；返回当前轨迹后才能使用运行控制。
+              </p>
+            </section>
+            <section class="inspector-section request-trace-output-section" id="traceOutputSection">
+              <div class="section-title">Result</div>
+              <div class="request-trace-output empty" id="traceOutputFact">尚无输出</div>
+            </section>
+            <section class="inspector-section" id="routeSection">
               <div class="section-title">Route</div>
               <div class="route-stack">
                 <div class="route-node">
@@ -284,8 +335,8 @@
           </div>
 
           <div class="inspector-body hidden" id="eventsPanel" role="tabpanel">
-            <div class="event-toolbar">
-              <span>原始事件已脱敏</span>
+              <div class="event-toolbar">
+                <span>原始事件已脱敏 · 当前轨迹最多保留 120 条</span>
               <button id="clearEventsButton" type="button">Clear</button>
             </div>
             <div class="event-list" id="eventList">

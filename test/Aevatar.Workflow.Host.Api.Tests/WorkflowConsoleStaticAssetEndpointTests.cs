@@ -54,6 +54,10 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
             html.Should().Contain("const url = CFG.nyxidApi + \"/api/v1/admin/users");
             html.Should().NotContain("const url = CFG.authority + \"/api/v1/admin/users");
             html.Should().Contain("\"aria-label\":\"完整 run id\"");
+            html.Should().Contain("/api/workflow/observatory/activity-runs");
+            html.Should().Contain("请求轨迹");
+            html.Should().Contain("function normalizeActivityRunFeed(");
+            html.Should().Contain("data-duration=\"");
             html.Should().Contain("/api/workflow/observatory/admin/runs/");
             html.Should().Contain("detail.diagnostics");
             html.Should().NotContain("indexOf(\":run:\")");
@@ -69,6 +73,9 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
             html.Should().NotContain("class=\"workflow-nav\"");
             html.Should().Contain("id=\"servicesButton\"");
             html.Should().Contain("id=\"mobileInspectorButton\"");
+            html.Should().Contain("id=\"traceViewButton\"");
+            html.Should().Contain("id=\"requestTracePanel\"");
+            html.Should().Contain("id=\"traceReadonlyNotice\"");
             html.Should().Contain("\"enableStudioWireInspector\":false");
             html.Should().NotContain("class=\"studio-tabs\"");
             html.Should().Contain("<div class=\"group-label\">当前实录</div>");
@@ -188,6 +195,13 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         app.Should().Contain("async function submitActionContinuation(");
         app.Should().Contain("async function selectAttachment(");
         app.Should().Contain("conversationStates: new Map()");
+        app.Should().Contain("function createRequestTrace(entry, run)");
+        app.Should().Contain("currentTraceKey: null");
+        app.Should().Contain("function currentRequestRun(");
+        app.Should().Contain("conversation.run = state.run;");
+        app.Should().Contain("function switchWorkspaceView(view,");
+        app.Should().Contain("function isReviewingHistoricalTrace(");
+        app.Should().Contain("queueRequestTraceRender(conversation)");
         protocol.Should().Contain("export function normalizeFrame(");
         protocol.Should().Contain("export function validateActionContinuation(");
         protocol.Should().Contain("schemaVersion !== 4");
@@ -212,6 +226,9 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         html.Should().Contain("id=\"needsYouFilterButton\"");
         html.Should().NotContain("id=\"taskPhaseList\"");
         html.Should().Contain("id=\"composerInputRequest\"");
+        html.Should().Contain("class=\"content-view-switch\"");
+        html.Should().Contain("id=\"requestTraceList\"");
+        html.Should().Contain("id=\"traceClientRequestFact\"");
         html.Should().Contain("class=\"hidden\" id=\"eventsTabButton\"");
         html.Should().Contain("/workflow/studio/assets/vendor/lucide.min.js");
         html.Should().Contain("/workflow/studio/assets/vendor/marked.min.js");
@@ -229,6 +246,9 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         styles.Should().Contain(".actor-task.collapsed");
         styles.Should().Contain(".cc-progress");
         styles.Should().Contain(".activity-card.collapsed");
+        styles.Should().Contain(".content-view-switch");
+        styles.Should().Contain(".request-trace-row");
+        styles.Should().Contain(".request-trace-readonly");
         styles.Should().Contain("--assistant-card-max-width: 720px");
         styles.Should().Contain("--assistant-card-inline-gutter: 40px");
         styles.Should().Contain("--workspace-max-width: 1240px");
@@ -258,8 +278,8 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         app.Should().NotContain("freeText.className = \"needs-you-free-text\"");
         styles.Should().Contain("@media (max-width:");
         html.Should().Contain("<meta name=\"color-scheme\" content=\"only light\"");
-        html.Should().Contain("app.js?v=20260808-m42-card-scale-tighten");
-        html.Should().Contain("styles.css?v=20260808-m42-card-scale-tighten");
+        html.Should().Contain("app.js?v=20260813-m43-request-traces");
+        html.Should().Contain("styles.css?v=20260813-m43-request-traces");
         app.Should().Contain("transport.js?v=20260807-m40-thread-polish");
         app.Should().Contain("readiness.js?v=20260807-m40-thread-polish");
         transport.Should().Contain("readiness.js?v=20260807-m40-thread-polish");
@@ -285,6 +305,151 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         styles.Should().Contain(".recent-session-list {\n  min-height: 0;\n  flex: 1 1 0;");
         styles.Should().NotContain("min-height: 480px");
         styles.Should().NotContain("data-theme");
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_RequestTraces_ShouldKeepClientIdentityAndIsolateHistoricalControls()
+    {
+        var html = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetStudioPage);
+        var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name, nextName) {
+              const start = source.indexOf('function ' + name + '(');
+              const end = source.indexOf('\nfunction ' + nextName + '(', start);
+              assert.notEqual(start, -1, name + ' must exist in the served Studio app');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return source.slice(start, end);
+            }
+
+            const hidden = [];
+            const classList = name => ({
+              add(value) { hidden.push([name, value]); },
+              remove() {},
+              toggle() {},
+            });
+            const dom = {
+              sendButton: { classList: classList('send') },
+              steerButton: { classList: classList('steer') },
+              stopButton: { classList: classList('stop') },
+              observationDisconnectButton: { classList: classList('observation') },
+              promptInput: { disabled: false },
+              attachButton: { disabled: false },
+              composerServicesButton: { disabled: false },
+              composerStatus: { textContent: '' },
+            };
+            const context = {
+              Map,
+              state: { activeConversation: null },
+              dom,
+              isActiveConversationContext: () => true,
+            };
+            vm.createContext(context);
+            vm.runInContext(`
+              ${functionSource('createRequestTrace', 'currentRequestTrace')}
+              ${functionSource('currentRequestTrace', 'selectedRequestTrace')}
+              ${functionSource('selectedRequestTrace', 'traceForRun')}
+              ${functionSource('traceForRun', 'isReviewingHistoricalTrace')}
+              ${functionSource('isReviewingHistoricalTrace', 'requestTraceInput')}
+              ${functionSource('requestTraceInput', 'requestTraceOutput')}
+              ${functionSource('requestTraceOutput', 'requestTraceStatusLabel')}
+              ${functionSource('inspectorRequestTrace', 'inspectorRunState')}
+              ${functionSource('inspectorRunState', 'paintRunStatus')}
+              ${functionSource('renderActorControlUi', 'renderSteps')}
+            `, context);
+
+            const firstRun = {
+              clientRequestId: 'client-request-one', context: {}, events: [], tools: new Map(),
+              assistantText: 'First request result',
+            };
+            const secondRun = {
+              clientRequestId: 'client-request-two', context: {}, events: [], tools: new Map(),
+            };
+            const entry = {
+              run: firstRun,
+              traces: new Map(),
+              traceOrder: [],
+              selectedTraceKey: null,
+            };
+            context.state.activeConversation = entry;
+
+            const firstTrace = vm.runInContext('createRequestTrace', context)(entry, firstRun);
+            assert.equal(entry.currentTraceKey, 'client-request-one');
+            assert.equal(vm.runInContext('currentRequestRun', context)(entry), firstRun);
+            const duplicate = vm.runInContext('createRequestTrace', context)(entry, firstRun);
+            assert.equal(duplicate, firstTrace);
+            assert.equal(entry.traces.size, 1);
+            assert.deepEqual(entry.traceOrder, ['client-request-one']);
+
+            const secondTrace = vm.runInContext('createRequestTrace', context)(entry, secondRun);
+            assert.notEqual(secondTrace, firstTrace);
+            assert.equal(entry.traces.size, 2);
+            assert.deepEqual(entry.traceOrder, ['client-request-two', 'client-request-one']);
+            assert.equal(entry.currentTraceKey, 'client-request-two');
+            assert.equal(vm.runInContext('currentRequestRun', context)(entry), secondRun);
+            assert.equal(entry.selectedTraceKey, 'client-request-two');
+
+            firstRun.context.runId = 'run-server-one';
+            firstRun.context.turnId = 'turn-server-one';
+            assert.equal(vm.runInContext('attachRequestTraceServerFacts', context)(entry, firstRun, {
+              runId: 'run-server-one', turnId: 'turn-server-one',
+            }), firstTrace);
+            assert.equal(firstTrace.serverRunId, 'run-server-one');
+            assert.equal(firstTrace.serverTurnId, 'turn-server-one');
+            assert.equal(vm.runInContext('createRequestTrace', context)(entry, firstRun), firstTrace);
+            assert.equal(vm.runInContext('traceForRun', context)(entry, firstRun), firstTrace);
+            assert.equal(entry.currentTraceKey, 'client-request-two', 'looking up an existing trace does not make it current');
+            assert.equal(vm.runInContext('currentRequestRun', context)(entry), secondRun);
+            assert.equal(entry.traces.size, 2, 'server facts do not create or collapse client-owned traces');
+            assert.deepEqual([...entry.traces.keys()], ['client-request-one', 'client-request-two']);
+
+            entry.run = secondRun;
+            entry.selectedTraceKey = 'client-request-one';
+            assert.equal(vm.runInContext('currentRequestTrace', context)(entry), secondTrace);
+            assert.equal(vm.runInContext('selectedRequestTrace', context)(entry), firstTrace);
+            assert.equal(vm.runInContext('isReviewingHistoricalTrace', context)(entry), true);
+            assert.equal(vm.runInContext('currentRequestRun', context)(entry), secondRun,
+              'historical selection cannot redirect the live request pointer');
+            assert.equal(vm.runInContext('inspectorRequestTrace', context)(entry), firstTrace);
+            assert.equal(vm.runInContext('inspectorRunState', context)(entry), firstRun);
+            assert.equal(vm.runInContext('requestTraceOutput', context)(firstRun), 'First request result');
+
+            vm.runInContext('renderActorControlUi', context)();
+            assert.deepEqual(hidden, [
+              ['send', 'hidden'], ['steer', 'hidden'], ['stop', 'hidden'], ['observation', 'hidden'],
+            ]);
+            assert.equal(dom.promptInput.disabled, true);
+            assert.equal(dom.attachButton.disabled, true);
+            assert.equal(dom.composerServicesButton.disabled, true);
+            assert.match(dom.composerStatus.textContent, /历史轨迹/);
+
+            entry.selectedTraceKey = 'client-request-two';
+            assert.equal(vm.runInContext('isReviewingHistoricalTrace', context)(entry), false);
+            assert.equal(vm.runInContext('inspectorRunState', context)(entry), secondRun);
+            """;
+
+        var result = await RunNodeAsync(script, app);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+        app.Should().Contain("function attachRequestTraceServerFacts(entry, run, event)");
+        app.Should().Contain("attachRequestTraceServerFacts(conversationContext || state.activeConversation, state.run, event)");
+        app.Should().Contain("dom.routeSection.classList.toggle(\"hidden\", historical);");
+        app.Should().Contain("renderMarkdown(dom.traceOutputFact, output);");
+        html.Should().Contain("历史轨迹仅供查看；返回当前轨迹后才能使用运行控制。");
+        html.Should().Contain("id=\"traceOutputFact\"");
+        html.Should().Contain("id=\"routeSection\"");
+        var sendPromptStart = app.IndexOf("async function sendPrompt(", StringComparison.Ordinal);
+        var ownerRunAssignment = app.IndexOf("conversation.run = state.run;", sendPromptStart, StringComparison.Ordinal);
+        var firstTraceCreation = app.IndexOf(
+            "createRequestTrace(conversation, state.run);",
+            sendPromptStart,
+            StringComparison.Ordinal);
+        ownerRunAssignment.Should().BeGreaterThan(sendPromptStart);
+        firstTraceCreation.Should().BeGreaterThan(ownerRunAssignment,
+            "the conversation must own the new request before its first trajectory render");
     }
 
     [Fact]
@@ -1190,7 +1355,7 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
 
         entryVersions.Should().NotBeEmpty();
         entryVersions.Should().OnlyContain(static version =>
-            version == "20260808-m42-card-scale-tighten");
+            version == "20260813-m43-request-traces");
         transitiveVersions.Should().NotBeEmpty();
         transitiveVersions.Should().OnlyContain(static version =>
             version == "20260807-m40-thread-polish");
@@ -1654,6 +1819,547 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         html.Should().Contain("批准并继续");
         html.Should().Contain("/api/scopes/");
         html.Should().Contain(":resume");
+    }
+
+    [Fact]
+    public async Task WorkflowObservatory_RequestTraceFeed_ShouldNormalizeCoverageAndScopeTheActivityRequest()
+    {
+        var html = await GetObservatoryHtmlAsync();
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name, nextName) {
+              const starts = [
+                html.indexOf('function ' + name + '('),
+                html.indexOf('async function ' + name + '('),
+              ].filter(index => index !== -1);
+              const start = starts.length ? Math.min(...starts) : -1;
+              const ends = [
+                html.indexOf('\nfunction ' + nextName + '(', start),
+                html.indexOf('\nasync function ' + nextName + '(', start),
+              ].filter(index => index !== -1);
+              const end = ends.length ? Math.min(...ends) : -1;
+              assert.notEqual(start, -1, name + ' must exist in the served observatory asset');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return html.slice(start, end);
+            }
+
+            function singleLineFunctionSource(name) {
+              const start = html.indexOf('function ' + name + '(');
+              const end = html.indexOf('\n', start);
+              assert.notEqual(start, -1, name + ' must exist in the served observatory asset');
+              assert.notEqual(end, -1, name + ' must end on its declaration line');
+              return html.slice(start, end);
+            }
+
+            const context = {
+              URLSearchParams,
+              adminState: { isAdmin: false, currentScope: null },
+              filterState: { status: '', origin: '', definition: '', schedule: '', from: '', to: '' },
+              cache: { runs: ['preserved'], runFeed: { marker: 'preserved' } },
+              state: { scenario: 'normal' },
+            };
+            vm.createContext(context);
+            vm.runInContext(`
+              ${functionSource('isActivityRunFeedEnvelope', 'normalizeActivityRunFeed')}
+              ${functionSource('normalizeActivityRunFeed', 'activityRunFeedRequestPath')}
+              ${singleLineFunctionSource('activityRunFeedRequestPath')}
+              ${functionSource('listQueryParams', 'hasActiveFilters')}
+              ${functionSource('requestTraceCountLabel', 'requestTraceCoverageLabel')}
+              ${functionSource('requestTraceCoverageLabel', 'requestTracePreview')}
+            `, context);
+
+            const feed = {
+              items: [{ runId: 'run-alpha' }, { runId: 'run-beta' }],
+              nextCursor: 'cursor-beta',
+              hasMore: true,
+              totalCount: 247,
+            };
+            assert.equal(vm.runInContext('isActivityRunFeedEnvelope', context)(feed), true);
+            assert.equal(vm.runInContext('isActivityRunFeedEnvelope', context)({ items: [], hasMore: 'false' }), false);
+            assert.equal(vm.runInContext('isActivityRunFeedEnvelope', context)({ hasMore: false }), false);
+
+            const normalized = vm.runInContext('normalizeActivityRunFeed', context)(feed);
+            assert.deepEqual(JSON.parse(JSON.stringify(normalized)), feed);
+            assert.deepEqual(JSON.parse(JSON.stringify(vm.runInContext('normalizeActivityRunFeed', context)({
+              items: 'invalid', nextCursor: 7, hasMore: 'true', totalCount: -1,
+            }))), {
+              items: [], nextCursor: null, hasMore: false, totalCount: null,
+            });
+            assert.deepEqual(JSON.parse(JSON.stringify(vm.runInContext('normalizeActivityRunFeed', context)(null))), {
+              items: [], nextCursor: null, hasMore: false, totalCount: null,
+            });
+
+            assert.equal(
+              vm.runInContext('activityRunFeedRequestPath', context)('?take=100&includeTotalCount=true'),
+              '/api/workflow/observatory/activity-runs?take=100&includeTotalCount=true',
+            );
+            assert.equal(
+              vm.runInContext('requestTraceCountLabel', context)(feed, 100),
+              '100 / 247',
+            );
+            assert.equal(
+              vm.runInContext('requestTraceCoverageLabel', context)(feed, 100),
+              '显示最近 100 条，共 247 条；仍有更多请求轨迹',
+            );
+            assert.equal(
+              vm.runInContext('requestTraceCountLabel', context)({ items: [], hasMore: true }, 100),
+              '100+',
+            );
+            assert.equal(
+              vm.runInContext('requestTraceCoverageLabel', context)({ items: [], hasMore: false, totalCount: 2 }, 2),
+              '共 2 条请求轨迹',
+            );
+
+            assert.equal(
+              vm.runInContext('listQueryParams', context)(),
+              '?take=100&includeTotalCount=true',
+            );
+            assert.equal(
+              vm.runInContext('listQueryParams', context)('cursor alpha+/='),
+              '?take=100&includeTotalCount=true&cursor=cursor+alpha%2B%2F%3D',
+            );
+            assert.equal(
+              vm.runInContext('listQueryParams', context)('cursor-alpha', 240),
+              '?take=240&includeTotalCount=true&cursor=cursor-alpha',
+            );
+            assert.equal(
+              vm.runInContext('listQueryParams', context)(null, 999),
+              '?take=500&includeTotalCount=true',
+            );
+            assert.equal(
+              vm.runInContext('listQueryParams', context)(null, -5),
+              '?take=1&includeTotalCount=true',
+            );
+            context.adminState.isAdmin = true;
+            context.adminState.currentScope = 'scope alpha';
+            Object.assign(context.filterState, {
+              status: 'failed',
+              origin: 'ad-hoc-chat',
+              definition: 'wf/alpha',
+              schedule: 'schedule-alpha',
+              from: '2026-08-12T00:00:00Z',
+              to: '2026-08-13T00:00:00Z',
+            });
+            assert.equal(
+              vm.runInContext('listQueryParams', context)(),
+              '?scope=scope+alpha&status=failed&origin=ad-hoc-chat&definition=wf%2Falpha&schedule=schedule-alpha&from=2026-08-12T00%3A00%3A00Z&to=2026-08-13T00%3A00%3A00Z&take=100&includeTotalCount=true',
+            );
+            context.adminState.currentScope = '__all__';
+            assert.match(vm.runInContext('listQueryParams', context)(), /^\?scope=__all__&/);
+
+            context.api = async path => {
+              assert.equal(path, '/api/workflow/observatory/activity-runs?invalid=1');
+              return { items: [] };
+            };
+            context.activityRunFeedRequestPath = query => '/api/workflow/observatory/activity-runs' + query;
+            context.listQueryParams = () => '?invalid=1';
+            vm.runInContext(functionSource('refreshRuns', 'refreshDetail'), context);
+            (async () => {
+              assert.equal(await vm.runInContext('refreshRuns', context)(), false);
+              assert.equal(context.state.scenario, 'globalError');
+              assert.deepEqual(context.cache.runs, ['preserved']);
+              assert.deepEqual(context.cache.runFeed, { marker: 'preserved' });
+            })().catch(error => { console.error(error); process.exitCode = 1; });
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+        html.Should().Contain("throw new Error(\"invalid-activity-run-feed\")");
+        html.Should().NotContain("/api/workflow/observatory/runs/activity");
+    }
+
+    [Fact]
+    public async Task WorkflowObservatory_RequestTracePagination_ShouldAppendIdempotentlyAndRecoverTransientNotFound()
+    {
+        var html = await GetObservatoryHtmlAsync();
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name, nextName) {
+              const starts = [
+                html.indexOf('function ' + name + '('),
+                html.indexOf('async function ' + name + '('),
+              ].filter(index => index !== -1);
+              const start = starts.length ? Math.min(...starts) : -1;
+              const ends = [
+                html.indexOf('\nfunction ' + nextName + '(', start),
+                html.indexOf('\nasync function ' + nextName + '(', start),
+              ].filter(index => index !== -1);
+              const end = ends.length ? Math.min(...ends) : -1;
+              assert.notEqual(start, -1, name + ' must exist in the served observatory asset');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return html.slice(start, end);
+            }
+
+            function singleLineFunctionSource(name) {
+              const start = html.indexOf('function ' + name + '(');
+              const end = html.indexOf('\n', start);
+              assert.notEqual(start, -1, name + ' must exist in the served observatory asset');
+              assert.notEqual(end, -1, name + ' must end on its declaration line');
+              return html.slice(start, end);
+            }
+
+            const firstPageRuns = [
+              { runId: 'run-new', status: 'running', updatedAtUtc: '2026-08-13T10:00:00Z' },
+              { runId: 'run-overlap', status: 'running', updatedAtUtc: '2026-08-13T09:00:00Z', page: 1 },
+            ];
+            const requestedPaths = [];
+            const context = {
+              Map,
+              URLSearchParams,
+              Date,
+              adminState: { isAdmin: true, currentScope: 'scope-alpha' },
+              filterState: { status: 'running', origin: '', definition: '', schedule: '', from: '', to: '' },
+              cache: {
+                runs: firstPageRuns,
+                runFeed: {
+                  items: firstPageRuns,
+                  nextCursor: 'cursor older+/=',
+                  hasMore: true,
+                  totalCount: 5,
+                },
+                details: {},
+              },
+              state: { scenario: 'normal', loadingMore: false },
+              renderCalls: 0,
+              render: () => { context.renderCalls++; },
+              api: async path => {
+                requestedPaths.push(path);
+                return {
+                  items: [
+                    { runId: 'run-overlap', status: 'completed', updatedAtUtc: '2026-08-13T09:30:00Z', page: 2 },
+                    { runId: 'run-old', status: 'completed', updatedAtUtc: '2026-08-13T08:00:00Z' },
+                  ],
+                  nextCursor: null,
+                  hasMore: false,
+                  totalCount: 5,
+                };
+              },
+              lastRunsSig: '',
+            };
+            vm.createContext(context);
+            vm.runInContext(`
+              ${functionSource('isActivityRunFeedEnvelope', 'normalizeActivityRunFeed')}
+              ${functionSource('normalizeActivityRunFeed', 'activityRunFeedRequestPath')}
+              ${singleLineFunctionSource('activityRunFeedRequestPath')}
+              ${functionSource('listQueryParams', 'hasActiveFilters')}
+              ${functionSource('runsSig', 'detailSig')}
+              ${functionSource('loadMoreRequestTraces', 'refreshDetail')}
+            `, context);
+
+            (async () => {
+              assert.equal(await vm.runInContext('loadMoreRequestTraces', context)(), true);
+              assert.deepEqual(requestedPaths, [
+                '/api/workflow/observatory/activity-runs?scope=scope-alpha&status=running&take=100&includeTotalCount=true&cursor=cursor+older%2B%2F%3D',
+              ]);
+              assert.deepEqual(JSON.parse(JSON.stringify(context.cache.runs.map(run => run.runId))), [
+                'run-new', 'run-overlap', 'run-old',
+              ]);
+              assert.equal(context.cache.runs[1].page, 2, 'a repeated run id is updated in place rather than duplicated');
+              assert.equal(context.cache.runFeed.items, context.cache.runs);
+              assert.equal(context.cache.runFeed.totalCount, 5);
+              assert.equal(context.cache.runFeed.hasMore, false);
+              assert.equal(context.cache.runFeed.nextCursor, null);
+              assert.equal(context.state.loadingMore, false);
+              assert.equal(context.renderCalls, 2, 'loading and settled states both render');
+
+              assert.equal(await vm.runInContext('loadMoreRequestTraces', context)(), false);
+              assert.equal(requestedPaths.length, 1, 'the exhausted feed cannot fetch the same page again');
+              assert.equal(context.renderCalls, 2);
+            })().catch(error => { console.error(error); process.exitCode = 1; });
+            """;
+
+        var paginationResult = await RunNodeAsync(script, html);
+
+        paginationResult.ExitCode.Should().Be(0, paginationResult.Error + paginationResult.Output);
+
+        const string recoveryScript = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+            const start = html.indexOf('async function poll()');
+            const end = html.indexOf('\nfunction startPolling()', start);
+            assert.notEqual(start, -1, 'poll must exist in the served observatory asset');
+            assert.notEqual(end, -1, 'startPolling must follow poll');
+
+            const context = {
+              Date,
+              document: { hidden: false, getElementById: () => null },
+              state: {
+                signedIn: true,
+                scenario: 'notFound',
+                selectedRunId: 'run-eventually-visible',
+                lastSyncedAtUtc: null,
+              },
+              cache: { runs: [], runFeed: { items: [], hasMore: false, totalCount: 0 }, details: {} },
+              lastRunsSig: 'stable',
+              lastDetailSig: 'none',
+              refreshDetailCalls: 0,
+              renderCalls: 0,
+              refreshRuns: async () => true,
+              runsSig: () => 'stable',
+              detailSig: detail => detail ? 'recovered' : 'none',
+              refreshDetail: async runId => {
+                context.refreshDetailCalls++;
+                assert.equal(runId, 'run-eventually-visible');
+                if (context.refreshDetailCalls === 1) return false;
+                context.cache.details[runId] = { summary: { status: 'running', stateVersion: 1 } };
+                context.state.scenario = 'normal';
+                return true;
+              },
+              render: () => { context.renderCalls++; },
+              setTimeout,
+            };
+            vm.createContext(context);
+            vm.runInContext(html.slice(start, end), context);
+
+            (async () => {
+              await vm.runInContext('poll', context)();
+              assert.equal(context.refreshDetailCalls, 1);
+              assert.equal(context.state.scenario, 'notFound');
+              assert.equal(context.renderCalls, 0);
+              assert.equal(context.state.lastSyncedAtUtc, null);
+
+              await vm.runInContext('poll', context)();
+              assert.equal(context.refreshDetailCalls, 2, 'notFound remains eligible for a recovery probe');
+              assert.equal(context.state.scenario, 'normal');
+              assert.equal(context.renderCalls, 1);
+              assert.ok(context.state.lastSyncedAtUtc);
+
+              context.state.polling = true;
+              await vm.runInContext('poll', context)();
+              assert.equal(context.refreshDetailCalls, 2, 'an in-flight poll prevents overlapping requests');
+            })().catch(error => { console.error(error); process.exitCode = 1; });
+            """;
+
+        var recoveryResult = await RunNodeAsync(recoveryScript, html);
+
+        recoveryResult.ExitCode.Should().Be(0, recoveryResult.Error + recoveryResult.Output);
+        html.Should().Contain("class:\"trace-load-more\"");
+        html.Should().Contain("加载更早的请求轨迹");
+        html.Should().Contain("if(state.selectedRunId){");
+        html.Should().Contain("if(document.hidden || !state.signedIn || state.polling) return;");
+        html.Should().Contain("state.polling=false;");
+        html.Should().NotContain("state.selectedRunId && state.scenario !== \"notFound\"");
+    }
+
+    [Fact]
+    public async Task WorkflowObservatory_RequestTraceListRaces_ShouldPreserveLoadedWindowAndDiscardStalePages()
+    {
+        var html = await GetObservatoryHtmlAsync();
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name, nextName) {
+              const starts = [
+                html.indexOf('function ' + name + '('),
+                html.indexOf('async function ' + name + '('),
+              ].filter(index => index !== -1);
+              const start = starts.length ? Math.min(...starts) : -1;
+              const ends = [
+                html.indexOf('\nfunction ' + nextName + '(', start),
+                html.indexOf('\nasync function ' + nextName + '(', start),
+              ].filter(index => index !== -1);
+              const end = ends.length ? Math.min(...ends) : -1;
+              assert.notEqual(start, -1, name + ' must exist in the served observatory asset');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return html.slice(start, end);
+            }
+
+            function singleLineFunctionSource(name) {
+              const start = html.indexOf('function ' + name + '(');
+              const end = html.indexOf('\n', start);
+              assert.notEqual(start, -1, name + ' must exist in the served observatory asset');
+              assert.notEqual(end, -1, name + ' must end on its declaration line');
+              return html.slice(start, end);
+            }
+
+            function installRefresh(context) {
+              vm.createContext(context);
+              vm.runInContext(`
+                ${functionSource('isActivityRunFeedEnvelope', 'normalizeActivityRunFeed')}
+                ${functionSource('normalizeActivityRunFeed', 'activityRunFeedRequestPath')}
+                ${singleLineFunctionSource('activityRunFeedRequestPath')}
+                ${functionSource('listQueryParams', 'hasActiveFilters')}
+                ${functionSource('refreshRuns', 'loadMoreRequestTraces')}
+              `, context);
+            }
+
+            function installLoadMore(context) {
+              vm.createContext(context);
+              vm.runInContext(`
+                ${functionSource('isActivityRunFeedEnvelope', 'normalizeActivityRunFeed')}
+                ${functionSource('normalizeActivityRunFeed', 'activityRunFeedRequestPath')}
+                ${singleLineFunctionSource('activityRunFeedRequestPath')}
+                ${functionSource('listQueryParams', 'hasActiveFilters')}
+                ${functionSource('runsSig', 'detailSig')}
+                ${functionSource('loadMoreRequestTraces', 'refreshDetail')}
+              `, context);
+            }
+
+            (async () => {
+              const oldRuns = Array.from({ length: 600 }, (_, index) => {
+                const number = String(index + 1).padStart(3, '0');
+                return {
+                  runId: `old-${number}`,
+                  stateVersion: 1,
+                  status: 'completed',
+                  updatedAtUtc: `2026-08-12T${String(index % 24).padStart(2, '0')}:00:00Z`,
+                };
+              });
+              const insertedRuns = Array.from({ length: 10 }, (_, index) => ({
+                runId: `new-${String(index + 1).padStart(2, '0')}`,
+                stateVersion: 1,
+                status: 'running',
+                updatedAtUtc: '2026-08-13T12:00:00Z',
+              }));
+              const refreshedOldHead = oldRuns.slice(0, 490).map(run => ({
+                ...run,
+                stateVersion: 2,
+                source: 'latest-head',
+              }));
+              const refreshPaths = [];
+              const refreshContext = {
+                Map,
+                URLSearchParams,
+                adminState: { isAdmin: false, currentScope: null },
+                filterState: { status: '', origin: '', definition: '', schedule: '', from: '', to: '' },
+                cache: {
+                  runs: oldRuns,
+                  runFeed: {
+                    items: oldRuns,
+                    nextCursor: 'old-loaded-window-cursor',
+                    hasMore: true,
+                    totalCount: 600,
+                  },
+                },
+                state: { scenario: 'normal', loadingMore: false, listRequestEpoch: 7 },
+                api: async path => {
+                  refreshPaths.push(path);
+                  return {
+                    items: [...insertedRuns, ...refreshedOldHead],
+                    nextCursor: 'refreshed-head-cursor',
+                    hasMore: true,
+                    totalCount: 610,
+                  };
+                },
+              };
+              installRefresh(refreshContext);
+
+              assert.equal(await vm.runInContext('refreshRuns', refreshContext)(), true);
+              assert.deepEqual(refreshPaths, [
+                '/api/workflow/observatory/activity-runs?take=500&includeTotalCount=true',
+              ]);
+              assert.equal(refreshContext.state.listRequestEpoch, 8);
+              assert.equal(refreshContext.cache.runs.length, 610);
+              const refreshedIds = refreshContext.cache.runs.map(run => run.runId);
+              const uniqueIds = new Set(refreshedIds);
+              assert.equal(uniqueIds.size, 610, 'head refresh must not duplicate existing run ids');
+              for (let index = 1; index <= 600; index++) {
+                assert.equal(uniqueIds.has(`old-${String(index).padStart(3, '0')}`), true,
+                  `loaded run old-${String(index).padStart(3, '0')} must survive the bounded head refresh`);
+              }
+              for (let index = 1; index <= 10; index++) {
+                assert.equal(uniqueIds.has(`new-${String(index).padStart(2, '0')}`), true);
+              }
+              assert.equal(refreshContext.cache.runs[500].runId, 'old-491');
+              assert.equal(refreshContext.cache.runs[509].runId, 'old-500');
+              assert.equal(refreshContext.cache.runs[609].runId, 'old-600');
+              assert.equal(refreshContext.cache.runs.find(run => run.runId === 'old-001').stateVersion, 2);
+              assert.equal(refreshContext.cache.runs.find(run => run.runId === 'old-001').source, 'latest-head');
+              assert.equal(refreshContext.cache.runFeed.items, refreshContext.cache.runs);
+              assert.equal(refreshContext.cache.runFeed.nextCursor, 'old-loaded-window-cursor');
+              assert.equal(refreshContext.cache.runFeed.hasMore, true);
+              assert.equal(refreshContext.cache.runFeed.totalCount, 610);
+
+              const refreshCount = refreshPaths.length;
+              const epochBeforeBusyPoll = refreshContext.state.listRequestEpoch;
+              refreshContext.state.loadingMore = true;
+              assert.equal(await vm.runInContext('refreshRuns', refreshContext)(), false);
+              assert.equal(refreshPaths.length, refreshCount, 'poll refresh must not race an active page request');
+              assert.equal(refreshContext.state.listRequestEpoch, epochBeforeBusyPoll);
+
+              let resolveOldPage;
+              const stalePaths = [];
+              const oldPageResponse = new Promise(resolve => { resolveOldPage = resolve; });
+              const staleContext = {
+                Map,
+                URLSearchParams,
+                adminState: { isAdmin: false, currentScope: null },
+                filterState: { status: '', origin: '', definition: '', schedule: '', from: '', to: '' },
+                cache: {
+                  runs: [{ runId: 'old-filter-run', status: 'running', updatedAtUtc: '2026-08-13T10:00:00Z' }],
+                  runFeed: {
+                    items: [],
+                    nextCursor: 'stale page cursor',
+                    hasMore: true,
+                    totalCount: 2,
+                  },
+                },
+                state: { scenario: 'normal', loadingMore: false, listRequestEpoch: 20 },
+                lastRunsSig: 'replacement-signature',
+                renderCalls: 0,
+                render: () => { staleContext.renderCalls++; },
+                api: path => {
+                  stalePaths.push(path);
+                  return oldPageResponse;
+                },
+              };
+              installLoadMore(staleContext);
+
+              const staleRequest = vm.runInContext('loadMoreRequestTraces', staleContext)();
+              assert.equal(staleContext.state.loadingMore, true);
+              assert.equal(staleContext.state.listRequestEpoch, 21);
+              assert.equal(staleContext.renderCalls, 1);
+              assert.deepEqual(stalePaths, [
+                '/api/workflow/observatory/activity-runs?take=100&includeTotalCount=true&cursor=stale+page+cursor',
+              ]);
+
+              const replacementRuns = [{ runId: 'new-filter-run', status: 'completed' }];
+              const replacementFeed = {
+                items: replacementRuns,
+                nextCursor: null,
+                hasMore: false,
+                totalCount: 1,
+              };
+              const replacementCache = { runs: replacementRuns, runFeed: replacementFeed, details: {} };
+              staleContext.state.listRequestEpoch++;
+              staleContext.state.loadingMore = false;
+              staleContext.cache = replacementCache;
+              resolveOldPage({
+                items: [{ runId: 'stale-page-run', status: 'completed' }],
+                nextCursor: null,
+                hasMore: false,
+                totalCount: 2,
+              });
+
+              assert.equal(await staleRequest, false);
+              assert.equal(staleContext.cache, replacementCache);
+              assert.equal(staleContext.cache.runs, replacementRuns);
+              assert.equal(staleContext.cache.runFeed, replacementFeed);
+              assert.deepEqual(staleContext.cache.runs.map(run => run.runId), ['new-filter-run']);
+              assert.equal(staleContext.state.loadingMore, false);
+              assert.equal(staleContext.state.scenario, 'normal');
+              assert.equal(staleContext.lastRunsSig, 'replacement-signature');
+              assert.equal(staleContext.renderCalls, 1,
+                'a stale page may render its initial loading state but cannot render after query reset');
+            })().catch(error => { console.error(error); process.exitCode = 1; });
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+        html.Should().Contain("if(state.loadingMore) return false;");
+        html.Should().Contain("requestEpoch!==state.listRequestEpoch");
+        html.Should().Contain("if(requestEpoch===state.listRequestEpoch)");
     }
 
     [Fact]

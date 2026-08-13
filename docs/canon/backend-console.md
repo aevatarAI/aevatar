@@ -28,7 +28,8 @@ Backend console 只使用一种页面承载方式：
 | `/cqrs` | `src/Aevatar.Mainnet.Host.Api/Cqrs/cqrs-observatory.html` | Mainnet Host |
 | `/voice` | `src/Aevatar.Mainnet.Host.Api/Voice/voice-console.html` | Mainnet Host |
 | `/workflow/skills` | `src/Aevatar.Mainnet.Host.Api/Skills/workflow-skills.html` | Mainnet Host |
-| `/workflow/studio`, `/schedules` | `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/workflow-studio.html` | Workflow Infrastructure |
+| `/workflow/studio`, `/admin/studio` | `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/studio-assistant.html` plus `StudioAssistant/*` | Workflow Infrastructure |
+| `/schedules` | `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/workflow-studio.html` | Workflow Infrastructure |
 | `/channels` | `agents/channels/Aevatar.GAgents.Channel.NyxIdRelay/channels.html` | NyxIdRelay channel package |
 
 ## 2. Host Fact Injection
@@ -77,6 +78,11 @@ Static shell endpoint files must not introduce mutating data APIs. Data surfaces
 
 Workflow Observatory data endpoints are read-only. Normal run detail reads remain scope-bound under
 `GET /api/workflow/observatory/runs/{runId}` and `GET /api/workflow/observatory/runs/{runId}/graph`.
+The request-trajectory rail reads `GET /api/workflow/observatory/activity-runs`: one activity row per
+`runId`, returned as a bounded paged envelope with honest `hasMore` / `totalCount` coverage. The rail
+offers cursor-based loading for earlier pages instead of presenting the first window as complete, and
+polls that read model and the selected detail approximately every three seconds while the page is
+visible; it does not treat the refresh interval as a strong-consistency guarantee.
 Aevatar admins resolved by `IPlatformAdminAuthorizer` may use
 `GET /api/workflow/observatory/admin/runs/{runId}` and
 `GET /api/workflow/observatory/admin/runs/{runId}/graph` to resolve a known run id across scopes. These admin
@@ -107,6 +113,12 @@ unnecessary document reload; a different module or iframe source still creates t
 The authoritative page defaults every caller, including an administrator, to the caller's own scope.
 `scope=all` is an explicit administrator viewing mode that maps to the backend-only `__all__` sentinel; exact
 scope IDs remain exact and are never inferred from role.
+
+Admin Studio exposes conversation and request-trajectory views over the same live `/api/chat` stream.
+Each top-level text request is keyed by its `clientRequestId`; a later `runId` or `turnId` is attached as
+a server fact and never replaces that key. Selecting an older request changes only the inspector data;
+Actor controls remain scoped to the current task. These Studio traces are explicitly page-local and use
+SSE for incremental refresh, while durable cross-session inspection remains the Observatory read model.
 
 Fleet links carry exact `scope + run`, and schedule links carry `schedule` while clearing an unrelated selected
 run. The embedded page writes canonical route changes back to the parent hash without reloading its iframe.

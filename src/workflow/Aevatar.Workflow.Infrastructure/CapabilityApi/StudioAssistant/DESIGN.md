@@ -58,6 +58,11 @@ The page is a quiet operational transcript with confident workspace scale. A sub
 - Tool activity: ordered calls and receipts with collapsed detail
 - Composer: stable 900px input with 60px minimum height, optional answer choices, attachment/services, send/steer/stop modes
 - Inspector: off-canvas run facts and raw events so the transcript width never changes
+- Request trajectory: a conversation-local ledger where every top-level text
+  request is one selectable trace. `clientRequestId` is the stable browser
+  identity until the server's `runId` is attached; visible request numbers are
+  never used for lookup. Steering, approval, and continuation commands advance
+  the owning task instead of inventing unrelated top-level traces.
 
 ## Page Patterns
 
@@ -65,6 +70,14 @@ The page is a quiet operational transcript with confident workspace scale. A sub
 - Mobile collapses navigation and inspector into drawers, keeps all controls within viewport width, and stacks pending-input choices above the composer.
 - The composer command changes with authoritative actor state: new `text`, pending `input.resolve`, active `task.steer`, or explicit `task.stop`.
 - Task completion is displayed only from committed actor/current-state facts. A browser journey or transport ACK is never presented as verified success.
+- Conversation and trajectory are sibling views of the same request stream.
+  SSE frames update the active trajectory incrementally; selecting an older
+  trajectory opens its input, runtime facts, steps, usage, and raw event detail
+  without granting controls over that historical request. In-flight duration
+  is labeled as running rather than rendered as a completed duration. The
+  current ledger is page-local: reopening a stored transcript does not infer
+  request identities or event traces from message positions. Durable recovery
+  requires a future typed request-trace read model.
 
 ## Content Style
 
@@ -77,6 +90,9 @@ The page is a quiet operational transcript with confident workspace scale. A sub
 - Preserve the single `/api/chat` and actor current-state contracts.
 - Do not infer task, approval, connection, or effect success from local browser state.
 - Keep task and step status inside the chronological transcript; do not add a parallel lifecycle rail.
+- Keep request trajectories inside their owning conversation. Never key them
+  by `actorId`, infer them from message position, or merge them because two
+  requests later resolve to the same actor/run context.
 - Send clarification as one typed `input.resolve` from the shared composer.
 - Keep `task.steer`, `task.stop`, `step.retry`, and `step.skip` explicit and identity/version guarded.
 - Render final verification only when actor-owned postcondition or terminal facts prove it.

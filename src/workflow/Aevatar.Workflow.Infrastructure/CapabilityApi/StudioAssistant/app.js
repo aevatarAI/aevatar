@@ -56,6 +56,7 @@ const dom = {
   commandFact: $("#commandFact"),
   commandFactRow: $("#commandFactRow"),
   composerForm: $("#composerForm"),
+  composerWrap: $("#composerWrap"),
   composerInputOptions: $("#composerInputOptions"),
   composerInputPrompt: $("#composerInputPrompt"),
   composerInputRequest: $("#composerInputRequest"),
@@ -68,6 +69,7 @@ const dom = {
   connectionDot: $("#connectionDot"),
   connectionTest: $("#connectionTest"),
   connectionText: $("#connectionText"),
+  conversationViewButton: $("#conversationViewButton"),
   conversationTitle: $("#conversationTitle"),
   accountAvatar: $("#accountAvatar"),
   accountEmail: $("#accountEmail"),
@@ -103,12 +105,18 @@ const dom = {
   refreshComposerServicesButton: $("#refreshComposerServicesButton"),
   recentGroup: $("#recentGroup"),
   recentSessionsList: $("#recentSessionsList"),
+  requestTraceCount: $("#requestTraceCount"),
+  requestTraceEmpty: $("#requestTraceEmpty"),
+  requestTraceLive: $("#requestTraceLive"),
+  requestTraceList: $("#requestTraceList"),
+  requestTracePanel: $("#requestTracePanel"),
   needsYouCount: $("#needsYouCount"),
   needsYouFilterButton: $("#needsYouFilterButton"),
   removeAttachmentButton: $("#removeAttachmentButton"),
   routeClientState: $("#routeClientState"),
   routeLabel: $("#routeLabel"),
   routeOrnnState: $("#routeOrnnState"),
+  routeSection: $("#routeSection"),
   routeSurfaceValue: $("#routeSurfaceValue"),
   routeTransportValue: $("#routeTransportValue"),
   routeUpstreamState: $("#routeUpstreamState"),
@@ -125,6 +133,8 @@ const dom = {
   servicesCount: $("#servicesCount"),
   runIdentityFact: $("#runIdentityFact"),
   runIdentityLabel: $("#runIdentityLabel"),
+  inspectorEyebrow: $("#inspectorEyebrow"),
+  inspectorTitle: $("#inspectorTitle"),
   settingsButton: $("#settingsButton"),
   settingsDialog: $("#settingsDialog"),
   settingsForm: $("#settingsForm"),
@@ -145,6 +155,17 @@ const dom = {
   thread: $("#thread"),
   toast: $("#toast"),
   toastText: $("#toastText"),
+  traceClientRequestFact: $("#traceClientRequestFact"),
+  traceDurationFact: $("#traceDurationFact"),
+  traceEventFact: $("#traceEventFact"),
+  traceInputFact: $("#traceInputFact"),
+  traceOutputFact: $("#traceOutputFact"),
+  traceOutputSection: $("#traceOutputSection"),
+  traceReadonlyNotice: $("#traceReadonlyNotice"),
+  traceStartedFact: $("#traceStartedFact"),
+  traceStatusFact: $("#traceStatusFact"),
+  traceToolFact: $("#traceToolFact"),
+  traceViewButton: $("#traceViewButton"),
   usageElapsed: $("#usageElapsed"),
   usageModel: $("#usageModel"),
   usageTokens: $("#usageTokens"),
@@ -188,6 +209,7 @@ const state = {
   historyRequestSequence: 0,
   historyRefreshTimer: null,
   run: createRunState(),
+  traceRenderFrame: null,
   toastTimer: null,
 };
 
@@ -218,6 +240,7 @@ function createRunState() {
     cardElements: new Map(),
     actionCardsElement: null,
     eventSequence: 0,
+    clientRequestId: null,
     request: null,
   };
 }
@@ -246,6 +269,11 @@ function createConversationState({ actorId = null, meta = null, title = "新会�
     draft: "",
     attachment: null,
     run: createRunState(),
+    traces: new Map(),
+    traceOrder: [],
+    currentTraceKey: null,
+    selectedTraceKey: null,
+    mainView: "conversation",
     controller: null,
     controllers: new Set(),
     thread,
@@ -259,6 +287,268 @@ function createConversationState({ actorId = null, meta = null, title = "新会�
   state.conversationStates.set(entry.key, entry);
   dom.threadViewport.append(thread);
   return entry;
+}
+
+function createRequestTrace(entry, run) {
+  const key = String(run?.clientRequestId || "").trim();
+  if (!entry || !key) return null;
+  const existing = entry.traces.get(key);
+  if (existing) return existing;
+  entry.currentTraceKey = key;
+  const trace = {
+    key,
+    clientRequestId: key,
+    serverRunId: null,
+    serverTurnId: null,
+    run,
+    element: null,
+    fields: null,
+  };
+  entry.traces.set(key, trace);
+  entry.traceOrder.unshift(key);
+  entry.selectedTraceKey = key;
+  return trace;
+}
+
+function currentRequestTrace(entry = state.activeConversation) {
+  const key = String(entry?.currentTraceKey || entry?.run?.clientRequestId || "").trim();
+  return key ? entry?.traces?.get(key) || null : null;
+}
+
+function selectedRequestTrace(entry = state.activeConversation) {
+  if (!entry?.selectedTraceKey) return null;
+  return entry.traces.get(entry.selectedTraceKey) || null;
+}
+
+function traceForRun(entry, run) {
+  const key = String(run?.clientRequestId || "").trim();
+  return key ? entry?.traces?.get(key) || null : null;
+}
+
+function currentRequestRun(entry = state.activeConversation) {
+  return currentRequestTrace(entry)?.run || entry?.run || null;
+}
+
+function attachRequestTraceServerFacts(entry, run, event) {
+  const trace = traceForRun(entry, run);
+  if (!trace || !event) return trace;
+  trace.serverRunId = event.runId || trace.serverRunId;
+  trace.serverTurnId = event.turnId || trace.serverTurnId;
+  return trace;
+}
+
+function isReviewingHistoricalTrace(entry = state.activeConversation) {
+  const selected = selectedRequestTrace(entry);
+  return Boolean(selected && selected !== currentRequestTrace(entry));
+}
+
+function requestTraceInput(trace) {
+  const prompt = String(trace?.run?.request?.prompt || "").trim();
+  const attachmentName = String(trace?.run?.request?.attachment?.name || "").trim();
+  if (prompt && attachmentName) return `${prompt} · 附件 ${attachmentName}`;
+  return prompt || (attachmentName ? `附件 ${attachmentName}` : "空请求");
+}
+
+function requestTraceOutput(run) {
+  return String(run?.assistantText || "").trim();
+}
+
+function requestTraceStatusLabel(status) {
+  return {
+    idle: "待命",
+    running: "进行中",
+    complete: "已完成",
+    blocked: "已阻塞",
+    error: "失败",
+    stopped: "已停止",
+    closed: "已结束",
+  }[String(status || "idle").toLowerCase()] || "状态未知";
+}
+
+function requestTraceStatusEnglish(status) {
+  return {
+    idle: "Ready",
+    running: "Running",
+    complete: "Complete",
+    blocked: "Blocked",
+    error: "Error",
+    stopped: "Stopped",
+    closed: "Closed",
+  }[String(status || "idle").toLowerCase()] || "Unknown";
+}
+
+function requestTraceDuration(trace) {
+  const run = trace?.run;
+  if (!run?.startedAt) return "—";
+  if (!run.completedAt) return run.status === "running" ? "进行中" : "—";
+  return formatDuration(Math.max(0, run.completedAt - run.startedAt));
+}
+
+function requestTraceStartTime(trace, { detailed = false } = {}) {
+  const startedAt = trace?.run?.startedAt;
+  if (!startedAt) return "—";
+  const date = new Date(startedAt);
+  if (Number.isNaN(date.getTime())) return "—";
+  return detailed
+    ? date.toLocaleString("zh-CN", { hour12: false })
+    : date.toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function createRequestTraceRow(entry, trace) {
+  const row = el("button", "request-trace-row");
+  row.type = "button";
+  row.setAttribute("role", "option");
+  row.dataset.traceKey = trace.key;
+  const marker = el("span", "request-trace-marker");
+  marker.append(iconNode("waypoints"));
+  const copy = el("span", "request-trace-copy");
+  const input = el("strong", "request-trace-prompt");
+  const identity = el("small", "request-trace-identity mono");
+  copy.append(input, identity);
+  const metrics = el("span", "request-trace-row-metrics");
+  const status = el("span", "request-trace-row-status");
+  const counts = el("span", "request-trace-row-counts");
+  const timing = el("span", "request-trace-row-timing");
+  metrics.append(status, counts, timing);
+  row.append(marker, copy, metrics, iconNode("chevron-right"));
+  trace.element = row;
+  trace.fields = { marker, input, identity, status, counts, timing };
+  row.addEventListener("click", () => selectRequestTrace(entry, trace.key, { openDetails: true }));
+  row.addEventListener("keydown", (event) => moveRequestTraceSelection(event, entry, trace.key));
+  return row;
+}
+
+function updateRequestTraceRow(entry, trace) {
+  const row = trace.element || createRequestTraceRow(entry, trace);
+  const run = trace.run;
+  const selected = entry.selectedTraceKey === trace.key;
+  row.className = `request-trace-row ${run.status || "idle"}${selected ? " selected" : ""}`;
+  row.setAttribute("aria-selected", String(selected));
+  row.tabIndex = selected ? 0 : -1;
+  trace.fields.input.textContent = requestTraceInput(trace);
+  const serverRunId = trace.serverRunId || run.context?.runId || "";
+  trace.fields.identity.textContent = serverRunId
+    ? `request ${trace.clientRequestId} · run ${serverRunId}`
+    : `request ${trace.clientRequestId}`;
+  trace.fields.status.textContent = requestTraceStatusLabel(run.status);
+  trace.fields.counts.textContent = `${run.events.length} 事件 · ${run.tools.size} 工具`;
+  trace.fields.timing.textContent = `${requestTraceStartTime(trace)} · ${requestTraceDuration(trace)}`;
+  return row;
+}
+
+function renderRequestTraces(entry = state.activeConversation) {
+  if (!entry || entry !== state.activeConversation || !dom.requestTraceList) return;
+  const traces = entry.traceOrder
+    .map((key) => entry.traces.get(key))
+    .filter(Boolean);
+  dom.requestTraceCount.textContent = String(traces.length);
+  const activeTrace = currentRequestTrace(entry);
+  const receiving = Boolean(entry.controllers?.size && activeTrace?.run?.status === "running");
+  const liveCopy = receiving
+    ? "SSE 实时更新"
+    : activeTrace?.run?.startedAt
+      ? "SSE 已结束"
+      : "本页会话";
+  dom.requestTraceLive.classList.toggle("active", receiving);
+  dom.requestTraceLive.querySelector("span").textContent = liveCopy;
+  if (!traces.length) {
+    entry.selectedTraceKey = null;
+    if (dom.requestTraceList.firstElementChild !== dom.requestTraceEmpty || dom.requestTraceList.childElementCount !== 1) {
+      dom.requestTraceList.replaceChildren(dom.requestTraceEmpty);
+    }
+    dom.requestTraceEmpty.classList.remove("hidden");
+    refreshIcons(dom.requestTraceEmpty);
+    return;
+  }
+  dom.requestTraceEmpty.classList.add("hidden");
+  if (!entry.traces.has(entry.selectedTraceKey)) entry.selectedTraceKey = traces[0].key;
+  const needsIcons = traces.some((trace) => !trace.element);
+  const rows = traces.map((trace) => updateRequestTraceRow(entry, trace));
+  rows.forEach((row, index) => {
+    const current = dom.requestTraceList.children[index];
+    if (current !== row) dom.requestTraceList.insertBefore(row, current || null);
+  });
+  while (dom.requestTraceList.childElementCount > rows.length) {
+    dom.requestTraceList.lastElementChild.remove();
+  }
+  if (needsIcons) refreshIcons(dom.requestTraceList);
+}
+
+function selectRequestTrace(entry, key, { openDetails = false, focusRow = false } = {}) {
+  if (!entry?.traces?.has(key)) return;
+  entry.selectedTraceKey = key;
+  if (entry !== state.activeConversation) return;
+  renderRequestTraces(entry);
+  renderInspector();
+  renderEventLog();
+  setInspectorTab("run");
+  if (openDetails) openMobilePanel("inspector");
+  if (focusRow) entry.traces.get(key)?.element?.focus();
+}
+
+function moveRequestTraceSelection(event, entry, key) {
+  if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+  event.preventDefault();
+  const keys = entry.traceOrder.filter((candidate) => entry.traces.has(candidate));
+  const index = Math.max(0, keys.indexOf(key));
+  const nextIndex = event.key === "Home"
+    ? 0
+    : event.key === "End"
+      ? keys.length - 1
+      : event.key === "ArrowUp"
+        ? Math.max(0, index - 1)
+        : Math.min(keys.length - 1, index + 1);
+  selectRequestTrace(entry, keys[nextIndex], { openDetails: true, focusRow: true });
+}
+
+function queueRequestTraceRender(entry = conversationContext || state.activeConversation) {
+  if (!entry || entry !== state.activeConversation || state.traceRenderFrame != null) return;
+  state.traceRenderFrame = requestAnimationFrame(() => {
+    state.traceRenderFrame = null;
+    const activeEntry = state.activeConversation;
+    renderRequestTraces(activeEntry);
+    renderInspector();
+    if (!dom.eventsPanel?.classList.contains("hidden")) renderEventLog();
+  });
+}
+
+function switchWorkspaceView(view, { focusButton = false } = {}) {
+  const entry = state.activeConversation;
+  if (!entry) return;
+  const traceView = view === "traces";
+  entry.mainView = traceView ? "traces" : "conversation";
+  if (traceView && !entry.traces.has(entry.selectedTraceKey)) {
+    entry.selectedTraceKey = entry.traceOrder.find((key) => entry.traces.has(key)) || null;
+  }
+  if (!traceView) {
+    entry.selectedTraceKey = currentRequestTrace(entry)?.key || null;
+  }
+  dom.threadViewport.classList.toggle("hidden", traceView);
+  dom.requestTracePanel.classList.toggle("hidden", !traceView);
+  dom.composerWrap.classList.toggle("hidden", traceView);
+  dom.conversationViewButton.classList.toggle("active", !traceView);
+  dom.traceViewButton.classList.toggle("active", traceView);
+  dom.conversationViewButton.setAttribute("aria-selected", String(!traceView));
+  dom.traceViewButton.setAttribute("aria-selected", String(traceView));
+  dom.conversationViewButton.tabIndex = traceView ? -1 : 0;
+  dom.traceViewButton.tabIndex = traceView ? 0 : -1;
+  renderRequestTraces(entry);
+  renderInspector();
+  renderEventLog();
+  renderActorControlUi();
+  if (!traceView) {
+    requestAnimationFrame(() => {
+      dom.threadViewport.scrollTop = entry.scrollTop;
+    });
+  }
+  if (focusButton) (traceView ? dom.traceViewButton : dom.conversationViewButton).focus();
+}
+
+function moveWorkspaceView(event) {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  event.preventDefault();
+  const traces = event.key === "ArrowRight" || event.key === "End";
+  switchWorkspaceView(traces ? "traces" : "conversation", { focusButton: true });
 }
 
 function persistConversationState(entry = state.activeConversation) {
@@ -279,7 +569,7 @@ function restoreConversationState(entry) {
   state.workflowSessionId = entry.workflowSessionId;
   state.currentConversationMeta = entry.meta;
   state.attachment = entry.attachment;
-  state.run = entry.run;
+  state.run = currentRequestRun(entry) || entry.run;
   state.activeController = entry.controller;
 }
 
@@ -360,6 +650,7 @@ function activateConversationState(entry) {
   dom.promptInput.value = entry.draft;
   autoResizeComposer();
   renderAttachment();
+  switchWorkspaceView(entry.mainView);
   requestAnimationFrame(() => {
     dom.threadViewport.scrollTop = entry.scrollTop;
   });
@@ -429,6 +720,10 @@ async function init() {
 }
 
 function bindEvents() {
+  dom.conversationViewButton.addEventListener("click", () => switchWorkspaceView("conversation"));
+  dom.traceViewButton.addEventListener("click", () => switchWorkspaceView("traces"));
+  dom.conversationViewButton.addEventListener("keydown", moveWorkspaceView);
+  dom.traceViewButton.addEventListener("keydown", moveWorkspaceView);
   dom.composerForm.addEventListener("submit", (event) => {
     event.preventDefault();
     void submitComposer();
@@ -2940,6 +3235,10 @@ function mountActorTask(thread, root) {
 }
 
 async function submitActorControl(kind, step = null, instruction = null) {
+  if (isReviewingHistoricalTrace()) {
+    showToast("历史轨迹仅供查看；请返回当前轨迹后再执行控制。");
+    return;
+  }
   const entry = state.activeConversation;
   const projection = entryActorProjection(entry);
   if (!entry?.actorId || !projection) return;
@@ -3086,6 +3385,7 @@ function renderActiveConversationState() {
   else applyHealthRouteState();
   renderInspector();
   renderEventLog();
+  renderRequestTraces(entry);
   renderHistoryList();
   renderAttachment();
   refreshIcons(entry.thread);
@@ -3151,6 +3451,7 @@ function scheduleHistoryRefresh() {
 
 function focusCurrentConversation() {
   closeMobilePanels();
+  switchWorkspaceView("conversation");
   dom.threadViewport.scrollTo({ top: dom.threadViewport.scrollHeight, behavior: "smooth" });
   dom.promptInput.focus();
 }
@@ -3255,6 +3556,11 @@ async function sendPrompt(overridePrompt, options = {}) {
   state.run.startedAt = Date.now();
   state.run.request = { prompt, attachment };
   state.run.clientRequestId = options.clientRequestId || createId("client-text");
+  // Make the owning conversation point at the new request before the first render. Otherwise the
+  // freshly selected trace is briefly mistaken for a historical trace until persistConversationState runs.
+  conversation.run = state.run;
+  createRequestTrace(conversation, state.run);
+  renderRequestTraces(conversation);
   const controller = new AbortController();
   const run = state.run;
   const runSurface = state.config.surface;
@@ -3379,6 +3685,7 @@ async function sendPrompt(overridePrompt, options = {}) {
       renderInspector();
     });
     renderHistoryList();
+    queueRequestTraceRender(conversation);
     if (runSurface === "nyxid-chat") scheduleHistoryRefresh();
   }
 }
@@ -3407,12 +3714,18 @@ function handleFrame(raw) {
   switch (event.type) {
     case "run_context":
       state.run.context = { ...state.run.context, ...pickContext(event) };
+      if (typeof attachRequestTraceServerFacts === "function") {
+        attachRequestTraceServerFacts(conversationContext || state.activeConversation, state.run, event);
+      }
       updateRunProgress("运行上下文已建立，Agent 正在分析请求…");
       break;
     case "run_started":
       state.run.context.actorId = event.actorId || event.threadId || state.run.context.actorId;
       state.run.context.runId = event.runId || state.run.context.runId;
       state.run.context.turnId = event.turnId || state.run.context.turnId;
+      if (typeof attachRequestTraceServerFacts === "function") {
+        attachRequestTraceServerFacts(conversationContext || state.activeConversation, state.run, event);
+      }
       state.actorId = state.run.surface === "nyxid-chat"
         ? state.run.context.actorId || state.actorId
         : state.actorId;
@@ -3569,7 +3882,9 @@ function handleFrame(raw) {
     default:
       break;
   }
-  renderInspector();
+  const owner = conversationContext || state.activeConversation;
+  if (typeof queueRequestTraceRender === "function") queueRequestTraceRender(owner);
+  else renderInspector();
 }
 
 function pickContext(event) {
@@ -3595,7 +3910,11 @@ function recordEvent(event, raw) {
     raw: safeRaw,
   });
   if (state.run.events.length > 120) state.run.events.shift();
-  renderEventLog();
+  if (typeof queueRequestTraceRender === "function") {
+    queueRequestTraceRender(conversationContext || state.activeConversation);
+  } else {
+    renderEventLog();
+  }
 }
 
 function addUserMessage(prompt, attachment) {
@@ -4364,31 +4683,98 @@ function completeRun(actorStatus) {
   );
 }
 
+function inspectorRequestTrace(entry = state.activeConversation) {
+  return selectedRequestTrace(entry) || currentRequestTrace(entry);
+}
+
+function inspectorRunState(entry = state.activeConversation) {
+  return inspectorRequestTrace(entry)?.run || entry?.run || state.run;
+}
+
+function paintRunStatus(status, label = requestTraceStatusEnglish(status)) {
+  dom.runStatus.className = `run-status ${status || "idle"}`;
+  dom.runStatus.querySelector("strong").textContent = label;
+}
+
 function renderInspector() {
   if (!isActiveConversationContext()) return;
-  const context = state.run.context;
-  const projection = entryActorProjection(state.activeConversation);
+  const entry = state.activeConversation;
+  const trace = inspectorRequestTrace(entry);
+  const run = inspectorRunState(entry);
+  const context = run.context || {};
+  const historical = isReviewingHistoricalTrace(entry);
+  const projection = entryActorProjection(entry);
   const isNyxid = state.config.surface === "nyxid-chat";
-  const actorTurnId = projection?.activeTurn?.turnId || projection?.latestTurn?.turnId ||
-    projection?.task?.turnId || context.turnId;
-  dom.actorFact.textContent = context.actorId || state.actorId || "—";
+  const projectionTurnId = projection?.activeTurn?.turnId || projection?.latestTurn?.turnId ||
+    projection?.task?.turnId;
+  const actorTurnId = historical ? context.turnId : context.turnId || projectionTurnId;
+  const projectionStatus = !historical && context.turnId && projectionTurnId === context.turnId
+    ? actorTerminalRunStatus(projection)
+    : null;
+  const visibleStatus = projectionStatus || run.status || "idle";
+  dom.inspectorEyebrow.textContent = trace ? "Request trace" : "Current run";
+  dom.inspectorTitle.textContent = trace ? "轨迹详情" : "运行详情";
+  paintRunStatus(visibleStatus);
+  dom.traceClientRequestFact.textContent = trace?.clientRequestId || run.clientRequestId || "—";
+  dom.traceClientRequestFact.title = trace?.clientRequestId || run.clientRequestId || "";
+  dom.traceInputFact.textContent = trace
+    ? requestTraceInput(trace)
+    : run.request?.prompt || (run.request?.attachment?.name ? `附件 ${run.request.attachment.name}` : "尚未发送请求");
+  dom.traceStatusFact.textContent = requestTraceStatusLabel(visibleStatus);
+  dom.traceEventFact.textContent = String(run.events.length);
+  dom.traceToolFact.textContent = String(run.tools.size);
+  dom.traceStartedFact.textContent = trace
+    ? requestTraceStartTime(trace, { detailed: true })
+    : run.startedAt ? new Date(run.startedAt).toLocaleString("zh-CN", { hour12: false }) : "—";
+  dom.traceDurationFact.textContent = trace
+    ? requestTraceDuration(trace)
+    : run.startedAt && !run.completedAt && run.status === "running"
+      ? "进行中"
+      : run.startedAt && run.completedAt
+        ? formatDuration(run.completedAt - run.startedAt)
+        : "—";
+  dom.traceReadonlyNotice.classList.toggle("hidden", !historical);
+  const output = requestTraceOutput(run);
+  dom.traceOutputFact.classList.toggle("empty", !output);
+  if (output) {
+    renderMarkdown(dom.traceOutputFact, output);
+  } else {
+    dom.traceOutputFact.textContent = visibleStatus === "running"
+      ? "等待响应"
+      : run.startedAt ? "未返回可展示的文本" : "尚无输出";
+  }
+  dom.routeSection.classList.toggle("hidden", historical);
+  dom.eventCount.textContent = String(run.events.length);
+  dom.clearEventsButton.disabled = historical;
+  dom.actorFact.textContent = context.actorId || (!historical ? state.actorId : "—") || "—";
   dom.runFact.textContent = context.runId || "—";
   dom.commandFact.textContent = context.commandId || "—";
   dom.runIdentityLabel.textContent = isNyxid ? "Turn" : "Session";
   dom.runIdentityFact.textContent = isNyxid
     ? actorTurnId || "—"
     : context.workflowSessionId || state.workflowSessionId;
-  dom.usageTokens.textContent = state.run.usage?.totalTokens ?? "—";
-  const model = state.run.usage?.model || state.currentConversationMeta?.llmModel;
-  const hasConversationData = Boolean(state.run.startedAt || state.currentConversationMeta);
+  dom.usageTokens.textContent = run.usage?.totalTokens ?? "—";
+  const model = run.usage?.model || state.currentConversationMeta?.llmModel;
+  const hasConversationData = Boolean(run.startedAt || state.currentConversationMeta);
   dom.usageModel.textContent = model || (hasConversationData ? "not reported" : "—");
-  renderSteps();
+  renderSteps(run, { trace, allowActorProjection: !historical });
   renderActorControlUi();
-  updateElapsed();
+  updateElapsed(run);
 }
 
 function renderActorControlUi() {
   if (!isActiveConversationContext()) return;
+  if (isReviewingHistoricalTrace()) {
+    dom.sendButton.classList.add("hidden");
+    dom.steerButton.classList.add("hidden");
+    dom.stopButton.classList.add("hidden");
+    dom.observationDisconnectButton.classList.add("hidden");
+    dom.promptInput.disabled = true;
+    dom.attachButton.disabled = true;
+    dom.composerServicesButton.disabled = true;
+    dom.composerStatus.textContent = "正在查看历史轨迹；返回当前轨迹后可继续操作";
+    return;
+  }
   const projection = entryActorProjection(state.activeConversation);
   const nyxid = state.config.surface === "nyxid-chat";
   const authoritativeStop = nyxid && actorCan(projection, "stop");
@@ -4442,13 +4828,17 @@ function renderActorControlUi() {
   dom.observationDisconnectButton.classList.toggle("hidden", !state.activeController);
 }
 
-function renderSteps() {
+function renderSteps(run = inspectorRunState(), { trace = null, allowActorProjection = true } = {}) {
   dom.stepList.replaceChildren();
   const projection = entryActorProjection(state.activeConversation);
-  const actorSteps = state.config.surface === "nyxid-chat" && projection?.task
+  const traceTurnId = trace?.serverTurnId || run.context?.turnId || "";
+  const projectionMatchesTrace = !trace || !run.startedAt ||
+    (traceTurnId && projection?.task?.turnId === traceTurnId);
+  const actorSteps = allowActorProjection && projectionMatchesTrace &&
+    state.config.surface === "nyxid-chat" && projection?.task
     ? [...projection.steps.values()]
     : null;
-  const steps = actorSteps || Array.from(state.run.steps.values());
+  const steps = actorSteps || Array.from(run.steps.values());
   dom.stepCount.textContent = String(steps.length);
   if (!steps.length) {
     dom.stepList.className = "step-list empty-list";
@@ -4463,9 +4853,9 @@ function renderSteps() {
         stopped: "停止接收前没有收到工具事件",
         closed: "流关闭前没有收到工具事件",
       };
-      dom.stepList.textContent = labels[state.run.status] || "没有可展示的工具步骤";
+      dom.stepList.textContent = labels[run.status] || "没有可展示的工具步骤";
     } else {
-      dom.stepList.textContent = state.run.status === "idle"
+      dom.stepList.textContent = run.status === "idle"
         ? "发送消息后显示 Workflow 步骤"
         : "尚未收到 Workflow 步骤事件";
     }
@@ -4492,13 +4882,18 @@ function renderSteps() {
 
 function renderEventLog() {
   if (!isActiveConversationContext() || !dom.eventCount || !dom.eventList) return;
-  dom.eventCount.textContent = String(state.run.events.length);
-  dom.eventList.replaceChildren();
-  if (!state.run.events.length) {
-    dom.eventList.append(el("div", "event-empty", "尚无事件"));
+  const run = inspectorRunState();
+  const events = run.events;
+  dom.eventCount.textContent = String(events.length);
+  dom.clearEventsButton.disabled = isReviewingHistoricalTrace();
+  if (!events.length) {
+    if (dom.eventList.childElementCount !== 1 || !dom.eventList.firstElementChild?.classList.contains("event-empty")) {
+      dom.eventList.replaceChildren(el("div", "event-empty", "尚无事件"));
+    }
     return;
   }
-  for (const event of [...state.run.events].reverse()) {
+  const rows = [...events].reverse().map((event) => {
+    if (event.element) return event.element;
     const details = el("details", "event-row");
     const summary = document.createElement("summary");
     summary.append(
@@ -4507,13 +4902,22 @@ function renderEventLog() {
       el("span", "mono", event.at.toLocaleTimeString("zh-CN", { hour12: false })),
     );
     details.append(summary, el("pre", "", safeJson(event.raw)));
-    dom.eventList.append(details);
-  }
+    event.element = details;
+    return details;
+  });
+  rows.forEach((row, index) => {
+    const current = dom.eventList.children[index];
+    if (current !== row) dom.eventList.insertBefore(row, current || null);
+  });
+  while (dom.eventList.childElementCount > rows.length) dom.eventList.lastElementChild.remove();
 }
 
 function clearEvents() {
-  state.run.events = [];
+  if (isReviewingHistoricalTrace()) return;
+  inspectorRunState().events = [];
   renderEventLog();
+  renderRequestTraces();
+  renderInspector();
 }
 
 function configureWireInspector() {
@@ -4523,21 +4927,27 @@ function configureWireInspector() {
   if (!enabled) setInspectorTab("run");
 }
 
-function updateElapsed() {
-  const start = state.run.startedAt;
+function updateElapsed(run = inspectorRunState()) {
+  const start = run.startedAt;
   if (!start) {
     dom.usageElapsed.textContent = "00:00";
     return;
   }
-  const end = state.run.completedAt || Date.now();
+  if (!run.completedAt) {
+    dom.usageElapsed.textContent = run.status === "running" ? "进行中" : "—";
+    if (dom.traceDurationFact) dom.traceDurationFact.textContent = run.status === "running" ? "进行中" : "—";
+    return;
+  }
+  const end = run.completedAt;
   const seconds = Math.max(0, Math.floor((end - start) / 1000));
   dom.usageElapsed.textContent = `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+  if (dom.traceDurationFact) dom.traceDurationFact.textContent = formatDuration(end - start);
 }
 
 function setRunStatus(status, label) {
   if (!isActiveConversationContext()) return;
-  dom.runStatus.className = `run-status ${status}`;
-  dom.runStatus.querySelector("strong").textContent = label;
+  if (isReviewingHistoricalTrace()) return;
+  paintRunStatus(status, label);
 }
 
 function setRunningUi(running) {
@@ -4565,6 +4975,7 @@ function setRunningUi(running) {
 }
 
 function cancelRun() {
+  if (isReviewingHistoricalTrace()) return;
   if (!state.activeController) return;
   dom.stopButton.disabled = true;
   dom.composerStatus.textContent = "正在停止当前页面接收…";
@@ -4572,6 +4983,7 @@ function cancelRun() {
 }
 
 function cancelObservation() {
+  if (isReviewingHistoricalTrace()) return;
   if (!state.activeController) return;
   dom.observationDisconnectButton.disabled = true;
   dom.composerStatus.textContent = "正在停止当前页面观察…";

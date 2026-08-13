@@ -1,7 +1,7 @@
 # Admin Observatory UI Design
 
 - **Date:** 2026-07-24
-- **Status:** Implemented; immersive mode and position restoration restored on 2026-08-01
+- **Status:** Implemented; request-trajectory ledger added on 2026-08-13
 - **Surface:** `/admin#/observatory`
 - **Owner:** Aevatar Mainnet Backend Console
 
@@ -27,6 +27,9 @@ the caller's role badge.
 
 ## Goals
 
+- Present every accepted workflow request/run as one independently selectable
+  trajectory. The display number is a reading aid; `runId` remains the stable
+  identity used for selection, refresh, and detail lookup.
 - Default every caller, including an admin, to their own scope.
 - Make all-scope observation an explicit and continuously visible admin mode.
 - Give the selected run substantially more space without losing fast run
@@ -147,14 +150,20 @@ The compact filter bar contains:
 - active filter chips with individual removal and one clear-all action.
 
 `status`, `origin`, `definition`, `schedule`, `from`, and `to` are sent to the
-existing list endpoint. The status UI uses the backend values
+activity-run feed endpoint. The status UI uses the backend values
 `running/completed/failed/stopped`, with localized display labels. Local search
-only filters the already loaded maximum of 100 summaries and displays the
-visible/loaded count so it cannot be mistaken for a server-wide search.
+only filters the summaries already loaded into the rail and displays the
+visible/loaded count so it cannot be mistaken for a server-wide search. The
+first page contains the newest 100 trajectories; when `hasMore` and
+`nextCursor` are present, the rail offers an explicit “load earlier” action and
+keeps the loaded/total coverage visible.
 
 Changing a server filter updates the URL and starts a new list request. A
 monotonic request ID prevents an older response from overwriting a newer scope
-or filter selection. Polling reuses the current URL-derived query.
+or filter selection. Polling reuses the current URL-derived query. Cursor
+loading is serialized against polling; a refreshed newest window overwrites
+matching `runId` rows but retains every already loaded older identity, so new
+head insertions cannot create a gap at the server's 500-row page boundary.
 
 ## Layout
 
@@ -198,6 +207,23 @@ remain identifiable. Desktop-only side-by-side density is not forced onto
 mobile.
 
 ## Run Detail Behavior
+
+The run rail is the request-trajectory ledger. Each row represents one
+authoritative workflow run and exposes enough request context to distinguish
+nearby calls without opening them: workflow, safe input summary when available,
+status, origin, update time, duration/current step, and a shortened run ID.
+Selecting a row opens that run's existing detail; events, steps, diagnostics,
+logs, artifacts, and graph remain children of the selected trajectory rather
+than parallel top-level records.
+
+The ledger reads the paged activity-run projection while detail and graph keep
+using their existing run endpoints. The page polls the current ledger and only
+the selected detail approximately every three seconds while visible. The live
+indicator describes this near-live projection refresh honestly; it does not
+claim that a transport ACK is committed or that the read model is strongly
+consistent. Incoming rows do not change an explicit selection. A selected run
+that is briefly absent from the eventually consistent detail projection remains
+eligible for later polling, so it can recover without a manual page refresh.
 
 The detail header shows workflow name, honest status, full run ID, scope,
 definition, origin, optional schedule ID, state version, and last update.
