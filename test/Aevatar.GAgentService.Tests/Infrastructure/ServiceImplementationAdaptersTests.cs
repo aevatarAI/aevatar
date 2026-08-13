@@ -572,6 +572,7 @@ public sealed class ServiceImplementationAdaptersTests
                 ImplementationKind = ServiceImplementationKind.Workflow,
                 WorkflowSpec = new WorkflowServiceRevisionSpec
                 {
+                    WorkflowId = "wf-inferred",
                     WorkflowYaml = "name: inferred-workflow",
                     ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
                 },
@@ -644,6 +645,7 @@ public sealed class ServiceImplementationAdaptersTests
                 ImplementationKind = ServiceImplementationKind.Workflow,
                 WorkflowSpec = new WorkflowServiceRevisionSpec
                 {
+                    WorkflowId = "wf-bundle",
                     WorkflowYaml = workflowYaml,
                     InlineWorkflowYamls = { ["child"] = "name: child" },
                     CapabilityAdmissionPlan = admissionPlan,
@@ -679,6 +681,7 @@ public sealed class ServiceImplementationAdaptersTests
                 ImplementationKind = ServiceImplementationKind.Workflow,
                 WorkflowSpec = new WorkflowServiceRevisionSpec
                 {
+                    WorkflowId = "wf-legacy-interactive",
                     WorkflowYaml = workflowYaml,
                 },
             },
@@ -746,6 +749,7 @@ public sealed class ServiceImplementationAdaptersTests
                 ImplementationKind = ServiceImplementationKind.Workflow,
                 WorkflowSpec = new WorkflowServiceRevisionSpec
                 {
+                    WorkflowId = "wf-provided",
                     WorkflowName = "provided-workflow",
                     WorkflowYaml = "name: ignored",
                     DefinitionActorId = "workflow-definition-1",
@@ -983,6 +987,7 @@ public sealed class ServiceImplementationAdaptersTests
                 ImplementationKind = ServiceImplementationKind.Workflow,
                 WorkflowSpec = new WorkflowServiceRevisionSpec
                 {
+                    WorkflowId = "wf-rebound",
                     WorkflowYaml = LegacyWorkflowYaml,
                     ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
                 },
