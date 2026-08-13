@@ -337,6 +337,240 @@ export const workflowActivityVNextCss = `
 .wa-vnext__technical-details { color: var(--wa-muted); font-size: 12px; margin-top: 16px; max-width: 100%; }
 .wa-vnext__technical-details summary { cursor: pointer; font-weight: 600; }
 .wa-vnext__technical-details-body { background: #fff; border: 1px solid var(--wa-line); border-radius: 6px; display: block; margin-top: 8px; max-width: 100%; overflow-wrap: anywhere; padding: 10px; }
+.wa-vnext-run-detail {
+  background: #f7f8fa;
+  color: #111827;
+  display: grid;
+  grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+  width: 100%;
+}
+.wa-vnext-run-detail__rail {
+  background: #ffffff;
+  border-right: 1px solid #e5e7eb;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+.wa-vnext-run-detail__rail-header {
+  align-items: center;
+  border-bottom: 1px solid #e5e7eb;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  min-width: 0;
+  padding: 12px 18px 14px;
+}
+.wa-vnext-run-detail__rail-title {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+.wa-vnext-run-detail__rail-list {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+}
+.wa-vnext-run-detail__run {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: inherit;
+  cursor: pointer;
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px 12px;
+  text-align: left;
+  transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+  width: 100%;
+}
+.wa-vnext-run-detail__run:hover {
+  background: #f3f4f6;
+  border-color: #e5e7eb;
+}
+.wa-vnext-run-detail__run--selected {
+  background: #eef6ff;
+  border-color: #83b7ff;
+  box-shadow: inset 3px 0 0 #1677ff;
+}
+.wa-vnext-run-detail__run-title {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+.wa-vnext-run-detail__stage {
+  display: grid;
+  grid-template-rows: auto minmax(280px, 1fr) minmax(220px, 34vh);
+  min-height: 0;
+  min-width: 0;
+}
+.wa-vnext-run-detail__stage-header {
+  align-items: center;
+  background: #ffffff;
+  border-bottom: 1px solid #e5e7eb;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  min-width: 0;
+  padding: 14px 22px;
+}
+.wa-vnext-run-detail__stage-title {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.wa-vnext-run-detail__stage-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.wa-vnext-run-detail__graph {
+  background:
+    linear-gradient(135deg, rgba(17, 24, 39, 0.035) 25%, transparent 25%) -8px 0 / 16px 16px,
+    linear-gradient(225deg, rgba(17, 24, 39, 0.03) 25%, transparent 25%) -8px 0 / 16px 16px,
+    #fbfbfc;
+  min-height: 0;
+  min-width: 0;
+  padding: 18px;
+}
+.wa-vnext-run-detail__graph > * {
+  height: 100%;
+  min-height: 0;
+}
+.wa-vnext-run-detail__details {
+  background: #ffffff;
+  border-top: 1px solid #e5e7eb;
+  display: grid;
+  grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
+  min-height: 0;
+  min-width: 0;
+}
+.wa-vnext-run-detail__logs {
+  border-right: 1px solid #e5e7eb;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+.wa-vnext-run-detail__logs-header,
+.wa-vnext-run-detail__inspector-header {
+  align-items: center;
+  border-bottom: 1px solid #edf0f3;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  min-width: 0;
+  padding: 10px 14px;
+}
+.wa-vnext-run-detail__step-list {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px;
+}
+.wa-vnext-run-detail__step {
+  align-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: inherit;
+  cursor: pointer;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  min-width: 0;
+  padding: 8px 10px;
+  text-align: left;
+  width: 100%;
+}
+.wa-vnext-run-detail__step:hover { background: #f8fafc; }
+.wa-vnext-run-detail__step--selected { background: #eef6ff; border-color: #bfdbfe; }
+.wa-vnext-run-detail__inspector {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.wa-vnext-run-detail__inspector-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px;
+}
+.wa-vnext-run-detail__inspector-body > .ant-tabs {
+  min-height: 0;
+}
+.wa-vnext-run-detail__inspector-body > .ant-tabs > .ant-tabs-content-holder {
+  min-height: 0;
+}
+.wa-vnext-run-detail__inspector-body .ant-tabs-tabpane {
+  min-height: 0;
+}
+.wa-vnext-run-detail__pre,
+.wa-vnext-run-detail__kv,
+.wa-vnext-run-detail__timeline {
+  background: var(--wa-subtle);
+  border: 1px solid var(--wa-line);
+  border-radius: 8px;
+  margin: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.wa-vnext-run-detail__pre {
+  padding: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.wa-vnext-run-detail__kv {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+}
+.wa-vnext-run-detail__kv-row {
+  display: grid;
+  gap: 4px;
+}
+.wa-vnext-run-detail__kv-key { color: var(--wa-muted); font-size: 11px; font-weight: 700; text-transform: uppercase; }
+.wa-vnext-run-detail__kv-value { color: var(--wa-ink); font-size: 12px; overflow-wrap: anywhere; white-space: pre-wrap; }
+.wa-vnext-run-detail__timeline {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+}
+.wa-vnext-run-detail__timeline-row {
+  display: grid;
+  gap: 4px;
+  grid-template-columns: 120px minmax(0, 1fr);
+}
+.wa-vnext-run-detail__timeline-key {
+  color: var(--wa-muted);
+  font-size: 11px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+.wa-vnext-run-detail__timeline-value {
+  overflow-wrap: anywhere;
+}
+.wa-vnext-run-detail .wa-vnext__status {
+  white-space: nowrap;
+}
+.wa-vnext-run-detail .ant-tag {
+  margin-inline-end: 0;
+}
 .wa-vnext__node-inspector { background: var(--wa-surface); border: 1px solid var(--wa-line); border-radius: var(--wa-radius); bottom: 16px; box-shadow: 0 16px 36px rgba(16, 24, 40, .16); display: flex; flex-direction: column; max-width: calc(100% - 32px); min-height: 0; overflow: hidden; position: absolute; right: 16px; top: 16px; width: min(400px, calc(100% - 32px)); z-index: 20; }
 .wa-vnext__node-inspector-header { align-items: flex-start; border-bottom: 1px solid var(--wa-line); display: flex; gap: 12px; justify-content: space-between; padding: 16px 16px 14px; }
 .wa-vnext__node-inspector-title.ant-typography { font-size: 15px; line-height: 1.35; margin: 0; }

@@ -681,14 +681,18 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                       key={run.runId}
                       onClick={() =>
                         history.push(
-                          buildWorkflowActivityRunHref(scopeId, run.runId),
+                          buildWorkflowActivityRunHref(scopeId, run.runId, {
+                            definition: definition || undefined,
+                          }),
                         )
                       }
                       onKeyDown={(event) => {
                         if (event.key !== 'Enter' && event.key !== ' ') return;
                         event.preventDefault();
                         history.push(
-                          buildWorkflowActivityRunHref(scopeId, run.runId),
+                          buildWorkflowActivityRunHref(scopeId, run.runId, {
+                            definition: definition || undefined,
+                          }),
                         );
                       }}
                       tabIndex={0}
@@ -699,7 +703,29 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                           'Workflow',
                         )}
                       >
-                        <span className="wa-vnext__title">{workflowName}</span>
+                        <button
+                          className="wa-vnext__run-link"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            history.push(
+                              buildWorkflowActivityRunHref(scopeId, run.runId, {
+                                definition: definition || undefined,
+                              }),
+                            );
+                          }}
+                          style={{
+                            background: 'transparent',
+                            border: 0,
+                            color: 'var(--wa-blue)',
+                            padding: 0,
+                            textAlign: 'left',
+                          }}
+                          type="button"
+                        >
+                          <span className="wa-vnext__title">
+                            {workflowName}
+                          </span>
+                        </button>
                       </td>
                       <td
                         data-label={t(

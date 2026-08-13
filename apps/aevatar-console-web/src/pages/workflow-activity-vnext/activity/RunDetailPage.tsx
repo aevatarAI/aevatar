@@ -1,26 +1,52 @@
-import { ArrowLeftOutlined, ReloadOutlined } from '@ant-design/icons';
+import {
+  ArrowLeftOutlined,
+  CheckCircleFilled,
+  ClockCircleOutlined,
+  CloseCircleFilled,
+  ExclamationCircleFilled,
+  LoadingOutlined,
+  NodeIndexOutlined,
+  ReloadOutlined,
+} from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
-import { Alert, Button, Descriptions, Modal, Space, Tabs } from 'antd';
+import { type Edge, MarkerType, type Node, Position } from '@xyflow/react';
+import {
+  Alert,
+  Button,
+  Empty,
+  Modal,
+  Space,
+  Tabs,
+  Tag,
+  Typography,
+} from 'antd';
 import React from 'react';
 import {
   WorkflowActivityApiError,
   workflowActivityApi,
 } from '@/shared/api/workflowActivityApi';
+import { formatDateTime } from '@/shared/datetime/dateTime';
+import GraphCanvas from '@/shared/graphs/GraphCanvas';
 import { t } from '@/shared/i18n/messages';
 import type {
   WorkflowActivityRunDetail,
-  WorkflowRecoveryRecommendedAction,
+  WorkflowActivityRunGraph,
+  WorkflowActivityRunSummary,
+  WorkflowActivityStep,
+  WorkflowActivityTimelineEvent,
   WorkflowRunForkAcceptedReceipt,
-  WorkflowRunLineage,
-  WorkflowRunLineageRunRef,
 } from '@/shared/models/workflowActivity';
 import { history } from '@/shared/navigation/history';
+import type {
+  StudioGraphEdgeData,
+  StudioGraphNodeData,
+} from '@/shared/studio/graph';
 import { useConsoleToast } from '@/shared/ui/ConsoleToast';
+import { useConsoleLocation } from '../hooks/useConsoleLocation';
 import {
   buildWorkflowActivityRunHref,
   buildWorkflowActivitySectionHref,
 } from '../navigation';
-import TableScrollRegion from '../TableScrollRegion';
 import TechnicalDetails from '../TechnicalDetails';
 import WorkflowActivityVNextShell from '../WorkflowActivityVNextShell';
 import {
@@ -30,10 +56,16 @@ import {
   RunFailureToastContent,
 } from './runFailurePresentation';
 import { getRunOriginLabel, getRunStatusPresentation } from './runPresentation';
-import {
-  type RecoveryActionPresentation,
-  resolveRunRecovery,
-} from './runRecovery';
+
+type RunStatusTone = 'default' | 'processing' | 'success' | 'warning' | 'error';
+
+function trimOptional(value: string | null | undefined): string {
+  return value?.trim() ?? '';
+}
+
+function getRunBadgeClass(status: string): string {
+  return `wa-vnext__status wa-vnext__status--${getRunStatusPresentation(status).className}`;
+}
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -96,338 +128,335 @@ function readCommittedRunFailure(
   };
 }
 
-function RunFailureSummary({
-  detail,
-  kind,
-}: {
-  readonly detail: string;
-  readonly kind: 'run' | 'step';
-}) {
-  return (
-    <>
-      <span>
-        {kind === 'run'
-          ? t(
-              'workflowActivityVNext.run.failedSummary',
-              'The run did not complete.',
-            )
-          : t(
-              'workflowActivityVNext.run.stepFailedSummary',
-              'This step did not complete.',
-            )}
-      </span>
-      <TechnicalDetails>{detail}</TechnicalDetails>
-    </>
-  );
-}
-
-function RunLink({
-  runId,
-  scopeId,
-}: {
-  readonly runId: string;
-  readonly scopeId: string;
-}) {
-  if (!runId.trim()) {
-    return <>{t('workflowActivityVNext.common.unavailable', 'Unavailable')}</>;
+function formatRunStatus(status: string | null | undefined): string {
+  const normalized = trimOptional(status)
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+  if (!normalized) {
+    return t('workflowActivityVNext.common.unknown', 'Unknown');
   }
-  return (
-    <a
-      className="wa-vnext__mono"
-      href={buildWorkflowActivityRunHref(scopeId, runId)}
-    >
-      {runId}
-    </a>
-  );
+
+  return normalized
+    .split('_')
+    .filter(Boolean)
+    .map((segment) => `${segment.charAt(0).toUpperCase()}${segment.slice(1)}`)
+    .join(' ');
 }
 
-function ChildRunList({
-  runs,
-  scopeId,
-}: {
-  readonly runs: readonly WorkflowRunLineageRunRef[];
-  readonly scopeId: string;
-}) {
-  if (!runs.length) {
-    return (
-      <p>{t('workflowActivityVNext.run.noRelatedRuns', 'No related runs.')}</p>
+function getStepExecutionStatus(
+  step: WorkflowActivityStep,
+): 'idle' | 'active' | 'waiting' | 'completed' | 'failed' {
+  if (step.success === true) return 'completed';
+  if (step.success === false || trimOptional(step.error)) return 'failed';
+  if (trimOptional(step.suspensionType)) return 'waiting';
+  if (trimOptional(step.requestedAtUtc) && !trimOptional(step.completedAtUtc)) {
+    return 'active';
+  }
+  return 'idle';
+}
+
+function getStepStatusTone(step: WorkflowActivityStep): RunStatusTone {
+  const status = getStepExecutionStatus(step);
+  if (status === 'completed') return 'success';
+  if (status === 'failed') return 'error';
+  if (status === 'active') return 'processing';
+  if (status === 'waiting') return 'warning';
+  return 'default';
+}
+
+function getStepStatusLabel(step: WorkflowActivityStep): string {
+  const status = getStepExecutionStatus(step);
+  if (status === 'active') return 'Running';
+  if (status === 'idle') return 'Pending';
+  return formatRunStatus(status);
+}
+
+function renderStepStatusIcon(step: WorkflowActivityStep): React.ReactNode {
+  const status = getStepExecutionStatus(step);
+  if (status === 'completed')
+    return <CheckCircleFilled style={{ color: '#16a34a' }} />;
+  if (status === 'failed')
+    return <CloseCircleFilled style={{ color: '#dc2626' }} />;
+  if (status === 'active')
+    return <LoadingOutlined style={{ color: '#2563eb' }} />;
+  if (status === 'waiting')
+    return <ExclamationCircleFilled style={{ color: '#d97706' }} />;
+  return <ClockCircleOutlined style={{ color: '#94a3b8' }} />;
+}
+
+function formatDurationMs(value: number | null | undefined): string {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    return 'n/a';
+  }
+  if (value < 1000) return `${Math.round(value)}ms`;
+  if (value < 60_000)
+    return `${(value / 1000).toFixed(value < 10_000 ? 2 : 1)}s`;
+  const minutes = Math.floor(value / 60_000);
+  const seconds = Math.round((value % 60_000) / 1000);
+  return `${minutes}m ${seconds}s`;
+}
+
+function getRunDurationMs(
+  run: WorkflowActivityRunDetail | WorkflowActivityRunSummary,
+  steps?: readonly WorkflowActivityStep[],
+): number | null {
+  const startedAt = Date.parse(trimOptional(run.summary.startedAtUtc));
+  const updatedAt = Date.parse(trimOptional(run.summary.updatedAtUtc));
+  if (
+    Number.isFinite(startedAt) &&
+    Number.isFinite(updatedAt) &&
+    updatedAt > startedAt
+  ) {
+    return updatedAt - startedAt;
+  }
+
+  const durations = (steps ?? [])
+    .map((step) => step.durationMs)
+    .filter(
+      (value): value is number =>
+        typeof value === 'number' && Number.isFinite(value) && value >= 0,
     );
+  if (!durations.length) return null;
+  const total = durations.reduce((sum, duration) => sum + duration, 0);
+  return total > 0 ? total : null;
+}
+
+function getStepDisplayName(
+  step: WorkflowActivityStep | null | undefined,
+): string {
+  const stepId = trimOptional(step?.stepId);
+  const stepType = trimOptional(step?.stepType);
+  return stepId || stepType || t('workflowActivityVNext.run.step', 'Step');
+}
+
+function summarizeStepParameters(step: WorkflowActivityStep): string {
+  const entries = Object.entries(step.requestParameters).filter(
+    ([key, value]) => trimOptional(key) || trimOptional(value),
+  );
+  if (!entries.length) {
+    return step.stepType || t('workflowActivityVNext.run.step', 'step');
   }
+  return entries
+    .slice(0, 2)
+    .map(([key, value]) => `${key}: ${value}`)
+    .join(' | ');
+}
+
+function getStepSortTimestamp(step: WorkflowActivityStep): number {
   return (
-    <ul className="wa-vnext__related-list">
-      {runs.map((run) => (
-        <li key={`${run.relationshipId}:${run.runId}`}>
-          <RunLink runId={run.runId} scopeId={scopeId} />
-          {run.stepId ? (
-            <span className="wa-vnext__sub">
-              {t('workflowActivityVNext.run.fromStep', 'From step {step}', {
-                step: run.stepId,
-              })}
-            </span>
-          ) : null}
-        </li>
-      ))}
-    </ul>
+    Date.parse(
+      trimOptional(step.requestedAtUtc) || trimOptional(step.completedAtUtc),
+    ) || 0
   );
 }
 
-function RelatedRuns({
-  lineage,
-  scopeId,
-}: {
-  readonly lineage: WorkflowRunLineage;
-  readonly scopeId: string;
-}) {
-  return (
-    <section className="wa-vnext__related-runs">
-      <h2>{t('workflowActivityVNext.run.relatedRuns', 'Related runs')}</h2>
-      {lineage.availability !== 1 ? (
-        <Alert
-          message={
-            lineage.unavailableReason ||
-            t(
-              'workflowActivityVNext.run.lineageUnavailable',
-              'Related run history is unavailable.',
-            )
-          }
-          showIcon
-          type="info"
-        />
-      ) : (
-        <div className="wa-vnext__related-groups">
-          <section>
-            <h3>
-              {t('workflowActivityVNext.run.retryHistory', 'Retry history')}
-            </h3>
-            {lineage.retryFork.availability === 1 ? (
-              <Descriptions
-                column={1}
-                size="small"
-                items={[
-                  {
-                    key: 'source',
-                    label: t(
-                      'workflowActivityVNext.run.sourceRun',
-                      'Source run',
-                    ),
-                    children: (
-                      <RunLink
-                        runId={lineage.retryFork.sourceRunId}
-                        scopeId={scopeId}
-                      />
-                    ),
-                  },
-                  {
-                    key: 'original',
-                    label: t(
-                      'workflowActivityVNext.run.originalRun',
-                      'Original run',
-                    ),
-                    children: (
-                      <RunLink
-                        runId={lineage.retryFork.originalRunId}
-                        scopeId={scopeId}
-                      />
-                    ),
-                  },
-                  {
-                    key: 'attempt',
-                    label: t('workflowActivityVNext.run.attempt', 'Attempt'),
-                    children: lineage.retryFork.attempt,
-                  },
-                  {
-                    key: 'startingStep',
-                    label: t(
-                      'workflowActivityVNext.run.startingStep',
-                      'Starting step',
-                    ),
-                    children: lineage.retryFork.startAtStepId,
-                  },
-                  {
-                    key: 'children',
-                    label: t(
-                      'workflowActivityVNext.run.childRuns',
-                      'Child runs',
-                    ),
-                    children: (
-                      <ChildRunList
-                        runs={lineage.retryFork.childRuns}
-                        scopeId={scopeId}
-                      />
-                    ),
-                  },
-                ]}
-              />
-            ) : (
-              <p>
-                {t('workflowActivityVNext.common.unavailable', 'Unavailable')}
-              </p>
-            )}
-          </section>
-          <section>
-            <h3>
-              {t('workflowActivityVNext.run.subWorkflows', 'Sub-workflows')}
-            </h3>
-            {lineage.subWorkflow.availability === 1 ? (
-              <Descriptions
-                column={1}
-                size="small"
-                items={[
-                  {
-                    key: 'parent',
-                    label: t(
-                      'workflowActivityVNext.run.parentRun',
-                      'Parent run',
-                    ),
-                    children: (
-                      <RunLink
-                        runId={lineage.subWorkflow.parentRunId}
-                        scopeId={scopeId}
-                      />
-                    ),
-                  },
-                  {
-                    key: 'root',
-                    label: t('workflowActivityVNext.run.rootRun', 'Root run'),
-                    children: (
-                      <RunLink
-                        runId={lineage.subWorkflow.rootRunId}
-                        scopeId={scopeId}
-                      />
-                    ),
-                  },
-                  {
-                    key: 'depth',
-                    label: t('workflowActivityVNext.run.depth', 'Depth'),
-                    children: lineage.subWorkflow.depth,
-                  },
-                  {
-                    key: 'parentStep',
-                    label: t(
-                      'workflowActivityVNext.run.parentStep',
-                      'Parent step',
-                    ),
-                    children: lineage.subWorkflow.parentStepId,
-                  },
-                  {
-                    key: 'children',
-                    label: t(
-                      'workflowActivityVNext.run.childRuns',
-                      'Child runs',
-                    ),
-                    children: (
-                      <ChildRunList
-                        runs={lineage.subWorkflow.childRuns}
-                        scopeId={scopeId}
-                      />
-                    ),
-                  },
-                ]}
-              />
-            ) : (
-              <p>
-                {t('workflowActivityVNext.common.unavailable', 'Unavailable')}
-              </p>
-            )}
-          </section>
-        </div>
-      )}
-    </section>
+function getSelectedStepDefaultId(
+  steps: readonly WorkflowActivityStep[],
+  graph?: WorkflowActivityRunGraph,
+): string {
+  const failed = steps.find(
+    (step) => step.success === false || trimOptional(step.error),
   );
+  if (failed) return failed.stepId;
+
+  const rootStepId = trimOptional(
+    graph?.nodes.find((node) => node.nodeId === graph?.rootNodeId)?.stepId,
+  );
+  if (rootStepId && steps.some((step) => step.stepId === rootStepId)) {
+    return rootStepId;
+  }
+
+  return steps[0]?.stepId ?? '';
 }
 
-function recoveryRecommendationLabel(
-  action: WorkflowRecoveryRecommendedAction,
-): string | null {
-  switch (action) {
-    case 1:
-      return t('workflowActivityVNext.run.retry', 'Retry failed step');
-    case 2:
-      return t('workflowActivityVNext.run.runAgain', 'Run again');
-    case 3:
-    case 4:
-      return t('workflowActivityVNext.run.reviewSettings', 'Review settings');
-    case 5:
-      return t('workflowActivityVNext.run.editWorkflow', 'Edit workflow');
-    case 6:
-      return t('workflowActivityVNext.run.reviewInput', 'Review input');
-    case 7:
-      return t(
-        'workflowActivityVNext.common.technicalDetails',
-        'Technical details',
+function buildExecutionGraph(
+  detail: WorkflowActivityRunDetail | undefined,
+  graph: WorkflowActivityRunGraph | undefined,
+  selectedStepId: string,
+): {
+  readonly edges: Edge<StudioGraphEdgeData>[];
+  readonly nodes: Node<StudioGraphNodeData>[];
+  readonly orderedSteps: WorkflowActivityStep[];
+} {
+  const orderedSteps = [...(detail?.steps ?? [])].sort((left, right) => {
+    const leftTime = getStepSortTimestamp(left);
+    const rightTime = getStepSortTimestamp(right);
+    if (leftTime !== rightTime) return leftTime - rightTime;
+    return left.stepId.localeCompare(right.stepId);
+  });
+  const stepById = new Map(
+    orderedSteps.map((step) => [step.stepId, step] as const),
+  );
+  const nodeById = new Map(
+    graph?.nodes.map((node) => [node.nodeId, node] as const) ?? [],
+  );
+  const stepIdByNodeId = new Map(
+    graph?.nodes.map(
+      (node) => [node.nodeId, trimOptional(node.stepId)] as const,
+    ) ?? [],
+  );
+  const nodes: Node<StudioGraphNodeData>[] = orderedSteps.map(
+    (step, index) => ({
+      data: {
+        branchCount: trimOptional(step.branchKey) ? 1 : 0,
+        executionFocused: step.stepId === selectedStepId,
+        executionStatus: getStepExecutionStatus(step),
+        kind: 'step',
+        label: getStepDisplayName(step),
+        parametersSummary: summarizeStepParameters(step),
+        stepId: step.stepId,
+        stepType: step.stepType || 'step',
+        subtitle: step.stepType || t('workflowActivityVNext.run.step', 'Step'),
+        targetRole: step.targetRole,
+        title: getStepDisplayName(step),
+      },
+      id: `step:${step.stepId}`,
+      position: {
+        x: 120 + index * 310,
+        y: 150 + (index % 2 === 0 ? 0 : 44),
+      },
+      sourcePosition: Position.Right,
+      targetPosition: Position.Left,
+      type: 'studioWorkflowNode',
+    }),
+  );
+  const edges: Edge<StudioGraphEdgeData>[] = [];
+  const seen = new Set<string>();
+  const pushEdge = (
+    sourceStepId: string,
+    targetStepId: string,
+    implicit: boolean,
+    branchLabel?: string,
+  ) => {
+    if (!stepById.has(sourceStepId) || !stepById.has(targetStepId)) return;
+    const key = `${sourceStepId}->${targetStepId}:${branchLabel ?? ''}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    edges.push({
+      animated: false,
+      data: {
+        branchLabel,
+        implicit,
+        kind: branchLabel ? 'branch' : 'next',
+      },
+      id: `edge:${sourceStepId}:${targetStepId}:${edges.length}`,
+      label: branchLabel || undefined,
+      markerEnd: {
+        color: implicit ? '#94a3b8' : '#1677ff',
+        height: 10,
+        type: MarkerType.ArrowClosed,
+        width: 10,
+      },
+      source: `step:${sourceStepId}`,
+      style: {
+        stroke: implicit ? '#94a3b8' : '#1677ff',
+        strokeDasharray: implicit ? '5 5' : undefined,
+        strokeWidth: implicit ? 1.6 : 2.4,
+      },
+      target: `step:${targetStepId}`,
+      type: 'smoothstep',
+    });
+  };
+
+  if (graph?.edges.length) {
+    for (const edge of graph.edges) {
+      const sourceStepId =
+        trimOptional(stepIdByNodeId.get(edge.fromNodeId)) ||
+        nodeById.get(edge.fromNodeId)?.stepId ||
+        '';
+      const targetStepId =
+        trimOptional(stepIdByNodeId.get(edge.toNodeId)) ||
+        nodeById.get(edge.toNodeId)?.stepId ||
+        '';
+      if (sourceStepId && targetStepId) {
+        pushEdge(
+          sourceStepId,
+          targetStepId,
+          false,
+          trimOptional(edge.branchKey) || undefined,
+        );
+      }
+    }
+  }
+
+  for (const step of orderedSteps) {
+    const nextStepId = trimOptional(step.nextStepId);
+    if (nextStepId) {
+      pushEdge(
+        step.stepId,
+        nextStepId,
+        false,
+        trimOptional(step.branchKey) || undefined,
       );
-    default:
-      return null;
+    }
   }
+
+  if (!edges.length) {
+    orderedSteps.forEach((step, index) => {
+      const next = orderedSteps[index + 1];
+      if (next) {
+        pushEdge(step.stepId, next.stepId, true);
+      }
+    });
+  }
+
+  return { edges, nodes, orderedSteps };
 }
 
-function RecoveryUnavailableNotice({
-  action,
-  actionName,
-  onOpenSettings,
-}: {
-  readonly action: RecoveryActionPresentation;
-  readonly actionName: string;
-  readonly onOpenSettings: () => void;
-}) {
-  if (action.enabled || !action.reason) return null;
-  const recommendations = [
-    ...new Set(
-      action.recommendedActions
-        .map((recommendation) => ({
-          action: recommendation,
-          label: recoveryRecommendationLabel(recommendation),
-        }))
-        .filter(
-          (
-            recommendation,
-          ): recommendation is {
-            action: WorkflowRecoveryRecommendedAction;
-            label: string;
-          } => Boolean(recommendation.label),
-        ),
-    ),
-  ];
-  return (
-    <Alert
-      action={
-        recommendations.some(
-          ({ action: recommendation }) =>
-            recommendation === 3 || recommendation === 4,
-        ) ? (
-          <Button onClick={onOpenSettings} size="small">
-            {t('workflowActivityVNext.run.reviewSettings', 'Review settings')}
-          </Button>
-        ) : undefined
-      }
-      description={
-        recommendations.length ? (
-          <span>
-            {t(
-              'workflowActivityVNext.run.recommendedNextSteps',
-              'Recommended: {actions}',
-              { actions: recommendations.map(({ label }) => label).join(', ') },
-            )}
-          </span>
-        ) : undefined
-      }
-      message={
-        <span>
-          <strong>{actionName}</strong>
-          <span className="wa-vnext__sub">{action.reason}</span>
-        </span>
-      }
-      showIcon
-      type="info"
-    />
+function filterTimelineForStep(
+  timeline: readonly WorkflowActivityTimelineEvent[],
+  selectedStepId: string,
+): readonly WorkflowActivityTimelineEvent[] {
+  if (!selectedStepId) return timeline;
+  const scoped = timeline.filter(
+    (event) => trimOptional(event.stepId) === selectedStepId,
   );
+  return scoped.length ? scoped : timeline;
+}
+
+function renderKeyValueRows(values: Readonly<Record<string, string>>) {
+  const entries = Object.entries(values).filter(
+    ([key, value]) => trimOptional(key) || trimOptional(value),
+  );
+  if (!entries.length) {
+    return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} />;
+  }
+
+  return (
+    <div className="wa-vnext-run-detail__kv">
+      {entries.map(([key, value]) => (
+        <div className="wa-vnext-run-detail__kv-row" key={key}>
+          <div className="wa-vnext-run-detail__kv-key">{key}</div>
+          <div className="wa-vnext-run-detail__kv-value">{value || 'n/a'}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function renderTextBlock(value: string) {
+  const normalized = value.trim();
+  if (!normalized) {
+    return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} />;
+  }
+  return <pre className="wa-vnext-run-detail__pre">{normalized}</pre>;
+}
+
+function formatRunTime(run: WorkflowActivityRunSummary): string {
+  return formatDateTime(run.updatedAtUtc);
 }
 
 const RunDetailPage: React.FC<{
   readonly runId: string;
   readonly scopeId: string;
 }> = ({ runId, scopeId }) => {
+  const location = useConsoleLocation();
   const toast = useConsoleToast();
+  const params = React.useMemo(
+    () => new URLSearchParams(location.search),
+    [location.search],
+  );
+  const definitionId = params.get('definition')?.trim() ?? '';
   const detail = useQuery({
     queryKey: ['workflow-activity-vnext', 'run-detail', scopeId, runId],
     queryFn: () => workflowActivityApi.getRun(scopeId, runId),
@@ -438,6 +467,15 @@ const RunDetailPage: React.FC<{
     queryFn: () => workflowActivityApi.getRunGraph(scopeId, runId),
     retry: false,
   });
+  const historyRuns = useQuery({
+    queryKey: ['workflow-activity-vnext', 'run-history', scopeId, definitionId],
+    queryFn: () =>
+      workflowActivityApi.listRuns(scopeId, {
+        definitionActorIds: definitionId ? [definitionId] : undefined,
+        take: 100,
+      }),
+    retry: false,
+  });
   const [forking, setForking] = React.useState(false);
   const [receipt, setReceipt] =
     React.useState<WorkflowRunForkAcceptedReceipt | null>(null);
@@ -445,6 +483,7 @@ const RunDetailPage: React.FC<{
     readonly kind: 'retry' | 'run_again';
     readonly stepId: string;
   } | null>(null);
+  const [selectedStepId, setSelectedStepId] = React.useState('');
   const shownFailureKeys = React.useRef(new Set<string>());
 
   const failurePresentation = React.useMemo(() => {
@@ -462,7 +501,11 @@ const RunDetailPage: React.FC<{
       );
       switch (action) {
         case 'sign_in': {
-          const returnTo = buildWorkflowActivityRunHref(scopeId, runId);
+          const returnTo = buildWorkflowActivityRunHref(
+            scopeId,
+            runId,
+            definitionId ? { definition: definitionId } : undefined,
+          );
           history.push(`/login?redirect=${encodeURIComponent(returnTo)}`);
           return;
         }
@@ -477,12 +520,13 @@ const RunDetailPage: React.FC<{
         case 'retry':
           void detail.refetch();
           void graph.refetch();
+          void historyRuns.refetch();
           return;
         case 'review_input':
           return;
       }
     },
-    [detail, graph, runId, scopeId],
+    [detail, definitionId, graph, historyRuns, runId, scopeId],
   );
 
   React.useEffect(() => {
@@ -502,6 +546,15 @@ const RunDetailPage: React.FC<{
       { duration: failurePresentation.duration, key },
     );
   }, [failurePresentation, performFailureAction, runId, toast]);
+
+  React.useEffect(() => {
+    if (selectedStepId) return;
+    const defaultStepId = getSelectedStepDefaultId(
+      detail.data?.steps ?? [],
+      graph.data,
+    );
+    setSelectedStepId(defaultStepId);
+  }, [detail.data?.steps, graph.data, selectedStepId]);
 
   const fork = async (startAtStepId: string): Promise<boolean> => {
     if (forking) return false;
@@ -533,7 +586,7 @@ const RunDetailPage: React.FC<{
     if (await fork(pendingRecovery.stepId)) setPendingRecovery(null);
   };
 
-  if (detail.isPending)
+  if (detail.isPending || historyRuns.isPending) {
     return (
       <WorkflowActivityVNextShell
         activeSection="activity"
@@ -549,7 +602,9 @@ const RunDetailPage: React.FC<{
         </div>
       </WorkflowActivityVNextShell>
     );
-  if (detail.isError || !detail.data)
+  }
+
+  if (detail.isError || !detail.data) {
     return (
       <WorkflowActivityVNextShell
         activeSection="activity"
@@ -579,15 +634,120 @@ const RunDetailPage: React.FC<{
         </div>
       </WorkflowActivityVNextShell>
     );
+  }
 
   const run = detail.data;
-  const recovery = resolveRunRecovery(run.recoveryCapability);
-  const pendingRecoveryPresentation = pendingRecovery
-    ? pendingRecovery.kind === 'retry'
-      ? recovery.retry
-      : recovery.runAgain
-    : null;
   const statusPresentation = getRunStatusPresentation(run.summary.status);
+  const historyEntries = [...(historyRuns.data ?? [])].sort((left, right) => {
+    const leftTime =
+      Date.parse(
+        trimOptional(left.updatedAtUtc) || trimOptional(left.startedAtUtc),
+      ) || 0;
+    const rightTime =
+      Date.parse(
+        trimOptional(right.updatedAtUtc) || trimOptional(right.startedAtUtc),
+      ) || 0;
+    if (leftTime !== rightTime) return rightTime - leftTime;
+    return left.runId.localeCompare(right.runId);
+  });
+  const normalizedWorkflowName = trimOptional(
+    run.summary.workflowName,
+  ).toLowerCase();
+  const scopedHistoryEntries = normalizedWorkflowName
+    ? historyEntries.filter(
+        (entry) =>
+          trimOptional(entry.workflowName).toLowerCase() ===
+          normalizedWorkflowName,
+      )
+    : historyEntries;
+  const effectiveHistory = scopedHistoryEntries.some(
+    (entry) => entry.runId === run.summary.runId,
+  )
+    ? scopedHistoryEntries
+    : [run.summary, ...scopedHistoryEntries];
+  const selectedHistoryRun =
+    effectiveHistory.find((entry) => entry.runId === run.summary.runId) ??
+    run.summary;
+  const graphView = buildExecutionGraph(run, graph.data, selectedStepId);
+  const selectedStep =
+    graphView.orderedSteps.find((step) => step.stepId === selectedStepId) ??
+    graphView.orderedSteps[0] ??
+    null;
+  const scopedTimeline = filterTimelineForStep(
+    run.timeline,
+    selectedStep?.stepId ?? '',
+  );
+  const runDurationMs = getRunDurationMs(run, graphView.orderedSteps);
+  const selectedStepTitle = getStepDisplayName(selectedStep);
+  const selectedStepDuration = formatDurationMs(selectedStep?.durationMs);
+
+  const openRun = (targetRunId: string) => {
+    history.push(
+      buildWorkflowActivityRunHref(
+        scopeId,
+        targetRunId,
+        definitionId ? { definition: definitionId } : undefined,
+      ),
+    );
+    setSelectedStepId('');
+  };
+
+  const renderGraph = () => {
+    if (graph.isError) {
+      return (
+        <Alert
+          action={
+            <Button onClick={() => void graph.refetch()}>
+              {t('workflowActivityVNext.common.retry', 'Retry')}
+            </Button>
+          }
+          message={t(
+            'workflowActivityVNext.run.graphUnavailable',
+            'Run graph unavailable',
+          )}
+          showIcon
+          type="warning"
+        />
+      );
+    }
+
+    if (!graphView.nodes.length) {
+      return (
+        <div className="wa-vnext__state wa-vnext__state--compact">
+          <h3>
+            {t(
+              'workflowActivityVNext.run.graphEmpty',
+              'No graph is available yet.',
+            )}
+          </h3>
+          <p>
+            {t(
+              'workflowActivityVNext.run.graphEmptyDescription',
+              'This run has not materialized a graph view yet.',
+            )}
+          </p>
+        </div>
+      );
+    }
+
+    return (
+      <GraphCanvas
+        autoFitKey={run.summary.runId}
+        edges={graphView.edges}
+        height="100%"
+        nodes={graphView.nodes}
+        onCanvasSelect={() => setSelectedStepId('')}
+        onNodeSelect={(nodeId) =>
+          setSelectedStepId(nodeId.replace(/^step:/, ''))
+        }
+        selectedNodeId={
+          selectedStep ? `step:${selectedStep.stepId}` : undefined
+        }
+        variant="studio"
+      />
+    );
+  };
+
   return (
     <WorkflowActivityVNextShell
       activeSection="activity"
@@ -614,6 +774,7 @@ const RunDetailPage: React.FC<{
             onClick={() => {
               void detail.refetch();
               void graph.refetch();
+              void historyRuns.refetch();
             }}
           >
             {t('workflowActivityVNext.common.refresh', 'Refresh')}
@@ -626,566 +787,324 @@ const RunDetailPage: React.FC<{
         t('workflowActivityVNext.run.title', 'Run details')
       }
     >
-      <div className="wa-vnext__toolbar">
-        <Space wrap>
-          <span
-            className={`wa-vnext__status wa-vnext__status--${statusPresentation.className}`}
-          >
-            {statusPresentation.label}
-          </span>
-          <span>{getRunOriginLabel(run.summary.runOrigin)}</span>
-        </Space>
-        <Space wrap>
-          <Button
-            aria-disabled={!recovery.retry.enabled}
-            className={
-              !recovery.retry.enabled ? 'wa-vnext__aria-disabled' : undefined
-            }
-            loading={forking}
-            onClick={() => {
-              if (!recovery.retry.enabled) return;
-              setPendingRecovery({
-                kind: 'retry',
-                stepId: recovery.retry.startingStepId,
-              });
-            }}
-            danger
-          >
-            {t('workflowActivityVNext.run.retry', 'Retry failed step')}
-          </Button>
-          <Button
-            aria-disabled={!recovery.runAgain.enabled}
-            className={
-              !recovery.runAgain.enabled ? 'wa-vnext__aria-disabled' : undefined
-            }
-            loading={forking}
-            onClick={() => {
-              if (!recovery.runAgain.enabled) return;
-              setPendingRecovery({
-                kind: 'run_again',
-                stepId: recovery.runAgain.startingStepId,
-              });
-            }}
-          >
-            {t('workflowActivityVNext.run.runAgain', 'Run again')}
-          </Button>
-        </Space>
-      </div>
-      <div className="wa-vnext__recovery-notices">
-        <RecoveryUnavailableNotice
-          action={recovery.retry}
-          actionName={t('workflowActivityVNext.run.retry', 'Retry failed step')}
-          onOpenSettings={() =>
-            history.push(buildWorkflowActivitySectionHref(scopeId, 'settings'))
-          }
-        />
-        <RecoveryUnavailableNotice
-          action={recovery.runAgain}
-          actionName={t('workflowActivityVNext.run.runAgain', 'Run again')}
-          onOpenSettings={() =>
-            history.push(buildWorkflowActivitySectionHref(scopeId, 'settings'))
-          }
-        />
-      </div>
-      {receipt ? (
-        <Alert
-          action={
-            <Button
-              onClick={() =>
-                history.push(
-                  buildWorkflowActivityRunHref(scopeId, receipt.newRunId),
-                )
-              }
-            >
-              {t('workflowActivityVNext.run.openNewRun', 'Open new run')}
-            </Button>
-          }
-          description={
-            <>
-              <p>
+      <div className="wa-vnext-run-detail">
+        <aside className="wa-vnext-run-detail__rail">
+          <div className="wa-vnext-run-detail__rail-header">
+            <div className="wa-vnext-run-detail__rail-title">
+              <Typography.Title level={5} style={{ margin: 0 }}>
                 {t(
-                  'workflowActivityVNext.run.forkAcceptedDescription',
-                  'The request was accepted. Open the new run to follow its progress.',
+                  'pages.runs.memberPublishedRuns.publishedRuns',
+                  'Published runs',
                 )}
-              </p>
-              <TechnicalDetails>
-                <Descriptions
-                  column={1}
+              </Typography.Title>
+              <Typography.Text ellipsis type="secondary">
+                {run.summary.workflowName ||
+                  t('workflowActivityVNext.common.unknown', 'Unknown')}
+              </Typography.Text>
+            </div>
+            <Button
+              icon={<ReloadOutlined />}
+              loading={historyRuns.isFetching}
+              onClick={() => void historyRuns.refetch()}
+              shape="circle"
+              size="small"
+              aria-label={t('workflowActivityVNext.common.refresh', 'Refresh')}
+            />
+          </div>
+          <div className="wa-vnext-run-detail__rail-list">
+            {historyRuns.isError ? (
+              <Alert
+                showIcon
+                type="error"
+                message={t(
+                  'workflowActivityVNext.run.historyUnavailable',
+                  'Run history is unavailable.',
+                )}
+                description={errorMessage(historyRuns.error)}
+              />
+            ) : effectiveHistory.length ? (
+              effectiveHistory.map((entry) => {
+                const selected = entry.runId === selectedHistoryRun.runId;
+                const selectedStatus = getRunStatusPresentation(entry.status);
+                return (
+                  <button
+                    aria-current={selected ? 'true' : undefined}
+                    aria-label={t(
+                      'workflowActivityVNext.run.openRunAria',
+                      'Open {runId}',
+                      {
+                        runId: entry.runId,
+                      },
+                    )}
+                    className={`wa-vnext-run-detail__run${selected ? ' wa-vnext-run-detail__run--selected' : ''}`}
+                    key={entry.runId}
+                    onClick={() => openRun(entry.runId)}
+                    type="button"
+                  >
+                    <div className="wa-vnext-run-detail__run-title">
+                      <Tag
+                        className={getRunBadgeClass(entry.status)}
+                        style={{ marginInlineEnd: 0 }}
+                      >
+                        {selectedStatus.label}
+                      </Tag>
+                      <Typography.Text ellipsis style={{ minWidth: 0 }}>
+                        {formatRunTime(entry)}
+                      </Typography.Text>
+                    </div>
+                    <Typography.Text ellipsis type="secondary">
+                      {entry.runOrigin ||
+                        t('workflowActivityVNext.common.unknown', 'Unknown')}
+                    </Typography.Text>
+                  </button>
+                );
+              })
+            ) : (
+              <div className="wa-vnext__state wa-vnext__state--compact">
+                <h3>
+                  {t(
+                    'workflowActivityVNext.run.noHistory',
+                    'No published runs yet.',
+                  )}
+                </h3>
+                <p>
+                  {t(
+                    'workflowActivityVNext.run.noHistoryDescription',
+                    'This workflow has no other runs in the current history context.',
+                  )}
+                </p>
+              </div>
+            )}
+          </div>
+        </aside>
+        <section className="wa-vnext-run-detail__stage">
+          <header className="wa-vnext-run-detail__stage-header">
+            <div className="wa-vnext-run-detail__stage-title">
+              <Space wrap size={8}>
+                <Typography.Title level={4} style={{ margin: 0 }}>
+                  {formatDateTime(run.summary.updatedAtUtc)}
+                </Typography.Title>
+                <Tag
+                  className={getRunBadgeClass(run.summary.status)}
+                  style={{ marginInlineEnd: 0 }}
+                >
+                  {statusPresentation.label}
+                </Tag>
+                <Tag style={{ marginInlineEnd: 0 }}>
+                  {formatDurationMs(runDurationMs)}
+                </Tag>
+              </Space>
+              <Typography.Text ellipsis type="secondary">
+                {run.summary.workflowName ||
+                  t('workflowActivityVNext.common.unknown', 'Unknown')}
+                {' · '}
+                {getRunOriginLabel(run.summary.runOrigin)}
+              </Typography.Text>
+            </div>
+            <div className="wa-vnext-run-detail__stage-actions">
+              <Button
+                icon={<ReloadOutlined />}
+                loading={
+                  detail.isFetching ||
+                  graph.isFetching ||
+                  historyRuns.isFetching
+                }
+                onClick={() => {
+                  void detail.refetch();
+                  void graph.refetch();
+                  void historyRuns.refetch();
+                }}
+              >
+                {t('workflowActivityVNext.common.refresh', 'Refresh')}
+              </Button>
+            </div>
+          </header>
+          {receipt ? (
+            <Alert
+              action={
+                <Button
+                  onClick={() =>
+                    history.push(
+                      buildWorkflowActivitySectionHref(scopeId, 'activity'),
+                    )
+                  }
+                >
+                  {t(
+                    'workflowActivityVNext.editor.openActivity',
+                    'Open Activity',
+                  )}
+                </Button>
+              }
+              description={
+                <>
+                  <p>
+                    {t(
+                      'workflowActivityVNext.run.forkAcceptedDescription',
+                      'Open Activity to follow its progress.',
+                    )}
+                  </p>
+                  <TechnicalDetails>
+                    <ul>
+                      <li className="wa-vnext__mono">
+                        {receipt.newRunActorId}
+                      </li>
+                      <li className="wa-vnext__mono">
+                        {receipt.acceptedCommandId}
+                      </li>
+                      <li className="wa-vnext__mono">{receipt.statusUrl}</li>
+                    </ul>
+                  </TechnicalDetails>
+                </>
+              }
+              message={t(
+                'workflowActivityVNext.run.forkAccepted',
+                'New run started',
+              )}
+              showIcon
+              type="success"
+            />
+          ) : null}
+          <div className="wa-vnext-run-detail__graph">{renderGraph()}</div>
+          <div className="wa-vnext-run-detail__details">
+            <section className="wa-vnext-run-detail__logs">
+              <div className="wa-vnext-run-detail__logs-header">
+                <Typography.Text strong>
+                  {t('workflowActivityVNext.run.logs', 'Logs')}
+                </Typography.Text>
+                <Typography.Text type="secondary">
+                  {selectedStepDuration}
+                </Typography.Text>
+              </div>
+              <div className="wa-vnext-run-detail__step-list">
+                {graphView.orderedSteps.length ? (
+                  graphView.orderedSteps.map((step) => {
+                    const selected = selectedStep?.stepId === step.stepId;
+                    return (
+                      <button
+                        aria-current={selected ? 'true' : undefined}
+                        className={`wa-vnext-run-detail__step${selected ? ' wa-vnext-run-detail__step--selected' : ''}`}
+                        key={step.stepId}
+                        onClick={() => setSelectedStepId(step.stepId)}
+                        type="button"
+                      >
+                        {renderStepStatusIcon(step)}
+                        <span style={{ minWidth: 0 }}>
+                          <Typography.Text
+                            ellipsis
+                            style={{ display: 'block' }}
+                          >
+                            {getStepDisplayName(step)}
+                          </Typography.Text>
+                          <Typography.Text ellipsis type="secondary">
+                            {step.stepType ||
+                              t('workflowActivityVNext.run.step', 'Step')}
+                          </Typography.Text>
+                        </span>
+                        <Typography.Text type="secondary">
+                          {formatDurationMs(step.durationMs)}
+                        </Typography.Text>
+                      </button>
+                    );
+                  })
+                ) : (
+                  <div className="wa-vnext__state wa-vnext__state--compact">
+                    <h3>
+                      {t(
+                        'workflowActivityVNext.run.noSteps',
+                        'No steps are available yet.',
+                      )}
+                    </h3>
+                  </div>
+                )}
+              </div>
+            </section>
+            <section className="wa-vnext-run-detail__inspector">
+              <div className="wa-vnext-run-detail__inspector-header">
+                <Space size={8} style={{ minWidth: 0 }}>
+                  <NodeIndexOutlined style={{ color: '#1677ff' }} />
+                  <Typography.Text ellipsis strong style={{ maxWidth: 360 }}>
+                    {selectedStepTitle ||
+                      t('workflowActivityVNext.run.details', 'Details')}
+                  </Typography.Text>
+                  {selectedStep ? (
+                    <Tag
+                      color={getStepStatusTone(selectedStep)}
+                      style={{ marginInlineEnd: 0 }}
+                    >
+                      {getStepStatusLabel(selectedStep)}
+                    </Tag>
+                  ) : null}
+                </Space>
+                {selectedStep ? (
+                  <Typography.Text type="secondary">
+                    {formatDateTime(
+                      selectedStep.completedAtUtc ||
+                        selectedStep.requestedAtUtc,
+                    )}
+                  </Typography.Text>
+                ) : null}
+              </div>
+              <div className="wa-vnext-run-detail__inspector-body">
+                <Tabs
                   size="small"
                   items={[
                     {
-                      key: 'actor',
-                      label: t(
-                        'workflowActivityVNext.run.newActorId',
-                        'Run address',
-                      ),
-                      children: (
-                        <span className="wa-vnext__mono">
-                          {receipt.newRunActorId}
-                        </span>
-                      ),
+                      key: 'output',
+                      label: t('workflowActivityVNext.run.output', 'Output'),
+                      children: selectedStep
+                        ? renderTextBlock(
+                            selectedStep.error || selectedStep.outputPreview,
+                          )
+                        : renderTextBlock(run.finalError || run.finalOutput),
                     },
                     {
-                      key: 'command',
-                      label: t(
-                        'workflowActivityVNext.run.commandId',
-                        'Request ID',
-                      ),
-                      children: (
-                        <span className="wa-vnext__mono">
-                          {receipt.acceptedCommandId}
-                        </span>
-                      ),
+                      key: 'input',
+                      label: t('workflowActivityVNext.run.input', 'Input'),
+                      children: selectedStep
+                        ? renderKeyValueRows(selectedStep.requestParameters)
+                        : renderTextBlock(run.input),
                     },
                     {
-                      key: 'correlation',
+                      key: 'timeline',
                       label: t(
-                        'workflowActivityVNext.run.correlationId',
-                        'Tracking ID',
+                        'workflowActivityVNext.run.timeline',
+                        'Timeline',
                       ),
-                      children: (
-                        <span className="wa-vnext__mono">
-                          {receipt.correlationId}
-                        </span>
-                      ),
-                    },
-                    {
-                      key: 'status',
-                      label: t(
-                        'workflowActivityVNext.run.statusUrl',
-                        'Status URL',
-                      ),
-                      children: (
-                        <span className="wa-vnext__mono">
-                          {receipt.statusUrl}
-                        </span>
+                      children: scopedTimeline.length ? (
+                        <div className="wa-vnext-run-detail__timeline">
+                          {scopedTimeline.map((event) => (
+                            <div
+                              className="wa-vnext-run-detail__timeline-row"
+                              key={`${event.timestampUtc}-${event.stage}-${event.kind}-${event.stepId}-${event.agentId}`}
+                            >
+                              <div className="wa-vnext-run-detail__timeline-key">
+                                {formatDateTime(event.timestampUtc)}
+                              </div>
+                              <div className="wa-vnext-run-detail__timeline-value">
+                                <Typography.Text strong>
+                                  {event.stage || event.kind || 'event'}
+                                </Typography.Text>
+                                <br />
+                                <Typography.Text type="secondary">
+                                  {trimOptional(event.message) ||
+                                    trimOptional(event.agentId) ||
+                                    'event'}
+                                </Typography.Text>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} />
                       ),
                     },
                   ]}
                 />
-              </TechnicalDetails>
-            </>
-          }
-          message={t(
-            'workflowActivityVNext.run.forkAccepted',
-            'New run accepted',
-          )}
-          showIcon
-          type="success"
-        />
-      ) : null}
-      <div className="wa-vnext__run-summary">
-        <Descriptions
-          bordered
-          column={{ xs: 1, sm: 2 }}
-          items={[
-            {
-              key: 'origin',
-              label: t('workflowActivityVNext.activity.columnOrigin', 'Source'),
-              children: getRunOriginLabel(run.summary.runOrigin),
-            },
-            {
-              key: 'input',
-              label: t('workflowActivityVNext.run.input', 'Input'),
-              children:
-                run.input || t('workflowActivityVNext.common.empty', 'Empty'),
-            },
-            {
-              key: 'output',
-              label: t('workflowActivityVNext.run.output', 'Final output'),
-              children:
-                run.finalOutput ||
-                t('workflowActivityVNext.common.unavailable', 'Unavailable'),
-            },
-            {
-              key: 'error',
-              label: t('workflowActivityVNext.run.error', 'Final error'),
-              children: run.finalError ? (
-                <RunFailureSummary detail={run.finalError} kind="run" />
-              ) : (
-                t('workflowActivityVNext.common.unavailable', 'Unavailable')
-              ),
-            },
-          ]}
-        />
+              </div>
+            </section>
+          </div>
+        </section>
       </div>
-      <RelatedRuns lineage={run.lineage} scopeId={scopeId} />
-      <Tabs
-        className="wa-vnext__run-tabs"
-        items={[
-          {
-            key: 'steps',
-            label: t('workflowActivityVNext.run.steps', 'Steps'),
-            children: run.steps.length ? (
-              <TableScrollRegion
-                ariaLabel={t('workflowActivityVNext.run.steps', 'Steps')}
-              >
-                <table className="wa-vnext__table">
-                  <thead>
-                    <tr>
-                      <th>{t('workflowActivityVNext.run.step', 'Step')}</th>
-                      <th>{t('workflowActivityVNext.run.type', 'Type')}</th>
-                      <th>
-                        {t(
-                          'workflowActivityVNext.activity.columnStatus',
-                          'Status',
-                        )}
-                      </th>
-                      <th>{t('workflowActivityVNext.run.output', 'Output')}</th>
-                      <th>
-                        {t(
-                          'workflowActivityVNext.run.requestParameters',
-                          'Request parameters',
-                        )}
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {run.steps.map((step) => (
-                      <tr key={step.stepId}>
-                        <td
-                          className="wa-vnext__mono"
-                          data-label={t(
-                            'workflowActivityVNext.run.step',
-                            'Step',
-                          )}
-                        >
-                          {step.stepId}
-                        </td>
-                        <td
-                          data-label={t(
-                            'workflowActivityVNext.run.type',
-                            'Type',
-                          )}
-                        >
-                          {step.stepType}
-                        </td>
-                        <td
-                          data-label={t(
-                            'workflowActivityVNext.activity.columnStatus',
-                            'Status',
-                          )}
-                        >
-                          {step.success === null
-                            ? t(
-                                'workflowActivityVNext.common.pending',
-                                'Pending',
-                              )
-                            : step.success
-                              ? t(
-                                  'workflowActivityVNext.common.succeeded',
-                                  'Succeeded',
-                                )
-                              : t(
-                                  'workflowActivityVNext.common.failed',
-                                  'Failed',
-                                )}
-                        </td>
-                        <td
-                          data-label={t(
-                            'workflowActivityVNext.run.output',
-                            'Output',
-                          )}
-                        >
-                          {step.error ? (
-                            <RunFailureSummary
-                              detail={step.error}
-                              kind="step"
-                            />
-                          ) : (
-                            step.outputPreview ||
-                            t(
-                              'workflowActivityVNext.common.unavailable',
-                              'Unavailable',
-                            )
-                          )}
-                        </td>
-                        <td
-                          data-label={t(
-                            'workflowActivityVNext.run.requestParameters',
-                            'Request parameters',
-                          )}
-                        >
-                          <pre className="wa-vnext__mono">
-                            {Object.keys(step.requestParameters).length
-                              ? JSON.stringify(step.requestParameters, null, 2)
-                              : t(
-                                  'workflowActivityVNext.common.empty',
-                                  'Empty',
-                                )}
-                          </pre>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </TableScrollRegion>
-            ) : (
-              <div className="wa-vnext__state">
-                <p>
-                  {t(
-                    'workflowActivityVNext.run.noSteps',
-                    'No steps are available yet.',
-                  )}
-                </p>
-              </div>
-            ),
-          },
-          {
-            key: 'diagnostics',
-            label: t('workflowActivityVNext.run.diagnostics', 'Diagnostics'),
-            children: run.diagnostics.length ? (
-              <TableScrollRegion
-                ariaLabel={t(
-                  'workflowActivityVNext.run.diagnostics',
-                  'Diagnostics',
-                )}
-              >
-                <table className="wa-vnext__table">
-                  <thead>
-                    <tr>
-                      <th>
-                        {t('workflowActivityVNext.run.severity', 'Severity')}
-                      </th>
-                      <th>{t('workflowActivityVNext.run.code', 'Code')}</th>
-                      <th>{t('workflowActivityVNext.run.step', 'Step')}</th>
-                      <th>
-                        {t('workflowActivityVNext.run.message', 'Message')}
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {run.diagnostics.map((diagnostic) => (
-                      <tr
-                        key={[
-                          diagnostic.timestampUtc,
-                          diagnostic.code,
-                          diagnostic.stepId,
-                          diagnostic.message,
-                        ].join('|')}
-                      >
-                        <td
-                          data-label={t(
-                            'workflowActivityVNext.run.severity',
-                            'Severity',
-                          )}
-                        >
-                          {diagnostic.severity}
-                        </td>
-                        <td
-                          className="wa-vnext__mono"
-                          data-label={t(
-                            'workflowActivityVNext.run.code',
-                            'Code',
-                          )}
-                        >
-                          {diagnostic.code}
-                        </td>
-                        <td
-                          className="wa-vnext__mono"
-                          data-label={t(
-                            'workflowActivityVNext.run.step',
-                            'Step',
-                          )}
-                        >
-                          {diagnostic.stepId ||
-                            t(
-                              'workflowActivityVNext.common.unavailable',
-                              'Unavailable',
-                            )}
-                        </td>
-                        <td
-                          data-label={t(
-                            'workflowActivityVNext.run.message',
-                            'Message',
-                          )}
-                        >
-                          {diagnostic.message}
-                          {diagnostic.hint ? (
-                            <span className="wa-vnext__sub">
-                              {diagnostic.hint}
-                            </span>
-                          ) : null}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </TableScrollRegion>
-            ) : (
-              <div className="wa-vnext__state">
-                <p>
-                  {t(
-                    'workflowActivityVNext.run.noDiagnostics',
-                    'No diagnostics were returned.',
-                  )}
-                </p>
-              </div>
-            ),
-          },
-          {
-            key: 'timeline',
-            label: t('workflowActivityVNext.run.timeline', 'Timeline'),
-            children: run.timeline.length ? (
-              <ol>
-                {run.timeline.map((event) => (
-                  <li
-                    key={[
-                      event.timestampUtc,
-                      event.kind,
-                      event.stepId,
-                      event.message,
-                    ].join('|')}
-                  >
-                    <span className="wa-vnext__mono">{event.timestampUtc}</span>{' '}
-                    · {event.kind} · {event.message}
-                    {event.content ? (
-                      <pre className="wa-vnext__mono">{event.content}</pre>
-                    ) : null}
-                    {event.toolCall ? (
-                      <pre className="wa-vnext__mono">
-                        {JSON.stringify(event.toolCall, null, 2)}
-                      </pre>
-                    ) : null}
-                  </li>
-                ))}
-              </ol>
-            ) : (
-              <div className="wa-vnext__state">
-                <p>
-                  {t(
-                    'workflowActivityVNext.run.noTimeline',
-                    'No timeline events are visible yet.',
-                  )}
-                </p>
-              </div>
-            ),
-          },
-          {
-            key: 'statistics',
-            label: t(
-              'workflowActivityVNext.run.statisticsUsage',
-              'Statistics and usage',
-            ),
-            children: (
-              <Descriptions
-                bordered
-                column={{ xs: 1, sm: 2 }}
-                items={[
-                  {
-                    key: 'totalSteps',
-                    label: t(
-                      'workflowActivityVNext.run.totalSteps',
-                      'Total steps',
-                    ),
-                    children: run.statistics.totalSteps,
-                  },
-                  {
-                    key: 'requestedSteps',
-                    label: t(
-                      'workflowActivityVNext.run.requestedSteps',
-                      'Requested steps',
-                    ),
-                    children: run.statistics.requestedSteps,
-                  },
-                  {
-                    key: 'completedSteps',
-                    label: t(
-                      'workflowActivityVNext.run.completedSteps',
-                      'Completed steps',
-                    ),
-                    children: run.statistics.completedSteps,
-                  },
-                  {
-                    key: 'roleReplies',
-                    label: t(
-                      'workflowActivityVNext.run.roleReplies',
-                      'Role replies',
-                    ),
-                    children: run.statistics.roleReplyCount,
-                  },
-                  {
-                    key: 'promptTokens',
-                    label: t(
-                      'workflowActivityVNext.run.promptTokens',
-                      'Prompt tokens',
-                    ),
-                    children: run.usageTotals.promptTokens,
-                  },
-                  {
-                    key: 'completionTokens',
-                    label: t(
-                      'workflowActivityVNext.run.completionTokens',
-                      'Completion tokens',
-                    ),
-                    children: run.usageTotals.completionTokens,
-                  },
-                  {
-                    key: 'totalTokens',
-                    label: t(
-                      'workflowActivityVNext.run.totalTokens',
-                      'Total tokens',
-                    ),
-                    children: run.usageTotals.totalTokens,
-                  },
-                  {
-                    key: 'cost',
-                    label: t('workflowActivityVNext.run.cost', 'Returned cost'),
-                    children: run.usageTotals.cost,
-                  },
-                ]}
-              />
-            ),
-          },
-          {
-            key: 'graph',
-            label: t('workflowActivityVNext.run.graph', 'Graph'),
-            children: graph.isPending ? (
-              <p>
-                {t(
-                  'workflowActivityVNext.run.graphLoading',
-                  'Loading run graph…',
-                )}
-              </p>
-            ) : graph.isError ? (
-              <Alert
-                action={
-                  <Button onClick={() => void graph.refetch()}>
-                    {t('workflowActivityVNext.common.retry', 'Retry')}
-                  </Button>
-                }
-                message={t(
-                  'workflowActivityVNext.run.graphUnavailable',
-                  'Run graph unavailable',
-                )}
-                showIcon
-                type="warning"
-              />
-            ) : (
-              <div>
-                <p>
-                  {t(
-                    'workflowActivityVNext.run.graphSummary',
-                    '{nodes} nodes · {edges} edges',
-                    {
-                      nodes: graph.data?.nodes.length ?? 0,
-                      edges: graph.data?.edges.length ?? 0,
-                    },
-                  )}
-                </p>
-                <ul>
-                  {graph.data?.nodes.map((node) => (
-                    <li className="wa-vnext__mono" key={node.nodeId}>
-                      {node.nodeId}
-                      {node.stepId ? ` · ${node.stepId}` : ''}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ),
-          },
-        ]}
-      />
       <Modal
         aria-label={t(
           'workflowActivityVNext.run.confirmTitle',
@@ -1206,81 +1125,15 @@ const RunDetailPage: React.FC<{
         open={Boolean(pendingRecovery)}
         title={t('workflowActivityVNext.run.confirmTitle', 'Confirm new run')}
       >
-        <Descriptions
-          column={1}
-          items={[
-            {
-              key: 'revision',
-              label: t(
-                'workflowActivityVNext.run.definitionRevision',
-                'Definition revision',
-              ),
-              children:
-                recovery.workflowDefinitionRevisionId ||
-                t('workflowActivityVNext.common.unavailable', 'Unavailable'),
-            },
-            {
-              key: 'version',
-              label: t(
-                'workflowActivityVNext.run.definitionVersion',
-                'Definition version',
-              ),
-              children: recovery.workflowDefinitionVersion,
-            },
-            {
-              key: 'step',
-              label: t(
-                'workflowActivityVNext.run.startingStep',
-                'Starting step',
-              ),
-              children: pendingRecovery?.stepId ? (
-                <span className="wa-vnext__mono">{pendingRecovery.stepId}</span>
-              ) : (
-                t('workflowActivityVNext.common.unavailable', 'Unavailable')
-              ),
-            },
-            {
-              key: 'input',
-              label: t('workflowActivityVNext.run.input', 'Input'),
-              children:
-                run.input || t('workflowActivityVNext.common.empty', 'Empty'),
-            },
-            {
-              key: 'reuse',
-              label: t(
-                'workflowActivityVNext.run.priorOutputs',
-                'Prior step outputs',
-              ),
-              children: pendingRecoveryPresentation?.reusesPriorStepOutputs
-                ? t(
-                    'workflowActivityVNext.run.priorOutputsReused',
-                    'Prior step outputs will be reused.',
-                  )
-                : t(
-                    'workflowActivityVNext.run.priorOutputsNotReused',
-                    'Prior step outputs will not be reused.',
-                  ),
-            },
-          ]}
-        />
-        <Alert
-          message={t(
-            'workflowActivityVNext.run.sourceImmutable',
-            "This creates a separate run. The source run won't change.",
-          )}
-          showIcon
-          type="info"
-        />
-        {pendingRecoveryPresentation?.mayIncurModelOrToolCost ? (
-          <Alert
-            message={t(
-              'workflowActivityVNext.run.costWarning',
-              'This action may incur model or tool costs again.',
-            )}
-            showIcon
-            type="warning"
-          />
-        ) : null}
+        <Space direction="vertical" size={12}>
+          <Typography.Text>
+            {pendingRecovery?.stepId ||
+              t('workflowActivityVNext.common.unavailable', 'Unavailable')}
+          </Typography.Text>
+          <Typography.Text type="secondary">
+            {run.input || t('workflowActivityVNext.common.empty', 'Empty')}
+          </Typography.Text>
+        </Space>
       </Modal>
     </WorkflowActivityVNextShell>
   );
