@@ -2259,8 +2259,6 @@ public sealed class ScopeBindingCommandApplicationServiceTests
             {
                 WorkflowPlan = new WorkflowServiceDeploymentPlan
                 {
-                    WorkflowId = revisionId,
-                    RevisionId = revisionId,
                     WorkflowName = workflowName,
                     WorkflowYaml = workflowYaml,
                     WorkflowId = workflowId ?? string.Empty,
