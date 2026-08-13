@@ -328,6 +328,29 @@ public sealed class NyxIdChatTaskContractTests
     }
 
     [Fact]
+    public void FormatterOutput_ShouldIncludeDecoderRequiredStepBooleansWhenFalse()
+    {
+        var step = new NyxIdChatTaskPlanStep
+        {
+            StepId = "step-optional-read",
+            Required = false,
+            MayChangeExternalState = false,
+        };
+        var plan = new NyxIdChatTaskPlan();
+        plan.Steps.Add(step);
+
+        var planStep = NyxIdChatTaskPlanJsonFormatter
+            .FormatTaskPlan(plan)["steps"]![0]!;
+        planStep["required"]!.GetValue<bool>().Should().BeFalse();
+        planStep["mayChangeExternalState"]!.GetValue<bool>().Should().BeFalse();
+
+        var changedStep = NyxIdChatTaskPlanJsonFormatter
+            .FormatTaskPlan(new NyxIdChatTaskPlanStepChanged { Step = step })["step"]!;
+        changedStep["required"]!.GetValue<bool>().Should().BeFalse();
+        changedStep["mayChangeExternalState"]!.GetValue<bool>().Should().BeFalse();
+    }
+
+    [Fact]
     public async Task FormatterOutput_ShouldRoundTripThroughStudioProtocolWithRepeatedDefaults()
     {
         var plan = new NyxIdChatTaskPlan

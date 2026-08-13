@@ -96,6 +96,30 @@ internal sealed class RuntimeEnvelopeRetryPolicy
         };
     }
 
+    /// <summary>
+    /// True when the failure chain indicates the actor's in-memory state and the
+    /// event store disagree about the committed history (append conflict, version
+    /// drift, or a committed-state publication that could not be persisted).
+    /// After such a failure the activation's memory is not trustworthy: keeping
+    /// the actor alive lets it consume and drop every subsequent command while
+    /// callers see accepted results. The grain should shed the activation so the
+    /// next envelope rehydrates from the committed history.
+    /// </summary>
+    internal static bool ContainsCommitConsistencyFailure(Exception exception)
+    {
+        return exception switch
+        {
+            EventStoreOptimisticConcurrencyException => true,
+            EventStoreVersionDriftException => true,
+            CommittedStatePublicationException => true,
+            AggregateException aggregate =>
+                aggregate.InnerExceptions.Any(ContainsCommitConsistencyFailure),
+            _ when exception.InnerException is not null =>
+                ContainsCommitConsistencyFailure(exception.InnerException),
+            _ => false,
+        };
+    }
+
     private static int GetAttempt(EventEnvelope envelope)
     {
         return RuntimeEnvelopeDeliveryIdentity.GetAttempt(envelope);

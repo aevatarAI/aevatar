@@ -284,6 +284,41 @@ public sealed class NyxIdActionPostconditionPortTests
     }
 
     [Fact]
+    public async Task VerifyAsync_KeyCreateHumanSessionDelegation_ShouldVerify()
+    {
+        var evidence = new StubActionEvidenceReadPort
+        {
+            AgentApiKey = AgentKey(),
+        };
+        var port = CreatePort(new StubCatalogQueryPort(ReadySnapshot()), evidence);
+
+        var result = await port.VerifyAsync(KeyCreateInput(), HumanDelegationReadContext());
+
+        result.Verified.Should().BeTrue();
+        evidence.BearerTokens.Should().ContainSingle().Which.Should().Be("delegated-secret");
+        result.ToString().Should().NotContain("delegated-secret");
+    }
+
+    [Fact]
+    public async Task VerifyAsync_KeyCreateRawProxyDelegation_ShouldNotRead()
+    {
+        var evidence = new StubActionEvidenceReadPort
+        {
+            AgentApiKey = AgentKey(),
+        };
+        var port = CreatePort(new StubCatalogQueryPort(ReadySnapshot()), evidence);
+        var context = ReadContext();
+        context.Credentials.NyxIdCredentialKind =
+            AgentToolNyxIdCredentialKindPayload.ProxyDelegation;
+
+        var result = await port.VerifyAsync(KeyCreateInput(), context);
+
+        result.Verified.Should().BeFalse();
+        result.FailureCode.Should().Be(NyxIdActionPostconditionPort.UnavailableCode);
+        evidence.AgentKeyReads.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task VerifyAsync_KeyCreatePlatformMismatch_ShouldFailClosed()
     {
         var evidence = new StubActionEvidenceReadPort
@@ -389,6 +424,30 @@ public sealed class NyxIdActionPostconditionPortTests
 
         result.Verified.Should().BeTrue();
         result.Resource.Key.KeyId.Should().Be("key-beta");
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public async Task VerifyAsync_KeyRotateNonPositiveAuthorityVersion_ShouldFailClosed(
+        long stateVersion)
+    {
+        var evidence = new StubActionEvidenceReadPort
+        {
+            AgentApiKey = AgentKey("key-beta") with
+            {
+                VersionEvidence = new NyxIdApiKeyVersionEvidence(
+                    "key-alpha",
+                    stateVersion,
+                    Now.AddMinutes(-1)),
+            },
+        };
+        var port = CreatePort(new StubCatalogQueryPort(ReadySnapshot()), evidence);
+
+        var result = await port.VerifyAsync(KeyRotateInput(), ReadContext());
+
+        result.Verified.Should().BeFalse();
+        result.FailureCode.Should().Be(NyxIdActionPostconditionPort.LineageUnavailableCode);
     }
 
     [Fact]
@@ -571,6 +630,32 @@ public sealed class NyxIdActionPostconditionPortTests
         {
             NyxIdAccessToken = "bearer-secret",
             NyxIdCredentialKind = AgentToolNyxIdCredentialKindPayload.SourceReadableUserBearer,
+        },
+    };
+
+    private static AgentToolExecutionContextPayload HumanDelegationReadContext() => new()
+    {
+        Caller = new AgentToolCallerContextPayload
+        {
+            ScopeId = "scope-alpha",
+            OwnerScopeId = "scope-alpha",
+            OwnerSubject = "owner-alpha",
+        },
+        Credentials = new AgentToolCredentialsPayload
+        {
+            NyxIdAccessToken = "delegated-secret",
+            NyxIdCredentialKind = AgentToolNyxIdCredentialKindPayload.ProxyDelegation,
+        },
+        NyxIdAuthority = new AgentToolNyxIdAuthorityContextPayload
+        {
+            Platform = "nyxid",
+            ExternalUserId = "owner-alpha",
+            Scope = "proxy",
+        },
+        InvocationSurface = AgentToolInvocationSurfacePayload.HumanSession,
+        Chat = new AgentChatInvocationContextPayload
+        {
+            Surface = AgentChatInvocationSurfacePayload.NyxidAssistant,
         },
     };
 

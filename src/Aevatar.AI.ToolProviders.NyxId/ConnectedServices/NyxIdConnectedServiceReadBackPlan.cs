@@ -40,9 +40,12 @@ internal sealed class NyxIdConnectedServiceReadBackPlan
             !string.Equals(effectOperation.CatalogDigest, readOperation.CatalogDigest, StringComparison.Ordinal) ||
             string.IsNullOrWhiteSpace(binding.CheckName) ||
             binding.Match == AgentToolReadBackMatch.Unspecified ||
-            binding.ArgumentBindings.Count == 0 ||
+            binding.ArgumentBindings.Count == 0 && binding.ProviderResourceArgument is null ||
             binding.ArgumentBindings.Select(TargetKey)
                 .Concat(binding.LiteralReadArguments.Select(TargetKey))
+                .Concat(binding.ProviderResourceArgument is null
+                    ? []
+                    : [TargetKey(binding.ProviderResourceArgument)])
                 .GroupBy(static key => key)
                 .Any(static group => group.Count() != 1) ||
             binding.ArgumentBindings.Any(argument =>
@@ -51,6 +54,10 @@ internal sealed class NyxIdConnectedServiceReadBackPlan
             binding.LiteralReadArguments.Any(argument =>
                 argument.Value is null ||
                 !HasArgument(readOperation, argument.ReadLocation, argument.ReadArgumentName)) ||
+            !IsValidProviderResourceArgument(
+                binding.ProviderResourceArgument,
+                readOperation,
+                UsesProviderResourceIdentity(binding)) ||
             binding.EffectArgumentConstraints.Any(constraint =>
                 constraint.ExpectedValue is null ||
                 !HasArgument(effectOperation, constraint.EffectLocation, constraint.EffectArgumentName)) ||
@@ -58,7 +65,9 @@ internal sealed class NyxIdConnectedServiceReadBackPlan
             !IsValidPagination(binding.Pagination, readOperation, binding.Match) ||
             !RequiredReadArguments(readOperation).All(required =>
                 binding.ArgumentBindings.Any(argument => TargetKey(argument) == required) ||
-                binding.LiteralReadArguments.Any(argument => TargetKey(argument) == required)) ||
+                binding.LiteralReadArguments.Any(argument => TargetKey(argument) == required) ||
+                binding.ProviderResourceArgument is not null &&
+                TargetKey(binding.ProviderResourceArgument) == required) ||
             binding.Match is AgentToolReadBackMatch.Equals or AgentToolReadBackMatch.ArrayContainsEquals &&
             !UsesProviderResourceIdentity(binding) &&
             !HasArgument(effectOperation, binding.ExpectedValueLocation, binding.ExpectedValueArgumentName) ||
@@ -164,6 +173,11 @@ internal sealed class NyxIdConnectedServiceReadBackPlan
                 ToAdmissionLocation(_binding.Pagination.PageTokenLocation),
                 _binding.Pagination.PageTokenArgumentName,
                 _binding.Pagination.MaxPages);
+        var providerResourceArgument = _binding.ProviderResourceArgument is null
+            ? null
+            : new AgentToolReadBackProviderResourceArgument(
+                ToAdmissionLocation(_binding.ProviderResourceArgument.ReadLocation),
+                _binding.ProviderResourceArgument.ReadArgumentName);
         readBack = new AgentToolOperationReadBack(
             _readOperation,
             typedArguments,
@@ -175,36 +189,20 @@ internal sealed class NyxIdConnectedServiceReadBackPlan
                 expectedValueSource),
             _binding.CheckName,
             notAppliedAssertion,
-            pagination);
+            pagination,
+            providerResourceArgument,
+            _binding.EffectResultIdentityJsonPointer ?? string.Empty);
         return true;
     }
 
     public string? ExtractProviderResourceId(string? effectResultJson)
-    {
-        if (!UsesProviderResourceIdentity(_binding) || string.IsNullOrWhiteSpace(effectResultJson))
-            return null;
-
-        try
-        {
-            return TryResolvePointer(
-                       JsonNode.Parse(effectResultJson),
-                       _binding.EffectResultIdentityJsonPointer,
-                       out var value) &&
-                   value is JsonValue jsonValue &&
-                   jsonValue.TryGetValue<string>(out var resourceId) &&
-                   !string.IsNullOrWhiteSpace(resourceId)
-                ? resourceId.Trim()
-                : null;
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
-    }
+        => NyxIdEffectResultIdentityExtractor.ExtractAtPointer(
+            effectResultJson,
+            _binding.EffectResultIdentityJsonPointer);
 
     private static bool UsesProviderResourceIdentity(NyxIdAssistantOperationReadBackBinding binding) =>
         !string.IsNullOrWhiteSpace(binding.EffectResultIdentityJsonPointer) &&
-        binding.EffectResultIdentityJsonPointer.StartsWith("/", StringComparison.Ordinal);
+        AgentToolEffectResultIdentityJsonPointer.IsValid(binding.EffectResultIdentityJsonPointer);
 
     private static bool IsValidNotAppliedEvidence(
         NyxIdAssistantReadBackNotAppliedEvidence? evidence) =>
@@ -213,6 +211,17 @@ internal sealed class NyxIdConnectedServiceReadBackPlan
         evidence.ExpectedValue.KindCase != Value.KindOneofCase.None &&
         !string.IsNullOrWhiteSpace(evidence.JsonPointer) &&
         evidence.JsonPointer.StartsWith("/", StringComparison.Ordinal);
+
+    private static bool IsValidProviderResourceArgument(
+        NyxIdAssistantReadBackProviderResourceArgument? argument,
+        AgentToolOperationAdmission readOperation,
+        bool usesProviderResourceIdentity) =>
+        argument is null ||
+        usesProviderResourceIdentity &&
+        (argument.ReadLocation is NyxIdAssistantOperationArgumentLocation.Path or
+            NyxIdAssistantOperationArgumentLocation.Query or
+            NyxIdAssistantOperationArgumentLocation.Header) &&
+        HasArgument(readOperation, argument.ReadLocation, argument.ReadArgumentName);
 
     private static bool IsValidPagination(
         NyxIdAssistantReadBackPagination? pagination,
@@ -230,30 +239,6 @@ internal sealed class NyxIdConnectedServiceReadBackPlan
             readOperation,
             pagination.PageTokenLocation,
             pagination.PageTokenArgumentName);
-
-    private static bool TryResolvePointer(JsonNode? root, string pointer, out JsonNode? value)
-    {
-        value = root;
-        if (root is null || !pointer.StartsWith("/", StringComparison.Ordinal))
-            return false;
-
-        foreach (var encoded in pointer.Split('/').Skip(1))
-        {
-            var segment = encoded.Replace("~1", "/", StringComparison.Ordinal)
-                .Replace("~0", "~", StringComparison.Ordinal);
-            if (value is JsonObject obj && obj.TryGetPropertyValue(segment, out value))
-                continue;
-            if (value is JsonArray array && int.TryParse(segment, out var index) &&
-                index >= 0 && index < array.Count)
-            {
-                value = array[index];
-                continue;
-            }
-            value = null;
-            return false;
-        }
-        return value is not null;
-    }
 
     private static bool HasArgument(
         AgentToolOperationAdmission operation,
@@ -281,6 +266,10 @@ internal sealed class NyxIdConnectedServiceReadBackPlan
 
     private static (NyxIdAssistantOperationArgumentLocation Location, string Name) TargetKey(
         NyxIdAssistantReadBackLiteralArgument argument) =>
+        (argument.ReadLocation, argument.ReadArgumentName);
+
+    private static (NyxIdAssistantOperationArgumentLocation Location, string Name) TargetKey(
+        NyxIdAssistantReadBackProviderResourceArgument argument) =>
         (argument.ReadLocation, argument.ReadArgumentName);
 
     private static bool JsonEquals(JsonNode? node, Value expected) =>

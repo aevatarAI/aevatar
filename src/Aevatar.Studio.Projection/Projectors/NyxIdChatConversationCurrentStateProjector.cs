@@ -70,6 +70,8 @@ public sealed class NyxIdChatConversationCurrentStateProjector
                 CommittedStateEventEnvelope.ResolveTimestamp(envelope, _clock.UtcNow)),
             ConversationActorId = state.ConversationActorId,
             ScopeId = state.ScopeId,
+            Deleted = state.Deleted,
+            DeletedAt = state.DeletedAt?.Clone(),
             ProgressSequence = state.ProgressSequence,
             ActiveTurn = ToTurn(state.ActiveTurn),
             LatestTurn = ToTurn(state.LatestTurn),
@@ -641,6 +643,27 @@ public sealed class NyxIdChatConversationCurrentStateProjector
                     Origin = ToWireName(resolution.NumericThreshold.Origin),
                 };
         }
+        if (resolution.Answer is not null)
+        {
+            switch (resolution.Answer.AnswerCase)
+            {
+                case NyxIdChatInputAnswer.AnswerOneofCase.FreeText:
+                    document.Answer = new NyxIdChatConversationInputAnswerDocument
+                    {
+                        FreeText = resolution.Answer.FreeText,
+                    };
+                    break;
+                case NyxIdChatInputAnswer.AnswerOneofCase.Selection:
+                    document.Answer = new NyxIdChatConversationInputAnswerDocument
+                    {
+                        Selection = new NyxIdChatConversationInputSelectionAnswerDocument
+                        {
+                            OptionIds = { resolution.Answer.Selection.OptionIds },
+                        },
+                    };
+                    break;
+            }
+        }
         return document;
     }
 
@@ -763,6 +786,24 @@ public sealed class NyxIdChatConversationCurrentStateProjector
                         AuthKeyName = action.Params.CustomServiceConnect.AuthKeyName,
                         ViaNodeId = action.Params.CustomServiceConnect.ViaNodeId,
                         TargetOrgId = action.Params.CustomServiceConnect.TargetOrgId,
+                    },
+                },
+            NyxIdAssistantActionParams.ParamsOneofCase.KeyCreate =>
+                new NyxIdChatConversationActionParamsDocument
+                {
+                    KeyCreate = new NyxIdChatConversationKeyCreateDocument
+                    {
+                        Name = action.Params.KeyCreate.Name,
+                        Platform = action.Params.KeyCreate.Platform,
+                        AllowedServiceIds = { action.Params.KeyCreate.AllowedServiceIds },
+                    },
+                },
+            NyxIdAssistantActionParams.ParamsOneofCase.KeyRotate =>
+                new NyxIdChatConversationActionParamsDocument
+                {
+                    KeyRotate = new NyxIdChatConversationKeyRotateDocument
+                    {
+                        KeyId = action.Params.KeyRotate.KeyId,
                     },
                 },
             _ => null,

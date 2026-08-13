@@ -133,6 +133,7 @@ public static class NyxIdChatNeedsYouDecisions
             ClientRequestId = command.ClientRequestId.Trim(),
             Outcome = NyxIdChatNeedsYouResolutionOutcome.Accepted,
             AnswerSha256 = answerHash,
+            Answer = normalizedAnswer.Clone(),
             CommittedAt = now.Clone(),
         };
         if (numericResolution is not null)
@@ -548,6 +549,9 @@ public static class NyxIdChatNeedsYouDecisions
                 MayChangeExternalState = step.MayChangeExternalState,
                 IdempotencyKey = key.OperationId,
                 OperationAdmission = step.Source?.Tool?.OperationAdmission?.Clone(),
+                ExactServiceApproval = pending.ExactServiceApproval?.Clone(),
+                ToolCallId = pending.ToolCallId,
+                ToolName = pending.ToolName,
             },
         };
     }

@@ -16,6 +16,11 @@ public sealed class NyxIdCodeExecutionWorkflowCapabilitySource(
     ILogger<NyxIdCodeExecutionWorkflowCapabilitySource>? logger = null) :
     IExternalWorkflowCapabilitySource
 {
+    private const string PolicyMismatchMessage =
+        "The canonical platform code execution route does not deliver an accepted execution " +
+        "credential. Set forward_access_token, or set inject_delegation_token with " +
+        "sandbox:execute in delegation_token_scope.";
+
     private static readonly TimeSpan FreshnessWindow = TimeSpan.FromMinutes(5);
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
     private readonly ILogger<NyxIdCodeExecutionWorkflowCapabilitySource> _logger =
@@ -194,7 +199,7 @@ public sealed class NyxIdCodeExecutionWorkflowCapabilitySource(
         return new ExternalWorkflowCapabilityRef { CodeExecution = proof };
     }
 
-    private static ExternalCapabilityReadiness ResolutionFailure(
+    private ExternalCapabilityReadiness ResolutionFailure(
         ExternalWorkflowCapabilitySelector selector,
         ExternalCapabilityExecutionMode executionMode,
         NyxIdCodeExecutionRouteResolution resolution,
@@ -207,35 +212,45 @@ public sealed class NyxIdCodeExecutionWorkflowCapabilitySource(
                 ExternalCapabilityReadinessStatus.ServiceRegistrationRequired,
                 "CODE_EXECUTION_ROUTE_MISSING",
                 "The canonical platform code execution route is missing.",
-                source),
+                source,
+                remediationAction: ExternalCapabilityRemediationActionKind.RegisterService,
+                remediationLabel: "Connect the platform code service"),
             NyxIdCodeExecutionRouteResolutionKind.Inactive => Failure(
                 selector,
                 executionMode,
                 ExternalCapabilityReadinessStatus.ContractDrift,
                 "CODE_EXECUTION_ROUTE_INACTIVE",
                 "The canonical platform code execution route is inactive.",
-                source),
+                source,
+                remediationAction: ExternalCapabilityRemediationActionKind.ConnectCredential,
+                remediationLabel: "Reactivate the platform code service"),
             NyxIdCodeExecutionRouteResolutionKind.PolicyMismatch => Failure(
                 selector,
                 executionMode,
                 ExternalCapabilityReadinessStatus.ContractDrift,
                 "CODE_EXECUTION_ROUTE_POLICY_MISMATCH",
-                "The canonical platform code execution route policy is incompatible.",
-                source),
+                PolicyMismatchMessage,
+                source,
+                remediationAction: ExternalCapabilityRemediationActionKind.ConnectCredential,
+                remediationLabel: "Update the platform code service identity settings"),
             NyxIdCodeExecutionRouteResolutionKind.Ambiguous => Failure(
                 selector,
                 executionMode,
                 ExternalCapabilityReadinessStatus.ContractDrift,
                 "CODE_EXECUTION_ROUTE_AMBIGUOUS",
                 "Multiple canonical platform code execution routes are eligible.",
-                source),
+                source,
+                remediationAction: ExternalCapabilityRemediationActionKind.ConfigureConnector,
+                remediationLabel: "Keep exactly one platform code service"),
             NyxIdCodeExecutionRouteResolutionKind.AccessDenied => Failure(
                 selector,
                 executionMode,
                 ExternalCapabilityReadinessStatus.ServiceAccessDenied,
                 "CODE_EXECUTION_ROUTE_ACCESS_DENIED",
                 "The caller cannot access the canonical platform code execution route.",
-                source),
+                source,
+                remediationAction: ExternalCapabilityRemediationActionKind.RequestAccess,
+                remediationLabel: "Request access to the platform code service"),
             _ => Failure(
                 selector,
                 executionMode,
@@ -257,14 +272,17 @@ public sealed class NyxIdCodeExecutionWorkflowCapabilitySource(
             SelectedCapability = capability,
         };
 
-    private static ExternalCapabilityReadiness Failure(
+    private ExternalCapabilityReadiness Failure(
         ExternalWorkflowCapabilitySelector selector,
         ExternalCapabilityExecutionMode executionMode,
         ExternalCapabilityReadinessStatus status,
         string code,
         string message,
         ExternalCapabilitySourceStamp? source = null,
-        ExternalWorkflowCapabilityRef? capability = null)
+        ExternalWorkflowCapabilityRef? capability = null,
+        ExternalCapabilityRemediationActionKind remediationAction =
+            ExternalCapabilityRemediationActionKind.RefreshSource,
+        string remediationLabel = "Restore platform code route")
     {
         var result = new ExternalCapabilityReadiness
         {
@@ -281,11 +299,15 @@ public sealed class NyxIdCodeExecutionWorkflowCapabilitySource(
         });
         result.Remediations.Add(new ExternalCapabilityRemediation
         {
-            ActionKind = ExternalCapabilityRemediationActionKind.RefreshSource,
-            Label = "Restore platform code route",
+            ActionKind = remediationAction,
+            Label = remediationLabel,
+            TrustedLocator = TrustedLocator(),
         });
         if (source is not null)
             result.Sources.Add(source);
         return result;
     }
+
+    private string TrustedLocator() =>
+        string.IsNullOrWhiteSpace(options.BaseUrl) ? string.Empty : options.BaseUrl.TrimEnd('/');
 }

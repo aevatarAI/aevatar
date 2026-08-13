@@ -721,6 +721,7 @@ public sealed class MainnetHostCompositionTests
         registry.GetRegisteredNames().Should().Equal(
             AgentProfilePolicies.NyxIdChatRouteToolSet,
             ToolSetNames.LarkSelfNotify,
+            ToolSetNames.NyxIdAssistantAdmission,
             ToolSetNames.NyxIdConnectedServices,
             ToolSetNames.WorkspaceDefault);
 
@@ -828,6 +829,12 @@ public sealed class MainnetHostCompositionTests
         nyxIdConnectedServices.IsSuccess.Should().BeTrue(nyxIdConnectedServices.Error?.Message);
         nyxIdConnectedServices.Sources.Should().ContainSingle(source => source is NyxIdConnectedServiceToolSource);
         workspace.Sources.Should().NotContain(source => source is NyxIdConnectedServiceToolSource);
+
+        var nyxIdAssistantAdmission = registry.Resolve(ToolSetNames.NyxIdAssistantAdmission);
+        nyxIdAssistantAdmission.IsSuccess.Should().BeTrue(nyxIdAssistantAdmission.Error?.Message);
+        nyxIdAssistantAdmission.Sources.Should().ContainSingle(source => source is NyxIdAssistantToolSource);
+        nyxIdAssistantAdmission.Sources.Should().NotContain(source =>
+            source is NyxIdConnectedServiceToolSource);
 
         var nyxIdChatProfile = registry.Resolve(AgentProfilePolicies.NyxIdChatRouteToolSet);
         nyxIdChatProfile.IsSuccess.Should().BeTrue(nyxIdChatProfile.Error?.Message);
@@ -1194,13 +1201,18 @@ public sealed class MainnetHostCompositionTests
         readBack.EffectHttpMethod.Should().Be("POST");
         readBack.EffectPathTemplate.Should().Be("/open-apis/im/v1/messages");
         readBack.ReadHttpMethod.Should().Be("GET");
-        readBack.ReadPathTemplate.Should().Be("/open-apis/im/v1/messages");
+        readBack.ReadPathTemplate.Should().Be("/open-apis/im/v1/messages/{message_id}");
+        readBack.CheckName.Should().Be("lark_provider_message_visible_by_id");
         readBack.Match.Should().Be(AgentToolReadBackMatch.ArrayContainsEquals);
         readBack.JsonPointer.Should().Be("/data/items");
         readBack.ElementJsonPointer.Should().Be("/message_id");
         readBack.EffectResultIdentityJsonPointer.Should().Be("/data/message_id");
-        readBack.EffectArgumentConstraints.Should().ContainSingle();
-        readBack.LiteralReadArguments.Should().HaveCount(2);
+        readBack.ProviderResourceArgument.Should().NotBeNull();
+        readBack.ProviderResourceArgument!.ReadLocation.Should()
+            .Be(NyxIdAssistantOperationArgumentLocation.Path);
+        readBack.ProviderResourceArgument.ReadArgumentName.Should().Be("message_id");
+        readBack.EffectArgumentConstraints.Should().BeEmpty();
+        readBack.LiteralReadArguments.Should().BeEmpty();
 
         var approvalReadBack = options.AssistantOperationReadBackBindings.Single(binding =>
             binding.EffectPathTemplate == "/open-apis/approval/v4/instances");

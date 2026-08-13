@@ -137,7 +137,8 @@ public static class AgentToolExecutionContextMapper
                 AgentToolExecutionContext.Normalize(payload.Request?.CallId),
                 AgentToolExecutionContext.Normalize(payload.Request?.IdempotencyKey),
                 payload.Request?.IssuedAtUnixMs ?? 0,
-                AgentToolExecutionContext.Normalize(payload.Request?.OperationId)),
+                AgentToolExecutionContext.Normalize(payload.Request?.OperationId),
+                payload.Request?.OperationGeneration ?? 0),
             new AgentToolCredentials(
                 AgentToolExecutionContext.Normalize(payload.Credentials?.NyxIdAccessToken),
                 AgentToolExecutionContext.Normalize(payload.Credentials?.NyxIdOrgToken),
@@ -192,6 +193,7 @@ public static class AgentToolExecutionContextMapper
                 IdempotencyKey = context.Request.IdempotencyKey ?? string.Empty,
                 IssuedAtUnixMs = context.Request.IssuedAtUnixMs,
                 OperationId = context.Request.OperationId ?? string.Empty,
+                OperationGeneration = context.Request.OperationGeneration,
             },
             Credentials = new AgentToolCredentialsPayload
             {
@@ -259,6 +261,7 @@ public static class AgentToolExecutionContextMapper
                 IdempotencyKey = context.Request.IdempotencyKey ?? string.Empty,
                 IssuedAtUnixMs = context.Request.IssuedAtUnixMs,
                 OperationId = context.Request.OperationId ?? string.Empty,
+                OperationGeneration = context.Request.OperationGeneration,
             },
             Caller = new AgentToolCallerContextPayload
             {
@@ -327,7 +330,8 @@ public static class AgentToolExecutionContextMapper
                 AgentToolExecutionContext.Normalize(payload.Request?.CallId),
                 AgentToolExecutionContext.Normalize(payload.Request?.IdempotencyKey),
                 payload.Request?.IssuedAtUnixMs ?? 0,
-                AgentToolExecutionContext.Normalize(payload.Request?.OperationId)),
+                AgentToolExecutionContext.Normalize(payload.Request?.OperationId),
+                payload.Request?.OperationGeneration ?? 0),
             AgentToolCredentials.Empty with
             {
                 NyxIdCredentialKind = FromNyxIdCredentialKindPayload(

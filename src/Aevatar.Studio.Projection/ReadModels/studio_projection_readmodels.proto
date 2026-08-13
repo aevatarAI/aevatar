@@ -213,6 +213,63 @@ message WorkflowExecutionBoardSummaryReadModel {
   optional int32 definition_step_count = 5;
 }
 
+// Materialized workflow-native source fact for the scope workflow catalogue.
+// source_kind distinguishes draft-owned and service-owned facts; Team/Member
+// bindings are not part of this catalogue surface.
+message ScopeWorkflowCatalogueSourceDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at = 5;
+
+  string scope_id = 20;
+  string workflow_id = 21;
+  string source_kind = 22;
+  string name = 23;
+  string description = 24;
+  google.protobuf.Timestamp source_updated_at_utc_value = 25;
+
+  string service_key = 30;
+  string workflow_name = 31;
+  string committed_actor_id = 32;
+  string active_revision_id = 33;
+  string deployment_id = 34;
+  string deployment_status = 35;
+  string service_app_id = 36;
+  string service_namespace = 37;
+  string published_service_id = 38;
+}
+
+// Aggregate workflow catalogue row keyed by scope_id + workflow_id. The request
+// path reads this row document only; source documents remain an internal
+// materialization input for converging draft and published service facts.
+message ScopeWorkflowCatalogueRowDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at = 5;
+
+  string scope_id = 20;
+  string workflow_id = 21;
+  string name = 22;
+  string description = 23;
+  bool has_draft_source = 24;
+  bool has_published_source = 25;
+  google.protobuf.Timestamp row_updated_at_utc_value = 26;
+  string updated_at_source = 27;
+  google.protobuf.Timestamp source_watermark_utc_value = 28;
+
+  string service_key = 30;
+  string workflow_name = 31;
+  string committed_actor_id = 32;
+  string active_revision_id = 33;
+  string deployment_id = 34;
+  string deployment_status = 35;
+  string published_service_id = 36;
+}
+
 // ─── UserConfig Current State ReadModel ───
 
 message UserConfigCurrentStateDocument {
@@ -670,12 +727,24 @@ message NyxIdChatConversationNumericThresholdResolutionDocument {
   string origin = 3;
 }
 
+message NyxIdChatConversationInputSelectionAnswerDocument {
+  repeated string option_ids = 1;
+}
+
+message NyxIdChatConversationInputAnswerDocument {
+  oneof answer {
+    string free_text = 1;
+    NyxIdChatConversationInputSelectionAnswerDocument selection = 2;
+  }
+}
+
 message NyxIdChatConversationInputResolutionDocument {
   string request_id = 1;
   string client_request_id = 2;
   string outcome = 3;
   google.protobuf.Timestamp committed_at = 4;
   NyxIdChatConversationNumericThresholdResolutionDocument numeric_threshold = 5;
+  NyxIdChatConversationInputAnswerDocument answer = 6;
 }
 
 message NyxIdChatConversationApprovalResolutionDocument {
@@ -788,6 +857,8 @@ message NyxIdChatConversationActionParamsDocument {
   oneof params {
     NyxIdChatConversationCatalogServiceConnectDocument catalog_service = 1;
     NyxIdChatConversationCustomServiceConnectDocument custom_service = 2;
+    NyxIdChatConversationKeyCreateDocument key_create = 3;
+    NyxIdChatConversationKeyRotateDocument key_rotate = 4;
   }
 }
 
@@ -805,6 +876,16 @@ message NyxIdChatConversationCustomServiceConnectDocument {
   string auth_key_name = 4;
   string via_node_id = 5;
   string target_org_id = 6;
+}
+
+message NyxIdChatConversationKeyCreateDocument {
+  string name = 1;
+  string platform = 2;
+  repeated string allowed_service_ids = 3;
+}
+
+message NyxIdChatConversationKeyRotateDocument {
+  string key_id = 1;
 }
 
 message NyxIdChatConversationCurrentStateDocument {
@@ -837,6 +918,8 @@ message NyxIdChatConversationCurrentStateDocument {
   NyxIdChatConversationStepControlResultDocument latest_step_control_result = 40;
   repeated NyxIdChatConversationStepControlResultDocument recent_step_control_results = 41;
   NyxIdChatConversationCanaryEffectFaultDocument canary_effect_fault = 42;
+  bool deleted = 43;
+  google.protobuf.Timestamp deleted_at = 44;
 }
 
 message NyxIdChatConversationCanaryEffectFaultDocument {

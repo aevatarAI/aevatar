@@ -414,7 +414,7 @@ Example stop request:
 
 The controller commits a stop or steering fence before any successor decision. Once accepted, no later old-plan LLM round, tool, retry, or step may start. Stop outcomes are typed: `accepted`, `rejected`, `already_terminal`, or `uncancellable`. Cancellation is best effort. A late LLM result is discarded. Exact late tool evidence may refine `external_effect`, but it cannot remove the fence, change the stopped terminal, or authorize a successor. An unprovable effect-capable operation becomes `uncertain / may_have_changed`.
 
-Steering is serialized by the actor. If an operation is physically in flight, the controller may commit `accepted_for_later`; the server starts the new `continuationTurnId` only after a safe checkpoint. Completed steps and prior effect evidence are preserved and never re-executed.
+Steering is serialized by the actor. If an operation is physically in flight, the controller may commit `accepted_for_later`; the server starts the new `continuationTurnId` only after a safe checkpoint. Completed steps, prior effect evidence, and the typed answers of committed input resolutions are carried into the server-authored transient steering context, so the continuation does not ask the owner to restate already accepted facts. Completed work is never re-executed.
 
 Retry and skip validate the body `conversationId`, `turnId`, `taskId`, `stepId`, expected generation, expected actor version, and current actor-computed availability. Replaying the same request and content is idempotent. Reusing an identity with different content fails closed.
 
@@ -477,7 +477,7 @@ The caller resolves input through the same public command surface:
 
 An accepted dispatch returns `202 Accepted` with `requestId`, `commandId`, `correlationId`, and `stateUrl`. This proves transport acceptance only. The first matching decision committed at the expected actor version wins and emits `nyxid.input.changed`; an exact duplicate is idempotent, while a stale version, unknown request, invalid option ID, or conflicting reuse cannot advance actor state. Acceptance completes the exact waiting input step, appends one LLM continuation step, injects the typed answer as the matching `ask_user` tool result, and resumes that exact transient turn session.
 
-The actor persists only the answer fingerprint and safe resolution facts. Raw free text, selected option IDs, fresh NyxID credentials, and the resulting tool message exist only in the transient continuation. If that turn capability was lost through passivation, or if the continuation cannot be accepted for dispatch, the operation fails closed and terminalizes the task; it is never left as an orphaned waiting or running step.
+The accepted typed answer is an owner-scoped, actor-owned durable input fact alongside its answer fingerprint. A selection persists only opaque `optionId` values and never copies presentation labels into the resolution. Accepted free text persists as the owner's submitted input because later same-task steering must preserve composite facts such as party size, dietary needs, and budget. Fresh NyxID credentials and the generated tool-result message remain transient and never enter actor state. The committed `nyxid.input.changed` payload and current-state `latestInputResolution` are projections of this same typed resolution, including the same `answer` union; reload does not reconstruct it from browser state. If the transient turn capability is lost through passivation, or if the continuation cannot be accepted for dispatch, the operation fails closed and terminalizes the task; it is never left as an orphaned waiting or running step.
 
 Pending approval carries the exact `requestId / turnId / taskId / stepId / toolName / askedAt` correlation plus `expiresAt`, the deadline the owning actor stamps when it parks the approval (`askedAt` plus the fixed local approval window), and a safe `presentation`:
 
@@ -683,6 +683,12 @@ effect evidence, available actions, pending input, approval presentation,
 latest safe input/approval resolution facts, typed `pendingActions` and bounded
 `recentActions`, control fences, continuation admission, progress sequence,
 actor-authored attention, and actor version. It also exposes
+the exact safe typed parameters needed to resume browser actions after reload:
+`key.create` preserves `name`, `platform`, and the nonempty
+`allowedServiceIds`; `key.rotate` preserves only `keyId`. These values come
+from the committed actor state through the same current-state projection and
+never include full key material, credentials, or an alternate query-time
+reconstruction path. It also exposes
 `latestStepControlResult` and bounded `recentStepControlResults`; each result
 preserves the typed retry/skip kind, request and client identities, exact
 turn/task/step identity, expected and resulting operation generations,
@@ -690,8 +696,9 @@ expected state version, outcome, safe reason, command/correlation identities,
 and commit time. These fields are copied from the same actor current-state
 fact and are not reconstructed by the query adapter. A NyxID tool source may
 include the exact optional `readinessCapabilityId` described above. The
-snapshot excludes submitted answers and reasons, transient capabilities, raw
-LLM/tool results, credentials, and actor runtime internals.
+snapshot includes the latest accepted typed input answer as described above,
+but excludes approval reasons, transient capabilities, raw LLM/tool results,
+credentials, and actor runtime internals.
 
 The read model is eventually consistent and says so through its actor-derived `stateVersion`. Writes are monotonic overwrite: newer replaces older, byte-equivalent equal-version duplicates are idempotent, equal-version conflicts fail, and older versions cannot overwrite newer state. Query-time priming and replay are forbidden.
 

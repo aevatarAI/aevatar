@@ -328,6 +328,27 @@ public class EventSourcingBehavior<TState> :
             return events.Count == 0 && snapshot == null ? null : state;
         }
 
+        if (replayedVersion > storeVersion)
+        {
+            // Reverse drift: the replay observed events (or a snapshot) beyond
+            // the store's committed version. A store whose reads are bounded at
+            // the commit point cannot produce this, so it means either
+            // uncommitted remnants of an aborted append leaked into the read
+            // path or the snapshot is ahead of a truncated log. Activating at
+            // replayedVersion would make every subsequent append an
+            // unresolvable optimistic-concurrency conflict (the store is
+            // behind), permanently wedging the actor while it keeps accepting
+            // commands. Fail activation with the typed drift error instead.
+            _logger.LogError(
+                "Event sourcing replay observed state beyond the committed store version. agentId={AgentId} replayedVersion={ReplayedVersion} storeVersion={StoreVersion} eventsCount={EventsCount} hasSnapshot={HasSnapshot}",
+                agentId,
+                replayedVersion,
+                storeVersion,
+                events.Count,
+                snapshot != null);
+            throw new EventStoreVersionDriftException(agentId, replayedVersion, storeVersion);
+        }
+
         _currentVersion = replayedVersion;
         if (publicationState == null || !publicationState.Initialized)
         {

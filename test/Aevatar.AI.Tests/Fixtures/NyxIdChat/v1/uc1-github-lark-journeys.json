@@ -266,7 +266,7 @@
             "description": "Lark — read back the exact published message lark-message-alpha.",
             "source": {
               "postcondition": {
-                "check": "lark_provider_message_visible_in_chat",
+                "check": "lark_provider_message_visible_by_id",
                 "providerResourceId": "lark-message-alpha"
               }
             },
@@ -495,7 +495,7 @@
             "description": "Lark — read back the exact published message lark-message-alpha.",
             "source": {
               "postcondition": {
-                "check": "lark_provider_message_visible_in_chat",
+                "check": "lark_provider_message_visible_by_id",
                 "providerResourceId": "lark-message-alpha"
               }
             },

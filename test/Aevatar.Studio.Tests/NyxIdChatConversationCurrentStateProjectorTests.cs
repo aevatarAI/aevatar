@@ -70,6 +70,81 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
     }
 
     [Fact]
+    public async Task ProjectAsync_ShouldHydrateReloadableKeyActionParameters()
+    {
+        var dispatcher = new RecordingWriteDispatcher();
+        var projector = new NyxIdChatConversationCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-08-12T04:00:00Z")));
+        var state = BuildState();
+        state.ActiveTask.Gate = null;
+        var keyCreate = state.PendingActions.Single();
+        keyCreate.Action = NyxIdAssistantActionKind.KeyCreate;
+        keyCreate.Params = new NyxIdAssistantActionParams
+        {
+            KeyCreate = new NyxIdKeyCreateParams
+            {
+                Name = "agent-alpha",
+                Platform = "codex",
+                AllowedServiceIds = { "service-github", "service-lark" },
+            },
+        };
+        var keyRotate = keyCreate.Clone();
+        keyRotate.ActionRequestId = "action-key-rotate";
+        keyRotate.Action = NyxIdAssistantActionKind.KeyRotate;
+        keyRotate.Params = new NyxIdAssistantActionParams
+        {
+            KeyRotate = new NyxIdKeyRotateParams { KeyId = "key-predecessor" },
+        };
+        state.RecentActions.Add(keyRotate);
+
+        await projector.ProjectAsync(
+            NewContext(),
+            WrapCommitted(
+                new NyxIdChatActionRequestedEvent(),
+                state,
+                version: 19,
+                eventId: "event-alpha-19",
+                stateEventTimestamp: DateTimeOffset.Parse("2026-08-12T04:00:00Z")));
+
+        var document = dispatcher.Upserts.Should().ContainSingle().Subject;
+        var createParams = document.PendingActions.Should().ContainSingle().Which.Request.Params.KeyCreate;
+        createParams.Name.Should().Be("agent-alpha");
+        createParams.Platform.Should().Be("codex");
+        createParams.AllowedServiceIds.Should().Equal("service-github", "service-lark");
+        document.RecentActions.Should().ContainSingle().Which.Request.Params.KeyRotate.KeyId
+            .Should().Be("key-predecessor");
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldCopyAuthoritativeDeletionTombstone()
+    {
+        var dispatcher = new RecordingWriteDispatcher();
+        var projector = new NyxIdChatConversationCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-08-12T04:30:00Z")));
+        var state = BuildState();
+        state.Deleted = true;
+        state.DeletedAt = Timestamp.FromDateTimeOffset(
+            DateTimeOffset.Parse("2026-08-12T04:29:00Z"));
+
+        await projector.ProjectAsync(
+            NewContext(),
+            WrapCommitted(
+                new NyxIdChatConversationHistoryDeletedEvent(),
+                state,
+                version: 20,
+                eventId: "event-alpha-20",
+                stateEventTimestamp: DateTimeOffset.Parse("2026-08-12T04:30:00Z")));
+
+        var document = dispatcher.Upserts.Should().ContainSingle().Subject;
+        document.Deleted.Should().BeTrue();
+        document.DeletedAt.ToDateTimeOffset().Should().Be(
+            DateTimeOffset.Parse("2026-08-12T04:29:00Z"));
+        document.StateVersion.Should().Be(20);
+    }
+
+    [Fact]
     public async Task ProjectAsync_ShouldCopySafeQueryStateAndAuthoritativeVersion()
     {
         var dispatcher = new RecordingWriteDispatcher();
@@ -510,6 +585,13 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
             RequestId = "input-before",
             ClientRequestId = "client-input-before",
             Outcome = NyxIdChatNeedsYouResolutionOutcome.Accepted,
+            Answer = new NyxIdChatInputAnswer
+            {
+                Selection = new NyxIdChatInputSelectionAnswer
+                {
+                    OptionIds = { "option-singapore" },
+                },
+            },
             CommittedAt = askedAt.Clone(),
         };
         state.LatestApprovalResolution = new NyxIdChatApprovalResolutionState
@@ -551,6 +633,8 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
         document.PendingInput.AskedAt.Should().Be(askedAt);
         document.LatestInputResolution.RequestId.Should().Be("input-before");
         document.LatestInputResolution.Outcome.Should().Be("accepted");
+        document.LatestInputResolution.Answer.Selection.OptionIds.Should()
+            .Equal("option-singapore");
         document.LatestApprovalResolution.RequestId.Should().Be("approval-before");
         document.LatestApprovalResolution.Approved.Should().BeFalse();
         document.AttentionKind.Should().Be("input");

@@ -74,6 +74,14 @@ enum NyxIdChatEffectEvidence {
   NYX_ID_CHAT_EFFECT_EVIDENCE_MAY_HAVE_CHANGED = 4;
 }
 
+// Exact-service recovery resumes only the frozen NyxID admission protocol.
+// It must never fall through to provider execution after an interrupted turn.
+enum NyxIdChatExactServiceRecoveryStage {
+  NYX_ID_CHAT_EXACT_SERVICE_RECOVERY_STAGE_UNSPECIFIED = 0;
+  NYX_ID_CHAT_EXACT_SERVICE_RECOVERY_STAGE_CREATE = 1;
+  NYX_ID_CHAT_EXACT_SERVICE_RECOVERY_STAGE_DECIDE_REDEEM = 2;
+}
+
 enum NyxIdChatActionDisposition {
   NYX_ID_CHAT_ACTION_DISPOSITION_UNSPECIFIED = 0;
   NYX_ID_CHAT_ACTION_DISPOSITION_COMPLETED = 1;
@@ -814,6 +822,7 @@ message NyxIdChatPendingApprovalState {
   google.protobuf.Timestamp asked_at = 7;
   NyxIdChatApprovalPresentation presentation = 8;
   string tool_call_id = 9;
+  aevatar.ai.NyxIdExactServiceApprovalAuthority exact_service_approval = 10;
 }
 
 message NyxIdChatApprovalPresentation {
@@ -875,6 +884,7 @@ message NyxIdChatInputResolutionState {
   bytes answer_sha256 = 4;
   google.protobuf.Timestamp committed_at = 5;
   NyxIdChatNumericThresholdResolution numeric_threshold = 6;
+  NyxIdChatInputAnswer answer = 7;
 }
 
 message NyxIdChatApprovalResolutionState {
@@ -1243,6 +1253,16 @@ message NyxIdChatConversationGAgentState {
   // terminal identity plus a SHA-256 digest); correctness must not depend on
   // evicting an older receipt from a long-lived conversation actor.
   repeated NyxIdChatOperationResultAcknowledgementFence result_acknowledgement_fences = 43;
+  // Secret-vault pointer for a plan resolution that committed before the turn
+  // actor acknowledged its exact gate admission. The bearer-bearing command
+  // remains outside actor state until that admission barrier is satisfied.
+  aevatar.credentials.DurableCallerCredentialRef pending_plan_gate_continuation = 44;
+  NyxIdChatOperationKey pending_plan_gate_continuation_key = 45;
+  // Authoritative actor-owned deletion tombstone. The current-state
+  // projection copies this fact; query paths must not infer deletion by
+  // joining the registry or replaying events.
+  bool deleted = 46;
+  google.protobuf.Timestamp deleted_at = 47;
 }
 
 message NyxIdChatOperationResultAcknowledgementFence {
@@ -1445,6 +1465,10 @@ message NyxIdChatTurnGAgentState {
   // confirms that this exact result committed.
   NyxIdChatOperationResultSignal pending_result = 38;
   int32 result_delivery_attempt = 39;
+  NyxIdChatExactServiceRecoveryStage exact_service_recovery_stage = 40;
+  // Safe terminal evidence used to distinguish approval-required results from
+  // success or authorization-required results after actor reactivation.
+  aevatar.ai.AgentToolReceiptStatus tool_receipt_status = 41;
 }
 
 message NyxIdChatTurnOperationAdmittedEvent {
@@ -1464,6 +1488,7 @@ message NyxIdChatTurnOperationAdmittedEvent {
   NyxIdChatCanaryEffectFaultDirective canary_effect_fault = 14;
   string canary_effect_fault_tool_call_id = 15;
   string canary_effect_fault_tool_name = 16;
+  NyxIdChatExactServiceRecoveryStage exact_service_recovery_stage = 17;
 }
 
 message NyxIdChatTurnPlanGateAdmissionCommand {
@@ -1481,6 +1506,11 @@ message NyxIdChatTurnPlanGateAdmissionCommittedSignal {
 
 message NyxIdChatPlanGateAdmissionDeliveryDispatchRequested {
   string gate_request_id = 1;
+}
+
+message NyxIdChatPendingPlanGateContinuationDispatchRequested {
+  string credential_ref = 1;
+  NyxIdChatOperationKey key = 2;
 }
 
 message NyxIdChatTurnPlanGateAdmissionExpiredEvent {
@@ -1555,6 +1585,7 @@ message NyxIdChatTurnOperationCompletedEvent {
   // Populated only for a credential-free postcondition terminal result that
   // must survive accepted-but-uncommitted parent delivery.
   NyxIdChatOperationResultSignal result = 8;
+  aevatar.ai.AgentToolReceiptStatus tool_receipt_status = 9;
 }
 
 message NyxIdChatTurnOperationDeliveredEvent {
@@ -1657,6 +1688,9 @@ message NyxIdChatToolApprovalContinuationInput {
   bool may_change_external_state = 4;
   string idempotency_key = 5;
   aevatar.ai.tool_providers.AgentToolOperationAdmissionPayload operation_admission = 6;
+  aevatar.ai.NyxIdExactServiceApprovalAuthority exact_service_approval = 7;
+  string tool_call_id = 8;
+  string tool_name = 9;
 }
 
 // Initial plan confirmation carries no raw tool arguments and matches the
@@ -1832,6 +1866,7 @@ message NyxIdChatTurnOperationReconciliationInput {
   aevatar.ai.AgentToolRecoveryContextPayload recovery_context = 7;
   aevatar.credentials.DurableCallerCredentialRef recovery_credential = 8;
   string effect_step_id = 9;
+  NyxIdChatExactServiceRecoveryStage exact_service_recovery_stage = 10;
 }
 
 message NyxIdChatTextProgress {
@@ -1898,6 +1933,44 @@ message NyxIdChatOperationStepChangedDueSignal {
   google.protobuf.Timestamp expected_due_at = 2;
 }
 
+// Credential-free committed facts supplied only to a steering continuation's
+// transient execution path. The public turn prompt remains the user's steering
+// instruction, while the executor can continue the existing task without
+// replaying completed work or asking the user to restate it.
+message NyxIdChatSteeringCompletedStepFact {
+  string step_id = 1;
+  int32 order = 2;
+  NyxIdChatStepKind kind = 3;
+  NyxIdChatStepStatus status = 4;
+  string description = 5;
+  NyxIdChatStepSource source = 6;
+  NyxIdChatEffectEvidence external_effect = 7;
+  NyxIdChatOperationPhase operation_phase = 8;
+  string terminal_code = 9;
+  string safe_message = 10;
+  repeated NyxIdChatSubstepState substeps = 11;
+}
+
+message NyxIdChatSteeringInputResolutionFact {
+  string request_id = 1;
+  NyxIdChatNeedsYouResolutionOutcome outcome = 2;
+  NyxIdChatNumericThresholdResolution numeric_threshold = 3;
+  NyxIdChatInputAnswer answer = 4;
+}
+
+message NyxIdChatSteeringExecutionContext {
+  string origin_turn_id = 1;
+  string origin_prompt = 2;
+  string task_id = 3;
+  string plan_id = 4;
+  int32 plan_revision = 5;
+  string task_title = 6;
+  NyxIdChatPlanGateMode gate_mode = 7;
+  string gate_reason = 8;
+  repeated NyxIdChatSteeringCompletedStepFact completed_steps = 9;
+  repeated NyxIdChatSteeringInputResolutionFact input_resolutions = 10;
+}
+
 message NyxIdChatStartTurnCommand {
   string scope_id = 1;
   string conversation_actor_id = 2;
@@ -1916,6 +1989,9 @@ message NyxIdChatStartTurnCommand {
   string plan_id = 13;
   int32 plan_revision = 14;
   NyxIdChatStepAddedBy added_by = 15;
+  // Server-authored, transient execution context for a steering continuation.
+  // It is never copied into actor state, projections, or transcript history.
+  NyxIdChatSteeringExecutionContext steering_execution_context = 16;
 }
 
 message NyxIdChatStopCommand {

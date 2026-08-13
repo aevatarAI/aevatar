@@ -186,6 +186,10 @@ public static class ServiceCollectionExtensions
             WorkflowExecutionBoardDocumentMetadataProvider>();
 
         services.TryAddSingleton<
+            IProjectionDocumentMetadataProvider<ScopeWorkflowCatalogueSourceDocument>,
+            ScopeWorkflowCatalogueSourceDocumentMetadataProvider>();
+
+        services.TryAddSingleton<
             IProjectionDocumentMetadataProvider<UserConfigCurrentStateDocument>,
             UserConfigCurrentStateDocumentMetadataProvider>();
 
@@ -240,7 +244,11 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<
             IProjectionDocumentMetadataProvider<StudioWorkspaceCurrentStateDocument>,
             StudioWorkspaceCurrentStateDocumentMetadataProvider>();
+        services.TryAddSingleton<
+            IProjectionDocumentMetadataProvider<ScopeWorkflowCatalogueRowDocument>,
+            ScopeWorkflowCatalogueRowDocumentMetadataProvider>();
 
+        services.TryAddSingleton<ScopeWorkflowCatalogueRowMaterializer>();
         services.TryAddSingleton<ProjectionActivationPlanDispatcher>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             ICommittedStatePublicationHook,
@@ -265,6 +273,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IStudioMemberBindingRunQueryPort, ProjectionStudioMemberBindingRunQueryPort>();
         services.TryAddSingleton<IStudioTeamQueryPort, ProjectionStudioTeamQueryPort>();
         services.TryAddSingleton<IStudioWorkspaceQueryPort, ProjectionStudioWorkspaceQueryPort>();
+        services.TryAddSingleton<IWorkflowCatalogueQueryPort, ProjectionWorkflowCatalogueQueryPort>();
         services.TryAddSingleton<IScheduledInvocationMemberEvidenceQueryPort, ProjectionScheduledInvocationMemberQueryPort>();
         services.TryAddSingleton<IScheduledInvocationWorkflowEvidenceQueryPort, ProjectionScheduledInvocationWorkflowQueryPort>();
         services.TryAddSingleton<IScheduledInvocationConnectorEvidenceQueryPort, ProjectionScheduledInvocationConnectorQueryPort>();

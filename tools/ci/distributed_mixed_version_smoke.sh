@@ -136,6 +136,11 @@ start_node() {
     Aevatar__Authentication__ScopeServiceTokens__SigningKeys__0__Kid="${DISTRIBUTED_SMOKE_SCOPE_TOKEN_KID}" \
     Aevatar__Authentication__ScopeServiceTokens__SigningKeys__0__Algorithm=HS256 \
     Aevatar__Authentication__ScopeServiceTokens__SigningKeys__0__KeyBase64="${DISTRIBUTED_SMOKE_SCOPE_TOKEN_KEY_BASE64}" \
+    AEVATAR_NYXID_AUTHORITY="http://127.0.0.1:${http_port}" \
+    AEVATAR_Aevatar__NyxId__Authority="http://127.0.0.1:${http_port}" \
+    AEVATAR_Aevatar__NyxId__InternalApiBaseUrl="http://127.0.0.1:${http_port}" \
+    AEVATAR_Aevatar__NyxId__ApiBaseUrl="http://127.0.0.1:${http_port}" \
+    AEVATAR_Aevatar__NyxId__AssistantActions__Enabled=false \
     AEVATAR_ActorRuntime__Provider=Orleans \
     AEVATAR_ActorRuntime__OrleansStreamBackend="${STREAM_BACKEND}" \
     AEVATAR_ActorRuntime__OrleansPersistenceBackend=Garnet \

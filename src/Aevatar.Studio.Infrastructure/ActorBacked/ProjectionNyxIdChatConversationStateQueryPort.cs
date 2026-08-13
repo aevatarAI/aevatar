@@ -57,22 +57,15 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
 
         var serverTurnId = ResolveTurnId(document);
         if (!string.Equals(document.ScopeId, scopeId, StringComparison.Ordinal))
-        {
-            return NyxIdChatConversationStateQueryResult.ReloadRequired(
-                document.StateVersion,
-                serverTurnId,
-                "scope_mismatch");
-        }
+            return NyxIdChatConversationStateQueryResult.NotFound();
 
         if (!string.Equals(document.Id, actorId, StringComparison.Ordinal) ||
             !string.Equals(document.ActorId, actorId, StringComparison.Ordinal) ||
             !string.Equals(document.ConversationActorId, actorId, StringComparison.Ordinal))
-        {
-            return NyxIdChatConversationStateQueryResult.ReloadRequired(
-                document.StateVersion,
-                serverTurnId,
-                "conversation_mismatch");
-        }
+            return NyxIdChatConversationStateQueryResult.NotFound();
+
+        if (document.Deleted)
+            return NyxIdChatConversationStateQueryResult.NotFound();
 
         if (document.StateVersion <= 0)
         {
@@ -153,6 +146,7 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
                 string.Equals(document.Id, document.ActorId, StringComparison.Ordinal) &&
                 string.Equals(document.ActorId, document.ConversationActorId, StringComparison.Ordinal) &&
                 string.Equals(document.ScopeId, normalizedScopeId, StringComparison.Ordinal) &&
+                !document.Deleted &&
                 document.StateVersion > 0)
             .ToDictionary(
                 static document => document.ConversationActorId,
@@ -561,7 +555,18 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
                     : new NyxIdChatNumericThresholdResolutionSnapshot(
                         resolution.NumericThreshold.SuggestedValue,
                         resolution.NumericThreshold.EffectiveValue,
-                        resolution.NumericThreshold.Origin));
+                        resolution.NumericThreshold.Origin),
+                resolution.Answer?.AnswerCase switch
+                {
+                    NyxIdChatConversationInputAnswerDocument.AnswerOneofCase.FreeText =>
+                        new NyxIdChatInputAnswerSnapshot(
+                            FreeText: resolution.Answer.FreeText),
+                    NyxIdChatConversationInputAnswerDocument.AnswerOneofCase.Selection =>
+                        new NyxIdChatInputAnswerSnapshot(
+                            Selection: new NyxIdChatInputSelectionAnswerSnapshot(
+                                resolution.Answer.Selection.OptionIds.ToArray())),
+                    _ => null,
+                });
 
     private static NyxIdChatApprovalResolutionSnapshot? ToApprovalResolution(
         NyxIdChatConversationApprovalResolutionDocument? resolution) =>
@@ -665,6 +670,14 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
                         NullIfEmpty(request.Params.CustomService.AuthKeyName),
                         NullIfEmpty(request.Params.CustomService.ViaNodeId),
                         NullIfEmpty(request.Params.CustomService.TargetOrgId))),
+            NyxIdChatConversationActionParamsDocument.ParamsOneofCase.KeyCreate =>
+                new NyxIdChatActionParamsSnapshot(
+                    Name: request.Params.KeyCreate.Name,
+                    Platform: request.Params.KeyCreate.Platform,
+                    AllowedServiceIds: request.Params.KeyCreate.AllowedServiceIds.ToArray()),
+            NyxIdChatConversationActionParamsDocument.ParamsOneofCase.KeyRotate =>
+                new NyxIdChatActionParamsSnapshot(
+                    KeyId: request.Params.KeyRotate.KeyId),
             _ => null,
         };
         return parameters is null

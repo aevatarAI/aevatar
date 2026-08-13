@@ -23,4 +23,6 @@ public static class CredentialSecretPurposes
         "nyxid-chat.action-read-authority";
     public const string NyxIdChatActionReadAuthorityFence =
         "nyxid-chat.action-read-authority-fence";
+    public const string NyxIdChatPendingPlanGateContinuation =
+        "nyxid-chat.pending-plan-gate-continuation";
 }

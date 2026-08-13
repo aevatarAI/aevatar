@@ -77,6 +77,7 @@ public sealed class WorkflowExecutionCurrentStateQueryPort : IWorkflowExecutionC
             {
                 Take = boundedTake,
                 Filters = BuildFilters(query),
+                AnyOfFilters = BuildActivitySearchFilters(query),
                 Sorts = RecencyDescendingSort,
                 Cursor = query.Cursor,
                 IncludeTotalCount = query.IncludeTotalCount,
@@ -122,6 +123,31 @@ public sealed class WorkflowExecutionCurrentStateQueryPort : IWorkflowExecutionC
             Direction = ProjectionDocumentSortDirection.Asc,
         },
     ];
+
+    private static readonly IReadOnlyList<string> ActivitySearchFieldPaths =
+    [
+        nameof(WorkflowExecutionCurrentStateDocument.WorkflowName),
+        nameof(WorkflowExecutionCurrentStateDocument.RunId),
+        nameof(WorkflowExecutionCurrentStateDocument.Status),
+        nameof(WorkflowExecutionCurrentStateDocument.InputSummary),
+        nameof(WorkflowExecutionCurrentStateDocument.ActivityInitiator) + "." + nameof(WorkflowRunActivityInitiatorSnapshot.DisplayValue),
+    ];
+
+    private static IReadOnlyList<ProjectionDocumentFilter> BuildActivitySearchFilters(WorkflowActorCurrentStateListQuery query)
+    {
+        var searchText = query.SearchText.Trim();
+        if (searchText.Length == 0)
+            return [];
+
+        return ActivitySearchFieldPaths
+            .Select(fieldPath => new ProjectionDocumentFilter
+            {
+                FieldPath = fieldPath,
+                Operator = ProjectionDocumentFilterOperator.ContainsText,
+                Value = ProjectionDocumentValue.FromString(searchText),
+            })
+            .ToArray();
+    }
 
     private static IReadOnlyList<ProjectionDocumentFilter> BuildFilters(WorkflowActorCurrentStateListQuery query)
     {

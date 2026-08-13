@@ -832,7 +832,9 @@ public sealed partial class WorkflowRunGAgent
         {
             await PublishAsync(start, TopologyAudience.Self);
         }
-        catch (Exception ex) when (!ct.IsCancellationRequested)
+        catch (Exception ex) when (
+            !ct.IsCancellationRequested &&
+            !WorkflowRuntimeInfrastructureFailurePolicy.IsCommittedStatePublicationFailure(ex))
         {
             Logger.LogError(
                 ex,
@@ -850,7 +852,9 @@ public sealed partial class WorkflowRunGAgent
             {
                 await HandleWorkflowCompleted(terminal);
             }
-            catch (Exception terminalEx) when (!ct.IsCancellationRequested)
+            catch (Exception terminalEx) when (
+                !ct.IsCancellationRequested &&
+                !WorkflowRuntimeInfrastructureFailurePolicy.IsCommittedStatePublicationFailure(terminalEx))
             {
                 Logger.LogError(
                     terminalEx,

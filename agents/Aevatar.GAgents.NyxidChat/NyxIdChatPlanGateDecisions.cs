@@ -33,11 +33,14 @@ public static class NyxIdChatPlanGateDecisions
         if (call.Safety is null)
             return true;
 
-        return call.OperationAdmission?.ExecutionPolicy is
+        var admission = call.OperationAdmission;
+        return admission?.ExecutionPolicy is
         {
             Risk: AgentToolOperationRiskPayload.Write,
             Approval: AgentToolOperationApprovalPayload.Required,
         } ||
+               admission?.ExecutionPolicy?.Risk == AgentToolOperationRiskPayload.Write ||
+               !string.IsNullOrWhiteSpace(admission?.DurableAuthorization?.ToolDefinitionFingerprint) ||
                call.Safety.RequiresApproval ||
                call.Safety.IsDestructive ||
                ExceedsEstimatedDurationThreshold(plannedSteps, thresholdSeconds);

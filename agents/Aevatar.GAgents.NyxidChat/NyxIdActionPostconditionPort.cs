@@ -465,7 +465,8 @@ public sealed class NyxIdActionPostconditionPort : INyxIdActionPostconditionPort
         var versionEvidence = evidence.VersionEvidence;
         if (versionEvidence is null ||
             versionEvidence.RotationPredecessorId is not { } predecessorId ||
-            !ValidIdentity(predecessorId))
+            !ValidIdentity(predecessorId) ||
+            versionEvidence.StateVersion <= 0)
         {
             return Unverified(
                 input,
@@ -584,8 +585,7 @@ public sealed class NyxIdActionPostconditionPort : INyxIdActionPostconditionPort
             return null;
         }
 
-        var bearerToken = AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(
-            context.Credentials);
+        var bearerToken = AgentToolHumanSessionNyxIdCredential.ResolveBearerToken(context);
         if (bearerToken is null)
             failure = ProviderReadUnavailable(input);
         return bearerToken;

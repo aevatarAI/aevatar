@@ -119,7 +119,12 @@ public sealed class NyxIdChatNeedsYouDecisionsTests
         accepted.State.LatestInputResolution.RequestId.Should().Be("input-alpha");
         accepted.State.LatestInputResolution.ClientRequestId.Should().Be("client-input-alpha");
         accepted.State.LatestInputResolution.AnswerSha256.Should().NotBeEmpty();
-        accepted.State.ToString().Should().NotContain("Singapore");
+        accepted.State.LatestInputResolution.Answer.Selection.OptionIds.Should()
+            .Equal("option-singapore");
+        accepted.State.ToString().Should()
+            .Contain("option-singapore")
+            .And.NotContain("Singapore",
+                "the committed selection identity is the option id, not its presentation label");
         accepted.State.ActiveTask.Steps.Single(step => step.StepId == "step-alpha")
             .Status.Should().Be(NyxIdChatStepStatus.Done);
         accepted.NextCommand.Should().NotBeNull();
@@ -172,7 +177,7 @@ public sealed class NyxIdChatNeedsYouDecisionsTests
     }
 
     [Fact]
-    public void ResolveInput_ShouldCarryTwoSelectedOptionsOnlyInTransientContinuation()
+    public void ResolveInput_ShouldPersistOnlySelectedOptionIdsAndCarryThemIntoContinuation()
     {
         var request = InputRequest();
         request.MultiSelect = true;
@@ -201,15 +206,17 @@ public sealed class NyxIdChatNeedsYouDecisionsTests
             .Equal("option-singapore", "option-frankfurt");
         decision.NextCommand.InputContinuation.SelectedOptions.Select(static option => option.OptionId)
             .Should().Equal("option-singapore", "option-frankfurt");
+        decision.State.LatestInputResolution.Answer.Selection.OptionIds.Should()
+            .Equal("option-singapore", "option-frankfurt");
         decision.State.ToString().Should()
-            .NotContain("option-singapore")
-            .And.NotContain("option-frankfurt")
+            .Contain("option-singapore")
+            .And.Contain("option-frankfurt")
             .And.NotContain("Singapore")
             .And.NotContain("Frankfurt");
     }
 
     [Fact]
-    public void ResolveInput_ShouldKeepRawFreeTextOnlyInTransientContinuation()
+    public void ResolveInput_ShouldPersistNormalizedFreeTextForCommittedContinuationContext()
     {
         const string rawAnswer = "private-answer-sentinel";
         var request = InputRequest();
@@ -235,10 +242,15 @@ public sealed class NyxIdChatNeedsYouDecisionsTests
             ResolvedAt);
 
         decision.ShouldCommit.Should().BeTrue();
-        decision.State.ToString().Should().NotContain(rawAnswer);
+        decision.State.LatestInputResolution.Answer.FreeText.Should().Be(rawAnswer);
+        decision.State.ToString().Should().Contain(rawAnswer);
         System.Text.Encoding.UTF8.GetString(decision.State.ToByteArray()).Should()
-            .NotContain(rawAnswer);
+            .Contain(rawAnswer);
         decision.NextCommand!.InputContinuation.Answer.FreeText.Should().Be(rawAnswer);
+
+        var reloaded = NyxIdChatConversationGAgentState.Parser.ParseFrom(
+            decision.State.ToByteArray());
+        reloaded.LatestInputResolution.Answer.FreeText.Should().Be(rawAnswer);
     }
 
     [Fact]

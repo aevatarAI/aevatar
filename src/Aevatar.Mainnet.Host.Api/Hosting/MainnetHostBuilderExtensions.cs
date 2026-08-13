@@ -378,46 +378,17 @@ public static class MainnetHostBuilderExtensions
                 EffectHttpMethod = "POST",
                 EffectPathTemplate = "/open-apis/im/v1/messages",
                 ReadHttpMethod = "GET",
-                ReadPathTemplate = "/open-apis/im/v1/messages",
-                CheckName = "lark_provider_message_visible_in_chat",
+                ReadPathTemplate = "/open-apis/im/v1/messages/{message_id}",
+                CheckName = "lark_provider_message_visible_by_id",
                 Match = AgentToolReadBackMatch.ArrayContainsEquals,
                 JsonPointer = "/data/items",
                 ElementJsonPointer = "/message_id",
                 EffectResultIdentityJsonPointer = "/data/message_id",
-                EffectArgumentConstraints =
-                [
-                    new NyxIdAssistantEffectArgumentConstraint
-                    {
-                        EffectLocation = NyxIdAssistantOperationArgumentLocation.Query,
-                        EffectArgumentName = "receive_id_type",
-                        ExpectedValue = Value.ForString("chat_id"),
-                    },
-                ],
-                ArgumentBindings =
-                [
-                    new NyxIdAssistantReadBackArgumentBinding
-                    {
-                        EffectLocation = NyxIdAssistantOperationArgumentLocation.Body,
-                        EffectArgumentName = "receive_id",
-                        ReadLocation = NyxIdAssistantOperationArgumentLocation.Query,
-                        ReadArgumentName = "container_id",
-                    },
-                ],
-                LiteralReadArguments =
-                [
-                    new NyxIdAssistantReadBackLiteralArgument
-                    {
-                        ReadLocation = NyxIdAssistantOperationArgumentLocation.Query,
-                        ReadArgumentName = "container_id_type",
-                        Value = Value.ForString("chat"),
-                    },
-                    new NyxIdAssistantReadBackLiteralArgument
-                    {
-                        ReadLocation = NyxIdAssistantOperationArgumentLocation.Query,
-                        ReadArgumentName = "page_size",
-                        Value = Value.ForNumber(50),
-                    },
-                ],
+                ProviderResourceArgument = new NyxIdAssistantReadBackProviderResourceArgument
+                {
+                    ReadLocation = NyxIdAssistantOperationArgumentLocation.Path,
+                    ReadArgumentName = "message_id",
+                },
             });
             o.AssistantOperationReadBackBindings.Add(new NyxIdAssistantOperationReadBackBinding
             {
@@ -595,6 +566,10 @@ public static class MainnetHostBuilderExtensions
                 ToolSetNames.NyxIdConnectedServices,
                 [CreateToolSource<NyxIdConnectedServiceToolSource>],
                 "NyxID request-local operations admitted from the exact MCP and connected-service inventory intersection.");
+            options.AddToolSet(
+                ToolSetNames.NyxIdAssistantAdmission,
+                [CreateToolSource<NyxIdAssistantToolSource>],
+                "Pinned local NyxID Assistant tools used by built-in admission intents without external discovery dependencies.");
             options.AddToolSet(
                 AgentProfilePolicies.NyxIdChatRouteToolSet,
                 [

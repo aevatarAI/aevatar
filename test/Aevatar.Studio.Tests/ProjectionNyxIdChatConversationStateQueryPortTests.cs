@@ -102,6 +102,8 @@ public sealed class ProjectionNyxIdChatConversationStateQueryPortTests
         result.Snapshot.PendingInput.Options.Select(static option => option.Label).Should()
             .Equal("Singapore", "Frankfurt");
         result.Snapshot.LatestInputResolution!.RequestId.Should().Be("input-before");
+        result.Snapshot.LatestInputResolution.Answer!.Selection!.OptionIds.Should()
+            .Equal("option-singapore");
         result.Snapshot.LatestApprovalResolution!.Approved.Should().BeFalse();
         result.Snapshot.TaskStatus.Should().Be("active");
         result.Snapshot.AttentionKind.Should().Be("input");
@@ -156,6 +158,50 @@ public sealed class ProjectionNyxIdChatConversationStateQueryPortTests
     }
 
     [Fact]
+    public async Task GetAsync_ShouldExposeFlatReloadableKeyActionParameters()
+    {
+        var document = BuildDocument(stateVersion: 8);
+        var keyCreate = document.PendingActions.Single();
+        keyCreate.Action = "key.create";
+        keyCreate.Request.Action = "key.create";
+        keyCreate.Request.Params = new NyxIdChatConversationActionParamsDocument
+        {
+            KeyCreate = new NyxIdChatConversationKeyCreateDocument
+            {
+                Name = "agent-alpha",
+                Platform = "codex",
+                AllowedServiceIds = { "service-github", "service-lark" },
+            },
+        };
+        var keyRotate = document.RecentActions.Single();
+        keyRotate.Action = "key.rotate";
+        keyRotate.Request.Action = "key.rotate";
+        keyRotate.Request.Params = new NyxIdChatConversationActionParamsDocument
+        {
+            KeyRotate = new NyxIdChatConversationKeyRotateDocument
+            {
+                KeyId = "key-predecessor",
+            },
+        };
+        var port = new ProjectionNyxIdChatConversationStateQueryPort(
+            new RecordingReader { Document = document });
+
+        var result = await port.GetAsync(new NyxIdChatConversationStateQuery(
+            "scope-alpha",
+            "conversation-alpha"));
+
+        var createParams = result.Snapshot!.PendingActions.Single().Request!.Params;
+        createParams.Name.Should().Be("agent-alpha");
+        createParams.Platform.Should().Be("codex");
+        createParams.AllowedServiceIds.Should().Equal("service-github", "service-lark");
+        createParams.KeyId.Should().BeNull();
+        var rotateParams = result.Snapshot.RecentActions!.Single().Request!.Params;
+        rotateParams.KeyId.Should().Be("key-predecessor");
+        rotateParams.Name.Should().BeNull();
+        rotateParams.AllowedServiceIds.Should().BeNull();
+    }
+
+    [Fact]
     public async Task GetAsync_ShouldPreserveAvailableActionsMessagePresence()
     {
         var document = BuildDocument(stateVersion: 8);
@@ -183,17 +229,27 @@ public sealed class ProjectionNyxIdChatConversationStateQueryPortTests
     public async Task GetAttentionSummariesAsync_ShouldBatchReadActorScopedProjectionTruth()
     {
         var valid = BuildDocument(stateVersion: 23);
+        var deleted = BuildDocument(stateVersion: 25);
+        deleted.Id = "conversation-deleted";
+        deleted.ActorId = "conversation-deleted";
+        deleted.ConversationActorId = "conversation-deleted";
+        deleted.Deleted = true;
         var foreign = BuildDocument(stateVersion: 24);
         foreign.Id = "conversation-foreign";
         foreign.ActorId = "conversation-foreign";
         foreign.ConversationActorId = "conversation-foreign";
         foreign.ScopeId = "scope-other";
-        var reader = new RecordingReader { QueryDocuments = [valid, foreign] };
+        var reader = new RecordingReader { QueryDocuments = [valid, deleted, foreign] };
         var port = new ProjectionNyxIdChatConversationStateQueryPort(reader);
 
         var result = await port.GetAttentionSummariesAsync(
             " scope-alpha ",
-            [" conversation-alpha ", "conversation-alpha", "conversation-missing"]);
+            [
+                " conversation-alpha ",
+                "conversation-alpha",
+                "conversation-deleted",
+                "conversation-missing",
+            ]);
 
         var summary = result.Should().ContainSingle().Which;
         summary.Key.Should().Be("conversation-alpha");
@@ -204,7 +260,7 @@ public sealed class ProjectionNyxIdChatConversationStateQueryPortTests
         summary.Value.ActiveStepSummary.Should().Be("Choose a deployment region.");
         summary.Value.StateVersion.Should().Be(23);
         reader.Queries.Should().ContainSingle().Which.Should().Match<ProjectionDocumentQuery>(query =>
-            query.Take == 2 &&
+            query.Take == 3 &&
             query.Filters.Any(filter =>
                 filter.FieldPath == nameof(NyxIdChatConversationCurrentStateDocument.ScopeId) &&
                 filter.Operator == ProjectionDocumentFilterOperator.Eq) &&
@@ -255,12 +311,11 @@ public sealed class ProjectionNyxIdChatConversationStateQueryPortTests
     }
 
     [Theory]
-    [InlineData("scope-other", "conversation-alpha", "scope_mismatch")]
-    [InlineData("scope-alpha", "conversation-other", "conversation_mismatch")]
-    public async Task GetAsync_ShouldReturnReloadRequiredForDocumentIdentityMismatch(
+    [InlineData("scope-other", "conversation-alpha")]
+    [InlineData("scope-alpha", "conversation-other")]
+    public async Task GetAsync_ShouldFailClosedForDocumentIdentityMismatch(
         string documentScopeId,
-        string documentActorId,
-        string reasonCode)
+        string documentActorId)
     {
         var document = BuildDocument(stateVersion: 8);
         document.ScopeId = documentScopeId;
@@ -274,8 +329,8 @@ public sealed class ProjectionNyxIdChatConversationStateQueryPortTests
             AfterStateVersion: 7,
             TurnId: "turn-alpha"));
 
-        result.Status.Should().Be(NyxIdChatConversationStateQueryStatus.ReloadRequired);
-        result.ReasonCode.Should().Be(reasonCode);
+        result.Status.Should().Be(NyxIdChatConversationStateQueryStatus.NotFound);
+        result.ReasonCode.Should().BeNull();
         result.Snapshot.Should().BeNull();
     }
 
@@ -287,6 +342,24 @@ public sealed class ProjectionNyxIdChatConversationStateQueryPortTests
         var result = await port.GetAsync(new NyxIdChatConversationStateQuery(
             "scope-alpha",
             "conversation-missing"));
+
+        result.Status.Should().Be(NyxIdChatConversationStateQueryStatus.NotFound);
+        result.Snapshot.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetAsync_ShouldReturnNotFoundWhenDocumentIsDeleted()
+    {
+        var document = BuildDocument(stateVersion: 9);
+        document.Deleted = true;
+        document.DeletedAt = Timestamp.FromDateTimeOffset(
+            DateTimeOffset.Parse("2026-08-12T04:29:00Z"));
+        var port = new ProjectionNyxIdChatConversationStateQueryPort(
+            new RecordingReader { Document = document });
+
+        var result = await port.GetAsync(new NyxIdChatConversationStateQuery(
+            "scope-alpha",
+            "conversation-alpha"));
 
         result.Status.Should().Be(NyxIdChatConversationStateQueryStatus.NotFound);
         result.Snapshot.Should().BeNull();
@@ -322,6 +395,13 @@ public sealed class ProjectionNyxIdChatConversationStateQueryPortTests
             ClientRequestId = "client-input-before",
             Outcome = "accepted",
             CommittedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-01T11:55:00Z")),
+            Answer = new NyxIdChatConversationInputAnswerDocument
+            {
+                Selection = new NyxIdChatConversationInputSelectionAnswerDocument
+                {
+                    OptionIds = { "option-singapore" },
+                },
+            },
         },
         LatestApprovalResolution = new NyxIdChatConversationApprovalResolutionDocument
         {

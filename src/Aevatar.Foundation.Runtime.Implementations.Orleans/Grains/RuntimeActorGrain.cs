@@ -263,6 +263,15 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             _logger.LogWarning(
                 "Runtime actor {ActorId} is unavailable; applying terminal failure policy to the envelope",
                 this.GetPrimaryKeyString());
+
+            // A persisted identity exists but could not be re-bound (for
+            // example the replay failed against a damaged stream). Resolution
+            // is attempted at most once per activation, so a camped activation
+            // would drop every future envelope for as long as it lives. Shed
+            // the activation instead: each new envelope then re-activates the
+            // grain and retries the bind, which is also the natural retry path
+            // once the underlying store has been repaired.
+            DeactivateOnIdle();
         }
         else
         {
@@ -314,6 +323,25 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             AgentMetrics.RecordEnvelopeTerminalFailure(
                 AgentMetrics.FailureReasonHandlerRetryExhausted,
                 ResolveTerminalFailureDisposition(propagateFailure));
+
+            if (RuntimeEnvelopeRetryPolicy.ContainsCommitConsistencyFailure(ex))
+            {
+                // The activation's memory and the event store disagree about the
+                // committed history. Keeping this activation alive would let it
+                // keep accepting commands whose commits can never land (the
+                // observed zombie: every write reported accepted, nothing
+                // persisted). Shed the agent and the activation so the next
+                // envelope rehydrates from the committed history, where a
+                // repaired store commits cleanly and unrepaired drift fails
+                // activation with a diagnosable error instead of a silent drop.
+                _logger.LogWarning(
+                    "Runtime actor {ActorId} is shedding its activation after a commit-consistency failure; the next envelope will rehydrate from committed state.",
+                    this.GetPrimaryKeyString());
+                _agent = null;
+                _activeKind = null;
+                DeactivateOnIdle();
+            }
+
             if (propagateFailure)
             {
                 throw;

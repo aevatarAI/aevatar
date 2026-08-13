@@ -9,7 +9,6 @@ using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.NyxidChat;
-using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Infrastructure.ActorBacked;
 using Aevatar.Studio.Projection.Orchestration;
@@ -357,6 +356,11 @@ public sealed class NyxIdChatStateEndpointTests
                 RequestId = "input-threshold",
                 ClientRequestId = "client-threshold",
                 Outcome = NyxIdChatNeedsYouResolutionOutcome.Accepted,
+                Answer = new NyxIdChatInputAnswer
+                {
+                    FreeText =
+                        "Party size 4; one vegetarian; SGD 200 total; research only.",
+                },
                 CommittedAt = evaluatedAt.Clone(),
                 NumericThreshold = new NyxIdChatNumericThresholdResolution
                 {
@@ -418,6 +422,16 @@ public sealed class NyxIdChatStateEndpointTests
             .GetValue<long>().Should().Be(75);
         snapshot["latestInputResolution"]!["numericThreshold"]!["origin"]!
             .GetValue<string>().Should().Be("user_override");
+        snapshot["latestInputResolution"]!["answer"]!["freeText"]!
+            .GetValue<string>().Should().Be(
+                "Party size 4; one vegetarian; SGD 200 total; research only.");
+        var liveInputChanged = JsonNode.Parse(
+            JsonFormatter.Default.Format(state.LatestInputResolution))!;
+        JsonNode.DeepEquals(
+                liveInputChanged["answer"],
+                snapshot["latestInputResolution"]!["answer"])
+            .Should().BeTrue(
+                "live input.changed and current-state reload expose the same typed answer");
         snapshot["activeTask"]!["domain"]!["candidateScreening"]!["totalScore"]!
             .GetValue<int>().Should().Be(80);
         snapshot["activeTask"]!["domain"]!["candidateScreening"]!["scores"]![0]!["evidence"]!
@@ -583,6 +597,97 @@ public sealed class NyxIdChatStateEndpointTests
     }
 
     [Fact]
+    public async Task GetState_ShouldExposeFlatReloadableKeyActionParameters()
+    {
+        var keyCreate = new NyxIdChatActionSnapshot(
+            4,
+            "action-key-create",
+            "turn-alpha",
+            "task-alpha",
+            "step-key-create",
+            "key.create",
+            DateTimeOffset.Parse("2026-08-12T04:00:00Z"),
+            [],
+            null,
+            new NyxIdChatActionRequestSnapshot(
+                4,
+                "conversation-alpha",
+                "turn-alpha",
+                "task-alpha",
+                "step-key-create",
+                "action-key-create",
+                "key.create",
+                new NyxIdChatActionParamsSnapshot(
+                    Name: "agent-alpha",
+                    Platform: "codex",
+                    AllowedServiceIds: ["service-github", "service-lark"])));
+        var keyRotate = new NyxIdChatActionSnapshot(
+            4,
+            "action-key-rotate",
+            "turn-alpha",
+            "task-alpha",
+            "step-key-rotate",
+            "key.rotate",
+            DateTimeOffset.Parse("2026-08-12T04:01:00Z"),
+            [],
+            null,
+            new NyxIdChatActionRequestSnapshot(
+                4,
+                "conversation-alpha",
+                "turn-alpha",
+                "task-alpha",
+                "step-key-rotate",
+                "action-key-rotate",
+                "key.rotate",
+                new NyxIdChatActionParamsSnapshot(KeyId: "key-predecessor")));
+        var queryPort = new RecordingQueryPort
+        {
+            Result = NyxIdChatConversationStateQueryResult.Current(
+                new NyxIdChatConversationStateSnapshot(
+                    ActorId: "conversation-alpha",
+                    ScopeId: "scope-alpha",
+                    StateVersion: 12,
+                    ProgressSequence: 41,
+                    UpdatedAt: DateTimeOffset.Parse("2026-08-12T04:02:00Z"),
+                    ActiveTurn: null,
+                    LatestTurn: null,
+                    RecentTerminalTurns: [],
+                    ActiveTask: null,
+                    PendingApproval: null,
+                    PendingActions: [keyCreate],
+                    ControlFence: null,
+                    LatestControlResult: null,
+                    ContinuationAdmission: null,
+                    RecentActions: [keyRotate])),
+        };
+
+        var response = await ExecuteAsync(queryPort, string.Empty);
+
+        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        using var json = JsonDocument.Parse(response.Body);
+        var snapshot = json.RootElement.GetProperty("snapshot");
+        var createParams = snapshot.GetProperty("pendingActions")[0]
+            .GetProperty("request")
+            .GetProperty("params");
+        createParams.GetProperty("name").GetString().Should().Be("agent-alpha");
+        createParams.GetProperty("platform").GetString().Should().Be("codex");
+        createParams.GetProperty("allowedServiceIds").EnumerateArray()
+            .Select(static value => value.GetString())
+            .Should().Equal("service-github", "service-lark");
+        createParams.EnumerateObject().Select(static property => property.Name)
+            .Should().Equal("name", "platform", "allowedServiceIds");
+        createParams.TryGetProperty("keyCreate", out _).Should().BeFalse();
+        var rotateParams = snapshot.GetProperty("recentActions")[0]
+            .GetProperty("request")
+            .GetProperty("params");
+        rotateParams.GetProperty("keyId").GetString().Should().Be("key-predecessor");
+        rotateParams.EnumerateObject().Select(static property => property.Name)
+            .Should().Equal("keyId");
+        rotateParams.TryGetProperty("keyRotate", out _).Should().BeFalse();
+        response.Body.Should().NotContain("fullKey").And.NotContain("keyMaterial");
+    }
+
+    [Fact]
     public async Task GetState_ShouldReturnReloadRequiredForInvalidNumericCursorWithoutQuerying()
     {
         var queryPort = new RecordingQueryPort();
@@ -613,27 +718,19 @@ public sealed class NyxIdChatStateEndpointTests
     }
 
     [Fact]
-    public async Task GetState_ShouldNotReadConversationStateWhenRegistryDoesNotOwnActor()
+    public async Task GetState_ShouldReadConversationCurrentStateWithoutARegistryReplicaJoin()
     {
-        var queryPort = new RecordingQueryPort();
-        var registry = new RecordingRegistryQueryPort
+        var queryPort = new RecordingQueryPort
         {
-            Snapshot = new GAgentActorRegistrySnapshot(
-                "scope-alpha",
-                [new GAgentActorGroup(NyxIdChatServiceDefaults.GAgentKind, ["conversation-other"])],
-                3,
-                DateTimeOffset.UtcNow,
-                DateTimeOffset.UtcNow),
+            Result = NyxIdChatConversationStateQueryResult.NotModified(8, "turn-alpha"),
         };
 
-        var response = await ExecuteAsync(
-            queryPort,
-            string.Empty,
-            registryQueryPort: registry);
+        var response = await ExecuteAsync(queryPort, string.Empty);
 
-        response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
-        queryPort.Queries.Should().BeEmpty();
-        registry.ScopeIds.Should().ContainSingle("scope-alpha");
+        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        queryPort.Queries.Should().ContainSingle(query =>
+            query.ScopeId == "scope-alpha" &&
+            query.ActorId == "conversation-alpha");
     }
 
     [Fact]
@@ -658,6 +755,7 @@ public sealed class NyxIdChatStateEndpointTests
             "agents/Aevatar.GAgents.NyxidChat/NyxIdChatEndpoints.State.cs"));
 
         source.Should().Contain("INyxIdChatConversationStateQueryPort");
+        source.Should().NotContain("IGAgentActorRegistryQueryPort");
         source.Should().NotContain("IActorRuntime");
         source.Should().NotContain("IEventStore");
         source.Should().NotContain("INyxIdChatSessionProjectionPort");
@@ -833,10 +931,8 @@ public sealed class NyxIdChatStateEndpointTests
     private static async Task<(int StatusCode, string Body)> ExecuteAsync(
         INyxIdChatConversationStateQueryPort queryPort,
         string queryString,
-        string? authenticatedScopeId = null,
-        IGAgentActorRegistryQueryPort? registryQueryPort = null)
+        string? authenticatedScopeId = null)
     {
-        registryQueryPort ??= RecordingRegistryQueryPort.OwningConversation();
         await using var services = new ServiceCollection()
             .AddLogging()
             .AddSingleton<IConfiguration>(new ConfigurationBuilder()
@@ -853,7 +949,6 @@ public sealed class NyxIdChatStateEndpointTests
                     ? Environments.Development
                     : Environments.Production,
             })
-            .AddSingleton(registryQueryPort)
             .AddSingleton(queryPort)
             .BuildServiceProvider();
         var context = new DefaultHttpContext { RequestServices = services };
@@ -954,41 +1049,6 @@ public sealed class NyxIdChatStateEndpointTests
                 CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyDictionary<string, NyxIdChatConversationAttentionSummary>>(
                 new Dictionary<string, NyxIdChatConversationAttentionSummary>());
-    }
-
-    private sealed class RecordingRegistryQueryPort : IGAgentActorRegistryQueryPort
-    {
-        public GAgentActorRegistrySnapshot Snapshot { get; init; } =
-            new(
-                "scope-alpha",
-                [],
-                0,
-                DateTimeOffset.MinValue,
-                DateTimeOffset.MinValue);
-        public List<string> ScopeIds { get; } = [];
-
-        public Task<GAgentActorRegistrySnapshot> ListActorsAsync(
-            string scopeId,
-            CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            ScopeIds.Add(scopeId);
-            return Task.FromResult(Snapshot);
-        }
-
-        public static RecordingRegistryQueryPort OwningConversation() => new()
-        {
-            Snapshot = new GAgentActorRegistrySnapshot(
-                "scope-alpha",
-                [
-                    new GAgentActorGroup(
-                        NyxIdChatServiceDefaults.GAgentKind,
-                        ["conversation-alpha"]),
-                ],
-                4,
-                DateTimeOffset.UtcNow,
-                DateTimeOffset.UtcNow),
-        };
     }
 
     private sealed class TestHostEnvironment : IHostEnvironment

@@ -176,8 +176,8 @@ internal sealed class NyxIdAssistantReadOnlyActionTool :
         if (!IsAllowed(argumentsJson))
             return RejectedJson;
 
-        var token = AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(
-            AgentToolRequestContext.Current?.Credentials);
+        var token = AgentToolHumanSessionNyxIdCredential.ResolveBearerToken(
+            AgentToolRequestContext.Current);
         if (string.IsNullOrWhiteSpace(token))
             return MissingTokenJson;
 

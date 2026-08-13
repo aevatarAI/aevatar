@@ -2,6 +2,9 @@ using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Studio.Domain.Studio.Models;
+using IWorkflowYamlDocumentService = Aevatar.Studio.Application.Studio.Abstractions.IWorkflowYamlDocumentService;
+using WorkflowParseResult = Aevatar.Studio.Application.Studio.Abstractions.WorkflowParseResult;
 using Aevatar.Studio.Projection.Metadata;
 using Aevatar.Studio.Projection.Orchestration;
 using Aevatar.Studio.Projection.Projectors;
@@ -29,7 +32,7 @@ public sealed class StudioWorkspaceCurrentStateProjectorTests
     {
         var dispatcher = new RecordingWriteDispatcher();
         var clock = new FixedProjectionClock(DateTimeOffset.Parse("2026-05-19T08:00:00Z"));
-        var projector = new StudioWorkspaceCurrentStateProjector(dispatcher, clock);
+        var projector = CreateProjector(dispatcher, clock);
         var state = new StudioWorkspaceState
         {
             WorkspaceId = RootActorId,
@@ -69,9 +72,14 @@ public sealed class StudioWorkspaceCurrentStateProjectorTests
     public async Task ProjectAsync_ShouldStoreWorkspaceStateAsOpaqueJsonString_ForElasticsearch()
     {
         var dispatcher = new RecordingWriteDispatcher();
-        var projector = new StudioWorkspaceCurrentStateProjector(
+        var catalogueDispatcher = new RecordingCatalogueSourceDispatcher();
+        var rowDispatcher = new RecordingCatalogueRowDispatcher();
+        var projectedAt = DateTimeOffset.Parse("2026-05-19T08:00:00Z");
+        var projector = CreateProjector(
             dispatcher,
-            new FixedProjectionClock(DateTimeOffset.Parse("2026-05-19T08:00:00Z")));
+            new FixedProjectionClock(projectedAt),
+            catalogueDispatcher,
+            rowDispatcher);
         var state = new StudioWorkspaceState
         {
             WorkspaceId = RootActorId,
@@ -121,6 +129,16 @@ public sealed class StudioWorkspaceCurrentStateProjectorTests
             DirectoryId = "dir-1",
             Version = 4,
         });
+        var catalogueSource = catalogueDispatcher.Upserts.Should().ContainSingle().Subject;
+        catalogueSource.ScopeId.Should().Be("scope-1");
+        catalogueSource.WorkflowId.Should().Be("wf-alpha");
+        catalogueSource.SourceKind.Should().Be(ScopeWorkflowCatalogueSourceDocument.DraftSourceKind);
+        catalogueSource.ActorId.Should().Be("scope-workflow-catalogue-source:scope-1:wf-alpha:draft");
+        catalogueSource.StateVersion.Should().Be(catalogueSource.UpdatedAt.ToDateTimeOffset().UtcDateTime.Ticks);
+        catalogueSource.Name.Should().Be("workflow-alpha");
+        rowDispatcher.Upserts.Should().ContainSingle(row => row.Id == "scope-1:workflow:wf-alpha" &&
+                                                           row.ActorId == "scope-workflow-catalogue-row:scope-1:wf-alpha" &&
+                                                           row.HasDraftSource);
         StudioWorkspaceCurrentStateDocument.Descriptor.Fields.InDeclarationOrder()
             .Select(field => field.Name)
             .Should().NotContain("state_root");
@@ -180,7 +198,7 @@ public sealed class StudioWorkspaceCurrentStateProjectorTests
     public async Task ProjectAsync_ShouldNoOp_WhenEnvelopeIsUnrelatedOrInvalid()
     {
         var dispatcher = new RecordingWriteDispatcher();
-        var projector = new StudioWorkspaceCurrentStateProjector(
+        var projector = CreateProjector(
             dispatcher,
             new FixedProjectionClock(DateTimeOffset.UtcNow));
 
@@ -216,11 +234,58 @@ public sealed class StudioWorkspaceCurrentStateProjectorTests
     }
 
     [Fact]
+    public async Task ProjectAsync_WhenDraftDeleted_ShouldDeleteCatalogueDraftSourceByExactKey()
+    {
+        var dispatcher = new RecordingWriteDispatcher();
+        var catalogueDispatcher = new RecordingCatalogueSourceDispatcher();
+        var rowDispatcher = new RecordingCatalogueRowDispatcher();
+        var projector = CreateProjector(
+            dispatcher,
+            new FixedProjectionClock(DateTimeOffset.UtcNow),
+            catalogueDispatcher,
+            rowDispatcher);
+        var projectedAt = DateTimeOffset.Parse("2026-08-06T00:00:00Z");
+
+        await projector.ProjectAsync(
+            NewContext(),
+            WrapCommitted(
+                new StudioWorkflowDraftDeleted
+                {
+                    WorkspaceId = RootActorId,
+                    ScopeId = "scope-1",
+                    WorkflowId = "wf-alpha",
+                    DeletedAtUtc = Timestamp.FromDateTimeOffset(projectedAt),
+                },
+                new StudioWorkspaceState { WorkspaceId = RootActorId, ScopeId = "scope-1" },
+                version: 12,
+                eventId: "evt-draft-deleted",
+                envelopeTimestamp: projectedAt,
+                stateEventTimestamp: projectedAt));
+
+        dispatcher.Upserts.Should().ContainSingle();
+        catalogueDispatcher.Upserts.Should().BeEmpty();
+        catalogueDispatcher.DeleteMarkers.Should().ContainSingle().Which.Should().Be(
+            new ProjectionDocumentDeleteMarker(
+                "scope-1:wf-alpha:draft",
+                "scope-workflow-catalogue-source:scope-1:wf-alpha:draft",
+                projectedAt.UtcDateTime.Ticks + 1,
+                "evt-draft-deleted",
+                projectedAt));
+        rowDispatcher.DeleteMarkers.Should().ContainSingle().Which.Should().Be(
+            new ProjectionDocumentDeleteMarker(
+                "scope-1:workflow:wf-alpha",
+                "scope-workflow-catalogue-row:scope-1:wf-alpha",
+                projectedAt.UtcDateTime.Ticks + 1,
+                "evt-draft-deleted",
+                projectedAt));
+    }
+
+    [Fact]
     public async Task ProjectAsync_WhenStateEventTimestampMissing_ShouldUseEnvelopeTimestamp()
     {
         var dispatcher = new RecordingWriteDispatcher();
         var clock = new FixedProjectionClock(DateTimeOffset.Parse("2026-05-19T12:00:00Z"));
-        var projector = new StudioWorkspaceCurrentStateProjector(dispatcher, clock);
+        var projector = CreateProjector(dispatcher, clock);
         var envelopeTimestamp = DateTimeOffset.Parse("2026-05-19T11:00:00Z");
 
         await projector.ProjectAsync(
@@ -235,6 +300,25 @@ public sealed class StudioWorkspaceCurrentStateProjectorTests
 
         dispatcher.Upserts.Should().ContainSingle();
         dispatcher.Upserts[0].UpdatedAt.ToDateTimeOffset().Should().Be(envelopeTimestamp);
+    }
+
+    private static StudioWorkspaceCurrentStateProjector CreateProjector(
+        RecordingWriteDispatcher dispatcher,
+        IProjectionClock clock,
+        RecordingCatalogueSourceDispatcher? catalogueDispatcher = null,
+        RecordingCatalogueRowDispatcher? rowDispatcher = null)
+    {
+        catalogueDispatcher ??= new RecordingCatalogueSourceDispatcher();
+        rowDispatcher ??= new RecordingCatalogueRowDispatcher();
+        var rowMaterializer = new ScopeWorkflowCatalogueRowMaterializer(
+            new RecordingCatalogueSourceReader(catalogueDispatcher),
+            rowDispatcher);
+        return new StudioWorkspaceCurrentStateProjector(
+            dispatcher,
+            catalogueDispatcher,
+            rowMaterializer,
+            new StubWorkflowYamlDocumentService(),
+            clock);
     }
 
     private static StudioMaterializationContext NewContext() => new()
@@ -287,6 +371,110 @@ public sealed class StudioWorkspaceCurrentStateProjectorTests
 
         public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default) =>
             Task.FromResult(ProjectionWriteResult.Applied());
+    }
+
+    private sealed class RecordingCatalogueSourceDispatcher
+        : IProjectionWriteDispatcher<ScopeWorkflowCatalogueSourceDocument>
+    {
+        public List<ScopeWorkflowCatalogueSourceDocument> Upserts { get; } = [];
+        public List<ProjectionDocumentDeleteMarker> DeleteMarkers { get; } = [];
+
+        public Task<ProjectionWriteResult> UpsertAsync(
+            ScopeWorkflowCatalogueSourceDocument readModel,
+            CancellationToken ct = default)
+        {
+            Upserts.Add(readModel);
+            return Task.FromResult(ProjectionWriteResult.Applied());
+        }
+
+        public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default) =>
+            Task.FromResult(ProjectionWriteResult.Applied());
+
+        public Task<ProjectionWriteResult> DeleteAsync(
+            ProjectionDocumentDeleteMarker marker,
+            CancellationToken ct = default)
+        {
+            DeleteMarkers.Add(marker);
+            return Task.FromResult(ProjectionWriteResult.Applied());
+        }
+    }
+
+    private sealed class RecordingCatalogueSourceReader(RecordingCatalogueSourceDispatcher dispatcher)
+        : IProjectionDocumentReader<ScopeWorkflowCatalogueSourceDocument, string>
+    {
+        public Task<ScopeWorkflowCatalogueSourceDocument?> GetAsync(string key, CancellationToken ct = default)
+        {
+            var deleted = dispatcher.DeleteMarkers.Any(marker => string.Equals(marker.Id, key, StringComparison.Ordinal));
+            var source = deleted
+                ? null
+                : dispatcher.Upserts.LastOrDefault(document => string.Equals(document.Id, key, StringComparison.Ordinal));
+            return Task.FromResult(source);
+        }
+
+        public Task<ProjectionDocumentQueryResult<ScopeWorkflowCatalogueSourceDocument>> QueryAsync(
+            ProjectionDocumentQuery query,
+            CancellationToken ct = default) =>
+            Task.FromResult(new ProjectionDocumentQueryResult<ScopeWorkflowCatalogueSourceDocument>
+            {
+                Items = dispatcher.Upserts,
+                NextCursor = null,
+                TotalCount = dispatcher.Upserts.Count,
+            });
+    }
+
+    private sealed class RecordingCatalogueRowDispatcher
+        : IProjectionWriteDispatcher<ScopeWorkflowCatalogueRowDocument>
+    {
+        public List<ScopeWorkflowCatalogueRowDocument> Upserts { get; } = [];
+        public List<ProjectionDocumentDeleteMarker> DeleteMarkers { get; } = [];
+
+        public Task<ProjectionWriteResult> UpsertAsync(
+            ScopeWorkflowCatalogueRowDocument readModel,
+            CancellationToken ct = default)
+        {
+            Upserts.Add(readModel);
+            return Task.FromResult(ProjectionWriteResult.Applied());
+        }
+
+        public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default) =>
+            Task.FromResult(ProjectionWriteResult.Applied());
+
+        public Task<ProjectionWriteResult> DeleteAsync(
+            ProjectionDocumentDeleteMarker marker,
+            CancellationToken ct = default)
+        {
+            DeleteMarkers.Add(marker);
+            return Task.FromResult(ProjectionWriteResult.Applied());
+        }
+    }
+
+    private sealed class StubWorkflowYamlDocumentService : IWorkflowYamlDocumentService
+    {
+        public WorkflowParseResult Parse(string yaml)
+        {
+            var document = new WorkflowDocument
+            {
+                Name = ReadScalar(yaml, "name") ?? "workflow",
+                Description = ReadScalar(yaml, "description") ?? string.Empty,
+            };
+            return new WorkflowParseResult(document, []);
+        }
+
+        public string Serialize(WorkflowDocument document) =>
+            $"name: {document.Name}\ndescription: {document.Description}\nsteps: []\n";
+
+        private static string? ReadScalar(string yaml, string key)
+        {
+            foreach (var line in yaml.Split('\n'))
+            {
+                var trimmed = line.Trim();
+                var prefix = $"{key}:";
+                if (trimmed.StartsWith(prefix, StringComparison.Ordinal))
+                    return trimmed[prefix.Length..].Trim();
+            }
+
+            return null;
+        }
     }
 
     private sealed class FixedProjectionClock(DateTimeOffset utcNow) : IProjectionClock

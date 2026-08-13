@@ -562,6 +562,7 @@ internal sealed class NyxIdChatCommandEnvelopeFactory : ICommandEnvelopeFactory<
                 string.Empty,
                 command.OwnerSubject,
                 "proxy"),
+            InvocationSurface = AgentToolInvocationSurface.HumanSession,
             Chat = new AgentChatInvocationContext(
                 AgentChatInvocationSurface.NyxIdAssistant,
                 command.ActorId.Trim(),

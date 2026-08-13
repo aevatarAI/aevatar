@@ -452,7 +452,18 @@ public sealed record NyxIdChatInputResolutionSnapshot(
     string ClientRequestId,
     string Outcome,
     DateTimeOffset? CommittedAt,
-    NyxIdChatNumericThresholdResolutionSnapshot? NumericThreshold = null);
+    NyxIdChatNumericThresholdResolutionSnapshot? NumericThreshold = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    NyxIdChatInputAnswerSnapshot? Answer = null);
+
+public sealed record NyxIdChatInputAnswerSnapshot(
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? FreeText = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    NyxIdChatInputSelectionAnswerSnapshot? Selection = null);
+
+public sealed record NyxIdChatInputSelectionAnswerSnapshot(
+    IReadOnlyList<string> OptionIds);
 
 public sealed record NyxIdChatNumericThresholdResolutionSnapshot(
     long SuggestedValue,
@@ -531,8 +542,18 @@ public sealed record NyxIdChatActionRequestSnapshot(
     NyxIdChatActionParamsSnapshot Params);
 
 public sealed record NyxIdChatActionParamsSnapshot(
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     NyxIdChatCatalogServiceConnectSnapshot? CatalogService = null,
-    NyxIdChatCustomServiceConnectSnapshot? CustomService = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    NyxIdChatCustomServiceConnectSnapshot? CustomService = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? Name = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? Platform = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    IReadOnlyList<string>? AllowedServiceIds = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? KeyId = null);
 
 public sealed record NyxIdChatCatalogServiceConnectSnapshot(
     string ServiceSlug,

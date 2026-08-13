@@ -94,6 +94,8 @@ internal static class NyxIdChatOperationAdmissionPolicy
             readBack.Assertion is null ||
             string.IsNullOrWhiteSpace(readBack.CheckName) ||
             readBack.Assertion.Match == AgentToolReadBackMatchPayload.Unspecified ||
+            !AgentToolEffectResultIdentityJsonPointer.IsValid(
+                readBack.EffectResultIdentityJsonPointer) ||
             operation.ReadBack is not null)
         {
             return false;
@@ -101,7 +103,13 @@ internal static class NyxIdChatOperationAdmissionPolicy
 
         if (!AgentToolReadBackExpectedValueSourcePayloadCanonicalizer.TryGetCanonicalSource(
                 readBack.Assertion,
-                out _))
+                out var expectedValueSource))
+        {
+            return false;
+        }
+        if (!string.IsNullOrEmpty(readBack.EffectResultIdentityJsonPointer) &&
+            expectedValueSource !=
+            AgentToolReadBackExpectedValueSourcePayload.ProviderResourceId)
         {
             return false;
         }
@@ -135,6 +143,10 @@ internal static class NyxIdChatOperationAdmissionPolicy
                     effectOperation.CatalogDigest,
                     StringComparison.Ordinal)) &&
                IsValidAssertion(readBack.Assertion) &&
+               IsValidProviderResourceArgument(
+                   readBack.ProviderResourceArgument,
+                   operation,
+                   expectedValueSource) &&
                (readBack.Pagination is null ||
                 readBack.Assertion.Match == AgentToolReadBackMatchPayload.ArrayContainsEquals) &&
                (readBack.NotAppliedAssertion is null ||
@@ -144,6 +156,20 @@ internal static class NyxIdChatOperationAdmissionPolicy
                 !string.IsNullOrWhiteSpace(readBack.NotAppliedAssertion.JsonPointer)) &&
                IsValidPagination(readBack.Pagination, operation);
     }
+
+    private static bool IsValidProviderResourceArgument(
+        AgentToolReadBackProviderResourceArgumentPayload? argument,
+        AgentToolOperationAdmissionPayload readOperation,
+        AgentToolReadBackExpectedValueSourcePayload expectedValueSource) =>
+        argument is null ||
+        expectedValueSource == AgentToolReadBackExpectedValueSourcePayload.ProviderResourceId &&
+        (argument.Location is AgentToolOperationParameterLocationPayload.Path or
+            AgentToolOperationParameterLocationPayload.Query or
+            AgentToolOperationParameterLocationPayload.Header) &&
+        !string.IsNullOrWhiteSpace(argument.ArgumentName) &&
+        readOperation.Parameters.Any(parameter =>
+            parameter.Location == argument.Location &&
+            string.Equals(parameter.Name, argument.ArgumentName, StringComparison.Ordinal));
 
     private static bool IsValidAssertion(AgentToolReadBackAssertionPayload assertion) =>
         AgentToolReadBackExpectedValueSourcePayloadCanonicalizer.TryGetCanonicalSource(

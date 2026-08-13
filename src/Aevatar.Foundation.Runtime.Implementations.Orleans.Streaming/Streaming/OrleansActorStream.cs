@@ -11,24 +11,38 @@ namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 
 internal sealed class OrleansActorStream : IStream
 {
+    private const int DefaultSubscribeAttemptLimit = 30;
+    private static readonly TimeSpan DefaultSubscribeRetryDelay = TimeSpan.FromSeconds(1);
+
     private readonly string _streamId;
     private readonly string _streamNamespace;
     private readonly global::Orleans.Streams.IStreamProvider _streamProvider;
     private readonly IStreamForwardingRegistry _forwardingRegistry;
     private readonly ILogger<OrleansActorStream> _logger;
+    private readonly int _subscribeAttemptLimit;
+    private readonly TimeSpan _subscribeRetryDelay;
 
     public OrleansActorStream(
         string streamId,
         string streamNamespace,
         global::Orleans.Streams.IStreamProvider streamProvider,
         IStreamForwardingRegistry? forwardingRegistry = null,
-        ILogger<OrleansActorStream>? logger = null)
+        ILogger<OrleansActorStream>? logger = null,
+        int subscribeAttemptLimit = DefaultSubscribeAttemptLimit,
+        TimeSpan? subscribeRetryDelay = null)
     {
+        ArgumentOutOfRangeException.ThrowIfLessThan(subscribeAttemptLimit, 1);
+
+        var resolvedRetryDelay = subscribeRetryDelay ?? DefaultSubscribeRetryDelay;
+        ArgumentOutOfRangeException.ThrowIfLessThan(resolvedRetryDelay, TimeSpan.Zero);
+
         _streamId = streamId;
         _streamNamespace = streamNamespace;
         _streamProvider = streamProvider;
         _forwardingRegistry = forwardingRegistry ?? NoOpForwardingRegistry.Instance;
         _logger = logger ?? NullLogger<OrleansActorStream>.Instance;
+        _subscribeAttemptLimit = subscribeAttemptLimit;
+        _subscribeRetryDelay = resolvedRetryDelay;
     }
 
     public string StreamId => _streamId;
@@ -57,8 +71,34 @@ internal sealed class OrleansActorStream : IStream
         ArgumentNullException.ThrowIfNull(handler);
 
         var observer = new DelegateObserver<T>(handler);
-        var handle = await ResolveStream().SubscribeAsync(observer);
-        return new OrleansSubscriptionLease(handle);
+        for (var attempt = 1; attempt <= _subscribeAttemptLimit; attempt++)
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                var handle = await ResolveStream().SubscribeAsync(observer);
+                return new OrleansSubscriptionLease(handle);
+            }
+            catch (Exception ex) when (
+                attempt < _subscribeAttemptLimit &&
+                ex is OrleansMessageRejectionException or SiloUnavailableException)
+            {
+                if (attempt == 1 || attempt % 5 == 0)
+                {
+                    _logger.LogWarning(
+                        ex,
+                        "Orleans stream subscription was rejected during topology convergence. " +
+                        "streamId={StreamId} attempt={Attempt}/{AttemptLimit}",
+                        _streamId,
+                        attempt,
+                        _subscribeAttemptLimit);
+                }
+
+                await Task.Delay(_subscribeRetryDelay, ct);
+            }
+        }
+
+        throw new InvalidOperationException("Orleans stream subscription retry loop exited unexpectedly.");
     }
 
     public Task UpsertRelayAsync(StreamForwardingBinding binding, CancellationToken ct = default)

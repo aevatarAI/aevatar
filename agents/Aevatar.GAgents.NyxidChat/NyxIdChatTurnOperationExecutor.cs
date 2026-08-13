@@ -3,6 +3,8 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Tools;
+using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
+using Aevatar.AI.ToolProviders.NyxId.ExactServiceApprovals;
 using Aevatar.Foundation.Abstractions.Tools;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
@@ -307,6 +309,8 @@ public sealed class NyxIdChatTurnOperationExecutor
     internal const string ToolApprovalRequestIdRequiredCode =
         "NYXID_CHAT_TOOL_APPROVAL_REQUEST_ID_REQUIRED";
     internal const string DelegationRefreshFailedCode = "NYXID_CHAT_DELEGATION_REFRESH_FAILED";
+    internal const string ExactServiceApprovalFailedCode =
+        "NYXID_CHAT_EXACT_SERVICE_APPROVAL_FAILED";
     private const string InvalidExecutionResultCode = "NYXID_CHAT_INVALID_EXECUTION_RESULT";
     private const string UnsupportedOperationCode = "NYXID_CHAT_OPERATION_NOT_SUPPORTED";
     private const string ToolCapabilityLostMessage =
@@ -341,6 +345,7 @@ public sealed class NyxIdChatTurnOperationExecutor
     private readonly AgentProfileTurnCatalogMaterializer? _turnCatalogMaterializer;
     private readonly INyxIdChatDelegationCredentialLifecyclePort _delegationCredentialLifecycle;
     private readonly INyxIdChatToolVerificationPort _toolVerificationPort;
+    private readonly INyxIdExactServiceApprovalPort _exactServiceApprovalPort;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<NyxIdChatTurnOperationExecutor> _logger;
 
@@ -395,6 +400,7 @@ public sealed class NyxIdChatTurnOperationExecutor
             delegationCredentialLifecycle,
             toolVerificationPort,
             actionReadAuthorityPort,
+            new UnavailableNyxIdExactServiceApprovalPort(),
             TimeProvider.System,
             logger)
     {
@@ -449,6 +455,27 @@ public sealed class NyxIdChatTurnOperationExecutor
     {
     }
 
+    public NyxIdChatTurnOperationExecutor(
+        IAgentRunReplyGenerationExecutorPort generationExecutor,
+        INyxIdActionPostconditionPort actionPostconditionPort,
+        AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer,
+        INyxIdChatDelegationCredentialLifecyclePort delegationCredentialLifecycle,
+        INyxIdChatToolVerificationPort toolVerificationPort,
+        INyxIdExactServiceApprovalPort exactServiceApprovalPort,
+        ILogger<NyxIdChatTurnOperationExecutor> logger)
+        : this(
+            generationExecutor,
+            actionPostconditionPort,
+            turnCatalogMaterializer,
+            delegationCredentialLifecycle,
+            toolVerificationPort,
+            null,
+            exactServiceApprovalPort,
+            TimeProvider.System,
+            logger)
+    {
+    }
+
     internal NyxIdChatTurnOperationExecutor(
         IAgentRunReplyGenerationExecutorPort generationExecutor,
         INyxIdActionPostconditionPort actionPostconditionPort,
@@ -463,6 +490,7 @@ public sealed class NyxIdChatTurnOperationExecutor
             delegationCredentialLifecycle,
             toolVerificationPort,
             null,
+            new UnavailableNyxIdExactServiceApprovalPort(),
             timeProvider,
             NullLogger<NyxIdChatTurnOperationExecutor>.Instance)
     {
@@ -483,6 +511,7 @@ public sealed class NyxIdChatTurnOperationExecutor
             delegationCredentialLifecycle,
             toolVerificationPort,
             null,
+            new UnavailableNyxIdExactServiceApprovalPort(),
             timeProvider,
             logger)
     {
@@ -495,6 +524,7 @@ public sealed class NyxIdChatTurnOperationExecutor
         INyxIdChatDelegationCredentialLifecyclePort delegationCredentialLifecycle,
         INyxIdChatToolVerificationPort toolVerificationPort,
         INyxIdActionReadAuthorityPort? actionReadAuthorityPort,
+        INyxIdExactServiceApprovalPort exactServiceApprovalPort,
         TimeProvider timeProvider,
         ILogger<NyxIdChatTurnOperationExecutor> logger)
     {
@@ -507,6 +537,8 @@ public sealed class NyxIdChatTurnOperationExecutor
                                          throw new ArgumentNullException(nameof(delegationCredentialLifecycle));
         _toolVerificationPort = toolVerificationPort ??
                                 throw new ArgumentNullException(nameof(toolVerificationPort));
+        _exactServiceApprovalPort = exactServiceApprovalPort ??
+                                    throw new ArgumentNullException(nameof(exactServiceApprovalPort));
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
@@ -1048,6 +1080,12 @@ public sealed class NyxIdChatTurnOperationExecutor
                 ct)
             .ConfigureAwait(false);
 
+        if (await TryCreateExactServiceApprovalAsync(command, session, toolInput, ct)
+                .ConfigureAwait(false) is { } exactApproval)
+        {
+            return exactApproval;
+        }
+
         await ReportToolStartedOnceAsync(
                 command.Key,
                 new NyxIdChatToolProgress
@@ -1197,6 +1235,240 @@ public sealed class NyxIdChatTurnOperationExecutor
                 ExternalEffect = ResolveExternalEffect(toolInput, receipt),
             },
         });
+    }
+
+    private async Task<NyxIdChatTurnOperationExecution?> TryCreateExactServiceApprovalAsync(
+        NyxIdChatOperationDispatchCommand command,
+        NyxIdChatTransientExecutionSession session,
+        NyxIdChatToolOperationInput toolInput,
+        CancellationToken ct)
+    {
+        if (!toolInput.MayChangeExternalState || toolInput.OperationAdmission is null)
+            return null;
+
+        var admission = AgentToolOperationAdmissionPayloadMapper.FromPayload(
+            toolInput.OperationAdmission);
+        if (admission?.Identity is not AgentToolOperationIdentity.PublishedEndpoint)
+            return null;
+
+        // The explicit unavailable adapter must be allowed to declare Tier A
+        // absent before credentials are required. The real adapter validates
+        // the token and therefore still fails closed when Tier A is present.
+        var token = Normalize(session.Request?.ToolContext?.Credentials?.NyxIdAccessToken) ??
+                    string.Empty;
+
+        JsonNode? arguments;
+        try
+        {
+            arguments = JsonNode.Parse(toolInput.ArgumentsJson);
+        }
+        catch (JsonException)
+        {
+            arguments = null;
+        }
+        if (arguments is not JsonObject)
+        {
+            return Failure(
+                command.Key,
+                ExactServiceApprovalFailedCode,
+                "The exact-service operation arguments were invalid.",
+                NyxIdChatEffectEvidence.NotStarted);
+        }
+
+        NyxIdExactServiceApprovalCreateResult created;
+        try
+        {
+            created = await _exactServiceApprovalPort.CreateAsync(
+                    token,
+                    admission,
+                    arguments,
+                    command.Key.OperationId,
+                    command.Key.OperationGeneration,
+                    toolInput.IdempotencyKey,
+                    ct)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(
+                exception,
+                "Exact-service approval creation failed before effect admission: operationId={OperationId}",
+                command.Key.OperationId);
+            return Failure(
+                command.Key,
+                ExactServiceApprovalFailedCode,
+                "The exact-service approval authority could not be requested.",
+                NyxIdChatEffectEvidence.NotStarted);
+        }
+
+        if (created.Disposition is
+            NyxIdExactServiceApprovalCreateDisposition.TierAUnavailable or
+            NyxIdExactServiceApprovalCreateDisposition.ApprovalNotRequired)
+        {
+            return null;
+        }
+        if (created.Disposition != NyxIdExactServiceApprovalCreateDisposition.Created ||
+            created.Snapshot is null)
+        {
+            return Failure(
+                command.Key,
+                ExactServiceApprovalFailedCode,
+                "The exact-service approval authority was rejected.",
+                NyxIdChatEffectEvidence.NotStarted);
+        }
+
+        ClearAuthorization(session);
+        return BuildExactServiceApprovalExecution(
+            command.Key,
+            toolInput.CallId,
+            toolInput.ToolName,
+            created.Snapshot,
+            toolInput.OperationAdmission?.ReadBack,
+            session);
+    }
+
+    internal static NyxIdChatTurnOperationExecution BuildExactServiceApprovalExecution(
+        NyxIdChatOperationKey key,
+        string callId,
+        string toolName,
+        NyxIdExactServiceApprovalSnapshot snapshot,
+        AgentToolOperationReadBackPayload? readBack,
+        NyxIdChatTransientExecutionSession session)
+    {
+        var authority = snapshot.Authority.Clone();
+        var receipt = new AgentToolReceipt
+        {
+            CallId = callId,
+            ToolName = toolName,
+            ApprovalRequestId = authority.RequestId,
+            ApprovalMode = AgentToolReceiptApprovalMode.AlwaysRequire,
+            NyxIdApprovalDecisionMode = NyxIdApprovalDecisionMode.PerRequest,
+            Effect = AgentToolReceiptEffect.Mutating,
+            SubjectKind = "user_service",
+            SubjectId = authority.UserServiceId,
+            SideEffectKind = toolName,
+            ExactServiceApproval = authority,
+        };
+        var externalEffect = NyxIdChatEffectEvidence.NotStarted;
+        var resultJson = string.Empty;
+
+        switch (snapshot.State)
+        {
+            case NyxIdExactServiceApprovalState.Pending:
+            case NyxIdExactServiceApprovalState.Approved:
+                receipt.Status = AgentToolReceiptStatus.ApprovalRequired;
+                resultJson = JsonSerializer.Serialize(new
+                {
+                    type = "exact_service_approval_required",
+                    approval_request_id = authority.RequestId,
+                });
+                break;
+            case NyxIdExactServiceApprovalState.Denied:
+                receipt.Status = AgentToolReceiptStatus.Denied;
+                receipt.NyxIdApprovalTerminalOutcome =
+                    NyxIdApprovalTerminalOutcome.Rejected;
+                receipt.ErrorCode = "approval_denied";
+                receipt.ErrorMessage = "Exact-service approval denied.";
+                externalEffect = NyxIdChatEffectEvidence.NotApplied;
+                break;
+            case NyxIdExactServiceApprovalState.Expired:
+                receipt.Status = AgentToolReceiptStatus.Denied;
+                receipt.NyxIdApprovalTerminalOutcome =
+                    NyxIdApprovalTerminalOutcome.Expired;
+                receipt.ErrorCode = "approval_expired";
+                receipt.ErrorMessage = "Exact-service approval expired.";
+                externalEffect = NyxIdChatEffectEvidence.NotApplied;
+                break;
+            case NyxIdExactServiceApprovalState.Redeemed when snapshot.Receipt is not null:
+                if (!NyxIdExactServiceApprovalReceiptValidator.HasValidDigest(snapshot.Receipt))
+                {
+                    receipt.Status = AgentToolReceiptStatus.Error;
+                    receipt.ErrorCode = "exact_service_receipt_digest_mismatch";
+                    receipt.ErrorMessage =
+                        "Exact-service receipt integrity validation failed.";
+                    externalEffect = NyxIdChatEffectEvidence.MayHaveChanged;
+                    break;
+                }
+                if (!NyxIdExactServiceApprovalReceiptValidator.IsSuccessfulHttpStatus(
+                        snapshot.Receipt))
+                {
+                    receipt.Status = AgentToolReceiptStatus.Error;
+                    receipt.ErrorCode = "exact_service_provider_http_error";
+                    receipt.ErrorMessage =
+                        "Exact-service provider returned an unsuccessful response.";
+                    externalEffect = NyxIdChatEffectEvidence.MayHaveChanged;
+                    break;
+                }
+                receipt.Status = AgentToolReceiptStatus.Success;
+                resultJson = snapshot.Receipt.ResponseBody;
+                receipt.ResultJson = resultJson;
+                receipt.ProviderResourceId =
+                    NyxIdEffectResultIdentityExtractor.Extract(readBack, resultJson) ??
+                    string.Empty;
+                externalEffect = NyxIdChatEffectEvidence.MayHaveChanged;
+                ApplyExactServiceResultToSession(session, callId, toolName, resultJson, receipt);
+                break;
+            case NyxIdExactServiceApprovalState.Redeemed:
+                receipt.Status = AgentToolReceiptStatus.Error;
+                receipt.ErrorCode = "exact_service_receipt_missing";
+                receipt.ErrorMessage = "Exact-service receipt was unavailable.";
+                externalEffect = NyxIdChatEffectEvidence.MayHaveChanged;
+                break;
+            case NyxIdExactServiceApprovalState.Redeeming:
+                receipt.Status = AgentToolReceiptStatus.Error;
+                receipt.ErrorCode = "exact_service_redemption_in_progress";
+                receipt.ErrorMessage = "Exact-service effect admission is still in progress.";
+                externalEffect = NyxIdChatEffectEvidence.MayHaveChanged;
+                break;
+            case NyxIdExactServiceApprovalState.Failed:
+                receipt.Status = AgentToolReceiptStatus.Error;
+                receipt.ErrorCode = snapshot.FailureCode ?? "exact_service_approval_failed";
+                receipt.ErrorMessage = "Exact-service approval redemption failed.";
+                externalEffect = NyxIdChatEffectEvidence.MayHaveChanged;
+                break;
+            default:
+                receipt.Status = AgentToolReceiptStatus.Error;
+                receipt.ErrorCode = snapshot.FailureCode ?? "exact_service_approval_failed";
+                receipt.ErrorMessage = "Exact-service approval could not be used.";
+                externalEffect = NyxIdChatEffectEvidence.NotApplied;
+                break;
+        }
+
+        return new NyxIdChatTurnOperationExecution(new NyxIdChatOperationResultSignal
+        {
+            Key = key.Clone(),
+            Tool = new NyxIdChatToolOperationResult
+            {
+                ResultJson = resultJson,
+                Receipt = receipt,
+                ExternalEffect = externalEffect,
+            },
+        });
+    }
+
+    private static void ApplyExactServiceResultToSession(
+        NyxIdChatTransientExecutionSession session,
+        string callId,
+        string toolName,
+        string resultJson,
+        AgentToolReceipt receipt)
+    {
+        if (session.StepState is null)
+            return;
+
+        var result = new AgentRunToolStepResult { AdvanceRound = true };
+        result.ResultMessages.Add(AgentRunReplyStepMappers.ToProto(
+            ToolCallLoop.BuildToolResultMessage(callId, toolName, resultJson)));
+        result.ToolReceipts.Add(receipt.Clone());
+        session.StepState = ApplyToolFacts(
+            session.StepState,
+            result,
+            checked(session.StepState.NextStepIndex + 1));
+        ClearAuthorization(session);
     }
 
     private async Task<NyxIdChatTurnOperationExecution> ExecuteInputContinuationAsync(
@@ -1479,6 +1751,16 @@ public sealed class NyxIdChatTurnOperationExecutor
                 NyxIdChatEffectEvidence.NotStarted);
         }
 
+        if (approval.ExactServiceApproval is not null)
+        {
+            return await ExecuteExactServiceApprovalContinuationAsync(
+                    command,
+                    session,
+                    approval,
+                    ct)
+                .ConfigureAwait(false);
+        }
+
         if (session.StepState is null ||
             session.Request is null ||
             session.StepState.PendingToolCalls.Count != 1 ||
@@ -1569,6 +1851,111 @@ public sealed class NyxIdChatTurnOperationExecutor
         if (execution.Result.Tool?.Receipt?.Status == AgentToolReceiptStatus.Success)
             execution.Result.Tool.Receipt.ApprovalRequestId = approval.ApprovalRequestId;
         return execution;
+    }
+
+    private async Task<NyxIdChatTurnOperationExecution> ExecuteExactServiceApprovalContinuationAsync(
+        NyxIdChatOperationDispatchCommand command,
+        NyxIdChatTransientExecutionSession session,
+        NyxIdChatToolApprovalContinuationInput approval,
+        CancellationToken ct)
+    {
+        var authority = approval.ExactServiceApproval;
+        if (!string.Equals(
+                approval.ApprovalRequestId,
+                authority.RequestId,
+                StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(approval.ToolCallId) ||
+            string.IsNullOrWhiteSpace(approval.ToolName))
+        {
+            return Failure(
+                command.Key,
+                ToolAuthorizationMismatchCode,
+                ToolAuthorizationMismatchMessage,
+                NyxIdChatEffectEvidence.NotStarted);
+        }
+
+        var token = Normalize(approval.ToolContext?.Credentials?.NyxIdAccessToken);
+        if (token is null)
+        {
+            return Failure(
+                command.Key,
+                ToolAuthorizationMismatchCode,
+                ToolAuthorizationMismatchMessage,
+                NyxIdChatEffectEvidence.NotStarted);
+        }
+
+        NyxIdExactServiceApprovalSnapshot decision;
+        try
+        {
+            decision = await _exactServiceApprovalPort.DecideAsync(
+                    token,
+                    authority,
+                    approval.Approved,
+                    ct)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(
+                exception,
+                "Exact-service approval decision failed: requestId={RequestId}",
+                authority.RequestId);
+            return Failure(
+                command.Key,
+                ExactServiceApprovalFailedCode,
+                "The exact-service approval decision could not be observed.",
+                NyxIdChatEffectEvidence.NotStarted);
+        }
+
+        if (!approval.Approved ||
+            decision.State != NyxIdExactServiceApprovalState.Approved)
+        {
+            return BuildExactServiceApprovalExecution(
+                command.Key,
+                approval.ToolCallId,
+                approval.ToolName,
+                decision,
+                approval.OperationAdmission?.ReadBack,
+                session);
+        }
+
+        NyxIdExactServiceApprovalSnapshot redeemed;
+        try
+        {
+            redeemed = await _exactServiceApprovalPort.RedeemAsync(
+                    token,
+                    authority,
+                    ct)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(
+                exception,
+                "Exact-service approval redemption outcome is uncertain: requestId={RequestId}",
+                authority.RequestId);
+            return Failure(
+                command.Key,
+                ExactServiceApprovalFailedCode,
+                "The exact-service effect admission outcome is uncertain.",
+                NyxIdChatEffectEvidence.MayHaveChanged);
+        }
+
+        return BuildExactServiceApprovalExecution(
+            command.Key,
+            approval.ToolCallId,
+            approval.ToolName,
+            redeemed,
+            approval.OperationAdmission?.ReadBack,
+            session);
     }
 
     private async Task<NyxIdChatTurnOperationExecution> ExecutePlanGateContinuationAsync(
@@ -1924,6 +2311,7 @@ public sealed class NyxIdChatTurnOperationExecutor
             {
                 RequestId = command.Key.OperationId,
                 OperationId = command.Key.OperationId,
+                OperationGeneration = command.Key.OperationGeneration,
                 IdempotencyKey = input.IdempotencyKey,
             },
             Chat = mappedToolContext.Chat with

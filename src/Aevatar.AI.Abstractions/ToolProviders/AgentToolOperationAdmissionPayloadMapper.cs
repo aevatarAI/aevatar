@@ -106,6 +106,8 @@ public static class AgentToolOperationAdmissionPayloadMapper
             Arguments = readBack.Arguments?.Clone() ?? new Google.Protobuf.WellKnownTypes.Struct(),
             Assertion = ToReadBackAssertion(readBack.Assertion),
             CheckName = readBack.CheckName ?? string.Empty,
+            EffectResultIdentityJsonPointer =
+                readBack.EffectResultIdentityJsonPointer ?? string.Empty,
         };
         if (readBack.NotAppliedAssertion is not null)
             payload.NotAppliedAssertion = ToReadBackAssertion(readBack.NotAppliedAssertion);
@@ -118,6 +120,14 @@ public static class AgentToolOperationAdmissionPayloadMapper
                 PageTokenLocation = ToParameterLocation(readBack.Pagination.PageTokenLocation),
                 PageTokenArgumentName = readBack.Pagination.PageTokenArgumentName ?? string.Empty,
                 MaxPages = (uint)Math.Max(0, readBack.Pagination.MaxPages),
+            };
+        }
+        if (readBack.ProviderResourceArgument is not null)
+        {
+            payload.ProviderResourceArgument = new AgentToolReadBackProviderResourceArgumentPayload
+            {
+                Location = ToParameterLocation(readBack.ProviderResourceArgument.Location),
+                ArgumentName = readBack.ProviderResourceArgument.ArgumentName ?? string.Empty,
             };
         }
         return payload;
@@ -161,7 +171,13 @@ public static class AgentToolOperationAdmissionPayloadMapper
                     payload.Pagination.PageTokenJsonPointer ?? string.Empty,
                     FromParameterLocation(payload.Pagination.PageTokenLocation),
                     payload.Pagination.PageTokenArgumentName ?? string.Empty,
-                    checked((int)payload.Pagination.MaxPages)));
+                    checked((int)payload.Pagination.MaxPages)),
+            payload.ProviderResourceArgument is null
+                ? null
+                : new AgentToolReadBackProviderResourceArgument(
+                    FromParameterLocation(payload.ProviderResourceArgument.Location),
+                    payload.ProviderResourceArgument.ArgumentName ?? string.Empty),
+            payload.EffectResultIdentityJsonPointer ?? string.Empty);
     }
 
     private static AgentToolReadBackAssertionPayload ToReadBackAssertion(
