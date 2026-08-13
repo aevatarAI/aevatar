@@ -75,7 +75,7 @@ describe('resolveWorkflowActivityAccount', () => {
     expect(result.auth?.profile).toBeNull();
   });
 
-  it('keeps an explicit backend sign-out authoritative over stored state', () => {
+  it('keeps a restorable browser principal when backend account state is unauthenticated', () => {
     const result = resolveWorkflowActivityAccount(
       createBackendSession({
         authenticated: false,
@@ -85,7 +85,12 @@ describe('resolveWorkflowActivityAccount', () => {
       createStoredSession(),
     );
 
-    expect(result.principal).toBeNull();
+    expect(result.auth?.authenticated).toBe(false);
+    expect(result.principal).toEqual({
+      authenticated: true,
+      displayName: 'Abigail Deng',
+      picture: 'https://example.test/abigail.png',
+    });
   });
 
   it('uses the stored profile while backend account facts are unavailable', () => {

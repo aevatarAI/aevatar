@@ -85,6 +85,7 @@ export function resolveWorkflowActivityAccount(
   };
   const authenticated =
     resolvedAuth.authenticated && resolvedAuth.session?.authenticated !== false;
+  const browserPrincipal = storedPrincipal(storedSession);
 
   return {
     auth: resolvedAuth,
@@ -102,6 +103,6 @@ export function resolveWorkflowActivityAccount(
             firstValue(resolvedAuth.profile?.picture, resolvedAuth.picture) ||
             null,
         }
-      : null,
+      : browserPrincipal,
   };
 }
