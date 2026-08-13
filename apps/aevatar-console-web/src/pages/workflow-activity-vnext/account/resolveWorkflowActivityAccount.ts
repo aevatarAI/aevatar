@@ -1,4 +1,4 @@
-import type { NyxIDAuthSession, NyxIDUserInfo } from '@/shared/auth/session';
+import type { NyxIDAuthSession } from '@/shared/auth/session';
 import type {
   StudioAuthProfile,
   StudioAuthSession,
@@ -42,23 +42,21 @@ function storedPrincipal(
   };
 }
 
-function mergeProfile(
+function resolveBackendProfile(
   auth: StudioAuthSession,
   subject: string | undefined,
-  fallback: NyxIDUserInfo | undefined,
 ): StudioAuthProfile | null | undefined {
   const profile = auth.profile;
-  if (!profile && !fallback) return profile;
+  if (!profile) return profile;
 
   return {
     subject: subject || null,
-    name: firstValue(profile?.name, auth.name, fallback?.name) || null,
-    email: firstValue(profile?.email, auth.email, fallback?.email) || null,
-    emailVerified: profile?.emailVerified ?? fallback?.email_verified ?? null,
-    picture:
-      firstValue(profile?.picture, auth.picture, fallback?.picture) || null,
-    roles: profile?.roles ?? fallback?.roles ?? [],
-    groups: profile?.groups ?? fallback?.groups ?? [],
+    name: firstValue(profile.name, auth.name) || null,
+    email: firstValue(profile.email, auth.email) || null,
+    emailVerified: profile.emailVerified ?? null,
+    picture: firstValue(profile.picture, auth.picture) || null,
+    roles: profile.roles,
+    groups: profile.groups,
   };
 }
 
@@ -71,16 +69,13 @@ export function resolveWorkflowActivityAccount(
   }
 
   const subject = firstValue(auth.profile?.subject, auth.subject);
-  const storedSubject = normalize(storedSession?.user.sub);
-  const fallback =
-    subject && storedSubject === subject ? storedSession?.user : undefined;
-  const profile = mergeProfile(auth, subject, fallback);
+  const profile = resolveBackendProfile(auth, subject);
   const resolvedAuth: StudioAuthSession = {
     ...auth,
     subject: subject || null,
-    name: firstValue(profile?.name, auth.name, fallback?.name),
-    email: firstValue(profile?.email, auth.email, fallback?.email),
-    picture: firstValue(profile?.picture, auth.picture, fallback?.picture),
+    name: firstValue(profile?.name, auth.name),
+    email: firstValue(profile?.email, auth.email),
+    picture: firstValue(profile?.picture, auth.picture),
     profile,
   };
   const authenticated =
