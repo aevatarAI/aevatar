@@ -352,8 +352,11 @@ public sealed class ScopeWorkflowCommandApplicationServiceTests
             firstArtifact.DeploymentPlan.WorkflowPlan.CapabilityAdmissionPlan);
     }
 
-    [Fact]
-    public async Task UpsertAsync_WithExistingPlanAndNoFreshConfirmation_ShouldRevalidateAndDispatch()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task UpsertAsync_WithExistingPlan_ShouldUseCredentialAwareAdmissionPathAndDispatch(
+        bool includeCallerCredential)
     {
         var existingPlan = await ScopeExplicitRequestAdmissionTestFixture.CreatePersistedPlanAsync(
             "scope_workflow_upsert");
@@ -374,11 +377,14 @@ public sealed class ScopeWorkflowCommandApplicationServiceTests
             ScopeExplicitRequestAdmissionTestFixture.WorkflowYaml,
             RevisionId: ScopeExplicitRequestAdmissionTestFixture.RevisionId)
         {
-            CapabilityAdmission = ScopeExplicitRequestAdmissionTestFixture.CreatePersistedContext(existingPlan),
+            CapabilityAdmission = ScopeExplicitRequestAdmissionTestFixture.CreatePersistedContext(
+                existingPlan,
+                includeCallerCredential),
         });
 
         result.RevisionId.Should().Be(ScopeExplicitRequestAdmissionTestFixture.RevisionId);
-        admission.RevalidatePersistedCallCount.Should().Be(1);
+        admission.RefreshPersistedCallCount.Should().Be(includeCallerCredential ? 1 : 0);
+        admission.RevalidatePersistedCallCount.Should().Be(includeCallerCredential ? 0 : 1);
         admission.AdmitCallCount.Should().Be(0);
         commandPort.Calls.Should().Contain(call => call.Method == "CreateRevisionAsync");
     }
@@ -435,6 +441,11 @@ public sealed class ScopeWorkflowCommandApplicationServiceTests
             PersistedWorkflowCapabilityAdmissionRequest request,
             CancellationToken cancellationToken = default) =>
             Task.FromResult(request.Plan.Clone());
+
+        public Task<WorkflowCapabilityAdmissionPlan> RefreshPersistedAsync(
+            RefreshPersistedWorkflowCapabilityAdmissionRequest request,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(request.Persisted.Plan.Clone());
     }
 
     private static ServiceCatalogSnapshot CreateServiceSnapshot(
@@ -722,10 +733,13 @@ internal static class ScopeExplicitRequestAdmissionTestFixture
     }
 
     public static WorkflowCapabilityAdmissionContext CreatePersistedContext(
-        WorkflowCapabilityAdmissionPlan existingPlan) =>
+        WorkflowCapabilityAdmissionPlan existingPlan,
+        bool includeCallerCredential = true) =>
         new(
             CallerId,
-            NyxIdCallerCredentialSelection.SourceReadableUserBearer(BearerToken),
+            includeCallerCredential
+                ? NyxIdCallerCredentialSelection.SourceReadableUserBearer(BearerToken)
+                : null,
             executionMode: ExternalCapabilityExecutionMode.Interactive,
             existingPlan: existingPlan);
 
@@ -972,6 +986,8 @@ internal static class ScopeExplicitRequestAdmissionTestFixture
 
         public int RevalidatePersistedCallCount { get; private set; }
 
+        public int RefreshPersistedCallCount { get; private set; }
+
         public Task<WorkflowCapabilityAdmissionPlan> AdmitAsync(
             WorkflowExternalCapabilityAdmissionRequest request,
             CancellationToken cancellationToken = default)
@@ -986,6 +1002,14 @@ internal static class ScopeExplicitRequestAdmissionTestFixture
         {
             RevalidatePersistedCallCount++;
             return inner.RevalidatePersistedAsync(request, cancellationToken);
+        }
+
+        public Task<WorkflowCapabilityAdmissionPlan> RefreshPersistedAsync(
+            RefreshPersistedWorkflowCapabilityAdmissionRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            RefreshPersistedCallCount++;
+            return inner.RefreshPersistedAsync(request, cancellationToken);
         }
     }
 }

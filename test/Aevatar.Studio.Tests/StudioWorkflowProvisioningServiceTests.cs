@@ -870,8 +870,11 @@ public sealed class StudioWorkflowProvisioningServiceTests
         schedule.LastCreateRequest.Should().BeNull();
     }
 
-    [Fact]
-    public async Task ProvisionAsync_WithExistingPlan_ShouldOnlyRevalidateWithoutFreshConfirmation()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ProvisionAsync_WithExistingPlan_ShouldUseCredentialAwareAdmissionPath(
+        bool includeCallerCredential)
     {
         var admission = StudioExplicitRequestAdmissionTestKit.CreateAdmissionService();
         var identity = ProvisionIdentity("scope-studio-alpha", "team-alpha", "Monitor");
@@ -905,11 +908,13 @@ public sealed class StudioWorkflowProvisioningServiceTests
                 AuthenticatedOwner = TestAuthenticatedOwner(),
                 CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(
                     existingPlan: plan,
-                    executionMode: ExternalCapabilityExecutionMode.Durable),
+                    executionMode: ExternalCapabilityExecutionMode.Durable,
+                    includeCallerCredential: includeCallerCredential),
             });
 
         admission.Requests.Should().BeEmpty();
-        admission.PersistedRequests.Should().ContainSingle();
+        admission.RefreshRequests.Should().HaveCount(includeCallerCredential ? 1 : 0);
+        admission.PersistedRequests.Should().HaveCount(includeCallerCredential ? 0 : 1);
         member.BindRequest.Should().NotBeNull();
     }
 

@@ -9,7 +9,7 @@ owner: eanzhao
 This document defines the authoritative Aevatar contract for `codex_exec`. The tool has one business entry and two infrastructure targets:
 
 - `private_ssh`: execute a fixed Codex stdin command through a caller-owned NyxID SSH service.
-- `managed_sandbox`: ask the user's exact NyxID `chrono-managed-codex` service to run Codex in its managed sandbox runtime.
+- `managed_sandbox`: ask the user's exact NyxID `chrono-sandbox` service to run Codex in its managed sandbox runtime.
 
 The targets share parsing, lifecycle events, terminal result semantics, and workflow run authority. They do not share transport, credentials, or isolation configuration.
 
@@ -27,7 +27,7 @@ orchestration, while Infrastructure owns only external transport:
   exactly once.
 - `NyxIdManagedCodexChronoTransport` receives an already-authoritative
   credential descriptor and maps it to the fixed NyxID proxy route for
-  `chrono-managed-codex`. It does not query credential state or own lifecycle
+  `chrono-sandbox`. It does not query credential state or own lifecycle
   orchestration.
 
 The normal managed path is:
@@ -94,7 +94,7 @@ attests only the native user ID; an unattested tenant must never create a second
 credential actor or Vault owner scope for the same user.
 
 Eligibility is a typed policy. `Allowlist` admits only configured NyxID user
-IDs. `All` admits native NyxID users whose personal `chrono-managed-codex` and usable
+IDs. `All` admits native NyxID users whose personal `chrono-sandbox` and usable
 `chrono-llm-public` UserServices already exist; Aevatar does not create missing
 UserServices. Enabling managed Codex also requires the explicit typed
 `RolloutBoundary=InternalOnly` startup acknowledgement. No public rollout
@@ -105,23 +105,28 @@ The issued key must have exactly:
 - scope `proxy`
 - `allow_all_services=false`
 - `allowed_service_ids` equal, order-independently, to that user's directly
-  owned active `chrono-managed-codex` UserService ID and usable
+  owned active `chrono-sandbox` UserService ID and usable
   `chrono-llm-public` UserService ID
 - `allow_all_nodes=false` and no node grants
 - a finite configured expiry
 
-No extra service grant is accepted. NyxID's exact `chrono-managed-codex`
-UserService must set `forward_access_token=false`,
-`inject_delegation_token=true`, and the temporary internal-canary
-`delegation_token_scope=proxy:*`. Aevatar validates these settings during
+No extra service grant is accepted. NyxID's exact `chrono-sandbox` UserService
+must set `inject_delegation_token=true`, and its delegation scopes must be either
+`proxy:*` or the combined `proxy:* sandbox:execute` set. The managed request sends
+an agent key and no `Authorization` header, so `forward_access_token` does not
+deliver a credential on this path. Aevatar validates these settings during
 explicit provisioning, reconciliation, and rotation.
 
-This is not the `code_execute` identity. Exact source execution uses a different
-exact UserService ID with slug `chrono-sandbox`, path `/execute`,
-`forward_access_token=false`, `inject_delegation_token=true`, and exact scope
-`sandbox:execute`; its caller bearer terminates at NyxID. Both identities may
-target one chrono deployment, but they never share credentials, scope, IDs, or
-fallback behavior.
+Managed `codex_exec` and `code_execute` intentionally select the same exact
+`chrono-sandbox` UserService ID. They target different fixed paths and keep
+different invocation credentials, admission, and fallback contracts:
+`code_execute` calls `/execute` with the accepted credential-delivery contract in
+[sandbox-execution.md](sandbox-execution.md), while managed Codex calls
+`/codex/execute` with a Vault-backed agent key and requires delegation containing
+`proxy:*`. The UserService route configuration is shared, so a capability-owned
+convergence must preserve scopes required by the other path. In particular,
+adding `sandbox:execute` must preserve `proxy:*`; managed eligibility accepts that
+combined scope set. Neither execution verb may fall back to the other's path.
 
 The only persistent raw-key copy is stored in `ISecretVault`. Actor state, events, read models, APIs, logs, workflow state, and chrono request bodies contain only typed non-secret facts such as the key ID and `SecretReference`. Execution resolves the raw value immediately before the NyxID request and uses it only as that request's `X-API-Key` value. Aevatar never intentionally serializes or forwards it to chrono-sandbox or codex-runner.
 
@@ -132,18 +137,17 @@ For the internal P0, the mutable delegation-injection policy remains a trust bou
 Aevatar sends exactly one fixed proxy request:
 
 ```text
-POST /api/v1/proxy/s/chrono-managed-codex/codex/execute?_nyxid_via=<managed-codex-user-service-id>
+POST /api/v1/proxy/s/chrono-sandbox/codex/execute?_nyxid_via=<chrono-sandbox-user-service-id>
 X-API-Key: <per-user agent key resolved from ISecretVault>
 Authorization: <absent>
 ```
 
 The server-selected `_nyxid_via` value is the same personal
-`chrono-managed-codex` UserService ID stored in the credential descriptor and
-granted to the key. It must differ from the user's `chrono-sandbox`
-`code_execute` UserService ID. NyxID strips this internal routing parameter
-before forwarding the request. This prevents slug auto-resolution from
-selecting an inherited service when the user has multiple services with the
-same slug.
+`chrono-sandbox` UserService ID stored in the credential descriptor, granted to
+the key, and selected for `code_execute`. NyxID strips this internal routing
+parameter before forwarding the request. This prevents slug auto-resolution
+from selecting an inherited service when the user has multiple services with
+the same slug.
 
 The JSON body contains only:
 
@@ -156,7 +160,7 @@ The JSON body contains only:
 ```
 
 The interactive workflow bearer is not used for the chrono request. Under the
-validated `chrono-managed-codex` policy, NyxID validates the agent key without
+validated managed `chrono-sandbox` policy, NyxID validates the agent key without
 forwarding it and injects a five-minute `proxy:*` delegation token for the
 chrono deployment. The deployment validates that exact token scope before
 sandbox creation and passes it to the one-shot Codex process only as

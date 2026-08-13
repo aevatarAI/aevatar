@@ -1,5 +1,3 @@
-using System.Text.Json;
-
 namespace Aevatar.AI.ToolProviders.NyxId;
 
 public enum NyxIdCodeExecutionRouteRepairFailureKind
@@ -17,20 +15,31 @@ public sealed record NyxIdCodeExecutionRouteReconciliation(
         NyxIdCodeExecutionRouteRepairFailureKind.None);
 
 /// <summary>
-/// Reconciles a caller-owned personal code route to the platform's delegation-only policy. The
-/// result is based on a fresh authoritative inventory read, never on the management response.
+/// Declares the platform code route contract and selects its exact caller-owned UserService. The
+/// generic route converger owns authority joining, mutation, scope preservation, and readback.
 /// </summary>
-public sealed class NyxIdCodeExecutionRoutePolicyReconciler(
-    INyxIdApiClientFactory clientFactory)
+public sealed class NyxIdCodeExecutionRoutePolicyReconciler
 {
+    private static readonly NyxIdUserServiceRouteContract RouteContract = new(
+        NyxIdUserServiceBooleanRequirement.Disabled,
+        NyxIdUserServiceBooleanRequirement.Enabled,
+        ["sandbox:execute"]);
+
+    private readonly NyxIdUserServiceRouteConverger _converger;
+
+    public NyxIdCodeExecutionRoutePolicyReconciler(INyxIdApiClientFactory clientFactory)
+    {
+        _converger = new NyxIdUserServiceRouteConverger(clientFactory);
+    }
+
     public async Task<NyxIdCodeExecutionRouteReconciliation> ReconcileAsync(
-        string bearerToken,
+        NyxIdUserServiceRouteMutationAuthority mutationAuthority,
         string? exactUserServiceId = null,
         CancellationToken cancellationToken = default)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(bearerToken);
-        var client = clientFactory.CreateClient();
-        var before = await ReadAsync(client, bearerToken, cancellationToken).ConfigureAwait(false);
+        ArgumentNullException.ThrowIfNull(mutationAuthority);
+        var before = await _converger.ReadAsync(mutationAuthority, cancellationToken)
+            .ConfigureAwait(false);
         var resolution = NyxIdCodeExecutionRouteResolver.Resolve(before, exactUserServiceId);
         if (resolution.IsReady)
         {
@@ -40,9 +49,8 @@ public sealed class NyxIdCodeExecutionRoutePolicyReconciler(
                 Verified: true);
         }
 
-        var route = SelectPersonalRepairCandidate(before, exactUserServiceId);
-        if (route is null ||
-            route.CredentialSource.Kind != NyxIdUserServiceCredentialSourceKind.Personal)
+        var route = SelectRepairCandidate(before, exactUserServiceId);
+        if (route is null)
         {
             return new NyxIdCodeExecutionRouteReconciliation(
                 resolution,
@@ -50,90 +58,40 @@ public sealed class NyxIdCodeExecutionRoutePolicyReconciler(
                 Verified: resolution.IsReady);
         }
 
-        var desiredScope = NyxIdCodeExecutionRouteResolver.AddCodeExecutionDelegationScope(
-            route.DelegationTokenScope);
-        if (IsCanonicalPolicy(route, desiredScope))
-        {
-            return new NyxIdCodeExecutionRouteReconciliation(
-                resolution,
-                Attempted: false,
-                Verified: true);
-        }
-
-        var updateFailureKind = NyxIdCodeExecutionRouteRepairFailureKind.None;
-        try
-        {
-            var body = JsonSerializer.Serialize(new
-            {
-                forward_access_token = false,
-                inject_delegation_token = true,
-                delegation_token_scope = desiredScope,
-            });
-            _ = await client.UpdateServiceRouteAsync(
-                    bearerToken,
-                    route.Id,
-                    body,
-                    cancellationToken)
-                .ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch
-        {
-            updateFailureKind = NyxIdCodeExecutionRouteRepairFailureKind.UpdateException;
-        }
-
-        var after = await ReadAsync(client, bearerToken, cancellationToken).ConfigureAwait(false);
-        var verified = NyxIdCodeExecutionRouteResolver.Resolve(after, route.Id);
-        var postconditionSatisfied = verified.IsReady &&
-                                     string.Equals(
-                                         verified.Service!.CatalogServiceId,
-                                         route.CatalogServiceId,
-                                         StringComparison.Ordinal) &&
-                                     verified.Service.ForwardAccessToken == false &&
-                                     verified.Service.InjectDelegationToken == true &&
-                                     GrantsEveryScope(
-                                         verified.Service.DelegationTokenScope,
-                                         desiredScope);
+        var convergence = await _converger.ConvergeAsync(
+                mutationAuthority,
+                route.Id,
+                RouteContract,
+                before,
+                cancellationToken)
+            .ConfigureAwait(false);
+        var verified = NyxIdCodeExecutionRouteResolver.Resolve(
+            convergence.Snapshot,
+            route.Id);
+        var postconditionSatisfied = convergence.Verified && verified.IsReady;
         return new NyxIdCodeExecutionRouteReconciliation(
             verified,
-            Attempted: true,
+            Attempted: convergence.Attempted,
             Verified: postconditionSatisfied,
             FailureKind: postconditionSatisfied
                 ? NyxIdCodeExecutionRouteRepairFailureKind.None
-                : updateFailureKind == NyxIdCodeExecutionRouteRepairFailureKind.None
-                    ? NyxIdCodeExecutionRouteRepairFailureKind.PostconditionMismatch
-                    : updateFailureKind);
+                : convergence.FailureKind ==
+                  NyxIdUserServiceRouteConvergenceFailureKind.UpdateException
+                    ? NyxIdCodeExecutionRouteRepairFailureKind.UpdateException
+                    : NyxIdCodeExecutionRouteRepairFailureKind.PostconditionMismatch);
     }
 
-    private static async Task<NyxIdApiAccessResult<NyxIdUserServices>> ReadAsync(
-        NyxIdApiClient client,
-        string bearerToken,
-        CancellationToken cancellationToken)
-    {
-        var response = await client.ListUserServicesAsync(bearerToken, cancellationToken)
-            .ConfigureAwait(false);
-        return NyxIdApiAccessResponseParser.ParseCodeExecutionUserServices(response);
-    }
-
-    private static bool IsCanonicalPolicy(NyxIdUserService route, string desiredScope) =>
-        route.ForwardAccessToken == false &&
-        route.InjectDelegationToken == true &&
-        GrantsEveryScope(route.DelegationTokenScope, desiredScope);
-
-    private static NyxIdUserService? SelectPersonalRepairCandidate(
-        NyxIdApiAccessResult<NyxIdUserServices> inventory,
+    private static NyxIdUserService? SelectRepairCandidate(
+        NyxIdUserServiceAuthoritySnapshot snapshot,
         string? exactUserServiceId)
     {
-        if (!inventory.Succeeded)
+        if (!snapshot.Succeeded)
             return null;
 
         var requestedId = string.IsNullOrWhiteSpace(exactUserServiceId)
             ? null
             : exactUserServiceId.Trim();
-        var personalCandidates = inventory.Value!.Services
+        var repairCandidates = snapshot.Routes.Value!.Services
             .Where(service =>
                 string.Equals(
                     service.Slug,
@@ -141,22 +99,15 @@ public sealed class NyxIdCodeExecutionRoutePolicyReconciler(
                     StringComparison.Ordinal) &&
                 !string.IsNullOrWhiteSpace(service.CatalogServiceId) &&
                 service.IsActive &&
-                service.CredentialSource.Kind == NyxIdUserServiceCredentialSourceKind.Personal &&
-                (requestedId is null || string.Equals(service.Id, requestedId, StringComparison.Ordinal)))
+                (requestedId is null ||
+                 string.Equals(service.Id, requestedId, StringComparison.Ordinal)) &&
+                snapshot.TryGetExact(service.Id, out var authority) &&
+                authority is { CanManageRoute: true } &&
+                string.Equals(
+                    authority.Execution.CatalogServiceSlug,
+                    Aevatar.AI.Abstractions.CodeExecution.CodeExecutionContract.ServiceSlug,
+                    StringComparison.Ordinal))
             .ToArray();
-        return personalCandidates.Length == 1 ? personalCandidates[0] : null;
+        return repairCandidates.Length == 1 ? repairCandidates[0] : null;
     }
-
-    private static bool GrantsEveryScope(string? actual, string required)
-    {
-        var actualScopes = SplitScopes(actual).ToHashSet(StringComparer.Ordinal);
-        return SplitScopes(required).All(actualScopes.Contains);
-    }
-
-    private static IEnumerable<string> SplitScopes(string? value) =>
-        string.IsNullOrWhiteSpace(value)
-            ? []
-            : value.Split(
-                (char[]?)null,
-                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 }

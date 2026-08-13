@@ -8,12 +8,13 @@ owner: platform
 
 ## Purpose And Boundary
 
-This runbook is the code-only incident-recovery procedure for these two
+This runbook is the code-only incident-recovery procedure for these
 current-state replicas:
 
 - Studio Workspace;
 - personal NyxID authorization catalog used by scheduled Agent Key
   authorization.
+- the cluster-singleton Aevatar OAuth client used by NyxID login finalization.
 
 It applies only when inspection proves that the Elasticsearch document version
 is higher than the surviving authoritative actor/event-store version:
@@ -22,11 +23,12 @@ is higher than the surviving authoritative actor/event-store version:
 expected document version > expected source version > 0
 ```
 
-The two guarded admin routes are:
+The guarded admin routes are:
 
 ```text
 POST /api/admin/scheduled-agent-key/projection-repair/workspace
 POST /api/admin/scheduled-agent-key/projection-repair/nyxid-catalog
+POST /api/admin/identity/projection-repair/aevatar-oauth-client
 ```
 
 Operators must use these routes. Do not manually edit, lower, or delete
@@ -40,20 +42,34 @@ immediately before deletion. If the delete result is transport-ambiguous, the
 repair adapter performs one bounded exact reinspection of the leased
 index/document/revision and treats it as absent only when that exact revision is
 proven absent. Once a prior guarded delete has made it absent, the code cannot
-re-verify that deleted fingerprint; the narrower operator/audit retry rule is
-documented below.
+re-verify that deleted fingerprint. The OAuth route therefore rejects a new
+apply against an already-missing document; use the separately governed client
+projection rebuild endpoint described below. Existing target-specific retry
+rules for Workspace and Catalog remain documented below.
+
+For the OAuth client, first inspect with `{ "apply": false }`, then apply the
+exact actor ID, source version, document version, and last-event ID returned by
+that response. A `202` means the exact stale replica was deleted (or the same
+invocation reconciled an ambiguous delete against its leased revision) and
+authoritative republish was accepted; it is not visibility proof. The repair
+actor requires its current version to be at least the inspected version and to
+equal the live EventStore commit point. This accepts a legitimate newer commit
+while rejecting an ahead zombie activation. Poll
+the normal OAuth client status/config reads for visibility. Never include HMAC material, vault
+references, client secrets, or bearers in repair requests or incident evidence.
 
 The repair capability is a separate Elasticsearch-only opt-in adapter. It is
 not exposed by the ordinary projection store, other read models, or the
 in-memory provider. Catalog repair command and refresh adapters are also
 separate and are composed only with the Elasticsearch repair path.
 
-After a guarded delete returns `Deleted` or `AlreadyAbsent`, Workspace
-republish dispatch and Catalog refresh continue independently of the HTTP
-request cancellation token. Closing the client connection does not cancel that
-authoritative recovery. A disconnected client may miss the response or the
-Catalog visibility follow-up, so establish completion through the normal read
-surfaces below; do not assume disconnect means the repair stopped.
+After a guarded delete returns `Deleted`, or the same leased delete operation
+reconciles as `AlreadyAbsent`, Workspace/OAuth republish dispatch and Catalog
+refresh continue independently of the HTTP request cancellation token. Closing
+the client connection does not cancel that authoritative recovery. A
+disconnected client may miss the response or the visibility follow-up, so
+establish completion through the normal read surfaces below; do not assume
+disconnect means the repair stopped.
 
 Unexpected downstream inspection or apply exceptions return a bodyless,
 sanitized HTTP `503`. The response never serializes exception text, bearer or
@@ -61,11 +77,9 @@ credential values, or catalog contents. A cancellation exception propagates
 only when the request token is actually canceled; authorization failures remain
 fail-closed as `403`.
 
-This hardening requires no new secret, configuration setting, infrastructure
-operation, or operator step. A signed inspection token or durable
-repair-request-ID record that could make already-absent provenance
-code-verifiable is explicitly deferred; the existing operator/audit rule in
-“Conflict And Retry Rules” remains authoritative.
+This hardening requires no new secret or configuration setting. OAuth recovery
+from a post-delete process failure uses the existing governed client projection
+rebuild endpoint; it never treats a missing document as proof of a prior delete.
 
 Examples below use only synthetic identities:
 
@@ -89,7 +103,7 @@ shown by these endpoints.
 
 ## Preconditions
 
-Before either repair:
+Before any repair:
 
 1. Confirm the deployed release includes the guarded repair routes and the
    target-specific repair services.
@@ -103,8 +117,20 @@ Before either repair:
 3. Assign an incident/change record and the synthetic example request ID
    `repair-alpha`. A real execution must use its own non-secret request ID and a
    concise reason containing no catalog or credential data.
-4. Confirm normal query traffic is not being used to repair or prime either
-   projection.
+4. Confirm normal query traffic is not being used to repair or prime any
+   target projection.
+5. For OAuth version regression, use the platform-approved read-only runtime
+   state inspection to prove that the initialized committed-state publication
+   checkpoint equals the inspected EventStore source version and exact
+   committed event, and that any runtime actor snapshot is absent or no newer
+   than that source. Stop before apply if the checkpoint is ahead, a snapshot is
+   ahead, or this proof is unavailable. This route deliberately does not lower
+   or rewrite runtime checkpoints or snapshots.
+6. For OAuth version regression, confirm every active pod runs the committed-
+   version-bounded EventStore reader and the projection transport has returned
+   to its normal lag baseline. Do not delete the replica while an older image
+   can still publish the orphaned envelope. The stable visibility window below
+   remains mandatory because persistent transport is at-least-once.
 
 Run the examples as a protected, mode-`0600` non-interactive Bash script. Do
 not paste them into an interactive terminal or a recorded operator session.
@@ -633,6 +659,251 @@ defined in
 The repair route is incident recovery only and is never a preflight, query, or
 readiness fallback.
 
+## Aevatar OAuth Client Repair
+
+Use this target only when the cluster-singleton OAuth client document is ahead
+of its committed EventStore stream. It does not rotate HMAC material. If the
+post-repair config read still reports `oauth_client_not_provisioned` and the
+server-side diagnostic says the authoritative reference itself cannot resolve,
+stop and use the separately governed lost-secret HMAC rotation procedure.
+
+### 1. Inspect The OAuth Client
+
+Create the read-only request inside the protected directory:
+
+```bash
+OAUTH_INSPECT_REQUEST="$REPAIR_DIR/oauth-inspect-request.json"
+OAUTH_INSPECT_RESPONSE="$REPAIR_DIR/oauth-inspect-response.json"
+
+jq -n '
+  {
+    apply: false,
+    expected_actor_id: "",
+    expected_source_state_version: 0,
+    expected_document_state_version: 0,
+    expected_document_last_event_id: "",
+    repair_request_id: "",
+    repair_reason: ""
+  }
+' > "$OAUTH_INSPECT_REQUEST"
+
+HTTP_STATUS="$(protected_api_request POST \
+  /api/admin/identity/projection-repair/aevatar-oauth-client \
+  "$OAUTH_INSPECT_REQUEST" "$OAUTH_INSPECT_RESPONSE")"
+expect_http_status 200 "$HTTP_STATUS" oauth-client-inspection
+
+OAUTH_REPAIR_MODE=""
+if jq -e '
+    .status == "inspection"
+    and .repairable == true
+    and .actor_id == "aevatar-oauth-client"
+    and .document_actor_id == .actor_id
+    and .source_state_version > 0
+    and .document_state_version > .source_state_version
+    and (.document_last_event_id | type == "string" and length > 0)
+  ' "$OAUTH_INSPECT_RESPONSE" >/dev/null; then
+  OAUTH_REPAIR_MODE="version-regression"
+elif jq -e '
+    .status == "inspection"
+    and .repairable == false
+    and .actor_id == "aevatar-oauth-client"
+    and .source_state_version > 0
+    and .document_state_version == null
+  ' "$OAUTH_INSPECT_RESPONSE" >/dev/null; then
+  # This is also the recovery branch after a guarded delete was committed but
+  # its process died before repair dispatch. It needs no deleted fingerprint:
+  # the existing governed rebuild publishes current authoritative actor state.
+  OAUTH_REPAIR_MODE="missing-document-rebuild"
+else
+  printf 'STOP: OAuth client inspection is not an approved repair shape\n' >&2
+  exit 1
+fi
+```
+
+An equal/lower document, source version `0`, or actor mismatch is not
+authorization to fabricate a manifest. A missing document with a positive
+source version uses only the existing governed projection rebuild path; it is
+never submitted as a version-regression apply or treated as proof of a prior
+deleted fingerprint.
+
+### 2. Apply The Exact Inspected Manifest
+
+The request ID is an opaque non-secret value of at most 128 ASCII letters,
+digits, `.`, `_`, `:`, or `-`. The reason is a single non-secret line of at
+most 256 characters. The terminal endpoint audit records the elevated caller,
+a one-way request-ID digest, versions, sanitized reason, and HTTP outcome; it
+never records the bearer, raw request ID, HMAC material, vault reference, or raw
+document event ID.
+
+```bash
+OAUTH_REPAIR_REQUEST_ID="repair-alpha"
+OAUTH_REPAIR_REASON="restore regressed identity client replica from committed state"
+OAUTH_APPLY_CONTROL="$REPAIR_DIR/oauth-apply-control.json"
+OAUTH_APPLY_REQUEST="$REPAIR_DIR/oauth-apply-request.json"
+OAUTH_APPLY_RESPONSE="$REPAIR_DIR/oauth-apply-response.json"
+
+jq -n \
+  --arg repairRequestId "$OAUTH_REPAIR_REQUEST_ID" \
+  --arg repairReason "$OAUTH_REPAIR_REASON" '
+  {
+    repair_request_id: $repairRequestId,
+    repair_reason: $repairReason
+  }
+' > "$OAUTH_APPLY_CONTROL"
+
+jq -s '
+  .[0] as $inspection
+  | .[1] as $control
+  | {
+      apply: true,
+      expected_actor_id: $inspection.actor_id,
+      expected_source_state_version: $inspection.source_state_version,
+      expected_document_state_version: $inspection.document_state_version,
+      expected_document_last_event_id: $inspection.document_last_event_id,
+      repair_request_id: $control.repair_request_id,
+      repair_reason: $control.repair_reason
+    }
+' \
+  "$OAUTH_INSPECT_RESPONSE" \
+  "$OAUTH_APPLY_CONTROL" \
+  > "$OAUTH_APPLY_REQUEST"
+
+OAUTH_APPLY_ACCEPTED=false
+if test "$OAUTH_REPAIR_MODE" = "missing-document-rebuild"; then
+  OAUTH_REBUILD_REQUEST="$REPAIR_DIR/oauth-rebuild-request.json"
+  OAUTH_REBUILD_RESPONSE="$REPAIR_DIR/oauth-rebuild-response.json"
+  jq -n '{}' > "$OAUTH_REBUILD_REQUEST"
+  HTTP_STATUS="$(protected_api_request POST \
+    /api/oauth/aevatar-client/rebuild \
+    "$OAUTH_REBUILD_REQUEST" "$OAUTH_REBUILD_RESPONSE")"
+  expect_http_status 202 "$HTTP_STATUS" oauth-client-missing-document-rebuild
+  jq -e '
+    .status == "rebuild_pending"
+    and (.projection_rebuild_command_id | type == "string" and length > 0)
+  ' "$OAUTH_REBUILD_RESPONSE" >/dev/null
+  OAUTH_APPLY_ACCEPTED=true
+else
+  HTTP_STATUS="$(protected_api_request POST \
+    /api/admin/identity/projection-repair/aevatar-oauth-client \
+    "$OAUTH_APPLY_REQUEST" "$OAUTH_APPLY_RESPONSE")"
+
+  case "$HTTP_STATUS" in
+    202)
+      jq -e '
+        .status == "accepted"
+        and (.command_id | type == "string" and length > 0)
+        and (.delete_status == "deleted" or .delete_status == "already_absent")
+      ' "$OAUTH_APPLY_RESPONSE" >/dev/null
+      OAUTH_APPLY_ACCEPTED=true
+      ;;
+    409)
+      printf 'STOP: OAuth client manifest changed; inspect again\n' >&2
+      exit 1
+      ;;
+    503)
+      printf 'STOP: apply failed; restart from inspection, never reuse the old manifest\n' >&2
+      exit 1
+      ;;
+    *)
+      printf 'STOP: OAuth client apply returned HTTP %s\n' "$HTTP_STATUS" >&2
+      exit 1
+      ;;
+  esac
+fi
+
+if test "$OAUTH_APPLY_ACCEPTED" != "true"; then
+  printf 'STOP: OAuth client repair was not accepted after exact retries\n' >&2
+  exit 1
+fi
+```
+
+The apply command requires the actor's in-memory/current version to be at least
+the inspected version and then compares it with the live EventStore commit
+point inside the actor turn. A lower version is stale; an in-memory version
+ahead of EventStore is a zombie activation. Both are rejected. A legitimate
+newer committed version is re-published as the current authority. The command
+appends no OAuth event and changes no client or HMAC fact.
+
+That actor fence complements, but does not replace, the runtime publication
+checkpoint precondition. Never delete the Elasticsearch replica merely to
+discover afterward that a checkpoint-ahead actor cannot activate. Treat a
+checkpoint or snapshot ahead of EventStore as a different recovery class and
+stop this procedure before apply.
+
+### 3. Prove Replica And Login Configuration Visibility
+
+`202 Accepted` proves dispatch admission only. It does not prove that the
+re-materialized document won the Elasticsearch write. Run a short stable-window
+check through the repair inspection and ordinary login config/status APIs:
+
+```bash
+OAUTH_VERIFY_INSPECT_RESPONSE="$REPAIR_DIR/oauth-verify-inspect-response.json"
+OAUTH_CONFIG_RESPONSE="$REPAIR_DIR/oauth-config-response.json"
+OAUTH_STATUS_RESPONSE="$REPAIR_DIR/oauth-status-response.json"
+OAUTH_EXPECTED_SOURCE_VERSION="$(
+  jq -er '.source_state_version' "$OAUTH_INSPECT_RESPONSE"
+)"
+OAUTH_VISIBLE=false
+OAUTH_STABLE_SAMPLES=0
+
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+  VERIFY_STATUS="$(protected_api_request POST \
+    /api/admin/identity/projection-repair/aevatar-oauth-client \
+    "$OAUTH_INSPECT_REQUEST" "$OAUTH_VERIFY_INSPECT_RESPONSE")"
+  CONFIG_STATUS="$(protected_api_request GET \
+    /api/auth/nyxid/config \
+    "" "$OAUTH_CONFIG_RESPONSE")"
+  STATUS_STATUS="$(protected_api_request GET \
+    /api/oauth/aevatar-client/status \
+    "" "$OAUTH_STATUS_RESPONSE")"
+
+  if test "$VERIFY_STATUS" = "200" \
+      && test "$CONFIG_STATUS" = "200" \
+      && test "$STATUS_STATUS" = "200" \
+      && jq -e --argjson expected "$OAUTH_EXPECTED_SOURCE_VERSION" '
+        .status == "inspection"
+        and .repairable == false
+        and .actor_id == "aevatar-oauth-client"
+        and .document_actor_id == .actor_id
+        and .source_state_version >= $expected
+        and .document_state_version == .source_state_version
+      ' "$OAUTH_VERIFY_INSPECT_RESPONSE" >/dev/null \
+      && jq -e '
+        (.base_url | type == "string" and length > 0)
+        and (.client_id | type == "string" and length > 0)
+        and (.scope | type == "string" and length > 0)
+      ' "$OAUTH_CONFIG_RESPONSE" >/dev/null \
+      && jq -e '.status != "not_provisioned"' "$OAUTH_STATUS_RESPONSE" >/dev/null; then
+    OAUTH_STABLE_SAMPLES=$((OAUTH_STABLE_SAMPLES + 1))
+    if test "$OAUTH_STABLE_SAMPLES" -ge 3; then
+      OAUTH_VISIBLE=true
+      break
+    fi
+  else
+    OAUTH_STABLE_SAMPLES=0
+  fi
+
+  sleep 5
+done
+
+if test "$OAUTH_VISIBLE" != "true"; then
+  printf 'STOP: OAuth client replica/config visibility was not stable\n' >&2
+  exit 1
+fi
+```
+
+The durable projection scope intentionally processes the authoritative lower
+version even if its historical `lastSuccessfulVersion` remains at the orphaned
+higher value. That high-water mark is not the OAuth repair success predicate;
+do not lower or reset it. Use the exact document/source equality and ordinary
+config/status reads above.
+
+Finally, start a fresh console login and require the browser flow to complete.
+Do not replay or retain an authorization code, PKCE verifier, or finalize
+request as evidence. If `/api/auth/nyxid/config` becomes `503` again during the
+stable window, investigate delayed orphan envelopes and server diagnostics;
+do not manually overwrite Elasticsearch.
+
 ## Conflict And Retry Rules
 
 Any HTTP `409 Conflict` means an actor identity, source version, document
@@ -640,30 +911,29 @@ fingerprint, or Elasticsearch revision changed. Stop immediately and re-run
 `apply=false`. Do not edit the old manifest to make it pass, do not retry a
 lower-version write, and do not manually delete the document.
 
-An already missing document can continue only as an operator-controlled
-idempotent retry of the previously inspected strict manifest. The service
-cannot reconstruct or cryptographically verify the deleted document's prior
-actor/version/event fingerprint once the replica is absent. Reuse the exact
-prior
-`expected_actor_id`, source version, higher document version, last event ID,
-request ID, and reason only when:
+Workspace and Catalog retain their target-specific operator-controlled retry
+rules. OAuth does not accept a later apply against an already-missing document:
+the service cannot reconstruct or cryptographically verify the deleted
+document's prior actor/version/event fingerprint once the replica is absent.
+Never reuse or reconstruct the old OAuth apply manifest. Restart at
+`apply=false`; when it proves the canonical actor has a positive source version
+and no document, use only `POST /api/oauth/aevatar-client/rebuild` as shown
+above. That existing governed path republishes current authoritative state and
+does not require the deleted fingerprint.
+
+For targets whose existing retry contract permits an already-missing document,
+reuse the exact prior actor ID, source version, higher document version, last
+event ID, request ID, and reason only when:
 
 ```text
 prior expected document version > prior expected source version > 0
 ```
 
-This narrow retry is an operator/audit control backed by the protected incident
-record; it is not code-enforced proof of the deleted document's provenance. The
-code still enforces the current canonical actor identity, a positive unchanged
-source version, and strict
-`expected_document_state_version > expected_source_state_version` before it
-continues. A fresh inspection that merely says the document is absent does not
-authorize inventing a document version or event ID. If the authoritative source
-version or actor identity has changed, stop and escalate instead of reusing the
-prior manifest. Enforceable prior-document provenance would require a future
-signed or leased inspection token carried from inspection into apply/retry, or
-a durable repair-request-ID record. Both are explicitly deferred; do not invent
-an ad hoc local record or new operator step.
+That narrow Workspace/Catalog retry remains an operator/audit control backed by
+the protected incident record; it is not code-enforced proof of the deleted
+document's provenance. A fresh inspection that merely says the document is
+absent does not authorize inventing a document version or event ID. OAuth avoids
+this gap entirely by rejecting the absent-document apply shape.
 
 ## Completion Evidence
 
@@ -677,6 +947,8 @@ Retain only non-secret evidence:
 - Workspace normal-API visibility and cleanup result;
 - catalog delete, refresh, visibility, required-version, and visible-version
   statuses;
+- OAuth delete/dispatch status, exact source/document version equality, stable
+  config/status HTTP outcomes, and fresh console-login pass or stop decision;
 - scheduled preflight/canary pass or stop decision.
 
 Never retain the bearer, Agent Key, refresh token, Vault reference, production

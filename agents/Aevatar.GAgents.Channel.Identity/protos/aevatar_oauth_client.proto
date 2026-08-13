@@ -178,6 +178,17 @@ message RotateAevatarOAuthClientHmacKeyCommand {
 // and changes no OAuth client fact — disaster recovery only.
 message RebuildAevatarOAuthClientProjectionCommand {}
 
+// Issued only after an operator has inspected and conditionally removed an
+// OAuth client projection document whose version exceeds the authoritative
+// event-store version. The actor requires its current version to be at least
+// the inspected committed version and to equal the live EventStore commit
+// point before re-publishing its current state. This admits a legitimate
+// concurrent commit without admitting an ahead zombie activation.
+message RepairAevatarOAuthClientProjectionCommand {
+  int64 expected_state_version = 1;
+  string repair_request_id = 2;
+}
+
 // Issued by the OAuth callback handler when it observes binding_id in the
 // token response — confirmation that NyxID admin has enabled
 // broker_capability_enabled on this client.
