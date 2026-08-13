@@ -43,4 +43,55 @@ public sealed class WorkflowWebhookBindingSecretCipherTests
 
         cipher.Unprotect("legacy-plaintext-secret").Should().Be("legacy-plaintext-secret");
     }
+
+    [Fact]
+    public void TryDerivePassphraseFromKeyring_ShouldBeStable_AndTrackActiveKey()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"keyring-{Guid.NewGuid():N}.json");
+        try
+        {
+            File.WriteAllText(path, """{"activeKeyId":"k1","keys":{"k1":"QUFB","k0":"QkJC"},"fingerprintKey":"Q0ND"}""");
+
+            var derived = AesGcmWorkflowWebhookBindingSecretCipher.TryDerivePassphraseFromKeyring(path);
+            derived.Should().NotBeNullOrWhiteSpace();
+            AesGcmWorkflowWebhookBindingSecretCipher.TryDerivePassphraseFromKeyring(path)
+                .Should().Be(derived, "same keyring must derive the same key on every host/replica");
+
+            // Rotating the active key changes the derivation (a real key change).
+            File.WriteAllText(path, """{"activeKeyId":"k2","keys":{"k1":"QUFB","k2":"REREREQ="},"fingerprintKey":"Q0ND"}""");
+            AesGcmWorkflowWebhookBindingSecretCipher.TryDerivePassphraseFromKeyring(path)
+                .Should().NotBe(derived);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("/nonexistent/keyring.json")]
+    public void TryDerivePassphraseFromKeyring_WithMissingKeyring_ShouldFailClosed(string? path)
+    {
+        AesGcmWorkflowWebhookBindingSecretCipher.TryDerivePassphraseFromKeyring(path).Should().BeNull();
+    }
+
+    [Fact]
+    public void TryDerivePassphraseFromKeyring_WithMalformedKeyring_ShouldFailClosed()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"keyring-{Guid.NewGuid():N}.json");
+        try
+        {
+            File.WriteAllText(path, "not json at all");
+            AesGcmWorkflowWebhookBindingSecretCipher.TryDerivePassphraseFromKeyring(path).Should().BeNull();
+
+            File.WriteAllText(path, """{"activeKeyId":"missing","keys":{"k1":"QUFB"}}""");
+            AesGcmWorkflowWebhookBindingSecretCipher.TryDerivePassphraseFromKeyring(path).Should().BeNull();
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
 }

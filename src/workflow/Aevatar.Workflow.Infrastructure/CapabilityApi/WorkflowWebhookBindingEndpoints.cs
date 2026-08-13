@@ -236,8 +236,11 @@ internal static class WorkflowWebhookBindingEndpoints
                 {
                     code = "WEBHOOK_BINDING_STORE_UNAVAILABLE",
                     message = "Workflow webhook binding store is not configured on this host. " +
-                        "The Redis-backed store requires WorkflowWebhookIngress:RedisConnectionString " +
-                        "and WorkflowWebhookIngress:BindingSecretEncryptionKey.",
+                        "The Redis-backed store needs a connection string " +
+                        "(WorkflowWebhookIngress:RedisConnectionString, defaulting to " +
+                        "ActorRuntime:OrleansGarnetConnectionString) and a secret encryption key " +
+                        "(WorkflowWebhookIngress:BindingSecretEncryptionKey, defaulting to a key " +
+                        "derived from ActorRuntime:SecretStoreKeyringPath).",
                 },
                 statusCode: StatusCodes.Status503ServiceUnavailable);
         return store;

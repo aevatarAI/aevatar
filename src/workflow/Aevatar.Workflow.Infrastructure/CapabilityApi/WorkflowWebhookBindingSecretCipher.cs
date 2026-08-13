@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 
 namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 
@@ -48,6 +49,52 @@ internal sealed class AesGcmWorkflowWebhookBindingSecretCipher : IWorkflowWebhoo
         tag.CopyTo(packed, NonceSize);
         cipherBytes.CopyTo(packed, NonceSize + TagSize);
         return Prefix + Convert.ToBase64String(packed);
+    }
+
+    /// <summary>
+    /// Derives a binding-secret passphrase from the host's Garnet secret-store
+    /// keyring so production needs no new configuration: the keyring is
+    /// already mounted host key material, and the derivation is
+    /// domain-separated from the secret store's own use of the active key.
+    /// Returns null (fail closed: the binding store stays unregistered) when
+    /// the keyring is absent or unreadable. Rotating the keyring's active key
+    /// changes the derived key; previously stored binding secrets must then
+    /// be re-PUT (they also live at their source, e.g. the sender's trigger
+    /// config).
+    /// </summary>
+    public static string? TryDerivePassphraseFromKeyring(string? keyringPath)
+    {
+        if (string.IsNullOrWhiteSpace(keyringPath) || !File.Exists(keyringPath))
+            return null;
+
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(keyringPath));
+            if (!document.RootElement.TryGetProperty("activeKeyId", out var activeKeyIdElement) ||
+                activeKeyIdElement.ValueKind != JsonValueKind.String)
+            {
+                return null;
+            }
+
+            var activeKeyId = activeKeyIdElement.GetString();
+            if (string.IsNullOrWhiteSpace(activeKeyId) ||
+                !document.RootElement.TryGetProperty("keys", out var keysElement) ||
+                keysElement.ValueKind != JsonValueKind.Object ||
+                !keysElement.TryGetProperty(activeKeyId, out var keyElement) ||
+                keyElement.ValueKind != JsonValueKind.String)
+            {
+                return null;
+            }
+
+            var activeKey = keyElement.GetString();
+            return string.IsNullOrWhiteSpace(activeKey)
+                ? null
+                : $"aevatar:workflow-webhook-binding:v1:{activeKeyId}:{activeKey}";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return null;
+        }
     }
 
     public string Unprotect(string stored)

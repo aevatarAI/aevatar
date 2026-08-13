@@ -66,8 +66,33 @@ public static class WorkflowCapabilityServiceCollectionExtensions
             .ValidateOnStart();
         services.TryAddSingleton<WorkflowWebhookIngressRequestBuilder>();
         services.TryAddSingleton<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowWebhookReplayAdmissionPort, WorkflowWebhookReplayAdmissionPort>();
+        // Zero-config default: hosts that already run on Garnet reuse the
+        // actor-runtime connection for webhook replay/binding storage, and the
+        // mounted secret-store keyring supplies (via domain-separated
+        // derivation) the binding-secret encryption key. Explicit
+        // WorkflowWebhookIngress values override both.
         var webhookReplayRedisConnectionString = configuration[$"{WorkflowWebhookIngressOptions.SectionName}:RedisConnectionString"];
+        if (string.IsNullOrWhiteSpace(webhookReplayRedisConnectionString))
+        {
+            webhookReplayRedisConnectionString = configuration["ActorRuntime:OrleansGarnetConnectionString"];
+            if (!string.IsNullOrWhiteSpace(webhookReplayRedisConnectionString))
+            {
+                var fallbackConnectionString = webhookReplayRedisConnectionString;
+                services.PostConfigure<WorkflowWebhookIngressOptions>(options =>
+                {
+                    if (string.IsNullOrWhiteSpace(options.RedisConnectionString))
+                        options.RedisConnectionString = fallbackConnectionString;
+                });
+            }
+        }
+
         var bindingSecretEncryptionKey = configuration[$"{WorkflowWebhookIngressOptions.SectionName}:BindingSecretEncryptionKey"];
+        if (string.IsNullOrWhiteSpace(bindingSecretEncryptionKey))
+        {
+            bindingSecretEncryptionKey = AesGcmWorkflowWebhookBindingSecretCipher.TryDerivePassphraseFromKeyring(
+                configuration["ActorRuntime:SecretStoreKeyringPath"]);
+        }
+
         if (!string.IsNullOrWhiteSpace(webhookReplayRedisConnectionString))
         {
             services.TryAddSingleton<WorkflowWebhookReplayRedisConnection>();
