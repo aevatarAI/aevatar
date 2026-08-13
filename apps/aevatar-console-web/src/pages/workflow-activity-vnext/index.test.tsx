@@ -625,6 +625,42 @@ describe('Workflow Activity vNext catalogue', () => {
     );
   });
 
+  it('reports only the specific delete refresh failure after the draft was removed', async () => {
+    mockScopesApi.queryWorkflowCatalogue
+      .mockResolvedValueOnce(
+        createCatalogueResponse([
+          createCatalogueRow({
+            workflowId: 'wf-draft-alpha',
+            name: 'Support triage',
+          }),
+        ]),
+      )
+      .mockRejectedValueOnce(new Error('refresh returned 503'));
+    mockStudioApi.deleteWorkflowDraft.mockResolvedValue(undefined);
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    const draftName = await screen.findByText('Support triage');
+    fireEvent.click(
+      within(draftName.closest('tr') as HTMLElement).getByRole('button', {
+        name: 'More actions for Support triage in Workspace',
+      }),
+    );
+    fireEvent.click(
+      await screen.findByRole('menuitem', { name: 'Delete draft' }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Delete draft' }));
+
+    await waitFor(() =>
+      expect(mockConsoleToast.error).toHaveBeenCalledWith(
+        'Draft was deleted, but the workflow list could not refresh. Please try again.',
+      ),
+    );
+    expect(mockConsoleToast.error).toHaveBeenCalledTimes(1);
+    expect(mockStudioApi.deleteWorkflowDraft).toHaveBeenCalledTimes(1);
+    expect(mockScopesApi.queryWorkflowCatalogue).toHaveBeenCalledTimes(2);
+  });
+
   it('maps unsupported legacy views to the backend all view', async () => {
     mockLocation =
       '/scopes/scope-alpha/workflow-activity-vnext/workflows?view=archived';

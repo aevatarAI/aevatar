@@ -477,7 +477,7 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
         removed
           ? t(
               'workflowActivityVNext.workflows.deleteRefreshFailed',
-              "Draft was deleted, but workflows couldn't refresh",
+              'Draft was deleted, but the workflow list could not refresh. Please try again.',
             )
           : t(
               'workflowActivityVNext.workflows.deleteFailed',
