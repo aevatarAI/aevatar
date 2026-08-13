@@ -352,7 +352,45 @@ describe('Workflow Activity vNext Activity ledger', () => {
     expect(history.push).toHaveBeenCalledTimes(2);
   });
 
-  it('replaces the table with the next cursor page', async () => {
+  it('renders a standard pagination control with a direct page jump input', async () => {
+    mockListActivityRuns.mockResolvedValue(
+      feedPage([activityRow({ runId: 'run-one', workflowName: 'First run' })], {
+        hasMore: true,
+        nextCursor: 'cursor-two',
+        totalCount: 75,
+      }),
+    );
+
+    renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
+
+    const pagination = await screen.findByTestId('activity-pagination');
+    expect(pagination).toHaveClass('ant-pagination');
+    expect(within(pagination).getByTitle('3')).toBeInTheDocument();
+    expect(
+      pagination.querySelector('.ant-pagination-options-quick-jumper input'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Load more' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('does not expose arbitrary page jumping when the feed omits its total count', async () => {
+    mockListActivityRuns.mockResolvedValue({
+      hasMore: true,
+      items: [activityRow({ runId: 'run-one', workflowName: 'First run' })],
+      nextCursor: 'cursor-two',
+      totalCount: null,
+    });
+
+    renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
+
+    const pagination = await screen.findByTestId('activity-pagination');
+    expect(
+      pagination.querySelector('.ant-pagination-options-quick-jumper input'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('opens a selected known page with its saved cursor', async () => {
     mockListActivityRuns
       .mockResolvedValueOnce(
         feedPage(
@@ -373,7 +411,9 @@ describe('Workflow Activity vNext Activity ledger', () => {
 
     renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Next page' }));
+    fireEvent.click(
+      within(await screen.findByTestId('activity-pagination')).getByTitle('2'),
+    );
 
     expect(await screen.findByText('Second run')).toBeInTheDocument();
     expect(screen.queryByText('First run')).not.toBeInTheDocument();
@@ -387,12 +427,9 @@ describe('Workflow Activity vNext Activity ledger', () => {
     expect(
       document.querySelector('.wa-vnext__activity-footer'),
     ).toHaveTextContent('Page 2 of 2');
-    expect(
-      screen.queryByRole('button', { name: 'Load more' }),
-    ).not.toBeInTheDocument();
   });
 
-  it('returns to the known first-page cursor', async () => {
+  it('resolves missing cursors before opening a directly selected page', async () => {
     mockListActivityRuns
       .mockResolvedValueOnce(
         feedPage(
@@ -400,8 +437,101 @@ describe('Workflow Activity vNext Activity ledger', () => {
           {
             hasMore: true,
             nextCursor: 'cursor-two',
-            totalCount: 26,
+            totalCount: 75,
           },
+        ),
+      )
+      .mockResolvedValueOnce(
+        feedPage(
+          [activityRow({ runId: 'run-two', workflowName: 'Second run' })],
+          {
+            hasMore: true,
+            nextCursor: 'cursor-three',
+            totalCount: 75,
+          },
+        ),
+      )
+      .mockResolvedValueOnce(
+        feedPage(
+          [activityRow({ runId: 'run-three', workflowName: 'Third run' })],
+          { totalCount: 75 },
+        ),
+      );
+
+    renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
+
+    const quickJumper = (
+      await screen.findByTestId('activity-pagination')
+    ).querySelector('.ant-pagination-options-quick-jumper input');
+    if (!quickJumper) throw new Error('The page jump input was not found.');
+    fireEvent.change(quickJumper, { target: { value: '3' } });
+    fireEvent.keyUp(quickJumper, { key: 'Enter', keyCode: 13 });
+
+    expect(await screen.findByText('Third run')).toBeInTheDocument();
+    expect(screen.queryByText('First run')).not.toBeInTheDocument();
+    expect(screen.queryByText('Second run')).not.toBeInTheDocument();
+    expect(mockListActivityRuns).toHaveBeenCalledTimes(3);
+    expect(
+      mockListActivityRuns.mock.calls.map(([, filter]) => filter.cursor),
+    ).toEqual([undefined, 'cursor-two', 'cursor-three']);
+    expect(
+      document.querySelector('.wa-vnext__activity-footer'),
+    ).toHaveTextContent('Page 3 of 3');
+  });
+
+  it('keeps the current page visible and retries when cursor resolution fails', async () => {
+    mockListActivityRuns
+      .mockResolvedValueOnce(
+        feedPage(
+          [activityRow({ runId: 'run-one', workflowName: 'First run' })],
+          {
+            hasMore: true,
+            nextCursor: 'cursor-invalid',
+            totalCount: 75,
+          },
+        ),
+      )
+      .mockRejectedValueOnce(new Error('Network unavailable'))
+      .mockResolvedValueOnce(
+        feedPage(
+          [activityRow({ runId: 'run-two', workflowName: 'Second run' })],
+          { hasMore: true, nextCursor: 'cursor-three', totalCount: 75 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        feedPage(
+          [activityRow({ runId: 'run-three', workflowName: 'Third run' })],
+          { totalCount: 75 },
+        ),
+      );
+
+    renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
+
+    const quickJumper = (
+      await screen.findByTestId('activity-pagination')
+    ).querySelector('.ant-pagination-options-quick-jumper input');
+    if (!quickJumper) throw new Error('The page jump input was not found.');
+    fireEvent.change(quickJumper, { target: { value: '3' } });
+    fireEvent.keyUp(quickJumper, { key: 'Enter', keyCode: 13 });
+
+    expect(
+      await screen.findByText("Couldn't load this page"),
+    ).toBeInTheDocument();
+    expect(screen.getByText('First run')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    expect(await screen.findByText('Third run')).toBeInTheDocument();
+    expect(
+      mockListActivityRuns.mock.calls.map(([, filter]) => filter.cursor),
+    ).toEqual([undefined, 'cursor-invalid', 'cursor-invalid', 'cursor-three']);
+  });
+
+  it('resets cursor pagination to the first page when filters change', async () => {
+    mockListActivityRuns
+      .mockResolvedValueOnce(
+        feedPage(
+          [activityRow({ runId: 'run-one', workflowName: 'First run' })],
+          { hasMore: true, nextCursor: 'cursor-two', totalCount: 26 },
         ),
       )
       .mockResolvedValueOnce(
@@ -412,60 +542,34 @@ describe('Workflow Activity vNext Activity ledger', () => {
       )
       .mockResolvedValueOnce(
         feedPage(
-          [activityRow({ runId: 'run-one', workflowName: 'First run' })],
-          { totalCount: 26 },
+          [
+            activityRow({
+              runId: 'run-filtered',
+              workflowName: 'Filtered run',
+            }),
+          ],
+          { totalCount: 1 },
         ),
       );
 
-    renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
+    const view = renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Next page' }));
-    await screen.findByText('Second run');
-    fireEvent.click(screen.getByRole('button', { name: 'Previous page' }));
-
-    expect(await screen.findByText('First run')).toBeInTheDocument();
-    expect(mockListActivityRuns).toHaveBeenLastCalledWith(
-      'scope-alpha',
-      expect.objectContaining({ cursor: undefined }),
+    fireEvent.click(
+      within(await screen.findByTestId('activity-pagination')).getByTitle('2'),
     );
-    expect(
-      document.querySelector('.wa-vnext__activity-footer'),
-    ).toHaveTextContent('Page 1 of 2');
-  });
+    await screen.findByText('Second run');
 
-  it('shows a retry action when the selected page cannot be loaded', async () => {
-    mockListActivityRuns
-      .mockResolvedValueOnce(
-        feedPage(
-          [activityRow({ runId: 'run-one', workflowName: 'First run' })],
-          {
-            hasMore: true,
-            nextCursor: 'cursor-invalid',
-          },
-        ),
-      )
-      .mockRejectedValueOnce(new Error('Network unavailable'))
-      .mockResolvedValueOnce(
-        feedPage([
-          activityRow({ runId: 'run-fresh', workflowName: 'Fresh first page' }),
-        ]),
-      );
+    mockSearch = '?status=failed';
+    view.unmount();
+    renderWithQueryClient(
+      <ActivityPage scopeId="scope-alpha" />,
+      view.queryClient,
+    );
 
-    renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Next page' }));
-    expect(
-      await screen.findByText("Couldn't load this page"),
-    ).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
-
-    expect(await screen.findByText('Fresh first page')).toBeInTheDocument();
+    expect(await screen.findByText('Filtered run')).toBeInTheDocument();
     expect(mockListActivityRuns).toHaveBeenLastCalledWith(
       'scope-alpha',
-      expect.objectContaining({
-        cursor: 'cursor-invalid',
-        includeTotalCount: true,
-      }),
+      expect.objectContaining({ status: 'failed', cursor: undefined }),
     );
   });
 
