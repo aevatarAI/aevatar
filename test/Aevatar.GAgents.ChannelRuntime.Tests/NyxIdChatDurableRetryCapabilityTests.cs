@@ -48,6 +48,8 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
               "endpoint_id": "instance-endpoint-alpha",
               "endpoint_url": "https://lark.test",
               "is_active": true,
+              "connected": true,
+              "status": "active",
               "credential_source": { "type": "personal" }
             }
           ]
