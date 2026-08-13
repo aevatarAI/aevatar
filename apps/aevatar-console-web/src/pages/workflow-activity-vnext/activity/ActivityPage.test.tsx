@@ -236,7 +236,7 @@ describe('Workflow Activity vNext Activity ledger', () => {
     );
   });
 
-  it('shows authoritative triage facts without exposing actor identity', async () => {
+  it('keeps the activity list focused on user-facing run facts', async () => {
     mockListActivityRuns.mockResolvedValue(
       feedPage(
         [
@@ -244,6 +244,11 @@ describe('Workflow Activity vNext Activity ledger', () => {
             runId: 'workflow-definition:studio:run:internal-alpha',
             workflowName: 'Customer follow-up',
             runOrigin: 'backend-native-origin.v2',
+            currentStep: {
+              availability: 'available',
+              inputSummary: 'Connector request',
+              stepId: 'generate_weekly_report',
+            },
           }),
         ],
         { totalCount: 42 },
@@ -257,17 +262,33 @@ describe('Workflow Activity vNext Activity ledger', () => {
     ).toBeEnabled();
     expect(screen.getByText('Completed')).toBeInTheDocument();
     expect(screen.getByText('Connector unavailable')).toBeInTheDocument();
-    expect(screen.getByText('Abigail')).toBeInTheDocument();
-    expect(screen.getByText('backend-native-origin.v2')).toBeInTheDocument();
     expect(screen.getByText('Ticket redacted')).toBeInTheDocument();
     expect(screen.getByText('2m')).toBeInTheDocument();
-    expect(screen.getByText('internal-alpha')).toBeInTheDocument();
     expect(screen.getByText('1 of 42 runs loaded')).toBeInTheDocument();
-    expect(screen.queryByText('actor-technical-alpha')).not.toBeInTheDocument();
+    expect(
+      screen.getByRole('columnheader', { name: 'Duration' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('columnheader', { name: 'Input preview' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('columnheader', { name: 'Initiator' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('generate_weekly_report'),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('backend-native-origin.v2'),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText('internal-alpha')).not.toBeInTheDocument();
     expect(
       screen.queryByText('workflow-definition:studio:run:internal-alpha'),
     ).not.toBeInTheDocument();
     expect(screen.queryByText('State version')).not.toBeInTheDocument();
+
+    expect(screen.getByText('Ticket redacted')).toHaveClass(
+      'wa-vnext__input-preview',
+    );
 
     const activityRegion = screen.getByRole('region', { name: 'Activity' });
     expect(activityRegion).toHaveAttribute('tabindex', '0');

@@ -61,32 +61,16 @@ function runDuration(run: WorkflowActivityRunFeedRow, now: number): string {
   return Number.isNaN(startedAt) ? '-' : formatDuration(now - startedAt);
 }
 
-function shortRunReference(runId: string): string {
-  const segments = runId.split(':').filter(Boolean);
-  const lastSegment = segments.at(-1) ?? runId;
-  return lastSegment.length > 18
-    ? `${lastSegment.slice(0, 8)}…${lastSegment.slice(-6)}`
-    : lastSegment;
-}
-
 function isAvailable(value: string): boolean {
   return value.trim().toLowerCase() === 'available';
 }
 
 function runContext(run: WorkflowActivityRunFeedRow): string | null {
   if (isAvailable(run.firstFailure.availability)) {
-    return run.firstFailure.message || run.firstFailure.stepId || null;
+    return run.firstFailure.message || null;
   }
   if (isAvailable(run.waiting.availability)) {
-    return (
-      run.waiting.prompt ||
-      run.waiting.waitingKind ||
-      run.waiting.stepId ||
-      null
-    );
-  }
-  if (isAvailable(run.currentStep.availability)) {
-    return run.currentStep.stepId || run.currentStep.inputSummary || null;
+    return run.waiting.prompt || run.waiting.waitingKind || null;
   }
   return null;
 }
@@ -467,6 +451,14 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
             ariaLabel={t('workflowActivityVNext.activity.title', 'Activity')}
           >
             <table className="wa-vnext__table">
+              <colgroup>
+                <col className="wa-vnext__activity-column--workflow" />
+                <col className="wa-vnext__activity-column--status" />
+                <col className="wa-vnext__activity-column--started" />
+                <col className="wa-vnext__activity-column--duration" />
+                <col className="wa-vnext__activity-column--input" />
+                <col className="wa-vnext__activity-column--actions" />
+              </colgroup>
               <thead>
                 <tr>
                   <th>
@@ -483,12 +475,15 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                   </th>
                   <th>
                     {t(
-                      'workflowActivityVNext.activity.columnInitiator',
-                      'Initiator',
+                      'workflowActivityVNext.activity.columnDuration',
+                      'Duration',
                     )}
                   </th>
                   <th>
-                    {t('workflowActivityVNext.activity.columnInput', 'Input')}
+                    {t(
+                      'workflowActivityVNext.activity.columnInputPreview',
+                      'Input preview',
+                    )}
                   </th>
                   <th>
                     <span className="aevatar-loading-visually-hidden">
@@ -521,9 +516,6 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                         )}
                       >
                         <span className="wa-vnext__title">{workflowName}</span>
-                        <span className="wa-vnext__sub wa-vnext__mono">
-                          {shortRunReference(run.runId)}
-                        </span>
                       </td>
                       <td
                         data-label={t(
@@ -547,33 +539,24 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                         )}
                       >
                         {formatDate(run.startedAtUtc)}
-                        <span className="wa-vnext__sub">
-                          {runDuration(run, now)}
-                        </span>
                       </td>
                       <td
                         data-label={t(
-                          'workflowActivityVNext.activity.columnInitiator',
-                          'Initiator',
+                          'workflowActivityVNext.activity.columnDuration',
+                          'Duration',
                         )}
                       >
-                        {isAvailable(run.initiator.availability)
-                          ? run.initiator.displayValue
-                          : t(
-                              'workflowActivityVNext.common.unavailable',
-                              'Unavailable',
-                            )}
-                        <span className="wa-vnext__sub">
-                          {run.runOrigin || '-'}
-                        </span>
+                        {runDuration(run, now)}
                       </td>
                       <td
                         data-label={t(
-                          'workflowActivityVNext.activity.columnInput',
-                          'Input',
+                          'workflowActivityVNext.activity.columnInputPreview',
+                          'Input preview',
                         )}
                       >
-                        {run.inputSummary || '-'}
+                        <span className="wa-vnext__input-preview">
+                          {run.inputSummary || '-'}
+                        </span>
                       </td>
                       <td
                         data-label={t(

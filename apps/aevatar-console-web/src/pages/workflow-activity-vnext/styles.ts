@@ -147,6 +147,12 @@ export const workflowActivityVNextCss = `
 }
 .wa-vnext__table th:first-child { border-top-left-radius: 7px; }
 .wa-vnext__table th:last-child { border-top-right-radius: 7px; }
+.wa-vnext__activity-column--workflow { width: 22%; }
+.wa-vnext__activity-column--status { width: 18%; }
+.wa-vnext__activity-column--started { width: 170px; }
+.wa-vnext__activity-column--duration { width: 76px; }
+.wa-vnext__activity-column--input { width: auto; }
+.wa-vnext__activity-column--actions { width: 48px; }
 .wa-vnext__table-column--status { width: 120px; }
 .wa-vnext__table-column--updated { width: 190px; }
 .wa-vnext__table-column--actions { width: 270px; }
@@ -160,6 +166,15 @@ export const workflowActivityVNextCss = `
 .wa-vnext__run-link { max-width: 100%; min-width: 0; overflow: hidden; }
 .wa-vnext__title { display: block; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wa-vnext__sub { color: var(--wa-muted); display: block; font-size: 12px; line-height: 17px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wa-vnext__input-preview {
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  display: -webkit-box;
+  line-height: 17px;
+  max-height: 34px;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
 .wa-vnext__workflow-name-trigger { background: transparent; border: 0; color: inherit; cursor: help; display: block; font: inherit; margin: 0; max-width: 100%; padding: 0; text-align: left; }
 .wa-vnext__workflow-description-popover { max-width: calc(100vw - 48px); width: 320px; }
 .wa-vnext__workflow-description { margin: 0; max-width: 100%; overflow-wrap: anywhere; white-space: normal; }
