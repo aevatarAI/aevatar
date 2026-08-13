@@ -267,9 +267,9 @@ message ScopeWorkflowCatalogueRowDocument {
   string active_revision_id = 33;
   string deployment_id = 34;
   string deployment_status = 35;
-  string service_app_id = 36;
-  string service_namespace = 37;
-  string published_service_id = 38;
+  string published_service_id = 36;
+  string service_app_id = 37;
+  string service_namespace = 38;
 }
 
 // ─── UserConfig Current State ReadModel ───

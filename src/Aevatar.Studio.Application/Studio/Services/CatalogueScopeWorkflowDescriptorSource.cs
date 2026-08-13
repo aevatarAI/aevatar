@@ -22,16 +22,30 @@ public sealed class CatalogueScopeWorkflowDescriptorSource
     {
         var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
         var queryTake = Math.Clamp(take, 1, 100);
-        var catalogue = await _catalogueQueryPort.QueryAsync(
-            new ScopeWorkflowCatalogueQuery(normalizedScopeId, Take: queryTake),
-            ct);
+        var descriptors = new List<ScopeWorkflowPublishedServiceDescriptor>(queryTake);
+        string? cursor = null;
 
-        return catalogue.Items
-            .Select(Map)
-            .Where(static descriptor => descriptor != null)
-            .Select(static descriptor => descriptor!)
-            .Take(queryTake)
-            .ToArray();
+        do
+        {
+            var catalogue = await _catalogueQueryPort.QueryAsync(
+                new ScopeWorkflowCatalogueQuery(normalizedScopeId, Cursor: cursor, Take: queryTake),
+                ct);
+
+            foreach (var row in catalogue.Items)
+            {
+                var descriptor = Map(row);
+                if (descriptor == null)
+                    continue;
+
+                descriptors.Add(descriptor);
+                if (descriptors.Count == queryTake)
+                    return descriptors;
+            }
+
+            cursor = catalogue.NextPageToken;
+        } while (!string.IsNullOrWhiteSpace(cursor));
+
+        return descriptors;
     }
 
     public async Task<IReadOnlyList<ScopeWorkflowPublishedServiceDescriptor>> FindByWorkflowIdAsync(
@@ -41,16 +55,24 @@ public sealed class CatalogueScopeWorkflowDescriptorSource
     {
         var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
         var normalizedWorkflowId = NormalizeRequired(workflowId, nameof(workflowId));
-        var catalogue = await _catalogueQueryPort.QueryAsync(
-            new ScopeWorkflowCatalogueQuery(normalizedScopeId, Query: normalizedWorkflowId, Take: 100),
-            ct);
+        string? cursor = null;
 
-        return catalogue.Items
-            .Where(row => string.Equals(row.WorkflowId, normalizedWorkflowId, StringComparison.Ordinal))
-            .Select(Map)
-            .Where(static descriptor => descriptor != null)
-            .Select(static descriptor => descriptor!)
-            .ToArray();
+        do
+        {
+            var catalogue = await _catalogueQueryPort.QueryAsync(
+                new ScopeWorkflowCatalogueQuery(normalizedScopeId, Query: normalizedWorkflowId, Cursor: cursor, Take: 100),
+                ct);
+
+            var exactRow = catalogue.Items.FirstOrDefault(row =>
+                string.Equals(row.WorkflowId, normalizedWorkflowId, StringComparison.Ordinal));
+            var descriptor = exactRow == null ? null : Map(exactRow);
+            if (descriptor != null)
+                return [descriptor];
+
+            cursor = catalogue.NextPageToken;
+        } while (!string.IsNullOrWhiteSpace(cursor));
+
+        return [];
     }
 
     private static ScopeWorkflowPublishedServiceDescriptor? Map(ScopeWorkflowCatalogueRow row)
