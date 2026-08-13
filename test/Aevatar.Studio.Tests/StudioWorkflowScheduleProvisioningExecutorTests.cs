@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.Studio.Application.Provisioning;
@@ -100,6 +102,24 @@ public sealed class StudioWorkflowScheduleProvisioningExecutorTests
         port.CreateRequests.Should().ContainSingle();
         port.CreateRequests[0].ScheduleId.Should().Be(result.ScheduleId);
         port.CreateRequests[0].AcceptedBinding!.PublishedServiceId.Should().Be("scope-1/service:workflow-alpha");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenUnsafePublishedServiceIdFirstGenerationIsTombstoned_ShouldCreateSecondSafeGeneration()
+    {
+        const string publishedServiceId = "scope-1/service:workflow-alpha";
+        var expectedFirst = $"provision-{HashSuffix(publishedServiceId)}";
+        var port = new RecordingSchedulePort();
+        port.TombstonedScheduleIds.Add(expectedFirst);
+        var sut = new StudioWorkflowScheduleProvisioningExecutor(port);
+
+        var result = await sut.ExecuteAsync(NewExecution(publishedServiceId: publishedServiceId));
+
+        result.Success.Should().BeTrue();
+        result.ScheduleId.Should().Be($"{expectedFirst}.2");
+        port.GetScheduleIds.Should().Equal(expectedFirst, $"{expectedFirst}.2");
+        port.CreateRequests.Select(static request => request.ScheduleId).Should()
+            .Equal(expectedFirst, $"{expectedFirst}.2");
     }
 
     [Fact]
@@ -223,6 +243,9 @@ public sealed class StudioWorkflowScheduleProvisioningExecutorTests
         port.CreateRequests.Select(static request => request.ScheduleId).Should()
             .Equal("provision-svc-1", "provision-svc-1.2");
     }
+
+    private static string HashSuffix(string value) =>
+        Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(value)).AsSpan(0, 16));
 
     private static StudioWorkflowScheduleProvisioningExecution NewExecution(
         string publishedServiceId = "svc-1") =>
