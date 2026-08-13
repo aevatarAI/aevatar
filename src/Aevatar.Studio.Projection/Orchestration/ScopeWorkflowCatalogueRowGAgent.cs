@@ -28,7 +28,7 @@ public sealed class ScopeWorkflowCatalogueRowGAgent : GAgentBase<ScopeWorkflowCa
         if (string.IsNullOrWhiteSpace(command.ScopeId) || string.IsNullOrWhiteSpace(command.WorkflowId))
             return;
 
-        if (RepresentsCurrentState(command))
+        if (RepresentsCurrentState(State, command))
             return;
 
         await PersistDomainEventAsync(new ScopeWorkflowCatalogueRowSourcesObservedEvent
@@ -57,11 +57,15 @@ public sealed class ScopeWorkflowCatalogueRowGAgent : GAgentBase<ScopeWorkflowCa
             .On<ScopeWorkflowCatalogueRowSourcesObservedEvent>(ApplySourcesObserved)
             .OrCurrent();
 
-    private bool RepresentsCurrentState(ObserveScopeWorkflowCatalogueSourcesCommand command) =>
-        string.Equals(State.ScopeId, command.ScopeId?.Trim(), StringComparison.Ordinal) &&
-        string.Equals(State.WorkflowId, command.WorkflowId?.Trim(), StringComparison.Ordinal) &&
-        SameSource(State.DraftSource, command.DraftSource) &&
-        SameSource(State.ServiceSource, command.ServiceSource);
+    internal static bool RepresentsCurrentState(
+        ScopeWorkflowCatalogueRowState state,
+        ObserveScopeWorkflowCatalogueSourcesCommand command) =>
+        string.Equals(state.ScopeId, command.ScopeId?.Trim(), StringComparison.Ordinal) &&
+        string.Equals(state.WorkflowId, command.WorkflowId?.Trim(), StringComparison.Ordinal) &&
+        SameSource(state.DraftSource, command.DraftSource) &&
+        SameSource(state.ServiceSource, command.ServiceSource) &&
+        SameWatermark(state.DraftWatermarkUtc, command.DraftWatermarkUtc) &&
+        SameWatermark(state.ServiceWatermarkUtc, command.ServiceWatermarkUtc);
 
     private static ScopeWorkflowCatalogueRowState ApplySourcesObserved(
         ScopeWorkflowCatalogueRowState state,
@@ -111,6 +115,10 @@ public sealed class ScopeWorkflowCatalogueRowGAgent : GAgentBase<ScopeWorkflowCa
     private static bool SameSource(
         ScopeWorkflowCatalogueSourceSnapshot? current,
         ScopeWorkflowCatalogueSourceSnapshot? incoming) =>
+        current == null && incoming == null ||
+        current != null && incoming != null && current.Equals(incoming);
+
+    private static bool SameWatermark(Timestamp? current, Timestamp? incoming) =>
         current == null && incoming == null ||
         current != null && incoming != null && current.Equals(incoming);
 

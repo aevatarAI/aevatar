@@ -147,6 +147,40 @@ public sealed class ScopeWorkflowCatalogueRowActorProjectionTests
     }
 
     [Fact]
+    public void RepresentsCurrentState_ShouldRequireMatchingWatermarks_WhenSourcesAreUnchanged()
+    {
+        var current = new ScopeWorkflowCatalogueRowState
+        {
+            ScopeId = "scope-1",
+            WorkflowId = "wf-shared",
+            DraftSource = Source(ScopeWorkflowCatalogueSourceDocument.DraftSourceKind, "draft", "2026-08-06T00:00:00Z"),
+            DraftWatermarkUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-06T00:00:00Z")),
+            ServiceWatermarkUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-05T00:00:00Z")),
+        };
+
+        var command = CurrentStateCommand(current);
+        command.ServiceWatermarkUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-07T00:00:00Z"));
+
+        ScopeWorkflowCatalogueRowGAgent.RepresentsCurrentState(current, command).Should().BeFalse();
+    }
+
+    [Fact]
+    public void RepresentsCurrentState_ShouldMatch_WhenSourcesAndWatermarksAreUnchanged()
+    {
+        var current = new ScopeWorkflowCatalogueRowState
+        {
+            ScopeId = "scope-1",
+            WorkflowId = "wf-shared",
+            DraftSource = Source(ScopeWorkflowCatalogueSourceDocument.DraftSourceKind, "draft", "2026-08-06T00:00:00Z"),
+            DraftWatermarkUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-06T00:00:00Z")),
+            ServiceSource = Source(ScopeWorkflowCatalogueSourceDocument.ServiceSourceKind, "published", "2026-08-05T00:00:00Z"),
+            ServiceWatermarkUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-05T00:00:00Z")),
+        };
+
+        ScopeWorkflowCatalogueRowGAgent.RepresentsCurrentState(current, CurrentStateCommand(current)).Should().BeTrue();
+    }
+
+    [Fact]
     public async Task ProjectAsync_ShouldDeleteRow_WhenActorStateHasNoSources()
     {
         var dispatcher = new RecordingRowDispatcher();
@@ -189,6 +223,18 @@ public sealed class ScopeWorkflowCatalogueRowActorProjectionTests
             SourceKind = sourceKind,
             Name = name,
             SourceUpdatedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse(sourceUpdatedAtUtc)),
+        };
+
+    private static ObserveScopeWorkflowCatalogueSourcesCommand CurrentStateCommand(
+        ScopeWorkflowCatalogueRowState state) =>
+        new()
+        {
+            ScopeId = state.ScopeId,
+            WorkflowId = state.WorkflowId,
+            DraftSource = state.DraftSource?.Clone(),
+            ServiceSource = state.ServiceSource?.Clone(),
+            DraftWatermarkUtc = state.DraftWatermarkUtc?.Clone(),
+            ServiceWatermarkUtc = state.ServiceWatermarkUtc?.Clone(),
         };
 
     private static EventEnvelope WrapCommitted(
