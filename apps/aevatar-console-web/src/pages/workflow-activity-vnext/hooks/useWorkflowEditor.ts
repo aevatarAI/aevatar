@@ -859,15 +859,6 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
       }
       const normalizedInput = (snapshot?.input ?? runInput).trim();
       const submittedFiles = snapshot?.files ?? runFiles;
-      if (!normalizedInput && submittedFiles.length === 0) {
-        setRunInputError(
-          t(
-            'workflowActivityVNext.editor.runInputRequired',
-            'Input or an attached file is required.',
-          ),
-        );
-        return;
-      }
       const emptyFile = submittedFiles.find((file) => file.size <= 0);
       if (emptyFile) {
         setRunError(

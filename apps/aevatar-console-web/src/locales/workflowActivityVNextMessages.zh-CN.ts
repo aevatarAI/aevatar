@@ -150,7 +150,7 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.editor.openRunDetails': '打开运行详情',
     'workflowActivityVNext.editor.outputSummary': '输出摘要',
     'workflowActivityVNext.editor.publishedRunPanel.inputRequired':
-      '请输入内容或添加附件后再启动已发布的工作流。',
+      '已发布工作流可以在没有手动输入时启动。',
     'workflowActivityVNext.editor.publishedRunPanel.removeEmptyFile':
       '启动已发布运行前，请移除空文件 {name}。',
     'workflowActivityVNext.editor.resizePublishedRunPanel':

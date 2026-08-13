@@ -4667,7 +4667,6 @@ const projectMessages = {
   "pages.studio.studioworkbenchsections.wait.for.external.signal": "等待外部信号",
   "pages.studio.studioworkbenchsections.waiting.for.execution": "等待执行",
   "pages.studio.studioworkbenchsections.waiting.for.manual.approval": "等待人工审批",
-  "pages.studio.studioworkbenchsections.waiting.for.manual.input": "等待人工输入",
   "pages.studio.studioworkbenchsections.warming.up": "预热中",
   "pages.studio.studioworkbenchsections.workflow.graph.unavailable": "Workflow 图不可用。",
   "pages.studio.studioworkbenchsections.workflow.graph.unavailable.for.this": "该成员无法使用 Workflow 图。",

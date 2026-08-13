@@ -185,6 +185,61 @@ describe('StudioExecutionPage', () => {
     expect(screen.getByText('Graph canvas')).toBeInTheDocument();
   });
 
+  it('does not show the manual input label for human_input interactions', () => {
+    const baseProps = createBaseProps();
+
+    render(
+      React.createElement(
+        StudioExecutionPage,
+        createBaseProps({
+          selectedExecution: {
+            ...baseProps.selectedExecution,
+            data: {
+              ...baseProps.selectedExecution.data,
+              frames: [
+                {
+                  receivedAtUtc: '2026-03-18T00:00:01Z',
+                  payload: JSON.stringify({
+                    custom: {
+                      name: 'aevatar.step.request',
+                      payload: {
+                        stepId: 'triage',
+                        stepType: 'human_input',
+                        targetRole: 'support',
+                        input: 'Collect the missing details.',
+                      },
+                    },
+                  }),
+                },
+                {
+                  receivedAtUtc: '2026-03-18T00:00:02Z',
+                  payload: JSON.stringify({
+                    custom: {
+                      name: 'aevatar.human_input.request',
+                      payload: {
+                        runId: 'execution-1',
+                        stepId: 'triage',
+                        suspensionType: 'human_input',
+                        prompt: 'Enter the missing information.',
+                        variableName: 'missing_details',
+                      },
+                    },
+                  }),
+                },
+              ],
+            },
+          },
+        }) as any,
+      ),
+    );
+
+    expect(screen.queryByText('等待人工输入')).toBeNull();
+    expect(screen.queryByText('Waiting for manual input')).toBeNull();
+    expect(
+      screen.getAllByText('Enter the missing information.').length,
+    ).toBeGreaterThan(0);
+  });
+
   it('shows selected execution context without exposing the actor id', async () => {
     const writeText = jest.fn().mockResolvedValue(undefined);
     Object.defineProperty(window.navigator, 'clipboard', {

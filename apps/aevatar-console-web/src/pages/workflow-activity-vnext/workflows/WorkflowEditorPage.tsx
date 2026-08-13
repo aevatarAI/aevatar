@@ -1318,16 +1318,7 @@ const WorkflowEditorPage: React.FC<{
             !runBusy &&
             Boolean(publishedInvocationTarget) &&
             editor.canRun &&
-            Boolean(editor.runInput.trim() || editor.runFiles.length > 0) &&
             !editorWriteLocked
-          }
-          disabledReason={
-            editor.runInput.trim() || editor.runFiles.length > 0
-              ? undefined
-              : t(
-                  'workflowActivityVNext.editor.publishedRunPanel.inputRequired',
-                  'Enter an input or attach a file to start this published workflow run.',
-                )
           }
           height="100%"
           inputDisabled={runBusy || editorWriteLocked}
