@@ -392,6 +392,28 @@ public sealed class NyxIdChatTurnOperationExecutor
         INyxIdChatDelegationCredentialLifecyclePort delegationCredentialLifecycle,
         INyxIdChatToolVerificationPort toolVerificationPort,
         INyxIdActionReadAuthorityPort actionReadAuthorityPort,
+        INyxIdExactServiceApprovalPort exactServiceApprovalPort,
+        ILogger<NyxIdChatTurnOperationExecutor> logger)
+        : this(
+            generationExecutor,
+            actionPostconditionPort,
+            turnCatalogMaterializer,
+            delegationCredentialLifecycle,
+            toolVerificationPort,
+            actionReadAuthorityPort,
+            exactServiceApprovalPort,
+            TimeProvider.System,
+            logger)
+    {
+    }
+
+    public NyxIdChatTurnOperationExecutor(
+        IAgentRunReplyGenerationExecutorPort generationExecutor,
+        INyxIdActionPostconditionPort actionPostconditionPort,
+        AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer,
+        INyxIdChatDelegationCredentialLifecyclePort delegationCredentialLifecycle,
+        INyxIdChatToolVerificationPort toolVerificationPort,
+        INyxIdActionReadAuthorityPort actionReadAuthorityPort,
         ILogger<NyxIdChatTurnOperationExecutor> logger)
         : this(
             generationExecutor,
