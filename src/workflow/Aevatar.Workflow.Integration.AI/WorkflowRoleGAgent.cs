@@ -115,6 +115,13 @@ public class WorkflowRoleGAgent(
             var toolContext = recoveryToolContext ??
                               llmControl.ToToolContext(
                                   AgentToolExecutionContextMapper.FromPayload(chatRequest.ToolContext));
+            if (recoveryToolContext is null)
+            {
+                toolContext = await ResolveInitialDurableToolContextAsync(
+                    chatRequest,
+                    toolContext,
+                    streamCt);
+            }
             if (publishStarted)
             {
                 if (!await TryEstablishWorkflowTurnAuthorityAsync(
@@ -322,6 +329,14 @@ public class WorkflowRoleGAgent(
     {
         var durable = checkpoint.CallerDurableCredential;
         if (checkpoint.RequiresRuntimeCredential &&
+            durable?.SourceKind == DurableCallerCredentialSourceKind.WebhookBinding)
+        {
+            // A webhook binding owns an exact Agent Key. Never replace it with
+            // an OAuth token issued from the accompanying human authority.
+            return await base.TryResolveRecoveryExecutionContextAsync(checkpoint, ct);
+        }
+
+        if (checkpoint.RequiresRuntimeCredential &&
             durable?.SourceKind == DurableCallerCredentialSourceKind.ScheduledDispatch &&
             durable.ScheduledCallerNyxIdAuthority is { } authority &&
             !string.IsNullOrWhiteSpace(authority.Platform) &&
@@ -363,6 +378,29 @@ public class WorkflowRoleGAgent(
         }
 
         return await base.TryResolveRecoveryExecutionContextAsync(checkpoint, ct);
+    }
+
+    private async Task<AgentToolExecutionContext> ResolveInitialDurableToolContextAsync(
+        ChatRequestEvent request,
+        AgentToolExecutionContext context,
+        CancellationToken ct)
+    {
+        if (request.CallerDurableCredential?.SourceKind !=
+            DurableCallerCredentialSourceKind.WebhookBinding)
+        {
+            return context;
+        }
+
+        var resolved = await base.TryResolveRecoveryExecutionContextAsync(
+            new RoleChatRecoveryCheckpoint
+            {
+                RequiresRuntimeCredential = true,
+                CallerDurableCredential = request.CallerDurableCredential.Clone(),
+                RecoveryContext = context.ToRecoveryPayload(),
+            },
+            ct);
+        return resolved ?? throw new InvalidOperationException(
+            "Workflow webhook caller credential is unavailable or no longer matches its binding descriptor.");
     }
 
     protected override async Task<IAgentTool?> ResolveRecoveryToolAsync(

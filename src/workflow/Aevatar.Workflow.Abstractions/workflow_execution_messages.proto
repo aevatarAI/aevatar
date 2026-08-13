@@ -278,6 +278,7 @@ message WorkflowWebhookBindingState {
   // reads or writes a durable user bearer from a webhook binding.
   string protected_caller_bearer_token = 18 [deprecated = true];
   string protected_caller_authorization = 19;
+  aevatar.credentials.DurableCallerCredentialRef caller_durable_credential = 20;
 }
 
 message WorkflowWebhookCallerAuthorizationState {

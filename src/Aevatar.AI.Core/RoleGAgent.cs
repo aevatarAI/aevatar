@@ -2069,12 +2069,14 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         var reference = checkpoint.CallerDurableCredential;
         if (_chatToolRecoverySecretVault is null ||
             reference is null ||
-            reference.SourceKind != DurableCallerCredentialSourceKind.ScheduledDispatch ||
+            reference.SourceKind is not (
+                DurableCallerCredentialSourceKind.ScheduledDispatch or
+                DurableCallerCredentialSourceKind.WebhookBinding) ||
             string.IsNullOrWhiteSpace(reference.Ref) ||
             string.IsNullOrWhiteSpace(reference.Purpose) ||
             string.IsNullOrWhiteSpace(reference.OwnerScopeKey) ||
             string.IsNullOrWhiteSpace(reference.SubjectId) ||
-            !IsSupportedDurableCredentialPurpose(reference.Purpose))
+            !IsSupportedDurableCredential(reference))
         {
             return null;
         }
@@ -2132,19 +2134,32 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         };
     }
 
-    private static bool IsSupportedDurableCredentialPurpose(string purpose) =>
-        string.Equals(
-            purpose,
-            CredentialSecretPurposes.WorkflowCallerDurableBearerToken,
-            StringComparison.Ordinal) ||
-        string.Equals(
-            purpose,
-            CredentialSecretPurposes.WorkflowCallerSourceReadableUserBearerToken,
-            StringComparison.Ordinal) ||
-        string.Equals(
-            purpose,
-            CredentialSecretPurposes.ScheduledInvocationAgentKey,
-            StringComparison.Ordinal);
+    private static bool IsSupportedDurableCredential(DurableCallerCredentialRef reference)
+    {
+        if (reference.SourceKind == DurableCallerCredentialSourceKind.WebhookBinding)
+        {
+            return string.Equals(
+                       reference.Purpose,
+                       CredentialSecretPurposes.WorkflowWebhookBindingAgentKey,
+                       StringComparison.Ordinal) &&
+                   reference.SecretReference is { } descriptor &&
+                   !string.IsNullOrWhiteSpace(descriptor.Ref);
+        }
+
+        return reference.SourceKind == DurableCallerCredentialSourceKind.ScheduledDispatch &&
+               (string.Equals(
+                    reference.Purpose,
+                    CredentialSecretPurposes.WorkflowCallerDurableBearerToken,
+                    StringComparison.Ordinal) ||
+                string.Equals(
+                    reference.Purpose,
+                    CredentialSecretPurposes.WorkflowCallerSourceReadableUserBearerToken,
+                    StringComparison.Ordinal) ||
+                string.Equals(
+                    reference.Purpose,
+                    CredentialSecretPurposes.ScheduledInvocationAgentKey,
+                    StringComparison.Ordinal));
+    }
 
     private static AgentToolNyxIdCredentialKind ResolveDurableCredentialKind(string purpose) =>
         string.Equals(
@@ -2157,15 +2172,30 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
     private static bool MatchesResolvedCredentialReference(
         DurableCallerCredentialRef expected,
         SecretReference? actual,
-        DateTimeOffset now) =>
-        actual is not null &&
-        string.Equals(actual.Ref, expected.Ref, StringComparison.Ordinal) &&
-        string.Equals(actual.Purpose, expected.Purpose, StringComparison.Ordinal) &&
-        string.Equals(actual.OwnerScopeKey, expected.OwnerScopeKey, StringComparison.Ordinal) &&
-        actual.Version > 0 &&
-        !string.IsNullOrWhiteSpace(actual.Fingerprint) &&
-        actual.CreatedAtUnixMs > 0 &&
-        (actual.ExpiresAtUnixMs == 0 || actual.ExpiresAtUnixMs > now.ToUnixTimeMilliseconds());
+        DateTimeOffset now)
+    {
+        if (actual is null ||
+            !string.Equals(actual.Ref, expected.Ref, StringComparison.Ordinal) ||
+            !string.Equals(actual.Purpose, expected.Purpose, StringComparison.Ordinal) ||
+            !string.Equals(actual.OwnerScopeKey, expected.OwnerScopeKey, StringComparison.Ordinal) ||
+            actual.Version <= 0 ||
+            string.IsNullOrWhiteSpace(actual.Fingerprint) ||
+            actual.CreatedAtUnixMs <= 0 ||
+            actual.ExpiresAtUnixMs > 0 && actual.ExpiresAtUnixMs <= now.ToUnixTimeMilliseconds())
+        {
+            return false;
+        }
+
+        var descriptor = expected.SecretReference;
+        return descriptor == null || string.IsNullOrWhiteSpace(descriptor.Ref) ||
+               string.Equals(descriptor.Ref, actual.Ref, StringComparison.Ordinal) &&
+               string.Equals(descriptor.Purpose, actual.Purpose, StringComparison.Ordinal) &&
+               string.Equals(descriptor.OwnerScopeKey, actual.OwnerScopeKey, StringComparison.Ordinal) &&
+               string.Equals(descriptor.Fingerprint, actual.Fingerprint, StringComparison.Ordinal) &&
+               descriptor.Version == actual.Version &&
+               descriptor.CreatedAtUnixMs == actual.CreatedAtUnixMs &&
+               descriptor.ExpiresAtUnixMs == actual.ExpiresAtUnixMs;
+    }
 
     private async Task<List<RecoveredChatToolResult>?> RecoverCheckpointToolResultsAsync(
         string sessionId,

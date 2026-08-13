@@ -1,5 +1,6 @@
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Credentials;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Workflow.Core.Execution;
 using FluentAssertions;
 
@@ -54,6 +55,35 @@ public sealed class WorkflowCallerAccessTokenResolverTests
             CancellationToken.None);
 
         resolved.Should().BeSameAs(credential);
+        provider.IssueCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ResolveAsync_WithWebhookBindingAgentKey_ShouldPreserveExactBearer()
+    {
+        var provider = new RecordingAccessTokenProvider();
+        var credential = new WorkflowCallerCredential
+        {
+            BearerToken = "nyxid_ag_exact_service_secret",
+            DurableCallerCredential = new DurableCallerCredentialRef
+            {
+                Ref = "sec-webhook-binding",
+                Purpose = CredentialSecretPurposes.WorkflowWebhookBindingAgentKey,
+                OwnerScopeKey = "scope-1",
+                SubjectId = "owner-alpha",
+                SourceKind = DurableCallerCredentialSourceKind.WebhookBinding,
+            },
+            NyxIdAuthority = CreateAuthority(),
+            Kind = NyxIdCallerCredentialKind.ProxyDelegation,
+        };
+
+        var resolved = await WorkflowCallerAccessTokenResolver.ResolveAsync(
+            credential,
+            provider,
+            CancellationToken.None);
+
+        resolved.Should().BeSameAs(credential);
+        resolved.BearerToken.Should().Be("nyxid_ag_exact_service_secret");
         provider.IssueCount.Should().Be(0);
     }
 
