@@ -1,12 +1,13 @@
 import {
-  ArrowRightOutlined,
   CloseOutlined,
+  LeftOutlined,
   ReloadOutlined,
+  RightOutlined,
   SearchOutlined,
 } from '@ant-design/icons';
-import { useInfiniteQuery } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { getLocale } from '@umijs/max';
-import { Alert, Button, DatePicker, Input, Select, Space } from 'antd';
+import { Button, DatePicker, Input, Select, Space, Tooltip } from 'antd';
 import dayjs from 'dayjs';
 import React from 'react';
 import {
@@ -25,6 +26,7 @@ import WorkflowActivityVNextShell from '../WorkflowActivityVNextShell';
 import { getRunStatusPresentation } from './runPresentation';
 
 const supportedRunStatuses = new Set(['running', 'completed', 'failed']);
+const activityPageSize = 25;
 
 function normalizeRunStatusFilter(value: string | null): string {
   const normalized = value?.trim().toLowerCase() ?? '';
@@ -94,6 +96,18 @@ function failureTitle(error: unknown): string {
   );
 }
 
+interface ActivityPaginationState {
+  readonly filterKey: string;
+  readonly page: number;
+  readonly cursors: readonly (string | undefined)[];
+}
+
+function createActivityPaginationState(
+  filterKey: string,
+): ActivityPaginationState {
+  return { filterKey, page: 1, cursors: [undefined] };
+}
+
 const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
   const location = useConsoleLocation();
   const params = React.useMemo(
@@ -104,12 +118,46 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
   const status = normalizeRunStatusFilter(rawStatus);
   const origin = params.get('origin') ?? '';
   const definition = params.get('definition')?.trim() ?? '';
+  const schedule = params.get('schedule')?.trim() ?? '';
   const workflowFilterPresent = params.has('workflowId');
   const workflowId = params.get('workflowId')?.trim() ?? '';
   const fromUtc = params.get('from')?.trim() ?? '';
   const toUtc = params.get('to')?.trim() ?? '';
   const search = params.get('q') ?? '';
   const [now, setNow] = React.useState(() => Date.now());
+  const filterKey = React.useMemo(
+    () =>
+      JSON.stringify([
+        scopeId,
+        status,
+        origin,
+        definition,
+        schedule,
+        workflowId,
+        search,
+        fromUtc,
+        toUtc,
+      ]),
+    [
+      definition,
+      fromUtc,
+      origin,
+      schedule,
+      scopeId,
+      search,
+      status,
+      toUtc,
+      workflowId,
+    ],
+  );
+  const [pagination, setPagination] = React.useState<ActivityPaginationState>(
+    () => createActivityPaginationState(filterKey),
+  );
+  const activePagination =
+    pagination.filterKey === filterKey
+      ? pagination
+      : createActivityPaginationState(filterKey);
+  const currentCursor = activePagination.cursors[activePagination.page - 1];
 
   const replaceParams = React.useCallback(
     (update: (next: URLSearchParams) => void) => {
@@ -142,43 +190,39 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
     replaceParam('status', '');
   }, [rawStatus, replaceParam, status]);
 
-  const runs = useInfiniteQuery({
+  React.useEffect(() => {
+    if (pagination.filterKey === filterKey) return;
+    setPagination(createActivityPaginationState(filterKey));
+  }, [filterKey, pagination.filterKey]);
+
+  const runs = useQuery({
     queryKey: [
       'workflow-activity-vnext',
       'activity-runs',
-      scopeId,
-      status,
-      origin,
-      definition,
-      workflowId,
-      fromUtc,
-      toUtc,
+      filterKey,
+      currentCursor,
     ],
-    queryFn: ({ pageParam }) =>
+    queryFn: () =>
       workflowActivityApi.listActivityRuns(scopeId, {
         status: status || undefined,
         origins: origin ? [origin] : undefined,
         definitionActorIds: definition ? [definition] : undefined,
+        scheduleIds: schedule ? [schedule] : undefined,
         workflowId: workflowId || undefined,
+        searchText: search.trim() || undefined,
         fromUtc: fromUtc || undefined,
         toUtc: toUtc || undefined,
-        take: 50,
-        cursor: pageParam,
-        includeTotalCount: pageParam === undefined,
+        take: activityPageSize,
+        cursor: currentCursor,
+        includeTotalCount: true,
       }),
-    initialPageParam: undefined as string | undefined,
-    getNextPageParam: (lastPage) =>
-      lastPage.hasMore ? (lastPage.nextCursor ?? undefined) : undefined,
     enabled: !workflowFilterPresent || Boolean(workflowId),
     refetchOnMount: 'always',
     retry: false,
   });
 
-  const loadedRuns = React.useMemo(
-    () => runs.data?.pages.flatMap((page) => page.items) ?? [],
-    [runs.data],
-  );
-  const hasRunningRun = loadedRuns.some(
+  const currentRuns = runs.data?.items ?? [];
+  const hasRunningRun = currentRuns.some(
     (run) => run.status.trim().toLowerCase() === 'running',
   );
   React.useEffect(() => {
@@ -187,23 +231,45 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
     return () => window.clearInterval(interval);
   }, [hasRunningRun]);
 
-  const filtered = loadedRuns.filter((run) => {
-    const normalized = search.trim().toLowerCase();
-    return (
-      !normalized ||
-      [
-        run.workflowName,
-        run.runId,
-        run.status,
-        run.inputSummary,
-        run.initiator.displayValue,
-      ].some((value) => value.toLowerCase().includes(normalized))
-    );
-  });
-  const totalCount = runs.data?.pages[0]?.totalCount ?? null;
-  const cursorMalformed =
-    runs.error instanceof WorkflowActivityApiError &&
-    runs.error.code === 'malformed_cursor';
+  const totalCount = runs.data?.totalCount ?? null;
+  const totalPages =
+    totalCount === null
+      ? null
+      : Math.max(1, Math.ceil(totalCount / activityPageSize));
+  const hasFilters = Boolean(
+    status ||
+      origin ||
+      definition ||
+      schedule ||
+      workflowId ||
+      search ||
+      fromUtc ||
+      toUtc,
+  );
+  const goToNextPage = React.useCallback(() => {
+    const nextCursor = runs.data?.nextCursor;
+    if (!runs.data?.hasMore || !nextCursor) return;
+    setPagination((current) => {
+      const active =
+        current.filterKey === filterKey
+          ? current
+          : createActivityPaginationState(filterKey);
+      return {
+        filterKey,
+        page: active.page + 1,
+        cursors: [...active.cursors.slice(0, active.page), nextCursor],
+      };
+    });
+  }, [filterKey, runs.data]);
+  const goToPreviousPage = React.useCallback(() => {
+    setPagination((current) => {
+      const active =
+        current.filterKey === filterKey
+          ? current
+          : createActivityPaginationState(filterKey);
+      return active.page === 1 ? active : { ...active, page: active.page - 1 };
+    });
+  }, [filterKey]);
 
   return (
     <WorkflowActivityVNextShell
@@ -243,14 +309,14 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
         <Input
           allowClear
           aria-label={t(
-            'workflowActivityVNext.activity.filterLoadedAria',
-            'Filter loaded runs',
+            'workflowActivityVNext.activity.searchAria',
+            'Search runs',
           )}
           className="wa-vnext__toolbar-search"
           onChange={(event) => replaceParam('q', event.target.value)}
           placeholder={t(
-            'workflowActivityVNext.activity.filterLoaded',
-            'Filter loaded runs',
+            'workflowActivityVNext.activity.search',
+            'Search runs',
           )}
           prefix={<SearchOutlined />}
           role="searchbox"
@@ -401,7 +467,7 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
             'workflowActivityVNext.activity.loading',
             'Loading activity…',
           )}
-          columnWidths={['minmax(220px, 1fr)', 180, 190, 180, 220, 56]}
+          columnWidths={['minmax(220px, 1fr)', 180, 190, 180, 220]}
           rows={4}
           tableMinWidth={1080}
           variant="table"
@@ -409,7 +475,14 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
       ) : runs.isError && !runs.data ? (
         <div className="wa-vnext__state" role="alert">
           <div>
-            <h2>{failureTitle(runs.error)}</h2>
+            <h2>
+              {activePagination.page === 1
+                ? failureTitle(runs.error)
+                : t(
+                    'workflowActivityVNext.activity.pageUnavailable',
+                    "Couldn't load this page",
+                  )}
+            </h2>
             <p>
               {t(
                 'workflowActivityVNext.activity.unavailableDescription',
@@ -426,11 +499,11 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
             </TechnicalDetails>
           </div>
         </div>
-      ) : filtered.length === 0 ? (
+      ) : currentRuns.length === 0 ? (
         <div className="wa-vnext__state">
           <div>
             <h2>
-              {loadedRuns.length
+              {hasFilters
                 ? t(
                     'workflowActivityVNext.activity.noMatch',
                     'No matching runs',
@@ -457,7 +530,6 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                 <col className="wa-vnext__activity-column--started" />
                 <col className="wa-vnext__activity-column--duration" />
                 <col className="wa-vnext__activity-column--input" />
-                <col className="wa-vnext__activity-column--actions" />
               </colgroup>
               <thead>
                 <tr>
@@ -485,18 +557,10 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                       'Input preview',
                     )}
                   </th>
-                  <th>
-                    <span className="aevatar-loading-visually-hidden">
-                      {t(
-                        'workflowActivityVNext.activity.columnAction',
-                        'Open run',
-                      )}
-                    </span>
-                  </th>
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((run) => {
+                {currentRuns.map((run) => {
                   const statusPresentation = getRunStatusPresentation(
                     run.status,
                   );
@@ -508,7 +572,23 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                     );
                   const context = runContext(run);
                   return (
-                    <tr key={run.runId}>
+                    <tr
+                      className="wa-vnext__activity-row"
+                      key={run.runId}
+                      onClick={() =>
+                        history.push(
+                          buildWorkflowActivityRunHref(scopeId, run.runId),
+                        )
+                      }
+                      onKeyDown={(event) => {
+                        if (event.key !== 'Enter' && event.key !== ' ') return;
+                        event.preventDefault();
+                        history.push(
+                          buildWorkflowActivityRunHref(scopeId, run.runId),
+                        );
+                      }}
+                      tabIndex={0}
+                    >
                       <td
                         data-label={t(
                           'workflowActivityVNext.activity.columnRun',
@@ -558,27 +638,6 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                           {run.inputSummary || '-'}
                         </span>
                       </td>
-                      <td
-                        data-label={t(
-                          'workflowActivityVNext.activity.columnAction',
-                          'Open run',
-                        )}
-                      >
-                        <Button
-                          aria-label={t(
-                            'workflowActivityVNext.activity.openRunAria',
-                            'Open {name}',
-                            { name: workflowName },
-                          )}
-                          icon={<ArrowRightOutlined />}
-                          onClick={() =>
-                            history.push(
-                              buildWorkflowActivityRunHref(scopeId, run.runId),
-                            )
-                          }
-                          type="text"
-                        />
-                      </td>
                     </tr>
                   );
                 })}
@@ -588,53 +647,52 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
           <div className="wa-vnext__activity-footer">
             <span aria-live="polite">
               {totalCount === null
-                ? t(
-                    'workflowActivityVNext.activity.loadedCount',
-                    '{loaded} runs loaded',
-                    { loaded: loadedRuns.length },
-                  )
+                ? t('workflowActivityVNext.activity.page', 'Page {page}', {
+                    page: activePagination.page,
+                  })
                 : t(
-                    'workflowActivityVNext.activity.loadedTotalCount',
-                    '{loaded} of {total} runs loaded',
-                    { loaded: loadedRuns.length, total: totalCount },
+                    'workflowActivityVNext.activity.pageOf',
+                    'Page {page} of {total}',
+                    { page: activePagination.page, total: totalPages },
                   )}
             </span>
-            {runs.isFetchNextPageError ? (
-              <Alert
-                action={
-                  <Button
-                    onClick={() =>
-                      cursorMalformed
-                        ? void runs.refetch()
-                        : void runs.fetchNextPage()
-                    }
-                  >
-                    {cursorMalformed
-                      ? t(
-                          'workflowActivityVNext.activity.refreshFromStart',
-                          'Refresh from start',
-                        )
-                      : t(
-                          'workflowActivityVNext.activity.retryLoadMore',
-                          'Retry loading more',
-                        )}
-                  </Button>
-                }
-                message={t(
-                  'workflowActivityVNext.activity.loadMoreFailed',
-                  "Couldn't load more runs",
+            <Space size={4}>
+              <Tooltip
+                title={t(
+                  'workflowActivityVNext.activity.previousPage',
+                  'Previous page',
                 )}
-                showIcon
-                type="warning"
-              />
-            ) : runs.hasNextPage ? (
-              <Button
-                loading={runs.isFetchingNextPage}
-                onClick={() => void runs.fetchNextPage()}
               >
-                {t('workflowActivityVNext.activity.loadMore', 'Load more')}
-              </Button>
-            ) : null}
+                <Button
+                  aria-label={t(
+                    'workflowActivityVNext.activity.previousPage',
+                    'Previous page',
+                  )}
+                  disabled={activePagination.page === 1}
+                  icon={<LeftOutlined />}
+                  onClick={goToPreviousPage}
+                  type="text"
+                />
+              </Tooltip>
+              <Tooltip
+                title={t(
+                  'workflowActivityVNext.activity.nextPage',
+                  'Next page',
+                )}
+              >
+                <Button
+                  aria-label={t(
+                    'workflowActivityVNext.activity.nextPage',
+                    'Next page',
+                  )}
+                  disabled={!runs.data?.hasMore || !runs.data.nextCursor}
+                  icon={<RightOutlined />}
+                  loading={runs.isFetching}
+                  onClick={goToNextPage}
+                  type="text"
+                />
+              </Tooltip>
+            </Space>
           </div>
         </>
       )}

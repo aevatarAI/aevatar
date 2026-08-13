@@ -870,6 +870,7 @@ export const workflowActivityApi = {
       definition: joinFilter(filter.definitionActorIds),
       schedule: joinFilter(filter.scheduleIds),
       workflowId: filter.workflowId?.trim(),
+      q: filter.searchText?.trim(),
       from: filter.fromUtc?.trim(),
       to: filter.toUtc?.trim(),
       take: filter.take,

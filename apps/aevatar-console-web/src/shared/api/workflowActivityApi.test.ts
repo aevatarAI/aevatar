@@ -124,6 +124,7 @@ describe('workflowActivityApi', () => {
         definitionActorIds: ['definition-alpha'],
         scheduleIds: ['schedule-alpha'],
         workflowId: 'wf-alpha',
+        searchText: 'Test Member',
         fromUtc: '2026-08-01T00:00:00Z',
         toUtc: '2026-08-05T00:00:00Z',
         take: 25,
@@ -156,7 +157,7 @@ describe('workflowActivityApi', () => {
     );
 
     expect(fetchMock).toHaveBeenCalledWith(
-      '/api/workflow/observatory/activity-runs?scope=scope-alpha&status=failed&origin=draft&definition=definition-alpha&schedule=schedule-alpha&workflowId=wf-alpha&from=2026-08-01T00%3A00%3A00Z&to=2026-08-05T00%3A00%3A00Z&take=25&cursor=opaque-cursor&includeTotalCount=true',
+      '/api/workflow/observatory/activity-runs?scope=scope-alpha&status=failed&origin=draft&definition=definition-alpha&schedule=schedule-alpha&workflowId=wf-alpha&q=Test+Member&from=2026-08-01T00%3A00%3A00Z&to=2026-08-05T00%3A00%3A00Z&take=25&cursor=opaque-cursor&includeTotalCount=true',
     );
   });
 

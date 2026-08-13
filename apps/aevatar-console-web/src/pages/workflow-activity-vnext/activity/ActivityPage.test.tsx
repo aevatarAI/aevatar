@@ -91,13 +91,13 @@ describe('Workflow Activity vNext Activity ledger', () => {
 
     expect(screen.getByRole('status')).toHaveAttribute('data-variant', 'table');
     expect(screen.getAllByTestId('aevatar-content-skeleton-cell').length).toBe(
-      24,
+      20,
     );
     expect(screen.getByText('Loading activity…')).toHaveClass(
       'aevatar-loading-visually-hidden',
     );
     expect(
-      screen.getByRole('searchbox', { name: 'Filter loaded runs' }),
+      screen.getByRole('searchbox', { name: 'Search runs' }),
     ).toBeEnabled();
   });
 
@@ -135,10 +135,12 @@ describe('Workflow Activity vNext Activity ledger', () => {
         status: undefined,
         origins: undefined,
         definitionActorIds: undefined,
+        scheduleIds: undefined,
         workflowId: 'wf-alpha',
+        searchText: undefined,
         fromUtc: undefined,
         toUtc: undefined,
-        take: 50,
+        take: 25,
         cursor: undefined,
         includeTotalCount: true,
       }),
@@ -165,7 +167,7 @@ describe('Workflow Activity vNext Activity ledger', () => {
 
   it('sends URL-backed filters and total-count intent to the feed', async () => {
     mockSearch =
-      '?status=failed&origin=draft&definition=definition-alpha&from=2026-08-01T00%3A00%3A00Z&to=2026-08-05T00%3A00%3A00Z';
+      '?status=failed&origin=draft&definition=definition-alpha&schedule=schedule-alpha&q=customer&from=2026-08-01T00%3A00%3A00Z&to=2026-08-05T00%3A00%3A00Z';
 
     renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
 
@@ -174,10 +176,12 @@ describe('Workflow Activity vNext Activity ledger', () => {
         status: 'failed',
         origins: ['draft'],
         definitionActorIds: ['definition-alpha'],
+        scheduleIds: ['schedule-alpha'],
         workflowId: undefined,
+        searchText: 'customer',
         fromUtc: '2026-08-01T00:00:00Z',
         toUtc: '2026-08-05T00:00:00Z',
-        take: 50,
+        take: 25,
         cursor: undefined,
         includeTotalCount: true,
       }),
@@ -211,7 +215,7 @@ describe('Workflow Activity vNext Activity ledger', () => {
     );
   });
 
-  it('labels local search as filtering only loaded runs', async () => {
+  it('sends the URL search text to the Activity feed', async () => {
     mockSearch = '?q=customer&status=failed';
     mockListActivityRuns.mockResolvedValue(
       feedPage([
@@ -225,14 +229,13 @@ describe('Workflow Activity vNext Activity ledger', () => {
 
     renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
 
-    expect(
-      screen.getByRole('searchbox', { name: 'Filter loaded runs' }),
-    ).toHaveValue('customer');
+    expect(screen.getByRole('searchbox', { name: 'Search runs' })).toHaveValue(
+      'customer',
+    );
     expect(await screen.findByText('Customer follow-up')).toBeInTheDocument();
-    expect(screen.queryByText('Invoice review')).not.toBeInTheDocument();
     expect(mockListActivityRuns).toHaveBeenCalledWith(
       'scope-alpha',
-      expect.not.objectContaining({ q: 'customer' }),
+      expect.objectContaining({ searchText: 'customer' }),
     );
   });
 
@@ -257,14 +260,15 @@ describe('Workflow Activity vNext Activity ledger', () => {
 
     renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
 
+    await screen.findByText('Customer follow-up');
     expect(
-      await screen.findByRole('button', { name: 'Open Customer follow-up' }),
-    ).toBeEnabled();
+      screen.queryByRole('button', { name: 'Open Customer follow-up' }),
+    ).not.toBeInTheDocument();
     expect(screen.getByText('Completed')).toBeInTheDocument();
     expect(screen.getByText('Connector unavailable')).toBeInTheDocument();
     expect(screen.getByText('Ticket redacted')).toBeInTheDocument();
     expect(screen.getByText('2m')).toBeInTheDocument();
-    expect(screen.getByText('1 of 42 runs loaded')).toBeInTheDocument();
+    expect(screen.getByText('Page 1 of 2')).toBeInTheDocument();
     expect(
       screen.getByRole('columnheader', { name: 'Duration' }),
     ).toBeInTheDocument();
@@ -297,7 +301,58 @@ describe('Workflow Activity vNext Activity ledger', () => {
     ).toHaveAttribute('data-label', 'Workflow');
   });
 
-  it('loads the next cursor page and appends its rows', async () => {
+  it('opens run details when an activity row is clicked', async () => {
+    mockListActivityRuns.mockResolvedValue(
+      feedPage([
+        activityRow({
+          runId: 'run-customer',
+          workflowName: 'Customer follow-up',
+        }),
+      ]),
+    );
+
+    renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
+
+    const customerRunRow = (
+      await screen.findByText('Customer follow-up')
+    ).closest('tr');
+    if (!customerRunRow) throw new Error('The customer run row was not found.');
+
+    fireEvent.click(customerRunRow);
+
+    expect(history.push).toHaveBeenLastCalledWith(
+      '/scopes/scope-alpha/workflow-activity-vnext/activity/run-customer',
+    );
+  });
+
+  it('opens run details when an activity row is keyboard activated', async () => {
+    mockListActivityRuns.mockResolvedValue(
+      feedPage([
+        activityRow({
+          runId: 'run-customer',
+          workflowName: 'Customer follow-up',
+        }),
+      ]),
+    );
+
+    renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
+
+    const customerRunRow = (
+      await screen.findByText('Customer follow-up')
+    ).closest('tr');
+    if (!customerRunRow) throw new Error('The customer run row was not found.');
+    expect(customerRunRow).toHaveAttribute('tabindex', '0');
+
+    fireEvent.keyDown(customerRunRow, { key: 'Enter' });
+    expect(history.push).toHaveBeenLastCalledWith(
+      '/scopes/scope-alpha/workflow-activity-vnext/activity/run-customer',
+    );
+
+    fireEvent.keyDown(customerRunRow, { key: ' ' });
+    expect(history.push).toHaveBeenCalledTimes(2);
+  });
+
+  it('replaces the table with the next cursor page', async () => {
     mockListActivityRuns
       .mockResolvedValueOnce(
         feedPage(
@@ -305,32 +360,39 @@ describe('Workflow Activity vNext Activity ledger', () => {
           {
             hasMore: true,
             nextCursor: 'cursor-two',
-            totalCount: 2,
+            totalCount: 26,
           },
         ),
       )
       .mockResolvedValueOnce(
-        feedPage([
-          activityRow({ runId: 'run-two', workflowName: 'Second run' }),
-        ]),
+        feedPage(
+          [activityRow({ runId: 'run-two', workflowName: 'Second run' })],
+          { totalCount: 26 },
+        ),
       );
 
     renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Load more' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Next page' }));
 
     expect(await screen.findByText('Second run')).toBeInTheDocument();
-    expect(screen.getByText('First run')).toBeInTheDocument();
+    expect(screen.queryByText('First run')).not.toBeInTheDocument();
     expect(mockListActivityRuns).toHaveBeenLastCalledWith(
       'scope-alpha',
       expect.objectContaining({
         cursor: 'cursor-two',
-        includeTotalCount: false,
+        includeTotalCount: true,
       }),
     );
+    expect(
+      document.querySelector('.wa-vnext__activity-footer'),
+    ).toHaveTextContent('Page 2 of 2');
+    expect(
+      screen.queryByRole('button', { name: 'Load more' }),
+    ).not.toBeInTheDocument();
   });
 
-  it('preserves loaded rows when the next page fails and allows retry', async () => {
+  it('returns to the known first-page cursor', async () => {
     mockListActivityRuns
       .mockResolvedValueOnce(
         feedPage(
@@ -338,32 +400,40 @@ describe('Workflow Activity vNext Activity ledger', () => {
           {
             hasMore: true,
             nextCursor: 'cursor-two',
+            totalCount: 26,
           },
         ),
       )
-      .mockRejectedValueOnce(new Error('Network unavailable'))
       .mockResolvedValueOnce(
-        feedPage([
-          activityRow({ runId: 'run-two', workflowName: 'Second run' }),
-        ]),
+        feedPage(
+          [activityRow({ runId: 'run-two', workflowName: 'Second run' })],
+          { totalCount: 26 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        feedPage(
+          [activityRow({ runId: 'run-one', workflowName: 'First run' })],
+          { totalCount: 26 },
+        ),
       );
 
     renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Load more' }));
-    expect(
-      await screen.findByText("Couldn't load more runs"),
-    ).toBeInTheDocument();
-    expect(screen.getByText('First run')).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'Next page' }));
+    await screen.findByText('Second run');
+    fireEvent.click(screen.getByRole('button', { name: 'Previous page' }));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Retry loading more' }));
-    expect(await screen.findByText('Second run')).toBeInTheDocument();
+    expect(await screen.findByText('First run')).toBeInTheDocument();
+    expect(mockListActivityRuns).toHaveBeenLastCalledWith(
+      'scope-alpha',
+      expect.objectContaining({ cursor: undefined }),
+    );
+    expect(
+      document.querySelector('.wa-vnext__activity-footer'),
+    ).toHaveTextContent('Page 1 of 2');
   });
 
-  it('refreshes from the first page when an opaque cursor is rejected', async () => {
-    const { WorkflowActivityApiError } = jest.requireMock(
-      '@/shared/api/workflowActivityApi',
-    );
+  it('shows a retry action when the selected page cannot be loaded', async () => {
     mockListActivityRuns
       .mockResolvedValueOnce(
         feedPage(
@@ -374,13 +444,7 @@ describe('Workflow Activity vNext Activity ledger', () => {
           },
         ),
       )
-      .mockRejectedValueOnce(
-        new WorkflowActivityApiError(
-          'The cursor is malformed.',
-          400,
-          'malformed_cursor',
-        ),
-      )
+      .mockRejectedValueOnce(new Error('Network unavailable'))
       .mockResolvedValueOnce(
         feedPage([
           activityRow({ runId: 'run-fresh', workflowName: 'Fresh first page' }),
@@ -389,15 +453,19 @@ describe('Workflow Activity vNext Activity ledger', () => {
 
     renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Load more' }));
-    fireEvent.click(
-      await screen.findByRole('button', { name: 'Refresh from start' }),
-    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Next page' }));
+    expect(
+      await screen.findByText("Couldn't load this page"),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
 
     expect(await screen.findByText('Fresh first page')).toBeInTheDocument();
     expect(mockListActivityRuns).toHaveBeenLastCalledWith(
       'scope-alpha',
-      expect.objectContaining({ cursor: undefined, includeTotalCount: true }),
+      expect.objectContaining({
+        cursor: 'cursor-invalid',
+        includeTotalCount: true,
+      }),
     );
   });
 

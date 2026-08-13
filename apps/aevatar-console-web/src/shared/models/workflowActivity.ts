@@ -11,6 +11,7 @@ export interface WorkflowActivityRunFilter {
 export interface WorkflowActivityRunFeedFilter
   extends WorkflowActivityRunFilter {
   readonly workflowId?: string;
+  readonly searchText?: string;
   readonly cursor?: string;
   readonly includeTotalCount?: boolean;
 }

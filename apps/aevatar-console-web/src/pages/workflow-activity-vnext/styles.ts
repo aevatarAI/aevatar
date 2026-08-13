@@ -152,13 +152,14 @@ export const workflowActivityVNextCss = `
 .wa-vnext__activity-column--started { width: 170px; }
 .wa-vnext__activity-column--duration { width: 76px; }
 .wa-vnext__activity-column--input { width: auto; }
-.wa-vnext__activity-column--actions { width: 48px; }
 .wa-vnext__table-column--status { width: 120px; }
 .wa-vnext__table-column--updated { width: 190px; }
 .wa-vnext__table-column--actions { width: 270px; }
 .wa-vnext__table td { border-bottom: 1px solid var(--wa-line); height: 76px; overflow-wrap: anywhere; padding: 10px 12px; vertical-align: middle; }
 .wa-vnext__table tr:last-child td { border-bottom: 0; }
 .wa-vnext__table tbody tr:hover { background: #f9fafb; }
+.wa-vnext__activity-row { cursor: pointer; }
+.wa-vnext__activity-row:focus-visible { outline: 3px solid rgba(23, 92, 211, .25); outline-offset: -3px; }
 .wa-vnext__table pre { margin: 0; max-width: 100%; white-space: pre-wrap; word-break: break-word; }
 .wa-vnext__workflow-actions-cell { text-align: right; }
 .wa-vnext__workflow-actions { align-items: center; display: inline-flex; white-space: nowrap; }
