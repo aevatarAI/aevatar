@@ -273,6 +273,68 @@ public sealed class WorkflowGAgentExecutionTests : WorkflowGAgentTestBase
                 .Should().ContainSingle().Which.Input.Should().Be(prompt);
         }
 
+        [Theory]
+        [InlineData("")]
+        [InlineData("run the month-end preview")]
+        public async Task WorkflowRunGAgent_TypedJsonInvalidInput_ShouldCommitZeroStepConfigurationFailure(
+            string prompt)
+        {
+            const string workflowYaml = """
+                name: typed_json_probe
+                roles: []
+                steps:
+                  - id: capture_run_input
+                    type: assign
+                    parameters:
+                      target: raw_request
+                      value: "$input"
+                    next: normalize_schedule_context
+                  - id: normalize_schedule_context
+                    type: transform
+                    op: template
+                    template: '{{ json({ value: get(data, "value", "") }) }}'
+                """;
+            var eventStore = new InMemoryEventStore();
+            var publisher = new RecordingEventPublisher();
+            var agent = CreateRunAgent(eventStore: eventStore);
+            agent.EventPublisher = publisher;
+            await BindInteractiveWorkflowRunDefinitionAsync(
+                agent,
+                "definition-typed-json-invalid",
+                workflowYaml,
+                "typed_json_probe",
+                runId: "run-typed-json-invalid");
+
+            await agent.HandleChatRequest(new WorkflowChatRequestEvent
+            {
+                Prompt = prompt,
+                SessionId = "session-typed-json-invalid",
+            });
+
+            publisher.Published.Select(x => x.evt).OfType<StartWorkflowEvent>().Should().BeEmpty();
+            agent.State.Status.Should().Be("failed");
+            agent.State.TerminalRecoveryFailureKind.Should().Be(WorkflowRecoveryFailureKind.ConfigurationFailure);
+            agent.State.ExecutionStates.Should().BeEmpty();
+            agent.State.StartedAtUtc.Should().BeNull();
+
+            var persisted = (await eventStore.GetEventsAsync(agent.Id)).ToList();
+            persisted.Should().NotContain(stateEvent =>
+                stateEvent.EventData.Is(WorkflowRunExecutionStartedEvent.Descriptor));
+            var completionIndex = persisted.FindIndex(stateEvent =>
+                stateEvent.EventData.Is(WorkflowCompletedEvent.Descriptor));
+            var timingIndex = persisted.FindIndex(stateEvent =>
+                stateEvent.EventData.Is(WorkflowRunTerminalTimingRecordedEvent.Descriptor));
+            completionIndex.Should().BeGreaterThanOrEqualTo(0);
+            timingIndex.Should().BeGreaterThan(completionIndex);
+            var completion = persisted[completionIndex].EventData.Unpack<WorkflowCompletedEvent>();
+            completion.Success.Should().BeFalse();
+            completion.RecoveryFailureKind.Should().Be(WorkflowRecoveryFailureKind.ConfigurationFailure);
+            completion.Error.Should().Contain("serialized JSON");
+            completion.Error.Should().Contain("inputs.prompt");
+            if (!string.IsNullOrEmpty(prompt))
+                completion.Error.Should().NotContain(prompt);
+        }
+
         [Fact]
         public async Task WorkflowRunGAgent_WhenInteractiveAuthorizationIsRequired_ShouldCommitCardBeforeSuccessfulTerminalContinuation()
         {

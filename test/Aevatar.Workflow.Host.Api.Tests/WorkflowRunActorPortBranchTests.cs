@@ -284,6 +284,46 @@ public sealed class WorkflowRunActorPortBranchTests
     }
 
     [Fact]
+    public async Task CreateRunAsync_WhenExistingNonExplicitRevisionIdentityMatches_ShouldReuseWithoutRebinding()
+    {
+        const string workflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        var runtime = new RecordingActorRuntime();
+        var plan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            workflowYaml,
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+            ExternalCapabilityExecutionMode.Interactive,
+            [],
+            [],
+            workflowId: "workflow-direct",
+            revisionId: "revision-direct");
+        var definitionAgent = CreateBoundDefinitionAgent(
+            workflowYaml,
+            plan,
+            workflowId: "workflow-direct",
+            revisionId: "revision-direct");
+        var definitionActor = new RecordingActor("definition-non-explicit", definitionAgent);
+        runtime.StoredActors[definitionActor.Id] = definitionActor;
+        runtime.ActorsToCreate.Enqueue(new RecordingActor("run-non-explicit", new StubAgent("run-non-explicit")));
+        var port = CreatePort(runtime);
+
+        var result = await port.CreateRunAsync(
+            new WorkflowDefinitionBinding(
+                definitionActor.Id,
+                "direct",
+                workflowYaml,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
+                CapabilityAdmissionPlan: plan,
+                WorkflowId: "workflow-direct",
+                RevisionId: "revision-direct"),
+            CancellationToken.None);
+
+        result.DefinitionActorId.Should().Be(definitionActor.Id);
+        result.CreatedActorIds.Should().Equal("run-non-explicit");
+        definitionActor.LastHandledEnvelope.Should().BeNull();
+    }
+
+    [Fact]
     public async Task CreateRunAsync_ShouldLeaveReceiptRunIdEmpty_WhenNoRoutableRunIdentityExists()
     {
         const string workflowYaml = "name: direct\nroles: []\nsteps: []\n";
