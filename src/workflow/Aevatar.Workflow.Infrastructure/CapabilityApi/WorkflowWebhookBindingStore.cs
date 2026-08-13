@@ -31,7 +31,8 @@ public sealed record WorkflowWebhookBindingRecord(
     string? DefinitionActorId = null,
     string? TargetRevisionId = null,
     string? PreviousHmacSecret = null,
-    string? TimeZoneId = null)
+    string? TimeZoneId = null,
+    string? CallerBearerToken = null)
 {
     public WorkflowWebhookIngressBindingOptions ToBindingOptions() => new()
     {
@@ -48,6 +49,7 @@ public sealed record WorkflowWebhookBindingRecord(
         DeliveryIdJsonPath = DeliveryIdJsonPath,
         HmacSecret = HmacSecret,
         PreviousHmacSecret = PreviousHmacSecret,
+        CallerBearerToken = CallerBearerToken,
         HmacSignatureHeader = HmacSignatureHeader,
         HmacTimestampHeader = HmacTimestampHeader,
         MaxTimestampSkewSeconds = MaxTimestampSkewSeconds,
@@ -289,6 +291,9 @@ internal sealed class RedisWorkflowWebhookBindingStore : IWorkflowWebhookBinding
             ? string.Empty
             : _secretCipher.Protect(record.PreviousHmacSecret),
         TimeZoneId = record.TimeZoneId ?? string.Empty,
+        ProtectedCallerBearerToken = record.CallerBearerToken == null
+            ? string.Empty
+            : _secretCipher.Protect(record.CallerBearerToken),
     };
 
     private WorkflowWebhookBindingRecord FromState(WorkflowWebhookBindingState state) => new(
@@ -310,7 +315,10 @@ internal sealed class RedisWorkflowWebhookBindingStore : IWorkflowWebhookBinding
         PreviousHmacSecret: state.ProtectedPreviousHmacSecret.Length == 0
             ? null
             : _secretCipher.Unprotect(state.ProtectedPreviousHmacSecret),
-        TimeZoneId: NullIfEmpty(state.TimeZoneId));
+        TimeZoneId: NullIfEmpty(state.TimeZoneId),
+        CallerBearerToken: state.ProtectedCallerBearerToken.Length == 0
+            ? null
+            : _secretCipher.Unprotect(state.ProtectedCallerBearerToken));
 
     private static string? NullIfEmpty(string value) => value.Length == 0 ? null : value;
 }

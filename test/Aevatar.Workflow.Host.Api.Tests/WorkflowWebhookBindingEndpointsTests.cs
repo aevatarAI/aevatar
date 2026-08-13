@@ -365,6 +365,57 @@ public sealed class WorkflowWebhookBindingEndpointsTests
     }
 
     [Fact]
+    public async Task Ingress_ShouldAttachBindingCallerCredential_ToDispatchedRun()
+    {
+        // Webhook deliveries carry no user identity: nyxid-brokered write
+        // steps (e.g. HR-01 create_approval) fail with
+        // NYXID_ACCESS_TOKEN_MISSING unless the binding supplies the caller
+        // bearer the run executes as.
+        var store = new InMemoryWorkflowWebhookBindingStore();
+        await SeedAsync(store, BindingRecord("hr01-route", "scope-1") with
+        {
+            WorkflowName = "hr_onboarding_email_approval",
+            DefinitionActorId = "actor-hr01",
+            TargetRevisionId = "rev-7",
+            DeliveryIdHeader = "X-NyxID-Delivery-Id",
+            HmacSignatureHeader = "X-NyxID-Signature",
+            HmacTimestampHeader = "X-NyxID-Timestamp",
+            CallerBearerToken = "caller-bearer-token",
+        });
+
+        var dispatch = new RecordingDispatch();
+        dispatch.Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>.Success(
+            new WorkflowChatRunAcceptedReceipt("actor-1", "wf", "cmd-1", "corr-1"));
+        var http = CreateHttpContext(
+            store,
+            new AcceptingReplayStore(),
+            new FakeActorBindingReader(DefinitionBinding()));
+        var body = Encoding.UTF8.GetBytes("""{"event_id":"delivery-1","record_id":"rec-123"}""");
+        http.Request.Body = new MemoryStream(body);
+        http.Request.ContentType = "application/json";
+        http.Request.Headers["X-NyxID-Delivery-Id"] = "delivery-1";
+        SignNyxId(http, "secret-1", body);
+
+        var disabledOptions = Options.Create(new WorkflowWebhookIngressOptions { Enabled = false });
+        var result = await WorkflowWebhookIngressEndpoints.HandleAsync(
+            http,
+            "hr01-route",
+            new WorkflowWebhookIngressRequestBuilder(disabledOptions),
+            dispatch,
+            disabledOptions,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        dispatch.Commands.Should().ContainSingle();
+        dispatch.Commands[0].CallerCredential.Should().NotBeNull();
+        dispatch.Commands[0].CallerCredential!.BearerToken.Should().Be("caller-bearer-token");
+        // The credential's ToString stays redacted so logs never leak it.
+        dispatch.Commands[0].CallerCredential!.ToString().Should().NotContain("caller-bearer-token");
+    }
+
+    [Fact]
     public async Task Ingress_ShouldAcceptSignatureFromPreviousSecret_DuringRotation()
     {
         var store = new InMemoryWorkflowWebhookBindingStore();

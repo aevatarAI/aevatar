@@ -241,6 +241,7 @@ message WorkflowWebhookBindingState {
   string target_revision_id = 15;
   string protected_previous_hmac_secret = 16;
   string time_zone_id = 17;
+  string protected_caller_bearer_token = 18;
 }
 
 message WorkflowChatRequestEvent {

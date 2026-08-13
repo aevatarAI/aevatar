@@ -139,6 +139,12 @@ internal sealed class WorkflowWebhookIngressRequestBuilder
             AuthScheme: auth.AuthScheme,
             PrincipalSubject: auth.PrincipalSubject);
 
+        // Webhook deliveries carry no user identity; the binding's caller
+        // bearer (write-only, encrypted at rest) is what nyxid-brokered
+        // steps execute as. Without it read-only workflows still run, but
+        // any nyxid write step fails with NYXID_ACCESS_TOKEN_MISSING.
+        var callerBearerToken = Normalize(binding.CallerBearerToken);
+
         var command = new WorkflowChatRunRequest(
             Prompt: prompt,
             // A scope-published target is addressed by its definition actor;
@@ -146,6 +152,9 @@ internal sealed class WorkflowWebhookIngressRequestBuilder
             Source: definitionActorId != null
                 ? WorkflowChatSource.DefinitionActor(definitionActorId, workflowName)
                 : WorkflowChatSource.CatalogWorkflow(workflowName!),
+            CallerCredential: callerBearerToken == null
+                ? null
+                : new WorkflowCallerCredential(BearerToken: callerBearerToken),
             ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
             ScopeId: Normalize(binding.ScopeId),
             CommandIdSeed: commandId,

@@ -41,7 +41,8 @@ internal static class WorkflowWebhookBindingEndpoints
         string? DefinitionActorId = null,
         string? TargetRevisionId = null,
         string? PreviousHmacSecret = null,
-        string? TimeZoneId = null);
+        string? TimeZoneId = null,
+        string? CallerBearerToken = null);
 
     internal static async Task<IResult> HandlePutAsync(
         HttpContext http,
@@ -228,7 +229,8 @@ internal static class WorkflowWebhookBindingEndpoints
             UpdatedAtUnixMs: DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             DefinitionActorId: definitionActorId,
             TargetRevisionId: targetRevisionId,
-            PreviousHmacSecret: previousHmacSecret);
+            PreviousHmacSecret: previousHmacSecret,
+            CallerBearerToken: Normalize(request.CallerBearerToken));
         if (!await bindingStore.TryPutOwnedAsync(record, ct))
         {
             return Results.Json(
@@ -296,6 +298,7 @@ internal static class WorkflowWebhookBindingEndpoints
         deliveryIdJsonPath = record.DeliveryIdJsonPath,
         hmacSecretSet = !string.IsNullOrWhiteSpace(record.HmacSecret),
         previousHmacSecretSet = !string.IsNullOrWhiteSpace(record.PreviousHmacSecret),
+        callerCredentialSet = !string.IsNullOrWhiteSpace(record.CallerBearerToken),
         hmacSignatureHeader = record.HmacSignatureHeader,
         hmacTimestampHeader = record.HmacTimestampHeader,
         maxTimestampSkewSeconds = record.MaxTimestampSkewSeconds,
