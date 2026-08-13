@@ -67,14 +67,25 @@ public static class WorkflowCapabilityServiceCollectionExtensions
         services.TryAddSingleton<WorkflowWebhookIngressRequestBuilder>();
         services.TryAddSingleton<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowWebhookReplayAdmissionPort, WorkflowWebhookReplayAdmissionPort>();
         var webhookReplayRedisConnectionString = configuration[$"{WorkflowWebhookIngressOptions.SectionName}:RedisConnectionString"];
+        var bindingSecretEncryptionKey = configuration[$"{WorkflowWebhookIngressOptions.SectionName}:BindingSecretEncryptionKey"];
         if (!string.IsNullOrWhiteSpace(webhookReplayRedisConnectionString))
         {
             services.TryAddSingleton<WorkflowWebhookReplayRedisConnection>();
             services.TryAddSingleton<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowWebhookReplayStore, RedisWorkflowWebhookReplayStore>();
+            // Fail closed: without a host encryption key the Redis-backed
+            // binding store stays unregistered (management API answers 503)
+            // rather than persisting scope-submitted secrets in plaintext.
+            if (!string.IsNullOrWhiteSpace(bindingSecretEncryptionKey))
+            {
+                services.TryAddSingleton<IWorkflowWebhookBindingSecretCipher>(
+                    new AesGcmWorkflowWebhookBindingSecretCipher(bindingSecretEncryptionKey));
+                services.TryAddSingleton<IWorkflowWebhookBindingStore, RedisWorkflowWebhookBindingStore>();
+            }
         }
         else if (configuration.GetValue<bool>($"{WorkflowWebhookIngressOptions.SectionName}:UseInMemoryReplayStore"))
         {
             services.TryAddSingleton<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowWebhookReplayStore, InMemoryWorkflowWebhookReplayStore>();
+            services.TryAddSingleton<IWorkflowWebhookBindingStore, InMemoryWorkflowWebhookBindingStore>();
         }
         services.AddWorkflowDefinitionFileSource(options =>
         {
