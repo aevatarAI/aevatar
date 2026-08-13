@@ -231,6 +231,63 @@ public sealed class ScopeWorkflowCatalogueRowActorProjectionTests
                 observedAt));
     }
 
+    [Fact]
+    public async Task ProjectAsync_ShouldUseClockWhenObservedAtIsMissing()
+    {
+        var clock = DateTimeOffset.Parse("2026-08-06T12:00:00Z");
+        var dispatcher = new RecordingRowDispatcher();
+        var projector = new ScopeWorkflowCatalogueRowCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(clock));
+        var state = new ScopeWorkflowCatalogueRowState
+        {
+            ScopeId = "scope-1",
+            WorkflowId = "wf-shared",
+            DraftSource = Source(ScopeWorkflowCatalogueSourceDocument.DraftSourceKind, "Draft Display", "2026-08-04T00:00:00Z"),
+            ServiceSource = Source(ScopeWorkflowCatalogueSourceDocument.ServiceSourceKind, "Published Workflow", "2026-08-05T00:00:00Z"),
+        };
+
+        await projector.ProjectAsync(
+            new StudioMaterializationContext
+            {
+                RootActorId = ScopeWorkflowCatalogueRowMaterializer.BuildRowActorId("scope-1", "wf-shared"),
+                ProjectionKind = "scope-workflow-catalogue-row",
+            },
+            WrapCommitted(state, version: 4, eventId: "evt-row-4"));
+
+        var row = dispatcher.Upserts.Should().ContainSingle().Subject;
+        row.UpdatedAt.Should().NotBeNull();
+        row.UpdatedAt!.ToDateTimeOffset().Should().Be(clock);
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldPreferDraftSourceAsUpdatedAtSourceWhenDraftIsNewest()
+    {
+        var dispatcher = new RecordingRowDispatcher();
+        var projector = new ScopeWorkflowCatalogueRowCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-08-06T12:00:00Z")));
+        var state = new ScopeWorkflowCatalogueRowState
+        {
+            ScopeId = "scope-1",
+            WorkflowId = "wf-shared",
+            DraftSource = Source(ScopeWorkflowCatalogueSourceDocument.DraftSourceKind, "Draft Display", "2026-08-06T00:00:00Z"),
+            ServiceSource = Source(ScopeWorkflowCatalogueSourceDocument.ServiceSourceKind, "Published Workflow", "2026-08-05T00:00:00Z"),
+        };
+
+        await projector.ProjectAsync(
+            new StudioMaterializationContext
+            {
+                RootActorId = ScopeWorkflowCatalogueRowMaterializer.BuildRowActorId("scope-1", "wf-shared"),
+                ProjectionKind = "scope-workflow-catalogue-row",
+            },
+            WrapCommitted(state, version: 5, eventId: "evt-row-5"));
+
+        var row = dispatcher.Upserts.Should().ContainSingle().Subject;
+        row.UpdatedAtSource.Should().Be(ScopeWorkflowCatalogueSourceDocument.DraftSourceKind);
+        row.SourceWatermarkUtc.Should().Be(DateTimeOffset.Parse("2026-08-06T00:00:00Z"));
+    }
+
     private static ScopeWorkflowCatalogueSourceSnapshot Source(
         string sourceKind,
         string name,

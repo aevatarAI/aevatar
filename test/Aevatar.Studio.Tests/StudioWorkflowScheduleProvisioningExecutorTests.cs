@@ -319,6 +319,43 @@ public sealed class StudioWorkflowScheduleProvisioningExecutorTests
             .Equal("provision-svc-1", "provision-svc-1.2");
     }
 
+    [Fact]
+    public async Task ExecuteAsync_WhenExplicitOperationIdentityIsProvided_ShouldUseItVerbatim()
+    {
+        var port = new RecordingSchedulePort();
+        var sut = new StudioWorkflowScheduleProvisioningExecutor(port);
+
+        var result = await sut.ExecuteAsync(NewExecution(
+            scheduleOperationId: "custom-operation-id",
+            scheduleIdempotencyKey: "custom-idempotency-key"));
+
+        result.Success.Should().BeTrue();
+        port.CreateRequests.Should().ContainSingle();
+        port.CreateRequests[0].OperationId.Should().Be("custom-operation-id");
+        port.CreateRequests[0].IdempotencyKey.Should().Be("custom-idempotency-key");
+        port.CreateRequests[0].OperationId.Should().NotStartWith("studio-workflow-provision-create:");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenAllScheduleGenerationsAreTombstoned_ShouldFailAfterExhaustion()
+    {
+        var port = new RecordingSchedulePort();
+        for (var generation = 1; generation <= 50; generation++)
+        {
+            port.TombstonedScheduleIds.Add(generation == 1 ? "provision-svc-1" : $"provision-svc-1.{generation}");
+        }
+
+        var sut = new StudioWorkflowScheduleProvisioningExecutor(port);
+
+        var result = await sut.ExecuteAsync(NewExecution());
+
+        result.Success.Should().BeFalse();
+        result.Retryable.Should().BeFalse();
+        result.FailureCode.Should().Be("schedule_generations_exhausted");
+        port.CreateRequests.Should().HaveCount(50);
+        port.GetScheduleIds.Should().HaveCount(50);
+    }
+
     private static string HashSuffix(string value) =>
         Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(value)).AsSpan(0, 16));
 
@@ -327,7 +364,9 @@ public sealed class StudioWorkflowScheduleProvisioningExecutorTests
         ScheduledDispatchScheduleMode scheduleMode = ScheduledDispatchScheduleMode.RecurringCron,
         string? cronExpression = "0 9 * * *",
         string? timezone = "UTC",
-        DateTimeOffset? oneShotFireAt = null) =>
+        DateTimeOffset? oneShotFireAt = null,
+        string? scheduleOperationId = null,
+        string? scheduleIdempotencyKey = null) =>
         new(
             new StudioWorkflowScheduleProvisioningIntent(
                 "schedule-provisioning-1",
@@ -354,7 +393,11 @@ public sealed class StudioWorkflowScheduleProvisioningExecutorTests
                 cronExpression,
                 timezone,
                 30,
-                "bind-1"),
+                "bind-1")
+            {
+                ScheduleOperationId = scheduleOperationId,
+                ScheduleIdempotencyKey = scheduleIdempotencyKey,
+            },
             oneShotFireAt);
 
     private static StudioMemberAutomationView NewExistingAutomation(

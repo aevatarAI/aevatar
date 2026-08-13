@@ -132,6 +132,74 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
     }
 
     [Fact]
+    public async Task StartAsync_ShouldUsePublishedServiceId_WhenWorkflowPlanHasNoExplicitBindingIdentity()
+    {
+        var serviceCatalog = new ServiceCatalogReadModel
+        {
+            Id = "svc-key",
+            ActorId = "service-definition:scope-1:published-service-1",
+            StateVersion = 3,
+            LastEventId = "evt-service-catalog",
+            TenantId = "scope-1",
+            AppId = "workflow-app",
+            Namespace = "user",
+            ServiceId = "published-service-1",
+            DisplayName = "Published Service",
+            UpdatedAt = DateTimeOffset.Parse("2026-08-04T00:00:00Z"),
+        };
+        var deploymentCatalog = new ServiceDeploymentCatalogReadModel
+        {
+            Id = "svc-key",
+            ActorId = "service-deployment:scope-1:published-service-1",
+            StateVersion = 8,
+            LastEventId = "evt-deployment",
+            UpdatedAt = DateTimeOffset.Parse("2026-08-05T00:00:00Z"),
+            Deployments =
+            [
+                new ServiceDeploymentReadModel
+                {
+                    DeploymentId = "dep-1",
+                    RevisionId = "rev-live",
+                    PrimaryActorId = "workflow-actor-live",
+                    Status = ServiceDeploymentStatus.Active.ToString(),
+                    UpdatedAt = DateTimeOffset.Parse("2026-08-05T01:00:00Z"),
+                },
+            ],
+        };
+        var revisionCatalog = WorkflowRevisionCatalog(
+            "svc-key",
+            "rev-live",
+            serviceCatalog.ServiceId,
+            "Published Workflow",
+            includeExplicitBindingIdentity: false);
+        var sourceWriter = new RecordingCatalogueSourceDispatcher();
+        var rowWriter = new RecordingCatalogueRowDispatcher();
+        var sourceReader = new RecordingCatalogueSourceReader([], sourceWriter);
+        var service = CreateService(
+            [serviceCatalog],
+            [deploymentCatalog],
+            [revisionCatalog],
+            [],
+            [],
+            sourceWriter,
+            rowWriter,
+            sourceReader);
+
+        await service.StartAsync(CancellationToken.None);
+
+        var serviceSource = sourceWriter.Upserts.Should().ContainSingle().Subject;
+        serviceSource.Id.Should().Be("scope-1:published-service-1:service");
+        serviceSource.WorkflowId.Should().Be("published-service-1");
+        serviceSource.PublishedServiceId.Should().Be("published-service-1");
+        serviceSource.ActiveRevisionId.Should().Be("rev-live");
+
+        var command = rowWriter.Commands.Should().ContainSingle().Subject;
+        command.WorkflowId.Should().Be("published-service-1");
+        command.ServiceSource.Should().NotBeNull();
+        command.ServiceSource!.PublishedServiceId.Should().Be("published-service-1");
+    }
+
+    [Fact]
     public async Task StartAsync_ShouldDeleteStaleDraftSourcesForParsedWorkspaceScope()
     {
         var workspaceState = new StudioWorkspaceState
