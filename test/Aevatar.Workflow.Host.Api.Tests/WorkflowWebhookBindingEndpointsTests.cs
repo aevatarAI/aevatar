@@ -24,7 +24,9 @@ public sealed class WorkflowWebhookBindingEndpointsTests
     public async Task PutListDelete_ShouldRoundTripScopeOwnedBinding_WithSecretRedacted()
     {
         var store = new InMemoryWorkflowWebhookBindingStore();
-        var http = CreateHttpContext(store);
+        var http = CreateHttpContext(
+            store,
+            bindingReader: new FakeActorBindingReader(DefinitionBinding()));
 
         var put = await WorkflowWebhookBindingEndpoints.HandlePutAsync(
             http,
@@ -36,25 +38,27 @@ public sealed class WorkflowWebhookBindingEndpointsTests
                 PromptTemplate: """{"record_id":"{{payload.record_id}}","submit":false}""",
                 PromptJsonPath: null,
                 DeliveryIdHeader: "X-NyxID-Delivery-Id",
-                DeliveryIdJsonPath: null,
-                HmacSecret: "delivery-signing-secret",
+                DeliveryIdJsonPath: "event_id",
+                HmacSecret: "delivery-signing-secret-at-least-32-bytes",
                 HmacSignatureHeader: "X-NyxID-Signature",
                 HmacTimestampHeader: "X-NyxID-Timestamp",
-                MaxTimestampSkewSeconds: 300));
+                MaxTimestampSkewSeconds: 300,
+                DefinitionActorId: "actor-hr01",
+                TargetRevisionId: "rev-7"));
         ((Microsoft.AspNetCore.Http.IStatusCodeHttpResult)put).StatusCode.Should().Be(StatusCodes.Status200OK);
 
         var stored = await store.GetAsync("hr01-route");
         stored.Should().NotBeNull();
         stored!.ScopeId.Should().Be("scope-1");
         stored.WorkflowName.Should().Be("hr_onboarding_email_approval");
-        stored.HmacSecret.Should().Be("delivery-signing-secret");
+        stored.HmacSecret.Should().Be("delivery-signing-secret-at-least-32-bytes");
 
         var list = await WorkflowWebhookBindingEndpoints.HandleListAsync(http, "scope-1");
         var listJson = System.Text.Json.JsonSerializer.Serialize(
             ((Microsoft.AspNetCore.Http.IValueHttpResult)list).Value);
         listJson.Should().Contain("hr01-route");
         listJson.Should().Contain("hmacSecretSet");
-        listJson.Should().NotContain("delivery-signing-secret");
+        listJson.Should().NotContain("delivery-signing-secret-at-least-32-bytes");
 
         var delete = await WorkflowWebhookBindingEndpoints.HandleDeleteAsync(http, "scope-1", "hr01-route");
         delete.Should().BeOfType<Microsoft.AspNetCore.Http.HttpResults.NoContent>();
@@ -65,8 +69,10 @@ public sealed class WorkflowWebhookBindingEndpointsTests
     public async Task Put_ShouldRejectRouteOwnedByAnotherScope()
     {
         var store = new InMemoryWorkflowWebhookBindingStore();
-        await store.PutAsync(BindingRecord("shared-route", "scope-owner"));
-        var http = CreateHttpContext(store);
+        await SeedAsync(store, BindingRecord("shared-route", "scope-owner"));
+        var http = CreateHttpContext(
+            store,
+            bindingReader: new FakeActorBindingReader(DefinitionBinding(scopeId: "scope-intruder")));
 
         var result = await WorkflowWebhookBindingEndpoints.HandlePutAsync(
             http,
@@ -78,11 +84,13 @@ public sealed class WorkflowWebhookBindingEndpointsTests
                 PromptTemplate: "{}",
                 PromptJsonPath: null,
                 DeliveryIdHeader: "X-Delivery",
-                DeliveryIdJsonPath: null,
-                HmacSecret: "secret-2",
+                DeliveryIdJsonPath: "event_id",
+                HmacSecret: "scope-intruder-secret-at-least-32-bytes",
                 HmacSignatureHeader: null,
                 HmacTimestampHeader: null,
-                MaxTimestampSkewSeconds: null));
+                MaxTimestampSkewSeconds: null,
+                DefinitionActorId: "actor-hr01",
+                TargetRevisionId: "rev-7"));
 
         await result.ExecuteAsync(http);
         http.Response.StatusCode.Should().Be(StatusCodes.Status409Conflict);
@@ -90,10 +98,29 @@ public sealed class WorkflowWebhookBindingEndpointsTests
     }
 
     [Fact]
+    public async Task Put_ShouldRejectOversizedRouteKey()
+    {
+        var store = new InMemoryWorkflowWebhookBindingStore();
+        var http = CreateHttpContext(
+            store,
+            bindingReader: new FakeActorBindingReader(DefinitionBinding()));
+
+        var result = await WorkflowWebhookBindingEndpoints.HandlePutAsync(
+            http,
+            "scope-1",
+            new string('r', WorkflowWebhookIngressLimits.MaxRouteKeyBytes + 1),
+            ExactPutRequest());
+
+        await result.ExecuteAsync(http);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        (await ReadBodyAsync(http.Response)).Should().Contain("WEBHOOK_ROUTE_REQUIRED");
+    }
+
+    [Fact]
     public async Task Delete_ShouldNotTouchAnotherScopesBinding()
     {
         var store = new InMemoryWorkflowWebhookBindingStore();
-        await store.PutAsync(BindingRecord("their-route", "scope-owner"));
+        await SeedAsync(store, BindingRecord("their-route", "scope-owner"));
         var http = CreateHttpContext(store);
 
         var result = await WorkflowWebhookBindingEndpoints.HandleDeleteAsync(
@@ -101,6 +128,24 @@ public sealed class WorkflowWebhookBindingEndpointsTests
 
         result.Should().BeOfType<Microsoft.AspNetCore.Http.HttpResults.NotFound>();
         (await store.GetAsync("their-route")).Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task Delete_WithStaleOwner_ShouldNotRemoveReassignedRoute()
+    {
+        var store = new InMemoryWorkflowWebhookBindingStore();
+        await SeedAsync(store, BindingRecord("reassigned-route", "scope-old"));
+        (await store.TryDeleteOwnedAsync("reassigned-route", "scope-old")).Should().BeTrue();
+        await SeedAsync(store, BindingRecord("reassigned-route", "scope-new"));
+        var staleHttp = CreateHttpContext(store);
+
+        var result = await WorkflowWebhookBindingEndpoints.HandleDeleteAsync(
+            staleHttp,
+            "scope-old",
+            "reassigned-route");
+
+        result.Should().BeOfType<Microsoft.AspNetCore.Http.HttpResults.NotFound>();
+        (await store.GetAsync("reassigned-route"))!.ScopeId.Should().Be("scope-new");
     }
 
     [Fact]
@@ -127,8 +172,8 @@ public sealed class WorkflowWebhookBindingEndpointsTests
             PromptTemplate: """{"record_id":"{{record_id}}","submit":false}""",
             PromptJsonPath: null,
             DeliveryIdHeader: "X-NyxID-Delivery-Id",
-            DeliveryIdJsonPath: null,
-            HmacSecret: "delivery-signing-secret",
+            DeliveryIdJsonPath: "event_id",
+            HmacSecret: "delivery-signing-secret-at-least-32-bytes",
             HmacSignatureHeader: null,
             HmacTimestampHeader: null,
             MaxTimestampSkewSeconds: null,
@@ -160,6 +205,101 @@ public sealed class WorkflowWebhookBindingEndpointsTests
     }
 
     [Fact]
+    public async Task Put_ShouldRejectRunActorTarget()
+    {
+        var store = new InMemoryWorkflowWebhookBindingStore();
+        var runTarget = DefinitionBinding() with
+        {
+            ActorKind = WorkflowActorKind.Run,
+            RunId = "run-1",
+        };
+        var http = CreateHttpContext(
+            store,
+            bindingReader: new FakeActorBindingReader(runTarget));
+
+        var result = await WorkflowWebhookBindingEndpoints.HandlePutAsync(
+            http,
+            "scope-1",
+            "hr01-route",
+            ExactPutRequest());
+
+        ((Microsoft.AspNetCore.Http.IStatusCodeHttpResult)result).StatusCode
+            .Should().Be(StatusCodes.Status400BadRequest);
+        (await store.GetAsync("hr01-route")).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Put_ShouldRejectHmacSecretShorterThan32Utf8Bytes()
+    {
+        var store = new InMemoryWorkflowWebhookBindingStore();
+        var http = CreateHttpContext(
+            store,
+            bindingReader: new FakeActorBindingReader(DefinitionBinding()));
+        var request = ExactPutRequest() with { HmacSecret = "short-secret" };
+
+        var result = await WorkflowWebhookBindingEndpoints.HandlePutAsync(
+            http,
+            "scope-1",
+            "hr01-route",
+            request);
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        (await ReadBodyAsync(http.Response)).Should().Contain("WEBHOOK_SECRET_TOO_SHORT");
+        (await store.GetAsync("hr01-route")).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Put_ShouldRejectShortPreviousSecretAndHeaderOnlyDeliveryId()
+    {
+        var store = new InMemoryWorkflowWebhookBindingStore();
+        var http = CreateHttpContext(
+            store,
+            bindingReader: new FakeActorBindingReader(DefinitionBinding()));
+
+        var shortPrevious = await WorkflowWebhookBindingEndpoints.HandlePutAsync(
+            http,
+            "scope-1",
+            "hr01-route",
+            ExactPutRequest() with { PreviousHmacSecret = "short" });
+        await shortPrevious.ExecuteAsync(http);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        (await ReadBodyAsync(http.Response)).Should().Contain("WEBHOOK_PREVIOUS_SECRET_TOO_SHORT");
+
+        http.Response.Body = new MemoryStream();
+        var headerOnly = await WorkflowWebhookBindingEndpoints.HandlePutAsync(
+            http,
+            "scope-1",
+            "hr01-route",
+            ExactPutRequest() with { DeliveryIdJsonPath = null });
+        await headerOnly.ExecuteAsync(http);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        (await ReadBodyAsync(http.Response)).Should().Contain("WEBHOOK_DELIVERY_ID_MAPPING_REQUIRED");
+    }
+
+    [Fact]
+    public async Task Put_ShouldRejectRouteReservedByStaticConfiguration_AfterCanonicalization()
+    {
+        var store = new InMemoryWorkflowWebhookBindingStore();
+        var options = new WorkflowWebhookIngressOptions();
+        options.Bindings.Add(new WorkflowWebhookIngressBindingOptions { RouteKey = " HR01-ROUTE " });
+        var http = CreateHttpContext(
+            store,
+            bindingReader: new FakeActorBindingReader(DefinitionBinding()),
+            ingressOptions: options);
+
+        var result = await WorkflowWebhookBindingEndpoints.HandlePutAsync(
+            http,
+            "scope-1",
+            "hr01-route",
+            ExactPutRequest());
+
+        ((Microsoft.AspNetCore.Http.IStatusCodeHttpResult)result).StatusCode
+            .Should().Be(StatusCodes.Status409Conflict);
+        (await store.GetAsync("hr01-route")).Should().BeNull();
+    }
+
+    [Fact]
     public async Task Ingress_ShouldStartExactlyOneRun_ForDefinitionActorBindingWithDerivedRunDate()
     {
         // Issue 3444 acceptance shape: a persisted binding pointing at the
@@ -169,12 +309,13 @@ public sealed class WorkflowWebhookBindingEndpointsTests
         // trusted ingress received_at (UTC+8) because Base automation cannot
         // supply "today"; operator_id is a binding constant.
         var store = new InMemoryWorkflowWebhookBindingStore();
-        await store.PutAsync(BindingRecord("hr01-route", "scope-1") with
+        await SeedAsync(store, BindingRecord("hr01-route", "scope-1") with
         {
             WorkflowName = "hr_onboarding_email_approval",
             DefinitionActorId = "actor-hr01",
+            TargetRevisionId = "rev-7",
             PromptTemplate =
-                """{"record_id":"{{record_id}}","operator_id":"831cg5af","run_date":"{{@run_date}}","submit":false}""",
+                """{"record_id":"{{record_id}}","operator_id":"demo-operator","run_date":"{{@run_date}}","submit":false}""",
             DeliveryIdHeader = "X-NyxID-Delivery-Id",
             HmacSignatureHeader = "X-NyxID-Signature",
             HmacTimestampHeader = "X-NyxID-Timestamp",
@@ -188,8 +329,11 @@ public sealed class WorkflowWebhookBindingEndpointsTests
 
         async Task<int> DeliverAsync()
         {
-            var http = CreateHttpContext(store, replayStore);
-            var body = Encoding.UTF8.GetBytes("""{"record_id":"rec-123"}""");
+            var http = CreateHttpContext(
+                store,
+                replayStore,
+                new FakeActorBindingReader(DefinitionBinding()));
+            var body = Encoding.UTF8.GetBytes("""{"event_id":"delivery-1","record_id":"rec-123"}""");
             http.Request.Body = new MemoryStream(body);
             http.Request.ContentType = "application/json";
             http.Request.Headers["X-NyxID-Delivery-Id"] = "delivery-1";
@@ -214,16 +358,21 @@ public sealed class WorkflowWebhookBindingEndpointsTests
         command.Source.Kind.Should().Be(WorkflowChatSourceKind.DefinitionActor);
         command.Source.ActorId.Should().Be("actor-hr01");
         command.ScopeId.Should().Be("scope-1");
+        command.ResolvedDefinitionBinding.Should().NotBeNull();
+        command.ResolvedDefinitionBinding!.RevisionId.Should().Be("rev-7");
         command.Prompt.Should().MatchRegex(
-            """^\{"record_id":"rec-123","operator_id":"831cg5af","run_date":"\d{4}-\d{2}-\d{2}","submit":false\}$""");
+            """^\{"record_id":"rec-123","operator_id":"demo-operator","run_date":"\d{4}-\d{2}-\d{2}","submit":false\}$""");
     }
 
     [Fact]
     public async Task Ingress_ShouldAcceptSignatureFromPreviousSecret_DuringRotation()
     {
         var store = new InMemoryWorkflowWebhookBindingStore();
-        await store.PutAsync(BindingRecord("hr01-route", "scope-1") with
+        await SeedAsync(store, BindingRecord("hr01-route", "scope-1") with
         {
+            WorkflowName = "hr_onboarding_email_approval",
+            DefinitionActorId = "actor-hr01",
+            TargetRevisionId = "rev-7",
             HmacSecret = "rotated-new-secret",
             PreviousHmacSecret = "secret-1",
             DeliveryIdHeader = "X-NyxID-Delivery-Id",
@@ -234,8 +383,11 @@ public sealed class WorkflowWebhookBindingEndpointsTests
         var dispatch = new RecordingDispatch();
         dispatch.Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>.Success(
             new WorkflowChatRunAcceptedReceipt("actor-1", "wf", "cmd-1", "corr-1"));
-        var http = CreateHttpContext(store, new AcceptingReplayStore());
-        var body = Encoding.UTF8.GetBytes("""{"record_id":"rec-123"}""");
+        var http = CreateHttpContext(
+            store,
+            new AcceptingReplayStore(),
+            new FakeActorBindingReader(DefinitionBinding()));
+        var body = Encoding.UTF8.GetBytes("""{"event_id":"delivery-1","record_id":"rec-123"}""");
         http.Request.Body = new MemoryStream(body);
         http.Request.ContentType = "application/json";
         http.Request.Headers["X-NyxID-Delivery-Id"] = "delivery-1";
@@ -263,9 +415,11 @@ public sealed class WorkflowWebhookBindingEndpointsTests
         // The whole point of dynamic bindings: no appsettings change, no
         // Enabled flag — a scope-registered binding is live on its own.
         var store = new InMemoryWorkflowWebhookBindingStore();
-        await store.PutAsync(BindingRecord("hr01-route", "scope-1") with
+        await SeedAsync(store, BindingRecord("hr01-route", "scope-1") with
         {
             WorkflowName = "hr_onboarding_email_approval",
+            DefinitionActorId = "actor-hr01",
+            TargetRevisionId = "rev-7",
             PromptTemplate = """{"record_id":"{{record_id}}","submit":false}""",
             DeliveryIdHeader = "X-NyxID-Delivery-Id",
             HmacSignatureHeader = "X-NyxID-Signature",
@@ -275,8 +429,11 @@ public sealed class WorkflowWebhookBindingEndpointsTests
         var dispatch = new RecordingDispatch();
         dispatch.Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>.Success(
             new WorkflowChatRunAcceptedReceipt("actor-1", "hr_onboarding_email_approval", "cmd-1", "corr-1"));
-        var http = CreateHttpContext(store, new AcceptingReplayStore());
-        var body = Encoding.UTF8.GetBytes("""{"record_id":"rec-123"}""");
+        var http = CreateHttpContext(
+            store,
+            new AcceptingReplayStore(),
+            new FakeActorBindingReader(DefinitionBinding()));
+        var body = Encoding.UTF8.GetBytes("""{"event_id":"delivery-1","record_id":"rec-123"}""");
         http.Request.Body = new MemoryStream(body);
         http.Request.ContentType = "application/json";
         http.Request.Headers["X-NyxID-Delivery-Id"] = "delivery-1";
@@ -300,6 +457,88 @@ public sealed class WorkflowWebhookBindingEndpointsTests
         dispatch.Commands[0].ScopeId.Should().Be("scope-1");
     }
 
+    [Fact]
+    public async Task Ingress_ShouldFailClosed_WhenPinnedRevisionDrifts()
+    {
+        var store = new InMemoryWorkflowWebhookBindingStore();
+        await SeedAsync(store, BindingRecord("hr01-route", "scope-1") with
+        {
+            WorkflowName = "hr_onboarding_email_approval",
+            DefinitionActorId = "actor-hr01",
+            TargetRevisionId = "rev-7",
+            PromptJsonPath = "record_id",
+            PromptTemplate = null,
+            HmacSignatureHeader = "X-NyxID-Signature",
+            HmacTimestampHeader = "X-NyxID-Timestamp",
+        });
+        var dispatch = new RecordingDispatch();
+        var replay = new CountingReplayStore();
+        var reader = new FakeActorBindingReader(DefinitionBinding(revisionId: "rev-8"));
+        var http = CreateHttpContext(
+            store,
+            replay,
+            reader);
+        var body = Encoding.UTF8.GetBytes("""{"event_id":"delivery-1","record_id":"rec-123"}""");
+        http.Request.Body = new MemoryStream(body);
+        SignNyxId(http, "secret-1", body);
+
+        var disabledOptions = Options.Create(new WorkflowWebhookIngressOptions { Enabled = false });
+        var result = await WorkflowWebhookIngressEndpoints.HandleAsync(
+            http,
+            "HR01-ROUTE",
+            new WorkflowWebhookIngressRequestBuilder(disabledOptions),
+            dispatch,
+            disabledOptions,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status409Conflict);
+        (await ReadBodyAsync(http.Response)).Should().Contain("WEBHOOK_TARGET_REVISION_DRIFT");
+        reader.ReadCount.Should().Be(1);
+        replay.Requests.Should().BeEmpty();
+        dispatch.Commands.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Ingress_ShouldAuthenticateBeforeReadingPinnedTarget()
+    {
+        var store = new InMemoryWorkflowWebhookBindingStore();
+        await SeedAsync(store, BindingRecord("hr01-route", "scope-1") with
+        {
+            WorkflowName = "hr_onboarding_email_approval",
+            DefinitionActorId = "actor-hr01",
+            TargetRevisionId = "rev-7",
+            PromptJsonPath = "record_id",
+            PromptTemplate = null,
+        });
+        var dispatch = new RecordingDispatch();
+        var replay = new CountingReplayStore();
+        var reader = new FakeActorBindingReader(DefinitionBinding(revisionId: "rev-8"));
+        var http = CreateHttpContext(store, replay, reader);
+        var body = Encoding.UTF8.GetBytes("""{"event_id":"delivery-1","record_id":"rec-123"}""");
+        http.Request.Body = new MemoryStream(body);
+        http.Request.Headers["X-Aevatar-Timestamp"] =
+            DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
+        http.Request.Headers["X-Aevatar-Signature"] = "sha256=invalid";
+
+        var disabledOptions = Options.Create(new WorkflowWebhookIngressOptions { Enabled = false });
+        var result = await WorkflowWebhookIngressEndpoints.HandleAsync(
+            http,
+            "hr01-route",
+            new WorkflowWebhookIngressRequestBuilder(disabledOptions),
+            dispatch,
+            disabledOptions,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
+        reader.ReadCount.Should().Be(0);
+        replay.Requests.Should().BeEmpty();
+        dispatch.Commands.Should().BeEmpty();
+    }
+
     private static WorkflowWebhookBindingRecord BindingRecord(string routeKey, string scopeId) => new(
         RouteKey: routeKey,
         ScopeId: scopeId,
@@ -308,17 +547,55 @@ public sealed class WorkflowWebhookBindingEndpointsTests
         PromptTemplate: "{}",
         PromptJsonPath: null,
         DeliveryIdHeader: "X-Delivery",
-        DeliveryIdJsonPath: null,
+        DeliveryIdJsonPath: "event_id",
         HmacSecret: "secret-1",
         HmacSignatureHeader: null,
         HmacTimestampHeader: null,
         MaxTimestampSkewSeconds: 300,
         UpdatedAtUnixMs: 1);
 
+    private static async Task SeedAsync(
+        IWorkflowWebhookBindingStore store,
+        WorkflowWebhookBindingRecord record)
+    {
+        (await store.TryPutOwnedAsync(record)).Should().BeTrue();
+    }
+
+    private static WorkflowActorBinding DefinitionBinding(
+        string scopeId = "scope-1",
+        string revisionId = "rev-7") => new(
+        WorkflowActorKind.Definition,
+        "actor-hr01",
+        "actor-hr01",
+        string.Empty,
+        "hr_onboarding_email_approval",
+        "yaml",
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+        Aevatar.Workflow.Abstractions.ExternalCapabilityExecutionMode.Interactive,
+        ScopeId: scopeId,
+        SourceKind: "service_revision",
+        WorkflowId: "workflow-hr01",
+        RevisionId: revisionId);
+
+    private static WorkflowWebhookBindingEndpoints.PutWorkflowWebhookBindingRequest ExactPutRequest() => new(
+        WorkflowName: "hr_onboarding_email_approval",
+        SourceId: "nyxid-trigger",
+        PromptTemplate: "{}",
+        PromptJsonPath: null,
+        DeliveryIdHeader: "X-NyxID-Delivery-Id",
+        DeliveryIdJsonPath: "event_id",
+        HmacSecret: "delivery-signing-secret-at-least-32-bytes",
+        HmacSignatureHeader: "X-NyxID-Signature",
+        HmacTimestampHeader: "X-NyxID-Timestamp",
+        MaxTimestampSkewSeconds: 300,
+        DefinitionActorId: "actor-hr01",
+        TargetRevisionId: "rev-7");
+
     private static DefaultHttpContext CreateHttpContext(
         IWorkflowWebhookBindingStore? bindingStore = null,
         IWorkflowWebhookReplayStore? replayStore = null,
-        IWorkflowActorBindingReader? bindingReader = null)
+        IWorkflowActorBindingReader? bindingReader = null,
+        WorkflowWebhookIngressOptions? ingressOptions = null)
     {
         var services = new ServiceCollection();
         services.AddSingleton<Microsoft.Extensions.Logging.ILoggerFactory>(NullLoggerFactory.Instance);
@@ -336,9 +613,18 @@ public sealed class WorkflowWebhookBindingEndpointsTests
             services.AddSingleton(replayStore);
         if (bindingReader != null)
             services.AddSingleton(bindingReader);
+        if (ingressOptions != null)
+            services.AddSingleton<IOptions<WorkflowWebhookIngressOptions>>(Options.Create(ingressOptions));
         var http = new DefaultHttpContext { RequestServices = services.BuildServiceProvider() };
         http.Response.Body = new MemoryStream();
         return http;
+    }
+
+    private static async Task<string> ReadBodyAsync(HttpResponse response)
+    {
+        response.Body.Position = 0;
+        using var reader = new StreamReader(response.Body, Encoding.UTF8, leaveOpen: true);
+        return await reader.ReadToEndAsync();
     }
 
     private static void SignNyxId(HttpContext http, string secret, byte[] body)
@@ -375,10 +661,15 @@ public sealed class WorkflowWebhookBindingEndpointsTests
 
         public FakeActorBindingReader(WorkflowActorBinding binding) => _binding = binding;
 
-        public Task<WorkflowActorBinding?> GetAsync(string actorId, CancellationToken ct = default) =>
-            Task.FromResult(string.Equals(actorId, _binding.ActorId, StringComparison.Ordinal)
+        public int ReadCount { get; private set; }
+
+        public Task<WorkflowActorBinding?> GetAsync(string actorId, CancellationToken ct = default)
+        {
+            ReadCount++;
+            return Task.FromResult(string.Equals(actorId, _binding.ActorId, StringComparison.Ordinal)
                 ? _binding
                 : null);
+        }
     }
 
     /// <summary>First delivery id is admitted; every replay is a duplicate.</summary>
@@ -408,6 +699,24 @@ public sealed class WorkflowWebhookBindingEndpointsTests
             CancellationToken cancellationToken = default) =>
             ValueTask.FromResult(new WorkflowWebhookReplayAdmission(
                 WorkflowWebhookReplayAdmissionStatus.Admitted));
+
+        public ValueTask ReleaseAsync(
+            WorkflowWebhookReplayAdmissionRequest request,
+            CancellationToken cancellationToken = default) => ValueTask.CompletedTask;
+    }
+
+    private sealed class CountingReplayStore : IWorkflowWebhookReplayStore
+    {
+        public List<WorkflowWebhookReplayAdmissionRequest> Requests { get; } = [];
+
+        public ValueTask<WorkflowWebhookReplayAdmission> AdmitAsync(
+            WorkflowWebhookReplayAdmissionRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            Requests.Add(request);
+            return ValueTask.FromResult(new WorkflowWebhookReplayAdmission(
+                WorkflowWebhookReplayAdmissionStatus.Admitted));
+        }
 
         public ValueTask ReleaseAsync(
             WorkflowWebhookReplayAdmissionRequest request,

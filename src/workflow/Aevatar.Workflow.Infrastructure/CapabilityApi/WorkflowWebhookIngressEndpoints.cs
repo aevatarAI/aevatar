@@ -46,19 +46,72 @@ internal static class WorkflowWebhookIngressEndpoints
         using var scope = ApiRequestScope.BeginHttp();
         var logger = loggerFactory.CreateLogger("Aevatar.Workflow.Host.Api.Webhook");
 
-        // Scope-registered bindings are data, always live. The Enabled flag
-        // gates only the static appsettings binding list.
-        var bindingStore = http.RequestServices.GetService<IWorkflowWebhookBindingStore>();
-        var dynamicBinding = bindingStore is null
-            ? null
-            : (await bindingStore.GetAsync(routeKey, ct))?.ToBindingOptions();
-
-        if (dynamicBinding is null && !options.Value.Enabled)
+        var normalizedRoute = WorkflowWebhookRoute.Normalize(routeKey);
+        if (normalizedRoute == null)
         {
             scope.MarkResult(StatusCodes.Status404NotFound);
             return Results.Json(
-                new { code = "WEBHOOK_INGRESS_DISABLED", message = "Workflow webhook ingress is disabled." },
+                new { code = "WEBHOOK_ROUTE_NOT_FOUND", message = "Webhook route was not found." },
                 statusCode: StatusCodes.Status404NotFound);
+        }
+
+        // Scope-registered bindings are data, always live. The Enabled flag
+        // gates only the static appsettings binding list.
+        var bindingStore = http.RequestServices.GetService<IWorkflowWebhookBindingStore>();
+        var dynamicRecord = bindingStore is null
+            ? null
+            : await bindingStore.GetAsync(normalizedRoute, ct);
+        var staticBindings = options.Value.Bindings
+            .Where(binding => string.Equals(
+                WorkflowWebhookRoute.Normalize(binding.RouteKey),
+                normalizedRoute,
+                StringComparison.Ordinal))
+            .ToArray();
+
+        if (dynamicRecord != null && staticBindings.Length > 0)
+        {
+            scope.MarkResult(StatusCodes.Status409Conflict);
+            return Results.Json(
+                new
+                {
+                    code = "WEBHOOK_ROUTE_CONFIGURATION_CONFLICT",
+                    message = "Webhook route has both dynamic and host-configured bindings.",
+                },
+                statusCode: StatusCodes.Status409Conflict);
+        }
+
+        if (staticBindings.Length > 1)
+        {
+            scope.MarkResult(StatusCodes.Status500InternalServerError);
+            return Results.Json(
+                new
+                {
+                    code = "WEBHOOK_ROUTE_CONFIGURATION_CONFLICT",
+                    message = "Webhook route is configured more than once.",
+                },
+                statusCode: StatusCodes.Status500InternalServerError);
+        }
+
+        var resolvedBinding = dynamicRecord?.ToBindingOptions()
+            ?? (options.Value.Enabled ? staticBindings.SingleOrDefault() : null);
+        if (resolvedBinding is null)
+        {
+            scope.MarkResult(StatusCodes.Status404NotFound);
+            return Results.Json(
+                new { code = "WEBHOOK_ROUTE_NOT_FOUND", message = "Webhook route was not found." },
+                statusCode: StatusCodes.Status404NotFound);
+        }
+
+        if (dynamicRecord != null && string.IsNullOrWhiteSpace(resolvedBinding.DefinitionActorId))
+        {
+            scope.MarkResult(StatusCodes.Status409Conflict);
+            return Results.Json(
+                new
+                {
+                    code = "WEBHOOK_EXACT_TARGET_REQUIRED",
+                    message = "Dynamic webhook binding is not pinned to a workflow definition actor.",
+                },
+                statusCode: StatusCodes.Status409Conflict);
         }
 
         var replayStore = http.RequestServices.GetService<IWorkflowWebhookReplayStore>();
@@ -73,15 +126,29 @@ internal static class WorkflowWebhookIngressEndpoints
         byte[] rawBody;
         try
         {
-            rawBody = await ReadBodyAsync(http.Request, ct);
+            rawBody = await ReadBodyAsync(
+                http.Request,
+                WorkflowWebhookIngressLimits.MaxBodyBytes,
+                ct);
         }
         catch (OperationCanceledException)
         {
             return Results.StatusCode(499);
         }
+        catch (WebhookBodyTooLargeException)
+        {
+            scope.MarkResult(StatusCodes.Status413PayloadTooLarge);
+            return Results.Json(
+                new
+                {
+                    code = "WEBHOOK_BODY_TOO_LARGE",
+                    message = "Webhook request body exceeds the supported size.",
+                },
+                statusCode: StatusCodes.Status413PayloadTooLarge);
+        }
 
         var receivedAt = DateTimeOffset.UtcNow;
-        var build = requestBuilder.Build(http.Request, routeKey, rawBody, receivedAt, dynamicBinding);
+        var build = requestBuilder.Build(http.Request, normalizedRoute, rawBody, receivedAt, resolvedBinding);
         if (!build.Succeeded)
         {
             scope.MarkResult(build.StatusCode);
@@ -90,11 +157,34 @@ internal static class WorkflowWebhookIngressEndpoints
                 statusCode: build.StatusCode);
         }
 
+        // Authenticate and validate the body before touching the definition
+        // projection. Anonymous callers must not be able to probe target
+        // existence or revision drift through this public route.
+        var exactTarget = await WorkflowWebhookExactTargetResolver.ResolveAsync(
+            http.RequestServices.GetService<IWorkflowActorBindingReader>(),
+            resolvedBinding,
+            ct);
+        if (!exactTarget.Succeeded)
+        {
+            scope.MarkResult(exactTarget.StatusCode);
+            return Results.Json(
+                new { code = exactTarget.ErrorCode, message = exactTarget.ErrorMessage },
+                statusCode: exactTarget.StatusCode);
+        }
+
+        var runRequest = exactTarget.Definition == null
+            ? build.Request!
+            : build.Request! with
+            {
+                ExpectedExecutionMode = exactTarget.Definition.ExpectedExecutionMode,
+                ScopeId = exactTarget.Definition.ScopeId,
+                ResolvedDefinitionBinding = exactTarget.Definition,
+            };
         var admission = await replayStore.AdmitAsync(build.Admission!, ct);
         switch (admission.Status)
         {
             case WorkflowWebhookReplayAdmissionStatus.Admitted:
-                return await DispatchAsync(http, build.Request!, build.Admission!, replayStore, chatRunService, logger, scope, ct);
+                return await DispatchAsync(http, runRequest, build.Admission!, replayStore, chatRunService, logger, scope, ct);
             case WorkflowWebhookReplayAdmissionStatus.DuplicateCompleted:
             case WorkflowWebhookReplayAdmissionStatus.DuplicateInProgress:
                 scope.MarkResult(StatusCodes.Status202Accepted);
@@ -193,13 +283,31 @@ internal static class WorkflowWebhookIngressEndpoints
         }
     }
 
-    private static async Task<byte[]> ReadBodyAsync(HttpRequest request, CancellationToken ct)
+    private static async Task<byte[]> ReadBodyAsync(
+        HttpRequest request,
+        int maxBytes,
+        CancellationToken ct)
     {
-        using var memory = new MemoryStream();
-        await request.Body.CopyToAsync(memory, ct);
+        if (request.ContentLength is > 0 && request.ContentLength > maxBytes)
+            throw new WebhookBodyTooLargeException();
+
+        using var memory = new MemoryStream(Math.Min(maxBytes, 16 * 1024));
+        var buffer = new byte[16 * 1024];
+        while (true)
+        {
+            var read = await request.Body.ReadAsync(buffer.AsMemory(), ct);
+            if (read == 0)
+                break;
+            if (memory.Length + read > maxBytes)
+                throw new WebhookBodyTooLargeException();
+            await memory.WriteAsync(buffer.AsMemory(0, read), ct);
+        }
         return memory.ToArray();
     }
 
     private static string BuildWorkflowRunStatusUrl(string actorId) =>
         $"/api/workflow-actors/{Uri.EscapeDataString(actorId)}/current-state";
+
+    private sealed class WebhookBodyTooLargeException : Exception;
+
 }

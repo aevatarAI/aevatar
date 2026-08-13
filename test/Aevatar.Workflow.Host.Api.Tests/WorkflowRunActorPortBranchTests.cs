@@ -547,6 +547,95 @@ public sealed class WorkflowRunActorPortBranchTests
     }
 
     [Fact]
+    public async Task CreateRunAsync_WhenExistingAdmissionPlanDiffers_ShouldFailWithoutCreatingRun()
+    {
+        const string workflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        var runtime = new RecordingActorRuntime();
+        var authoritativePlan = CreateCapabilityAdmissionPlan(workflowYaml);
+        var definitionAgent = new WorkflowGAgent();
+        definitionAgent.State.WorkflowName = "direct";
+        definitionAgent.State.WorkflowYaml = workflowYaml;
+        definitionAgent.State.CapabilityAdmissionPlan = authoritativePlan;
+        definitionAgent.State.ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive;
+        runtime.StoredActors["definition-plan"] = new RecordingActor("definition-plan", definitionAgent);
+        var port = CreatePort(runtime);
+        var stalePlan = authoritativePlan.Clone();
+        stalePlan.AdmissionDigest = "stale-admission-digest";
+
+        var act = () => port.CreateRunAsync(
+            new WorkflowDefinitionBinding(
+                "definition-plan",
+                "direct",
+                workflowYaml,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExternalCapabilityExecutionMode.Interactive,
+                CapabilityAdmissionPlan: stalePlan),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*payload does not match the requested Run definition*");
+        runtime.CreateRequests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CreateRunAsync_WhenAdmissionPlanAppearsAfterSnapshot_ShouldFailWithoutCreatingRun()
+    {
+        const string workflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        var runtime = new RecordingActorRuntime();
+        var definitionAgent = new WorkflowGAgent();
+        definitionAgent.State.WorkflowName = "direct";
+        definitionAgent.State.WorkflowYaml = workflowYaml;
+        definitionAgent.State.CapabilityAdmissionPlan = CreateCapabilityAdmissionPlan(workflowYaml);
+        definitionAgent.State.ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive;
+        runtime.StoredActors["definition-plan-added"] =
+            new RecordingActor("definition-plan-added", definitionAgent);
+        var port = CreatePort(runtime);
+
+        var act = () => port.CreateRunAsync(
+            new WorkflowDefinitionBinding(
+                "definition-plan-added",
+                "direct",
+                workflowYaml,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExternalCapabilityExecutionMode.Interactive,
+                RunOrigin: WorkflowRunOrigins.Webhook,
+                CapabilityAdmissionPlan: null),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*payload does not match the requested Run definition*");
+        runtime.CreateRequests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CreateRunAsync_WhenPinnedDefinitionVersionDiffers_ShouldFailWithoutCreatingRun()
+    {
+        const string workflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        var runtime = new RecordingActorRuntime();
+        var definitionAgent = new WorkflowGAgent();
+        definitionAgent.State.WorkflowName = "direct";
+        definitionAgent.State.WorkflowYaml = workflowYaml;
+        definitionAgent.State.ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive;
+        definitionAgent.State.Version = 7;
+        runtime.StoredActors["definition-version"] = new RecordingActor("definition-version", definitionAgent);
+        var port = CreatePort(runtime);
+
+        var act = () => port.CreateRunAsync(
+            new WorkflowDefinitionBinding(
+                "definition-version",
+                "direct",
+                workflowYaml,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExternalCapabilityExecutionMode.Interactive,
+                DefinitionVersion: 6),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*payload does not match the requested Run definition*");
+        runtime.CreateRequests.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task CreateRunAsync_WhenExistingDefinitionWorkflowNameDiffers_ShouldFailFast()
     {
         var runtime = new RecordingActorRuntime();

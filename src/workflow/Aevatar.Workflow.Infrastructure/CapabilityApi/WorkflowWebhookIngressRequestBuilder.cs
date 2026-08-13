@@ -24,6 +24,12 @@ internal sealed class WorkflowWebhookIngressRequestBuilder
         DateTimeOffset receivedAt,
         WorkflowWebhookIngressBindingOptions? resolvedBinding = null)
     {
+        if (rawBody.Length > WorkflowWebhookIngressLimits.MaxBodyBytes)
+            return WorkflowWebhookIngressBuildResult.Failure(
+                "WEBHOOK_BODY_TOO_LARGE",
+                "Webhook request body exceeds the supported size.",
+                StatusCodes.Status413PayloadTooLarge);
+
         // Scope-registered dynamic bindings take precedence; the static
         // appsettings list remains as an operator fallback.
         var binding = resolvedBinding ?? ResolveBinding(routeKey);
@@ -33,7 +39,7 @@ internal sealed class WorkflowWebhookIngressRequestBuilder
                 "Webhook route was not found.",
                 StatusCodes.Status404NotFound);
 
-        var route = Normalize(binding.RouteKey) ?? string.Empty;
+        var route = WorkflowWebhookRoute.Normalize(binding.RouteKey) ?? string.Empty;
         var sourceId = Normalize(binding.SourceId) ?? route;
         var workflowName = Normalize(binding.WorkflowName);
         var definitionActorId = Normalize(binding.DefinitionActorId);
@@ -56,18 +62,69 @@ internal sealed class WorkflowWebhookIngressRequestBuilder
                 auth.ErrorMessage ?? "Webhook authentication failed.",
                 StatusCodes.Status401Unauthorized);
 
-        var deliveryId = ResolveDeliveryId(httpRequest, binding, rawBody);
-        if (deliveryId == null)
+        JsonDocument payload;
+        try
+        {
+            payload = JsonDocument.Parse(
+                rawBody.ToArray(),
+                new JsonDocumentOptions { MaxDepth = WorkflowWebhookIngressLimits.MaxJsonDepth });
+        }
+        catch (JsonException)
+        {
+            return WorkflowWebhookIngressBuildResult.Failure(
+                "WEBHOOK_BODY_INVALID",
+                "Webhook request body must be valid JSON.",
+                StatusCodes.Status400BadRequest);
+        }
+
+        using (payload)
+        {
+            var delivery = ResolveDeliveryId(httpRequest, binding, payload.RootElement);
+            if (!delivery.Succeeded)
+                return WorkflowWebhookIngressBuildResult.Failure(
+                    delivery.ErrorCode!,
+                    delivery.ErrorMessage!,
+                    delivery.StatusCode);
+
+            var prompt = ResolvePrompt(binding, payload.RootElement, receivedAt);
+            if (!prompt.Succeeded)
+                return WorkflowWebhookIngressBuildResult.Failure(
+                    prompt.ErrorCode!,
+                    prompt.ErrorMessage!,
+                    prompt.StatusCode);
+
+            return BuildSuccess(
+                httpRequest,
+                route,
+                sourceId,
+                workflowName,
+                definitionActorId,
+                binding,
+                rawBody,
+                receivedAt,
+                auth,
+                delivery.DeliveryId!,
+                prompt.Prompt!);
+        }
+    }
+
+    private static WorkflowWebhookIngressBuildResult BuildSuccess(
+        HttpRequest httpRequest,
+        string route,
+        string sourceId,
+        string? workflowName,
+        string? definitionActorId,
+        WorkflowWebhookIngressBindingOptions binding,
+        ReadOnlySpan<byte> rawBody,
+        DateTimeOffset receivedAt,
+        WorkflowWebhookAuthenticationResult auth,
+        string deliveryId,
+        string prompt)
+    {
+        if (deliveryId.Length == 0)
             return WorkflowWebhookIngressBuildResult.Failure(
                 "WEBHOOK_DELIVERY_ID_REQUIRED",
                 "Webhook delivery id is required.",
-                StatusCodes.Status400BadRequest);
-
-        var prompt = ResolvePrompt(binding, rawBody, receivedAt);
-        if (prompt == null)
-            return WorkflowWebhookIngressBuildResult.Failure(
-                "WEBHOOK_PROMPT_REQUIRED",
-                "Webhook prompt mapping produced an empty prompt.",
                 StatusCodes.Status400BadRequest);
 
         var fingerprint = Fingerprint(rawBody);
@@ -109,139 +166,118 @@ internal sealed class WorkflowWebhookIngressRequestBuilder
 
     private WorkflowWebhookIngressBindingOptions? ResolveBinding(string routeKey)
     {
-        var normalizedRoute = Normalize(routeKey);
+        var normalizedRoute = WorkflowWebhookRoute.Normalize(routeKey);
         if (normalizedRoute == null)
             return null;
 
         return _options.Value.Bindings.FirstOrDefault(binding =>
-            string.Equals(Normalize(binding.RouteKey), normalizedRoute, StringComparison.Ordinal));
+            string.Equals(
+                WorkflowWebhookRoute.Normalize(binding.RouteKey),
+                normalizedRoute,
+                StringComparison.Ordinal));
     }
 
-    private static string? ResolveDeliveryId(
+    private static DeliveryIdResolution ResolveDeliveryId(
         HttpRequest request,
         WorkflowWebhookIngressBindingOptions binding,
-        ReadOnlySpan<byte> rawBody)
+        JsonElement payload)
     {
+        var path = Normalize(binding.DeliveryIdJsonPath);
+        if (path == null || !WorkflowWebhookJsonPath.TryExtractScalar(payload, path, out var bodyValue))
+            return DeliveryIdResolution.Failure(
+                "WEBHOOK_DELIVERY_ID_REQUIRED",
+                "Webhook payload is missing its signed delivery id.",
+                StatusCodes.Status400BadRequest);
+
+        var deliveryId = Normalize(bodyValue);
+        if (deliveryId == null)
+            return DeliveryIdResolution.Failure(
+                "WEBHOOK_DELIVERY_ID_REQUIRED",
+                "Webhook delivery id is required.",
+                StatusCodes.Status400BadRequest);
+
+        if (Encoding.UTF8.GetByteCount(deliveryId) > WorkflowWebhookIngressLimits.MaxDeliveryIdBytes)
+            return DeliveryIdResolution.Failure(
+                "WEBHOOK_DELIVERY_ID_TOO_LARGE",
+                "Webhook delivery id exceeds the supported size.",
+                StatusCodes.Status400BadRequest);
+
         var headerName = Normalize(binding.DeliveryIdHeader);
         if (headerName != null)
         {
             var headerValue = Normalize(request.Headers[headerName].FirstOrDefault());
-            if (headerValue != null)
-                return headerValue;
+            if (headerValue != null && !string.Equals(headerValue, deliveryId, StringComparison.Ordinal))
+            {
+                return DeliveryIdResolution.Failure(
+                    "WEBHOOK_DELIVERY_ID_MISMATCH",
+                    "Webhook delivery id header does not match the signed payload.",
+                    StatusCodes.Status400BadRequest);
+            }
         }
 
-        var path = Normalize(binding.DeliveryIdJsonPath);
-        return path == null ? null : ExtractJsonString(rawBody, path);
+        return DeliveryIdResolution.Success(deliveryId);
     }
 
-    private static string? ResolvePrompt(
+    private static WorkflowWebhookPromptRenderResult ResolvePrompt(
         WorkflowWebhookIngressBindingOptions binding,
-        ReadOnlySpan<byte> rawBody,
+        JsonElement payload,
         DateTimeOffset receivedAt)
     {
         var template = Normalize(binding.PromptTemplate);
         if (template != null)
-            return ApplyTemplate(template, rawBody, receivedAt);
+            return WorkflowWebhookPromptTemplate.Render(
+                template,
+                payload,
+                receivedAt,
+                binding.TimeZoneId);
 
         var path = Normalize(binding.PromptJsonPath);
-        if (path != null)
-            return ExtractJsonString(rawBody, path);
-
-        return null;
-    }
-
-    private static string? ApplyTemplate(string template, ReadOnlySpan<byte> rawBody, DateTimeOffset receivedAt)
-    {
-        var result = template;
-        foreach (var placeholder in EnumeratePlaceholders(template))
+        if (path != null && WorkflowWebhookJsonPath.TryExtractScalar(payload, path, out var value))
         {
-            var value = placeholder.StartsWith('@')
-                ? ResolveIngressPlaceholder(placeholder, receivedAt)
-                : ExtractJsonString(rawBody, placeholder);
-            result = result.Replace("{{" + placeholder + "}}", value ?? string.Empty, StringComparison.Ordinal);
-        }
-
-        return Normalize(result);
-    }
-
-    // Tenant local time is UTC+8. Senders such as Lark Base automation cannot
-    // supply "today", so bindings derive it from the trusted ingress
-    // received_at instead of trusting a payload-provided date.
-    private static readonly TimeSpan TenantUtcOffset = TimeSpan.FromHours(8);
-
-    private static string? ResolveIngressPlaceholder(string placeholder, DateTimeOffset receivedAt) =>
-        placeholder switch
-        {
-            "@run_date" => receivedAt.ToOffset(TenantUtcOffset).ToString("yyyy-MM-dd"),
-            "@received_at_unix_ms" => receivedAt.ToUnixTimeMilliseconds().ToString(),
-            _ => null,
-        };
-
-    private static IEnumerable<string> EnumeratePlaceholders(string template)
-    {
-        var index = 0;
-        while (index < template.Length)
-        {
-            var start = template.IndexOf("{{", index, StringComparison.Ordinal);
-            if (start < 0)
-                yield break;
-            var end = template.IndexOf("}}", start + 2, StringComparison.Ordinal);
-            if (end < 0)
-                yield break;
-
-            var value = template[(start + 2)..end].Trim();
-            if (value.Length > 0)
-                yield return value;
-            index = end + 2;
-        }
-    }
-
-    private static string? ExtractJsonString(ReadOnlySpan<byte> rawBody, string path)
-    {
-        try
-        {
-            using var document = JsonDocument.Parse(rawBody.ToArray());
-            var current = document.RootElement;
-            foreach (var segment in NormalizeJsonPath(path))
+            var prompt = Normalize(value);
+            if (prompt != null)
             {
-                if (current.ValueKind != JsonValueKind.Object ||
-                    !current.TryGetProperty(segment, out current))
-                {
-                    return null;
-                }
+                if (Encoding.UTF8.GetByteCount(prompt) > WorkflowWebhookIngressLimits.MaxPromptBytes)
+                    return WorkflowWebhookPromptRenderResult.PayloadFailure(
+                        "WEBHOOK_PROMPT_TOO_LARGE",
+                        "Webhook prompt mapping exceeds the supported output size.",
+                        StatusCodes.Status413PayloadTooLarge);
+                return WorkflowWebhookPromptRenderResult.Success(prompt);
             }
-
-            return current.ValueKind switch
-            {
-                JsonValueKind.String => Normalize(current.GetString()),
-                JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False => current.GetRawText(),
-                _ => null,
-            };
         }
-        catch (JsonException)
-        {
-            return null;
-        }
-    }
 
-    private static IEnumerable<string> NormalizeJsonPath(string path)
-    {
-        var normalized = path.Trim();
-        if (normalized.StartsWith("$.", StringComparison.Ordinal))
-            normalized = normalized[2..];
-        else if (normalized.StartsWith(".", StringComparison.Ordinal))
-            normalized = normalized[1..];
-
-        return normalized
-            .Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return WorkflowWebhookPromptRenderResult.PayloadFailure(
+            "WEBHOOK_PROMPT_PATH_MISSING",
+            "Webhook payload is missing a required prompt value.",
+            StatusCodes.Status400BadRequest);
     }
 
     private static string Fingerprint(ReadOnlySpan<byte> rawBody) =>
         Convert.ToHexString(SHA256.HashData(rawBody)).ToLowerInvariant();
 
     private static string BuildSeed(params string[] parts) =>
-        string.Join(':', parts.Select(Normalize).Where(static part => part != null));
+        "webhook:" + Convert.ToHexString(SHA256.HashData(
+            Encoding.UTF8.GetBytes(string.Concat(parts.Select(static part =>
+            {
+                var normalized = Normalize(part) ?? string.Empty;
+                return $"{Encoding.UTF8.GetByteCount(normalized)}:{normalized}";
+            }))))).ToLowerInvariant();
 
     private static string? Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private sealed record DeliveryIdResolution(
+        string? DeliveryId,
+        string? ErrorCode,
+        string? ErrorMessage,
+        int StatusCode)
+    {
+        public bool Succeeded => DeliveryId != null && ErrorCode == null;
+
+        public static DeliveryIdResolution Success(string deliveryId) =>
+            new(deliveryId, null, null, StatusCodes.Status200OK);
+
+        public static DeliveryIdResolution Failure(string code, string message, int statusCode) =>
+            new(null, code, message, statusCode);
+    }
 }

@@ -83,7 +83,10 @@ applies only to Audit Trail artifacts with typed chat provenance.
 |---|---|---|
 | `POST /api/chat` | HTTP + SSE | Mainnet typed command 进入 Assistant actor 主干；既有 form/no-type 请求进入冻结的 external Workflow compatibility adapter；Workflow Host 直接发起 Workflow run |
 | `GET /api/ws/chat` | WebSocket | 与 `/api/chat` 同能力，使用 WS 封装 |
-| `POST /api/workflow-webhooks/{routeKey}` | HTTP JSON | 认证外部 webhook，并按 Host binding 启动新 run |
+| `POST /api/workflow-webhooks/{routeKey}` | HTTP JSON | 认证外部 webhook，并按 Host 或 scope-owned exact binding 启动新 run |
+| `PUT /api/scopes/{scopeId}/workflow-webhooks/{routeKey}` | HTTP JSON | 为当前 scope 注册或更新 exact Definition/revision webhook binding |
+| `GET /api/scopes/{scopeId}/workflow-webhooks` | HTTP JSON | 列出当前 scope 的 webhook bindings（secret 只返回 set/unset） |
+| `DELETE /api/scopes/{scopeId}/workflow-webhooks/{routeKey}` | HTTP JSON | 原子删除仍归当前 scope 所有的 binding |
 | `POST /api/workflows/resume` | HTTP JSON | 恢复 `human_input/human_approval` 挂起步骤 |
 | `POST /api/workflows/signal` | HTTP JSON | 向等待信号的步骤发送 signal |
 
@@ -292,16 +295,20 @@ Scope service stream 入口（如 `/api/scopes/{scopeId}/invoke/chat:stream`、m
 
 ### Webhook start-run
 
-`POST /api/workflow-webhooks/{routeKey}` 用于外部系统认证后启动新的 workflow run。`routeKey` 只匹配 Host 配置里的 binding；workflow 名称、scope、delivery id 来源、prompt 映射与 HMAC header 都由 `WorkflowWebhookIngress` options 承载，不在生产代码硬编码具体 workflow。
+`POST /api/workflow-webhooks/{routeKey}` 用于外部系统认证后启动新的 workflow run。`routeKey` 可以匹配 Host 配置的静态 binding，也可以匹配 scope member 通过管理 API 注册的动态 binding。二者共享 canonical route namespace；大小写/首尾空白统一规范化，同名冲突 fail closed，动态 binding 不能遮蔽静态 binding。
 
 运行语义：
 
-- Host 读取 raw JSON、执行 HMAC 校验、按 binding 映射 delivery id 与 prompt，然后构造 typed `WorkflowChatRunRequest`。
-- `CommandIdSeed` 与 `CorrelationIdSeed` 使用稳定格式 `webhook:{routeKey}:{sourceId}:{deliveryId}`。
+- 动态 binding 只接受当前 scope 的 committed Definition actor，并在注册时固定 revision；每次 ingress 在 HMAC 成功后、replay admission 前重新核对 actor kind、scope、workflow name、revision、definition payload/version 与 capability admission digest，发生 drift 返回 `409`，不启动 run。
+- Host 有界读取 raw JSON，先执行 HMAC 校验，再按 binding 从已签名 body 解析 delivery id 与 prompt。delivery id header 若配置只能与 body 值相同，不能作为未签名的 replay identity。
+- JSON prompt template 使用结构化 JSON 替换，字符串引号、反斜杠与换行保持原值；缺失 path、未知 placeholder、非法 template、超限 body/template/output/delivery id 均 fail closed。`@run_date` 按 binding 的 IANA/系统时区计算，默认 UTC。
+- `CommandIdSeed` 与 `CorrelationIdSeed` 是对 canonical `route/source/delivery` 长度前缀 tuple 做 SHA-256 后得到的稳定 opaque seed，避免分隔符歧义。
 - `WorkflowChatRequestEvent.external_ingress` 承载 typed route/source/delivery/fingerprint/auth 信息；这些稳定语义不得塞进 `Metadata`。
+- 动态 binding 以 Protobuf 持久化；HMAC secret 加密落盘，GET/list 只返回 set/unset，不回显 secret。
 - 防重放由 `IWorkflowWebhookReplayStore` 承载，生产实现必须是 durable/distributed first-writer-wins store；显式 in-memory 实现只允许本地或测试使用。
 - 启用 webhook ingress 但没有 replay store 时，Host fail closed 返回 `503 WEBHOOK_REPLAY_STORE_UNAVAILABLE`。
 - 成功响应是 `202 Accepted`，只表示命令已被接受并可追踪；不承诺 run 已提交、执行完成或 readmodel 已刷新。
+- 当前 admission record 在 dispatch 接受后用于压制重复投递，但尚未与 workflow terminal state 建立 lease/complete 状态机；因此不得宣称 crash-safe exactly-once。webhook HMAC 也只证明事件来源，不授予下游写工具的 caller credential 或 tool approval。
 
 `POST /api/workflows/signal` 仍只用于已有 run 的 `wait_signal` continuation，必须携带已知 `actorId + runId + signalName`，不能作为新 run webhook trigger 使用。
 

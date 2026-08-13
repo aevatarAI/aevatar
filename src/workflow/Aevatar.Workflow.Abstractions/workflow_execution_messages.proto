@@ -220,6 +220,29 @@ message WorkflowWebhookReplayRecord {
   string correlation_id = 7;
 }
 
+// Durable scope-owned webhook binding payload. HMAC fields contain ciphertext
+// produced by the host binding-secret cipher; plaintext secrets never enter
+// the Redis value.
+message WorkflowWebhookBindingState {
+  string route_key = 1;
+  string scope_id = 2;
+  string workflow_name = 3;
+  string source_id = 4;
+  string prompt_template = 5;
+  string prompt_json_path = 6;
+  string delivery_id_header = 7;
+  string delivery_id_json_path = 8;
+  string protected_hmac_secret = 9;
+  string hmac_signature_header = 10;
+  string hmac_timestamp_header = 11;
+  int32 max_timestamp_skew_seconds = 12;
+  int64 updated_at_unix_ms = 13;
+  string definition_actor_id = 14;
+  string target_revision_id = 15;
+  string protected_previous_hmac_secret = 16;
+  string time_zone_id = 17;
+}
+
 message WorkflowChatRequestEvent {
   reserved 9;
   reserved "connector_http_authorization";

@@ -38,9 +38,17 @@ public sealed class WorkflowWebhookIngressBindingOptions
     /// </summary>
     public string? DefinitionActorId { get; set; }
 
+    /// <summary>
+    /// Revision pinned when the binding is created. Definition-actor webhook
+    /// deliveries fail closed when the committed actor moves to another
+    /// revision instead of silently executing changed workflow code.
+    /// </summary>
+    public string? TargetRevisionId { get; set; }
+
     public string? ScopeId { get; set; }
     public string? PromptTemplate { get; set; }
     public string? PromptJsonPath { get; set; }
+    public string? TimeZoneId { get; set; }
     public string? DeliveryIdHeader { get; set; }
     public string? DeliveryIdJsonPath { get; set; }
     public string? HmacSecret { get; set; }
@@ -54,4 +62,17 @@ public sealed class WorkflowWebhookIngressBindingOptions
     public string? HmacSignatureHeader { get; set; }
     public string? HmacTimestampHeader { get; set; }
     public int MaxTimestampSkewSeconds { get; set; } = 300;
+}
+
+internal static class WorkflowWebhookIngressLimits
+{
+    public const int MaxRouteKeyBytes = 256;
+    public const int MaxBodyBytes = 256 * 1024;
+    public const int MaxPromptTemplateBytes = 64 * 1024;
+    public const int MaxPromptBytes = 256 * 1024;
+    public const int MaxDeliveryIdBytes = 256;
+    public const int MaxJsonPathBytes = 256;
+    public const int MaxJsonPathSegments = 32;
+    public const int MaxPromptPlaceholders = 128;
+    public const int MaxJsonDepth = 32;
 }

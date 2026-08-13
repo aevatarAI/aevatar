@@ -68,6 +68,35 @@ public sealed class WorkflowWebhookBindingSecretCipherTests
         }
     }
 
+    [Fact]
+    public void KeyringCipher_AfterRotation_ShouldReadRetainedHistoricalCiphertext()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"keyring-{Guid.NewGuid():N}.json");
+        try
+        {
+            File.WriteAllText(path, """{"activeKeyId":"k1","keys":{"k1":"QUFB"}}""");
+            var writer = AesGcmWorkflowWebhookBindingSecretCipher.TryCreateFromKeyring(path);
+            writer.Should().NotBeNull();
+            var oldCiphertext = writer!.Protect("delivery-signing-secret");
+
+            File.WriteAllText(
+                path,
+                """{"activeKeyId":"k2","keys":{"k1":"QUFB","k2":"REREREQ="}}""");
+            var rotated = AesGcmWorkflowWebhookBindingSecretCipher.TryCreateFromKeyring(path);
+
+            rotated.Should().NotBeNull();
+            rotated!.Unprotect(oldCiphertext).Should().Be("delivery-signing-secret");
+            var newCiphertext = rotated.Protect("new-secret");
+            var oldOnly = writer;
+            var act = () => oldOnly.Unprotect(newCiphertext);
+            act.Should().Throw<CryptographicException>();
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]

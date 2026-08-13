@@ -295,18 +295,21 @@ ContentArtifact metadata and provenance survive. See
 
 运行边界：
 
-- Binding 由 Host-owned `WorkflowWebhookIngress` options/config 承载，包含 `routeKey`、`sourceId`、workflow 名称、scope、delivery id 来源、prompt 映射与 HMAC 策略。
-- Host/Adapter 负责读取 raw body、校验 HMAC、解析简单 JSON path/template，并生成稳定 `webhook:{routeKey}:{sourceId}:{deliveryId}` command/correlation seed。
+- Binding 可以由 Host-owned `WorkflowWebhookIngress` options/config 承载，也可以由 scope member 通过 `PUT/GET/DELETE /api/scopes/{scopeId}/workflow-webhooks...` 管理。动态 binding 是 scope-owned Protobuf state，HMAC secret 加密落盘且只写不读；route ownership 的 create/update/delete 都以原子 compare-and-set 维护。
+- 动态 binding 必须指向同 scope 的 committed Definition actor 和精确 revision。每次 ingress 在 HMAC 验证后、replay admission 前重新读取 authoritative actor binding，并核对 scope/name/revision/payload/version/capability admission digest；任何 drift 都 fail closed，不允许静默执行新 revision 或新 capability plan。
+- Host/Adapter 有界读取 raw body、校验 HMAC，并从已签名 JSON body 取得稳定 delivery id；可选 header 必须与 body id 相同。prompt template 是 JSON-aware 映射，缺失字段、未知占位符、非法 JSON 或超限输入都 fail closed。
+- command/correlation seed 对 canonical `route/source/delivery` 长度前缀 tuple 做 SHA-256，保持稳定且无分隔符碰撞。`@run_date` 使用 binding 配置时区，默认 UTC。
 - 应用层只接收 typed `WorkflowChatRunRequest.ExternalIngress`，command envelope 写入 `WorkflowChatRequestEvent.external_ingress`；不得把 route、delivery、fingerprint、auth 等稳定语义塞进 `Metadata`。
 - Replay/idempotency 权威是 `IWorkflowWebhookReplayStore`，生产实现必须是 durable/distributed first-writer-wins store；`InMemoryWorkflowWebhookReplayStore` 只在显式配置时用于本地或测试。
 - Host 启用 webhook ingress 但没有 replay store 时返回 `503 WEBHOOK_REPLAY_STORE_UNAVAILABLE`，不能退化为无幂等的生产路径。
 - HTTP 成功响应只返回 `202 Accepted + commandId/correlationId/actorId/statusUrl/deliveryId`，不暗示 committed、result 或 readmodel-observed。
+- Replay admission 当前没有与 terminal run 联动的 lease/completed 状态，不能表述为 crash-safe exactly-once；HMAC binding 也不等价于 caller credential 或运行时写工具批准。
 
 不属于 v1 的范围：
 
 - 不新增 `WorkflowWebhookTriggerGAgent`、trigger state proto、trigger projection/readmodel 或 `/api/workflow-triggers/{triggerId}/deliveries` endpoint family。
 - 不在 endpoint 或中间层维护生产 `Dictionary` / `ConcurrentDictionary` / `MemoryCache` delivery ledger。
-- 不依赖 NyxID、chrono-storage 或 Ornn 新增端点、schema 或能力。
+- 不依赖 NyxID、chrono-storage 或 Ornn 新增端点、schema 或能力；NyxID 发送方应使用已签名 envelope 内的 `event_id` 作为 delivery identity。
 
 ### Workflow Lease
 

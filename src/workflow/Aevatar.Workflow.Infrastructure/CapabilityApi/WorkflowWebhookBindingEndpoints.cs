@@ -1,9 +1,11 @@
 using Aevatar.Capabilities;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using System.Text;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 
@@ -38,7 +40,8 @@ internal static class WorkflowWebhookBindingEndpoints
         int? MaxTimestampSkewSeconds,
         string? DefinitionActorId = null,
         string? TargetRevisionId = null,
-        string? PreviousHmacSecret = null);
+        string? PreviousHmacSecret = null,
+        string? TimeZoneId = null);
 
     internal static async Task<IResult> HandlePutAsync(
         HttpContext http,
@@ -55,87 +58,155 @@ internal static class WorkflowWebhookBindingEndpoints
         if (bindingStore == null)
             return storeUnavailable!;
 
-        var normalizedRoute = Normalize(routeKey);
+        var normalizedRoute = WorkflowWebhookRoute.Normalize(routeKey);
         if (normalizedRoute == null)
             return BadRequest("WEBHOOK_ROUTE_REQUIRED", "Route key is required.");
 
-        var workflowName = Normalize(request.WorkflowName);
         var definitionActorId = Normalize(request.DefinitionActorId);
-        if (workflowName == null && definitionActorId == null)
+        if (definitionActorId == null)
             return BadRequest(
-                "WEBHOOK_WORKFLOW_REQUIRED",
-                "workflowName or definitionActorId is required.");
+                "WEBHOOK_EXACT_TARGET_REQUIRED",
+                "definitionActorId is required for a dynamic webhook binding.");
 
-        // A definition-actor target is validated against the actor's own
-        // committed binding: it must exist, be workflow-capable, belong to the
-        // caller's scope, and (when pinned) match the expected revision. The
-        // webhook payload itself can never choose or redirect the workflow.
-        string? targetRevisionId = null;
-        if (definitionActorId != null)
+        // Static bindings and dynamic bindings share one public route
+        // namespace. A dynamic record must never shadow a host-owned route,
+        // even when the static ingress flag is currently disabled.
+        var configuredBindings = http.RequestServices
+            .GetService<IOptions<WorkflowWebhookIngressOptions>>()?
+            .Value.Bindings;
+        if (configuredBindings?.Any(binding => string.Equals(
+                WorkflowWebhookRoute.Normalize(binding.RouteKey),
+                normalizedRoute,
+                StringComparison.Ordinal)) == true)
         {
-            var bindingReader = http.RequestServices.GetService<IWorkflowActorBindingReader>();
-            if (bindingReader == null)
-                return Results.Json(
-                    new
-                    {
-                        code = "WEBHOOK_TARGET_VALIDATION_UNAVAILABLE",
-                        message = "Definition actor targets cannot be validated on this host.",
-                    },
-                    statusCode: StatusCodes.Status503ServiceUnavailable);
-
-            var target = await bindingReader.GetAsync(definitionActorId, ct);
-            if (target == null || !target.IsWorkflowCapable)
-                return BadRequest("WEBHOOK_TARGET_NOT_FOUND", "Definition actor target was not found.");
-
-            if (!string.Equals(target.ScopeId, scopeId, StringComparison.Ordinal))
-                return Results.Json(
-                    new
-                    {
-                        code = "WEBHOOK_TARGET_NOT_IN_SCOPE",
-                        message = "Definition actor target belongs to another scope.",
-                    },
-                    statusCode: StatusCodes.Status403Forbidden);
-
-            var expectedRevision = Normalize(request.TargetRevisionId);
-            if (expectedRevision != null &&
-                !string.Equals(expectedRevision, target.RevisionId, StringComparison.Ordinal))
-            {
-                return Results.Json(
-                    new
-                    {
-                        code = "WEBHOOK_TARGET_REVISION_MISMATCH",
-                        message = "Definition actor target revision does not match the expected revision.",
-                    },
-                    statusCode: StatusCodes.Status409Conflict);
-            }
-
-            targetRevisionId = Normalize(target.RevisionId);
-            workflowName ??= Normalize(target.WorkflowName);
-            if (workflowName == null)
-                return BadRequest("WEBHOOK_TARGET_NOT_FOUND", "Definition actor target has no workflow name.");
+            return Results.Json(
+                new
+                {
+                    code = "WEBHOOK_ROUTE_RESERVED_BY_HOST",
+                    message = "Route key is reserved by host configuration.",
+                },
+                statusCode: StatusCodes.Status409Conflict);
         }
 
-        if (Normalize(request.HmacSecret) == null)
-            return BadRequest("WEBHOOK_SECRET_REQUIRED", "hmacSecret is required.");
+        // Validate the exact committed definition target before persisting the
+        // pin. A run actor is intentionally not accepted: otherwise a binding
+        // could inherit mutable run state instead of a revisioned definition.
+        var bindingReader = http.RequestServices.GetService<IWorkflowActorBindingReader>();
+        if (bindingReader == null)
+            return Results.Json(
+                new
+                {
+                    code = "WEBHOOK_TARGET_VALIDATION_UNAVAILABLE",
+                    message = "Definition actor targets cannot be validated on this host.",
+                },
+                statusCode: StatusCodes.Status503ServiceUnavailable);
+
+        var target = await bindingReader.GetAsync(definitionActorId, ct);
+        if (target == null)
+            return BadRequest("WEBHOOK_TARGET_NOT_FOUND", "Definition actor target was not found.");
+
+        if (target.ActorKind != WorkflowActorKind.Definition ||
+            !string.Equals(target.ActorId, definitionActorId, StringComparison.Ordinal))
+        {
+            return BadRequest(
+                "WEBHOOK_TARGET_NOT_DEFINITION",
+                "Webhook targets must be workflow definition actors.");
+        }
+
+        if (!string.Equals(Normalize(target.ScopeId), Normalize(scopeId), StringComparison.Ordinal))
+            return Results.Json(
+                new
+                {
+                    code = "WEBHOOK_TARGET_NOT_IN_SCOPE",
+                    message = "Definition actor target belongs to another scope.",
+                },
+                statusCode: StatusCodes.Status403Forbidden);
+
+        var targetRevisionId = Normalize(target.RevisionId);
+        if (targetRevisionId == null)
+            return BadRequest(
+                "WEBHOOK_TARGET_REVISION_REQUIRED",
+                "Definition actor target has no committed revision.");
+
+        var expectedRevision = Normalize(request.TargetRevisionId);
+        if (expectedRevision != null &&
+            !string.Equals(expectedRevision, targetRevisionId, StringComparison.Ordinal))
+        {
+            return Results.Json(
+                new
+                {
+                    code = "WEBHOOK_TARGET_REVISION_MISMATCH",
+                    message = "Definition actor target revision does not match the expected revision.",
+                },
+                statusCode: StatusCodes.Status409Conflict);
+        }
+
+        var workflowName = Normalize(target.WorkflowName);
+        if (workflowName == null)
+            return BadRequest("WEBHOOK_TARGET_NOT_FOUND", "Definition actor target has no workflow name.");
+
+        var requestedWorkflowName = Normalize(request.WorkflowName);
+        if (requestedWorkflowName != null &&
+            !string.Equals(requestedWorkflowName, workflowName, StringComparison.OrdinalIgnoreCase))
+        {
+            return Results.Json(
+                new
+                {
+                    code = "WEBHOOK_TARGET_WORKFLOW_MISMATCH",
+                    message = "Definition actor workflow does not match workflowName.",
+                },
+                statusCode: StatusCodes.Status409Conflict);
+        }
+
+        var hmacSecret = request.HmacSecret?.Trim();
+        if (hmacSecret == null || Encoding.UTF8.GetByteCount(hmacSecret) < 32)
+            return BadRequest(
+                "WEBHOOK_SECRET_TOO_SHORT",
+                "hmacSecret must contain at least 32 UTF-8 bytes.");
+
+        var previousHmacSecret = Normalize(request.PreviousHmacSecret);
+        if (previousHmacSecret != null && Encoding.UTF8.GetByteCount(previousHmacSecret) < 32)
+            return BadRequest(
+                "WEBHOOK_PREVIOUS_SECRET_TOO_SHORT",
+                "previousHmacSecret must contain at least 32 UTF-8 bytes when supplied.");
 
         if (Normalize(request.PromptTemplate) == null && Normalize(request.PromptJsonPath) == null)
             return BadRequest(
                 "WEBHOOK_PROMPT_MAPPING_REQUIRED",
                 "promptTemplate or promptJsonPath is required.");
 
-        if (Normalize(request.DeliveryIdHeader) == null && Normalize(request.DeliveryIdJsonPath) == null)
+        var deliveryIdJsonPath = Normalize(request.DeliveryIdJsonPath);
+        if (deliveryIdJsonPath == null || !WorkflowWebhookJsonPath.IsValid(deliveryIdJsonPath))
             return BadRequest(
                 "WEBHOOK_DELIVERY_ID_MAPPING_REQUIRED",
-                "deliveryIdHeader or deliveryIdJsonPath is required.");
+                "deliveryIdJsonPath is required for a signed payload delivery id.");
 
-        // Route keys are a global namespace shared by every scope: a route may
-        // be (re)bound only by the scope that already owns it.
-        var existing = await bindingStore.GetAsync(normalizedRoute, ct);
-        if (existing != null && !string.Equals(existing.ScopeId, scopeId, StringComparison.Ordinal))
+        var promptJsonPath = Normalize(request.PromptJsonPath);
+        if (promptJsonPath != null && !WorkflowWebhookJsonPath.IsValid(promptJsonPath))
+            return BadRequest(
+                "WEBHOOK_PROMPT_JSON_PATH_INVALID",
+                "promptJsonPath is invalid.");
+
+        var promptTemplate = Normalize(request.PromptTemplate);
+        if (promptTemplate != null)
         {
-            return Results.Json(
-                new { code = "WEBHOOK_ROUTE_OWNED_BY_OTHER_SCOPE", message = "Route key is owned by another scope." },
-                statusCode: StatusCodes.Status409Conflict);
+            var templateValidation = WorkflowWebhookPromptTemplate.Validate(promptTemplate);
+            if (!templateValidation.Succeeded)
+                return BadRequest(templateValidation.ErrorCode!, templateValidation.ErrorMessage!);
+        }
+
+        var timeZoneId = Normalize(request.TimeZoneId) ?? TimeZoneInfo.Utc.Id;
+        try
+        {
+            _ = TimeZoneInfo.FindSystemTimeZoneById(timeZoneId);
+        }
+        catch (TimeZoneNotFoundException)
+        {
+            return BadRequest("WEBHOOK_TIME_ZONE_INVALID", "timeZoneId is not recognized.");
+        }
+        catch (InvalidTimeZoneException)
+        {
+            return BadRequest("WEBHOOK_TIME_ZONE_INVALID", "timeZoneId is invalid.");
         }
 
         var record = new WorkflowWebhookBindingRecord(
@@ -143,11 +214,12 @@ internal static class WorkflowWebhookBindingEndpoints
             ScopeId: scopeId,
             WorkflowName: workflowName!,
             SourceId: Normalize(request.SourceId),
-            PromptTemplate: Normalize(request.PromptTemplate),
-            PromptJsonPath: Normalize(request.PromptJsonPath),
+            PromptTemplate: promptTemplate,
+            PromptJsonPath: promptJsonPath,
+            TimeZoneId: timeZoneId,
             DeliveryIdHeader: Normalize(request.DeliveryIdHeader),
-            DeliveryIdJsonPath: Normalize(request.DeliveryIdJsonPath),
-            HmacSecret: request.HmacSecret!.Trim(),
+            DeliveryIdJsonPath: deliveryIdJsonPath,
+            HmacSecret: hmacSecret,
             HmacSignatureHeader: Normalize(request.HmacSignatureHeader),
             HmacTimestampHeader: Normalize(request.HmacTimestampHeader),
             MaxTimestampSkewSeconds: request.MaxTimestampSkewSeconds is > 0 and <= 3600
@@ -156,8 +228,13 @@ internal static class WorkflowWebhookBindingEndpoints
             UpdatedAtUnixMs: DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             DefinitionActorId: definitionActorId,
             TargetRevisionId: targetRevisionId,
-            PreviousHmacSecret: Normalize(request.PreviousHmacSecret));
-        await bindingStore.PutAsync(record, ct);
+            PreviousHmacSecret: previousHmacSecret);
+        if (!await bindingStore.TryPutOwnedAsync(record, ct))
+        {
+            return Results.Json(
+                new { code = "WEBHOOK_ROUTE_OWNED_BY_OTHER_SCOPE", message = "Route key is owned by another scope." },
+                statusCode: StatusCodes.Status409Conflict);
+        }
 
         return Results.Ok(ToView(record));
     }
@@ -193,15 +270,13 @@ internal static class WorkflowWebhookBindingEndpoints
         if (bindingStore == null)
             return storeUnavailable!;
 
-        var normalizedRoute = Normalize(routeKey);
+        var normalizedRoute = WorkflowWebhookRoute.Normalize(routeKey);
         if (normalizedRoute == null)
             return BadRequest("WEBHOOK_ROUTE_REQUIRED", "Route key is required.");
 
-        var existing = await bindingStore.GetAsync(normalizedRoute, ct);
-        if (existing == null || !string.Equals(existing.ScopeId, scopeId, StringComparison.Ordinal))
+        if (!await bindingStore.TryDeleteOwnedAsync(normalizedRoute, scopeId, ct))
             return Results.NotFound();
 
-        await bindingStore.DeleteAsync(normalizedRoute, ct);
         return Results.NoContent();
     }
 
@@ -216,6 +291,7 @@ internal static class WorkflowWebhookBindingEndpoints
         sourceId = record.SourceId,
         promptTemplate = record.PromptTemplate,
         promptJsonPath = record.PromptJsonPath,
+        timeZoneId = record.TimeZoneId,
         deliveryIdHeader = record.DeliveryIdHeader,
         deliveryIdJsonPath = record.DeliveryIdJsonPath,
         hmacSecretSet = !string.IsNullOrWhiteSpace(record.HmacSecret),

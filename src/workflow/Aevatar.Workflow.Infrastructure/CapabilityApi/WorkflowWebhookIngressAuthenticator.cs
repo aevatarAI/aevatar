@@ -32,7 +32,17 @@ internal static class WorkflowWebhookIngressAuthenticator
                 "WEBHOOK_AUTH_INVALID",
                 "Webhook timestamp is invalid.");
 
-        var timestamp = DateTimeOffset.FromUnixTimeSeconds(timestampUnixSeconds);
+        DateTimeOffset timestamp;
+        try
+        {
+            timestamp = DateTimeOffset.FromUnixTimeSeconds(timestampUnixSeconds);
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return WorkflowWebhookAuthenticationResult.Failure(
+                "WEBHOOK_AUTH_INVALID",
+                "Webhook timestamp is invalid.");
+        }
         var maxSkew = TimeSpan.FromSeconds(binding.MaxTimestampSkewSeconds <= 0
             ? 300
             : binding.MaxTimestampSkewSeconds);

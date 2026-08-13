@@ -29,7 +29,7 @@ Historical persisted actor kind/type tokens such as `channel-runtime.skill-runne
 
 Scheduled workflow/team external triggers are not admitted through the retired runner model or runner delivery ledgers.
 
-When external trigger support is required, use workflow/team-owned ingress such as `WorkflowWebhookIngressEndpoints` and its replay/admission store. That path owns stable delivery identity, payload-conflict handling, and durable dedupe. Scheduled workflow agent creation rejects `external_trigger_sources` explicitly instead of silently routing them to a retired runner.
+When external trigger support is required, use workflow/team-owned ingress such as `WorkflowWebhookIngressEndpoints` and its replay/admission store. Scope-owned dynamic bindings pin an exact Definition actor/revision and revalidate that target after HMAC authentication on every delivery. The path owns stable signed-body delivery identity, payload-conflict handling, and durable duplicate suppression, but its current admission record is not a terminal-state lease/completion protocol and therefore is not crash-safe exactly-once. Scheduled workflow agent creation rejects `external_trigger_sources` explicitly instead of silently routing them to a retired runner.
 
 ## Canonical Team Member Automation API
 
