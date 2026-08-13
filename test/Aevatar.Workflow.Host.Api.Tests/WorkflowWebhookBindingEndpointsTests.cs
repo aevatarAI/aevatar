@@ -5,6 +5,7 @@ using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Abstractions.Credentials;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using FluentAssertions;
@@ -342,6 +343,134 @@ public sealed class WorkflowWebhookBindingEndpointsTests
     }
 
     [Fact]
+    public async Task Put_WithAuthenticatedCliProxyDelegation_ShouldPersistUnattendedAuthorization()
+    {
+        var store = new InMemoryWorkflowWebhookBindingStore();
+        var tokenProvider = new RecordingCallerAccessTokenProvider("bound-source-readable-token");
+        var http = CreateHttpContext(
+            store,
+            bindingReader: new FakeActorBindingReader(DefinitionBinding(plan: DurableApprovalPlan())),
+            authenticationEnabled: true,
+            bindingQuery: new FakeBindingQuery("bnd-owner-alpha"),
+            callerAccessTokenProvider: tokenProvider);
+        ApplyProxyDelegationAuthentication(http, "owner-alpha", "scope-1");
+        http.Request.Headers.Authorization = "Bearer forwarded-user-token";
+
+        var result = await WorkflowWebhookBindingEndpoints.HandlePutAsync(
+            http,
+            "scope-1",
+            "hr01-route",
+            ExactPutRequest() with { EnableUnattendedEffects = true });
+
+        ((IStatusCodeHttpResult)result).StatusCode.Should().Be(StatusCodes.Status200OK);
+        var stored = await store.GetAsync("hr01-route");
+        stored.Should().NotBeNull();
+        stored!.CallerAuthority!.ExternalUserId.Should().Be("owner-alpha");
+        stored.CallerAuthority.BindingId.Should().Be("bnd-owner-alpha");
+        stored.UnattendedEffectAuthorization.Should().NotBeNull();
+        tokenProvider.Authority.Should().NotBeNull();
+        tokenProvider.Authority!.ExternalUserId.Should().Be("owner-alpha");
+        tokenProvider.Authority.BindingId.Should().Be("bnd-owner-alpha");
+    }
+
+    [Fact]
+    public async Task Put_WithOrdinaryProxyDelegationWithoutBoundSourceCredential_ShouldFailWithoutMutation()
+    {
+        var store = new InMemoryWorkflowWebhookBindingStore();
+        var http = CreateHttpContext(
+            store,
+            bindingReader: new FakeActorBindingReader(DefinitionBinding(plan: DurableApprovalPlan())),
+            authenticationEnabled: true,
+            bindingQuery: new FakeBindingQuery("bnd-owner-alpha"));
+        ApplyProxyDelegationAuthentication(http, "owner-alpha", "scope-1");
+
+        var result = await WorkflowWebhookBindingEndpoints.HandlePutAsync(
+            http,
+            "scope-1",
+            "hr01-route",
+            ExactPutRequest() with { EnableUnattendedEffects = true });
+
+        ((IStatusCodeHttpResult)result).StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
+        (await store.GetAsync("hr01-route")).Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData(CallerAccessTokenProviderFailureMode.Empty)]
+    [InlineData(CallerAccessTokenProviderFailureMode.Throw)]
+    public async Task Put_WhenBoundSourceCredentialIssuanceFails_ShouldFailWithoutMutation(
+        CallerAccessTokenProviderFailureMode failureMode)
+    {
+        var store = new InMemoryWorkflowWebhookBindingStore();
+        var tokenProvider = new FailingCallerAccessTokenProvider(failureMode);
+        var http = CreateHttpContext(
+            store,
+            bindingReader: new FakeActorBindingReader(DefinitionBinding(plan: DurableApprovalPlan())),
+            authenticationEnabled: true,
+            bindingQuery: new FakeBindingQuery("bnd-owner-alpha"),
+            callerAccessTokenProvider: tokenProvider);
+        ApplyProxyDelegationAuthentication(http, "owner-alpha", "scope-1");
+
+        var result = await WorkflowWebhookBindingEndpoints.HandlePutAsync(
+            http,
+            "scope-1",
+            "hr01-route",
+            ExactPutRequest() with { EnableUnattendedEffects = true });
+
+        ((IStatusCodeHttpResult)result).StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
+        (await store.GetAsync("hr01-route")).Should().BeNull();
+        tokenProvider.Authority!.BindingId.Should().Be("bnd-owner-alpha");
+    }
+
+    [Fact]
+    public async Task Put_WhenIssuedCredentialBindingNoLongerMatchesActiveBinding_ShouldFailWithoutMutation()
+    {
+        var store = new InMemoryWorkflowWebhookBindingStore();
+        var tokenProvider = new RecordingCallerAccessTokenProvider("bound-source-readable-token");
+        var http = CreateHttpContext(
+            store,
+            bindingReader: new FakeActorBindingReader(DefinitionBinding(plan: DurableApprovalPlan())),
+            authenticationEnabled: true,
+            bindingQuery: new SequencedBindingQuery("bnd-owner-alpha", "bnd-owner-beta"),
+            callerAccessTokenProvider: tokenProvider);
+        ApplyProxyDelegationAuthentication(http, "owner-alpha", "scope-1");
+
+        var result = await WorkflowWebhookBindingEndpoints.HandlePutAsync(
+            http,
+            "scope-1",
+            "hr01-route",
+            ExactPutRequest() with { EnableUnattendedEffects = true });
+
+        ((IStatusCodeHttpResult)result).StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
+        (await store.GetAsync("hr01-route")).Should().BeNull();
+        tokenProvider.Authority.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Put_WithConflictingAuthenticatedSubjects_ShouldFailBeforeCredentialIssuance()
+    {
+        var store = new InMemoryWorkflowWebhookBindingStore();
+        var tokenProvider = new RecordingCallerAccessTokenProvider("bound-source-readable-token");
+        var http = CreateHttpContext(
+            store,
+            bindingReader: new FakeActorBindingReader(DefinitionBinding(plan: DurableApprovalPlan())),
+            authenticationEnabled: true,
+            bindingQuery: new FakeBindingQuery("bnd-owner-alpha"),
+            callerAccessTokenProvider: tokenProvider);
+        ApplyProxyDelegationAuthentication(http, "owner-alpha", "scope-1");
+        ((ClaimsIdentity)http.User.Identity!).AddClaim(new Claim("uid", "owner-beta"));
+
+        var result = await WorkflowWebhookBindingEndpoints.HandlePutAsync(
+            http,
+            "scope-1",
+            "hr01-route",
+            ExactPutRequest() with { EnableUnattendedEffects = true });
+
+        ((IStatusCodeHttpResult)result).StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
+        (await store.GetAsync("hr01-route")).Should().BeNull();
+        tokenProvider.Authority.Should().BeNull();
+    }
+
+    [Fact]
     public async Task Put_EnableUnattendedEffectsWithoutAuthenticatedHuman_ShouldFailWithoutMutation()
     {
         var store = new InMemoryWorkflowWebhookBindingStore();
@@ -356,6 +485,27 @@ public sealed class WorkflowWebhookBindingEndpointsTests
             ExactPutRequest() with { EnableUnattendedEffects = true });
 
         ((IStatusCodeHttpResult)result).StatusCode.Should().Be(StatusCodes.Status409Conflict);
+        (await store.GetAsync("hr01-route")).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Put_EnableUnattendedEffectsWithAuthenticationEnabledButNoPrincipal_ShouldFailWithoutMutation()
+    {
+        var store = new InMemoryWorkflowWebhookBindingStore();
+        var http = CreateHttpContext(
+            store,
+            bindingReader: new FakeActorBindingReader(DefinitionBinding(plan: DurableApprovalPlan())),
+            authenticationEnabled: true,
+            bindingQuery: new FakeBindingQuery("bnd-owner-alpha"),
+            callerAccessTokenProvider: new RecordingCallerAccessTokenProvider("bound-source-readable-token"));
+
+        var result = await WorkflowWebhookBindingEndpoints.HandlePutAsync(
+            http,
+            "scope-1",
+            "hr01-route",
+            ExactPutRequest() with { EnableUnattendedEffects = true });
+
+        ((IStatusCodeHttpResult)result).StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
         (await store.GetAsync("hr01-route")).Should().BeNull();
     }
 
@@ -873,7 +1023,8 @@ public sealed class WorkflowWebhookBindingEndpointsTests
         IWorkflowActorBindingReader? bindingReader = null,
         WorkflowWebhookIngressOptions? ingressOptions = null,
         bool authenticationEnabled = false,
-        IExternalIdentityBindingQueryPort? bindingQuery = null)
+        IExternalIdentityBindingQueryPort? bindingQuery = null,
+        IWorkflowCallerAccessTokenProvider? callerAccessTokenProvider = null)
     {
         var services = new ServiceCollection();
         services.AddSingleton<Microsoft.Extensions.Logging.ILoggerFactory>(NullLoggerFactory.Instance);
@@ -895,6 +1046,8 @@ public sealed class WorkflowWebhookBindingEndpointsTests
             services.AddSingleton<IOptions<WorkflowWebhookIngressOptions>>(Options.Create(ingressOptions));
         if (bindingQuery != null)
             services.AddSingleton(bindingQuery);
+        if (callerAccessTokenProvider != null)
+            services.AddSingleton(callerAccessTokenProvider);
         var http = new DefaultHttpContext { RequestServices = services.BuildServiceProvider() };
         http.Response.Body = new MemoryStream();
         return http;
@@ -915,6 +1068,26 @@ public sealed class WorkflowWebhookBindingEndpointsTests
         ], scheme));
         http.User = principal;
         http.Request.Headers.Authorization = $"Bearer {token}";
+        http.Features.Set<IAuthenticateResultFeature>(new TestAuthenticateResultFeature
+        {
+            AuthenticateResult = AuthenticateResult.Success(
+                new AuthenticationTicket(principal, scheme)),
+        });
+    }
+
+    private static void ApplyProxyDelegationAuthentication(
+        DefaultHttpContext http,
+        string subject,
+        string scopeId)
+    {
+        const string scheme = "NyxIdIdentityAssertion";
+        var principal = new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim("sub", subject),
+            new Claim("scope_id", scopeId),
+        ], scheme));
+        http.User = principal;
+        http.Request.Headers["X-NyxID-Delegation-Token"] = "proxy-delegation-token";
         http.Features.Set<IAuthenticateResultFeature>(new TestAuthenticateResultFeature
         {
             AuthenticateResult = AuthenticateResult.Success(
@@ -980,6 +1153,56 @@ public sealed class WorkflowWebhookBindingEndpointsTests
             ExternalSubjectRef externalSubject,
             CancellationToken ct = default) =>
             Task.FromResult<BindingId?>(new BindingId { Value = bindingId });
+    }
+
+    private sealed class SequencedBindingQuery(params string[] bindingIds)
+        : IExternalIdentityBindingQueryPort
+    {
+        private int _index;
+
+        public Task<BindingId?> ResolveAsync(
+            ExternalSubjectRef externalSubject,
+            CancellationToken ct = default)
+        {
+            var index = Math.Min(_index++, bindingIds.Length - 1);
+            return Task.FromResult<BindingId?>(new BindingId { Value = bindingIds[index] });
+        }
+    }
+
+    private sealed class RecordingCallerAccessTokenProvider(string accessToken)
+        : IWorkflowCallerAccessTokenProvider
+    {
+        public Aevatar.Workflow.Abstractions.WorkflowCallerNyxIdAuthority? Authority { get; private set; }
+
+        public Task<string> IssueAsync(
+            Aevatar.Workflow.Abstractions.WorkflowCallerNyxIdAuthority authority,
+            CancellationToken ct = default)
+        {
+            Authority = authority;
+            return Task.FromResult(accessToken);
+        }
+    }
+
+    public enum CallerAccessTokenProviderFailureMode
+    {
+        Empty,
+        Throw,
+    }
+
+    private sealed class FailingCallerAccessTokenProvider(CallerAccessTokenProviderFailureMode failureMode)
+        : IWorkflowCallerAccessTokenProvider
+    {
+        public Aevatar.Workflow.Abstractions.WorkflowCallerNyxIdAuthority? Authority { get; private set; }
+
+        public Task<string> IssueAsync(
+            Aevatar.Workflow.Abstractions.WorkflowCallerNyxIdAuthority authority,
+            CancellationToken ct = default)
+        {
+            Authority = authority;
+            return failureMode == CallerAccessTokenProviderFailureMode.Throw
+                ? Task.FromException<string>(new InvalidOperationException("credential exchange failed"))
+                : Task.FromResult(string.Empty);
+        }
     }
 
     private sealed class TestAuthenticateResultFeature : IAuthenticateResultFeature

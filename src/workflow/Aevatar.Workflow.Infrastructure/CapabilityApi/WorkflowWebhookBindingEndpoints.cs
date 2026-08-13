@@ -2,12 +2,14 @@ using Aevatar.Capabilities;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Abstractions.Credentials;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using System.Text;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using ProtoWorkflowCallerNyxIdAuthority = Aevatar.Workflow.Abstractions.WorkflowCallerNyxIdAuthority;
 
@@ -364,16 +366,6 @@ internal static class WorkflowWebhookBindingEndpoints
                 statusCode: StatusCodes.Status409Conflict));
         }
 
-        var extracted = WorkflowCallerCredentialExtractor.Extract(http);
-        if (!extracted.Succeeded ||
-            extracted.Credential?.NyxIdAuthority is not { } extractedAuthority ||
-            extracted.NyxIdCredentialSelection?.CanManageUserServices != true ||
-            !AevatarPrincipalSubjectResolver.TryResolveNyxIdSubject(http.User, out var subject) ||
-            !string.Equals(subject, extractedAuthority.ExternalUserId, StringComparison.Ordinal))
-        {
-            return UnattendedAuthorizationResolution.Failure(Results.Unauthorized());
-        }
-
         var bindingQuery = http.RequestServices.GetService<IExternalIdentityBindingQueryPort>();
         if (bindingQuery is null)
         {
@@ -384,6 +376,25 @@ internal static class WorkflowWebhookBindingEndpoints
                     message = "Caller NyxID binding lookup is unavailable.",
                 },
                 statusCode: StatusCodes.Status503ServiceUnavailable));
+        }
+
+        if (!AevatarPrincipalSubjectResolver.TryResolveNyxIdSubject(http.User, out var subject))
+            return UnattendedAuthorizationResolution.Failure(Results.Unauthorized());
+
+        var logger = http.RequestServices
+            .GetService<ILoggerFactory>()?
+            .CreateLogger("Aevatar.Workflow.WebhookBinding");
+        var extracted = await WorkflowCallerCredentialExtractor.ExtractAsync(
+            http,
+            bindingQuery,
+            callerAccessTokenProvider: null,
+            logger: logger,
+            ct: ct);
+        if (!extracted.Succeeded ||
+            extracted.Credential?.NyxIdAuthority is not { } extractedAuthority ||
+            !string.Equals(subject, extractedAuthority.ExternalUserId, StringComparison.Ordinal))
+        {
+            return UnattendedAuthorizationResolution.Failure(Results.Unauthorized());
         }
 
         BindingId? bindingId;
@@ -424,14 +435,45 @@ internal static class WorkflowWebhookBindingEndpoints
                 statusCode: StatusCodes.Status409Conflict));
         }
 
+        var exactBindingId = bindingId.Value.Trim();
+        var canManageWithDirectHumanBearer =
+            extracted.NyxIdCredentialSelection?.CanManageUserServices == true;
         var callerAuthority = new ProtoWorkflowCallerNyxIdAuthority
         {
             Platform = extractedAuthority.Platform,
             Tenant = extractedAuthority.Tenant,
             ExternalUserId = subject,
             Scope = extractedAuthority.Scope,
-            BindingId = bindingId.Value.Trim(),
+            BindingId = exactBindingId,
         };
+        var canManageWithBoundProxyDelegation = false;
+        if (
+            extracted.Credential.Kind == NyxIdCallerCredentialKind.ProxyDelegation &&
+            !string.IsNullOrWhiteSpace(extractedAuthority.BindingId) &&
+            string.Equals(extractedAuthority.BindingId, exactBindingId, StringComparison.Ordinal) &&
+            http.RequestServices.GetService<IWorkflowCallerAccessTokenProvider>() is { } tokenProvider)
+        {
+            try
+            {
+                var issuedToken = await tokenProvider.IssueAsync(callerAuthority, ct);
+                canManageWithBoundProxyDelegation =
+                    WorkflowCallerCredentialTokens.ParseOptional(issuedToken).IsValid;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                logger?.LogWarning(
+                    ex,
+                    "Caller NyxID source-readable token exchange failed while managing webhook binding.");
+            }
+        }
+
+        if (!canManageWithDirectHumanBearer && !canManageWithBoundProxyDelegation)
+            return UnattendedAuthorizationResolution.Failure(Results.Unauthorized());
+
         try
         {
             var authorization = WorkflowUnattendedEffectAuthorizationIntegrity.Create(
