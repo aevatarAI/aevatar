@@ -2249,6 +2249,8 @@ public sealed class ScopeBindingCommandApplicationServiceTests
             {
                 WorkflowPlan = new WorkflowServiceDeploymentPlan
                 {
+                    WorkflowId = revisionId,
+                    RevisionId = revisionId,
                     WorkflowName = workflowName,
                     WorkflowYaml = workflowYaml,
                     DefinitionActorId = DefaultOptions.BuildDefinitionActorIdPrefix(
@@ -2294,6 +2296,8 @@ public sealed class ScopeBindingCommandApplicationServiceTests
             {
                 WorkflowPlan = new WorkflowServiceDeploymentPlan
                 {
+                    WorkflowId = revisionId,
+                    RevisionId = revisionId,
                     WorkflowName = workflowName,
                     WorkflowYaml = workflowYaml,
                     ExecutionMode = workflowExecutionMode,
