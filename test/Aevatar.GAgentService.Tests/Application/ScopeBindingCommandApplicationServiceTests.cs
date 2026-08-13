@@ -1533,6 +1533,72 @@ public sealed class ScopeBindingCommandApplicationServiceTests
     }
 
     [Fact]
+    public async Task UpsertAsync_ShouldNotRecreateAcceptedWorkflowRevision_WhenReadModelIsNotVisible()
+    {
+        const string revisionId = "rev-save-and-bind";
+        var commandPort = new RecordingServiceCommandPort();
+        var service = CreateService(
+            commandPort,
+            new FakeServiceLifecycleQueryPort(getResult: null),
+            new FakeScopeScriptQueryPort(),
+            new FakeScriptDefinitionSnapshotPort(),
+            new FakeWorkflowRunActorPort());
+
+        var result = await service.UpsertAsync(new ScopeBindingUpsertRequest(
+            ScopeId,
+            ScopeBindingImplementationKind.Workflow,
+            Workflow: new ScopeBindingWorkflowSpec(
+                "default",
+                ["name: main\nsteps:\n  - run: echo hello"]),
+            RevisionId: revisionId,
+            AllowExistingRevisionReplay: true,
+            ReplayRevisionId: revisionId)
+        {
+            AcceptedRevisionCreation = new ScopeBindingAcceptedRevisionCreation(
+                "scope-a:default:default:default",
+                revisionId),
+        });
+
+        result.RevisionId.Should().Be(revisionId);
+        commandPort.Calls.Should().NotContain(call => call.Method == "CreateRevisionAsync");
+        commandPort.Calls.Should().Contain(call => call.Method == "PrepareRevisionAsync");
+        commandPort.Calls.Should().Contain(call => call.Method == "PublishRevisionAsync");
+        commandPort.Calls.Should().Contain(call => call.Method == "SetDefaultServingRevisionAsync");
+        commandPort.Calls.Should().Contain(call => call.Method == "ActivateServiceRevisionAsync");
+    }
+
+    [Fact]
+    public async Task UpsertAsync_ShouldCreateRevision_WhenAcceptedCreationTargetsAnotherService()
+    {
+        const string revisionId = "rev-save-and-bind";
+        var commandPort = new RecordingServiceCommandPort();
+        var service = CreateService(
+            commandPort,
+            new FakeServiceLifecycleQueryPort(getResult: null),
+            new FakeScopeScriptQueryPort(),
+            new FakeScriptDefinitionSnapshotPort(),
+            new FakeWorkflowRunActorPort());
+
+        await service.UpsertAsync(new ScopeBindingUpsertRequest(
+            ScopeId,
+            ScopeBindingImplementationKind.Workflow,
+            Workflow: new ScopeBindingWorkflowSpec(
+                "published-workflow",
+                ["name: main\nsteps:\n  - run: echo hello"]),
+            ServiceId: "published-service",
+            RevisionId: revisionId,
+            AllowExistingRevisionReplay: true,
+            ReplayRevisionId: revisionId)
+        {
+            AcceptedRevisionCreation = new ScopeBindingAcceptedRevisionCreation(
+                "scope-a:default:default:published-workflow",
+                revisionId),
+        });
+
+        commandPort.Calls.Should().ContainSingle(call => call.Method == "CreateRevisionAsync");
+    }
+
+    [Fact]
     public async Task UpsertAsync_ShouldRejectExistingWorkflowRevision_WhenReplayArtifactHashDoesNotMatch()
     {
         const string revisionId = "rev-platform-bind-1";

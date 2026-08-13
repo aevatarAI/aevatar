@@ -196,7 +196,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         var existingRevision = revisions?.Revisions.FirstOrDefault(x =>
             string.Equals(x.RevisionId, revisionId, StringComparison.Ordinal));
         if (existingRevision == null)
-            return true;
+            return !MatchesAcceptedRevisionCreation(request, identity, revisionId);
 
         if (!string.Equals(existingRevision.ImplementationKind, revisionSpec.ImplementationKind.ToString(), StringComparison.OrdinalIgnoreCase))
         {
@@ -248,6 +248,19 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         }
 
         return false;
+    }
+
+    private static bool MatchesAcceptedRevisionCreation(
+        ScopeBindingUpsertRequest request,
+        ServiceIdentity identity,
+        string revisionId)
+    {
+        var accepted = request.AcceptedRevisionCreation;
+        return accepted != null &&
+               request.AllowExistingRevisionReplay &&
+               string.Equals(request.ReplayRevisionId, revisionId, StringComparison.Ordinal) &&
+               string.Equals(accepted.RevisionId, revisionId, StringComparison.Ordinal) &&
+               string.Equals(accepted.ServiceKey, ServiceKeys.Build(identity), StringComparison.Ordinal);
     }
 
     private async Task<string> ComputeNonScriptingArtifactHashAsync(

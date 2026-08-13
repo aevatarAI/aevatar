@@ -627,7 +627,9 @@ public sealed class ToolCallModuleContextTests
         var ctx = new RecordingWorkflowContext();
         ctx.ExecutionContextState.CallerCredential = new WorkflowCallerCredentialState
         {
+            BearerToken = "short-lived-token",
             NyxIdAuthority = CreateCallerAuthority(),
+            Kind = NyxIdCallerCredentialKind.ProxyDelegation,
         };
 
         await ExecuteToolCallAsync(module, ctx, tool.Name, stepId: "call-1");

@@ -109,9 +109,14 @@ public sealed class ScopeWorkflowSaveAndBindApplicationService : IScopeWorkflowS
                 RevisionId: revisionId,
                 AppId: request.AppId,
                 ServiceId: ResolveBindingServiceId(request.ServiceId),
-                ExposureDesired: request.ExposureDesired)
+                ExposureDesired: request.ExposureDesired,
+                AllowExistingRevisionReplay: true,
+                ReplayRevisionId: revisionId)
             {
                 CapabilityAdmission = trustedAdmissionContext,
+                AcceptedRevisionCreation = new ScopeBindingAcceptedRevisionCreation(
+                    workflowResult.ServiceKey,
+                    workflowResult.RevisionId),
             },
             ct);
 
