@@ -565,8 +565,26 @@ public sealed class WorkflowRunObservatoryQueryService
         };
     }
 
-    private static WorkflowRunRecoveryCapability CloneRecoveryCapability(WorkflowActorSnapshot snapshot) =>
-        snapshot.RecoveryCapability?.Clone() ?? new WorkflowRunRecoveryCapability();
+    private static WorkflowRunRecoveryCapability CloneRecoveryCapability(WorkflowActorSnapshot snapshot)
+    {
+        var source = snapshot.RecoveryCapability;
+        return new WorkflowRunRecoveryCapability
+        {
+            WorkflowDefinitionRevisionId = source?.WorkflowDefinitionRevisionId ?? string.Empty,
+            WorkflowDefinitionVersion = source?.WorkflowDefinitionVersion ?? 0,
+            RetryFailedStep = CloneRecoveryActionCapability(source?.RetryFailedStep),
+            RunAgain = CloneRecoveryActionCapability(source?.RunAgain),
+        };
+    }
+
+    private static WorkflowRecoveryActionCapability CloneRecoveryActionCapability(
+        WorkflowRecoveryActionCapability? source) =>
+        source?.Clone() ?? new WorkflowRecoveryActionCapability
+        {
+            Eligibility = WorkflowRecoveryEligibility.Unavailable,
+            UnavailableReasonCode = WorkflowRecoveryUnavailableReasonCode.LegacyUnavailable,
+            UnavailableReason = "Recovery capability is unavailable for this legacy run.",
+        };
 
     private static Aevatar.Workflow.Abstractions.WorkflowRunLineage CloneLineage(WorkflowActorSnapshot snapshot) =>
         snapshot.Lineage?.Clone() ?? new Aevatar.Workflow.Abstractions.WorkflowRunLineage
