@@ -59,14 +59,6 @@ public sealed class WorkflowWebhookIngressBindingOptions
     /// </summary>
     public string? PreviousHmacSecret { get; set; }
 
-    /// <summary>
-    /// Optional NyxID bearer the webhook-started run executes as. Webhook
-    /// deliveries carry no user identity, so without this every
-    /// nyxid-brokered write step fails with NYXID_ACCESS_TOKEN_MISSING.
-    /// Stored encrypted, never returned by views.
-    /// </summary>
-    public string? CallerBearerToken { get; set; }
-
     public string? HmacSignatureHeader { get; set; }
     public string? HmacTimestampHeader { get; set; }
     public int MaxTimestampSkewSeconds { get; set; } = 300;

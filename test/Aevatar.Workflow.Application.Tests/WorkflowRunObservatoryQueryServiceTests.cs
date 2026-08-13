@@ -103,7 +103,7 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
     }
 
     [Fact]
-    public async Task ListActivityRunsForScopeAsync_ShouldReturnPagedTypedRows_FromCurrentStateReadModel()
+    public async Task ListActivityRunsForScopeAsync_ShouldReturnPagedTypedRows_AndRedactLegacyBindingId()
     {
         const string workflowId = "wf-alpha";
         const string runId = "run-alpha";
@@ -212,7 +212,7 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         row.ActorId.Should().Be(actorId);
         row.WorkflowId.Should().Be(workflowId);
         row.Initiator.ExternalUserId.Should().Be(memberIdentityCandidate);
-        row.Initiator.BindingId.Should().Be(serviceIdentityCandidate);
+        row.Initiator.BindingId.Should().BeEmpty();
         row.InputSummary.Should().Be("summarized input");
         row.CurrentStep.StepId.Should().Be("step-current");
         row.FirstFailure.StepId.Should().Be("step-failed");

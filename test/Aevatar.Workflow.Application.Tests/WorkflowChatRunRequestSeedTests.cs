@@ -6,6 +6,8 @@ using Aevatar.Workflow.Application.Runs;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
+using AppWorkflowCallerCredential = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential;
+using AppWorkflowCallerNyxIdAuthority = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerNyxIdAuthority;
 
 namespace Aevatar.Workflow.Application.Tests;
 
@@ -114,6 +116,99 @@ public sealed class WorkflowChatRunRequestSeedTests
         payload.ExternalIngress.AuthScheme.Should().Be("hmac-sha256");
         payload.ExternalIngress.PrincipalSubject.Should().Be("lark");
         payload.Metadata.Should().NotContainKey("external_ingress");
+    }
+
+    [Fact]
+    public void WorkflowChatRequestEnvelopeFactory_ShouldMapExactUnattendedAuthorityWithoutBearer()
+    {
+        var authorization = new WorkflowUnattendedEffectAuthorization
+        {
+            SchemaVersion = WorkflowUnattendedEffectAuthorizationIntegrity.SchemaVersion,
+            DefinitionActorId = "definition-alpha",
+            ScopeId = "scope-alpha",
+            WorkflowId = "workflow-alpha",
+            RevisionId = "revision-alpha",
+            DefinitionVersion = 7,
+            AuthorizationDigest = "sha256:authorization-alpha",
+        };
+        var request = new WorkflowChatRunRequest(
+            Prompt: "start",
+            Source: WorkflowChatSource.DefinitionActor("definition-alpha", "workflow-alpha"),
+            CallerCredential: new AppWorkflowCallerCredential(
+                BearerToken: null,
+                NyxIdAuthority: new AppWorkflowCallerNyxIdAuthority(
+                    "nyxid",
+                    "tenant-alpha",
+                    "user-alpha",
+                    "proxy",
+                    "binding-alpha"),
+                Kind: NyxIdCallerCredentialKind.ProxyDelegation,
+                SourceReadableUserBearerToken: null,
+                UnattendedEffectAuthorization: authorization),
+            ExpectedExecutionMode: ExternalCapabilityExecutionMode.Durable,
+            ExternalIngress: new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowExternalIngressContext(
+                "route-alpha",
+                "nyxid",
+                "delivery-alpha",
+                1710000000000,
+                "application/json",
+                "sha256:payload-alpha",
+                "hmac-sha256",
+                "nyxid"));
+
+        var payload = new WorkflowChatRequestEnvelopeFactory().CreateEnvelope(
+            request,
+            new CommandContext(
+                "command-alpha",
+                "correlation-alpha",
+                "target-alpha",
+                new Dictionary<string, string>(StringComparer.Ordinal)))
+            .Payload.Unpack<WorkflowChatRequestEvent>();
+
+        payload.CallerCredential.BearerToken.Should().BeEmpty();
+        payload.CallerCredential.SourceReadableUserBearerToken.Should().BeEmpty();
+        payload.CallerCredential.Kind.Should().Be(NyxIdCallerCredentialKind.ProxyDelegation);
+        payload.CallerCredential.NyxIdAuthority.BindingId.Should().Be("binding-alpha");
+        payload.CallerCredential.UnattendedEffectAuthorization.AuthorizationDigest
+            .Should().Be("sha256:authorization-alpha");
+    }
+
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    public void WorkflowChatRequestEnvelopeFactory_ShouldRejectIncompleteUnattendedAuthority(
+        bool includeBindingId,
+        bool includeAuthorization)
+    {
+        var request = new WorkflowChatRunRequest(
+            Prompt: "start",
+            Source: WorkflowChatSource.DefinitionActor("definition-alpha", "workflow-alpha"),
+            CallerCredential: new AppWorkflowCallerCredential(
+                BearerToken: null,
+                NyxIdAuthority: new AppWorkflowCallerNyxIdAuthority(
+                    "nyxid",
+                    "tenant-alpha",
+                    "user-alpha",
+                    "proxy",
+                    includeBindingId ? "binding-alpha" : null),
+                Kind: NyxIdCallerCredentialKind.ProxyDelegation,
+                SourceReadableUserBearerToken: null,
+                UnattendedEffectAuthorization: includeAuthorization
+                    ? new WorkflowUnattendedEffectAuthorization
+                    {
+                        SchemaVersion = WorkflowUnattendedEffectAuthorizationIntegrity.SchemaVersion,
+                    }
+                    : null),
+            ExpectedExecutionMode: ExternalCapabilityExecutionMode.Durable);
+
+        FluentActions.Invoking(() => new WorkflowChatRequestEnvelopeFactory().CreateEnvelope(
+                request,
+                new CommandContext(
+                    "command-alpha",
+                    "correlation-alpha",
+                    "target-alpha",
+                    new Dictionary<string, string>(StringComparer.Ordinal))))
+            .Should().Throw<ArgumentException>();
     }
 
     [Fact]

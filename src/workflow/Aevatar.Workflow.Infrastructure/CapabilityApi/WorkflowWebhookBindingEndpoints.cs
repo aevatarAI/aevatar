@@ -1,4 +1,7 @@
 using Aevatar.Capabilities;
+using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Channel.Identity.Abstractions;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using System.Text;
 using Microsoft.AspNetCore.Builder;
@@ -6,6 +9,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using ProtoWorkflowCallerNyxIdAuthority = Aevatar.Workflow.Abstractions.WorkflowCallerNyxIdAuthority;
 
 namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 
@@ -42,7 +46,7 @@ internal static class WorkflowWebhookBindingEndpoints
         string? TargetRevisionId = null,
         string? PreviousHmacSecret = null,
         string? TimeZoneId = null,
-        string? CallerBearerToken = null);
+        bool EnableUnattendedEffects = false);
 
     internal static async Task<IResult> HandlePutAsync(
         HttpContext http,
@@ -159,6 +163,25 @@ internal static class WorkflowWebhookBindingEndpoints
                 statusCode: StatusCodes.Status409Conflict);
         }
 
+        ProtoWorkflowCallerNyxIdAuthority? callerAuthority = null;
+        WorkflowUnattendedEffectAuthorization? unattendedAuthorization = null;
+        if (request.EnableUnattendedEffects)
+        {
+            var authorization = await ResolveUnattendedAuthorizationAsync(
+                http,
+                normalizedRoute,
+                scopeId,
+                definitionActorId,
+                target,
+                targetRevisionId,
+                ct);
+            if (authorization.Error != null)
+                return authorization.Error;
+
+            callerAuthority = authorization.CallerAuthority;
+            unattendedAuthorization = authorization.Authorization;
+        }
+
         var hmacSecret = request.HmacSecret?.Trim();
         if (hmacSecret == null || Encoding.UTF8.GetByteCount(hmacSecret) < 32)
             return BadRequest(
@@ -230,7 +253,8 @@ internal static class WorkflowWebhookBindingEndpoints
             DefinitionActorId: definitionActorId,
             TargetRevisionId: targetRevisionId,
             PreviousHmacSecret: previousHmacSecret,
-            CallerBearerToken: Normalize(request.CallerBearerToken));
+            CallerAuthority: callerAuthority,
+            UnattendedEffectAuthorization: unattendedAuthorization);
         if (!await bindingStore.TryPutOwnedAsync(record, ct))
         {
             return Results.Json(
@@ -298,12 +322,141 @@ internal static class WorkflowWebhookBindingEndpoints
         deliveryIdJsonPath = record.DeliveryIdJsonPath,
         hmacSecretSet = !string.IsNullOrWhiteSpace(record.HmacSecret),
         previousHmacSecretSet = !string.IsNullOrWhiteSpace(record.PreviousHmacSecret),
-        callerCredentialSet = !string.IsNullOrWhiteSpace(record.CallerBearerToken),
+        callerCredentialSet = record.CallerAuthority is not null,
+        unattendedEffectsEnabled = record.CallerAuthority is not null &&
+                                   record.UnattendedEffectAuthorization is not null,
         hmacSignatureHeader = record.HmacSignatureHeader,
         hmacTimestampHeader = record.HmacTimestampHeader,
         maxTimestampSkewSeconds = record.MaxTimestampSkewSeconds,
         updatedAtUnixMs = record.UpdatedAtUnixMs,
     };
+
+    private static async Task<UnattendedAuthorizationResolution> ResolveUnattendedAuthorizationAsync(
+        HttpContext http,
+        string routeKey,
+        string scopeId,
+        string definitionActorId,
+        WorkflowActorBinding target,
+        string targetRevisionId,
+        CancellationToken ct)
+    {
+        if (!AevatarScopeAccessGuard.IsAuthenticationEnabled(http.RequestServices))
+        {
+            return UnattendedAuthorizationResolution.Failure(Results.Json(
+                new
+                {
+                    code = "WEBHOOK_UNATTENDED_AUTHENTICATION_REQUIRED",
+                    message = "Unattended webhook effects require authenticated binding management.",
+                },
+                statusCode: StatusCodes.Status409Conflict));
+        }
+
+        if (target.ExpectedExecutionMode != ExternalCapabilityExecutionMode.Durable ||
+            target.CapabilityAdmissionPlan is null ||
+            target.SourceVersion < 1)
+        {
+            return UnattendedAuthorizationResolution.Failure(Results.Json(
+                new
+                {
+                    code = "WEBHOOK_UNATTENDED_DURABLE_TARGET_REQUIRED",
+                    message = "Unattended webhook effects require a versioned durable workflow definition.",
+                },
+                statusCode: StatusCodes.Status409Conflict));
+        }
+
+        var extracted = WorkflowCallerCredentialExtractor.Extract(http);
+        if (!extracted.Succeeded ||
+            extracted.Credential?.NyxIdAuthority is not { } extractedAuthority ||
+            extracted.NyxIdCredentialSelection?.CanManageUserServices != true ||
+            !AevatarPrincipalSubjectResolver.TryResolveNyxIdSubject(http.User, out var subject) ||
+            !string.Equals(subject, extractedAuthority.ExternalUserId, StringComparison.Ordinal))
+        {
+            return UnattendedAuthorizationResolution.Failure(Results.Unauthorized());
+        }
+
+        var bindingQuery = http.RequestServices.GetService<IExternalIdentityBindingQueryPort>();
+        if (bindingQuery is null)
+        {
+            return UnattendedAuthorizationResolution.Failure(Results.Json(
+                new
+                {
+                    code = "WEBHOOK_CALLER_BINDING_LOOKUP_UNAVAILABLE",
+                    message = "Caller NyxID binding lookup is unavailable.",
+                },
+                statusCode: StatusCodes.Status503ServiceUnavailable));
+        }
+
+        BindingId? bindingId;
+        try
+        {
+            bindingId = await bindingQuery.ResolveAsync(
+                new ExternalSubjectRef
+                {
+                    Platform = extractedAuthority.Platform,
+                    Tenant = extractedAuthority.Tenant,
+                    ExternalUserId = subject,
+                },
+                ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            return UnattendedAuthorizationResolution.Failure(Results.Json(
+                new
+                {
+                    code = "WEBHOOK_CALLER_BINDING_LOOKUP_UNAVAILABLE",
+                    message = "Caller NyxID binding lookup is unavailable.",
+                },
+                statusCode: StatusCodes.Status503ServiceUnavailable));
+        }
+
+        if (string.IsNullOrWhiteSpace(bindingId?.Value))
+        {
+            return UnattendedAuthorizationResolution.Failure(Results.Json(
+                new
+                {
+                    code = "WEBHOOK_CALLER_BINDING_REQUIRED",
+                    message = "Reconnect NyxID before enabling unattended webhook effects.",
+                },
+                statusCode: StatusCodes.Status409Conflict));
+        }
+
+        var callerAuthority = new ProtoWorkflowCallerNyxIdAuthority
+        {
+            Platform = extractedAuthority.Platform,
+            Tenant = extractedAuthority.Tenant,
+            ExternalUserId = subject,
+            Scope = extractedAuthority.Scope,
+            BindingId = bindingId.Value.Trim(),
+        };
+        try
+        {
+            var authorization = WorkflowUnattendedEffectAuthorizationIntegrity.Create(
+                definitionActorId,
+                scopeId,
+                target.WorkflowId,
+                targetRevisionId,
+                routeKey,
+                subject,
+                target.SourceVersion,
+                callerAuthority,
+                target.CapabilityAdmissionPlan);
+            return UnattendedAuthorizationResolution.Success(callerAuthority, authorization);
+        }
+        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
+        {
+            return UnattendedAuthorizationResolution.Failure(Results.Json(
+                new
+                {
+                    code = "WEBHOOK_UNATTENDED_AUTHORIZATION_INVALID",
+                    message = "The workflow definition is not eligible for unattended effects.",
+                },
+                statusCode: StatusCodes.Status409Conflict));
+        }
+    }
 
     private static IWorkflowWebhookBindingStore? ResolveStore(HttpContext http, out IResult? unavailable)
     {
@@ -343,4 +496,18 @@ internal static class WorkflowWebhookBindingEndpoints
 
     private static string? Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private sealed record UnattendedAuthorizationResolution(
+        ProtoWorkflowCallerNyxIdAuthority? CallerAuthority,
+        WorkflowUnattendedEffectAuthorization? Authorization,
+        IResult? Error)
+    {
+        public static UnattendedAuthorizationResolution Success(
+            ProtoWorkflowCallerNyxIdAuthority callerAuthority,
+            WorkflowUnattendedEffectAuthorization authorization) =>
+            new(callerAuthority, authorization, null);
+
+        public static UnattendedAuthorizationResolution Failure(IResult error) =>
+            new(null, null, error);
+    }
 }

@@ -32,7 +32,8 @@ public sealed record WorkflowWebhookBindingRecord(
     string? TargetRevisionId = null,
     string? PreviousHmacSecret = null,
     string? TimeZoneId = null,
-    string? CallerBearerToken = null)
+    WorkflowCallerNyxIdAuthority? CallerAuthority = null,
+    WorkflowUnattendedEffectAuthorization? UnattendedEffectAuthorization = null)
 {
     public WorkflowWebhookIngressBindingOptions ToBindingOptions() => new()
     {
@@ -49,7 +50,6 @@ public sealed record WorkflowWebhookBindingRecord(
         DeliveryIdJsonPath = DeliveryIdJsonPath,
         HmacSecret = HmacSecret,
         PreviousHmacSecret = PreviousHmacSecret,
-        CallerBearerToken = CallerBearerToken,
         HmacSignatureHeader = HmacSignatureHeader,
         HmacTimestampHeader = HmacTimestampHeader,
         MaxTimestampSkewSeconds = MaxTimestampSkewSeconds,
@@ -87,7 +87,7 @@ internal sealed class InMemoryWorkflowWebhookBindingStore : IWorkflowWebhookBind
     public Task<WorkflowWebhookBindingRecord?> GetAsync(string routeKey, CancellationToken ct = default)
     {
         _records.TryGetValue(routeKey, out var record);
-        return Task.FromResult(record);
+        return Task.FromResult(record is null ? null : CloneRecord(record));
     }
 
     public Task<bool> TryPutOwnedAsync(WorkflowWebhookBindingRecord record, CancellationToken ct = default)
@@ -100,12 +100,12 @@ internal sealed class InMemoryWorkflowWebhookBindingStore : IWorkflowWebhookBind
                 if (!string.Equals(existing.ScopeId, record.ScopeId, StringComparison.Ordinal))
                     return Task.FromResult(false);
 
-                if (_records.TryUpdate(record.RouteKey, record, existing))
+                if (_records.TryUpdate(record.RouteKey, CloneRecord(record), existing))
                     return Task.FromResult(true);
                 continue;
             }
 
-            if (_records.TryAdd(record.RouteKey, record))
+            if (_records.TryAdd(record.RouteKey, CloneRecord(record)))
                 return Task.FromResult(true);
         }
     }
@@ -138,9 +138,17 @@ internal sealed class InMemoryWorkflowWebhookBindingStore : IWorkflowWebhookBind
         IReadOnlyList<WorkflowWebhookBindingRecord> result = _records.Values
             .Where(record => string.Equals(record.ScopeId, scopeId, StringComparison.Ordinal))
             .OrderBy(static record => record.RouteKey, StringComparer.Ordinal)
+            .Select(CloneRecord)
             .ToArray();
         return Task.FromResult(result);
     }
+
+    private static WorkflowWebhookBindingRecord CloneRecord(WorkflowWebhookBindingRecord source) =>
+        source with
+        {
+            CallerAuthority = source.CallerAuthority?.Clone(),
+            UnattendedEffectAuthorization = source.UnattendedEffectAuthorization?.Clone(),
+        };
 }
 
 internal sealed class RedisWorkflowWebhookBindingStore : IWorkflowWebhookBindingStore
@@ -311,34 +319,64 @@ internal sealed class RedisWorkflowWebhookBindingStore : IWorkflowWebhookBinding
             ? string.Empty
             : _secretCipher.Protect(record.PreviousHmacSecret),
         TimeZoneId = record.TimeZoneId ?? string.Empty,
-        ProtectedCallerBearerToken = record.CallerBearerToken == null
-            ? string.Empty
-            : _secretCipher.Protect(record.CallerBearerToken),
+        // Field 18 may exist in records produced by the retired bearer-token
+        // workaround. It is intentionally never populated or consumed.
+        ProtectedCallerBearerToken = string.Empty,
+        ProtectedCallerAuthorization = ProtectCallerAuthorization(record),
     };
 
-    private WorkflowWebhookBindingRecord FromState(WorkflowWebhookBindingState state) => new(
-        RouteKey: state.RouteKey,
-        ScopeId: state.ScopeId,
-        WorkflowName: state.WorkflowName,
-        SourceId: NullIfEmpty(state.SourceId),
-        PromptTemplate: NullIfEmpty(state.PromptTemplate),
-        PromptJsonPath: NullIfEmpty(state.PromptJsonPath),
-        DeliveryIdHeader: NullIfEmpty(state.DeliveryIdHeader),
-        DeliveryIdJsonPath: NullIfEmpty(state.DeliveryIdJsonPath),
-        HmacSecret: _secretCipher.Unprotect(state.ProtectedHmacSecret),
-        HmacSignatureHeader: NullIfEmpty(state.HmacSignatureHeader),
-        HmacTimestampHeader: NullIfEmpty(state.HmacTimestampHeader),
-        MaxTimestampSkewSeconds: state.MaxTimestampSkewSeconds,
-        UpdatedAtUnixMs: state.UpdatedAtUnixMs,
-        DefinitionActorId: NullIfEmpty(state.DefinitionActorId),
-        TargetRevisionId: NullIfEmpty(state.TargetRevisionId),
-        PreviousHmacSecret: state.ProtectedPreviousHmacSecret.Length == 0
-            ? null
-            : _secretCipher.Unprotect(state.ProtectedPreviousHmacSecret),
-        TimeZoneId: NullIfEmpty(state.TimeZoneId),
-        CallerBearerToken: state.ProtectedCallerBearerToken.Length == 0
-            ? null
-            : _secretCipher.Unprotect(state.ProtectedCallerBearerToken));
+    private WorkflowWebhookBindingRecord FromState(WorkflowWebhookBindingState state)
+    {
+        var callerAuthorization = ReadCallerAuthorization(state);
+        return new WorkflowWebhookBindingRecord(
+            RouteKey: state.RouteKey,
+            ScopeId: state.ScopeId,
+            WorkflowName: state.WorkflowName,
+            SourceId: NullIfEmpty(state.SourceId),
+            PromptTemplate: NullIfEmpty(state.PromptTemplate),
+            PromptJsonPath: NullIfEmpty(state.PromptJsonPath),
+            DeliveryIdHeader: NullIfEmpty(state.DeliveryIdHeader),
+            DeliveryIdJsonPath: NullIfEmpty(state.DeliveryIdJsonPath),
+            HmacSecret: _secretCipher.Unprotect(state.ProtectedHmacSecret),
+            HmacSignatureHeader: NullIfEmpty(state.HmacSignatureHeader),
+            HmacTimestampHeader: NullIfEmpty(state.HmacTimestampHeader),
+            MaxTimestampSkewSeconds: state.MaxTimestampSkewSeconds,
+            UpdatedAtUnixMs: state.UpdatedAtUnixMs,
+            DefinitionActorId: NullIfEmpty(state.DefinitionActorId),
+            TargetRevisionId: NullIfEmpty(state.TargetRevisionId),
+            PreviousHmacSecret: state.ProtectedPreviousHmacSecret.Length == 0
+                ? null
+                : _secretCipher.Unprotect(state.ProtectedPreviousHmacSecret),
+            TimeZoneId: NullIfEmpty(state.TimeZoneId),
+            CallerAuthority: callerAuthorization.CallerAuthority,
+            UnattendedEffectAuthorization: callerAuthorization.Authorization);
+    }
+
+    private string ProtectCallerAuthorization(WorkflowWebhookBindingRecord record)
+    {
+        if (record.CallerAuthority is null || record.UnattendedEffectAuthorization is null)
+            return string.Empty;
+
+        var state = new WorkflowWebhookCallerAuthorizationState
+        {
+            CallerAuthority = record.CallerAuthority.Clone(),
+            UnattendedEffectAuthorization = record.UnattendedEffectAuthorization.Clone(),
+        };
+        return _secretCipher.Protect(Convert.ToBase64String(state.ToByteArray()));
+    }
+
+    private (WorkflowCallerNyxIdAuthority? CallerAuthority,
+        WorkflowUnattendedEffectAuthorization? Authorization) ReadCallerAuthorization(
+        WorkflowWebhookBindingState state)
+    {
+        if (string.IsNullOrWhiteSpace(state.ProtectedCallerAuthorization))
+            return (null, null);
+
+        var plaintext = _secretCipher.Unprotect(state.ProtectedCallerAuthorization);
+        var decoded = WorkflowWebhookCallerAuthorizationState.Parser.ParseFrom(
+            Convert.FromBase64String(plaintext));
+        return (decoded.CallerAuthority?.Clone(), decoded.UnattendedEffectAuthorization?.Clone());
+    }
 
     private static string? NullIfEmpty(string value) => value.Length == 0 ? null : value;
 }

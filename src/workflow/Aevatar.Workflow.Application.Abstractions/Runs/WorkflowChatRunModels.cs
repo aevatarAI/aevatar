@@ -71,10 +71,14 @@ public sealed record WorkflowCallerCredential(
     WorkflowCallerNyxIdAuthority? NyxIdAuthority = null,
     Aevatar.Workflow.Abstractions.NyxIdCallerCredentialKind Kind =
         Aevatar.Workflow.Abstractions.NyxIdCallerCredentialKind.Unspecified,
-    string? SourceReadableUserBearerToken = null)
+    string? SourceReadableUserBearerToken = null,
+    // Ingress-only seal. The Run validates this against its actor-owned exact
+    // definition and stores it outside the generic caller credential state.
+    Aevatar.Workflow.Abstractions.WorkflowUnattendedEffectAuthorization?
+        UnattendedEffectAuthorization = null)
 {
     public override string ToString() =>
-        $"{nameof(WorkflowCallerCredential)} {{ BearerToken = [REDACTED], SourceReadableUserBearerToken = [REDACTED], NyxIdAuthorityPresent = {NyxIdAuthority is not null} }}";
+        $"{nameof(WorkflowCallerCredential)} {{ BearerToken = [REDACTED], SourceReadableUserBearerToken = [REDACTED], NyxIdAuthorityPresent = {NyxIdAuthority is not null}, UnattendedEffectAuthorizationPresent = {UnattendedEffectAuthorization is not null} }}";
 }
 
 public sealed record WorkflowExternalIngressContext(

@@ -611,7 +611,7 @@ public sealed class WorkflowRunObservatoryQueryService
                 Tenant = source.Tenant,
                 ExternalUserId = source.ExternalUserId,
                 Scope = source.Scope,
-                BindingId = source.BindingId,
+                BindingId = string.Empty,
                 DisplayValue = string.IsNullOrWhiteSpace(source.DisplayValue) ? "Unknown" : source.DisplayValue,
                 Availability = string.IsNullOrWhiteSpace(source.Availability) ? "unavailable" : source.Availability,
             };

@@ -302,10 +302,13 @@ ContentArtifact metadata and provenance survive. See
 - Host/Adapter 有界读取 raw body、校验 HMAC，并从已签名 JSON body 取得稳定 delivery id；可选 header 必须与 body id 相同。prompt template 是 JSON-aware 映射，缺失字段、未知占位符、非法 JSON 或超限输入都 fail closed。
 - command/correlation seed 对 canonical `route/source/delivery` 长度前缀 tuple 做 SHA-256，保持稳定且无分隔符碰撞。`@run_date` 使用 binding 配置时区，默认 UTC。
 - 应用层只接收 typed `WorkflowChatRunRequest.ExternalIngress`，command envelope 写入 `WorkflowChatRequestEvent.external_ingress`；不得把 route、delivery、fingerprint、auth 等稳定语义塞进 `Metadata`。
+- 默认 webhook 只获得启动权限，不获得下游写权限。scope-authorized direct human 可以在管理 binding 时显式设置 `enableUnattendedEffects=true`；该 opt-in 只接受 exact、versioned、Durable Definition，并把当前 NyxID binding authority 与所有符合条件的 authored-request write call-site 一起密封。authority 与授权密文落盘，GET/list 只显示是否启用；永远不在 binding 中持久化 bearer token。
+- run-start 会再次把授权与 webhook route、scope、Definition actor、workflow/revision/version、capability admission digest 和 caller authority 精确比对。每个 tool call 只能从 actor-owned state 派生一次 process-local permit；它只允许 `nyxid_proxy` 的 exact、non-destructive、Aevatar-owned Durable write，不能流入 LLM tool loop、fork、subworkflow 或 dynamic replacement，也不能伪装成人工 approval grant。任何 drift 都 fail closed。
+- 这个许可只处理 Aevatar 的 tool-approval gate；NyxID/目标 provider 自己的 operation policy 仍独立生效。HMAC、`enableUnattendedEffects` 或 Aevatar permit 都不能绕过下游 `require_approval`。
 - Replay/idempotency 权威是 `IWorkflowWebhookReplayStore`，生产实现必须是 durable/distributed first-writer-wins store；`InMemoryWorkflowWebhookReplayStore` 只在显式配置时用于本地或测试。
 - Host 启用 webhook ingress 但没有 replay store 时返回 `503 WEBHOOK_REPLAY_STORE_UNAVAILABLE`，不能退化为无幂等的生产路径。
 - HTTP 成功响应只返回 `202 Accepted + commandId/correlationId/actorId/statusUrl/deliveryId`，不暗示 committed、result 或 readmodel-observed。
-- Replay admission 当前没有与 terminal run 联动的 lease/completed 状态，不能表述为 crash-safe exactly-once；HMAC binding 也不等价于 caller credential 或运行时写工具批准。
+- Replay admission 当前没有与 terminal run 联动的 lease/completed 状态，不能表述为 crash-safe exactly-once；未显式启用且通过上述 exact Durable 授权时，HMAC binding 也不等价于 caller credential 或运行时写工具批准。
 
 不属于 v1 的范围：
 

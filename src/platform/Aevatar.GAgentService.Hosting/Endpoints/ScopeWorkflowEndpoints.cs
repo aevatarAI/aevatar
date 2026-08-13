@@ -174,6 +174,7 @@ public static class ScopeWorkflowEndpoints
             {
                 CapabilityAdmission = await WorkflowCapabilityAdmissionHttpContext.CreateAsync(
                     http,
+                    ParseSaveAndBindExecutionMode(request.ExecutionMode),
                     explicitRequestConfirmations: request.ExplicitRequestConfirmations,
                     ct: ct),
             }, ct);
@@ -224,6 +225,7 @@ public static class ScopeWorkflowEndpoints
                 {
                     CapabilityAdmission = await WorkflowCapabilityAdmissionHttpContext.CreateAsync(
                         http,
+                        ParseSaveAndBindExecutionMode(request.ExecutionMode),
                         explicitRequestConfirmations: request.ExplicitRequestConfirmations,
                         ct: ct),
                 },
@@ -384,6 +386,11 @@ public static class ScopeWorkflowEndpoints
             _ => throw new InvalidOperationException(
                 "ExecutionMode must be either 'interactive' or 'durable'."),
         };
+
+    private static ExternalCapabilityExecutionMode ParseSaveAndBindExecutionMode(string? value) =>
+        string.IsNullOrWhiteSpace(value)
+            ? ExternalCapabilityExecutionMode.Interactive
+            : ParseExplicitRequestPreviewExecutionMode(value);
 
     private static ExplicitRequestPreviewHttpItem ToExplicitRequestPreviewHttpItem(
         WorkflowExplicitRequestPreviewItem item) =>
@@ -1131,7 +1138,8 @@ public static class ScopeWorkflowEndpoints
         string? DisplayName = null,
         Dictionary<string, string>? InlineWorkflowYamls = null,
         string? RevisionId = null,
-        IReadOnlyList<NyxIdExplicitRequestConfirmationInput>? ExplicitRequestConfirmations = null);
+        IReadOnlyList<NyxIdExplicitRequestConfirmationInput>? ExplicitRequestConfirmations = null,
+        string? ExecutionMode = null);
 
     public sealed record SaveAndBindScopeWorkflowHttpRequest(
         string? WorkflowId,
@@ -1143,7 +1151,8 @@ public static class ScopeWorkflowEndpoints
         string? ServiceId = null,
         bool? ExposureDesired = null,
         string? RevisionId = null,
-        IReadOnlyList<NyxIdExplicitRequestConfirmationInput>? ExplicitRequestConfirmations = null);
+        IReadOnlyList<NyxIdExplicitRequestConfirmationInput>? ExplicitRequestConfirmations = null,
+        string? ExecutionMode = null);
 
     public sealed record ExplicitRequestPreviewHttpRequest(
         string WorkflowYaml,

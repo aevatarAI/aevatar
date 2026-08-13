@@ -305,10 +305,12 @@ Scope service stream 入口（如 `/api/scopes/{scopeId}/invoke/chat:stream`、m
 - `CommandIdSeed` 与 `CorrelationIdSeed` 是对 canonical `route/source/delivery` 长度前缀 tuple 做 SHA-256 后得到的稳定 opaque seed，避免分隔符歧义。
 - `WorkflowChatRequestEvent.external_ingress` 承载 typed route/source/delivery/fingerprint/auth 信息；这些稳定语义不得塞进 `Metadata`。
 - 动态 binding 以 Protobuf 持久化；HMAC secret 加密落盘，GET/list 只返回 set/unset，不回显 secret。
+- 默认 binding 只启动 run。显式 `enableUnattendedEffects=true` 时，管理请求必须来自同 scope 的 direct-human NyxID access credential，目标必须是 exact versioned Durable Definition；服务端把 caller binding authority 与 eligible authored-request write call-sites 密封、加密保存。binding 不接受或持久化 user bearer token。
+- unattended authorization 在 ingress、run-start 和每个 tool call 三层与 authoritative definition/plan/authority 重验，仅为 exact non-destructive `nyxid_proxy` write 生成 process-local permit；不得传播给 LLM、fork、subworkflow 或 dynamic replacement。它只满足 Aevatar 本地 approval gate，下游 NyxID/provider policy 仍可独立拒绝或要求批准。
 - 防重放由 `IWorkflowWebhookReplayStore` 承载，生产实现必须是 durable/distributed first-writer-wins store；显式 in-memory 实现只允许本地或测试使用。
 - 启用 webhook ingress 但没有 replay store 时，Host fail closed 返回 `503 WEBHOOK_REPLAY_STORE_UNAVAILABLE`。
 - 成功响应是 `202 Accepted`，只表示命令已被接受并可追踪；不承诺 run 已提交、执行完成或 readmodel 已刷新。
-- 当前 admission record 在 dispatch 接受后用于压制重复投递，但尚未与 workflow terminal state 建立 lease/complete 状态机；因此不得宣称 crash-safe exactly-once。webhook HMAC 也只证明事件来源，不授予下游写工具的 caller credential 或 tool approval。
+- 当前 admission record 在 dispatch 接受后用于压制重复投递，但尚未与 workflow terminal state 建立 lease/complete 状态机；因此不得宣称 crash-safe exactly-once。webhook HMAC 只证明事件来源；只有显式 opt-in 且 exact Durable authorization 全部通过时，才具备上述受限写权限。
 
 `POST /api/workflows/signal` 仍只用于已有 run 的 `wait_signal` continuation，必须携带已知 `actorId + runId + signalName`，不能作为新 run webhook trigger 使用。
 

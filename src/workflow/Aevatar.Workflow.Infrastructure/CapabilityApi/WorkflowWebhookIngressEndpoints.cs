@@ -1,6 +1,7 @@
 using Aevatar.Audit;
 using Aevatar.Audit.Hosting.EndpointAudit;
 using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -8,6 +9,10 @@ using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using AppWorkflowCallerNyxIdAuthority =
+    Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerNyxIdAuthority;
+using AppWorkflowCallerCredential =
+    Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential;
 
 namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 
@@ -180,6 +185,23 @@ internal static class WorkflowWebhookIngressEndpoints
                 ScopeId = exactTarget.Definition.ScopeId,
                 ResolvedDefinitionBinding = exactTarget.Definition,
             };
+        if (dynamicRecord != null &&
+            !TryAttachUnattendedCaller(
+                dynamicRecord,
+                normalizedRoute,
+                exactTarget.Definition,
+                runRequest,
+                out runRequest))
+        {
+            scope.MarkResult(StatusCodes.Status409Conflict);
+            return Results.Json(
+                new
+                {
+                    code = "WEBHOOK_UNATTENDED_AUTHORIZATION_DRIFT",
+                    message = "Webhook unattended authorization no longer matches the pinned workflow definition.",
+                },
+                statusCode: StatusCodes.Status409Conflict);
+        }
         var admission = await replayStore.AdmitAsync(build.Admission!, ct);
         switch (admission.Status)
         {
@@ -213,6 +235,61 @@ internal static class WorkflowWebhookIngressEndpoints
                     new { code = "WEBHOOK_REPLAY_ADMISSION_FAILED", message = "Webhook replay admission failed." },
                     statusCode: StatusCodes.Status503ServiceUnavailable);
         }
+    }
+
+    private static bool TryAttachUnattendedCaller(
+        WorkflowWebhookBindingRecord record,
+        string routeKey,
+        WorkflowDefinitionBinding? definition,
+        WorkflowChatRunRequest source,
+        out WorkflowChatRunRequest result)
+    {
+        result = source;
+        var authority = record.CallerAuthority;
+        var authorization = record.UnattendedEffectAuthorization;
+        if (authority is null && authorization is null)
+            return true;
+        if (authority is null || authorization is null || definition is null ||
+            definition.ExpectedExecutionMode != ExternalCapabilityExecutionMode.Durable ||
+            definition.CapabilityAdmissionPlan is null ||
+            string.IsNullOrWhiteSpace(authority.BindingId))
+        {
+            return false;
+        }
+
+        try
+        {
+            WorkflowUnattendedEffectAuthorizationIntegrity.ValidateForDefinition(
+                authorization,
+                authority,
+                routeKey,
+                definition.DefinitionActorId,
+                definition.ScopeId,
+                definition.WorkflowId,
+                definition.RevisionId,
+                definition.DefinitionVersion,
+                definition.CapabilityAdmissionPlan);
+        }
+        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
+        {
+            return false;
+        }
+
+        result = source with
+        {
+            CallerCredential = new AppWorkflowCallerCredential(
+                BearerToken: null,
+                NyxIdAuthority: new AppWorkflowCallerNyxIdAuthority(
+                    authority.Platform,
+                    authority.Tenant,
+                    authority.ExternalUserId,
+                    authority.Scope,
+                    authority.BindingId),
+                Kind: NyxIdCallerCredentialKind.ProxyDelegation,
+                SourceReadableUserBearerToken: null,
+                UnattendedEffectAuthorization: authorization.Clone()),
+        };
+        return true;
     }
 
     private static async Task<IResult> DispatchAsync(

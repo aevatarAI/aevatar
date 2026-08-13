@@ -475,6 +475,7 @@ internal static class WorkflowRunExecutionContextStateAccess
             clone.CallerCredential.DurableCallerCredential = null;
         if (clone.CallerCredential?.NyxIdAuthority != null)
             clone.CallerCredential.NyxIdAuthority = null;
+        clone.UnattendedEffectAuthorization = null;
         return clone;
     }
 

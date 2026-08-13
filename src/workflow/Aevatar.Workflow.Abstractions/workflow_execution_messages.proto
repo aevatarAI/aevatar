@@ -189,6 +189,7 @@ message WorkflowCallerCredential {
   NyxIdCallerCredentialKind kind = 5;
   string source_readable_user_bearer_token = 6;
   aevatar.credentials.RuntimeSecretReference source_readable_user_bearer_runtime_secret_reference = 7;
+  WorkflowUnattendedEffectAuthorization unattended_effect_authorization = 8;
 }
 
 message WorkflowCallerNyxIdAuthority {
@@ -197,6 +198,37 @@ message WorkflowCallerNyxIdAuthority {
   string external_user_id = 3;
   string scope = 4;
   string binding_id = 5;
+}
+
+// Owner-granted authorization for unattended effects from one exact workflow
+// revision. The authorization is created only by a trusted binding endpoint;
+// external webhook payloads cannot supply or modify it.
+message WorkflowUnattendedEffectAuthorization {
+  string schema_version = 1;
+  string definition_actor_id = 2;
+  string scope_id = 3;
+  string workflow_id = 4;
+  string revision_id = 5;
+  string admission_digest = 6;
+  string grantor_subject = 7;
+  string route_digest = 8;
+  string caller_authority_digest = 9;
+  repeated WorkflowUnattendedInvocationAuthorization invocations = 10;
+  string authorization_digest = 11;
+  int64 definition_version = 12;
+}
+
+message WorkflowUnattendedInvocationAuthorization {
+  string call_site_id = 1;
+  string capability_contract_digest = 2;
+  string explicit_request_grant_digest = 3;
+}
+
+message WorkflowUnattendedInvocationPermit {
+  string authorization_id = 1;
+  string call_site_id = 2;
+  string capability_contract_digest = 3;
+  string explicit_request_grant_digest = 4;
 }
 
 message WorkflowExternalIngressContext {
@@ -241,7 +273,16 @@ message WorkflowWebhookBindingState {
   string target_revision_id = 15;
   string protected_previous_hmac_secret = 16;
   string time_zone_id = 17;
-  string protected_caller_bearer_token = 18;
+  // Deprecated unsafe workaround retained only so already-written records
+  // cannot be reinterpreted as a different protobuf field. New code never
+  // reads or writes a durable user bearer from a webhook binding.
+  string protected_caller_bearer_token = 18 [deprecated = true];
+  string protected_caller_authorization = 19;
+}
+
+message WorkflowWebhookCallerAuthorizationState {
+  WorkflowCallerNyxIdAuthority caller_authority = 1;
+  WorkflowUnattendedEffectAuthorization unattended_effect_authorization = 2;
 }
 
 message WorkflowChatRequestEvent {
@@ -483,6 +524,8 @@ message WorkflowRunExecutionContextDelta
   bool clear_caller_credential = 6;
   WorkflowToolRuntimeContextPayload workflow_runtime = 7;
   bool clear_workflow_runtime = 8;
+  WorkflowUnattendedEffectAuthorization unattended_effect_authorization = 9;
+  bool clear_unattended_effect_authorization = 10;
 }
 message WorkflowRunLlmExecutionContextDelta
 {

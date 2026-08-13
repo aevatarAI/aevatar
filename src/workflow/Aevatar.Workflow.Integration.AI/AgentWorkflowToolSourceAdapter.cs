@@ -103,7 +103,12 @@ public sealed class AgentWorkflowToolSourceAdapter(
                         request.RunId,
                         request.ApprovalGrant.ToolName,
                         request.ApprovalGrant.ToolCallId,
-                        AgentToolArgumentsDigest.ComputeSha256(request.ArgumentsJson)));
+                        AgentToolArgumentsDigest.ComputeSha256(request.ArgumentsJson)),
+                UnattendedAuthorization: MapUnattendedAuthorization(
+                    request,
+                    toolContext,
+                    request.ArgumentsJson,
+                    _tool.Name));
             var outcome = await _toolExecutionPort.ExecuteAsync(executionRequest, ct).ConfigureAwait(false);
             if (IsActorRedeliveryAdmission(outcome))
             {
@@ -154,6 +159,42 @@ public sealed class AgentWorkflowToolSourceAdapter(
                 StringComparison.Ordinal) &&
             !outcome.TerminalInvoked &&
             !outcome.Retryable;
+
+        private static AgentToolUnattendedExecutionAuthorization? MapUnattendedAuthorization(
+            WorkflowToolExecutionRequest request,
+            AgentToolExecutionContext context,
+            string argumentsJson,
+            string toolName)
+        {
+            var permit = request.UnattendedInvocationPermit;
+            var admission = context.OperationAdmission;
+            var explicitGrant = request.InvocationAdmission?.NyxIdExplicitRequestGrant;
+            if (permit is null || admission is null ||
+                explicitGrant is null ||
+                !string.Equals(permit.CallSiteId, request.InvocationAdmission?.CallSiteId, StringComparison.Ordinal) ||
+                !string.Equals(
+                    permit.CapabilityContractDigest,
+                    request.InvocationAdmission?.Capability?.NyxIdUserRequest?.ContractDigest,
+                    StringComparison.Ordinal) ||
+                !string.Equals(
+                    permit.ExplicitRequestGrantDigest,
+                    WorkflowCapabilityAdmissionPlanIntegrity.ComputeNyxIdExplicitRequestGrantDigest(explicitGrant),
+                    StringComparison.Ordinal))
+            {
+                return null;
+            }
+
+            return new AgentToolUnattendedExecutionAuthorization(
+                AgentToolUnattendedAuthorizationKind.WorkflowWebhookExact,
+                permit.AuthorizationId,
+                context.ExecutionOwner.Clone(),
+                request.RunId,
+                toolName,
+                request.CallId,
+                AgentToolArgumentsDigest.ComputeSha256(argumentsJson),
+                permit.CallSiteId,
+                AgentToolOperationSelector.ComputeDigest(admission));
+        }
 
         private static ChatFileRef ToChatFileRef(WorkflowFileRef fileRef) =>
             new()

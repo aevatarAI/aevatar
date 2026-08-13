@@ -138,6 +138,16 @@ public sealed partial class WorkflowRunGAgent
 
     public string ScheduleId => State.ScheduleId ?? string.Empty;
 
+    string IWorkflowExecutionStateHost.DefinitionActorId => State.DefinitionActorId ?? string.Empty;
+
+    string IWorkflowExecutionStateHost.WorkflowId => State.WorkflowId ?? string.Empty;
+
+    string IWorkflowExecutionStateHost.RevisionId => State.RevisionId ?? string.Empty;
+
+    string IWorkflowExecutionStateHost.RunOrigin => State.RunOrigin ?? string.Empty;
+
+    long IWorkflowExecutionStateHost.DefinitionVersion => Math.Max(0, State.DefinitionVersion);
+
     public WorkflowCallerNyxIdAuthority? CallerNyxIdAuthority
     {
         get
@@ -647,10 +657,19 @@ public sealed partial class WorkflowRunGAgent
         //                making Headers a stable control flow channel.
         //   New principle: actor reads command id from ActiveInboundEnvelope.Id,
         //                  the typed envelope identity.
+        ValidateUnattendedWebhookCredential(request, scopeId);
         var callerCredentialDelta = await WorkflowCallerCredentialRuntimeContextAccess.BuildCredentialDeltaAsync(
             this,
             request.CallerCredential,
             CancellationToken.None);
+        if (request.CallerCredential?.UnattendedEffectAuthorization is { } unattendedAuthorization)
+        {
+            callerCredentialDelta.UnattendedEffectAuthorization = unattendedAuthorization.Clone();
+        }
+        else
+        {
+            callerCredentialDelta.ClearUnattendedEffectAuthorization = true;
+        }
         _runtimeContext.ApplyRequestMetadata(request.Metadata);
         _runtimeContext.ApplySenderNyxIdAccessToken(request.LlmControl?.SenderNyxIdAccessToken);
         var llmControlDelta = WorkflowRunExecutionContextStateAccess.BuildLlmControlDelta(request.LlmControl);
@@ -756,6 +775,34 @@ public sealed partial class WorkflowRunGAgent
         return start;
     }
 
+    private void ValidateUnattendedWebhookCredential(WorkflowChatRequestEvent request, string scopeId)
+    {
+        var authorization = request.CallerCredential?.UnattendedEffectAuthorization;
+        if (authorization is null)
+            return;
+
+        if (!string.Equals(State.RunOrigin, WorkflowRunOrigins.Webhook, StringComparison.Ordinal) ||
+            request.ExternalIngress is null ||
+            State.ExpectedExecutionMode != ExternalCapabilityExecutionMode.Durable ||
+            State.CapabilityAdmissionPlan is null ||
+            request.CallerCredential?.NyxIdAuthority is not { } authority)
+        {
+            throw new InvalidOperationException(
+                "Unattended effect authorization is only valid for an exact durable webhook run.");
+        }
+
+        WorkflowUnattendedEffectAuthorizationIntegrity.ValidateForDefinition(
+            authorization,
+            authority,
+            request.ExternalIngress.RouteKey,
+            State.DefinitionActorId,
+            scopeId,
+            State.WorkflowId,
+            State.RevisionId,
+            State.DefinitionVersion,
+            State.CapabilityAdmissionPlan);
+    }
+
     private bool TryAcquireChatCommandExecutionLease(string commandId)
     {
         if (_inFlightChatCommandId == null)
@@ -815,6 +862,10 @@ public sealed partial class WorkflowRunGAgent
         var runId = string.IsNullOrWhiteSpace(State.RunId)
             ? WorkflowRunIdNormalizer.Normalize(Id)
             : WorkflowRunIdNormalizer.Normalize(State.RunId);
+        var replacementExecutionContext =
+            WorkflowRunExecutionContextStateAccess.ClearWorkflowRuntimeDelta();
+        replacementExecutionContext.ClearCallerCredential = true;
+        replacementExecutionContext.ClearUnattendedEffectAuthorization = true;
         await PersistDomainEventAsync(new WorkflowRunExecutionStartedEvent
         {
             RunId = runId,
@@ -822,7 +873,7 @@ public sealed partial class WorkflowRunGAgent
             Input = request.Input ?? string.Empty,
             DefinitionActorId = State.DefinitionActorId ?? string.Empty,
             ScopeId = State.ScopeId ?? string.Empty,
-            ExecutionContextDelta = WorkflowRunExecutionContextStateAccess.ClearWorkflowRuntimeDelta(),
+            ExecutionContextDelta = replacementExecutionContext,
             Attempt = State.ForkAttempt,
             // O2 (06-19-workflow-run-observatory): capture the run-start fact so the readmodel can sort by it.
             StartedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
@@ -2482,7 +2533,9 @@ public sealed partial class WorkflowRunGAgent
         next.TerminalRecoveryFailureKind = WorkflowRecoveryFailureKind.Unspecified;
         next.CompletedAtUtc = null;
         next.ClearDurationMs();
-        next.Initiator = BuildInitiator(evt.ExecutionContextDelta?.CallerCredential?.NyxIdAuthority);
+        next.Initiator = BuildInitiator(
+            evt.ExecutionContextDelta?.CallerCredential?.NyxIdAuthority,
+            current.RunOrigin);
         next.ForkAttempt = Math.Max(0, evt.Attempt);
         next.CompensableLedger.Clear();
         next.CompensationCursor = 0;
@@ -2746,10 +2799,14 @@ public sealed partial class WorkflowRunGAgent
                 merged.ClearLlm = true;
             if (delta.ClearCallerCredential)
                 merged.ClearCallerCredential = true;
+            if (delta.ClearUnattendedEffectAuthorization)
+                merged.ClearUnattendedEffectAuthorization = true;
             if (delta.Llm != null)
                 merged.Llm = delta.Llm.Clone();
             if (delta.CallerCredential != null)
                 merged.CallerCredential = delta.CallerCredential.Clone();
+            if (delta.UnattendedEffectAuthorization != null)
+                merged.UnattendedEffectAuthorization = delta.UnattendedEffectAuthorization.Clone();
             if (delta.ClearWorkflowRuntime)
                 merged.ClearWorkflowRuntime = true;
             if (delta.WorkflowRuntime != null)
@@ -2770,6 +2827,8 @@ public sealed partial class WorkflowRunGAgent
             state.Llm = null;
         if (delta.ClearCallerCredential)
             state.CallerCredential = null;
+        if (delta.ClearUnattendedEffectAuthorization)
+            state.UnattendedEffectAuthorization = null;
         if (delta.ClearWorkflowRuntime)
             state.WorkflowRuntime = null;
 
@@ -2804,6 +2863,9 @@ public sealed partial class WorkflowRunGAgent
                 Kind = delta.CallerCredential.Kind,
             };
         }
+
+        if (delta.UnattendedEffectAuthorization != null)
+            state.UnattendedEffectAuthorization = delta.UnattendedEffectAuthorization.Clone();
 
         if (delta.WorkflowRuntime != null)
         {
@@ -3136,8 +3198,20 @@ public sealed partial class WorkflowRunGAgent
             (completedAtUtc.ToDateTimeOffset() - state.StartedAtUtc.ToDateTimeOffset()).TotalMilliseconds);
     }
 
-    private static WorkflowRunInitiatorState BuildInitiator(WorkflowCallerNyxIdAuthority? authority)
+    private static WorkflowRunInitiatorState BuildInitiator(
+        WorkflowCallerNyxIdAuthority? authority,
+        string? runOrigin)
     {
+        if (string.Equals(runOrigin, WorkflowRunOrigins.Webhook, StringComparison.Ordinal))
+        {
+            return new WorkflowRunInitiatorState
+            {
+                Platform = "webhook",
+                DisplayValue = "Webhook",
+                Availability = "available",
+            };
+        }
+
         if (authority == null)
         {
             return new WorkflowRunInitiatorState
@@ -3151,15 +3225,17 @@ public sealed partial class WorkflowRunGAgent
         var tenant = authority.Tenant?.Trim() ?? string.Empty;
         var externalUserId = authority.ExternalUserId?.Trim() ?? string.Empty;
         var scope = authority.Scope?.Trim() ?? string.Empty;
-        var bindingId = authority.BindingId?.Trim() ?? string.Empty;
-        var displayValue = ResolveInitiatorDisplayValue(platform, tenant, externalUserId, scope, bindingId);
+        var displayValue = ResolveInitiatorDisplayValue(platform, tenant, externalUserId, scope);
         return new WorkflowRunInitiatorState
         {
             Platform = platform,
             Tenant = tenant,
             ExternalUserId = externalUserId,
             Scope = scope,
-            BindingId = bindingId,
+            // Binding ids are credential-capable opaque handles. They remain
+            // actor-private for JIT token exchange and never enter activity
+            // or Observatory initiator projections.
+            BindingId = string.Empty,
             DisplayValue = string.IsNullOrWhiteSpace(displayValue) ? "Unknown" : displayValue,
             Availability = string.IsNullOrWhiteSpace(displayValue) ? "unavailable" : "available",
         };
@@ -3169,8 +3245,7 @@ public sealed partial class WorkflowRunGAgent
         string platform,
         string tenant,
         string externalUserId,
-        string scope,
-        string bindingId)
+        string scope)
     {
         if (!string.IsNullOrWhiteSpace(platform) && !string.IsNullOrWhiteSpace(externalUserId))
             return string.IsNullOrWhiteSpace(tenant)
@@ -3178,8 +3253,6 @@ public sealed partial class WorkflowRunGAgent
                 : $"{platform}:{tenant}:{externalUserId}";
         if (!string.IsNullOrWhiteSpace(scope))
             return $"scope:{scope}";
-        if (!string.IsNullOrWhiteSpace(bindingId))
-            return $"binding:{bindingId}";
         return string.Empty;
     }
 

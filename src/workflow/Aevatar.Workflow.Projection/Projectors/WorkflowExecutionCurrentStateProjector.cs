@@ -142,7 +142,9 @@ public sealed class WorkflowExecutionCurrentStateProjector
             Tenant = WorkflowAuditTextSanitizer.Sanitize(initiator.Tenant),
             ExternalUserId = WorkflowAuditTextSanitizer.Sanitize(initiator.ExternalUserId),
             Scope = WorkflowAuditTextSanitizer.Sanitize(initiator.Scope),
-            BindingId = WorkflowAuditTextSanitizer.Sanitize(initiator.BindingId),
+            // Never publish the NyxID binding handle. It can be exchanged for
+            // a short-lived credential by trusted server-side infrastructure.
+            BindingId = string.Empty,
             DisplayValue = string.IsNullOrWhiteSpace(initiator.DisplayValue)
                 ? "Unknown"
                 : WorkflowAuditTextSanitizer.Sanitize(initiator.DisplayValue),
