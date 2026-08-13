@@ -17,14 +17,15 @@ when Schedule is in scope.
 Use the sources in this order:
 
 1. `aevatar-workflow-activity-vnext.excalidraw` is the primary visual,
-   information-architecture, and interaction reference.
+   information-architecture, and interaction reference for Workflow,
+   Activity, and Settings.
 2. The design specification is the normative product, route, identity, API,
    state, and backend-compatibility contract.
-3. The published-workflow schedule supplement is normative whenever a
-   Schedule entry, panel, resource, or Activity origin is changed. It defines
-   Schedule as a Team member automation backed by `ScheduledDispatch`, not a
-   standalone schedule collection, graph node, draft property, or Run
-   property.
+3. `aevatar-workflow-schedule-design.excalidraw` and the published-workflow
+   schedule supplement are normative whenever a Schedule entry, panel,
+   resource, or Activity origin is changed. They define Schedule as a Team
+   member automation backed by `ScheduledDispatch`, not a standalone schedule
+   collection, graph node, draft property, or Run property.
 4. The user-path specification is the normative end-to-end journey, decision,
    recovery, and completion-evidence contract.
 5. The PNG files are viewport references for individual states.
@@ -107,10 +108,14 @@ Design baseline:
 Primary design:
   aevatar-workflow-activity-vnext.excalidraw
 Design SHA-256:
-  88b29f952a07ec170408623a70fd17da8706eaf0ec4b119a8e91f4d5b48fc644
+  30e74d7b410ae72c4c91432355436679033679c54c10b1702908435b001577de
 Contract specification:
   apps/aevatar-console-web/docs/superpowers/specs/
   2026-08-04-workflow-activity-vnext-design.md
+Schedule design, when Schedule is in scope:
+  aevatar-workflow-schedule-design.excalidraw
+Schedule design SHA-256:
+  69634a3503d4f21a3eac21d404d0ab4d965888f07c85f696cb6b29e09a119520
 Schedule supplement, when Schedule is in scope:
   apps/aevatar-console-web/docs/superpowers/specs/
   2026-08-11-workflow-schedule-design.md
@@ -136,9 +141,10 @@ failures rather than undocumented implementation choices.
 
 ## 文件
 
-- `aevatar-workflow-activity-vnext.excalidraw`：合并后的 Excalidraw，包含 Workflows、Activity、Settings 与已发布 Workflow 的 Schedule 配置，共 18 个 frame。
+- `aevatar-workflow-activity-vnext.excalidraw`：合并后的 Excalidraw，包含 Workflows、Activity 与 Settings，共 17 个 frame。
+- `aevatar-workflow-schedule-design.excalidraw`：单独拆出的 Schedule Excalidraw，包含已发布 Team member Workflow 的 Member automations 配置，共 1 个 frame。
 - `aevatar-workflow-activity-vnext.gen.py`：画板生成器，内含画框边界、ID 唯一性和废弃术语检查。
-- `verify-baseline.py`：仓库内校验器，验证画板 SHA-256、生成器确定性输出和 18 个 frame 的精确清单。
+- `verify-baseline.py`：仓库内校验器，验证主画板 SHA-256、生成器确定性输出、17 个主画板 frame 的精确清单，以及独立 Schedule 画板的完整性。
 - `prototype.html`：可直接在浏览器打开的交互原型，不需要安装依赖或启动服务。
 - `prototype-workflows.png`：Workflows 桌面视图截图。
 - `prototype-activity.png`：Activity 桌面视图截图。
@@ -194,7 +200,7 @@ Production Data Truth Rule，也不覆盖设计规范中的
 
 ## Excalidraw 阅读顺序
 
-导入 `aevatar-workflow-activity-vnext.excalidraw` 后，建议先缩放到全部内容，再按 frame 名称从 01 看到 18：
+导入 `aevatar-workflow-activity-vnext.excalidraw` 后，建议先缩放到全部内容，再按 frame 名称从 01 看到 17：
 
 1. `01 Workflows - catalogue`：日常入口、搜索、筛选、Run 和 Open。
 2. `02 New workflow - direct creation`：四种入口都直接创建 Workflow 草稿。
@@ -213,7 +219,7 @@ Production Data Truth Rule，也不覆盖设计规范中的
 15. `15 Settings - save and recovery states`：dirty save bar、accepted observation、fallback、catalog unavailable 和保存失败恢复。
 16. `16 Settings - Account`：Profile、claims、Authentication、Sign out 与 Manage service access。
 17. `17 Settings - Advanced and responsive`：单份只读 effective request values 与完整移动端操作布局。
-18. `18 Schedule - published workflow configuration`：已发布 Team member Workflow 的右侧 Schedule 管理面；它复用现有 Team Automation 语义，显示 member owner、published service、pinned revision、周期、时区、可选 prompt、Dedicated Agent Key 审查、服务端预览、credential 状态和调度状态，不把 Schedule 画成图节点。
+Schedule 相关变更请另外导入 `aevatar-workflow-schedule-design.excalidraw`。该文件只保留 `18 Schedule - published workflow configuration`：已发布 Team member Workflow 的右侧 Schedule 管理面；它复用现有 Team Automation 语义，显示 member owner、published service、pinned revision、周期、时区、可选 prompt、Dedicated Agent Key 审查、服务端预览、credential 状态和调度状态，不把 Schedule 画成图节点。
 
 重点不是逐个查看控件，而是沿着这条主路径检查语义是否连贯：
 
@@ -275,5 +281,5 @@ python3 apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/v
 ```
 
 校验器会在临时目录运行导入的生成器，不修改仓库文件，并验证生成结果与
-主画板逐字节一致、SHA-256 与声明一致，以及 18 个 frame 的名称和顺序
-完整。任何失败都表示设计基线或声明已经漂移，必须在实现或评审前处理。
+主画板逐字节一致、SHA-256 与声明一致、17 个主画板 frame 的名称和顺序
+完整，以及独立 Schedule 画板的 SHA-256、frame 与关键语义文案完整。任何失败都表示设计基线或声明已经漂移，必须在实现或评审前处理。

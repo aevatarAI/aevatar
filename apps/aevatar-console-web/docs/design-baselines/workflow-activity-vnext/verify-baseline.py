@@ -13,9 +13,11 @@ from pathlib import Path
 
 BASELINE_DIR = Path(__file__).resolve().parent
 BOARD_NAME = "aevatar-workflow-activity-vnext.excalidraw"
+SCHEDULE_BOARD_NAME = "aevatar-workflow-schedule-design.excalidraw"
 GENERATOR_NAME = "aevatar-workflow-activity-vnext.gen.py"
 PROTOTYPE_NAME = "prototype.html"
-EXPECTED_SHA256 = "88b29f952a07ec170408623a70fd17da8706eaf0ec4b119a8e91f4d5b48fc644"
+EXPECTED_SHA256 = "30e74d7b410ae72c4c91432355436679033679c54c10b1702908435b001577de"
+EXPECTED_SCHEDULE_SHA256 = "69634a3503d4f21a3eac21d404d0ab4d965888f07c85f696cb6b29e09a119520"
 EXPECTED_FRAMES = (
     "01 Workflows - catalogue",
     "02 New workflow - direct creation",
@@ -34,15 +36,19 @@ EXPECTED_FRAMES = (
     "15 Settings - save and recovery states",
     "16 Settings - Account",
     "17 Settings - Advanced and responsive",
+)
+EXPECTED_SCHEDULE_FRAMES = (
     "18 Schedule - published workflow configuration",
 )
 
 
 def main() -> None:
     board_path = BASELINE_DIR / BOARD_NAME
+    schedule_board_path = BASELINE_DIR / SCHEDULE_BOARD_NAME
     generator_path = BASELINE_DIR / GENERATOR_NAME
     prototype_path = BASELINE_DIR / PROTOTYPE_NAME
     board_bytes = board_path.read_bytes()
+    schedule_board_bytes = schedule_board_path.read_bytes()
 
     actual_sha256 = hashlib.sha256(board_bytes).hexdigest()
     if actual_sha256 != EXPECTED_SHA256:
@@ -50,46 +56,55 @@ def main() -> None:
             f"design SHA-256 mismatch: expected {EXPECTED_SHA256}, got {actual_sha256}"
         )
 
+    actual_schedule_sha256 = hashlib.sha256(schedule_board_bytes).hexdigest()
+    if actual_schedule_sha256 != EXPECTED_SCHEDULE_SHA256:
+        raise SystemExit(
+            "schedule design SHA-256 mismatch: "
+            f"expected {EXPECTED_SCHEDULE_SHA256}, got {actual_schedule_sha256}"
+        )
+
     document = json.loads(board_bytes)
-    visible_text = "\n".join(
+    schedule_document = json.loads(schedule_board_bytes)
+    schedule_visible_text = "\n".join(
         element["text"]
-        for element in document["elements"]
+        for element in schedule_document["elements"]
         if element.get("type") == "text"
     )
-    visible_text_casefolded = visible_text.casefold()
-    if "Publish this workflow before scheduling it." not in visible_text:
-        raise SystemExit("schedule draft-state copy is missing from the design board")
-    if "Source: Schedule" not in visible_text:
-        raise SystemExit("scheduled Activity filter is missing from the design board")
-    if "View scheduled runs" not in visible_text:
-        raise SystemExit("scheduled Activity entry point is missing from the design board")
-    if "Member automations" not in visible_text:
+    schedule_visible_text_casefolded = schedule_visible_text.casefold()
+    if "View scheduled runs" not in schedule_visible_text:
+        raise SystemExit("scheduled Activity entry point is missing from the schedule design board")
+    if "Member automations" not in schedule_visible_text:
         raise SystemExit("schedule frame does not use the Team Automation owner model")
-    if "Dedicated Agent Key" not in visible_text:
+    if "Dedicated Agent Key" not in schedule_visible_text:
         raise SystemExit("schedule frame is missing Team Automation authorization review")
-    if "prompt (optional)" not in visible_text_casefolded:
+    if "prompt (optional)" not in schedule_visible_text_casefolded:
         raise SystemExit("schedule frame incorrectly hides optional recurring prompt semantics")
-    if "Credential active" not in visible_text:
+    if "Credential active" not in schedule_visible_text:
         raise SystemExit("schedule frame is missing observed credential state")
-    if "18 Schedule - published workflow configuration" not in {
-        element.get("name")
-        for element in document["elements"]
-        if element.get("type") == "frame"
-    }:
-        raise SystemExit("schedule configuration frame is missing from the design board")
-    if "Schedule every Monday" in visible_text or "Schedule every weekday" in visible_text:
+    if "Schedule every Monday" in schedule_visible_text or "Schedule every weekday" in schedule_visible_text:
         raise SystemExit("schedule remains modeled as a workflow graph node")
-    if "Created from Published" in visible_text:
+    if "Created from Published" in schedule_visible_text:
         raise SystemExit("published status is incorrectly modeled as a workflow creation source")
+    schedule_frame_names = tuple(
+        element["name"]
+        for element in schedule_document["elements"]
+        if element.get("type") == "frame"
+    )
+    if schedule_frame_names != EXPECTED_SCHEDULE_FRAMES:
+        raise SystemExit(
+            "schedule frame inventory mismatch:\n"
+            f"expected {EXPECTED_SCHEDULE_FRAMES!r}\n"
+            f"got      {schedule_frame_names!r}"
+        )
     schedule_frame_id = next(
         element["id"]
-        for element in document["elements"]
+        for element in schedule_document["elements"]
         if element.get("type") == "frame"
         and element.get("name") == "18 Schedule - published workflow configuration"
     )
     schedule_nodes = [
         element
-        for element in document["elements"]
+        for element in schedule_document["elements"]
         if element.get("frameId") == schedule_frame_id
         and element.get("type") == "rectangle"
         and element.get("width") == 214
@@ -191,6 +206,8 @@ def main() -> None:
 
     print(f"design SHA-256: {actual_sha256}")
     print(f"frames: {len(frame_names)}/{len(EXPECTED_FRAMES)}")
+    print(f"schedule design SHA-256: {actual_schedule_sha256}")
+    print(f"schedule frames: {len(schedule_frame_names)}/{len(EXPECTED_SCHEDULE_FRAMES)}")
     print("generator output: byte-identical")
     print("workflow activity vNext baseline: PASS")
 
