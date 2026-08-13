@@ -22,7 +22,7 @@ public sealed class RedisWorkflowWebhookReplayStore : IWorkflowWebhookReplayStor
     private readonly IDatabase _database;
     private readonly WorkflowWebhookIngressOptions _options;
 
-    internal RedisWorkflowWebhookReplayStore(
+    public RedisWorkflowWebhookReplayStore(
         WorkflowWebhookReplayRedisConnection connection,
         IOptions<WorkflowWebhookIngressOptions> options)
     {
