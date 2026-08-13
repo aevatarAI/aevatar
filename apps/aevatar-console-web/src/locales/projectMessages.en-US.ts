@@ -4667,7 +4667,6 @@ const projectMessages = {
   "pages.studio.studioworkbenchsections.wait.for.external.signal": "Wait for external signal",
   "pages.studio.studioworkbenchsections.waiting.for.execution": "Waiting for execution",
   "pages.studio.studioworkbenchsections.waiting.for.manual.approval": "Waiting for manual approval",
-  "pages.studio.studioworkbenchsections.waiting.for.manual.input": "Waiting for manual input",
   "pages.studio.studioworkbenchsections.warming.up": "Warming up",
   "pages.studio.studioworkbenchsections.workflow.graph.unavailable": "Workflow graph unavailable.",
   "pages.studio.studioworkbenchsections.workflow.graph.unavailable.for.this": "Workflow graph unavailable for this member.",

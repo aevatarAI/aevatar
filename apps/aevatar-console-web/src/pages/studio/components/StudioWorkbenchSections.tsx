@@ -1359,7 +1359,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
                     ? t("pages.studio.studioworkbenchsections.waiting.for.manual.approval", "Waiting for manual approval")
                     : activeExecutionInteraction.kind === 'wait_signal'
                       ? t("pages.studio.studioworkbenchsections.wait.for.external.signal", "wait for external signal")
-                    : t("pages.studio.studioworkbenchsections.waiting.for.manual.input", "Waiting for manual input")}
+                    : null}
                 </Typography.Text>
                 <div style={{ color: '#6b7280', fontSize: 12, marginTop: 4 }}>
                   {activeExecutionInteraction.kind === 'human_approval'
