@@ -169,10 +169,10 @@ internal sealed class RedisWorkflowWebhookBindingStore : IWorkflowWebhookBinding
     {
         ct.ThrowIfCancellationRequested();
         var value = await Database.StringGetAsync(BindingKey(routeKey));
-        if (value.IsNullOrEmpty)
+        if (value.IsNullOrEmpty || !TryParseState((byte[])value!, out var state))
             return null;
 
-        return FromState(WorkflowWebhookBindingState.Parser.ParseFrom((byte[])value!));
+        return FromState(state);
     }
 
     public async Task<bool> TryPutOwnedAsync(
@@ -191,13 +191,13 @@ internal sealed class RedisWorkflowWebhookBindingStore : IWorkflowWebhookBinding
         {
             ct.ThrowIfCancellationRequested();
             var existingValue = await database.StringGetAsync(bindingKey);
-            if (!existingValue.IsNullOrEmpty)
+            // An unparseable value is a pre-proto legacy record: it is dead
+            // weight (no reader can use it), so a PUT may reclaim the route.
+            if (!existingValue.IsNullOrEmpty &&
+                TryParseState((byte[])existingValue!, out var existing) &&
+                !string.Equals(existing.ScopeId, record.ScopeId, StringComparison.Ordinal))
             {
-                var existing = WorkflowWebhookBindingState.Parser.ParseFrom((byte[])existingValue!);
-                if (!string.Equals(existing.ScopeId, record.ScopeId, StringComparison.Ordinal))
-                {
-                    return false;
-                }
+                return false;
             }
 
             var transaction = database.CreateTransaction();
@@ -228,9 +228,13 @@ internal sealed class RedisWorkflowWebhookBindingStore : IWorkflowWebhookBinding
             if (existingValue.IsNullOrEmpty)
                 return false;
 
-            var existing = WorkflowWebhookBindingState.Parser.ParseFrom((byte[])existingValue!);
-            if (!string.Equals(existing.ScopeId, scopeId, StringComparison.Ordinal))
+            // Unparseable legacy values are deletable by any scope: they are
+            // unusable dead weight and blocking cleanup would wedge the route.
+            if (TryParseState((byte[])existingValue!, out var existing) &&
+                !string.Equals(existing.ScopeId, scopeId, StringComparison.Ordinal))
+            {
                 return false;
+            }
 
             var transaction = database.CreateTransaction();
             transaction.AddCondition(Condition.StringEqual(bindingKey, existingValue));
@@ -264,6 +268,22 @@ internal sealed class RedisWorkflowWebhookBindingStore : IWorkflowWebhookBinding
         return records
             .OrderBy(static record => record.RouteKey, StringComparer.Ordinal)
             .ToArray();
+    }
+
+    internal static bool TryParseState(byte[] value, out WorkflowWebhookBindingState state)
+    {
+        try
+        {
+            state = WorkflowWebhookBindingState.Parser.ParseFrom(value);
+            // A proto parse can "succeed" on garbage; a real record always
+            // carries its route key and scope.
+            return state.RouteKey.Length > 0 && state.ScopeId.Length > 0;
+        }
+        catch (Google.Protobuf.InvalidProtocolBufferException)
+        {
+            state = new WorkflowWebhookBindingState();
+            return false;
+        }
     }
 
     private RedisKey BindingKey(string routeKey) => $"{_keyPrefix}:bindings:{routeKey}";

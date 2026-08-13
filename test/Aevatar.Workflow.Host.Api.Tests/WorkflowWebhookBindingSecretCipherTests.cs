@@ -97,6 +97,27 @@ public sealed class WorkflowWebhookBindingSecretCipherTests
         }
     }
 
+    [Fact]
+    public void TryParseState_WithLegacyJsonValue_ShouldReturnFalseInsteadOfThrowing()
+    {
+        // Bindings written before the proto storage format are JSON; the
+        // store must treat them as absent (reclaimable/deletable), not crash
+        // every read of the route.
+        var legacyJson = System.Text.Encoding.UTF8.GetBytes(
+            """{"routeKey":"hr01-route","scopeId":"scope-1","workflowName":"wf"}""");
+
+        RedisWorkflowWebhookBindingStore.TryParseState(legacyJson, out _).Should().BeFalse();
+
+        var real = new Aevatar.Workflow.Abstractions.WorkflowWebhookBindingState
+        {
+            RouteKey = "hr01-route",
+            ScopeId = "scope-1",
+        };
+        RedisWorkflowWebhookBindingStore.TryParseState(
+            Google.Protobuf.MessageExtensions.ToByteArray(real), out var parsed).Should().BeTrue();
+        parsed.RouteKey.Should().Be("hr01-route");
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]
