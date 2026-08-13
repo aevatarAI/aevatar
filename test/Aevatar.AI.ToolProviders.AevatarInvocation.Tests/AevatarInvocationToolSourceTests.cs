@@ -99,6 +99,31 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
+    public async Task StartWorkflowSchema_ShouldDescribeJsonInputContractOnPrompt()
+    {
+        // Field regression (2026-08-13): agents passed the user's raw sentence
+        // or an empty string as inputs.prompt because the proto-derived schema
+        // carried zero semantics. The contract must be visible at the model
+        // interface.
+        var tool = await DiscoverSingleAsync(new StartWorkflowToolSource(new Harness().CreateDispatcher()));
+        using var doc = JsonDocument.Parse(tool.ParametersSchema);
+
+        var prompt = doc.RootElement
+            .GetProperty("properties")
+            .GetProperty("inputs")
+            .GetProperty("properties")
+            .GetProperty("prompt");
+        var description = prompt.GetProperty("description").GetString();
+        description.Should().Contain("serialized JSON");
+        description.Should().Contain("Never pass an empty string");
+
+        var workflowId = doc.RootElement
+            .GetProperty("properties")
+            .GetProperty("workflow_id");
+        workflowId.GetProperty("description").GetString().Should().Contain("Never guess");
+    }
+
+    [Fact]
     public async Task ObserveRunSchema_ShouldRequireTypedTarget()
     {
         var tool = await DiscoverSingleAsync(new ObserveRunToolSource(new Harness().CreateDispatcher()));
@@ -2192,6 +2217,37 @@ public sealed class AevatarInvocationToolSourceTests
         harness.ScopeWorkflowQuery.Lookups.Should().ContainSingle()
             .Which.Should().Be(("scope-1", "98a81d707d4f4294b9b06f61a9fa8ac0"));
         harness.WorkflowDispatch.Command.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task StartWorkflow_WithWaitComplete_ShouldSkipBackgroundDeliveryRegistration()
+    {
+        // wait=complete is the caller's promise to observe the run in-turn and
+        // compose the user-facing reply itself; the background channel relay
+        // would post the raw final output as a second, unformatted message.
+        var harness = new Harness();
+        harness.WorkflowDispatch.Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
+            .Success(new WorkflowChatRunAcceptedReceipt("workflow-actor", "wf-main", "wf-command", "wf-correlation"));
+        harness.WorkflowRunDelivery.DeliveryActorId = "delivery-wait-complete";
+        var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
+
+        using var _ = PushContext(
+            callId: "call-workflow-wait-complete",
+            channelPlatform: "lark",
+            channelRegistrationScopeId: "registration-scope-1");
+        var output = await tool.ExecuteAsync("""
+            {
+              "workflow_id": "wf-main",
+              "inputs": { "prompt": "{\"submit\":false}" },
+              "wait": "complete"
+            }
+            """);
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        harness.WorkflowRunDelivery.Reservations.Should().BeEmpty();
+        harness.WorkflowRunDelivery.Registrations.Should().BeEmpty();
+        harness.WorkflowDispatch.Command.Should().NotBeNull();
+        harness.WorkflowDispatch.Command!.CompletionNotificationTarget.Should().BeNull();
     }
 
     [Fact]

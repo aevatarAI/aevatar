@@ -12,7 +12,8 @@ internal static class ProtoToolSchema
         IReadOnlySet<string>? requiredFields = null,
         IReadOnlyDictionary<string, IReadOnlyList<string>>? stringEnums = null,
         IReadOnlyList<IReadOnlyList<string>>? oneOfRequiredGroups = null,
-        bool emitTopLevelOneOf = true)
+        bool emitTopLevelOneOf = true,
+        IReadOnlyDictionary<string, string>? fieldDescriptions = null)
     {
         var schema = BuildMessageSchema(descriptor, requiredFields, stringEnums, depth: 0);
         if (emitTopLevelOneOf && oneOfRequiredGroups is { Count: > 0 })
@@ -25,7 +26,44 @@ internal static class ProtoToolSchema
                 .ToArray();
         }
 
+        if (fieldDescriptions is { Count: > 0 })
+        {
+            foreach (var (path, description) in fieldDescriptions)
+                ApplyFieldDescription(schema, path, description);
+        }
+
         return JsonSerializer.Serialize(schema, SerializerOptions);
+    }
+
+    /// <summary>
+    /// Attaches a "description" to the schema node at a dotted property path
+    /// (for example "inputs.prompt"). The proto-derived schemas are otherwise
+    /// type-only, which leaves the model with zero guidance on field
+    /// semantics — for contract-sensitive fields that guidance is the primary
+    /// defense against malformed tool calls.
+    /// </summary>
+    private static void ApplyFieldDescription(
+        Dictionary<string, object> schema,
+        string dottedPath,
+        string description)
+    {
+        var node = schema;
+        var segments = dottedPath.Split('.', StringSplitOptions.RemoveEmptyEntries);
+        for (var index = 0; index < segments.Length; index++)
+        {
+            if (node.TryGetValue("properties", out var propertiesRaw) &&
+                propertiesRaw is Dictionary<string, object> properties &&
+                properties.TryGetValue(segments[index], out var childRaw) &&
+                childRaw is Dictionary<string, object> child)
+            {
+                node = child;
+                continue;
+            }
+
+            return;
+        }
+
+        node["description"] = description;
     }
 
     private static Dictionary<string, object> BuildMessageSchema(

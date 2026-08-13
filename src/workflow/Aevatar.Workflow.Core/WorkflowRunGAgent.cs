@@ -705,6 +705,23 @@ public sealed partial class WorkflowRunGAgent
             llmControlDelta,
             WorkflowRunExecutionContextStateAccess.ClearWorkflowRuntimeDelta());
         var executionInput = ResolveExecutionInput(request);
+        if (WorkflowRunInputContract.RequiresJsonInput(_compiledWorkflow) &&
+            !WorkflowRunInputContract.IsBoundedJson(executionInput))
+        {
+            // Fail at start, before any step runs, with a corrective message the
+            // calling agent can act on — instead of letting the first bounded
+            // transform throw an opaque mid-run failure (see WorkflowRunInputContract).
+            await HandleWorkflowCompleted(new WorkflowCompletedEvent
+            {
+                RunId = runId,
+                WorkflowName = _compiledWorkflow.Name,
+                Success = false,
+                Error = WorkflowRunInputContract.BuildViolationMessage(_compiledWorkflow.Name, executionInput),
+                RecoveryFailureKind = WorkflowRecoveryFailureKind.ConfigurationFailure,
+            }, request.SessionId);
+            return null;
+        }
+
         var executionStarted = new WorkflowRunExecutionStartedEvent
         {
             RunId = runId,
