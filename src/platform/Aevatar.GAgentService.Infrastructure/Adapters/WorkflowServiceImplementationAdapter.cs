@@ -76,9 +76,13 @@ public sealed class WorkflowServiceImplementationAdapter : IServiceImplementatio
 
         var authorizationDependencies = parse.AuthorizationDependencies
             ?? throw new InvalidOperationException("workflow authorization dependencies are required.");
+        var artifactRevisionSpec = preparationSpec.Clone();
+        artifactRevisionSpec.WorkflowSpec!.WorkflowId = string.IsNullOrWhiteSpace(spec.WorkflowId)
+            ? request.Spec.RevisionId
+            : spec.WorkflowId;
 
         return WorkflowServiceRevisionArtifactBuilder.Build(
-            preparationSpec,
+            artifactRevisionSpec,
             resolvedWorkflowName,
             authorizationDependencies,
             capabilityAdmissionPlan);

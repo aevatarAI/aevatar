@@ -55,6 +55,8 @@ public sealed class AppScopedWorkflowCatalogueServiceTests
         overlap.Committed.Should().NotBeNull();
         overlap.Committed!.ActorId.Should().Be("actor-wf-overlap");
         overlap.Committed.DeploymentId.Should().Be("dep-wf-overlap");
+        overlap.Committed.ServiceAppId.Should().Be("studio");
+        overlap.Committed.ServiceNamespace.Should().Be("default");
         overlap.PublishedServiceId.Should().Be("published-service-overlap");
         response.Freshness.RefreshWatermarkUtc.Should().Be(DateTimeOffset.Parse("2026-08-03T00:00:00Z"));
     }
@@ -216,6 +218,8 @@ public sealed class AppScopedWorkflowCatalogueServiceTests
             ActiveRevisionId = hasPublishedSource ? $"active-{workflowId}" : string.Empty,
             DeploymentId = hasPublishedSource ? $"dep-{workflowId}" : string.Empty,
             DeploymentStatus = hasPublishedSource ? "Active" : string.Empty,
+            ServiceAppId = hasPublishedSource ? "studio" : string.Empty,
+            ServiceNamespace = hasPublishedSource ? "default" : string.Empty,
             PublishedServiceId = hasPublishedSource ? publishedServiceId ?? workflowId : string.Empty,
         };
 

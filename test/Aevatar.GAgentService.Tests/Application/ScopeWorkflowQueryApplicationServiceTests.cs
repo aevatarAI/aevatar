@@ -236,16 +236,18 @@ public sealed class ScopeWorkflowQueryApplicationServiceTests
     }
 
     [Fact]
-    public async Task LookupByWorkflowIdAsync_ShouldRejectConventionalAndExplicitIdentityConflict()
+    public async Task LookupByWorkflowIdAsync_ShouldPreferExplicitPublishedServiceDescriptorOverConventionalIdentity()
     {
         const string workflowId = "wf-alpha";
         var directSnapshot = CreateServiceSnapshot(workflowId, "Direct Workflow");
         var studioSnapshot = CreateServiceSnapshot(
             "svc-alpha",
             "Studio Workflow",
+            primaryActorId: "actor-default",
             appId: "studio");
         var lifecyclePort = new FakeServiceLifecycleQueryPort(
-            listResult: [directSnapshot, studioSnapshot]);
+            listResult: [directSnapshot, studioSnapshot],
+            deploymentResult: CreateDeploymentCatalog(studioSnapshot));
         var descriptorSource = new FakePublishedServiceDescriptorSource(
             new ScopeWorkflowPublishedServiceDescriptor(
                 ScopeId,
@@ -257,14 +259,19 @@ public sealed class ScopeWorkflowQueryApplicationServiceTests
                 DateTimeOffset.UtcNow));
         var service = CreateService(
             lifecyclePort,
-            new FakeWorkflowActorBindingReader(),
+            new FakeWorkflowActorBindingReader(CreateBinding("actor-default", "Studio Workflow", workflowId)),
             descriptorSource);
 
         var result = await service.LookupByWorkflowIdAsync(ScopeId, workflowId);
 
-        result.Status.Should().Be(ScopeWorkflowLookupStatus.Stale);
-        result.Workflow.Should().BeNull();
-        result.Reason.Should().Be("published_service_descriptor_conflicts_with_conventional_identity");
+        result.Status.Should().Be(ScopeWorkflowLookupStatus.Runnable);
+        result.Workflow.Should().NotBeNull();
+        result.Workflow!.ServiceAppId.Should().Be("studio");
+        result.Workflow.ServiceNamespace.Should().Be(DefaultOptions.ServiceNamespace);
+        result.Workflow.PublishedServiceId.Should().Be("svc-alpha");
+        lifecyclePort.LastGetRequest.Should().NotBeNull();
+        lifecyclePort.LastGetRequest!.AppId.Should().Be("studio");
+        lifecyclePort.LastGetRequest.ServiceId.Should().Be("svc-alpha");
     }
 
     [Fact]

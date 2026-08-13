@@ -665,6 +665,15 @@ public sealed class ScopeWorkflowEndpointsTests
                 ["child"] = "name: child\nsteps: []\n",
             },
             ExternalCapabilityExecutionMode.Durable);
+        var descriptorSource = new FakePublishedServiceDescriptorSource(
+            new ScopeWorkflowPublishedServiceDescriptor(
+                "user-1",
+                "approval",
+                "workflow-app",
+                "user:user-1-token",
+                "approval",
+                "Approval",
+                DateTimeOffset.UtcNow));
         var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
         await revisionCatalog.UpsertRevisionAsync(
             "tenant-a:workflow-app:user:token:approval",
@@ -688,7 +697,7 @@ public sealed class ScopeWorkflowEndpointsTests
             http,
             "user-1",
             "approval",
-            BuildQueryPort(queryPort: queryPort, bindingReader: bindingReader),
+            BuildQueryPort(queryPort: queryPort, bindingReader: bindingReader, descriptorSource: descriptorSource),
             bindingReader,
             revisionCatalog,
             Options.Create(new ScopeWorkflowCapabilityOptions()),
@@ -700,6 +709,9 @@ public sealed class ScopeWorkflowEndpointsTests
         http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
         body.Should().Contain("\"available\":true");
         body.Should().Contain("\"workflowId\":\"approval\"");
+        body.Should().Contain("\"serviceAppId\":\"workflow-app\"");
+        body.Should().Contain("\"serviceNamespace\":\"user:user-1-token\"");
+        body.Should().Contain("\"publishedServiceId\":\"approval\"");
         body.Should().Contain("\"workflowYaml\":\"name: approval\\nsteps: []\\n\"");
         body.Should().Contain("\"inlineWorkflowYamls\":{\"child\":\"name: child\\nsteps: []\\n\"}");
     }
@@ -2073,12 +2085,14 @@ public sealed class ScopeWorkflowEndpointsTests
 
     private static IScopeWorkflowQueryPort BuildQueryPort(
         FakeServiceLifecycleQueryPort? queryPort = null,
-        FakeWorkflowActorBindingReader? bindingReader = null) =>
-        BuildQueryApplicationService(queryPort, bindingReader);
+        FakeWorkflowActorBindingReader? bindingReader = null,
+        IScopeWorkflowPublishedServiceDescriptorSource? descriptorSource = null) =>
+        BuildQueryApplicationService(queryPort, bindingReader, descriptorSource);
 
     private static ScopeWorkflowQueryApplicationService BuildQueryApplicationService(
         FakeServiceLifecycleQueryPort? queryPort = null,
-        FakeWorkflowActorBindingReader? bindingReader = null)
+        FakeWorkflowActorBindingReader? bindingReader = null,
+        IScopeWorkflowPublishedServiceDescriptorSource? descriptorSource = null)
     {
         return new ScopeWorkflowQueryApplicationService(
             queryPort ?? new FakeServiceLifecycleQueryPort(),
@@ -2088,7 +2102,8 @@ public sealed class ScopeWorkflowEndpointsTests
                 ServiceAppId = "default",
                 ServiceNamespace = "default",
                 DefinitionActorIdPrefix = "scope-workflow",
-            }));
+            }),
+            descriptorSource == null ? null : [descriptorSource]);
     }
 
     private static DefaultHttpContext CreateHttpContext(
@@ -2571,6 +2586,32 @@ public sealed class ScopeWorkflowEndpointsTests
                     string.Empty,
                     new Dictionary<string, string>(),
                     ExternalCapabilityExecutionMode.Durable));
+    }
+
+    private sealed class FakePublishedServiceDescriptorSource
+        : IScopeWorkflowPublishedServiceDescriptorSource
+    {
+        private readonly IReadOnlyList<ScopeWorkflowPublishedServiceDescriptor> _descriptors;
+
+        public FakePublishedServiceDescriptorSource(params ScopeWorkflowPublishedServiceDescriptor[] descriptors)
+        {
+            _descriptors = descriptors;
+        }
+
+        public Task<IReadOnlyList<ScopeWorkflowPublishedServiceDescriptor>> ListAsync(
+            string scopeId,
+            int take,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<ScopeWorkflowPublishedServiceDescriptor>>(
+                _descriptors.Where(descriptor => descriptor.ScopeId == scopeId).Take(take).ToArray());
+
+        public Task<IReadOnlyList<ScopeWorkflowPublishedServiceDescriptor>> FindByWorkflowIdAsync(
+            string scopeId,
+            string workflowId,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<ScopeWorkflowPublishedServiceDescriptor>>(
+                _descriptors.Where(descriptor =>
+                    descriptor.ScopeId == scopeId && descriptor.WorkflowId == workflowId).ToArray());
     }
 
     private sealed class FakeServiceRevisionCatalogQueryReader : IServiceRevisionCatalogQueryReader

@@ -64,6 +64,9 @@ public static class ServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IScopeWorkflowPublishedServiceDescriptorSource,
             StudioMemberScopeWorkflowDescriptorSource>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IScopeWorkflowPublishedServiceDescriptorSource,
+            CatalogueScopeWorkflowDescriptorSource>());
         services.TryAddSingleton<IStudioMemberWorkflowDurableAdmissionPort,
             StudioMemberWorkflowDurableAdmissionPort>();
         services.TryAddSingleton(new StudioMemberWorkflowSchedulePolicy());

@@ -21,6 +21,8 @@ message ScopeWorkflowCatalogueSourceSnapshot {
   string deployment_id = 14;
   string deployment_status = 15;
   string published_service_id = 16;
+  string service_app_id = 17;
+  string service_namespace = 18;
 }
 
 message ObserveScopeWorkflowCatalogueSourcesCommand {
