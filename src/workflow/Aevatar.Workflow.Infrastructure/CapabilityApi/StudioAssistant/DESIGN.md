@@ -58,11 +58,21 @@ The page is a quiet operational transcript with confident workspace scale. A sub
 - Tool activity: ordered calls and receipts with collapsed detail
 - Composer: stable 900px input with 60px minimum height, optional answer choices, attachment/services, send/steer/stop modes
 - Inspector: off-canvas run facts and raw events so the transcript width never changes
-- Request trajectory: a conversation-local ledger where every top-level text
-  request is one selectable trace. `clientRequestId` is the stable browser
-  identity until the server's `runId` is attached; visible request numbers are
-  never used for lookup. Steering, approval, and continuation commands advance
-  the owning task instead of inventing unrelated top-level traces.
+- Request trajectory: every top-level text request creates a conversation-local
+  trace container, not one atomic trajectory record. `clientRequestId` is the
+  stable browser identity until the server's `runId` is attached; visible
+  request numbers are never used for lookup. Inside the container, an ordered
+  operation ledger creates one selectable record for the input, each model
+  response, and each tool call. Steering, approval, and continuation commands
+  advance the owning task instead of inventing unrelated top-level containers.
+- Trajectory overview: a compact, shared time domain above the ledger with
+  distinct `Input`, `Model`, and `Tools` lanes. A bar and its ledger row carry
+  the same stable operation identity. Model bars may distinguish TTFT from
+  decoding only when both timings were recorded.
+- Operation inspector: Input shows captured content/source; Model shows output,
+  model/provider, usage, and timing; Tool shows payload, result, schema, and
+  timing. Tabs and fields appear only when backed by the operation's captured
+  facts; missing facts are labeled unavailable.
 
 ## Page Patterns
 
@@ -71,13 +81,16 @@ The page is a quiet operational transcript with confident workspace scale. A sub
 - The composer command changes with authoritative actor state: new `text`, pending `input.resolve`, active `task.steer`, or explicit `task.stop`.
 - Task completion is displayed only from committed actor/current-state facts. A browser journey or transport ACK is never presented as verified success.
 - Conversation and trajectory are sibling views of the same request stream.
-  SSE frames update the active trajectory incrementally; selecting an older
-  trajectory opens its input, runtime facts, steps, usage, and raw event detail
-  without granting controls over that historical request. In-flight duration
-  is labeled as running rather than rendered as a completed duration. The
-  current ledger is page-local: reopening a stored transcript does not infer
-  request identities or event traces from message positions. Durable recovery
-  requires a future typed request-trace read model.
+  SSE frames incrementally create or update operations inside the active trace
+  container; multiple model responses and tool calls never collapse into the
+  container row. Selecting an older container or one of its operations changes
+  inspection only and grants no controls over that historical request. A
+  duration bar requires the operation's recorded start and completion. An
+  in-flight operation with only a real start renders a start marker/running
+  state; absent timing is unavailable and is never synthesized from browser
+  receipt time. The current ledger is page-local: reopening a stored transcript
+  does not infer request identities or event traces from message positions.
+  Durable recovery requires a future typed request-trace read model.
 
 ## Content Style
 
@@ -90,9 +103,15 @@ The page is a quiet operational transcript with confident workspace scale. A sub
 - Preserve the single `/api/chat` and actor current-state contracts.
 - Do not infer task, approval, connection, or effect success from local browser state.
 - Keep task and step status inside the chronological transcript; do not add a parallel lifecycle rail.
-- Keep request trajectories inside their owning conversation. Never key them
-  by `actorId`, infer them from message position, or merge them because two
+- Keep trace containers inside their owning conversation. Never key them by
+  `actorId`, infer them from message position, or merge them because two
   requests later resolve to the same actor/run context.
+- Keep Input/Model/Tool operations inside their owning trace container, with a
+  stable operation identity shared by the three-lane overview, ledger row, and
+  inspector. Do not use the container ID as every operation ID.
+- Treat timing, model/provider, usage, tool payload/result, and tool schema as
+  recorded facts. Render unavailable when absent; do not infer them from event
+  arrival time, adjacent records, display text, or mutable conversation state.
 - Send clarification as one typed `input.resolve` from the shared composer.
 - Keep `task.steer`, `task.stop`, `step.retry`, and `step.skip` explicit and identity/version guarded.
 - Render final verification only when actor-owned postcondition or terminal facts prove it.

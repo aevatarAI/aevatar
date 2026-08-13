@@ -6,12 +6,12 @@
     <meta name="color-scheme" content="only light" />
     <meta name="supported-color-schemes" content="light" />
     <title>Aevatar Studio</title>
-    <link rel="stylesheet" href="/workflow/studio/assets/styles.css?v=20260813-m43-request-traces" />
-    <script defer src="/workflow/studio/assets/vendor/lucide.min.js?v=20260813-m43-request-traces"></script>
-    <script defer src="/workflow/studio/assets/vendor/marked.min.js?v=20260813-m43-request-traces"></script>
-    <script defer src="/workflow/studio/assets/vendor/purify.min.js?v=20260813-m43-request-traces"></script>
+    <link rel="stylesheet" href="/workflow/studio/assets/styles.css?v=20260814-m44-operation-ledger" />
+    <script defer src="/workflow/studio/assets/vendor/lucide.min.js?v=20260814-m44-operation-ledger"></script>
+    <script defer src="/workflow/studio/assets/vendor/marked.min.js?v=20260814-m44-operation-ledger"></script>
+    <script defer src="/workflow/studio/assets/vendor/purify.min.js?v=20260814-m44-operation-ledger"></script>
     <script>globalThis.__AEVATAR_ASSISTANT_CONFIG__ = __BACKEND_CONSOLE_CONFIG__;</script>
-    <script type="module" src="/workflow/studio/assets/app.js?v=20260813-m43-request-traces"></script>
+    <script type="module" src="/workflow/studio/assets/app.js?v=20260814-m44-operation-ledger"></script>
   </head>
   <body>
     <div class="app-shell">
@@ -160,18 +160,46 @@
           <section class="request-trace-panel hidden" id="requestTracePanel" role="tabpanel" aria-labelledby="traceViewButton">
             <header class="request-trace-header">
               <div>
-                <span class="eyebrow">Request traces</span>
-                <h1>请求轨迹</h1>
-                <p>每次请求独立成轨迹；选择一条可在右侧查看实时详情。</p>
+                <span class="eyebrow">Operation ledger</span>
+                <h1>执行轨迹</h1>
               </div>
               <span class="request-trace-live" id="requestTraceLive"><i data-lucide="radio"></i><span>本页会话</span></span>
             </header>
-            <div class="request-trace-list" id="requestTraceList" role="listbox" aria-label="当前会话的请求轨迹" aria-live="polite">
-              <div class="request-trace-empty" id="requestTraceEmpty">
-                <i data-lucide="waypoints"></i>
-                <strong>尚无请求轨迹</strong>
-                <span>在“对话”视图发送请求后，轨迹会立即出现在这里。</span>
-              </div>
+            <div class="request-trace-workspace">
+              <aside class="request-trace-requests" aria-label="请求">
+                <div class="request-trace-requests-title">
+                  <span>Requests</span>
+                  <strong id="requestTraceRailCount">0</strong>
+                </div>
+                <div class="request-trace-list" id="requestTraceList" role="listbox" aria-label="当前会话的请求" aria-live="polite">
+                  <div class="request-trace-empty" id="requestTraceEmpty">
+                    <i data-lucide="waypoints"></i>
+                    <strong>尚无请求</strong>
+                  </div>
+                </div>
+              </aside>
+              <section class="trace-operation-ledger" aria-label="操作轨迹">
+                <header class="trace-operation-toolbar">
+                  <div>
+                    <span>Operations</span>
+                    <strong id="traceOperationCount">0</strong>
+                  </div>
+                  <span class="trace-operation-legend" aria-hidden="true">
+                    <i class="input"></i>Input
+                    <i class="model"></i>Model
+                    <i class="tools"></i>Tools
+                  </span>
+                </header>
+                <div class="trace-operation-overview" id="traceOperationOverview" aria-label="Input、Model、Tools Duration 概览">
+                  <div class="trace-operation-overview-empty">—</div>
+                </div>
+                <div class="trace-operation-list" id="traceOperationList" role="listbox" aria-label="按时间排列的操作记录" aria-live="polite">
+                  <div class="trace-operation-empty" id="traceOperationEmpty">
+                    <i data-lucide="list-tree"></i>
+                    <strong>尚无操作记录</strong>
+                  </div>
+                </div>
+              </section>
             </div>
           </section>
 
@@ -262,6 +290,26 @@
           </div>
 
           <div class="inspector-body" id="runPanel" role="tabpanel">
+            <section class="inspector-section trace-operation-detail hidden" id="traceOperationSection">
+              <div class="trace-operation-detail-heading">
+                <span class="trace-operation-kind" id="traceOperationKindFact">Operation</span>
+                <span class="mono" id="traceOperationIdFact">—</span>
+              </div>
+              <h3 id="traceOperationTitleFact">操作详情</h3>
+              <dl class="request-trace-metrics trace-operation-metrics">
+                <div><dt>状态</dt><dd id="traceOperationStatusFact">—</dd></div>
+                <div><dt>开始</dt><dd id="traceOperationStartedFact">—</dd></div>
+                <div><dt>Duration</dt><dd id="traceOperationDurationFact">—</dd></div>
+              </dl>
+              <div class="trace-operation-payload hidden" id="traceOperationInputSection">
+                <span>Input</span>
+                <pre id="traceOperationInputFact"></pre>
+              </div>
+              <div class="trace-operation-payload hidden" id="traceOperationOutputSection">
+                <span>Output</span>
+                <pre id="traceOperationOutputFact"></pre>
+              </div>
+            </section>
             <section class="inspector-section request-trace-summary">
               <div class="section-title section-title-row">
                 <span>Request</span>

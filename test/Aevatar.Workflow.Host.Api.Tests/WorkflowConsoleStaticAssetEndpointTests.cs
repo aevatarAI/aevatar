@@ -60,6 +60,22 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
             html.Should().Contain("data-duration=\"");
             html.Should().Contain("/api/workflow/observatory/admin/runs/");
             html.Should().Contain("detail.diagnostics");
+            html.Should().Contain("function buildOperationRecords(detail)");
+            html.Should().Contain("function renderDurationOverview(detail,records)");
+            html.Should().Contain("aria-label\":\"Input Model Tools Duration 总览\"");
+            html.Should().Contain("{id:\"input\",label:\"Input\"");
+            html.Should().Contain("{id:\"model\",label:\"Model\"");
+            html.Should().Contain("{id:\"tools\",label:\"Tools\"");
+            html.Should().Contain("function renderOperationDetail(record)");
+            html.Should().Contain("function renderOperationLedger(records)");
+            html.Should().Contain("aria-label\":\"逐条 operation 记录\"");
+            html.Should().Contain("Operation ledger");
+            html.Should().Contain("state.expandedOperations.has(record.key)");
+            html.Should().Contain("wrap.appendChild(renderDurationOverview(detail,records))");
+            html.Should().Contain("wrap.appendChild(renderOperationLedger(records))");
+            html.Should().NotContain("operationRecordKey(\"step\"");
+            html.Should().NotContain("operationLaneForStep(");
+            html.Should().NotContain("data-kind=\"step\"");
             html.Should().NotContain("indexOf(\":run:\")");
         }
         else
@@ -202,6 +218,18 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         app.Should().Contain("function switchWorkspaceView(view,");
         app.Should().Contain("function isReviewingHistoricalTrace(");
         app.Should().Contain("queueRequestTraceRender(conversation)");
+        app.Should().Contain("function renderTraceOperations(entry, trace)");
+        app.Should().Contain("function renderTraceOperationOverview(trace)");
+        app.Should().Contain("if (!record && !explicitKey && trace.activeModelOperationKey)");
+        app.Should().Contain("function selectTraceOperation(entry, trace, key,");
+        app.Should().Contain("trace.selectedOperationKey = key;");
+        app.Should().Contain("renderTraceOperations(entry, selectedRequestTrace(entry) || traces[0]);");
+        app.Should().Contain("function renderTraceOperationInspector(trace)");
+        app.Should().Contain("dom.traceOperationSection.classList.toggle(\"hidden\", !record);");
+        app.Should().Contain("dom.traceOperationKindFact.textContent = traceOperationKindLabel(record.kind);");
+        app.Should().Contain("dom.traceOperationInputFact.textContent = hasInput ? String(record.input) : \"\"");
+        app.Should().Contain("const outputValue = [String(record.output || \"\"), usageFacts]");
+        app.Should().Contain("dom.traceOperationOutputFact.textContent = outputValue;");
         protocol.Should().Contain("export function normalizeFrame(");
         protocol.Should().Contain("export function validateActionContinuation(");
         protocol.Should().Contain("schemaVersion !== 4");
@@ -228,6 +256,14 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         html.Should().Contain("id=\"composerInputRequest\"");
         html.Should().Contain("class=\"content-view-switch\"");
         html.Should().Contain("id=\"requestTraceList\"");
+        html.Should().Contain("Operation ledger");
+        html.Should().Contain("id=\"traceOperationOverview\"");
+        html.Should().Contain("aria-label=\"Input、Model、Tools Duration 概览\"");
+        html.Should().Contain("id=\"traceOperationList\"");
+        html.Should().Contain("role=\"listbox\" aria-label=\"按时间排列的操作记录\"");
+        html.Should().Contain("id=\"traceOperationSection\"");
+        html.Should().Contain("id=\"traceOperationInputFact\"");
+        html.Should().Contain("id=\"traceOperationOutputFact\"");
         html.Should().Contain("id=\"traceClientRequestFact\"");
         html.Should().Contain("class=\"hidden\" id=\"eventsTabButton\"");
         html.Should().Contain("/workflow/studio/assets/vendor/lucide.min.js");
@@ -249,6 +285,10 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         styles.Should().Contain(".content-view-switch");
         styles.Should().Contain(".request-trace-row");
         styles.Should().Contain(".request-trace-readonly");
+        styles.Should().Contain(".trace-operation-ledger");
+        styles.Should().Contain(".trace-operation-lane");
+        styles.Should().Contain(".trace-operation-row");
+        styles.Should().Contain(".trace-operation-detail");
         styles.Should().Contain("--assistant-card-max-width: 720px");
         styles.Should().Contain("--assistant-card-inline-gutter: 40px");
         styles.Should().Contain("--workspace-max-width: 1240px");
@@ -278,8 +318,8 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         app.Should().NotContain("freeText.className = \"needs-you-free-text\"");
         styles.Should().Contain("@media (max-width:");
         html.Should().Contain("<meta name=\"color-scheme\" content=\"only light\"");
-        html.Should().Contain("app.js?v=20260813-m43-request-traces");
-        html.Should().Contain("styles.css?v=20260813-m43-request-traces");
+        html.Should().Contain("app.js?v=20260814-m44-operation-ledger");
+        html.Should().Contain("styles.css?v=20260814-m44-operation-ledger");
         app.Should().Contain("transport.js?v=20260807-m40-thread-polish");
         app.Should().Contain("readiness.js?v=20260807-m40-thread-polish");
         transport.Should().Contain("readiness.js?v=20260807-m40-thread-polish");
@@ -779,6 +819,7 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
               state:{activeConversation:entry,run:{}},
               normalizeFrame:(raw) => raw,
               recordEvent:() => {},
+              applyRequestTraceEvent:() => {},
               entryActorProjection:(candidate) => candidate.actorProjection,
               reduceActorEvent:(_projection, event) => event.projection,
               renderActorProjection:() => {},
@@ -1355,7 +1396,7 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
 
         entryVersions.Should().NotBeEmpty();
         entryVersions.Should().OnlyContain(static version =>
-            version == "20260813-m43-request-traces");
+            version == "20260814-m44-operation-ledger");
         transitiveVersions.Should().NotBeEmpty();
         transitiveVersions.Should().OnlyContain(static version =>
             version == "20260807-m40-thread-polish");

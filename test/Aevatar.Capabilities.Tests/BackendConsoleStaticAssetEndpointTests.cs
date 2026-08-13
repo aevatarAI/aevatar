@@ -74,10 +74,15 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             html.Should().Contain("class=\"site-header\"");
             html.Should().Contain("id=\"composerForm\"");
             html.Should().Contain("生产环境 · 操作会影响真实数据，高风险操作需要确认");
-            html.Should().Contain("app.js?v=20260813-m43-request-traces");
-            html.Should().Contain("styles.css?v=20260813-m43-request-traces");
+            html.Should().Contain("app.js?v=20260814-m44-operation-ledger");
+            html.Should().Contain("styles.css?v=20260814-m44-operation-ledger");
             html.Should().Contain("id=\"traceViewButton\"");
             html.Should().Contain("id=\"requestTracePanel\"");
+            html.Should().Contain("Operation ledger");
+            html.Should().Contain("id=\"traceOperationOverview\"");
+            html.Should().Contain("aria-label=\"Input、Model、Tools Duration 概览\"");
+            html.Should().Contain("id=\"traceOperationList\"");
+            html.Should().Contain("id=\"traceOperationSection\"");
             html.Should().NotContain("class=\"brand-mark\"");
             html.Should().NotContain("Aevatar Studio · 工作流实录");
             html.Should().NotContain("从意图到交付的真实对话");

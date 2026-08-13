@@ -1,7 +1,7 @@
 # Admin Observatory UI Design
 
 - **Date:** 2026-07-24
-- **Status:** Implemented; request-trajectory ledger added on 2026-08-13
+- **Status:** Implemented; operation-ledger semantics clarified on 2026-08-14
 - **Surface:** `/admin#/observatory`
 - **Owner:** Aevatar Mainnet Backend Console
 
@@ -28,8 +28,11 @@ the caller's role badge.
 ## Goals
 
 - Present every accepted workflow request/run as one independently selectable
-  trajectory. The display number is a reading aid; `runId` remains the stable
-  identity used for selection, refresh, and detail lookup.
+  trace container. The display number is a reading aid; `runId` remains the
+  stable container identity used for selection, refresh, and detail lookup.
+- Inside the selected container, present an ordered operation ledger in which
+  each Input, model response, and tool call is independently selectable, with a
+  three-lane `Input / Model / Tools` duration overview over the same records.
 - Default every caller, including an admin, to their own scope.
 - Make all-scope observation an explicit and continuously visible admin mode.
 - Give the selected run substantially more space without losing fast run
@@ -41,7 +44,9 @@ the caller's role badge.
 
 ## Non-Goals
 
-- No new observatory API or read model.
+- No new observatory API or read model. Facts absent from the current contracts
+  remain explicitly unavailable; this iteration does not manufacture parity by
+  reconstructing model or tool requests in the browser.
 - No change to authorization or the `__all__` backend sentinel.
 - No migration to `apps/aevatar-console-web` or a new frontend build chain.
 - No redesign of unrelated `/admin` modules.
@@ -154,7 +159,7 @@ activity-run feed endpoint. The status UI uses the backend values
 `running/completed/failed/stopped`, with localized display labels. Local search
 only filters the summaries already loaded into the rail and displays the
 visible/loaded count so it cannot be mistaken for a server-wide search. The
-first page contains the newest 100 trajectories; when `hasMore` and
+first page contains the newest 100 trace containers; when `hasMore` and
 `nextCursor` are present, the rail offers an explicit “load earlier” action and
 keeps the loaded/total coverage visible.
 
@@ -208,13 +213,59 @@ mobile.
 
 ## Run Detail Behavior
 
-The run rail is the request-trajectory ledger. Each row represents one
+The run rail lists request/run trace containers. Each row represents one
 authoritative workflow run and exposes enough request context to distinguish
 nearby calls without opening them: workflow, safe input summary when available,
-status, origin, update time, duration/current step, and a shortened run ID.
-Selecting a row opens that run's existing detail; events, steps, diagnostics,
-logs, artifacts, and graph remain children of the selected trajectory rather
-than parallel top-level records.
+status, origin, update time, duration/current step, and a shortened run ID. The
+row is not an atomic trajectory event. Selecting it opens the container's
+operation workspace; events, steps, diagnostics, logs, artifacts, and graph
+remain children of the selected container rather than parallel top-level
+records.
+
+The primary trajectory inside that workspace is a chronological operation
+ledger. It emits a distinct selectable record for each recorded input, each
+model response, and each tool call; nested tool work may remain linked beneath
+its owning tool operation. A fixed overview above the ledger has three aligned
+lanes: `Input`, `Model`, and `Tools`. Every overview bar and ledger row refers to
+the same stable operation identity. The run/request identity is used only to
+own and group those operations; it must not collapse a multi-step model/tool
+exchange into one summary row.
+
+Clicking an operation opens a local inspector rather than replacing the run
+detail route. Input records expose captured content and source. Model records
+expose output, provider/model, usage, and timing when recorded. Tool records
+expose payload, result, call-time schema, and timing when recorded. Status and
+error state remain separate from the operation kind. Request-level status,
+options, cumulative usage, and navigation remain a container summary, not a
+substitute for operation details.
+
+The overview renders duration bars only from real operation timestamps. A
+recorded start without a recorded completion is a start marker or running
+record, not a growing duration bar. When either timing fact is absent, Duration
+is `unavailable`; the UI must not derive it from `updatedAtUtc`, polling time,
+adjacent event timestamps, list order, or the parent run duration.
+
+### Current Read-Model Gaps
+
+The existing activity-run projection provides the run container list, while the
+existing detail projection and run-report artifacts provide committed timeline
+events. Workflow steps remain in their dedicated workflow-oriented view and do
+not become Model or Tool operations. The projections do not currently provide all facts required for
+full DSH-equivalent operations:
+
+- no typed start/completion pair for every Input, Model, and Tool operation;
+- no stable per-model-response provider, model, usage, TTFT, and decoding
+  contract across every workflow path;
+- no request-time model-visible tools catalog or per-call tool schema in the
+  Observatory query contract.
+
+Consequently the Admin implementation may classify and display only operations
+supported by committed timeline evidence. Missing Duration, Model, usage,
+tools catalog, and schema values are shown as `unavailable`. It must not parse
+step prose, actor IDs, current-step summaries, or generic data-bag key spellings
+to fill those fields. A future parity change must add typed committed facts and
+materialize them through the normal projection pipeline; query-time event
+replay or browser-side state reconstruction is outside this design.
 
 The ledger reads the paged activity-run projection while detail and graph keep
 using their existing run endpoints. The page polls the current ledger and only
@@ -284,6 +335,11 @@ Static asset tests must fail before implementation and cover:
   with Escape;
 - stale list responses cannot replace a newer scope/filter result;
 - cached detail remains visible during polling.
+- a run/request row is treated as a container while Input, Model, and Tool
+  operations remain independently selectable;
+- the three overview lanes and ledger rows share operation identities;
+- missing operation timing, model facts, and tools-catalog facts render as
+  unavailable and are never inferred from refresh or update timestamps.
 
 Visual verification covers `1440x900`, `1920x1080`, `1024x768`, and `390x844`.
 It checks normal and immersive modes, expanded filters, long run IDs, long log

@@ -594,6 +594,91 @@
   .tabpanel { margin-top: 18px; }
   .tabpanel[hidden] { display: none; }
 
+  /* ---- Request operation trajectory ------------------------------------- */
+  .operation-trajectory { display: grid; gap: 18px; }
+  .duration-overview {
+    border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--panel); overflow: hidden;
+  }
+  .do-head {
+    display: flex; align-items: flex-start; justify-content: space-between; gap: 16px;
+    padding: 12px 14px; border-bottom: 1px solid var(--border-soft); background: var(--panel-2);
+  }
+  .do-title { font-size: 13px; font-weight: 700; color: var(--fg-strong); }
+  .do-sub { margin-top: 3px; color: var(--muted); font-size: 11.5px; line-height: 1.45; }
+  .do-range { flex: 0 0 auto; font-family: var(--mono); font-size: 11px; color: var(--muted-2); white-space: nowrap; }
+  .duration-lanes { display: grid; }
+  .duration-lane {
+    display: grid; grid-template-columns: 112px minmax(0, 1fr); min-height: 64px;
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .duration-lane:last-child { border-bottom: 0; }
+  .dl-label { padding: 11px 12px; border-right: 1px solid var(--border-soft); display: grid; align-content: center; gap: 2px; }
+  .dl-name { display: inline-flex; align-items: center; gap: 7px; color: var(--fg-strong); font-size: 12px; font-weight: 700; }
+  .dl-name svg { width: 13px; height: 13px; }
+  .duration-lane[data-lane="input"] .dl-name { color: var(--ok); }
+  .duration-lane[data-lane="model"] .dl-name { color: var(--run); }
+  .duration-lane[data-lane="tools"] .dl-name { color: var(--accent); }
+  .dl-count { color: var(--muted-2); font-size: 10.5px; font-family: var(--mono); }
+  .dl-track {
+    position: relative; min-width: 0; margin: 10px 14px; height: 44px;
+    background: linear-gradient(90deg, var(--border-soft) 1px, transparent 1px) 0 0 / 25% 100%;
+  }
+  .dl-track::before { content: ""; position: absolute; left: 0; right: 0; top: 21px; height: 1px; background: var(--border); }
+  .dl-empty { position: absolute; left: 7px; top: 13px; color: var(--muted-2); font-size: 11px; }
+  .duration-mark {
+    --mark-color: var(--muted); position: absolute; top: calc(4px + var(--mark-row, 0) * 12px); height: 10px;
+    min-width: 5px; border: 0; border-radius: 3px; background: var(--mark-color); color: transparent;
+    box-shadow: 0 0 0 2px color-mix(in oklab, var(--mark-color) 14%, transparent); cursor: pointer;
+  }
+  .duration-mark:hover, .duration-mark:focus-visible { z-index: 3; box-shadow: 0 0 0 3px color-mix(in oklab, var(--mark-color) 28%, transparent); outline: none; }
+  .duration-mark.point { width: 7px !important; min-width: 7px; border-radius: 50%; }
+  .duration-mark[data-kind="input"] { --mark-color: var(--ok); }
+  .duration-mark[data-kind="model"] { --mark-color: var(--run); }
+  .duration-mark[data-kind="tool"] { --mark-color: var(--accent); }
+  .do-axis { display: grid; grid-template-columns: 112px minmax(0, 1fr); border-top: 1px solid var(--border-soft); }
+  .do-axis-label { border-right: 1px solid var(--border-soft); }
+  .do-ticks { display: flex; justify-content: space-between; padding: 6px 14px 8px; font-family: var(--mono); font-size: 10px; color: var(--muted-2); }
+  .duration-legend { display: flex; flex-wrap: wrap; gap: 12px; padding: 9px 14px; border-top: 1px solid var(--border-soft); color: var(--muted); font-size: 11px; }
+  .duration-legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .duration-legend i { width: 12px; height: 6px; border-radius: 2px; background: var(--muted-2); }
+  .duration-legend i.point { width: 7px; height: 7px; border-radius: 50%; background: var(--run); }
+
+  .operation-ledger { border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--panel); overflow: hidden; }
+  .ol-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 11px 14px; border-bottom: 1px solid var(--border); background: var(--panel-2); }
+  .ol-title { color: var(--fg-strong); font-size: 13px; font-weight: 700; }
+  .ol-count { color: var(--muted-2); font-family: var(--mono); font-size: 11px; }
+  .operation-row { border-bottom: 1px solid var(--border-soft); }
+  .operation-row:last-child { border-bottom: 0; }
+  .operation-summary {
+    width: 100%; display: grid; grid-template-columns: 28px 86px minmax(150px, 1fr) 78px 104px 82px 16px;
+    gap: 10px; align-items: center; padding: 10px 12px; border: 0; background: var(--panel); color: inherit; text-align: left;
+  }
+  .operation-summary:hover { background: var(--panel-2); }
+  .operation-summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .op-index, .op-time, .op-duration { font-family: var(--mono); font-size: 11px; color: var(--muted-2); font-variant-numeric: tabular-nums; }
+  .op-type { display: inline-flex; align-items: center; gap: 5px; min-width: 0; font-size: 10.5px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; }
+  .op-type svg { width: 12px; height: 12px; }
+  .op-type.input { color: var(--ok); }
+  .op-type.model { color: var(--run); }
+  .op-type.tool { color: var(--accent); }
+  .op-main { min-width: 0; display: grid; gap: 2px; }
+  .op-name { color: var(--fg-strong); font-size: 12.5px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .op-preview { color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .op-duration.unavailable { color: var(--muted-2); }
+  .op-state { justify-self: start; font-size: 10.5px; font-weight: 650; padding: 2px 7px; border: 1px solid var(--border); border-radius: var(--r-pill); color: var(--muted); white-space: nowrap; }
+  .op-state.ok { color: var(--ok); border-color: color-mix(in oklab, var(--ok) 28%, var(--border)); background: var(--ok-soft); }
+  .op-state.bad { color: var(--err); border-color: color-mix(in oklab, var(--err) 30%, var(--border)); background: var(--err-soft); }
+  .op-state.live { color: var(--run); border-color: color-mix(in oklab, var(--run) 30%, var(--border)); background: var(--run-soft); }
+  .op-chevron { color: var(--muted-2); transition: transform .16s ease; }
+  .operation-row[data-open="true"] .op-chevron { transform: rotate(90deg); }
+  .operation-detail { display: none; padding: 0 14px 14px 136px; background: var(--panel); }
+  .operation-row[data-open="true"] .operation-detail { display: grid; gap: 10px; }
+  .op-meta { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 5px 14px; padding: 10px 12px; border: 1px solid var(--border-soft); border-radius: var(--r-sm); background: var(--bg); font-size: 12px; }
+  .op-meta .k { color: var(--muted-2); }
+  .op-meta .v { color: var(--fg); font-family: var(--mono); word-break: break-word; }
+  .op-unavailable { color: var(--muted); font-size: 12px; padding: 8px 10px; border-left: 2px solid var(--muted-2); background: var(--panel-2); }
+  .op-text { margin: 0; padding: 11px 12px; max-height: 300px; overflow: auto; white-space: pre-wrap; word-break: break-word; background: var(--bg); border: 1px solid var(--border-soft); border-radius: var(--r-sm); color: var(--fg); font-family: var(--mono); font-size: 12px; line-height: 1.55; }
+
   /* =========================================================================
      Timeline — the centerpiece
      ========================================================================= */
@@ -978,6 +1063,13 @@
     .usage-strip { flex-direction: column; }
     .usage-cell { border-right: 0; border-bottom: 1px solid var(--border-soft); }
     .usage-cell:last-child { border-bottom: 0; }
+    .duration-lane, .do-axis { grid-template-columns: 82px minmax(0, 1fr); }
+    .dl-label { padding: 9px 8px; }
+    .do-head { align-items: stretch; flex-direction: column; gap: 5px; }
+    .do-range { white-space: normal; }
+    .operation-summary { grid-template-columns: 24px 74px minmax(0, 1fr) 72px 16px; gap: 7px; }
+    .operation-summary .op-time, .operation-summary .op-state { display: none; }
+    .operation-detail { padding: 0 10px 12px; }
     .graph-wrap { height: 62dvh; }
     /* node detail becomes a bottom sheet */
     .gnode-detail { top: auto; left: 8px; right: 8px; bottom: 8px; width: auto; max-width: none; max-height: 64%; }
@@ -1501,6 +1593,11 @@ const KIND = {
 // kinds that carry an assistant/role reply (real LLM response text in ev.content).
 const REPLY_KINDS = new Set(["Message", "TextMessage"]);
 const STEPTYPE_LABEL = { llm:"模型", tool:"工具", human:"人工" };
+const OPERATION_TYPE = {
+  input: { label:"Input" },
+  model: { label:"Model" },
+  tool: { label:"Tool" }
+};
 
 /* 06-23 detail enrichment: the AGUI event data bag (ev.data) is an open string->string map. We surface
    a tasteful whitelist of the high-value keys as chips (model + token usage) and tuck everything else
@@ -1649,6 +1746,7 @@ const state = {
   selectedRunId: initialRoute.run || null,
   activeTab: initialRoute.tab,
   expanded: new Set(),  // tool-call ids expanded by default for the running run
+  expandedOperations: new Set(), // selected request's operation-ledger rows; survives near-live polling
   theme: localStorage.getItem("wro-theme") || null, // null = follow system
   selectedNodeId: null, // graph node whose detail drawer is open
   graphView: { zoom: 1, panX: 0, panY: 0, fitted: false }, // pan/zoom transform, survives polling re-renders
@@ -2439,76 +2537,197 @@ function renderDataDetails(data){
   return wrap;
 }
 
-/* ---- Timeline ---- */
-function renderTimeline(detail){
-  const wrap = el("div", {});
-  wrap.appendChild(el("p", { class:"tl-rail-note" }, "按时间自上而下 · 时间戳为 UTC"));
-  const tl = el("ol", { class:"timeline", "aria-label":"事件时间线", style:"list-style:none;margin:0;padding:0" });
-  const isRunning = detail.summary.status === "running";
-  const lastIdx = detail.timeline.length - 1;
+/* ---- Request operation trajectory --------------------------------------
+   The current read contract has one committed timestamp for each role.reply / tool.call, but no
+   operation start/end pair. Keep those records as points and say Duration is unavailable. Workflow
+   steps remain in the dedicated Steps view; they are not model or tool operations. */
+function operationTypeIcon(type){
+  if(type==="input") return ICON.play;
+  if(type==="model") return ICON.chat;
+  return ICON.tool;
+}
+function operationTimestamp(value){
+  const parsed=parseT(value);
+  return Number.isFinite(parsed)?parsed:null;
+}
+function operationDurationLabel(ms){
+  const value=Number(ms);
+  if(!Number.isFinite(value)||value<0) return "不可用";
+  if(value<1000) return Math.round(value)+" ms";
+  if(value<10000) return (value/1000).toFixed(2)+" s";
+  if(value<60000) return (value/1000).toFixed(1)+" s";
+  const minutes=Math.floor(value/60000),seconds=Math.round((value%60000)/1000);
+  return minutes+"分"+String(seconds).padStart(2,"0")+"秒";
+}
+function operationRecordKey(type, preferred, timestamp, index){
+  const stable=String(preferred||"").trim();
+  return stable?[type,stable].join(":"):[type,String(timestamp||"unknown"),String(index)].join(":");
+}
+function buildOperationRecords(detail){
+  const timeline=Array.isArray(detail.timeline)?detail.timeline:[];
+  const runId=detail.summary&&detail.summary.runId||"run";
+  const startEvent=timeline.find(event=>event&&event.stage==="workflow.start");
+  const inputTimestamp=(startEvent&&startEvent.timestampUtc)||(detail.summary&&detail.summary.startedAtUtc)||null;
+  const fullInput=String(detail.input==null?"":detail.input);
+  const inputSummary=String(detail.inputSummary==null?"":detail.inputSummary);
+  const records=[{
+    key:operationRecordKey("input",runId,inputTimestamp,0),type:"input",timestamp:inputTimestamp,
+    title:"Request input",preview:(fullInput||inputSummary||"未记录输入内容").replace(/\s+/g," "),
+    content:fullInput||inputSummary,status:fullInput||inputSummary?"已提交":"内容不可用",statusTone:fullInput||inputSummary?"ok":"",
+    durationMs:null,durationSource:"当前详情契约没有 Input 的独立起止时间。",
+    fullInputAvailable:fullInput.length>0,sourceIndex:-1
+  }];
 
-  detail.timeline.forEach((ev, i) => {
-    const isLast = i === lastIdx;
-    const li = el("li", { class:`ev k-${ev.kind}${(isRunning && isLast)?" is-new":""}` });
-
-    // gutter timestamp
-    const gutter = el("div", { class:"gutter" }, `<span class="ts">${clockUTC(ev.timestampUtc)}</span>`);
-
-    // rail + body
-    const rail = el("div", { class:"node-rail" });
-    rail.appendChild(el("span", { class:"marker", "aria-hidden":"true" }));
-    const body = el("div", { class:"ev-body" });
-
-    const headRow = el("div", { class:"ev-head" });
-    headRow.innerHTML = `<span class="kind">${kindIcon(ev.kind)}<span>${KIND[ev.kind]?.label||ev.kind}</span></span>`;
-    if(ev.stepId){
-      const stType = ev.stepType ? ` <span class="st">${STEPTYPE_LABEL[ev.stepType]||ev.stepType}</span>` : "";
-      headRow.insertAdjacentHTML("beforeend", `<span class="stepbadge">${esc(ev.stepId)}${stType}</span>`);
+  timeline.forEach((event,index)=>{
+    if(!event) return;
+    const timestamp=event.timestampUtc||null;
+    if(REPLY_KINDS.has(event.kind)||event.stage==="role.reply"){
+      const data=event.data&&typeof event.data==="object"?event.data:{};
+      const sessionId=dataLookup(data,["session_id","sessionId"]);
+      const role=event.message||event.agentId||event.stepId||"assistant";
+      const content=String(event.content==null?"":event.content);
+      records.push({
+        key:operationRecordKey("model",runId+":"+(sessionId||[role,timestamp,index].join(":")),timestamp,index),type:"model",timestamp,
+        title:role,preview:(content||"该回复没有文本内容").replace(/\s+/g," "),content,event,data,
+        model:dataLookup(data,DATA_MODEL_KEYS),sessionId,status:"已提交",statusTone:"ok",durationMs:null,
+        durationSource:"当前详情契约只返回模型回复的 committed 时间点，没有 invocation started/completed。",
+        sourceIndex:index
+      });
+      return;
     }
-    if(ev.agentId) headRow.insertAdjacentHTML("beforeend", `<span class="agentbadge">@${esc(ev.agentId)}</span>`);
-    body.appendChild(headRow);
-
-    // content by kind
-    if(REPLY_KINDS.has(ev.kind)){
-      // the real assistant/role response text (ev.content), beautified — NOT just the role id
-      body.appendChild(renderReplyBubble(ev));
-    } else if(ev.kind === "ToolCall"){
-      body.appendChild(renderToolCall(ev.toolCall));
-    } else if(ev.kind === "HumanInputRequest"){
-      const na = el("div", { class:"needs-attn", role:"note" });
-      na.innerHTML = `${ICON.human}<div><div class="na-l">需要关注 · 等待人工确认</div><div class="na-m">${esc(ev.message)}</div><div class="na-ro">${ICON.lock.replace('width="24" height="24"','width="11" height="11"')} 只读视图 —— 请到审批系统中处理</div></div>`;
-      body.appendChild(na);
-    } else if(ev.kind === "StepFinished" && ev.message){
-      const parts = String(ev.message).split("·").map(x=>x.trim());
-      body.appendChild(el("div", { class:"ev-cost" }, `<span class="costchip">${parts.map(p=>`<b>${esc(p)}</b>`).join(' <span style="color:var(--border)">·</span> ')}</span>`));
-    } else if(ev.message){
-      const cls = (ev.kind==="RunError") ? "ev-msg" : "ev-msg";
-      const node = el("div", { class:cls }, esc(ev.message));
-      if(ev.kind==="RunError") node.style.color = "var(--err)", node.style.fontWeight = "600";
-      body.appendChild(node);
+    if(event.kind==="ToolCall"||event.stage==="tool.call"){
+      const tool=event.toolCall||{};
+      const callId=String(tool.callId||dataLookup(event.data||{},["call_id","callId"]));
+      const name=String(tool.toolName||event.message||"unknown tool");
+      const error=String(tool.error||"");
+      const success=tool.success===true;
+      records.push({
+        key:operationRecordKey("tool",runId+":"+(callId||[name,timestamp,index].join(":")),timestamp,index),type:"tool",timestamp,title:name,
+        preview:(error||(tool.resultJson||tool.argumentsJson)||"未返回工具详情").replace(/\s+/g," "),tool,event,
+        status:success?"成功":tool.success===false||error?"失败":"结果未确认",statusTone:success?"ok":tool.success===false||error?"bad":"",
+        durationMs:null,durationSource:"当前详情契约没有工具执行的 started/completed；该时间点是结果被投影的时间。",
+        sourceIndex:index
+      });
     }
-
-    // model + token-usage chips (and a collapsible 详情 for the rest) wherever the committed data bag
-    // carries them — typically llm_call StepFinished / Message events. Skipped for tool-call rows whose
-    // detail already lives in the tool-call panel.
-    if(ev.kind !== "ToolCall"){
-      const details = renderDataDetails(ev.data);
-      if(details) body.appendChild(details);
-    }
-
-    rail.appendChild(body);
-    li.appendChild(gutter);
-    li.appendChild(rail);
-    tl.appendChild(li);
   });
 
-  wrap.appendChild(tl);
-
-  if(isRunning){
-    const tail = el("div", { class:"tl-tail", role:"status", "aria-live":"polite" });
-    tail.innerHTML = `<span class="dot" aria-hidden="true"></span><span>运行进行中 —— 新事件将自动追加在此</span>`;
-    wrap.appendChild(tail);
+  const typeOrder={input:0,model:1,tool:2};
+  records.sort((left,right)=>{
+    const lt=operationTimestamp(left.timestamp),rt=operationTimestamp(right.timestamp);
+    if(lt==null&&rt!=null) return 1;
+    if(lt!=null&&rt==null) return -1;
+    if(lt!=null&&rt!=null&&lt!==rt) return lt-rt;
+    if(left.sourceIndex!==right.sourceIndex) return left.sourceIndex-right.sourceIndex;
+    return (typeOrder[left.type]||0)-(typeOrder[right.type]||0);
+  });
+  return records;
+}
+function openOperationRecord(key){
+  state.expandedOperations.add(key);
+  const row=Array.from(document.querySelectorAll(".operation-row")).find(item=>item.getAttribute("data-operation-key")===key);
+  if(!row) return;
+  row.setAttribute("data-open","true");
+  row.querySelector(".operation-summary")?.setAttribute("aria-expanded","true");
+  row.scrollIntoView({block:"nearest",behavior:"smooth"});
+}
+function renderDurationOverview(detail,records){
+  const overview=el("section",{class:"duration-overview","aria-label":"Input Model Tools Duration 总览"});
+  const modelRecords=records.filter(record=>record.type==="model"),toolRecords=records.filter(record=>record.type==="tool");
+  const timestamps=[];
+  records.forEach(record=>{const time=operationTimestamp(record.timestamp);if(time!=null)timestamps.push(time);});
+  const runStart=operationTimestamp(detail.summary&&detail.summary.startedAtUtc);
+  if(runStart!=null) timestamps.push(runStart);
+  const scaleStart=timestamps.length?Math.min(...timestamps):0;
+  let scaleEnd=timestamps.length?Math.max(...timestamps):scaleStart+1000;
+  if(scaleEnd<=scaleStart) scaleEnd=scaleStart+1000;
+  const span=scaleEnd-scaleStart;
+  const position=time=>Math.max(0,Math.min(99.2,((time-scaleStart)/span)*100));
+  const head=el("div",{class:"do-head"},`<div><div class="do-title">Duration overview</div><div class="do-sub">Input、模型回复与实际工具调用独立成记录。当前 Admin 契约仅提供 committed 时间点，因此不绘制伪造的耗时条。</div></div><div class="do-range">${scaleStart?clockUTC(new Date(scaleStart).toISOString())+" → "+clockUTC(new Date(scaleEnd).toISOString())+" UTC":"时间窗口不可用"}</div>`);
+  overview.appendChild(head);
+  const lanes=el("div",{class:"duration-lanes"});
+  const definitions=[
+    {id:"input",label:"Input",icon:ICON.play,records:records.filter(record=>record.type==="input")},
+    {id:"model",label:"Model",icon:ICON.chat,records:modelRecords},
+    {id:"tools",label:"Tools",icon:ICON.tool,records:toolRecords}
+  ];
+  definitions.forEach(definition=>{
+    const lane=el("div",{class:"duration-lane","data-lane":definition.id});
+    lane.appendChild(el("div",{class:"dl-label"},`<span class="dl-name">${definition.icon}<span>${definition.label}</span></span><span class="dl-count">${definition.records.length} record${definition.records.length===1?"":"s"}</span>`));
+    const track=el("div",{class:"dl-track"});
+    const marks=[];
+    definition.records.forEach((record,index)=>{
+      const time=operationTimestamp(record.timestamp);
+      if(time==null) return;
+      const mark=el("button",{class:"duration-mark point",type:"button","data-kind":record.type,title:`${OPERATION_TYPE[record.type].label} · ${record.title} · Duration 不可用`,style:`left:${position(time)}%;--mark-row:${index%3}`});
+      mark.addEventListener("click",()=>openOperationRecord(record.key));
+      track.appendChild(mark);marks.push(mark);
+    });
+    if(marks.length===0) track.appendChild(el("span",{class:"dl-empty"},"暂无可定位的 committed 时间点"));
+    lane.appendChild(track);lanes.appendChild(lane);
+  });
+  overview.appendChild(lanes);
+  const axis=el("div",{class:"do-axis"});
+  axis.appendChild(el("span",{class:"do-axis-label"}));
+  axis.appendChild(el("div",{class:"do-ticks"},`<span>+0</span><span>+${operationDurationLabel(span/2)}</span><span>+${operationDurationLabel(span)}</span>`));
+  overview.appendChild(axis);
+  overview.appendChild(el("div",{class:"duration-legend"},'<span><i class="point"></i>单点记录 · Duration 不可用</span><span>Tools = 实际调用；模型可用工具清单未进入当前详情契约</span>'));
+  return overview;
+}
+function operationMeta(entries){
+  const meta=el("div",{class:"op-meta"});
+  entries.forEach(([key,value])=>{
+    meta.appendChild(el("span",{class:"k"},esc(key)));
+    meta.appendChild(el("span",{class:"v"},esc(value==null||value===""?"不可用":String(value))));
+  });
+  return meta;
+}
+function renderOperationDetail(record){
+  const detail=el("div",{class:"operation-detail",id:"operation-detail-"+record.key.replace(/[^a-zA-Z0-9_-]/g,"-")});
+  if(record.type==="input"){
+    detail.appendChild(operationMeta([["记录类型","Input"],["Committed 时间",record.timestamp||"不可用"],["Duration","不可用"],["内容来源",record.fullInputAvailable?"run-report Input（完整脱敏值）":"InputSummary 或不可用"]]));
+    detail.appendChild(el("div",{class:"op-unavailable"},esc(record.durationSource)));
+    detail.appendChild(el("pre",{class:"op-text scroll",tabindex:"0"},esc(record.content||"输入内容未记录或为空。")));
+  } else if(record.type==="model"){
+    detail.appendChild(operationMeta([["记录类型","Model response"],["Role",record.title],["Agent",record.event.agentId],["Session",record.sessionId],["Model",record.model||"不可用（当前详情契约未返回）"],["Committed 时间",record.timestamp||"不可用"],["Duration","不可用"]]));
+    detail.appendChild(el("div",{class:"op-unavailable"},esc(record.durationSource)));
+    detail.appendChild(renderReplyBubble(record.event));
+    const data=renderDataDetails(record.data);if(data)detail.appendChild(data);
+  } else if(record.type==="tool"){
+    const tool=record.tool;
+    detail.appendChild(operationMeta([["记录类型","Tool call"],["Tool",record.title],["Call ID",tool.callId],["Committed 时间",record.timestamp||"不可用"],["Duration","不可用"],["结果状态",record.status]]));
+    detail.appendChild(el("div",{class:"op-unavailable"},esc(record.durationSource)));
+    detail.appendChild(jsonField("参数 · arguments",tool.argumentsJson));
+    if(tool.resultJson) detail.appendChild(jsonField("结果 · result",tool.resultJson));
+    if(tool.error) detail.appendChild(el("pre",{class:"op-text scroll",tabindex:"0"},esc(tool.error)));
   }
+  return detail;
+}
+function renderOperationLedger(records){
+  const ledger=el("section",{class:"operation-ledger","aria-label":"逐条 operation 记录"});
+  ledger.appendChild(el("div",{class:"ol-head"},`<span class="ol-title">Operation ledger</span><span class="ol-count">${records.length} records · 按 committed 时间排序</span>`));
+  if(records.length===0){ledger.appendChild(el("div",{class:"detail-empty"},'<div class="dt">暂无 operation 记录</div>'));return ledger;}
+  records.forEach((record,index)=>{
+    const open=state.expandedOperations.has(record.key);
+    const detailId="operation-detail-"+record.key.replace(/[^a-zA-Z0-9_-]/g,"-");
+    const row=el("article",{class:"operation-row","data-open":String(open),"data-operation-key":record.key});
+    const summary=el("button",{class:"operation-summary",type:"button","aria-expanded":String(open),"aria-controls":detailId,"aria-label":`${OPERATION_TYPE[record.type].label} ${record.title}，${record.status}，Duration ${record.durationMs==null?"不可用":operationDurationLabel(record.durationMs)}`});
+    summary.innerHTML=`<span class="op-index">${String(index+1).padStart(2,"0")}</span><span class="op-type ${record.type}">${operationTypeIcon(record.type)}<span>${OPERATION_TYPE[record.type].label}</span></span><span class="op-main"><span class="op-name">${esc(record.title)}</span><span class="op-preview">${esc(record.preview||"—")}</span></span><span class="op-time">${record.timestamp?clockUTC(record.timestamp):"时间不可用"}</span><span class="op-duration ${record.durationMs==null?"unavailable":""}">${record.durationMs==null?"Duration 不可用":operationDurationLabel(record.durationMs)}</span><span class="op-state ${record.statusTone||""}">${esc(record.status)}</span><span class="op-chevron" aria-hidden="true">${ICON.chevron}</span>`;
+    summary.addEventListener("click",()=>{
+      const next=!state.expandedOperations.has(record.key);
+      if(next)state.expandedOperations.add(record.key);else state.expandedOperations.delete(record.key);
+      row.setAttribute("data-open",String(next));summary.setAttribute("aria-expanded",String(next));
+    });
+    row.appendChild(summary);row.appendChild(renderOperationDetail(record));ledger.appendChild(row);
+  });
+  return ledger;
+}
+
+function renderTimeline(detail){
+  const wrap=el("div",{class:"operation-trajectory"});
+  const records=buildOperationRecords(detail);
+  wrap.appendChild(renderDurationOverview(detail,records));
+  wrap.appendChild(renderOperationLedger(records));
+  if(detail.summary.status==="running")wrap.appendChild(el("div",{class:"tl-tail",role:"status","aria-live":"polite"},'<span class="dot" aria-hidden="true"></span><span>运行进行中 · committed operation 将约每 3 秒追加</span>'));
   return wrap;
 }
 
@@ -2956,6 +3175,7 @@ function selectRun(runId){
   state.selectedRunId = runId;
   state.scenario = "detailLoading";
   state.activeTab = "timeline";
+  state.expandedOperations.clear();
   writeObservatoryRoute({ run:runId, tab:"timeline" });
   state.selectedNodeId = null;
   state.graphView = { zoom: 1, panX: 0, panY: 0, fitted: false };
@@ -2980,6 +3200,7 @@ function setScope(scope){
   pendingListScrollReset = true;         // new scope → fresh list, start at the top
   pendingDetailScrollReset = true;
   state.selectedRunId = null;
+  state.expandedOperations.clear();
   cache.runs = []; cache.runFeed = normalizeActivityRunFeed(null); cache.details = {}; cache.graphs = {};
   state.lastSyncedAtUtc = null;
   lastRunsSig = ""; lastDetailSig = "";
