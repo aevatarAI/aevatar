@@ -93,7 +93,8 @@ button{font-family:inherit;cursor:pointer;}
   height:var(--header-h);flex:0 0 var(--header-h);
   display:flex;align-items:center;gap:14px;
   padding:0 var(--pad);background:rgba(255,255,255,.92);
-  backdrop-filter:saturate(1.4) blur(8px);
+  /* 不加 backdrop-filter：底色已 92% 不透明，模糊只作用于剩下 8%，肉眼不可辨；
+     而常驻表头一旦成为 backdrop root，其后内容每次滚动/重绘都要重新取样+模糊。 */
   border-bottom:1px solid var(--border);z-index:30;
 }
 .app-mark{display:flex;align-items:center;gap:10px;flex:0 0 auto;}
@@ -923,7 +924,7 @@ body.observatory-immersive .view{height:100vh;}
 .ap-title{font-size:18px;font-weight:650;color:var(--heading);overflow-wrap:anywhere;letter-spacing:-.01em;}
 .ap-sub{font-size:12px;color:var(--faint);margin-top:3px;}
 .ap-actions{margin-left:auto;justify-content:flex-end;}
-.ap-action-bar{position:sticky;bottom:0;z-index:6;display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:18px -2px 0;padding:12px 14px;border:1px solid var(--border-strong);border-radius:12px;background:rgba(255,255,255,.96);box-shadow:0 -8px 24px rgba(14,21,38,.08);backdrop-filter:blur(10px);}
+.ap-action-bar{position:sticky;bottom:0;z-index:6;display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:18px -2px 0;padding:12px 14px;border:1px solid var(--border-strong);border-radius:12px;background:rgba(255,255,255,.96);box-shadow:0 -8px 24px rgba(14,21,38,.08);/* 无 backdrop-filter：96% 底色下模糊不可辨，而 sticky 元素的 backdrop 每滚动帧都要重新取样 */}
 .ap-action-state{display:flex;align-items:center;gap:9px;min-width:190px;margin-right:auto}.ap-action-state-copy{display:flex;flex-direction:column;gap:1px}.ap-action-state-copy b{font-size:12px;color:var(--heading)}.ap-action-state-copy span{font-size:10.5px;color:var(--faint)}
 .ap-lifecycle{width:9px;height:9px;flex:0 0 auto;border-radius:50%;background:var(--idle)}.ap-lifecycle.busy{background:var(--running);box-shadow:0 0 0 4px var(--running-bg)}.ap-lifecycle.pending{background:var(--waiting);box-shadow:0 0 0 4px var(--waiting-bg)}.ap-lifecycle.dirty,.ap-lifecycle.invalid{background:var(--failed);box-shadow:0 0 0 4px var(--failed-bg)}.ap-lifecycle.valid,.ap-lifecycle.published{background:var(--success);box-shadow:0 0 0 4px var(--success-bg)}
 .ap-action-buttons{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.ap-action-secondary{display:flex;align-items:center;gap:8px;padding-right:10px;margin-right:2px;border-right:1px solid var(--border)}
@@ -4192,6 +4193,9 @@ function opsView(module){
 var STATE={l0Sort:'health',l0Filter:null,l0Range:'today',l1Sub:'roster',l1Status:null,l2Mode:'emp',search:'',collapsed:{},railCollapsed:false};
 var _focusSearch=false;
 var ADMIN_VIEW_KEY=OIDC.storageKey+':admin:view',_renderedRouteKey='',_renderedModule='';
+/* 当前 .rail 子树对应的标记；与 DOM 严格同步（ensureShell 建壳时写入，render 重建时更新），
+   用于跳过内容相同的 rail 重建。 */
+var _renderedRailHtml='';
 
 /* ---------- hash parsing / building ---------- */
 function parseHash(){
@@ -4299,7 +4303,8 @@ function renderShellHeader(module,rest){
 function ensureShell(){
   var app=document.getElementById('app');
   if(document.getElementById('console-shell')) return app;
-  app.innerHTML='<div class="console" id="console-shell">'+renderRail('')+
+  _renderedRailHtml=renderRail('');          /* 建壳即登记，保证缓存与 DOM 同源 */
+  app.innerHTML='<div class="console" id="console-shell">'+_renderedRailHtml+
     '<div class="main">'+renderShellHeader(defaultModule(),[])+
       '<div class="view"><div id="view-body"></div><div id="frame-dock"></div></div>'+
     '</div></div>';
@@ -4347,7 +4352,12 @@ function render(){
   var shell=document.getElementById('console-shell');
   shell.classList.toggle('rail-collapsed',STATE.railCollapsed);
   var header=shell.querySelector('.app-header'); if(header) header.outerHTML=renderShellHeader(module,rest);
-  var rail=shell.querySelector('.rail'); if(rail) rail.outerHTML=renderRail(module);
+  /* rail 标记只随 module / 账号 / 权限变化，而 render() 在排序、筛选、抽屉开合等同模块交互中
+     都会跑一遍。内容相同就跳过 outerHTML —— 重建要重新解析标记、重造整棵导航子树，并重绘
+     rail 的 radial-gradient 底色。折叠/展开态挂在 #console-shell 上，不受此影响。 */
+  var rail=shell.querySelector('.rail');
+  if(rail){ var railHtml=renderRail(module);
+    if(railHtml!==_renderedRailHtml){ rail.outerHTML=railHtml; _renderedRailHtml=railHtml; } }
   var viewBody=document.getElementById('view-body'),dock=document.getElementById('frame-dock');
   if(v.persistentKey){
     viewBody.style.display='none'; viewBody.innerHTML='';
@@ -4572,8 +4582,16 @@ function bindEvents(){
 }
 
 /* ---------- live stamp tick (simulated AGUI SSE heartbeat) ---------- */
+/* 与 schedules/status 轮询同一套跳拍约定：页签不可见时不查询也不写 DOM，回到前台下一拍（≤1s）自然追平。
+   同秒重复触发直接跳过，避免把相同文本写回 [data-stamp] 触发多余的样式/布局失效。 */
 function startClock(){
-  setInterval(function(){ document.querySelectorAll('[data-stamp]').forEach(function(s){ s.textContent=nowStamp(); }); },1000);
+  var lastStamp='';
+  setInterval(function(){
+    if(document.hidden) return;
+    var stamp=nowStamp(); if(stamp===lastStamp) return; lastStamp=stamp;
+    var nodes=document.querySelectorAll('[data-stamp]');
+    for(var i=0;i<nodes.length;i++) nodes[i].textContent=stamp;
+  },1000);
 }
 
 /* ---------- login gate（未登录全屏） ---------- */
