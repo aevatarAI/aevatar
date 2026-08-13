@@ -165,6 +165,23 @@ public sealed class ScopeWorkflowCatalogueRowActorProjectionTests
     }
 
     [Fact]
+    public void Transition_ShouldBuildStableEventId_WhenObservationEventIdIsMissing()
+    {
+        var next = ScopeWorkflowCatalogueRowGAgent.Transition(new ScopeWorkflowCatalogueRowState(), new ScopeWorkflowCatalogueRowSourcesObservedEvent
+        {
+            ScopeId = "scope-1",
+            WorkflowId = "wf-shared",
+            DraftSource = Source(ScopeWorkflowCatalogueSourceDocument.DraftSourceKind, "draft", "2026-08-06T00:00:00Z"),
+            DraftWatermarkUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-06T00:00:00Z")),
+            ObservationEventId = " ",
+            ObservedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-06T01:00:00Z")),
+        });
+
+        next.LastAppliedEventVersion.Should().Be(1);
+        next.LastEventId.Should().Be("scope-1:wf-shared:catalogue-row:1");
+    }
+
+    [Fact]
     public void RepresentsCurrentState_ShouldMatch_WhenSourcesAndWatermarksAreUnchanged()
     {
         var current = new ScopeWorkflowCatalogueRowState
