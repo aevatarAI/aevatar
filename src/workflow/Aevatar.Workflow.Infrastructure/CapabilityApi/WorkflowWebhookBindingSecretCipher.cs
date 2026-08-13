@@ -91,7 +91,15 @@ internal sealed class AesGcmWorkflowWebhookBindingSecretCipher : IWorkflowWebhoo
                 ? null
                 : $"aevatar:workflow-webhook-binding:v1:{activeKeyId}:{activeKey}";
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        catch (IOException)
+        {
+            return null;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return null;
+        }
+        catch (JsonException)
         {
             return null;
         }
