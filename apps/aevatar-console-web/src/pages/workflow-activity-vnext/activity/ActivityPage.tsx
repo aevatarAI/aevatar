@@ -29,6 +29,7 @@ import { getRunStatusPresentation } from './runPresentation';
 
 const supportedRunStatuses = new Set(['running', 'completed', 'failed']);
 const activityPageSize = 25;
+const activitySearchDebounceMs = 300;
 const activityRunsQueryPrefix = ['workflow-activity-vnext', 'activity-runs'];
 
 function normalizeRunStatusFilter(value: string | null): string {
@@ -128,6 +129,7 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
   const fromUtc = params.get('from')?.trim() ?? '';
   const toUtc = params.get('to')?.trim() ?? '';
   const search = params.get('q') ?? '';
+  const [searchInput, setSearchInput] = React.useState(search);
   const [now, setNow] = React.useState(() => Date.now());
   const filterKey = React.useMemo(
     () =>
@@ -201,6 +203,19 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
     if (!rawStatus || status) return;
     replaceParam('status', '');
   }, [rawStatus, replaceParam, status]);
+
+  React.useEffect(() => {
+    setSearchInput(search);
+  }, [search]);
+
+  React.useEffect(() => {
+    if (searchInput === search) return;
+    const timer = window.setTimeout(
+      () => replaceParam('q', searchInput),
+      activitySearchDebounceMs,
+    );
+    return () => window.clearTimeout(timer);
+  }, [replaceParam, search, searchInput]);
 
   React.useEffect(() => {
     if (pagination.filterKey === filterKey) return;
@@ -402,14 +417,14 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
             'Search runs',
           )}
           className="wa-vnext__toolbar-search"
-          onChange={(event) => replaceParam('q', event.target.value)}
+          onChange={(event) => setSearchInput(event.target.value)}
           placeholder={t(
             'workflowActivityVNext.activity.search',
             'Search runs',
           )}
           prefix={<SearchOutlined />}
           role="searchbox"
-          value={search}
+          value={searchInput}
         />
         <Space className="wa-vnext__toolbar-filters" wrap>
           <Select

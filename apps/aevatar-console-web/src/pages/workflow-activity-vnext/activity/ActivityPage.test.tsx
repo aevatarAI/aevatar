@@ -1,5 +1,11 @@
 import { QueryClient } from '@tanstack/react-query';
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import * as React from 'react';
 import { history } from '@/shared/navigation/history';
 import {
@@ -237,6 +243,41 @@ describe('Workflow Activity vNext Activity ledger', () => {
       'scope-alpha',
       expect.objectContaining({ searchText: 'customer' }),
     );
+  });
+
+  it('debounces Activity search before updating the URL and feed query', async () => {
+    jest.useFakeTimers();
+    const view = renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
+
+    try {
+      expect(mockListActivityRuns).toHaveBeenCalledTimes(1);
+
+      const searchInput = screen.getByRole('searchbox', {
+        name: 'Search runs',
+      });
+      fireEvent.change(searchInput, { target: { value: 's' } });
+      fireEvent.change(searchInput, { target: { value: 'su' } });
+      fireEvent.change(searchInput, { target: { value: 'support' } });
+
+      expect(searchInput).toHaveValue('support');
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(299);
+      });
+      expect(history.replace).not.toHaveBeenCalled();
+      expect(mockListActivityRuns).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(1);
+      });
+      expect(history.replace).toHaveBeenLastCalledWith(
+        '/scopes/scope-alpha/workflow-activity-vnext/activity?q=support',
+      );
+      expect(mockListActivityRuns).toHaveBeenCalledTimes(1);
+    } finally {
+      view.unmount();
+      jest.clearAllTimers();
+      jest.useRealTimers();
+    }
   });
 
   it('keeps the activity list focused on user-facing run facts', async () => {
