@@ -13,6 +13,7 @@ using Xunit;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
+[Collection(ChannelRuntimeTestCollections.NyxIdInventoryRequestContext)]
 public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
 {
     [Fact]

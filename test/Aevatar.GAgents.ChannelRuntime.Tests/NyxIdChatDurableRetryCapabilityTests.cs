@@ -27,6 +27,7 @@ using NSubstitute;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
+[Collection(ChannelRuntimeTestCollections.NyxIdInventoryRequestContext)]
 public sealed class NyxIdChatDurableRetryCapabilityTests
 {
     private static readonly Timestamp Now = Timestamp.FromDateTimeOffset(
