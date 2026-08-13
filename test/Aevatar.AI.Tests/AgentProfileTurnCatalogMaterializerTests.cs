@@ -117,7 +117,7 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
             "request-token",
             [catalogTool, requireServiceTool, unrelatedTool]);
         var registry = new RecordingToolSetRegistry();
-        registry.Add(AgentProfilePolicies.NyxIdChatRouteToolSet, source);
+        registry.Add(ToolSetNames.NyxIdAssistantAdmission, source);
         var materializer = NewMaterializer(
             registry,
             new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
@@ -128,7 +128,7 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
             ToolContext("request-token"),
             CancellationToken.None);
 
-        registry.ResolveCalls.Should().Equal(AgentProfilePolicies.NyxIdChatRouteToolSet);
+        registry.ResolveCalls.Should().Equal(ToolSetNames.NyxIdAssistantAdmission);
         source.ObservedTokens.Should().Equal("request-token");
         catalog.FinalAllowedToolNames.Should().BeEquivalentTo(
             "nyxid_catalog",
@@ -152,7 +152,7 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
             "request-token",
             [servicesTool, keyCreateTool, unrelatedTool]);
         var registry = new RecordingToolSetRegistry();
-        registry.Add(AgentProfilePolicies.NyxIdChatRouteToolSet, source);
+        registry.Add(ToolSetNames.NyxIdAssistantAdmission, source);
         var materializer = NewMaterializer(
             registry,
             new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
@@ -172,6 +172,61 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
     }
 
     [Fact]
+    public async Task MaterializeBuiltInIntentAsync_KeyCreateWithVerifiedHumanDelegation_ShouldUseRealAssistantSource()
+    {
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
+        using var client = new NyxIdApiClient(options, new HttpClient());
+        var registry = new RecordingToolSetRegistry();
+        registry.Add(
+            ToolSetNames.NyxIdAssistantAdmission,
+            new NyxIdAssistantToolSource(options, client));
+        var materializer = NewMaterializer(
+            registry,
+            new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+            fetcher: null);
+        var toolContext = AgentToolExecutionContext.Empty with
+        {
+            Credentials = new AgentToolCredentials(
+                "proxy-delegation",
+                null,
+                null,
+                AgentToolNyxIdCredentialKind.ProxyDelegation),
+            Caller = new AgentToolCallerContext(
+                "scope-alpha",
+                "owner-alpha",
+                "turn-alpha",
+                "scope-alpha"),
+            NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                "nyxid",
+                null,
+                "owner-alpha",
+                "proxy"),
+            InvocationSurface = AgentToolInvocationSurface.HumanSession,
+            Chat = new AgentChatInvocationContext(
+                AgentChatInvocationSurface.NyxIdAssistant,
+                "conversation-alpha",
+                "turn-alpha",
+                "task-alpha",
+                null,
+                null),
+        };
+
+        var catalog = await materializer.MaterializeBuiltInIntentAsync(
+            NyxIdChatTurnIntent.KeyCreate,
+            toolContext,
+            CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().BeEquivalentTo(
+            "nyxid_services",
+            "nyxid_request_key_create");
+        catalog.RouteOwnedTools.Keys.Should().BeEquivalentTo(
+            "nyxid_services",
+            "nyxid_request_key_create");
+        catalog.Diagnostics.Should().NotContain(static diagnostic =>
+            diagnostic.Code == AgentProfileTurnDiagnosticCode.ToolCapabilityRejected);
+    }
+
+    [Fact]
     public async Task MaterializeBuiltInIntentAsync_KeyRotate_ShouldExposeInventoryAndTypedProducerOnly()
     {
         var keysTool = new TestTool("nyxid_api_keys");
@@ -181,7 +236,7 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
             "request-token",
             [keysTool, keyRotateTool, unrelatedTool]);
         var registry = new RecordingToolSetRegistry();
-        registry.Add(AgentProfilePolicies.NyxIdChatRouteToolSet, source);
+        registry.Add(ToolSetNames.NyxIdAssistantAdmission, source);
         var materializer = NewMaterializer(
             registry,
             new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
@@ -205,7 +260,7 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
     {
         var registry = new RecordingToolSetRegistry();
         registry.Add(
-            AgentProfilePolicies.NyxIdChatRouteToolSet,
+            ToolSetNames.NyxIdAssistantAdmission,
             new StaticToolSource([new TestTool("nyxid_catalog"), new TestTool("nyxid_services")]));
         var materializer = NewMaterializer(
             registry,

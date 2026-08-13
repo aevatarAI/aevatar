@@ -9,6 +9,7 @@ using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.DependencyInjection;
 using Aevatar.Studio.Application.Studio.Services;
 using Aevatar.Studio.Application.Studio.WorkflowBoards;
+using Aevatar.Studio.Hosting.Auth;
 using Aevatar.Studio.Hosting.Controllers;
 using Aevatar.Studio.Hosting.ContentArtifacts;
 using Aevatar.Studio.Hosting.Endpoints;
@@ -48,6 +49,7 @@ internal static class StudioHostingServiceCollectionExtensions
             });
         services.AddHttpContextAccessor();
         services.AddHttpClient();
+        services.TryAddScoped<IAppAuthProfileResolver, NyxIdAppAuthProfileResolver>();
         services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton<
             IContentArtifactBackingContentPort,

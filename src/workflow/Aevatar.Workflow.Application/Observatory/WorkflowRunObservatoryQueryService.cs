@@ -201,6 +201,7 @@ public sealed class WorkflowRunObservatoryQueryService
                 DefinitionActorIds = filter.DefinitionActorIds,
                 ScheduleIds = filter.ScheduleIds,
                 WorkflowId = filter.WorkflowId?.Trim() ?? string.Empty,
+                SearchText = filter.SearchText?.Trim() ?? string.Empty,
                 UpdatedFromUtc = filter.FromUtc,
                 UpdatedToUtc = filter.ToUtc,
                 Cursor = cursor,
@@ -564,8 +565,26 @@ public sealed class WorkflowRunObservatoryQueryService
         };
     }
 
-    private static WorkflowRunRecoveryCapability CloneRecoveryCapability(WorkflowActorSnapshot snapshot) =>
-        snapshot.RecoveryCapability?.Clone() ?? new WorkflowRunRecoveryCapability();
+    private static WorkflowRunRecoveryCapability CloneRecoveryCapability(WorkflowActorSnapshot snapshot)
+    {
+        var source = snapshot.RecoveryCapability;
+        return new WorkflowRunRecoveryCapability
+        {
+            WorkflowDefinitionRevisionId = source?.WorkflowDefinitionRevisionId ?? string.Empty,
+            WorkflowDefinitionVersion = source?.WorkflowDefinitionVersion ?? 0,
+            RetryFailedStep = CloneRecoveryActionCapability(source?.RetryFailedStep),
+            RunAgain = CloneRecoveryActionCapability(source?.RunAgain),
+        };
+    }
+
+    private static WorkflowRecoveryActionCapability CloneRecoveryActionCapability(
+        WorkflowRecoveryActionCapability? source) =>
+        source?.Clone() ?? new WorkflowRecoveryActionCapability
+        {
+            Eligibility = WorkflowRecoveryEligibility.Unavailable,
+            UnavailableReasonCode = WorkflowRecoveryUnavailableReasonCode.LegacyUnavailable,
+            UnavailableReason = "Recovery capability is unavailable for this legacy run.",
+        };
 
     private static Aevatar.Workflow.Abstractions.WorkflowRunLineage CloneLineage(WorkflowActorSnapshot snapshot) =>
         snapshot.Lineage?.Clone() ?? new Aevatar.Workflow.Abstractions.WorkflowRunLineage
@@ -592,7 +611,7 @@ public sealed class WorkflowRunObservatoryQueryService
                 Tenant = source.Tenant,
                 ExternalUserId = source.ExternalUserId,
                 Scope = source.Scope,
-                BindingId = source.BindingId,
+                BindingId = string.Empty,
                 DisplayValue = string.IsNullOrWhiteSpace(source.DisplayValue) ? "Unknown" : source.DisplayValue,
                 Availability = string.IsNullOrWhiteSpace(source.Availability) ? "unavailable" : source.Availability,
             };

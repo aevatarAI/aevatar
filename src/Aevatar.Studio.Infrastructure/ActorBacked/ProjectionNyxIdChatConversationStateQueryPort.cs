@@ -57,22 +57,15 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
 
         var serverTurnId = ResolveTurnId(document);
         if (!string.Equals(document.ScopeId, scopeId, StringComparison.Ordinal))
-        {
-            return NyxIdChatConversationStateQueryResult.ReloadRequired(
-                document.StateVersion,
-                serverTurnId,
-                "scope_mismatch");
-        }
+            return NyxIdChatConversationStateQueryResult.NotFound();
 
         if (!string.Equals(document.Id, actorId, StringComparison.Ordinal) ||
             !string.Equals(document.ActorId, actorId, StringComparison.Ordinal) ||
             !string.Equals(document.ConversationActorId, actorId, StringComparison.Ordinal))
-        {
-            return NyxIdChatConversationStateQueryResult.ReloadRequired(
-                document.StateVersion,
-                serverTurnId,
-                "conversation_mismatch");
-        }
+            return NyxIdChatConversationStateQueryResult.NotFound();
+
+        if (document.Deleted)
+            return NyxIdChatConversationStateQueryResult.NotFound();
 
         if (document.StateVersion <= 0)
         {
@@ -153,6 +146,7 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
                 string.Equals(document.Id, document.ActorId, StringComparison.Ordinal) &&
                 string.Equals(document.ActorId, document.ConversationActorId, StringComparison.Ordinal) &&
                 string.Equals(document.ScopeId, normalizedScopeId, StringComparison.Ordinal) &&
+                !document.Deleted &&
                 document.StateVersion > 0)
             .ToDictionary(
                 static document => document.ConversationActorId,

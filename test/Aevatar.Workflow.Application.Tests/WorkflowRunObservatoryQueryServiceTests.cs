@@ -103,7 +103,7 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
     }
 
     [Fact]
-    public async Task ListActivityRunsForScopeAsync_ShouldReturnPagedTypedRows_FromCurrentStateReadModel()
+    public async Task ListActivityRunsForScopeAsync_ShouldReturnPagedTypedRows_AndRedactLegacyBindingId()
     {
         const string workflowId = "wf-alpha";
         const string runId = "run-alpha";
@@ -195,6 +195,7 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         var firstQuery = currentState.PageQueries[0];
         firstQuery.ScopeId.Should().Be(CallerScope);
         firstQuery.WorkflowId.Should().Be(workflowId);
+        firstQuery.SearchText.Should().BeEmpty();
         firstQuery.Cursor.Should().Be("cursor-current");
         firstQuery.IncludeTotalCount.Should().BeTrue();
         firstQuery.Take.Should().Be(1);
@@ -211,7 +212,7 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         row.ActorId.Should().Be(actorId);
         row.WorkflowId.Should().Be(workflowId);
         row.Initiator.ExternalUserId.Should().Be(memberIdentityCandidate);
-        row.Initiator.BindingId.Should().Be(serviceIdentityCandidate);
+        row.Initiator.BindingId.Should().BeEmpty();
         row.InputSummary.Should().Be("summarized input");
         row.CurrentStep.StepId.Should().Be("step-current");
         row.FirstFailure.StepId.Should().Be("step-failed");
@@ -229,6 +230,31 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         row.Lineage.RetryFork.OriginalRunId.Should().Be("run-original-alpha");
         row.Lineage.RetryFork.StartAtStepId.Should().Be("step-failed");
         row.Lineage.SubWorkflow.Availability.Should().Be(WorkflowRunLineageAvailability.Unavailable);
+    }
+
+    [Fact]
+    public async Task ListActivityRunsForScopeAsync_ShouldPassSearchTextToCurrentStatePageQuery()
+    {
+        var currentState = new FakeCurrentStateQueryPort
+        {
+            PageResult = new WorkflowActorCurrentStatePage([], null, null),
+        };
+        var service = new WorkflowRunObservatoryQueryService(currentState, new FakeArtifactQueryPort());
+
+        await service.ListActivityRunsForScopeAsync(
+            CallerScope,
+            new WorkflowActivityRunFeedFilter
+            {
+                SearchText = "  Test Member  ",
+                Status = "completed",
+                WorkflowId = "workflow-alpha",
+                Take = 25,
+            });
+
+        currentState.PageQueries.Should().HaveCount(1);
+        currentState.PageQueries[0].SearchText.Should().Be("Test Member");
+        currentState.PageQueries[0].Status.Should().Be("completed");
+        currentState.PageQueries[0].WorkflowId.Should().Be("workflow-alpha");
     }
 
     [Fact]
@@ -259,7 +285,51 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         row.Waiting.Availability.Should().Be("unavailable");
         row.CompletedAtUtc.Should().BeNull();
         row.DurationMs.Should().BeNull();
+        row.RecoveryCapability.RetryFailedStep.Should().NotBeNull();
+        row.RecoveryCapability.RetryFailedStep.Eligibility.Should().Be(WorkflowRecoveryEligibility.Unavailable);
+        row.RecoveryCapability.RetryFailedStep.UnavailableReasonCode.Should()
+            .Be(WorkflowRecoveryUnavailableReasonCode.LegacyUnavailable);
+        row.RecoveryCapability.RunAgain.Should().NotBeNull();
+        row.RecoveryCapability.RunAgain.Eligibility.Should().Be(WorkflowRecoveryEligibility.Unavailable);
+        row.RecoveryCapability.RunAgain.UnavailableReasonCode.Should()
+            .Be(WorkflowRecoveryUnavailableReasonCode.LegacyUnavailable);
         row.Lineage.Availability.Should().Be(WorkflowRunLineageAvailability.LegacyUnavailable);
+    }
+
+    [Fact]
+    public async Task ListActivityRunsForScopeAsync_ShouldNormalizeLegacyRecoveryActions_WhenCapabilityExistsWithoutActions()
+    {
+        var snapshot = Snapshot("actor-legacy-recovery", CallerScope, WorkflowRunCompletionStatus.Completed, updated: 300);
+        snapshot.RecoveryCapability = new WorkflowRunRecoveryCapability
+        {
+            WorkflowDefinitionRevisionId = "rev-legacy",
+            WorkflowDefinitionVersion = 3,
+        };
+        var currentState = new FakeCurrentStateQueryPort
+        {
+            PageResult = new WorkflowActorCurrentStatePage([snapshot], null, null),
+        };
+        var service = new WorkflowRunObservatoryQueryService(currentState, new FakeArtifactQueryPort());
+
+        var page = await service.ListActivityRunsForScopeAsync(
+            CallerScope,
+            new WorkflowActivityRunFeedFilter());
+
+        var row = page.Items.Should().ContainSingle().Subject;
+        row.RecoveryCapability.WorkflowDefinitionRevisionId.Should().Be("rev-legacy");
+        row.RecoveryCapability.WorkflowDefinitionVersion.Should().Be(3);
+        row.RecoveryCapability.RetryFailedStep.Should().NotBeNull();
+        row.RecoveryCapability.RetryFailedStep.Eligibility.Should().Be(WorkflowRecoveryEligibility.Unavailable);
+        row.RecoveryCapability.RetryFailedStep.UnavailableReasonCode.Should()
+            .Be(WorkflowRecoveryUnavailableReasonCode.LegacyUnavailable);
+        row.RecoveryCapability.RetryFailedStep.UnavailableReason.Should()
+            .Be("Recovery capability is unavailable for this legacy run.");
+        row.RecoveryCapability.RunAgain.Should().NotBeNull();
+        row.RecoveryCapability.RunAgain.Eligibility.Should().Be(WorkflowRecoveryEligibility.Unavailable);
+        row.RecoveryCapability.RunAgain.UnavailableReasonCode.Should()
+            .Be(WorkflowRecoveryUnavailableReasonCode.LegacyUnavailable);
+        row.RecoveryCapability.RunAgain.UnavailableReason.Should()
+            .Be("Recovery capability is unavailable for this legacy run.");
     }
 
     [Fact]

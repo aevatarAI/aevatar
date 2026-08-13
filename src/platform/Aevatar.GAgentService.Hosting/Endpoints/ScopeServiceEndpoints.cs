@@ -225,7 +225,8 @@ public static class ScopeServiceEndpoints
                     workflowFileIngressPort,
                     trustedCallerCredential: callerCredential.Credential,
                     cancellationToken: ct,
-                    trustedScopeId: scopeId);
+                    trustedScopeId: scopeId,
+                    trustedNyxIdCredentialSelection: callerCredential.NyxIdCredentialSelection);
                 if (!normalizedRequest.Succeeded)
                 {
                     var (statusCode, code, message) = ScopeWorkflowEndpoints.MapRunStartError(normalizedRequest.Error);

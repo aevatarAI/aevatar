@@ -37,7 +37,9 @@ public sealed class ToolAuditRecordFactory
         AgentToolCredentialSource credentialSource,
         AgentToolReceipt receipt,
         AuditOutcome outcome,
-        bool isMutation)
+        bool isMutation,
+        string? authorizationMode = null,
+        string? authorizationId = null)
     {
         if (executionPhase == AuditToolExecutionPhase.Unspecified)
             throw new ArgumentOutOfRangeException(nameof(executionPhase), executionPhase, null);
@@ -115,6 +117,8 @@ public sealed class ToolAuditRecordFactory
         AddIfPresent(record.Annotations, "subject_hash", receipt.SubjectHash);
         AddIfPresent(record.Annotations, "channel_platform", executionContext.Channel.Platform);
         AddIfPresent(record.Annotations, "schedule_id", executionContext.Schedule.ScheduleId);
+        AddIfPresent(record.Annotations, "authorization_mode", authorizationMode);
+        AddIfPresent(record.Annotations, "authorization_id", authorizationId);
 
         if (terminalOutcome is AuditTerminalOutcome.Failed or AuditTerminalOutcome.TimedOut)
         {

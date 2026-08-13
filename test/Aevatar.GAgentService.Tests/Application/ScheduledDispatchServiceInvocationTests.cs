@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
@@ -1489,6 +1491,183 @@ public sealed class ScheduledDispatchServiceInvocationTests
         invoked.Should().NotBeSameAs(original);
         invoked.Payload.Unpack<ChatRequestEvent>().Metadata.Should().Contain("trace", "scheduled");
         original.Payload.Unpack<ChatRequestEvent>().Metadata.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ScheduledServiceInvocationDispatchPort_ShouldRenderPromptFromAuthoritativeFireContext()
+    {
+        var invocationPort = new RecordingServiceInvocationPort();
+        var port = new ScheduledServiceInvocationDispatchPort(
+            invocationPort,
+            new RecordingScheduledServiceInvocationCredentialExchangePort());
+        var original = new ServiceInvocationRequest
+        {
+            CommandId = "cmd-scheduled-template",
+            CorrelationId = "corr-scheduled-template",
+            Payload = Any.Pack(new ChatRequestEvent
+            {
+                Prompt = """
+                    {"period_label":"{{@schedule.run_year}}年{{@schedule.run_month}}月","run_date":"{{ @schedule.run_date }}","days_left":"{{@schedule.days_until_month_end}}","fire_at":"{{@schedule.fire_at_utc}}","timezone":"{{@schedule.timezone}}","external":"{{payload.value}}","submit":true}
+                    """,
+            }),
+        };
+
+        await port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
+            original,
+            FireContext: new ScheduledDispatchFireContext(
+                new DateTimeOffset(2026, 8, 27, 2, 0, 0, TimeSpan.Zero),
+                "Asia/Singapore")));
+
+        var invokedPrompt = invocationPort.Requests.Should().ContainSingle().Which
+            .Payload.Unpack<ChatRequestEvent>().Prompt;
+        using var rendered = JsonDocument.Parse(invokedPrompt);
+        rendered.RootElement.GetProperty("period_label").GetString().Should().Be("2026年8月");
+        rendered.RootElement.GetProperty("run_date").GetString().Should().Be("2026-08-27");
+        rendered.RootElement.GetProperty("days_left").GetString().Should().Be("4");
+        rendered.RootElement.GetProperty("fire_at").GetString().Should()
+            .Be("2026-08-27T02:00:00.0000000+00:00");
+        rendered.RootElement.GetProperty("timezone").GetString().Should().Be("Asia/Singapore");
+        rendered.RootElement.GetProperty("external").GetString().Should().Be("{{payload.value}}");
+        rendered.RootElement.GetProperty("submit").GetBoolean().Should().BeTrue();
+        original.Payload.Unpack<ChatRequestEvent>().Prompt.Should().Contain("@schedule.run_date");
+    }
+
+    [Theory]
+    [InlineData("{\"{{@schedule.run_date}}\":\"value\"}", "only in JSON string values")]
+    [InlineData("{\"date\":\"{{payload {{@schedule.run_date}}\"}", "nested placeholder delimiters")]
+    [InlineData("{\"date\":\"{{@schedule.run_date\"}", "unmatched placeholder delimiter")]
+    public void ScheduledDispatchPromptTemplate_ShouldFailClosedForInvalidSyntax(
+        string template,
+        string expectedError)
+    {
+        var validation = ScheduledDispatchPromptTemplate.Validate(template);
+
+        validation.Succeeded.Should().BeFalse();
+        validation.Error.Should().Contain(expectedError);
+    }
+
+    [Fact]
+    public async Task ScheduledServiceInvocationDispatchPort_ShouldLeaveNonChatPayloadUnchanged()
+    {
+        var invocationPort = new RecordingServiceInvocationPort();
+        var port = new ScheduledServiceInvocationDispatchPort(
+            invocationPort,
+            new RecordingScheduledServiceInvocationCredentialExchangePort());
+        var original = new ServiceInvocationRequest
+        {
+            Payload = Any.Pack(new StringValue { Value = "{{@schedule.run_date}}" }),
+        };
+
+        await port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
+            original,
+            FireContext: new ScheduledDispatchFireContext(
+                new DateTimeOffset(2026, 8, 27, 2, 0, 0, TimeSpan.Zero),
+                "Asia/Singapore")));
+
+        invocationPort.Requests.Should().ContainSingle().Which.Payload
+            .Unpack<StringValue>().Value.Should().Be("{{@schedule.run_date}}");
+        original.Payload.Unpack<StringValue>().Value.Should().Be("{{@schedule.run_date}}");
+    }
+
+    [Theory]
+    [InlineData("2026-02-27T02:00:00+00:00", "1")]
+    [InlineData("2028-02-27T02:00:00+00:00", "2")]
+    [InlineData("2026-08-31T02:00:00+00:00", "0")]
+    public async Task ScheduledServiceInvocationDispatchPort_ShouldDeriveDaysLeftForMonthAndLeapYear(
+        string fireAtUtc,
+        string expectedDaysLeft)
+    {
+        var invocationPort = new RecordingServiceInvocationPort();
+        var port = new ScheduledServiceInvocationDispatchPort(
+            invocationPort,
+            new RecordingScheduledServiceInvocationCredentialExchangePort());
+
+        await port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
+            new ServiceInvocationRequest
+            {
+                Payload = Any.Pack(new ChatRequestEvent
+                {
+                    Prompt = "{\"days_left\":\"{{@schedule.days_until_month_end}}\"}",
+                }),
+            },
+            FireContext: new ScheduledDispatchFireContext(
+                DateTimeOffset.Parse(fireAtUtc, CultureInfo.InvariantCulture),
+                "Asia/Singapore")));
+
+        invocationPort.Requests.Should().ContainSingle().Which
+            .Payload.Unpack<ChatRequestEvent>().Prompt.Should()
+            .Be($"{{\"days_left\":\"{expectedDaysLeft}\"}}");
+    }
+
+    [Fact]
+    public async Task ScheduledServiceInvocationDispatchPort_ShouldUseScheduleTimezoneAcrossUtcDateBoundary()
+    {
+        var invocationPort = new RecordingServiceInvocationPort();
+        var port = new ScheduledServiceInvocationDispatchPort(
+            invocationPort,
+            new RecordingScheduledServiceInvocationCredentialExchangePort());
+
+        await port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
+            new ServiceInvocationRequest
+            {
+                Payload = Any.Pack(new ChatRequestEvent
+                {
+                    Prompt = "{\"run_date\":\"{{@schedule.run_date}}\"}",
+                }),
+            },
+            FireContext: new ScheduledDispatchFireContext(
+                new DateTimeOffset(2026, 8, 26, 16, 30, 0, TimeSpan.Zero),
+                "Asia/Singapore")));
+
+        invocationPort.Requests.Should().ContainSingle().Which
+            .Payload.Unpack<ChatRequestEvent>().Prompt.Should().Be("{\"run_date\":\"2026-08-27\"}");
+    }
+
+    [Fact]
+    public async Task ScheduledServiceInvocationDispatchPort_WithoutFireContext_ShouldPreserveTemplate()
+    {
+        var invocationPort = new RecordingServiceInvocationPort();
+        var port = new ScheduledServiceInvocationDispatchPort(
+            invocationPort,
+            new RecordingScheduledServiceInvocationCredentialExchangePort());
+
+        await port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
+            new ServiceInvocationRequest
+            {
+                Payload = Any.Pack(new ChatRequestEvent
+                {
+                    Prompt = "{{@schedule.run_date}} {{payload.value}}",
+                }),
+            }));
+
+        invocationPort.Requests.Should().ContainSingle().Which
+            .Payload.Unpack<ChatRequestEvent>().Prompt.Should()
+            .Be("{{@schedule.run_date}} {{payload.value}}");
+    }
+
+    [Fact]
+    public async Task ScheduledServiceInvocationDispatchPort_WithUnknownSchedulePlaceholder_ShouldFailBeforeInvoke()
+    {
+        var invocationPort = new RecordingServiceInvocationPort();
+        var port = new ScheduledServiceInvocationDispatchPort(
+            invocationPort,
+            new RecordingScheduledServiceInvocationCredentialExchangePort());
+
+        var act = () => port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
+            new ServiceInvocationRequest
+            {
+                Payload = Any.Pack(new ChatRequestEvent
+                {
+                    Prompt = "{\"run_date\":\"{{@schedule.unknown}}\"}",
+                }),
+            },
+            FireContext: new ScheduledDispatchFireContext(
+                new DateTimeOffset(2026, 8, 27, 2, 0, 0, TimeSpan.Zero),
+                "Asia/Singapore")));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("Unsupported scheduled prompt placeholder '@schedule.unknown'.");
+        invocationPort.Requests.Should().BeEmpty();
     }
 
     [Fact]

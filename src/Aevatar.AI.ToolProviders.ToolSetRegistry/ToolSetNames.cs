@@ -12,4 +12,11 @@ public static class ToolSetNames
     /// policy explicitly selects this set.
     /// </summary>
     public const string NyxIdConnectedServices = "nyxid.connected_services";
+
+    /// <summary>
+    /// Pinned local NyxID Assistant tools used to materialize built-in admission intents.
+    /// This set deliberately excludes request-local connected-service discovery so an
+    /// unavailable external inventory cannot suppress local typed admission actions.
+    /// </summary>
+    public const string NyxIdAssistantAdmission = "nyxid.assistant.admission";
 }

@@ -12,6 +12,7 @@ public enum NyxIdCodeExecutionRouteResolutionKind
     AccessDenied = 5,
     SourceUnavailable = 6,
     Inactive = 7,
+    ExecutionNotReady = 8,
 }
 
 public sealed record NyxIdCodeExecutionRouteResolution(
@@ -43,17 +44,29 @@ public static class NyxIdCodeExecutionRouteResolver
         ArgumentNullException.ThrowIfNull(clientFactory);
         ArgumentException.ThrowIfNullOrWhiteSpace(bearerToken);
 
-        var response = await clientFactory.CreateClient()
-            .ListUserServicesAsync(bearerToken.Trim(), cancellationToken)
+        var snapshot = await new NyxIdUserServiceAuthorityReader(clientFactory)
+            .ReadAsync(bearerToken.Trim(), cancellationToken)
             .ConfigureAwait(false);
-        return Resolve(
-            NyxIdApiAccessResponseParser.ParseCodeExecutionUserServices(response),
-            exactUserServiceId);
+        return Resolve(snapshot, exactUserServiceId);
+    }
+
+    public static NyxIdCodeExecutionRouteResolution Resolve(
+        NyxIdUserServiceAuthoritySnapshot snapshot,
+        string? exactUserServiceId = null)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        return Resolve(snapshot.Routes, snapshot.ExecutionInventory, exactUserServiceId);
     }
 
     public static NyxIdCodeExecutionRouteResolution Resolve(
         NyxIdApiAccessResult<NyxIdUserServices> inventory,
-        string? exactUserServiceId = null)
+        string? exactUserServiceId = null) =>
+        Resolve(inventory, executionInventory: null, exactUserServiceId);
+
+    private static NyxIdCodeExecutionRouteResolution Resolve(
+        NyxIdApiAccessResult<NyxIdUserServices> inventory,
+        NyxIdApiAccessResult<NyxIdUserServiceKeys>? executionInventory,
+        string? exactUserServiceId)
     {
         ArgumentNullException.ThrowIfNull(inventory);
         if (!inventory.Succeeded)
@@ -100,7 +113,41 @@ public static class NyxIdCodeExecutionRouteResolver
                 active,
                 []);
 
-        var eligible = active.Where(HasUsableExecutionCredential).ToArray();
+        if (executionInventory is not null && !executionInventory.Succeeded)
+        {
+            var denied = executionInventory.Failure?.Kind is
+                NyxIdApiAccessFailureKind.Unauthorized or NyxIdApiAccessFailureKind.Forbidden;
+            return new NyxIdCodeExecutionRouteResolution(
+                denied
+                    ? NyxIdCodeExecutionRouteResolutionKind.AccessDenied
+                    : NyxIdCodeExecutionRouteResolutionKind.SourceUnavailable,
+                null,
+                canonical.Length,
+                accessible.Length,
+                active.Length,
+                0,
+                executionInventory.Failure);
+        }
+
+        var executionReady = executionInventory is null
+            ? active
+            : active.Where(service =>
+                    TryResolveExecutionAuthority(inventory, executionInventory, service.Id, out var authority) &&
+                    authority!.IsExecutionReady &&
+                    string.Equals(
+                        authority.Execution.CatalogServiceSlug,
+                        CodeExecutionContract.ServiceSlug,
+                        StringComparison.Ordinal))
+                .ToArray();
+        if (executionReady.Length == 0)
+            return Result(
+                NyxIdCodeExecutionRouteResolutionKind.ExecutionNotReady,
+                canonical,
+                accessible,
+                active,
+                executionReady);
+
+        var eligible = executionReady.Where(HasUsableExecutionCredential).ToArray();
         if (eligible.Length == 0)
             return Result(
                 NyxIdCodeExecutionRouteResolutionKind.PolicyMismatch,
@@ -126,11 +173,10 @@ public static class NyxIdCodeExecutionRouteResolver
     }
 
     /// <summary>
-    /// Whether the route delivers a credential the platform code runtime accepts on its execute
-    /// endpoint. The runtime authenticates a forwarded caller bearer, and falls back to NyxID's
-    /// injected delegation token only when that bearer is absent and the delegated scope carries
-    /// <c>sandbox:execute</c>. NyxID keeps forwarding and delegation independent, so neither the
-    /// pairing of the two nor the presence of unrelated delegated scopes constrains admission.
+    /// Whether the route delivers a credential the deployed platform runtime accepts. Existing
+    /// forwarding routes remain valid; otherwise NyxID must inject a short-lived token whose
+    /// whitespace scope membership includes <c>sandbox:execute</c>. Command-side reconciliation
+    /// targets the non-forwarding delegated shape without invalidating already-admitted routes.
     /// </summary>
     public static bool HasUsableExecutionCredential(NyxIdUserService service)
     {
@@ -138,6 +184,21 @@ public static class NyxIdCodeExecutionRouteResolver
         return service.ForwardAccessToken == true ||
                (service.InjectDelegationToken == true &&
                 GrantsCodeExecutionDelegation(service.DelegationTokenScope));
+    }
+
+    public static string AddCodeExecutionDelegationScope(string? delegationTokenScope)
+    {
+        var scopes = string.IsNullOrWhiteSpace(delegationTokenScope)
+            ? []
+            : delegationTokenScope
+                .Split(
+                    (char[]?)null,
+                    StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
+        if (!scopes.Contains(CodeDelegationScope, StringComparer.Ordinal))
+            scopes.Add(CodeDelegationScope);
+        return string.Join(' ', scopes);
     }
 
     private static bool GrantsCodeExecutionDelegation(string? delegationTokenScope) =>
@@ -156,6 +217,14 @@ public static class NyxIdCodeExecutionRouteResolver
                 service.CredentialSource.Allowed,
             _ => false,
         };
+
+    private static bool TryResolveExecutionAuthority(
+        NyxIdApiAccessResult<NyxIdUserServices> routes,
+        NyxIdApiAccessResult<NyxIdUserServiceKeys> executionInventory,
+        string userServiceId,
+        out NyxIdUserServiceAuthority? authority) =>
+        new NyxIdUserServiceAuthoritySnapshot(routes, executionInventory)
+            .TryGetExact(userServiceId, out authority);
 
     private static NyxIdCodeExecutionRouteResolution Result(
         NyxIdCodeExecutionRouteResolutionKind kind,

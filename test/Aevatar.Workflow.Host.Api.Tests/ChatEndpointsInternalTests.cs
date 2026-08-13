@@ -16,6 +16,8 @@ using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Aevatar.Workflow.Infrastructure.DependencyInjection;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
@@ -785,6 +787,38 @@ public sealed class ChatEndpointsInternalTests
     }
 
     [Fact]
+    public async Task HandleChat_ShouldPreserveDirectSupplementalUserServiceManagementAuthority()
+    {
+        const string subject = "nyx-user-human";
+        const string sourceReadableToken = "human-access-token";
+        var capturedCommand = default(WorkflowChatRunRequest);
+        var interactionService = new FakeCommandInteractionService
+        {
+            ResultFactory = (command, _, _, _) =>
+            {
+                capturedCommand = command;
+                return Task.FromResult(
+                    WorkflowChatRunInteractionResult
+                        .Failure(WorkflowChatRunStartError.WorkflowBindingMismatch));
+            },
+        };
+        var http = CreateHttpContext();
+        ApplyValidatedAccessTokenAuthentication(http, sourceReadableToken, subject);
+        http.Request.Headers["X-NyxID-Delegation-Token"] = "delegation-token";
+
+        await WorkflowCapabilityEndpoints.HandleChat(
+            http,
+            new ChatInput { Prompt = "hello" },
+            interactionService,
+            CancellationToken.None);
+
+        capturedCommand.Should().NotBeNull();
+        capturedCommand!.CallerCredential!.BearerToken.Should().Be("delegation-token");
+        capturedCommand.CallerCredential.SourceReadableUserBearerToken.Should().Be(sourceReadableToken);
+        capturedCommand.CallerNyxIdCredentialSelection!.CanManageUserServices.Should().BeTrue();
+    }
+
+    [Fact]
     public async Task HandleChat_ShouldResolveIngressPortAndDispatchFileRefForInlineFile()
     {
         var capturedCommand = default(WorkflowChatRunRequest);
@@ -1044,6 +1078,7 @@ public sealed class ChatEndpointsInternalTests
             NyxIdCallerCredentialKind.SourceReadableUserBearer);
         result.NyxIdCredentialSelection.SourceReadableUserBearerToken.Should().Be(
             "source-readable-alpha");
+        result.NyxIdCredentialSelection.CanManageUserServices.Should().BeFalse();
         tokenProvider.Authority.Should().BeEquivalentTo(new Aevatar.Workflow.Abstractions.WorkflowCallerNyxIdAuthority
         {
             Platform = "nyxid",
@@ -1606,19 +1641,33 @@ public sealed class ChatEndpointsInternalTests
     [Fact]
     public void WorkflowCallerCredentialExtractor_ShouldExposeMissingValidAndInvalidStatus()
     {
+        const string humanSubject = "nyx-user-human";
+        const string humanAccessToken = "human-access-token";
+        const string serviceAccountToken = "service-account-token";
         var missingHttpContext = WorkflowCallerCredentialExtractor.Extract(null);
         var missingHttp = CreateHttpContext();
         var unsupportedSchemeHttp = CreateHttpContext();
         unsupportedSchemeHttp.Request.Headers.Authorization = "Basic token-123";
         var validHttp = CreateHttpContext();
-        validHttp.Request.Headers.Authorization = "Bearer token-123";
+        ApplyValidatedAccessTokenAuthentication(validHttp, humanAccessToken, humanSubject);
         var bareBearerHttp = CreateHttpContext();
         bareBearerHttp.Request.Headers.Authorization = "Bearer";
         var invalidHttp = CreateHttpContext();
         invalidHttp.Request.Headers.Authorization = "Bearer token 123";
         var bothValidHttp = CreateHttpContext();
-        bothValidHttp.Request.Headers.Authorization = "Bearer forwarded-token";
+        ApplyValidatedAccessTokenAuthentication(bothValidHttp, humanAccessToken, humanSubject);
         bothValidHttp.Request.Headers["X-NyxID-Delegation-Token"] = "delegation-token";
+        var apiKeyHttp = CreateHttpContext();
+        apiKeyHttp.Request.Headers.Authorization = "Bearer nyxid_sk_example";
+        apiKeyHttp.User = AuthenticatedSubjectPrincipal(humanSubject);
+        var serviceAccountHttp = CreateHttpContext();
+        ApplyValidatedAccessTokenAuthentication(
+            serviceAccountHttp,
+            serviceAccountToken,
+            humanSubject,
+            new Claim("sa", "true"));
+        var unauthenticatedHumanTokenHttp = CreateHttpContext();
+        unauthenticatedHumanTokenHttp.Request.Headers.Authorization = $"Bearer {humanAccessToken}";
         var delegationOnlyHttp = CreateHttpContext();
         delegationOnlyHttp.Request.Headers["X-NyxID-Delegation-Token"] = "delegation-token";
         var malformedAuthorizationWithDelegationHttp = CreateHttpContext();
@@ -1642,6 +1691,10 @@ public sealed class ChatEndpointsInternalTests
         var bareBearer = WorkflowCallerCredentialExtractor.Extract(bareBearerHttp);
         var invalid = WorkflowCallerCredentialExtractor.Extract(invalidHttp);
         var bothValid = WorkflowCallerCredentialExtractor.Extract(bothValidHttp);
+        var apiKey = WorkflowCallerCredentialExtractor.Extract(apiKeyHttp);
+        var serviceAccount = WorkflowCallerCredentialExtractor.Extract(serviceAccountHttp);
+        var unauthenticatedHumanToken = WorkflowCallerCredentialExtractor.Extract(
+            unauthenticatedHumanTokenHttp);
         var delegationOnly = WorkflowCallerCredentialExtractor.Extract(delegationOnlyHttp);
         var malformedAuthorizationWithDelegation =
             WorkflowCallerCredentialExtractor.Extract(malformedAuthorizationWithDelegationHttp);
@@ -1656,10 +1709,11 @@ public sealed class ChatEndpointsInternalTests
         missing.Succeeded.Should().BeTrue();
         missing.Credential.Should().BeNull();
         valid.Succeeded.Should().BeTrue();
-        valid.Credential!.BearerToken.Should().Be("token-123");
+        valid.Credential!.BearerToken.Should().Be(humanAccessToken);
         valid.Credential.Kind.Should().Be(NyxIdCallerCredentialKind.SourceReadableUserBearer);
         valid.NyxIdCredentialSelection!.Kind.Should().Be(
             NyxIdCallerCredentialKind.SourceReadableUserBearer);
+        valid.NyxIdCredentialSelection.CanManageUserServices.Should().BeTrue();
         bareBearer.Succeeded.Should().BeFalse();
         bareBearer.Error.Should().Be(WorkflowChatRunStartError.InvalidCallerCredential);
         bareBearer.Credential.Should().BeNull();
@@ -1669,10 +1723,17 @@ public sealed class ChatEndpointsInternalTests
         bothValid.Succeeded.Should().BeTrue();
         bothValid.Credential!.BearerToken.Should().Be("delegation-token");
         bothValid.Credential.Kind.Should().Be(NyxIdCallerCredentialKind.ProxyDelegation);
-        bothValid.Credential.SourceReadableUserBearerToken.Should().Be("forwarded-token");
+        bothValid.Credential.SourceReadableUserBearerToken.Should().Be(humanAccessToken);
         bothValid.NyxIdCredentialSelection!.Kind.Should().Be(
             NyxIdCallerCredentialKind.SourceReadableUserBearer);
-        bothValid.NyxIdCredentialSelection.SourceReadableUserBearerToken.Should().Be("forwarded-token");
+        bothValid.NyxIdCredentialSelection.SourceReadableUserBearerToken.Should().Be(humanAccessToken);
+        bothValid.NyxIdCredentialSelection.CanManageUserServices.Should().BeTrue();
+        apiKey.Succeeded.Should().BeTrue();
+        apiKey.NyxIdCredentialSelection!.CanManageUserServices.Should().BeFalse();
+        serviceAccount.Succeeded.Should().BeTrue();
+        serviceAccount.NyxIdCredentialSelection!.CanManageUserServices.Should().BeFalse();
+        unauthenticatedHumanToken.Succeeded.Should().BeTrue();
+        unauthenticatedHumanToken.NyxIdCredentialSelection!.CanManageUserServices.Should().BeFalse();
         unsupportedScheme.Succeeded.Should().BeFalse();
         unsupportedScheme.Error.Should().Be(WorkflowChatRunStartError.InvalidCallerCredential);
         unsupportedScheme.Credential.Should().BeNull();
@@ -1681,6 +1742,7 @@ public sealed class ChatEndpointsInternalTests
         delegationOnly.Credential.Kind.Should().Be(NyxIdCallerCredentialKind.ProxyDelegation);
         delegationOnly.NyxIdCredentialSelection!.Kind.Should().Be(
             NyxIdCallerCredentialKind.ProxyDelegation);
+        delegationOnly.NyxIdCredentialSelection.CanManageUserServices.Should().BeFalse();
         malformedAuthorizationWithDelegation.Succeeded.Should().BeFalse();
         malformedAuthorizationWithDelegation.Error.Should().Be(
             WorkflowChatRunStartError.InvalidCallerCredential);
@@ -1692,6 +1754,69 @@ public sealed class ChatEndpointsInternalTests
         malformedDelegationOnly.Succeeded.Should().BeFalse();
         malformedDelegationOnly.Error.Should().Be(
             WorkflowChatRunStartError.InvalidCallerCredential);
+    }
+
+    [Theory]
+    [InlineData("token_type", "refresh")]
+    [InlineData("delegated", "true")]
+    [InlineData("act", "{\"sub\":\"aevatar\"}")]
+    [InlineData("relay", "true")]
+    [InlineData("assistant_forward", "true")]
+    [InlineData("aevatar.scope_service", "true")]
+    public void WorkflowCallerCredentialExtractor_NonHumanCredentialClaims_ShouldRemainReadOnly(
+        string claimType,
+        string claimValue)
+    {
+        var http = CreateHttpContext();
+        var claims = claimType == "token_type"
+            ? new[] { new Claim(claimType, claimValue) }
+            : new[] { new Claim("token_type", "access"), new Claim(claimType, claimValue) };
+        ApplyValidatedBearerAuthentication(
+            http,
+            "non-human-token",
+            "nyx-user-alpha",
+            "Bearer",
+            claims);
+
+        var result = WorkflowCallerCredentialExtractor.Extract(http);
+
+        result.Succeeded.Should().BeTrue();
+        result.NyxIdCredentialSelection!.CanManageUserServices.Should().BeFalse();
+    }
+
+    [Fact]
+    public void WorkflowCallerCredentialExtractor_OAuthHumanAccessToken_ShouldRemainWritable()
+    {
+        var http = CreateHttpContext();
+        ApplyValidatedBearerAuthentication(
+            http,
+            "human-oauth-token",
+            "nyx-user-alpha",
+            "Bearer",
+            new Claim("token_type", "access"),
+            new Claim("client_id", "console-client"));
+
+        var result = WorkflowCallerCredentialExtractor.Extract(http);
+
+        result.Succeeded.Should().BeTrue();
+        result.NyxIdCredentialSelection!.CanManageUserServices.Should().BeTrue();
+    }
+
+    [Fact]
+    public void WorkflowCallerCredentialExtractor_NonBearerAuthenticationTicket_ShouldRemainReadOnly()
+    {
+        var http = CreateHttpContext();
+        ApplyValidatedBearerAuthentication(
+            http,
+            "identity-assertion-token",
+            "nyx-user-alpha",
+            "NyxIdIdentityAssertion",
+            new Claim("token_type", "access"));
+
+        var result = WorkflowCallerCredentialExtractor.Extract(http);
+
+        result.Succeeded.Should().BeTrue();
+        result.NyxIdCredentialSelection!.CanManageUserServices.Should().BeFalse();
     }
 
     [Fact]
@@ -2861,6 +2986,55 @@ public sealed class ChatEndpointsInternalTests
 
     private static ClaimsPrincipal AuthenticatedScopePrincipal(string scopeId) =>
         new(new ClaimsIdentity([new Claim("scope_id", scopeId)], "test"));
+
+    private static ClaimsPrincipal AuthenticatedSubjectPrincipal(string subject) =>
+        new(new ClaimsIdentity([new Claim("sub", subject)], "test"));
+
+    private static void ApplyValidatedAccessTokenAuthentication(
+        DefaultHttpContext http,
+        string bearerToken,
+        string subject,
+        params Claim[] additionalClaims)
+    {
+        var claims = new List<Claim> { new("token_type", "access") };
+        claims.AddRange(additionalClaims);
+        ApplyValidatedBearerAuthentication(
+            http,
+            bearerToken,
+            subject,
+            JwtBearerDefaults.AuthenticationScheme,
+            claims.ToArray());
+    }
+
+    private static void ApplyValidatedBearerAuthentication(
+        DefaultHttpContext http,
+        string bearerToken,
+        string subject,
+        string authenticationScheme,
+        params Claim[] claims)
+    {
+        http.Request.Headers.Authorization = $"Bearer {bearerToken}";
+        var allClaims = new List<Claim> { new("sub", subject) };
+        allClaims.AddRange(claims.Where(claim => !string.Equals(
+            claim.Type,
+            "sub",
+            StringComparison.Ordinal)));
+        var principal = new ClaimsPrincipal(new ClaimsIdentity(
+            allClaims,
+            authenticationScheme));
+        http.User = principal;
+        http.Features.Set<IAuthenticateResultFeature>(new TestAuthenticateResultFeature
+        {
+            AuthenticateResult = AuthenticateResult.Success(new AuthenticationTicket(
+                principal,
+                authenticationScheme)),
+        });
+    }
+
+    private sealed class TestAuthenticateResultFeature : IAuthenticateResultFeature
+    {
+        public AuthenticateResult? AuthenticateResult { get; set; }
+    }
 
     private sealed class StubHostEnvironment : IHostEnvironment
     {

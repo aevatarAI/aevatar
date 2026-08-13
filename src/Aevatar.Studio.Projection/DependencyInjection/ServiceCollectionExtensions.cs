@@ -54,7 +54,8 @@ public static class ServiceCollectionExtensions
             typeof(Aevatar.GAgents.StudioTeam.StudioTeamGAgent).Assembly,
             typeof(ContentArtifactGAgent).Assembly,
             typeof(Aevatar.GAgents.WorkOrder.WorkOrderGAgent).Assembly,
-            typeof(Aevatar.Studio.Workspace.StudioWorkspaceGAgent).Assembly));
+            typeof(Aevatar.Studio.Workspace.StudioWorkspaceGAgent).Assembly,
+            typeof(ScopeWorkflowCatalogueRowGAgent).Assembly));
         services.AddStudioProjectionActorCommandDispatch();
 
         // Projection read-model runtime (write dispatcher + sink bindings)
@@ -146,6 +147,10 @@ public static class ServiceCollectionExtensions
         services.AddCurrentStateProjectionMaterializer<
             StudioMaterializationContext,
             StudioWorkspaceCurrentStateProjector>();
+
+        services.AddCurrentStateProjectionMaterializer<
+            StudioMaterializationContext,
+            ScopeWorkflowCatalogueRowCurrentStateProjector>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, StudioMemberCreatedAuditTranslator>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, StudioMemberImplementationUpdatedAuditTranslator>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, StudioMemberReassignedAuditTranslator>());

@@ -56,4 +56,28 @@ public sealed class NyxIdChatConversationCurrentStateRegistrationTests
                 NyxIdChatConversationCurrentStateDocument,
                 string>>();
     }
+
+    [Fact]
+    public void Metadata_ShouldExposeDeletionTombstoneMappings()
+    {
+        var metadata = new NyxIdChatConversationCurrentStateDocumentMetadataProvider().Metadata;
+        var properties = metadata.Mappings["properties"].Should()
+            .BeAssignableTo<IReadOnlyDictionary<string, object?>>()
+            .Subject;
+
+        FieldType(properties, "deleted").Should().Be("boolean");
+        FieldType(properties, "deleted_at").Should().Be("date");
+    }
+
+    private static string? FieldType(
+        IReadOnlyDictionary<string, object?> properties,
+        string fieldName)
+    {
+        properties.Should().ContainKey(fieldName);
+        var fieldMapping = properties[fieldName].Should()
+            .BeAssignableTo<IReadOnlyDictionary<string, object?>>()
+            .Subject;
+        fieldMapping.Should().ContainKey("type");
+        return fieldMapping["type"] as string;
+    }
 }

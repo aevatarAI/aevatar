@@ -308,6 +308,8 @@ public sealed class ScopeWorkflowEndpointsTests
         port.Request.ExposureDesired.Should().BeTrue();
         port.Request.CapabilityAdmission.Should().NotBeNull();
         port.Request.CapabilityAdmission!.CallerId.Should().Be("caller-alpha");
+        port.Request.CapabilityAdmission.ExecutionMode.Should().Be(
+            ExternalCapabilityExecutionMode.Interactive);
         port.Request.CapabilityAdmission.NyxIdCallerCredential?.SourceReadableUserBearerToken
             .Should().Be("transient-caller-token");
         var confirmation = port.Request.CapabilityAdmission.ExplicitRequestConfirmations
@@ -318,6 +320,58 @@ public sealed class ScopeWorkflowEndpointsTests
         body.Should().Contain("\"revisionId\":\"rev-generated\"");
         body.Should().Contain("\"acceptanceStage\":\"accepted\"");
         body.Should().Contain("\"propagationStage\":\"readmodel_propagating\"");
+    }
+
+    [Fact]
+    public async Task HandleSaveAndBindWorkflowAsync_ShouldPropagateExplicitDurableExecutionMode()
+    {
+        var http = CreateHttpContext();
+        http.Request.Headers.Authorization = "Bearer transient-caller-token";
+        var port = new RecordingScopeWorkflowSaveAndBindPort();
+
+        var result = await ScopeWorkflowEndpoints.HandleSaveAndBindWorkflowAsync(
+            http,
+            "user-1",
+            new ScopeWorkflowEndpoints.SaveAndBindScopeWorkflowHttpRequest(
+                "wf-durable",
+                "name: approval\nsteps: []\n",
+                WorkflowName: "approval",
+                ExecutionMode: "durable"),
+            port,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        port.Request.Should().NotBeNull();
+        port.Request!.CapabilityAdmission.Should().NotBeNull();
+        port.Request.CapabilityAdmission!.ExecutionMode.Should().Be(
+            ExternalCapabilityExecutionMode.Durable);
+    }
+
+    [Fact]
+    public async Task HandleSaveAndBindWorkflowAsync_ShouldRejectInvalidExecutionModeBeforeDispatch()
+    {
+        var http = CreateHttpContext();
+        http.Request.Headers.Authorization = "Bearer transient-caller-token";
+        var port = new RecordingScopeWorkflowSaveAndBindPort();
+
+        var result = await ScopeWorkflowEndpoints.HandleSaveAndBindWorkflowAsync(
+            http,
+            "user-1",
+            new ScopeWorkflowEndpoints.SaveAndBindScopeWorkflowHttpRequest(
+                "wf-invalid",
+                "name: approval\nsteps: []\n",
+                ExecutionMode: "background"),
+            port,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.Should().Contain("INVALID_USER_WORKFLOW_REQUEST");
+        port.Request.Should().BeNull();
     }
 
     [Fact]
@@ -359,6 +413,57 @@ public sealed class ScopeWorkflowEndpointsTests
         confirmation.CallSiteId.Should().Be("wf-alpha/request-alpha");
         confirmation.RequestContractDigest.Should().Be("digest-alpha");
         confirmation.AttestedRisk.Should().Be(NyxIdOperationRisk.Destructive);
+    }
+
+    [Fact]
+    public async Task HandleUpsertWorkflowAsync_ShouldPropagateExplicitDurableExecutionMode()
+    {
+        var http = CreateHttpContext();
+        http.Request.Headers.Authorization = "Bearer transient-upsert-token";
+        var port = new RecordingScopeWorkflowCommandPort();
+
+        var result = await ScopeWorkflowEndpoints.HandleUpsertWorkflowAsync(
+            http,
+            "user-1",
+            "wf-durable",
+            new ScopeWorkflowEndpoints.UpsertScopeWorkflowHttpRequest(
+                "name: wf-durable\nsteps: []\n",
+                ExecutionMode: "durable"),
+            port,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        port.Request.Should().NotBeNull();
+        port.Request!.CapabilityAdmission.Should().NotBeNull();
+        port.Request.CapabilityAdmission!.ExecutionMode.Should().Be(
+            ExternalCapabilityExecutionMode.Durable);
+    }
+
+    [Fact]
+    public async Task HandleUpsertWorkflowAsync_ShouldRejectInvalidExecutionModeBeforeDispatch()
+    {
+        var http = CreateHttpContext();
+        http.Request.Headers.Authorization = "Bearer transient-upsert-token";
+        var port = new RecordingScopeWorkflowCommandPort();
+
+        var result = await ScopeWorkflowEndpoints.HandleUpsertWorkflowAsync(
+            http,
+            "user-1",
+            "wf-invalid",
+            new ScopeWorkflowEndpoints.UpsertScopeWorkflowHttpRequest(
+                "name: wf-invalid\nsteps: []\n",
+                ExecutionMode: "background"),
+            port,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.Should().Contain("INVALID_USER_WORKFLOW_REQUEST");
+        port.Request.Should().BeNull();
     }
 
     [Fact]
@@ -2446,6 +2551,11 @@ public sealed class ScopeWorkflowEndpointsTests
             PersistedWorkflowCapabilityAdmissionRequest request,
             CancellationToken cancellationToken = default) =>
             Task.FromResult(request.Plan.Clone());
+
+        public Task<WorkflowCapabilityAdmissionPlan> RefreshPersistedAsync(
+            RefreshPersistedWorkflowCapabilityAdmissionRequest request,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(request.Persisted.Plan.Clone());
     }
 
     private sealed class NoOpServiceGovernanceCommandPort : IServiceGovernanceCommandPort

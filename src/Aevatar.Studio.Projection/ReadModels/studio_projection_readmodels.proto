@@ -918,6 +918,8 @@ message NyxIdChatConversationCurrentStateDocument {
   NyxIdChatConversationStepControlResultDocument latest_step_control_result = 40;
   repeated NyxIdChatConversationStepControlResultDocument recent_step_control_results = 41;
   NyxIdChatConversationCanaryEffectFaultDocument canary_effect_fault = 42;
+  bool deleted = 43;
+  google.protobuf.Timestamp deleted_at = 44;
 }
 
 message NyxIdChatConversationCanaryEffectFaultDocument {

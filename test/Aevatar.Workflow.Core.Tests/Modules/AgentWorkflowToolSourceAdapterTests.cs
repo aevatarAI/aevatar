@@ -107,6 +107,68 @@ public sealed class AgentWorkflowToolSourceAdapterTests
     }
 
     [Fact]
+    public async Task WorkflowTool_ShouldMapActorIssuedUnattendedPermitToExactProviderAuthorization()
+    {
+        const string argumentsJson = """{"method":"POST","path":"/api/resources/42"}""";
+        var agentTool = new CapturingAgentTool(name: "nyxid_proxy");
+        var executionPort = new PassThroughExecutionPort();
+        var adapter = new AgentWorkflowToolSourceAdapter(
+            [new SingleAgentToolSource(agentTool)],
+            executionPort);
+        var tool = (await adapter.GetToolsAsync(CancellationToken.None)).Single();
+        var invocationAdmission = ExplicitRequestInvocationAdmission();
+        invocationAdmission.Capability.NyxIdUserRequest.ExecutionPolicy.AllowedExecutionModes.Add(
+            ExternalCapabilityExecutionMode.Durable);
+        invocationAdmission.NyxIdExplicitRequestGrant.AllowedExecutionModes.Add(
+            ExternalCapabilityExecutionMode.Durable);
+        RefreshExplicitAdmissionDigests(invocationAdmission);
+        var permit = new WorkflowUnattendedInvocationPermit
+        {
+            AuthorizationId = "sha256:authorization-alpha",
+            CallSiteId = invocationAdmission.CallSiteId,
+            CapabilityContractDigest = invocationAdmission.Capability.NyxIdUserRequest.ContractDigest,
+            ExplicitRequestGrantDigest = invocationAdmission.Capability.NyxIdUserRequest.ExplicitRequestGrantDigest,
+        };
+
+        await tool.ExecuteAsync(
+            new WorkflowToolExecutionRequest(
+                ArgumentsJson: argumentsJson,
+                RunId: "run-unattended-alpha",
+                StepId: "request-alpha",
+                ExecutionId: "exec-unattended-alpha",
+                CallId: "call-unattended-alpha",
+                ScopeId: "scope-explicit-alpha",
+                CallerCredential: new WorkflowCallerCredential
+                {
+                    BearerToken = "jit-token-alpha",
+                    Kind = NyxIdCallerCredentialKind.ProxyDelegation,
+                    NyxIdAuthority = new WorkflowCallerNyxIdAuthority
+                    {
+                        Platform = "nyxid",
+                        ExternalUserId = "binder-alpha",
+                        Scope = "proxy",
+                    },
+                },
+                RuntimeContext: WorkflowToolRuntimeContext.Empty,
+                InvocationAdmission: invocationAdmission,
+                UnattendedInvocationPermit: permit),
+            CancellationToken.None);
+
+        var mapped = executionPort.Requests.Should().ContainSingle().Subject.UnattendedAuthorization;
+        mapped.Should().NotBeNull();
+        mapped!.Kind.Should().Be(AgentToolUnattendedAuthorizationKind.WorkflowWebhookExact);
+        mapped.AuthorizationId.Should().Be(permit.AuthorizationId);
+        mapped.RequestId.Should().Be("run-unattended-alpha");
+        mapped.ToolName.Should().Be("nyxid_proxy");
+        mapped.ToolCallId.Should().Be("call-unattended-alpha");
+        mapped.ArgumentsSha256.Should().Be(AgentToolArgumentsDigest.ComputeSha256(argumentsJson));
+        mapped.CallSiteId.Should().Be(invocationAdmission.CallSiteId);
+        mapped.OperationSelectorDigest.Should().Be(
+            AgentToolOperationSelector.ComputeDigest(
+                WorkflowOperationAdmissionToolContextMapper.Map(invocationAdmission)!));
+    }
+
+    [Fact]
     public async Task WorkflowTool_ShouldRejectExplicitRequestAdmissionWhenGrantPolicyDoesNotMatch()
     {
         var agentTool = new CapturingAgentTool();
@@ -788,9 +850,11 @@ public sealed class AgentWorkflowToolSourceAdapterTests
         result.Failure.ErrorMessage.Should().Be("The tool outcome could not be verified.");
     }
 
-    private sealed class CapturingAgentTool(ToolApprovalMode approvalMode = ToolApprovalMode.NeverRequire) : IAgentTool
+    private sealed class CapturingAgentTool(
+        ToolApprovalMode approvalMode = ToolApprovalMode.NeverRequire,
+        string name = "capture_context") : IAgentTool
     {
-        public string Name => "capture_context";
+        public string Name => name;
 
         public string Description => "Capture tool context";
 

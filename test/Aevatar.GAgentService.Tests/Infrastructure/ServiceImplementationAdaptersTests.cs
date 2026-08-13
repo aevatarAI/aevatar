@@ -1140,6 +1140,8 @@ public sealed class ServiceImplementationAdaptersTests
 
         public PersistedWorkflowCapabilityAdmissionRequest? PersistedRequest { get; private set; }
 
+        public RefreshPersistedWorkflowCapabilityAdmissionRequest? RefreshRequest { get; private set; }
+
         public WorkflowCapabilityAdmissionPlan? Result { get; init; }
 
         public Exception? Failure { get; init; }
@@ -1168,6 +1170,16 @@ public sealed class ServiceImplementationAdaptersTests
             if (Failure is not null)
                 return Task.FromException<WorkflowCapabilityAdmissionPlan>(Failure);
             return Task.FromResult(Result?.Clone() ?? request.Plan.Clone());
+        }
+
+        public Task<WorkflowCapabilityAdmissionPlan> RefreshPersistedAsync(
+            RefreshPersistedWorkflowCapabilityAdmissionRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            RefreshRequest = request;
+            if (Failure is not null)
+                return Task.FromException<WorkflowCapabilityAdmissionPlan>(Failure);
+            return Task.FromResult(Result?.Clone() ?? request.Persisted.Plan.Clone());
         }
     }
 

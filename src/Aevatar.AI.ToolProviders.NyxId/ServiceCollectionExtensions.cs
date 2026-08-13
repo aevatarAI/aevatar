@@ -40,6 +40,12 @@ public static class ServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Transient<
             IExternalWorkflowCapabilitySource,
             NyxIdCodeExecutionWorkflowCapabilitySource>());
+        services.TryAddTransient<NyxIdUserServiceAuthorityReader>();
+        services.TryAddTransient<NyxIdUserServiceRouteConverger>();
+        services.TryAddTransient<NyxIdCodeExecutionRoutePolicyReconciler>();
+        services.TryAddEnumerable(ServiceDescriptor.Transient<
+            IExternalWorkflowCapabilityAdmissionPreparer,
+            NyxIdCodeExecutionRouteAdmissionPreparer>());
         services.Replace(ServiceDescriptor.Singleton<
             IWorkflowFileMultipartUploadPort,
             NyxIdWorkflowFileMultipartUploadPort>());
@@ -130,6 +136,7 @@ public static class ServiceCollectionExtensions
             services.AddSingleton<NyxIdApiAccessRegistrationMarker>();
         }
         services.TryAddSingleton<INyxIdApiClientFactory, HttpClientFactoryNyxIdApiClientFactory>();
+        services.TryAddTransient<INyxIdUserReadApi>(static sp => sp.GetRequiredService<NyxIdApiClient>());
         services.TryAddSingleton<INyxIdActionEvidenceReadPort, NyxIdActionEvidenceReadPort>();
         return services;
     }

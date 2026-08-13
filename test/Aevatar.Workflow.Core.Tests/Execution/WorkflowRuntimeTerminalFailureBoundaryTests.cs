@@ -1,6 +1,8 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Core.Execution;
@@ -84,6 +86,33 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
 
         message.Should().Be(
             "step_completion_handling_failed: step 'definition-step' (notify) failed during completion: boom");
+    }
+
+    [Fact]
+    public void InfrastructureFailurePolicy_ShouldRecognizeWrappedCommittedStatePublicationFailures()
+    {
+        var publicationFailure = new CommittedStatePublicationException(
+            "run-1",
+            new StateEvent
+            {
+                EventId = "event-7",
+                Version = 7,
+            },
+            CommittedStatePublicationFailureStage.AdapterAcceptance,
+            new InvalidOperationException("stream adapter unavailable"));
+
+        WorkflowRuntimeInfrastructureFailurePolicy.IsCommittedStatePublicationFailure(
+                new InvalidOperationException("runtime wrapper", publicationFailure))
+            .Should()
+            .BeTrue();
+        WorkflowRuntimeInfrastructureFailurePolicy.IsCommittedStatePublicationFailure(
+                new AggregateException(new InvalidOperationException("other"), publicationFailure))
+            .Should()
+            .BeTrue();
+        WorkflowRuntimeInfrastructureFailurePolicy.IsCommittedStatePublicationFailure(
+                new InvalidOperationException("ordinary workflow failure"))
+            .Should()
+            .BeFalse();
     }
 
     [Fact]
@@ -445,6 +474,69 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
         completion.Success.Should().BeFalse();
         completion.Error.Should().StartWith("step_dispatch_failed: step 'step-1' (notify) failed during dispatch: ");
         completion.Error.Should().NotContain("super-secret-token");
+    }
+
+    [Fact]
+    public async Task Kernel_ShouldPropagateCommittedStatePublicationFailure_WithoutTerminalizingRun()
+    {
+        var workflow = new WorkflowDefinition
+        {
+            Name = "wf",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition { Id = "step-1", Type = "notify" },
+                new StepDefinition { Id = "step-2", Type = "notify" },
+            ],
+        };
+        var host = new RecordingStateHost { RunId = "run-1" };
+        var module = new WorkflowExecutionKernel(workflow, host);
+        var publicationFailure = new CommittedStatePublicationException(
+            "run-1",
+            new StateEvent
+            {
+                EventId = "event-7",
+                Version = 7,
+            },
+            CommittedStatePublicationFailureStage.AdapterAcceptance,
+            new InvalidOperationException("stream adapter unavailable"));
+        var stepRequestCount = 0;
+        var ctx = new RecordingEventHandlerContext
+        {
+            FailPublish = evt =>
+                evt is StepRequestEvent && ++stepRequestCount == 2
+                    ? throw publicationFailure
+                    : false,
+        };
+
+        await module.HandleAsync(
+            Envelope(new StartWorkflowEvent
+            {
+                RunId = "run-1",
+                WorkflowName = "wf",
+                Input = "hello",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var error = await FluentActions.Awaiting(() => module.HandleAsync(
+                Envelope(new StepCompletedEvent
+                {
+                    RunId = "run-1",
+                    StepId = "step-1",
+                    Success = true,
+                    Output = "done",
+                }),
+                ctx,
+                CancellationToken.None))
+            .Should()
+            .ThrowAsync<CommittedStatePublicationException>();
+
+        error.Which.Should().BeSameAs(publicationFailure);
+        ctx.Published
+            .Select(static published => published.Event)
+            .Should()
+            .NotContain(published => published.Is(WorkflowCompletedEvent.Descriptor));
     }
 
     [Fact]

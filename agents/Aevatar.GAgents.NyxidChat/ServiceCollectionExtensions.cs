@@ -160,6 +160,9 @@ public static class ServiceCollectionExtensions
                     // the reply activity's TransportExtras) instead of the process-wide default, so a DM
                     // to one bot is answered by that bot's app and not a sibling under the same account.
                     sp.GetService<ILarkOutboundClientFactory>(),
+                    // Inbound turns bind the card through their single-use channel reply authority.
+                    // Proactive turns still use the scoped Lark proxy client above.
+                    sp.GetRequiredService<NyxIdApiClient>(),
                     sp.GetRequiredService<ILogger<ChannelCardConversationTurnRunner>>());
             }));
         }

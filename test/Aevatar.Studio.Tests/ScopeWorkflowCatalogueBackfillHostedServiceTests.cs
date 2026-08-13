@@ -4,6 +4,7 @@ using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Hosting.Backfill;
 using Aevatar.GAgentService.Hosting.DependencyInjection;
@@ -126,8 +127,76 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
         draftSource.Name.Should().Be("Draft From Yaml");
         draftSource.Description.Should().Be("draft desc");
 
-        rowWriter.Upserts.Select(static row => row.Id)
-            .Should().Contain(["scope-1:workflow:wf-published", "scope-1:workflow:wf-draft"]);
+        rowWriter.Commands.Select(static command => command.WorkflowId)
+            .Should().Contain(["wf-published", "wf-draft"]);
+    }
+
+    [Fact]
+    public async Task StartAsync_ShouldUsePublishedServiceId_WhenWorkflowPlanHasNoExplicitBindingIdentity()
+    {
+        var serviceCatalog = new ServiceCatalogReadModel
+        {
+            Id = "svc-key",
+            ActorId = "service-definition:scope-1:published-service-1",
+            StateVersion = 3,
+            LastEventId = "evt-service-catalog",
+            TenantId = "scope-1",
+            AppId = "workflow-app",
+            Namespace = "user",
+            ServiceId = "published-service-1",
+            DisplayName = "Published Service",
+            UpdatedAt = DateTimeOffset.Parse("2026-08-04T00:00:00Z"),
+        };
+        var deploymentCatalog = new ServiceDeploymentCatalogReadModel
+        {
+            Id = "svc-key",
+            ActorId = "service-deployment:scope-1:published-service-1",
+            StateVersion = 8,
+            LastEventId = "evt-deployment",
+            UpdatedAt = DateTimeOffset.Parse("2026-08-05T00:00:00Z"),
+            Deployments =
+            [
+                new ServiceDeploymentReadModel
+                {
+                    DeploymentId = "dep-1",
+                    RevisionId = "rev-live",
+                    PrimaryActorId = "workflow-actor-live",
+                    Status = ServiceDeploymentStatus.Active.ToString(),
+                    UpdatedAt = DateTimeOffset.Parse("2026-08-05T01:00:00Z"),
+                },
+            ],
+        };
+        var revisionCatalog = WorkflowRevisionCatalog(
+            "svc-key",
+            "rev-live",
+            serviceCatalog.ServiceId,
+            "Published Workflow",
+            includeExplicitBindingIdentity: false);
+        var sourceWriter = new RecordingCatalogueSourceDispatcher();
+        var rowWriter = new RecordingCatalogueRowDispatcher();
+        var sourceReader = new RecordingCatalogueSourceReader([], sourceWriter);
+        var service = CreateService(
+            [serviceCatalog],
+            [deploymentCatalog],
+            [revisionCatalog],
+            [],
+            [],
+            sourceWriter,
+            rowWriter,
+            sourceReader);
+
+        await service.StartAsync(CancellationToken.None);
+
+        var serviceSource = sourceWriter.Upserts.Should().ContainSingle().Subject;
+        serviceSource.Id.Should().Be("scope-1:published-service-1:service");
+        serviceSource.WorkflowId.Should().Be("published-service-1");
+        serviceSource.PublishedServiceId.Should().Be("published-service-1");
+        serviceSource.ActiveRevisionId.Should().Be("rev-live");
+
+        var command = rowWriter.Commands.Should().ContainSingle().Subject;
+        command.WorkflowId.Should().Be("published-service-1");
+        command.ServiceSource.Should().NotBeNull();
+        command.ServiceSource!.PublishedServiceId.Should().Be("published-service-1");
     }
 
     [Fact]
@@ -180,7 +249,9 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
             WatermarkStateVersion("2026-08-02T01:00:00Z") + 1,
             "evt-workspace-current",
             DateTimeOffset.Parse("2026-08-02T01:00:00Z")));
-        rowWriter.DeleteMarkers.Should().ContainSingle(marker => marker.Id == "scope-1:workflow:wf-stale");
+        rowWriter.Commands.Should().ContainSingle(command => command.WorkflowId == "wf-stale" &&
+                                                              command.DraftSource == null &&
+                                                              command.ServiceSource == null);
     }
 
     [Fact]
@@ -214,7 +285,9 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
         await service.StartAsync(CancellationToken.None);
 
         sourceWriter.DeleteMarkers.Should().ContainSingle().Which.Id.Should().Be("scope-1:wf-old:service");
-        rowWriter.DeleteMarkers.Should().ContainSingle().Which.Id.Should().Be("scope-1:workflow:wf-old");
+        rowWriter.Commands.Should().ContainSingle(command => command.WorkflowId == "wf-old" &&
+                                                              command.DraftSource == null &&
+                                                              command.ServiceSource == null);
     }
 
     [Fact]
@@ -265,8 +338,46 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
         await service.StartAsync(CancellationToken.None);
 
         sourceWriter.Upserts.Should().BeEmpty();
-        rowWriter.Upserts.Should().BeEmpty();
-        rowWriter.DeleteMarkers.Should().BeEmpty();
+        rowWriter.Commands.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task StartAsync_ShouldNotFailHostStartup_WhenRowRefreshThrows()
+    {
+        // Production regression (2026-08-13): during a rolling upgrade the
+        // first new-image pod backfilled rows whose actors only resolve on
+        // the new image; the old-image silo threw UnknownAgentKindException
+        // (which has no Orleans codec) and the unhandled StartAsync failure
+        // crash-looped the rollout. The backfill must never abort boot.
+        var staleServiceSource = ExistingServiceSource("scope-1", "wf-old", "published-service-1");
+        var sourceWriter = new RecordingCatalogueSourceDispatcher();
+        var rowWriter = new ThrowingCatalogueRowDispatcher();
+        var sourceReader = new RecordingCatalogueSourceReader([staleServiceSource], sourceWriter);
+        var service = CreateService(
+            [new ServiceCatalogReadModel
+            {
+                Id = "svc-key",
+                ActorId = "service-definition:scope-1:published-service-1",
+                StateVersion = 3,
+                LastEventId = "evt-service-catalog",
+                TenantId = "scope-1",
+                AppId = "workflow-app",
+                Namespace = "user",
+                ServiceId = "published-service-1",
+                UpdatedAt = DateTimeOffset.Parse("2026-08-04T00:00:00Z"),
+            }],
+            [],
+            [],
+            [],
+            [staleServiceSource],
+            sourceWriter,
+            rowWriter,
+            sourceReader);
+
+        var start = async () => await service.StartAsync(CancellationToken.None);
+
+        await start.Should().NotThrowAsync();
+        rowWriter.Attempts.Should().BeGreaterThan(0, "the backfill must have tried the row before skipping it");
     }
 
     [Fact]
@@ -328,10 +439,11 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
         source.SourceUpdatedAtUtc.Should().Be(DateTimeOffset.Parse("2026-08-05T01:00:00Z"));
         source.DeploymentId.Should().Be("dep-1");
 
-        var row = rowWriter.Upserts.Should().ContainSingle().Subject;
-        row.Id.Should().Be("scope-1:workflow:wf-published");
-        row.HasPublishedSource.Should().BeTrue();
-        row.ActiveRevisionId.Should().Be("rev-live");
+        var command = rowWriter.Commands.Should().ContainSingle().Subject;
+        command.ScopeId.Should().Be("scope-1");
+        command.WorkflowId.Should().Be("wf-published");
+        command.ServiceSource.Should().NotBeNull();
+        command.ServiceSource!.ActiveRevisionId.Should().Be("rev-live");
     }
 
     [Fact]
@@ -389,9 +501,10 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
         source.WorkflowId.Should().Be("published-service-1");
         source.Id.Should().Be("scope-1:published-service-1:service");
 
-        var row = rowWriter.Upserts.Should().ContainSingle().Subject;
-        row.Id.Should().Be("scope-1:workflow:published-service-1");
-        row.PublishedServiceId.Should().Be("published-service-1");
+        var command = rowWriter.Commands.Should().ContainSingle().Subject;
+        command.WorkflowId.Should().Be("published-service-1");
+        command.ServiceSource.Should().NotBeNull();
+        command.ServiceSource!.PublishedServiceId.Should().Be("published-service-1");
     }
 
     [Fact]
@@ -399,6 +512,8 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
     {
         var services = new ServiceCollection();
         services.AddLogging();
+        services.AddSingleton<IActorRuntime, StubActorRuntime>();
+        services.AddSingleton<IActorDispatchPort, StubActorDispatchPort>();
         services.AddGAgentServiceCapability(new ConfigurationBuilder().Build());
 
         using var provider = services.BuildServiceProvider();
@@ -411,7 +526,7 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
     }
 
     [Fact]
-    public async Task RowMaterializer_ShouldComposeDraftAndServiceSourcesIntoStableAggregateRow()
+    public async Task RowMaterializer_ShouldDispatchObservedDraftAndServiceSourcesToRowActor()
     {
         var draft = ExistingDraftSource("scope-1", "wf-shared");
         draft.Name = "Draft Display";
@@ -431,18 +546,16 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
             "evt-refresh",
             DateTimeOffset.Parse("2026-08-06T00:00:00Z"));
 
-        var row = rowWriter.Upserts.Should().ContainSingle().Subject;
-        row.Id.Should().Be("scope-1:workflow:wf-shared");
-        row.ActorId.Should().Be("scope-workflow-catalogue-row:scope-1:wf-shared");
-        row.StateVersion.Should().Be(WatermarkStateVersion("2026-08-06T00:00:00Z"));
-        row.Name.Should().Be("Draft Display");
-        row.Description.Should().Be("draft desc");
-        row.HasDraftSource.Should().BeTrue();
-        row.HasPublishedSource.Should().BeTrue();
-        row.SourceWatermarkUtc.Should().Be(DateTimeOffset.Parse("2026-08-05T00:00:00Z"));
-        row.UpdatedAtSource.Should().Be(ScopeWorkflowCatalogueSourceDocument.ServiceSourceKind);
-        row.PublishedServiceId.Should().Be("published-service-1");
-        row.CommittedActorId.Should().Be("workflow-actor-live");
+        var command = rowWriter.Commands.Should().ContainSingle().Subject;
+        command.ScopeId.Should().Be("scope-1");
+        command.WorkflowId.Should().Be("wf-shared");
+        command.DraftSource.Should().NotBeNull();
+        command.DraftSource!.Name.Should().Be("Draft Display");
+        command.DraftSource.Description.Should().Be("draft desc");
+        command.ServiceSource.Should().NotBeNull();
+        command.ServiceSource!.SourceUpdatedAtUtc.ToDateTimeOffset().Should().Be(DateTimeOffset.Parse("2026-08-05T00:00:00Z"));
+        command.ServiceSource.PublishedServiceId.Should().Be("published-service-1");
+        command.ServiceSource.CommittedActorId.Should().Be("workflow-actor-live");
 
         sourceWriter.DeleteMarkers.Add(new ProjectionDocumentDeleteMarker(
             draft.Id,
@@ -456,9 +569,9 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
             "evt-delete-draft",
             DateTimeOffset.Parse("2026-08-06T01:00:00Z"));
 
-        rowWriter.Upserts.Last().StateVersion.Should().Be(WatermarkStateVersion("2026-08-06T01:00:00Z"));
-        rowWriter.Upserts.Last().HasDraftSource.Should().BeFalse();
-        rowWriter.DeleteMarkers.Should().BeEmpty();
+        rowWriter.Commands.Should().HaveCount(2);
+        rowWriter.Commands[1].DraftSource.Should().BeNull();
+        rowWriter.Commands[1].ServiceSource.Should().NotBeNull();
 
         sourceWriter.DeleteMarkers.Add(new ProjectionDocumentDeleteMarker(
             serviceSource.Id,
@@ -472,36 +585,18 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
             "evt-delete-service",
             DateTimeOffset.Parse("2026-08-06T02:00:00Z"));
 
-        rowWriter.DeleteMarkers.Should().ContainSingle().Which.Should().Be(new ProjectionDocumentDeleteMarker(
-            "scope-1:workflow:wf-shared",
-            "scope-workflow-catalogue-row:scope-1:wf-shared",
-            WatermarkStateVersion("2026-08-06T02:00:00Z") + 1,
-            "evt-delete-service",
-            DateTimeOffset.Parse("2026-08-06T02:00:00Z")));
+        rowWriter.Commands.Should().HaveCount(3);
+        rowWriter.Commands[2].DraftSource.Should().BeNull();
+        rowWriter.Commands[2].ServiceSource.Should().BeNull();
+        rowWriter.Commands[2].ObservationEventId.Should().Be("evt-delete-service");
     }
 
     [Fact]
-    public async Task RowMaterializer_ShouldRetryWhenRowWriteConflicts()
+    public async Task RowMaterializer_ShouldDispatchSingleActorObservation_WhenSourceSnapshotExists()
     {
         var draft = ExistingDraftSource("scope-1", "wf-retry");
         var sourceWriter = new RecordingCatalogueSourceDispatcher();
-        var rowWriter = new RecordingCatalogueRowDispatcher
-        {
-            RejectedWritesRemaining = 1,
-        };
-        rowWriter.Upserts.Add(new ScopeWorkflowCatalogueRowDocument
-        {
-            Id = "scope-1:workflow:wf-retry",
-            ActorId = "scope-workflow-catalogue-row:scope-1:wf-retry",
-            StateVersion = 4,
-            LastEventId = "evt-existing",
-            UpdatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-01T00:00:00Z")),
-            ScopeId = "scope-1",
-            WorkflowId = "wf-retry",
-            HasDraftSource = true,
-            RowUpdatedAtUtc = DateTimeOffset.Parse("2026-08-01T00:00:00Z"),
-            SourceWatermarkUtc = DateTimeOffset.Parse("2026-08-01T00:00:00Z"),
-        });
+        var rowWriter = new RecordingCatalogueRowDispatcher();
         var materializer = new ScopeWorkflowCatalogueRowMaterializer(
             new RecordingCatalogueSourceReader([draft], sourceWriter),
             rowWriter);
@@ -512,28 +607,16 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
             "evt-refresh",
             DateTimeOffset.Parse("2026-08-06T00:00:00Z"));
 
-        rowWriter.Upserts.Last().StateVersion.Should().Be(WatermarkStateVersion("2026-08-06T00:00:00Z"));
-        rowWriter.UpsertAttempts.Should().Be(2);
+        rowWriter.Commands.Should().ContainSingle();
+        rowWriter.Commands[0].DraftSource.Should().NotBeNull();
+        rowWriter.Commands[0].DraftSource!.Name.Should().Be("wf-retry");
     }
 
     [Fact]
-    public async Task RowMaterializer_ShouldRetryWhenRowDeleteConflicts()
+    public async Task RowMaterializer_ShouldDispatchEmptyActorObservation_WhenSourcesAreMissing()
     {
         var sourceWriter = new RecordingCatalogueSourceDispatcher();
-        var rowWriter = new RecordingCatalogueRowDispatcher
-        {
-            RejectedDeletesRemaining = 1,
-        };
-        rowWriter.Upserts.Add(new ScopeWorkflowCatalogueRowDocument
-        {
-            Id = "scope-1:workflow:wf-delete-retry",
-            ActorId = "scope-workflow-catalogue-row:scope-1:wf-delete-retry",
-            StateVersion = 4,
-            LastEventId = "evt-existing",
-            UpdatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-01T00:00:00Z")),
-            ScopeId = "scope-1",
-            WorkflowId = "wf-delete-retry",
-        });
+        var rowWriter = new RecordingCatalogueRowDispatcher();
         var materializer = new ScopeWorkflowCatalogueRowMaterializer(
             new RecordingCatalogueSourceReader([], sourceWriter),
             rowWriter);
@@ -544,8 +627,10 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
             "evt-refresh",
             DateTimeOffset.Parse("2026-08-06T00:00:00Z"));
 
-        rowWriter.DeleteMarkers.Should().ContainSingle().Which.StateVersion.Should().Be(WatermarkStateVersion("2026-08-06T00:00:00Z") + 1);
-        rowWriter.DeleteAttempts.Should().Be(2);
+        rowWriter.Commands.Should().ContainSingle();
+        rowWriter.Commands[0].DraftSource.Should().BeNull();
+        rowWriter.Commands[0].ServiceSource.Should().BeNull();
+        rowWriter.Commands[0].ObservationEventId.Should().Be("evt-refresh");
     }
 
     [Fact]
@@ -566,9 +651,11 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
             "evt-refresh-older",
             DateTimeOffset.Parse("2026-08-06T00:00:00Z"));
 
-        var row = rowWriter.Upserts.Should().ContainSingle().Subject;
-        row.StateVersion.Should().Be(WatermarkStateVersion("2026-08-07T00:00:00Z"));
-        row.LastEventId.Should().Be("evt-source-newer");
+        var command = rowWriter.Commands.Should().ContainSingle().Subject;
+        command.ObservationEventId.Should().Be("evt-refresh-older");
+        command.DraftSource.Should().NotBeNull();
+        command.DraftSource!.SourceUpdatedAtUtc.ToDateTimeOffset().Should().Be(DateTimeOffset.Parse("2026-08-07T00:00:00Z"));
+        command.DraftSource.LastEventId.Should().Be("evt-source-newer");
     }
 
     private static long WatermarkStateVersion(string value) =>
@@ -581,7 +668,7 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
         IReadOnlyList<StudioWorkspaceCurrentStateDocument> workspaces,
         IReadOnlyList<ScopeWorkflowCatalogueSourceDocument> existingSources,
         RecordingCatalogueSourceDispatcher sourceWriter,
-        RecordingCatalogueRowDispatcher rowWriter,
+        IScopeWorkflowCatalogueRowCommandPort rowWriter,
         RecordingCatalogueSourceReader sourceReader) =>
         new(
             new StubProjectionDocumentReader<ServiceCatalogReadModel>(serviceCatalogs),
@@ -885,47 +972,115 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
         }
     }
 
-    private sealed class RecordingCatalogueRowDispatcher
-        : IProjectionWriteDispatcher<ScopeWorkflowCatalogueRowDocument>
+    private sealed class ThrowingCatalogueRowDispatcher
+        : IScopeWorkflowCatalogueRowCommandPort
     {
-        public List<ScopeWorkflowCatalogueRowDocument> Upserts { get; } = [];
+        public int Attempts { get; private set; }
 
-        public List<ProjectionDocumentDeleteMarker> DeleteMarkers { get; } = [];
-
-        public int RejectedWritesRemaining { get; init; }
-
-        public int RejectedDeletesRemaining { get; init; }
-
-        public int UpsertAttempts { get; private set; }
-
-        public int DeleteAttempts { get; private set; }
-
-        public Task<ProjectionWriteResult> UpsertAsync(
-            ScopeWorkflowCatalogueRowDocument readModel,
+        public Task ObserveSourcesAsync(
+            string scopeId,
+            string workflowId,
+            ScopeWorkflowCatalogueSourceSnapshot? draftSource,
+            ScopeWorkflowCatalogueSourceSnapshot? serviceSource,
+            DateTimeOffset draftWatermarkUtc,
+            DateTimeOffset serviceWatermarkUtc,
+            string observationEventId,
+            DateTimeOffset observedAt,
             CancellationToken ct = default)
         {
-            UpsertAttempts++;
-            if (RejectedWritesRemaining >= UpsertAttempts)
-                return Task.FromResult(ProjectionWriteResult.Conflict());
-
-            Upserts.Add(readModel);
-            return Task.FromResult(ProjectionWriteResult.Applied());
+            Attempts++;
+            throw new InvalidOperationException(
+                "simulated actor dispatch failure (UnknownAgentKindException without an Orleans codec)");
         }
+    }
 
-        public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default) =>
-            Task.FromResult(ProjectionWriteResult.Applied());
+    private sealed class RecordingCatalogueRowDispatcher
+        : IScopeWorkflowCatalogueRowCommandPort
+    {
+        public List<ObserveScopeWorkflowCatalogueSourcesCommand> Commands { get; } = [];
 
-        public Task<ProjectionWriteResult> DeleteAsync(
-            ProjectionDocumentDeleteMarker marker,
+        public Task ObserveSourcesAsync(
+            string scopeId,
+            string workflowId,
+            ScopeWorkflowCatalogueSourceSnapshot? draftSource,
+            ScopeWorkflowCatalogueSourceSnapshot? serviceSource,
+            DateTimeOffset draftWatermarkUtc,
+            DateTimeOffset serviceWatermarkUtc,
+            string observationEventId,
+            DateTimeOffset observedAt,
             CancellationToken ct = default)
         {
-            DeleteAttempts++;
-            if (RejectedDeletesRemaining >= DeleteAttempts)
-                return Task.FromResult(ProjectionWriteResult.Conflict());
-
-            DeleteMarkers.Add(marker);
-            return Task.FromResult(ProjectionWriteResult.Applied());
+            Commands.Add(new ObserveScopeWorkflowCatalogueSourcesCommand
+            {
+                ScopeId = scopeId,
+                WorkflowId = workflowId,
+                DraftSource = draftSource?.Clone(),
+                ServiceSource = serviceSource?.Clone(),
+                ObservationEventId = observationEventId ?? string.Empty,
+                ObservedAt = Timestamp.FromDateTimeOffset(observedAt),
+                DraftWatermarkUtc = Timestamp.FromDateTimeOffset(draftWatermarkUtc),
+                ServiceWatermarkUtc = Timestamp.FromDateTimeOffset(serviceWatermarkUtc),
+            });
+            return Task.CompletedTask;
         }
+    }
+
+    private sealed class StubActorRuntime : IActorRuntime
+    {
+        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
+            where TAgent : IAgent =>
+            Task.FromResult<IActor>(new StubActor(id ?? Guid.NewGuid().ToString("N")));
+
+        public Task<IActor> CreateAsync(System.Type agentType, string? id = null, CancellationToken ct = default) =>
+            Task.FromResult<IActor>(new StubActor(id ?? Guid.NewGuid().ToString("N")));
+
+        public Task DestroyAsync(string id, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<IActor?> GetAsync(string id) => Task.FromResult<IActor?>(new StubActor(id));
+
+        public Task<bool> ExistsAsync(string id) => Task.FromResult(true);
+
+        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task UnlinkAsync(string childId, CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private sealed class StubActor(string id) : IActor
+    {
+        public string Id { get; } = id;
+
+        public IAgent Agent { get; } = new StubAgent(id);
+
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
+
+        public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
+    }
+
+    private sealed class StubAgent(string id) : IAgent
+    {
+        public string Id { get; } = id;
+
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<string> GetDescriptionAsync() => Task.FromResult(string.Empty);
+
+        public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<System.Type>>([]);
+
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private sealed class StubActorDispatchPort : IActorDispatchPort
+    {
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default) =>
+            Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
     }
 
     private sealed class StubWorkflowYamlDocumentService : IWorkflowYamlDocumentService

@@ -76,7 +76,7 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool
             },
             "prompt": {
               "type": "string",
-              "description": "Optional user prompt the scheduled run starts from."
+              "description": "Optional JSON prompt template the scheduled run starts from. Trusted fire-time placeholder names allowed in JSON string values are @schedule.run_date, @schedule.run_year, @schedule.run_month, @schedule.days_until_month_end, @schedule.fire_at_utc, and @schedule.timezone."
             },
             "schedule_cron": {
               "type": "string",

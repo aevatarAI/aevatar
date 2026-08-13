@@ -25,6 +25,8 @@ public sealed class WorkflowActorCurrentStateListQuery
 
     public string WorkflowId { get; init; } = string.Empty;
 
+    public string SearchText { get; init; } = string.Empty;
+
     // Inclusive updated-at window, filtered at the source on the document's updated_at field.
     public DateTimeOffset? UpdatedFromUtc { get; init; }
 

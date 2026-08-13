@@ -20,12 +20,14 @@ using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
+using Aevatar.GAgents.Channel.Identity.ProjectionRecovery;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Device;
 using Aevatar.GAgents.Scheduled;
 using Aevatar.GAgents.StatusDashboard;
 using Aevatar.GAgents.StreamingProxy;
 using Aevatar.Mainnet.Host.Api.Status;
+using Aevatar.Mainnet.Host.Api.ProjectionRecovery;
 using Aevatar.Workflow.Projection.ReadModels;
 using Google.Protobuf;
 using Microsoft.Extensions.Configuration;
@@ -126,6 +128,7 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         TryAddElasticsearchStore<ProjectionScopeStatusDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<ExternalIdentityBindingDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<AevatarOAuthClientDocument>(services, configuration, static document => document.Id);
+        AddAevatarOAuthClientVersionRegressionRepair(services);
         TryAddElasticsearchStore<ManagedCodexCredentialDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<ChatRoutePolicyCurrentStateDocument>(services, configuration, static document => document.ActorId);
         TryAddElasticsearchStore<DeviceRegistrationDocument>(services, configuration, static document => document.Id);
@@ -135,6 +138,31 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         TryAddElasticsearchStore<WorkflowExternalApprovalContinuationDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<StreamingProxyChatSessionTerminalSnapshot>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<StreamingProxyRoomParticipantsSnapshot>(services, configuration, static document => document.Id);
+    }
+
+    private static void AddAevatarOAuthClientVersionRegressionRepair(IServiceCollection services)
+    {
+        if (!services.Any(static descriptor =>
+                descriptor.ServiceType == typeof(IElasticsearchProjectionDocumentRepairStore<
+                    AevatarOAuthClientDocument,
+                    string>)))
+        {
+            services.AddElasticsearchDocumentProjectionRepairStore<
+                AevatarOAuthClientDocument,
+                string>();
+        }
+
+        services.TryAddSingleton<
+            IAevatarOAuthClientVersionRegressionStorePort,
+            ElasticsearchAevatarOAuthClientVersionRegressionStorePort>();
+        if (services.Any(static descriptor =>
+                descriptor.ServiceType == typeof(IAevatarOAuthClientProjectionRepublishPort)) &&
+            services.Any(static descriptor => descriptor.ServiceType == typeof(IActorRuntime)))
+        {
+            services.TryAddSingleton<
+                IAevatarOAuthClientVersionRegressionRepairService,
+                AevatarOAuthClientVersionRegressionRepairService>();
+        }
     }
 
     private static void AddInMemoryStores(IServiceCollection services)

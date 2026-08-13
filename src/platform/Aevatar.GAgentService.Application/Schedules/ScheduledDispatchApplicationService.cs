@@ -3,6 +3,7 @@ using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -967,14 +968,16 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         var mode = NormalizeScheduleMode(decision.ScheduleMode);
         var callerAuthority = NormalizeCallerAuthority(decision.CallerAuthority) ??
             throw new ArgumentException("Team automation caller authority is required.", nameof(decision));
+        var payload = decision.Payload?.Clone() ??
+            throw new ArgumentException("Team automation payload is required.", nameof(decision));
+        ValidateScheduledPrompt(payload, nameof(decision));
         return new TeamAutomationActivationDecision(
             NormalizeScheduleId(decision.ScheduleId),
             NormalizeOptional(decision.DisplayName),
             NormalizeTeamOwner(decision.Owner),
             NormalizeServiceInvocationIdentity(decision.ServiceIdentity),
             NormalizeRequired(decision.EndpointId, nameof(decision.EndpointId)),
-            decision.Payload?.Clone() ??
-                throw new ArgumentException("Team automation payload is required.", nameof(decision)),
+            payload,
             callerAuthority,
             NormalizeAuthorizationFact(decision.AuthorizationFact),
             mode == ScheduledDispatchScheduleMode.RecurringCron
@@ -1698,6 +1701,9 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
 
     private static void ValidateSchedule(ScheduledDispatchConfiguration configuration)
     {
+        ValidateScheduledPrompt(
+            configuration.Target.ServiceInvocation?.Payload,
+            nameof(configuration));
         if (configuration.ScheduleMode == ScheduledDispatchScheduleMode.OneShotAtUtc)
         {
             if (!configuration.OneShotFireAt.HasValue)
@@ -1710,6 +1716,13 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         var validation = ScheduledDispatchCalculator.Validate(configuration.CronExpression, configuration.Timezone);
         if (!validation.Succeeded)
             throw new ArgumentException(validation.Error, nameof(configuration));
+    }
+
+    private static void ValidateScheduledPrompt(Any? payload, string parameterName)
+    {
+        var validation = ScheduledDispatchPromptTemplate.ValidatePayload(payload);
+        if (!validation.Succeeded)
+            throw new ArgumentException(validation.Error, parameterName);
     }
 
     private static ScheduledDispatchScheduleMode NormalizeScheduleMode(ScheduledDispatchScheduleMode mode) =>

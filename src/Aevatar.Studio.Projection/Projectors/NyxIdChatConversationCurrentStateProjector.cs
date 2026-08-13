@@ -70,6 +70,8 @@ public sealed class NyxIdChatConversationCurrentStateProjector
                 CommittedStateEventEnvelope.ResolveTimestamp(envelope, _clock.UtcNow)),
             ConversationActorId = state.ConversationActorId,
             ScopeId = state.ScopeId,
+            Deleted = state.Deleted,
+            DeletedAt = state.DeletedAt?.Clone(),
             ProgressSequence = state.ProgressSequence,
             ActiveTurn = ToTurn(state.ActiveTurn),
             LatestTurn = ToTurn(state.LatestTurn),

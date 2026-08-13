@@ -49,28 +49,22 @@ public static class WorkflowServiceRevisionArtifactBuilder
         };
         authorizationEvidence.ExternalCapabilities.Add(admittedCapabilities);
 
-        var bindingIdentity = WorkflowCapabilityAdmissionPlanIntegrity
-            .RequiresExplicitRequestBindingIdentity(capabilityAdmissionPlan)
-            ? WorkflowServiceDeploymentPlanIntegrity.RequireExplicitBindingIdentity(
-                workflowSpec.WorkflowId,
-                revisionSpec.RevisionId)
-            : (WorkflowServiceBindingIdentity?)null;
+        var bindingIdentity = WorkflowServiceDeploymentPlanIntegrity.RequireExplicitBindingIdentity(
+            workflowSpec.WorkflowId,
+            revisionSpec.RevisionId);
 
         var workflowPlan = new WorkflowServiceDeploymentPlan
         {
             WorkflowName = resolvedWorkflowName,
             WorkflowYaml = workflowSpec.WorkflowYaml,
+            WorkflowId = bindingIdentity.WorkflowId,
+            RevisionId = bindingIdentity.RevisionId,
             DefinitionActorId = workflowSpec.DefinitionActorId ?? string.Empty,
             AuthorizationEvidence = authorizationEvidence,
             CapabilityAdmissionPlan = capabilityAdmissionPlan.Clone(),
             ExecutionMode = capabilityAdmissionPlan.ExecutionMode,
         };
         workflowPlan.InlineWorkflowYamls.Add(workflowSpec.InlineWorkflowYamls);
-        if (bindingIdentity is { } explicitBindingIdentity)
-        {
-            workflowPlan.WorkflowId = explicitBindingIdentity.WorkflowId;
-            workflowPlan.RevisionId = explicitBindingIdentity.RevisionId;
-        }
 
         return new PreparedServiceRevisionArtifact
         {

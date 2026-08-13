@@ -85,6 +85,10 @@ public sealed class NyxIdChatPublicEndpointsTests
         start.ToolContext.NyxIdAuthority.Platform.Should().Be("nyxid");
         start.ToolContext.NyxIdAuthority.ExternalUserId.Should().Be("user-alpha");
         start.ToolContext.NyxIdAuthority.Scope.Should().Be("proxy");
+        start.ToolContext.InvocationSurface.Should()
+            .Be(AgentToolInvocationSurfacePayload.HumanSession);
+        start.ToolContext.Chat.Surface.Should()
+            .Be(AgentChatInvocationSurfacePayload.NyxidAssistant);
         AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(
                 AgentToolExecutionContextMapper.FromPayload(start.ToolContext).Credentials)
             .Should().Be("delegated-token");

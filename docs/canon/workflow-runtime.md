@@ -212,6 +212,8 @@ The exception exposes only the stable code and safe message. YAML, selectors, cr
 运行边界：
 
 - `ScheduledDispatchGAgent` 是每个 schedule 的唯一写侧事实源，持有 cron、timezone、enabled、typed target descriptor、dispatch headers、next fire lease 与 recent fire records。
+- scheduled `ChatRequestEvent.Prompt` 可以使用 schedule-owned fire-time 模板。模板原文随 target descriptor 持久化，只在每次 fire 的 payload clone 上展开；输入必须取 actor 权威的 logical `scheduledFireAtUtc + timezone`，禁止改用 callback 到达时间、Host 当前时间、LLM 推测或客户端 header。自动补跑继续使用原计划 occurrence，`run-now` 使用本次手动触发时刻。
+- fire-time 模板仅在 JSON string value 中接受 `{{@schedule.run_date}}`（当地 `yyyy-MM-dd`）、`{{@schedule.run_year}}`、`{{@schedule.run_month}}`（不补零）、`{{@schedule.days_until_month_end}}`（不含当天）、`{{@schedule.fire_at_utc}}` 与 `{{@schedule.timezone}}`。create/update/ensure 以及 Team automation credential operation 在产生副作用前校验模板；未知 schedule placeholder、非法 JSON、property-name placeholder、超限模板均 fail closed。没有 schedule-owned placeholder 的现有 prompt 与非 Chat protobuf payload 保持原样。
 - workflow 内部的 `self_reschedule` / `schedule_workflow` step 只向 `ScheduledDispatchGAgent` 发送幂等 ensure 命令；跨 run schedule fact 不归 workflow run actor 持有。创建不同 schedule 时，step 只能复用可信 HTTP ingress 或 Scheduled Dispatch 写入 run actor 的 typed caller NyxID authority，并把该 subject + capability scope 映射为 `SenderNyxId` source；`scopeId` 只表达 Aevatar 资源边界，禁止把它构造成 NyxID `external_user_id`。没有 typed caller authority 的 legacy/untrusted run 必须 fail closed。更新当前 run 所属 schedule 时省略 auth，由 schedule actor 保留其已有 typed source，禁止用本次 run 的 bearer 覆盖 schedule auth。
 - workflow schedule ensure 同步结果只表示 `accepted` command receipt（schedule id、schedule actor id、command id、correlation id）；readmodel freshness 通过 projection/readmodel 观察，不能由 step completion 暗示强一致。
 - 外部 submit/poll job 必须建模为 split-run 模板，而不是 workflow core primitive。submit run 提交一次外部 job 并把 `job_id`、`idempotency_key`、确定性 `schedule_id`、poll cadence、deadline 与 attempt 预算交给 poll workflow；`ScheduledDispatchGAgent` 持有 schedule fact；每个 poll run 查询一次状态；终态分支用同一 `schedule_id` 幂等 ensure `enabled=false` 来停止后续 poll。
@@ -295,18 +297,24 @@ ContentArtifact metadata and provenance survive. See
 
 运行边界：
 
-- Binding 由 Host-owned `WorkflowWebhookIngress` options/config 承载，包含 `routeKey`、`sourceId`、workflow 名称、scope、delivery id 来源、prompt 映射与 HMAC 策略。
-- Host/Adapter 负责读取 raw body、校验 HMAC、解析简单 JSON path/template，并生成稳定 `webhook:{routeKey}:{sourceId}:{deliveryId}` command/correlation seed。
+- Binding 可以由 Host-owned `WorkflowWebhookIngress` options/config 承载，也可以由 scope member 通过 `PUT/GET/DELETE /api/scopes/{scopeId}/workflow-webhooks...` 管理。动态 binding 是 scope-owned Protobuf state，HMAC secret 加密落盘且只写不读；route ownership 的 create/update/delete 都以原子 compare-and-set 维护。
+- 动态 binding 必须指向同 scope 的 committed Definition actor 和精确 revision。每次 ingress 在 HMAC 验证后、replay admission 前重新读取 authoritative actor binding，并核对 scope/name/revision/payload/version/capability admission digest；任何 drift 都 fail closed，不允许静默执行新 revision 或新 capability plan。
+- Host/Adapter 有界读取 raw body、校验 HMAC，并从已签名 JSON body 取得稳定 delivery id；可选 header 必须与 body id 相同。prompt template 是 JSON-aware 映射，缺失字段、未知占位符、非法 JSON 或超限输入都 fail closed。
+- command/correlation seed 对 canonical `route/source/delivery` 长度前缀 tuple 做 SHA-256，保持稳定且无分隔符碰撞。`@run_date` 使用 binding 配置时区，默认 UTC。
 - 应用层只接收 typed `WorkflowChatRunRequest.ExternalIngress`，command envelope 写入 `WorkflowChatRequestEvent.external_ingress`；不得把 route、delivery、fingerprint、auth 等稳定语义塞进 `Metadata`。
+- 默认 webhook 只获得启动权限，不获得下游写权限。scope-authorized direct human 可以在管理 binding 时显式设置 `enableUnattendedEffects=true`；该 opt-in 只接受 exact、versioned、Durable Definition，并把当前 NyxID binding authority 与所有符合条件的 authored-request write call-site 一起密封。authority 与授权密文落盘，GET/list 只显示是否启用；永远不在 binding 中持久化 bearer token。
+- run-start 会再次把授权与 webhook route、scope、Definition actor、workflow/revision/version、capability admission digest 和 caller authority 精确比对。每个 tool call 只能从 actor-owned state 派生一次 process-local permit；它只允许 `nyxid_proxy` 的 exact、non-destructive、Aevatar-owned Durable write，不能流入 LLM tool loop、fork、subworkflow 或 dynamic replacement，也不能伪装成人工 approval grant。任何 drift 都 fail closed。
+- 这个许可只处理 Aevatar 的 tool-approval gate；NyxID/目标 provider 自己的 operation policy 仍独立生效。HMAC、`enableUnattendedEffects` 或 Aevatar permit 都不能绕过下游 `require_approval`。
 - Replay/idempotency 权威是 `IWorkflowWebhookReplayStore`，生产实现必须是 durable/distributed first-writer-wins store；`InMemoryWorkflowWebhookReplayStore` 只在显式配置时用于本地或测试。
 - Host 启用 webhook ingress 但没有 replay store 时返回 `503 WEBHOOK_REPLAY_STORE_UNAVAILABLE`，不能退化为无幂等的生产路径。
 - HTTP 成功响应只返回 `202 Accepted + commandId/correlationId/actorId/statusUrl/deliveryId`，不暗示 committed、result 或 readmodel-observed。
+- Replay admission 当前没有与 terminal run 联动的 lease/completed 状态，不能表述为 crash-safe exactly-once；未显式启用且通过上述 exact Durable 授权时，HMAC binding 也不等价于 caller credential 或运行时写工具批准。
 
 不属于 v1 的范围：
 
 - 不新增 `WorkflowWebhookTriggerGAgent`、trigger state proto、trigger projection/readmodel 或 `/api/workflow-triggers/{triggerId}/deliveries` endpoint family。
 - 不在 endpoint 或中间层维护生产 `Dictionary` / `ConcurrentDictionary` / `MemoryCache` delivery ledger。
-- 不依赖 NyxID、chrono-storage 或 Ornn 新增端点、schema 或能力。
+- 不依赖 NyxID、chrono-storage 或 Ornn 新增端点、schema 或能力；NyxID 发送方应使用已签名 envelope 内的 `event_id` 作为 delivery identity。
 
 ### Workflow Lease
 
@@ -545,6 +553,7 @@ Workflow engine 不新增：
 错误码要点：
 
 - `INVALID_WORKFLOW_YAML`（400）：`workflowYaml` 解析/校验失败。
+- `EXTERNAL_WORKFLOW_CAPABILITY_NOT_READY`（409）：定义有效，但外部能力 admission 未就绪。
 - `WORKFLOW_NAME_MISMATCH`（400）：`workflow` 与 `workflowYaml.name` 不一致。
 - `WORKFLOW_BINDING_MISMATCH`（409）：目标 actor 已绑定其它 workflow。
 - `AGENT_WORKFLOW_NOT_CONFIGURED`（409）：typed source 指定的 actor 未绑定且未提供 inline YAML。

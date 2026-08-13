@@ -52,6 +52,8 @@ internal sealed class WorkflowRunCommittedStateRedactionHook : ICommittedStatePu
 
         var state = context.Published.StateRoot.Unpack<WorkflowRunState>() ?? new WorkflowRunState();
         state.ExecutionContext = WorkflowRunExecutionContextStateAccess.RedactedClone(state.ExecutionContext);
+        if (state.Initiator != null)
+            state.Initiator.BindingId = string.Empty;
         RedactSecureInputExecutionState(state);
         RedactConnectorCallExecutionState(state);
 
@@ -115,5 +117,7 @@ internal sealed class WorkflowRunCommittedStateRedactionHook : ICommittedStatePu
             delta.CallerCredential.DurableCallerCredential = null;
         if (delta.CallerCredential?.NyxIdAuthority != null)
             delta.CallerCredential.NyxIdAuthority = null;
+        delta.UnattendedEffectAuthorization = null;
+        delta.ClearUnattendedEffectAuthorization = true;
     }
 }

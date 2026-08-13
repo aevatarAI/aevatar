@@ -144,10 +144,15 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             throw new ArgumentException("Workflow caller credential bearer token is invalid.", nameof(source));
 
         var authority = source?.NyxIdAuthority;
-        if (authority != null && !parsed.IsValid)
+        var authorityOnly = authority != null &&
+                            parsed.IsMissing &&
+                            sourceReadable.IsMissing &&
+                            source?.Kind == NyxIdCallerCredentialKind.ProxyDelegation &&
+                            source.UnattendedEffectAuthorization is not null;
+        if (authority != null && !parsed.IsValid && !authorityOnly)
         {
             throw new ArgumentException(
-                "Workflow caller NyxID authority requires a valid caller credential.",
+                "Workflow caller NyxID authority requires a valid proxy delegation credential or authority-only delegation.",
                 nameof(source));
         }
 
@@ -164,7 +169,8 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             var scope = Normalize(authority.Scope);
             if (string.IsNullOrWhiteSpace(platform) ||
                 string.IsNullOrWhiteSpace(externalUserId) ||
-                string.IsNullOrWhiteSpace(scope))
+                string.IsNullOrWhiteSpace(scope) ||
+                authorityOnly && string.IsNullOrWhiteSpace(authority.BindingId))
             {
                 throw new ArgumentException(
                     "Workflow caller NyxID authority is incomplete.",
@@ -179,6 +185,17 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
                 Scope = scope,
                 BindingId = Normalize(authority.BindingId),
             };
+        }
+        if (source?.UnattendedEffectAuthorization != null)
+        {
+            if (!authorityOnly)
+            {
+                throw new ArgumentException(
+                    "Workflow unattended effect authorization requires authority-only proxy delegation.",
+                    nameof(source));
+            }
+            credential.UnattendedEffectAuthorization =
+                source.UnattendedEffectAuthorization.Clone();
         }
 
         return credential;

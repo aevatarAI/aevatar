@@ -437,7 +437,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
                 intent.MaxToolRounds = llm.MaxToolRoundsOverride;
         }
         var callerCredential = await WorkflowCallerCredentialRuntimeContextAccess.TryGetCredentialAsync(ctx, ct);
-        intent.CallerCredential = callerCredential.Found
+        intent.CallerCredential = callerCredential.Found && !HasUnattendedWebhookAuthorization(ctx)
             ? await WorkflowCallerAccessTokenResolver.ResolveAsync(
                 callerCredential.Credential,
                 _callerAccessTokenProvider,
@@ -473,6 +473,11 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             prompt.Length);
         await ctx.PublishAsync(intent, TopologyAudience.Self, ct, dispatchOptions);
     }
+
+    private static bool HasUnattendedWebhookAuthorization(IWorkflowExecutionContext ctx) =>
+        ctx is IWorkflowExecutionStateHostAccessor accessor &&
+        string.Equals(accessor.StateHost.RunOrigin, WorkflowRunOrigins.Webhook, StringComparison.Ordinal) &&
+        accessor.StateHost.ExecutionContextSnapshot.UnattendedEffectAuthorization is not null;
 
     private static Task PublishFailedCompletionAsync(
         PendingLlmCallState pending,

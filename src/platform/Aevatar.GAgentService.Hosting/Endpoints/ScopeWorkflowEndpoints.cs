@@ -175,6 +175,7 @@ public static class ScopeWorkflowEndpoints
             {
                 CapabilityAdmission = await WorkflowCapabilityAdmissionHttpContext.CreateAsync(
                     http,
+                    ParseSaveAndBindExecutionMode(request.ExecutionMode),
                     explicitRequestConfirmations: request.ExplicitRequestConfirmations,
                     ct: ct),
             }, ct);
@@ -225,6 +226,7 @@ public static class ScopeWorkflowEndpoints
                 {
                     CapabilityAdmission = await WorkflowCapabilityAdmissionHttpContext.CreateAsync(
                         http,
+                        ParseSaveAndBindExecutionMode(request.ExecutionMode),
                         explicitRequestConfirmations: request.ExplicitRequestConfirmations,
                         ct: ct),
                 },
@@ -385,6 +387,11 @@ public static class ScopeWorkflowEndpoints
             _ => throw new InvalidOperationException(
                 "ExecutionMode must be either 'interactive' or 'durable'."),
         };
+
+    private static ExternalCapabilityExecutionMode ParseSaveAndBindExecutionMode(string? value) =>
+        string.IsNullOrWhiteSpace(value)
+            ? ExternalCapabilityExecutionMode.Interactive
+            : ParseExplicitRequestPreviewExecutionMode(value);
 
     private static ExplicitRequestPreviewHttpItem ToExplicitRequestPreviewHttpItem(
         WorkflowExplicitRequestPreviewItem item) =>
@@ -774,7 +781,7 @@ public static class ScopeWorkflowEndpoints
 
             if (!result.Succeeded && !started)
             {
-                if (result.FailureDetail?.Error == WorkflowChatRunStartError.InvalidWorkflowYaml)
+                if (result.FailureDetail?.ExternalCapabilityReadiness is not null)
                 {
                     await WriteJsonErrorResponseAsync(
                         http,
@@ -1086,6 +1093,7 @@ public static class ScopeWorkflowEndpoints
             WorkflowChatRunStartError.WorkflowBindingMismatch => (StatusCodes.Status409Conflict, "WORKFLOW_BINDING_MISMATCH", "Actor is bound to a different workflow."),
             WorkflowChatRunStartError.AgentWorkflowNotConfigured => (StatusCodes.Status409Conflict, "AGENT_WORKFLOW_NOT_CONFIGURED", "Actor has no bound workflow."),
             WorkflowChatRunStartError.InvalidWorkflowYaml => (StatusCodes.Status400BadRequest, "INVALID_WORKFLOW_YAML", "Workflow YAML is invalid."),
+            WorkflowChatRunStartError.ExternalCapabilityNotReady => (StatusCodes.Status409Conflict, "EXTERNAL_WORKFLOW_CAPABILITY_NOT_READY", "External workflow capability admission failed."),
             WorkflowChatRunStartError.WorkflowNameMismatch => (StatusCodes.Status400BadRequest, "WORKFLOW_NAME_MISMATCH", "Workflow name does not match workflow YAML."),
             WorkflowChatRunStartError.PromptRequired => (StatusCodes.Status400BadRequest, "PROMPT_REQUIRED", "Prompt is required."),
             WorkflowChatRunStartError.InvalidCallerCredential => (StatusCodes.Status400BadRequest, "INVALID_CALLER_CREDENTIAL", "Caller credential is invalid."),
@@ -1131,7 +1139,8 @@ public static class ScopeWorkflowEndpoints
         string? DisplayName = null,
         Dictionary<string, string>? InlineWorkflowYamls = null,
         string? RevisionId = null,
-        IReadOnlyList<NyxIdExplicitRequestConfirmationInput>? ExplicitRequestConfirmations = null);
+        IReadOnlyList<NyxIdExplicitRequestConfirmationInput>? ExplicitRequestConfirmations = null,
+        string? ExecutionMode = null);
 
     public sealed record SaveAndBindScopeWorkflowHttpRequest(
         string? WorkflowId,
@@ -1143,7 +1152,8 @@ public static class ScopeWorkflowEndpoints
         string? ServiceId = null,
         bool? ExposureDesired = null,
         string? RevisionId = null,
-        IReadOnlyList<NyxIdExplicitRequestConfirmationInput>? ExplicitRequestConfirmations = null);
+        IReadOnlyList<NyxIdExplicitRequestConfirmationInput>? ExplicitRequestConfirmations = null,
+        string? ExecutionMode = null);
 
     public sealed record ExplicitRequestPreviewHttpRequest(
         string WorkflowYaml,

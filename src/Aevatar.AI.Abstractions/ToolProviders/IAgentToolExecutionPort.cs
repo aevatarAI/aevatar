@@ -37,10 +37,33 @@ public sealed record AgentToolExecutionRequest(
     AgentToolExecutionContext ExecutionContext,
     AgentToolApprovalContinuationMode ApprovalContinuationMode,
     AgentToolApprovalGrant? ApprovalGrant,
-    AgentToolExecutionAttemptKind ExecutionAttemptKind = AgentToolExecutionAttemptKind.Initial)
+    AgentToolExecutionAttemptKind ExecutionAttemptKind = AgentToolExecutionAttemptKind.Initial,
+    AgentToolUnattendedExecutionAuthorization? UnattendedAuthorization = null)
 {
     public AgentToolExecutionOwner ExecutionOwner => ExecutionContext.ExecutionOwner;
 }
+
+public enum AgentToolUnattendedAuthorizationKind
+{
+    Unspecified = 0,
+    WorkflowWebhookExact = 1,
+}
+
+/// <summary>
+/// Process-local permit produced from actor-owned workflow state after an exact
+/// webhook authorization was validated. It is not a human approval grant and
+/// is never accepted from an external request payload.
+/// </summary>
+public sealed record AgentToolUnattendedExecutionAuthorization(
+    AgentToolUnattendedAuthorizationKind Kind,
+    string AuthorizationId,
+    AgentToolExecutionOwner ExecutionOwner,
+    string RequestId,
+    string ToolName,
+    string ToolCallId,
+    string ArgumentsSha256,
+    string CallSiteId,
+    string OperationSelectorDigest);
 
 public enum AgentToolExecutionAttemptKind
 {

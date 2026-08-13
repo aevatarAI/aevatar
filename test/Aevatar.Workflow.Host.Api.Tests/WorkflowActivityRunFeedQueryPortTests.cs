@@ -12,7 +12,7 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 public sealed class WorkflowActivityRunFeedQueryPortTests
 {
     [Fact]
-    public void WorkflowExecutionReadModelMapper_ShouldExposeActivityRunSummaryFields()
+    public void WorkflowExecutionReadModelMapper_ShouldExposeSafeActivityRunSummaryFields()
     {
         var mapper = new WorkflowExecutionReadModelMapper();
         var completedAt = DateTimeOffset.Parse("2026-08-07T02:10:00+00:00");
@@ -62,7 +62,10 @@ public sealed class WorkflowActivityRunFeedQueryPortTests
         snapshot.DurationMs.Should().Be(62_000);
         snapshot.InputSummary.Should().Be("safe input summary");
         snapshot.ActivityInitiator.ExternalUserId.Should().Be("m-alpha");
-        snapshot.ActivityInitiator.BindingId.Should().Be("svc-alpha");
+        // Binding ids can be exchanged for short-lived NyxID credentials and
+        // must never escape through activity/read-model projections, including
+        // when legacy documents already contain one.
+        snapshot.ActivityInitiator.BindingId.Should().BeEmpty();
         snapshot.ActivityCurrentStep.StepId.Should().Be("step-current");
         snapshot.ActivityFirstFailure.Message.Should().Be("first failure");
         snapshot.ActivityWaiting.WaitingKind.Should().Be("signal");

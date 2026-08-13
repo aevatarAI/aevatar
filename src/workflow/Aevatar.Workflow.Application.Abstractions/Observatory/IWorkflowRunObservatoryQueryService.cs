@@ -63,6 +63,8 @@ public sealed class WorkflowActivityRunFeedFilter
 
     public string? WorkflowId { get; init; }
 
+    public string? SearchText { get; init; }
+
     public DateTimeOffset? FromUtc { get; init; }
 
     public DateTimeOffset? ToUtc { get; init; }

@@ -317,6 +317,10 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
                 _callerAccessTokenProvider,
                 ct)
             : new WorkflowCallerCredential();
+        var unattendedPermit = ResolveUnattendedInvocationPermit(
+            ctx,
+            credential.Found ? credential.Credential : null,
+            admission);
         var runtimeContext = WorkflowRunExecutionContextStateAccess.GetWorkflowRuntimeContext(
             ctx,
             ctx.AgentId ?? string.Empty,
@@ -338,9 +342,65 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
                 ScheduleId: ctx.ScheduleId ?? string.Empty,
                 InvocationAdmission: admission,
                 LlmControl: GetLlmControl(ctx),
-                IssuedAtUnixMs: issuedAtUnixMs),
+                IssuedAtUnixMs: issuedAtUnixMs,
+                UnattendedInvocationPermit: unattendedPermit),
             ct);
     }
+
+    private static WorkflowUnattendedInvocationPermit? ResolveUnattendedInvocationPermit(
+        IWorkflowExecutionContext ctx,
+        WorkflowCallerCredential? credential,
+        WorkflowCapabilityInvocationAdmission? admission)
+    {
+        if (ctx is not IWorkflowExecutionStateHostAccessor accessor ||
+            accessor.StateHost.ExecutionContextSnapshot.UnattendedEffectAuthorization is not { } authorization)
+            return null;
+
+        if (!string.Equals(accessor.StateHost.RunOrigin, WorkflowRunOrigins.Webhook, StringComparison.Ordinal) ||
+            credential?.NyxIdAuthority is not { } authority ||
+            string.IsNullOrWhiteSpace(authority.BindingId))
+        {
+            throw new InvalidOperationException(
+                "The unattended webhook authorization is not bound to a valid actor-owned caller authority.");
+        }
+
+        try
+        {
+            WorkflowUnattendedEffectAuthorizationIntegrity.ValidateForActorState(
+                authorization,
+                authority,
+                accessor.StateHost.DefinitionActorId,
+                accessor.StateHost.ScopeId,
+                accessor.StateHost.WorkflowId,
+                accessor.StateHost.RevisionId,
+                accessor.StateHost.DefinitionVersion,
+                accessor.StateHost.CapabilityAdmissionPlanSnapshot);
+        }
+        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
+        {
+            throw new InvalidOperationException(
+                "The unattended webhook authorization no longer matches the actor-owned workflow definition.",
+                exception);
+        }
+
+        var permit = WorkflowUnattendedEffectAuthorizationIntegrity.CreateInvocationPermit(
+            authorization,
+            authority,
+            admission);
+        if (permit is null && RequiresUnattendedEffectPermit(admission))
+        {
+            throw new InvalidOperationException(
+                "The workflow effect is not covered by the exact unattended webhook authorization.");
+        }
+
+        return permit;
+    }
+
+    private static bool RequiresUnattendedEffectPermit(WorkflowCapabilityInvocationAdmission? admission) =>
+        admission?.Capability?.CapabilityCase ==
+            ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest &&
+        admission.Capability.NyxIdUserRequest.ExecutionPolicy is { } policy &&
+        policy.Risk == NyxIdOperationRisk.Write;
 
     private static WorkflowLlmControlContext? GetLlmControl(IWorkflowExecutionContext ctx)
     {

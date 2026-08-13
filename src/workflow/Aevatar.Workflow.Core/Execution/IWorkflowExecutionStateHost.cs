@@ -34,6 +34,16 @@ internal interface IWorkflowExecutionStateHost
 
     string ScheduleId => string.Empty;
 
+    string DefinitionActorId => string.Empty;
+
+    string WorkflowId => string.Empty;
+
+    string RevisionId => string.Empty;
+
+    string RunOrigin => string.Empty;
+
+    long DefinitionVersion => 0;
+
     WorkflowExecutionRuntimeContext RuntimeContext { get; }
 
     WorkflowRunExecutionContextState ExecutionContextSnapshot { get; }

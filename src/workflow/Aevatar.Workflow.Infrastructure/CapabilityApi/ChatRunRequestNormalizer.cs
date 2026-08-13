@@ -35,7 +35,8 @@ internal static class ChatRunRequestNormalizer
         IReadOnlyDictionary<string, string>? defaultMetadata = null,
         WorkflowCallerCredential? trustedCallerCredential = null,
         string? trustedScopeId = null,
-        bool allowEmptyInputForResolvedWorkflowService = false)
+        bool allowEmptyInputForResolvedWorkflowService = false,
+        WorkflowProtocol.NyxIdCallerCredentialSelection? trustedNyxIdCredentialSelection = null)
     {
         // Refactor (iter112/cluster-3): Old pattern: host passed normalized legacy mirror fields into Application commands. New principle: host normalizes wire aliases once into typed WorkflowChatSource.
         // Refactor (iter349/cluster-349):
@@ -50,7 +51,8 @@ internal static class ChatRunRequestNormalizer
             trustedCallerCredential,
             trustedScopeId,
             allowEmptyInputForResolvedWorkflowService,
-            chatConversation: null);
+            chatConversation: null,
+            trustedNyxIdCredentialSelection);
     }
 
     public static ChatRunRequestNormalizationResult Normalize(
@@ -58,7 +60,8 @@ internal static class ChatRunRequestNormalizer
         IReadOnlyDictionary<string, string>? defaultMetadata = null,
         WorkflowCallerCredential? trustedCallerCredential = null,
         string? trustedScopeId = null,
-        bool allowEmptyInputForResolvedWorkflowService = false)
+        bool allowEmptyInputForResolvedWorkflowService = false,
+        WorkflowProtocol.NyxIdCallerCredentialSelection? trustedNyxIdCredentialSelection = null)
     {
         ArgumentNullException.ThrowIfNull(input);
 
@@ -75,7 +78,8 @@ internal static class ChatRunRequestNormalizer
                 trustedCallerCredential,
                 trustedScopeId,
                 allowEmptyInputForResolvedWorkflowService,
-                conversationResult.Conversation),
+                conversationResult.Conversation,
+                trustedNyxIdCredentialSelection),
             input.CommandId);
     }
 
@@ -163,7 +167,8 @@ internal static class ChatRunRequestNormalizer
         WorkflowCallerCredential? trustedCallerCredential = null,
         CancellationToken cancellationToken = default,
         string? trustedScopeId = null,
-        bool allowEmptyInputForResolvedWorkflowService = false)
+        bool allowEmptyInputForResolvedWorkflowService = false,
+        WorkflowProtocol.NyxIdCallerCredentialSelection? trustedNyxIdCredentialSelection = null)
     {
         ArgumentNullException.ThrowIfNull(input);
         var normalizedInputParts = fileIngressPort == null
@@ -176,7 +181,8 @@ internal static class ChatRunRequestNormalizer
             trustedCallerCredential,
             trustedScopeId,
             allowEmptyInputForResolvedWorkflowService,
-            chatConversation: null);
+            chatConversation: null,
+            trustedNyxIdCredentialSelection);
     }
 
     public static async ValueTask<ChatRunRequestNormalizationResult> NormalizeAsync(
@@ -186,7 +192,8 @@ internal static class ChatRunRequestNormalizer
         WorkflowCallerCredential? trustedCallerCredential = null,
         CancellationToken cancellationToken = default,
         string? trustedScopeId = null,
-        bool allowEmptyInputForResolvedWorkflowService = false)
+        bool allowEmptyInputForResolvedWorkflowService = false,
+        WorkflowProtocol.NyxIdCallerCredentialSelection? trustedNyxIdCredentialSelection = null)
     {
         ArgumentNullException.ThrowIfNull(input);
 
@@ -205,7 +212,8 @@ internal static class ChatRunRequestNormalizer
                 trustedCallerCredential,
                 trustedScopeId,
                 allowEmptyInputForResolvedWorkflowService,
-                conversationResult.Conversation),
+                conversationResult.Conversation,
+                trustedNyxIdCredentialSelection),
             input.CommandId);
     }
 
@@ -216,7 +224,8 @@ internal static class ChatRunRequestNormalizer
         WorkflowCallerCredential? trustedCallerCredential,
         string? trustedScopeId,
         bool allowEmptyInputForResolvedWorkflowService,
-        WorkflowChatConversationIntent? chatConversation)
+        WorkflowChatConversationIntent? chatConversation,
+        WorkflowProtocol.NyxIdCallerCredentialSelection? trustedNyxIdCredentialSelection)
     {
         if (normalizedInputPartsResult.Error != WorkflowChatRunStartError.None)
             return ChatRunRequestNormalizationResult.Failed(normalizedInputPartsResult.Error);
@@ -256,7 +265,8 @@ internal static class ChatRunRequestNormalizer
                 LlmControl: NormalizeLlmControl(input.LlmControl),
                 CallerCredential: callerCredentialResult.Credential,
                 Headers: normalizedContext.Headers,
-                ChatConversation: chatConversation));
+                ChatConversation: chatConversation,
+                CallerNyxIdCredentialSelection: trustedNyxIdCredentialSelection));
     }
 
     private readonly record struct ConversationNormalizationResult(

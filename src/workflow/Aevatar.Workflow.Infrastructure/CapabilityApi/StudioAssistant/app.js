@@ -3458,7 +3458,10 @@ function handleFrame(raw) {
       renderActorProjection(entry);
       renderActionCards(entry);
       if (entry === state.activeConversation) renderActiveConversationState();
-      if (["input_requested", "input_changed", "approval_requested", "approval_changed"].includes(event.type)) {
+      const needsStateRefresh =
+        ["input_requested", "input_changed", "approval_requested", "approval_changed"].includes(event.type) ||
+        (event.type === "task_snapshot" && actorPendingPlanGate(entry.actorProjection));
+      if (needsStateRefresh) {
         if (entry.actorStateRefreshTimer) window.clearTimeout(entry.actorStateRefreshTimer);
         entry.actorStateRefreshTimer = window.setTimeout(() => {
           entry.actorStateRefreshTimer = null;

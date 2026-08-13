@@ -10,6 +10,7 @@ using Aevatar.Workflow.Application.Abstractions.Runs;
 using WorkflowCallerCredential = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential;
 using Aevatar.Workflow.Application.Runs;
 using FluentAssertions;
+using System.Text.Json;
 
 namespace Aevatar.Workflow.Application.Tests;
 
@@ -149,6 +150,65 @@ public sealed class WorkflowChatRunInteractionServiceTests
         acceptedReceipts.Should().ContainSingle();
         acceptedReceipts[0].Run.CommandId.Should().Be(command.CommandIdSeed);
         acceptedReceipts[0].Run.CorrelationId.Should().Be(command.CorrelationIdSeed);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldClearTransientNyxIdManagementAuthorityAfterActorResolution()
+    {
+        var actorResolver = new RecordingActorResolver
+        {
+            Results =
+            {
+                new WorkflowActorResolutionResult(
+                    new WorkflowRunCreationReceipt("run-1", "definition-1", ["run-1"]),
+                    "direct",
+                    WorkflowChatRunStartError.None),
+            },
+        };
+        var inner = new RecordingInteractionService();
+        var service = CreateService(
+            actorResolver,
+            new RecordingProjectionPort(),
+            new RecordingRunProvisioningPort(),
+            inner);
+        var selection = NyxIdCallerCredentialSelection.DirectUserBearer("human-access-token");
+
+        var result = await service.ExecuteAsync(
+            new WorkflowChatRunRequest(
+                "hello",
+                WorkflowChatSource.CatalogWorkflow("direct"),
+                ExternalCapabilityExecutionMode.Interactive,
+                CallerCredential: new WorkflowCallerCredential(
+                    "human-access-token",
+                    Kind: NyxIdCallerCredentialKind.SourceReadableUserBearer),
+                CallerNyxIdCredentialSelection: selection),
+            static (_, _) => ValueTask.CompletedTask);
+
+        result.Succeeded.Should().BeTrue();
+        actorResolver.Requests.Should().ContainSingle().Which
+            .CallerNyxIdCredentialSelection.Should().BeSameAs(selection);
+        inner.Requests.Should().ContainSingle().Which
+            .CallerNyxIdCredentialSelection.Should().BeNull();
+    }
+
+    [Fact]
+    public void WorkflowChatRunRequest_ShouldNotSerializeTransientNyxIdManagementAuthority()
+    {
+        var request = new WorkflowChatRunRequest(
+            "hello",
+            WorkflowChatSource.CatalogWorkflow("direct"),
+            ExternalCapabilityExecutionMode.Interactive,
+            CallerCredential: new WorkflowCallerCredential(
+                "human-access-token",
+                Kind: NyxIdCallerCredentialKind.SourceReadableUserBearer),
+            CallerNyxIdCredentialSelection:
+                NyxIdCallerCredentialSelection.DirectUserBearer("human-access-token"));
+
+        var json = JsonSerializer.Serialize(request);
+
+        json.Should().NotContain("callerNyxIdCredentialSelection");
+        json.Should().NotContain("CallerNyxIdCredentialSelection");
+        json.Should().NotContain("CanManageUserServices");
     }
 
     [Fact]

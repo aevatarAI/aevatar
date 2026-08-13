@@ -116,7 +116,8 @@ public sealed record WorkflowToolExecutionRequest
         string ScheduleId = "",
         WorkflowCapabilityInvocationAdmission? InvocationAdmission = null,
         WorkflowLlmControlContext? LlmControl = null,
-        long IssuedAtUnixMs = 0)
+        long IssuedAtUnixMs = 0,
+        WorkflowUnattendedInvocationPermit? UnattendedInvocationPermit = null)
     {
         this.ArgumentsJson = ArgumentsJson;
         this.RunId = RunId;
@@ -133,6 +134,7 @@ public sealed record WorkflowToolExecutionRequest
         this.InvocationAdmission = InvocationAdmission?.Clone();
         this.LlmControl = LlmControl?.Clone();
         this.IssuedAtUnixMs = IssuedAtUnixMs;
+        this.UnattendedInvocationPermit = UnattendedInvocationPermit?.Clone();
     }
 
     public string ArgumentsJson { get; init; }
@@ -168,6 +170,8 @@ public sealed record WorkflowToolExecutionRequest
     public WorkflowCapabilityInvocationAdmission? InvocationAdmission { get; init; }
 
     public WorkflowLlmControlContext? LlmControl { get; init; }
+
+    public WorkflowUnattendedInvocationPermit? UnattendedInvocationPermit { get; init; }
 
     private static IReadOnlyList<WorkflowFileRef> CopyInputFileRefs(
         IReadOnlyList<WorkflowFileRef>? inputFileRefs) =>

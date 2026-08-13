@@ -925,6 +925,34 @@ public sealed class AgentRunLarkCardDeliveryTests
     }
 
     [Fact]
+    public async Task RelayReplyAmbiguousFailure_CompletesAsFailedWithoutReusingReplyAuthority()
+    {
+        var runner = new RecordingCardRunner
+        {
+            CreateResult = ConversationCardCreateResult.ReplyAuthoritySpentDeliveryUnknown(
+                "card-relay-ambiguous",
+                string.Empty,
+                "card_relay_reply_threw",
+                "reply outcome unknown"),
+        };
+        var publisher = new RecordingEventPublisher();
+        var agent = CreateAgent(runner, publisher: publisher);
+
+        await agent.HandleEventAsync(Envelope(agent.Id, CreateCardChunk("possibly delivered")));
+        await DispatchPendingSelfEventsAsync(agent, publisher);
+
+        agent.State.LarkCardDelivery.Phase.Should().Be(AgentRunLarkCardDeliveryPhase.Terminated);
+        agent.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
+        publisher.Sent.Select(e => e.Event).OfType<LlmReplyStreamChunkEvent>().Should().BeEmpty();
+        var completed = publisher.Sent.Select(e => e.Event).OfType<LarkCardDeliveryCompletedEvent>().Single();
+        completed.DeliveryFailure.Should().NotBeNull();
+        completed.DeliveryFailure.ErrorCode.Should().Be("card_relay_reply_threw");
+        agent.State.RecentDeliveries.Should().ContainSingle().Subject.Status
+            .Should().Be(DeliveryStatus.FailedPostSend);
+        agent.State.LastSuccessfulDelivery.Should().BeNull();
+    }
+
+    [Fact]
     public async Task RateLimitedStreamFailure_RecoversWithoutDeliveryOrFallback()
     {
         var runner = new RecordingCardRunner

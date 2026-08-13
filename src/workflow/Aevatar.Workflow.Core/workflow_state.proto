@@ -231,6 +231,7 @@ message WorkflowRunExecutionContextState
   reserved "connector";
   WorkflowCallerCredentialState caller_credential = 3;
   WorkflowToolRuntimeContextState workflow_runtime = 4;
+  WorkflowUnattendedEffectAuthorization unattended_effect_authorization = 5;
 }
 
 message WorkflowLlmExecutionContextState
@@ -252,6 +253,8 @@ message WorkflowCallerCredentialState
   NyxIdCallerCredentialKind kind = 5;
   string source_readable_user_bearer_token = 6;
   aevatar.credentials.RuntimeSecretReference source_readable_user_bearer_runtime_secret_reference = 7;
+  reserved 8;
+  reserved "unattended_effect_authorization";
 }
 
 message WorkflowToolRuntimeContextState

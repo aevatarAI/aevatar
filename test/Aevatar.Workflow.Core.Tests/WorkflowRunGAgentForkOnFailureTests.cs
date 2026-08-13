@@ -451,33 +451,27 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
     }
 
     [Fact]
-    public async Task ChatRequest_WhenStartTerminalizationFails_ShouldPublishParentFailure()
+    public async Task ChatRequest_WhenStartTerminalizationPublicationFails_ShouldPropagateWithoutParentFailure()
     {
         var runId = "run-1917-" + Guid.NewGuid().ToString("N");
         var harness = await CreateRunAsync(runId, WorkflowYaml(onFailure: false));
         harness.Publisher.FailPublish = evt => evt is StartWorkflowEvent;
         harness.CommittedPublisher.FailBeforePublish = evt => evt is WorkflowCompletedEvent;
 
-        await harness.Agent.HandleEventAsync(EnvelopeFrom("api", new WorkflowChatRequestEvent
-        {
-            Prompt = "hello",
-            ScopeId = "scope-1",
-            SessionId = "session-1",
-        }));
-
-        var fallback = harness.Publisher.Published
-            .Where(x => x.Event is WorkflowLlmInvocationCompletedEvent)
-            .Select(x => (WorkflowLlmInvocationCompletedEvent)x.Event)
+        await FluentActions.Awaiting(() => harness.Agent.HandleEventAsync(
+                EnvelopeFrom("api", new WorkflowChatRequestEvent
+                {
+                    Prompt = "hello",
+                    ScopeId = "scope-1",
+                    SessionId = "session-1",
+                })))
             .Should()
-            .ContainSingle()
-            .Subject;
-        fallback.RunId.Should().Be(runId);
-        fallback.SessionId.Should().Be("session-1");
-        fallback.Success.Should().BeFalse();
-        fallback.Content.Should().Be("Workflow execution failed: start_dispatch_failed");
-        fallback.Error.Should().StartWith("start_dispatch_failed: failed during start_dispatch: ");
-        fallback.Error.Should().NotContain("super-secret-token");
-        fallback.Error.Should().NotContain("Bearer");
+            .ThrowAsync<CommittedStatePublicationException>();
+
+        harness.Publisher.Published
+            .Select(static published => published.Event)
+            .Should()
+            .NotContain(published => published is WorkflowLlmInvocationCompletedEvent);
     }
 
     [Fact]

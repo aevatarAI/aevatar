@@ -39,16 +39,22 @@ internal sealed class StudioWorkflowProvisioningAdmissionService
         if (existingPlan is null)
             return AdmitWithCatalogPreparationAsync(liveRequest, provisioningRequest, ct);
 
-        return _admissionService.RevalidatePersistedAsync(
-            new PersistedWorkflowCapabilityAdmissionRequest(
-                existingPlan,
-                liveRequest.WorkflowYaml,
-                liveRequest.InlineWorkflowYamls,
-                liveRequest.SourceKind,
-                liveRequest.ExecutionMode,
-                liveRequest.WorkflowId,
-                liveRequest.RevisionId),
-            ct);
+        var persisted = new PersistedWorkflowCapabilityAdmissionRequest(
+            existingPlan,
+            liveRequest.WorkflowYaml,
+            liveRequest.InlineWorkflowYamls,
+            liveRequest.SourceKind,
+            liveRequest.ExecutionMode,
+            liveRequest.WorkflowId,
+            liveRequest.RevisionId);
+        return liveRequest.Access.NyxIdCallerCredential is not null
+            ? _admissionService.RefreshPersistedAsync(
+                new RefreshPersistedWorkflowCapabilityAdmissionRequest(
+                    persisted,
+                    liveRequest.Access,
+                    liveRequest.ExplicitRequestConfirmations),
+                ct)
+            : _admissionService.RevalidatePersistedAsync(persisted, ct);
     }
 
     private async Task<WorkflowCapabilityAdmissionPlan> AdmitWithCatalogPreparationAsync(
@@ -116,6 +122,15 @@ internal sealed class StudioWorkflowProvisioningAdmissionService
 
             if (refresh.Status == NyxIdAuthorizationCatalogRefreshStatus.Superseded)
                 throw new StudioMemberAutomationCatalogRefreshSupersededException();
+            if (refresh.Status == NyxIdAuthorizationCatalogRefreshStatus.CatalogUnstable &&
+                string.Equals(
+                    refresh.FailureCode,
+                    StudioMemberAutomationCatalogRouteUnresolvedException.NyxIdFailureCode,
+                    StringComparison.Ordinal))
+            {
+                throw new StudioMemberAutomationCatalogRouteUnresolvedException(
+                    requiredServices.Select(static service => service.UserServiceId));
+            }
             if (!refresh.Success)
                 throw new StudioMemberAutomationCatalogRefreshUnavailableException();
 

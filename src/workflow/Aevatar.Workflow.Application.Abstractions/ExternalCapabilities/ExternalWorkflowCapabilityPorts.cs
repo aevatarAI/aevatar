@@ -207,6 +207,41 @@ public sealed class PersistedWorkflowCapabilityAdmissionRequest
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }
 
+/// <summary>
+/// Command-side refresh of a previously admitted workflow. The persisted plan is first checked
+/// for definition integrity, then current caller authority is used to obtain fresh capability
+/// facts and converge capability-owned route contracts. This request is transient and must never
+/// be persisted because <see cref="Access"/> can contain caller credentials.
+/// </summary>
+public sealed class RefreshPersistedWorkflowCapabilityAdmissionRequest
+{
+    private readonly IReadOnlyList<NyxIdExplicitRequestConfirmation> _explicitRequestConfirmations;
+
+    public RefreshPersistedWorkflowCapabilityAdmissionRequest(
+        PersistedWorkflowCapabilityAdmissionRequest persisted,
+        ExternalWorkflowCapabilityAccessContext access,
+        IEnumerable<NyxIdExplicitRequestConfirmation>? explicitRequestConfirmations = null)
+    {
+        Persisted = persisted ?? throw new ArgumentNullException(nameof(persisted));
+        Access = access ?? throw new ArgumentNullException(nameof(access));
+        _explicitRequestConfirmations = explicitRequestConfirmations?
+            .Select(static confirmation => confirmation?.Clone() ?? throw new ArgumentException(
+                "Explicit request confirmations cannot contain null values.",
+                nameof(explicitRequestConfirmations)))
+            .ToArray() ?? [];
+    }
+
+    public PersistedWorkflowCapabilityAdmissionRequest Persisted { get; }
+
+    public ExternalWorkflowCapabilityAccessContext Access { get; }
+
+    public IReadOnlyList<NyxIdExplicitRequestConfirmation> ExplicitRequestConfirmations =>
+        _explicitRequestConfirmations.Select(static confirmation => confirmation.Clone()).ToArray();
+
+    public override string ToString() =>
+        $"{nameof(RefreshPersistedWorkflowCapabilityAdmissionRequest)} {{ Persisted = [REDACTED], Access = {Access} }}";
+}
+
 public interface IExternalWorkflowCapabilitySource
 {
     ExternalWorkflowCapabilitySelector.SelectorOneofCase SelectorKind { get; }
@@ -236,6 +271,29 @@ public interface IExternalWorkflowCapabilityReadinessPort
         CancellationToken cancellationToken = default);
 }
 
+/// <summary>
+/// Performs command-side preparation required before a workflow capability can be admitted.
+/// Readiness inspection remains side-effect free; implementations must use only transient caller
+/// authority and the following live inspection must verify the authoritative result.
+/// </summary>
+public interface IExternalWorkflowCapabilityAdmissionPreparer
+{
+    ExternalWorkflowCapabilitySelector.SelectorOneofCase SelectorKind { get; }
+
+    /// <summary>
+    /// Returns true only when this preparer owns the exact readiness drift and can converge it
+    /// using the transient command authority. The default is fail-closed so adding a preparer
+    /// never turns an arbitrary readiness failure into a write.
+    /// </summary>
+    bool CanConverge(ExternalCapabilityReadiness readiness) => false;
+
+    Task PrepareAsync(
+        ExternalWorkflowCapabilityAccessContext access,
+        ExternalWorkflowCapabilitySelector selector,
+        ExternalCapabilityExecutionMode executionMode,
+        CancellationToken cancellationToken = default);
+}
+
 public sealed record WorkflowArtifactCompatibilityRequest(
     string WorkflowYaml,
     IReadOnlyDictionary<string, string> InlineWorkflowYamls,
@@ -259,6 +317,10 @@ public interface IWorkflowExternalCapabilityAdmissionService
 
     Task<WorkflowCapabilityAdmissionPlan> RevalidatePersistedAsync(
         PersistedWorkflowCapabilityAdmissionRequest request,
+        CancellationToken cancellationToken = default);
+
+    Task<WorkflowCapabilityAdmissionPlan> RefreshPersistedAsync(
+        RefreshPersistedWorkflowCapabilityAdmissionRequest request,
         CancellationToken cancellationToken = default);
 }
 

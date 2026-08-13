@@ -1,0 +1,58 @@
+syntax = "proto3";
+
+package aevatar.gagentservice;
+
+option csharp_namespace = "Aevatar.GAgentService.Abstractions";
+
+import "google/protobuf/timestamp.proto";
+
+message ScopeWorkflowCatalogueSourceSnapshot {
+  string source_kind = 1;
+  string name = 2;
+  string description = 3;
+  google.protobuf.Timestamp source_updated_at_utc = 4;
+  string last_event_id = 5;
+  google.protobuf.Timestamp observed_at = 6;
+
+  string service_key = 10;
+  string workflow_name = 11;
+  string committed_actor_id = 12;
+  string active_revision_id = 13;
+  string deployment_id = 14;
+  string deployment_status = 15;
+  string published_service_id = 16;
+}
+
+message ObserveScopeWorkflowCatalogueSourcesCommand {
+  string scope_id = 1;
+  string workflow_id = 2;
+  ScopeWorkflowCatalogueSourceSnapshot draft_source = 3;
+  ScopeWorkflowCatalogueSourceSnapshot service_source = 4;
+  string observation_event_id = 5;
+  google.protobuf.Timestamp observed_at = 6;
+  google.protobuf.Timestamp draft_watermark_utc = 7;
+  google.protobuf.Timestamp service_watermark_utc = 8;
+}
+
+message ScopeWorkflowCatalogueRowState {
+  string scope_id = 1;
+  string workflow_id = 2;
+  ScopeWorkflowCatalogueSourceSnapshot draft_source = 3;
+  ScopeWorkflowCatalogueSourceSnapshot service_source = 4;
+  int64 last_applied_event_version = 5;
+  string last_event_id = 6;
+  google.protobuf.Timestamp observed_at = 7;
+  google.protobuf.Timestamp draft_watermark_utc = 8;
+  google.protobuf.Timestamp service_watermark_utc = 9;
+}
+
+message ScopeWorkflowCatalogueRowSourcesObservedEvent {
+  string scope_id = 1;
+  string workflow_id = 2;
+  ScopeWorkflowCatalogueSourceSnapshot draft_source = 3;
+  ScopeWorkflowCatalogueSourceSnapshot service_source = 4;
+  string observation_event_id = 5;
+  google.protobuf.Timestamp observed_at = 6;
+  google.protobuf.Timestamp draft_watermark_utc = 7;
+  google.protobuf.Timestamp service_watermark_utc = 8;
+}

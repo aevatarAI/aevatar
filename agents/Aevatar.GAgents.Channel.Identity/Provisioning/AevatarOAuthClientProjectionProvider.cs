@@ -2,6 +2,8 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Google.Protobuf;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace Aevatar.GAgents.Channel.Identity;
@@ -21,15 +23,18 @@ public sealed class AevatarOAuthClientProjectionProvider : IAevatarOAuthClientPr
     private readonly IProjectionDocumentReader<AevatarOAuthClientDocument, string> _reader;
     private readonly ISecretVault _secretVault;
     private readonly AevatarOAuthClientOptions _clientOptions;
+    private readonly ILogger<AevatarOAuthClientProjectionProvider> _logger;
 
     public AevatarOAuthClientProjectionProvider(
         IProjectionDocumentReader<AevatarOAuthClientDocument, string> reader,
         ISecretVault secretVault,
-        IOptions<AevatarOAuthClientOptions> clientOptions)
+        IOptions<AevatarOAuthClientOptions> clientOptions,
+        ILogger<AevatarOAuthClientProjectionProvider>? logger = null)
     {
         _reader = reader ?? throw new ArgumentNullException(nameof(reader));
         _secretVault = secretVault ?? throw new ArgumentNullException(nameof(secretVault));
         _clientOptions = clientOptions?.Value ?? throw new ArgumentNullException(nameof(clientOptions));
+        _logger = logger ?? NullLogger<AevatarOAuthClientProjectionProvider>.Instance;
     }
 
     public async Task<AevatarOAuthClientSnapshot> GetAsync(CancellationToken ct = default)
@@ -55,7 +60,14 @@ public sealed class AevatarOAuthClientProjectionProvider : IAevatarOAuthClientPr
         }
 
         // Current key: an unresolvable reference is a provisioning fault (fail closed).
-        var hmacKey = await TryResolveKeyAsync(document.HmacKeyRef, document.HmacKey, ct).ConfigureAwait(false)
+        var hmacKey = await TryResolveKeyAsync(
+                document.HmacKeyRef,
+                document.HmacKey,
+                "current",
+                document.StateVersion,
+                document.HmacKid,
+                ct)
+            .ConfigureAwait(false)
             ?? throw new AevatarOAuthClientNotProvisionedException();
 
         var brokerObservedAt = document.BrokerCapabilityObservedAtUnix > 0
@@ -75,7 +87,14 @@ public sealed class AevatarOAuthClientProjectionProvider : IAevatarOAuthClientPr
         DateTimeOffset? previousDemotedAt = null;
         if (HasRef(document.PreviousHmacKeyRef) || !document.PreviousHmacKey.IsEmpty)
         {
-            previousKey = await TryResolveKeyAsync(document.PreviousHmacKeyRef, document.PreviousHmacKey, ct).ConfigureAwait(false);
+            previousKey = await TryResolveKeyAsync(
+                    document.PreviousHmacKeyRef,
+                    document.PreviousHmacKey,
+                    "previous",
+                    document.StateVersion,
+                    document.PreviousHmacKid,
+                    ct)
+                .ConfigureAwait(false);
             if (previousKey is not null)
             {
                 previousKid = string.IsNullOrEmpty(document.PreviousHmacKid) ? null : document.PreviousHmacKid;
@@ -120,6 +139,9 @@ public sealed class AevatarOAuthClientProjectionProvider : IAevatarOAuthClientPr
     private async Task<byte[]?> TryResolveKeyAsync(
         SecretReference? reference,
         ByteString legacy,
+        string keyRole,
+        long documentStateVersion,
+        string keyId,
         CancellationToken ct)
     {
         if (HasRef(reference))
@@ -132,7 +154,18 @@ public sealed class AevatarOAuthClientProjectionProvider : IAevatarOAuthClientPr
                     AevatarOAuthClientGAgent.WellKnownId,
                     "identity.oauth.resolve"),
                 ct).ConfigureAwait(false);
-            return result.Resolved ? Convert.FromBase64String(result.Secret!) : null;
+            if (!result.Resolved)
+            {
+                _logger.LogError(
+                    "Aevatar OAuth client HMAC secret resolution failed. key_role={KeyRole} failure_reason={FailureReason} document_state_version={DocumentStateVersion} kid={Kid}",
+                    keyRole,
+                    result.FailureReason,
+                    documentStateVersion,
+                    keyId);
+                return null;
+            }
+
+            return Convert.FromBase64String(result.Secret!);
         }
 
         return legacy.IsEmpty ? null : legacy.ToByteArray();

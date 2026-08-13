@@ -402,7 +402,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
 
         var diagnostics = new List<AgentProfileTurnDiagnostic>();
         var routeTools = await DiscoverToolSetAsync(
-            AgentProfilePolicies.NyxIdChatRouteToolSet,
+            ToolSetNames.NyxIdAssistantAdmission,
             toolContext,
             AgentProfileTurnDiagnosticCode.RouteToolSetUnavailable,
             diagnostics,
@@ -975,7 +975,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
                    AgentToolCapabilities.RequiresHumanSession,
                    StringComparer.Ordinal) ||
                !string.IsNullOrWhiteSpace(
-                   AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(toolContext.Credentials));
+                   AgentToolHumanSessionNyxIdCredential.ResolveBearerToken(toolContext));
     }
 
     private static bool DeclaresCapability(IAgentTool tool, string capability) =>

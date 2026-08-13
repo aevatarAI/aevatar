@@ -20,6 +20,8 @@ public sealed class NyxIdChatConversationCurrentStateDocumentMetadataProvider
                 ["updated_at"] = Date(),
                 ["conversation_actor_id"] = Keyword(),
                 ["scope_id"] = Keyword(),
+                ["deleted"] = Boolean(),
+                ["deleted_at"] = Date(),
                 ["progress_sequence"] = Long(),
             },
         },
@@ -39,5 +41,10 @@ public sealed class NyxIdChatConversationCurrentStateDocumentMetadataProvider
     private static Dictionary<string, object?> Date() => new(StringComparer.Ordinal)
     {
         ["type"] = "date",
+    };
+
+    private static Dictionary<string, object?> Boolean() => new(StringComparer.Ordinal)
+    {
+        ["type"] = "boolean",
     };
 }

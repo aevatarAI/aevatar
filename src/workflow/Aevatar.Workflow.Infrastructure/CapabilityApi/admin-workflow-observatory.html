@@ -1231,7 +1231,7 @@ const STATUS_OPTIONS = [
 const ORIGIN_OPTIONS = [
   ["", "全部来源"],
   ["draft","草稿运行"], ["member-invoke","成员调用"], ["default-invoke","默认调用"],
-  ["team-invoke","团队调用"], ["service-invoke","服务调用"], ["ad-hoc-chat","即席对话"], ["provisioned","计划调度"]
+  ["team-invoke","团队调用"], ["service-invoke","服务调用"], ["webhook","外部 Webhook"], ["ad-hoc-chat","即席对话"], ["provisioned","计划调度"]
 ];
 const ORIGIN_LABEL = Object.fromEntries(ORIGIN_OPTIONS.map(([v,l]) => [v,l]));
 const STATUS_VALUES = new Set(STATUS_OPTIONS.map(o => o[0]));

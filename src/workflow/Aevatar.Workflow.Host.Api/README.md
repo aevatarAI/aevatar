@@ -13,6 +13,9 @@
   - `POST /api/chat`（SSE）
   - `GET /api/ws/chat`（WebSocket）
   - `POST /api/workflow-webhooks/{routeKey}`（认证 webhook start-run）
+  - `PUT /api/scopes/{scopeId}/workflow-webhooks/{routeKey}`（注册/更新 scope-owned exact Definition/revision binding）
+  - `GET /api/scopes/{scopeId}/workflow-webhooks`（列出 bindings，secret 仅显示是否已设置）
+  - `DELETE /api/scopes/{scopeId}/workflow-webhooks/{routeKey}`（原子删除当前 scope 所有的 binding）
   - `GET /api/agents`、`GET /api/workflows`、`GET /api/actors/{actorId}`、`GET /api/actors/{actorId}/timeline`
   - `chat` payload 支持 `prompt`、`workflow`（注册表名称 lookup，含内建与文件工作流）、`workflowYamls`（inline YAML bundle）或 typed `source.definitionActor.actorId`；仅在新建 Actor 且未提供 source/workflow/workflowYamls 时，外部 API 默认走 `auto`
 - 调用应用层：
@@ -43,6 +46,7 @@
 常见错误码：
 
 - `INVALID_WORKFLOW_YAML`：`workflowYamls` 任一 YAML 解析或校验失败（400）
+- `EXTERNAL_WORKFLOW_CAPABILITY_NOT_READY`：YAML 已通过校验，但所需外部能力尚未就绪（409）
 - `WORKFLOW_BINDING_MISMATCH`：目标 actor 已绑定其它 workflow（409）
 - `WORKFLOW_NOT_FOUND`：`workflow` 未命中注册表名称（404）
 - `AGENT_WORKFLOW_NOT_CONFIGURED`：typed source 指定的 actor 未绑定且未提供 inline YAML（409）
@@ -64,7 +68,9 @@
 - Workflow Host 通过 `IWorkflowChatRunInteractionPort` 启动实时交互；该业务端口内部使用默认 CQRS interaction service 作为非 fallback plumbing，并负责本次 realtime projection scope activation 与 cleanup ownership。
 - Workflow Host 只消费这条 CQRS 骨架，不自定义通用 command lifecycle；workflow 领域只负责目标解析、payload 映射与读侧观察映射。
 - `resume/signal` 也复用同一条骨架，Host 只依赖对应的 `ICommandDispatchService<...>`，不再直接注入 `IActorRuntime/IActorDispatchPort`。
-- Webhook ingress 只在 Host/Adapter 处理 raw JSON、HMAC 与 binding mapping；应用层接收 typed `WorkflowExternalIngressContext`，防重放依赖 `IWorkflowWebhookReplayStore`，生产启用但缺少 durable store 时 fail closed。
+- Webhook ingress 只在 Host/Adapter 有界处理 raw JSON、HMAC 与 JSON-safe binding mapping；应用层接收 typed `WorkflowExternalIngressContext`。动态 binding 固定 scope-owned Definition/revision，并在每次已认证投递时重验 authoritative payload/version/admission digest；route ownership、更新和删除均为原子操作，内部持久化使用 Protobuf，secret 加密且只写不读。
+- binding 默认只允许启动 run。`enableUnattendedEffects=true` 只接受同 scope direct-human 授权和 exact versioned Durable Definition；服务端加密保存 NyxID binding authority 与 exact authored-request write grants，不保存 bearer。运行时只为匹配 actor-owned definition/plan 的 non-destructive `nyxid_proxy` write 生成短生命周期 permit，且不传播到 LLM/fork/subworkflow/dynamic replacement。NyxID/provider 自身 approval policy 仍独立生效。
+- 防重放依赖 `IWorkflowWebhookReplayStore`，生产启用但缺少 durable store 时 fail closed。当前 admission 尚未与 run terminal state 形成 lease/completed 状态机，因此 `202` 只表示 accepted，不承诺 committed、completed 或 crash-safe exactly-once；HMAC 本身不提供下游写工具 credential/approval。
 - Workflow file tools 只通过 workflow-owned tool source 暴露：`workflow_connected_service_resource_fetch` 按 provider/operation/resource_kind allowlist 读取 connected-service 二进制资源，并且只通过 `IWorkflowFileIngressPort` 以 `SourceKind=ConnectedServiceResource` 写入 artifact store；结果只返回 sanitized `WorkflowFileRef`，不回显 bytes/base64。Connected-service 包只注册窄 adapter，例如 Lark 的 `lark/message_resource_download/image|file`。
 - `document_extract` 是唯一公开文档抽取 tool，读取 artifact store 中的 typed file ref。默认或 `extraction_kind=text` 返回既有 descriptor + bounded text；支持 UTF-8/PDF/DOCX 文档文本，以及最多 5 MiB 的 `image/png` / `image/jpeg` 图片文字抽取。图片抽取需要已配置且支持 image input 的 LLM provider；缺失或不支持时返回 `image_provider_unavailable`，`image/webp` 仍 fail closed。`extraction_kind=schema_bound_json` 要求 `schema_contract`，通过同一个 tool 返回 canonical JSON envelope（`schema_name/schema_hash/structured_result`），并 fail closed 校验 schema 与 provider 结果；该 v1 结果仍只是既有 tool result string 通道，不新增 proto，若将结构化字段提升为 actor state、event/readmodel/projection transport、SDK DTO 或跨模块 command/query contract，必须先新增 `.proto` typed contract。
 - `workflow_file_submit` 由 Workflow Infrastructure 的 workflow-only runtime 负责参数解析、caller bearer 校验、artifact 描述/打开、policy 解析、multipart upload port 调用与结果净化。工具只接收候选上传请求：`file_ref`、`slug`、`path`、`method`、`file_field_name`、字符串 `form` 字段、`output.kind`、`output.selector` 与可收窄的 `max_file_bytes`；Host/provider-owned `IWorkflowFileMultipartUploadPolicyResolver` 必须解析出允许的 safety policy，否则 fail closed。Mainnet resolver 不维护静态 destination allowlist，也不决定用户能上传到哪个 NyxID service；它只限制通用安全上限（当前允许 `POST/PUT/PATCH` 这类上传/替换/局部更新方法，并使用 Mainnet 文件大小上限，用户 `max_file_bytes` 只能进一步收窄）。runtime 继续负责候选 destination 的通用校验：相对 `path`、非空 `slug/file_field_name`、安全 `output.selector`、禁止 `target/headers/body/raw_body/bytes/base64/data_uri` 等；resolved policy 中的 `slug/path/file_field_name/form/output.kind/output.selector` 从 candidate 透传，不包含 destination-level media type allowlist。runtime 只依赖 `IWorkflowFileArtifactReadPort`、`IWorkflowFileMultipartUploadPolicyResolver` 与 `IWorkflowFileMultipartUploadPort`，不依赖 `NyxIdApiClient`、connected-service submit target registry 或 Lark upload adapter。public `file_ref` 只携带 identity/ownership，文件名、媒体类型、大小与 hash 只能来自 artifact descriptor；结果固定为 `success/error/detail/output_code/output_kind/http_status/provider_code/destination/file`，不生成 `file_token`、`file_code` provider alias，也不回显 provider raw body、bytes/base64/data URI。
