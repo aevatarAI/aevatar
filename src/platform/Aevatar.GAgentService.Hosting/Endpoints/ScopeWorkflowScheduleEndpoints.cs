@@ -88,7 +88,7 @@ internal static class ScopeWorkflowScheduleEndpoints
         ScheduledDispatchMutationContext context;
         try
         {
-            context = ResolveMutationContext(http);
+            context = ResolveMutationContext(http, resolved.Workflow!);
             configuration = BuildConfiguration(resolved.Workflow!, input, input.ScheduleId, context.AuthenticatedNyxIdOwnerSubject);
         }
         catch (Exception ex) when (ScheduledDispatchEndpoints.TryMapScheduleConfigurationError(ex, out var result))
@@ -129,7 +129,7 @@ internal static class ScopeWorkflowScheduleEndpoints
         ScheduledDispatchMutationContext context;
         try
         {
-            context = ResolveMutationContext(http);
+            context = ResolveMutationContext(http, resolved.Workflow!);
             configuration = BuildConfiguration(
                 resolved.Workflow!,
                 input with { ScheduleId = null },
@@ -238,7 +238,8 @@ internal static class ScopeWorkflowScheduleEndpoints
             input?.Reason ?? string.Empty,
             workflowQueryPort,
             schedules,
-            static (service, id, reason, token) => service.EnableAsync(id, reason, token),
+            static (service, id, reason, context, token) => service.EnableAsync(id, reason, context, token),
+            requireRunnableWorkflow: true,
             ct);
 
     internal static async Task<IResult> Disable(
@@ -258,7 +259,8 @@ internal static class ScopeWorkflowScheduleEndpoints
             input?.Reason ?? string.Empty,
             workflowQueryPort,
             schedules,
-            static (service, id, reason, token) => service.DisableAsync(id, reason, token),
+            static (service, id, reason, context, token) => service.DisableAsync(id, reason, context, token),
+            requireRunnableWorkflow: false,
             ct);
 
     internal static async Task<IResult> Delete(
@@ -279,7 +281,8 @@ internal static class ScopeWorkflowScheduleEndpoints
             input?.Reason ?? reason ?? string.Empty,
             workflowQueryPort,
             schedules,
-            static (service, id, deleteReason, token) => service.DeleteAsync(id, deleteReason, token),
+            static (service, id, deleteReason, context, token) => service.DeleteAsync(id, deleteReason, context, token),
+            requireRunnableWorkflow: false,
             ct);
 
     internal static async Task<IResult> RunNow(
@@ -301,7 +304,7 @@ internal static class ScopeWorkflowScheduleEndpoints
 
         try
         {
-            var receipt = await schedules.RunNowAsync(scheduleId, ct);
+            var receipt = await schedules.RunNowAsync(scheduleId, ResolveMutationContext(http, resolved.Workflow!), ct: ct);
             return Results.Accepted(BuildWorkflowScheduleLocation(scopeId, workflowId, receipt.ScheduleId), receipt);
         }
         catch (Exception ex) when (ScheduledDispatchEndpoints.TryMapScheduleMutationError(ex, out var result))
@@ -318,20 +321,24 @@ internal static class ScopeWorkflowScheduleEndpoints
         string reason,
         IScopeWorkflowQueryPort workflowQueryPort,
         IScheduledDispatchApplicationService schedules,
-        Func<IScheduledDispatchApplicationService, string, string, CancellationToken, Task<ScheduledDispatchMutationReceipt>> mutateAsync,
+        Func<IScheduledDispatchApplicationService, string, string, ScheduledDispatchMutationContext, CancellationToken, Task<ScheduledDispatchMutationReceipt>> mutateAsync,
+        bool requireRunnableWorkflow,
         CancellationToken ct)
     {
-        var resolved = await ResolveWorkflowAsync(http, scopeId, workflowId, workflowQueryPort, ct);
+        var resolved = requireRunnableWorkflow
+            ? await ResolveWorkflowAsync(http, scopeId, workflowId, workflowQueryPort, ct)
+            : await ResolveWorkflowForTeardownAsync(http, scopeId, workflowId, workflowQueryPort, ct);
         if (resolved.Result != null)
             return resolved.Result;
 
+        var context = ResolveMutationContext(http, resolved.Workflow!);
         var ownership = await RequireWorkflowScheduleAsync(schedules, scheduleId, resolved.Workflow!, ct);
         if (ownership.Result != null)
             return ownership.Result;
 
         try
         {
-            var receipt = await mutateAsync(schedules, scheduleId, reason, ct);
+            var receipt = await mutateAsync(schedules, scheduleId, reason, context, ct);
             return Results.Accepted(BuildWorkflowScheduleLocation(scopeId, workflowId, receipt.ScheduleId), receipt);
         }
         catch (Exception ex) when (ScheduledDispatchEndpoints.TryMapScheduleMutationError(ex, out var result))
@@ -354,6 +361,27 @@ internal static class ScopeWorkflowScheduleEndpoints
         if (lookup.IsRunnable)
             return new ResolvedWorkflowResult(lookup.Workflow, null);
 
+        var (statusCode, code, message) = ScopeWorkflowEndpoints.MapWorkflowLookupError(scopeId, workflowId, lookup);
+        return new ResolvedWorkflowResult(
+            null,
+            Results.Json(new { code, message }, statusCode: statusCode));
+    }
+
+    private static async Task<ResolvedWorkflowResult> ResolveWorkflowForTeardownAsync(
+        HttpContext http,
+        string scopeId,
+        string workflowId,
+        IScopeWorkflowQueryPort workflowQueryPort,
+        CancellationToken ct)
+    {
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return new ResolvedWorkflowResult(null, denied);
+
+        var workflow = await workflowQueryPort.GetByWorkflowIdAsync(scopeId, workflowId, ct);
+        if (workflow != null && !string.IsNullOrWhiteSpace(workflow.PublishedServiceId))
+            return new ResolvedWorkflowResult(workflow, null);
+
+        var lookup = new ScopeWorkflowLookupResult(ScopeWorkflowLookupStatus.NotFound, null, string.Empty);
         var (statusCode, code, message) = ScopeWorkflowEndpoints.MapWorkflowLookupError(scopeId, workflowId, lookup);
         return new ResolvedWorkflowResult(
             null,
@@ -465,13 +493,23 @@ internal static class ScopeWorkflowScheduleEndpoints
                 ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner));
     }
 
-    private static ScheduledDispatchMutationContext ResolveMutationContext(HttpContext http)
+    private static ScheduledDispatchMutationContext ResolveMutationContext(
+        HttpContext http,
+        ScopeWorkflowSummary workflow)
     {
         ArgumentNullException.ThrowIfNull(http);
         return new ScheduledDispatchMutationContext(
             ReadFirstClaim(http.User, "scope_id", "workflow.scope_id"),
-            ResolveAuthenticatedNyxIdOwnerSubject(http));
+            ResolveAuthenticatedNyxIdOwnerSubject(http),
+            ExpectedServiceTarget: BuildExpectedServiceTarget(workflow));
     }
+
+    private static ScheduledDispatchExpectedServiceTarget BuildExpectedServiceTarget(ScopeWorkflowSummary workflow) => new(
+        ScheduledDispatchScheduleKind.Workflow,
+        ScheduledDispatchTargetKind.ServiceInvocation,
+        ChatEndpointId,
+        workflow.PublishedServiceId,
+        string.IsNullOrWhiteSpace(workflow.ServiceKey) ? null : workflow.ServiceKey);
 
     private static ScheduledServiceInvocationNyxIdSubjectRef? ResolveAuthenticatedNyxIdOwnerSubject(HttpContext http)
     {

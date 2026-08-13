@@ -59,7 +59,7 @@ public sealed class AgentBuilderToolTests
 
         using var document = JsonDocument.Parse(result);
         document.RootElement.GetProperty("status").GetString().Should().Be("accepted");
-        await scheduledDispatch.Received(1).RunNowAsync("scheduled-workflow-1", Arg.Any<CancellationToken>());
+        await scheduledDispatch.Received(1).RunNowAsync("scheduled-workflow-1", ct: Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -85,8 +85,8 @@ public sealed class AgentBuilderToolTests
             }
             """));
 
-        await scheduledDispatch.Received(1).DisableAsync("scheduled-workflow-1", "disable_agent", Arg.Any<CancellationToken>());
-        await scheduledDispatch.Received(1).EnableAsync("scheduled-workflow-1", "enable_agent", Arg.Any<CancellationToken>());
+        await scheduledDispatch.Received(1).DisableAsync("scheduled-workflow-1", "disable_agent", ct: Arg.Any<CancellationToken>());
+        await scheduledDispatch.Received(1).EnableAsync("scheduled-workflow-1", "enable_agent", ct: Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -113,7 +113,7 @@ public sealed class AgentBuilderToolTests
 
         using var document = JsonDocument.Parse(result);
         document.RootElement.GetProperty("status").GetString().Should().Be("accepted");
-        await scheduledDispatch.Received(1).DeleteAsync("scheduled-workflow-1", "delete_agent", Arg.Any<CancellationToken>());
+        await scheduledDispatch.Received(1).DeleteAsync("scheduled-workflow-1", "delete_agent", ct: Arg.Any<CancellationToken>());
         await catalogCommandPort.Received(1).RetryCredentialRevocationsAsync(Arg.Any<OwnerScope>(), "session-token", Arg.Any<CancellationToken>());
         await catalogCommandPort.Received(1).TombstoneAsync("scheduled-workflow-1", Arg.Any<CancellationToken>(), "session-token");
     }
@@ -142,7 +142,7 @@ public sealed class AgentBuilderToolTests
 
         using var document = JsonDocument.Parse(result);
         document.RootElement.GetProperty("error").GetString().Should().Contain("does not support run_agent");
-        await scheduledDispatch.DidNotReceive().RunNowAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await scheduledDispatch.DidNotReceive().RunNowAsync(Arg.Any<string>(), ct: Arg.Any<CancellationToken>());
     }
 
     [Fact]
