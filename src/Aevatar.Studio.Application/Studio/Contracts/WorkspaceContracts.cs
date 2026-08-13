@@ -109,7 +109,9 @@ public sealed record ScopeWorkflowCatalogueCommittedFacts(
     string ActorId,
     string ActiveRevisionId,
     string DeploymentId,
-    string DeploymentStatus);
+    string DeploymentStatus,
+    string ServiceAppId,
+    string ServiceNamespace);
 
 public sealed record ScopeWorkflowCatalogueRowCapabilities(
     ScopeWorkflowCatalogueActionCapability Open,

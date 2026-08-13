@@ -97,6 +97,8 @@ public sealed class ScopeWorkflowCatalogueRowMaterializer
             ActiveRevisionId = state.ServiceSource?.ActiveRevisionId ?? string.Empty,
             DeploymentId = state.ServiceSource?.DeploymentId ?? string.Empty,
             DeploymentStatus = state.ServiceSource?.DeploymentStatus ?? string.Empty,
+            ServiceAppId = state.ServiceSource?.ServiceAppId ?? string.Empty,
+            ServiceNamespace = state.ServiceSource?.ServiceNamespace ?? string.Empty,
             PublishedServiceId = state.ServiceSource?.PublishedServiceId ?? string.Empty,
         };
     }
@@ -132,6 +134,8 @@ public sealed class ScopeWorkflowCatalogueRowMaterializer
             DeploymentId = source.DeploymentId ?? string.Empty,
             DeploymentStatus = source.DeploymentStatus ?? string.Empty,
             PublishedServiceId = source.PublishedServiceId ?? string.Empty,
+            ServiceAppId = source.ServiceAppId ?? string.Empty,
+            ServiceNamespace = source.ServiceNamespace ?? string.Empty,
         };
     }
 
