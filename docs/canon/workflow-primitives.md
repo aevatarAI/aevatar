@@ -879,6 +879,7 @@ steps:
 
 - 作用：为长时外部 submit/poll job 创建或更新一个 workflow schedule。schedule fact 由 `ScheduledDispatchGAgent` 拥有，workflow run 只收到 accepted receipt。
 - 常用参数：`schedule_id`、`cron_expression`、`timezone`、`workflow_name` 或 `service_id`、`scope_id`、`prompt`、`enabled`。
+- `prompt` 若包含 schedule-owned fire-time placeholder，必须是 JSON 文档且 placeholder 只能位于 string value。可用值为 `{{@schedule.run_date}}`、`{{@schedule.run_year}}`、`{{@schedule.run_month}}`、`{{@schedule.days_until_month_end}}`、`{{@schedule.fire_at_utc}}`、`{{@schedule.timezone}}`；它们按 logical fire occurrence 与配置的 timezone 确定性展开。
 - submit/poll 合同：submit 模板把 `job_id`、`idempotency_key`、确定性 `schedule_id`、poll cadence、deadline 与 attempt 预算放进 poll workflow 的 `prompt`；poll 模板每次只 poll 一次，非终态结束本 run，终态用同一 `schedule_id` 且 `enabled: "false"` 停止 schedule。
 - `header.*` 只用于 dispatch header 扩展；不得承载 `job_id`、`idempotency_key`、`schedule_id`、deadline、attempt 或 terminal status 等业务事实。内部 workflow YAML 不使用泛化 `metadata` 承载这些事实。
 

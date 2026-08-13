@@ -80,6 +80,120 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Fact]
+    public async Task CreateAsync_ShouldRejectUnknownScheduledPromptPlaceholderBeforeActorDispatch()
+    {
+        var actorPort = new RecordingScheduledDispatchActorPort { ResolveUnknownAsMissing = true };
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            new RecordingScheduledDispatchQueryPort(),
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
+        var configuration = CreateServiceInvocationConfiguration(
+            "schedule-invalid-template",
+            ScheduledDispatchScheduleKind.Generic,
+            ScheduledDispatchCredentialRequirementTargetKind.StaticService,
+            Any.Pack(new ChatRequestEvent
+            {
+                Prompt = "{\"run_date\":\"{{@schedule.unknown}}\"}",
+            }));
+
+        var act = () => service.CreateAsync(configuration);
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*Unsupported scheduled prompt placeholder '@schedule.unknown'.*");
+        actorPort.ResolvedScheduleIds.Should().BeEmpty();
+        actorPort.EnsuredScheduleIds.Should().BeEmpty();
+        actorPort.Created.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task BeginTeamAutomation_ShouldRejectUnknownScheduledPromptPlaceholderBeforeCredentialOperation()
+    {
+        var actorPort = new RecordingScheduledDispatchActorPort();
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            new RecordingScheduledDispatchQueryPort(),
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
+        var owner = new TeamMemberAutomationOwner("scope-alpha", "member-alpha", "team-alpha");
+        var authorizationOwner = new ScheduledInvocationAuthorizationOwner(
+            "nyxid",
+            "personal",
+            "owner-alpha");
+        var authorizationFact = new ScheduledInvocationAuthorizationFact(
+            "digest-alpha",
+            "policy-v1",
+            authorizationOwner,
+            [],
+            "proxy",
+            DateTimeOffset.UtcNow.AddHours(1),
+            ServiceGrantsNotRequired: true,
+            new ScheduledInvocationAuthorizationDisclosure(true, true, false, true, true),
+            new ScheduledInvocationAuthorizationAuthority(
+                0,
+                0,
+                0,
+                0,
+                0,
+                DateTimeOffset.UnixEpoch,
+                DateTimeOffset.UnixEpoch,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                DateTimeOffset.UnixEpoch));
+        var decision = new TeamAutomationActivationDecision(
+            "schedule-team-invalid-template",
+            "Invalid template",
+            owner,
+            new ServiceIdentity { ServiceId = "workflow-alpha" },
+            "chat",
+            Any.Pack(new ChatRequestEvent
+            {
+                Prompt = "{\"run_date\":\"{{@schedule.unknown}}\"}",
+            }),
+            new ScheduledCallerNyxIdAuthority
+            {
+                Platform = "lark",
+                ExternalUserId = "owner-alpha",
+                Scope = "proxy",
+                BindingId = "binding-alpha",
+            },
+            authorizationFact,
+            "0 10 27 * *",
+            "Asia/Singapore",
+            true,
+            ScheduledDispatchScheduleKind.Workflow,
+            new Dictionary<string, string>(),
+            ScheduledDispatchScheduleMode.RecurringCron,
+            null,
+            ScheduledDispatchCredentialRequirementTargetKind.WorkflowService,
+            "rev-alpha",
+            null);
+        var operation = new TeamAutomationCredentialOperation(
+            decision.ScheduleId,
+            owner,
+            "operation-alpha",
+            "idempotency-alpha",
+            authorizationFact.PermissionDigest,
+            authorizationFact.PolicyVersion,
+            TeamAutomationOperationKind.Create,
+            new ScheduledCredentialEffectLocator(
+                "credential-alpha",
+                "secret-alpha",
+                CredentialSecretPurposes.ScheduledInvocationAgentKey,
+                "schedule:schedule-team-invalid-template",
+                authorizationOwner),
+            decision,
+            "mutation-alpha");
+
+        var act = () => service.BeginTeamAutomationCredentialOperationAsync(operation);
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*Unsupported scheduled prompt placeholder '@schedule.unknown'.*");
+        actorPort.EnsuredScheduleIds.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task UpdateAsync_ShouldRejectRawEnvelopeBeforeQueryReadActorResolutionAndDispatch()
     {
         var actorPort = new RecordingScheduledDispatchActorPort();
@@ -2910,6 +3024,21 @@ public sealed class ScheduledDispatchApplicationServiceTests
                 DateTimeOffset.UtcNow)
             .Should().Be(TimeSpan.FromSeconds(1));
         ScheduledDispatchCalculator.NormalizeTimezone(" Asia/Shanghai ").Should().Be("Asia/Shanghai");
+    }
+
+    [Fact]
+    public void Calculator_ShouldResolveLastDayCronInScheduleTimezone()
+    {
+        var occurrences = ScheduledDispatchCalculator.GetNextOccurrences(
+            "0 10 L * *",
+            "Asia/Singapore",
+            new DateTimeOffset(2026, 8, 13, 0, 0, 0, TimeSpan.Zero),
+            3);
+
+        occurrences.Should().Equal(
+            new DateTimeOffset(2026, 8, 31, 2, 0, 0, TimeSpan.Zero),
+            new DateTimeOffset(2026, 9, 30, 2, 0, 0, TimeSpan.Zero),
+            new DateTimeOffset(2026, 10, 31, 2, 0, 0, TimeSpan.Zero));
     }
 
     private static ScheduledDispatchApplicationService CreateService() =>

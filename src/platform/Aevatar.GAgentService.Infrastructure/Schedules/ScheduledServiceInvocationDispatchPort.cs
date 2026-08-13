@@ -54,16 +54,22 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
     {
         ArgumentNullException.ThrowIfNull(dispatch);
         ArgumentNullException.ThrowIfNull(dispatch.Request);
-        ValidateAuthorizationFact(dispatch);
-        ValidateWorkflowAgentKeyIntegrity(dispatch);
+        var firePreparedDispatch = dispatch with
+        {
+            Request = ScheduledChatPromptTemplateRenderer.Render(
+                dispatch.Request,
+                dispatch.FireContext),
+        };
+        ValidateAuthorizationFact(firePreparedDispatch);
+        ValidateWorkflowAgentKeyIntegrity(firePreparedDispatch);
 
-        var prepared = await BuildInvocationRequestAsync(dispatch, ct);
+        var prepared = await BuildInvocationRequestAsync(firePreparedDispatch, ct);
         try
         {
-            var request = WithScheduleId(prepared.Request, dispatch.ScheduleId);
+            var request = WithScheduleId(prepared.Request, firePreparedDispatch.ScheduleId);
             _logger.LogInformation(
                 "Scheduled service invocation credential projection prepared. scheduleId={ScheduleId} serviceKey={ServiceKey} endpointId={EndpointId} hasConnectorAuthorization={HasConnectorAuthorization} hasOwnerLlmToken={HasOwnerLlmToken} hasSenderLlmToken={HasSenderLlmToken}",
-                dispatch.ScheduleId ?? string.Empty,
+                firePreparedDispatch.ScheduleId ?? string.Empty,
                 FormatServiceKey(request.Identity),
                 request.EndpointId ?? string.Empty,
                 HasConnectorAuthorization(request),

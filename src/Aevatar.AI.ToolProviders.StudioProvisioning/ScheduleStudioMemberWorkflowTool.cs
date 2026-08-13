@@ -65,7 +65,7 @@ internal sealed class ScheduleStudioMemberWorkflowTool : IStudioMutationReceiptT
             },
             "prompt": {
               "type": "string",
-              "description": "Optional prompt passed to the workflow chat endpoint when the schedule fires."
+              "description": "Optional JSON prompt template passed to the workflow when the schedule fires. Trusted fire-time placeholders are allowed in JSON string values: {{@schedule.run_date}}, {{@schedule.run_year}}, {{@schedule.run_month}}, {{@schedule.days_until_month_end}}, {{@schedule.fire_at_utc}}, and {{@schedule.timezone}}."
             },
             "display_name": {
               "type": "string",
