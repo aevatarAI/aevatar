@@ -342,6 +342,45 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
     }
 
     [Fact]
+    public async Task StartAsync_ShouldNotFailHostStartup_WhenRowRefreshThrows()
+    {
+        // Production regression (2026-08-13): during a rolling upgrade the
+        // first new-image pod backfilled rows whose actors only resolve on
+        // the new image; the old-image silo threw UnknownAgentKindException
+        // (which has no Orleans codec) and the unhandled StartAsync failure
+        // crash-looped the rollout. The backfill must never abort boot.
+        var staleServiceSource = ExistingServiceSource("scope-1", "wf-old", "published-service-1");
+        var sourceWriter = new RecordingCatalogueSourceDispatcher();
+        var rowWriter = new ThrowingCatalogueRowDispatcher();
+        var sourceReader = new RecordingCatalogueSourceReader([staleServiceSource], sourceWriter);
+        var service = CreateService(
+            [new ServiceCatalogReadModel
+            {
+                Id = "svc-key",
+                ActorId = "service-definition:scope-1:published-service-1",
+                StateVersion = 3,
+                LastEventId = "evt-service-catalog",
+                TenantId = "scope-1",
+                AppId = "workflow-app",
+                Namespace = "user",
+                ServiceId = "published-service-1",
+                UpdatedAt = DateTimeOffset.Parse("2026-08-04T00:00:00Z"),
+            }],
+            [],
+            [],
+            [],
+            [staleServiceSource],
+            sourceWriter,
+            rowWriter,
+            sourceReader);
+
+        var start = async () => await service.StartAsync(CancellationToken.None);
+
+        await start.Should().NotThrowAsync();
+        rowWriter.Attempts.Should().BeGreaterThan(0, "the backfill must have tried the row before skipping it");
+    }
+
+    [Fact]
     public async Task RevisionSourceProjector_ShouldRefreshCatalogueRow_WhenDeploymentWasMaterializedBeforeRevision()
     {
         var identity = ServiceIdentity("scope-1", "workflow-app", "user", "published-service-1");
@@ -629,7 +668,7 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
         IReadOnlyList<StudioWorkspaceCurrentStateDocument> workspaces,
         IReadOnlyList<ScopeWorkflowCatalogueSourceDocument> existingSources,
         RecordingCatalogueSourceDispatcher sourceWriter,
-        RecordingCatalogueRowDispatcher rowWriter,
+        IScopeWorkflowCatalogueRowCommandPort rowWriter,
         RecordingCatalogueSourceReader sourceReader) =>
         new(
             new StubProjectionDocumentReader<ServiceCatalogReadModel>(serviceCatalogs),
@@ -930,6 +969,28 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
         {
             DeleteMarkers.Add(marker);
             return Task.FromResult(ProjectionWriteResult.Applied());
+        }
+    }
+
+    private sealed class ThrowingCatalogueRowDispatcher
+        : IScopeWorkflowCatalogueRowCommandPort
+    {
+        public int Attempts { get; private set; }
+
+        public Task ObserveSourcesAsync(
+            string scopeId,
+            string workflowId,
+            ScopeWorkflowCatalogueSourceSnapshot? draftSource,
+            ScopeWorkflowCatalogueSourceSnapshot? serviceSource,
+            DateTimeOffset draftWatermarkUtc,
+            DateTimeOffset serviceWatermarkUtc,
+            string observationEventId,
+            DateTimeOffset observedAt,
+            CancellationToken ct = default)
+        {
+            Attempts++;
+            throw new InvalidOperationException(
+                "simulated actor dispatch failure (UnknownAgentKindException without an Orleans codec)");
         }
     }
 

@@ -55,6 +55,32 @@ internal sealed class ScopeWorkflowCatalogueBackfillHostedService : IHostedServi
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
+        // The backfill is convergence acceleration, not a boot invariant: the
+        // event-driven projectors keep the catalogue converging regardless,
+        // and a pod restart re-runs the backfill. It must therefore never
+        // abort host startup — during a rolling upgrade the first new-image
+        // pod can hit actors an old-image silo cannot resolve
+        // (UnknownAgentKindException, which additionally has no Orleans
+        // codec), and failing StartAsync here crash-loops the rollout.
+        try
+        {
+            await RunBackfillAsync(cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "Scope workflow catalogue backfill failed; continuing host startup. " +
+                "Event-driven projections keep the catalogue converging and a pod restart re-runs the backfill.");
+        }
+    }
+
+    private async Task RunBackfillAsync(CancellationToken cancellationToken)
+    {
         var serviceCatalogs = await QueryAllAsync(_serviceCatalogReader, cancellationToken);
         var deploymentCatalogs = await QueryAllAsync(_deploymentCatalogReader, cancellationToken);
         var revisionCatalogs = await QueryAllAsync(_revisionCatalogReader, cancellationToken);
@@ -272,13 +298,32 @@ internal sealed class ScopeWorkflowCatalogueBackfillHostedService : IHostedServi
             source.StateVersion == long.MaxValue ? long.MaxValue : source.StateVersion + 1,
             ScopeWorkflowCatalogueRowMaterializer.BuildSourceDeleteStateVersion(updatedAt));
 
-    private Task RefreshRowAsync(
+    private async Task RefreshRowAsync(
         string scopeId,
         string workflowId,
         string eventId,
         DateTimeOffset updatedAt,
-        CancellationToken ct) =>
-        _catalogueRowMaterializer.RefreshAsync(scopeId, workflowId, eventId, updatedAt, ct);
+        CancellationToken ct)
+    {
+        // One poisoned row (e.g. its actor is only resolvable on a newer
+        // image mid-rollout) must not stop the rest of the backfill.
+        try
+        {
+            await _catalogueRowMaterializer.RefreshAsync(scopeId, workflowId, eventId, updatedAt, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Skipping workflow catalogue backfill row for scope {ScopeId}, workflow {WorkflowId}: refresh failed.",
+                scopeId,
+                workflowId);
+        }
+    }
 
     private static ServiceDeploymentReadModel? ResolveActiveDeployment(ServiceDeploymentCatalogReadModel deploymentCatalog) =>
         deploymentCatalog.Deployments
