@@ -46,6 +46,39 @@ public sealed class WorkflowGAgentExecutionTests : WorkflowGAgentTestBase
         }
 
         [Fact]
+        public async Task WorkflowGAgent_ShouldAllowNonExplicitRevisionIdentityReplay()
+        {
+            const string workflowYaml = "name: direct\\nroles: []\\nsteps: []\\n";
+            var plan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+                workflowYaml,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExternalCapabilityExecutionMode.Interactive,
+                [],
+                [],
+                workflowId: "workflow-direct",
+                revisionId: "revision-direct");
+            var agent = CreateDefinitionAgent();
+
+            await BindInteractiveWorkflowDefinitionAsync(
+                agent,
+                workflowYaml,
+                "direct",
+                capabilityAdmissionPlan: plan,
+                workflowId: "workflow-direct",
+                revisionId: "revision-direct");
+            await BindInteractiveWorkflowDefinitionAsync(
+                agent,
+                workflowYaml,
+                "direct",
+                capabilityAdmissionPlan: plan,
+                workflowId: "workflow-direct",
+                revisionId: "revision-direct");
+
+            agent.State.WorkflowId.Should().Be("workflow-direct");
+            agent.State.RevisionId.Should().Be("revision-direct");
+        }
+
+        [Fact]
         public async Task WorkflowGAgent_WhenYamlInvalid_ShouldMarkInvalidAndDescribe()
         {
             var agent = CreateDefinitionAgent();
@@ -176,6 +209,68 @@ public sealed class WorkflowGAgentExecutionTests : WorkflowGAgentTestBase
             start.Input.Should().Contain("team01");
             start.Input.Split("team01", StringSplitOptions.None).Should().HaveCount(3);
             agent.State.CurrentTurnId.Should().Be("turn-current");
+        }
+
+        [Fact]
+        public async Task WorkflowRunGAgent_TypedJsonInput_ShouldPreserveRawPromptWithConversationContext()
+        {
+            const string workflowYaml = """
+                name: typed_json_probe
+                roles: []
+                steps:
+                  - id: capture_run_input
+                    type: assign
+                    parameters:
+                      target: raw_request
+                      value: "$input"
+                    next: normalize_schedule_context
+                  - id: normalize_schedule_context
+                    type: transform
+                    op: template
+                    template: >-
+                      {{~ fire_at_utc = get(data, 'fire_at_utc', ''); timezone = get(data, 'timezone', ''); run_date = get(data, 'run_date', '') ~}}
+                      {{ json({ fire_at_utc: fire_at_utc, timezone: timezone, run_date: run_date }) }}
+                    next: done
+                  - id: done
+                    type: assign
+                    parameters:
+                      target: final
+                      value: "$input"
+                """;
+            var publisher = new RecordingEventPublisher();
+            var agent = CreateRunAgent();
+            agent.EventPublisher = publisher;
+            await BindInteractiveWorkflowRunDefinitionAsync(
+                agent,
+                "definition-typed-json",
+                workflowYaml,
+                "typed_json_probe",
+                runId: "run-typed-json");
+
+            const string prompt = "{\"fire_at_utc\":\"2026-08-27T01:00:00Z\",\"timezone\":\"Asia/Singapore\",\"run_date\":\"2026-08-27\"}";
+            await agent.HandleChatRequest(new WorkflowChatRequestEvent
+            {
+                Prompt = prompt,
+                SessionId = "session-typed-json",
+                ConversationContext = new WorkflowConversationContext
+                {
+                    ScopeId = "scope-typed-json",
+                    ConversationId = "conversation-typed-json",
+                    CurrentTurnId = "turn-typed-json",
+                    Messages =
+                    {
+                        new WorkflowConversationMessage
+                        {
+                            Sequence = 1,
+                            Role = WorkflowConversationRole.User,
+                            Content = "This context must not become the typed input.",
+                        },
+                    },
+                },
+            });
+
+            publisher.Published.Select(x => x.evt).OfType<StartWorkflowEvent>()
+                .Should().ContainSingle().Which.Input.Should().Be(prompt);
         }
 
         [Fact]

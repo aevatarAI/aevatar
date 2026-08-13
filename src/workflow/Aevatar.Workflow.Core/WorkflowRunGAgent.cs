@@ -723,8 +723,9 @@ public sealed partial class WorkflowRunGAgent
             callerCredentialDelta,
             llmControlDelta,
             WorkflowRunExecutionContextStateAccess.ClearWorkflowRuntimeDelta());
-        var executionInput = ResolveExecutionInput(request);
-        if (WorkflowRunInputContract.RequiresJsonInput(_compiledWorkflow) &&
+        var requiresJsonInput = WorkflowRunInputContract.RequiresJsonInput(_compiledWorkflow);
+        var executionInput = ResolveExecutionInput(request, requiresJsonInput);
+        if (requiresJsonInput &&
             !WorkflowRunInputContract.IsBoundedJson(executionInput))
         {
             // Fail at start, before any step runs, with a corrective message the
@@ -1340,7 +1341,9 @@ public sealed partial class WorkflowRunGAgent
             ct);
     }
 
-    private static string ResolveExecutionInput(WorkflowChatRequestEvent request)
+    private static string ResolveExecutionInput(
+        WorkflowChatRequestEvent request,
+        bool requiresJsonInput)
     {
         if (request.ForkSeed != null &&
             request.ForkSeed.Variables.TryGetValue("input", out var seedInput))
@@ -1348,7 +1351,7 @@ public sealed partial class WorkflowRunGAgent
             return seedInput ?? string.Empty;
         }
 
-        if (request.ConversationContext != null)
+        if (!requiresJsonInput && request.ConversationContext != null)
         {
             return RenderConversationExecutionInput(request.ConversationContext, request.Prompt);
         }
