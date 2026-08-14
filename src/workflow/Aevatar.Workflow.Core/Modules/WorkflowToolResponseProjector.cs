@@ -46,21 +46,28 @@ internal static class WorkflowToolResponseProjector
 
     private static JsonNode? ProjectField(
         JsonNode? root,
-        WorkflowToolResponseProjectionField field)
+        WorkflowToolResponseProjectionField field) =>
+        ApplyOperations(root, field.Operations, field.OutputName);
+
+    private static JsonNode? ApplyOperations(
+        JsonNode? current,
+        IEnumerable<WorkflowToolResponseProjectionOperation> operations,
+        string outputName)
     {
-        var current = root;
-        foreach (var operation in field.Operations)
+        foreach (var operation in operations)
         {
             current = operation.OperationCase switch
             {
                 WorkflowToolResponseProjectionOperation.OperationOneofCase.JsonPointer =>
-                    ResolveRequiredPointer(current, operation.JsonPointer, field.OutputName),
+                    ResolveRequiredPointer(current, operation.JsonPointer, outputName),
                 WorkflowToolResponseProjectionOperation.OperationOneofCase.ParseJson =>
-                    ParseRequiredJson(current, field.OutputName),
+                    ParseRequiredJson(current, outputName),
                 WorkflowToolResponseProjectionOperation.OperationOneofCase.ArrayMatch =>
-                    ResolveRequiredArrayMatch(current, operation.ArrayMatch, field.OutputName),
+                    ResolveRequiredArrayMatch(current, operation.ArrayMatch, outputName),
+                WorkflowToolResponseProjectionOperation.OperationOneofCase.ArrayMap =>
+                    ResolveRequiredArrayMap(current, operation.ArrayMap, outputName),
                 _ => throw new WorkflowToolResponseProjectionException(
-                    $"Projection field '{field.OutputName}' contains an unsupported operation."),
+                    $"Projection field '{outputName}' contains an unsupported operation."),
             };
         }
 
@@ -133,6 +140,32 @@ internal static class WorkflowToolResponseProjector
         }
 
         return selected;
+    }
+
+    private static JsonNode ResolveRequiredArrayMap(
+        JsonNode? current,
+        WorkflowToolResponseProjectionArrayMap map,
+        string outputName)
+    {
+        if (current is not JsonArray array)
+        {
+            throw new WorkflowToolResponseProjectionException(
+                $"Projection field '{outputName}' can only map elements in a JSON array.");
+        }
+        if (array.Count > WorkflowToolResponseProjectionContract.MaxArrayMapItems)
+        {
+            throw new WorkflowToolResponseProjectionException(
+                $"Projection field '{outputName}' exceeds the array map item limit.");
+        }
+
+        var mapped = new JsonArray();
+        foreach (var element in array)
+        {
+            var projected = ApplyOperations(element, map.Operations, outputName);
+            mapped.Add(projected?.DeepClone());
+        }
+
+        return mapped;
     }
 
     private static bool TryResolvePointer(

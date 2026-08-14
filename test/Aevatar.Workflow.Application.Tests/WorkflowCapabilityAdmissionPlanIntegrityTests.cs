@@ -133,12 +133,25 @@ public sealed class WorkflowCapabilityAdmissionPlanIntegrityTests
             {
                 new WorkflowToolResponseProjectionField
                 {
-                    OutputName = "instance_code",
+                    OutputName = "values",
                     Operations =
                     {
                         new WorkflowToolResponseProjectionOperation
                         {
-                            JsonPointer = "/data/instance_code",
+                            JsonPointer = "/data/rows",
+                        },
+                        new WorkflowToolResponseProjectionOperation
+                        {
+                            ArrayMap = new WorkflowToolResponseProjectionArrayMap
+                            {
+                                Operations =
+                                {
+                                    new WorkflowToolResponseProjectionOperation
+                                    {
+                                        JsonPointer = "/value",
+                                    },
+                                },
+                            },
                         },
                     },
                 },
@@ -150,11 +163,11 @@ public sealed class WorkflowCapabilityAdmissionPlanIntegrityTests
         Check(fixture).Succeeded.Should().BeTrue();
 
         var admittedPointer = fixture.Plan.InvocationAdmissions[0]
-            .ResponseProjection.Fields[0].Operations[0];
+            .ResponseProjection.Fields[0].Operations[1].ArrayMap.Operations[0];
         var expectedPointer = fixture.ExpectedInvocations[0]
-            .ResponseProjection.Fields[0].Operations[0];
-        admittedPointer.JsonPointer = "/data/other_instance_code";
-        expectedPointer.JsonPointer = "/data/other_instance_code";
+            .ResponseProjection.Fields[0].Operations[1].ArrayMap.Operations[0];
+        admittedPointer.JsonPointer = "/other_value";
+        expectedPointer.JsonPointer = "/other_value";
 
         Check(fixture).Failure.Should().Be(
             WorkflowCapabilityAdmissionCompatibilityFailure.AdmissionDigestMismatch);

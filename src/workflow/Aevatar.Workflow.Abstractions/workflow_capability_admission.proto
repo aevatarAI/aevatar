@@ -144,6 +144,7 @@ message WorkflowToolResponseProjectionOperation {
     string json_pointer = 1;
     bool parse_json = 2;
     WorkflowToolResponseProjectionArrayMatch array_match = 3;
+    WorkflowToolResponseProjectionArrayMap array_map = 4;
   }
 }
 
@@ -152,6 +153,13 @@ message WorkflowToolResponseProjectionOperation {
 message WorkflowToolResponseProjectionArrayMatch {
   string element_json_pointer = 1;
   string expected_string = 2;
+}
+
+// Applies one bounded, ordered operation chain to every element of the current array and returns
+// the projected values in source order. Every element must project successfully. Array maps cannot
+// contain another array map.
+message WorkflowToolResponseProjectionArrayMap {
+  repeated WorkflowToolResponseProjectionOperation operations = 1;
 }
 
 message ExternalToolInvocationSpec {

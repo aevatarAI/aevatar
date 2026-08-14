@@ -280,11 +280,48 @@ public sealed class WorkflowParser
         ArgumentNullException.ThrowIfNull(rawOperation);
         var populated = (rawOperation.Pointer is null ? 0 : 1) +
                         (rawOperation.ParseJson.HasValue ? 1 : 0) +
+                        (rawOperation.ArrayMatch is null ? 0 : 1) +
+                        (rawOperation.ArrayMap is null ? 0 : 1);
+        if (populated != 1)
+        {
+            throw new InvalidOperationException(
+                "Each response_projection operation must contain exactly one of pointer, parse_json, match, or map.");
+        }
+
+        if (rawOperation.Pointer is not null)
+            return new WorkflowToolResponseProjectionOperation { JsonPointer = rawOperation.Pointer };
+        if (rawOperation.ParseJson.HasValue)
+            return new WorkflowToolResponseProjectionOperation { ParseJson = rawOperation.ParseJson.Value };
+
+        if (rawOperation.ArrayMap is not null)
+        {
+            var arrayMap = new WorkflowToolResponseProjectionArrayMap();
+            foreach (var mappedOperation in rawOperation.ArrayMap)
+                arrayMap.Operations.Add(MapResponseProjectionMappedOperation(mappedOperation));
+            return new WorkflowToolResponseProjectionOperation { ArrayMap = arrayMap };
+        }
+
+        return new WorkflowToolResponseProjectionOperation
+        {
+            ArrayMatch = new WorkflowToolResponseProjectionArrayMatch
+            {
+                ElementJsonPointer = rawOperation.ArrayMatch!.Pointer ?? string.Empty,
+                ExpectedString = rawOperation.ArrayMatch.ExpectedString ?? string.Empty,
+            },
+        };
+    }
+
+    private static WorkflowToolResponseProjectionOperation MapResponseProjectionMappedOperation(
+        RawToolResponseProjectionMappedOperation rawOperation)
+    {
+        ArgumentNullException.ThrowIfNull(rawOperation);
+        var populated = (rawOperation.Pointer is null ? 0 : 1) +
+                        (rawOperation.ParseJson.HasValue ? 1 : 0) +
                         (rawOperation.ArrayMatch is null ? 0 : 1);
         if (populated != 1)
         {
             throw new InvalidOperationException(
-                "Each response_projection operation must contain exactly one of pointer, parse_json, or match.");
+                "Each mapped response_projection operation must contain exactly one of pointer, parse_json, or match.");
         }
 
         if (rawOperation.Pointer is not null)
@@ -1587,6 +1624,20 @@ public sealed class WorkflowParser
     }
 
     private sealed class RawToolResponseProjectionOperation
+    {
+        public string? Pointer { get; set; }
+
+        [YamlMember(Alias = "parse_json")]
+        public bool? ParseJson { get; set; }
+
+        [YamlMember(Alias = "match")]
+        public RawToolResponseProjectionArrayMatch? ArrayMatch { get; set; }
+
+        [YamlMember(Alias = "map")]
+        public List<RawToolResponseProjectionMappedOperation>? ArrayMap { get; set; }
+    }
+
+    private sealed class RawToolResponseProjectionMappedOperation
     {
         public string? Pointer { get; set; }
 

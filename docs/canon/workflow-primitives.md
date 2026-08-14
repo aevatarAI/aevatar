@@ -156,7 +156,24 @@ YAML 的 exact capability 规则：
 - `nyxid_proxy` has exactly one selector: `capability.nyxid_operation { user_service_id, endpoint_id }` (`PublishedEndpoint`) or `capability.nyxid_request { user_service_id, method, path_template, query_parameters, header_parameters, body_mode, body_required, response_mode, risk? }` (`AuthoredRequest`). Both are static and mutually exclusive. `risk` accepts `read_only`、`write` or `destructive`; omitted contracts preserve the method-derived v1 digest, while an explicit risk is bound into the v2 request digest.
 - Published-operation slug/method/path/schema/source facts come from `/api/v1/mcp/config` at admission. Authored-request admission reads only exact UserService inventory, derives the slug constraint server-side, and requires a separate authenticated binder confirmation to create the typed grant. Dynamic selector, missing selector/grant, caller-authored proof fields, secret-bearing headers, and runtime route/policy overrides fail closed.
 - ordinary、nested、`foreach`/`for_each`/`foreach_llm` 与 `while`/`loop` 共享同一 invocation compiler。循环 primitive 的 selector 写在 owner step 的 `capability` 上，编译器为其 synthesized tool sub-step 生成稳定 `<workflow>/<step>/sub-step` call-site；每个 item/iteration 只能改变 runtime arguments，不能改变服务或 endpoint。
-- Admitted `nyxid_proxy` steps may declare a root-level `response_projection.fields` map. The compiler normalizes it into a typed projection and seals it into the call-site admission digest; runtime rejects a different or missing projection. Each field is an ordered chain of RFC 6901 `pointer`, `parse_json: true`, or exact-unique array `match { pointer, equals }` operations. Projection runs before any tool completion enters workflow durable state or a committed event. Missing paths, wrong types, invalid encoded JSON, zero/multiple matches, or projected output above 64 KiB fail closed without retaining the raw provider response. A provider failure under an authored projection also persists only a stable safe code and message.
+- Admitted `nyxid_proxy` steps may declare a root-level `response_projection.fields` map. The compiler normalizes it into a typed projection and seals it into the call-site admission digest; runtime rejects a different or missing projection. Each field is an ordered chain of RFC 6901 `pointer`, `parse_json: true`, exact-unique array `match { pointer, equals }`, or bounded `map` operations. `map` applies its ordered nested operation list to every element of the current JSON array, preserves source order and cardinality, and fails the whole field when any element fails. A map cannot contain another map, mapped operations count toward the existing 16-operation field budget, and one map accepts at most 1024 source elements. Projection runs before any tool completion enters workflow durable state or a committed event. Missing paths, wrong types, invalid encoded JSON, zero/multiple matches, map item overflow, or projected output above 64 KiB fail closed without retaining the raw provider response. A provider failure under an authored projection also persists only a stable safe code and message.
+
+  ```yaml
+  response_projection:
+    fields:
+      payment_reasons:
+        - pointer: /data/form
+        - parse_json: true
+        - match:
+            pointer: /id
+            equals: field-list
+        - pointer: /value
+        - map:
+            - match:
+                pointer: /id
+                equals: payment-reason-widget
+            - pointer: /value
+  ```
 - `sub_param_` 仍是通用的 synthesized sub-step 参数前缀；`sub_param_prompt`、`sub_param_workflow`、`sub_param_prompt_prefix` 与其他非工具用法保持原语义，不承载 capability proof。
 - API key、bearer、OAuth secret、cookie 和 downstream credential 不得进入 Chat、YAML、actor state、read model、receipt 或 log。Credential setup 只在 NyxID 或 Host Connector trusted boundary 完成。
 

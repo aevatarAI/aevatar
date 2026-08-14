@@ -10,6 +10,8 @@ public static class WorkflowToolResponseProjectionContract
 {
     public const int MaxFields = 64;
     public const int MaxOperationsPerField = 16;
+    public const int MaxArrayMapItems = 1024;
+    public const int MaxArrayMapDepth = 1;
     public const int MaxOutputNameBytes = 64;
     public const int MaxJsonPointerBytes = 512;
     public const int MaxExpectedStringBytes = 1024;
@@ -41,15 +43,22 @@ public static class WorkflowToolResponseProjectionContract
             }
             previousOutputName = field.OutputName;
 
-            if (field.Operations.Count is 0 or > MaxOperationsPerField)
+            if (field.Operations.Count == 0)
             {
                 throw new InvalidOperationException(
                     $"Workflow tool response projection field '{field.OutputName}' must contain between 1 and " +
                     $"{MaxOperationsPerField} operations.");
             }
 
+            var operationCount = 0;
             foreach (var operation in field.Operations)
-                ValidateOperation(operation);
+                operationCount += ValidateOperation(operation, mapDepth: 0);
+            if (operationCount > MaxOperationsPerField)
+            {
+                throw new InvalidOperationException(
+                    $"Workflow tool response projection field '{field.OutputName}' must contain between 1 and " +
+                    $"{MaxOperationsPerField} operations, including mapped operations.");
+            }
         }
     }
 
@@ -87,7 +96,9 @@ public static class WorkflowToolResponseProjectionContract
         }
     }
 
-    private static void ValidateOperation(WorkflowToolResponseProjectionOperation operation)
+    private static int ValidateOperation(
+        WorkflowToolResponseProjectionOperation operation,
+        int mapDepth)
     {
         ArgumentNullException.ThrowIfNull(operation);
         switch (operation.OperationCase)
@@ -116,9 +127,27 @@ public static class WorkflowToolResponseProjectionContract
                         "Workflow tool response projection contains an invalid array match operation.");
                 }
                 break;
+            case WorkflowToolResponseProjectionOperation.OperationOneofCase.ArrayMap:
+                if (operation.ArrayMap is null || operation.ArrayMap.Operations.Count == 0)
+                {
+                    throw new InvalidOperationException(
+                        "Workflow tool response projection contains an empty array map operation.");
+                }
+                if (mapDepth >= MaxArrayMapDepth)
+                {
+                    throw new InvalidOperationException(
+                        "Workflow tool response projection array map operations cannot be nested.");
+                }
+
+                var mappedOperationCount = 1;
+                foreach (var mappedOperation in operation.ArrayMap.Operations)
+                    mappedOperationCount += ValidateOperation(mappedOperation, mapDepth + 1);
+                return mappedOperationCount;
             default:
                 throw new InvalidOperationException(
                     "Workflow tool response projection operations must select exactly one operation kind.");
         }
+
+        return 1;
     }
 }

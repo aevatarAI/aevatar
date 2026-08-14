@@ -800,17 +800,18 @@ public sealed class WorkflowAuthorizationDependenciesTests
                   fields:
                     instance_code:
                       - pointer: /data/instance_code
-                    vendor:
+                    payment_reasons:
                       - pointer: /data/form
                       - parse_json: true
                       - match:
                           pointer: /id
                           equals: field-list
-                      - pointer: /value/0
-                      - match:
-                          pointer: /id
-                          equals: vendor-widget
                       - pointer: /value
+                      - map:
+                          - match:
+                              pointer: /id
+                              equals: payment-reason-widget
+                          - pointer: /value
                 parameters:
                   sub_step_type: tool_call
                   sub_param_tool: nyxid_proxy
@@ -822,15 +823,54 @@ public sealed class WorkflowAuthorizationDependenciesTests
         var invocation = dependencies!.ExternalInvocations.Should().ContainSingle().Subject;
         invocation.CallSiteId.Should().Be("fin-history/fetch-details/sub-step");
         invocation.ResponseProjection.Fields.Select(static field => field.OutputName)
-            .Should().Equal("instance_code", "vendor");
+            .Should().Equal("instance_code", "payment_reasons");
         invocation.ResponseProjection.Fields[1].Operations.Select(static operation => operation.OperationCase)
             .Should().Equal(
                 WorkflowToolResponseProjectionOperation.OperationOneofCase.JsonPointer,
                 WorkflowToolResponseProjectionOperation.OperationOneofCase.ParseJson,
                 WorkflowToolResponseProjectionOperation.OperationOneofCase.ArrayMatch,
                 WorkflowToolResponseProjectionOperation.OperationOneofCase.JsonPointer,
+                WorkflowToolResponseProjectionOperation.OperationOneofCase.ArrayMap);
+        invocation.ResponseProjection.Fields[1].Operations[^1].ArrayMap.Operations
+            .Select(static operation => operation.OperationCase)
+            .Should().Equal(
                 WorkflowToolResponseProjectionOperation.OperationOneofCase.ArrayMatch,
                 WorkflowToolResponseProjectionOperation.OperationOneofCase.JsonPointer);
+    }
+
+    [Fact]
+    public void EvaluateAuthorizationDependencies_ShouldRejectNestedResponseProjectionMaps()
+    {
+        const string yaml = """
+            name: nested-map
+            roles: []
+            steps:
+              - id: fetch-details
+                type: tool_call
+                capability:
+                  nyxid_request:
+                    user_service_id: us-lark-alpha
+                    method: GET
+                    path_template: /approval/instances
+                    body_mode: none
+                    response_mode: text
+                    risk: read_only
+                response_projection:
+                  fields:
+                    values:
+                      - pointer: /rows
+                      - map:
+                          - map:
+                              - pointer: /value
+                parameters:
+                  tool: nyxid_proxy
+                  arguments: '{}'
+            """;
+
+        var act = () => new Aevatar.Workflow.Core.Primitives.WorkflowParser().Parse(yaml);
+
+        act.Should().Throw<YamlDotNet.Core.YamlException>()
+            .WithMessage("*Property 'map' not found*");
     }
 
     [Theory]
