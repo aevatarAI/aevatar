@@ -19,6 +19,8 @@ export interface ScopeWorkflowCatalogueCommittedFacts {
   activeRevisionId: string;
   deploymentId: string;
   deploymentStatus: string;
+  serviceAppId: string;
+  serviceNamespace: string;
 }
 
 export interface ScopeWorkflowCatalogueRow {
@@ -33,6 +35,7 @@ export interface ScopeWorkflowCatalogueRow {
   capabilities: ScopeWorkflowCatalogueRowCapabilities;
   sourceWatermarkUtc: string;
   committed: ScopeWorkflowCatalogueCommittedFacts | null;
+  publishedServiceId: string | null;
 }
 
 export interface ScopeWorkflowCatalogueResponse {
