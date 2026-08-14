@@ -30,6 +30,7 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
 {
     internal const string ModuleStateKey = "foreach";
     private const string InputFileRefsItemsSource = "input_file_refs";
+    private const int MaxConcurrentChildPublications = BackpressureHelper.DefaultMaxConcurrentWorkers;
     internal static TimeSpan DurablePublicationRetryDelay => TimeSpan.FromSeconds(1);
     private readonly WorkflowExpressionEvaluator _expressionEvaluator = new();
 
@@ -485,7 +486,9 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
         CancellationToken ct)
     {
         var checkpointRequired = false;
+        var identityCheckpointRequired = false;
         var retryParentKeys = new HashSet<string>(StringComparer.Ordinal);
+        var pendingPublications = new List<PendingDispatchPublication>();
 
         foreach (var (parentKey, parentState) in state.Parents.ToArray())
         {
@@ -498,34 +501,42 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
                     continue;
                 }
 
-                EnsureStableChildIdentity(entry, parentState);
-                try
-                {
-                    await ctx.PublishAsync(
-                        BackpressureHelper.ToStepRequest(entry),
-                        TopologyAudience.Self,
-                        ct,
-                        BuildChildPublishOptions(entry));
-                }
-                catch (OperationCanceledException) when (ct.IsCancellationRequested)
-                {
-                    throw;
-                }
-                catch (Exception ex)
-                {
-                    ctx.Logger.LogWarning(
-                        ex,
-                        "ForEach child publication remains pending run={RunId} step={StepId}",
-                        entry.RunId,
-                        entry.StepId);
-                    retryParentKeys.Add(parentKey);
-                    break;
-                }
-
-                AddIfMissing(parentState.DispatchedStepIds, entry.StepId);
-                RemovePendingDispatch(parentState, entry.StepId);
-                checkpointRequired = true;
+                identityCheckpointRequired |= EnsureStableChildIdentity(entry, parentState);
+                pendingPublications.Add(new PendingDispatchPublication(parentKey, parentState, entry));
             }
+        }
+
+        // Upgrade-era pending entries may predate stable child identities. Fence those identities
+        // before any publication so a crash cannot replay the same child under a different operation.
+        if (identityCheckpointRequired)
+        {
+            await SaveStateAsync(state, ctx, ct);
+            checkpointRequired = false;
+        }
+
+        var publicationResults = new List<PendingDispatchPublicationResult>(pendingPublications.Count);
+        foreach (var batch in pendingPublications.Chunk(MaxConcurrentChildPublications))
+        {
+            publicationResults.AddRange(await Task.WhenAll(batch.Select(
+                publication => TryPublishPendingDispatchAsync(publication, ctx, ct))));
+        }
+
+        foreach (var result in publicationResults)
+        {
+            if (result.Error != null)
+            {
+                ctx.Logger.LogWarning(
+                    result.Error,
+                    "ForEach child publication remains pending run={RunId} step={StepId}",
+                    result.Entry.RunId,
+                    result.Entry.StepId);
+                retryParentKeys.Add(result.ParentKey);
+                continue;
+            }
+
+            AddIfMissing(result.ParentState.DispatchedStepIds, result.Entry.StepId);
+            RemovePendingDispatch(result.ParentState, result.Entry.StepId);
+            checkpointRequired = true;
         }
 
         // Every intent was durable before publication. A single acknowledgement checkpoint after
@@ -536,6 +547,46 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
 
         foreach (var parentKey in retryParentKeys)
             await TrySchedulePublicationRetryAsync(parentKey, ctx, ct);
+    }
+
+    private static async Task<PendingDispatchPublicationResult> TryPublishPendingDispatchAsync(
+        PendingDispatchPublication publication,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        try
+        {
+            await ctx.PublishAsync(
+                BackpressureHelper.ToStepRequest(publication.Entry),
+                TopologyAudience.Self,
+                ct,
+                BuildChildPublishOptions(publication.Entry));
+            return new PendingDispatchPublicationResult(publication, null);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return new PendingDispatchPublicationResult(publication, ex);
+        }
+    }
+
+    private sealed record PendingDispatchPublication(
+        string ParentKey,
+        ForEachParentState ParentState,
+        BackpressureQueueEntry Entry);
+
+    private sealed record PendingDispatchPublicationResult(
+        PendingDispatchPublication Publication,
+        Exception? Error)
+    {
+        public string ParentKey => Publication.ParentKey;
+
+        public ForEachParentState ParentState => Publication.ParentState;
+
+        public BackpressureQueueEntry Entry => Publication.Entry;
     }
 
     private static async Task PublishPendingCompletionAsync(
@@ -648,7 +699,7 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
         }
     }
 
-    private static void EnsureStableChildIdentity(
+    private static bool EnsureStableChildIdentity(
         BackpressureQueueEntry entry,
         ForEachParentState parentState)
     {
@@ -657,19 +708,34 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
             : parentState.ParentStepId;
         var index = ExtractDirectItemIndex(entry.StepId);
         if (parent == null || index < 0)
-            return;
+            return false;
 
+        var changed = false;
         var runId = WorkflowRunIdNormalizer.Normalize(entry.RunId);
         if (string.IsNullOrWhiteSpace(entry.ExecutionId))
+        {
             entry.ExecutionId = BuildChildExecutionId(runId, parent, index, parentState.ParentExecutionId);
+            changed = true;
+        }
         if (string.IsNullOrWhiteSpace(entry.IdempotencyKey))
+        {
             entry.IdempotencyKey = BuildChildIdempotencyKey(
                 runId,
                 parent,
                 index,
                 parentState.ParentExecutionId,
                 parentState.ParentIdempotencyKey);
-        parentState.ChildExecutionIds[entry.StepId] = entry.ExecutionId;
+            changed = true;
+        }
+
+        if (!parentState.ChildExecutionIds.TryGetValue(entry.StepId, out var executionId) ||
+            !string.Equals(executionId, entry.ExecutionId, StringComparison.Ordinal))
+        {
+            parentState.ChildExecutionIds[entry.StepId] = entry.ExecutionId;
+            changed = true;
+        }
+
+        return changed;
     }
 
     private static void MigrateLegacyParentState(
