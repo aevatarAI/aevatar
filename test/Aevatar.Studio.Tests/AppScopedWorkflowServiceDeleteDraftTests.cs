@@ -488,7 +488,7 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
     }
 
     [Fact]
-    public async Task SaveDraftAsync_ShouldPreserveUnresolvedRuntimeYamlAndStableDraftIdentity()
+    public async Task SaveDraftAsync_ShouldUseExplicitWorkflowNameAndAlignYaml()
     {
         using var environment = new ScopedWorkflowEnvironment();
         var workspacePort = new RecordingStudioWorkspacePorts();
@@ -517,11 +517,16 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
         var saved = workspacePort.SavedDrafts.Should().ContainSingle().Subject;
         saved.ScopeId.Should().Be("scope-alpha");
         saved.WorkflowId.Should().Be("wf-alpha");
-        saved.WorkflowName.Should().Be("x_digest");
-        saved.Yaml.Should().Be(yaml.Trim());
+        saved.WorkflowName.Should().Be("X Digest");
+        saved.Yaml.Should().Contain("name: X Digest");
         accepted.WorkflowId.Should().Be("wf-alpha");
         accepted.Accepted.Should().BeTrue();
         accepted.Readiness.Stage.Should().Be("projection_pending");
+
+        var reopened = await service.GetDraftAsync("scope-alpha", "wf-alpha");
+        reopened.Should().NotBeNull();
+        reopened!.Name.Should().Be("X Digest");
+        reopened.Yaml.Should().Contain("name: X Digest");
     }
 
     [Fact]
