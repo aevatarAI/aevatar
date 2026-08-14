@@ -113,9 +113,14 @@ remains read-only. Admission commits
 the exact UserService ID, slug snapshot, catalog identity, and contract digest into an
 `external-capability-admission.v5` call-site proof. Durable bind/invoke additionally requires the
 existing actor-owned NyxID authorization catalog to prove that exact service grant. Interactive
-runtime re-reads NyxID facts when it has a source-readable caller credential. With delegation-only
-interactive ingress, runtime does not read inventory again and may call only the exact UserService
-ID sealed in the valid admission proof. Scheduled runtime follows the same exact-proof rule:
+runtime re-reads NyxID facts when it has a source-readable caller credential. If that source read
+returns `401 Unauthorized` after admission because the short-lived credential expired during a long
+run, runtime may continue only when the valid admission proof seals an exact UserService ID; NyxID
+then performs the final live credential and allowlist check on that exact proxy request. A `403`
+response or an inventory read that succeeds and explicitly denies the route still fails closed. With
+delegation-only interactive ingress, runtime does not read inventory again and may call only the
+exact UserService ID sealed in the valid admission proof. Scheduled runtime follows the same
+exact-proof rule:
 authority-refreshed tokens, short-lived tokens projected through a scheduled durable handle, and
 restricted scheduled-invocation Agent Keys all retain the `ProxyDelegation` kind. They are execution
 credentials, not source-readable inventory credentials, so none may auto-resolve a slug.

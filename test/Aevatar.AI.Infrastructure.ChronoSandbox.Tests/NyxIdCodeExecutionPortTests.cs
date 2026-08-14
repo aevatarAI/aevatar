@@ -108,6 +108,183 @@ public sealed class NyxIdCodeExecutionPortTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WhenUserServicesSourceCredentialExpiresAfterExactAdmission_UsesAdmittedRoute()
+    {
+        var handler = new SequenceHandler(
+            JsonResponse("{\"error\":\"expired\"}", HttpStatusCode.Unauthorized),
+            JsonResponse(
+                """
+                {
+                  "success": true,
+                  "output": {
+                    "stdout": "admitted-ok",
+                    "stderr": "",
+                    "exit_code": 0
+                  }
+                }
+                """));
+        var port = CreatePort(handler);
+        var request = Request(CodeServiceId) with
+        {
+            Route = new CodeExecutionRouteIdentity(
+                "chrono-sandbox",
+                CodeServiceId,
+                CodeExecutionRouteIdentitySource.WorkflowCapabilityAdmission),
+        };
+
+        var outcome = await port.ExecuteAsync(request);
+
+        outcome.Failure.Should().BeNull();
+        outcome.Result!.Stdout.Should().Be("admitted-ok");
+        outcome.ResolvedRoute.Should().Be(new CodeExecutionRouteIdentity(
+            "chrono-sandbox",
+            CodeServiceId,
+            CodeExecutionRouteIdentitySource.WorkflowCapabilityAdmission));
+        handler.Requests.Should().HaveCount(3);
+        handler.Requests[0].PathAndQuery.Should().Be("/api/v1/user-services");
+        handler.Requests[0].Authorization.Should().Be($"Bearer {SourceReadableBearerToken}");
+        handler.Requests[1].PathAndQuery.Should().Be("/api/v1/keys");
+        handler.Requests[1].Authorization.Should().Be($"Bearer {SourceReadableBearerToken}");
+        handler.Requests[2].PathAndQuery.Should().Be(
+            "/api/v1/proxy/s/chrono-sandbox/execute?_nyxid_via=us-code-alpha");
+        handler.Requests[2].Authorization.Should().Be($"Bearer {ExecutionBearerToken}");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenKeysSourceCredentialExpiresAfterExactAdmission_UsesAdmittedRoute()
+    {
+        var handler = new SequenceHandler(
+            JsonResponse(Inventory(Service(
+                CodeServiceId,
+                "chrono-sandbox",
+                false,
+                true,
+                "sandbox:execute"))),
+            JsonResponse(
+                """
+                {
+                  "success": true,
+                  "output": {
+                    "stdout": "admitted-ok",
+                    "stderr": "",
+                    "exit_code": 0
+                  }
+                }
+                """))
+        {
+            KeysResponse = JsonResponse(
+                "{\"error\":\"expired\"}",
+                HttpStatusCode.Unauthorized),
+        };
+        var port = CreatePort(handler);
+        var request = Request(CodeServiceId) with
+        {
+            Route = new CodeExecutionRouteIdentity(
+                "chrono-sandbox",
+                CodeServiceId,
+                CodeExecutionRouteIdentitySource.WorkflowCapabilityAdmission),
+        };
+
+        var outcome = await port.ExecuteAsync(request);
+
+        outcome.Failure.Should().BeNull();
+        outcome.Result!.Stdout.Should().Be("admitted-ok");
+        outcome.ResolvedRoute.Should().Be(new CodeExecutionRouteIdentity(
+            "chrono-sandbox",
+            CodeServiceId,
+            CodeExecutionRouteIdentitySource.WorkflowCapabilityAdmission));
+        handler.Requests.Should().HaveCount(3);
+        handler.Requests[0].PathAndQuery.Should().Be("/api/v1/user-services");
+        handler.Requests[1].PathAndQuery.Should().Be("/api/v1/keys");
+        handler.Requests[2].PathAndQuery.Should().Be(
+            "/api/v1/proxy/s/chrono-sandbox/execute?_nyxid_via=us-code-alpha");
+        handler.Requests[2].Authorization.Should().Be($"Bearer {ExecutionBearerToken}");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenSourceCredentialIsUnauthorizedWithoutExactAdmission_DoesNotFallback()
+    {
+        var handler = new SequenceHandler(JsonResponse(
+            "{\"error\":\"expired\"}",
+            HttpStatusCode.Unauthorized));
+        var port = CreatePort(handler);
+
+        var outcome = await port.ExecuteAsync(Request(CodeServiceId));
+
+        outcome.Result.Should().BeNull();
+        outcome.ResolvedRoute.Should().BeNull();
+        outcome.Failure.Should().BeEquivalentTo(new
+        {
+            Kind = CodeExecutionFailureKind.AdmissionDenied,
+            Code = "code_execution_route_access_denied",
+        });
+        handler.Requests.Should().HaveCount(2);
+        handler.Requests.Should().NotContain(recorded =>
+            recorded.PathAndQuery.Contains("/api/v1/proxy/", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenSourceCredentialIsForbiddenAfterExactAdmission_DoesNotFallback()
+    {
+        var handler = new SequenceHandler(JsonResponse(
+            "{\"error\":\"forbidden\"}",
+            HttpStatusCode.Forbidden));
+        var port = CreatePort(handler);
+        var request = Request(CodeServiceId) with
+        {
+            Route = new CodeExecutionRouteIdentity(
+                "chrono-sandbox",
+                CodeServiceId,
+                CodeExecutionRouteIdentitySource.WorkflowCapabilityAdmission),
+        };
+
+        var outcome = await port.ExecuteAsync(request);
+
+        outcome.Result.Should().BeNull();
+        outcome.ResolvedRoute.Should().BeNull();
+        outcome.Failure.Should().BeEquivalentTo(new
+        {
+            Kind = CodeExecutionFailureKind.AdmissionDenied,
+            Code = "code_execution_route_access_denied",
+        });
+        handler.Requests.Should().HaveCount(2);
+        handler.Requests.Should().NotContain(recorded =>
+            recorded.PathAndQuery.Contains("/api/v1/proxy/", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenLiveInventoryDeniesExactAdmission_DoesNotFallBackToProxy()
+    {
+        var handler = new SequenceHandler(JsonResponse(Inventory(Service(
+            CodeServiceId,
+            "chrono-sandbox",
+            false,
+            true,
+            "sandbox:execute",
+            credentialSourceType: "org",
+            allowed: false))));
+        var port = CreatePort(handler);
+        var request = Request(CodeServiceId) with
+        {
+            Route = new CodeExecutionRouteIdentity(
+                "chrono-sandbox",
+                CodeServiceId,
+                CodeExecutionRouteIdentitySource.WorkflowCapabilityAdmission),
+        };
+
+        var outcome = await port.ExecuteAsync(request);
+
+        outcome.Failure.Should().BeEquivalentTo(new
+        {
+            Kind = CodeExecutionFailureKind.AdmissionDenied,
+            Code = "code_execution_route_access_denied",
+        });
+        handler.Requests.Should().HaveCount(2);
+        handler.Requests.Should().NotContain(request =>
+            request.PathAndQuery.Contains("/api/v1/proxy/", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WithoutSourceReadableCredentialOrExactAdmissionFailsBeforeNyxIdCall()
     {
         var handler = new SequenceHandler();

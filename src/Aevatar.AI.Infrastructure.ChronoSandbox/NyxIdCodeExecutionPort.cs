@@ -112,13 +112,31 @@ internal sealed class NyxIdCodeExecutionPort(
             }
 
             if (!resolution.IsReady)
-                return RouteResolutionFailed(resolution, localDiagnosticId);
-
-            var resolvedService = resolution.Service!;
-            route = new CodeExecutionRouteIdentity(
-                resolvedService.Slug,
-                resolvedService.Id,
-                CodeExecutionRouteIdentitySource.NyxIdUserServiceCatalog);
+            {
+                if (resolution.SourceFailure?.Kind == NyxIdApiAccessFailureKind.Unauthorized &&
+                    TryResolveExactAdmittedRoute(request.Route, out var admittedUserServiceId))
+                {
+                    _logger.LogWarning(
+                        "Code execution source revalidation was unauthorized; using the exact workflow admission and deferring final access control to NyxID. diagnosticId={DiagnosticId} failureKind=source_unauthorized_exact_admission",
+                        localDiagnosticId);
+                    route = new CodeExecutionRouteIdentity(
+                        RequiredServiceSlug,
+                        admittedUserServiceId,
+                        CodeExecutionRouteIdentitySource.WorkflowCapabilityAdmission);
+                }
+                else
+                {
+                    return RouteResolutionFailed(resolution, localDiagnosticId);
+                }
+            }
+            else
+            {
+                var resolvedService = resolution.Service!;
+                route = new CodeExecutionRouteIdentity(
+                    resolvedService.Slug,
+                    resolvedService.Id,
+                    CodeExecutionRouteIdentitySource.NyxIdUserServiceCatalog);
+            }
         }
 
         if (string.IsNullOrWhiteSpace(route.UserServiceId))
