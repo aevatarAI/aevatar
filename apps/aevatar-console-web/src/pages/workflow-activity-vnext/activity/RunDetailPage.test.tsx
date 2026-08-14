@@ -432,6 +432,28 @@ describe('Workflow Activity vNext run detail console', () => {
     });
   });
 
+  it('uses vNext panel tokens instead of legacy published-runs detail colors', async () => {
+    renderWithQueryClient(
+      <RunDetailPage runId="run-source-alpha" scopeId="scope-alpha" />,
+    );
+
+    expect(
+      await screen.findByRole('heading', { name: 'Published runs' }),
+    ).toBeInTheDocument();
+
+    const styleText = Array.from(document.querySelectorAll('style'))
+      .map((style) => style.textContent ?? '')
+      .join('\n');
+    expect(styleText).toContain('background: var(--wa-surface);');
+    expect(styleText).toContain('border: 1px solid var(--wa-line);');
+    expect(styleText).toContain('border-radius: var(--wa-radius);');
+    expect(styleText).toContain(
+      '.wa-vnext-run-detail__run--selected { background: var(--wa-blue-bg);',
+    );
+    expect(styleText).not.toContain('background: #f7f8fa;');
+    expect(styleText).not.toContain('border-color: #83b7ff;');
+  });
+
   it('keeps the selected workflow history visible when the immutable detail request fails', async () => {
     mockSearch = '?workflowId=wf-alpha';
     mockWorkflowActivityApi.getRun.mockRejectedValue(

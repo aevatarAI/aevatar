@@ -343,10 +343,12 @@ export const workflowActivityVNextCss = `
 .wa-vnext__technical-details summary { cursor: pointer; font-weight: 600; }
 .wa-vnext__technical-details-body { background: #fff; border: 1px solid var(--wa-line); border-radius: 6px; display: block; margin-top: 8px; max-width: 100%; overflow-wrap: anywhere; padding: 10px; }
 .wa-vnext-run-detail {
-  background: #f7f8fa;
-  color: #111827;
+  background: var(--wa-surface);
+  border: 1px solid var(--wa-line);
+  border-radius: var(--wa-radius);
+  color: var(--wa-ink);
   display: grid;
-  grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
+  grid-template-columns: minmax(256px, 312px) minmax(0, 1fr);
   flex: 1 1 auto;
   height: 100%;
   max-height: 100%;
@@ -355,8 +357,8 @@ export const workflowActivityVNextCss = `
   width: 100%;
 }
 .wa-vnext-run-detail__rail {
-  background: #ffffff;
-  border-right: 1px solid #e5e7eb;
+  background: var(--wa-surface);
+  border-right: 1px solid var(--wa-line);
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -365,79 +367,95 @@ export const workflowActivityVNextCss = `
 }
 .wa-vnext-run-detail__rail-header {
   align-items: center;
-  border-bottom: 1px solid #e5e7eb;
+  border-bottom: 1px solid var(--wa-line);
   display: flex;
   gap: 12px;
   justify-content: space-between;
   min-width: 0;
-  padding: 12px 18px 14px;
+  padding: 12px 16px;
 }
 .wa-vnext-run-detail__rail-title {
   display: grid;
   gap: 3px;
   min-width: 0;
 }
+.wa-vnext-run-detail__rail-title h5.ant-typography {
+  font-size: 14px;
+  line-height: 20px;
+}
+.wa-vnext-run-detail__rail-title .ant-typography {
+  font-size: 12px;
+  line-height: 17px;
+}
 .wa-vnext-run-detail__rail-list {
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 12px;
+  padding: 10px;
   scrollbar-gutter: stable;
 }
 .wa-vnext-run-detail__run {
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: 6px;
   color: inherit;
   cursor: pointer;
   display: grid;
-  gap: 4px;
+  gap: 3px;
   min-width: 0;
-  padding: 10px 12px;
+  padding: 8px 10px;
   text-align: left;
   transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
   width: 100%;
 }
 .wa-vnext-run-detail__run:hover {
-  background: #f3f4f6;
-  border-color: #e5e7eb;
+  background: var(--wa-subtle);
+  border-color: var(--wa-line);
 }
-.wa-vnext-run-detail__run--selected {
-  background: #eef6ff;
-  border-color: #83b7ff;
-  box-shadow: inset 3px 0 0 #1677ff;
-}
+.wa-vnext-run-detail__run--selected { background: var(--wa-blue-bg); border-color: color-mix(in srgb, var(--wa-blue) 35%, var(--wa-line)); box-shadow: inset 2px 0 0 var(--wa-blue); }
 .wa-vnext-run-detail__run-title {
   align-items: center;
   display: flex;
   gap: 8px;
   min-width: 0;
 }
+.wa-vnext-run-detail__run .ant-typography {
+  font-size: 12px;
+  line-height: 17px;
+}
 .wa-vnext-run-detail__stage {
   display: grid;
-  grid-template-rows: auto minmax(280px, 1fr) minmax(220px, 34vh);
+  grid-template-rows: auto minmax(280px, 1fr) minmax(220px, 32vh);
   min-height: 0;
   min-width: 0;
 }
 .wa-vnext-run-detail__stage-header {
   align-items: center;
-  background: #ffffff;
-  border-bottom: 1px solid #e5e7eb;
+  background: var(--wa-surface);
+  border-bottom: 1px solid var(--wa-line);
   display: flex;
   gap: 12px;
   justify-content: space-between;
   min-width: 0;
-  padding: 14px 22px;
+  padding: 12px 16px;
 }
 .wa-vnext-run-detail__stage-title {
   display: grid;
   gap: 4px;
   min-width: 0;
+}
+.wa-vnext-run-detail__stage-title h4.ant-typography {
+  font-size: 16px;
+  line-height: 22px;
+}
+.wa-vnext-run-detail__stage-title .ant-typography {
+  font-size: 12px;
+  line-height: 17px;
 }
 .wa-vnext-run-detail__stage-actions {
   align-items: center;
@@ -447,28 +465,25 @@ export const workflowActivityVNextCss = `
   justify-content: flex-end;
 }
 .wa-vnext-run-detail__graph {
-  background:
-    linear-gradient(135deg, rgba(17, 24, 39, 0.035) 25%, transparent 25%) -8px 0 / 16px 16px,
-    linear-gradient(225deg, rgba(17, 24, 39, 0.03) 25%, transparent 25%) -8px 0 / 16px 16px,
-    #fbfbfc;
+  background: var(--wa-subtle);
   min-height: 0;
   min-width: 0;
-  padding: 18px;
+  padding: 12px;
 }
 .wa-vnext-run-detail__graph > * {
   height: 100%;
   min-height: 0;
 }
 .wa-vnext-run-detail__details {
-  background: #ffffff;
-  border-top: 1px solid #e5e7eb;
+  background: var(--wa-surface);
+  border-top: 1px solid var(--wa-line);
   display: grid;
   grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
   min-height: 0;
   min-width: 0;
 }
 .wa-vnext-run-detail__logs {
-  border-right: 1px solid #e5e7eb;
+  border-right: 1px solid var(--wa-line);
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -477,12 +492,12 @@ export const workflowActivityVNextCss = `
 .wa-vnext-run-detail__logs-header,
 .wa-vnext-run-detail__inspector-header {
   align-items: center;
-  border-bottom: 1px solid #edf0f3;
+  border-bottom: 1px solid var(--wa-line);
   display: flex;
   gap: 8px;
   justify-content: space-between;
   min-width: 0;
-  padding: 10px 14px;
+  padding: 10px 12px;
 }
 .wa-vnext-run-detail__step-list {
   display: flex;
@@ -490,14 +505,17 @@ export const workflowActivityVNextCss = `
   flex-direction: column;
   gap: 4px;
   min-height: 0;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 8px;
+  scrollbar-gutter: stable;
 }
 .wa-vnext-run-detail__step {
   align-items: center;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: 6px;
   color: inherit;
   cursor: pointer;
   display: grid;
@@ -508,8 +526,8 @@ export const workflowActivityVNextCss = `
   text-align: left;
   width: 100%;
 }
-.wa-vnext-run-detail__step:hover { background: #f8fafc; }
-.wa-vnext-run-detail__step--selected { background: #eef6ff; border-color: #bfdbfe; }
+.wa-vnext-run-detail__step:hover { background: var(--wa-subtle); border-color: var(--wa-line); }
+.wa-vnext-run-detail__step--selected { background: var(--wa-blue-bg); border-color: color-mix(in srgb, var(--wa-blue) 30%, var(--wa-line)); }
 .wa-vnext-run-detail__inspector {
   display: flex;
   flex-direction: column;
@@ -537,7 +555,7 @@ export const workflowActivityVNextCss = `
 .wa-vnext-run-detail__timeline {
   background: var(--wa-subtle);
   border: 1px solid var(--wa-line);
-  border-radius: 8px;
+  border-radius: var(--wa-radius);
   margin: 0;
   max-width: 100%;
   overflow-wrap: anywhere;
