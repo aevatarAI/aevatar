@@ -203,7 +203,7 @@ public sealed class AevatarInvocationToolSourceTests
         tool.Name.Should().Be("aevatar_read_workflow_run_artifact");
         tool.IsReadOnly.Should().BeTrue();
         tool.Description.Should().Contain("aevatar_start_workflow");
-        tool.Description.Should().Contain("always pass both");
+        tool.Description.Should().Contain("run-binding projection proves");
         tool.Description.Should().Contain("pending");
         doc.RootElement.GetProperty("type").GetString().Should().Be("object");
         doc.RootElement.GetProperty("additionalProperties").GetBoolean().Should().BeFalse();
@@ -4370,9 +4370,21 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
-    public async Task ReadWorkflowRunArtifact_ShouldUseExplicitActorIdWithoutBindingLookup()
+    public async Task ReadWorkflowRunArtifact_ShouldUseExplicitActorIdWhenRunBindingMatches()
     {
         var harness = new Harness();
+        harness.RunBindingReader.BindingsByRunId["run-1"] =
+        [
+            new WorkflowActorBinding(
+                WorkflowActorKind.Run,
+                "workflow-run-actor",
+                "workflow-definition-actor",
+                "run-1",
+                "demo-dinner-workflow",
+                string.Empty,
+                new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Interactive),
+        ];
         harness.WorkflowQuery.ReportsByWorkflowRunId["workflow-run-actor"] = new WorkflowRunReport
         {
             RootActorId = "workflow-run-actor",
@@ -4388,13 +4400,45 @@ public sealed class AevatarInvocationToolSourceTests
             """{"workflow_run_id":"run-1","actor_id":"workflow-run-actor"}""");
 
         ErrorCodeOrNull(output).Should().BeNull(output);
-        harness.RunBindingReader.ListByRunIdCalls.Should().BeEmpty();
+        harness.RunBindingReader.ListByRunIdCalls.Should().Equal("run-1");
         harness.WorkflowQuery.ReportCalls.Should().Equal("run-1", "workflow-run-actor");
         var result = Read(output);
         result.GetProperty("workflow_run_id").GetString().Should().Be("run-1");
         result.GetProperty("artifact_actor_id").GetString().Should().Be("workflow-run-actor");
         result.GetProperty("status").GetString().Should().Be(nameof(WorkflowRunCompletionStatus.Completed));
         result.GetProperty("final_output").GetString().Should().Be("Completed through explicit actor identity.");
+    }
+
+    [Fact]
+    public async Task ReadWorkflowRunArtifact_ExplicitForeignActorWithoutRunBinding_ShouldNotReadItsReport()
+    {
+        var harness = new Harness();
+        harness.WorkflowQuery.ReportsByWorkflowRunId["foreign-workflow-run-actor"] = new WorkflowRunReport
+        {
+            RootActorId = "foreign-workflow-run-actor",
+            WorkflowName = "foreign-workflow",
+            CommandId = "foreign-command",
+            CompletionStatus = WorkflowRunCompletionStatus.Completed,
+            StateVersion = 12,
+            Success = true,
+            FinalOutput = "Foreign committed output.",
+        };
+        var tool = await harness.DiscoverToolAsync("aevatar_read_workflow_run_artifact");
+
+        var output = await tool.ExecuteAsync(
+            """{"workflow_run_id":"run-1","actor_id":"foreign-workflow-run-actor","wait_ms":0}""");
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        harness.RunBindingReader.ListByRunIdCalls.Should().Equal("run-1");
+        harness.WorkflowQuery.ReportCalls.Should().Equal("run-1");
+        var result = Read(output);
+        result.GetProperty("workflow_run_id").GetString().Should().Be("run-1");
+        result.GetProperty("artifact_actor_id").GetString().Should().Be("run-1");
+        result.GetProperty("status").GetString().Should().Be("pending");
+        result.GetProperty("pending").GetBoolean().Should().BeTrue();
+        result.TryGetProperty("success", out _).Should().BeFalse();
+        result.TryGetProperty("root_actor_id", out _).Should().BeFalse();
+        result.TryGetProperty("final_output_sha256", out _).Should().BeFalse();
     }
 
     [Fact]
