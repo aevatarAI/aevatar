@@ -171,7 +171,8 @@ public static class ServiceCollectionExtensions
         if (int.TryParse(configuredInternalFallbackTimeout, out var internalFallbackTimeoutSeconds) &&
             internalFallbackTimeoutSeconds > 0)
         {
-            options.InternalApiFallbackTimeoutSeconds = internalFallbackTimeoutSeconds;
+            options.InternalApiFallbackTimeoutSeconds =
+                NyxIdTransportFallbackPolicy.NormalizeTimeoutSeconds(internalFallbackTimeoutSeconds);
         }
         configure?.Invoke(options);
 

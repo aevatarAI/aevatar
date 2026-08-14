@@ -8,8 +8,16 @@ public static class NyxIdTransportFallbackPolicy
 
     public const int DefaultTimeoutSeconds = 5;
 
+    // Leave at least 30 seconds of the 330-second NyxID transport ceiling for the public attempt.
+    public const int MaximumTimeoutSeconds = 300;
+
     public static TimeSpan EffectiveTimeout(int configuredSeconds) =>
-        TimeSpan.FromSeconds(configuredSeconds > 0 ? configuredSeconds : DefaultTimeoutSeconds);
+        TimeSpan.FromSeconds(NormalizeTimeoutSeconds(configuredSeconds));
+
+    public static int NormalizeTimeoutSeconds(int configuredSeconds) =>
+        configuredSeconds <= 0
+            ? DefaultTimeoutSeconds
+            : Math.Min(configuredSeconds, MaximumTimeoutSeconds);
 
     /// <summary>
     /// Only safe HTTP methods may be replayed after a response-header timeout. Mutations may still

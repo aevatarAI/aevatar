@@ -291,7 +291,8 @@ public static class IdentityServiceCollectionExtensions
                         out var internalFallbackTimeoutSeconds) &&
                     internalFallbackTimeoutSeconds > 0)
                 {
-                    options.InternalApiFallbackTimeoutSeconds = internalFallbackTimeoutSeconds;
+                    options.InternalApiFallbackTimeoutSeconds =
+                        NyxIdTransportFallbackPolicy.NormalizeTimeoutSeconds(internalFallbackTimeoutSeconds);
                 }
                 options.ResourceServerBaseUrl =
                     (normalizedPublicApiBaseUrl ?? string.Empty)

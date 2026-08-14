@@ -1,6 +1,7 @@
 using Aevatar.GAgents.Scheduled;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.Channel;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
@@ -31,6 +32,27 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
 public sealed class ServiceCollectionExtensionsTests
 {
+    [Theory]
+    [InlineData(-1, NyxIdTransportFallbackPolicy.DefaultTimeoutSeconds)]
+    [InlineData(0, NyxIdTransportFallbackPolicy.DefaultTimeoutSeconds)]
+    [InlineData(int.MaxValue, NyxIdTransportFallbackPolicy.MaximumTimeoutSeconds)]
+    public void NyxIdFallbackOptions_ShouldShareBoundedEffectiveTimeout(
+        int configuredSeconds,
+        int expectedSeconds)
+    {
+        var toolOptions = new NyxIdToolOptions
+        {
+            InternalApiFallbackTimeoutSeconds = configuredSeconds,
+        };
+        var brokerOptions = new NyxIdBrokerOptions
+        {
+            InternalApiFallbackTimeoutSeconds = configuredSeconds,
+        };
+
+        toolOptions.EffectiveInternalApiFallbackTimeout.Should().Be(TimeSpan.FromSeconds(expectedSeconds));
+        brokerOptions.EffectiveInternalApiFallbackTimeout.Should().Be(TimeSpan.FromSeconds(expectedSeconds));
+    }
+
     [Fact]
     public void AddChannelRuntime_RegistersProviderNeutralRegistrationProjectionServices()
     {
