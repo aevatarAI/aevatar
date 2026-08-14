@@ -48,6 +48,11 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
         if (string.IsNullOrWhiteSpace(command.RevisionId))
             throw new InvalidOperationException("revision_id is required.");
 
+        var activationAttemptId = NormalizeActivationAttemptId(command.ActivationAttemptId);
+        var isContinuation = command.ActivationDeadlineAt != null;
+        if (ShouldIgnoreFencedActivation(command.RevisionId, activationAttemptId, isContinuation))
+            return;
+
         var revisionCatalog = await _revisionCatalogQueryReader.GetAsync(command.Identity, CancellationToken.None);
         // Refactor (iter100/cluster-100): Old activation read prepared artifacts from a process-local store. / New activation consumes the projected revision readmodel catalog.
         // The bind chain dispatches prepare->publish->activate fire-and-forget, so the revision-catalog
@@ -61,15 +66,16 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
                 await FailActivationAsync(
                     command.Identity,
                     command.RevisionId,
+                    activationAttemptId,
                     ServiceDeploymentActivationFailureCode.RevisionPreparationFailed,
                     $"Prepared artifact for '{ServiceKeys.Build(command.Identity)}' revision '{command.RevisionId}' failed preparation.");
                 return;
             }
 
-            if (State.ActivationFailures.ContainsKey(command.RevisionId))
-                return;
-
-            await ReArmActivationForProjectionLagAsync(command, ActivationProjectionLagSource.RevisionCatalog);
+            await ReArmActivationForProjectionLagAsync(
+                command,
+                activationAttemptId,
+                ActivationProjectionLagSource.RevisionCatalog);
             return;
         }
 
@@ -86,6 +92,7 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
         {
             await ReArmActivationForProjectionLagAsync(
                 command,
+                activationAttemptId,
                 exception.Projection switch
                 {
                     ActivationCapabilityViewProjection.ServiceCatalog => ActivationProjectionLagSource.ServiceCatalog,
@@ -152,6 +159,7 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
 
     private async Task ReArmActivationForProjectionLagAsync(
         ActivateServiceRevisionCommand command,
+        string activationAttemptId,
         ActivationProjectionLagSource lagSource)
     {
         if (State.Deployments.Values.Any(x =>
@@ -163,7 +171,8 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
 
         var nowUtc = DateTime.UtcNow;
         DateTime deadlineUtc;
-        if (State.PendingActivations.TryGetValue(command.RevisionId, out var pendingActivation))
+        if (State.PendingActivations.TryGetValue(command.RevisionId, out var pendingActivation) &&
+            ActivationAttemptsMatch(pendingActivation.ActivationAttemptId, activationAttemptId))
         {
             deadlineUtc = pendingActivation.DeadlineAt.ToDateTime();
         }
@@ -178,6 +187,7 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
                 RevisionId = command.RevisionId,
                 DeadlineAt = Timestamp.FromDateTime(deadlineUtc),
                 DeferredAt = Timestamp.FromDateTime(nowUtc),
+                ActivationAttemptId = activationAttemptId,
             });
         }
 
@@ -198,6 +208,7 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
             await FailActivationAsync(
                 command.Identity,
                 command.RevisionId,
+                activationAttemptId,
                 failureCode,
                 failureReason);
             return;
@@ -208,6 +219,7 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
 
         var retryCommand = command.Clone();
         retryCommand.ActivationDeadlineAt = Timestamp.FromDateTime(deadlineUtc);
+        retryCommand.ActivationAttemptId = activationAttemptId;
 
         Logger.LogInformation(
             "Activation deferred: required projection '{Projection}' is not yet visible for service '{ServiceKey}' revision '{RevisionId}'. Re-arming activation in {DueSeconds:F1}s (deadline {Deadline:O}).",
@@ -235,6 +247,7 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
     private async Task FailActivationAsync(
         ServiceIdentity identity,
         string revisionId,
+        string activationAttemptId,
         ServiceDeploymentActivationFailureCode failureCode,
         string failureReason)
     {
@@ -246,6 +259,8 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
         }
 
         if (State.ActivationFailures.TryGetValue(revisionId, out var existing) &&
+            ActivationAttemptsMatch(existing.ActivationAttemptId, activationAttemptId) &&
+            !string.IsNullOrEmpty(activationAttemptId) &&
             existing.FailureCode == failureCode &&
             string.Equals(existing.FailureReason, failureReason, StringComparison.Ordinal))
         {
@@ -265,6 +280,7 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
             FailureCode = failureCode,
             FailureReason = failureReason,
             OccurredAt = Timestamp.FromDateTime(DateTime.UtcNow),
+            ActivationAttemptId = activationAttemptId,
         });
     }
 
@@ -342,6 +358,7 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
             FailureCode = evt.FailureCode,
             FailureReason = evt.FailureReason ?? string.Empty,
             OccurredAt = evt.OccurredAt?.Clone() ?? Timestamp.FromDateTime(DateTime.UtcNow),
+            ActivationAttemptId = evt.ActivationAttemptId ?? string.Empty,
         };
         next.PendingActivations.Remove(evt.RevisionId);
         next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
@@ -360,11 +377,44 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
             RevisionId = evt.RevisionId ?? string.Empty,
             DeadlineAt = evt.DeadlineAt?.Clone() ?? Timestamp.FromDateTime(DateTime.UtcNow),
             DeferredAt = evt.DeferredAt?.Clone() ?? Timestamp.FromDateTime(DateTime.UtcNow),
+            ActivationAttemptId = evt.ActivationAttemptId ?? string.Empty,
         };
+        next.ActivationFailures.Remove(evt.RevisionId);
         next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
         next.LastEventId = BuildEventId(evt.Identity, evt.RevisionId, "activation-deferred");
         return next;
     }
+
+    private bool ShouldIgnoreFencedActivation(
+        string revisionId,
+        string activationAttemptId,
+        bool isContinuation)
+    {
+        if (isContinuation)
+        {
+            return !State.PendingActivations.TryGetValue(revisionId, out var pending) ||
+                   !ActivationAttemptsMatch(pending.ActivationAttemptId, activationAttemptId);
+        }
+
+        if (!State.ActivationFailures.TryGetValue(revisionId, out var failure))
+            return false;
+
+        if (!ActivationAttemptsMatch(failure.ActivationAttemptId, activationAttemptId))
+            return false;
+
+        // Non-empty attempt ids identify the same logical request even when the caller replays
+        // the original command. Empty ids retain the legacy external-retry behavior.
+        return !string.IsNullOrEmpty(activationAttemptId);
+    }
+
+    private static bool ActivationAttemptsMatch(string? left, string? right) =>
+        string.Equals(
+            NormalizeActivationAttemptId(left),
+            NormalizeActivationAttemptId(right),
+            StringComparison.Ordinal);
+
+    private static string NormalizeActivationAttemptId(string? activationAttemptId) =>
+        activationAttemptId?.Trim() ?? string.Empty;
 
     private static ServiceDeploymentState ApplyDeactivated(ServiceDeploymentState state, ServiceDeploymentDeactivatedEvent evt)
     {

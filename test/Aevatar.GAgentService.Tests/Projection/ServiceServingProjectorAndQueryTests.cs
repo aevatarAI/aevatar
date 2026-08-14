@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
@@ -55,6 +56,7 @@ public sealed class ServiceServingProjectorAndQueryTests
             FailureCode = ServiceDeploymentActivationFailureCode.PreparedArtifactMissing,
             FailureReason = "projection deadline exceeded",
             OccurredAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-03-15T02:30:00+00:00")),
+            ActivationAttemptId = "attempt-projection",
         };
         await projector.ProjectAsync(
             context,
@@ -88,6 +90,8 @@ public sealed class ServiceServingProjectorAndQueryTests
         snapshot.ActivationFailures[0].FailureReason.Should().Be("projection deadline exceeded");
         snapshot.ActivationFailures[0].OccurredAt
             .Should().Be(DateTimeOffset.Parse("2026-03-15T02:30:00+00:00"));
+        snapshot.ActivationFailures[0].ActivationAttemptId.Should().Be("attempt-projection");
+        JsonSerializer.Serialize(snapshot).Should().NotContain("attempt-projection");
     }
 
     [Fact]

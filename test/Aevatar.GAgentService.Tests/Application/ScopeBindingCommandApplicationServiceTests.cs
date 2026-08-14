@@ -62,7 +62,10 @@ public sealed class ScopeBindingCommandApplicationServiceTests
                 [
                     "name: main_runtime\nsteps:\n  - run: echo hello",
                     "name: child\nsteps:\n  - run: echo child",
-                ])));
+                ]))
+        {
+            ActivationAttemptId = " attempt-binding-1 ",
+        });
 
         commandPort.Calls.Should().HaveCount(6);
         commandPort.Calls[0].Method.Should().Be("CreateServiceAsync");
@@ -83,6 +86,7 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         result.Workflow.DefinitionActorIdPrefix.Should().Be(expectedDefinitionActorIdPrefix);
         result.ExpectedActorId.Should().StartWith($"{expectedDefinitionActorIdPrefix}:");
         result.DisplayName.Should().Be("main_runtime");
+        result.ActivationAttemptId.Should().Be("attempt-binding-1");
 
         var revisionCommand = commandPort.Calls[1].Command.Should().BeOfType<CreateServiceRevisionCommand>().Subject;
         revisionCommand.Spec.WorkflowSpec.Should().NotBeNull();
@@ -94,6 +98,10 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         admission.Request!.WorkflowYaml.Should().Contain("name: main_runtime");
         admission.Request.InlineWorkflowYamls.Should().ContainKey("child");
         admission.Request.Access.ScopeId.Should().Be(ScopeId);
+
+        var activationCommand = commandPort.Calls[5].Command
+            .Should().BeOfType<ActivateServiceRevisionCommand>().Subject;
+        activationCommand.ActivationAttemptId.Should().Be("attempt-binding-1");
 
         var createCommand = commandPort.Calls[0].Command.Should().BeOfType<CreateServiceDefinitionCommand>().Subject;
         createCommand.Spec.Identity.Should().BeEquivalentTo(new ServiceIdentity

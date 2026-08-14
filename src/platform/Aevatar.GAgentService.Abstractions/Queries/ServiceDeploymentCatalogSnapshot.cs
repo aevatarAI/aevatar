@@ -30,4 +30,5 @@ public sealed record ServiceDeploymentActivationFailureSnapshot(
     string RevisionId,
     ServiceDeploymentActivationFailureCode FailureCode,
     string FailureReason,
-    DateTimeOffset OccurredAt);
+    DateTimeOffset OccurredAt,
+    [property: JsonIgnore] string ActivationAttemptId = "");

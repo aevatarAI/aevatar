@@ -77,6 +77,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
             ? ScopeWorkflowCapabilityConventions.BuildDefaultServiceIdentity(_options, normalizedScopeId, request.AppId)
             : ScopeWorkflowCapabilityConventions.BuildServiceIdentity(_options, normalizedScopeId, request.ServiceId.Trim(), request.AppId);
         var revisionId = ScopeWorkflowCapabilityConventions.ResolveRevisionId(request.RevisionId);
+        var activationAttemptId = ScopeWorkflowCapabilityConventions.NormalizeOptional(request.ActivationAttemptId);
         var explicitRequestConfirmations = request.CapabilityAdmission?.ExplicitRequestConfirmations;
         var desiredBinding = await ResolveDesiredBindingAsync(
             request,
@@ -139,13 +140,17 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         {
             Identity = identity.Clone(),
             RevisionId = revisionId,
+            ActivationAttemptId = activationAttemptId,
         }, ct);
         await DispatchExternalExposureIntentAsync(request, identity, desiredBinding.ServiceDefinition, existingService, ct);
 
         var expectedDeploymentId = $"{ServiceActorIds.Deployment(identity)}:{revisionId}";
         // TODO(iter2/cluster-006): If callers need "invoke safe now", add an explicit read/projection
         // observation path in a separate PR rather than blocking this command path on readmodels.
-        return desiredBinding.BuildResult(normalizedScopeId, identity.ServiceId, revisionId, expectedDeploymentId);
+        return desiredBinding.BuildResult(normalizedScopeId, identity.ServiceId, revisionId, expectedDeploymentId) with
+        {
+            ActivationAttemptId = activationAttemptId,
+        };
     }
 
     private static void ApplyExternalExposureIntent(

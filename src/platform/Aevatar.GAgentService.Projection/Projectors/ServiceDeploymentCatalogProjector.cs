@@ -87,5 +87,6 @@ public sealed class ServiceDeploymentCatalogProjector
             FailureCode = source.FailureCode,
             FailureReason = source.FailureReason ?? string.Empty,
             OccurredAtUtcValue = source.OccurredAt?.Clone(),
+            ActivationAttemptId = source.ActivationAttemptId ?? string.Empty,
         };
 }

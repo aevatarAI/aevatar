@@ -50,7 +50,8 @@ public sealed class ServiceDeploymentCatalogQueryReader : IServiceDeploymentCata
                     x.RevisionId,
                     x.FailureCode,
                     x.FailureReason,
-                    x.OccurredAtUtcValue?.ToDateTimeOffset() ?? DateTimeOffset.UnixEpoch))
+                    x.OccurredAtUtcValue?.ToDateTimeOffset() ?? DateTimeOffset.UnixEpoch,
+                    x.ActivationAttemptId))
                 .ToList(),
             readModel.UpdatedAt);
     }

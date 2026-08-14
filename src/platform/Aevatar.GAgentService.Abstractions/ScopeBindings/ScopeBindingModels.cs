@@ -70,6 +70,9 @@ public sealed record ScopeBindingUpsertRequest(
 
     [JsonIgnore]
     public ScopeBindingAcceptedRevisionCreation? AcceptedRevisionCreation { get; init; }
+
+    [JsonIgnore]
+    public string ActivationAttemptId { get; init; } = string.Empty;
 }
 
 public sealed record ScopeBindingWorkflowResult
@@ -124,4 +127,8 @@ public sealed record ScopeBindingUpsertResult(
     ScopeBindingWorkflowResult? Workflow = null,
     ScopeBindingScriptResult? Script = null,
     ScopeBindingGAgentResult? GAgent = null,
-    string ExpectedDeploymentId = "");
+    string ExpectedDeploymentId = "")
+{
+    [JsonIgnore]
+    public string ActivationAttemptId { get; init; } = string.Empty;
+}

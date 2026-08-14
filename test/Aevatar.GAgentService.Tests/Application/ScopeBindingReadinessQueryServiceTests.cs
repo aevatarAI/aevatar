@@ -38,6 +38,40 @@ public sealed class ScopeBindingReadinessQueryServiceTests
     }
 
     [Fact]
+    public async Task GetReadinessAsync_WhenServiceCatalogMissingButActivationFailed_ShouldExposeTerminalFailure()
+    {
+        var lifecyclePort = new FakeServiceLifecycleQueryPort
+        {
+            Deployments = new ServiceDeploymentCatalogSnapshot(
+                "scope-a:default:default:service-a",
+                [],
+                [
+                    new ServiceDeploymentActivationFailureSnapshot(
+                        "rev-terminal",
+                        ServiceDeploymentActivationFailureCode.PreparedArtifactMissing,
+                        "sensitive internal projection details",
+                        DateTimeOffset.Parse("2026-08-14T19:47:24+00:00"),
+                        ActivationAttemptId: "attempt-terminal"),
+                ],
+                DateTimeOffset.Parse("2026-08-14T19:47:24+00:00")),
+        };
+        var servingPort = new FakeServiceServingQueryPort();
+        var service = CreateService(lifecyclePort, servingPort);
+
+        var snapshot = await service.GetReadinessAsync(new ScopeBindingReadinessRequest(
+            "scope-a",
+            "service-a",
+            ExpectedRevisionId: "rev-terminal",
+            ExpectedActivationAttemptId: "attempt-terminal"));
+
+        snapshot.Status.Should().Be(ScopeBindingReadinessStatus.ServiceCatalogMissing);
+        snapshot.TerminalActivationFailureCode.Should()
+            .Be(ServiceDeploymentActivationFailureCode.PreparedArtifactMissing);
+        lifecyclePort.GetDeploymentsCallCount.Should().Be(1);
+        servingPort.GetServingSetCallCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task GetReadinessAsync_WhenServingSetMissing_ShouldReturnServingSetMissing()
     {
         var lifecyclePort = new FakeServiceLifecycleQueryPort
@@ -58,11 +92,138 @@ public sealed class ScopeBindingReadinessQueryServiceTests
     }
 
     [Fact]
+    public async Task GetReadinessAsync_WhenServingSetMissingAndActivationFailed_ShouldExposeTerminalFailure()
+    {
+        var lifecyclePort = new FakeServiceLifecycleQueryPort
+        {
+            Service = CreateServiceSnapshot("service-a"),
+            Deployments = new ServiceDeploymentCatalogSnapshot(
+                "scope-a:default:default:service-a",
+                [],
+                [
+                    new ServiceDeploymentActivationFailureSnapshot(
+                        "rev-terminal",
+                        ServiceDeploymentActivationFailureCode.PreparedArtifactMissing,
+                        "sensitive internal projection details",
+                        DateTimeOffset.Parse("2026-08-14T19:47:24+00:00"),
+                        ActivationAttemptId: "attempt-terminal"),
+                ],
+                DateTimeOffset.Parse("2026-08-14T19:47:24+00:00")),
+        };
+        var servingPort = new FakeServiceServingQueryPort();
+        var service = CreateService(lifecyclePort, servingPort);
+
+        var snapshot = await service.GetReadinessAsync(new ScopeBindingReadinessRequest(
+            "scope-a",
+            "service-a",
+            ExpectedRevisionId: "rev-terminal",
+            ExpectedDeploymentId: "deployment-terminal",
+            ExpectedActivationAttemptId: "attempt-terminal"));
+
+        snapshot.Status.Should().Be(ScopeBindingReadinessStatus.ServingSetMissing);
+        snapshot.InvokeReady.Should().BeFalse();
+        snapshot.TerminalActivationFailureCode.Should()
+            .Be(ServiceDeploymentActivationFailureCode.PreparedArtifactMissing);
+        lifecyclePort.GetDeploymentsCallCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task GetReadinessAsync_WhenActivationFailureAttemptDoesNotMatch_ShouldRemainPending()
+    {
+        var lifecyclePort = new FakeServiceLifecycleQueryPort
+        {
+            Service = CreateServiceSnapshot("service-a"),
+            Deployments = new ServiceDeploymentCatalogSnapshot(
+                "scope-a:default:default:service-a",
+                [],
+                [
+                    new ServiceDeploymentActivationFailureSnapshot(
+                        "rev-pending",
+                        ServiceDeploymentActivationFailureCode.PreparedArtifactMissing,
+                        "previous attempt failed",
+                        DateTimeOffset.Parse("2026-08-14T19:47:24+00:00"),
+                        ActivationAttemptId: "attempt-old"),
+                ],
+                DateTimeOffset.Parse("2026-08-14T19:47:24+00:00")),
+        };
+        var servingPort = new FakeServiceServingQueryPort();
+        var service = CreateService(lifecyclePort, servingPort);
+
+        var snapshot = await service.GetReadinessAsync(new ScopeBindingReadinessRequest(
+            "scope-a",
+            "service-a",
+            ExpectedRevisionId: "rev-pending",
+            ExpectedDeploymentId: "deployment-pending",
+            ExpectedActivationAttemptId: "attempt-new"));
+
+        snapshot.Status.Should().Be(ScopeBindingReadinessStatus.ServingSetMissing);
+        snapshot.InvokeReady.Should().BeFalse();
+        snapshot.TerminalActivationFailureCode.Should().BeNull();
+        lifecyclePort.GetDeploymentsCallCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task GetReadinessAsync_WhenLegacyRequestHasNoActivationFence_ShouldRemainPending()
+    {
+        var lifecyclePort = new FakeServiceLifecycleQueryPort
+        {
+            Service = CreateServiceSnapshot("service-a"),
+            DeploymentsFailure = new InvalidOperationException("legacy requests must not query terminal failures"),
+        };
+        var service = CreateService(lifecyclePort, new FakeServiceServingQueryPort());
+
+        var snapshot = await service.GetReadinessAsync(new ScopeBindingReadinessRequest(
+            "scope-a",
+            "service-a",
+            ExpectedRevisionId: "rev-legacy",
+            ExpectedDeploymentId: "deployment-legacy"));
+
+        snapshot.Status.Should().Be(ScopeBindingReadinessStatus.ServingSetMissing);
+        snapshot.TerminalActivationFailureCode.Should().BeNull();
+        lifecyclePort.GetDeploymentsCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task GetReadinessAsync_WhenMatchingActivationFailureHasEarlierWallClock_ShouldExposeTerminalFailure()
+    {
+        var lifecyclePort = new FakeServiceLifecycleQueryPort
+        {
+            Service = CreateServiceSnapshot("service-a"),
+            Deployments = new ServiceDeploymentCatalogSnapshot(
+                "scope-a:default:default:service-a",
+                [],
+                [
+                    new ServiceDeploymentActivationFailureSnapshot(
+                        "rev-replayed",
+                        ServiceDeploymentActivationFailureCode.PreparedArtifactMissing,
+                        "previous attempt failed",
+                        DateTimeOffset.Parse("2026-08-14T19:47:22+00:00"),
+                        ActivationAttemptId: "attempt-replayed"),
+                ],
+                DateTimeOffset.Parse("2026-08-14T19:47:24+00:00")),
+        };
+        var service = CreateService(lifecyclePort, new FakeServiceServingQueryPort());
+
+        var snapshot = await service.GetReadinessAsync(new ScopeBindingReadinessRequest(
+            "scope-a",
+            "service-a",
+            ExpectedRevisionId: "rev-replayed",
+            ExpectedDeploymentId: "deployment-replayed",
+            ExpectedActivationAttemptId: "attempt-replayed"));
+
+        snapshot.Status.Should().Be(ScopeBindingReadinessStatus.ServingSetMissing);
+        snapshot.TerminalActivationFailureCode.Should()
+            .Be(ServiceDeploymentActivationFailureCode.PreparedArtifactMissing);
+        lifecyclePort.GetDeploymentsCallCount.Should().Be(1);
+    }
+
+    [Fact]
     public async Task GetReadinessAsync_WhenServiceCatalogHasDifferentExpectedTargetButServingSetMatches_ShouldReturnReady()
     {
         var lifecyclePort = new FakeServiceLifecycleQueryPort
         {
             Service = CreateServiceSnapshot("service-a"),
+            DeploymentsFailure = new InvalidOperationException("lagging deployment projection"),
         };
         var servingPort = new FakeServiceServingQueryPort
         {
@@ -76,7 +237,8 @@ public sealed class ScopeBindingReadinessQueryServiceTests
             "scope-a",
             "service-a",
             ExpectedRevisionId: "rev-new",
-            ExpectedDeploymentId: "deployment-rev-new"));
+            ExpectedDeploymentId: "deployment-rev-new",
+            ExpectedActivationAttemptId: "attempt-new"));
 
         snapshot.Status.Should().Be(ScopeBindingReadinessStatus.Ready);
         snapshot.ServiceCatalogVisible.Should().BeTrue();
@@ -85,6 +247,8 @@ public sealed class ScopeBindingReadinessQueryServiceTests
         snapshot.InvokeReady.Should().BeTrue();
         snapshot.RevisionId.Should().Be("rev-new");
         snapshot.DeploymentId.Should().Be("deployment-rev-new");
+        snapshot.TerminalActivationFailureCode.Should().BeNull("exact invoke readiness is authoritative");
+        lifecyclePort.GetDeploymentsCallCount.Should().Be(0, "Ready must not depend on the lagging failure projection");
         servingPort.GetServingSetCallCount.Should().Be(1);
     }
 
@@ -769,7 +933,10 @@ public sealed class ScopeBindingReadinessQueryServiceTests
     private sealed class FakeServiceLifecycleQueryPort : IServiceLifecycleQueryPort
     {
         public ServiceCatalogSnapshot? Service { get; init; }
+        public ServiceDeploymentCatalogSnapshot? Deployments { get; init; }
+        public Exception? DeploymentsFailure { get; init; }
         public ServiceIdentity? LastIdentity { get; private set; }
+        public int GetDeploymentsCallCount { get; private set; }
 
         public Task<ServiceCatalogSnapshot?> GetServiceAsync(ServiceIdentity identity, CancellationToken ct = default)
         {
@@ -792,8 +959,13 @@ public sealed class ScopeBindingReadinessQueryServiceTests
 
         public Task<ServiceDeploymentCatalogSnapshot?> GetServiceDeploymentsAsync(
             ServiceIdentity identity,
-            CancellationToken ct = default) =>
-            Task.FromResult<ServiceDeploymentCatalogSnapshot?>(null);
+            CancellationToken ct = default)
+        {
+            GetDeploymentsCallCount++;
+            if (DeploymentsFailure != null)
+                throw DeploymentsFailure;
+            return Task.FromResult(Deployments);
+        }
     }
 
     private sealed class FakeServiceServingQueryPort : IServiceServingQueryPort

@@ -199,6 +199,7 @@ message StudioMemberPlatformBindingRecoverySnapshot {
   StudioMemberPlatformBindingResult result = 1;
   string expected_deployment_id = 2;
   repeated string expected_endpoint_ids = 3;
+  string activation_attempt_id = 4;
 }
 
 message StudioMemberBindingRunState {

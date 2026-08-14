@@ -759,6 +759,57 @@ public sealed class StudioMemberBindingRunGAgentStateTests
     }
 
     [Fact]
+    public async Task TerminalActivationFailure_ShouldReachFailedStateAndFenceWatchdogRetry()
+    {
+        var state = NewReadinessInFlightState(DateTimeOffset.UtcNow.AddSeconds(-10));
+        var publisher = new RecordingEventPublisher();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var platformPort = new RecordingPlatformBindingCommandPort();
+        var eventSourcing = new RecordingEventSourcing(state);
+        var agent = NewHandlerAgent(state, publisher, scheduler, platformPort, eventSourcing);
+        var failure = new StudioMemberPlatformBindingExecutionFailed
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-1",
+            ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+            ExecutionAttempt = 2,
+            ExecutionStage = StudioMemberPlatformBindingExecutionStage.ReadinessInFlight,
+            Failure = new StudioMemberBindingFailure
+            {
+                Code = "STUDIO_MEMBER_PLATFORM_BINDING_ACTIVATION_PREPARED_ARTIFACT_MISSING",
+                Message = "platform service activation failed because its prepared artifact was unavailable.",
+                FailedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            },
+        };
+
+        await agent.HandlePlatformBindingExecutionFailed(failure);
+        StudioMemberBindingRunStateSetter.Get(agent).Status.Should()
+            .Be(StudioMemberBindingRunStatus.MemberNotificationPending);
+        await agent.HandlePlatformBindingWatchdogFired(new StudioMemberPlatformBindingExecutionWatchdogFired
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-1",
+            ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+            ExpectedExecutionAttempt = 2,
+        });
+
+        eventSourcing.CommittedEvents.Should().Contain(failure);
+        scheduler.Timeouts.Should().BeEmpty();
+        platformPort.ExecuteRequests.Should().BeEmpty();
+        publisher.SentMessages.Should().ContainSingle().Which.Event.Should()
+            .BeOfType<StudioMemberBindingFailedEvent>();
+
+        await agent.HandleMemberBindingTerminalAcknowledged(new StudioMemberBindingTerminalAcknowledged
+        {
+            BindingRunId = "bind-1",
+            Status = StudioMemberBindingRunStatus.Failed,
+            AcknowledgedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+
+        StudioMemberBindingRunStateSetter.Get(agent).Status.Should().Be(StudioMemberBindingRunStatus.Failed);
+    }
+
+    [Fact]
     public async Task HandlePlatformBindingExecuteRequested_AfterReadinessTimeout_ShouldPassRecoverySnapshot()
     {
         var recoverySnapshot = NewRecoverySnapshot();
@@ -877,6 +928,7 @@ public sealed class StudioMemberBindingRunGAgentStateTests
         committed.PlatformExecutionStage.Should().Be(StudioMemberPlatformBindingExecutionStage.ReadinessPending);
         committed.PlatformExecutionAttempt.Should().Be(1);
         committed.PlatformBindingRecoverySnapshot.Should().BeEquivalentTo(completed.RecoverySnapshot);
+        committed.PlatformBindingRecoverySnapshot.ActivationAttemptId.Should().Be("platform-1:a1");
         committed.PlatformExecutionInFlight.Should().BeTrue();
         committed.PlatformExecutionStartedAtUtc!.ToDateTimeOffset().Year.Should().Be(9999);
         committed.PlatformExecutionStageStartedAtUtc.Should().BeNull();
@@ -1743,6 +1795,7 @@ public sealed class StudioMemberBindingRunGAgentStateTests
                 },
             },
             ExpectedDeploymentId = "deployment-1",
+            ActivationAttemptId = "platform-1:a1",
         };
         return snapshot;
     }

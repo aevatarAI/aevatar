@@ -17,6 +17,14 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
     private const string BindingRunDirectRoute = "aevatar.studio.projection.studio-member-binding-run";
     private const string PlatformBindingFailedFailureCode = "STUDIO_MEMBER_PLATFORM_BINDING_FAILED";
     private const string ReadinessFailedFailureCode = "STUDIO_MEMBER_PLATFORM_BINDING_READINESS_FAILED";
+    private const string ReadinessFailedMessage = "platform binding readiness could not be verified.";
+    private const string ActivationFailedFailureCode = "STUDIO_MEMBER_PLATFORM_BINDING_ACTIVATION_FAILED";
+    private const string ActivationPreparedArtifactMissingFailureCode =
+        "STUDIO_MEMBER_PLATFORM_BINDING_ACTIVATION_PREPARED_ARTIFACT_MISSING";
+    private const string ActivationRevisionPreparationFailedFailureCode =
+        "STUDIO_MEMBER_PLATFORM_BINDING_ACTIVATION_REVISION_PREPARATION_FAILED";
+    private const string ActivationCapabilityViewNotReadyFailureCode =
+        "STUDIO_MEMBER_PLATFORM_BINDING_ACTIVATION_CAPABILITY_VIEW_NOT_READY";
     private const string RecoverySnapshotInvalidFailureCode =
         "STUDIO_MEMBER_PLATFORM_BINDING_RECOVERY_SNAPSHOT_INVALID";
 
@@ -165,11 +173,15 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
                 "platform binding command execution must not carry a recovery snapshot.");
         }
 
+        var activationAttemptId = BuildActivationAttemptId(request);
         ScopeBindingUpsertResult result;
         try
         {
             result = await _scopeBindingCommandPort
-                .UpsertAsync(BuildScopeBindingRequest(request), ct)
+                .UpsertAsync(BuildScopeBindingRequest(request) with
+                {
+                    ActivationAttemptId = activationAttemptId,
+                }, ct)
                 .ConfigureAwait(false);
         }
         catch (Exception ex)
@@ -189,7 +201,10 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
         StudioMemberPlatformBindingRecoverySnapshot recoverySnapshot;
         try
         {
-            recoverySnapshot = BuildRecoverySnapshot(result, request);
+            recoverySnapshot = BuildRecoverySnapshot(
+                result,
+                request,
+                activationAttemptId);
         }
         catch (Exception ex)
         {
@@ -258,31 +273,43 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
             return BuildFailedContinuation(
                 request,
                 ReadinessFailedFailureCode,
-                ex.Message);
+                ReadinessFailedMessage);
         }
 
-        if (!readiness.InvokeReady)
+        if (readiness.InvokeReady)
         {
-            _logger.LogWarning(
-                "StudioMember platform binding commands completed, but readiness was not observed before timeout. Leaving binding run pending for watchdog recovery. bindingRunId={BindingRunId} platformBindingCommandId={CommandId} readinessStatus={ReadinessStatus}",
+            return new StudioMemberPlatformBindingExecutionSucceeded
+            {
+                BindingRunId = request.BindingRunId,
+                PlatformBindingCommandId = request.PlatformBindingCommandId,
+                CompletedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                Result = recoverySnapshot.Result.Clone(),
+                ProtocolVersion = request.ProtocolVersion,
+                ExecutionAttempt = request.ExecutionAttempt,
+            };
+        }
+
+        if (readiness.TerminalActivationFailureCode is { } activationFailureCode
+            && activationFailureCode != ServiceDeploymentActivationFailureCode.Unspecified)
+        {
+            var (code, message) = MapTerminalActivationFailure(activationFailureCode);
+            _logger.LogError(
+                "StudioMember platform binding observed a terminal service activation failure. bindingRunId={BindingRunId} platformBindingCommandId={CommandId} activationFailureCode={ActivationFailureCode}",
                 request.BindingRunId,
                 request.PlatformBindingCommandId,
-                readiness.Status);
-
-            return BuildReadinessTimedOutContinuation(
-                request,
-                readiness.Status);
+                activationFailureCode);
+            return BuildFailedContinuation(request, code, message);
         }
 
-        return new StudioMemberPlatformBindingExecutionSucceeded
-        {
-            BindingRunId = request.BindingRunId,
-            PlatformBindingCommandId = request.PlatformBindingCommandId,
-            CompletedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Result = recoverySnapshot.Result.Clone(),
-            ProtocolVersion = request.ProtocolVersion,
-            ExecutionAttempt = request.ExecutionAttempt,
-        };
+        _logger.LogWarning(
+            "StudioMember platform binding commands completed, but readiness was not observed before timeout. Leaving binding run pending for watchdog recovery. bindingRunId={BindingRunId} platformBindingCommandId={CommandId} readinessStatus={ReadinessStatus}",
+            request.BindingRunId,
+            request.PlatformBindingCommandId,
+            readiness.Status);
+
+        return BuildReadinessTimedOutContinuation(
+            request,
+            readiness.Status);
     }
 
     private async Task<ScopeBindingReadinessSnapshot> WaitForBindingReadyAsync(
@@ -308,14 +335,18 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
             result.PublishedServiceId,
             ExpectedRevisionId: expectedRevisionId,
             ExpectedDeploymentId: expectedDeploymentId,
-            ExpectedEndpointIds: expectedEndpointIds);
+            ExpectedEndpointIds: expectedEndpointIds,
+            ExpectedActivationAttemptId: recoverySnapshot.ActivationAttemptId);
 
         while (true)
         {
             ct.ThrowIfCancellationRequested();
 
             var snapshot = await _readinessQueryPort.GetReadinessAsync(request, ct).ConfigureAwait(false);
-            if (snapshot.InvokeReady || _utcNow() >= deadline)
+            if (snapshot.InvokeReady
+                || snapshot.TerminalActivationFailureCode is { } activationFailureCode
+                    && activationFailureCode != ServiceDeploymentActivationFailureCode.Unspecified
+                || _utcNow() >= deadline)
                 return snapshot;
 
             var remaining = deadline - _utcNow();
@@ -376,8 +407,18 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
 
     private static StudioMemberPlatformBindingRecoverySnapshot BuildRecoverySnapshot(
         ScopeBindingUpsertResult result,
-        StudioMemberPlatformBindingExecutionRequest request)
+        StudioMemberPlatformBindingExecutionRequest request,
+        string expectedActivationAttemptId)
     {
+        var activationAttemptId = RequireCanonical(
+            result.ActivationAttemptId,
+            "scope binding result activation attempt id");
+        if (!string.Equals(activationAttemptId, expectedActivationAttemptId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "scope binding result activation attempt id does not match the platform binding command.");
+        }
+
         var snapshot = new StudioMemberPlatformBindingRecoverySnapshot
         {
             Result = new StudioMemberPlatformBindingResult
@@ -389,6 +430,7 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
                 ImplementationRef = BuildImplementationRef(result, request),
             },
             ExpectedDeploymentId = result.ExpectedDeploymentId,
+            ActivationAttemptId = activationAttemptId,
         };
         snapshot.ExpectedEndpointIds.AddRange(BuildExpectedEndpointIds(result, request));
         return snapshot;
@@ -432,6 +474,13 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
         var expectedDeploymentId = RequireCanonical(
             snapshot.ExpectedDeploymentId,
             "platform binding recovery deployment id");
+
+        if (!string.IsNullOrWhiteSpace(snapshot.ActivationAttemptId))
+        {
+            _ = RequireCanonical(
+                snapshot.ActivationAttemptId,
+                "platform binding recovery activation attempt id");
+        }
 
         var normalizedEndpointIds = NormalizeEndpointIds(snapshot.ExpectedEndpointIds);
         if (!snapshot.ExpectedEndpointIds.SequenceEqual(normalizedEndpointIds, StringComparer.Ordinal))
@@ -720,6 +769,26 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
             ExecutionAttempt = request.ExecutionAttempt,
             ExecutionStage = request.ExecutionStage,
         };
+
+    private static (string Code, string Message) MapTerminalActivationFailure(
+        ServiceDeploymentActivationFailureCode failureCode) =>
+        failureCode switch
+        {
+            ServiceDeploymentActivationFailureCode.PreparedArtifactMissing =>
+                (ActivationPreparedArtifactMissingFailureCode,
+                    "platform service activation failed because its prepared artifact was unavailable."),
+            ServiceDeploymentActivationFailureCode.RevisionPreparationFailed =>
+                (ActivationRevisionPreparationFailedFailureCode,
+                    "platform service activation failed because revision preparation failed."),
+            ServiceDeploymentActivationFailureCode.CapabilityViewNotReady =>
+                (ActivationCapabilityViewNotReadyFailureCode,
+                    "platform service activation failed because capability readiness was not established."),
+            _ => (ActivationFailedFailureCode, "platform service activation failed."),
+        };
+
+    private static string BuildActivationAttemptId(
+        StudioMemberPlatformBindingExecutionRequest request) =>
+        $"{RequireCanonical(request.PlatformBindingCommandId, "platform binding command id")}:a{request.ExecutionAttempt}";
 
     private static ScopeBindingUpsertRequest BuildScopeBindingRequest(
         StudioMemberPlatformBindingExecutionRequest request)
