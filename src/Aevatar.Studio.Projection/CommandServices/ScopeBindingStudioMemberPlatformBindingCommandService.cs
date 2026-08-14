@@ -11,12 +11,14 @@ namespace Aevatar.Studio.Projection.CommandServices;
 
 // Refactor (iter16/cluster-meta-studio-actor-substrate):
 //   Old: platform binding start flow dispatched detached continuations and did not make the command execution boundary explicit.
-//   New principle: Start/Execute return accepted receipts only; terminal success/failure is delivered as a typed continuation to the run actor inbox.
+//   New principle: Start/Execute return accepted receipts only; outcomes are delivered as typed continuations to the run actor inbox.
 internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IStudioMemberPlatformBindingCommandPort
 {
     private const string BindingRunDirectRoute = "aevatar.studio.projection.studio-member-binding-run";
     private const string PlatformBindingFailedFailureCode = "STUDIO_MEMBER_PLATFORM_BINDING_FAILED";
     private const string ReadinessFailedFailureCode = "STUDIO_MEMBER_PLATFORM_BINDING_READINESS_FAILED";
+    private const string RecoverySnapshotInvalidFailureCode =
+        "STUDIO_MEMBER_PLATFORM_BINDING_RECOVERY_SNAPSHOT_INVALID";
 
     private readonly IScopeBindingCommandPort _scopeBindingCommandPort;
     private readonly IScopeBindingReadinessQueryPort _readinessQueryPort;
@@ -55,9 +57,9 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
         _utcNow = utcNow ?? throw new ArgumentNullException(nameof(utcNow));
     }
 
-    public Task<StudioMemberPlatformBindingAccepted> StartAsync(
+    public Task<StudioMemberPlatformBindingExecutionStartAccepted> StartAsync(
         string replyActorId,
-        StudioMemberPlatformBindingStartRequested request,
+        StudioMemberPlatformBindingExecutionStartRequested request,
         CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(replyActorId);
@@ -67,43 +69,44 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
             ? StudioMemberConventions.BuildPlatformBindingCommandId(request.BindingRunId, 1)
             : request.PlatformBindingCommandId;
 
-        return Task.FromResult(new StudioMemberPlatformBindingAccepted
+        return Task.FromResult(new StudioMemberPlatformBindingExecutionStartAccepted
         {
             BindingRunId = request.BindingRunId,
             PlatformBindingCommandId = commandId,
             AcceptedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            ProtocolVersion = request.ProtocolVersion,
+            ExecutionAttempt = request.ExecutionAttempt,
         });
     }
 
     public Task<StudioMemberPlatformBindingExecutionAccepted> ExecuteAsync(
         string replyActorId,
-        string platformBindingCommandId,
-        StudioMemberPlatformBindingStartRequested request,
+        StudioMemberPlatformBindingExecutionRequest request,
         CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(replyActorId);
-        ArgumentException.ThrowIfNullOrWhiteSpace(platformBindingCommandId);
         ArgumentNullException.ThrowIfNull(request);
+        ArgumentException.ThrowIfNullOrWhiteSpace(request.PlatformBindingCommandId);
 
         var executionRequest = request.Clone();
-        executionRequest.PlatformBindingCommandId = platformBindingCommandId;
-        _ = RunBindingAndDispatchAsync(replyActorId, platformBindingCommandId, executionRequest, ct);
+        _ = RunBindingAndDispatchAsync(replyActorId, executionRequest, ct);
 
         return Task.FromResult(new StudioMemberPlatformBindingExecutionAccepted(
             request.BindingRunId,
-            platformBindingCommandId));
+            request.PlatformBindingCommandId,
+            request.ProtocolVersion,
+            request.ExecutionAttempt));
     }
 
     private async Task RunBindingAndDispatchAsync(
         string replyActorId,
-        string commandId,
-        StudioMemberPlatformBindingStartRequested request,
+        StudioMemberPlatformBindingExecutionRequest request,
         CancellationToken ct)
     {
         IMessage? outcome;
         try
         {
-            outcome = await RunBindingAsync(commandId, request, ct).ConfigureAwait(false);
+            outcome = await RunBindingAsync(request, ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -111,7 +114,7 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
                 ex,
                 "StudioMember platform binding execution failed unexpectedly. bindingRunId={BindingRunId} platformBindingCommandId={CommandId}",
                 request.BindingRunId,
-                commandId);
+                request.PlatformBindingCommandId);
             return;
         }
 
@@ -128,16 +131,40 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
                 ex,
                 "StudioMember platform binding continuation dispatch failed. bindingRunId={BindingRunId} platformBindingCommandId={CommandId} replyActorId={ReplyActorId}",
                 request.BindingRunId,
-                commandId,
+                request.PlatformBindingCommandId,
                 replyActorId);
         }
     }
 
     private async Task<IMessage?> RunBindingAsync(
-        string commandId,
-        StudioMemberPlatformBindingStartRequested request,
+        StudioMemberPlatformBindingExecutionRequest request,
         CancellationToken ct)
     {
+        return request.ExecutionStage switch
+        {
+            StudioMemberPlatformBindingExecutionStage.CommandInFlight =>
+                await RunPlatformCommandAsync(request, ct).ConfigureAwait(false),
+            StudioMemberPlatformBindingExecutionStage.ReadinessInFlight =>
+                await RunReadinessObservationAsync(request, ct).ConfigureAwait(false),
+            _ => BuildFailedContinuation(
+                request,
+                RecoverySnapshotInvalidFailureCode,
+                "platform binding execution stage is invalid."),
+        };
+    }
+
+    private async Task<IMessage> RunPlatformCommandAsync(
+        StudioMemberPlatformBindingExecutionRequest request,
+        CancellationToken ct)
+    {
+        if (request.RecoverySnapshot != null)
+        {
+            return BuildFailedContinuation(
+                request,
+                RecoverySnapshotInvalidFailureCode,
+                "platform binding command execution must not carry a recovery snapshot.");
+        }
+
         ScopeBindingUpsertResult result;
         try
         {
@@ -151,19 +178,74 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
                 ex,
                 "StudioMember platform binding failed. bindingRunId={BindingRunId} platformBindingCommandId={CommandId}",
                 request.BindingRunId,
-                commandId);
+                request.PlatformBindingCommandId);
 
             return BuildFailedContinuation(
-                request.BindingRunId,
-                commandId,
+                request,
                 PlatformBindingFailedFailureCode,
+                ex.Message);
+        }
+
+        StudioMemberPlatformBindingRecoverySnapshot recoverySnapshot;
+        try
+        {
+            recoverySnapshot = BuildRecoverySnapshot(result, request);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "StudioMember platform binding result mapping failed. bindingRunId={BindingRunId} platformBindingCommandId={CommandId}",
+                request.BindingRunId,
+                request.PlatformBindingCommandId);
+
+            return BuildFailedContinuation(
+                request,
+                PlatformBindingFailedFailureCode,
+                ex.Message);
+        }
+
+        return new StudioMemberPlatformBindingCommandsCompleted
+        {
+            BindingRunId = request.BindingRunId,
+            PlatformBindingCommandId = request.PlatformBindingCommandId,
+            RecoverySnapshot = recoverySnapshot,
+            CompletedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            ProtocolVersion = request.ProtocolVersion,
+            ExecutionAttempt = request.ExecutionAttempt,
+        };
+    }
+
+    private async Task<IMessage> RunReadinessObservationAsync(
+        StudioMemberPlatformBindingExecutionRequest request,
+        CancellationToken ct)
+    {
+        StudioMemberPlatformBindingRecoverySnapshot recoverySnapshot;
+        try
+        {
+            recoverySnapshot = ValidateRecoverySnapshot(
+                request.RecoverySnapshot
+                    ?? throw new InvalidOperationException("platform binding recovery snapshot is required."),
+                request);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "StudioMember platform binding recovery snapshot validation failed. bindingRunId={BindingRunId} platformBindingCommandId={CommandId}",
+                request.BindingRunId,
+                request.PlatformBindingCommandId);
+
+            return BuildFailedContinuation(
+                request,
+                RecoverySnapshotInvalidFailureCode,
                 ex.Message);
         }
 
         ScopeBindingReadinessSnapshot readiness;
         try
         {
-            readiness = await WaitForBindingReadyAsync(result, request, ct).ConfigureAwait(false);
+            readiness = await WaitForBindingReadyAsync(recoverySnapshot, request, ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -171,11 +253,10 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
                 ex,
                 "StudioMember platform binding readiness observation failed. bindingRunId={BindingRunId} platformBindingCommandId={CommandId}",
                 request.BindingRunId,
-                commandId);
+                request.PlatformBindingCommandId);
 
             return BuildFailedContinuation(
-                request.BindingRunId,
-                commandId,
+                request,
                 ReadinessFailedFailureCode,
                 ex.Message);
         }
@@ -185,71 +266,49 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
             _logger.LogWarning(
                 "StudioMember platform binding commands completed, but readiness was not observed before timeout. Leaving binding run pending for watchdog recovery. bindingRunId={BindingRunId} platformBindingCommandId={CommandId} readinessStatus={ReadinessStatus}",
                 request.BindingRunId,
-                commandId,
+                request.PlatformBindingCommandId,
                 readiness.Status);
 
             return BuildReadinessTimedOutContinuation(
-                request.BindingRunId,
-                commandId,
+                request,
                 readiness.Status);
         }
 
-        StudioMemberImplementationRef implementationRef;
-        try
-        {
-            implementationRef = BuildImplementationRef(result);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(
-                ex,
-                "StudioMember platform binding result mapping failed. bindingRunId={BindingRunId} platformBindingCommandId={CommandId}",
-                request.BindingRunId,
-                commandId);
-
-            return BuildFailedContinuation(
-                request.BindingRunId,
-                commandId,
-                PlatformBindingFailedFailureCode,
-                ex.Message);
-        }
-
-        return new StudioMemberPlatformBindingSucceeded
+        return new StudioMemberPlatformBindingExecutionSucceeded
         {
             BindingRunId = request.BindingRunId,
-            PlatformBindingCommandId = commandId,
+            PlatformBindingCommandId = request.PlatformBindingCommandId,
             CompletedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Result = new StudioMemberPlatformBindingResult
-            {
-                PublishedServiceId = result.ServiceId,
-                RevisionId = result.RevisionId,
-                ImplementationKind = ToStudioKind(result.ImplementationKind),
-                ExpectedActorId = result.ExpectedActorId,
-                ImplementationRef = implementationRef,
-            },
+            Result = recoverySnapshot.Result.Clone(),
+            ProtocolVersion = request.ProtocolVersion,
+            ExecutionAttempt = request.ExecutionAttempt,
         };
     }
 
     private async Task<ScopeBindingReadinessSnapshot> WaitForBindingReadyAsync(
-        ScopeBindingUpsertResult result,
-        StudioMemberPlatformBindingStartRequested bindingRequest,
+        StudioMemberPlatformBindingRecoverySnapshot recoverySnapshot,
+        StudioMemberPlatformBindingExecutionRequest bindingRequest,
         CancellationToken ct)
     {
         var deadline = _utcNow() + _options.BindingReadinessTimeout;
+        var result = recoverySnapshot.Result
+            ?? throw new InvalidOperationException("platform binding recovery result is required for readiness observation.");
         var expectedRevisionId = result.RevisionId?.Trim();
         if (string.IsNullOrWhiteSpace(expectedRevisionId))
             throw new InvalidOperationException("scope binding result revision id is required for readiness observation.");
 
-        var expectedDeploymentId = result.ExpectedDeploymentId?.Trim();
+        var expectedDeploymentId = recoverySnapshot.ExpectedDeploymentId?.Trim();
         if (string.IsNullOrWhiteSpace(expectedDeploymentId))
             throw new InvalidOperationException("scope binding result deployment id is required for readiness observation.");
 
+        var expectedEndpointIds = NormalizeEndpointIds(recoverySnapshot.ExpectedEndpointIds);
+
         var request = new ScopeBindingReadinessRequest(
-            result.ScopeId,
-            result.ServiceId,
+            bindingRequest.Request.ScopeId,
+            result.PublishedServiceId,
             ExpectedRevisionId: expectedRevisionId,
             ExpectedDeploymentId: expectedDeploymentId,
-            ExpectedEndpointIds: BuildExpectedEndpointIds(result, bindingRequest));
+            ExpectedEndpointIds: expectedEndpointIds);
 
         while (true)
         {
@@ -272,11 +331,12 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
 
     private static IReadOnlyList<string> BuildExpectedEndpointIds(
         ScopeBindingUpsertResult result,
-        StudioMemberPlatformBindingStartRequested request) =>
+        StudioMemberPlatformBindingExecutionRequest request) =>
         request.Request.ImplementationCase switch
         {
-            StudioMemberBindingRequest.ImplementationOneofCase.Script => NormalizeEndpointIds(result.Script?.EndpointIds),
-            StudioMemberBindingRequest.ImplementationOneofCase.Gagent => NormalizeEndpointIds(
+            StudioMemberBindingRequest.ImplementationOneofCase.Script => RequireScriptEndpointIds(
+                result.Script?.EndpointIds),
+            StudioMemberBindingRequest.ImplementationOneofCase.Gagent => BuildEffectiveGAgentEndpointIds(
                 request.Request.Gagent.Endpoints.Select(endpoint => endpoint.EndpointId)),
             _ => ["chat"],
         };
@@ -287,7 +347,321 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
             .Where(endpointId => !string.IsNullOrWhiteSpace(endpointId))
             .Select(endpointId => endpointId!)
             .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
             .ToArray() ?? [];
+
+    private static IReadOnlyList<string> RequireScriptEndpointIds(IEnumerable<string>? endpointIds)
+    {
+        var normalizedEndpointIds = NormalizeEndpointIds(endpointIds);
+        if (normalizedEndpointIds.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "platform binding script result must expose at least one command endpoint.");
+        }
+
+        return normalizedEndpointIds;
+    }
+
+    private static IReadOnlyList<string> BuildEffectiveGAgentEndpointIds(IEnumerable<string>? endpointIds)
+    {
+        var effectiveEndpointIds = NormalizeEndpointIds(endpointIds).ToList();
+        if (!effectiveEndpointIds.Any(endpointId =>
+                string.Equals(endpointId, "chat", StringComparison.OrdinalIgnoreCase)))
+        {
+            effectiveEndpointIds.Add("chat");
+        }
+
+        return effectiveEndpointIds.Order(StringComparer.Ordinal).ToArray();
+    }
+
+    private static StudioMemberPlatformBindingRecoverySnapshot BuildRecoverySnapshot(
+        ScopeBindingUpsertResult result,
+        StudioMemberPlatformBindingExecutionRequest request)
+    {
+        var snapshot = new StudioMemberPlatformBindingRecoverySnapshot
+        {
+            Result = new StudioMemberPlatformBindingResult
+            {
+                PublishedServiceId = result.ServiceId,
+                RevisionId = result.RevisionId,
+                ImplementationKind = ToStudioKind(result.ImplementationKind),
+                ExpectedActorId = result.ExpectedActorId,
+                ImplementationRef = BuildImplementationRef(result, request),
+            },
+            ExpectedDeploymentId = result.ExpectedDeploymentId,
+        };
+        snapshot.ExpectedEndpointIds.AddRange(BuildExpectedEndpointIds(result, request));
+        return snapshot;
+    }
+
+    private static StudioMemberPlatformBindingRecoverySnapshot ValidateRecoverySnapshot(
+        StudioMemberPlatformBindingRecoverySnapshot snapshot,
+        StudioMemberPlatformBindingExecutionRequest request)
+    {
+        var result = snapshot.Result
+            ?? throw new InvalidOperationException("platform binding recovery result is required.");
+        var expectedServiceId = request.Admitted.PublishedServiceId;
+        var recoveredServiceId = RequireCanonical(
+            result.PublishedServiceId,
+            "platform binding recovery published service id");
+        if (string.IsNullOrWhiteSpace(expectedServiceId)
+            || !string.Equals(recoveredServiceId, expectedServiceId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "platform binding recovery published service id does not match the admitted binding.");
+        }
+
+        var expectedRevisionId = ResolveRevisionId(request);
+        var recoveredRevisionId = RequireCanonical(
+            result.RevisionId,
+            "platform binding recovery revision id");
+        if (!string.Equals(recoveredRevisionId, expectedRevisionId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "platform binding recovery revision id does not match the binding command.");
+        }
+
+        var expectedImplementationKind = ToStudioKind(request.Request.ImplementationCase);
+        if (result.ImplementationKind != expectedImplementationKind
+            || request.Admitted.ImplementationKind != expectedImplementationKind)
+        {
+            throw new InvalidOperationException(
+                "platform binding recovery implementation kind does not match the binding request.");
+        }
+
+        var expectedDeploymentId = RequireCanonical(
+            snapshot.ExpectedDeploymentId,
+            "platform binding recovery deployment id");
+
+        var normalizedEndpointIds = NormalizeEndpointIds(snapshot.ExpectedEndpointIds);
+        if (!snapshot.ExpectedEndpointIds.SequenceEqual(normalizedEndpointIds, StringComparer.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "platform binding recovery endpoint ids must be normalized.");
+        }
+
+        ValidateRecoveryImplementation(result, request, expectedDeploymentId);
+
+        var expectedRecoveryEndpointIds = BuildExpectedRecoveryEndpointIds(request, result);
+        if (!normalizedEndpointIds.SequenceEqual(expectedRecoveryEndpointIds, StringComparer.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "platform binding recovery endpoint ids do not match the sealed binding result.");
+        }
+
+        var validated = snapshot.Clone();
+        validated.Result.PublishedServiceId = recoveredServiceId;
+        validated.Result.RevisionId = recoveredRevisionId;
+        validated.Result.ExpectedActorId = RequireCanonical(
+            result.ExpectedActorId,
+            "platform binding recovery expected actor id");
+        validated.ExpectedDeploymentId = expectedDeploymentId;
+        return validated;
+    }
+
+    private static void ValidateRecoveryImplementation(
+        StudioMemberPlatformBindingResult result,
+        StudioMemberPlatformBindingExecutionRequest request,
+        string expectedDeploymentId)
+    {
+        var expectedActorId = RequireCanonical(
+            result.ExpectedActorId,
+            "platform binding recovery expected actor id");
+
+        var implementationRef = result.ImplementationRef
+            ?? throw new InvalidOperationException("platform binding recovery implementation ref is required.");
+        switch (request.Request.ImplementationCase)
+        {
+            case StudioMemberBindingRequest.ImplementationOneofCase.Workflow:
+                ValidateWorkflowRecoveryImplementation(
+                    implementationRef,
+                    request.Request.Workflow,
+                    result.RevisionId,
+                    expectedActorId,
+                    expectedDeploymentId);
+                break;
+            case StudioMemberBindingRequest.ImplementationOneofCase.Script:
+                ValidateScriptRecoveryImplementation(
+                    implementationRef,
+                    request.Request.Script,
+                    expectedActorId,
+                    expectedDeploymentId);
+                break;
+            case StudioMemberBindingRequest.ImplementationOneofCase.Gagent:
+                ValidateGAgentRecoveryImplementation(
+                    implementationRef,
+                    request.Request.Gagent,
+                    expectedActorId,
+                    expectedDeploymentId);
+                break;
+            default:
+                throw new InvalidOperationException(
+                    "platform binding recovery implementation request is required.");
+        }
+    }
+
+    private static void ValidateWorkflowRecoveryImplementation(
+        StudioMemberImplementationRef implementationRef,
+        StudioMemberWorkflowBindingRequest request,
+        string revisionId,
+        string expectedActorId,
+        string expectedDeploymentId)
+    {
+        if (implementationRef.Workflow == null
+            || implementationRef.Script != null
+            || implementationRef.Gagent != null)
+        {
+            throw new InvalidOperationException(
+                "platform binding recovery workflow implementation ref has an invalid shape.");
+        }
+
+        var workflowId = RequireCanonical(
+            implementationRef.Workflow.WorkflowId,
+            "platform binding recovery workflow id");
+        if (!string.Equals(workflowId, request.WorkflowId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "platform binding recovery workflow id does not match the binding request.");
+        }
+
+        var workflowRevision = RequireCanonical(
+            implementationRef.Workflow.WorkflowRevision,
+            "platform binding recovery workflow revision");
+        if (!string.Equals(workflowRevision, revisionId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "platform binding recovery workflow revision does not match the binding result.");
+        }
+
+        var definitionActorIdPrefix = RequireCanonical(
+            implementationRef.Workflow.DefinitionActorIdPrefix,
+            "platform binding recovery workflow definition actor id prefix");
+        if (!string.Equals(
+                expectedActorId,
+                $"{definitionActorIdPrefix}:{expectedDeploymentId}",
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "platform binding recovery workflow actor does not match the expected deployment.");
+        }
+    }
+
+    private static void ValidateScriptRecoveryImplementation(
+        StudioMemberImplementationRef implementationRef,
+        StudioMemberScriptBindingRequest request,
+        string expectedActorId,
+        string expectedDeploymentId)
+    {
+        if (implementationRef.Script == null
+            || implementationRef.Workflow != null
+            || implementationRef.Gagent != null)
+        {
+            throw new InvalidOperationException(
+                "platform binding recovery script implementation ref has an invalid shape.");
+        }
+
+        var scriptId = RequireCanonical(
+            implementationRef.Script.ScriptId,
+            "platform binding recovery script id");
+        if (!string.Equals(scriptId, request.ScriptId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "platform binding recovery script id does not match the binding request.");
+        }
+
+        var scriptRevision = RequireCanonical(
+            implementationRef.Script.ScriptRevision,
+            "platform binding recovery script revision");
+        if (request.HasScriptRevision
+            && !string.Equals(scriptRevision, request.ScriptRevision, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "platform binding recovery script revision does not match the binding request.");
+        }
+
+        var endpointIds = NormalizeEndpointIds(implementationRef.Script.EndpointIds);
+        if (endpointIds.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "platform binding recovery script endpoint ids are required.");
+        }
+        if (!implementationRef.Script.EndpointIds.SequenceEqual(endpointIds, StringComparer.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "platform binding recovery script endpoint ids must be normalized.");
+        }
+
+        var requiredActorId = $"gagent-service:script-runtime:{expectedDeploymentId}";
+        if (!string.Equals(expectedActorId, requiredActorId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "platform binding recovery script actor does not match the expected deployment.");
+        }
+    }
+
+    private static void ValidateGAgentRecoveryImplementation(
+        StudioMemberImplementationRef implementationRef,
+        StudioMemberGAgentBindingRequest request,
+        string expectedActorId,
+        string expectedDeploymentId)
+    {
+        if (implementationRef.Gagent == null
+            || implementationRef.Workflow != null
+            || implementationRef.Script != null)
+        {
+            throw new InvalidOperationException(
+                "platform binding recovery gagent implementation ref has an invalid shape.");
+        }
+
+        var agentKind = RequireCanonical(
+            implementationRef.Gagent.AgentKind,
+            "platform binding recovery gagent agent kind");
+        if (!string.Equals(agentKind, request.AgentKind, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "platform binding recovery gagent agent kind does not match the binding request.");
+        }
+
+        var requiredActorId = $"gagent-service:static-runtime:{expectedDeploymentId}";
+        if (!string.Equals(expectedActorId, requiredActorId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "platform binding recovery gagent actor does not match the expected deployment.");
+        }
+    }
+
+    private static StudioMemberImplementationKind ToStudioKind(
+        StudioMemberBindingRequest.ImplementationOneofCase implementationCase) =>
+        implementationCase switch
+        {
+            StudioMemberBindingRequest.ImplementationOneofCase.Workflow => StudioMemberImplementationKind.Workflow,
+            StudioMemberBindingRequest.ImplementationOneofCase.Script => StudioMemberImplementationKind.Script,
+            StudioMemberBindingRequest.ImplementationOneofCase.Gagent => StudioMemberImplementationKind.Gagent,
+            _ => StudioMemberImplementationKind.Unspecified,
+        };
+
+    private static IReadOnlyList<string> BuildExpectedRecoveryEndpointIds(
+        StudioMemberPlatformBindingExecutionRequest request,
+        StudioMemberPlatformBindingResult result) =>
+        request.Request.ImplementationCase switch
+        {
+            StudioMemberBindingRequest.ImplementationOneofCase.Workflow => ["chat"],
+            StudioMemberBindingRequest.ImplementationOneofCase.Gagent => BuildEffectiveGAgentEndpointIds(
+                request.Request.Gagent.Endpoints.Select(endpoint => endpoint.EndpointId)),
+            StudioMemberBindingRequest.ImplementationOneofCase.Script => NormalizeEndpointIds(
+                result.ImplementationRef?.Script?.EndpointIds),
+            _ => throw new InvalidOperationException(
+                "platform binding recovery implementation request is required."),
+        };
+
+    private static string RequireCanonical(string? value, string fieldName)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            throw new InvalidOperationException($"{fieldName} is required.");
+        if (!string.Equals(value, value.Trim(), StringComparison.Ordinal))
+            throw new InvalidOperationException($"{fieldName} must be canonical.");
+        return value;
+    }
 
     private static StudioMemberPlatformBindingOptions NormalizeOptions(StudioMemberPlatformBindingOptions options)
     {
@@ -315,37 +689,40 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
         return _dispatchPort.DispatchAsync(replyActorId, envelope, ct);
     }
 
-    private static StudioMemberPlatformBindingReadinessTimedOut BuildReadinessTimedOutContinuation(
-        string bindingRunId,
-        string commandId,
+    private static StudioMemberPlatformBindingReadinessObservationTimedOut BuildReadinessTimedOutContinuation(
+        StudioMemberPlatformBindingExecutionRequest request,
         ScopeBindingReadinessStatus readinessStatus) =>
         new()
         {
-            BindingRunId = bindingRunId,
-            PlatformBindingCommandId = commandId,
+            BindingRunId = request.BindingRunId,
+            PlatformBindingCommandId = request.PlatformBindingCommandId,
             ReadinessStatus = ToStudioReadinessStatus(readinessStatus),
             TimedOutAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            ProtocolVersion = request.ProtocolVersion,
+            ExecutionAttempt = request.ExecutionAttempt,
         };
 
-    private static StudioMemberPlatformBindingFailed BuildFailedContinuation(
-        string bindingRunId,
-        string commandId,
+    private static StudioMemberPlatformBindingExecutionFailed BuildFailedContinuation(
+        StudioMemberPlatformBindingExecutionRequest request,
         string code,
         string message) =>
         new()
         {
-            BindingRunId = bindingRunId,
-            PlatformBindingCommandId = commandId,
+            BindingRunId = request.BindingRunId,
+            PlatformBindingCommandId = request.PlatformBindingCommandId,
             Failure = new StudioMemberBindingFailure
             {
                 Code = code,
                 Message = message,
                 FailedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
             },
+            ProtocolVersion = request.ProtocolVersion,
+            ExecutionAttempt = request.ExecutionAttempt,
+            ExecutionStage = request.ExecutionStage,
         };
 
     private static ScopeBindingUpsertRequest BuildScopeBindingRequest(
-        StudioMemberPlatformBindingStartRequested request)
+        StudioMemberPlatformBindingExecutionRequest request)
     {
         var bindingRequest = request.Request;
         var revisionId = ResolveRevisionId(request);
@@ -381,7 +758,7 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
     }
 
     private static ScopeBindingUpsertRequest BuildWorkflowScopeBindingRequest(
-        StudioMemberPlatformBindingStartRequested request,
+        StudioMemberPlatformBindingExecutionRequest request,
         string revisionId)
     {
         var bindingRequest = request.Request;
@@ -407,7 +784,7 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
         };
     }
 
-    private static string ResolveRevisionId(StudioMemberPlatformBindingStartRequested request)
+    private static string ResolveRevisionId(StudioMemberPlatformBindingExecutionRequest request)
     {
         var explicitRevisionId = request.Request.HasRevisionId
             ? request.Request.RevisionId?.Trim()
@@ -422,7 +799,7 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
     }
 
     private static string? ResolveReplayRevisionId(
-        StudioMemberPlatformBindingStartRequested request,
+        StudioMemberPlatformBindingExecutionRequest request,
         string revisionId)
     {
         var explicitRevisionId = request.Request.HasRevisionId
@@ -507,7 +884,9 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
             _ => StudioMemberPlatformBindingReadinessStatus.Unspecified,
         };
 
-    private static StudioMemberImplementationRef BuildImplementationRef(ScopeBindingUpsertResult result) =>
+    private static StudioMemberImplementationRef BuildImplementationRef(
+        ScopeBindingUpsertResult result,
+        StudioMemberPlatformBindingExecutionRequest request) =>
         result.ImplementationKind switch
         {
             ScopeBindingImplementationKind.Workflow => new StudioMemberImplementationRef
@@ -516,25 +895,32 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
                 {
                     WorkflowId = ResolveWorkflowId(result),
                     WorkflowRevision = result.RevisionId,
+                    DefinitionActorIdPrefix = result.DefinitionActorIdPrefix,
                 },
             },
-            ScopeBindingImplementationKind.Scripting => new StudioMemberImplementationRef
-            {
-                Script = new StudioMemberScriptRef
-                {
-                    ScriptId = result.Script?.ScriptId ?? string.Empty,
-                    ScriptRevision = result.Script?.ScriptRevision ?? result.RevisionId,
-                },
-            },
+            ScopeBindingImplementationKind.Scripting => BuildScriptImplementationRef(result),
             ScopeBindingImplementationKind.GAgent => new StudioMemberImplementationRef
             {
                 Gagent = new StudioMemberGAgentRef
                 {
                     ActorTypeName = result.GAgent?.DiagnosticClrTypeName ?? string.Empty,
+                    AgentKind = request.Request.Gagent?.AgentKind ?? string.Empty,
                 },
             },
             _ => new StudioMemberImplementationRef(),
         };
+
+    private static StudioMemberImplementationRef BuildScriptImplementationRef(ScopeBindingUpsertResult result)
+    {
+        var endpointIds = RequireScriptEndpointIds(result.Script?.EndpointIds);
+        var scriptRef = new StudioMemberScriptRef
+        {
+            ScriptId = result.Script?.ScriptId ?? string.Empty,
+            ScriptRevision = result.Script?.ScriptRevision ?? result.RevisionId,
+        };
+        scriptRef.EndpointIds.AddRange(endpointIds);
+        return new StudioMemberImplementationRef { Script = scriptRef };
+    }
 
     private static string ResolveWorkflowId(ScopeBindingUpsertResult result)
     {
