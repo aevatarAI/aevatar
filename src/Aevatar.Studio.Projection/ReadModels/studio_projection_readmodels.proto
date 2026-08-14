@@ -5,6 +5,7 @@ option csharp_namespace = "Aevatar.Studio.Projection.ReadModels";
 import "google/protobuf/any.proto";
 import "google/protobuf/timestamp.proto";
 import "llm_selection.proto";
+import "Tools/tool_presentation.proto";
 
 message ContentArtifactCitationDocument {
   string citation_id = 1;
@@ -424,6 +425,7 @@ message NyxIdChatConversationToolStepSourceDocument {
   string service_id = 3;
   optional string readiness_capability_id = 4;
   string provider_resource_id = 5;
+  aevatar.foundation.tools.ToolPresentationDescriptor presentation = 6;
 }
 
 message NyxIdChatConversationBrowserActionStepSourceDocument {

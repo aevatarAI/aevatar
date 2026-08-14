@@ -990,6 +990,9 @@ public sealed class NyxIdChatTurnOperationExecutor
                 {
                     CallId = toolInput.CallId,
                     ToolName = toolInput.ToolName,
+                    Presentation = NyxIdChatDurableToolPresentation.Snapshot(
+                        authorization?.Presentation,
+                        toolInput.ToolName),
                 },
                 session,
                 reportProgressAsync,
@@ -1739,6 +1742,9 @@ public sealed class NyxIdChatTurnOperationExecutor
                         Idempotent = !approval.MayChangeExternalState,
                         IdempotencyKey = approval.IdempotencyKey,
                         OperationAdmission = approval.OperationAdmission?.Clone(),
+                        Presentation = NyxIdChatDurableToolPresentation.Snapshot(
+                            approval.Presentation,
+                            pending.Name),
                     },
                 },
                 session,
@@ -1939,6 +1945,9 @@ public sealed class NyxIdChatTurnOperationExecutor
                         AgentProfileTurnAuthority =
                             admission.AgentProfileTurnAuthority?.Clone(),
                         RematerializeDurableAuthorization = durableRetry,
+                        Presentation = NyxIdChatDurableToolPresentation.Snapshot(
+                            admission.Presentation,
+                            durableRetry ? admission.ToolName : pending!.Name),
                     },
                 },
                 session,
@@ -2116,6 +2125,9 @@ public sealed class NyxIdChatTurnOperationExecutor
             return result;
 
         var callSafety = snapshot.CallSafety;
+        result.Presentation = NyxIdChatDurableToolPresentation.Snapshot(
+            snapshot.Presentation,
+            call.Name);
         result.Safety = new NyxIdChatToolCallSafety
         {
             IsReadOnly = callSafety.IsReadOnly,
@@ -2157,7 +2169,9 @@ public sealed class NyxIdChatTurnOperationExecutor
 
         return snapshot with
         {
-            Presentation = snapshot.Presentation?.Clone(),
+            Presentation = NyxIdChatDurableToolPresentation.Snapshot(
+                snapshot.Presentation,
+                snapshot.ToolName),
             OperationAdmission = operationAdmission,
         };
     }
@@ -2278,6 +2292,9 @@ public sealed class NyxIdChatTurnOperationExecutor
                     authorization.IsDestructive),
                 authorization.SideEffectKind,
                 authorization.ToolDefinitionFingerprint,
+                Presentation: NyxIdChatDurableToolPresentation.Snapshot(
+                    input.Presentation,
+                    input.ToolName),
                 OperationAdmission: admission.Clone()),
         ];
         return true;

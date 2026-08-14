@@ -515,6 +515,7 @@ public sealed class NyxIdChatConversationCurrentStateProjector
             ServiceSlug = source.ServiceSlug,
             ServiceId = source.ServiceId,
             ProviderResourceId = source.ProviderResourceId,
+            Presentation = source.Presentation?.Clone(),
         };
         if (source.HasReadinessCapabilityId)
             document.ReadinessCapabilityId = source.ReadinessCapabilityId;

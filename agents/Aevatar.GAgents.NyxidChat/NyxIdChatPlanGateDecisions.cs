@@ -572,6 +572,9 @@ public static class NyxIdChatPlanGateDecisions
             MayChangeExternalState = step.MayChangeExternalState,
             IdempotencyKey = step.Operation.Key.OperationId,
             OperationAdmission = step.Source?.Tool?.OperationAdmission?.Clone(),
+            Presentation = NyxIdChatDurableToolPresentation.Snapshot(
+                step.Source?.Tool?.Presentation,
+                admission.ToolName),
         };
         if (step.RematerializeDurableAuthorization &&
             step.RetryToolInput?.Arguments is not null)

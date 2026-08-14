@@ -2738,12 +2738,18 @@ public sealed partial class NyxIdChatTurnGAgentTests
                 registry,
                 new NoMatchProfileClassifier()),
             credentialLifecycle);
-        var command = DurableGenerationTwoPlanGateContinuation();
+        var command = NyxIdChatOperationDispatchCommand.Parser.ParseFrom(
+            DurableGenerationTwoPlanGateContinuation().ToByteArray());
+        var progress = new List<NyxIdChatOperationProgressSignal>();
 
         var execution = await executor.ExecuteAsync(
             command,
             new NyxIdChatTransientExecutionSession(),
-            static (_, _) => Task.CompletedTask,
+            (signal, _) =>
+            {
+                progress.Add(signal.Clone());
+                return Task.CompletedTask;
+            },
             CancellationToken.None);
 
         registry.ResolveCount.Should().Be(1);
@@ -2766,6 +2772,13 @@ public sealed partial class NyxIdChatTurnGAgentTests
         context.ExecutionOwner.Kind.Should().Be(AgentToolExecutionOwnerKind.Actor);
         context.ExecutionOwner.OwnerId.Should().Be("conversation-alpha");
         credentialLifecycle.DelegationTokens.Should().Equal("fresh-plan-token");
+        var start = progress.Should().ContainSingle(signal =>
+                signal.ProgressCase ==
+                NyxIdChatOperationProgressSignal.ProgressOneofCase.ToolStarted)
+            .Which.ToolStarted;
+        start.CallId.Should().Be("call-alpha");
+        start.Presentation.Kind.Should().Be(ToolPresentationKind.Skill);
+        start.Presentation.Skill.SkillName.Should().Be("durable-skill-alpha");
     }
 
     [Theory]
@@ -2897,6 +2910,118 @@ public sealed partial class NyxIdChatTurnGAgentTests
         duplicate.Result.ResultCase.Should().Be(NyxIdChatOperationResultSignal.ResultOneofCase.Failure);
         duplicate.Result.Failure.FailureCode.Should().Be("NYXID_CHAT_TOOL_CAPABILITY_LOST");
         duplicate.Result.Failure.ExternalEffect.Should().Be(NyxIdChatEffectEvidence.NotStarted);
+    }
+
+    [Fact]
+    public async Task OperationExecutor_ToolStartWithoutLlmChunk_ShouldUseFrozenSkillPresentation()
+    {
+        var generationExecutor = new StreamingCapabilityReplyExecutor(toolName: "use_skill");
+        var executor = new NyxIdChatTurnOperationExecutor(generationExecutor);
+        var primingSession = new NyxIdChatTransientExecutionSession();
+        await executor.ExecuteAsync(
+            new NyxIdChatOperationDispatchCommand
+            {
+                Key = CreateKey(),
+                Llm = new NyxIdChatLLMOperationInput
+                {
+                    Request = new ChatRequestEvent
+                    {
+                        Prompt = "load the skill",
+                        SessionId = "turn-alpha",
+                    },
+                },
+            },
+            primingSession,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+        var session = new NyxIdChatTransientExecutionSession
+        {
+            StepState = primingSession.StepState?.Clone(),
+            Request = primingSession.Request?.Clone(),
+            AuthorizedToolStep = primingSession.AuthorizedToolStep,
+            AuthorizedToolCallSafeties = primingSession.AuthorizedToolCallSafeties
+                .Select(snapshot => snapshot with
+                {
+                    Presentation = ToolPresentationDescriptors.Skill(
+                        "use_skill",
+                        "synthetic-invoice-review",
+                        "Load the exact workflow skill.",
+                        "synthetic-invoice-review",
+                        "remote"),
+                })
+                .ToArray(),
+            AuthorizationSourceKey = primingSession.AuthorizationSourceKey?.Clone(),
+            TurnCatalog = primingSession.TurnCatalog,
+        };
+        var progress = new List<NyxIdChatOperationProgressSignal>();
+        Task ReportProgressAsync(
+            NyxIdChatOperationProgressSignal signal,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            progress.Add(signal.Clone());
+            return Task.CompletedTask;
+        }
+        await executor.ExecuteAsync(
+            new NyxIdChatOperationDispatchCommand
+            {
+                Key = CreateKey("step-tool-alpha", "operation-tool-alpha", 1),
+                Tool = new NyxIdChatToolOperationInput
+                {
+                    CallId = "call-alpha",
+                    ToolName = "use_skill",
+                    ArgumentsJson = "{\"value\":1}",
+                    MayChangeExternalState = true,
+                },
+            },
+            session,
+            ReportProgressAsync,
+            CancellationToken.None);
+
+        var start = progress.Should().ContainSingle(signal =>
+                signal.ProgressCase ==
+                NyxIdChatOperationProgressSignal.ProgressOneofCase.ToolStarted)
+            .Which.ToolStarted;
+        start.CallId.Should().Be("call-alpha");
+        start.ToolName.Should().Be("use_skill");
+        start.Presentation.Kind.Should().Be(ToolPresentationKind.Skill);
+        start.Presentation.Skill.SkillName.Should().Be("synthetic-invoice-review");
+        start.Presentation.Skill.Source.Should().Be("remote");
+    }
+
+    [Fact]
+    public void DurableToolPresentation_ShouldBoundMultibyteFieldsAndRoundTrip()
+    {
+        var oversizedMultibyte = string.Concat(Enumerable.Repeat("界🙂", 50_000));
+        var source = ToolPresentationDescriptors.Skill(
+            oversizedMultibyte,
+            oversizedMultibyte,
+            oversizedMultibyte,
+            oversizedMultibyte,
+            oversizedMultibyte);
+        source.IconUrl = oversizedMultibyte;
+        source.UnavailableReason = oversizedMultibyte;
+
+        var bounded = NyxIdChatDurableToolPresentation.Snapshot(
+            source,
+            oversizedMultibyte);
+
+        bounded.Should().NotBeNull();
+        bounded!.CalculateSize().Should().BeLessThanOrEqualTo(
+            NyxIdChatDurableToolPresentation.MaxDescriptorBytes);
+        Encoding.UTF8.GetByteCount(bounded.InvocationName).Should().BeLessThanOrEqualTo(
+            NyxIdChatDurableToolPresentation.MaxNameBytes);
+        Encoding.UTF8.GetByteCount(bounded.DisplayName).Should().BeLessThanOrEqualTo(
+            NyxIdChatDurableToolPresentation.MaxNameBytes);
+        Encoding.UTF8.GetByteCount(bounded.Description).Should().BeLessThanOrEqualTo(
+            NyxIdChatDurableToolPresentation.MaxDescriptionBytes);
+        Encoding.UTF8.GetByteCount(bounded.Skill.SkillName).Should().BeLessThanOrEqualTo(
+            NyxIdChatDurableToolPresentation.MaxNameBytes);
+        char.IsHighSurrogate(bounded.InvocationName.LastOrDefault()).Should().BeFalse();
+        char.IsHighSurrogate(bounded.Skill.SkillName.LastOrDefault()).Should().BeFalse();
+
+        var roundTripped = ToolPresentationDescriptor.Parser.ParseFrom(bounded.ToByteArray());
+        roundTripped.Should().BeEquivalentTo(bounded);
     }
 
     [Fact]
@@ -3484,6 +3609,12 @@ public sealed partial class NyxIdChatTurnGAgentTests
                     AuthorityCeilingToolNames = { "tool-alpha" },
                 },
                 RematerializeDurableAuthorization = true,
+                Presentation = ToolPresentationDescriptors.Skill(
+                    "tool-alpha",
+                    "Durable skill alpha",
+                    "Retry the exact skill operation.",
+                    "durable-skill-alpha",
+                    "remote"),
             },
         };
     }

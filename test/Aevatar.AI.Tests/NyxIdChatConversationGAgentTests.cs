@@ -3564,6 +3564,12 @@ public sealed partial class NyxIdChatConversationGAgentTests
                                 },
                             },
                         },
+                        Presentation = ToolPresentationDescriptors.Skill(
+                            "repository_update",
+                            "Repository maintenance",
+                            "Update the exact repository.",
+                            "repository-maintenance",
+                            "remote"),
                     },
                 },
             },
@@ -3582,6 +3588,8 @@ public sealed partial class NyxIdChatConversationGAgentTests
         committedCall.NyxIdProvenance.CatalogServiceSlug.Should().Be("catalog-slug-alpha");
         committedCall.NyxIdProvenance.ReadinessCapabilityId.Should()
             .Be("readiness-capability-alpha");
+        committedCall.Presentation.Kind.Should().Be(ToolPresentationKind.Skill);
+        committedCall.Presentation.Skill.SkillName.Should().Be("repository-maintenance");
 
         var successor = await ConfirmPendingWritePlanGateAsync(
             agent,
@@ -3605,6 +3613,8 @@ public sealed partial class NyxIdChatConversationGAgentTests
             step.Kind == NyxIdChatStepKind.Tool).Operation.Phase.Should().Be(
             NyxIdChatOperationPhase.Requested);
         toolStep.Source.Tool.ReadinessCapabilityId.Should().Be("readiness-capability-alpha");
+        toolStep.Source.Tool.Presentation.Skill.SkillName.Should()
+            .Be("repository-maintenance");
         successor.InputCase.Should().Be(
             NyxIdChatOperationDispatchCommand.InputOneofCase.PlanGateContinuation);
         successor.PlanGateContinuation.ArgumentsSha256.Should().Equal(
@@ -3613,6 +3623,8 @@ public sealed partial class NyxIdChatConversationGAgentTests
             AgentToolOperationRiskPayload.Write);
         successor.PlanGateContinuation.OperationAdmission.ExecutionPolicy.Approval.Should().Be(
             AgentToolOperationApprovalPayload.Required);
+        successor.PlanGateContinuation.Presentation.Skill.SkillName.Should()
+            .Be("repository-maintenance");
         eventsObservedAtSuccessorDispatch.Should().HaveCount(afterLlmResult.Count + 2,
             "the admission acknowledgement and plan resolution commit before successor dispatch");
 
@@ -3630,6 +3642,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
         reactivatedSource.ServiceId.Should().Be("connected-service-alpha");
         reactivatedSource.ServiceSlug.Should().Be("service-slug-alpha");
         reactivatedSource.ReadinessCapabilityId.Should().Be("readiness-capability-alpha");
+        reactivatedSource.Presentation.Skill.SkillName.Should().Be("repository-maintenance");
     }
 
     [Fact]

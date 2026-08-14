@@ -572,12 +572,7 @@ internal static class NyxIdChatConversationAguiFrameBuilder
                 ToolCallEnd = new ToolCallEndEvent
                 {
                     ToolCallId = receipt.CallId,
-                    Result = receipt.Status ==
-                        Aevatar.AI.Abstractions.AgentToolReceiptStatus.Success
-                        ? "completed"
-                        : string.IsNullOrWhiteSpace(receipt.ErrorMessage)
-                            ? "not completed"
-                            : receipt.ErrorMessage,
+                    Result = ResolveToolReceiptResult(receipt),
                 },
             });
         }
@@ -744,15 +739,15 @@ internal static class NyxIdChatConversationAguiFrameBuilder
                 ToolCallEnd = new ToolCallEndEvent
                 {
                     ToolCallId = receipt.CallId,
-                    Result = receipt.Status == Aevatar.AI.Abstractions.AgentToolReceiptStatus.Success
-                        ? "completed"
-                        : string.IsNullOrWhiteSpace(receipt.ErrorMessage)
-                            ? "not completed"
-                            : receipt.ErrorMessage,
+                    Result = ResolveToolReceiptResult(receipt),
                 },
             });
         }
     }
+
+    private static string ResolveToolReceiptResult(
+        Aevatar.AI.Abstractions.AgentToolReceipt receipt) =>
+        NyxIdChatPublicToolReceiptResult.ResolvePresentationResult(receipt);
 
     private static void AppendTerminalIfNeeded(
         List<AGUIEvent> frames,

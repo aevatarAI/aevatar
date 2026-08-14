@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
@@ -346,6 +348,7 @@ internal sealed class ReadWorkflowRunArtifactTool : IAevatarInvocationReadOnlyTo
     private const int MaxGraphDepth = 5;
     private const int DefaultReportWaitMs = 8000;
     private const int MaxReportWaitMs = 20000;
+    private const int FinalOutputDigestBufferSize = 4 * 1024;
     private static readonly TimeSpan ReportPollInterval = TimeSpan.FromMilliseconds(250);
 
     private readonly IWorkflowExecutionQueryApplicationService _queryService;
@@ -477,23 +480,28 @@ internal sealed class ReadWorkflowRunArtifactTool : IAevatarInvocationReadOnlyTo
             });
         }
 
+        var finalOutput = report.FinalOutput ?? string.Empty;
+        var finalOutputDigest = ComputeUtf8Sha256(finalOutput);
+        var committedArtifactActorId = EmptyToNull(report.RootActorId);
         return AevatarInvocationJson.ToJson(new
         {
             workflow_run_id = args.WorkflowRunId,
-            artifact_actor_id = EmptyToNull(artifactTarget.ArtifactWorkflowRunId),
+            artifact_actor_id = committedArtifactActorId,
             artifact = "report",
             workflow_name = EmptyToNull(report.WorkflowName),
             status = report.CompletionStatus.ToString(),
             state_version = report.StateVersion,
             command_id = EmptyToNull(report.CommandId),
-            root_actor_id = EmptyToNull(report.RootActorId),
+            root_actor_id = committedArtifactActorId,
             success = report.Success,
             started_at = ToIso(report.StartedAt),
             ended_at = ToIso(report.EndedAt),
             updated_at = ToIso(report.UpdatedAt),
             duration_ms = report.DurationMs,
             input = Truncate(report.Input, 500),
-            final_output = Truncate(report.FinalOutput, 2000),
+            final_output = Truncate(finalOutput, 2000),
+            final_output_bytes = finalOutputDigest.ByteCount,
+            final_output_sha256 = finalOutputDigest.Sha256,
             final_error = EmptyToNull(report.FinalError),
             summary = new
             {
@@ -718,6 +726,34 @@ internal sealed class ReadWorkflowRunArtifactTool : IAevatarInvocationReadOnlyTo
 
     private static string? ToIso(DateTimeOffset value) =>
         value == default ? null : value.UtcDateTime.ToString("O");
+
+    private static (long ByteCount, string Sha256) ComputeUtf8Sha256(string value)
+    {
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        var encoder = Encoding.UTF8.GetEncoder();
+        Span<byte> buffer = stackalloc byte[FinalOutputDigestBufferSize];
+        var remaining = value.AsSpan();
+        long byteCount = 0;
+        bool completed;
+
+        do
+        {
+            encoder.Convert(
+                remaining,
+                buffer,
+                flush: true,
+                out var charsUsed,
+                out var bytesUsed,
+                out completed);
+            hash.AppendData(buffer[..bytesUsed]);
+            byteCount += bytesUsed;
+            remaining = remaining[charsUsed..];
+        } while (!completed);
+
+        return (
+            byteCount,
+            Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant());
+    }
 
     private static TimeSpan Min(TimeSpan left, TimeSpan right) =>
         left <= right ? left : right;

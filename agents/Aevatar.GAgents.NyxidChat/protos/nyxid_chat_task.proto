@@ -350,6 +350,8 @@ message NyxIdChatToolStepSource {
   // Frozen typed expectation produced only for nyxid_require_service under a
   // committed service-connect turn admission.
   NyxIdCatalogServiceConnectParams service_connect_postcondition = 7;
+  // Bounded provider-authored presentation retained for recovery and retry.
+  aevatar.foundation.tools.ToolPresentationDescriptor presentation = 8;
 }
 
 message NyxIdChatBrowserActionStepSource {
@@ -374,6 +376,7 @@ message NyxIdChatRetryToolInputState {
   string tool_name = 2;
   google.protobuf.Struct arguments = 3;
   aevatar.ai.tool_providers.AgentToolOperationAdmissionPayload operation_admission = 4;
+  aevatar.foundation.tools.ToolPresentationDescriptor presentation = 5;
 }
 
 message NyxIdChatApprovalStepSource {
@@ -1620,6 +1623,7 @@ message NyxIdChatToolOperationInput {
   // this source before the executor may rematerialize a durable capability.
   NyxIdChatOperationKey retry_authorization_source_key = 12;
   NyxIdChatTurnIntent intent = 13;
+  aevatar.foundation.tools.ToolPresentationDescriptor presentation = 14;
 }
 
 message NyxIdChatToolVerificationInput {
@@ -1676,6 +1680,7 @@ message NyxIdChatToolApprovalContinuationInput {
   aevatar.ai.NyxIdExactServiceApprovalAuthority exact_service_approval = 7;
   string tool_call_id = 8;
   string tool_name = 9;
+  aevatar.foundation.tools.ToolPresentationDescriptor presentation = 10;
 }
 
 // Initial plan confirmation carries no raw tool arguments and matches the
@@ -1699,6 +1704,7 @@ message NyxIdChatPlanGateContinuationInput {
   aevatar.ai.AgentProfileTurnAuthorityState agent_profile_turn_authority = 14;
   bool rematerialize_durable_authorization = 15;
   NyxIdChatCanaryEffectFaultDirective canary_effect_fault = 16;
+  aevatar.foundation.tools.ToolPresentationDescriptor presentation = 17;
 }
 
 message NyxIdChatOperationDispatchCommand {
@@ -1753,6 +1759,8 @@ message NyxIdChatToolCall {
   // Exact provider-owned selector and contract. The model never authors this
   // field; the server snapshots it beside the authorized runtime capability.
   aevatar.ai.tool_providers.AgentToolOperationAdmissionPayload operation_admission = 6;
+  // Bounded provider-authored snapshot; never supplied by the model.
+  aevatar.foundation.tools.ToolPresentationDescriptor presentation = 7;
 }
 
 message NyxIdChatLLMOperationResult {

@@ -2976,6 +2976,9 @@ public sealed class NyxIdChatConversationGAgent
                         ToolName = call.ToolName,
                         Safety = call.Safety?.Clone(),
                         NyxIdProvenance = call.NyxIdProvenance?.Clone(),
+                        Presentation = NyxIdChatDurableToolPresentation.Snapshot(
+                            call.Presentation,
+                            call.ToolName),
                     }));
                 break;
             case NyxIdChatOperationResultSignal.ResultOneofCase.Tool:
@@ -3000,7 +3003,7 @@ public sealed class NyxIdChatConversationGAgent
         return durable;
     }
 
-    private static AgentToolReceipt? BuildDurableReceiptEvidence(AgentToolReceipt? receipt)
+    internal static AgentToolReceipt? BuildDurableReceiptEvidence(AgentToolReceipt? receipt)
     {
         if (receipt is null)
             return null;
@@ -3020,9 +3023,12 @@ public sealed class NyxIdChatConversationGAgent
             SubjectVersion = receipt.SubjectVersion,
             SubjectHash = receipt.SubjectHash,
             ApprovalRequestId = receipt.ApprovalRequestId,
-            ErrorCode = receipt.ErrorCode,
-            ErrorMessage = receipt.ErrorMessage,
+            ErrorCode = NyxIdChatPublicToolReceiptResult.NormalizeErrorCode(receipt.ErrorCode),
+            ErrorMessage = string.Empty,
             ProviderResourceId = receipt.ProviderResourceId,
+            MutationStage = receipt.MutationStage,
+            NyxIdApprovalTerminalOutcome = receipt.NyxIdApprovalTerminalOutcome,
+            ResultJson = NyxIdChatPublicToolReceiptResult.Project(receipt),
         };
         if (receipt.ManagedWorkflowHandoff is not null)
             durable.ManagedWorkflowHandoff = receipt.ManagedWorkflowHandoff.Clone();

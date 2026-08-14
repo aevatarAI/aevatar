@@ -10,6 +10,7 @@ using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Tools;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.NyxId.Tools;
+using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Tools;
 using Aevatar.GAgents.Channel.Abstractions;
@@ -514,8 +515,11 @@ public sealed class AgentRunReplyGenerationExecutorTests
         execution.Continuation.LlmStepResult.ToolCalls.Should().ContainSingle()
             .Which.Name.Should().Be("ornn_search_skills");
         execution.AuthorizedToolStep.Should().NotBeNull();
-        execution.AuthorizedToolCallSafeties.Should().ContainSingle()
-            .Which.ToolName.Should().Be("ornn_search_skills");
+        var recoverySnapshot = execution.AuthorizedToolCallSafeties.Should()
+            .ContainSingle().Which;
+        recoverySnapshot.ToolName.Should().Be("ornn_search_skills");
+        recoverySnapshot.Presentation.Should().NotBeNull();
+        recoverySnapshot.Presentation!.InvocationName.Should().Be("ornn_search_skills");
         searchSkills.ExecuteCount.Should().Be(0);
     }
 
@@ -636,7 +640,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
     [Fact]
     public async Task BuildLlmStepContinuation_WithPersistedStructuredSearch_ShouldLoadMatchedSkillWithoutProvider()
     {
-        var useSkill = new CountingTool("use_skill");
+        var useSkill = new UseSkillTool(new LocalSkillCatalog());
         var provider = new RecordingProvider();
         var recovery = new AgentSkillRecoveryContext(
             RequireInitialOrnnSearch: true,
@@ -685,6 +689,85 @@ public sealed class AgentRunReplyGenerationExecutorTests
         planned.Name.Should().Be("use_skill");
         planned.ArgumentsJson.Should().Contain("invoice-ocr-policy-review");
         execution.AuthorizedToolStep.Should().NotBeNull();
+        var presentation = execution.AuthorizedToolCallSafeties.Should()
+            .ContainSingle().Which.Presentation;
+        presentation.Should().NotBeNull();
+        presentation!.Kind.Should().Be(ToolPresentationKind.Skill);
+        presentation.Skill.SkillName.Should().Be("invoice-ocr-policy-review");
+    }
+
+    [Fact]
+    public async Task NyxIdChatTurnExecutor_UseSkillAfterPreamble_ShouldPublishOneExactSkillStart()
+    {
+        const string skillName = "invoice-ocr-policy-review";
+        const string preamble = "I will load the requested workflow skill.";
+        var useSkill = new UseSkillTool(new LocalSkillCatalog());
+        var generationExecutor = CreateToolEnabledExecutor(
+            useSkill,
+            new TextThenToolCallProvider(
+                useSkill.Name,
+                preamble,
+                $$"""{"skill":"{{skillName}}"}"""));
+        var executor = new NyxIdChatTurnOperationExecutor(generationExecutor);
+        var session = new NyxIdChatTransientExecutionSession();
+        var progress = new List<NyxIdChatOperationProgressSignal>();
+        Task ReportProgressAsync(
+            NyxIdChatOperationProgressSignal signal,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            progress.Add(signal.Clone());
+            return Task.CompletedTask;
+        }
+
+        var llmExecution = await executor.ExecuteAsync(
+            new NyxIdChatOperationDispatchCommand
+            {
+                Key = BuildOperationKey("step-use-skill-plan", "operation-use-skill-plan"),
+                Llm = new NyxIdChatLLMOperationInput
+                {
+                    Request = new ChatRequestEvent
+                    {
+                        Prompt = "load the invoice skill",
+                        SessionId = "turn-1",
+                    },
+                },
+            },
+            session,
+            ReportProgressAsync,
+            CancellationToken.None);
+        var call = llmExecution.Result.Llm.ToolCalls.Should().ContainSingle().Which;
+        call.Presentation.Kind.Should().Be(ToolPresentationKind.Skill);
+        call.Presentation.Skill.SkillName.Should().Be(skillName);
+        progress.Should().NotContain(signal =>
+            signal.ProgressCase == NyxIdChatOperationProgressSignal.ProgressOneofCase.Text &&
+            signal.Text.Delta.Contains(preamble, StringComparison.Ordinal));
+
+        await executor.ExecuteAsync(
+            new NyxIdChatOperationDispatchCommand
+            {
+                Key = BuildOperationKey("step-use-skill", "operation-use-skill"),
+                Tool = new NyxIdChatToolOperationInput
+                {
+                    CallId = call.CallId,
+                    ToolName = call.ToolName,
+                    ArgumentsJson = call.ArgumentsJson,
+                    MayChangeExternalState = call.Safety.MayChangeExternalState,
+                    Presentation = call.Presentation.Clone(),
+                },
+            },
+            session,
+            ReportProgressAsync,
+            CancellationToken.None);
+
+        var start = progress.Should().ContainSingle(signal =>
+                signal.ProgressCase ==
+                NyxIdChatOperationProgressSignal.ProgressOneofCase.ToolStarted &&
+                signal.ToolStarted.CallId == call.CallId)
+            .Which.ToolStarted;
+        start.Presentation.Kind.Should().Be(ToolPresentationKind.Skill);
+        start.Presentation.Skill.SkillName.Should().Be(skillName);
+        start.Presentation.Skill.Source.Should().Be("local-or-remote");
     }
 
     [Fact]
@@ -1924,7 +2007,10 @@ public sealed class AgentRunReplyGenerationExecutorTests
         }
     }
 
-    private sealed class TextThenToolCallProvider(string toolName, string content) : ILLMProvider
+    private sealed class TextThenToolCallProvider(
+        string toolName,
+        string content,
+        string argumentsJson = "{}") : ILLMProvider
     {
         public string Name => "text-then-tool-call-provider";
 
@@ -1939,7 +2025,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
                 {
                     Id = "call-approval-1",
                     Name = toolName,
-                    ArgumentsJson = "{}",
+                    ArgumentsJson = argumentsJson,
                 },
             };
             await Task.Yield();

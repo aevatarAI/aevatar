@@ -227,8 +227,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         // A tool-enabled LLM step may emit prose before its tool call. Buffer that step until
         // its terminal shape is known so intermediate planning never becomes a visible reply.
         // This applies to CardKit too: its separate transport does not make tool preambles final.
-        var deferPotentialToolCallText = streamingState is not null &&
-                                         !workItem.StepState.FinalNoToolsStep;
+        var deferPotentialToolCallText = !workItem.StepState.FinalNoToolsStep;
         List<LLMStreamChunk>? deferredLlmChunks = deferSkillRecoveryText || deferPotentialToolCallText
             ? []
             : null;

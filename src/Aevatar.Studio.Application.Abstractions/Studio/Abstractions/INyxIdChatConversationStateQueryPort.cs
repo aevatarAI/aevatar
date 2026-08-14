@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using Aevatar.Foundation.Abstractions.Tools;
 
 namespace Aevatar.Studio.Application.Studio.Abstractions;
 
@@ -352,7 +353,9 @@ public sealed record NyxIdChatToolStepSourceSnapshot(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     string? ReadinessCapabilityId,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    string? ProviderResourceId = null);
+    string? ProviderResourceId = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    ToolPresentationDescriptor? Presentation = null);
 
 public sealed record NyxIdChatBrowserActionStepSourceSnapshot(
     string Action,
