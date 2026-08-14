@@ -131,7 +131,7 @@ internal static class NyxIdChatPublicToolReceiptResult
         var artifactActorId = ReadBoundedString(root, "artifact_actor_id", MaxIdentifierBytes);
         var rootActorId = ReadBoundedString(root, "root_actor_id", MaxIdentifierBytes);
         var artifact = ReadBoundedString(root, "artifact", 32)?.ToLowerInvariant();
-        var status = ReadBoundedString(root, "status", 64)?.ToLowerInvariant();
+        var status = NormalizeArtifactStatus(ReadBoundedString(root, "status", 64));
         if (workflowRunId is null ||
             artifact != "report" ||
             !string.Equals(workflowRunId, receipt.SubjectId, StringComparison.Ordinal))
@@ -157,19 +157,6 @@ internal static class NyxIdChatPublicToolReceiptResult
             return pendingResult;
         }
 
-        if (!TryReadBoolean(root, "success", out var success))
-            return null;
-        if (root.TryGetProperty("pending", out _) &&
-            (!TryReadBoolean(root, "pending", out var terminalPending) || terminalPending))
-        {
-            return null;
-        }
-        if (status is not ("completed" or "failed" or "stopped") ||
-            (status == "completed") != success)
-        {
-            return null;
-        }
-
         var workflowName = ReadBoundedString(root, "workflow_name", MaxWorkflowNameBytes);
         var commandId = ReadBoundedString(root, "command_id", MaxIdentifierBytes);
         var stateVersion = ReadPositiveInt64(root, "state_version");
@@ -179,7 +166,45 @@ internal static class NyxIdChatPublicToolReceiptResult
             workflowName is null ||
             commandId is null ||
             stateVersion is null)
+        {
             return null;
+        }
+
+        if (IsMaterializedNonTerminalStatus(status))
+        {
+            if ((root.TryGetProperty("success", out _) &&
+                 (!TryReadBoolean(root, "success", out var nonTerminalSuccess) || nonTerminalSuccess)) ||
+                (root.TryGetProperty("pending", out _) &&
+                 (!TryReadBoolean(root, "pending", out var declaredPending) || !declaredPending)))
+            {
+                return null;
+            }
+
+            return new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["workflow_run_id"] = workflowRunId,
+                ["artifact_actor_id"] = artifactActorId,
+                ["artifact"] = artifact,
+                ["workflow_name"] = workflowName,
+                ["status"] = "pending",
+                ["pending"] = true,
+                ["state_version"] = stateVersion.Value,
+                ["command_id"] = commandId,
+            };
+        }
+
+        if (!TryReadBoolean(root, "success", out var success))
+            return null;
+        if (root.TryGetProperty("pending", out _) &&
+            (!TryReadBoolean(root, "pending", out var terminalPending) || terminalPending))
+        {
+            return null;
+        }
+        if (status is not ("completed" or "failed" or "stopped" or "timed_out") ||
+            (status == "completed") != success)
+        {
+            return null;
+        }
 
         var result = new Dictionary<string, object?>(StringComparer.Ordinal)
         {
@@ -207,6 +232,18 @@ internal static class NyxIdChatPublicToolReceiptResult
 
     private static bool RequiresTypedProjection(string toolName) =>
         toolName is "aevatar_start_workflow" or "aevatar_read_workflow_run_artifact";
+
+    private static bool IsMaterializedNonTerminalStatus(string? status) =>
+        status is "running" or "awaiting_tool_approval" or "waiting_for_signal";
+
+    private static string? NormalizeArtifactStatus(string? status) =>
+        status?.Trim().ToLowerInvariant() switch
+        {
+            "awaitingtoolapproval" or "awaiting_tool_approval" => "awaiting_tool_approval",
+            "waitingforsignal" or "waiting_for_signal" => "waiting_for_signal",
+            "timedout" or "timed_out" => "timed_out",
+            var normalized => normalized,
+        };
 
     private static bool HasValidWorkflowStartIdentity(
         AgentToolReceipt receipt,

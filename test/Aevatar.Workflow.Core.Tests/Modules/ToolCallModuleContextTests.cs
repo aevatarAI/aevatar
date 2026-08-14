@@ -846,7 +846,7 @@ public sealed class ToolCallModuleContextTests
             TimeoutDeadlineUnixMs = ((IWorkflowExecutionContext)ctx).UtcNow
                 .AddMinutes(1)
                 .ToUnixTimeMilliseconds(),
-            ContinuationToken = "approval-continuation-alpha",
+            ContinuationId = "approval-continuation-alpha",
             Attempt = 1,
         };
         await ctx.SaveStateAsync("tool_call", new ToolCallModuleState
@@ -1541,7 +1541,7 @@ public sealed class ToolCallModuleContextTests
             ToolName = "read_tool",
             CallId = "call-1",
             Attempt = 1,
-            ContinuationToken = "continuation-1",
+            ContinuationId = "continuation-1",
             ExecutionPhase = WorkflowToolCallExecutionPhase.ExecutionPending,
         };
         var unspecified = execution.Clone();
@@ -1579,7 +1579,7 @@ public sealed class ToolCallModuleContextTests
             ToolCallId = "call-approval",
             ApprovalRequestId = "approval-1",
             Attempt = 1,
-            ContinuationToken = "continuation-approval",
+            ContinuationId = "continuation-approval",
             TimeoutMs = 60_000,
             TimeoutDeadlineUnixMs = DateTimeOffset.UtcNow.AddMinutes(1).ToUnixTimeMilliseconds(),
             ExecutionPhase = WorkflowToolCallExecutionPhase.ApprovalPending,
@@ -1596,7 +1596,7 @@ public sealed class ToolCallModuleContextTests
         var recovery = recoveries.Should().ContainSingle().Subject;
         recovery.PendingKey.Should().Be("approval");
         recovery.CallbackId.Should().NotBeNullOrWhiteSpace();
-        recovery.Timeout.ContinuationToken.Should().Be(pending.ContinuationToken);
+        recovery.Timeout.ContinuationId.Should().Be(pending.ContinuationId);
     }
 
     [Fact]
@@ -1619,7 +1619,7 @@ public sealed class ToolCallModuleContextTests
             ApprovalRequestId = "approval-1",
             TerminalDecision = WorkflowToolCallTerminalDecision.Approved,
             Attempt = 2,
-            ContinuationToken = "continuation-approved",
+            ContinuationId = "continuation-approved",
             TimeoutDeadlineUnixMs = DateTimeOffset.UtcNow.AddMinutes(1).ToUnixTimeMilliseconds(),
             TimeoutCallbackId = "timeout-approved",
             TimeoutLease = new WorkflowRuntimeCallbackLeaseState
@@ -1657,7 +1657,7 @@ public sealed class ToolCallModuleContextTests
         ctx.Scheduled.Select(static item => item.Event)
             .OfType<WorkflowToolCallExecutionRecoveryFiredEvent>()
             .Should().ContainSingle()
-            .Which.ContinuationToken.Should().Be(pending.ContinuationToken);
+            .Which.ContinuationId.Should().Be(pending.ContinuationId);
     }
 
     [Fact]
@@ -1683,7 +1683,7 @@ public sealed class ToolCallModuleContextTests
             .Last(callback => callback.Event is WorkflowToolCallExecutionRecoveryFiredEvent);
         var recovery = recoveryCallback.Event.Should()
             .BeOfType<WorkflowToolCallExecutionRecoveryFiredEvent>().Subject;
-        recovery.ContinuationToken.Should().Be(pending.ContinuationToken);
+        recovery.ContinuationId.Should().Be(pending.ContinuationId);
         recovery.Attempt.Should().Be(pending.Attempt);
         var recoveryEnvelope = CallbackEnvelope(recoveryCallback);
         recoveryEnvelope.Route = EnvelopeRouteSemantics.CreateTopologyPublication(
@@ -1701,7 +1701,7 @@ public sealed class ToolCallModuleContextTests
         var completed = await ctx.WaitForPublishedAsync<WorkflowToolCallAttemptCompletedEvent>(candidate =>
             candidate.ExecutionId == pending.ExecutionId &&
             candidate.Attempt == pending.Attempt &&
-            candidate.ContinuationToken == pending.ContinuationToken);
+            candidate.ContinuationId == pending.ContinuationId);
         await recoveredModule.HandleAsync(ctx.PublishedEnvelope(completed), ctx, CancellationToken.None);
         firstInvocation.Completion.SetResult(WorkflowToolExecutionResult.Success("{}"));
 
@@ -2103,7 +2103,7 @@ public sealed class ToolCallModuleContextTests
             ExecutionId = pendingBeforeTimeout.ExecutionId,
             CallId = pendingBeforeTimeout.CallId,
             Attempt = pendingBeforeTimeout.Attempt,
-            ContinuationToken = pendingBeforeTimeout.ContinuationToken,
+            ContinuationId = pendingBeforeTimeout.ContinuationId,
             Success = new WorkflowToolCallAttemptSuccessOutcome { ResultJson = """{"late":true}""" },
         };
         var lateEnvelope = Envelope(lateCompletion);
@@ -2121,7 +2121,7 @@ public sealed class ToolCallModuleContextTests
                     lateCompletion.CallId,
                     lateCompletion.ExecutionId,
                     lateCompletion.Attempt.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                    lateCompletion.ContinuationToken),
+                    lateCompletion.ContinuationId),
             },
         };
         await module.HandleAsync(lateEnvelope, ctx, CancellationToken.None);
@@ -2376,7 +2376,7 @@ public sealed class ToolCallModuleContextTests
                 candidate.CallId == pending.CallId &&
                 candidate.ExecutionId == pending.ExecutionId &&
                 candidate.Attempt == pending.Attempt &&
-                candidate.ContinuationToken == pending.ContinuationToken);
+                candidate.ContinuationId == pending.ContinuationId);
             ctx.Published.RemoveAll(item => ReferenceEquals(item.Event, completed));
 
             await module.HandleAsync(

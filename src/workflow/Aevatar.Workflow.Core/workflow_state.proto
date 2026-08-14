@@ -540,7 +540,7 @@ message PendingToolCallApprovalState
   WorkflowToolCallExecutionPhase execution_phase = 18;
   int32 timeout_ms = 19;
   int64 timeout_deadline_unix_ms = 20;
-  string continuation_token = 21;
+  string continuation_id = 21;
   int32 attempt = 22;
   string timeout_callback_id = 23;
   WorkflowRuntimeCallbackLeaseState timeout_lease = 24;
@@ -651,7 +651,7 @@ message PendingToolCallExecutionState
   int32 attempt = 18;
   string retry_callback_id = 19;
   WorkflowRuntimeCallbackLeaseState retry_lease = 20;
-  string continuation_token = 21;
+  string continuation_id = 21;
   int64 retry_due_unix_ms = 22;
   aevatar.credentials.RuntimeSecretReference protected_material_reference = 23;
   string protected_material_digest_sha256 = 24;

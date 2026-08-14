@@ -160,7 +160,7 @@ public sealed class WorkflowLeaseGAgentTests
         await agent.HandleExpirationFiredAsync(new WorkflowLeaseExpirationFiredEvent
         {
             LeaseKey = "shared",
-            HolderToken = "stale",
+            HolderFenceId = "stale",
             Generation = holder.Generation,
             ExpiresAtUnixMs = holder.ExpiresAtUnixMs,
         }, 400_000, CancellationToken.None);
@@ -171,7 +171,7 @@ public sealed class WorkflowLeaseGAgentTests
         await agent.HandleExpirationFiredAsync(new WorkflowLeaseExpirationFiredEvent
         {
             LeaseKey = "shared",
-            HolderToken = holder.HolderToken,
+            HolderFenceId = holder.HolderToken,
             Generation = holder.Generation,
             ExpiresAtUnixMs = holder.ExpiresAtUnixMs,
         }, 400_000, CancellationToken.None);
@@ -254,7 +254,7 @@ public sealed class WorkflowLeaseGAgentTests
         request.CallbackId.Should().Be(RuntimeCallbackKeyComposer.BuildCallbackId("workflow-lease-expiration", "shared", "8"));
         request.TriggerEnvelope.Payload.Should().NotBeNull();
         var fired = request.TriggerEnvelope.Payload!.Unpack<WorkflowLeaseExpirationFiredEvent>();
-        fired.HolderToken.Should().Be("token-holder");
+        fired.HolderFenceId.Should().Be("token-holder");
         fired.Generation.Should().Be(8);
         agent.State.ExpirationLease.Should().NotBeNull();
         agent.State.ExpirationLease!.CallbackId.Should().Be(request.CallbackId);

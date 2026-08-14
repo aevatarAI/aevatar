@@ -115,6 +115,88 @@ public sealed class WorkflowRuntimeTerminalFailureTests
                 "Workflow start dispatch must go through PublishStartWorkflowOrTerminalFailureAsync"
             },
             {
+                "durable definition start bypasses terminalization helper",
+                sources => sources.ReplaceInMethod(
+                    RunAgentFile,
+                    "DrainDynamicDefinitionStartAsync",
+                    "await PublishStartWorkflowOrTerminalFailureAsync(",
+                    "await PublishAsync("),
+                "Workflow dynamic definition start must top-level await PublishStartWorkflowOrTerminalFailureAsync"
+            },
+            {
+                "durable definition entry stops draining its start continuation",
+                sources => sources.ReplaceInMethod(
+                    RunAgentFile,
+                    "HandleReplaceWorkflowDefinitionAndExecute",
+                    "ReplaceWorkflowDefinitionBypassingBindingAsync",
+                    "ReplaceWorkflowDefinitionWithoutStartingAsync"),
+                "Workflow direct execution entry must top-level await ReplaceWorkflowDefinitionBypassingBindingAsync"
+            },
+            {
+                "durable definition entry hides replacement behind a conditional",
+                sources => sources.NestTopLevelStatementContainingInvocation(
+                    RunAgentFile,
+                    "HandleReplaceWorkflowDefinitionAndExecute",
+                    "ReplaceWorkflowDefinitionBypassingBindingAsync"),
+                "Workflow direct execution entry must top-level await ReplaceWorkflowDefinitionBypassingBindingAsync"
+            },
+            {
+                "durable definition continuation disables execution after bind",
+                sources => sources.ReplaceInMethod(
+                    RunAgentFile,
+                    "ReplaceWorkflowDefinitionBypassingBindingAsync",
+                    "executeAfterBind: true",
+                    "executeAfterBind: false"),
+                "Workflow dynamic definition replacement must build an explicit execute-after-bind continuation"
+            },
+            {
+                "durable definition drains before continuation registration",
+                sources => sources.SwapTopLevelStatementsContainingInvocations(
+                    RunAgentFile,
+                    "ReplaceWorkflowDefinitionBypassingBindingAsync",
+                    "PersistDomainEventsAsync",
+                    "DrainPendingDefinitionBindingContinuationAsync"),
+                "Workflow dynamic definition replacement must persist its continuation before draining it"
+            },
+            {
+                "durable definition continuation condition is inverted",
+                sources => sources.ReplaceInMethod(
+                    RunAgentFile,
+                    "DrainPendingDefinitionBindingContinuationAsync",
+                    "if (continuation.ExecuteAfterBind)",
+                    "if (!continuation.ExecuteAfterBind)"),
+                "Workflow definition binding continuation must gate dynamic start on continuation.ExecuteAfterBind"
+            },
+            {
+                "durable definition start keeps a dummy helper call beside direct publish",
+                sources =>
+                {
+                    sources.ReplaceInMethod(
+                        RunAgentFile,
+                        "DrainDynamicDefinitionStartAsync",
+                        "await PublishStartWorkflowOrTerminalFailureAsync(",
+                        "await PublishAsync(");
+                    sources.ReplaceInMethod(
+                        RunAgentFile,
+                        "DrainDynamicDefinitionStartAsync",
+                        "await EnsureAgentTreeAsync();",
+                        """
+                        await PublishStartWorkflowOrTerminalFailureAsync(
+                                    new StartWorkflowEvent
+                                    {
+                                        WorkflowName = _compiledWorkflow.Name,
+                                        Input = continuation.ExecutionInput,
+                                        RunId = State.RunId,
+                                        BindingGeneration = State.BindingGeneration,
+                                    },
+                                    sessionId: string.Empty,
+                                    ct);
+                                await EnsureAgentTreeAsync();
+                        """);
+                },
+                "Workflow dynamic definition start must not invoke PublishAsync directly"
+            },
+            {
                 "start terminalization stops committing workflow completion",
                 sources => sources.ReplaceInMethod(
                     RunAgentFile,
@@ -232,10 +314,58 @@ public sealed class WorkflowRuntimeTerminalFailureTests
         }
 
         var executeWorkflow = index.GetMethod(RunAgentFile, "HandleReplaceWorkflowDefinitionAndExecute");
-        if (!RuntimeFailureSyntaxQueries.Invokes(executeWorkflow, "PublishStartWorkflowOrTerminalFailureAsync"))
+        if (!RuntimeFailureSyntaxQueries.HasSingleTopLevelAwaitedInvocation(
+                executeWorkflow,
+                "ReplaceWorkflowDefinitionBypassingBindingAsync"))
         {
             violations.Add(
-                "Workflow start dispatch must go through PublishStartWorkflowOrTerminalFailureAsync for direct executions.");
+                "Workflow direct execution entry must top-level await " +
+                "ReplaceWorkflowDefinitionBypassingBindingAsync.");
+        }
+
+        var replaceDefinition = index.GetMethod(RunAgentFile, "ReplaceWorkflowDefinitionBypassingBindingAsync");
+        if (!RuntimeFailureSyntaxQueries.HasSingleTopLevelInvocationWithNamedBooleanArgument(
+                replaceDefinition,
+                "BuildDefinitionBindingContinuation",
+                "executeAfterBind",
+                expectedValue: true))
+        {
+            violations.Add(
+                "Workflow dynamic definition replacement must build an explicit execute-after-bind continuation.");
+        }
+
+        if (!RuntimeFailureSyntaxQueries.PersistsContinuationBeforeTopLevelDrain(replaceDefinition))
+        {
+            violations.Add(
+                "Workflow dynamic definition replacement must persist its continuation before draining it.");
+        }
+
+        var drainDefinition = index.GetMethod(RunAgentFile, "DrainPendingDefinitionBindingContinuationAsync");
+        if (!RuntimeFailureSyntaxQueries.HasSingleTopLevelConditionalAwaitedInvocation(
+                drainDefinition,
+                receiverName: "continuation",
+                memberName: "ExecuteAfterBind",
+                invocationName: "DrainDynamicDefinitionStartAsync"))
+        {
+            violations.Add(
+                "Workflow definition binding continuation must gate dynamic start on " +
+                "continuation.ExecuteAfterBind.");
+        }
+
+        var drainStart = index.GetMethod(RunAgentFile, "DrainDynamicDefinitionStartAsync");
+        if (!RuntimeFailureSyntaxQueries.HasSingleTopLevelAwaitedInvocation(
+                drainStart,
+                "PublishStartWorkflowOrTerminalFailureAsync"))
+        {
+            violations.Add(
+                "Workflow dynamic definition start must top-level await " +
+                "PublishStartWorkflowOrTerminalFailureAsync.");
+        }
+
+        if (RuntimeFailureSyntaxQueries.Invokes(drainStart, "PublishAsync"))
+        {
+            violations.Add(
+                "Workflow dynamic definition start must not invoke PublishAsync directly.");
         }
 
         var publishStartFailure = index.GetMethod(RunAgentFile, "PublishStartWorkflowOrTerminalFailureAsync");
@@ -320,6 +450,80 @@ public sealed class WorkflowRuntimeTerminalFailureTests
                 StringComparison.Ordinal);
         }
 
+        public void NestTopLevelStatementContainingInvocation(
+            string relativePath,
+            string methodName,
+            string invocationName)
+        {
+            var (root, method) = ParseMethod(relativePath, methodName);
+            var body = method.Body
+                ?? throw new InvalidOperationException($"Fixture method has no body: {relativePath}:{methodName}");
+            var statement = body.Statements.SingleOrDefault(candidate =>
+                    ContainsInvocation(candidate, invocationName))
+                ?? throw new InvalidOperationException(
+                    $"Fixture top-level invocation not found in {relativePath}:{methodName}: {invocationName}");
+            var nestedStatement = statement.WithoutLeadingTrivia().WithoutTrailingTrivia();
+            var replacement = SyntaxFactory.IfStatement(
+                    SyntaxFactory.LiteralExpression(SyntaxKind.TrueLiteralExpression),
+                    SyntaxFactory.Block(nestedStatement))
+                .WithLeadingTrivia(statement.GetLeadingTrivia())
+                .WithTrailingTrivia(statement.GetTrailingTrivia());
+
+            _sources[relativePath] = root.ReplaceNode(statement, replacement).ToFullString();
+        }
+
+        public void SwapTopLevelStatementsContainingInvocations(
+            string relativePath,
+            string methodName,
+            string firstInvocationName,
+            string secondInvocationName)
+        {
+            var (root, method) = ParseMethod(relativePath, methodName);
+            var body = method.Body
+                ?? throw new InvalidOperationException($"Fixture method has no body: {relativePath}:{methodName}");
+            var statements = body.Statements.ToList();
+            var firstIndex = statements.FindIndex(candidate => ContainsInvocation(candidate, firstInvocationName));
+            var secondIndex = statements.FindIndex(candidate => ContainsInvocation(candidate, secondInvocationName));
+            if (firstIndex < 0 || secondIndex < 0)
+            {
+                throw new InvalidOperationException(
+                    $"Fixture top-level invocations not found in {relativePath}:{methodName}: " +
+                    $"{firstInvocationName}, {secondInvocationName}");
+            }
+
+            (statements[firstIndex], statements[secondIndex]) = (statements[secondIndex], statements[firstIndex]);
+            var replacement = method.WithBody(body.WithStatements(SyntaxFactory.List(statements)));
+            _sources[relativePath] = root.ReplaceNode(method, replacement).ToFullString();
+        }
+
+        private (CompilationUnitSyntax Root, MethodDeclarationSyntax Method) ParseMethod(
+            string relativePath,
+            string methodName)
+        {
+            if (!_sources.TryGetValue(relativePath, out var source))
+                throw new InvalidOperationException($"Missing source fixture: {relativePath}");
+
+            var root = CSharpSyntaxTree.ParseText(source, path: relativePath).GetCompilationUnitRoot();
+            var method = root.DescendantNodes()
+                .OfType<MethodDeclarationSyntax>()
+                .FirstOrDefault(x => x.Identifier.ValueText == methodName)
+                ?? throw new InvalidOperationException($"Fixture method not found in {relativePath}: {methodName}");
+            return (root, method);
+        }
+
+        private static bool ContainsInvocation(SyntaxNode node, string invocationName) =>
+            node.DescendantNodesAndSelf()
+                .OfType<InvocationExpressionSyntax>()
+                .Any(invocation => InvocationName(invocation) == invocationName);
+
+        private static string? InvocationName(InvocationExpressionSyntax invocation) =>
+            invocation.Expression switch
+            {
+                IdentifierNameSyntax identifier => identifier.Identifier.ValueText,
+                MemberAccessExpressionSyntax member => member.Name.Identifier.ValueText,
+                _ => null,
+            };
+
         public IReadOnlyDictionary<string, string> ToImmutableDictionary() =>
             _sources.ToDictionary(StringComparer.Ordinal);
     }
@@ -360,6 +564,81 @@ public sealed class WorkflowRuntimeTerminalFailureTests
             node.DescendantNodes()
                 .OfType<InvocationExpressionSyntax>()
                 .Any(invocation => GetInvocationName(invocation) == methodName);
+
+        public static bool HasSingleTopLevelAwaitedInvocation(
+            MethodDeclarationSyntax method,
+            string invocationName)
+        {
+            var allInvocations = FindInvocations(method, invocationName);
+            var topLevelInvocations = FindTopLevelAwaitedInvocations(method, invocationName);
+            return allInvocations.Count == 1 && topLevelInvocations.Count == 1;
+        }
+
+        public static bool HasSingleTopLevelInvocationWithNamedBooleanArgument(
+            MethodDeclarationSyntax method,
+            string invocationName,
+            string argumentName,
+            bool expectedValue)
+        {
+            var allInvocations = FindInvocations(method, invocationName);
+            var topLevelInvocations = FindTopLevelDirectInvocations(method, invocationName);
+            if (allInvocations.Count != 1 || topLevelInvocations.Count != 1)
+                return false;
+
+            var expectedKind = expectedValue
+                ? SyntaxKind.TrueLiteralExpression
+                : SyntaxKind.FalseLiteralExpression;
+            return topLevelInvocations[0].Invocation.ArgumentList.Arguments.Any(argument =>
+                argument.NameColon?.Name.Identifier.ValueText == argumentName &&
+                argument.Expression.IsKind(expectedKind));
+        }
+
+        public static bool PersistsContinuationBeforeTopLevelDrain(MethodDeclarationSyntax method)
+        {
+            var buildInvocations = FindTopLevelDirectInvocations(
+                method,
+                "BuildDefinitionBindingContinuation");
+            var persistInvocations = FindTopLevelAwaitedInvocations(method, "PersistDomainEventsAsync");
+            var drainInvocations = FindTopLevelAwaitedInvocations(
+                method,
+                "DrainPendingDefinitionBindingContinuationAsync");
+            if (buildInvocations.Count != 1 ||
+                persistInvocations.Count != 1 ||
+                drainInvocations.Count != 1 ||
+                FindInvocations(method, "DrainPendingDefinitionBindingContinuationAsync").Count != 1)
+            {
+                return false;
+            }
+
+            var persist = persistInvocations[0];
+            var registersContinuation = persist.Invocation.DescendantNodes()
+                .OfType<ObjectCreationExpressionSyntax>()
+                .Where(creation => TypeName(creation.Type) ==
+                                   "WorkflowRunDefinitionBindingContinuationRegisteredEvent")
+                .Any(creation => ObjectInitializerAssigns(creation, "Continuation", "continuation"));
+            return registersContinuation &&
+                   buildInvocations[0].StatementIndex < persist.StatementIndex &&
+                   persist.StatementIndex < drainInvocations[0].StatementIndex;
+        }
+
+        public static bool HasSingleTopLevelConditionalAwaitedInvocation(
+            MethodDeclarationSyntax method,
+            string receiverName,
+            string memberName,
+            string invocationName)
+        {
+            if (FindInvocations(method, invocationName).Count != 1 || method.Body == null)
+                return false;
+
+            var matchingConditions = method.Body.Statements
+                .OfType<IfStatementSyntax>()
+                .Where(statement => IsExactMemberAccess(statement.Condition, receiverName, memberName))
+                .ToList();
+            return matchingConditions.Count == 1 &&
+                   EmbeddedStatementDirectlyAwaitsInvocation(
+                       matchingConditions[0].Statement,
+                       invocationName);
+        }
 
         public static bool HasCatchInvoking(SyntaxNode node, string methodName) =>
             node.DescendantNodes()
@@ -416,6 +695,100 @@ public sealed class WorkflowRuntimeTerminalFailureTests
         public static bool NodeTextContainsAll(SyntaxNode node, params string[] fragments) =>
             fragments.All(fragment => node.ToString().Contains(fragment, StringComparison.Ordinal));
 
+        private static IReadOnlyList<InvocationExpressionSyntax> FindInvocations(
+            SyntaxNode node,
+            string invocationName) =>
+            node.DescendantNodes()
+                .OfType<InvocationExpressionSyntax>()
+                .Where(invocation => GetInvocationName(invocation) == invocationName)
+                .ToList();
+
+        private static IReadOnlyList<TopLevelInvocation> FindTopLevelAwaitedInvocations(
+            MethodDeclarationSyntax method,
+            string invocationName) =>
+            FindTopLevelInvocations(method, awaited: true)
+                .Where(candidate => GetInvocationName(candidate.Invocation) == invocationName)
+                .ToList();
+
+        private static IReadOnlyList<TopLevelInvocation> FindTopLevelDirectInvocations(
+            MethodDeclarationSyntax method,
+            string invocationName) =>
+            FindTopLevelInvocations(method, awaited: false)
+                .Where(candidate => GetInvocationName(candidate.Invocation) == invocationName)
+                .ToList();
+
+        private static IReadOnlyList<TopLevelInvocation> FindTopLevelInvocations(
+            MethodDeclarationSyntax method,
+            bool awaited)
+        {
+            var invocations = new List<TopLevelInvocation>();
+            if (method.Body == null)
+                return invocations;
+
+            for (var index = 0; index < method.Body.Statements.Count; index++)
+            {
+                foreach (var expression in DirectStatementExpressions(method.Body.Statements[index]))
+                {
+                    var candidate = awaited
+                        ? (expression as AwaitExpressionSyntax)?.Expression as InvocationExpressionSyntax
+                        : expression as InvocationExpressionSyntax;
+                    if (candidate != null)
+                        invocations.Add(new TopLevelInvocation(index, candidate));
+                }
+            }
+
+            return invocations;
+        }
+
+        private static IEnumerable<ExpressionSyntax> DirectStatementExpressions(StatementSyntax statement)
+        {
+            if (statement is ExpressionStatementSyntax expressionStatement)
+            {
+                yield return expressionStatement.Expression;
+                yield break;
+            }
+
+            if (statement is not LocalDeclarationStatementSyntax localDeclaration)
+                yield break;
+
+            foreach (var variable in localDeclaration.Declaration.Variables)
+            {
+                if (variable.Initializer?.Value is { } value)
+                    yield return value;
+            }
+        }
+
+        private static bool EmbeddedStatementDirectlyAwaitsInvocation(
+            StatementSyntax statement,
+            string invocationName)
+        {
+            var directStatement = statement is BlockSyntax { Statements.Count: 1 } block
+                ? block.Statements[0]
+                : statement;
+            return DirectStatementExpressions(directStatement)
+                .OfType<AwaitExpressionSyntax>()
+                .Select(awaitExpression => awaitExpression.Expression)
+                .OfType<InvocationExpressionSyntax>()
+                .Any(invocation => GetInvocationName(invocation) == invocationName);
+        }
+
+        private static bool IsExactMemberAccess(
+            ExpressionSyntax expression,
+            string receiverName,
+            string memberName)
+        {
+            while (expression is ParenthesizedExpressionSyntax parenthesized)
+                expression = parenthesized.Expression;
+
+            return expression is MemberAccessExpressionSyntax
+                   {
+                       Expression: IdentifierNameSyntax receiver,
+                       Name: IdentifierNameSyntax member,
+                   } &&
+                   receiver.Identifier.ValueText == receiverName &&
+                   member.Identifier.ValueText == memberName;
+        }
+
         private static bool ObjectInitializerAssigns(
             ObjectCreationExpressionSyntax creation,
             string memberName,
@@ -446,5 +819,9 @@ public sealed class WorkflowRuntimeTerminalFailureTests
                 AliasQualifiedNameSyntax aliasQualified => aliasQualified.Name.Identifier.ValueText,
                 _ => type.ToString(),
             };
+
+        private sealed record TopLevelInvocation(
+            int StatementIndex,
+            InvocationExpressionSyntax Invocation);
     }
 }

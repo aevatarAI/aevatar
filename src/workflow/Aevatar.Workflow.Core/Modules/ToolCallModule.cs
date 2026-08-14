@@ -770,7 +770,7 @@ public sealed partial class ToolCallModule :
             pending.ProtectedMaterialReference,
             pending.ProtectedMaterialDigestSha256,
             pending.TimeoutDeadlineUnixMs,
-            pending.ContinuationToken,
+            pending.ContinuationId,
             checked(pending.Attempt + 1));
         await StartToolExecutionAsync(
             state,
@@ -959,7 +959,7 @@ public sealed partial class ToolCallModule :
         long timeoutDeadlineUnixMs,
         string timeoutCallbackId,
         WorkflowRuntimeCallbackLeaseState? timeoutLease,
-        string continuationToken,
+        string continuationId,
         int attempt,
         WorkflowToolApprovalPendingOutcome pending,
         RuntimeSecretReference protectedMaterialReference,
@@ -979,7 +979,7 @@ public sealed partial class ToolCallModule :
             TimeoutDeadlineUnixMs = timeoutDeadlineUnixMs,
             TimeoutCallbackId = NormalizeRequired(timeoutCallbackId),
             TimeoutLease = timeoutLease?.Clone(),
-            ContinuationToken = NormalizeRequired(continuationToken),
+            ContinuationId = NormalizeRequired(continuationId),
             Attempt = Math.Max(1, attempt),
             ProtectedMaterialReference = protectedMaterialReference.Clone(),
             ProtectedMaterialDigestSha256 = protectedMaterialDigestSha256,

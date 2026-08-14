@@ -622,10 +622,10 @@ public sealed class AevatarInvocationDispatcher
         CancellationToken ct)
     {
         WorkflowBackgroundDeliveryReservationContext? deliveryReservation = null;
+        var workflowCommandIdSeed = ResolveCommandId();
         string? workflowCorrelationIdSeed = null;
         if (backgroundDelivery.ShouldRegister)
         {
-            var workflowCommandIdSeed = ResolveCommandId();
             workflowCorrelationIdSeed = ResolveWorkflowCorrelationId(workflowCommandIdSeed);
             var reservation = await ReserveWorkflowRunBackgroundDeliveryAsync(
                     workflowCommandIdSeed,
@@ -645,7 +645,7 @@ public sealed class AevatarInvocationDispatcher
 
         command = command with
         {
-            CommandIdSeed = deliveryReservation?.Reservation.ExpectedWorkflowCommandId,
+            CommandIdSeed = workflowCommandIdSeed,
             CorrelationIdSeed = workflowCorrelationIdSeed,
             CompletionNotificationTarget = ToWorkflowCompletionNotificationTarget(deliveryReservation),
         };

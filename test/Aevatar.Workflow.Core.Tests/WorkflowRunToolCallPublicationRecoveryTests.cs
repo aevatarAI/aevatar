@@ -113,7 +113,7 @@ public sealed class WorkflowRunToolCallPublicationRecoveryTests
             },
             TimeoutMs = 60_000,
             TimeoutDeadlineUnixMs = DateTimeOffset.UtcNow.AddMinutes(1).ToUnixTimeMilliseconds(),
-            ContinuationToken = "continuation-1",
+            ContinuationId = "continuation-1",
             ExecutionPhase = WorkflowToolCallExecutionPhase.ApprovalPending,
             InputFileRefs =
             {
@@ -171,7 +171,7 @@ public sealed class WorkflowRunToolCallPublicationRecoveryTests
             .Should().ContainSingle().Subject;
         approvalWatchdog.TriggerEnvelope.Payload!
             .Unpack<WorkflowToolCallTimeoutFiredEvent>()
-            .ContinuationToken.Should().Be("continuation-1");
+            .ContinuationId.Should().Be("continuation-1");
 
         var recoveredToolState = recovered.State.ExecutionStates[ToolCallModule.ModuleStateKey]
             .Unpack<ToolCallModuleState>();
@@ -1292,7 +1292,7 @@ public sealed class WorkflowRunToolCallPublicationRecoveryTests
             ApprovalRequestId = "approval-1",
             TimeoutMs = 60_000,
             TimeoutDeadlineUnixMs = DateTimeOffset.UtcNow.AddMinutes(1).ToUnixTimeMilliseconds(),
-            ContinuationToken = "continuation-1",
+            ContinuationId = "continuation-1",
             ExecutionPhase = WorkflowToolCallExecutionPhase.ApprovalPending,
         };
         var state = new ToolCallModuleState();
@@ -1349,7 +1349,7 @@ public sealed class WorkflowRunToolCallPublicationRecoveryTests
             TimeoutDeadlineUnixMs = DateTimeOffset.UtcNow.AddMinutes(1).ToUnixTimeMilliseconds(),
             TimeoutCallbackId = $"timeout-recovery-{index}",
             Attempt = 1,
-            ContinuationToken = $"continuation-{index}",
+            ContinuationId = $"continuation-{index}",
             ExecutionPhase = phase,
         };
 

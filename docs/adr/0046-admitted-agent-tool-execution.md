@@ -137,7 +137,7 @@ Workflow direct `tool_call` execution is an actor-owned asynchronous continuatio
 workflow actor never awaits provider I/O in its turn. Before an off-turn dispatch, it freezes
 the exact request as `ToolCallProtectedMaterial`, stores that Protobuf payload behind an
 owner-bound runtime-secret reference, and persists only the reference, deterministic SHA-256
-digest, call/execution identities, authored deadline, continuation token, attempt, callback
+digest, call/execution identities, authored deadline, continuation id, attempt, callback
 leases, and a typed execution phase. Raw arguments, input, file references, external invocation
 specification, and idempotency key are absent from newly written actor state, committed state
 events, projections, started events, and logs. Every approval resume, retry, or activation
@@ -170,7 +170,7 @@ forbidden, preventing the workflow kernel from bypassing admission with a new ca
 
 Provider completion returns as a typed self continuation. The actor accepts it only when the
 self publisher, delivery operation id, run/step/call/execution identities, attempt, and
-continuation token all match durable pending state. Publication first tries the actor inbox,
+continuation id all match durable pending state. Publication first tries the actor inbox,
 then a durable self callback. If neither transport accepts the result, a fixed small number of
 immediate yield-and-retry attempts may run within the authored deadline; module-local delay and
 backoff are forbidden. If those attempts also fail, the already-installed authored-deadline

@@ -321,12 +321,23 @@ internal static class DurableCallbackEnvelopeCredentialGuard
 
     private static bool IsRuntimeCredentialField(FieldDescriptor field)
     {
+        if (IsStableActorOwnedCallbackIdentifierField(field))
+            return false;
+
         var name = field.Name;
         return string.Equals(name, "reply_token", StringComparison.Ordinal) ||
                string.Equals(name, "reply_token_expires_at_unix_ms", StringComparison.Ordinal) ||
                string.Equals(name, "nyx_user_access_token", StringComparison.Ordinal) ||
                name.EndsWith("_token", StringComparison.Ordinal);
     }
+
+    private static bool IsStableActorOwnedCallbackIdentifierField(FieldDescriptor field) =>
+        (field.ContainingType.FullName, field.FieldNumber) is
+            ("aevatar.workflow.WorkflowToolCallAttemptCompletedEvent", 9) or
+            ("aevatar.workflow.WorkflowToolCallTimeoutFiredEvent", 6) or
+            ("aevatar.workflow.WorkflowToolCallRetryFiredEvent", 6) or
+            ("aevatar.workflow.WorkflowToolCallExecutionRecoveryFiredEvent", 6) or
+            ("aevatar.workflow.WorkflowLeaseExpirationFiredEvent", 2);
 
     private static bool IsDefaultCredentialValue(object? value)
     {

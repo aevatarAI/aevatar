@@ -55,7 +55,7 @@ second tool admission ledger or a generic background-job framework.
 - issued time, authored deadline, timeout callback id, and callback lease;
 - typed phase, attempt, retry due time, retry callback id, and retry lease;
 - approval request id and terminal decision; and
-- a random continuation token that fences stale signals for the same public identities.
+- a random continuation id that fences stale signals for the same public identities.
 
 `PendingToolCallApprovalState` owns the same protected-material reference and digest while
 the call is suspended. The reference is reused when the approved call returns to execution;
@@ -104,7 +104,7 @@ A new execution follows this order:
 2. Build deterministic `ToolCallProtectedMaterial`, store it behind an owner-bound runtime
    secret reference, and compute its SHA-256 digest.
 3. Persist `PendingToolCallExecutionState` in `EXECUTION_PENDING` with that reference,
-   digest, stable identities, attempt `1`, continuation token, and absolute deadline.
+   digest, stable identities, attempt `1`, continuation id, and absolute deadline.
 4. Schedule the durable deadline callback, then persist its callback lease against the same
    pending identity.
 5. Publish only a redacted `WorkflowToolCallStartedEvent`. Its deprecated arguments field is
@@ -171,13 +171,13 @@ numbers are cleared on every new write and are never used as a fallback.
 
 The background executor converts every tool outcome into
 `WorkflowToolCallAttemptCompletedEvent`. It carries typed success, approval-required, or
-failure data plus run, step, call, execution, attempt, and continuation token. The actor accepts
+failure data plus run, step, call, execution, attempt, and continuation id. The actor accepts
 the envelope only when all of the following match:
 
 - topology audience is self;
 - publisher is the workflow actor itself;
 - delivery operation id is derived from the exact completion identity;
-- durable pending identities and continuation token match; and
+- durable pending identities and continuation id match; and
 - the attempt equals the current durable attempt.
 
 A caller-created payload, a self-shaped envelope with the wrong publisher or operation id, a
@@ -207,7 +207,7 @@ Activation derives work only from durable pending state:
   remaining authored duration.
 - `EXECUTION_PENDING` schedules a typed
   `WorkflowToolCallExecutionRecoveryFiredEvent`. Its handler revalidates phase, identities,
-  attempt, continuation token, deadline, and protected material before an off-turn recovery.
+  attempt, continuation id, deadline, and protected material before an off-turn recovery.
 - If the current module instance already owns the call/execution cancellation key, recovery
   does not launch a second local task.
 
@@ -251,7 +251,7 @@ seconds, always within the original deadline.
 Transition to `RETRY_PENDING` occurs before the durable retry is scheduled. The retry handler
 then resolves the same protected material, clears the consumed retry lease, persists
 `EXECUTION_PENDING`, checks the deadline again, and dispatches with the same call id, execution
-id, idempotency key, approval grant identity, and continuation token. It changes only the typed
+id, idempotency key, approval grant identity, and continuation id. It changes only the typed
 attempt number and phase.
 
 A terminal-invoked failure, denial, invalid safety classification, retry exhaustion, or elapsed
