@@ -52,7 +52,7 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
         """;
 
     /// <summary>
-    /// Built-in <c>studio</c> workflow for the channel-less <c>/workflow/studio</c> authoring surface.
+    /// Built-in <c>studio</c> workflow retained for the frozen external compatibility adapter.
     ///
     /// <para>
     /// Unlike <see cref="BuiltInDirectYaml"/> (a zero-bias "helpful assistant" used by every channel-less
@@ -73,10 +73,9 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
     /// </para>
     ///
     /// <para>
-    /// The studio page selects this workflow by sending <c>workflow: "studio"</c> on <c>/api/chat</c>
-    /// (legacy-name lookup → <c>WorkflowChatSource.CatalogWorkflow("studio")</c>). It is the ONLY studio
-    /// scoping signal: no proto/surface field is added and the shared role agent is untouched, so other
-    /// <c>Direct</c> callers keep the benign <c>direct</c> prompt + unrestricted tool surface.
+    /// The pinned external caller selects this workflow by sending <c>workflow: "studio"</c> on
+    /// <c>/api/chat</c> (legacy-name lookup → <c>WorkflowChatSource.CatalogWorkflow("studio")</c>).
+    /// Aevatar-owned Studio chat does not use this workflow wrapper.
     /// </para>
     ///
     /// <para>
@@ -173,6 +172,11 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
                 a required external service is ready/connected or asks to connect, add, or authorize one.
                 A missing-service blocker from this tool is the authority for the interactive
                 `service.connect` handoff; prose and catalog results are not substitutes.
+              - For NyxID API key creation, first call `nyxid_services` with `action: "list"`, select
+                one or more exact caller-visible UserService `id` values, and then call
+                `nyxid_request_key_create` with a nonempty `allowed_service_ids` list. Never pass a
+                service slug, label, provider name, guessed id, or empty list, and never ask for or
+                expose key material. The typed result is the only `key.create` browser handoff producer.
               - For explicit current-turn API calls, use the admitted per-operation connected-service tool
                 exposed for the caller's NyxID services. For workflow authoring, use the structured operation discovery flow below
                 instead of copying current-turn proxy route arguments. Never ask the user for credentials,
@@ -440,6 +444,7 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
               - nyxid_llm_status
               - nyxid_services
               - nyxid_require_service
+              - nyxid_request_key_create
               - list_external_workflow_capabilities
               - inspect_external_workflow_capability_readiness
               - preview_workflow_explicit_requests

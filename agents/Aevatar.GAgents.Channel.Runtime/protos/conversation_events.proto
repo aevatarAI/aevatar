@@ -258,6 +258,13 @@ enum LarkCardOperationPhase {
   LARK_CARD_OPERATION_PHASE_CREATE = 1;
   LARK_CARD_OPERATION_PHASE_STREAM = 2;
   LARK_CARD_OPERATION_PHASE_FINALIZE = 3;
+  LARK_CARD_OPERATION_PHASE_ABORT = 4;
+}
+
+enum LarkCardAbortReason {
+  LARK_CARD_ABORT_REASON_UNSPECIFIED = 0;
+  LARK_CARD_ABORT_REASON_GENERATION_TIMEOUT = 1;
+  LARK_CARD_ABORT_REASON_FINALIZE_TIMEOUT = 2;
 }
 
 enum NyxRelayTextOperationKind {
@@ -389,13 +396,23 @@ enum LarkCardOperationResultState {
   LARK_CARD_OPERATION_RESULT_STATE_FAULTED = 3;
 }
 
+// Describes what is known about the chat-visible side effect after card creation.
+// Field value 1 intentionally preserves the old is_post_send_failure=true wire value;
+// legacy false/zero remains unspecified and is interpreted as definitely-not-sent.
+enum LarkCardCreateDeliveryDisposition {
+  LARK_CARD_CREATE_DELIVERY_DISPOSITION_UNSPECIFIED = 0;
+  LARK_CARD_CREATE_DELIVERY_DISPOSITION_SENT = 1;
+  LARK_CARD_CREATE_DELIVERY_DISPOSITION_REPLY_AUTHORITY_SPENT_DELIVERY_UNKNOWN = 2;
+  LARK_CARD_CREATE_DELIVERY_DISPOSITION_DEFINITELY_NOT_SENT = 3;
+}
+
 message LarkCardOperationRawResult {
   string card_id = 1;
   string card_message_id = 2;
   bool is_rate_limited = 3;
   bool is_table_limit_exceeded = 4;
   bool is_card_unavailable = 5;
-  bool is_post_send_failure = 6;
+  LarkCardCreateDeliveryDisposition create_delivery_disposition = 6;
   bool final_text_written = 7;
   string raw_error_code = 8;
   string raw_error_summary = 9;
@@ -420,6 +437,7 @@ message LarkCardOperationCompletedEvent {
   string card_message_id = 14;
   string streaming_element_id = 15;
   repeated ConversationHistoryEntry appended_history = 16;
+  LarkCardAbortReason abort_reason = 17;
 }
 
 message LarkCardOperationTimeoutFiredEvent {
@@ -440,6 +458,7 @@ message LarkCardOperationTimeoutFiredEvent {
   string final_text = 10;
   string last_flushed_text = 11;
   int64 fired_at_unix_ms = 12;
+  LarkCardAbortReason abort_reason = 13;
 }
 
 message ReplyOperationStepEvent {
@@ -535,6 +554,7 @@ message LarkCardOperationStepPayload {
   string streaming_element_id = 11;
   bool final_differs = 12;
   repeated ConversationHistoryEntry appended_history = 13;
+  LarkCardAbortReason abort_reason = 14;
 }
 
 message DeferredLlmReplyDispatchRequestedEvent {

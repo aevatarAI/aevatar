@@ -453,7 +453,8 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
             if (admission.Capability?.CapabilityCase is
                 ExternalWorkflowCapabilityRef.CapabilityOneofCase.HostConnector or
                 ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService or
-                ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest)
+                ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest or
+                ExternalWorkflowCapabilityRef.CapabilityOneofCase.CodeExecution)
             {
                 continue;
             }

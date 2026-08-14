@@ -1,5 +1,8 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.Audit.Core.DependencyInjection;
+using Aevatar.Audit.Abstractions.Identity;
+using Aevatar.Audit.Abstractions.Models;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Foundation.Abstractions;
@@ -118,6 +121,7 @@ public sealed class NyxIdChatCommittedStateProjectionActivationPlanProviderTests
     {
         using var provider = new ServiceCollection()
             .AddLogging()
+            .AddInMemoryAuditTrailForDevelopment()
             .AddAevatarRuntime()
             .AddNyxIdChat(new ConfigurationBuilder().Build())
             .BuildServiceProvider();
@@ -136,13 +140,16 @@ public sealed class NyxIdChatCommittedStateProjectionActivationPlanProviderTests
     [Fact]
     public void AddNyxIdChat_ShouldRegisterAndConstructResponsiveActorKinds()
     {
+        var configuration = new ConfigurationBuilder().Build();
         using var provider = new ServiceCollection()
             .AddLogging()
+            .AddSingleton<IAuditActorIdentityHasher, StableIdentityHasher>()
+            .AddInMemoryAuditTrailForDevelopment()
             .AddAevatarRuntime()
             .AddSingleton<ILLMProviderFactory>(new StubChatProviderFactory(
                 static (_, _) => Task.FromResult(new LLMResponse())))
             .AddSingleton<INyxIdChatTurnOperationExecutor, NoopTurnOperationExecutor>()
-            .AddNyxIdChat(new ConfigurationBuilder().Build())
+            .AddNyxIdChat(configuration)
             .BuildServiceProvider();
         var registry = provider.GetRequiredService<IAgentKindRegistry>();
 
@@ -160,6 +167,13 @@ public sealed class NyxIdChatCommittedStateProjectionActivationPlanProviderTests
             .Should().BeOfType<NyxIdChatConversationGAgent>();
         registry.Resolve(turnKind).Factory(provider)
             .Should().BeOfType<NyxIdChatTurnGAgent>();
+    }
+
+    private sealed class StableIdentityHasher : IAuditActorIdentityHasher
+    {
+        public AuditActorIdentity Hash(string canonicalActorKey) => new("actor-hash", "key-1");
+
+        public bool Verify(string canonicalActorKey, string auditActorId, string identityKeyId) => true;
     }
 
     public static IEnumerable<object[]> SessionBearingStateEvents()
@@ -191,6 +205,13 @@ public sealed class NyxIdChatCommittedStateProjectionActivationPlanProviderTests
                     Sequence = 1,
                     Text = new NyxIdChatTextProgress { Delta = "hello" },
                 },
+            },
+        ];
+        yield return
+        [
+            new NyxIdChatOperationStepChangedCommittedEvent
+            {
+                Key = OperationKey("turn-1"),
             },
         ];
         yield return
@@ -241,6 +262,16 @@ public sealed class NyxIdChatCommittedStateProjectionActivationPlanProviderTests
         ];
         yield return
         [
+            new NyxIdChatPlanResolutionCommittedEvent
+            {
+                State = new NyxIdChatConversationGAgentState
+                {
+                    ActiveTurn = new NyxIdChatTurnState { TurnId = "turn-1" },
+                },
+            },
+        ];
+        yield return
+        [
             new NyxIdChatStepControlCommittedEvent
             {
                 Result = new NyxIdChatStepControlResultState
@@ -267,10 +298,12 @@ public sealed class NyxIdChatCommittedStateProjectionActivationPlanProviderTests
         yield return [new NyxIdChatTurnStartedEvent()];
         yield return [new NyxIdChatOperationDispatchedEvent()];
         yield return [new NyxIdChatOperationProgressedEvent()];
+        yield return [new NyxIdChatOperationStepChangedCommittedEvent()];
         yield return [new NyxIdChatOperationReconciledEvent()];
         yield return [new NyxIdChatLateOperationEvidenceCommittedEvent()];
         yield return [new NyxIdChatControlFenceCommittedEvent()];
         yield return [new NyxIdChatActionRequestedEvent()];
+        yield return [new NyxIdChatPlanResolutionCommittedEvent()];
         yield return [new NyxIdChatContinuationAdmissionCommittedEvent()];
         yield return [new NyxIdChatStepControlCommittedEvent()];
         yield return [new NyxIdChatTurnAdmissionRejectedEvent()];

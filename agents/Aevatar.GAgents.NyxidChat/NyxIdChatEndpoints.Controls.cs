@@ -4,6 +4,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Capabilities;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -30,6 +31,12 @@ public static partial class NyxIdChatEndpoints
         group.MapPost(
             "/{scopeId}/nyxid-chat/conversations/{actorId}/turns/{turnId}/steps/{stepId}:skip",
             HandleSkipControlAsync);
+        group.MapPost(
+            "/{scopeId}/nyxid-chat/conversations/{actorId}/plans/{taskId}:resolve",
+            HandlePlanResolveControlAsync);
+        group.MapPost(
+            "/{scopeId}/nyxid-chat/conversations/{actorId}:arm-effect-fault-canary",
+            HandleCanaryEffectFaultArmControlAsync);
     }
 
     private static async Task<IResult> HandleStopControlAsync(
@@ -130,6 +137,7 @@ public static partial class NyxIdChatEndpoints
             LlmControl = control.ToPayload(),
             ToolContext = BuildControlToolContext(
                 normalizedScopeId,
+                normalizedActorId,
                 turnId,
                 requestId,
                 credentials!,
@@ -172,6 +180,12 @@ public static partial class NyxIdChatEndpoints
         var accessToken = credentials?.NyxIdAccessToken;
         if (string.IsNullOrWhiteSpace(accessToken))
             return Results.Unauthorized();
+        if (!AevatarPrincipalSubjectResolver.TryResolveNyxIdSubject(
+                http.User,
+                out var ownerSubject))
+        {
+            return Results.Unauthorized();
+        }
         var admissionError = await AuthorizeConversationAsync(
             admissionPort,
             identity.ScopeId,
@@ -194,13 +208,15 @@ public static partial class NyxIdChatEndpoints
             ClientRequestId = identity.ClientRequestId,
             CommandId = commandId,
             CorrelationId = correlationId,
+            OwnerSubject = ownerSubject,
             ExpectedOperationGeneration = request.ExpectedOperationGeneration,
             ExpectedStateVersion = request.ExpectedStateVersion,
             LlmControl = control.ToPayload(),
-            ToolContext = BuildControlToolContext(
+            ToolContext = BuildAuthenticatedOwnerControlToolContext(
                 identity.ScopeId,
-                identity.TurnId,
+                identity.ActorId,
                 identity.RequestId,
+                ownerSubject,
                 credentials!,
                 control),
         }, ct).ConfigureAwait(false);
@@ -361,8 +377,148 @@ public static partial class NyxIdChatEndpoints
         return AcceptedControl(http, identity.ScopeId, identity.ActorId, receipt);
     }
 
+    private static async Task<IResult> HandlePlanResolveControlAsync(
+        HttpContext http,
+        string scopeId,
+        string actorId,
+        string taskId,
+        NyxIdChatPlanResolveRequest request,
+        [FromServices] IScopeResourceAdmissionPort admissionPort,
+        [FromServices] INyxIdChatControlCommandPort commandPort,
+        CancellationToken ct)
+    {
+        if (!TryValidateNeedsYouRequest(
+                scopeId,
+                actorId,
+                request.RequestId,
+                request.ClientRequestId,
+                request.ExpectedStateVersion,
+                out var identity) ||
+            !TryValidateControlIdentity(taskId, out var normalizedTaskId) ||
+            !TryValidateControlIdentity(request.PlanId, out var normalizedPlanId) ||
+            request.PlanRevision <= 0)
+        {
+            return InvalidControlRequest();
+        }
+
+        var credentials = ExtractNyxIdCredentials(http);
+        if (string.IsNullOrWhiteSpace(credentials?.NyxIdAccessToken))
+            return Results.Unauthorized();
+        if (!AevatarPrincipalSubjectResolver.TryResolveNyxIdSubject(
+                http.User,
+                out var ownerSubject))
+        {
+            return Results.Unauthorized();
+        }
+        var admissionError = await AuthorizeConversationAsync(
+            admissionPort,
+            identity.ScopeId,
+            identity.ActorId,
+            ScopeResourceOperation.Control,
+            ct).ConfigureAwait(false);
+        if (admissionError is not null)
+            return admissionError;
+
+        var (commandId, correlationId) = CreateControlTraceIdentity();
+        var receipt = await commandPort.DispatchPlanResolveAsync(new NyxIdChatPlanResolveCommand
+        {
+            ScopeId = identity.ScopeId,
+            ConversationActorId = identity.ActorId,
+            TaskId = normalizedTaskId,
+            PlanId = normalizedPlanId,
+            OwnerSubject = ownerSubject,
+            PlanRevision = request.PlanRevision,
+            RequestId = identity.RequestId,
+            ClientRequestId = identity.ClientRequestId,
+            Confirmed = request.Confirmed,
+            ExpectedStateVersion = request.ExpectedStateVersion,
+            CommandId = commandId,
+            CorrelationId = correlationId,
+            ToolContext = BuildAuthenticatedOwnerControlToolContext(
+                identity.ScopeId,
+                identity.ActorId,
+                identity.RequestId,
+                ownerSubject,
+                credentials!),
+        }, ct).ConfigureAwait(false);
+        return AcceptedControl(http, identity.ScopeId, identity.ActorId, receipt);
+    }
+
+    private static async Task<IResult> HandleCanaryEffectFaultArmControlAsync(
+        HttpContext http,
+        string scopeId,
+        string actorId,
+        NyxIdChatCanaryEffectFaultArmRequest request,
+        [FromServices] IScopeResourceAdmissionPort admissionPort,
+        [FromServices] INyxIdChatControlCommandPort commandPort,
+        [FromServices] INyxIdChatCanaryEffectFaultAuthorizationPolicy canaryAuthorization,
+        CancellationToken ct)
+    {
+        if (!AevatarPrincipalSubjectResolver.TryResolveNyxIdSubject(
+                http.User,
+                out var ownerSubject) ||
+            !canaryAuthorization.CanArm(ownerSubject))
+        {
+            return Results.NotFound();
+        }
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+        if (!TryValidateControlIdentity(scopeId, out var normalizedScopeId) ||
+            !TryValidateControlIdentity(actorId, out var normalizedActorId) ||
+            !TryValidateControlIdentity(request.ArmId, out var armId) ||
+            !TryValidateControlIdentity(request.ClientRequestId, out var clientRequestId) ||
+            !TryValidateControlIdentity(request.TurnId, out var turnId) ||
+            !TryValidateControlIdentity(request.TaskId, out var taskId) ||
+            !TryValidateControlIdentity(request.StepId, out var stepId) ||
+            !TryValidateControlIdentity(request.OperationId, out var operationId) ||
+            !TryValidateControlIdentity(request.ServiceInstanceId, out var serviceInstanceId) ||
+            request.OperationGeneration != 1 ||
+            request.ExpectedStateVersion < 0 ||
+            request.ExpiresAt <= DateTimeOffset.UtcNow)
+        {
+            return InvalidControlRequest();
+        }
+
+        var admissionError = await AuthorizeConversationAsync(
+            admissionPort,
+            normalizedScopeId,
+            normalizedActorId,
+            ScopeResourceOperation.Control,
+            ct).ConfigureAwait(false);
+        if (admissionError is not null)
+            return admissionError;
+
+        var (commandId, correlationId) = CreateControlTraceIdentity();
+        var receipt = await commandPort.DispatchCanaryEffectFaultArmAsync(
+            new NyxIdChatCanaryEffectFaultArmCommand
+            {
+                ScopeId = normalizedScopeId,
+                ConversationActorId = normalizedActorId,
+                ArmId = armId,
+                ClientRequestId = clientRequestId,
+                Key = new NyxIdChatOperationKey
+                {
+                    ConversationActorId = normalizedActorId,
+                    TurnId = turnId,
+                    TaskId = taskId,
+                    StepId = stepId,
+                    OperationId = operationId,
+                    OperationGeneration = request.OperationGeneration,
+                },
+                ServiceInstanceId = serviceInstanceId,
+                OwnerSubject = ownerSubject,
+                ExpiresAt = Timestamp.FromDateTimeOffset(request.ExpiresAt),
+                ExpectedStateVersion = request.ExpectedStateVersion,
+                CommandId = commandId,
+                CorrelationId = correlationId,
+            },
+            ct).ConfigureAwait(false);
+        return AcceptedControl(http, normalizedScopeId, normalizedActorId, receipt);
+    }
+
     private static AgentToolExecutionContextPayload BuildControlToolContext(
         string scopeId,
+        string conversationActorId,
         string turnId,
         string requestId,
         AgentToolCredentials credentials,
@@ -374,8 +530,42 @@ public static partial class NyxIdChatEndpoints
             Credentials = credentials,
             Caller = new AgentToolCallerContext(scopeId, scopeId, turnId),
             Channel = new AgentToolChannelContext("nyxid-chat", null, scopeId, null, null),
+            ExecutionOwner = AgentToolExecutionOwners.Actor(conversationActorId),
         };
         return control.ToToolContext(context).ToPayload();
+    }
+
+    private static AgentToolExecutionContextPayload BuildAuthenticatedOwnerControlToolContext(
+        string scopeId,
+        string conversationActorId,
+        string requestId,
+        string ownerSubject,
+        AgentToolCredentials credentials,
+        LLMControlContext? control = null)
+    {
+        var context = AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity(requestId, null),
+            Credentials = credentials,
+            Caller = new AgentToolCallerContext(
+                scopeId,
+                ownerSubject,
+                requestId,
+                scopeId),
+            Channel = new AgentToolChannelContext(
+                NyxIdChatServiceDefaults.ServiceId,
+                null,
+                scopeId,
+                null,
+                null),
+            NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                "nyxid",
+                string.Empty,
+                ownerSubject,
+                "proxy"),
+            ExecutionOwner = AgentToolExecutionOwners.Actor(conversationActorId),
+        };
+        return (control ?? LLMControlContext.Empty).ToToolContext(context).ToPayload();
     }
 
     private static AgentToolExecutionContextPayload ToToolContextPayload(AgentToolCredentials credentials) =>
@@ -593,5 +783,25 @@ public static partial class NyxIdChatEndpoints
         string? ClientRequestId,
         bool Approved,
         string? Reason,
+        long ExpectedStateVersion);
+
+    public sealed record NyxIdChatPlanResolveRequest(
+        string? RequestId,
+        string? ClientRequestId,
+        string? PlanId,
+        int PlanRevision,
+        bool Confirmed,
+        long ExpectedStateVersion);
+
+    public sealed record NyxIdChatCanaryEffectFaultArmRequest(
+        string? ArmId,
+        string? ClientRequestId,
+        string? TurnId,
+        string? TaskId,
+        string? StepId,
+        string? OperationId,
+        long OperationGeneration,
+        string? ServiceInstanceId,
+        DateTimeOffset ExpiresAt,
         long ExpectedStateVersion);
 }

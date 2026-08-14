@@ -136,6 +136,8 @@ internal static class BackpressureHelper
             Parameters = { entry.Parameters },
             InputFileRefs = { entry.InputFileRefs.Select(static fileRef => fileRef.Clone()) },
             ExternalInvocation = entry.ExternalInvocation?.Clone(),
+            ExecutionId = entry.ExecutionId,
+            IdempotencyKey = entry.IdempotencyKey,
         };
 
     /// <summary>Creates a queue entry from step request fields.</summary>
@@ -143,7 +145,9 @@ internal static class BackpressureHelper
         string stepId, string stepType, string runId, string input,
         string targetRole, IDictionary<string, string>? parameters,
         IEnumerable<WorkflowFileRef>? inputFileRefs = null,
-        ExternalToolInvocationSpec? externalInvocation = null) =>
+        ExternalToolInvocationSpec? externalInvocation = null,
+        string executionId = "",
+        string idempotencyKey = "") =>
         new()
         {
             StepId = stepId,
@@ -154,6 +158,8 @@ internal static class BackpressureHelper
             Parameters = { parameters ?? new Dictionary<string, string>() },
             InputFileRefs = { inputFileRefs?.Select(static fileRef => fileRef.Clone()) ?? [] },
             ExternalInvocation = externalInvocation?.Clone(),
+            ExecutionId = executionId,
+            IdempotencyKey = idempotencyKey,
         };
 
     /// <summary>Initializes backpressure state with the resolved max/min concurrency.</summary>

@@ -1,8 +1,12 @@
+using System.Security.Cryptography;
+using System.Text;
+using Google.Protobuf.WellKnownTypes;
+
 namespace Aevatar.AI.Abstractions.ToolProviders;
 
 /// <summary>
 /// Server-generated proof that the current tool call site may invoke exactly one admitted
-/// connected-service request. It is a provider-neutral projection of an admission decision made
+/// external capability request. It is a provider-neutral projection of an admission decision made
 /// before dispatch; a tool must build its request from this contract instead of caller-supplied
 /// route fields. Absent proof means the caller is not an admitted call site.
 /// </summary>
@@ -17,7 +21,9 @@ public sealed record AgentToolOperationAdmission(
     IReadOnlyList<AgentToolOperationParameter> Parameters,
     AgentToolOperationRequestBody? RequestBody,
     AgentToolOperationResponsePolicy ResponsePolicy,
-    AgentToolOperationExecutionPolicy ExecutionPolicy)
+    AgentToolOperationExecutionPolicy ExecutionPolicy,
+    string CatalogDigest = "",
+    AgentToolOperationReadBack? ReadBack = null)
 {
     public IEnumerable<AgentToolOperationParameter> PathParameters =>
         Parameters.Where(static parameter => parameter.Location == AgentToolOperationParameterLocation.Path);
@@ -29,6 +35,101 @@ public sealed record AgentToolOperationAdmission(
         Parameters.Where(static parameter => parameter.Location == AgentToolOperationParameterLocation.Header);
 }
 
+public enum AgentToolReadBackMatch
+{
+    Unspecified = 0,
+    Exists = 1,
+    Absent = 2,
+    Equals = 3,
+    ArrayContainsEquals = 4,
+}
+
+public enum AgentToolReadBackExpectedValueSource
+{
+    FrozenValue = 0,
+    ProviderResourceId = 1,
+}
+
+/// <summary>
+/// Typed assertion evaluated against the bounded data member of a connected-service read
+/// projection. <see cref="JsonPointer"/> uses RFC 6901 syntax.
+/// </summary>
+public sealed record AgentToolReadBackAssertion(
+    AgentToolReadBackMatch Match,
+    string JsonPointer,
+    Value? ExpectedValue = null,
+    string ElementJsonPointer = "",
+    AgentToolReadBackExpectedValueSource ExpectedValueSource =
+        AgentToolReadBackExpectedValueSource.FrozenValue);
+
+public sealed record AgentToolReadBackPagination(
+    string HasMoreJsonPointer,
+    string PageTokenJsonPointer,
+    AgentToolOperationParameterLocation PageTokenLocation,
+    string PageTokenArgumentName,
+    int MaxPages);
+
+public sealed record AgentToolReadBackProviderResourceArgument(
+    AgentToolOperationParameterLocation Location,
+    string ArgumentName);
+
+/// <summary>
+/// Server-sealed post-effect read. The nested admission must be an exact read-only operation
+/// and must not itself carry another read-back contract.
+/// </summary>
+public sealed record AgentToolOperationReadBack(
+    AgentToolOperationAdmission ReadOperation,
+    Struct Arguments,
+    AgentToolReadBackAssertion Assertion,
+    string CheckName,
+    AgentToolReadBackAssertion? NotAppliedAssertion = null,
+    AgentToolReadBackPagination? Pagination = null,
+    AgentToolReadBackProviderResourceArgument? ProviderResourceArgument = null,
+    string EffectResultIdentityJsonPointer = "");
+
+public static class AgentToolEffectResultIdentityJsonPointer
+{
+    public static bool IsValid(string? pointer)
+    {
+        if (string.IsNullOrEmpty(pointer))
+            return true;
+        if (!pointer.StartsWith("/", StringComparison.Ordinal))
+            return false;
+
+        for (var index = 0; index < pointer.Length; index++)
+        {
+            if (pointer[index] != '~')
+                continue;
+            if (++index >= pointer.Length || pointer[index] is not ('0' or '1'))
+                return false;
+        }
+
+        return true;
+    }
+}
+
+public static class AgentToolOperationSelector
+{
+    public static string ComputeDigest(AgentToolOperationAdmission admission)
+    {
+        ArgumentNullException.ThrowIfNull(admission);
+        var operationIdentity = admission.Identity switch
+        {
+            AgentToolOperationIdentity.PublishedEndpoint published => published.EndpointId,
+            AgentToolOperationIdentity.AuthoredRequest authored => authored.RequestContractDigest,
+            AgentToolOperationIdentity.PlatformBuiltIn platform => platform.CapabilityId,
+            _ => string.Empty,
+        };
+        var material = string.Join('\n',
+            admission.ServiceInstanceId,
+            operationIdentity,
+            admission.CatalogDigest,
+            admission.ContractDigest);
+        return "sha256:" + Convert.ToHexStringLower(
+            SHA256.HashData(Encoding.UTF8.GetBytes(material)));
+    }
+}
+
 public abstract record AgentToolOperationIdentity
 {
     private AgentToolOperationIdentity()
@@ -38,12 +139,15 @@ public abstract record AgentToolOperationIdentity
     public sealed record PublishedEndpoint(string EndpointId) : AgentToolOperationIdentity;
 
     public sealed record AuthoredRequest(string RequestContractDigest) : AgentToolOperationIdentity;
+
+    public sealed record PlatformBuiltIn(string CapabilityId) : AgentToolOperationIdentity;
 }
 
 public enum AgentToolOperationAuthorizationBasis
 {
     PublishedContract = 1,
     ExplicitRequest = 2,
+    PlatformContract = 3,
 }
 
 public enum AgentToolOperationRisk

@@ -74,10 +74,16 @@ const ENUMS = Object.freeze({
     "planned", "waiting", "running", "done", "failed", "skipped", "cancelled", "uncertain",
   ]),
   stepKind: enumDefinition("NYX_ID_CHAT_STEP_KIND_", [
-    "llm", "tool", "browser_action", "postcondition", "input", "approval", "web",
+    "llm", "tool", "browser_action", "postcondition", "input", "approval", "web", "condition",
   ]),
   planGateMode: enumDefinition("NYX_ID_CHAT_PLAN_GATE_MODE_", ["auto", "confirm"]),
+  planGateStatus: enumDefinition("NYX_ID_CHAT_PLAN_GATE_STATUS_", [
+    "pending", "satisfied", "rejected",
+  ]),
   stepAddedBy: enumDefinition("NYX_ID_CHAT_STEP_ADDED_BY_", ["initial", "replan", "steering"]),
+  planRevisionCause: enumDefinition("NYX_ID_CHAT_PLAN_REVISION_CAUSE_", [
+    "initial", "scope_resolution", "failure_recovery", "steering", "user_revision",
+  ]),
   estimateKind: enumDefinition("NYX_ID_CHAT_STEP_ESTIMATE_KIND_", ["duration"]),
   substepStatus: enumDefinition("NYX_ID_CHAT_SUBSTEP_STATUS_", ["running", "done", "failed"]),
   stepChangeKind: enumDefinition("NYX_ID_CHAT_STEP_CHANGE_KIND_", [
@@ -101,7 +107,9 @@ const ENUMS = Object.freeze({
   transitionOutcome: enumDefinition("NYX_ID_CHAT_TRANSITION_OUTCOME_", [
     "accepted", "rejected", "idempotent",
   ]),
-  needsYouOutcome: enumDefinition("NYX_ID_CHAT_NEEDS_YOU_RESOLUTION_OUTCOME_", ["accepted"]),
+  needsYouOutcome: enumDefinition("NYX_ID_CHAT_NEEDS_YOU_RESOLUTION_OUTCOME_", [
+    "accepted", "expired",
+  ]),
   approvalReversibility: enumDefinition("NYX_ID_CHAT_APPROVAL_REVERSIBILITY_", [
     "reversible", "irreversible", "unknown",
   ]),
@@ -190,8 +198,10 @@ export function normalizeFrame(raw) {
   if (raw.textMessageStart) return { type: "text_start", ...raw.textMessageStart, raw };
   if (raw.textMessageContent) return { type: "text_delta", ...raw.textMessageContent, raw };
   if (raw.textMessageEnd) return { type: "text_end", ...raw.textMessageEnd, raw };
-  if (raw.toolCallStart) return { type: "tool_start", ...raw.toolCallStart, raw };
-  if (raw.toolCallEnd) return { type: "tool_end", ...raw.toolCallEnd, raw };
+  if (raw.modelCallStart) return normalizeOperationFrame("model_start", raw.modelCallStart, raw);
+  if (raw.modelCallEnd) return normalizeOperationFrame("model_end", raw.modelCallEnd, raw);
+  if (raw.toolCallStart) return normalizeOperationFrame("tool_start", raw.toolCallStart, raw);
+  if (raw.toolCallEnd) return normalizeOperationFrame("tool_end", raw.toolCallEnd, raw);
   if (raw.usage) return { type: "usage", ...raw.usage, raw };
   if (raw.stateSnapshot) return { type: "state_snapshot", ...raw.stateSnapshot, raw };
   if (raw.custom) return normalizeCustom(raw.custom, raw);
@@ -214,10 +224,14 @@ function normalizeTypedFrame(raw) {
       return { type: "text_delta", ...(raw.textMessageContent || {}), raw };
     case "TEXT_MESSAGE_END":
       return { type: "text_end", ...(raw.textMessageEnd || {}), raw };
+    case "MODEL_CALL_START":
+      return normalizeOperationFrame("model_start", raw.modelCallStart || {}, raw);
+    case "MODEL_CALL_END":
+      return normalizeOperationFrame("model_end", raw.modelCallEnd || {}, raw);
     case "TOOL_CALL_START":
-      return { type: "tool_start", ...(raw.toolCallStart || {}), raw };
+      return normalizeOperationFrame("tool_start", raw.toolCallStart || {}, raw);
     case "TOOL_CALL_END":
-      return { type: "tool_end", ...(raw.toolCallEnd || {}), raw };
+      return normalizeOperationFrame("tool_end", raw.toolCallEnd || {}, raw);
     case "TOOL_APPROVAL_REQUEST":
       return {
         type: "approval",
@@ -242,6 +256,16 @@ function normalizeTypedFrame(raw) {
     default:
       return { type: String(raw.type).toLowerCase(), raw };
   }
+}
+
+function normalizeOperationFrame(type, payload, raw) {
+  const sequence = Number(raw.sequence ?? payload.sequence);
+  return {
+    type,
+    ...payload,
+    ...(Number.isSafeInteger(sequence) && sequence > 0 ? { sequence } : {}),
+    raw,
+  };
 }
 
 function normalizeRunStarted(raw) {
@@ -704,12 +728,48 @@ function normalizeActorPayload(type, payload) {
   if (type === "task_snapshot") {
     normalizeIntegerProperty(value, "schemaVersion");
     normalizeIntegerProperty(value, "planRevision");
+    normalizeIntegerProperty(value, "planRevisionHistoryStart");
+    if (!Number.isSafeInteger(value.planRevision) || value.planRevision < 1) {
+      throw new ProtocolValidationError("Actor plan revision is invalid.", "NYXID_NUMBER_INVALID");
+    }
     normalizeEnumProperty(value, "status", ENUMS.taskStatus);
     if (value.gate && typeof value.gate === "object") {
       value.gate = cloneJsonObject(value.gate);
       normalizeEnumProperty(value.gate, "mode", ENUMS.planGateMode);
+      normalizeEnumProperty(value.gate, "status", ENUMS.planGateStatus);
+      normalizeIntegerProperty(value.gate, "planRevision");
     }
     if (Array.isArray(value.steps)) value.steps = value.steps.map(normalizeStep);
+    if (Object.prototype.hasOwnProperty.call(value, "planRevisions")) {
+      if (!Array.isArray(value.planRevisions)) {
+        throw new ProtocolValidationError("Actor plan revision history is invalid.");
+      }
+      value.planRevisions = value.planRevisions.map(normalizePlanRevision);
+      const historyStart = value.planRevisionHistoryStart ||
+        value.planRevisions[0]?.planRevision || 0;
+      for (let index = 0; index < value.planRevisions.length; index += 1) {
+        const expected = historyStart + index;
+        if (value.planRevisions[index].planRevision !== expected) {
+          throw new ProtocolValidationError(
+            "Actor plan revision history is not contiguous.",
+            "NYXID_PLAN_REVISION_CONFLICT",
+          );
+        }
+      }
+      if (value.planRevisions.length > 0 &&
+          value.planRevisions.at(-1).planRevision !== value.planRevision) {
+        throw new ProtocolValidationError(
+          "Actor plan revision history does not match the current plan.",
+          "NYXID_PLAN_REVISION_CONFLICT",
+        );
+      }
+      if (value.planRevisions.length > 0 && historyStart < 1) {
+        throw new ProtocolValidationError(
+          "Actor plan revision history start is invalid.",
+          "NYXID_PLAN_REVISION_CONFLICT",
+        );
+      }
+    }
     return value;
   }
   if (type === "task_step_changed") {
@@ -807,6 +867,8 @@ function normalizeStep(input) {
   normalizeEnumProperty(step, "status", ENUMS.stepStatus);
   normalizeEnumProperty(step, "externalEffect", ENUMS.effect);
   normalizeEnumProperty(step, "addedBy", ENUMS.stepAddedBy);
+  normalizeIntegerProperty(step, "addedInPlanRevision");
+  normalizeIntegerProperty(step, "cancelledInPlanRevision");
   if (Array.isArray(step.dependsOn)) step.dependsOn = step.dependsOn.map(validateIdentity);
   if (step.estimate && typeof step.estimate === "object") {
     step.estimate = cloneJsonObject(step.estimate);
@@ -836,6 +898,27 @@ function normalizeStep(input) {
     }
   }
   return step;
+}
+
+function normalizePlanRevision(input) {
+  const revision = cloneJsonObject(input);
+  normalizeIntegerProperty(revision, "planRevision");
+  if (!Number.isSafeInteger(revision.planRevision) || revision.planRevision < 1) {
+    throw new ProtocolValidationError("Actor plan revision is invalid.", "NYXID_NUMBER_INVALID");
+  }
+  normalizeEnumProperty(revision, "revisionCause", ENUMS.planRevisionCause);
+  if (!revision.revisionCause) {
+    throw new ProtocolValidationError("Actor plan revision cause is invalid.", "NYXID_ENUM_INVALID");
+  }
+  for (const key of ["addedStepIds", "cancelledStepIds"]) {
+    if (!Object.prototype.hasOwnProperty.call(revision, key)) {
+      revision[key] = [];
+    } else if (!Array.isArray(revision[key])) {
+      throw new ProtocolValidationError("Actor plan revision step identities are invalid.");
+    }
+    revision[key] = revision[key].map(validateIdentity);
+  }
+  return revision;
 }
 
 function normalizeEnumProperty(target, key, definition) {

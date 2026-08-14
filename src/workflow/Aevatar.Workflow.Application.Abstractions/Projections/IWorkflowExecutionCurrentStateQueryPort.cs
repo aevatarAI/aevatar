@@ -23,11 +23,24 @@ public sealed class WorkflowActorCurrentStateListQuery
     // Run status string as materialized on the current-state document (running/completed/failed/...).
     public string Status { get; init; } = string.Empty;
 
+    public string WorkflowId { get; init; } = string.Empty;
+
+    public string SearchText { get; init; } = string.Empty;
+
     // Inclusive updated-at window, filtered at the source on the document's updated_at field.
     public DateTimeOffset? UpdatedFromUtc { get; init; }
 
     public DateTimeOffset? UpdatedToUtc { get; init; }
+
+    public string? Cursor { get; init; }
+
+    public bool IncludeTotalCount { get; init; }
 }
+
+public sealed record WorkflowActorCurrentStatePage(
+    IReadOnlyList<WorkflowActorSnapshot> Items,
+    string? NextCursor,
+    long? TotalCount);
 
 public interface IWorkflowExecutionCurrentStateQueryPort
 {
@@ -47,6 +60,14 @@ public interface IWorkflowExecutionCurrentStateQueryPort
     Task<IReadOnlyList<WorkflowActorSnapshot>> ListWorkflowActorCurrentStatesAsync(
         WorkflowActorCurrentStateListQuery query,
         CancellationToken ct = default);
+
+    async Task<WorkflowActorCurrentStatePage> PageWorkflowActorCurrentStatesAsync(
+        WorkflowActorCurrentStateListQuery query,
+        CancellationToken ct = default)
+    {
+        var items = await ListWorkflowActorCurrentStatesAsync(query, ct);
+        return new WorkflowActorCurrentStatePage(items, null, null);
+    }
 
     Task<WorkflowActorProjectionState?> GetWorkflowActorProjectionStateAsync(
         string actorId,

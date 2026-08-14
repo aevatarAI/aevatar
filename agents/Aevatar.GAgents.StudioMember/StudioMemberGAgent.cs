@@ -25,6 +25,7 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
     private static readonly TimeSpan ScheduleProvisioningRetryDelay = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan ScheduleProvisioningAttemptWatchdogDelay = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan ScheduleProvisioningBudget = TimeSpan.FromMinutes(10);
+    private static readonly TimeSpan ScheduleProvisioningOneShotMinimumLeadTime = TimeSpan.FromSeconds(10);
     private readonly IStudioMemberWorkflowScheduleProvisioningPort? _scheduleProvisioningPort;
 
     public static string ProjectionKind => "studio-member";
@@ -457,16 +458,13 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         }
 
         var provisioning = State.WorkflowScheduleProvisioning!;
-        if (provisioning.Intent.ScheduleMode == StudioMemberWorkflowScheduleMode.OneShotAtUtc &&
-            provisioning.ResolvedOneShotFireAtUtc == null)
+        if (ShouldRefreshScheduleProvisioningOneShotTiming(provisioning, now))
         {
-            var delaySeconds = provisioning.Intent.OneShotDelaySeconds > 0
-                ? provisioning.Intent.OneShotDelaySeconds
-                : 30;
             await PersistDomainEventAsync(new StudioMemberWorkflowScheduleProvisioningTimingResolved
             {
                 ProvisioningId = command.ProvisioningId,
-                OneShotFireAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(delaySeconds)),
+                OneShotFireAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(
+                    ResolveScheduleProvisioningOneShotDelaySeconds(provisioning.Intent))),
                 ResolvedAtUtc = Timestamp.FromDateTimeOffset(now),
             });
             provisioning = State.WorkflowScheduleProvisioning!;
@@ -1456,6 +1454,22 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         var deadline = State.WorkflowScheduleProvisioning?.DeadlineAtUtc;
         return deadline != null && now >= deadline.ToDateTimeOffset();
     }
+
+    private static bool ShouldRefreshScheduleProvisioningOneShotTiming(
+        StudioMemberWorkflowScheduleProvisioningState provisioning,
+        DateTimeOffset now)
+    {
+        if (provisioning.Intent.ScheduleMode != StudioMemberWorkflowScheduleMode.OneShotAtUtc)
+            return false;
+
+        var currentFireAt = provisioning.ResolvedOneShotFireAtUtc?.ToDateTimeOffset().ToUniversalTime();
+        return currentFireAt == null ||
+               currentFireAt.Value <= now.Add(ScheduleProvisioningOneShotMinimumLeadTime);
+    }
+
+    private static int ResolveScheduleProvisioningOneShotDelaySeconds(
+        StudioMemberWorkflowScheduleProvisioningIntent intent) =>
+        intent.OneShotDelaySeconds > 0 ? intent.OneShotDelaySeconds : 30;
 
     private Task FailWorkflowScheduleProvisioningAsync(string code, string message)
     {

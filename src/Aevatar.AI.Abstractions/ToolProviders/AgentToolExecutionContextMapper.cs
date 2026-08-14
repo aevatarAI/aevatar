@@ -137,7 +137,8 @@ public static class AgentToolExecutionContextMapper
                 AgentToolExecutionContext.Normalize(payload.Request?.CallId),
                 AgentToolExecutionContext.Normalize(payload.Request?.IdempotencyKey),
                 payload.Request?.IssuedAtUnixMs ?? 0,
-                AgentToolExecutionContext.Normalize(payload.Request?.OperationId)),
+                AgentToolExecutionContext.Normalize(payload.Request?.OperationId),
+                payload.Request?.OperationGeneration ?? 0),
             new AgentToolCredentials(
                 AgentToolExecutionContext.Normalize(payload.Credentials?.NyxIdAccessToken),
                 AgentToolExecutionContext.Normalize(payload.Credentials?.NyxIdOrgToken),
@@ -174,6 +175,8 @@ public static class AgentToolExecutionContextMapper
             Chat = FromChatPayload(payload.Chat),
             InputFileRefs = FromInputFileRefsPayload(payload.InputFileRefs),
             ExecutionOwner = payload.ExecutionOwner?.Clone() ?? new AgentToolExecutionOwner(),
+            OperationAdmission =
+                AgentToolOperationAdmissionPayloadMapper.FromPayload(payload.OperationAdmission),
         };
     }
 
@@ -190,6 +193,7 @@ public static class AgentToolExecutionContextMapper
                 IdempotencyKey = context.Request.IdempotencyKey ?? string.Empty,
                 IssuedAtUnixMs = context.Request.IssuedAtUnixMs,
                 OperationId = context.Request.OperationId ?? string.Empty,
+                OperationGeneration = context.Request.OperationGeneration,
             },
             Credentials = new AgentToolCredentialsPayload
             {
@@ -231,6 +235,12 @@ public static class AgentToolExecutionContextMapper
             ExecutionOwner = context.ExecutionOwner?.Clone() ?? new AgentToolExecutionOwner(),
         };
 
+        if (context.OperationAdmission is not null)
+        {
+            payload.OperationAdmission =
+                AgentToolOperationAdmissionPayloadMapper.ToPayload(context.OperationAdmission);
+        }
+
         ApplyOptionalPayloads(context, payload);
         CopyExternalMetadata(context.ExternalMetadata, payload);
 
@@ -251,6 +261,7 @@ public static class AgentToolExecutionContextMapper
                 IdempotencyKey = context.Request.IdempotencyKey ?? string.Empty,
                 IssuedAtUnixMs = context.Request.IssuedAtUnixMs,
                 OperationId = context.Request.OperationId ?? string.Empty,
+                OperationGeneration = context.Request.OperationGeneration,
             },
             Caller = new AgentToolCallerContextPayload
             {
@@ -294,6 +305,11 @@ public static class AgentToolExecutionContextMapper
             RequiresSourceReadableNyxIdAccessToken =
                 !string.IsNullOrWhiteSpace(context.Credentials.SourceReadableNyxIdAccessToken),
         };
+        if (context.OperationAdmission is not null)
+        {
+            payload.OperationAdmission =
+                AgentToolOperationAdmissionPayloadMapper.ToPayload(context.OperationAdmission);
+        }
         if (context.ToolVisibility.IsRestricted)
             payload.ToolVisibility = ToToolVisibilityPayload(context.ToolVisibility);
         payload.InputFileRefs.AddRange(ToInputFileRefsPayload(context.InputFileRefs));
@@ -314,7 +330,8 @@ public static class AgentToolExecutionContextMapper
                 AgentToolExecutionContext.Normalize(payload.Request?.CallId),
                 AgentToolExecutionContext.Normalize(payload.Request?.IdempotencyKey),
                 payload.Request?.IssuedAtUnixMs ?? 0,
-                AgentToolExecutionContext.Normalize(payload.Request?.OperationId)),
+                AgentToolExecutionContext.Normalize(payload.Request?.OperationId),
+                payload.Request?.OperationGeneration ?? 0),
             AgentToolCredentials.Empty with
             {
                 NyxIdCredentialKind = FromNyxIdCredentialKindPayload(
@@ -349,6 +366,8 @@ public static class AgentToolExecutionContextMapper
             Chat = FromChatPayload(payload.Chat),
             InputFileRefs = FromInputFileRefsPayload(payload.InputFileRefs),
             ExecutionOwner = payload.ExecutionOwner?.Clone() ?? new AgentToolExecutionOwner(),
+            OperationAdmission =
+                AgentToolOperationAdmissionPayloadMapper.FromPayload(payload.OperationAdmission),
         };
     }
 

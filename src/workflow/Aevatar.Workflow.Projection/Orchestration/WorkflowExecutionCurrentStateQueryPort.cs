@@ -59,8 +59,16 @@ public sealed class WorkflowExecutionCurrentStateQueryPort : IWorkflowExecutionC
         WorkflowActorCurrentStateListQuery query,
         CancellationToken ct = default)
     {
+        var page = await PageWorkflowActorCurrentStatesAsync(query, ct);
+        return page.Items;
+    }
+
+    public async Task<WorkflowActorCurrentStatePage> PageWorkflowActorCurrentStatesAsync(
+        WorkflowActorCurrentStateListQuery query,
+        CancellationToken ct = default)
+    {
         if (!_workflowRunCurrentStateQueryEnabled)
-            return [];
+            return new WorkflowActorCurrentStatePage([], null, null);
 
         ArgumentNullException.ThrowIfNull(query);
         var boundedTake = Math.Clamp(query.Take, 1, 1000);
@@ -69,7 +77,10 @@ public sealed class WorkflowExecutionCurrentStateQueryPort : IWorkflowExecutionC
             {
                 Take = boundedTake,
                 Filters = BuildFilters(query),
+                AnyOfFilters = BuildActivitySearchFilters(query),
                 Sorts = RecencyDescendingSort,
+                Cursor = query.Cursor,
+                IncludeTotalCount = query.IncludeTotalCount,
             },
             ct);
         var snapshots = new List<WorkflowActorSnapshot>(currentStates.Items.Count);
@@ -78,7 +89,10 @@ public sealed class WorkflowExecutionCurrentStateQueryPort : IWorkflowExecutionC
             snapshots.Add(_mapper.ToActorSnapshot(currentState));
         }
 
-        return snapshots;
+        return new WorkflowActorCurrentStatePage(
+            snapshots,
+            currentStates.NextCursor,
+            currentStates.TotalCount);
     }
 
     public async Task<WorkflowActorProjectionState?> GetWorkflowActorProjectionStateAsync(
@@ -103,7 +117,37 @@ public sealed class WorkflowExecutionCurrentStateQueryPort : IWorkflowExecutionC
             FieldPath = nameof(WorkflowExecutionCurrentStateDocument.UpdatedAtUtcValue),
             Direction = ProjectionDocumentSortDirection.Desc,
         },
+        new ProjectionDocumentSort
+        {
+            FieldPath = nameof(WorkflowExecutionCurrentStateDocument.RootActorId),
+            Direction = ProjectionDocumentSortDirection.Asc,
+        },
     ];
+
+    private static readonly IReadOnlyList<string> ActivitySearchFieldPaths =
+    [
+        nameof(WorkflowExecutionCurrentStateDocument.WorkflowName),
+        nameof(WorkflowExecutionCurrentStateDocument.RunId),
+        nameof(WorkflowExecutionCurrentStateDocument.Status),
+        nameof(WorkflowExecutionCurrentStateDocument.InputSummary),
+        nameof(WorkflowExecutionCurrentStateDocument.ActivityInitiator) + "." + nameof(WorkflowRunActivityInitiatorSnapshot.DisplayValue),
+    ];
+
+    private static IReadOnlyList<ProjectionDocumentFilter> BuildActivitySearchFilters(WorkflowActorCurrentStateListQuery query)
+    {
+        var searchText = query.SearchText.Trim();
+        if (searchText.Length == 0)
+            return [];
+
+        return ActivitySearchFieldPaths
+            .Select(fieldPath => new ProjectionDocumentFilter
+            {
+                FieldPath = fieldPath,
+                Operator = ProjectionDocumentFilterOperator.ContainsText,
+                Value = ProjectionDocumentValue.FromString(searchText),
+            })
+            .ToArray();
+    }
 
     private static IReadOnlyList<ProjectionDocumentFilter> BuildFilters(WorkflowActorCurrentStateListQuery query)
     {
@@ -159,6 +203,16 @@ public sealed class WorkflowExecutionCurrentStateQueryPort : IWorkflowExecutionC
                 FieldPath = nameof(WorkflowExecutionCurrentStateDocument.Status),
                 Operator = ProjectionDocumentFilterOperator.Eq,
                 Value = ProjectionDocumentValue.FromString(query.Status.Trim()),
+            });
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.WorkflowId))
+        {
+            filters.Add(new ProjectionDocumentFilter
+            {
+                FieldPath = nameof(WorkflowExecutionCurrentStateDocument.WorkflowId),
+                Operator = ProjectionDocumentFilterOperator.Eq,
+                Value = ProjectionDocumentValue.FromString(query.WorkflowId.Trim()),
             });
         }
 

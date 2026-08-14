@@ -101,9 +101,12 @@ public abstract class WorkflowGAgentTestBase
                 scopeId,
                 runOrigin,
                 scheduleId,
+                workflowId: null,
+                revisionId: null,
+                definitionVersion: 0,
                 capabilityAdmissionPlan,
                 ExternalCapabilityExecutionMode.Interactive,
-                ct);
+                ct: ct);
 
         internal static async Task<WorkflowGAgent> CreateRegisteredDefinitionAgentAsync(
             RecordingActorRuntime runtime,

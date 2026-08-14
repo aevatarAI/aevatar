@@ -643,6 +643,76 @@ public sealed class StudioWorkflowProvisioningServiceTests
     }
 
     [Fact]
+    public async Task ProvisionAsync_WhenRequiredRouteIsUnresolved_ShouldFailBeforeMutationWithRepairTarget()
+    {
+        var member = NewMemberService();
+        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        var capability = DurableExplicitRequestCapability("usvc-alpha");
+        var admission = new StudioWorkflowCapabilityAdmissionTestService
+        {
+            AdmissionPlan = CapabilityPlan(capability),
+            OnAdmit = request =>
+            {
+                if (request.ExecutionMode == ExternalCapabilityExecutionMode.Durable)
+                    throw DurableAuthorizationUnavailable(capability);
+            },
+        };
+        var refresh = new RecordingCatalogRefreshPort(
+            new NyxIdAuthorizationCatalogRefreshResult(
+                NyxIdAuthorizationCatalogRefreshStatus.CatalogUnstable,
+                StudioMemberAutomationCatalogRouteUnresolvedException.NyxIdFailureCode));
+        var visibility = new RecordingCatalogVisibilityPort(new NyxIdAuthorizationCatalogVisibilityResult(
+            NyxIdAuthorizationCatalogVisibilityStatus.Ready,
+            31,
+            31,
+            string.Empty));
+        var owner = new AuthenticatedAuthorizationOwnerContext(
+            new AuthorizationOwnerIdentity
+            {
+                Authority = NyxIdAuthorizationAuthorities.NyxId,
+                OwnerKind = AuthorizationOwnerKind.Personal,
+                OwnerSubject = "caller-alpha",
+            },
+            "nyxid",
+            string.Empty,
+            "caller-alpha",
+            "binding-alpha");
+        var sut = new StudioWorkflowProvisioningService(
+            member,
+            new RecordingBindingPort(member, WorkflowId, RevisionId),
+            ImmediateScheduleCommand(schedule),
+            admission,
+            refresh,
+            visibility);
+
+        var action = () => sut.ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest("Monitor", StudioExplicitRequestAdmissionTestKit.WorkflowYaml)
+            {
+                TeamId = TeamId,
+                AuthenticatedOwner = owner,
+                ProvisioningBearerToken = "runtime-caller-credential",
+                CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(
+                    [StudioExplicitRequestAdmissionTestKit.MatchingConfirmation(string.Empty, string.Empty)],
+                    ExternalCapabilityExecutionMode.Durable),
+            });
+
+        var exception = await action.Should()
+            .ThrowAsync<StudioMemberAutomationCatalogRouteUnresolvedException>();
+        exception.Which.RequiredUserServiceIds.Should().Equal("usvc-alpha");
+        refresh.Request!.RequiredServices.Should().ContainSingle()
+            .Which.UserServiceId.Should().Be("usvc-alpha");
+        visibility.RequiredStateVersion.Should().Be(0);
+        member.GetCallCount.Should().Be(0);
+        member.CreateInvoked.Should().BeFalse();
+        member.BindRequest.Should().BeNull();
+        schedule.Ensured.Should().BeFalse();
+        schedule.PreflightRequests.Should().BeEmpty();
+        schedule.LastCreateRequest.Should().BeNull();
+    }
+
+    [Fact]
     public async Task ProvisionAsync_WhenCatalogAndAnotherRequirementAreMissing_ShouldNotRefreshOrMutate()
     {
         var member = NewMemberService();
@@ -870,8 +940,11 @@ public sealed class StudioWorkflowProvisioningServiceTests
         schedule.LastCreateRequest.Should().BeNull();
     }
 
-    [Fact]
-    public async Task ProvisionAsync_WithExistingPlan_ShouldOnlyRevalidateWithoutFreshConfirmation()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ProvisionAsync_WithExistingPlan_ShouldUseCredentialAwareAdmissionPath(
+        bool includeCallerCredential)
     {
         var admission = StudioExplicitRequestAdmissionTestKit.CreateAdmissionService();
         var identity = ProvisionIdentity("scope-studio-alpha", "team-alpha", "Monitor");
@@ -905,11 +978,13 @@ public sealed class StudioWorkflowProvisioningServiceTests
                 AuthenticatedOwner = TestAuthenticatedOwner(),
                 CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(
                     existingPlan: plan,
-                    executionMode: ExternalCapabilityExecutionMode.Durable),
+                    executionMode: ExternalCapabilityExecutionMode.Durable,
+                    includeCallerCredential: includeCallerCredential),
             });
 
         admission.Requests.Should().BeEmpty();
-        admission.PersistedRequests.Should().ContainSingle();
+        admission.RefreshRequests.Should().HaveCount(includeCallerCredential ? 1 : 0);
+        admission.PersistedRequests.Should().HaveCount(includeCallerCredential ? 0 : 1);
         member.BindRequest.Should().NotBeNull();
     }
 

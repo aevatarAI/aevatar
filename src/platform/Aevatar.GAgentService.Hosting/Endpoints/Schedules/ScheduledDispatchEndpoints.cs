@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using System.Text.Json.Serialization;
 using Aevatar.AI.Abstractions;
+using Aevatar.Authentication.Abstractions;
 using Aevatar.Capabilities;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
@@ -359,6 +360,13 @@ public static class ScheduledDispatchEndpoints
             var queryScopeId = query.TeamAutomationOwner?.ScopeId ?? query.TeamAutomationScopeId;
             if (TryCreateOwnerScopeAccessDeniedResult(http, queryScopeId, out var denied))
                 return denied;
+
+            if (queryScopeId == null)
+            {
+                var adminDenied = await AuthorizeLegacyGenericListAsync(http, ct);
+                if (adminDenied != null)
+                    return adminDenied;
+            }
         }
         catch (ArgumentException ex)
         {
@@ -367,6 +375,56 @@ public static class ScheduledDispatchEndpoints
 
         return Results.Ok(await schedules.ListAsync(query, ct));
     }
+
+    private static async Task<IResult?> AuthorizeLegacyGenericListAsync(
+        HttpContext http,
+        CancellationToken ct)
+    {
+        var authorizer = http.RequestServices.GetService<IPlatformAdminAuthorizer>();
+        if (authorizer == null)
+        {
+            return Results.Json(
+                new
+                {
+                    code = "SCHEDULE_ADMIN_AUTHORIZATION_UNAVAILABLE",
+                    message = "Platform admin authorization is unavailable.",
+                },
+                statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+
+        var authorization = http.Request.Headers.Authorization.FirstOrDefault()?.Trim();
+        const string bearerPrefix = "Bearer ";
+        var bearerToken = authorization?.StartsWith(bearerPrefix, StringComparison.OrdinalIgnoreCase) == true
+            ? authorization[bearerPrefix.Length..].Trim()
+            : string.Empty;
+        if (bearerToken.Length == 0)
+            return LegacyGenericListForbidden();
+
+        PlatformCaller caller;
+        try
+        {
+            caller = await authorizer.ResolveCallerAsync(bearerToken, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            return LegacyGenericListForbidden();
+        }
+
+        return caller.IsElevated ? null : LegacyGenericListForbidden();
+    }
+
+    private static IResult LegacyGenericListForbidden() =>
+        Results.Json(
+            new
+            {
+                code = "SCHEDULE_ADMIN_ACCESS_REQUIRED",
+                message = "Platform admin access is required to list legacy Generic schedules.",
+            },
+            statusCode: StatusCodes.Status403Forbidden);
 
     internal static async Task<IResult> Get(
         HttpContext http,
@@ -563,9 +621,15 @@ public static class ScheduledDispatchEndpoints
 
         var normalizedScopeId = NormalizeOptional(ownerScopeId)
             ?? throw new ArgumentException("Owner scopeId is required.", nameof(ownerScopeId));
-        var normalizedTeamId = NormalizeOptional(ownerTeamId)
-            ?? throw new ArgumentException("Owner teamId is required.", nameof(ownerTeamId));
+        var normalizedTeamId = NormalizeOptional(ownerTeamId);
         var normalizedMemberId = NormalizeOptional(ownerMemberId);
+        if (normalizedMemberId is not null && normalizedTeamId is null)
+        {
+            throw new ArgumentException(
+                "Owner teamId is required when owner memberId is supplied.",
+                nameof(ownerTeamId));
+        }
+
         if (normalizedMemberId is not null)
         {
             return new ScheduledDispatchListQuery(
@@ -575,7 +639,7 @@ public static class ScheduledDispatchEndpoints
                 TeamAutomationOwner: new TeamMemberAutomationOwner(
                     normalizedScopeId,
                     normalizedMemberId,
-                    normalizedTeamId));
+                    normalizedTeamId!));
         }
 
         return new ScheduledDispatchListQuery(

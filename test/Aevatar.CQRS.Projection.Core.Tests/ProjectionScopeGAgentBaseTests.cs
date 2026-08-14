@@ -185,6 +185,39 @@ public sealed class ProjectionScopeGAgentBaseTests
     }
 
     [Fact]
+    public async Task HandleObservedEnvelopeAsync_DurableScopeProcessesLowerVersionAfterLineageRegression()
+    {
+        var processed = 0;
+        var agent = BuildActivatedAgent(
+            scopeId: "projection-scope-lineage-regression",
+            onProcess: envelope =>
+            {
+                processed++;
+                CommittedStateEventEnvelope.TryGetObservedPayload(
+                    envelope,
+                    out _,
+                    out _,
+                    out var version).Should().BeTrue();
+                version.Should().Be(2);
+                return ProjectionScopeDispatchResult.Success(version, "event-type");
+            },
+            eventSourcing: new TrackingEventSourcing(),
+            runtimeMode: ProjectionRuntimeMode.DurableMaterialization);
+        agent.State.LastSuccessfulVersionsByActor["publisher-actor"] = 3;
+
+        await agent.HandleObservedEnvelopeAsync(BuildForwardedCommittedObservationEnvelope(
+            "projection-scope-lineage-regression",
+            version: 2,
+            eventId: "rebuild:publisher-actor:2"));
+
+        processed.Should().Be(1, "durable repair must not inherit the session observation version fence");
+        agent.State.LastSuccessfulVersionsByActor["publisher-actor"].Should().Be(
+            3,
+            "the historical high-water mark remains diagnostic and is not rewritten by repair");
+        agent.State.SuccessfulMaterializationTotal.Should().Be(1);
+    }
+
+    [Fact]
     public async Task HandleObservedEnvelopeAsync_ShouldIgnoreDuplicateAndStaleVersionsFromSamePublisher()
     {
         var processed = 0;

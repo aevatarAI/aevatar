@@ -180,8 +180,9 @@ public class NyxIdChatAguiSseEventWriterTests
             Order = 1,
             Kind = NyxIdChatStepKind.Tool,
             Status = NyxIdChatStepStatus.Failed,
-            Required = true,
+            Required = false,
             Description = "Update the repository.",
+            MayChangeExternalState = false,
             ExternalEffect = NyxIdChatEffectEvidence.NotApplied,
             AddedBy = NyxIdChatStepAddedBy.Replan,
             DependsOn = { "step-plan" },
@@ -226,6 +227,7 @@ public class NyxIdChatAguiSseEventWriterTests
                 },
                 Kind = NyxIdChatStepKind.Tool,
                 Phase = NyxIdChatOperationPhase.Failed,
+                MayChangeExternalState = false,
             },
         };
         var task = new NyxIdChatTaskState
@@ -309,6 +311,8 @@ public class NyxIdChatAguiSseEventWriterTests
         payload.GetProperty("planRevision").GetInt32().Should().Be(2);
         payload.GetProperty("gate").GetProperty("mode").GetString().Should().Be("confirm");
         var step = payload.GetProperty("steps")[0];
+        step.GetProperty("required").GetBoolean().Should().BeFalse();
+        step.GetProperty("mayChangeExternalState").GetBoolean().Should().BeFalse();
         step.GetProperty("kind").GetString().Should().Be("tool");
         step.GetProperty("status").GetString().Should().Be("failed");
         step.GetProperty("externalEffect").GetString().Should().Be("not_applied");
@@ -317,7 +321,9 @@ public class NyxIdChatAguiSseEventWriterTests
         step.GetProperty("estimate").GetProperty("seconds").GetInt32().Should().Be(30);
         step.GetProperty("substeps")[0].GetProperty("status").GetString().Should().Be("done");
         step.GetProperty("availableActions").GetProperty("retry").GetBoolean().Should().BeTrue();
-        step.GetProperty("operation").GetProperty("phase").GetString().Should().Be("failed");
+        var operation = step.GetProperty("operation");
+        operation.GetProperty("phase").GetString().Should().Be("failed");
+        operation.GetProperty("mayChangeExternalState").GetBoolean().Should().BeFalse();
         step.GetProperty("source").GetProperty("tool")
             .GetProperty("readinessCapabilityId").GetString().Should()
             .Be("readiness-capability-alpha");
@@ -330,7 +336,12 @@ public class NyxIdChatAguiSseEventWriterTests
         changedPayload.GetProperty("taskId").GetString().Should().Be("task-alpha");
         changedPayload.GetProperty("planRevision").GetInt32().Should().Be(2);
         changedPayload.GetProperty("changeKind").GetString().Should().Be("status");
-        changedPayload.GetProperty("step").GetProperty("source").GetProperty("tool")
+        var changedStep = changedPayload.GetProperty("step");
+        changedStep.GetProperty("required").GetBoolean().Should().BeFalse();
+        changedStep.GetProperty("mayChangeExternalState").GetBoolean().Should().BeFalse();
+        changedStep.GetProperty("operation").GetProperty("mayChangeExternalState")
+            .GetBoolean().Should().BeFalse();
+        changedStep.GetProperty("source").GetProperty("tool")
             .GetProperty("readinessCapabilityId").GetString().Should()
             .Be("readiness-capability-alpha");
         frame.GetRawText().Should().NotContain("@type");
@@ -376,6 +387,13 @@ public class NyxIdChatAguiSseEventWriterTests
                     RequestId = "input-alpha",
                     ClientRequestId = "client-input-alpha",
                     Outcome = NyxIdChatNeedsYouResolutionOutcome.Accepted,
+                    Answer = new NyxIdChatInputAnswer
+                    {
+                        Selection = new NyxIdChatInputSelectionAnswer
+                        {
+                            OptionIds = { "option-singapore" },
+                        },
+                    },
                 }),
             },
         }, "turn-alpha");
@@ -391,6 +409,8 @@ public class NyxIdChatAguiSseEventWriterTests
         var changed = frames[1].GetProperty("custom");
         changed.GetProperty("name").GetString().Should().Be("nyxid.input.changed");
         changed.GetProperty("payload").GetProperty("outcome").GetString().Should().Be("accepted");
+        changed.GetProperty("payload").GetProperty("answer").GetProperty("selection")
+            .GetProperty("optionIds")[0].GetString().Should().Be("option-singapore");
     }
 
     [Fact]
@@ -401,7 +421,7 @@ public class NyxIdChatAguiSseEventWriterTests
             Request = new NyxIdChatActionRequestState
             {
                 SchemaVersion = 4,
-                RegistryRevision = "nyxid-assistant-actions.v4",
+                RegistryRevision = "nyxid-assistant-actions.v5",
                 ConversationActorId = "conversation-alpha",
                 OriginTurnId = "turn-alpha",
                 TaskId = "task-alpha",
@@ -426,6 +446,8 @@ public class NyxIdChatAguiSseEventWriterTests
                 TaskId = "task-alpha",
                 TurnId = "turn-alpha",
                 Status = NyxIdChatTaskStatus.Blocked,
+                PlanId = "plan-alpha",
+                PlanRevision = 2,
             },
             OriginTurn = new NyxIdChatTurnState
             {
@@ -434,6 +456,17 @@ public class NyxIdChatAguiSseEventWriterTests
                 Status = NyxIdChatTurnStatus.Blocked,
             },
         };
+        committed.State = new NyxIdChatConversationGAgentState
+        {
+            ConversationActorId = "conversation-alpha",
+            ActiveTask = committed.Task.Clone(),
+            ActiveTurn = committed.OriginTurn.Clone(),
+        };
+        committed.State.PendingActions.Add(committed.Request.Clone());
+        committed.State.ActiveTask.Gate = NyxIdChatPlanGateDecisions.BuildActionGate(
+            committed.State,
+            committed.Request);
+        committed.State.ActiveTask.Gate.Status = NyxIdChatPlanGateStatus.Satisfied;
         var actionFrame = NyxIdChatConversationAguiFrameBuilder.BuildActionRequested(
                 "conversation-alpha",
                 "turn-alpha",
@@ -461,6 +494,274 @@ public class NyxIdChatAguiSseEventWriterTests
             "catalogService": {
               "serviceSlug": "api-github",
               "requestedScopes": ["repo"]
+            }
+          }
+        }
+        """);
+
+        JsonNode.DeepEquals(JsonNode.Parse(payload.GetRawText()), expected)
+            .Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task WriteAsync_ShouldMapKeyCreateToFlatCredentialFreeWireParams()
+    {
+        var committed = new NyxIdChatActionRequestedEvent
+        {
+            Request = new NyxIdChatActionRequestState
+            {
+                SchemaVersion = 4,
+                RegistryRevision = NyxIdAssistantActionRegistry.SupportedRegistryRevision,
+                ConversationActorId = "conversation-alpha",
+                OriginTurnId = "turn-alpha",
+                TaskId = "task-alpha",
+                StepId = "step-alpha",
+                ActionRequestId = "action-alpha",
+                Action = NyxIdAssistantActionKind.KeyCreate,
+                Params = new NyxIdAssistantActionParams
+                {
+                    KeyCreate = new NyxIdKeyCreateParams
+                    {
+                        Name = "agent-alpha",
+                        Platform = "codex",
+                        AllowedServiceIds = { "m-github", "m-lark" },
+                    },
+                },
+                AdvisoryRisk = NyxIdAssistantActionRisk.Grant,
+                RequestedAt = Timestamp.FromDateTimeOffset(
+                    new DateTimeOffset(2026, 8, 11, 8, 0, 0, TimeSpan.Zero)),
+            },
+            Task = new NyxIdChatTaskState
+            {
+                TaskId = "task-alpha",
+                TurnId = "turn-alpha",
+                Status = NyxIdChatTaskStatus.Blocked,
+                PlanId = "plan-alpha",
+                PlanRevision = 2,
+            },
+            OriginTurn = new NyxIdChatTurnState
+            {
+                TurnId = "turn-alpha",
+                TaskId = "task-alpha",
+                Status = NyxIdChatTurnStatus.Blocked,
+            },
+        };
+        committed.State = new NyxIdChatConversationGAgentState
+        {
+            ConversationActorId = "conversation-alpha",
+            ActiveTask = committed.Task.Clone(),
+            ActiveTurn = committed.OriginTurn.Clone(),
+        };
+        committed.State.PendingActions.Add(committed.Request.Clone());
+        committed.State.ActiveTask.Gate = NyxIdChatPlanGateDecisions.BuildActionGate(
+            committed.State,
+            committed.Request);
+        committed.State.ActiveTask.Gate.Status = NyxIdChatPlanGateStatus.Satisfied;
+        var actionFrame = NyxIdChatConversationAguiFrameBuilder.BuildActionRequested(
+                "conversation-alpha",
+                "turn-alpha",
+                committed,
+                sequence: 24)
+            .Single(frame => frame.Custom?.Name ==
+                             NyxIdChatConversationAguiFrameBuilder.ActionRequestEventName);
+        var sink = new SseFrameSink();
+
+        await sink.WriteAsync(actionFrame, "turn-alpha");
+
+        var payload = sink.ReadFrames().Should().ContainSingle().Which
+            .GetProperty("custom")
+            .GetProperty("payload");
+        var expected = JsonNode.Parse("""
+        {
+          "schemaVersion": 4,
+          "actorId": "conversation-alpha",
+          "originTurnId": "turn-alpha",
+          "taskId": "task-alpha",
+          "stepId": "step-alpha",
+          "actionRequestId": "action-alpha",
+          "action": "key.create",
+          "params": {
+            "name": "agent-alpha",
+            "platform": "codex",
+            "allowedServiceIds": ["m-github", "m-lark"]
+          }
+        }
+        """);
+
+        JsonNode.DeepEquals(JsonNode.Parse(payload.GetRawText()), expected)
+            .Should().BeTrue();
+        payload.GetRawText().Should()
+            .NotContain("risk")
+            .And.NotContain("registry")
+            .And.NotContain("token")
+            .And.NotContain("keyMaterial");
+    }
+
+    [Fact]
+    public async Task WriteAsync_ShouldMapKeyRotateToExactCredentialFreeWireParams()
+    {
+        var committed = new NyxIdChatActionRequestedEvent
+        {
+            Request = new NyxIdChatActionRequestState
+            {
+                SchemaVersion = 4,
+                RegistryRevision = NyxIdAssistantActionRegistry.SupportedRegistryRevision,
+                ConversationActorId = "conversation-alpha",
+                OriginTurnId = "turn-alpha",
+                TaskId = "task-alpha",
+                StepId = "step-alpha",
+                ActionRequestId = "action-alpha",
+                Action = NyxIdAssistantActionKind.KeyRotate,
+                Params = new NyxIdAssistantActionParams
+                {
+                    KeyRotate = new NyxIdKeyRotateParams { KeyId = "key-alpha" },
+                },
+                AdvisoryRisk = NyxIdAssistantActionRisk.Grant,
+                RequestedAt = Timestamp.FromDateTimeOffset(
+                    new DateTimeOffset(2026, 8, 11, 8, 0, 0, TimeSpan.Zero)),
+            },
+            Task = new NyxIdChatTaskState
+            {
+                TaskId = "task-alpha",
+                TurnId = "turn-alpha",
+                Status = NyxIdChatTaskStatus.Blocked,
+                PlanId = "plan-alpha",
+                PlanRevision = 2,
+            },
+            OriginTurn = new NyxIdChatTurnState
+            {
+                TurnId = "turn-alpha",
+                TaskId = "task-alpha",
+                Status = NyxIdChatTurnStatus.Blocked,
+            },
+        };
+        committed.State = new NyxIdChatConversationGAgentState
+        {
+            ConversationActorId = "conversation-alpha",
+            ActiveTask = committed.Task.Clone(),
+            ActiveTurn = committed.OriginTurn.Clone(),
+        };
+        committed.State.PendingActions.Add(committed.Request.Clone());
+        committed.State.ActiveTask.Gate = NyxIdChatPlanGateDecisions.BuildActionGate(
+            committed.State,
+            committed.Request);
+        committed.State.ActiveTask.Gate.Status = NyxIdChatPlanGateStatus.Satisfied;
+        var actionFrame = NyxIdChatConversationAguiFrameBuilder.BuildActionRequested(
+                "conversation-alpha",
+                "turn-alpha",
+                committed,
+                sequence: 25)
+            .Single(frame => frame.Custom?.Name ==
+                             NyxIdChatConversationAguiFrameBuilder.ActionRequestEventName);
+        var sink = new SseFrameSink();
+
+        await sink.WriteAsync(actionFrame, "turn-alpha");
+
+        var payload = sink.ReadFrames().Should().ContainSingle().Which
+            .GetProperty("custom")
+            .GetProperty("payload");
+        var expected = JsonNode.Parse("""
+        {
+          "schemaVersion": 4,
+          "actorId": "conversation-alpha",
+          "originTurnId": "turn-alpha",
+          "taskId": "task-alpha",
+          "stepId": "step-alpha",
+          "actionRequestId": "action-alpha",
+          "action": "key.rotate",
+          "params": {
+            "keyId": "key-alpha"
+          }
+        }
+        """);
+
+        JsonNode.DeepEquals(JsonNode.Parse(payload.GetRawText()), expected)
+            .Should().BeTrue();
+        payload.GetRawText().Should()
+            .NotContain("risk")
+            .And.NotContain("registry")
+            .And.NotContain("token")
+            .And.NotContain("keyMaterial");
+    }
+
+    [Fact]
+    public async Task WriteAsync_ShouldMapServiceReauthorizeToExactSchemaV4WirePayload()
+    {
+        var committed = new NyxIdChatActionRequestedEvent
+        {
+            Request = new NyxIdChatActionRequestState
+            {
+                SchemaVersion = 4,
+                RegistryRevision = "nyxid-assistant-actions.v5",
+                ConversationActorId = "conversation-alpha",
+                OriginTurnId = "turn-alpha",
+                TaskId = "task-alpha",
+                StepId = "step-alpha",
+                ActionRequestId = "action-alpha",
+                Action = NyxIdAssistantActionKind.ServiceReauthorize,
+                Params = new NyxIdAssistantActionParams
+                {
+                    ServiceReauthorize = new NyxIdServiceReauthorizeParams
+                    {
+                        UserServiceId = "us-github-alpha",
+                        RequestedScopes = { "repo", "read:org" },
+                    },
+                },
+                AdvisoryRisk = NyxIdAssistantActionRisk.Grant,
+            },
+            Task = new NyxIdChatTaskState
+            {
+                TaskId = "task-alpha",
+                TurnId = "turn-alpha",
+                Status = NyxIdChatTaskStatus.Blocked,
+                PlanId = "plan-alpha",
+                PlanRevision = 2,
+            },
+            OriginTurn = new NyxIdChatTurnState
+            {
+                TurnId = "turn-alpha",
+                TaskId = "task-alpha",
+                Status = NyxIdChatTurnStatus.Blocked,
+            },
+        };
+        committed.State = new NyxIdChatConversationGAgentState
+        {
+            ConversationActorId = "conversation-alpha",
+            ActiveTask = committed.Task.Clone(),
+            ActiveTurn = committed.OriginTurn.Clone(),
+        };
+        committed.State.PendingActions.Add(committed.Request.Clone());
+        committed.State.ActiveTask.Gate = NyxIdChatPlanGateDecisions.BuildActionGate(
+            committed.State,
+            committed.Request);
+        committed.State.ActiveTask.Gate.Status = NyxIdChatPlanGateStatus.Satisfied;
+        var actionFrame = NyxIdChatConversationAguiFrameBuilder.BuildActionRequested(
+                "conversation-alpha",
+                "turn-alpha",
+                committed,
+                sequence: 23)
+            .Single(frame => frame.Custom?.Name ==
+                             NyxIdChatConversationAguiFrameBuilder.ActionRequestEventName);
+        var sink = new SseFrameSink();
+
+        await sink.WriteAsync(actionFrame, "turn-alpha");
+
+        var payload = sink.ReadFrames().Should().ContainSingle().Which
+            .GetProperty("custom")
+            .GetProperty("payload");
+        var expected = JsonNode.Parse("""
+        {
+          "schemaVersion": 4,
+          "actorId": "conversation-alpha",
+          "originTurnId": "turn-alpha",
+          "taskId": "task-alpha",
+          "stepId": "step-alpha",
+          "actionRequestId": "action-alpha",
+          "action": "service.reauthorize",
+          "params": {
+            "serviceReauthorize": {
+              "userServiceId": "us-github-alpha",
+              "requestedScopes": ["repo", "read:org"]
             }
           }
         }

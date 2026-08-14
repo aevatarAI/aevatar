@@ -2,7 +2,7 @@
 
 **Aevatar** 是基于**虚拟 Actor 模型**构建的自主 Agent 平台。它提供三种核心原语 — **GAgent**、**Workflow**、**Script** — 每一种都可以发布为 **Service**，并通过 **Aevatar Mainnet** 上的虚拟 Actor 对外提供服务。与 **[NyxID](https://github.com/ChronoAIProject/NyxID)** 平台的深度集成，为所有服务提供了身份感知的访问控制、凭证托管和跨平台连接能力。
 
-**Mainnet 控制台：** [aevatar-console.aevatar.ai](https://aevatar-console.aevatar.ai/) | **NyxID 平台：** [nyx.chrono-ai.fun](https://nyx.chrono-ai.fun/)
+**Mainnet 控制台：** [aevatar-console.aevatar.ai](https://aevatar-console.aevatar.ai/) | **NyxID 平台：** [nyx-api.chrono-ai.fun](https://nyx-api.chrono-ai.fun/)
 
 > [English Version](README.md)
 
@@ -239,7 +239,7 @@ Runtime:
 
 ## NyxID 集成
 
-Aevatar 与 **[NyxID](https://github.com/ChronoAIProject/NyxID)**（[nyx.chrono-ai.fun](https://nyx.chrono-ai.fun/)）— 一个身份与凭证托管平台 — 深度集成。NyxID 为 Mainnet 上的所有服务提供身份层、LLM 网关、工具访问控制和跨平台连接能力。
+Aevatar 与 **[NyxID](https://github.com/ChronoAIProject/NyxID)**（[nyx-api.chrono-ai.fun](https://nyx-api.chrono-ai.fun/)）— 一个身份与凭证托管平台 — 深度集成。NyxID 为 Mainnet 上的所有服务提供身份层、LLM 网关、工具访问控制和跨平台连接能力。
 
 ### 身份与认证
 

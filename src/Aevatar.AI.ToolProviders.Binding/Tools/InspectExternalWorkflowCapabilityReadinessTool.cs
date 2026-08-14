@@ -33,9 +33,15 @@ public sealed class InspectExternalWorkflowCapabilityReadinessTool : ExternalWor
             "selector": {
               "type": "object",
               "description": "Exact selector object from list_external_workflow_capabilities. NyxID selector fields use workflow YAML names.",
-              "properties": {
-                "host_connector": { "type": "object" },
-                "nyxid_operation": {
+                "properties": {
+                  "host_connector": { "type": "object" },
+                  "code_execution": {
+                    "type": "object",
+                    "description": "Canonical platform code execution route",
+                    "properties": {},
+                    "additionalProperties": false
+                  },
+                  "nyxid_operation": {
                   "type": "object",
                   "properties": {
                     "user_service_id": { "type": "string" },

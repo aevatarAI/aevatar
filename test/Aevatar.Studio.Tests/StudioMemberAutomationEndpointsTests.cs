@@ -706,6 +706,46 @@ public sealed class StudioMemberAutomationEndpointsTests
     }
 
     [Fact]
+    public async Task Update_ShouldReturnNonRetryableRouteRepairTarget()
+    {
+        var schedules = new StubSchedules
+        {
+            Exception = new StudioMemberAutomationCatalogRouteUnresolvedException(
+                ["service-z", "service-a", "service-a"]),
+        };
+
+        var result = await StudioMemberAutomationEndpoints.HandleUpdateAsync(
+            CreateContext(ScopeId),
+            ScopeId,
+            TeamId,
+            MemberId,
+            ScheduleId,
+            new StudioMemberAutomationUpdateRequest(
+                "0 9 * * *",
+                "UTC",
+                "prompt",
+                "name",
+                true,
+                "op-alpha",
+                "idem-alpha"),
+            schedules,
+            new StubBindingQuery(),
+            CancellationToken.None);
+
+        StatusCode(result).Should().Be(StatusCodes.Status409Conflict);
+        var value = Value(result);
+        StringProperty(value, "code").Should().Be(
+            "TEAM_AUTOMATION_AUTHORIZATION_ROUTE_UNRESOLVED");
+        value.GetType().GetProperty("retryable")?.GetValue(value).Should().Be(false);
+        StringProperty(value, "refreshFailureCode").Should().Be(
+            StudioMemberAutomationCatalogRouteUnresolvedException.NyxIdFailureCode);
+        value.GetType().GetProperty("requiredUserServiceIds")?.GetValue(value)
+            .Should().BeEquivalentTo(new[] { "service-a", "service-z" }, options => options.WithStrictOrdering());
+        AssertNoCredentialMaterial(value);
+        schedules.ScheduleMutationCalls.Should().Be(0);
+    }
+
+    [Fact]
     public async Task Update_ShouldPassFreshBearerOnlyToApplicationCommand()
     {
         var schedules = new StubSchedules();

@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Diagnostics.CodeAnalysis;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Propagation;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
@@ -182,7 +183,13 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         var publisherActorId = envelope.Route?.PublisherActorId ?? ctx.AgentId;
         if (!evt.Success)
         {
-            await PublishFailedCompletionAsync(pending, string.IsNullOrWhiteSpace(evt.Error) ? "LLM call failed." : evt.Error, publisherActorId, ctx, ct);
+            await PublishFailedCompletionAsync(
+                pending,
+                string.IsNullOrWhiteSpace(evt.Error) ? "LLM call failed." : evt.Error,
+                publisherActorId,
+                evt.RecoveryFailureKind,
+                ctx,
+                ct);
             await RemovePendingAsync(sessionId, pending, ctx, ct);
             return;
         }
@@ -431,12 +438,10 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
                 intent.MaxToolRounds = llm.MaxToolRoundsOverride;
         }
         var callerCredential = await WorkflowCallerCredentialRuntimeContextAccess.TryGetCredentialAsync(ctx, ct);
-        intent.CallerCredential = callerCredential.Found
-            ? await WorkflowCallerAccessTokenResolver.ResolveAsync(
-                callerCredential.Credential,
-                _callerAccessTokenProvider,
-                ct)
-            : new WorkflowCallerCredential();
+        intent.CallerCredential = await BuildRoleCallerCredentialAsync(
+            callerCredential,
+            HasUnattendedWebhookAuthorization(ctx),
+            ct);
         WorkflowLlmExecutionIntentRuntimeContextAccess.ApplySenderNyxIdAccessToken(ctx, intent);
         CopyAgentToolScope(request.StepParameters?.AgentToolScope, intent);
         CopyParametersToChatRequest(request, intent, timeoutMs);
@@ -468,10 +473,54 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         await ctx.PublishAsync(intent, TopologyAudience.Self, ct, dispatchOptions);
     }
 
+    private static bool HasUnattendedWebhookAuthorization(IWorkflowExecutionContext ctx) =>
+        ctx is IWorkflowExecutionStateHostAccessor accessor &&
+        string.Equals(accessor.StateHost.RunOrigin, WorkflowRunOrigins.Webhook, StringComparison.Ordinal) &&
+        accessor.StateHost.ExecutionContextSnapshot.UnattendedEffectAuthorization is not null;
+
+    private async Task<WorkflowCallerCredential> BuildRoleCallerCredentialAsync(
+        (bool Found, WorkflowCallerCredential Credential) resolved,
+        bool hasUnattendedWebhookAuthorization,
+        CancellationToken ct)
+    {
+        if (!resolved.Found)
+            return new WorkflowCallerCredential();
+
+        if (!hasUnattendedWebhookAuthorization)
+        {
+            return await WorkflowCallerAccessTokenResolver.ResolveAsync(
+                resolved.Credential,
+                _callerAccessTokenProvider,
+                ct);
+        }
+
+        var durable = resolved.Credential.DurableCallerCredential;
+        if (durable?.SourceKind != DurableCallerCredentialSourceKind.WebhookBinding)
+            return new WorkflowCallerCredential();
+
+        // The role actor receives only the vault handle. It resolves the exact
+        // Agent Key locally, so raw binding credentials never cross actor events.
+        return new WorkflowCallerCredential
+        {
+            DurableCallerCredential = durable.Clone(),
+            NyxIdAuthority = resolved.Credential.NyxIdAuthority?.Clone(),
+            Kind = resolved.Credential.Kind,
+        };
+    }
+
     private static Task PublishFailedCompletionAsync(
         PendingLlmCallState pending,
         string error,
         string workerId,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct) =>
+        PublishFailedCompletionAsync(pending, error, workerId, WorkflowRecoveryFailureKind.Unspecified, ctx, ct);
+
+    private static Task PublishFailedCompletionAsync(
+        PendingLlmCallState pending,
+        string error,
+        string workerId,
+        WorkflowRecoveryFailureKind recoveryFailureKind,
         IWorkflowExecutionContext ctx,
         CancellationToken ct) =>
         PublishFailedCompletionAsync(
@@ -479,6 +528,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             pending.RunId,
             error,
             workerId,
+            recoveryFailureKind,
             ctx,
             ct);
 
@@ -489,6 +539,23 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         string workerId,
         IWorkflowExecutionContext ctx,
         CancellationToken ct) =>
+        PublishFailedCompletionAsync(
+            stepId,
+            runId,
+            error,
+            workerId,
+            WorkflowRecoveryFailureKind.Unspecified,
+            ctx,
+            ct);
+
+    private static Task PublishFailedCompletionAsync(
+        string stepId,
+        string runId,
+        string error,
+        string workerId,
+        WorkflowRecoveryFailureKind recoveryFailureKind,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct) =>
         ctx.PublishAsync(
             new StepCompletedEvent
             {
@@ -497,6 +564,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
                 Success = false,
                 Error = error,
                 WorkerId = string.IsNullOrWhiteSpace(workerId) ? ctx.AgentId : workerId,
+                RecoveryFailureKind = recoveryFailureKind,
             },
             TopologyAudience.Self,
             ct);

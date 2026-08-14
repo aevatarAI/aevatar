@@ -486,6 +486,12 @@ public sealed partial class ConnectorCallModule
             error,
             durationMs,
             responseAnnotations);
+        if (!success &&
+            string.Equals(reasonCode, "connector_authorization_unavailable", StringComparison.Ordinal))
+        {
+            completion.RecoveryFailureKind = WorkflowRecoveryFailureKind.AuthorizationFailure;
+        }
+
         completion.Annotations["connector.approval.action_id"] = snapshot.Plan.ActionId;
         completion.Annotations["connector.approval.status"] = snapshot.ApprovalStatus.ToString();
         completion.Annotations["connector.approval.execution_status"] = snapshot.ExecutionStatus.ToString();

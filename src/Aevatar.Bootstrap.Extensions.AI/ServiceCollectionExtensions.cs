@@ -882,7 +882,7 @@ public static class ServiceCollectionExtensions
             {
                 throw new InvalidOperationException(
                     $"NyxID provider '{provider.Name}' requires a gateway endpoint. " +
-                    $"Configure LLMProviders:Providers:{provider.Name}:Endpoint or set Aevatar:NyxId:Authority.");
+                    $"Configure LLMProviders:Providers:{provider.Name}:Endpoint or set Aevatar:NyxId:ApiBaseUrl.");
             }
 
             factory.RegisterGateway(
@@ -1117,10 +1117,9 @@ public static class ServiceCollectionExtensions
     {
         if (options.NyxIdLlmEndpoint != null)
         {
-            var authority = configuration["Cli:App:NyxId:Authority"]
-                ?? configuration["Aevatar:NyxId:Authority"]
-                ?? configuration["Aevatar:Authentication:Authority"];
-            return NyxIdLlmEndpointResolver.ResolveEndpoint(authority, options.NyxIdLlmEndpoint);
+            return NyxIdLlmEndpointResolver.ResolveEndpoint(
+                NyxIdEndpointResolver.ResolvePublicApiBaseUrl(configuration),
+                options.NyxIdLlmEndpoint);
         }
 
         return NyxIdLlmEndpointResolver.ResolveEndpoint(configuration);

@@ -1,5 +1,6 @@
 using Aevatar.AI.Application.CodexExecution;
 using Aevatar.AI.Application.CodexExecution.DependencyInjection;
+using Aevatar.AI.Abstractions.CodeExecution;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -16,6 +17,7 @@ public static class ServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configuration);
 
+        services.AddChronoSandboxCodeExecution();
         services.AddManagedCodexApplication(configuration);
         services.TryAddSingleton<IManagedCodexNyxIdCredentialPort, NyxIdManagedCodexCredentialAdapter>();
         if (useInMemoryMutationLease)
@@ -33,6 +35,14 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<
             IManagedCodexChronoTransport,
             NyxIdManagedCodexChronoTransport>();
+        return services;
+    }
+
+    public static IServiceCollection AddChronoSandboxCodeExecution(
+        this IServiceCollection services)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        services.TryAddSingleton<ICodeExecutionPort, NyxIdCodeExecutionPort>();
         return services;
     }
 }

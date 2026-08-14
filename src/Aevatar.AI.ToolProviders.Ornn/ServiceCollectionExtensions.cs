@@ -35,6 +35,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<OrnnPublishSkillTool>();
         services.TryAddSingleton<OrnnUpdateSkillTool>();
         services.TryAddSingleton<IRemoteSkillFetcher, OrnnRemoteSkillFetcher>();
+        services.TryAddSingleton<OrnnSearchAgentToolSource>();
         services.TryAddSingleton<OrnnAgentToolSource>();
         services.TryAddAgentToolSourceAlias<OrnnAgentToolSource>(GetOrnnAgentToolSource);
         return services;

@@ -35,7 +35,7 @@ public sealed class NyxIdAssistantToolSource : IAgentToolSource
 
     public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(_options.BaseUrl))
+        if (string.IsNullOrWhiteSpace(_options.EffectiveTransportBaseUrl))
             return Task.FromResult<IReadOnlyList<IAgentTool>>([]);
 
         IReadOnlyList<IAgentTool> tools =
@@ -46,6 +46,8 @@ public sealed class NyxIdAssistantToolSource : IAgentToolSource
             new NyxIdCatalogTool(_client),
             new NyxIdLlmStatusTool(_client),
             new NyxIdRequireServiceTool(_client),
+            new NyxIdRequestKeyCreateTool(_client),
+            new NyxIdRequestKeyRotateTool(_client),
             new NyxIdProxyTool(
                 _client,
                 _logger,
@@ -56,9 +58,12 @@ public sealed class NyxIdAssistantToolSource : IAgentToolSource
             ReadOnly(new NyxIdMfaTool(_client), ["status"], "status"),
             ReadOnly(new NyxIdServicesTool(_client), ["list", "show"], "list", "id"),
             ReadOnly(new NyxIdApiKeysTool(_client), ["list", "show"], "list", "id", "org"),
+            new NyxIdDurableGrantsTool(_client),
             ReadOnly(new NyxIdNodesTool(_client), ["list", "show"], "list", "id"),
             new NyxIdNodeCredentialsTool(_client),
             new NyxIdServicePoolsTool(_client),
+            new NyxIdDeveloperAppsTool(_client),
+            new NyxIdOAuthBindingsTool(_client),
             ReadOnly(
                 new NyxIdApprovalsTool(_client),
                 ["list", "show", "configs", "grants"],
@@ -171,8 +176,8 @@ internal sealed class NyxIdAssistantReadOnlyActionTool :
         if (!IsAllowed(argumentsJson))
             return RejectedJson;
 
-        var token = AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(
-            AgentToolRequestContext.Current?.Credentials);
+        var token = AgentToolHumanSessionNyxIdCredential.ResolveBearerToken(
+            AgentToolRequestContext.Current);
         if (string.IsNullOrWhiteSpace(token))
             return MissingTokenJson;
 

@@ -589,10 +589,13 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
         var provider = new FakeOAuthClientProvider(snapshot);
         options ??= new NyxIdBrokerOptions
         {
+            PublicApiBaseUrl = $" {ResourceServerBaseUrl}/// ",
             ResourceServerBaseUrl = $" {ResourceServerBaseUrl}/// ",
             RequiredLlmServiceSlug = RequiredLlmServiceSlug,
             AdditionalRequiredServiceSlugs = [RequiredOrnnServiceSlug, RequiredSandboxServiceSlug],
         };
+        if (string.IsNullOrWhiteSpace(options.PublicApiBaseUrl))
+            options.PublicApiBaseUrl = $" {ResourceServerBaseUrl}/// ";
         if (string.IsNullOrWhiteSpace(options.ResourceServerBaseUrl))
             options.ResourceServerBaseUrl = $" {ResourceServerBaseUrl}/// ";
         return new NyxIdRemoteCapabilityBroker(

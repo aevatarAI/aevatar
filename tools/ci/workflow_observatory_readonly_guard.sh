@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
-# Workflow Run Observatory read-only + embedded-asset guard.
+# Workflow Run Observatory read-query + embedded-asset guard.
 #
 # Enforces the C2 (06-19-workflow-run-observatory) invariants from the design spec:
 #
-#   1. Read-only surface: the observatory endpoints are GET-only. No MapPost/MapPut/MapDelete/MapPatch
-#      may appear in the endpoint file — there are no edit/run/stop controls anywhere.
+#   1. Read-only data surface: the observatory endpoints are GET-only. No MapPost/MapPut/MapDelete/MapPatch
+#      may appear in the endpoint file. Owner controls must reuse separately authorized canonical scope APIs.
 #   2. Query-ports-only seam: the scope-enforcement query service must depend on query ports only
 #      (IWorkflowExecution*QueryPort). It must NOT depend on IActorDispatchPort / IActorRuntime /
 #      IEventStore — a read viewer never dispatches commands or side-reads write-model state.
@@ -47,7 +47,8 @@ fi
 
 violations=0
 
-# 1. GET-only endpoints.
+# 1. GET-only observatory data endpoints. This does not prohibit owner controls from calling canonical
+#    scope command APIs such as /api/scopes/{scopeId}/runs/{runId}:stop.
 if [[ -f "${ENDPOINTS_FILE}" ]]; then
   mutating_hits="$(rg -n -P '\.Map(Post|Put|Delete|Patch)\s*\(' "${ENDPOINTS_FILE}" || true)"
   if [[ -n "${mutating_hits}" ]]; then

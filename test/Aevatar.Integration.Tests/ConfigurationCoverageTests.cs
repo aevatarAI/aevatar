@@ -246,6 +246,39 @@ public sealed class ConfigurationCoverageTests
     }
 
     [Fact]
+    public void NyxIdLlmEndpointResolver_ResolveEndpoint_ShouldUsePublicApiBaseWhenEndpointRolesDiffer()
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Aevatar:NyxId:InternalApiBaseUrl"] = "http://nyxid.internal:3001",
+                ["Aevatar:NyxId:ApiBaseUrl"] = "https://nyx-api.example.test/",
+                ["Aevatar:NyxId:Authority"] = "https://nyx-issuer.example.test",
+            })
+            .Build();
+
+        NyxIdLlmEndpointResolver.ResolveEndpoint(config)
+            .Should().Be("https://nyx-api.example.test/api/v1/llm/gateway/v1");
+        NyxIdEndpointResolver.ResolvePublicApiBaseUrl(config)
+            .Should().Be("https://nyx-api.example.test");
+    }
+
+    [Fact]
+    public void NyxIdEndpointResolver_WithInternalTransportButNoPublicApi_ShouldFailClosed()
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Aevatar:NyxId:InternalApiBaseUrl"] = "http://nyxid.internal:3001",
+                ["Aevatar:NyxId:Authority"] = "https://nyx-issuer.example.test",
+            })
+            .Build();
+
+        NyxIdEndpointResolver.ResolvePublicApiBaseUrl(config).Should().BeNull();
+        NyxIdLlmEndpointResolver.ResolveEndpoint(config).Should().BeNull();
+    }
+
+    [Fact]
     public void NyxIdLlmEndpointResolver_ResolveEndpoint_ShouldReturnNullForInvalidAuthority()
     {
         NyxIdLlmEndpointResolver.ResolveEndpoint("not-a-uri", null).Should().BeNull();

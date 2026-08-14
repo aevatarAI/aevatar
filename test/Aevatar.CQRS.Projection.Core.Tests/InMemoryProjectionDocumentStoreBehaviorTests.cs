@@ -68,6 +68,49 @@ public sealed class InMemoryProjectionDocumentStoreBehaviorTests
     }
 
     [Fact]
+    public async Task QueryAsync_ShouldApplyCaseInsensitiveContainsTextBeforeCountAndPaging()
+    {
+        var store = new InMemoryProjectionDocumentStore<TestStoreReadModel, string>(
+            keySelector: model => model.Id);
+        foreach (var (id, value) in new[]
+                 {
+                     ("item-a", "Alpha workflow"),
+                     ("item-b", "member test run"),
+                     ("item-c", "unrelated"),
+                 })
+        {
+            await store.UpsertAsync(new TestStoreReadModel
+            {
+                Id = id,
+                ActorId = id,
+                StateVersion = 1,
+                LastEventId = $"event-{id}",
+                UpdatedAt = DateTimeOffset.UnixEpoch,
+                Value = value,
+            });
+        }
+
+        var result = await store.QueryAsync(new ProjectionDocumentQuery
+        {
+            Take = 1,
+            IncludeTotalCount = true,
+            Filters =
+            [
+                new ProjectionDocumentFilter
+                {
+                    FieldPath = nameof(TestStoreReadModel.Value),
+                    Operator = ProjectionDocumentFilterOperator.ContainsText,
+                    Value = ProjectionDocumentValue.FromString(" TEST "),
+                },
+            ],
+        });
+
+        result.Items.Should().ContainSingle().Which.Id.Should().Be("item-b");
+        result.TotalCount.Should().Be(1);
+        result.NextCursor.Should().BeNull();
+    }
+
+    [Fact]
     public async Task QueryAsync_ShouldApplyAnyOfFiltersBeforeCountAndPaging()
     {
         var store = new InMemoryProjectionDocumentStore<TestStoreReadModel, string>(

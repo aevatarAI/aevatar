@@ -121,4 +121,6 @@ public sealed record WorkflowForkRunAcceptedReceipt(
     bool Accepted,
     string CommandId,
     string CorrelationId,
-    DateTimeOffset AckedAt);
+    DateTimeOffset AckedAt,
+    string NewRunId = "",
+    string OriginalRunId = "");

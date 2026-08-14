@@ -59,10 +59,22 @@ unprofiled turn 直接使用同一 ceiling，不会回退为枚举所有 DI `IAg
 明确的 route tool set 变更。
 
 这个固定 tool set 只提供审查过的只读 NyxID management wrappers、readiness/browser-action
-handoff、单一 `ask_user` typed input，以及其他明确允许的 route-owned tools。`ask_user`
-通过只含该工具的窄 source 挂载；它不让 `web_search`、`web_fetch` 或完整
+handoff、单一 `web_search`、单一 `ask_user` typed input，以及其他明确允许的
+route-owned tools。生产 `web_search` 通过 `tavily-search` NyxID service binding 执行；
+它和 `ask_user` 分别通过只含一个工具的窄 source 挂载，不让 `web_fetch` 或完整
 `WebAgentToolSource` 进入 ceiling。声明 `ExcludeFromNyxIdChat` 的通用 proxy
 不会进入模型可调用面。声明 `RequiresHumanSession` 的 Class-R read 只有在当前 turn 携带
 可验证的 source-readable user bearer 时才会被提供；credential 缺失、类型错误或仅有
-不可读 delegation 时，该 read 在 tool discovery 阶段即被移除。无论是否绑定 Profile，
+不可读 delegation 时，该 read 在 tool discovery 阶段即被移除。`RequiresHumanSession`
+只证明 credential shape，不证明 platform admin、operator 或 organization admin authority；
+因此 admin-only 的 service-account wrapper 在没有 typed authority admission 前不进入默认
+route ceiling，但其 typed REST adapter 可以由显式管理 surface 复用。无论是否绑定 Profile，
 mutation schema、secret-bearing 参数与新注册但未列入 ceiling 的工具都保持不可调用。
+
+Ornn workflow skill 的加载与执行是同一条受限能力链。ceiling 显式提供 `use_skill`，并且只提供
+`aevatar_start_workflow`、`aevatar_observe_run` 与 `aevatar_read_workflow_run_artifact` 三个
+workflow 工具，使 Assistant 可以启动已挂载或显式 inline fallback 的定义，并以 committed
+read model 与 typed artifact 判定结果。workflow 自身的 capability admission、scope authority、
+tool approval 和外部副作用策略仍逐层生效；这组工具不会引入通用 GAgent/team/member invoke、
+schedule provisioning 或 raw proxy。新增其他 workflow/control 工具仍必须通过单独的 route
+ceiling 审查，不能因注册了 `IAgentToolSource` 而自动暴露。

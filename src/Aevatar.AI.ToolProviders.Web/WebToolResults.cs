@@ -103,7 +103,7 @@ public static class WebToolResultBoundaryJson
             .Select(static item => new WebSearchResultItem(
                 ReadPropertyString(item, "title"),
                 ReadPropertyString(item, "url"),
-                ReadPropertyString(item, "snippet")))
+                ReadFirstPropertyString(item, "snippet", "content")))
             .ToArray();
         return true;
     }

@@ -140,6 +140,7 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
                 actorResolution.WorkflowNameForRun,
                 actorResolution.Target.CreatedActorIds,
                 request.Source),
+            CallerNyxIdCredentialSelection = null,
         };
 
         return AttemptStartResult.Success(new WorkflowChatRunInteractionAttempt(

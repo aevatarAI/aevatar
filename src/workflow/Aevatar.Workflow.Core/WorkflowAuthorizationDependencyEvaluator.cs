@@ -11,6 +11,8 @@ public static class WorkflowAuthorizationDependencyEvaluator
     /// <summary>The workflow tool whose every call site must carry a committed admission proof.</summary>
     public const string NyxIdProxyToolName = "nyxid_proxy";
 
+    public const string CodeExecuteToolName = "code_execute";
+
     private static readonly HashSet<string> NyxIdRuntimeArgumentNames = new(StringComparer.Ordinal)
     {
         "path_params",
@@ -41,7 +43,8 @@ public static class WorkflowAuthorizationDependencyEvaluator
 
     /// <summary>True when a dispatched tool may only run against a committed call-site proof.</summary>
     public static bool RequiresExternalCapabilityAdmission(string? toolName) =>
-        string.Equals(toolName?.Trim(), NyxIdProxyToolName, StringComparison.OrdinalIgnoreCase);
+        string.Equals(toolName?.Trim(), NyxIdProxyToolName, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(toolName?.Trim(), CodeExecuteToolName, StringComparison.OrdinalIgnoreCase);
 
     public static WorkflowAuthorizationDependencies Evaluate(WorkflowDefinition workflow)
     {
@@ -111,7 +114,7 @@ public static class WorkflowAuthorizationDependencyEvaluator
         if (!invocation.Step.Parameters.TryGetValue("tool", out var rawToolName) ||
             string.IsNullOrWhiteSpace(rawToolName))
         {
-            if (invocation.IsSynthesized)
+            if (invocation.IsSynthesized || invocation.Step.ResponseProjection is not null)
                 throw Invalid(invocation.Step, "indirect tool_call requires one static tool name.");
             return null;
         }
@@ -128,12 +131,37 @@ public static class WorkflowAuthorizationDependencyEvaluator
 
         if (!RequiresExternalCapabilityAdmission(toolName))
         {
-            if (invocation.Step.Capability is not null)
-                throw Invalid(invocation.Step, "step capability is only valid for its matching external tool invocation.");
+            if (invocation.Step.Capability is not null || invocation.Step.ResponseProjection is not null)
+            {
+                throw Invalid(
+                    invocation.Step,
+                    "step capability and response_projection are only valid for their matching external tool invocation.");
+            }
             return null;
         }
 
+        if (string.Equals(toolName, CodeExecuteToolName, StringComparison.OrdinalIgnoreCase))
+        {
+            if (invocation.Step.Capability is not null || invocation.Step.ResponseProjection is not null)
+            {
+                throw Invalid(
+                    invocation.Step,
+                    "code_execute uses the canonical platform route and does not accept an authored capability selector or response_projection.");
+            }
+
+            return new ExternalToolInvocationSpec
+            {
+                CallSiteId = invocation.CallSiteId,
+                ToolName = CodeExecuteToolName,
+                Selector = new ExternalWorkflowCapabilitySelector
+                {
+                    CodeExecution = new CodeExecutionSelector(),
+                },
+            };
+        }
+
         ValidateNyxIdRuntimeArguments(invocation.Step);
+        var responseProjection = ValidateResponseProjection(invocation.Step);
         var selector = invocation.Step.Capability?.Clone() ?? new ExternalWorkflowCapabilitySelector();
         if (selector.SelectorCase is not (
                 ExternalWorkflowCapabilitySelector.SelectorOneofCase.None or
@@ -153,11 +181,18 @@ public static class WorkflowAuthorizationDependencyEvaluator
             CallSiteId = invocation.CallSiteId,
             ToolName = NyxIdProxyToolName,
             Selector = selector,
+            ResponseProjection = responseProjection,
         };
     }
 
     private static ExternalToolInvocationSpec CompileConnectorInvocation(InvocationStep invocation)
     {
+        if (invocation.Step.ResponseProjection is not null)
+        {
+            throw Invalid(
+                invocation.Step,
+                "response_projection is currently supported only by admitted nyxid_proxy tool_call steps.");
+        }
         var connectorRef = ReadStaticStepParameter(invocation.Step, "connector", required: true);
         var operationId = ReadFirstStaticStepParameter(invocation.Step, ["operation", "action"])
                           ?? DefaultConnectorOperationId;
@@ -236,6 +271,22 @@ public static class WorkflowAuthorizationDependencyEvaluator
         catch (JsonException)
         {
             throw ArgumentInvalid(step, "nyxid_proxy arguments must be valid JSON.");
+        }
+    }
+
+    private static WorkflowToolResponseProjection? ValidateResponseProjection(StepDefinition step)
+    {
+        if (step.ResponseProjection is null)
+            return null;
+
+        try
+        {
+            WorkflowToolResponseProjectionContract.ValidateOrThrow(step.ResponseProjection);
+            return step.ResponseProjection.Clone();
+        }
+        catch (InvalidOperationException exception)
+        {
+            throw Invalid(step, exception.Message);
         }
     }
 
@@ -324,6 +375,7 @@ public static class WorkflowAuthorizationDependencyEvaluator
             TargetRole = owner.Parameters.GetValueOrDefault("sub_target_role"),
             Parameters = subParameters,
             Capability = owner.Capability?.Clone(),
+            ResponseProjection = owner.ResponseProjection?.Clone(),
         };
     }
 

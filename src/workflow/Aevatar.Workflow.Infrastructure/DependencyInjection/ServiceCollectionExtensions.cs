@@ -67,6 +67,8 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<WorkflowRunActorPort>());
         services.TryAddSingleton<IWorkflowRunProvisioningPort>(sp =>
             sp.GetRequiredService<WorkflowRunActorPort>());
+        services.TryAddSingleton<IWorkflowRunLineageRecordingPort>(sp =>
+            sp.GetRequiredService<WorkflowRunActorPort>());
         services.TryAddSingleton<WorkflowDefinitionParser>();
         services.TryAddSingleton<IWorkflowDefinitionParser>(sp =>
             sp.GetRequiredService<WorkflowDefinitionParser>());

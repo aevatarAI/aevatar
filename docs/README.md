@@ -36,6 +36,7 @@ Authoritative architecture and developer guides. Each covers one topic.
 - [Aevatar Observability — OTel Semantic Conventions](canon/observability.md)
 - [Aevatar 项目架构（Maker 插件化基线）](canon/overview.md)
 - [Role 与工作流、Connector 配置指南](canon/role-model.md)
+- [Sandbox Execution](canon/sandbox-execution.md)
 - [Scheduled Workflow Dispatch](canon/scheduled-skill-runners.md)
 - [Aevatar.Scripting 架构文档](canon/scripting.md)
 - [.NET Workflow SDK Quick Start](canon/sdk-dotnet.md)
@@ -95,7 +96,10 @@ Immutable records of architectural choices and their rationale.
 - [Scheduled Credential Lifecycle Compensation](adr/0043-scheduled-credential-lifecycle-compensation.md)
 - [Managed Codex gVisor Direct-Token Isolation Model](adr/0044-managed-codex-gvisor-direct-token.md)
 - [0045 - Runtime-owned committed-state publication recovery](adr/0045-runtime-owned-committed-state-publication-recovery.md)
+- [Admitted Agent Tool Execution](adr/0046-admitted-agent-tool-execution.md)
+- [0047 - Kafka fixed-assignment ownership follows Orleans queue balancing](adr/0047-kafka-fixed-assignment-ownership.md)
 - [NyxID Assistant Operation-Class Boundary](adr/0048-nyxid-assistant-operation-class-boundary.md)
+- [NyxID Assistant Plan Gate and Revision](adr/0049-nyxid-assistant-plan-gate-and-revision.md)
 - [Agent Kind Primary-Only Identity](adr/2026-06-04-agent-kind-primary-only-identity.md)
 
 ## History
@@ -132,6 +136,10 @@ Point-in-time design snapshots. Not authoritative — for context only.
 - [2026-05-19-auto-refactor-loop-summary.md](audit-scorecard/2026-05-19-auto-refactor-loop-summary.md)
 - [2026-05-19-meta-audit-loop-depth-diagnosis.md](audit-scorecard/2026-05-19-meta-audit-loop-depth-diagnosis.md)
 - [2026-06-11-nyxid-workflow-scope-service-runbook.md](audit-scorecard/2026-06-11-nyxid-workflow-scope-service-runbook.md)
+- [2026-08-02-architecture-audit.md](audit-scorecard/2026-08-02-architecture-audit.md)
+- [2026-08-02-role-actor-contention.md](audit-scorecard/2026-08-02-role-actor-contention.md)
+- [2026-08-02-role-provider-normalization.md](audit-scorecard/2026-08-02-role-provider-normalization.md)
+- [2026-08-02-role-streaming-write-amplification.md](audit-scorecard/2026-08-02-role-streaming-write-amplification.md)
 - [2026-08-07-milestone-40-gate-0-inventory.md](audit-scorecard/2026-08-07-milestone-40-gate-0-inventory.md)
 - [FEATURE_APP_SERVICES_AUDIT.md](audit-scorecard/FEATURE_APP_SERVICES_AUDIT.md)
 

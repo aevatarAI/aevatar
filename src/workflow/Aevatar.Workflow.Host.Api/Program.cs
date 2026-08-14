@@ -9,8 +9,11 @@
 // LLM API Key 可从环境变量 DEEPSEEK_API_KEY / OPENAI_API_KEY 或 secrets 读取。
 // ─────────────────────────────────────────────────────────────
 
+using Aevatar.AI.Infrastructure.ChronoSandbox;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Audit.Core.DependencyInjection;
+using Aevatar.Authentication.Hosting;
+using Aevatar.Authentication.Providers.NyxId;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.GAgentService.Hosting.DependencyInjection;
 using Aevatar.Workflow.Extensions.Hosting;
@@ -29,18 +32,13 @@ builder.Services.AddAuditTrailCore(builder.Configuration);
 if (builder.Environment.IsDevelopment() || builder.Environment.IsEnvironment("Testing"))
     builder.Services.AddInMemoryAuditTrailForDevelopment();
 builder.AddWorkflowAgentToolAdmission();
+builder.Services.AddNyxIdAuthentication();
+builder.AddAevatarAuthentication();
 // NyxID-backed current-user resolver plus aevatar admin access policy.
 builder.Services.AddNyxIdPlatformAuthorization(builder.Configuration);
-builder.Services.AddNyxIdTools(options =>
+builder.Services.AddChronoSandboxCodeExecution();
+builder.Services.AddNyxIdTools(builder.Configuration, options =>
 {
-    // Override the single default (NyxIdToolOptions.DefaultBaseUrl) only when config provides a
-    // non-empty value; an absent/empty config key must NOT clobber the default to null.
-    var nyxAuthority = builder.Configuration["Aevatar:NyxId:ApiBaseUrl"]
-                       ?? builder.Configuration["Aevatar:NyxId:Authority"]
-                       ?? builder.Configuration["Cli:App:NyxId:Authority"]
-                       ?? builder.Configuration["Aevatar:Authentication:Authority"];
-    if (!string.IsNullOrWhiteSpace(nyxAuthority))
-        options.BaseUrl = nyxAuthority;
     if (long.TryParse(builder.Configuration["Aevatar:NyxId:ProxyFileArtifactMaxBytes"], out var maxBytes))
         options.ProxyFileArtifactMaxBytes = maxBytes;
 });

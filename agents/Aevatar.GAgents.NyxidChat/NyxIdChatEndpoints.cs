@@ -85,7 +85,8 @@ public static partial class NyxIdChatEndpoints
                 if (string.IsNullOrWhiteSpace(token))
                     return Results.Json(new { error = "Provide token via X-Test-Token header" });
 
-                var baseUrl = (nyxOptions.BaseUrl ?? "https://nyx-api.chrono-ai.fun").TrimEnd('/');
+                var baseUrl = (nyxOptions.EffectiveApiBaseUrl ?? "https://nyx-api.chrono-ai.fun")
+                    .TrimEnd('/');
                 var gateway = $"{baseUrl}/api/v1/llm/gateway/v1/chat/completions";
                 var body = """{"model":"gpt-5.4","messages":[{"role":"user","content":"hi"}],"max_tokens":10}""";
 
@@ -328,13 +329,17 @@ public static partial class NyxIdChatEndpoints
             }
 
             var bearerToken = authorization["Bearer ".Length..].Trim();
-            return string.IsNullOrWhiteSpace(bearerToken) || bearerToken.Any(char.IsWhiteSpace)
-                ? null
-                : new AgentToolCredentials(
-                    bearerToken,
-                    null,
-                    null,
-                    AgentToolNyxIdCredentialKind.SourceReadableUserBearer);
+            if (string.IsNullOrWhiteSpace(bearerToken) || bearerToken.Any(char.IsWhiteSpace))
+                return null;
+
+            var credentialKind = NyxIdDelegationTokenClaims.IsDelegationToken(bearerToken)
+                ? AgentToolNyxIdCredentialKind.ProxyDelegation
+                : AgentToolNyxIdCredentialKind.SourceReadableUserBearer;
+            return new AgentToolCredentials(
+                bearerToken,
+                null,
+                null,
+                credentialKind);
         }
 
         if (http.Request.Headers.TryGetValue(NyxIdDelegationTokenHeader, out var delegationValues))

@@ -225,7 +225,8 @@ public static class ScopeServiceEndpoints
                     workflowFileIngressPort,
                     trustedCallerCredential: callerCredential.Credential,
                     cancellationToken: ct,
-                    trustedScopeId: scopeId);
+                    trustedScopeId: scopeId,
+                    trustedNyxIdCredentialSelection: callerCredential.NyxIdCredentialSelection);
                 if (!normalizedRequest.Succeeded)
                 {
                     var (statusCode, code, message) = ScopeWorkflowEndpoints.MapRunStartError(normalizedRequest.Error);
@@ -1840,7 +1841,7 @@ public static class ScopeServiceEndpoints
             endpointId,
             multipartFileInputParser,
             appId,
-            false,
+            true,
             resolutionService,
             readinessErrorMapper,
             admissionAuthorizer,
@@ -1859,7 +1860,7 @@ public static class ScopeServiceEndpoints
         string endpointId,
         WorkflowMultipartFileInputParser multipartFileInputParser,
         string? appId,
-        bool allowEmptyInputForResolvedMemberWorkflow,
+        bool allowEmptyInputForResolvedWorkflowService,
         [FromServices] ServiceInvocationResolutionService resolutionService,
         [FromServices] ServiceInvokeReadinessErrorMapper readinessErrorMapper,
         [FromServices] IInvokeAdmissionAuthorizer admissionAuthorizer,
@@ -1990,7 +1991,7 @@ public static class ScopeServiceEndpoints
                             correlationId: receipt.CorrelationId,
                             targetActorId: receipt.ActorId,
                             token),
-                        allowEmptyInputForResolvedMemberWorkflow: allowEmptyInputForResolvedMemberWorkflow,
+                        allowEmptyInputForResolvedWorkflowService: allowEmptyInputForResolvedWorkflowService,
                         resolvedDefinitionBinding: resolvedDefinitionBinding);
                     break;
 

@@ -501,28 +501,42 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
     }
 
     [Fact]
-    public async Task RefreshPersonalAsync_WhenProviderCompletesInsideCancellationCallback_ShouldKeepTokenAliveUntilCallbackReturns()
+    public async Task LosingProviderTaskObservation_WhenProviderCompletesInsideCancellationCallback_ShouldKeepTokenAliveUntilCallbackReturns()
     {
-        var commands = new RecordingCommandPort();
-        var observation = new RecordingObservationRuntime();
-        var client = new CancellationCompletingHttpClient();
-        var port = CreateWithClient(commands, client, observation: observation);
-        var refresh = Task.Run(() => port.RefreshPersonalAsync("owner-alpha", "bearer-secret"));
-        await client.Blocked;
-        var refreshId = commands.Beginnings.Should().ContainSingle().Which.RefreshId;
+        var providerCancellation = new CancellationTokenSource();
+        var providerToken = providerCancellation.Token;
+        var providerCompletion = new TaskCompletionSource<bool>();
+        var callbackCompleted = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        Exception? tokenLifetimeFailure = null;
+        using var registration = providerToken.Register(() =>
+        {
+            providerCompletion.TrySetCanceled(providerToken);
+            try
+            {
+                _ = providerToken.WaitHandle.WaitOne(0);
+            }
+            catch (Exception ex)
+            {
+                tokenLifetimeFailure = ex;
+            }
+            finally
+            {
+                callbackCompleted.TrySetResult(true);
+            }
+        });
+        var observation = new NyxIdAuthorizationCatalogRefreshPipeline.LosingProviderTaskObservation(
+            providerCompletion.Task,
+            providerCancellation,
+            NullLogger<NyxIdAuthorizationCatalogRefreshPort>.Instance);
 
-        observation.Publish(
-            refreshId,
-            NyxIdAuthorizationCatalogRefreshOutcomeStatus.Superseded,
-            "nyxid_catalog_refresh_superseded");
-        await client.CancellationCallbackCompleted.WaitAsync(TimeSpan.FromSeconds(1));
-        var result = await refresh.WaitAsync(TimeSpan.FromSeconds(1));
+        await Task.Run(observation.CancelWithoutThrowing).WaitAsync(TimeSpan.FromSeconds(1));
+        await callbackCompleted.Task.WaitAsync(TimeSpan.FromSeconds(1));
 
-        result.Status.Should().Be(NyxIdAuthorizationCatalogRefreshStatus.Superseded);
-        client.TokenLifetimeFailure.Should().BeNull();
-        observation.Detached.Should().Be(1);
-        observation.ProjectionReleases.Should().Be(1);
-        observation.PreparationReleases.Should().Be(1);
+        providerCompletion.Task.IsCanceled.Should().BeTrue();
+        tokenLifetimeFailure.Should().BeNull();
+        var accessReleasedToken = () => providerToken.WaitHandle;
+        accessReleasedToken.Should().Throw<ObjectDisposedException>();
     }
 
     [Fact]
@@ -1665,45 +1679,6 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
             });
             _blocked.TrySetResult(true);
             return await _pendingResponse.Task;
-        }
-    }
-
-    private sealed class CancellationCompletingHttpClient : HttpClient
-    {
-        private readonly TaskCompletionSource<bool> _blocked =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private readonly TaskCompletionSource<bool> _cancellationCallbackCompleted =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private readonly TaskCompletionSource<HttpResponseMessage> _response = new();
-
-        public Task Blocked => _blocked.Task;
-
-        public Task CancellationCallbackCompleted => _cancellationCallbackCompleted.Task;
-
-        public Exception? TokenLifetimeFailure { get; private set; }
-
-        public override Task<HttpResponseMessage> SendAsync(
-            HttpRequestMessage request,
-            CancellationToken cancellationToken)
-        {
-            _ = cancellationToken.Register(() =>
-            {
-                _response.TrySetCanceled(cancellationToken);
-                try
-                {
-                    _ = cancellationToken.WaitHandle.WaitOne(0);
-                }
-                catch (Exception ex)
-                {
-                    TokenLifetimeFailure = ex;
-                }
-                finally
-                {
-                    _cancellationCallbackCompleted.TrySetResult(true);
-                }
-            });
-            _blocked.TrySetResult(true);
-            return _response.Task;
         }
     }
 

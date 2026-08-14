@@ -4,6 +4,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using FluentAssertions;
 using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.AI.Tests;
 
@@ -226,6 +227,103 @@ public sealed class AgentToolExecutionContextMapperTests
 
         payload.Request.IssuedAtUnixMs.Should().Be(issuedAtUnixMs);
         restored.Request.IssuedAtUnixMs.Should().Be(issuedAtUnixMs);
+    }
+
+    [Fact]
+    public void OperationAdmission_ShouldRoundTripThroughExecutionAndRecoveryProtobuf()
+    {
+        var admission = ExactOperationAdmission();
+        var context = AgentToolExecutionContext.Empty with
+        {
+            OperationAdmission = admission,
+        };
+
+        var executionPayload = AgentToolExecutionContextPayload.Parser.ParseFrom(
+            context.ToPayload().ToByteArray());
+        var recoveryPayload = AgentToolRecoveryContextPayload.Parser.ParseFrom(
+            context.ToRecoveryPayload().ToByteArray());
+
+        executionPayload.OperationAdmission.IdentityCase.Should().Be(
+            AgentToolOperationAdmissionPayload.IdentityOneofCase.PublishedEndpoint);
+        recoveryPayload.OperationAdmission.IdentityCase.Should().Be(
+            AgentToolOperationAdmissionPayload.IdentityOneofCase.PublishedEndpoint);
+        AgentToolExecutionContextMapper.FromPayload(executionPayload).OperationAdmission
+            .Should().BeEquivalentTo(admission);
+        AgentToolExecutionContextMapper.FromRecoveryPayload(recoveryPayload).OperationAdmission
+            .Should().BeEquivalentTo(admission);
+    }
+
+    [Fact]
+    public void PlatformBuiltInAdmission_ShouldRoundTripThroughExecutionAndRecoveryProtobuf()
+    {
+        var admission = ExactOperationAdmission() with
+        {
+            Identity = new AgentToolOperationIdentity.PlatformBuiltIn("code_execute"),
+            AuthorizationBasis = AgentToolOperationAuthorizationBasis.PlatformContract,
+        };
+        var context = AgentToolExecutionContext.Empty with
+        {
+            OperationAdmission = admission,
+        };
+
+        var executionPayload = AgentToolExecutionContextPayload.Parser.ParseFrom(
+            context.ToPayload().ToByteArray());
+        var recoveryPayload = AgentToolRecoveryContextPayload.Parser.ParseFrom(
+            context.ToRecoveryPayload().ToByteArray());
+
+        executionPayload.OperationAdmission.IdentityCase.Should().Be(
+            AgentToolOperationAdmissionPayload.IdentityOneofCase.PlatformBuiltIn);
+        recoveryPayload.OperationAdmission.IdentityCase.Should().Be(
+            AgentToolOperationAdmissionPayload.IdentityOneofCase.PlatformBuiltIn);
+        AgentToolExecutionContextMapper.FromPayload(executionPayload).OperationAdmission
+            .Should().BeEquivalentTo(admission);
+        AgentToolExecutionContextMapper.FromRecoveryPayload(recoveryPayload).OperationAdmission
+            .Should().BeEquivalentTo(admission);
+    }
+
+    [Fact]
+    public void OperationAdmission_WhenIdentityOneofIsMissing_ShouldFailClosed()
+    {
+        var malformed = new AgentToolOperationAdmissionPayload
+        {
+            ServiceInstanceId = "usvc-alpha",
+            ServiceSlug = "api-shop",
+            HttpMethod = "GET",
+            PathTemplate = "/orders/{orderId}",
+            ContractDigest = "contract-digest-alpha",
+        };
+        var executionPayload = new AgentToolExecutionContextPayload
+        {
+            OperationAdmission = malformed.Clone(),
+        };
+        var recoveryPayload = new AgentToolRecoveryContextPayload
+        {
+            OperationAdmission = malformed.Clone(),
+        };
+
+        AgentToolExecutionContextMapper.FromPayload(executionPayload).OperationAdmission
+            .Should().BeNull();
+        AgentToolExecutionContextMapper.FromRecoveryPayload(recoveryPayload).OperationAdmission
+            .Should().BeNull();
+    }
+
+    [Fact]
+    public void OperationAdmission_WhenSelectedIdentityIsEmpty_ShouldFailClosed()
+    {
+        var malformed = new AgentToolOperationAdmissionPayload
+        {
+            ServiceInstanceId = "usvc-alpha",
+            ServiceSlug = "api-shop",
+            PublishedEndpoint = new AgentToolPublishedEndpointIdentityPayload(),
+        };
+
+        var restored = AgentToolExecutionContextMapper.FromRecoveryPayload(
+            new AgentToolRecoveryContextPayload
+            {
+                OperationAdmission = malformed,
+            });
+
+        restored.OperationAdmission.Should().BeNull();
     }
 
     [Fact]
@@ -575,6 +673,106 @@ public sealed class AgentToolExecutionContextMapperTests
         source.Should().NotContain("AgentToolRequestContext.TryGet(");
         source.Should().NotContain(".ToLegacyMetadata(");
         source.Should().NotContain("HttpAuthorizationMetadataKey");
+    }
+
+    private static AgentToolOperationAdmission ExactOperationAdmission()
+    {
+        var readOperation = new AgentToolOperationAdmission(
+            "usvc-alpha",
+            "api-shop",
+            new AgentToolOperationIdentity.PublishedEndpoint("get-order"),
+            AgentToolOperationAuthorizationBasis.PublishedContract,
+            "GET",
+            "/orders/{orderId}",
+            "read-contract-digest-alpha",
+            [
+                new AgentToolOperationParameter(
+                    "orderId",
+                    AgentToolOperationParameterLocation.Path,
+                    true,
+                    AgentToolOperationValueSchema.Text),
+                new AgentToolOperationParameter(
+                    "page_token",
+                    AgentToolOperationParameterLocation.Query,
+                    false,
+                    AgentToolOperationValueSchema.Text),
+            ],
+            null,
+            AgentToolOperationResponsePolicy.TextOnly,
+            new AgentToolOperationExecutionPolicy(
+                AgentToolOperationRisk.ReadOnly,
+                AgentToolOperationApproval.None,
+                AgentToolOperationEnforcementOwner.Aevatar,
+                [AgentToolOperationExecutionMode.Interactive]),
+            "catalog-digest-alpha");
+
+        return new AgentToolOperationAdmission(
+            "usvc-alpha",
+            "api-shop",
+            new AgentToolOperationIdentity.PublishedEndpoint("endpoint-alpha"),
+            AgentToolOperationAuthorizationBasis.PublishedContract,
+            "POST",
+            "/orders/{orderId}",
+            "contract-digest-alpha",
+            [
+                new AgentToolOperationParameter(
+                    "orderId",
+                    AgentToolOperationParameterLocation.Path,
+                    true,
+                    AgentToolOperationValueSchema.Text),
+            ],
+            new AgentToolOperationRequestBody(
+                true,
+                "application/json",
+                new AgentToolOperationValueSchema(
+                    AgentToolOperationValueKind.Object,
+                    [
+                        new AgentToolOperationSchemaProperty(
+                            "lines",
+                            new AgentToolOperationValueSchema(
+                                AgentToolOperationValueKind.Array,
+                                [],
+                                new HashSet<string>(StringComparer.Ordinal),
+                                AgentToolOperationValueSchema.Text,
+                                [],
+                                false)),
+                    ],
+                    new HashSet<string>(["lines"], StringComparer.Ordinal),
+                    null,
+                    [],
+                    false)),
+            new AgentToolOperationResponsePolicy(true, false, ["application/json"]),
+            new AgentToolOperationExecutionPolicy(
+                AgentToolOperationRisk.Write,
+                AgentToolOperationApproval.Required,
+                AgentToolOperationEnforcementOwner.Aevatar,
+                [AgentToolOperationExecutionMode.Interactive, AgentToolOperationExecutionMode.Durable]),
+            "catalog-digest-alpha",
+            new AgentToolOperationReadBack(
+                readOperation,
+                new Struct
+                {
+                    Fields =
+                    {
+                        ["orderId"] = Google.Protobuf.WellKnownTypes.Value.ForString("order-alpha"),
+                    },
+                },
+                new AgentToolReadBackAssertion(
+                    AgentToolReadBackMatch.ArrayContainsEquals,
+                    "/items",
+                    Google.Protobuf.WellKnownTypes.Value.ForString("created"),
+                    "/status"),
+                "order_created",
+                new AgentToolReadBackAssertion(
+                    AgentToolReadBackMatch.Equals,
+                    "/code",
+                    Google.Protobuf.WellKnownTypes.Value.ForNumber(1390003)),
+                new AgentToolReadBackPagination(
+                    "/has_more",
+                    "/page_token",
+                    AgentToolOperationParameterLocation.Query,
+                    "page_token",
+                    200)));
     }
 
     private static string FindRepositoryRoot()

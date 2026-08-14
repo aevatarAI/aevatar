@@ -80,10 +80,10 @@ public sealed class NyxIdLlmCatalogHttpClient : IUserLlmCatalogPort
 
     public string? ResolveGatewayUrl()
     {
-        var authorityBase = ResolveNyxIdAuthorityBase();
-        return string.IsNullOrWhiteSpace(authorityBase)
+        var apiBaseUrl = ResolveNyxIdApiBaseUrl();
+        return string.IsNullOrWhiteSpace(apiBaseUrl)
             ? null
-            : $"{authorityBase}/api/v1/llm/gateway/v1";
+            : $"{apiBaseUrl}/api/v1/llm/gateway/v1";
     }
 
     private async Task<NyxIdHttpResult> SendNyxIdAsync(
@@ -93,11 +93,11 @@ public sealed class NyxIdLlmCatalogHttpClient : IUserLlmCatalogPort
         string? body,
         CancellationToken ct)
     {
-        var authorityBase = ResolveNyxIdAuthorityBase();
-        if (string.IsNullOrWhiteSpace(authorityBase))
-            throw new InvalidOperationException("NyxID authority is not configured.");
+        var apiBaseUrl = ResolveNyxIdApiBaseUrl();
+        if (string.IsNullOrWhiteSpace(apiBaseUrl))
+            throw new InvalidOperationException("NyxID public API base URL is not configured.");
 
-        using var request = new HttpRequestMessage(method, $"{authorityBase}{path}");
+        using var request = new HttpRequestMessage(method, $"{apiBaseUrl}{path}");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
         if (body is not null)
             request.Content = new StringContent(body, Encoding.UTF8, "application/json");
@@ -269,9 +269,9 @@ public sealed class NyxIdLlmCatalogHttpClient : IUserLlmCatalogPort
         }
     }
 
-    private string? ResolveNyxIdAuthorityBase()
+    private string? ResolveNyxIdApiBaseUrl()
     {
-        return NyxIdAuthorityResolver.ResolveNyxIdAuthorityBase(_configuration);
+        return NyxIdApiEndpointResolver.ResolvePublicApiBaseUrl(_configuration);
     }
 
     private readonly record struct NyxIdHttpResult(HttpStatusCode StatusCode, string Body);

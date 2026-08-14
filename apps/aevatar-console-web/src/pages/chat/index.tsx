@@ -4,8 +4,8 @@ import {
   MessageOutlined,
   PlusOutlined,
   ReloadOutlined,
-} from "@ant-design/icons";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+} from '@ant-design/icons';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Alert,
   Button,
@@ -18,7 +18,7 @@ import {
   Tooltip,
   Typography,
   theme,
-} from "antd";
+} from 'antd';
 import React, {
   useCallback,
   useEffect,
@@ -26,55 +26,46 @@ import React, {
   useMemo,
   useRef,
   useState,
-} from "react";
-import { t } from "@/shared/i18n/messages";
-import { history } from "@/shared/navigation/history";
-import { studioApi } from "@/shared/studio/api";
-import { AevatarPageShell } from "@/shared/ui/aevatarPageShells";
-import { resolveStudioScopeContext } from "../scopes/components/resolvedScope";
+} from 'react';
+import { isNyxIdChatWireInspectorEnabled } from '@/shared/config/consoleFeatures';
+import { t } from '@/shared/i18n/messages';
+import { history } from '@/shared/navigation/history';
 import {
   buildTeamDetailHref,
   buildTeamMemberWorkflowStudioHref,
-} from "@/shared/navigation/teamRoutes";
-import {
-  applyRuntimeEvent,
-  createRuntimeEventAccumulator,
-  isRawObserved,
-} from "./chatEventAdapter";
+} from '@/shared/navigation/teamRoutes';
+import { studioApi } from '@/shared/studio/api';
+import { AevatarPageShell } from '@/shared/ui/aevatarPageShells';
+import { resolveStudioScopeContext } from '../scopes/components/resolvedScope';
+import { type ChatActionJourney, ChatActorControls } from './ChatActorControls';
 import {
   actorCan,
   applyCurrentStateResult,
+  type ChatActorProjection,
+  type ChatActorStep,
+  type ChatPendingInput,
+  type ChatServiceConnectActionRequest,
   chatActionIdentityKey,
   createChatActorProjection,
   decodeActorFrame,
   reduceActorFrame,
-  type ChatActorProjection,
-  type ChatActorStep,
-  type ChatPendingApproval,
-  type ChatPendingInput,
-  type ChatServiceConnectActionRequest,
-} from "./chatActorState";
+} from './chatActorState';
 import {
-  extractChatStreamArtifacts,
-  readChatStreamFrames,
-  sendChatCommand,
   type ChatActionResource,
   type ChatCommand,
   type ChatInputAnswer,
-} from "./chatApi";
-import { chatHistoryApi } from "./chatHistoryApi";
+  extractChatStreamArtifacts,
+  readChatStreamFrames,
+  sendChatCommand,
+} from './chatApi';
 import {
-  buildNyxIdConnectUrl,
-  createNyxIdCatalogKey,
-  listNyxIdConnectors,
-  matchNewUserServiceId,
-  matchingUserServiceIds,
-} from "./nyxIdServiceApi";
-import {
-  ChatActorControls,
-  type ChatActionJourney,
-} from "./ChatActorControls";
-import { ChatInput, ChatMessageBubble } from "./chatPresentation";
+  applyRuntimeEvent,
+  createRuntimeEventAccumulator,
+  isRawObserved,
+} from './chatEventAdapter';
+import { chatHistoryApi } from './chatHistoryApi';
+import { ChatInput, ChatMessageBubble } from './chatPresentation';
+import type { ChatPlanGate } from './chatTaskPlan';
 import type {
   ChatMessage,
   ChatStudioTarget,
@@ -84,7 +75,14 @@ import type {
   StepInfo,
   StoredChatMessage,
   ToolCallInfo,
-} from "./chatTypes";
+} from './chatTypes';
+import {
+  buildNyxIdConnectUrl,
+  createNyxIdCatalogKey,
+  listNyxIdConnectors,
+  matchingUserServiceIds,
+  matchNewUserServiceId,
+} from './nyxIdServiceApi';
 
 type ConversationState = {
   clientId: string;
@@ -103,36 +101,40 @@ type ConversationListItem = ConversationMeta & {
 };
 
 type DetailLoadState =
-  | { status: "idle" }
-  | { status: "loading" }
-  | { message: string; status: "error" };
+  | { status: 'idle' }
+  | { status: 'loading' }
+  | { message: string; status: 'error' };
 
 type Notice = {
   message: string;
-  type: "error" | "info" | "success" | "warning";
+  type: 'error' | 'info' | 'success' | 'warning';
 };
 
 type StudioJump = { href: string; label: string };
 
 type ActionDisposition =
-  | "completed"
-  | "declined"
-  | "failed"
-  | "cancelled"
-  | "expired";
+  | 'completed'
+  | 'declined'
+  | 'failed'
+  | 'cancelled'
+  | 'expired';
 
-type ChatControlCommand = Exclude<ChatCommand, { type: "text" }>;
+type ChatControlCommand = Exclude<ChatCommand, { type: 'text' }>;
+
+const ACTIVE_STATE_REFRESH_DELAYS_MS = [250, 500, 1_000, 2_000] as const;
 
 function readChatQueryValue(
   key: string,
-  search = typeof window === "undefined" ? "" : window.location.search
+  search = typeof window === 'undefined' ? '' : window.location.search,
 ): string {
-  return new URLSearchParams(search).get(key)?.trim() ?? "";
+  return new URLSearchParams(search).get(key)?.trim() ?? '';
 }
 
 function createClientId(): string {
-  return globalThis.crypto?.randomUUID?.() ??
-    `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  return (
+    globalThis.crypto?.randomUUID?.() ??
+    `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+  );
 }
 
 function createDraftConversation(): ConversationState {
@@ -140,13 +142,13 @@ function createDraftConversation(): ConversationState {
     clientId: createClientId(),
     expectedTurnCount: 0,
     messages: [],
-    status: "draft",
-    title: t("pages.chat.index.newChat", "New chat"),
+    status: 'draft',
+    title: t('pages.chat.index.newChat', 'New chat'),
   };
 }
 
 export function hydrateStoredMessages(
-  messages: readonly StoredChatMessage[]
+  messages: readonly StoredChatMessage[],
 ): ChatMessage[] {
   return messages.map((message) => ({
     authorId: message.authorId,
@@ -155,21 +157,21 @@ export function hydrateStoredMessages(
     error: message.error || undefined,
     id: message.id,
     role: message.role,
-    status: message.error?.trim() ? "error" : message.status,
+    status: message.error?.trim() ? 'error' : message.status,
     thinking: message.thinking || undefined,
     timestamp: message.timestamp,
   }));
 }
 
 function resolveStoredConversationStatus(
-  messages: readonly StoredChatMessage[]
+  messages: readonly StoredChatMessage[],
 ): LocalChatStatus {
   const terminal =
-    [...messages].reverse().find((message) => message.role === "assistant") ??
+    [...messages].reverse().find((message) => message.role === 'assistant') ??
     messages.at(-1);
-  return terminal?.status === "error" || Boolean(terminal?.error?.trim())
-    ? "error"
-    : "completed_text";
+  return terminal?.status === 'error' || Boolean(terminal?.error?.trim())
+    ? 'error'
+    : 'completed_text';
 }
 
 function ChatMessageEntry({
@@ -177,17 +179,17 @@ function ChatMessageEntry({
 }: {
   message: ChatMessage;
 }): React.ReactElement {
-  const authorName = message.authorName?.trim() || "";
-  if (message.role === "user" || message.role === "assistant") {
+  const authorName = message.authorName?.trim() || '';
+  if (message.role === 'user' || message.role === 'assistant') {
     return (
-      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         {authorName ? (
           <Typography.Text
             style={{
-              alignSelf: message.role === "user" ? "flex-end" : "flex-start",
-              color: "#6b7280",
+              alignSelf: message.role === 'user' ? 'flex-end' : 'flex-start',
+              color: '#6b7280',
               fontSize: 11,
-              marginLeft: message.role === "assistant" ? 34 : 0,
+              marginLeft: message.role === 'assistant' ? 34 : 0,
             }}
           >
             {authorName}
@@ -198,28 +200,28 @@ function ChatMessageEntry({
     );
   }
 
-  const roleLabel = message.role.trim() ||
-    t("pages.chat.index.unknownRole", "Message");
+  const roleLabel =
+    message.role.trim() || t('pages.chat.index.unknownRole', 'Message');
   const displayName = authorName || roleLabel;
   return (
     <article
       aria-label={`${displayName} ${roleLabel} message`}
-      style={{ display: "flex", gap: 10 }}
+      style={{ display: 'flex', gap: 10 }}
     >
       <MessageOutlined
         style={{
-          background: "#f3f4f6",
-          border: "1px solid #e5e7eb",
+          background: '#f3f4f6',
+          border: '1px solid #e5e7eb',
           borderRadius: 999,
-          color: "#4b5563",
+          color: '#4b5563',
           fontSize: 12,
           height: 24,
           marginTop: 3,
-          textAlign: "center",
+          textAlign: 'center',
           width: 24,
         }}
       />
-      <div style={{ flex: 1, maxWidth: "82%", minWidth: 0 }}>
+      <div style={{ flex: 1, maxWidth: '82%', minWidth: 0 }}>
         <Space align="center" size={6} wrap>
           <Typography.Text strong style={{ fontSize: 12 }}>
             {displayName}
@@ -228,7 +230,7 @@ function ChatMessageEntry({
         </Space>
         {message.thinking ? (
           <Typography.Paragraph
-            style={{ color: "#6b7280", fontSize: 12, margin: "6px 0" }}
+            style={{ color: '#6b7280', fontSize: 12, margin: '6px 0' }}
           >
             {message.thinking}
           </Typography.Paragraph>
@@ -236,18 +238,23 @@ function ChatMessageEntry({
         {message.content ? (
           <div
             style={{
-              color: "#1f2937",
+              color: '#1f2937',
               fontSize: 14,
               lineHeight: 1.65,
-              whiteSpace: "pre-wrap",
-              wordBreak: "break-word",
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
             }}
           >
             {message.content}
           </div>
         ) : null}
-        {message.status === "error" && message.error ? (
-          <Alert description={message.error} showIcon style={{ marginTop: 8 }} type="error" />
+        {message.status === 'error' && message.error ? (
+          <Alert
+            description={message.error}
+            showIcon
+            style={{ marginTop: 8 }}
+            type="error"
+          />
         ) : null}
       </div>
     </article>
@@ -259,9 +266,9 @@ function errorMessage(error: unknown): string {
 }
 
 function createChatMessage(
-  role: ChatMessage["role"],
+  role: ChatMessage['role'],
   content: string,
-  status: ChatMessage["status"] = "complete"
+  status: ChatMessage['status'] = 'complete',
 ): ChatMessage {
   return {
     content,
@@ -276,13 +283,15 @@ function cloneStepInfo(steps?: readonly StepInfo[]): StepInfo[] {
   return (steps ?? []).map((step) => ({ ...step }));
 }
 
-function cloneToolCallInfo(toolCalls?: readonly ToolCallInfo[]): ToolCallInfo[] {
+function cloneToolCallInfo(
+  toolCalls?: readonly ToolCallInfo[],
+): ToolCallInfo[] {
   return (toolCalls ?? []).map((toolCall) => ({ ...toolCall }));
 }
 
 function buildAssistantMessagePatch(
   accumulator: ReturnType<typeof createRuntimeEventAccumulator>,
-  status: ChatMessage["status"]
+  status: ChatMessage['status'],
 ): Partial<ChatMessage> {
   return {
     content: accumulator.finalOutput || accumulator.assistantText,
@@ -302,64 +311,69 @@ function buildAssistantMessagePatch(
 }
 
 function trimTitle(value: string): string {
-  const normalized = value.trim().replace(/\s+/g, " " );
-  if (!normalized) return t("pages.chat.index.newChat", "New chat");
+  const normalized = value.trim().replace(/\s+/g, ' ');
+  if (!normalized) return t('pages.chat.index.newChat', 'New chat');
   return normalized.length > 60 ? `${normalized.slice(0, 57)}...` : normalized;
 }
 
 function formatStatusLabel(status: LocalChatStatus): string {
   switch (status) {
-    case "streaming":
-      return t("pages.chat.index.status.streaming", "Streaming");
-    case "completed_with_studio_target":
-      return t("pages.chat.index.status.studioReady", "Studio ready");
-    case "completed_text":
-      return t("pages.chat.index.status.completed", "Completed");
-    case "error":
-      return t("pages.chat.index.status.error", "Error");
+    case 'streaming':
+      return t('pages.chat.index.status.streaming', 'Streaming');
+    case 'completed_with_studio_target':
+      return t('pages.chat.index.status.studioReady', 'Studio ready');
+    case 'completed_text':
+      return t('pages.chat.index.status.completed', 'Completed');
+    case 'error':
+      return t('pages.chat.index.status.error', 'Error');
     default:
-      return t("pages.chat.index.status.draft", "Draft");
+      return t('pages.chat.index.status.draft', 'Draft');
   }
 }
 
 function resolveStatusTone(
-  status: LocalChatStatus
-): "default" | "processing" | "success" | "error" {
-  if (status === "streaming") return "processing";
-  if (status === "completed_text" || status === "completed_with_studio_target") {
-    return "success";
+  status: LocalChatStatus,
+): 'default' | 'processing' | 'success' | 'error' {
+  if (status === 'streaming') return 'processing';
+  if (
+    status === 'completed_text' ||
+    status === 'completed_with_studio_target'
+  ) {
+    return 'success';
   }
-  return status === "error" ? "error" : "default";
+  return status === 'error' ? 'error' : 'default';
 }
 
-function resolveStudioJump(target: ChatStudioTarget | undefined): StudioJump | null {
+function resolveStudioJump(
+  target: ChatStudioTarget | undefined,
+): StudioJump | null {
   if (!target) return null;
   if (target.studioUrl) {
     return {
       href: target.studioUrl,
-      label: t("pages.chat.index.openWorkflowStudio", "Open Workflow Studio"),
+      label: t('pages.chat.index.openWorkflowStudio', 'Open Workflow Studio'),
     };
   }
   if (target.scopeId && target.teamId && target.memberId) {
     return {
       href: buildTeamMemberWorkflowStudioHref({
         memberId: target.memberId,
-        mode: "edit-member",
+        mode: 'edit-member',
         scopeId: target.scopeId,
         teamId: target.teamId,
         workflowId: target.workflowId,
       }),
-      label: t("pages.chat.index.openWorkflowStudio", "Open Workflow Studio"),
+      label: t('pages.chat.index.openWorkflowStudio', 'Open Workflow Studio'),
     };
   }
   if (target.scopeId && target.teamId) {
     return {
       href: buildTeamDetailHref({
         scopeId: target.scopeId,
-        tab: "members",
+        tab: 'members',
         teamId: target.teamId,
       }),
-      label: t("pages.chat.index.openTeam", "Open Team"),
+      label: t('pages.chat.index.openTeam', 'Open Team'),
     };
   }
   return null;
@@ -373,34 +387,41 @@ function hasUsage(usage: ChatUsageSummary | undefined): boolean {
         usage.completionTokens ||
         usage.model ||
         usage.cost ||
-        usage.latencyMs)
+        usage.latencyMs),
   );
 }
 
 function formatRelativeTime(isoString: string): string {
   const timestamp = Date.parse(isoString);
-  if (!Number.isFinite(timestamp)) return "";
+  if (!Number.isFinite(timestamp)) return '';
   const minutes = Math.floor((Date.now() - timestamp) / 60_000);
-  if (minutes < 1) return t("pages.chat.index.time.justNow", "just now");
+  if (minutes < 1) return t('pages.chat.index.time.justNow', 'just now');
   if (minutes < 60) {
-    return t("pages.chat.index.time.minutesAgo", "{count}m ago", { count: minutes });
+    return t('pages.chat.index.time.minutesAgo', '{count}m ago', {
+      count: minutes,
+    });
   }
   const hours = Math.floor(minutes / 60);
   if (hours < 24) {
-    return t("pages.chat.index.time.hoursAgo", "{count}h ago", { count: hours });
+    return t('pages.chat.index.time.hoursAgo', '{count}h ago', {
+      count: hours,
+    });
   }
-  return t("pages.chat.index.time.daysAgo", "{count}d ago", {
+  return t('pages.chat.index.time.daysAgo', '{count}d ago', {
     count: Math.floor(hours / 24),
   });
 }
 
 function formatTurnCount(count: number): string {
-  return t("pages.chat.index.turnCount", "{count} turns", { count });
+  return t('pages.chat.index.turnCount', '{count} turns', { count });
 }
 
-function stringField(record: Record<string, unknown> | null | undefined, key: string): string {
+function stringField(
+  record: Record<string, unknown> | null | undefined,
+  key: string,
+): string {
   const value = record?.[key];
-  return typeof value === "string" ? value : "";
+  return typeof value === 'string' ? value : '';
 }
 
 function actionReportResource(userServiceId: string): ChatActionResource {
@@ -414,68 +435,76 @@ const ChatPage: React.FC = () => {
   const projectionRef = useRef<ChatActorProjection | null>(null);
   const streamControllerRef = useRef<AbortController | null>(null);
   const controlControllerRef = useRef<AbortController | null>(null);
-  const detailRequestRef = useRef("");
-  const scopeIdentityRef = useRef("");
+  const detailRequestRef = useRef('');
+  const scopeIdentityRef = useRef('');
   const scrollAnchorRef = useRef<HTMLDivElement | null>(null);
   const [activeConversation, setActiveConversation] =
     useState<ConversationState | null>(null);
-  const [projection, setProjection] = useState<ChatActorProjection | null>(null);
+  const [projection, setProjection] = useState<ChatActorProjection | null>(
+    null,
+  );
   const [actionJourneys, setActionJourneys] = useState<
     ReadonlyMap<string, ChatActionJourney>
   >(() => new Map());
-  const [deleteTarget, setDeleteTarget] = useState<ConversationMeta | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<ConversationMeta | null>(
+    null,
+  );
   const [deletingConversation, setDeletingConversation] = useState(false);
-  const [deleteError, setDeleteError] = useState("");
+  const [deleteError, setDeleteError] = useState('');
   const [detailLoadState, setDetailLoadState] = useState<DetailLoadState>({
-    status: "idle",
+    status: 'idle',
   });
   const [historyDrawerOpen, setHistoryDrawerOpen] = useState(false);
-  const [prompt, setPrompt] = useState("");
+  const [prompt, setPrompt] = useState('');
   const [notice, setNotice] = useState<Notice | null>(null);
   const [controlBusy, setControlBusy] = useState(false);
+  const [diagnosticWire, setDiagnosticWire] = useState<unknown>(undefined);
+  const wireInspectorEnabled = isNyxIdChatWireInspectorEnabled();
 
   const authSessionQuery = useQuery({
-    queryKey: ["chat", "auth-session"],
+    queryKey: ['chat', 'auth-session'],
     queryFn: () => studioApi.getAuthSession(),
     retry: false,
   });
-  const routeSearch = typeof window === "undefined" ? "" : window.location.search;
+  const routeSearch =
+    typeof window === 'undefined' ? '' : window.location.search;
   const routeScopeId = useMemo(
-    () => readChatQueryValue("scopeId", routeSearch),
-    [routeSearch]
+    () => readChatQueryValue('scopeId', routeSearch),
+    [routeSearch],
   );
   const resolvedScope = useMemo(
     () => resolveStudioScopeContext(authSessionQuery.data),
-    [authSessionQuery.data]
+    [authSessionQuery.data],
   );
-  const authenticatedScopeId = resolvedScope?.scopeId.trim() || "";
+  const authenticatedScopeId = resolvedScope?.scopeId.trim() || '';
   const scopeMismatch = Boolean(
     authSessionQuery.isSuccess &&
       routeScopeId &&
       authenticatedScopeId &&
-      routeScopeId !== authenticatedScopeId
+      routeScopeId !== authenticatedScopeId,
   );
   const scopeId =
-    authSessionQuery.isSuccess && !scopeMismatch ? authenticatedScopeId : "";
+    authSessionQuery.isSuccess && !scopeMismatch ? authenticatedScopeId : '';
   const canStartChat = Boolean(
     authSessionQuery.isSuccess &&
       authSessionQuery.data?.enabled === true &&
       authSessionQuery.data.authenticated === true &&
-      scopeId
+      scopeId,
   );
   const chatCreationUnavailable = Boolean(
-    authSessionQuery.isSuccess && authSessionQuery.data?.enabled === false
+    authSessionQuery.isSuccess && authSessionQuery.data?.enabled === false,
   );
   const conversationsQuery = useQuery({
     enabled: canStartChat,
     queryFn: () => chatHistoryApi.listConversationMetas(),
-    queryKey: ["chat-conversations", scopeId],
+    queryKey: ['chat-conversations', scopeId],
     retry: false,
   });
   const conversations = conversationsQuery.data ?? [];
-  const isStreaming = activeConversation?.status === "streaming";
+  const isStreaming = activeConversation?.status === 'streaming';
   const actorHasActiveWork = Boolean(
-    projection?.activeTurn?.status === "active" || projection?.task?.status === "active"
+    projection?.activeTurn?.status === 'active' ||
+      projection?.task?.status === 'active',
   );
   const visibleConversations = useMemo<ConversationListItem[]>(() => {
     const serverItems = conversations.map((conversation) => ({
@@ -486,11 +515,15 @@ const ChatPage: React.FC = () => {
     }));
     if (
       !activeConversation?.conversationId ||
-      conversations.some((item) => item.id === activeConversation.conversationId)
+      conversations.some(
+        (item) => item.id === activeConversation.conversationId,
+      )
     ) {
       return serverItems;
     }
-    const timestamps = activeConversation.messages.map((message) => message.timestamp);
+    const timestamps = activeConversation.messages.map(
+      (message) => message.timestamp,
+    );
     return [
       {
         createdAt: new Date(timestamps[0] ?? Date.now()).toISOString(),
@@ -505,10 +538,7 @@ const ChatPage: React.FC = () => {
   }, [activeConversation, conversations]);
   const studioJump = resolveStudioJump(activeConversation?.target);
   const isConversationActionDisabled =
-    !canStartChat ||
-    detailLoadState.status === "loading" ||
-    controlBusy ||
-    actorHasActiveWork;
+    !canStartChat || detailLoadState.status === 'loading' || controlBusy;
 
   const applyProjection = useCallback((next: ChatActorProjection | null) => {
     projectionRef.current = next;
@@ -526,11 +556,12 @@ const ChatPage: React.FC = () => {
     applyProjection(null);
     setActionJourneys(new Map());
     setDeleteTarget(null);
-    setDeleteError("");
-    setDetailLoadState({ status: "idle" });
+    setDeleteError('');
+    setDetailLoadState({ status: 'idle' });
     setHistoryDrawerOpen(false);
     setNotice(null);
-    setPrompt("");
+    setPrompt('');
+    setDiagnosticWire(undefined);
   }, [applyProjection, scopeId]);
 
   useEffect(() => {
@@ -538,12 +569,15 @@ const ChatPage: React.FC = () => {
   }, [activeConversation]);
 
   useEffect(() => {
-    scrollAnchorRef.current?.scrollIntoView?.({ behavior: "smooth", block: "end" });
+    scrollAnchorRef.current?.scrollIntoView?.({
+      behavior: 'smooth',
+      block: 'end',
+    });
   }, [activeConversation?.messages, projection]);
 
   useEffect(() => {
-    document.body.classList.add("aevatar-chat-page-host");
-    return () => document.body.classList.remove("aevatar-chat-page-host");
+    document.body.classList.add('aevatar-chat-page-host');
+    return () => document.body.classList.remove('aevatar-chat-page-host');
   }, []);
 
   useEffect(
@@ -551,7 +585,7 @@ const ChatPage: React.FC = () => {
       streamControllerRef.current?.abort();
       controlControllerRef.current?.abort();
     },
-    []
+    [],
   );
 
   const loadActorState = useCallback(
@@ -559,9 +593,12 @@ const ChatPage: React.FC = () => {
       conversationId: string,
       current: ChatActorProjection | null,
       signal?: AbortSignal,
-      useCursor = true
+      useCursor = true,
     ): Promise<ChatActorProjection> => {
-      const turnId = stringField(current?.activeTurn ?? current?.latestTurn, "turnId");
+      const turnId = stringField(
+        current?.activeTurn ?? current?.latestTurn,
+        'turnId',
+      );
       const cursor =
         useCursor && current && current.stateVersion > 0
           ? {
@@ -572,20 +609,20 @@ const ChatPage: React.FC = () => {
       const envelope = await chatHistoryApi.loadConversationState(
         conversationId,
         cursor,
-        signal
+        signal,
       );
       if (
         current &&
         envelope &&
-        typeof envelope === "object" &&
-        "status" in envelope &&
-        envelope.status === "not_found"
+        typeof envelope === 'object' &&
+        'status' in envelope &&
+        envelope.status === 'not_found'
       ) {
         return current;
       }
       let result = applyCurrentStateResult(
         current ?? createChatActorProjection(conversationId),
-        envelope
+        envelope,
       );
       if (result.reloadWithoutCursor) {
         result = applyCurrentStateResult(
@@ -593,8 +630,8 @@ const ChatPage: React.FC = () => {
           await chatHistoryApi.loadConversationState(
             conversationId,
             {},
-            signal
-          )
+            signal,
+          ),
         );
       }
       if (activeConversationRef.current?.conversationId === conversationId) {
@@ -602,8 +639,66 @@ const ChatPage: React.FC = () => {
       }
       return result.projection;
     },
-    [applyProjection]
+    [applyProjection],
   );
+
+  useEffect(() => {
+    const conversationId = activeConversation?.conversationId?.trim();
+    if (
+      !isStreaming ||
+      !conversationId ||
+      (projection?.stateVersion ?? 0) > 0
+    ) {
+      return;
+    }
+
+    const controller = new AbortController();
+    let delayIndex = 0;
+    let timeoutId: number | undefined;
+
+    const scheduleRefresh = () => {
+      if (
+        controller.signal.aborted ||
+        delayIndex >= ACTIVE_STATE_REFRESH_DELAYS_MS.length
+      ) {
+        return;
+      }
+      const delay = ACTIVE_STATE_REFRESH_DELAYS_MS[delayIndex];
+      delayIndex += 1;
+      timeoutId = window.setTimeout(() => void refresh(), delay);
+    };
+
+    const refresh = async () => {
+      const current = projectionRef.current;
+      if (
+        controller.signal.aborted ||
+        !current ||
+        current.actorId !== conversationId ||
+        current.stateVersion > 0
+      ) {
+        return;
+      }
+      try {
+        await loadActorState(conversationId, current, controller.signal, false);
+      } catch {
+        // A failed read stays version-fenced and may be retried within this bounded window.
+      }
+      if ((projectionRef.current?.stateVersion ?? 0) === 0) {
+        scheduleRefresh();
+      }
+    };
+
+    scheduleRefresh();
+    return () => {
+      controller.abort();
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+    };
+  }, [
+    activeConversation?.conversationId,
+    isStreaming,
+    loadActorState,
+    projection?.stateVersion,
+  ]);
 
   const restoreConversation = useCallback(
     async (conversationId: string) => {
@@ -616,17 +711,17 @@ const ChatPage: React.FC = () => {
         conversationId,
         expectedTurnCount: meta?.messageCount ?? 0,
         messages: [],
-        status: "completed_text",
-        title: meta?.title || t("pages.chat.index.newChat", "New chat"),
+        status: 'completed_text',
+        title: meta?.title || t('pages.chat.index.newChat', 'New chat'),
       };
       detailRequestRef.current = requestId;
       activeConversationRef.current = placeholder;
       setActiveConversation(placeholder);
       applyProjection(createChatActorProjection(conversationId));
       setActionJourneys(new Map());
-      setDetailLoadState({ status: "loading" });
+      setDetailLoadState({ status: 'loading' });
       setNotice(null);
-      setPrompt("");
+      setPrompt('');
       try {
         const [detail, stateEnvelope] = await Promise.all([
           chatHistoryApi.loadConversation(conversationId),
@@ -635,34 +730,42 @@ const ChatPage: React.FC = () => {
         if (detailRequestRef.current !== requestId) return;
         const state = applyCurrentStateResult(
           createChatActorProjection(conversationId),
-          stateEnvelope
+          stateEnvelope,
         );
+        if (wireInspectorEnabled) setDiagnosticWire(stateEnvelope);
         const restored: ConversationState = {
           ...placeholder,
-          latestTurnId: stringField(
-            state.projection.activeTurn ?? state.projection.latestTurn,
-            "turnId"
-          ) || undefined,
+          latestTurnId:
+            stringField(
+              state.projection.activeTurn ?? state.projection.latestTurn,
+              'turnId',
+            ) || undefined,
           messages: hydrateStoredMessages(detail.messages),
           status: resolveStoredConversationStatus(detail.messages),
         };
         activeConversationRef.current = restored;
         setActiveConversation(restored);
         applyProjection(state.projection);
-        setDetailLoadState({ status: "idle" });
+        setDetailLoadState({ status: 'idle' });
       } catch (error) {
         if (detailRequestRef.current === requestId) {
-          setDetailLoadState({ message: errorMessage(error), status: "error" });
+          setDetailLoadState({ message: errorMessage(error), status: 'error' });
         }
       }
     },
-    [applyProjection, canStartChat, conversations, isStreaming]
+    [
+      applyProjection,
+      canStartChat,
+      conversations,
+      isStreaming,
+      wireInspectorEnabled,
+    ],
   );
 
   const handleNewChat = useCallback(() => {
     if (isStreaming) return;
     const current = activeConversationRef.current;
-    if (current?.status === "draft" && current.messages.length === 0) {
+    if (current?.status === 'draft' && current.messages.length === 0) {
       setHistoryDrawerOpen(false);
       return;
     }
@@ -671,27 +774,30 @@ const ChatPage: React.FC = () => {
     setActiveConversation(draft);
     applyProjection(null);
     setActionJourneys(new Map());
-    setDetailLoadState({ status: "idle" });
+    setDetailLoadState({ status: 'idle' });
     setHistoryDrawerOpen(false);
     setNotice(null);
-    setPrompt("");
+    setPrompt('');
+    setDiagnosticWire(undefined);
   }, [applyProjection, isStreaming]);
 
   const handleDeleteConversation = useCallback(async () => {
     if (!deleteTarget || deletingConversation || isStreaming) return;
     setDeletingConversation(true);
-    setDeleteError("");
+    setDeleteError('');
     try {
       await chatHistoryApi.deleteConversation(deleteTarget.id);
       setNotice({
         message: t(
-          "pages.chat.index.deleteAccepted",
-          "Deletion request accepted; waiting for actor and transcript projection."
+          'pages.chat.index.deleteAccepted',
+          'Deletion request accepted; waiting for actor and transcript projection.',
         ),
-        type: "info",
+        type: 'info',
       });
       setDeleteTarget(null);
-      await queryClient.invalidateQueries({ queryKey: ["chat-conversations", scopeId] });
+      await queryClient.invalidateQueries({
+        queryKey: ['chat-conversations', scopeId],
+      });
     } catch (error) {
       setDeleteError(errorMessage(error));
     } finally {
@@ -703,28 +809,28 @@ const ChatPage: React.FC = () => {
     async (
       conversation: ConversationState,
       command: ChatCommand,
-      safeUserText: string
+      safeUserText: string,
     ): Promise<boolean> => {
       if (!canStartChat || isStreaming) return false;
-      const userMessage = createChatMessage("user", safeUserText);
+      const userMessage = createChatMessage('user', safeUserText);
       const assistantMessageId = createClientId();
       const assistantMessage: ChatMessage = {
-        content: "",
+        content: '',
         events: [],
         id: assistantMessageId,
-        role: "assistant",
-        status: "streaming",
+        role: 'assistant',
+        status: 'streaming',
         steps: [],
-        thinking: "",
+        thinking: '',
         timestamp: Date.now(),
         toolCalls: [],
       };
       let streaming: ConversationState = {
         ...conversation,
         messages: [...conversation.messages, userMessage, assistantMessage],
-        status: "streaming",
+        status: 'streaming',
         title:
-          conversation.title === t("pages.chat.index.newChat", "New chat")
+          conversation.title === t('pages.chat.index.newChat', 'New chat')
             ? trimTitle(safeUserText)
             : conversation.title,
       };
@@ -736,15 +842,15 @@ const ChatPage: React.FC = () => {
           : createChatActorProjection(conversation.conversationId ?? null);
       const rawFrames: unknown[] = [];
       const accumulator = createRuntimeEventAccumulator();
-      let authoritativeConversationId = "";
-      let authoritativeTurnId = "";
+      let authoritativeConversationId = '';
+      let authoritativeTurnId = '';
       const controller = new AbortController();
       streamControllerRef.current?.abort();
       streamControllerRef.current = controller;
       detailRequestRef.current = createClientId();
-      setDetailLoadState({ status: "idle" });
+      setDetailLoadState({ status: 'idle' });
       setNotice(null);
-      setPrompt("");
+      setPrompt('');
       activeConversationRef.current = streaming;
       setActiveConversation(streaming);
       try {
@@ -753,41 +859,46 @@ const ChatPage: React.FC = () => {
           signal: controller.signal,
         })) {
           rawFrames.push(frame.raw);
+          if (wireInspectorEnabled) setDiagnosticWire(frame.raw);
           const actorFrame = decodeActorFrame(frame.raw);
-          if (actorFrame.type !== "ignored") {
+          if (actorFrame.type !== 'ignored') {
             actorState = reduceActorFrame(actorState, actorFrame);
             applyProjection(actorState);
           }
           if (!frame.event) continue;
           applyRuntimeEvent(accumulator, frame.event);
-          if (frame.event.type === "RUN_STARTED") {
+          if (frame.event.type === 'RUN_STARTED') {
             const conversationId = accumulator.actorId.trim();
             const turnId = accumulator.runId.trim();
             if (!conversationId || !turnId) {
               throw new Error(
                 t(
-                  "pages.chat.index.invalidRunIdentity",
-                  "Chat RUN_STARTED did not contain authoritative conversation and turn identities."
-                )
-              );
-            }
-            if (command.conversationId && command.conversationId !== conversationId) {
-              throw new Error(
-                t(
-                  "pages.chat.index.conversationIdentityMismatch",
-                  "Chat returned a different conversation identity."
-                )
+                  'pages.chat.index.invalidRunIdentity',
+                  'Chat RUN_STARTED did not contain authoritative conversation and turn identities.',
+                ),
               );
             }
             if (
-              (authoritativeConversationId && authoritativeConversationId !== conversationId) ||
+              command.conversationId &&
+              command.conversationId !== conversationId
+            ) {
+              throw new Error(
+                t(
+                  'pages.chat.index.conversationIdentityMismatch',
+                  'Chat returned a different conversation identity.',
+                ),
+              );
+            }
+            if (
+              (authoritativeConversationId &&
+                authoritativeConversationId !== conversationId) ||
               (authoritativeTurnId && authoritativeTurnId !== turnId)
             ) {
               throw new Error(
                 t(
-                  "pages.chat.index.runIdentityChanged",
-                  "Chat RUN_STARTED identity changed during the stream."
-                )
+                  'pages.chat.index.runIdentityChanged',
+                  'Chat RUN_STARTED identity changed during the stream.',
+                ),
               );
             }
             authoritativeConversationId = conversationId;
@@ -795,13 +906,24 @@ const ChatPage: React.FC = () => {
             if (actorState.actorId && actorState.actorId !== conversationId) {
               throw new Error(
                 t(
-                  "pages.chat.index.actorIdentityMismatch",
-                  "Actor state does not match the chat conversation."
-                )
+                  'pages.chat.index.actorIdentityMismatch',
+                  'Actor state does not match the chat conversation.',
+                ),
               );
             }
             actorState = { ...actorState, actorId: conversationId };
             applyProjection(actorState);
+            try {
+              actorState = await loadActorState(
+                conversationId,
+                actorState,
+                controller.signal,
+                false,
+              );
+              applyProjection(actorState);
+            } catch {
+              // Live facts remain visible, but version-fenced controls stay disabled without current state.
+            }
             streaming = {
               ...streaming,
               conversationId,
@@ -818,10 +940,10 @@ const ChatPage: React.FC = () => {
                     ...message,
                     ...buildAssistantMessagePatch(
                       accumulator,
-                      accumulator.errorText ? "error" : "streaming"
+                      accumulator.errorText ? 'error' : 'streaming',
                     ),
                   }
-                : message
+                : message,
             ),
           };
           activeConversationRef.current = streaming;
@@ -831,9 +953,9 @@ const ChatPage: React.FC = () => {
         if (!authoritativeConversationId || !authoritativeTurnId) {
           throw new Error(
             t(
-              "pages.chat.index.missingRunIdentity",
-              "Chat stream ended without authoritative conversation and turn identities."
-            )
+              'pages.chat.index.missingRunIdentity',
+              'Chat stream ended without authoritative conversation and turn identities.',
+            ),
           );
         }
         const artifacts = extractChatStreamArtifacts(rawFrames);
@@ -846,30 +968,30 @@ const ChatPage: React.FC = () => {
                   ...message,
                   ...buildAssistantMessagePatch(
                     accumulator,
-                    accumulator.errorText ? "error" : "complete"
+                    accumulator.errorText ? 'error' : 'complete',
                   ),
                 }
-              : message
+              : message,
           ),
           status: accumulator.errorText
-            ? "error"
+            ? 'error'
             : resolveStudioJump(target)
-              ? "completed_with_studio_target"
-              : "completed_text",
+              ? 'completed_with_studio_target'
+              : 'completed_text',
           target,
           usage: artifacts.usage || streaming.usage,
         };
         activeConversationRef.current = final;
         setActiveConversation(final);
         await queryClient.invalidateQueries({
-          queryKey: ["chat-conversations", scopeId],
+          queryKey: ['chat-conversations', scopeId],
         });
         try {
           actorState = await loadActorState(
             authoritativeConversationId,
             actorState,
             controller.signal,
-            false
+            false,
           );
           applyProjection(actorState);
         } catch {
@@ -879,17 +1001,20 @@ const ChatPage: React.FC = () => {
       } catch (error) {
         const message =
           controller.signal.aborted && !accumulator.errorText
-            ? t("pages.chat.index.observationStopped", "Observation stopped.")
+            ? t('pages.chat.index.observationStopped', 'Observation stopped.')
             : errorMessage(error);
         accumulator.errorText = message;
         const failed: ConversationState = {
           ...streaming,
           messages: streaming.messages.map((entry) =>
             entry.id === assistantMessageId
-              ? { ...entry, ...buildAssistantMessagePatch(accumulator, "error") }
-              : entry
+              ? {
+                  ...entry,
+                  ...buildAssistantMessagePatch(accumulator, 'error'),
+                }
+              : entry,
           ),
-          status: "error",
+          status: 'error',
         };
         activeConversationRef.current = failed;
         setActiveConversation(failed);
@@ -900,7 +1025,15 @@ const ChatPage: React.FC = () => {
         }
       }
     },
-    [applyProjection, canStartChat, isStreaming, loadActorState, queryClient, scopeId]
+    [
+      applyProjection,
+      canStartChat,
+      isStreaming,
+      loadActorState,
+      queryClient,
+      scopeId,
+      wireInspectorEnabled,
+    ],
   );
 
   const handleSend = useCallback(() => {
@@ -910,14 +1043,14 @@ const ChatPage: React.FC = () => {
     void streamCommand(
       conversation,
       {
-        type: "text",
+        type: 'text',
         ...(conversation.conversationId
           ? { conversationId: conversation.conversationId }
           : {}),
         clientRequestId: createClientId(),
         prompt: value,
       },
-      value
+      value,
     );
   }, [activeConversation, actorHasActiveWork, prompt, streamCommand]);
 
@@ -932,16 +1065,20 @@ const ChatPage: React.FC = () => {
       try {
         await sendChatCommand(command, controller.signal);
         setNotice({
-          message: t("pages.chat.index.requestAccepted", "Request accepted"),
-          type: "info",
+          message: t('pages.chat.index.requestAccepted', 'Request accepted'),
+          type: 'info',
         });
         try {
-          await loadActorState(command.conversationId, projectionRef.current, controller.signal);
+          await loadActorState(
+            command.conversationId,
+            projectionRef.current,
+            controller.signal,
+          );
         } catch {
           // A 202 receipt is dispatch-only; stale state remains honest until refreshed.
         }
       } catch (error) {
-        setNotice({ message: errorMessage(error), type: "error" });
+        setNotice({ message: errorMessage(error), type: 'error' });
       } finally {
         if (controlControllerRef.current === controller) {
           controlControllerRef.current = null;
@@ -949,7 +1086,7 @@ const ChatPage: React.FC = () => {
         setControlBusy(false);
       }
     },
-    [controlBusy, loadActorState]
+    [controlBusy, loadActorState],
   );
 
   const requireControlContext = useCallback(() => {
@@ -964,7 +1101,7 @@ const ChatPage: React.FC = () => {
       const context = requireControlContext();
       if (!context) return;
       void dispatchAcceptedCommand({
-        type: "input.resolve",
+        type: 'input.resolve',
         conversationId: context.conversationId,
         requestId: input.requestId,
         clientRequestId: createClientId(),
@@ -972,32 +1109,44 @@ const ChatPage: React.FC = () => {
         expectedStateVersion: context.state.stateVersion,
       });
     },
-    [dispatchAcceptedCommand, requireControlContext]
+    [dispatchAcceptedCommand, requireControlContext],
   );
 
-  const handleApprovalResolve = useCallback(
-    (approved: boolean, approval: ChatPendingApproval, reason?: string) => {
+  const handlePlanResolve = useCallback(
+    (confirmed: boolean, gate: ChatPlanGate) => {
       const context = requireControlContext();
-      if (!context) return;
+      if (
+        !context ||
+        gate.mode !== 'confirm' ||
+        gate.status !== 'pending' ||
+        !gate.requestId ||
+        !gate.taskId ||
+        !gate.planId ||
+        gate.planRevision === undefined
+      ) {
+        return;
+      }
       void dispatchAcceptedCommand({
-        type: "approval.resolve",
+        type: 'plan.resolve',
         conversationId: context.conversationId,
-        requestId: approval.approvalRequestId,
+        taskId: gate.taskId,
+        planId: gate.planId,
+        requestId: gate.requestId,
         clientRequestId: createClientId(),
-        approved,
-        ...(reason ? { reason } : {}),
+        planRevision: gate.planRevision,
+        confirmed,
         expectedStateVersion: context.state.stateVersion,
       });
     },
-    [dispatchAcceptedCommand, requireControlContext]
+    [dispatchAcceptedCommand, requireControlContext],
   );
 
   const handleTaskStop = useCallback(() => {
     const context = requireControlContext();
-    const turnId = stringField(context?.state.activeTurn, "turnId");
-    if (!context || !turnId || !actorCan(context.state, "stop")) return;
+    const turnId = stringField(context?.state.activeTurn, 'turnId');
+    if (!context || !turnId || !actorCan(context.state, 'stop')) return;
     void dispatchAcceptedCommand({
-      type: "task.stop",
+      type: 'task.stop',
       conversationId: context.conversationId,
       turnId,
       stopRequestId: createClientId(),
@@ -1009,10 +1158,10 @@ const ChatPage: React.FC = () => {
   const handleSteer = useCallback(
     (instruction: string) => {
       const context = requireControlContext();
-      const turnId = stringField(context?.state.activeTurn, "turnId");
+      const turnId = stringField(context?.state.activeTurn, 'turnId');
       if (!context || !turnId) return;
       void dispatchAcceptedCommand({
-        type: "task.steer",
+        type: 'task.steer',
         conversationId: context.conversationId,
         turnId,
         steeringId: createClientId(),
@@ -1021,32 +1170,53 @@ const ChatPage: React.FC = () => {
         expectedStateVersion: context.state.stateVersion,
       });
     },
-    [dispatchAcceptedCommand, requireControlContext]
+    [dispatchAcceptedCommand, requireControlContext],
   );
 
+  const handleComposerSend = useCallback(() => {
+    const value = prompt.trim();
+    if (!value) return;
+    const pendingInput = projectionRef.current?.pendingInput;
+    if (pendingInput?.allowFreeText) {
+      handleInputResolve({ freeText: value }, pendingInput);
+      setPrompt('');
+      return;
+    }
+    if (actorHasActiveWork) {
+      handleSteer(value);
+      setPrompt('');
+      return;
+    }
+    handleSend();
+  }, [actorHasActiveWork, handleInputResolve, handleSend, handleSteer, prompt]);
+
   const dispatchStepControl = useCallback(
-    (type: "step.retry" | "step.skip", step: ChatActorStep) => {
+    (type: 'step.retry' | 'step.skip', step: ChatActorStep) => {
       const context = requireControlContext();
       const operation = step.operation;
       const turnId =
-        stringField(operation, "turnId") ||
-        stringField(context?.state.activeTurn, "turnId");
+        stringField(operation, 'turnId') ||
+        stringField(context?.state.activeTurn, 'turnId');
       const taskId =
-        stringField(operation, "taskId") ||
-        stringField(context?.state.task, "taskId");
+        stringField(operation, 'taskId') ||
+        stringField(context?.state.task, 'taskId');
       const generation = operation?.operationGeneration;
       if (
         !context ||
         !turnId ||
         !taskId ||
-        typeof generation !== "number" ||
-        !actorCan(context.state, type === "step.retry" ? "retry" : "skip", step.stepId)
+        typeof generation !== 'number' ||
+        !actorCan(
+          context.state,
+          type === 'step.retry' ? 'retry' : 'skip',
+          step.stepId,
+        )
       ) {
         return;
       }
       const requestId = createClientId();
       void dispatchAcceptedCommand(
-        type === "step.retry"
+        type === 'step.retry'
           ? {
               type,
               conversationId: context.conversationId,
@@ -1068,25 +1238,25 @@ const ChatPage: React.FC = () => {
               clientRequestId: createClientId(),
               expectedOperationGeneration: generation,
               expectedStateVersion: context.state.stateVersion,
-            }
+            },
       );
     },
-    [dispatchAcceptedCommand, requireControlContext]
+    [dispatchAcceptedCommand, requireControlContext],
   );
 
   const updateJourney = useCallback(
     (
       request: Pick<
         ChatServiceConnectActionRequest,
-        "actorId" | "actionRequestId"
+        'actorId' | 'actionRequestId'
       >,
-      patch: Partial<ChatActionJourney>
+      patch: Partial<ChatActionJourney>,
     ) => {
       setActionJourneys((current) => {
         const next = new Map(current);
         const key = chatActionIdentityKey(
           request.actorId,
-          request.actionRequestId
+          request.actionRequestId,
         );
         next.set(key, {
           ...(next.get(key) ?? {}),
@@ -1095,21 +1265,24 @@ const ChatPage: React.FC = () => {
         return next;
       });
     },
-    []
+    [],
   );
 
   const sendActionReport = useCallback(
     async (
       request: ChatServiceConnectActionRequest,
       disposition: ActionDisposition,
-      resource?: ChatActionResource
+      resource?: ChatActionResource,
     ) => {
       const conversation = activeConversationRef.current;
-      if (!conversation?.conversationId || conversation.conversationId !== request.actorId) {
+      if (
+        !conversation?.conversationId ||
+        conversation.conversationId !== request.actorId
+      ) {
         updateJourney(request, {
           error: t(
-            "pages.chat.index.actionIdentityChanged",
-            "This action no longer matches the active conversation."
+            'pages.chat.index.actionIdentityChanged',
+            'This action no longer matches the active conversation.',
           ),
         });
         return;
@@ -1124,33 +1297,33 @@ const ChatPage: React.FC = () => {
       const accepted = await streamCommand(
         conversation,
         {
-          type: "action.continue",
+          type: 'action.continue',
           conversationId: conversation.conversationId,
           originTurnId: request.originTurnId,
           clientRequestId: createClientId(),
           actions: [report],
         },
         t(
-          "pages.chat.index.actionUpdate",
-          "NyxID action update: {disposition}.",
-          { disposition }
-        )
+          'pages.chat.index.actionUpdate',
+          'NyxID action update: {disposition}.',
+          { disposition },
+        ),
       );
       updateJourney(
         request,
         accepted
-          ? { busy: false, report: report as ChatActionJourney["report"] }
+          ? { busy: false, report: report as ChatActionJourney['report'] }
           : {
               busy: false,
               error: t(
-                "pages.chat.index.actionReportNotAccepted",
-                "Action report was not accepted."
+                'pages.chat.index.actionReportNotAccepted',
+                'Action report was not accepted.',
               ),
               report: undefined,
-            }
+            },
       );
     },
-    [streamCommand, updateJourney]
+    [streamCommand, updateJourney],
   );
 
   const handleActionOpen = useCallback(
@@ -1161,20 +1334,20 @@ const ChatPage: React.FC = () => {
         const baseline = matchingUserServiceIds(request, connectors);
         updateJourney(request, { baseline, busy: false });
         const slug =
-          "catalogService" in request.params
+          'catalogService' in request.params
             ? request.params.catalogService.serviceSlug
             : undefined;
         const opened = window.open(
           buildNyxIdConnectUrl(slug),
-          "nyxid-connect",
-          "noopener,noreferrer"
+          'nyxid-connect',
+          'noopener,noreferrer',
         );
         opened?.focus?.();
         if (!opened) {
           updateJourney(request, {
             error: t(
-              "pages.chat.index.popupBlocked",
-              "The NyxID window was blocked. Allow popups and try again."
+              'pages.chat.index.popupBlocked',
+              'The NyxID window was blocked. Allow popups and try again.',
             ),
           });
         }
@@ -1185,19 +1358,19 @@ const ChatPage: React.FC = () => {
         });
       }
     },
-    [updateJourney]
+    [updateJourney],
   );
 
   const handleActionRefresh = useCallback(
     async (request: ChatServiceConnectActionRequest) => {
       const journey = actionJourneys.get(
-        chatActionIdentityKey(request.actorId, request.actionRequestId)
+        chatActionIdentityKey(request.actorId, request.actionRequestId),
       );
       if (!journey?.baseline) {
         updateJourney(request, {
           error: t(
-            "pages.chat.index.openNyxIdFirst",
-            "Open NyxID from this action first so the connection baseline is known."
+            'pages.chat.index.openNyxIdFirst',
+            'Open NyxID from this action first so the connection baseline is known.',
           ),
         });
         return;
@@ -1206,23 +1379,23 @@ const ChatPage: React.FC = () => {
       try {
         const current = matchingUserServiceIds(
           request,
-          await listNyxIdConnectors()
+          await listNyxIdConnectors(),
         );
         const userServiceId = matchNewUserServiceId(journey.baseline, current);
         if (!userServiceId) {
           updateJourney(request, {
             busy: false,
             error: t(
-              "pages.chat.index.connectionNotUnique",
-              "Exactly one new matching UserService was not found; no completion was reported."
+              'pages.chat.index.connectionNotUnique',
+              'Exactly one new matching UserService was not found; no completion was reported.',
             ),
           });
           return;
         }
         await sendActionReport(
           request,
-          "completed",
-          actionReportResource(userServiceId)
+          'completed',
+          actionReportResource(userServiceId),
         );
       } catch (error) {
         updateJourney(request, {
@@ -1231,12 +1404,12 @@ const ChatPage: React.FC = () => {
         });
       }
     },
-    [actionJourneys, sendActionReport, updateJourney]
+    [actionJourneys, sendActionReport, updateJourney],
   );
 
   const handleActionConnectCredential = useCallback(
     async (request: ChatServiceConnectActionRequest, credential: string) => {
-      if (!("catalogService" in request.params)) return;
+      if (!('catalogService' in request.params)) return;
       updateJourney(request, { busy: true, error: undefined });
       try {
         const serviceSlug = request.params.catalogService.serviceSlug;
@@ -1247,8 +1420,8 @@ const ChatPage: React.FC = () => {
         });
         await sendActionReport(
           request,
-          "completed",
-          actionReportResource(userServiceId)
+          'completed',
+          actionReportResource(userServiceId),
         );
       } catch (error) {
         updateJourney(request, {
@@ -1256,19 +1429,21 @@ const ChatPage: React.FC = () => {
           error: errorMessage(error),
         });
         if (
-          !(error instanceof Error &&
-            "code" in error &&
-            error.code === "NYXID_USER_SERVICE_ID_MISSING")
+          !(
+            error instanceof Error &&
+            'code' in error &&
+            error.code === 'NYXID_USER_SERVICE_ID_MISSING'
+          )
         ) {
-          await sendActionReport(request, "failed");
+          await sendActionReport(request, 'failed');
         }
       }
     },
-    [sendActionReport, updateJourney]
+    [sendActionReport, updateJourney],
   );
 
   const handleComposerStop = useCallback(() => {
-    if (projectionRef.current && actorCan(projectionRef.current, "stop")) {
+    if (projectionRef.current && actorCan(projectionRef.current, 'stop')) {
       handleTaskStop();
       return;
     }
@@ -1282,8 +1457,8 @@ const ChatPage: React.FC = () => {
       <div
         style={{
           borderBottom: `1px solid ${token.colorBorderSecondary}`,
-          display: "flex",
-          flexDirection: "column",
+          display: 'flex',
+          flexDirection: 'column',
           gap: 8,
           padding: 12,
         }}
@@ -1296,23 +1471,39 @@ const ChatPage: React.FC = () => {
           style={{ minHeight: 44 }}
           type="primary"
         >
-          {t("pages.chat.index.newChatAction", "New Chat")}
+          {t('pages.chat.index.newChatAction', 'New Chat')}
         </Button>
-        <Typography.Text style={{ color: token.colorTextTertiary, fontSize: 12 }}>
+        <Typography.Text
+          style={{ color: token.colorTextTertiary, fontSize: 12 }}
+        >
           {t(
-            "pages.chat.index.historyStoredInWorkspace",
-            "History is saved to this workspace."
+            'pages.chat.index.historyStoredInWorkspace',
+            'History is saved to this workspace.',
           )}
         </Typography.Text>
       </div>
       <div
         aria-busy={conversationsQuery.isLoading}
-        style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "8px 6px 10px" }}
+        style={{
+          flex: 1,
+          minHeight: 0,
+          overflow: 'auto',
+          padding: '8px 6px 10px',
+        }}
       >
         {conversationsQuery.isLoading ? (
-          <div style={{ display: "flex", justifyContent: "center", minHeight: 120 }}>
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'center',
+              minHeight: 120,
+            }}
+          >
             <Spin
-              description={t("pages.chat.index.loadingHistory", "Loading chat history")}
+              description={t(
+                'pages.chat.index.loadingHistory',
+                'Loading chat history',
+              )}
               size="small"
             />
           </div>
@@ -1320,7 +1511,10 @@ const ChatPage: React.FC = () => {
           <Alert
             action={
               <Button
-                aria-label={t("pages.chat.index.retryHistory", "Retry chat history")}
+                aria-label={t(
+                  'pages.chat.index.retryHistory',
+                  'Retry chat history',
+                )}
                 icon={<ReloadOutlined />}
                 onClick={() => void conversationsQuery.refetch()}
                 size="small"
@@ -1328,67 +1522,77 @@ const ChatPage: React.FC = () => {
               />
             }
             description={errorMessage(conversationsQuery.error)}
-            message={t("pages.chat.index.failedToLoadHistory", "Chat history could not be loaded")}
+            message={t(
+              'pages.chat.index.failedToLoadHistory',
+              'Chat history could not be loaded',
+            )}
             showIcon
             type="error"
           />
         ) : visibleConversations.length === 0 ? (
           <Empty
-            description={t("pages.chat.index.noChatHistory", "No chat history")}
+            description={t('pages.chat.index.noChatHistory', 'No chat history')}
             image={Empty.PRESENTED_IMAGE_SIMPLE}
             style={{ marginTop: 24 }}
           />
         ) : (
-          <Space direction="vertical" size={6} style={{ width: "100%" }}>
+          <Space direction="vertical" size={6} style={{ width: '100%' }}>
             {visibleConversations.map((conversation) => {
-              const active = conversation.id === activeConversation?.conversationId;
+              const active =
+                conversation.id === activeConversation?.conversationId;
               return (
                 <div
                   className="aevatar-chat-history-item"
                   key={conversation.id}
                   style={{
-                    background: active ? token.colorPrimaryBg : "transparent",
+                    background: active ? token.colorPrimaryBg : 'transparent',
                     border: `1px solid ${
-                      active ? token.colorPrimaryBorder : "transparent"
+                      active ? token.colorPrimaryBorder : 'transparent'
                     }`,
                     borderRadius: token.borderRadius,
-                    boxShadow: active ? `inset 3px 0 0 ${token.colorPrimary}` : undefined,
-                    display: "flex",
+                    boxShadow: active
+                      ? `inset 3px 0 0 ${token.colorPrimary}`
+                      : undefined,
+                    display: 'flex',
                     gap: 4,
                     padding: 4,
-                    width: "100%",
+                    width: '100%',
                   }}
                 >
                   <button
-                    aria-current={active ? "page" : undefined}
+                    aria-current={active ? 'page' : undefined}
                     aria-label={conversation.title}
                     className="aevatar-chat-history-select"
                     disabled={isStreaming}
                     onClick={() => {
                       setHistoryDrawerOpen(false);
-                      if (activeConversation?.conversationId !== conversation.id) {
+                      if (
+                        activeConversation?.conversationId !== conversation.id
+                      ) {
                         void restoreConversation(conversation.id);
                       }
                     }}
                     style={{
-                      alignItems: "flex-start",
-                      background: "transparent",
+                      alignItems: 'flex-start',
+                      background: 'transparent',
                       border: 0,
-                      color: "inherit",
-                      cursor: isStreaming ? "not-allowed" : "pointer",
-                      display: "flex",
+                      color: 'inherit',
+                      cursor: isStreaming ? 'not-allowed' : 'pointer',
+                      display: 'flex',
                       flex: 1,
                       gap: 8,
                       minHeight: 40,
                       minWidth: 0,
-                      padding: "5px 4px",
-                      textAlign: "left",
+                      padding: '5px 4px',
+                      textAlign: 'left',
                     }}
                     type="button"
                   >
                     <MessageOutlined
                       style={{
-                        color: active ? token.colorPrimary : token.colorTextTertiary,
+                        color: active
+                          ? token.colorPrimary
+                          : token.colorTextTertiary,
                         fontSize: 14,
                         marginTop: 2,
                       }}
@@ -1397,12 +1601,12 @@ const ChatPage: React.FC = () => {
                       <span
                         style={{
                           color: token.colorText,
-                          display: "block",
+                          display: 'block',
                           fontSize: 13,
                           fontWeight: 600,
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                          whiteSpace: "nowrap",
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
                         }}
                       >
                         {conversation.title}
@@ -1410,35 +1614,41 @@ const ChatPage: React.FC = () => {
                       <span
                         style={{
                           color: token.colorTextTertiary,
-                          display: "flex",
+                          display: 'flex',
                           fontSize: 11,
                           gap: 6,
                           marginTop: 3,
                         }}
                       >
                         <span>
-                          {conversation.liveStatus === "streaming"
+                          {conversation.liveStatus === 'streaming'
                             ? formatStatusLabel(conversation.liveStatus)
                             : formatTurnCount(conversation.messageCount)}
                         </span>
-                        <span>{formatRelativeTime(conversation.updatedAt)}</span>
+                        <span>
+                          {formatRelativeTime(conversation.updatedAt)}
+                        </span>
                       </span>
                     </span>
                   </button>
                   <Tooltip
-                    title={t("pages.chat.index.deleteChat", "Delete {title}", {
+                    title={t('pages.chat.index.deleteChat', 'Delete {title}', {
                       title: conversation.title,
                     })}
                   >
                     <Button
-                      aria-label={t("pages.chat.index.deleteChat", "Delete {title}", {
-                        title: conversation.title,
-                      })}
+                      aria-label={t(
+                        'pages.chat.index.deleteChat',
+                        'Delete {title}',
+                        {
+                          title: conversation.title,
+                        },
+                      )}
                       danger
                       disabled={isStreaming}
                       icon={<DeleteOutlined />}
                       onClick={() => {
-                        setDeleteError("");
+                        setDeleteError('');
                         setDeleteTarget(conversation);
                       }}
                       style={{ minHeight: 40, minWidth: 40 }}
@@ -1458,7 +1668,7 @@ const ChatPage: React.FC = () => {
     <AevatarPageShell
       layoutMode="viewport"
       pageHeaderRender={false}
-      title={t("pages.chat.index.title", "Chat")}
+      title={t('pages.chat.index.title', 'Chat')}
     >
       <div
         className="aevatar-chat-page"
@@ -1466,12 +1676,12 @@ const ChatPage: React.FC = () => {
           background: token.colorBgContainer,
           border: `1px solid ${token.colorBorderSecondary}`,
           borderRadius: token.borderRadius,
-          boxShadow: "0 1px 2px rgba(15, 23, 42, 0.04)",
-          display: "grid",
+          boxShadow: '0 1px 2px rgba(15, 23, 42, 0.04)',
+          display: 'grid',
           flex: 1,
-          height: "100%",
+          height: '100%',
           minHeight: 0,
-          overflow: "hidden",
+          overflow: 'hidden',
         }}
       >
         <aside
@@ -1479,8 +1689,8 @@ const ChatPage: React.FC = () => {
           style={{
             background: token.colorBgContainer,
             borderRight: `1px solid ${token.colorBorderSecondary}`,
-            display: "flex",
-            flexDirection: "column",
+            display: 'flex',
+            flexDirection: 'column',
             minHeight: 0,
           }}
         >
@@ -1490,26 +1700,31 @@ const ChatPage: React.FC = () => {
           className="aevatar-chat-main"
           style={{
             background: token.colorBgContainer,
-            display: "flex",
-            flexDirection: "column",
+            display: 'flex',
+            flexDirection: 'column',
             minHeight: 0,
           }}
         >
           <div
             className="aevatar-chat-main-header"
             style={{
-              alignItems: "center",
+              alignItems: 'center',
               borderBottom: `1px solid ${token.colorBorderSecondary}`,
-              display: "flex",
+              display: 'flex',
               gap: 12,
-              justifyContent: "space-between",
+              justifyContent: 'space-between',
               minHeight: 54,
-              padding: "10px 14px",
+              padding: '10px 14px',
             }}
           >
-            <Tooltip title={t("pages.chat.index.openHistory", "Open chat history")}>
+            <Tooltip
+              title={t('pages.chat.index.openHistory', 'Open chat history')}
+            >
               <Button
-                aria-label={t("pages.chat.index.openHistory", "Open chat history")}
+                aria-label={t(
+                  'pages.chat.index.openHistory',
+                  'Open chat history',
+                )}
                 className="aevatar-chat-history-trigger"
                 icon={<HistoryOutlined />}
                 onClick={() => setHistoryDrawerOpen(true)}
@@ -1522,21 +1737,28 @@ const ChatPage: React.FC = () => {
                 strong
                 style={{
                   color: token.colorTextHeading,
-                  display: "block",
+                  display: 'block',
                   fontSize: 18,
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
                 }}
               >
-                {activeConversation?.title || t("pages.chat.index.title", "Chat")}
+                {activeConversation?.title ||
+                  t('pages.chat.index.title', 'Chat')}
               </Typography.Text>
               <Typography.Text
-                style={{ color: token.colorTextTertiary, display: "block", fontSize: 12 }}
+                style={{
+                  color: token.colorTextTertiary,
+                  display: 'block',
+                  fontSize: 12,
+                }}
               >
                 {scopeId
-                  ? t("pages.chat.index.scopeValue", "Scope {scopeId}", { scopeId })
-                  : t("pages.chat.index.resolvingScope", "Resolving scope")}
+                  ? t('pages.chat.index.scopeValue', 'Scope {scopeId}', {
+                      scopeId,
+                    })
+                  : t('pages.chat.index.resolvingScope', 'Resolving scope')}
               </Typography.Text>
             </div>
             <Space className="aevatar-chat-main-actions" wrap>
@@ -1546,7 +1768,10 @@ const ChatPage: React.FC = () => {
                 </Tag>
               ) : null}
               {studioJump ? (
-                <Button onClick={() => history.push(studioJump.href)} type="primary">
+                <Button
+                  onClick={() => history.push(studioJump.href)}
+                  type="primary"
+                >
                   {studioJump.label}
                 </Button>
               ) : null}
@@ -1557,9 +1782,9 @@ const ChatPage: React.FC = () => {
             <Alert
               banner
               message={t(
-                "pages.chat.index.scopeMismatch",
-                "Requested scope {requestedScopeId} does not match authenticated scope {authenticatedScopeId}. Open Chat from the active workspace or sign in again.",
-                { authenticatedScopeId, requestedScopeId: routeScopeId }
+                'pages.chat.index.scopeMismatch',
+                'Requested scope {requestedScopeId} does not match authenticated scope {authenticatedScopeId}. Open Chat from the active workspace or sign in again.',
+                { authenticatedScopeId, requestedScopeId: routeScopeId },
               )}
               type="error"
             />
@@ -1567,8 +1792,8 @@ const ChatPage: React.FC = () => {
             <Alert
               banner
               message={t(
-                "pages.chat.index.chatRequiresAuthentication",
-                "Starting or continuing a chat requires a trusted authenticated scope."
+                'pages.chat.index.chatRequiresAuthentication',
+                'Starting or continuing a chat requires a trusted authenticated scope.',
               )}
               type="info"
             />
@@ -1576,8 +1801,8 @@ const ChatPage: React.FC = () => {
             <Alert
               banner
               message={t(
-                "pages.chat.index.noScope",
-                "No usable scope was resolved for this account. Refresh and try again."
+                'pages.chat.index.noScope',
+                'No usable scope was resolved for this account. Refresh and try again.',
               )}
               type="warning"
             />
@@ -1595,24 +1820,32 @@ const ChatPage: React.FC = () => {
           <div
             style={{
               background: token.colorBgLayout,
-              display: "flex",
+              display: 'flex',
               flex: 1,
-              flexDirection: "column",
+              flexDirection: 'column',
               minHeight: 0,
-              overflow: "auto",
+              overflow: 'auto',
               padding: 16,
             }}
           >
-            {detailLoadState.status === "loading" ? (
+            {detailLoadState.status === 'loading' ? (
               <div
                 aria-live="polite"
-                style={{ display: "flex", flex: 1, justifyContent: "center", minHeight: 180 }}
+                style={{
+                  display: 'flex',
+                  flex: 1,
+                  justifyContent: 'center',
+                  minHeight: 180,
+                }}
               >
                 <Spin
-                  description={t("pages.chat.index.loadingConversation", "Loading conversation")}
+                  description={t(
+                    'pages.chat.index.loadingConversation',
+                    'Loading conversation',
+                  )}
                 />
               </div>
-            ) : detailLoadState.status === "error" ? (
+            ) : detailLoadState.status === 'error' ? (
               <Alert
                 action={
                   activeConversationId ? (
@@ -1623,14 +1856,14 @@ const ChatPage: React.FC = () => {
                       }
                       size="small"
                     >
-                      {t("pages.chat.index.retry", "Retry")}
+                      {t('pages.chat.index.retry', 'Retry')}
                     </Button>
                   ) : null
                 }
                 description={detailLoadState.message}
                 message={t(
-                  "pages.chat.index.failedToLoadConversation",
-                  "Conversation could not be loaded"
+                  'pages.chat.index.failedToLoadConversation',
+                  'Conversation could not be loaded',
                 )}
                 showIcon
                 type="error"
@@ -1638,22 +1871,24 @@ const ChatPage: React.FC = () => {
             ) : messageCount === 0 ? (
               <div
                 style={{
-                  alignItems: "center",
+                  alignItems: 'center',
                   background: token.colorBgContainer,
                   border: `1px solid ${token.colorBorderSecondary}`,
                   borderRadius: token.borderRadius,
-                  display: "flex",
+                  display: 'flex',
                   gap: 10,
-                  margin: "8px 0 0",
+                  margin: '8px 0 0',
                   maxWidth: 720,
-                  padding: "14px 16px",
+                  padding: '14px 16px',
                 }}
               >
-                <MessageOutlined style={{ color: token.colorPrimary, fontSize: 16 }} />
+                <MessageOutlined
+                  style={{ color: token.colorPrimary, fontSize: 16 }}
+                />
                 <Typography.Text style={{ color: token.colorTextSecondary }}>
                   {t(
-                    "pages.chat.index.emptyDescription",
-                    "Describe the Team, Member, or Workflow you want to create."
+                    'pages.chat.index.emptyDescription',
+                    'Describe the Team, Member, or Workflow you want to create.',
                   )}
                 </Typography.Text>
               </div>
@@ -1662,30 +1897,34 @@ const ChatPage: React.FC = () => {
                 className="aevatar-chat-message-list"
                 direction="vertical"
                 size={14}
-                style={{ marginInline: "auto", maxWidth: 1440, width: "100%" }}
+                style={{ marginInline: 'auto', maxWidth: 1440, width: '100%' }}
               >
                 {activeConversation?.messages.map((message) => (
                   <ChatMessageEntry key={message.id} message={message} />
                 ))}
               </Space>
             )}
-            <div style={{ margin: "14px auto 0", maxWidth: 1440, width: "100%" }}>
+            <div
+              style={{ margin: '14px auto 0', maxWidth: 1440, width: '100%' }}
+            >
               <ChatActorControls
                 actionJourneys={actionJourneys}
-                disabled={controlBusy || isStreaming}
+                diagnosticWire={diagnosticWire}
+                disabled={controlBusy || projection?.stateVersion === 0}
                 onActionConnectCredential={handleActionConnectCredential}
                 onActionOpen={handleActionOpen}
                 onActionRefresh={handleActionRefresh}
                 onActionReport={(request, disposition) =>
                   void sendActionReport(request, disposition)
                 }
-                onApprovalResolve={handleApprovalResolve}
                 onInputResolve={handleInputResolve}
-                onRetry={(step) => dispatchStepControl("step.retry", step)}
-                onSkip={(step) => dispatchStepControl("step.skip", step)}
+                onPlanResolve={handlePlanResolve}
+                onRetry={(step) => dispatchStepControl('step.retry', step)}
+                onSkip={(step) => dispatchStepControl('step.skip', step)}
                 onSteer={handleSteer}
                 onStop={handleTaskStop}
                 projection={projection}
+                wireInspectorEnabled={wireInspectorEnabled && canStartChat}
               />
             </div>
             <div ref={scrollAnchorRef} />
@@ -1695,15 +1934,16 @@ const ChatPage: React.FC = () => {
             style={{
               background: token.colorBgContainer,
               borderTop: `1px solid ${token.colorBorderSecondary}`,
-              padding: "10px 14px 12px",
+              padding: '10px 14px 12px',
             }}
           >
             {hasUsage(activeConversation?.usage) ? (
               <Space size={8} style={{ marginBottom: 10 }} wrap>
                 {activeConversation?.usage?.totalTokens !== undefined ? (
                   <Tag>
-                    {t("pages.chat.index.totalTokens", "{count} tokens", {
-                      count: activeConversation.usage.totalTokens.toLocaleString(),
+                    {t('pages.chat.index.totalTokens', '{count} tokens', {
+                      count:
+                        activeConversation.usage.totalTokens.toLocaleString(),
                     })}
                   </Tag>
                 ) : null}
@@ -1714,14 +1954,26 @@ const ChatPage: React.FC = () => {
             ) : null}
             <ChatInput
               disabled={isConversationActionDisabled}
-              isStreaming={isStreaming}
+              isStreaming={isStreaming && !actorHasActiveWork}
               onChange={setPrompt}
-              onSend={handleSend}
+              onSend={handleComposerSend}
               onStop={handleComposerStop}
-              placeholder={t(
-                "pages.chat.index.composerPlaceholder",
-                "Describe the workflow you want, or ask about the current setup..."
-              )}
+              placeholder={
+                projection?.pendingInput?.allowFreeText
+                  ? t(
+                      'pages.chat.index.composerInputAnswer',
+                      'Answer the current question...',
+                    )
+                  : actorHasActiveWork
+                    ? t(
+                        'pages.chat.index.composerSteering',
+                        'Steer the active task...',
+                      )
+                    : t(
+                        'pages.chat.index.composerPlaceholder',
+                        'Describe the workflow you want, or ask about the current setup...',
+                      )
+              }
               value={prompt}
             />
           </div>
@@ -1735,43 +1987,45 @@ const ChatPage: React.FC = () => {
         open={historyDrawerOpen}
         placement="left"
         size="min(320px, calc(100vw - 48px))"
-        title={t("pages.chat.index.historyTitle", "Chat history")}
+        title={t('pages.chat.index.historyTitle', 'Chat history')}
       >
-        <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+        <div
+          style={{ display: 'flex', flexDirection: 'column', height: '100%' }}
+        >
           {historyRail}
         </div>
       </Drawer>
 
       <Modal
         cancelButtonProps={{ disabled: deletingConversation }}
-        cancelText={t("pages.chat.index.cancel", "Cancel")}
+        cancelText={t('pages.chat.index.cancel', 'Cancel')}
         confirmLoading={deletingConversation}
         destroyOnHidden
         okButtonProps={{ danger: true, disabled: isStreaming }}
         onCancel={() => {
           if (!deletingConversation) {
             setDeleteTarget(null);
-            setDeleteError("");
+            setDeleteError('');
           }
         }}
         onOk={() => void handleDeleteConversation()}
-        okText={t("pages.chat.index.delete", "Delete")}
+        okText={t('pages.chat.index.delete', 'Delete')}
         open={Boolean(deleteTarget)}
-        title={t("pages.chat.index.deleteChatTitle", "Delete conversation?")}
+        title={t('pages.chat.index.deleteChatTitle', 'Delete conversation?')}
       >
         <Typography.Paragraph>
           {t(
-            "pages.chat.index.deleteChatDescription",
+            'pages.chat.index.deleteChatDescription',
             'Delete "{title}"? The command is asynchronous and the item remains until deletion is observed.',
-            { title: deleteTarget?.title || "" }
+            { title: deleteTarget?.title || '' },
           )}
         </Typography.Paragraph>
         {deleteError ? (
           <Alert
             description={deleteError}
             message={t(
-              "pages.chat.index.deleteChatFailed",
-              "Conversation could not be deleted"
+              'pages.chat.index.deleteChatFailed',
+              'Conversation could not be deleted',
             )}
             showIcon
             type="error"

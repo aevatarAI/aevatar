@@ -440,6 +440,37 @@ public sealed class StudioProvisioningEndpointsTests
     }
 
     [Fact]
+    public async Task HandleProvisionWorkflowAsync_ShouldReturnNonRetryableRouteRepairTarget()
+    {
+        var service = new RecordingProvisioningService
+        {
+            ProvisionException = new StudioMemberAutomationCatalogRouteUnresolvedException(
+                ["service-z", "service-a", "service-a"]),
+        };
+
+        var result = await InvokeHandle<IResult>(
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            new ProvisionWorkflowRequest("Monitor", "name: monitor", Caller: Caller)
+            {
+                TeamId = TeamId,
+            },
+            service,
+            CancellationToken.None);
+
+        AssertIsJsonStatus(result, StatusCodes.Status409Conflict);
+        var value = result.GetType().GetProperty("Value")?.GetValue(result);
+        value.Should().NotBeNull();
+        value!.GetType().GetProperty("code")?.GetValue(value).Should()
+            .Be("PROVISION_WORKFLOW_AUTHORIZATION_ROUTE_UNRESOLVED");
+        value.GetType().GetProperty("retryable")?.GetValue(value).Should().Be(false);
+        value.GetType().GetProperty("refreshFailureCode")?.GetValue(value).Should()
+            .Be(StudioMemberAutomationCatalogRouteUnresolvedException.NyxIdFailureCode);
+        value.GetType().GetProperty("requiredUserServiceIds")?.GetValue(value)
+            .Should().BeEquivalentTo(new[] { "service-a", "service-z" }, options => options.WithStrictOrdering());
+    }
+
+    [Fact]
     public async Task HandleProvisionWorkflowAsync_ShouldReturnForbidden_WhenScopeAccessDenied()
     {
         var service = new RecordingProvisioningService();

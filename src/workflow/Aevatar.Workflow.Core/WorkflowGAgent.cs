@@ -165,7 +165,7 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
             if (!hasExistingRevisionId)
                 throw new WorkflowCapabilityAdmissionRebindRequiredException();
 
-            if (!requestedRequiresExplicitIdentity ||
+            if ((existingRequiresExplicitIdentity && !requestedRequiresExplicitIdentity) ||
                 !string.Equals(State.WorkflowId, workflowId, StringComparison.Ordinal) ||
                 !string.Equals(State.RevisionId, revisionId, StringComparison.Ordinal))
             {
@@ -402,6 +402,7 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
             WorkflowYaml = State.WorkflowYaml ?? string.Empty,
             ScopeId = State.ScopeId ?? string.Empty,
             DefinitionVersion = State.Version,
+            RevisionId = State.RevisionId ?? string.Empty,
         };
 
         foreach (var (workflowName, workflowYaml) in State.InlineWorkflowYamls)

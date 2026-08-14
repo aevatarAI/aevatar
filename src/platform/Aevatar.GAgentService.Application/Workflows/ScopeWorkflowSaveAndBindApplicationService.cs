@@ -36,25 +36,40 @@ public sealed class ScopeWorkflowSaveAndBindApplicationService : IScopeWorkflowS
         var admissionContext = request.CapabilityAdmission;
         var executionMode = admissionContext?.ExecutionMode ?? ExternalCapabilityExecutionMode.Interactive;
         var explicitRequestConfirmations = admissionContext?.ExplicitRequestConfirmations;
+        var capabilityAccess = new ExternalWorkflowCapabilityAccessContext(
+            normalizedScopeId,
+            admissionContext?.CallerId ?? string.Empty,
+            admissionContext?.NyxIdCallerCredential,
+            admissionContext?.NyxIdOrganizationBearerToken);
         var capabilityAdmissionPlan = admissionContext?.ExistingPlan is { } existingPlan
-            ? await _capabilityAdmissionService.RevalidatePersistedAsync(
-                new PersistedWorkflowCapabilityAdmissionRequest(
-                    existingPlan,
-                    workflowYaml,
-                    inlineWorkflowYamls,
-                    "scope_workflow_save_and_bind",
-                    executionMode,
-                    normalizedWorkflowId,
-                    revisionId),
-                ct)
+            ? admissionContext.NyxIdCallerCredential is not null
+                ? await _capabilityAdmissionService.RefreshPersistedAsync(
+                    new RefreshPersistedWorkflowCapabilityAdmissionRequest(
+                        new PersistedWorkflowCapabilityAdmissionRequest(
+                            existingPlan,
+                            workflowYaml,
+                            inlineWorkflowYamls,
+                            "scope_workflow_save_and_bind",
+                            executionMode,
+                            normalizedWorkflowId,
+                            revisionId),
+                        capabilityAccess,
+                        explicitRequestConfirmations),
+                    ct)
+                : await _capabilityAdmissionService.RevalidatePersistedAsync(
+                    new PersistedWorkflowCapabilityAdmissionRequest(
+                        existingPlan,
+                        workflowYaml,
+                        inlineWorkflowYamls,
+                        "scope_workflow_save_and_bind",
+                        executionMode,
+                        normalizedWorkflowId,
+                        revisionId),
+                    ct)
             : await _capabilityAdmissionService.AdmitAsync(
                 new WorkflowExternalCapabilityAdmissionRequest(
-                new ExternalWorkflowCapabilityAccessContext(
-                    normalizedScopeId,
-                    admissionContext?.CallerId ?? string.Empty,
-                    admissionContext?.NyxIdCallerCredential,
-                    admissionContext?.NyxIdOrganizationBearerToken),
-                workflowYaml,
+                    capabilityAccess,
+                    workflowYaml,
                 inlineWorkflowYamls,
                 "scope_workflow_save_and_bind",
                 executionMode,
@@ -94,9 +109,14 @@ public sealed class ScopeWorkflowSaveAndBindApplicationService : IScopeWorkflowS
                 RevisionId: revisionId,
                 AppId: request.AppId,
                 ServiceId: ResolveBindingServiceId(request.ServiceId),
-                ExposureDesired: request.ExposureDesired)
+                ExposureDesired: request.ExposureDesired,
+                AllowExistingRevisionReplay: true,
+                ReplayRevisionId: revisionId)
             {
                 CapabilityAdmission = trustedAdmissionContext,
+                AcceptedRevisionCreation = new ScopeBindingAcceptedRevisionCreation(
+                    workflowResult.ServiceKey,
+                    workflowResult.RevisionId),
             },
             ct);
 

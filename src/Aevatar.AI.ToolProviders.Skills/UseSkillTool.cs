@@ -206,14 +206,15 @@ public sealed class UseSkillTool : IAgentTool
                     sideEffectKind);
             }
 
-            var mounted = workflowMount.TryGetProperty("mounted", out var mountedValue) &&
-                          mountedValue.ValueKind == JsonValueKind.True;
-            var accepted = workflowMount.TryGetProperty("accepted", out var acceptedValue) &&
-                           acceptedValue.ValueKind == JsonValueKind.True;
-            var succeeded = workflowMount.TryGetProperty("success", out var successValue) &&
-                            successValue.ValueKind == JsonValueKind.True;
-            if (mounted || accepted && succeeded)
-                return SuccessReceipt(callId, toolName, arguments.SkillName, sideEffectKind);
+            if (IsCanonicalMountObserved(workflowMount))
+            {
+                return SuccessReceipt(
+                    callId,
+                    toolName,
+                    arguments.SkillName,
+                    sideEffectKind,
+                    AgentToolReceiptMutationStage.ReadModelObserved);
+            }
 
             var mountStatus = workflowMount.TryGetProperty("status", out var mountStatusValue) &&
                               mountStatusValue.ValueKind == JsonValueKind.String
@@ -232,7 +233,10 @@ public sealed class UseSkillTool : IAgentTool
                 string.IsNullOrWhiteSpace(failureCode) ? MountFailureCode(mountStatus) : failureCode,
                 "Skill workflow mounting failed.",
                 arguments.SkillName,
-                sideEffectKind);
+                sideEffectKind,
+                string.Equals(mountStatus, "mount_observation_unavailable", StringComparison.Ordinal)
+                    ? AgentToolReceiptMutationStage.Accepted
+                    : AgentToolReceiptMutationStage.Unspecified);
         }
         catch (JsonException)
         {
@@ -702,7 +706,8 @@ public sealed class UseSkillTool : IAgentTool
         string callId,
         string toolName,
         string skillName,
-        string sideEffectKind = "") =>
+        string sideEffectKind = "",
+        AgentToolReceiptMutationStage mutationStage = AgentToolReceiptMutationStage.Unspecified) =>
         new()
         {
             CallId = callId ?? string.Empty,
@@ -713,6 +718,7 @@ public sealed class UseSkillTool : IAgentTool
                 ? AgentToolReceiptEffect.ReadOnly
                 : AgentToolReceiptEffect.Mutating,
             SideEffectKind = sideEffectKind,
+            MutationStage = mutationStage,
             SubjectKind = string.IsNullOrWhiteSpace(skillName) ? string.Empty : "ornn.skill",
             SubjectId = skillName?.Trim() ?? string.Empty,
         };
@@ -723,7 +729,8 @@ public sealed class UseSkillTool : IAgentTool
         string errorCode,
         string errorMessage,
         string skillName,
-        string sideEffectKind) =>
+        string sideEffectKind,
+        AgentToolReceiptMutationStage mutationStage = AgentToolReceiptMutationStage.Unspecified) =>
         new()
         {
             CallId = callId ?? string.Empty,
@@ -734,12 +741,19 @@ public sealed class UseSkillTool : IAgentTool
                 ? AgentToolReceiptEffect.ReadOnly
                 : AgentToolReceiptEffect.Mutating,
             SideEffectKind = sideEffectKind,
+            MutationStage = mutationStage,
             SubjectKind = string.IsNullOrWhiteSpace(skillName) ? string.Empty : "ornn.skill",
             SubjectId = skillName?.Trim() ?? string.Empty,
             ErrorCode = errorCode,
             ErrorMessage = errorMessage,
             ResultJson = JsonSerializer.Serialize(new { error = errorCode, message = errorMessage }),
         };
+
+    private static bool IsCanonicalMountObserved(JsonElement workflowMount) =>
+        workflowMount.TryGetProperty("mounted", out var mountedValue) &&
+        mountedValue.ValueKind == JsonValueKind.True &&
+        workflowMount.TryGetProperty("read_model_observed", out var observedValue) &&
+        observedValue.ValueKind == JsonValueKind.True;
 
     private static string LoadFailureCode(string status) =>
         status switch

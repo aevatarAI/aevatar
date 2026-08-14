@@ -88,6 +88,10 @@ public sealed class StudioApplicationServiceCollectionExtensionsTests
             x.ServiceType == typeof(IScopeWorkflowPublishedServiceDescriptorSource) &&
             x.ImplementationType == typeof(StudioMemberScopeWorkflowDescriptorSource) &&
             x.Lifetime == ServiceLifetime.Singleton);
+        services.Should().ContainSingle(x =>
+            x.ServiceType == typeof(IScopeWorkflowPublishedServiceDescriptorSource) &&
+            x.ImplementationType == typeof(CatalogueScopeWorkflowDescriptorSource) &&
+            x.Lifetime == ServiceLifetime.Singleton);
     }
 
     [Fact]

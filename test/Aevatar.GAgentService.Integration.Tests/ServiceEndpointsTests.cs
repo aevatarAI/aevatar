@@ -1862,6 +1862,8 @@ public sealed class ServiceEndpointsTests
 
         public List<PersistedWorkflowCapabilityAdmissionRequest> PersistedRequests { get; } = [];
 
+        public List<RefreshPersistedWorkflowCapabilityAdmissionRequest> RefreshRequests { get; } = [];
+
         public Task<WorkflowCapabilityAdmissionPlan> AdmitAsync(
             WorkflowExternalCapabilityAdmissionRequest request,
             CancellationToken cancellationToken = default)
@@ -1887,6 +1889,17 @@ public sealed class ServiceEndpointsTests
                 return Task.FromException<WorkflowCapabilityAdmissionPlan>(_failure);
 
             return Task.FromResult(request.Plan.Clone());
+        }
+
+        public Task<WorkflowCapabilityAdmissionPlan> RefreshPersistedAsync(
+            RefreshPersistedWorkflowCapabilityAdmissionRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            RefreshRequests.Add(request);
+            if (_failure is not null)
+                return Task.FromException<WorkflowCapabilityAdmissionPlan>(_failure);
+
+            return Task.FromResult(request.Persisted.Plan.Clone());
         }
     }
 

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Aevatar.AI.ToolProviders.Lark;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Platform.Lark;
@@ -9,12 +10,9 @@ namespace Aevatar.GAgents.NyxidChat;
 
 /// <summary>
 /// Production <see cref="IConversationCardTurnRunner"/> for the Lark CardKit streaming
-/// path. Composes <see cref="ILarkCardKitClient"/> (cardkit/v1/* endpoints) with
-/// <see cref="ILarkNyxClient.SendMessageAsync"/> or <see cref="ILarkNyxClient.ReplyToMessageAsync"/>
-/// (im/v1/messages with msg_type=interactive) to drive the create → bind → stream → finalize lifecycle. Auth: bot owner's NyxID
-/// access token from <c>activity.TransportExtras.NyxUserAccessToken</c>; receive target:
-/// <c>nyx_lark_chat_id</c> for groups, falling back to <c>nyx_lark_union_id</c> for p2p
-/// DMs (cross-app safe per the proto's documented invariants).
+/// path. CardKit entity operations use the bot owner's NyxID access token. The initial bind for an
+/// inbound relay turn uses that turn's single-use channel-reply authority; only proactive turns
+/// without reply authority use the generic Lark send/reply proxy.
 /// </summary>
 public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRunner
 {
@@ -23,13 +21,14 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
     private readonly ILarkCardKitClient _cardKit;
     private readonly ILarkNyxClient _larkClient;
     private readonly ILarkOutboundClientFactory? _outboundClientFactory;
+    private readonly NyxIdApiClient? _nyxClient;
     private readonly ILogger<ChannelCardConversationTurnRunner> _logger;
 
     public ChannelCardConversationTurnRunner(
         ILarkCardKitClient cardKit,
         ILarkNyxClient larkClient,
         ILogger<ChannelCardConversationTurnRunner> logger)
-        : this(cardKit, larkClient, outboundClientFactory: null, logger)
+        : this(cardKit, larkClient, outboundClientFactory: null, nyxClient: null, logger)
     {
     }
 
@@ -38,17 +37,27 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
         ILarkNyxClient larkClient,
         ILarkOutboundClientFactory? outboundClientFactory,
         ILogger<ChannelCardConversationTurnRunner> logger)
+        : this(cardKit, larkClient, outboundClientFactory, nyxClient: null, logger)
+    {
+    }
+
+    public ChannelCardConversationTurnRunner(
+        ILarkCardKitClient cardKit,
+        ILarkNyxClient larkClient,
+        ILarkOutboundClientFactory? outboundClientFactory,
+        NyxIdApiClient? nyxClient,
+        ILogger<ChannelCardConversationTurnRunner> logger)
     {
         _cardKit = cardKit ?? throw new ArgumentNullException(nameof(cardKit));
         _larkClient = larkClient ?? throw new ArgumentNullException(nameof(larkClient));
         _outboundClientFactory = outboundClientFactory;
+        _nyxClient = nyxClient;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
-    // Resolves the CardKit/im clients bound to the inbound bot's outbound proxy slug (carried on the
-    // reply activity's TransportExtras). Falls back to the configured-default singletons when no
-    // factory is wired or the activity has no slug. This is what makes a card reply proxy through the
-    // bot that received the inbound turn instead of the process-wide default `api-lark-bot`.
+    // Resolves the CardKit/proactive-message clients bound to the inbound bot's outbound proxy slug
+    // (carried on the reply activity's TransportExtras). Falls back to the configured-default
+    // singletons when no factory is wired or the activity has no slug.
     private (ILarkCardKitClient CardKit, ILarkNyxClient Lark) ResolveOutboundClients(ChatActivity? activity)
     {
         var slug = activity?.TransportExtras?.NyxProviderSlug?.Trim();
@@ -68,6 +77,32 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
         ArgumentNullException.ThrowIfNull(chunk);
         if (chunk.Activity is null)
             return ConversationCardCreateResult.Failed("activity_required", "Stream chunk event is missing the source activity.");
+
+        var isInboundRelayDelivery = !string.IsNullOrWhiteSpace(
+            chunk.Activity.OutboundDelivery?.ReplyMessageId);
+        if (isInboundRelayDelivery && runtimeContext.NyxRelayReplyToken is null)
+        {
+            return ConversationCardCreateResult.Failed(
+                "relay_reply_authority_missing",
+                "The inbound relay turn no longer has usable reply authority.");
+        }
+
+        if (runtimeContext.NyxRelayReplyToken is { } replyAuthority)
+        {
+            if (!ReplyAuthorityMatchesActivity(replyAuthority, chunk.Activity))
+            {
+                return ConversationCardCreateResult.Failed(
+                    "reply_authority_mismatch",
+                    "The channel reply authority does not belong to this inbound activity.");
+            }
+
+            if (_nyxClient is null)
+            {
+                return ConversationCardCreateResult.Failed(
+                    "relay_reply_client_missing",
+                    "The NyxID channel relay reply client is unavailable.");
+            }
+        }
 
         var token = ResolveToken(chunk.Activity, runtimeContext);
         if (token is null)
@@ -102,17 +137,26 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
 
         // 2. Bind the card to the chat by sending or replying with an interactive message
         //    that references it.
-        var contentJson = JsonSerializer.Serialize(
-            new { type = "card", data = new { card_id = cardId } },
-            JsonOptions);
-        var bindResult = await BindCardToConversationAsync(larkClient, token, chunk, cardId, contentJson, ct);
+        var cardPayload = new { type = "card", data = new { card_id = cardId } };
+        var contentJson = JsonSerializer.Serialize(cardPayload, JsonOptions);
+        var bindResult = await BindCardToConversationAsync(
+            larkClient,
+            token,
+            chunk,
+            runtimeContext,
+            cardId,
+            cardPayload,
+            contentJson,
+            ct);
         if (!bindResult.Success)
             return bindResult;
 
         var cardMessageId = bindResult.CardMessageId ?? string.Empty;
 
-        // 3. Write the first chunk's text into the streaming element. Sequence = 1 (the
-        //    grain pre-allocates this value; subsequent chunks pass sequence+1 each call).
+        // 3. Write the first chunk's text into the streaming element. Preserve interim JSON
+        //    verbatim: only complete final JSON can replace the shell with a native table, and
+        //    key/value rendering is reserved for the non-CardKit fallback path. Sequence = 1
+        //    (the grain pre-allocates this value; subsequent chunks pass sequence+1 each call).
         //    The card has already been bound to the chat (step 2), so any failure from here
         //    on is a *post-send* failure: an empty card is visible in the chat. We must
         //    return PostSendFailed (not Failed) so the actor terminates the turn instead
@@ -125,7 +169,7 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
                 new LarkCardKitStreamElementContentRequest(
                     CardId: cardId,
                     ElementId: streamingElementId,
-                    Content: LarkJsonTableFormatter.FormatAsKeyValueText(chunk.AccumulatedText),
+                    Content: chunk.AccumulatedText,
                     Sequence: 1,
                     IdempotencyKey: $"{chunk.CorrelationId}-1"),
                 ct);
@@ -201,7 +245,7 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
                 new LarkCardKitStreamElementContentRequest(
                     CardId: cardId,
                     ElementId: elementId,
-                    Content: LarkJsonTableFormatter.FormatAsKeyValueText(chunk.AccumulatedText),
+                    Content: chunk.AccumulatedText,
                     Sequence: sequence,
                     IdempotencyKey: $"{chunk.CorrelationId}-{sequence}"),
                 ct);
@@ -315,6 +359,50 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
         return ConversationCardFinalizeResult.Succeeded();
     }
 
+    public async Task<ConversationCardAbortResult> RunCardAbortAsync(
+        ChatActivity referenceActivity,
+        string cardId,
+        long sequence,
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(referenceActivity);
+
+        var token = ResolveToken(referenceActivity, runtimeContext);
+        if (token is null)
+        {
+            return ConversationCardAbortResult.Failed(
+                "token_missing",
+                "NyxID user access token is missing for card timeout compensation.");
+        }
+
+        var (cardKit, _) = ResolveOutboundClients(referenceActivity);
+        try
+        {
+            var settingsResponse = await cardKit.SetCardSettingsAsync(
+                token,
+                new LarkCardKitSettingsRequest(
+                    CardId: cardId,
+                    SettingsJson: LarkStreamingCardShell.BuildCloseStreamingSettingsJson(),
+                    Sequence: sequence,
+                    IdempotencyKey: $"abort-{cardId}-{sequence}"),
+                ct);
+            if (LarkProxyResponseParser.TryParseError(settingsResponse, out var settingsError))
+                return ConversationCardAbortResult.Failed("card_abort_streaming_failed", settingsError);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "CardKit timeout compensation threw for card_id={CardId}, seq={Sequence}",
+                cardId,
+                sequence);
+            return ConversationCardAbortResult.Failed("card_abort_streaming_threw", ex.Message);
+        }
+
+        return ConversationCardAbortResult.Succeeded();
+    }
+
     private static string? TryComposeJsonTableCard(string? text, ChatActivity referenceActivity)
     {
         if (!LarkJsonTableFormatter.ContainsConvertibleJson(text))
@@ -371,10 +459,25 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
         ILarkNyxClient larkClient,
         string token,
         LlmReplyCardStreamChunkEvent chunk,
+        ConversationTurnRuntimeContext runtimeContext,
         string cardId,
+        object cardPayload,
         string contentJson,
         CancellationToken ct)
     {
+        if (runtimeContext.NyxRelayReplyToken is { } replyAuthority)
+        {
+            return await BindCardThroughRelayReplyAsync(
+                    replyAuthority,
+                    chunk,
+                    cardId,
+                    cardPayload,
+                    ct)
+                .ConfigureAwait(false);
+        }
+
+        // No inbound reply authority means this is a proactive delivery. It intentionally uses
+        // the bot owner's scoped Lark proxy credential and an explicit target.
         var inboundMessageId = ResolveInboundMessageId(chunk.Activity);
         var isGroupLike = chunk.Activity?.Conversation?.Scope is ConversationScope.Group
                                                         or ConversationScope.Channel
@@ -424,6 +527,85 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
         var cardMessageId = LarkProxyResponseParser.ParseSendSuccess(response).MessageId
             ?? string.Empty;
         return ConversationCardCreateResult.Succeeded(cardId, cardMessageId);
+    }
+
+    private async Task<ConversationCardCreateResult> BindCardThroughRelayReplyAsync(
+        NyxRelayReplyTokenContext replyAuthority,
+        LlmReplyCardStreamChunkEvent chunk,
+        string cardId,
+        object cardPayload,
+        CancellationToken ct)
+    {
+        if (!ReplyAuthorityMatchesActivity(replyAuthority, chunk.Activity))
+        {
+            return ConversationCardCreateResult.Failed(
+                "reply_authority_mismatch",
+                "The channel reply authority does not belong to this inbound activity.");
+        }
+
+        if (_nyxClient is null)
+        {
+            return ConversationCardCreateResult.Failed(
+                "relay_reply_client_missing",
+                "The NyxID channel relay reply client is unavailable.");
+        }
+
+        try
+        {
+            var delivery = await _nyxClient.SendChannelRelayReplyAsync(
+                    replyAuthority.ReplyToken,
+                    replyAuthority.ReplyMessageId,
+                    new ChannelRelayReplyBody(
+                        chunk.AccumulatedText,
+                        new ChannelRelayReplyMetadata(cardPayload)),
+                    ct)
+                .ConfigureAwait(false);
+            if (!delivery.Succeeded)
+            {
+                return ConversationCardCreateResult.ReplyAuthoritySpentDeliveryUnknown(
+                    cardId,
+                    delivery.PlatformMessageId ?? delivery.MessageId ?? string.Empty,
+                    "card_relay_reply_failed",
+                    delivery.Detail ?? "NyxID channel relay rejected the card reply.");
+            }
+
+            var cardMessageId = delivery.PlatformMessageId ?? delivery.MessageId ?? string.Empty;
+            return ConversationCardCreateResult.Succeeded(cardId, cardMessageId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Channel relay card bind threw for correlation={CorrelationId}, card_id={CardId}",
+                chunk.CorrelationId,
+                cardId);
+            // NyxID consumes the single-use reply authority before the platform call. Once this
+            // attempt starts, any rejection, cancellation, or lost response is delivery-ambiguous;
+            // the caller must not reuse the authority for a text fallback.
+            return ConversationCardCreateResult.ReplyAuthoritySpentDeliveryUnknown(
+                cardId,
+                string.Empty,
+                "card_relay_reply_threw",
+                ex.Message);
+        }
+    }
+
+    private static bool ReplyAuthorityMatchesActivity(
+        NyxRelayReplyTokenContext replyAuthority,
+        ChatActivity activity)
+    {
+        var delivery = activity.OutboundDelivery;
+        return delivery is not null &&
+               !string.IsNullOrWhiteSpace(delivery.CorrelationId) &&
+               !string.IsNullOrWhiteSpace(delivery.ReplyMessageId) &&
+               string.Equals(
+                   replyAuthority.CorrelationId,
+                   delivery.CorrelationId.Trim(),
+                   StringComparison.Ordinal) &&
+               string.Equals(
+                   replyAuthority.ReplyMessageId,
+                   delivery.ReplyMessageId.Trim(),
+                   StringComparison.Ordinal);
     }
 
     private static string? ResolveInboundMessageId(ChatActivity? activity)

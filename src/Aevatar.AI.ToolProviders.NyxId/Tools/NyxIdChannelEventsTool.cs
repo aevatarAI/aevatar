@@ -4,13 +4,16 @@ using Aevatar.AI.Abstractions.ToolProviders;
 
 namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 
-public sealed class NyxIdChannelEventsTool : INyxIdBuiltInTool
+public sealed class NyxIdChannelEventsTool : INyxIdBuiltInTool, IAgentToolCapabilityDescriptor
 {
     private readonly NyxIdApiClient _client;
 
     public NyxIdChannelEventsTool(NyxIdApiClient client) => _client = client;
 
     public string Name => "nyxid_channel_events";
+
+    public IReadOnlyCollection<string> Capabilities =>
+        [AgentToolCapabilities.ExcludeFromNyxIdChat];
 
     public string Description =>
         "Push device or analyzer events through the NyxID HTTP Event Gateway. " +

@@ -37,7 +37,9 @@ public sealed class ToolAuditRecordFactory
         AgentToolCredentialSource credentialSource,
         AgentToolReceipt receipt,
         AuditOutcome outcome,
-        bool isMutation)
+        bool isMutation,
+        string? authorizationMode = null,
+        string? authorizationId = null)
     {
         if (executionPhase == AuditToolExecutionPhase.Unspecified)
             throw new ArgumentOutOfRangeException(nameof(executionPhase), executionPhase, null);
@@ -48,8 +50,8 @@ public sealed class ToolAuditRecordFactory
         var scopeId = ResolveScopeId(executionContext);
         var correlation = BuildCorrelation(executionContext, receipt, toolCallId);
         var lifecyclePhase = MapLifecyclePhase(executionPhase, receipt.Status);
-        var terminalOutcome = MapTerminalOutcome(lifecyclePhase, receipt, outcome);
-        var errorCode = ResolveFailureCode(receipt.ErrorCode, receipt.Status);
+        var terminalOutcome = MapTerminalOutcome(lifecyclePhase, receipt, outcome, tool.Name);
+        var errorCode = ResolveFailureCode(receipt.ErrorCode, receipt.Status, tool.Name);
         var targetKind = Normalize(receipt.SubjectKind) ?? "tool";
         var targetId = Normalize(receipt.SubjectId) ?? toolCallId;
         var record = new AuditRecord
@@ -69,7 +71,7 @@ public sealed class ToolAuditRecordFactory
             OperationKind = AuditOperationKind.Tool,
             OperationName = toolName,
             SensitivityLevel = AuditSensitivityLevel.Internal,
-            Outcome = MapOutcome(outcome, receipt),
+            Outcome = MapOutcome(outcome, receipt, tool.Name),
             LifecyclePhase = lifecyclePhase,
             TerminalOutcome = terminalOutcome,
             CapturePlane = AuditCapturePlane.ToolExecution,
@@ -115,6 +117,8 @@ public sealed class ToolAuditRecordFactory
         AddIfPresent(record.Annotations, "subject_hash", receipt.SubjectHash);
         AddIfPresent(record.Annotations, "channel_platform", executionContext.Channel.Platform);
         AddIfPresent(record.Annotations, "schedule_id", executionContext.Schedule.ScheduleId);
+        AddIfPresent(record.Annotations, "authorization_mode", authorizationMode);
+        AddIfPresent(record.Annotations, "authorization_id", authorizationId);
 
         if (terminalOutcome is AuditTerminalOutcome.Failed or AuditTerminalOutcome.TimedOut)
         {
@@ -167,8 +171,11 @@ public sealed class ToolAuditRecordFactory
         };
     }
 
-    private static AuditOutcome MapOutcome(AuditOutcome outcome, AgentToolReceipt receipt) =>
-        ResolveFailureCode(receipt.ErrorCode, receipt.Status) == "codex_execution_cancelled"
+    private static AuditOutcome MapOutcome(
+        AuditOutcome outcome,
+        AgentToolReceipt receipt,
+        string toolName) =>
+        IsCancelledFailureCode(ResolveFailureCode(receipt.ErrorCode, receipt.Status, toolName))
             ? AuditOutcome.Cancelled
             : receipt.Status == AgentToolReceiptStatus.Unspecified
                 ? AuditOutcome.Accepted
@@ -195,16 +202,20 @@ public sealed class ToolAuditRecordFactory
     private static AuditTerminalOutcome MapTerminalOutcome(
         AuditLifecyclePhase lifecyclePhase,
         AgentToolReceipt receipt,
-        AuditOutcome outcome)
+        AuditOutcome outcome,
+        string toolName)
     {
         if (lifecyclePhase != AuditLifecyclePhase.Terminal)
             return AuditTerminalOutcome.Unspecified;
 
-        return ResolveFailureCode(receipt.ErrorCode, receipt.Status) switch
+        var failureCode = ResolveFailureCode(receipt.ErrorCode, receipt.Status, toolName);
+        if (IsTimeoutFailureCode(failureCode))
+            return AuditTerminalOutcome.TimedOut;
+        if (IsCancelledFailureCode(failureCode))
+            return AuditTerminalOutcome.Cancelled;
+
+        return failureCode switch
         {
-            "approval_timeout" or "codex_execution_timed_out" or "WEB_FETCH_TIMEOUT" =>
-                AuditTerminalOutcome.TimedOut,
-            "codex_execution_cancelled" => AuditTerminalOutcome.Cancelled,
             _ => outcome switch
             {
                 AuditOutcome.Success => AuditTerminalOutcome.Succeeded,
@@ -214,11 +225,21 @@ public sealed class ToolAuditRecordFactory
         };
     }
 
-    private static string ResolveFailureCode(string? value, AgentToolReceiptStatus status)
+    private static bool IsTimeoutFailureCode(string? value) =>
+        value is "approval_timeout" or "codex_execution_timed_out" or "WEB_FETCH_TIMEOUT" ||
+        ToolExecutionAuditErrorCode.IsTimeout(value);
+
+    private static bool IsCancelledFailureCode(string? value) =>
+        value == "codex_execution_cancelled" || ToolExecutionAuditErrorCode.IsCancelled(value);
+
+    private static string ResolveFailureCode(
+        string? value,
+        AgentToolReceiptStatus status,
+        string toolName)
     {
-        var managedUpstreamCode = ManagedCodexUpstreamErrorCode.Resolve(value);
-        if (managedUpstreamCode is not null)
-            return managedUpstreamCode;
+        var ownedExecutionCode = ToolExecutionAuditErrorCode.ResolveForTool(toolName, value);
+        if (ownedExecutionCode is not null)
+            return ownedExecutionCode;
 
         var normalized = Normalize(value);
         if (IsOwnedNyxIdProxyFailureCode(normalized) ||
@@ -258,8 +279,7 @@ public sealed class ToolAuditRecordFactory
             "tool_execution_already_started" or
             "tool_execution_error" or
             "tool_execution_exception" or
-            "tool_outcome_unknown" or
-            "CODE_EXECUTE_FAILED" => normalized,
+            "tool_outcome_unknown" => normalized,
             _ => DefaultFailureCode(status),
         };
     }

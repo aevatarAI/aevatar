@@ -1,7 +1,9 @@
 using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.RunForks;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -68,6 +70,7 @@ internal sealed class WorkflowRunForkCoordinator : ICommittedStatePublicationHoo
                     requested.Attempt,
                     result.Error?.Code,
                     result.Error?.Reason);
+                return;
             }
         }
         catch (Exception ex)

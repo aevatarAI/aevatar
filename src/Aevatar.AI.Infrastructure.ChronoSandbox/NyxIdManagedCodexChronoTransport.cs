@@ -114,6 +114,7 @@ internal sealed class NyxIdManagedCodexChronoTransport(
         }
 
         var secret = new ManagedCodexOpaqueSecret(resolved.Secret);
+        var localDiagnosticId = CreateLocalDiagnosticId();
         var body = JsonSerializer.Serialize(new
         {
             prompt = request.Prompt,
@@ -126,38 +127,63 @@ internal sealed class NyxIdManagedCodexChronoTransport(
             _timeProvider);
         using var requestDeadline =
             CancellationTokenSource.CreateLinkedTokenSource(ct, lifecycleTimeout.Token);
-        var response = await secret.UseAsync(rawKey => _clientFactory.CreateClient().ProxyRequestBoundedWithApiKeyAsync(
-                rawKey,
-                ManagedCodexOptions.ChronoSandboxServiceSlug,
-                credential.ChronoSandboxUserServiceId,
-                ManagedCodexOptions.ChronoExecutionPath,
-                HttpMethod.Post.Method,
-                body,
-                _options.MaxResponseBytes,
-                requestDeadline.Token))
-            .ConfigureAwait(false);
+        NyxIdProxyTextResponse response;
+        try
+        {
+            response = await secret.UseAsync(rawKey =>
+                    _clientFactory.CreateClient().ProxyRequestBoundedWithApiKeyAsync(
+                        rawKey,
+                        ManagedCodexOptions.ManagedCodexServiceSlug,
+                        credential.ManagedCodexUserServiceId,
+                        ManagedCodexOptions.ChronoExecutionPath,
+                        HttpMethod.Post.Method,
+                        body,
+                        _options.MaxResponseBytes,
+                        requestDeadline.Token))
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            LogLocalProxyFailure(0, "lifecycle_timeout", localDiagnosticId);
+            throw Failure(
+                CodexExecutionFailureKind.TimedOut,
+                "managed_proxy_timeout",
+                "Managed Codex proxy request timed out.",
+                localDiagnosticId);
+        }
         if (!response.Succeeded)
         {
             if (response.Detail is
                 "content_length_exceeds_max_bytes" or
                 "content_exceeds_max_bytes")
             {
+                LogLocalProxyFailure(
+                    response.HttpStatus,
+                    "response_too_large",
+                    localDiagnosticId);
                 throw Failure(
                     CodexExecutionFailureKind.MalformedOutput,
                     "managed_response_too_large",
-                    "Managed Codex returned an oversized response.");
+                    "Managed Codex returned an oversized response.",
+                    localDiagnosticId);
             }
 
             if (response.HttpStatus > 0)
-                throw ProxyFailure(response.HttpStatus, response.Content);
+                throw ProxyFailure(response.HttpStatus, response.Content, localDiagnosticId);
 
+            LogLocalProxyFailure(0, "transport_unavailable", localDiagnosticId);
             throw Failure(
-                CodexExecutionFailureKind.CapacityUnavailable,
+                CodexExecutionFailureKind.TerminalFailure,
                 "managed_proxy_unavailable",
-                "Managed Codex proxy is temporarily unavailable.");
+                "Managed Codex proxy is temporarily unavailable.",
+                localDiagnosticId);
         }
 
-        return secret.Use(rawKey => ParseResponse(response.Content, rawKey));
+        return secret.Use(rawKey => ParseResponse(response.Content, rawKey, localDiagnosticId));
     }
 
     private ExternalSubjectRef ValidateRequest(CodexExecutionRequest? request)
@@ -218,13 +244,13 @@ internal sealed class NyxIdManagedCodexChronoTransport(
                 credential.ExpiresAt.ToDateTimeOffset() <= _timeProvider.GetUtcNow() ||
                 string.IsNullOrWhiteSpace(credential.ApiKeyId) ||
                 !string.Equals(
-                    credential.ChronoSandboxServiceSlug,
-                    ManagedCodexOptions.ChronoSandboxServiceSlug,
+                    credential.ManagedCodexServiceSlug,
+                    ManagedCodexOptions.ManagedCodexServiceSlug,
                     StringComparison.Ordinal) ||
-                string.IsNullOrWhiteSpace(credential.ChronoSandboxUserServiceId) ||
+                string.IsNullOrWhiteSpace(credential.ManagedCodexUserServiceId) ||
                 string.IsNullOrWhiteSpace(credential.ChronoLlmUserServiceId) ||
                 string.Equals(
-                    credential.ChronoSandboxUserServiceId,
+                    credential.ManagedCodexUserServiceId,
                     credential.ChronoLlmUserServiceId,
                     StringComparison.Ordinal) ||
                 credential.SecretReference is null ||
@@ -265,7 +291,10 @@ internal sealed class NyxIdManagedCodexChronoTransport(
         actual.Version == expected.Version &&
         string.Equals(actual.Fingerprint, expected.Fingerprint, StringComparison.Ordinal);
 
-    private CodexExecutionResult ParseResponse(string response, string rawKey)
+    private CodexExecutionResult ParseResponse(
+        string response,
+        string rawKey,
+        string localDiagnosticId)
     {
         try
         {
@@ -280,7 +309,7 @@ internal sealed class NyxIdManagedCodexChronoTransport(
                              statusElement.TryGetInt32(out var parsedStatus)
                     ? parsedStatus
                     : 0;
-                throw ProxyFailure(status, response);
+                throw ProxyFailure(status, response, localDiagnosticId);
             }
 
             if (!root.TryGetProperty("success", out var success) ||
@@ -293,30 +322,29 @@ internal sealed class NyxIdManagedCodexChronoTransport(
                 throw Failure(
                     CodexExecutionFailureKind.MalformedOutput,
                     "managed_response_invalid",
-                    "Managed Codex returned an invalid response.");
+                    "Managed Codex returned an invalid response.",
+                    localDiagnosticId);
             }
 
             var text = Redact(textElement.GetString() ?? string.Empty, rawKey) ?? string.Empty;
-            var exitCode = output.TryGetProperty("exit_code", out var exitCodeElement) &&
-                           exitCodeElement.TryGetInt32(out var parsedExitCode)
-                ? parsedExitCode
-                : (int?)null;
+            if (!output.TryGetProperty("exit_code", out var exitCodeElement) ||
+                !exitCodeElement.TryGetInt32(out var exitCode))
+            {
+                throw Failure(
+                    CodexExecutionFailureKind.MalformedOutput,
+                    "managed_response_invalid",
+                    "Managed Codex returned an invalid response.",
+                    localDiagnosticId);
+            }
             var elapsed = output.TryGetProperty("execution_time_ms", out var elapsedElement) &&
                           elapsedElement.TryGetInt64(out var parsedElapsed)
                 ? parsedElapsed
                 : (long?)null;
             var diagnosticId = root.TryGetProperty("diagnostic_id", out var diagnosticElement) &&
                                diagnosticElement.ValueKind == JsonValueKind.String
-                ? Redact(diagnosticElement.GetString(), rawKey)
+                ? ChronoProxyFailureInspector.SanitizeDiagnosticId(
+                    Redact(diagnosticElement.GetString(), rawKey))
                 : null;
-            if (exitCode is not 0)
-            {
-                throw Failure(
-                    CodexExecutionFailureKind.TerminalFailure,
-                    "managed_execution_nonzero_exit",
-                    "Managed Codex execution exited unsuccessfully.",
-                    diagnosticId);
-            }
             return new CodexExecutionResult(text, exitCode, diagnosticId, elapsed);
         }
         catch (ManagedCodexTransportException)
@@ -328,31 +356,61 @@ internal sealed class NyxIdManagedCodexChronoTransport(
             throw Failure(
                 CodexExecutionFailureKind.MalformedOutput,
                 "managed_response_invalid",
-                "Managed Codex returned an invalid response.");
+                "Managed Codex returned an invalid response.",
+                localDiagnosticId);
         }
     }
 
-    private ManagedCodexTransportException ProxyFailure(int status, string? response = null)
+    private ManagedCodexTransportException ProxyFailure(
+        int status,
+        string? response,
+        string localDiagnosticId)
     {
-        var upstreamCode = TryGetAllowedUpstreamFailureCode(response);
+        var inspection = ChronoProxyFailureInspector.Inspect(response, AllowedUpstreamFailureCodes);
+        var diagnosticId = inspection.DiagnosticId ?? localDiagnosticId;
+        var diagnosticSource = inspection.DiagnosticId is null ? "aevatar" : "upstream";
+        var upstreamCode = inspection.UpstreamCode is null
+            ? null
+            : $"managed_upstream_{inspection.UpstreamCode.ToLowerInvariant()}";
         // Bounded shape diagnostics only. Without them a proxy failure carrying no recognizable
         // upstream code is indistinguishable from one whose body we simply failed to parse, and
         // triage cannot tell a gateway-level fault from a chrono-reported one. Never log the body,
         // upstream message, credential, service id or run id.
         _logger.LogWarning(
-            "Managed Codex proxy failure. status={Status} bodyBytes={BodyBytes} bodyShape={BodyShape} upstreamCodeResolved={Resolved}",
+            "Managed Codex proxy failure. status={Status} bodyBytes={BodyBytes} bodyShape={BodyShape} upstreamCodeResolved={Resolved} diagnosticId={DiagnosticId} diagnosticSource={DiagnosticSource}",
             status,
-            response?.Length ?? 0,
-            ClassifyBodyShape(response),
-            upstreamCode is not null);
-        // A typed upstream code names the actual failing stage, so it classifies the failure.
+            inspection.BodyBytes,
+            inspection.BodyShape,
+            upstreamCode is not null,
+            diagnosticId,
+            diagnosticSource);
+        // A typed upstream code names the actual failing stage, so it normally classifies the failure.
+        // Capacity is the exception: chrono's contract binds that code to 429, and any other
+        // status/code combination is malformed producer output rather than evidence of capacity.
         // HTTP status alone cannot: chrono-sandbox returns 429 only for the capacity permit and
         // uses 502 for provisioning/OpenSandbox faults, so status-only mapping reports "capacity
         // unavailable" for sandbox-creation failures and sends triage the wrong way.
-        if (upstreamCode is not null &&
-            TryClassifyUpstreamFailure(upstreamCode) is { } upstreamFailure)
+        if (upstreamCode is not null)
         {
-            return Failure(upstreamFailure.Kind, upstreamCode, upstreamFailure.Message);
+            if (string.Equals(
+                    upstreamCode,
+                    "managed_upstream_codex_capacity_unavailable",
+                    StringComparison.Ordinal) &&
+                status != 429)
+            {
+                return Failure(
+                    CodexExecutionFailureKind.MalformedOutput,
+                    upstreamCode,
+                    "Managed Codex returned an inconsistent upstream failure.",
+                    diagnosticId);
+            }
+
+            var upstreamFailure = ClassifyUpstreamFailure(upstreamCode);
+            return Failure(
+                upstreamFailure.Kind,
+                upstreamCode,
+                upstreamFailure.Message,
+                diagnosticId);
         }
 
         return status switch
@@ -360,90 +418,88 @@ internal sealed class NyxIdManagedCodexChronoTransport(
             401 => Failure(
                 CodexExecutionFailureKind.AdmissionDenied,
                 upstreamCode ?? "managed_proxy_authentication_failed",
-                "Managed Codex proxy authentication failed."),
+                "Managed Codex proxy authentication failed.",
+                diagnosticId),
             403 => Failure(
                 CodexExecutionFailureKind.AdmissionDenied,
                 upstreamCode ?? "managed_proxy_authorization_denied",
-                "Managed Codex proxy authorization was denied."),
+                "Managed Codex proxy authorization was denied.",
+                diagnosticId),
             404 => Failure(
                 CodexExecutionFailureKind.TargetNotConfigured,
                 upstreamCode ?? "managed_proxy_target_unavailable",
-                "Managed Codex proxy target is unavailable."),
+                "Managed Codex proxy target is unavailable.",
+                diagnosticId),
             408 or 504 => Failure(
                 CodexExecutionFailureKind.TimedOut,
                 upstreamCode ?? "managed_proxy_timeout",
-                "Managed Codex proxy request timed out."),
-            429 or 502 or 503 => Failure(
+                "Managed Codex proxy request timed out.",
+                diagnosticId),
+            429 => Failure(
                 CodexExecutionFailureKind.CapacityUnavailable,
                 upstreamCode ?? "managed_proxy_unavailable",
-                "Managed Codex proxy is temporarily unavailable."),
+                "Managed Codex proxy is temporarily unavailable.",
+                diagnosticId),
+            502 or 503 => Failure(
+                CodexExecutionFailureKind.TerminalFailure,
+                upstreamCode ?? "managed_proxy_unavailable",
+                "Managed Codex proxy is temporarily unavailable.",
+                diagnosticId),
             _ => Failure(
                 CodexExecutionFailureKind.TerminalFailure,
                 upstreamCode ?? "managed_proxy_failed",
-                "Managed Codex proxy request failed."),
+                "Managed Codex proxy request failed.",
+                diagnosticId),
         };
     }
+
+    private static string CreateLocalDiagnosticId() => $"aevatar-{Guid.NewGuid():N}";
+
+    private void LogLocalProxyFailure(int status, string failureKind, string diagnosticId) =>
+        _logger.LogWarning(
+            "Managed Codex proxy transport failure. status={Status} failureKind={FailureKind} diagnosticId={DiagnosticId} diagnosticSource=aevatar",
+            status,
+            failureKind,
+            diagnosticId);
 
     /// <summary>
     /// Classifies a proxy failure body into a fixed, non-sensitive shape label. The labels are a
     /// closed set derived from structure only — no upstream content is read into the result.
     /// </summary>
-    private static string ClassifyBodyShape(string? response)
-    {
-        if (string.IsNullOrWhiteSpace(response))
-            return "empty";
+    private static string ClassifyBodyShape(string? response) =>
+        ChronoProxyFailureInspector.ClassifyBodyShape(response);
 
-        JsonDocument document;
-        try
-        {
-            document = JsonDocument.Parse(response);
-        }
-        catch (JsonException)
-        {
-            return "non_json";
-        }
-
-        using (document)
-        {
-            var root = document.RootElement;
-            if (root.ValueKind != JsonValueKind.Object)
-                return "json_non_object";
-            // chrono's own error shape is {"error":{"code":...}}. NyxID wraps upstream failures as
-            // {"error":true,"status":N,"body":...}, so a non-object `error` must fall through to the
-            // nested body — that nesting is exactly what distinguishes a gateway-level failure from
-            // a chrono-reported one.
-            if (root.TryGetProperty("error", out var error) &&
-                error.ValueKind == JsonValueKind.Object)
-            {
-                return error.TryGetProperty("code", out var code) &&
-                       code.ValueKind == JsonValueKind.String
-                    ? "json_error_code"
-                    : "json_error_untyped";
-            }
-
-            if (!root.TryGetProperty("body", out var body))
-                return error.ValueKind == JsonValueKind.Undefined
-                    ? "json_without_error"
-                    : "json_error_untyped";
-
-            return body.ValueKind switch
-            {
-                JsonValueKind.Object => "nested_body_object",
-                JsonValueKind.String => "nested_body_string",
-                _ => "nested_body_other",
-            };
-        }
-    }
-
-    /// <summary>
-    /// Maps an allowlisted upstream failure code to the stage it actually failed at. Codes are
-    /// already normalized to <c>managed_upstream_&lt;lowercased chrono code&gt;</c>. Returns
-    /// <c>null</c> for codes whose stage the HTTP status classifies at least as well.
-    /// </summary>
-    private static (CodexExecutionFailureKind Kind, string Message)? TryClassifyUpstreamFailure(
+    private static (CodexExecutionFailureKind Kind, string Message) ClassifyUpstreamFailure(
         string upstreamCode) =>
         upstreamCode switch
         {
+            "managed_upstream_codex_caller_credential_forwarded" or
+            "managed_upstream_codex_delegation_actor_invalid" or
+            "managed_upstream_codex_delegation_audience_invalid" or
+            "managed_upstream_codex_delegation_duplicated" or
+            "managed_upstream_codex_delegation_expired" or
+            "managed_upstream_codex_delegation_invalid" or
+            "managed_upstream_codex_delegation_issuer_invalid" or
+            "managed_upstream_codex_delegation_marker_invalid" or
+            "managed_upstream_codex_delegation_missing" or
+            "managed_upstream_codex_delegation_not_yet_valid" or
+            "managed_upstream_codex_delegation_scope_invalid" or
+            "managed_upstream_codex_delegation_subject_invalid" or
+            "managed_upstream_codex_delegation_type_invalid" or
+            "managed_upstream_codex_prompt_invalid" or
+            "managed_upstream_codex_prompt_too_large" or
+            "managed_upstream_codex_request_invalid" or
+            "managed_upstream_codex_timeout_invalid" or
+            "managed_upstream_codex_workspace_invalid" => (
+                CodexExecutionFailureKind.AdmissionDenied,
+                "Managed Codex request was rejected upstream."),
+            "managed_upstream_codex_config_invalid" or
+            "managed_upstream_codex_delegation_verifier_unavailable" => (
+                CodexExecutionFailureKind.ReadinessFailed,
+                "Managed Codex upstream readiness check failed."),
+            "managed_upstream_codex_feature_disabled" => (
+                CodexExecutionFailureKind.TargetNotConfigured,
+                "Managed Codex upstream target is disabled."),
             "managed_upstream_codex_sandbox_creation_failed" or
             "managed_upstream_codex_workspace_preparation_failed" or
             "managed_upstream_codex_opensandbox_unavailable" => (
@@ -458,63 +514,24 @@ internal sealed class NyxIdManagedCodexChronoTransport(
             "managed_upstream_codex_capacity_unavailable" => (
                 CodexExecutionFailureKind.CapacityUnavailable,
                 "Managed Codex capacity is unavailable upstream."),
-            _ => null,
+            "managed_upstream_codex_agent_message_missing" or
+            "managed_upstream_codex_execd_terminal_missing" or
+            "managed_upstream_codex_output_invalid" or
+            "managed_upstream_codex_output_too_large" or
+            "managed_upstream_codex_turn_terminal_missing" => (
+                CodexExecutionFailureKind.MalformedOutput,
+                "Managed Codex returned malformed output upstream."),
+            "managed_upstream_codex_cleanup_unconfirmed" => (
+                CodexExecutionFailureKind.CleanupFailed,
+                "Managed Codex sandbox cleanup failed upstream."),
+            "managed_upstream_codex_command_failed" or
+            "managed_upstream_codex_turn_failed" => (
+                CodexExecutionFailureKind.TerminalFailure,
+                "Managed Codex execution failed upstream."),
+            _ => (
+                CodexExecutionFailureKind.TerminalFailure,
+                "Managed Codex execution failed upstream."),
         };
-
-    private static string? TryGetAllowedUpstreamFailureCode(string? response)
-    {
-        if (string.IsNullOrWhiteSpace(response))
-            return null;
-
-        try
-        {
-            using var document = JsonDocument.Parse(response);
-            return TryGetAllowedUpstreamFailureCode(document.RootElement, allowNestedBody: true);
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
-    }
-
-    private static string? TryGetAllowedUpstreamFailureCode(
-        JsonElement root,
-        bool allowNestedBody)
-    {
-        if (root.ValueKind != JsonValueKind.Object)
-            return null;
-
-        if (root.TryGetProperty("error", out var error) &&
-            error.ValueKind == JsonValueKind.Object &&
-            error.TryGetProperty("code", out var codeElement) &&
-            codeElement.ValueKind == JsonValueKind.String &&
-            codeElement.GetString() is { } code &&
-            AllowedUpstreamFailureCodes.Contains(code))
-        {
-            return $"managed_upstream_{code.ToLowerInvariant()}";
-        }
-
-        if (!allowNestedBody || !root.TryGetProperty("body", out var body))
-            return null;
-
-        if (body.ValueKind == JsonValueKind.Object)
-            return TryGetAllowedUpstreamFailureCode(body, allowNestedBody: false);
-
-        if (body.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(body.GetString()))
-            return null;
-
-        try
-        {
-            using var bodyDocument = JsonDocument.Parse(body.GetString()!);
-            return TryGetAllowedUpstreamFailureCode(
-                bodyDocument.RootElement,
-                allowNestedBody: false);
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
-    }
 
     private static string? Redact(string? value, string rawKey) =>
         value?.Replace(rawKey, "[REDACTED]", StringComparison.Ordinal);

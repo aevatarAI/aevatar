@@ -54,7 +54,8 @@ public static class ServiceCollectionExtensions
             typeof(Aevatar.GAgents.StudioTeam.StudioTeamGAgent).Assembly,
             typeof(ContentArtifactGAgent).Assembly,
             typeof(Aevatar.GAgents.WorkOrder.WorkOrderGAgent).Assembly,
-            typeof(Aevatar.Studio.Workspace.StudioWorkspaceGAgent).Assembly));
+            typeof(Aevatar.Studio.Workspace.StudioWorkspaceGAgent).Assembly,
+            typeof(ScopeWorkflowCatalogueRowGAgent).Assembly));
         services.AddStudioProjectionActorCommandDispatch();
 
         // Projection read-model runtime (write dispatcher + sink bindings)
@@ -146,6 +147,10 @@ public static class ServiceCollectionExtensions
         services.AddCurrentStateProjectionMaterializer<
             StudioMaterializationContext,
             StudioWorkspaceCurrentStateProjector>();
+
+        services.AddCurrentStateProjectionMaterializer<
+            StudioMaterializationContext,
+            ScopeWorkflowCatalogueRowCurrentStateProjector>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, StudioMemberCreatedAuditTranslator>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, StudioMemberImplementationUpdatedAuditTranslator>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, StudioMemberReassignedAuditTranslator>());
@@ -184,6 +189,10 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<
             IProjectionDocumentMetadataProvider<WorkflowExecutionBoardDocument>,
             WorkflowExecutionBoardDocumentMetadataProvider>();
+
+        services.TryAddSingleton<
+            IProjectionDocumentMetadataProvider<ScopeWorkflowCatalogueSourceDocument>,
+            ScopeWorkflowCatalogueSourceDocumentMetadataProvider>();
 
         services.TryAddSingleton<
             IProjectionDocumentMetadataProvider<UserConfigCurrentStateDocument>,
@@ -240,7 +249,11 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<
             IProjectionDocumentMetadataProvider<StudioWorkspaceCurrentStateDocument>,
             StudioWorkspaceCurrentStateDocumentMetadataProvider>();
+        services.TryAddSingleton<
+            IProjectionDocumentMetadataProvider<ScopeWorkflowCatalogueRowDocument>,
+            ScopeWorkflowCatalogueRowDocumentMetadataProvider>();
 
+        services.TryAddSingleton<ScopeWorkflowCatalogueRowMaterializer>();
         services.TryAddSingleton<ProjectionActivationPlanDispatcher>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             ICommittedStatePublicationHook,
@@ -265,6 +278,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IStudioMemberBindingRunQueryPort, ProjectionStudioMemberBindingRunQueryPort>();
         services.TryAddSingleton<IStudioTeamQueryPort, ProjectionStudioTeamQueryPort>();
         services.TryAddSingleton<IStudioWorkspaceQueryPort, ProjectionStudioWorkspaceQueryPort>();
+        services.TryAddSingleton<IWorkflowCatalogueQueryPort, ProjectionWorkflowCatalogueQueryPort>();
         services.TryAddSingleton<IScheduledInvocationMemberEvidenceQueryPort, ProjectionScheduledInvocationMemberQueryPort>();
         services.TryAddSingleton<IScheduledInvocationWorkflowEvidenceQueryPort, ProjectionScheduledInvocationWorkflowQueryPort>();
         services.TryAddSingleton<IScheduledInvocationConnectorEvidenceQueryPort, ProjectionScheduledInvocationConnectorQueryPort>();

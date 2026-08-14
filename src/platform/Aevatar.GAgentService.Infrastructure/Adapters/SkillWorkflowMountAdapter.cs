@@ -15,22 +15,31 @@ namespace Aevatar.GAgentService.Infrastructure.Adapters;
 public sealed class SkillWorkflowMountAdapter : ISkillWorkflowMountPort, ISkillWorkflowConfirmationPort
 {
     private const string ConfirmationMismatchCode = "USE_SKILL_MOUNT_CONFIRMATION_MISMATCH";
+    private const string ReadModelUnavailableCode = "USE_SKILL_MOUNT_READ_MODEL_UNAVAILABLE";
+    private static readonly TimeSpan ReadModelObservationTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan ReadModelObservationInterval = TimeSpan.FromMilliseconds(500);
 
     private readonly IScopeWorkflowCommandPort _scopeWorkflowCommandPort;
     private readonly IWorkflowDefinitionParser _workflowDefinitionParser;
     private readonly IWorkflowExplicitRequestPreviewService _explicitRequestPreviewService;
+    private readonly IScopeWorkflowQueryPort? _scopeWorkflowQueryPort;
+    private readonly TimeProvider _timeProvider;
     private readonly ILogger<SkillWorkflowMountAdapter> _logger;
 
     public SkillWorkflowMountAdapter(
         IScopeWorkflowCommandPort scopeWorkflowCommandPort,
         IWorkflowDefinitionParser workflowDefinitionParser,
         IWorkflowExplicitRequestPreviewService explicitRequestPreviewService,
+        IScopeWorkflowQueryPort? scopeWorkflowQueryPort = null,
+        TimeProvider? timeProvider = null,
         ILogger<SkillWorkflowMountAdapter>? logger = null)
     {
         _scopeWorkflowCommandPort = scopeWorkflowCommandPort ?? throw new ArgumentNullException(nameof(scopeWorkflowCommandPort));
         _workflowDefinitionParser = workflowDefinitionParser ?? throw new ArgumentNullException(nameof(workflowDefinitionParser));
         _explicitRequestPreviewService = explicitRequestPreviewService ??
                                          throw new ArgumentNullException(nameof(explicitRequestPreviewService));
+        _scopeWorkflowQueryPort = scopeWorkflowQueryPort;
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _logger = logger ?? NullLogger<SkillWorkflowMountAdapter>.Instance;
     }
 
@@ -137,7 +146,8 @@ public sealed class SkillWorkflowMountAdapter : ISkillWorkflowMountPort, ISkillW
                 preparation.Result.ConfirmationToken);
         }
 
-        var mounted = new List<MountedSkillWorkflow>(preparation.Prepared.Count);
+        var accepted = new List<(PreparedWorkflowMount Item, ScopeWorkflowUpsertResult Upsert)>(
+            preparation.Prepared.Count);
         foreach (var item in preparation.Prepared)
         {
             var explicitRequestConfirmations = item.Confirmation.ExplicitRequests
@@ -169,6 +179,30 @@ public sealed class SkillWorkflowMountAdapter : ISkillWorkflowMountPort, ISkillW
                 },
                 ct);
 
+            accepted.Add((item, upsert));
+        }
+
+        var mounted = new List<MountedSkillWorkflow>(accepted.Count);
+        var observationDeadline = _timeProvider.GetUtcNow() + ReadModelObservationTimeout;
+        foreach (var (item, upsert) in accepted)
+        {
+            if (!await ObserveRunnableRevisionAsync(
+                    request.ScopeId,
+                    item.WorkflowId,
+                    upsert.RevisionId,
+                    observationDeadline,
+                    ct))
+            {
+                return new SkillWorkflowMountResult(
+                    Status: "mount_observation_unavailable",
+                    Mounted: false,
+                    Workflows: [],
+                    Message: "The workflow mutation was accepted, but its canonical runnable read model was not observed.",
+                    ConfirmationRequests: preparation.Result.ConfirmationRequests,
+                    FailureCode: ReadModelUnavailableCode,
+                    ConfirmationToken: preparation.Result.ConfirmationToken);
+            }
+
             mounted.Add(new MountedSkillWorkflow(
                 WorkflowId: item.WorkflowId,
                 ServiceId: upsert.WorkflowId,
@@ -184,7 +218,60 @@ public sealed class SkillWorkflowMountAdapter : ISkillWorkflowMountPort, ISkillW
                 ? "Mounted reviewed skill workflows into the current scope."
                 : "No skill workflows were mounted.",
             ConfirmationRequests: preparation.Result.ConfirmationRequests,
-            ConfirmationToken: preparation.Result.ConfirmationToken);
+            ConfirmationToken: preparation.Result.ConfirmationToken,
+            ReadModelObserved: mounted.Count > 0);
+    }
+
+    private async Task<bool> ObserveRunnableRevisionAsync(
+        string scopeId,
+        string workflowId,
+        string revisionId,
+        DateTimeOffset deadline,
+        CancellationToken ct)
+    {
+        if (_scopeWorkflowQueryPort is null)
+            return false;
+
+        while (true)
+        {
+            ScopeWorkflowLookupResult lookup;
+            try
+            {
+                lookup = await _scopeWorkflowQueryPort.LookupByWorkflowIdAsync(
+                    scopeId,
+                    workflowId,
+                    ct);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                _logger.LogWarning(
+                    "Canonical skill workflow read-model observation failed with code {FailureCode} and exception type {ExceptionType}",
+                    ReadModelUnavailableCode,
+                    exception.GetType().Name);
+                return false;
+            }
+
+            if (lookup.IsRunnable &&
+                string.Equals(lookup.Workflow!.ScopeId, scopeId, StringComparison.Ordinal) &&
+                string.Equals(lookup.Workflow.WorkflowId, workflowId, StringComparison.Ordinal) &&
+                string.Equals(lookup.Workflow.ActiveRevisionId, revisionId, StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            var remaining = deadline - _timeProvider.GetUtcNow();
+            if (remaining <= TimeSpan.Zero)
+                return false;
+
+            await Task.Delay(
+                remaining < ReadModelObservationInterval ? remaining : ReadModelObservationInterval,
+                _timeProvider,
+                ct);
+        }
     }
 
     private async Task<SkillWorkflowPreparation> PrepareCoreAsync(

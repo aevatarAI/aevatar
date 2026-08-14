@@ -223,8 +223,13 @@ public sealed class WorkflowRunActorResolverTests
             .Which.Should().Be(new KeyValuePair<string, string>("helper", helperWorkflowYaml));
     }
 
-    [Fact]
-    public async Task ResolveOrCreateAsync_ShouldAttachInteractiveAdmissionToAuthenticatedInlineDraftRun()
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    [InlineData(true, false)]
+    public async Task ResolveOrCreateAsync_ShouldUseSupplementalSourceCredentialForDraftAdmission(
+        bool canManageNyxIdUserServices,
+        bool selectionMatchesCredential)
     {
         var workflowYaml =
             """
@@ -284,17 +289,30 @@ public sealed class WorkflowRunActorResolverTests
                 ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
                 ScopeId: "scope-alpha",
                 CallerCredential: new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential(
-                    "bearer-alpha",
+                    "proxy-delegation-alpha",
                     new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerNyxIdAuthority(
                         "nyxid",
                         string.Empty,
                         "owner-alpha",
                         "proxy"),
-                    NyxIdCallerCredentialKind.SourceReadableUserBearer),
-                CommandIdSeed: "command-alpha"),
+                    NyxIdCallerCredentialKind.ProxyDelegation,
+                    SourceReadableUserBearerToken: "source-readable-alpha"),
+                CommandIdSeed: "command-alpha",
+                CallerNyxIdCredentialSelection: canManageNyxIdUserServices
+                    ? NyxIdCallerCredentialSelection.DirectUserBearer(
+                        selectionMatchesCredential
+                            ? "source-readable-alpha"
+                            : "different-source-token")
+                    : NyxIdCallerCredentialSelection.SourceReadableUserBearer(
+                        "source-readable-alpha")),
             CancellationToken.None);
 
         result.Error.Should().Be(WorkflowChatRunStartError.None);
+        readinessPort.LastAccess!.NyxIdCallerCredential!.SourceReadableUserBearerToken.Should()
+            .Be("source-readable-alpha");
+        readinessPort.LastAccess.NyxIdCallerCredential.CanManageUserServices.Should()
+            .Be(canManageNyxIdUserServices && selectionMatchesCredential);
+        readinessPort.LastAccess.NyxIdCallerCredential.ProxyDelegationToken.Should().BeNull();
         actorPort.CreateRunBindings.Should().ContainSingle();
         var binding = actorPort.CreateRunBindings[0];
         binding.SourceKind.Should().Be("workflow_draft_run");
@@ -408,7 +426,7 @@ public sealed class WorkflowRunActorResolverTests
                 CommandIdSeed: "command-alpha"),
             CancellationToken.None);
 
-        result.Error.Should().Be(WorkflowChatRunStartError.InvalidWorkflowYaml);
+        result.Error.Should().Be(WorkflowChatRunStartError.ExternalCapabilityNotReady);
         result.Target.Should().BeNull();
         result.FailureDetail.Should().NotBeNull();
         result.FailureDetail!.ExternalCapabilityReadiness.Should().NotBeSameAs(blockedReadiness);
@@ -541,6 +559,7 @@ public sealed class WorkflowRunActorResolverTests
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
                 ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
                 ScopeId: "scope-authoritative",
+                SourceVersion: 12,
                 SourceKind: "service_revision",
                 CapabilityAdmissionPlan: admissionPlan,
                 WorkflowId: "wf-admitted",
@@ -566,6 +585,49 @@ public sealed class WorkflowRunActorResolverTests
         runBinding.CapabilityAdmissionPlan!.AdmissionDigest.Should().Be(admissionPlan.AdmissionDigest);
         runBinding.WorkflowId.Should().Be("wf-admitted");
         runBinding.RevisionId.Should().Be("rev-admitted");
+        runBinding.DefinitionVersion.Should().Be(12);
+    }
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_ShouldNotTreatRunBindingSourceVersionAsDefinitionVersion()
+    {
+        const string sourceActorId = "source-run-active";
+        const string workflowYaml =
+            """
+            name: active_run
+            roles: []
+            steps: []
+            """;
+        var bindingReader = new RecordingWorkflowActorBindingReader();
+        bindingReader.Register(
+            sourceActorId,
+            new WorkflowActorBinding(
+                WorkflowActorKind.Run,
+                sourceActorId,
+                "definition-active-run",
+                "run-active",
+                "active_run",
+                workflowYaml,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
+                ScopeId: "scope-authoritative",
+                SourceVersion: 99,
+                RevisionId: "rev-active-run"));
+        var actorPort = new RecordingWorkflowRunActorPort();
+        var resolver = new WorkflowRunActorResolver(bindingReader, actorPort, actorPort, new InMemoryWorkflowDefinitionCatalog());
+
+        var result = await resolver.ResolveOrCreateAsync(
+            new WorkflowChatRunRequest(
+                "hello",
+                WorkflowChatSource.DefinitionActor(sourceActorId, "active_run"),
+                ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive),
+            CancellationToken.None);
+
+        result.Error.Should().Be(WorkflowChatRunStartError.None);
+        actorPort.CreateRunBindings.Should().ContainSingle();
+        var runBinding = actorPort.CreateRunBindings[0];
+        runBinding.RevisionId.Should().Be("rev-active-run");
+        runBinding.DefinitionVersion.Should().Be(0);
     }
 
     [Fact]
@@ -1209,11 +1271,14 @@ public sealed class WorkflowRunActorResolverTests
     private sealed class ReadyExplicitRequestReadinessPort(NyxIdRequestSelector requestContract) :
         IExternalWorkflowCapabilityReadinessPort
     {
+        public ExternalWorkflowCapabilityAccessContext? LastAccess { get; private set; }
+
         public Task<ExternalCapabilityReadiness> InspectAsync(
             InspectExternalWorkflowCapabilityReadinessRequest request,
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            LastAccess = request.Access;
             var policy = new NyxIdOperationExecutionPolicy
             {
                 Risk = NyxIdOperationRisk.ReadOnly,

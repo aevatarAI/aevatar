@@ -211,19 +211,25 @@ Gateway 的强类型 canonical route 是 `/api/v1/llm/gateway/v1`。Console Sett
 
 ## Aevatar 端配置（管理员）
 
-在 `appsettings.json` 中配置 NyxID Authority 即可。系统会自动注册 NyxID LLM Provider：
+在 `appsettings.json` 中分别配置 NyxID 的公开 OIDC、公开 API 和可选的集群内 REST 地址。系统会自动注册 NyxID LLM Provider：
 
 ```json
 {
   "Aevatar": {
     "NyxId": {
-      "Authority": "https://your-nyxid-domain"
+      "Authority": "https://your-nyxid-domain",
+      "ApiBaseUrl": "https://your-nyxid-domain",
+      "EnableInternalApiTransport": true,
+      "InternalApiBaseUrl": "http://nyxid-api.namespace.svc.cluster.local:3001",
+      "InternalApiFallbackTimeoutSeconds": 5
     }
   }
 }
 ```
 
-Gateway Endpoint 自动推导为 `{Authority}/api/v1/llm/gateway/v1`。
+`Authority` 只承担公开 OIDC issuer、discovery 和 JWKS；`ApiBaseUrl` 承担控制面 REST、LLM gateway、浏览器地址、webhook/resource URI 以及 Assistant action registry；`InternalApiBaseUrl` 只承担 `/api/v1/proxy/s/*` 与 `/api/v1/ssh/*` 的集群内执行传输。Mainnet 默认忽略历史配置中的 internal URL；只有 `EnableInternalApiTransport=true` 且 internal URL 是不含 userinfo、query 或 fragment 的绝对 HTTP(S) 地址时才启用，否则继续使用公网，显式启用但 URL 无效则启动失败。Gateway Endpoint 从 `ApiBaseUrl` 推导为 `{ApiBaseUrl}/api/v1/llm/gateway/v1`，不使用集群内地址。Chat 在签发用户能力时读取 `/api/v1/user-services`；该 catalog 以及 `/keys`、`/api-keys/scope-plan` 等控制面请求始终使用 `ApiBaseUrl`，不会先探测内网 transport。
+
+当同时配置 `InternalApiBaseUrl` 与 `ApiBaseUrl` 时，只有 proxy/SSH 执行请求首选内网地址。DNS、拒绝连接或 host/network unreachable 明确表明尚未连接到内网目标时，客户端使用相同 method、path/query、authorization、headers 和 body 向公开 API 重试一次。此外，仅安全的 `GET/HEAD/OPTIONS` 在 `InternalApiFallbackTimeoutSeconds` 响应头预算内没有收到内网响应头时向公开 API 重试一次；默认预算为 5 秒，非正值恢复默认值，超大值限制为 300 秒，并与公网重试共享原 HttpClient 的 330 秒总超时预算。Mutation 超时不会重放；TLS、连接重置、Host/调用方取消、重定向、任意 HTTP 响应，以及已收到响应头后的 body 读取失败也不会重放，multipart 请求不参与降级。Assistant action registry 若在启动期因网络、HTTP、读取、JSON 或契约校验失败而不可用，只禁用本进程的 Assistant browser actions；Host 与普通 chat 仍继续启动。Host 自身的取消信号不会被该降级吞掉。
 
 ---
 

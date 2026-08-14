@@ -98,7 +98,7 @@ Studio Consent 的产品语义是“用户从 NyxID 已有且自己可授权的 
 
 最终 resource contract 调整为:
 
-- binding 的必需 resource 集合是 `aevatar`、部署默认 LLM、Ornn 与 Sandbox service. Mainnet Host 分别从 `Aevatar:NyxId:DefaultRoute`、`Aevatar:Ornn:NyxIdSlug` 和 `Aevatar:NyxId:SandboxServiceSlug` 注入实际 slug;Sandbox 未配置时使用 tool provider 的默认值 `chrono-sandbox`.`NyxIdBrokerOptions.AdditionalRequiredServiceSlugs` 作为其他 provider 的可配置扩展点,Identity 层不维护第二份 provider 默认值.
+- binding 的必需 resource 集合是 `aevatar`、部署默认 LLM、Ornn 与 Sandbox service. Mainnet Host 从 `Aevatar:NyxId:DefaultRoute`、`Aevatar:Ornn:NyxIdSlug` 注入可配置 provider slug;`code_execute` 的 Sandbox identity 则由执行契约固定为 `chrono-sandbox`,禁止配置改写.`NyxIdBrokerOptions.AdditionalRequiredServiceSlugs` 只作为其他 provider 的可配置扩展点,Identity 层不维护第二份 provider 默认值.
 - channel `/oauth/authorize` 使用配置化必需集合;Studio `/oauth/authorize`、authorization-code exchange、broker token-exchange 与 `/api/auth/nyxid/config` 不携带该集合,以保留用户最终 Consent 边界.
 - broker 收到短期 access token 后必须验证其授权覆盖整个必需集合.优先使用 `resources` claim;Consent-only grant 则结合签名的 `allowed_service_ids/allow_all_services` 与 NyxID user-service catalog 验证.只含 `aevatar` 的 token 不再视为可用 sender capability,但必需集合之外的用户授权必须保留.
 - 历史决定：NyxID binding grant 是服务授权的唯一事实源;aevatar 只持有 opaque `binding_id`. 已绑定 sender 再次 `/init` 时,aevatar 把 `SHA-256(binding_id)` 放入浏览器可见的 `binding_grant_id`,同时发送 exact external subject并把同一哈希封入 HMAC state作为 callback 预期值;raw binding credential不离开服务端.
@@ -125,7 +125,7 @@ NyxID 2026-07-06 至 2026-07-08 的 OAuth 更新把第三方应用 service acces
 
 `aevatar`、部署默认 LLM、Ornn 与 Sandbox service 是 Studio 登录、channel binding 和后续对话/skill/code execution 正常工作的必要资源,不是可选 UI 偏好. 因此最终 contract 为:
 
-- channel `/init` 的 `/oauth/authorize` 请求显式携带配置化必需 resource 集合. `nyxid_api_base_url` 对应 NyxID backend `BASE_URL` / Aevatar `Aevatar:NyxId:ApiBaseUrl`,不得从浏览器 OAuth authority 或 JWT issuer 派生；各 service slug 由对应 provider 配置注入.控制台登录不发送该集合.
+- channel `/init` 的 `/oauth/authorize` 请求显式携带配置化必需 resource 集合. resource identity 对应 NyxID backend `BASE_URL` / Aevatar `Aevatar:NyxId:Authority`;服务端 HTTP 客户端优先使用 `Aevatar:NyxId:InternalApiBaseUrl`,未配置时才回退到现有公网 `Aevatar:NyxId:ApiBaseUrl`.内部传输地址不得参与 resource URI、issuer 或 audience 构造；各 service slug 由对应 provider 配置注入.控制台登录不发送该集合.
 - NyxID authorization decision 必须在服务端校验前端提交的 service ID 是否存在且可由当前用户授权;前端异步加载的 service picker 负责选择体验,不能单独成为授权事实源.带 RFC 8707 `resource` 的 flow 还必须由服务端解析并合并对应必需 service ID.
 - authorization-code exchange、控制台 refresh 与 broker 的主 token-exchange 都省略 `resource`,继承完整 Consent 边界;Aevatar 不把用户在前端选择的完整 grant 收窄为部署最低集合.
 - broker 每次拿到完整 grant token 后先校验 `resources` claim.若 claim 未枚举必需 resource,使用 token 的 `allow_all_services/allowed_service_ids` 与 NyxID `/api/v1/user-services` 的权威 ID/resource 映射校验;catalog 中存在但 token 未授权的 ID 不计入显式 grant.校验只读,返回给 runtime 的仍是原始完整 grant token.

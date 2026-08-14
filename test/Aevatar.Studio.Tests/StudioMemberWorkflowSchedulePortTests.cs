@@ -668,7 +668,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
     }
 
     [Fact]
-    public async Task PreflightForWriteAsync_WhenCatalogRefreshIsUnstable_ShouldThrowTypedRefreshUnavailable()
+    public async Task PreflightForWriteAsync_WhenRequiredRouteIsUnresolved_ShouldReturnNonRetryableRepairTarget()
     {
         var planner = new RecordingAuthorizationPlanner();
         planner.Results.Enqueue(ScheduledInvocationAuthorizationPlanResult.Failed(
@@ -691,8 +691,12 @@ public sealed class StudioMemberWorkflowSchedulePortTests
 
         var act = () => port.PreflightForWriteAsync(Request("scope-1", "member-1"));
 
-        await act.Should().ThrowAsync<StudioMemberAutomationCatalogRefreshUnavailableException>()
-            .WithMessage("The authorization catalog could not be refreshed. Retry this request.");
+        var exception = await act.Should()
+            .ThrowAsync<StudioMemberAutomationCatalogRouteUnresolvedException>();
+        exception.Which.Message.Should().Be(
+            "NyxID could not resolve a configured route required by this workflow. " +
+            "Repair or deactivate the route before retrying.");
+        exception.Which.RequiredUserServiceIds.Should().Equal("nyx-service-alpha");
         planner.Requests.Should().ContainSingle();
         refresh.RefreshCallCount.Should().Be(1);
         materializer.MaterializeCallCount.Should().Be(0);
@@ -1409,6 +1413,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
     [Theory]
     [InlineData(NyxIdAuthorizationCatalogRefreshStatus.Failed)]
     [InlineData(NyxIdAuthorizationCatalogRefreshStatus.ObservationTimedOut)]
+    [InlineData(NyxIdAuthorizationCatalogRefreshStatus.CatalogUnstable)]
     public async Task CreateAsync_WhenCatalogRefreshFailsTransiently_ShouldReturnRetryableUnavailable(
         NyxIdAuthorizationCatalogRefreshStatus refreshStatus)
     {

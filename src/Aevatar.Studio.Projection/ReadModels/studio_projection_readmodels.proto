@@ -5,6 +5,7 @@ option csharp_namespace = "Aevatar.Studio.Projection.ReadModels";
 import "google/protobuf/any.proto";
 import "google/protobuf/timestamp.proto";
 import "llm_selection.proto";
+import "Tools/tool_presentation.proto";
 
 message ContentArtifactCitationDocument {
   string citation_id = 1;
@@ -213,6 +214,65 @@ message WorkflowExecutionBoardSummaryReadModel {
   optional int32 definition_step_count = 5;
 }
 
+// Materialized workflow-native source fact for the scope workflow catalogue.
+// source_kind distinguishes draft-owned and service-owned facts; Team/Member
+// bindings are not part of this catalogue surface.
+message ScopeWorkflowCatalogueSourceDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at = 5;
+
+  string scope_id = 20;
+  string workflow_id = 21;
+  string source_kind = 22;
+  string name = 23;
+  string description = 24;
+  google.protobuf.Timestamp source_updated_at_utc_value = 25;
+
+  string service_key = 30;
+  string workflow_name = 31;
+  string committed_actor_id = 32;
+  string active_revision_id = 33;
+  string deployment_id = 34;
+  string deployment_status = 35;
+  string service_app_id = 36;
+  string service_namespace = 37;
+  string published_service_id = 38;
+}
+
+// Aggregate workflow catalogue row keyed by scope_id + workflow_id. The request
+// path reads this row document only; source documents remain an internal
+// materialization input for converging draft and published service facts.
+message ScopeWorkflowCatalogueRowDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at = 5;
+
+  string scope_id = 20;
+  string workflow_id = 21;
+  string name = 22;
+  string description = 23;
+  bool has_draft_source = 24;
+  bool has_published_source = 25;
+  google.protobuf.Timestamp row_updated_at_utc_value = 26;
+  string updated_at_source = 27;
+  google.protobuf.Timestamp source_watermark_utc_value = 28;
+
+  string service_key = 30;
+  string workflow_name = 31;
+  string committed_actor_id = 32;
+  string active_revision_id = 33;
+  string deployment_id = 34;
+  string deployment_status = 35;
+  string published_service_id = 36;
+  string service_app_id = 37;
+  string service_namespace = 38;
+}
+
 // ─── UserConfig Current State ReadModel ───
 
 message UserConfigCurrentStateDocument {
@@ -351,6 +411,8 @@ message NyxIdChatConversationOperationDocument {
   google.protobuf.Timestamp requested_at = 14;
   google.protobuf.Timestamp dispatched_at = 15;
   google.protobuf.Timestamp completed_at = 16;
+  google.protobuf.Timestamp last_progress_at = 17;
+  google.protobuf.Timestamp stalled_at = 18;
 }
 
 message NyxIdChatConversationLLMStepSourceDocument {
@@ -362,6 +424,8 @@ message NyxIdChatConversationToolStepSourceDocument {
   string service_slug = 2;
   string service_id = 3;
   optional string readiness_capability_id = 4;
+  string provider_resource_id = 5;
+  aevatar.foundation.tools.ToolPresentationDescriptor presentation = 6;
 }
 
 message NyxIdChatConversationBrowserActionStepSourceDocument {
@@ -372,6 +436,7 @@ message NyxIdChatConversationBrowserActionStepSourceDocument {
 message NyxIdChatConversationPostconditionStepSourceDocument {
   string action_request_id = 1;
   string check = 2;
+  string provider_resource_id = 3;
 }
 
 message NyxIdChatConversationInputStepSourceDocument {
@@ -384,6 +449,28 @@ message NyxIdChatConversationApprovalStepSourceDocument {
 
 message NyxIdChatConversationWebStepSourceDocument {}
 
+message NyxIdChatConversationNumericConditionDocument {
+  string condition_id = 1;
+  string source_input_request_id = 2;
+  int64 suggested_threshold = 3;
+  int64 effective_threshold = 4;
+  string threshold_origin = 5;
+  int64 observed_value = 6;
+  string comparison = 7;
+  string outcome = 8;
+  google.protobuf.Timestamp evaluated_at = 9;
+  string guarded_tool_name = 10;
+}
+
+message NyxIdChatConversationConditionStepSourceDocument {
+  NyxIdChatConversationNumericConditionDocument condition = 1;
+}
+
+message NyxIdChatConversationStepGuardDocument {
+  string condition_step_id = 1;
+  string required_outcome = 2;
+}
+
 message NyxIdChatConversationStepSourceDocument {
   oneof source {
     NyxIdChatConversationLLMStepSourceDocument llm = 1;
@@ -393,6 +480,7 @@ message NyxIdChatConversationStepSourceDocument {
     NyxIdChatConversationInputStepSourceDocument input = 5;
     NyxIdChatConversationApprovalStepSourceDocument approval = 6;
     NyxIdChatConversationWebStepSourceDocument web = 7;
+    NyxIdChatConversationConditionStepSourceDocument condition = 8;
   }
 }
 
@@ -405,6 +493,17 @@ message NyxIdChatConversationSubstepDocument {
   string substep_id = 1;
   string title = 2;
   string status = 3;
+}
+
+message NyxIdChatConversationPostReturnApprovalObservationDocument {
+  string approval_request_id = 1;
+  string decision_mode = 2;
+  string receipt_status = 3;
+  google.protobuf.Timestamp observed_at = 4;
+  string terminal_outcome = 5;
+  string subject_kind = 6;
+  reserved 7;
+  reserved "subject_id";
 }
 
 message NyxIdChatConversationStepDocument {
@@ -429,11 +528,137 @@ message NyxIdChatConversationStepDocument {
   repeated string depends_on = 19;
   NyxIdChatConversationStepEstimateDocument estimate = 20;
   repeated NyxIdChatConversationSubstepDocument substeps = 21;
+  int32 added_in_plan_revision = 22;
+  int32 cancelled_in_plan_revision = 23;
+  NyxIdChatConversationPostReturnApprovalObservationDocument approval_observation = 24;
+  NyxIdChatConversationStepGuardDocument guard = 25;
 }
 
 message NyxIdChatConversationPlanGateDocument {
   string mode = 1;
   string reason = 2;
+  string status = 3;
+  string request_id = 4;
+  string task_id = 5;
+  int32 plan_revision = 6;
+  google.protobuf.Timestamp decided_at = 7;
+  repeated NyxIdChatConversationPlanOperationAdmissionDocument admissions = 8;
+  string plan_id = 9;
+}
+
+message NyxIdChatConversationPlanOperationAdmissionDocument {
+  string conversation_actor_id = 1;
+  string turn_id = 2;
+  string task_id = 3;
+  string step_id = 4;
+  string operation_id = 5;
+  int64 operation_generation = 6;
+  string tool_call_id = 7;
+  string tool_name = 8;
+  bytes arguments_sha256 = 9;
+  string action_request_id = 10;
+  string action = 11;
+  bytes action_params_sha256 = 12;
+}
+
+message NyxIdChatConversationPlanRevisionDocument {
+  int32 plan_revision = 1;
+  string revision_cause = 2;
+  google.protobuf.Timestamp committed_at = 3;
+  repeated string added_step_ids = 4;
+  repeated string cancelled_step_ids = 5;
+}
+
+message NyxIdChatMoneyValueDocument {
+  string currency_code = 1;
+  int64 minor_units = 2;
+  uint32 fraction_digits = 3;
+}
+
+message NyxIdChatInvoiceEvidenceDocument {
+  int32 source_ordinal = 1;
+  string vendor = 2;
+  string invoice_number = 3;
+  string invoice_date = 4;
+  NyxIdChatMoneyValueDocument amount = 5;
+}
+
+message NyxIdChatInvoiceDuplicateEvidenceDocument {
+  int32 duplicate_source_ordinal = 1;
+  int32 retained_source_ordinal = 2;
+}
+
+message NyxIdChatReimbursementEvidenceDocument {
+  string evidence_id = 1;
+  string source_input_request_id = 2;
+  string expense_category = 3;
+  string cost_center = 4;
+  string reimbursement_currency_instruction = 5;
+  repeated NyxIdChatInvoiceEvidenceDocument source_invoices = 6;
+  repeated int32 retained_source_ordinals = 7;
+  repeated NyxIdChatInvoiceDuplicateEvidenceDocument duplicate_invoices = 8;
+  google.protobuf.Timestamp committed_at = 9;
+  string guarded_tool_name = 10;
+}
+
+message NyxIdChatCandidateRubricCriterionDocument {
+  string criterion_id = 1;
+  string title = 2;
+  int32 maximum_points = 3;
+}
+
+message NyxIdChatCandidateCriterionScoreDocument {
+  string criterion_id = 1;
+  int32 awarded_points = 2;
+  string evidence = 3;
+}
+
+message NyxIdChatCandidateScreeningEvidenceDocument {
+  string evidence_id = 1;
+  string source_input_request_id = 2;
+  string candidate_name = 3;
+  string role_title = 4;
+  repeated NyxIdChatCandidateRubricCriterionDocument rubric = 5;
+  repeated NyxIdChatCandidateCriterionScoreDocument scores = 6;
+  int32 total_score = 7;
+  string tracker_table = 8;
+  string tracker_table_id = 9;
+  string stage = 10;
+  string guarded_tool_name = 11;
+  google.protobuf.Timestamp committed_at = 12;
+}
+
+message NyxIdChatTaskDomainDocument {
+  oneof domain {
+    NyxIdChatReimbursementEvidenceDocument reimbursement = 1;
+    NyxIdChatCandidateScreeningEvidenceDocument candidate_screening = 2;
+  }
+}
+
+message NyxIdChatReimbursementArtifactDocument {
+  string provider_instance_id = 1;
+  string cost_center = 2;
+  int32 retained_item_count = 3;
+  int32 duplicate_item_count = 4;
+}
+
+message NyxIdChatCandidateTrackerArtifactDocument {
+  string provider_record_id = 1;
+  string candidate_name = 2;
+  int32 score = 3;
+  int64 threshold = 4;
+  string tracker_table = 5;
+  string tracker_table_id = 6;
+  string stage = 7;
+}
+
+message NyxIdChatVerifiedArtifactDocument {
+  string check_name = 1;
+  google.protobuf.Timestamp verified_at = 2;
+  oneof artifact {
+    NyxIdChatReimbursementArtifactDocument reimbursement = 3;
+    NyxIdChatCandidateTrackerArtifactDocument candidate_tracker = 4;
+  }
 }
 
 message NyxIdChatConversationTaskDocument {
@@ -453,6 +678,10 @@ message NyxIdChatConversationTaskDocument {
   int32 plan_revision = 14;
   string title = 15;
   NyxIdChatConversationPlanGateDocument gate = 16;
+  repeated NyxIdChatConversationPlanRevisionDocument plan_revisions = 17;
+  int32 plan_revision_history_start = 18;
+  NyxIdChatTaskDomainDocument domain = 19;
+  NyxIdChatVerifiedArtifactDocument artifact = 20;
 }
 
 message NyxIdChatConversationPendingApprovalDocument {
@@ -487,6 +716,30 @@ message NyxIdChatConversationPendingInputDocument {
   google.protobuf.Timestamp asked_at = 7;
   bool allow_free_text = 8;
   bool multi_select = 9;
+  NyxIdChatConversationNumericThresholdInputDocument numeric_threshold = 10;
+}
+
+message NyxIdChatConversationNumericThresholdInputDocument {
+  int64 suggested_value = 1;
+  int64 minimum_value = 2;
+  int64 maximum_value = 3;
+}
+
+message NyxIdChatConversationNumericThresholdResolutionDocument {
+  int64 suggested_value = 1;
+  int64 effective_value = 2;
+  string origin = 3;
+}
+
+message NyxIdChatConversationInputSelectionAnswerDocument {
+  repeated string option_ids = 1;
+}
+
+message NyxIdChatConversationInputAnswerDocument {
+  oneof answer {
+    string free_text = 1;
+    NyxIdChatConversationInputSelectionAnswerDocument selection = 2;
+  }
 }
 
 message NyxIdChatConversationInputResolutionDocument {
@@ -494,6 +747,8 @@ message NyxIdChatConversationInputResolutionDocument {
   string client_request_id = 2;
   string outcome = 3;
   google.protobuf.Timestamp committed_at = 4;
+  NyxIdChatConversationNumericThresholdResolutionDocument numeric_threshold = 5;
+  NyxIdChatConversationInputAnswerDocument answer = 6;
 }
 
 message NyxIdChatConversationApprovalResolutionDocument {
@@ -515,6 +770,26 @@ message NyxIdChatConversationControlFenceDocument {
   string reason_code = 8;
   string safe_message = 9;
   google.protobuf.Timestamp committed_at = 10;
+}
+
+message NyxIdChatConversationStepControlResultDocument {
+  string kind = 1;
+  string request_id = 2;
+  string client_request_id = 3;
+  string turn_id = 4;
+  string task_id = 5;
+  string step_id = 6;
+  int64 expected_operation_generation = 7;
+  int64 operation_generation = 8;
+  string outcome = 9;
+  string reason_code = 10;
+  string safe_message = 11;
+  string command_id = 12;
+  string correlation_id = 13;
+  google.protobuf.Timestamp committed_at = 14;
+  int64 expected_state_version = 15;
+  string scope_id = 16;
+  string conversation_actor_id = 17;
 }
 
 message NyxIdChatConversationContinuationAdmissionDocument {
@@ -568,6 +843,53 @@ message NyxIdChatConversationActionDocument {
   google.protobuf.Timestamp requested_at = 7;
   repeated NyxIdChatConversationActionReportDocument reports = 8;
   NyxIdChatConversationActionPostconditionDocument postcondition_result = 9;
+  NyxIdChatConversationActionRequestDocument request = 10;
+}
+
+message NyxIdChatConversationActionRequestDocument {
+  int32 schema_version = 1;
+  string actor_id = 2;
+  string origin_turn_id = 3;
+  string task_id = 4;
+  string step_id = 5;
+  string action_request_id = 6;
+  string action = 7;
+  NyxIdChatConversationActionParamsDocument params = 8;
+}
+
+message NyxIdChatConversationActionParamsDocument {
+  oneof params {
+    NyxIdChatConversationCatalogServiceConnectDocument catalog_service = 1;
+    NyxIdChatConversationCustomServiceConnectDocument custom_service = 2;
+    NyxIdChatConversationKeyCreateDocument key_create = 3;
+    NyxIdChatConversationKeyRotateDocument key_rotate = 4;
+  }
+}
+
+message NyxIdChatConversationCatalogServiceConnectDocument {
+  string service_slug = 1;
+  repeated string requested_scopes = 2;
+  string via_node_id = 3;
+  string target_org_id = 4;
+}
+
+message NyxIdChatConversationCustomServiceConnectDocument {
+  string name = 1;
+  string endpoint_url = 2;
+  string auth_method = 3;
+  string auth_key_name = 4;
+  string via_node_id = 5;
+  string target_org_id = 6;
+}
+
+message NyxIdChatConversationKeyCreateDocument {
+  string name = 1;
+  string platform = 2;
+  repeated string allowed_service_ids = 3;
+}
+
+message NyxIdChatConversationKeyRotateDocument {
+  string key_id = 1;
 }
 
 message NyxIdChatConversationCurrentStateDocument {
@@ -596,6 +918,26 @@ message NyxIdChatConversationCurrentStateDocument {
   string attention_kind = 36;
   google.protobuf.Timestamp attention_since = 37;
   string active_step_summary = 38;
+  repeated NyxIdChatConversationActionDocument recent_actions = 39;
+  NyxIdChatConversationStepControlResultDocument latest_step_control_result = 40;
+  repeated NyxIdChatConversationStepControlResultDocument recent_step_control_results = 41;
+  NyxIdChatConversationCanaryEffectFaultDocument canary_effect_fault = 42;
+  bool deleted = 43;
+  google.protobuf.Timestamp deleted_at = 44;
+}
+
+message NyxIdChatConversationCanaryEffectFaultDocument {
+  string arm_id = 1;
+  string status = 2;
+  string turn_id = 3;
+  string task_id = 4;
+  string step_id = 5;
+  string operation_id = 6;
+  int64 operation_generation = 7;
+  google.protobuf.Timestamp expires_at = 8;
+  google.protobuf.Timestamp consumed_at = 9;
+  google.protobuf.Timestamp forwarded_at = 10;
+  google.protobuf.Timestamp armed_at = 11;
 }
 
 // ─── Chat History Create Recovery Current State ReadModel ───

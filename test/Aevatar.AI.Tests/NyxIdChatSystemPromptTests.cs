@@ -60,6 +60,38 @@ public class NyxIdChatSystemPromptTests
     }
 
     [Fact]
+    public void ComposedPrompt_ShouldRouteReviewedFinIntentsToExactScopeWorkflows()
+    {
+        var prompt = ComposedAgentPrompt();
+
+        prompt.Should().Contain("Route these reviewed FIN preview intents before generic skill discovery");
+        prompt.Should().Contain("fin-invoice-precheck-approval");
+        prompt.Should().Contain("fin_invoice_precheck_approval");
+        prompt.Should().Contain("fin-budget-variance-monitor");
+        prompt.Should().Contain("fin_budget_variance_monitor");
+        prompt.Should().Contain("A submission request matches this route only when it explicitly names or refers back");
+        prompt.Should().Contain("generic submission request");
+        prompt.Should().Contain("does not match it");
+        prompt.Should().Contain("returned `workflow.workflow_id` unchanged");
+        prompt.Should().Contain("once with `wait=\"stream\"`");
+        prompt.Should().Contain("`workflow_current_state.actor_id`");
+        prompt.Should().Contain("`workflow_current_state.command_id`");
+        prompt.Should().Contain("that `run_id` as `workflow_run_id`");
+        prompt.Should().Contain("outer `workflow_name` to equal the");
+        prompt.Should().Contain("matching canonical value (`fin_invoice_precheck_approval` or `fin_budget_variance_monitor`)");
+        prompt.Should().Contain("exactly, with `status=Completed`");
+        prompt.Should().Contain("`final_output` as complete JSON");
+        prompt.Should().Contain("`mode=\"preview\"`");
+        prompt.Should().Contain("`side_effects=false`");
+        prompt.Should().Contain("current sender's delegated account");
+        prompt.Should().Contain("test-data boundaries");
+        prompt.Should().NotContain("TxGrbUmPQa8Lkus2z9UlEuffgUc");
+        prompt.Should().NotContain("tbl6Xceu4Ogkod6o");
+        prompt.Should().Contain("always use `submit:false` and never set `submit:true`");
+        prompt.Should().NotContain("explicitly confirms submission");
+    }
+
+    [Fact]
     public void ComposedPrompt_ShouldRequireTypedReadinessBeforeWorkflowWrites()
     {
         var prompt = ComposedAgentPrompt();
@@ -133,21 +165,82 @@ public class NyxIdChatSystemPromptTests
     }
 
     [Fact]
+    public void Value_ShouldEnforceFourTierPreferenceAndGeneralizedCannotCheck()
+    {
+        var prompt = NyxIdChatSystemPrompt.Value.Content;
+
+        var exactOperation = prompt.IndexOf(
+            "admitted exact-instance NyxID connected-service operation",
+            StringComparison.Ordinal);
+        var browserAction = prompt.IndexOf(
+            "`service.connect` browser action",
+            StringComparison.Ordinal);
+        var aevatarExecutor = prompt.IndexOf(
+            "Aevatar-ecosystem tool or skill",
+            StringComparison.Ordinal);
+        var honestStop = prompt.IndexOf(
+            "If none is available, stop honestly",
+            StringComparison.Ordinal);
+
+        exactOperation.Should().BeGreaterThanOrEqualTo(0);
+        browserAction.Should().BeGreaterThan(exactOperation);
+        aevatarExecutor.Should().BeGreaterThan(browserAction);
+        honestStop.Should().BeGreaterThan(aevatarExecutor);
+        prompt.Should().Contain("cannot check right now");
+        prompt.Should().Contain("never proves that a connection, binding, resource, or record is absent");
+        prompt.Should().Contain("Claim absence only from a successful authoritative read");
+        prompt.Should().Contain("Never present an Aevatar executor as a NyxID connected service");
+    }
+
+    [Fact]
+    public void ComposedPrompt_ShouldKeepReadOnlyResearchFallbackAndArtifactHonest()
+    {
+        var prompt = ComposedAgentPrompt();
+
+        prompt.Should().Contain("include that scope change in the single composite `ask_user` question");
+        prompt.Should().Contain("require the user's free-text consent before any tool runs");
+        prompt.Should().Contain("name it as Aevatar `web_search`");
+        prompt.Should().Contain("actor-derived `auto` gate");
+        prompt.Should().Contain("separate facts supported by successful reads from facts that `cannot check right now`");
+        prompt.Should().Contain("no reservation, publication, or other external mutation occurred");
+        prompt.Should().Contain("partial-work receipt based on committed step evidence");
+        prompt.Should().Contain("late evidence cannot advance the stopped task");
+    }
+
+    [Fact]
+    public void Value_ShouldKeepLocalHandoffsAndExcludedOperationsHonest()
+    {
+        var prompt = NyxIdChatSystemPrompt.Value.Content;
+
+        prompt.Should().Contain("Class-L operations run on the user's own machine");
+        prompt.Should().Contain("one exact copyable `nyxid ...` command");
+        prompt.Should().Contain("`start the node daemon` maps exactly to `nyxid node daemon start`");
+        prompt.Should().Contain("Do not claim that the command ran");
+        prompt.Should().Contain("Class-X operations are excluded from Assistant v1");
+        prompt.Should().Contain("Billing, platform administration, pre-authentication, channel-bot/event mutation, and oracle operations");
+        prompt.Should().Contain("Do not expose or fabricate a tool, browser action, approval card, or execution receipt");
+        prompt.Should().Contain("do not guess a verb, invent a URL, or turn a mutation into manual instructions");
+    }
+
+    [Fact]
     public void ComposedPrompt_ShouldUseFinalToolSchemasAsConnectedServiceAuthority()
     {
         var prompt = ComposedAgentPrompt();
 
         prompt.Should().Contain("final request's tool schemas are the only capability authority");
         prompt.Should().Contain("nyxid_service_inventory");
-        prompt.Should().Contain("nyxid_service_operation__");
+        prompt.Should().Contain("nyxop_*");
+        prompt.Should().NotContain("nyxid_service_update")
+            .And.NotContain("nyxid_service_route")
+            .And.NotContain("nyxid_service_delete");
         prompt.Should().Contain("unprofiled turn");
         prompt.Should().Contain("They do not add tools or expand the authority expressed by the final tool schemas");
     }
 
     [Fact]
-    public void Value_ShouldLoadNyxIdServiceDiscoveryBeforeReadingSenderInventory()
+    public void ComposedPrompt_ShouldRouteSenderInventoryThroughPositiveServiceInspection()
     {
-        var prompt = NyxIdChatSystemPrompt.Value.Content;
+        var prompt = ComposedAgentPrompt();
         var skillCall = prompt.IndexOf(
             "first call `use_skill(skill=\"nyxid-service-discovery\")`",
             StringComparison.Ordinal);
@@ -157,14 +250,34 @@ public class NyxIdChatSystemPromptTests
 
         skillCall.Should().BeGreaterThanOrEqualTo(0);
         inventoryCall.Should().BeGreaterThan(skillCall);
-        prompt.Should().Contain("current sender's live inventory");
+        prompt.Should().Contain("inventory read present in the final request's tool schemas");
+        prompt.Should().Contain("When `nyxid_service_inventory` is present");
+        prompt.Should().Contain("When `nyxid_service_inventory` is absent");
+        prompt.Should().Contain("such as `nyxid_services`");
+        prompt.Should().Contain("route the read through the catalog/service-inspection path");
+        prompt.Should().Contain("establishes current sender-specific service facts");
+        prompt.Should().Contain("execution tools only run supplied work and cannot establish that inventory");
+        prompt.Should().Contain("typed inventory result as the authority for the current sender");
         prompt.Should().Contain("temporary read failure");
         prompt.Should().Contain("binding is explicitly missing or revoked");
-        prompt.Should().Contain("Do not call `code_execute`");
-        prompt.Should().Contain("`nyxid service list`");
+        prompt.Should().NotContain("Do not call `code_execute`");
         prompt.Should().NotContain("skill=\"nyxid\"");
         prompt.Should().NotContain("call `nyxid_service_inventory` directly");
         prompt.Should().NotContain("Do not load a skill");
+    }
+
+    [Fact]
+    public void KernelIndex_ShouldDescribeBothExecutionVerbsWithTargetAwareApproval()
+    {
+        var prompt = NyxIdChatSystemPrompt.Value.Content;
+
+        prompt.Should().Contain("caller-provided exact Python, JavaScript, TypeScript, or Bash source");
+        prompt.Should().Contain("Delegate a natural-language task to Codex");
+        prompt.Should().Contain("`managed_sandbox` for the fixed isolated runtime without human approval");
+        prompt.Should().Contain("`private_ssh` for a real user host");
+        prompt.Should().Contain("`private_ssh` requires approval");
+        prompt.Should().NotContain("deterministic sandbox computation");
+        prompt.Should().NotContain("`codex_exec` always requires approval");
     }
 
     [Fact]

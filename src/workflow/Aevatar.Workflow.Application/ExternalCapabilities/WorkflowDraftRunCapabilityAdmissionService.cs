@@ -31,7 +31,10 @@ public sealed class WorkflowDraftRunCapabilityAdmissionService(
             WorkflowCapabilityAdmissionPlanIntegrity.ComputeDefinitionDigest(
                 workflowYaml,
                 inlineWorkflowYamls));
-        var access = BuildAccess(scopeId, request.CallerCredential);
+        var access = BuildAccess(
+            scopeId,
+            request.CallerCredential,
+            request.CallerNyxIdCredentialSelection);
 
         var preview = await previewService.PreviewAsync(
             new WorkflowExplicitRequestPreviewRequest(
@@ -64,15 +67,58 @@ public sealed class WorkflowDraftRunCapabilityAdmissionService(
 
     private static ExternalWorkflowCapabilityAccessContext BuildAccess(
         string scopeId,
-        Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential? callerCredential) =>
+        Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential? callerCredential,
+        NyxIdCallerCredentialSelection? callerNyxIdCredentialSelection) =>
         new(
             scopeId,
             callerCredential?.NyxIdAuthority?.ExternalUserId?.Trim() ?? string.Empty,
-            BuildCredentialSelection(callerCredential));
+            BindCredentialSelection(callerCredential, callerNyxIdCredentialSelection));
 
-    private static NyxIdCallerCredentialSelection? BuildCredentialSelection(
+    private static NyxIdCallerCredentialSelection? BindCredentialSelection(
+        Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential? callerCredential,
+        NyxIdCallerCredentialSelection? selection)
+    {
+        if (selection == null)
+            return BuildReadOnlyCredentialSelection(callerCredential);
+
+        var selectedSourceToken = selection.SourceReadableUserBearerToken;
+        if (!string.IsNullOrWhiteSpace(selectedSourceToken))
+        {
+            var boundSourceToken = !string.IsNullOrWhiteSpace(
+                callerCredential?.SourceReadableUserBearerToken)
+                ? callerCredential.SourceReadableUserBearerToken.Trim()
+                : callerCredential?.Kind == NyxIdCallerCredentialKind.SourceReadableUserBearer
+                    ? callerCredential.BearerToken?.Trim()
+                    : null;
+            return string.Equals(selectedSourceToken, boundSourceToken, StringComparison.Ordinal)
+                ? selection
+                : BuildReadOnlyCredentialSelection(callerCredential);
+        }
+
+        var selectedProxyToken = selection.ProxyDelegationToken;
+        if (!string.IsNullOrWhiteSpace(selectedProxyToken) &&
+            callerCredential?.Kind == NyxIdCallerCredentialKind.ProxyDelegation &&
+            string.Equals(
+                selectedProxyToken,
+                callerCredential.BearerToken?.Trim(),
+                StringComparison.Ordinal))
+        {
+            return selection;
+        }
+
+        return BuildReadOnlyCredentialSelection(callerCredential);
+    }
+
+    private static NyxIdCallerCredentialSelection? BuildReadOnlyCredentialSelection(
         Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential? callerCredential)
     {
+        var sourceReadableBearerToken = callerCredential?.SourceReadableUserBearerToken?.Trim();
+        if (!string.IsNullOrWhiteSpace(sourceReadableBearerToken))
+        {
+            return NyxIdCallerCredentialSelection.SourceReadableUserBearer(
+                sourceReadableBearerToken);
+        }
+
         var bearerToken = callerCredential?.BearerToken?.Trim();
         if (string.IsNullOrWhiteSpace(bearerToken))
             return null;

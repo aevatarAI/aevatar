@@ -1,6 +1,8 @@
 using System.Reflection;
 using System.Text;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core.EventSourcing;
@@ -719,7 +721,15 @@ public sealed class AgentRunLarkCardDeliveryTests
         var scheduler = new RecordingCallbackScheduler();
         var publisher = new RecordingEventPublisher();
         var runner = new RecordingCardRunner();
-        var agent = CreateAgent(runner, publisher: publisher, scheduler: scheduler);
+        var secretStore = new InMemoryRuntimeSecretStore();
+        var agent = CreateAgent(
+            runner,
+            publisher: publisher,
+            scheduler: scheduler,
+            runtimeSecretStore: secretStore);
+        agent.State.RelayUserAccessTokenRef = await StoreRelayUserAccessTokenAsync(
+            secretStore,
+            "abort-user-access-token");
         await StartVisibleCardAsync(agent, publisher, "partial");
 
         await agent.HandleNextLlmStepAsync(CreateFinalReplyStep("final"));
@@ -733,9 +743,17 @@ public sealed class AgentRunLarkCardDeliveryTests
         agent.State.LarkCardDelivery.InFlightOperation.Should().Be(LarkCardOperationPhase.Unspecified);
         agent.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
         runner.FinalizeCalls.Should().BeEmpty();
+        runner.AbortCalls.Should().ContainSingle(call =>
+            call.CardId == "card-ok" &&
+            call.Sequence > 1 &&
+            call.ActivityUserAccessToken == "abort-user-access-token" &&
+            call.RuntimeUserAccessToken == "abort-user-access-token");
         var completed = publisher.Sent.Select(e => e.Event).OfType<LarkCardDeliveryCompletedEvent>().Single();
         completed.OutboundText.Should().Be("partial");
         completed.CardMessageId.Should().Be("om-card-ok");
+        completed.Activity.Conversation.CanonicalKey.Should().Be("lark:group:oc-group-1");
+        completed.Activity.OutboundDelivery.ReplyMessageId.Should().Be("relay-msg-1");
+        completed.Activity.TransportExtras.NyxUserAccessToken.Should().BeEmpty();
         completed.DeliveryFailure.Should().NotBeNull();
         completed.DeliveryFailure.ErrorCode.Should().Be("finalize_timeout");
         publisher.Sent.Select(e => e.Event).OfType<LlmReplyStreamChunkEvent>().Should().BeEmpty();
@@ -743,6 +761,130 @@ public sealed class AgentRunLarkCardDeliveryTests
         var sentCount = publisher.Sent.Count;
         await agent.HandleEventAsync(Envelope(agent.Id, timeout));
         publisher.Sent.Should().HaveCount(sentCount);
+    }
+
+    [Fact]
+    public async Task GenerationTimeout_WithVisibleCard_AbortsBeforeFailingAndIsIdempotent()
+    {
+        var scheduler = new RecordingCallbackScheduler();
+        var publisher = new RecordingEventPublisher();
+        var runner = new RecordingCardRunner();
+        var secretStore = new InMemoryRuntimeSecretStore();
+        var agent = CreateAgent(
+            runner,
+            publisher: publisher,
+            scheduler: scheduler,
+            runtimeSecretStore: secretStore);
+        agent.State.RelayUserAccessTokenRef = await StoreRelayUserAccessTokenAsync(
+            secretStore,
+            "generation-timeout-user-token");
+        await StartVisibleCardAsync(agent, publisher, "partial");
+        scheduler.Timeouts.Clear();
+        var timeout = GenerationTimeout();
+
+        await agent.HandleReplyGenerationTimedOutAsync(timeout);
+
+        agent.State.Status.Should().Be(AgentRunStatus.ReplyGenerationRequested);
+        agent.State.LarkCardDelivery.InFlightOperation.Should().Be(LarkCardOperationPhase.Abort);
+        agent.State.LarkCardDelivery.PendingAbortReason.Should().Be(LarkCardAbortReason.GenerationTimeout);
+        runner.AbortCalls.Should().BeEmpty("the typed self-continuation owns CardKit IO");
+        var abortStep = publisher.Sent
+            .Select(e => e.Event)
+            .OfType<ReplyOperationStepEvent>()
+            .Single(step => step.LarkCard.Operation == LarkCardOperationPhase.Abort);
+        abortStep.LarkCard.Activity.TransportExtras.NyxUserAccessToken.Should()
+            .Be("generation-timeout-user-token");
+        abortStep.LarkCard.Activity.TransportExtras.NyxProviderSlug.Should().Be("api-lark-bot-4");
+
+        var sentBeforeDuplicate = publisher.Sent.Count;
+        var scheduledBeforeDuplicate = scheduler.Timeouts.Count;
+        await agent.HandleReplyGenerationTimedOutAsync(timeout.Clone());
+        publisher.Sent.Should().HaveCount(sentBeforeDuplicate);
+        scheduler.Timeouts.Should().HaveCount(scheduledBeforeDuplicate);
+
+        await DispatchPendingSelfEventsAsync(agent, publisher);
+
+        runner.AbortCalls.Should().ContainSingle(call =>
+            call.CardId == "card-ok" &&
+            call.Sequence > 1 &&
+            call.ActivityUserAccessToken == "generation-timeout-user-token" &&
+            call.RuntimeUserAccessToken == "generation-timeout-user-token");
+        agent.State.LarkCardDelivery.Phase.Should().Be(AgentRunLarkCardDeliveryPhase.Aborted);
+        agent.State.LarkCardDelivery.TerminalReason.Should().Be("llm_reply_timeout");
+        agent.State.Status.Should().Be(AgentRunStatus.Failed);
+        publisher.Sent.Select(e => e.Event).OfType<DeferredLlmReplyDroppedEvent>().Should().ContainSingle();
+
+        var sentAfterTerminal = publisher.Sent.Count;
+        await agent.HandleReplyGenerationTimedOutAsync(timeout.Clone());
+        publisher.Sent.Should().HaveCount(sentAfterTerminal);
+    }
+
+    [Fact]
+    public async Task GenerationTimeout_AfterProtobufRehydration_ResolvesTokenReferenceForAbort()
+    {
+        var secretStore = new InMemoryRuntimeSecretStore();
+        var firstPublisher = new RecordingEventPublisher();
+        var first = CreateAgent(
+            new RecordingCardRunner(),
+            publisher: firstPublisher,
+            runtimeSecretStore: secretStore);
+        first.State.RelayUserAccessTokenRef = await StoreRelayUserAccessTokenAsync(
+            secretStore,
+            "rehydrated-user-access-token");
+        await StartVisibleCardAsync(first, firstPublisher, "partial");
+
+        var rehydratedState = AgentRunGAgentState.Parser.ParseFrom(first.State.ToByteArray());
+        var runner = new RecordingCardRunner();
+        var publisher = new RecordingEventPublisher();
+        var scheduler = new RecordingCallbackScheduler();
+        var rehydrated = CreateAgent(
+            runner,
+            publisher: publisher,
+            scheduler: scheduler,
+            runtimeSecretStore: secretStore);
+        SetState(rehydrated, rehydratedState);
+
+        await rehydrated.HandleReplyGenerationTimedOutAsync(GenerationTimeout());
+        await DispatchPendingSelfEventsAsync(rehydrated, publisher);
+
+        rehydrated.State.RelayUserAccessTokenRef.Should().Be(rehydratedState.RelayUserAccessTokenRef);
+        rehydrated.State.LarkCardDelivery.NyxProviderSlug.Should().Be("api-lark-bot-4");
+        runner.AbortCalls.Should().ContainSingle(call =>
+            call.ActivityUserAccessToken == "rehydrated-user-access-token" &&
+            call.RuntimeUserAccessToken == "rehydrated-user-access-token");
+        rehydrated.State.Status.Should().Be(AgentRunStatus.Failed);
+    }
+
+    [Fact]
+    public async Task AbortTimeout_TerminatesFinalizeWithoutExecutingStaleAbortOrDuplicatingCompletion()
+    {
+        var scheduler = new RecordingCallbackScheduler();
+        var publisher = new RecordingEventPublisher();
+        var runner = new RecordingCardRunner();
+        var agent = CreateAgent(runner, publisher: publisher, scheduler: scheduler);
+        await StartVisibleCardAsync(agent, publisher, "partial");
+        scheduler.Timeouts.Clear();
+        await agent.HandleNextLlmStepAsync(CreateFinalReplyStep("final"));
+        var finalizeTimeout = ScheduledTimeout(scheduler, LarkCardOperationPhase.Finalize);
+
+        await agent.HandleEventAsync(Envelope(agent.Id, finalizeTimeout));
+        var abortTimeout = ScheduledTimeout(scheduler, LarkCardOperationPhase.Abort);
+        await agent.HandleEventAsync(Envelope(agent.Id, abortTimeout));
+
+        agent.State.LarkCardDelivery.Phase.Should().Be(AgentRunLarkCardDeliveryPhase.Terminated);
+        agent.State.LarkCardDelivery.TerminalReason.Should().Be("finalize_timeout:card_abort_failed:abort_timeout");
+        agent.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
+        runner.FinalizeCalls.Should().BeEmpty();
+        runner.AbortCalls.Should().BeEmpty();
+        publisher.Sent.Select(e => e.Event).OfType<LarkCardDeliveryCompletedEvent>().Should().ContainSingle();
+
+        var sentCount = publisher.Sent.Count;
+        await DispatchPendingSelfEventsAsync(agent, publisher);
+        await agent.HandleEventAsync(Envelope(agent.Id, abortTimeout.Clone()));
+
+        runner.AbortCalls.Should().BeEmpty("the queued abort step is stale after the abort timeout commits");
+        publisher.Sent.Should().HaveCount(sentCount);
+        publisher.Sent.Select(e => e.Event).OfType<LarkCardDeliveryCompletedEvent>().Should().ContainSingle();
     }
 
     [Fact]
@@ -780,6 +922,34 @@ public sealed class AgentRunLarkCardDeliveryTests
         var sentCount = publisher.Sent.Count;
         await agent.HandleEventAsync(Envelope(agent.Id, createCompleted));
         publisher.Sent.Should().HaveCount(sentCount);
+    }
+
+    [Fact]
+    public async Task RelayReplyAmbiguousFailure_CompletesAsFailedWithoutReusingReplyAuthority()
+    {
+        var runner = new RecordingCardRunner
+        {
+            CreateResult = ConversationCardCreateResult.ReplyAuthoritySpentDeliveryUnknown(
+                "card-relay-ambiguous",
+                string.Empty,
+                "card_relay_reply_threw",
+                "reply outcome unknown"),
+        };
+        var publisher = new RecordingEventPublisher();
+        var agent = CreateAgent(runner, publisher: publisher);
+
+        await agent.HandleEventAsync(Envelope(agent.Id, CreateCardChunk("possibly delivered")));
+        await DispatchPendingSelfEventsAsync(agent, publisher);
+
+        agent.State.LarkCardDelivery.Phase.Should().Be(AgentRunLarkCardDeliveryPhase.Terminated);
+        agent.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
+        publisher.Sent.Select(e => e.Event).OfType<LlmReplyStreamChunkEvent>().Should().BeEmpty();
+        var completed = publisher.Sent.Select(e => e.Event).OfType<LarkCardDeliveryCompletedEvent>().Single();
+        completed.DeliveryFailure.Should().NotBeNull();
+        completed.DeliveryFailure.ErrorCode.Should().Be("card_relay_reply_threw");
+        agent.State.RecentDeliveries.Should().ContainSingle().Subject.Status
+            .Should().Be(DeliveryStatus.FailedPostSend);
+        agent.State.LastSuccessfulDelivery.Should().BeNull();
     }
 
     [Fact]
@@ -859,7 +1029,15 @@ public sealed class AgentRunLarkCardDeliveryTests
     {
         var scheduler = new RecordingCallbackScheduler();
         var publisher = new RecordingEventPublisher();
-        var agent = CreateAgent(new RecordingCardRunner(), publisher: publisher, scheduler: scheduler);
+        var secretStore = new InMemoryRuntimeSecretStore();
+        var agent = CreateAgent(
+            new RecordingCardRunner(),
+            publisher: publisher,
+            scheduler: scheduler,
+            runtimeSecretStore: secretStore);
+        agent.State.RelayUserAccessTokenRef = await StoreRelayUserAccessTokenAsync(
+            secretStore,
+            "abort-timeout-user-access-token");
 
         await agent.HandleEventAsync(Envelope(agent.Id, CreateCardChunk("partial")));
 
@@ -899,6 +1077,24 @@ public sealed class AgentRunLarkCardDeliveryTests
         finalizeText.Should().NotContain("runtime-reply-token");
         finalizeText.Should().NotContain("nyx_user_access_token");
         finalizeText.Should().NotContain("reply_token");
+
+        await agent.HandleEventAsync(Envelope(agent.Id, timeout));
+
+        var abortStep = publisher.Sent
+            .Select(e => e.Event)
+            .OfType<ReplyOperationStepEvent>()
+            .Single(step => step.LarkCard.Operation == LarkCardOperationPhase.Abort);
+        abortStep.LarkCard.Activity.TransportExtras.NyxUserAccessToken.Should()
+            .Be("abort-timeout-user-access-token");
+        var abortTimeout = scheduler.Timeouts
+            .Last(scheduled => scheduled.TriggerEnvelope.Payload
+                .Unpack<LarkCardOperationTimeoutFiredEvent>().Operation == LarkCardOperationPhase.Abort);
+        var abortPayload = abortTimeout.TriggerEnvelope.Payload.Unpack<LarkCardOperationTimeoutFiredEvent>();
+        abortPayload.AbortReason.Should().Be(LarkCardAbortReason.FinalizeTimeout);
+        abortPayload.Activity.TransportExtras.NyxUserAccessToken.Should().BeEmpty();
+        var abortTimeoutText = Encoding.UTF8.GetString(abortTimeout.TriggerEnvelope.ToByteArray());
+        abortTimeoutText.Should().NotContain("abort-timeout-user-access-token");
+        abortTimeoutText.Should().NotContain("nyx_user_access_token");
     }
 
     [Fact]
@@ -923,6 +1119,18 @@ public sealed class AgentRunLarkCardDeliveryTests
                 PendingFinalizeText = "final",
                 PendingFinalizeCommandId = "llm:corr-card",
                 TextFallbackPhase = AgentRunLarkCardTextFallbackPhase.FinalForwarded,
+                NyxProviderSlug = "api-lark-bot-4",
+                PendingAbortReason = LarkCardAbortReason.FinalizeTimeout,
+                PendingAbortTriggeredAtUnixMs = 41,
+            },
+            RelayUserAccessTokenRef = new RuntimeSecretReference
+            {
+                Ref = "rsec_0000000000000001",
+                Purpose = ChannelRelayRuntimeSecretPurposes.UserAccessToken,
+                Fingerprint = "sha256:fingerprint",
+                ExpiresAtUnixMs = 9000,
+                OwnerRunId = "run-1",
+                OwnerStepId = "corr-card",
             },
             PendingCardDeliveryCompletion = BuildPendingCompletion(),
         };
@@ -947,6 +1155,9 @@ public sealed class AgentRunLarkCardDeliveryTests
             Sequence = 5,
             TerminalReason = "completed",
             TextFallbackPhase = AgentRunLarkCardTextFallbackPhase.FinalForwarded,
+            NyxProviderSlug = "api-lark-bot-4",
+            PendingAbortReason = LarkCardAbortReason.FinalizeTimeout,
+            PendingAbortTriggeredAtUnixMs = 41,
         };
 
         AgentRunGAgentState.Parser.ParseFrom(state.ToByteArray()).Should().Be(state);
@@ -956,11 +1167,43 @@ public sealed class AgentRunLarkCardDeliveryTests
         AgentRunLarkCardDeliveryChangedEvent.Parser.ParseFrom(evt.ToByteArray()).Should().Be(evt);
     }
 
+    [Fact]
+    public void ReplyGenerationRequestedReducer_PersistsOnlyRuntimeSecretReference()
+    {
+        var agent = CreateAgent(new RecordingCardRunner());
+        var reference = new RuntimeSecretReference
+        {
+            Ref = "rsec_0000000000000002",
+            Purpose = ChannelRelayRuntimeSecretPurposes.UserAccessToken,
+            Fingerprint = "sha256:user-token-fingerprint",
+            ExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
+            OwnerRunId = "run-1",
+            OwnerStepId = "corr-card",
+        };
+
+        var reduced = InvokeTransition(
+            agent,
+            new AgentRunGAgentState(),
+            new AgentRunReplyGenerationRequestedEvent
+            {
+                RunId = "run-1",
+                CorrelationId = "corr-card",
+                TargetActorId = "conversation-1",
+                RequestedAtUnixMs = 42,
+                Attempt = 1,
+                RelayUserAccessTokenRef = reference.Clone(),
+            });
+
+        reduced.RelayUserAccessTokenRef.Should().Be(reference);
+        Encoding.UTF8.GetString(reduced.ToByteArray()).Should().NotContain("raw-user-access-token");
+    }
+
     private static AgentRunGAgent CreateAgent(
         RecordingCardRunner runner,
         RecordingEventPublisher? publisher = null,
         RecordingCallbackScheduler? scheduler = null,
-        Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? relayOptions = null)
+        Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? relayOptions = null,
+        IRuntimeSecretStore? runtimeSecretStore = null)
     {
         var actorRuntime = new RecordingActorRuntime();
         var executor = new NoopReplyGenerationExecutor();
@@ -979,6 +1222,7 @@ public sealed class AgentRunLarkCardDeliveryTests
         var services = new ServiceCollection()
             .AddSingleton<IConversationCardTurnRunner>(runner)
             .AddSingleton<IActorRuntimeCallbackScheduler>(callbackScheduler)
+            .AddSingleton(runtimeSecretStore ?? new InMemoryRuntimeSecretStore())
             .BuildServiceProvider();
         agent.Services = services;
         agent.EventSourcing = new StateTransitionEventSourcing<AgentRunGAgentState>((current, evt) =>
@@ -1168,6 +1412,28 @@ public sealed class AgentRunLarkCardDeliveryTests
             },
         };
 
+    private static AgentRunReplyGenerationTimedOut GenerationTimeout() =>
+        new()
+        {
+            RunId = "run-1",
+            CorrelationId = "corr-card",
+            TargetActorId = "conversation-1",
+            TimedOutAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            Attempt = 1,
+        };
+
+    private static async Task<RuntimeSecretReference> StoreRelayUserAccessTokenAsync(
+        IRuntimeSecretStore secretStore,
+        string token) =>
+        (await secretStore.PutAsync(new StoreRuntimeSecretRequest(
+            ChannelRelayRuntimeSecretPurposes.UserAccessToken,
+            "run-1",
+            "corr-card",
+            token,
+            TimeSpan.FromMinutes(5),
+            ConsumeOnce: false,
+            AuditReason: "Test Lark card timeout compensation."))).Reference;
+
     private static LarkCardOperationTimeoutFiredEvent ScheduledTimeout(
         RecordingCallbackScheduler scheduler,
         LarkCardOperationPhase operation) =>
@@ -1246,6 +1512,7 @@ public sealed class AgentRunLarkCardDeliveryTests
                 NyxLarkChatId = "oc-group-1",
                 NyxRegistrationScopeId = "reg-scope-1",
                 NyxSenderUserId = "nyx-user-1",
+                NyxProviderSlug = "api-lark-bot-4",
             },
         };
 
@@ -1330,11 +1597,16 @@ public sealed class AgentRunLarkCardDeliveryTests
         public ConversationCardFinalizeResult FinalizeResult { get; init; } =
             ConversationCardFinalizeResult.Succeeded();
 
+        public ConversationCardAbortResult AbortResult { get; init; } =
+            ConversationCardAbortResult.Succeeded();
+
         public List<LlmReplyCardStreamChunkEvent> CreateCalls { get; } = [];
 
         public List<(string Text, long Sequence)> StreamCalls { get; } = [];
 
         public List<(string FinalText, long Sequence, string ActivityUserAccessToken, string RuntimeUserAccessToken)> FinalizeCalls { get; } = [];
+
+        public List<(string CardId, long Sequence, string ActivityUserAccessToken, string RuntimeUserAccessToken)> AbortCalls { get; } = [];
 
         public Task<ConversationCardCreateResult> RunCardCreateAsync(
             LlmReplyCardStreamChunkEvent chunk,
@@ -1374,6 +1646,21 @@ public sealed class AgentRunLarkCardDeliveryTests
                 referenceActivity.TransportExtras?.NyxUserAccessToken ?? string.Empty,
                 runtimeContext.NyxUserAccessToken ?? string.Empty));
             return Task.FromResult(FinalizeResult);
+        }
+
+        public Task<ConversationCardAbortResult> RunCardAbortAsync(
+            ChatActivity referenceActivity,
+            string cardId,
+            long sequence,
+            ConversationTurnRuntimeContext runtimeContext,
+            CancellationToken ct)
+        {
+            AbortCalls.Add((
+                cardId,
+                sequence,
+                referenceActivity.TransportExtras?.NyxUserAccessToken ?? string.Empty,
+                runtimeContext.NyxUserAccessToken ?? string.Empty));
+            return Task.FromResult(AbortResult);
         }
     }
 

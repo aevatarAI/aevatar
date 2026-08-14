@@ -5,6 +5,7 @@ using Aevatar.Workflow.Application.Observatory;
 using Aevatar.Workflow.Abstractions;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
+using System.Text.Json;
 
 namespace Aevatar.Workflow.Application.Tests;
 
@@ -102,6 +103,341 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
     }
 
     [Fact]
+    public async Task ListActivityRunsForScopeAsync_ShouldReturnPagedTypedRows_AndRedactLegacyBindingId()
+    {
+        const string workflowId = "wf-alpha";
+        const string runId = "run-alpha";
+        const string actorId = "actor-alpha";
+        const string serviceIdentityCandidate = "svc-alpha";
+        const string memberIdentityCandidate = "m-alpha";
+        var snapshot = Snapshot(actorId, CallerScope, WorkflowRunCompletionStatus.Completed, started: 100, updated: 300);
+        snapshot.RunId = runId;
+        snapshot.WorkflowId = workflowId;
+        snapshot.CompletedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UnixEpoch.AddSeconds(220));
+        snapshot.DurationMs = 120_000;
+        snapshot.RunOrigin = "member-invoke";
+        snapshot.ActivityInitiator = new WorkflowRunActivityInitiatorSnapshot
+        {
+            Platform = "nyxid",
+            Tenant = "tenant-alpha",
+            ExternalUserId = memberIdentityCandidate,
+            Scope = CallerScope,
+            BindingId = serviceIdentityCandidate,
+            DisplayValue = "alice@example.com",
+            Availability = "available",
+        };
+        snapshot.InputSummary = "summarized input";
+        snapshot.ActivityCurrentStep = new WorkflowRunActivityStepSnapshot
+        {
+            StepId = "step-current",
+            InputSummary = "current step input",
+            Availability = "available",
+        };
+        snapshot.ActivityFirstFailure = new WorkflowRunActivityFailureSnapshot
+        {
+            StepId = "step-failed",
+            Message = "first failure",
+            Availability = "available",
+        };
+        snapshot.ActivityWaiting = new WorkflowRunActivityWaitingSnapshot
+        {
+            StepId = "step-waiting",
+            WaitingKind = "tool_approval",
+            Prompt = "Approve?",
+            Availability = "available",
+        };
+        snapshot.RecoveryCapability = RecoveryCapability();
+        snapshot.Lineage = new WorkflowRunLineage
+        {
+            Availability = WorkflowRunLineageAvailability.Available,
+            RetryFork = new WorkflowRunRetryForkLineage
+            {
+                Availability = WorkflowRunLineageAvailability.Available,
+                SourceRunId = "run-source-gamma",
+                OriginalRunId = "run-original-alpha",
+                Attempt = 2,
+                StartAtStepId = "step-failed",
+            },
+            SubWorkflow = new WorkflowRunSubWorkflowLineage
+            {
+                Availability = WorkflowRunLineageAvailability.Unavailable,
+            },
+        };
+        var extraSnapshot = Snapshot("actor-beta", CallerScope, WorkflowRunCompletionStatus.Completed, started: 90, updated: 290);
+        extraSnapshot.RunId = "run-beta";
+        var currentState = new FakeCurrentStateQueryPort
+        {
+            PageResults =
+            [
+                new WorkflowActorCurrentStatePage([snapshot], "cursor-next", 42),
+                new WorkflowActorCurrentStatePage([extraSnapshot], null, null),
+            ],
+        };
+        var service = new WorkflowRunObservatoryQueryService(currentState, new FakeArtifactQueryPort());
+
+        var page = await service.ListActivityRunsForScopeAsync(
+            CallerScope,
+            new WorkflowActivityRunFeedFilter
+            {
+                Status = "completed",
+                WorkflowId = workflowId,
+                Origins = ["member-invoke"],
+                DefinitionActorIds = ["definition-alpha"],
+                ScheduleIds = ["schedule-alpha"],
+                FromUtc = DateTimeOffset.UnixEpoch.AddSeconds(10),
+                ToUtc = DateTimeOffset.UnixEpoch.AddSeconds(400),
+                Take = 1,
+                Cursor = "cursor-current",
+                IncludeTotalCount = true,
+            });
+
+        currentState.PageQueries.Should().HaveCount(2);
+        var firstQuery = currentState.PageQueries[0];
+        firstQuery.ScopeId.Should().Be(CallerScope);
+        firstQuery.WorkflowId.Should().Be(workflowId);
+        firstQuery.SearchText.Should().BeEmpty();
+        firstQuery.Cursor.Should().Be("cursor-current");
+        firstQuery.IncludeTotalCount.Should().BeTrue();
+        firstQuery.Take.Should().Be(1);
+        var verificationQuery = currentState.PageQueries[1];
+        verificationQuery.Cursor.Should().Be("cursor-next");
+        verificationQuery.IncludeTotalCount.Should().BeFalse();
+        verificationQuery.Take.Should().Be(1);
+        page.NextCursor.Should().Be("cursor-next");
+        page.HasMore.Should().BeTrue();
+        page.TotalCount.Should().Be(42);
+        page.Items.Should().ContainSingle();
+        var row = page.Items[0];
+        row.RunId.Should().Be(runId);
+        row.ActorId.Should().Be(actorId);
+        row.WorkflowId.Should().Be(workflowId);
+        row.Initiator.ExternalUserId.Should().Be(memberIdentityCandidate);
+        row.Initiator.BindingId.Should().BeEmpty();
+        row.InputSummary.Should().Be("summarized input");
+        row.CurrentStep.StepId.Should().Be("step-current");
+        row.FirstFailure.StepId.Should().Be("step-failed");
+        row.FirstFailure.Message.Should().Be("first failure");
+        row.Waiting.StepId.Should().Be("step-waiting");
+        row.Waiting.WaitingKind.Should().Be("tool_approval");
+        row.StartedAtUtc.Should().Be(DateTimeOffset.UnixEpoch.AddSeconds(100));
+        row.CompletedAtUtc.Should().Be(DateTimeOffset.UnixEpoch.AddSeconds(220));
+        row.UpdatedAtUtc.Should().Be(DateTimeOffset.UnixEpoch.AddSeconds(300));
+        row.DurationMs.Should().Be(120_000);
+        row.RecoveryCapability.WorkflowDefinitionRevisionId.Should().Be("rev-recovery");
+        row.RecoveryCapability.RetryFailedStep.Eligibility.Should().Be(WorkflowRecoveryEligibility.Eligible);
+        row.RecoveryCapability.RetryFailedStep.StartingStepId.Should().Be("step-failed");
+        row.Lineage.RetryFork.SourceRunId.Should().Be("run-source-gamma");
+        row.Lineage.RetryFork.OriginalRunId.Should().Be("run-original-alpha");
+        row.Lineage.RetryFork.StartAtStepId.Should().Be("step-failed");
+        row.Lineage.SubWorkflow.Availability.Should().Be(WorkflowRunLineageAvailability.Unavailable);
+    }
+
+    [Fact]
+    public async Task ListActivityRunsForScopeAsync_ShouldPassSearchTextToCurrentStatePageQuery()
+    {
+        var currentState = new FakeCurrentStateQueryPort
+        {
+            PageResult = new WorkflowActorCurrentStatePage([], null, null),
+        };
+        var service = new WorkflowRunObservatoryQueryService(currentState, new FakeArtifactQueryPort());
+
+        await service.ListActivityRunsForScopeAsync(
+            CallerScope,
+            new WorkflowActivityRunFeedFilter
+            {
+                SearchText = "  Test Member  ",
+                Status = "completed",
+                WorkflowId = "workflow-alpha",
+                Take = 25,
+            });
+
+        currentState.PageQueries.Should().HaveCount(1);
+        currentState.PageQueries[0].SearchText.Should().Be("Test Member");
+        currentState.PageQueries[0].Status.Should().Be("completed");
+        currentState.PageQueries[0].WorkflowId.Should().Be("workflow-alpha");
+    }
+
+    [Fact]
+    public async Task ListActivityRunsForScopeAsync_ShouldRepresentMissingFactsExplicitly()
+    {
+        var snapshot = Snapshot("actor-legacy", CallerScope, WorkflowRunCompletionStatus.Running, updated: 300);
+        var currentState = new FakeCurrentStateQueryPort
+        {
+            PageResult = new WorkflowActorCurrentStatePage([snapshot], null, null),
+        };
+        var service = new WorkflowRunObservatoryQueryService(currentState, new FakeArtifactQueryPort());
+
+        var page = await service.ListActivityRunsForScopeAsync(
+            CallerScope,
+            new WorkflowActivityRunFeedFilter());
+
+        page.HasMore.Should().BeFalse();
+        page.TotalCount.Should().BeNull();
+        page.Items.Should().ContainSingle();
+        var row = page.Items[0];
+        row.RunId.Should().BeEmpty();
+        row.ActorId.Should().Be("actor-legacy");
+        row.WorkflowId.Should().BeEmpty();
+        row.Initiator.DisplayValue.Should().Be("Unknown");
+        row.Initiator.Availability.Should().Be("unavailable");
+        row.CurrentStep.Availability.Should().Be("unavailable");
+        row.FirstFailure.Availability.Should().Be("unavailable");
+        row.Waiting.Availability.Should().Be("unavailable");
+        row.CompletedAtUtc.Should().BeNull();
+        row.DurationMs.Should().BeNull();
+        row.RecoveryCapability.RetryFailedStep.Should().NotBeNull();
+        row.RecoveryCapability.RetryFailedStep.Eligibility.Should().Be(WorkflowRecoveryEligibility.Unavailable);
+        row.RecoveryCapability.RetryFailedStep.UnavailableReasonCode.Should()
+            .Be(WorkflowRecoveryUnavailableReasonCode.LegacyUnavailable);
+        row.RecoveryCapability.RunAgain.Should().NotBeNull();
+        row.RecoveryCapability.RunAgain.Eligibility.Should().Be(WorkflowRecoveryEligibility.Unavailable);
+        row.RecoveryCapability.RunAgain.UnavailableReasonCode.Should()
+            .Be(WorkflowRecoveryUnavailableReasonCode.LegacyUnavailable);
+        row.Lineage.Availability.Should().Be(WorkflowRunLineageAvailability.LegacyUnavailable);
+    }
+
+    [Fact]
+    public async Task ListActivityRunsForScopeAsync_ShouldNormalizeLegacyRecoveryActions_WhenCapabilityExistsWithoutActions()
+    {
+        var snapshot = Snapshot("actor-legacy-recovery", CallerScope, WorkflowRunCompletionStatus.Completed, updated: 300);
+        snapshot.RecoveryCapability = new WorkflowRunRecoveryCapability
+        {
+            WorkflowDefinitionRevisionId = "rev-legacy",
+            WorkflowDefinitionVersion = 3,
+        };
+        var currentState = new FakeCurrentStateQueryPort
+        {
+            PageResult = new WorkflowActorCurrentStatePage([snapshot], null, null),
+        };
+        var service = new WorkflowRunObservatoryQueryService(currentState, new FakeArtifactQueryPort());
+
+        var page = await service.ListActivityRunsForScopeAsync(
+            CallerScope,
+            new WorkflowActivityRunFeedFilter());
+
+        var row = page.Items.Should().ContainSingle().Subject;
+        row.RecoveryCapability.WorkflowDefinitionRevisionId.Should().Be("rev-legacy");
+        row.RecoveryCapability.WorkflowDefinitionVersion.Should().Be(3);
+        row.RecoveryCapability.RetryFailedStep.Should().NotBeNull();
+        row.RecoveryCapability.RetryFailedStep.Eligibility.Should().Be(WorkflowRecoveryEligibility.Unavailable);
+        row.RecoveryCapability.RetryFailedStep.UnavailableReasonCode.Should()
+            .Be(WorkflowRecoveryUnavailableReasonCode.LegacyUnavailable);
+        row.RecoveryCapability.RetryFailedStep.UnavailableReason.Should()
+            .Be("Recovery capability is unavailable for this legacy run.");
+        row.RecoveryCapability.RunAgain.Should().NotBeNull();
+        row.RecoveryCapability.RunAgain.Eligibility.Should().Be(WorkflowRecoveryEligibility.Unavailable);
+        row.RecoveryCapability.RunAgain.UnavailableReasonCode.Should()
+            .Be(WorkflowRecoveryUnavailableReasonCode.LegacyUnavailable);
+        row.RecoveryCapability.RunAgain.UnavailableReason.Should()
+            .Be("Recovery capability is unavailable for this legacy run.");
+    }
+
+    [Fact]
+    public async Task ListActivityRunsForScopeAsync_ShouldLeaveDurationUnavailable_WhenTerminalRunHasNoStart()
+    {
+        var completedAt = DateTimeOffset.UnixEpoch.AddSeconds(420);
+        var snapshot = Snapshot("actor-terminal-legacy", CallerScope, WorkflowRunCompletionStatus.Completed, updated: 430);
+        snapshot.CompletedAtUtc = Timestamp.FromDateTimeOffset(completedAt);
+        var currentState = new FakeCurrentStateQueryPort
+        {
+            PageResult = new WorkflowActorCurrentStatePage([snapshot], null, null),
+        };
+        var service = new WorkflowRunObservatoryQueryService(currentState, new FakeArtifactQueryPort());
+
+        var page = await service.ListActivityRunsForScopeAsync(
+            CallerScope,
+            new WorkflowActivityRunFeedFilter());
+
+        var row = page.Items.Should().ContainSingle().Subject;
+        row.CompletedAtUtc.Should().Be(completedAt);
+        row.StartedAtUtc.Should().BeNull();
+        row.DurationMs.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ListActivityRunsForScopeAsync_ShouldNotAdvertiseNextPage_WhenResultExactlyFillsRequestedPage()
+    {
+        var currentState = new FakeCurrentStateQueryPort
+        {
+            PageResults =
+            [
+                new WorkflowActorCurrentStatePage(
+                    [
+                        Snapshot("actor-one", CallerScope, WorkflowRunCompletionStatus.Running),
+                        Snapshot("actor-two", CallerScope, WorkflowRunCompletionStatus.Completed),
+                    ],
+                    "provider-cursor-at-full-page",
+                    2),
+                new WorkflowActorCurrentStatePage([], null, null),
+            ],
+        };
+        var service = new WorkflowRunObservatoryQueryService(currentState, new FakeArtifactQueryPort());
+
+        var page = await service.ListActivityRunsForScopeAsync(
+            CallerScope,
+            new WorkflowActivityRunFeedFilter { Take = 2 });
+
+        currentState.PageQueries.Should().HaveCount(2);
+        currentState.PageQueries[0].Take.Should().Be(2);
+        currentState.PageQueries[1].Take.Should().Be(1);
+        currentState.PageQueries[1].Cursor.Should().Be("provider-cursor-at-full-page");
+        page.Items.Should().HaveCount(2);
+        page.HasMore.Should().BeFalse();
+        page.NextCursor.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ListActivityRunsForScopeAsync_ShouldDropForeignRowsEvenWhenPageContainsThem()
+    {
+        var currentState = new FakeCurrentStateQueryPort
+        {
+            PageResult = new WorkflowActorCurrentStatePage(
+                [
+                    Snapshot("actor-own", CallerScope, WorkflowRunCompletionStatus.Running),
+                    Snapshot("actor-foreign", OtherScope, WorkflowRunCompletionStatus.Running),
+                ],
+                null,
+                null),
+        };
+        var service = new WorkflowRunObservatoryQueryService(currentState, new FakeArtifactQueryPort());
+
+        var page = await service.ListActivityRunsForScopeAsync(CallerScope, new WorkflowActivityRunFeedFilter());
+
+        page.Items.Should().ContainSingle().Which.ActorId.Should().Be("actor-own");
+    }
+
+    [Fact]
+    public async Task ListAllActivityRunsAsync_ShouldPageAcrossScopes_WithoutScopeFilter()
+    {
+        var currentState = new FakeCurrentStateQueryPort
+        {
+            PageResults =
+            [
+                new WorkflowActorCurrentStatePage(
+                    [
+                        Snapshot("actor-own", CallerScope, WorkflowRunCompletionStatus.Running),
+                        Snapshot("actor-other", OtherScope, WorkflowRunCompletionStatus.Completed),
+                    ],
+                    "cursor-next",
+                    null),
+                new WorkflowActorCurrentStatePage([], null, null),
+            ],
+        };
+        var service = new WorkflowRunObservatoryQueryService(currentState, new FakeArtifactQueryPort());
+
+        var page = await service.ListAllActivityRunsAsync(new WorkflowActivityRunFeedFilter { Cursor = "cursor-current" });
+
+        currentState.PageQueries.Should().HaveCount(2);
+        currentState.PageQueries[0].ScopeId.Should().BeEmpty();
+        currentState.PageQueries[0].Cursor.Should().Be("cursor-current");
+        currentState.PageQueries[1].ScopeId.Should().BeEmpty();
+        currentState.PageQueries[1].Cursor.Should().Be("cursor-next");
+        currentState.PageQueries[1].Take.Should().Be(1);
+        page.HasMore.Should().BeFalse();
+        page.Items.Select(item => item.ScopeId).Should().BeEquivalentTo([CallerScope, OtherScope]);
+    }
+
+    [Fact]
     public async Task GetRunForScopeAsync_ShouldReturnNull_WhenRunBelongsToAnotherScope()
     {
         var currentState = new FakeCurrentStateQueryPort
@@ -138,6 +474,7 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         };
         var report = new WorkflowRunReport
         {
+            StateVersion = 7,
             Usage = new WorkflowRunUsageMetrics { PromptTokens = 10, CompletionTokens = 5, TotalTokens = 15, Cost = 0.004 },
             Timeline =
             [
@@ -181,6 +518,120 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
     }
 
     [Fact]
+    public async Task GetRunForScopeAsync_ShouldExposeTypedOperationsInStableSequenceOrderWithHonestDuration()
+    {
+        var snapshot = Snapshot("run-1", CallerScope, WorkflowRunCompletionStatus.Running);
+        snapshot.InputSummary = "Original user request.";
+        var currentState = new FakeCurrentStateQueryPort
+        {
+            SingleResult = snapshot,
+        };
+        var report = new WorkflowRunReport
+        {
+            StateVersion = 7,
+            Operations =
+            [
+                new WorkflowRunOperation
+                {
+                    SessionId = "session-alpha",
+                    OperationId = "model-round-1",
+                    ProgressSequence = 0,
+                    Round = 1,
+                    Kind = WorkflowRuntimeOperationKind.Model,
+                    StartedAt = DateTimeOffset.UnixEpoch.AddSeconds(8),
+                    CompletedAt = DateTimeOffset.UnixEpoch.AddSeconds(7),
+                    Model = "deepseek-chat",
+                    Output = "done",
+                    FinishReason = "stop",
+                    Success = true,
+                },
+                new WorkflowRunOperation
+                {
+                    SessionId = "session-alpha",
+                    OperationId = "call-search-1",
+                    ProgressSequence = 20,
+                    Kind = WorkflowRuntimeOperationKind.Tool,
+                    StartedAt = DateTimeOffset.UnixEpoch.AddSeconds(8),
+                    CompletedAt = DateTimeOffset.UnixEpoch.AddSeconds(9),
+                    RoleActorId = "role-actor-alpha",
+                    ToolCallId = "call-search-1",
+                    ToolName = "search",
+                    ArgumentsJson = "{\"query\":\"status\"}",
+                    ResultJson = "{\"healthy\":true}",
+                    Success = true,
+                },
+                new WorkflowRunOperation
+                {
+                    SessionId = "session-alpha",
+                    OperationId = "model-round-0",
+                    ProgressSequence = 10,
+                    Round = 0,
+                    Kind = WorkflowRuntimeOperationKind.Model,
+                    StartedAt = DateTimeOffset.UnixEpoch.AddSeconds(10),
+                    CompletedAt = DateTimeOffset.UnixEpoch.AddSeconds(12.25),
+                    RoleActorId = "role-actor-alpha",
+                    Model = "deepseek-chat",
+                    Provider = "deepseek",
+                    InputSummary = "Check the deployment status.",
+                    AvailableToolNames = ["search", "status"],
+                    Output = string.Empty,
+                    ReasoningContent = "A tool is required.",
+                    FinishReason = "tool_calls",
+                    Usage = new WorkflowRunUsageMetrics
+                    {
+                        PromptTokens = 13,
+                        CompletionTokens = 2,
+                        TotalTokens = 15,
+                    },
+                    Success = true,
+                },
+            ],
+        };
+        var service = new WorkflowRunObservatoryQueryService(
+            currentState,
+            new FakeArtifactQueryPort { Report = report });
+
+        var detail = await service.GetRunForScopeAsync(CallerScope, "run-1");
+
+        detail.Should().NotBeNull();
+        detail!.InputSummary.Should().Be("Original user request.",
+            "the request Input lane is distinct from every provider invocation input");
+        detail.Operations.Select(operation => operation.OperationId).Should().Equal(
+            "model-round-0",
+            "call-search-1",
+            "model-round-1");
+
+        var firstModel = detail.Operations[0];
+        firstModel.Kind.Should().Be("model");
+        firstModel.Round.Should().Be(0);
+        firstModel.ProgressSequence.Should().Be(10);
+        firstModel.Model.Should().Be("deepseek-chat");
+        firstModel.Provider.Should().Be("deepseek");
+        firstModel.InputSummary.Should().Be("Check the deployment status.");
+        firstModel.AvailableToolNames.Should().Equal("search", "status");
+        firstModel.ReasoningContent.Should().Be("A tool is required.");
+        firstModel.FinishReason.Should().Be("tool_calls");
+        firstModel.Usage.TotalTokens.Should().Be(15);
+        firstModel.DurationMs.Should().Be(2250);
+
+        var tool = detail.Operations[1];
+        tool.Kind.Should().Be("tool");
+        tool.ToolCallId.Should().Be("call-search-1");
+        tool.ToolName.Should().Be("search");
+        tool.ArgumentsJson.Should().Be("{\"query\":\"status\"}");
+        tool.ResultJson.Should().Be("{\"healthy\":true}");
+        tool.DurationMs.Should().Be(1000);
+
+        var invalidModel = detail.Operations[2];
+        invalidModel.Kind.Should().Be("model");
+        invalidModel.ProgressSequence.Should().Be(0);
+        invalidModel.StartedAtUtc.Should().Be(DateTimeOffset.UnixEpoch.AddSeconds(8));
+        invalidModel.CompletedAtUtc.Should().Be(DateTimeOffset.UnixEpoch.AddSeconds(7));
+        invalidModel.DurationMs.Should().BeNull(
+            "an end timestamp before its start is invalid rather than a zero-duration operation");
+    }
+
+    [Fact]
     public async Task GetRunForScopeAsync_ShouldExposeActiveHumanApprovalFacts()
     {
         var snapshot = Snapshot(
@@ -192,6 +643,7 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         var currentState = new FakeCurrentStateQueryPort { SingleResult = snapshot };
         var report = new WorkflowRunReport
         {
+            StateVersion = 7,
             Steps =
             [
                 new WorkflowRunStepTrace
@@ -232,6 +684,7 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         var currentState = new FakeCurrentStateQueryPort { SingleResult = snapshot };
         var report = new WorkflowRunReport
         {
+            StateVersion = 7,
             Steps =
             [
                 new WorkflowRunStepTrace
@@ -288,6 +741,7 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         rejection.Data["reason"] = "IdentityMismatch";
         var report = new WorkflowRunReport
         {
+            StateVersion = 7,
             Timeline = [rejection],
         };
         var service = new WorkflowRunObservatoryQueryService(
@@ -310,12 +764,22 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
     [Fact]
     public async Task GetRunForScopeAsync_ShouldSurfaceFinalResultStepsAndStatistics_WhenOwned()
     {
+        var snapshot = Snapshot("run-1", CallerScope, WorkflowRunCompletionStatus.Completed);
+        snapshot.ActivityInitiator = new WorkflowRunActivityInitiatorSnapshot
+        {
+            Platform = "nyxid",
+            ExternalUserId = "m-alpha",
+            DisplayValue = "alice@example.com",
+            Availability = "available",
+        };
+        snapshot.InputSummary = "redacted prompt summary";
         var currentState = new FakeCurrentStateQueryPort
         {
-            SingleResult = Snapshot("run-1", CallerScope, WorkflowRunCompletionStatus.Completed),
+            SingleResult = snapshot,
         };
         var report = new WorkflowRunReport
         {
+            StateVersion = 7,
             Input = "do the thing",
             FinalOutput = "the thing is done",
             FinalError = string.Empty,
@@ -324,6 +788,7 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
                 new WorkflowRunStepTrace
                 {
                     StepId = "draft",
+                    DisplayName = "Draft answer",
                     StepType = "llm_call",
                     TargetRole = "planner",
                     RequestedAt = DateTimeOffset.UnixEpoch,
@@ -353,16 +818,23 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         var detail = await service.GetRunForScopeAsync(CallerScope, "run-1");
 
         detail.Should().NotBeNull();
-        detail!.Input.Should().Be("do the thing");
+        detail!.Initiator.DisplayValue.Should().Be("alice@example.com");
+        detail.InputSummary.Should().Be("redacted prompt summary");
+        detail.Sections.Overview.VersionStatus.Should().Be(ObservatoryRunDetailSectionVersionStatus.Aligned);
+        detail.Sections.Steps.VersionStatus.Should().Be(ObservatoryRunDetailSectionVersionStatus.Aligned);
+        detail.Sections.Timeline.VersionStatus.Should().Be(ObservatoryRunDetailSectionVersionStatus.Aligned);
+        detail.Input.Should().Be("do the thing");
         detail.FinalOutput.Should().Be("the thing is done");
         detail.FinalError.Should().BeEmpty();
 
         detail.Steps.Should().ContainSingle();
         var step = detail.Steps[0];
         step.StepId.Should().Be("draft");
+        step.DisplayName.Should().Be("Draft answer");
         step.StepType.Should().Be("llm_call");
         step.TargetRole.Should().Be("planner");
         step.Success.Should().BeTrue();
+        step.Outcome.Should().Be(WorkflowRunStepOutcome.Succeeded);
         step.OutputPreview.Should().Be("preview of the step output");
         step.DurationMs.Should().Be(2000);
         step.Usage.TotalTokens.Should().Be(10);
@@ -374,24 +846,132 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
     }
 
     [Fact]
+    public async Task GetRunForScopeAsync_ShouldExposeVersionMismatch_WhenReportVersionDiffersFromSummary()
+    {
+        var snapshot = Snapshot("run-1", CallerScope, WorkflowRunCompletionStatus.Completed);
+        var report = new WorkflowRunReport
+        {
+            StateVersion = 6,
+            Input = "stale input",
+            FinalOutput = "stale output",
+            Steps = [new WorkflowRunStepTrace { StepId = "stale", Success = true }],
+            Timeline = [TimelineEvent("workflow.completed", "stale")],
+        };
+        var service = new WorkflowRunObservatoryQueryService(
+            new FakeCurrentStateQueryPort { SingleResult = snapshot },
+            new FakeArtifactQueryPort { Report = report });
+
+        var detail = await service.GetRunForScopeAsync(CallerScope, "run-1");
+
+        detail.Should().NotBeNull();
+        detail!.Summary.StateVersion.Should().Be(7);
+        detail.Sections.Steps.VersionStatus.Should().Be(ObservatoryRunDetailSectionVersionStatus.VersionMismatch);
+        detail.Sections.Steps.DetailStateVersion.Should().Be(7);
+        detail.Sections.Steps.SourceStateVersion.Should().Be(6);
+        detail.Sections.Timeline.VersionStatus.Should().Be(ObservatoryRunDetailSectionVersionStatus.VersionMismatch);
+        detail.Input.Should().BeEmpty();
+        detail.FinalOutput.Should().BeEmpty();
+        detail.Steps.Should().BeEmpty();
+        detail.Timeline.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetRunForScopeAsync_ShouldMapWaitingFailedAndSkippedStepOutcomes()
+    {
+        var skipped = new WorkflowRunStepTrace
+        {
+            StepId = "optional_connector",
+            CompletedAt = DateTimeOffset.UnixEpoch.AddSeconds(1),
+            Success = true,
+            CompletionAnnotations = new Dictionary<string, string> { ["connector.skipped"] = "true" },
+        };
+        var service = new WorkflowRunObservatoryQueryService(
+            new FakeCurrentStateQueryPort
+            {
+                SingleResult = Snapshot("run-1", CallerScope, WorkflowRunCompletionStatus.Running),
+            },
+            new FakeArtifactQueryPort
+            {
+                Report = new WorkflowRunReport
+                {
+                    StateVersion = 7,
+                    Steps =
+                    [
+                        new WorkflowRunStepTrace { StepId = "approval", RequestedAt = DateTimeOffset.UnixEpoch, SuspensionType = "tool_approval" },
+                        new WorkflowRunStepTrace { StepId = "publish", CompletedAt = DateTimeOffset.UnixEpoch, Success = false },
+                        skipped,
+                    ],
+                },
+            });
+
+        var detail = await service.GetRunForScopeAsync(CallerScope, "run-1");
+
+        detail.Should().NotBeNull();
+        detail!.Steps.Single(step => step.StepId == "approval").Outcome.Should().Be(WorkflowRunStepOutcome.Waiting);
+        detail.Steps.Single(step => step.StepId == "publish").Outcome.Should().Be(WorkflowRunStepOutcome.Failed);
+        detail.Steps.Single(step => step.StepId == "optional_connector").Outcome.Should().Be(WorkflowRunStepOutcome.Skipped);
+    }
+
+    [Fact]
+    public void ObservatoryStepDetail_ShouldSerializeOutcomeAsContractValue()
+    {
+        var json = JsonSerializer.Serialize(new ObservatoryStepDetail
+        {
+            StepId = "draft",
+            Outcome = WorkflowRunStepOutcome.Succeeded,
+        });
+
+        json.Should().Contain("\"Outcome\":\"succeeded\"");
+    }
+
+    [Fact]
     public async Task GetRunForScopeAsync_ShouldFallBackToSummary_WhenReportNotYetMaterialized()
     {
+        var snapshot = Snapshot("run-1", CallerScope, WorkflowRunCompletionStatus.Running);
+        snapshot.RecoveryCapability = RecoveryCapability();
         var currentState = new FakeCurrentStateQueryPort
         {
-            SingleResult = Snapshot("run-1", CallerScope, WorkflowRunCompletionStatus.Running),
+            SingleResult = snapshot,
         };
         var service = new WorkflowRunObservatoryQueryService(currentState, new FakeArtifactQueryPort { Report = null });
 
         var detail = await service.GetRunForScopeAsync(CallerScope, "run-1");
 
         detail.Should().NotBeNull();
-        detail!.Timeline.Should().BeEmpty();
+        detail!.Sections.Steps.VersionStatus.Should().Be(ObservatoryRunDetailSectionVersionStatus.Unavailable);
+        detail.Sections.Steps.DetailStateVersion.Should().Be(7);
+        detail.Sections.Steps.SourceStateVersion.Should().Be(0);
+        detail.Sections.Timeline.VersionStatus.Should().Be(ObservatoryRunDetailSectionVersionStatus.Unavailable);
+        detail.Sections.ExecutionPath.VersionStatus.Should().Be(ObservatoryRunDetailSectionVersionStatus.Unavailable);
+        detail.Sections.ExecutionPath.DetailStateVersion.Should().Be(7);
+        detail.Sections.ExecutionPath.SourceStateVersion.Should().Be(0);
+        detail.Timeline.Should().BeEmpty();
         detail.UsageTotals.TotalTokens.Should().Be(0);
         // Enriched fields degrade to empty when the report artifact has not materialized yet.
         detail.FinalOutput.Should().BeEmpty();
         detail.Steps.Should().BeEmpty();
         detail.Statistics.TotalSteps.Should().Be(0);
         detail.Diagnostics.Should().BeEmpty();
+        detail.RecoveryCapability.WorkflowDefinitionRevisionId.Should().Be("rev-recovery");
+        detail.RecoveryCapability.RetryFailedStep.Eligibility.Should().Be(WorkflowRecoveryEligibility.Eligible);
+    }
+
+    [Fact]
+    public async Task GetRunForScopeAsync_ShouldExposeRecoveryCapability_WhenReportIsMaterialized()
+    {
+        var snapshot = Snapshot("run-1", CallerScope, WorkflowRunCompletionStatus.Failed);
+        snapshot.RecoveryCapability = RecoveryCapability();
+        var service = new WorkflowRunObservatoryQueryService(
+            new FakeCurrentStateQueryPort { SingleResult = snapshot },
+            new FakeArtifactQueryPort { Report = new WorkflowRunReport { StateVersion = 7, FinalError = "boom" } });
+
+        var detail = await service.GetRunForScopeAsync(CallerScope, "run-1");
+
+        detail.Should().NotBeNull();
+        detail!.RecoveryCapability.WorkflowDefinitionRevisionId.Should().Be("rev-recovery");
+        detail.RecoveryCapability.WorkflowDefinitionVersion.Should().Be(12);
+        detail.RecoveryCapability.RetryFailedStep.RecommendedActions.Should().ContainSingle()
+            .Which.Should().Be(WorkflowRecoveryRecommendedAction.Retry);
     }
 
     [Fact]
@@ -406,6 +986,7 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         var currentState = new FakeCurrentStateQueryPort { SingleResult = snapshot };
         var report = new WorkflowRunReport
         {
+            StateVersion = 7,
             FinalError = "final report failure",
             EndedAt = DateTimeOffset.UnixEpoch.AddSeconds(9),
             Steps =
@@ -547,7 +1128,7 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         {
             SingleResult = Snapshot("run-1", CallerScope, WorkflowRunCompletionStatus.Running),
         };
-        var subgraph = new WorkflowRunGraphExportSubgraph { RootNodeId = "run-1" };
+        var subgraph = new WorkflowRunGraphExportSubgraph { RootNodeId = "run-1", SourceStateVersion = 7 };
         subgraph.Nodes.Add(new WorkflowRunGraphExportNode { NodeId = "n1", NodeType = "role" });
         subgraph.Edges.Add(new WorkflowRunGraphExportEdge { EdgeId = "e1", FromNodeId = "run-1", ToNodeId = "n1", EdgeType = "child" });
         var artifact = new FakeArtifactQueryPort { Subgraph = subgraph };
@@ -557,8 +1138,33 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
 
         graph.Should().NotBeNull();
         graph!.RootNodeId.Should().Be("run-1");
+        graph.VersionStatus.Should().Be(ObservatoryRunDetailSectionVersionStatus.Aligned);
+        graph.SourceStateVersion.Should().Be(7);
         graph.Nodes.Should().ContainSingle().Which.NodeId.Should().Be("n1");
         graph.Edges.Should().ContainSingle().Which.EdgeType.Should().Be("child");
+    }
+
+    [Fact]
+    public async Task GetRunGraphForScopeAsync_ShouldExposeMismatchAndHideStaleGraph_WhenSourceVersionDiffers()
+    {
+        var currentState = new FakeCurrentStateQueryPort
+        {
+            SingleResult = Snapshot("run-1", CallerScope, WorkflowRunCompletionStatus.Running),
+        };
+        var subgraph = new WorkflowRunGraphExportSubgraph { RootNodeId = "run-1", SourceStateVersion = 6 };
+        subgraph.Nodes.Add(new WorkflowRunGraphExportNode { NodeId = "stale-node", NodeType = "WorkflowRun" });
+        var service = new WorkflowRunObservatoryQueryService(
+            currentState,
+            new FakeArtifactQueryPort { Subgraph = subgraph });
+
+        var graph = await service.GetRunGraphForScopeAsync(CallerScope, "run-1");
+
+        graph.Should().NotBeNull();
+        graph!.VersionStatus.Should().Be(ObservatoryRunDetailSectionVersionStatus.VersionMismatch);
+        graph.DetailStateVersion.Should().Be(7);
+        graph.SourceStateVersion.Should().Be(6);
+        graph.Nodes.Should().BeEmpty();
+        graph.Edges.Should().BeEmpty();
     }
 
     // 06-21: graph node ids are composite (step:{actor}:{cmd}:{stepId}); the viewer can only join a node
@@ -571,9 +1177,10 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         {
             SingleResult = Snapshot("run-1", CallerScope, WorkflowRunCompletionStatus.Completed),
         };
-        var subgraph = new WorkflowRunGraphExportSubgraph { RootNodeId = "run-1" };
+        var subgraph = new WorkflowRunGraphExportSubgraph { RootNodeId = "run-1", SourceStateVersion = 7 };
         var stepNode = new WorkflowRunGraphExportNode { NodeId = "step:run-1:cmd:answer", NodeType = "WorkflowStep" };
         stepNode.Properties.Add("stepId", "answer");
+        stepNode.Properties.Add("displayName", "Answer customer");
         subgraph.Nodes.Add(stepNode);
         subgraph.Nodes.Add(new WorkflowRunGraphExportNode { NodeId = "run:run-1:cmd", NodeType = "WorkflowRun" });
         var artifact = new FakeArtifactQueryPort { Subgraph = subgraph };
@@ -583,6 +1190,7 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
 
         graph.Should().NotBeNull();
         graph!.Nodes.Single(node => node.NodeType == "WorkflowStep").StepId.Should().Be("answer");
+        graph.Nodes.Single(node => node.NodeType == "WorkflowStep").DisplayName.Should().Be("Answer customer");
         graph.Nodes.Single(node => node.NodeType == "WorkflowRun").StepId.Should().BeEmpty();
     }
 
@@ -642,7 +1250,7 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         };
         var artifact = new FakeArtifactQueryPort
         {
-            Report = new WorkflowRunReport { FinalOutput = "done" },
+            Report = new WorkflowRunReport { StateVersion = 7, FinalOutput = "done" },
         };
         var service = new WorkflowRunObservatoryQueryService(currentState, artifact);
 
@@ -684,7 +1292,7 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
                 Snapshot("run-foreign", OtherScope, WorkflowRunCompletionStatus.Completed),
             ],
         };
-        var subgraph = new WorkflowRunGraphExportSubgraph { RootNodeId = "run-foreign" };
+        var subgraph = new WorkflowRunGraphExportSubgraph { RootNodeId = "run-foreign", SourceStateVersion = 7 };
         subgraph.Nodes.Add(new WorkflowRunGraphExportNode { NodeId = "run-foreign", NodeType = "WorkflowRun" });
         var artifact = new FakeArtifactQueryPort { Subgraph = subgraph };
         var service = new WorkflowRunObservatoryQueryService(currentState, artifact);
@@ -733,6 +1341,33 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         return snapshot;
     }
 
+    private static WorkflowRunRecoveryCapability RecoveryCapability()
+    {
+        var capability = new WorkflowRunRecoveryCapability
+        {
+            WorkflowDefinitionRevisionId = "rev-recovery",
+            WorkflowDefinitionVersion = 12,
+            RetryFailedStep = new WorkflowRecoveryActionCapability
+            {
+                Eligibility = WorkflowRecoveryEligibility.Eligible,
+                UnavailableReasonCode = WorkflowRecoveryUnavailableReasonCode.None,
+                StartingStepId = "step-failed",
+                ReusesPriorStepOutputs = true,
+                MayIncurModelOrToolCost = true,
+            },
+            RunAgain = new WorkflowRecoveryActionCapability
+            {
+                Eligibility = WorkflowRecoveryEligibility.Eligible,
+                UnavailableReasonCode = WorkflowRecoveryUnavailableReasonCode.None,
+                StartingStepId = "step-a",
+                MayIncurModelOrToolCost = true,
+            },
+        };
+        capability.RetryFailedStep.RecommendedActions.Add(WorkflowRecoveryRecommendedAction.Retry);
+        capability.RunAgain.RecommendedActions.Add(WorkflowRecoveryRecommendedAction.RunAgain);
+        return capability;
+    }
+
     private static WorkflowRunTimelineEvent TimelineEvent(string stage, string message, string? stepId = null) =>
         new()
         {
@@ -766,9 +1401,13 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
     {
         public bool WorkflowActorCurrentStateQueryEnabled => true;
         public IReadOnlyList<WorkflowActorSnapshot> ListResult { get; init; } = [];
+        public WorkflowActorCurrentStatePage PageResult { get; init; } = new([], null, null);
+        public IReadOnlyList<WorkflowActorCurrentStatePage> PageResults { get; init; } = [];
         public WorkflowActorSnapshot? SingleResult { get; init; }
         public IReadOnlyList<WorkflowActorSnapshot> Snapshots { get; init; } = [];
         public WorkflowActorCurrentStateListQuery? LastListQuery { get; private set; }
+        public WorkflowActorCurrentStateListQuery? LastPageQuery { get; private set; }
+        public List<WorkflowActorCurrentStateListQuery> PageQueries { get; } = [];
         public List<string> GetRequests { get; } = [];
 
         public Task<WorkflowActorSnapshot?> GetWorkflowActorCurrentStateAsync(string actorId, CancellationToken ct = default)
@@ -794,6 +1433,16 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         {
             LastListQuery = query;
             return Task.FromResult(ListResult);
+        }
+
+        public Task<WorkflowActorCurrentStatePage> PageWorkflowActorCurrentStatesAsync(
+            WorkflowActorCurrentStateListQuery query,
+            CancellationToken ct = default)
+        {
+            LastPageQuery = query;
+            PageQueries.Add(query);
+            var index = PageQueries.Count - 1;
+            return Task.FromResult(index < PageResults.Count ? PageResults[index] : PageResult);
         }
 
         public Task<WorkflowActorProjectionState?> GetWorkflowActorProjectionStateAsync(string actorId, CancellationToken ct = default) =>

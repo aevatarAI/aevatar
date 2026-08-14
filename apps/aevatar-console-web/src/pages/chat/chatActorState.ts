@@ -1,3 +1,10 @@
+import {
+  type ChatActorStep,
+  type ChatTaskPlan,
+  decodeChatTaskPlan,
+  decodeChatTaskStep,
+} from './chatTaskPlan';
+
 type JsonRecord = Record<string, unknown>;
 
 const ACTOR_EVENT_NAMES = {
@@ -30,7 +37,6 @@ const FORBIDDEN_ACTION_KEY =
   /(?:^|[_-])(authorization|api[-_]?key|token|secret|password|credential|cookie|user[-_]?code|device[-_]?code)(?:$|[_-])/i;
 const SECRET_VALUE =
   /(Bearer\s+)[A-Za-z0-9._~+/-]+|nyx(?:id)?_[A-Za-z0-9_-]{8,}/gi;
-const ACTION_CACHE_PREFIX = 'aevatar-console:chat-action:v4:';
 const CUSTOM_SERVICE_AUTH_METHODS = [
   'bearer',
   'header',
@@ -52,18 +58,7 @@ export class ChatActorProtocolError extends Error {
   }
 }
 
-export type ChatAvailableActions = {
-  retry: boolean;
-  skip: boolean;
-  stop: boolean;
-};
-
-export type ChatActorStep = JsonRecord & {
-  stepId: string;
-  order?: number;
-  availableActions?: ChatAvailableActions;
-  operation?: (JsonRecord & { operationGeneration?: number }) | null;
-};
+export type { ChatActorStep, ChatAvailableActions } from './chatTaskPlan';
 
 export type ChatPendingInput = JsonRecord & {
   requestId: string;
@@ -71,6 +66,11 @@ export type ChatPendingInput = JsonRecord & {
   options: readonly { optionId: string; label: string; description?: string }[];
   allowFreeText: boolean;
   multiSelect: boolean;
+  numericThreshold?: {
+    suggestedValue: number;
+    minimumValue: number;
+    maximumValue: number;
+  } | null;
 };
 
 export type ChatPendingApproval = JsonRecord & {
@@ -78,6 +78,8 @@ export type ChatPendingApproval = JsonRecord & {
   toolName: string;
   action?: string;
   target?: string;
+  reversibility?: 'reversible' | 'irreversible' | 'unknown';
+  grantBoundary?: 'within_grant' | 'nyxid_step_up';
 };
 
 export type ChatServiceConnectActionRequest = {
@@ -131,7 +133,7 @@ export type ChatActorProjection = {
   activeTurn: JsonRecord | null;
   latestTurn: JsonRecord | null;
   recentTerminalTurns: JsonRecord[];
-  task: JsonRecord | null;
+  task: ChatTaskPlan | null;
   steps: Map<string, ChatActorStep>;
   pendingInput: ChatPendingInput | null;
   pendingApproval: ChatPendingApproval | null;
@@ -140,6 +142,7 @@ export type ChatActorProjection = {
   latestControlResult: JsonRecord | null;
   continuation: JsonRecord | null;
   latestStepControlResult: JsonRecord | null;
+  recentStepControlResults: JsonRecord[];
   latestInputResolution: JsonRecord | null;
   latestApprovalResolution: JsonRecord | null;
   conflicts: readonly { code: string }[];
@@ -187,6 +190,7 @@ export function createChatActorProjection(
     latestControlResult: null,
     continuation: null,
     latestStepControlResult: null,
+    recentStepControlResults: [],
     latestInputResolution: null,
     latestApprovalResolution: null,
     conflicts: [],
@@ -207,6 +211,11 @@ export function decodeActorFrame(raw: unknown): ChatActorFrame {
     );
   }
   const payload = unpackAny(custom?.payload);
+  if (type === 'input_request') {
+    const pendingInput = decodePendingInput(payload);
+    if (!pendingInput) throw invalidNumericThreshold();
+    return { type, sequence, payload: pendingInput };
+  }
   return type === 'action_request'
     ? { type, sequence, request: validateActionRequest(payload) }
     : { type, sequence, payload };
@@ -218,7 +227,7 @@ export function reduceActorFrame(
 ): ChatActorProjection {
   if (
     frame.type === 'ignored' ||
-    frame.sequence < projection.progressSequence
+    frame.sequence <= projection.progressSequence
   ) {
     return projection;
   }
@@ -239,9 +248,13 @@ export function reduceActorFrame(
       break;
     case 'step_control_changed':
       next.latestStepControlResult = cloneRecord(frame.payload);
+      next.recentStepControlResults = appendDistinctRecord(
+        next.recentStepControlResults,
+        frame.payload,
+      );
       break;
     case 'input_request':
-      next.pendingInput = frame.payload as ChatPendingInput;
+      next.pendingInput = decodePendingInput(frame.payload);
       break;
     case 'input_changed':
       next.latestInputResolution = cloneRecord(frame.payload);
@@ -336,6 +349,13 @@ export function applyCurrentStateResult(
       reloadWithoutCursor: false,
     };
   }
+  if (
+    projection.scopeId !== null &&
+    projection.stateVersion === envelope.stateVersion &&
+    projection.progressSequence === snapshot.progressSequence
+  ) {
+    return { projection, reloadWithoutCursor: false };
+  }
 
   const next = createChatActorProjection(actorId);
   next.scopeId = scopeId;
@@ -349,12 +369,22 @@ export function applyCurrentStateResult(
         .filter((value): value is JsonRecord => Boolean(value))
         .map(cloneRecord)
     : [];
-  next.pendingInput = optionalRecord(
-    snapshot.pendingInput,
-  ) as ChatPendingInput | null;
+  next.pendingInput = decodePendingInput(snapshot.pendingInput);
   next.pendingApproval = normalizePendingApproval(snapshot.pendingApproval);
   next.controlFence = cloneNullableRecord(snapshot.controlFence);
   next.latestControlResult = cloneNullableRecord(snapshot.latestControlResult);
+  next.latestStepControlResult = cloneNullableRecord(
+    snapshot.latestStepControlResult,
+  );
+  next.recentStepControlResults = Array.isArray(
+    snapshot.recentStepControlResults,
+  )
+    ? snapshot.recentStepControlResults
+        .map(optionalRecord)
+        .filter((value): value is JsonRecord => Boolean(value))
+        .map(cloneRecord)
+        .slice(-32)
+    : [];
   next.continuation = cloneNullableRecord(snapshot.continuationAdmission);
   next.latestInputResolution = cloneNullableRecord(
     snapshot.latestInputResolution,
@@ -365,7 +395,16 @@ export function applyCurrentStateResult(
   next.conflicts = [...projection.conflicts];
   const activeTask = optionalRecord(snapshot.activeTask);
   if (activeTask) applyTask(next, activeTask);
-  applyActionSummaries(next, snapshot.pendingActions);
+  applyActionSummaries(
+    next,
+    [
+      ...(Array.isArray(snapshot.pendingActions)
+        ? snapshot.pendingActions
+        : []),
+      ...(Array.isArray(snapshot.recentActions) ? snapshot.recentActions : []),
+    ],
+    projection.actions,
+  );
   return { projection: next, reloadWithoutCursor: false };
 }
 
@@ -406,39 +445,6 @@ export function validateActionRequest(
     action: 'service.connect',
     params,
   };
-}
-
-export function writeCachedActionRequest(
-  request: ChatServiceConnectActionRequest,
-): void {
-  const validated = validateActionRequest(request);
-  try {
-    globalThis.sessionStorage?.setItem(
-      actionCacheKey(validated.actorId, validated.actionRequestId),
-      JSON.stringify(validated),
-    );
-  } catch {
-    // Session cache is optional; live actor facts remain authoritative.
-  }
-}
-
-export function readCachedActionRequest(
-  summary: Omit<ChatActionSummary, 'request'>,
-): ChatServiceConnectActionRequest | null {
-  try {
-    const raw = globalThis.sessionStorage?.getItem(
-      actionCacheKey(summary.actorId, summary.actionRequestId),
-    );
-    if (!raw || summary.conflicted) return null;
-    const request = validateActionRequest(JSON.parse(raw));
-    return summary.schemaVersion === request.schemaVersion &&
-      summary.action === request.action &&
-      ACTION_IDENTITY_KEYS.every((key) => summary[key] === request[key])
-      ? request
-      : null;
-  } catch {
-    return null;
-  }
 }
 
 export function chatActionIdentityKey(
@@ -557,23 +563,10 @@ function validateServiceConnectParams(
 }
 
 function applyTask(projection: ChatActorProjection, task: JsonRecord): void {
-  projection.task = cloneRecord(task);
-  const steps = Array.isArray(task.steps)
-    ? task.steps
-        .map(optionalRecord)
-        .filter((value): value is JsonRecord => Boolean(value))
-        .map((value) => value as ChatActorStep)
-        .filter((step) => Boolean(readIdentity(step.stepId)))
-        .sort(
-          (left, right) =>
-            Number(left.order ?? Number.MAX_SAFE_INTEGER) -
-              Number(right.order ?? Number.MAX_SAFE_INTEGER) ||
-            left.stepId.localeCompare(right.stepId),
-        )
-    : [];
-  projection.steps = new Map(
-    steps.map((step) => [step.stepId, cloneStep(step)]),
-  );
+  const decoded = decodeChatTaskPlan(task);
+  projection.task = decoded;
+  const steps = decoded.steps;
+  projection.steps = new Map(steps.map((step) => [step.stepId, step]));
 }
 
 function applyStep(
@@ -583,12 +576,17 @@ function applyStep(
   if (!input) return;
   const stepId = readIdentity(input.stepId);
   if (!stepId) return;
-  const step = {
-    ...projection.steps.get(stepId),
-    ...cloneRecord(input),
-    stepId,
-  };
-  projection.steps.set(stepId, step as ChatActorStep);
+  const step = decodeChatTaskStep(input);
+  projection.steps.set(stepId, step);
+  if (projection.task) {
+    projection.task = {
+      ...projection.task,
+      steps: [...projection.steps.values()].sort(
+        (left, right) =>
+          left.order - right.order || left.stepId.localeCompare(right.stepId),
+      ),
+    };
+  }
 }
 
 function applyActionRequest(
@@ -626,16 +624,12 @@ function applyActionRequest(
     postconditionResult: existing?.postconditionResult ?? null,
     request,
   } as ChatActionSummary);
-  writeCachedActionRequest(request);
-}
-
-function actionCacheKey(actorId: string, actionRequestId: string): string {
-  return `${ACTION_CACHE_PREFIX}${chatActionIdentityKey(actorId, actionRequestId)}`;
 }
 
 function applyActionSummaries(
   projection: ChatActorProjection,
   input: unknown,
+  observedActions: ReadonlyMap<string, ChatActionSummary> = new Map(),
 ): void {
   projection.actions = new Map();
   if (!Array.isArray(input)) return;
@@ -674,7 +668,30 @@ function applyActionSummaries(
         : [],
       postconditionResult: cloneNullableRecord(summary.postconditionResult),
     };
-    item.request = readCachedActionRequest(item);
+    const reloadedRequest = optionalRecord(summary.request)
+      ? validateActionRequest(summary.request)
+      : null;
+    if (reloadedRequest) {
+      if (actionIdentityMatches(item, reloadedRequest)) {
+        item.request = reloadedRequest;
+      } else {
+        item.conflicted = true;
+        projection.conflicts = [
+          ...projection.conflicts,
+          { code: 'NYXID_ACTION_ID_CONFLICT' },
+        ];
+      }
+    }
+    const observed = observedActions.get(actionRequestId);
+    if (
+      !item.request &&
+      !item.conflicted &&
+      observed?.request &&
+      !observed.conflicted &&
+      actionIdentityMatches(item, observed.request)
+    ) {
+      item.request = observed.request;
+    }
     projection.actions.set(actionRequestId, item);
   }
 }
@@ -694,6 +711,37 @@ function normalizePendingApproval(input: unknown): ChatPendingApproval | null {
     toolName:
       typeof normalized.toolName === 'string' ? normalized.toolName : '',
   };
+}
+
+function decodePendingInput(input: unknown): ChatPendingInput | null {
+  const value = optionalRecord(input);
+  if (!value) return null;
+  const numericThreshold = value.numericThreshold;
+  if (numericThreshold === undefined || numericThreshold === null) {
+    return cloneRecord(value) as ChatPendingInput;
+  }
+  const threshold = optionalRecord(numericThreshold);
+  const suggestedValue = threshold?.suggestedValue;
+  const minimumValue = threshold?.minimumValue;
+  const maximumValue = threshold?.maximumValue;
+  if (
+    !validSafeInteger(suggestedValue) ||
+    !validSafeInteger(minimumValue) ||
+    !validSafeInteger(maximumValue) ||
+    minimumValue > maximumValue ||
+    suggestedValue < minimumValue ||
+    suggestedValue > maximumValue
+  ) {
+    throw invalidNumericThreshold();
+  }
+  return {
+    ...cloneRecord(value),
+    numericThreshold: {
+      suggestedValue,
+      minimumValue,
+      maximumValue,
+    },
+  } as ChatPendingInput;
 }
 
 function actionIdentityMatches(
@@ -759,6 +807,10 @@ function validVersion(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 
+function validSafeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value);
+}
+
 function readIdentity(value: unknown): string | null {
   if (typeof value !== 'string' || value.length < 1 || value.length > 256) {
     return null;
@@ -807,6 +859,13 @@ function unsafeUrl(): ChatActorProtocolError {
   );
 }
 
+function invalidNumericThreshold(): ChatActorProtocolError {
+  return new ChatActorProtocolError(
+    'NyxID numeric threshold is invalid.',
+    'NYXID_INPUT_NUMERIC_THRESHOLD_INVALID',
+  );
+}
+
 function secretForbidden(): ChatActorProtocolError {
   return new ChatActorProtocolError(
     'NyxID action input must not contain secrets.',
@@ -818,7 +877,11 @@ function cloneProjection(projection: ChatActorProjection): ChatActorProjection {
   return {
     ...projection,
     recentTerminalTurns: projection.recentTerminalTurns.map(cloneRecord),
-    task: cloneNullableRecord(projection.task),
+    recentStepControlResults:
+      projection.recentStepControlResults.map(cloneRecord),
+    task: projection.task
+      ? (JSON.parse(JSON.stringify(projection.task)) as ChatTaskPlan)
+      : null,
     steps: new Map(
       [...projection.steps].map(([key, value]) => [key, cloneStep(value)]),
     ),
@@ -836,13 +899,7 @@ function cloneProjection(projection: ChatActorProjection): ChatActorProjection {
 }
 
 function cloneStep(step: ChatActorStep): ChatActorStep {
-  return {
-    ...step,
-    ...(step.availableActions
-      ? { availableActions: { ...step.availableActions } }
-      : {}),
-    ...(step.operation ? { operation: { ...step.operation } } : {}),
-  };
+  return JSON.parse(JSON.stringify(step)) as ChatActorStep;
 }
 
 function cloneRecord(value: JsonRecord): JsonRecord {
@@ -852,6 +909,17 @@ function cloneRecord(value: JsonRecord): JsonRecord {
 function cloneNullableRecord(value: unknown): JsonRecord | null {
   const record = optionalRecord(value);
   return record ? cloneRecord(record) : null;
+}
+
+function appendDistinctRecord(
+  records: readonly JsonRecord[],
+  value: JsonRecord,
+): JsonRecord[] {
+  const serialized = JSON.stringify(value);
+  const next = records.some((record) => JSON.stringify(record) === serialized)
+    ? records.map(cloneRecord)
+    : [...records.map(cloneRecord), cloneRecord(value)];
+  return next.slice(-32);
 }
 
 function withConflict(

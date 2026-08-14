@@ -52,6 +52,7 @@ public sealed class WorkflowRunInsightReportDocumentReadModelTests
             RootActorId = " actor-1 ",
             CommandId = " cmd-1 ",
             WorkflowName = "direct",
+            StateVersion = 12,
             Input = "hello",
             UpdatedAt = new DateTimeOffset(2026, 3, 11, 8, 30, 0, TimeSpan.Zero),
             Steps =
@@ -59,6 +60,7 @@ public sealed class WorkflowRunInsightReportDocumentReadModelTests
                 new WorkflowExecutionStepTrace
                 {
                     StepId = "step-1",
+                    DisplayName = "Draft response",
                     StepType = "llm_call",
                     TargetRole = "assistant",
                     WorkerId = "worker-1",
@@ -76,14 +78,26 @@ public sealed class WorkflowRunInsightReportDocumentReadModelTests
         var edges = graph.Edges;
 
         nodes.Should().Contain(x => x.NodeId == "actor-1" && x.NodeType == WorkflowExecutionGraphConstants.ActorNodeType);
-        nodes.Should().Contain(x => x.NodeType == WorkflowExecutionGraphConstants.RunNodeType && x.Properties["input"] == "hello");
-        nodes.Should().Contain(x => x.NodeType == WorkflowExecutionGraphConstants.StepNodeType && x.Properties["stepId"] == "step-1");
-        nodes.Should().Contain(x => x.NodeId == "child-1" && x.NodeType == WorkflowExecutionGraphConstants.ActorNodeType);
+        nodes.Should().Contain(x =>
+            x.NodeType == WorkflowExecutionGraphConstants.RunNodeType &&
+            x.Properties["input"] == "hello" &&
+            x.Properties[WorkflowExecutionGraphConstants.SourceStateVersionPropertyKey] == "12");
+        nodes.Should().Contain(x =>
+            x.NodeType == WorkflowExecutionGraphConstants.StepNodeType &&
+            x.Properties["stepId"] == "step-1" &&
+            x.Properties["displayName"] == "Draft response");
+        nodes.Should().Contain(x =>
+            x.NodeId == "actor:actor-1:cmd-1:child-1" &&
+            x.NodeType == WorkflowExecutionGraphConstants.ActorNodeType &&
+            x.Properties["actorId"] == "child-1");
         edges.Should().Contain(x => x.EdgeType == WorkflowExecutionGraphConstants.EdgeTypeOwns);
         edges.Should().Contain(x => x.EdgeType == WorkflowExecutionGraphConstants.EdgeTypeContainsStep && x.Properties["stepType"] == "llm_call");
+        nodes.Where(x => x.NodeType != WorkflowExecutionGraphConstants.RunNodeType)
+            .Should().OnlyContain(x => !x.Properties.ContainsKey(WorkflowExecutionGraphConstants.SourceStateVersionPropertyKey));
+        edges.Should().OnlyContain(x => !x.Properties.ContainsKey(WorkflowExecutionGraphConstants.SourceStateVersionPropertyKey));
         edges.Should().ContainSingle(x => x.EdgeType == WorkflowExecutionGraphConstants.EdgeTypeChildOf);
         edges.Single(x => x.EdgeType == WorkflowExecutionGraphConstants.EdgeTypeChildOf).FromNodeId.Should().Be("actor-1");
-        edges.Single(x => x.EdgeType == WorkflowExecutionGraphConstants.EdgeTypeChildOf).ToNodeId.Should().Be("child-1");
+        edges.Single(x => x.EdgeType == WorkflowExecutionGraphConstants.EdgeTypeChildOf).ToNodeId.Should().Be("actor:actor-1:cmd-1:child-1");
     }
 
     [Fact]
@@ -116,9 +130,13 @@ public sealed class WorkflowRunInsightReportDocumentReadModelTests
         nodes.Should().Contain(x => x.NodeType == WorkflowExecutionGraphConstants.RunNodeType);
         nodes.Should().Contain(x => x.NodeType == WorkflowExecutionGraphConstants.StepNodeType && x.Properties["stepId"] == "unknown");
         edges.Should().Contain(x => x.EdgeType == WorkflowExecutionGraphConstants.EdgeTypeOwns);
+        nodes.Should().Contain(x =>
+            x.NodeId == "actor:unknown:unknown:child-1" &&
+            x.NodeType == WorkflowExecutionGraphConstants.ActorNodeType &&
+            x.Properties["actorId"] == "child-1");
         edges.Should().Contain(x => x.EdgeType == WorkflowExecutionGraphConstants.EdgeTypeContainsStep);
         edges.Should().ContainSingle(x => x.EdgeType == WorkflowExecutionGraphConstants.EdgeTypeChildOf);
         edges.Single(x => x.EdgeType == WorkflowExecutionGraphConstants.EdgeTypeChildOf).FromNodeId.Should().Be("unknown");
-        edges.Single(x => x.EdgeType == WorkflowExecutionGraphConstants.EdgeTypeChildOf).ToNodeId.Should().Be("child-1");
+        edges.Single(x => x.EdgeType == WorkflowExecutionGraphConstants.EdgeTypeChildOf).ToNodeId.Should().Be("actor:unknown:unknown:child-1");
     }
 }

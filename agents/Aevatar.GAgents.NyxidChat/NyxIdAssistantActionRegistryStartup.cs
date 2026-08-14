@@ -1,5 +1,7 @@
 using Aevatar.AI.ToolProviders.NyxId;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.GAgents.NyxidChat;
 
@@ -53,7 +55,7 @@ internal sealed class NyxIdAssistantActionRegistryHttpSource
 
     public async Task<string> FetchAsync(CancellationToken ct)
     {
-        var baseUrl = _options.BaseUrl?.Trim();
+        var baseUrl = _options.EffectiveApiBaseUrl?.Trim();
         if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var baseUri) ||
             (!string.Equals(baseUri.Scheme, Uri.UriSchemeHttp, StringComparison.Ordinal) &&
              !string.Equals(baseUri.Scheme, Uri.UriSchemeHttps, StringComparison.Ordinal)))
@@ -102,19 +104,39 @@ internal sealed class NyxIdAssistantActionRegistryStartupService : IHostedServic
 {
     private readonly INyxIdAssistantActionRegistrySource _source;
     private readonly NyxIdAssistantActionRegistrySnapshot _snapshot;
+    private readonly ILogger<NyxIdAssistantActionRegistryStartupService> _logger;
 
     public NyxIdAssistantActionRegistryStartupService(
         INyxIdAssistantActionRegistrySource source,
-        NyxIdAssistantActionRegistrySnapshot snapshot)
+        NyxIdAssistantActionRegistrySnapshot snapshot,
+        ILogger<NyxIdAssistantActionRegistryStartupService>? logger = null)
     {
         _source = source ?? throw new ArgumentNullException(nameof(source));
         _snapshot = snapshot ?? throw new ArgumentNullException(nameof(snapshot));
+        _logger = logger ?? NullLogger<NyxIdAssistantActionRegistryStartupService>.Instance;
     }
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
-        var json = await _source.FetchAsync(cancellationToken).ConfigureAwait(false);
-        var registry = NyxIdAssistantActionRegistry.Load(json);
+        NyxIdAssistantActionRegistry registry;
+        try
+        {
+            var json = await _source.FetchAsync(cancellationToken).ConfigureAwait(false);
+            registry = NyxIdAssistantActionRegistry.Load(json);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            _logger.LogError(
+                "NyxID Assistant action registry startup failed ({FailureType}); Assistant actions are disabled for this process",
+                ex.GetType().Name);
+            registry = NyxIdAssistantActionRegistry.CreateDisabled();
+        }
+
         _snapshot.Initialize(registry);
     }
 

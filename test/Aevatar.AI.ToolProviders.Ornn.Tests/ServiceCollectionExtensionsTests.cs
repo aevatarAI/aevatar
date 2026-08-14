@@ -80,6 +80,7 @@ public sealed class ServiceCollectionExtensionsTests
         });
 
         provider.GetRequiredService<OrnnAgentToolSource>().Should().NotBeNull();
+        provider.GetRequiredService<OrnnSearchAgentToolSource>().Should().NotBeNull();
     }
 
     [Fact]
@@ -98,6 +99,34 @@ public sealed class ServiceCollectionExtensionsTests
 
         provider.GetRequiredService<NyxIdToolOptions>().BaseUrl.Should().Be("https://nyx.example");
         provider.GetRequiredService<OrnnAgentToolSource>().Should().NotBeNull();
+        provider.GetRequiredService<OrnnSearchAgentToolSource>().Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task OrnnToolSources_ShouldKeepSearchOnlyRouteSeparateFromFullSource()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
+            new HttpClient(new NotFoundHttpMessageHandler())));
+        services.AddOrnnSkills();
+
+        await using var provider = services.BuildServiceProvider();
+        var searchTools = await provider.GetRequiredService<OrnnSearchAgentToolSource>()
+            .DiscoverToolsAsync();
+        var fullTools = await provider.GetRequiredService<OrnnAgentToolSource>()
+            .DiscoverToolsAsync();
+
+        var tool = searchTools.Should().ContainSingle().Which;
+        tool.Name.Should().Be("ornn_search_skills");
+        tool.IsReadOnly.Should().BeTrue();
+        searchTools.Should().NotContain(candidate =>
+            candidate.Name == "ornn_publish_skill" ||
+            candidate.Name == "ornn_update_skill");
+        fullTools.Select(static candidate => candidate.Name).Should().Equal(
+            "ornn_search_skills",
+            "ornn_publish_skill",
+            "ornn_update_skill");
     }
 
     [Fact]

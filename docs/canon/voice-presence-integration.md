@@ -45,7 +45,7 @@ JSON projection of the `VoiceControlFrame` protobuf.
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart LR
   DEV["Browser · ESP32-P4<br/>Home Assistant · Frigate"]
-  subgraph EDGE["voice-presence — edge :5050"]
+  subgraph EDGE["voice-presence — edge service"]
     VS["VoiceSession<br/>WebRTC/WHIP · /ws/audio"]
     BRAIN["AevatarVoiceClient<br/>(IRealtimeBrainClient)"]
     ET["EdgeTools API<br/>/edge-tools/openapi.json"]
@@ -214,6 +214,19 @@ authorization-code exchange repeats that exact resource set, and refresh uses
 the resources stored with the feature token. The shared baseline token is not
 overwritten. Owning the NyxID service and authorizing a particular access token
 to proxy it are separate facts.
+
+For a caller without a resolved voice target, `/voice` provisions a dedicated
+`nyxid.voice` `RoleGAgent` through `POST
+/api/scopes/{scopeId}/voice-agents`. The application command service creates the
+actor, registers caller-scope ownership, and dispatches the
+`VoicePresenceEnableRequested` command for `voice_presence_openai`; the HTTP 202
+receipt promises only accepted dispatch. The page then writes the
+`voice-default` rule with both `actor_id` and `voice_module_name`, and polls the
+policy plus voice-capability read models before dialing. It never substitutes a
+`nyxid.chat` conversation actor: that actor owns the NyxID conversation
+controller state and does not implement the voice capability contract. A
+console-managed `voice-default` rule left by the former conversation path is
+replaced after the actor registry proves that mismatch.
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "sequence": {"useMaxWidth": false}, "themeVariables": {"fontSize": "10px"}}}%%

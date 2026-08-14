@@ -53,6 +53,15 @@ enum StudioMemberPlatformBindingReadinessStatus {
   STUDIO_MEMBER_PLATFORM_BINDING_READINESS_STATUS_INVOCATION_CATALOG_NOT_READY = 8;
 }
 
+enum StudioMemberPlatformBindingExecutionStage {
+  STUDIO_MEMBER_PLATFORM_BINDING_EXECUTION_STAGE_UNSPECIFIED = 0;
+  STUDIO_MEMBER_PLATFORM_BINDING_EXECUTION_STAGE_ACCEPTANCE_PENDING = 1;
+  STUDIO_MEMBER_PLATFORM_BINDING_EXECUTION_STAGE_COMMAND_PENDING = 2;
+  STUDIO_MEMBER_PLATFORM_BINDING_EXECUTION_STAGE_COMMAND_IN_FLIGHT = 3;
+  STUDIO_MEMBER_PLATFORM_BINDING_EXECUTION_STAGE_READINESS_PENDING = 4;
+  STUDIO_MEMBER_PLATFORM_BINDING_EXECUTION_STAGE_READINESS_IN_FLIGHT = 5;
+}
+
 enum StudioMemberGAgentEndpointKind {
   STUDIO_MEMBER_GAGENT_ENDPOINT_KIND_UNSPECIFIED = 0;
   STUDIO_MEMBER_GAGENT_ENDPOINT_KIND_COMMAND = 1;
@@ -83,15 +92,18 @@ enum StudioMemberWorkflowScheduleMode {
 message StudioMemberWorkflowRef {
   string workflow_id = 1;
   string workflow_revision = 2;
+  string definition_actor_id_prefix = 3;
 }
 
 message StudioMemberScriptRef {
   string script_id = 1;
   string script_revision = 2;
+  repeated string endpoint_ids = 3;
 }
 
 message StudioMemberGAgentRef {
   string actor_type_name = 1;
+  string agent_kind = 2;
 }
 
 message StudioMemberImplementationRef {
@@ -183,6 +195,12 @@ message StudioMemberPlatformBindingResult {
   StudioMemberImplementationRef implementation_ref = 5;
 }
 
+message StudioMemberPlatformBindingRecoverySnapshot {
+  StudioMemberPlatformBindingResult result = 1;
+  string expected_deployment_id = 2;
+  repeated string expected_endpoint_ids = 3;
+}
+
 message StudioMemberBindingRunState {
   string binding_run_id = 1;
   string scope_id = 2;
@@ -197,8 +215,13 @@ message StudioMemberBindingRunState {
   google.protobuf.Timestamp updated_at_utc = 11;
   int32 attempt_count = 12;
   string platform_binding_command_id = 13;
-  bool platform_execution_in_flight = 14;
-  google.protobuf.Timestamp platform_execution_started_at_utc = 15;
+  bool platform_execution_in_flight = 14 [deprecated = true];
+  google.protobuf.Timestamp platform_execution_started_at_utc = 15 [deprecated = true];
+  StudioMemberPlatformBindingRecoverySnapshot platform_binding_recovery_snapshot = 16;
+  int32 platform_binding_protocol_version = 17;
+  int32 platform_execution_attempt = 18;
+  StudioMemberPlatformBindingExecutionStage platform_execution_stage = 19;
+  google.protobuf.Timestamp platform_execution_stage_started_at_utc = 20;
 }
 
 message StudioMemberWorkflowScheduleProvisioningIntent {
@@ -405,6 +428,8 @@ message StudioMemberPlatformBindingStartRequested {
   StudioMemberBindingRequest request = 3;
   StudioMemberBindingAdmittedSnapshot admitted = 4;
   google.protobuf.Timestamp requested_at_utc = 5;
+  reserved 6;
+  reserved "recovery_snapshot";
 }
 
 message StudioMemberPlatformBindingAccepted {
@@ -430,11 +455,83 @@ message StudioMemberPlatformBindingExecutionStarted {
   google.protobuf.Timestamp started_at_utc = 3;
 }
 
+message StudioMemberPlatformBindingExecutionStartRequested {
+  string binding_run_id = 1;
+  string platform_binding_command_id = 2;
+  StudioMemberBindingRequest request = 3;
+  StudioMemberBindingAdmittedSnapshot admitted = 4;
+  google.protobuf.Timestamp requested_at_utc = 5;
+  int32 protocol_version = 6;
+  int32 execution_attempt = 7;
+}
+
+message StudioMemberPlatformBindingExecutionStartAccepted {
+  string binding_run_id = 1;
+  string platform_binding_command_id = 2;
+  google.protobuf.Timestamp accepted_at_utc = 3;
+  int32 protocol_version = 4;
+  int32 execution_attempt = 5;
+}
+
+message StudioMemberPlatformBindingStageExecuteRequested {
+  string binding_run_id = 1;
+  string platform_binding_command_id = 2;
+  int32 protocol_version = 3;
+  int32 expected_execution_attempt = 4;
+}
+
+message StudioMemberPlatformBindingExecutionWatchdogFired {
+  string binding_run_id = 1;
+  string platform_binding_command_id = 2;
+  int32 protocol_version = 3;
+  int32 expected_execution_attempt = 4;
+}
+
+message StudioMemberPlatformBindingStageStarted {
+  string binding_run_id = 1;
+  string platform_binding_command_id = 2;
+  int32 protocol_version = 3;
+  int32 execution_attempt = 4;
+  StudioMemberPlatformBindingExecutionStage execution_stage = 5;
+  google.protobuf.Timestamp stage_started_at_utc = 6;
+}
+
+message StudioMemberPlatformBindingExecutionRequest {
+  string binding_run_id = 1;
+  string platform_binding_command_id = 2;
+  StudioMemberBindingRequest request = 3;
+  StudioMemberBindingAdmittedSnapshot admitted = 4;
+  StudioMemberPlatformBindingRecoverySnapshot recovery_snapshot = 5;
+  int32 protocol_version = 6;
+  int32 execution_attempt = 7;
+  StudioMemberPlatformBindingExecutionStage execution_stage = 8;
+}
+
+message StudioMemberPlatformBindingCommandsCompleted {
+  string binding_run_id = 1;
+  string platform_binding_command_id = 2;
+  StudioMemberPlatformBindingRecoverySnapshot recovery_snapshot = 3;
+  google.protobuf.Timestamp completed_at_utc = 4;
+  int32 protocol_version = 5;
+  int32 execution_attempt = 6;
+}
+
 message StudioMemberPlatformBindingReadinessTimedOut {
   string binding_run_id = 1;
   string platform_binding_command_id = 2;
   StudioMemberPlatformBindingReadinessStatus readiness_status = 3;
   google.protobuf.Timestamp timed_out_at_utc = 4;
+  reserved 5 to 7;
+  reserved "recovery_snapshot", "protocol_version", "execution_attempt";
+}
+
+message StudioMemberPlatformBindingReadinessObservationTimedOut {
+  string binding_run_id = 1;
+  string platform_binding_command_id = 2;
+  StudioMemberPlatformBindingReadinessStatus readiness_status = 3;
+  google.protobuf.Timestamp timed_out_at_utc = 4;
+  int32 protocol_version = 5;
+  int32 execution_attempt = 6;
 }
 
 message StudioMemberPlatformBindingSucceeded {
@@ -442,12 +539,34 @@ message StudioMemberPlatformBindingSucceeded {
   string platform_binding_command_id = 2;
   StudioMemberPlatformBindingResult result = 3;
   google.protobuf.Timestamp completed_at_utc = 4;
+  reserved 5 to 6;
+  reserved "protocol_version", "execution_attempt";
+}
+
+message StudioMemberPlatformBindingExecutionSucceeded {
+  string binding_run_id = 1;
+  string platform_binding_command_id = 2;
+  StudioMemberPlatformBindingResult result = 3;
+  google.protobuf.Timestamp completed_at_utc = 4;
+  int32 protocol_version = 5;
+  int32 execution_attempt = 6;
 }
 
 message StudioMemberPlatformBindingFailed {
   string binding_run_id = 1;
   string platform_binding_command_id = 2;
   StudioMemberBindingFailure failure = 3;
+  reserved 4 to 6;
+  reserved "protocol_version", "execution_attempt", "execution_stage";
+}
+
+message StudioMemberPlatformBindingExecutionFailed {
+  string binding_run_id = 1;
+  string platform_binding_command_id = 2;
+  StudioMemberBindingFailure failure = 3;
+  int32 protocol_version = 4;
+  int32 execution_attempt = 5;
+  StudioMemberPlatformBindingExecutionStage execution_stage = 6;
 }
 
 message StudioMemberBindingTerminalAcknowledged {

@@ -1045,6 +1045,125 @@ public sealed class AdmittedAgentToolExecutorTests
             .Should().Be(AuditToolExecutionPhase.WaitingApproval);
     }
 
+    [Fact]
+    public async Task ExecuteAsync_WhenExactWebhookPermitMatches_ShouldExecuteWithoutHumanApproval()
+    {
+        var appender = SuccessfulAuditAppender();
+        var tool = new RecordingTool(
+            new AgentToolCallSafety(true, false, false),
+            name: "nyxid_proxy")
+        {
+            ApprovalMode = ToolApprovalMode.Auto,
+        };
+        var admission = ExactUnattendedAdmission();
+        var owner = AgentToolExecutionOwners.WorkflowRun("run-1");
+        var context = CreateTestExecutionContext() with
+        {
+            ExecutionOwner = owner,
+            Request = new AgentToolRequestIdentity("run-1", "call-1"),
+            InvocationSurface = AgentToolInvocationSurface.WorkflowToolCall,
+            OperationAdmission = admission,
+            Credentials = new AgentToolCredentials(
+                "jit-token",
+                null,
+                null,
+                AgentToolNyxIdCredentialKind.ProxyDelegation),
+            NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                "nyxid",
+                "tenant-alpha",
+                "owner-alpha",
+                "proxy"),
+        };
+        var executor = CreateExecutor(appender);
+        var request = new AgentToolExecutionRequest(
+            tool,
+            "{}",
+            context,
+            AgentToolApprovalContinuationMode.ActorOwned,
+            ApprovalGrant: null,
+            UnattendedAuthorization: new AgentToolUnattendedExecutionAuthorization(
+                AgentToolUnattendedAuthorizationKind.WorkflowWebhookExact,
+                "sha256:authorization",
+                owner.Clone(),
+                "run-1",
+                "nyxid_proxy",
+                "call-1",
+                AgentToolArgumentsDigest.ComputeSha256("{}"),
+                "workflow-1/create-approval",
+                AgentToolOperationSelector.ComputeDigest(admission)));
+
+        var outcome = await executor.ExecuteAsync(request);
+
+        outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.Executed);
+        outcome.TerminalInvoked.Should().BeTrue();
+        tool.ExecutionCalls.Should().Be(1);
+        appender.Records.Should().NotContain(record =>
+            record.ToolExecution.ExecutionPhase == AuditToolExecutionPhase.WaitingApproval);
+        appender.Records.Where(record =>
+                record.ToolExecution.ExecutionPhase is
+                    AuditToolExecutionPhase.Running or AuditToolExecutionPhase.Terminal)
+            .Should().OnlyContain(record =>
+                record.Annotations["authorization_mode"] == "unattended_exact" &&
+                record.Annotations["authorization_id"] == "sha256:authorization");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenWebhookPermitDoesNotMatchArguments_ShouldDenyWithoutHumanFallback()
+    {
+        var appender = SuccessfulAuditAppender();
+        var tool = new RecordingTool(
+            new AgentToolCallSafety(true, false, false),
+            name: "nyxid_proxy")
+        {
+            ApprovalMode = ToolApprovalMode.Auto,
+        };
+        var admission = ExactUnattendedAdmission();
+        var owner = AgentToolExecutionOwners.WorkflowRun("run-1");
+        var context = CreateTestExecutionContext() with
+        {
+            ExecutionOwner = owner,
+            Request = new AgentToolRequestIdentity("run-1", "call-1"),
+            InvocationSurface = AgentToolInvocationSurface.WorkflowToolCall,
+            OperationAdmission = admission,
+            Credentials = new AgentToolCredentials(
+                "jit-token",
+                null,
+                null,
+                AgentToolNyxIdCredentialKind.ProxyDelegation),
+            NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                "nyxid",
+                "tenant-alpha",
+                "owner-alpha",
+                "proxy"),
+        };
+        var executor = CreateExecutor(appender);
+        var request = new AgentToolExecutionRequest(
+            tool,
+            "{}",
+            context,
+            AgentToolApprovalContinuationMode.ActorOwned,
+            ApprovalGrant: null,
+            UnattendedAuthorization: new AgentToolUnattendedExecutionAuthorization(
+                AgentToolUnattendedAuthorizationKind.WorkflowWebhookExact,
+                "sha256:authorization",
+                owner.Clone(),
+                "run-1",
+                "nyxid_proxy",
+                "call-1",
+                AgentToolArgumentsDigest.ComputeSha256("{\"changed\":true}"),
+                "workflow-1/create-approval",
+                AgentToolOperationSelector.ComputeDigest(admission)));
+
+        var outcome = await executor.ExecuteAsync(request);
+
+        outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.Denied);
+        outcome.FailureCode.Should().Be("unattended_authorization_mismatch");
+        outcome.TerminalInvoked.Should().BeFalse();
+        tool.ExecutionCalls.Should().Be(0);
+        appender.Records.Should().NotContain(record =>
+            record.ToolExecution.ExecutionPhase == AuditToolExecutionPhase.WaitingApproval);
+    }
+
     [Theory]
     [InlineData(AuditTrailAppendStatus.Conflict)]
     [InlineData(AuditTrailAppendStatus.StoreUnavailable)]
@@ -1437,6 +1556,32 @@ public sealed class AdmittedAgentToolExecutorTests
         {
             ExecutionOwner = AgentToolExecutionOwners.Actor("actor-test"),
         };
+
+    private static AgentToolOperationAdmission ExactUnattendedAdmission() => new(
+        "service-lark",
+        "api-lark-bot",
+        new AgentToolOperationIdentity.AuthoredRequest("sha256:request"),
+        AgentToolOperationAuthorizationBasis.ExplicitRequest,
+        "POST",
+        "/open-apis/approval/v4/instances",
+        "sha256:contract",
+        [],
+        new AgentToolOperationRequestBody(
+            true,
+            "application/json",
+            new AgentToolOperationValueSchema(
+                AgentToolOperationValueKind.Object,
+                [],
+                new HashSet<string>(StringComparer.Ordinal),
+                null,
+                [],
+                true)),
+        AgentToolOperationResponsePolicy.TextOnly,
+        new AgentToolOperationExecutionPolicy(
+            AgentToolOperationRisk.Write,
+            AgentToolOperationApproval.Required,
+            AgentToolOperationEnforcementOwner.Aevatar,
+            [AgentToolOperationExecutionMode.Interactive, AgentToolOperationExecutionMode.Durable]));
 
     private sealed class RecordingTool(
         AgentToolCallSafety safety,

@@ -50,6 +50,10 @@ public sealed class NyxIdChatCommittedStateProjectionActivationPlanProvider
 
         if (eventData.Is(NyxIdChatOperationProgressedEvent.Descriptor))
             return eventData.Unpack<NyxIdChatOperationProgressedEvent>().Progress?.Key?.TurnId;
+        if (eventData.Is(NyxIdChatOperationStepChangedCommittedEvent.Descriptor))
+            return eventData.Unpack<NyxIdChatOperationStepChangedCommittedEvent>().Key?.TurnId;
+        if (eventData.Is(NyxIdChatOperationStalledEvent.Descriptor))
+            return eventData.Unpack<NyxIdChatOperationStalledEvent>().Key?.TurnId;
 
         if (eventData.Is(NyxIdChatOperationReconciledEvent.Descriptor))
             return eventData.Unpack<NyxIdChatOperationReconciledEvent>().Result?.Key?.TurnId;
@@ -74,9 +78,21 @@ public sealed class NyxIdChatCommittedStateProjectionActivationPlanProvider
             return eventData.Unpack<NyxIdChatApprovalResolutionCommittedEvent>()
                 .State?.ActiveTurn?.TurnId;
 
+        if (eventData.Is(NyxIdChatPlanResolutionCommittedEvent.Descriptor))
+            return eventData.Unpack<NyxIdChatPlanResolutionCommittedEvent>()
+                .State?.ActiveTurn?.TurnId;
+
+        if (eventData.Is(NyxIdChatPlanGateCapabilityExpiredCommittedEvent.Descriptor))
+            return eventData.Unpack<NyxIdChatPlanGateCapabilityExpiredCommittedEvent>()
+                .State?.ActiveTurn?.TurnId;
+
         if (eventData.Is(NyxIdChatContinuationAdmissionCommittedEvent.Descriptor))
             return eventData.Unpack<NyxIdChatContinuationAdmissionCommittedEvent>()
                 .Admission?.OriginTurnId;
+
+        if (eventData.Is(NyxIdChatPendingSteeringContinuationFinalizedEvent.Descriptor))
+            return eventData.Unpack<NyxIdChatPendingSteeringContinuationFinalizedEvent>()
+                .State?.ContinuationAdmission?.OriginTurnId;
 
         if (eventData.Is(NyxIdChatStepControlCommittedEvent.Descriptor))
             return eventData.Unpack<NyxIdChatStepControlCommittedEvent>().Result?.TurnId;

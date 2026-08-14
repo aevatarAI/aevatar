@@ -20,6 +20,11 @@ internal sealed class TestEventHandlerContext :
     IWorkflowExecutionStateHostAccessor
 {
     private readonly Dictionary<string, long> _generations = new(StringComparer.Ordinal);
+    private readonly object _publicationGate = new();
+    private readonly List<IMessage> _publishedEvents = [];
+    private readonly Dictionary<IMessage, EventEnvelopePublishOptions?> _publishedOptions =
+        new(ReferenceEqualityComparer.Instance);
+    private TaskCompletionSource<bool> _publicationSignal = CreatePublicationSignal();
 
     public TestEventHandlerContext(IServiceProvider services, IAgent agent, ILogger logger)
     {
@@ -144,10 +149,68 @@ internal sealed class TestEventHandlerContext :
         EventEnvelopePublishOptions? options = null)
         where TEvent : IMessage
     {
-        _ = options;
-        Published.Add((evt, direction));
-        OnPublish?.Invoke(evt, direction);
+        _ = ct;
+        TaskCompletionSource<bool> signal;
+        lock (_publicationGate)
+        {
+            _publishedOptions[evt] = CloneOptions(options);
+            Published.Add((evt, direction));
+            _publishedEvents.Add(evt);
+            signal = _publicationSignal;
+            _publicationSignal = CreatePublicationSignal();
+        }
+
+        try
+        {
+            OnPublish?.Invoke(evt, direction);
+        }
+        finally
+        {
+            signal.TrySetResult(true);
+        }
+
         return Task.CompletedTask;
+    }
+
+    public async Task<TEvent> WaitForPublishedAsync<TEvent>(
+        Func<TEvent, bool>? predicate = null,
+        CancellationToken ct = default)
+        where TEvent : class, IMessage
+    {
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
+        while (true)
+        {
+            Task signal;
+            lock (_publicationGate)
+            {
+                var match = _publishedEvents.OfType<TEvent>()
+                    .FirstOrDefault(candidate => predicate == null || predicate(candidate));
+                if (match != null)
+                    return match;
+                signal = _publicationSignal.Task;
+            }
+
+            var remaining = deadline - DateTimeOffset.UtcNow;
+            if (remaining <= TimeSpan.Zero)
+                throw new TimeoutException($"Timed out waiting for published {typeof(TEvent).Name}.");
+            await signal.WaitAsync(remaining, ct);
+        }
+    }
+
+    public IReadOnlyList<(IMessage evt, TopologyAudience direction)> GetPublishedSnapshot()
+    {
+        lock (_publicationGate)
+            return Published.ToList();
+    }
+
+    public void RemovePublished(IMessage evt)
+    {
+        lock (_publicationGate)
+        {
+            Published.RemoveAll(item => ReferenceEquals(item.evt, evt));
+            _publishedEvents.RemoveAll(candidate => ReferenceEquals(candidate, evt));
+            _publishedOptions.Remove(evt);
+        }
     }
 
     public Task SendToAsync<TEvent>(
@@ -222,6 +285,30 @@ internal sealed class TestEventHandlerContext :
         };
         return envelope;
     }
+
+    public EventEnvelope CreatePublishedEnvelope(IMessage evt, string? publisherId = null)
+    {
+        var envelope = new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTimeOffset(UtcNow),
+            Payload = Any.Pack(evt),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(
+                publisherId ?? AgentId,
+                TopologyAudience.Self),
+        };
+        EventEnvelopePublishOptions? options;
+        lock (_publicationGate)
+            options = CloneOptions(_publishedOptions.GetValueOrDefault(evt));
+        if (options?.Propagation != null)
+            ApplyPropagationOverrides(envelope.EnsurePropagation(), options.Propagation);
+        if (!string.IsNullOrWhiteSpace(options?.Delivery?.OperationId))
+            envelope.EnsureRuntime().EnsureDeliveryIdentity().OperationId = options.Delivery.OperationId;
+        return envelope;
+    }
+
+    private static TaskCompletionSource<bool> CreatePublicationSignal() =>
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private RuntimeCallbackLease Schedule(
         string callbackId,

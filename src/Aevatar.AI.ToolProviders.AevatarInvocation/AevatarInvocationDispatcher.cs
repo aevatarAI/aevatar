@@ -20,6 +20,7 @@ using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using WorkflowRunCallerCredential = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential;
+using WorkflowRunCallerNyxIdAuthority = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerNyxIdAuthority;
 
 namespace Aevatar.AI.ToolProviders.AevatarInvocation;
 
@@ -28,6 +29,7 @@ public sealed class AevatarInvocationDispatcher
     private const string DirectGAgentPublisherId = "aevatar.tools.invoke_gagent";
     private const string DeletedGAgentActorNameAlias = "actor_name";
     private const string WorkflowBackgroundDeliveryBindingDegradedCode = "binding_degraded";
+    private const string WorkflowStartReadModelUnavailableCode = "workflow_start_read_model_unavailable";
     private const string DefaultMemberEndpointId = "chat";
     private const string ChannelWorkflowDeliveryUnavailableMessage =
         "This channel bot is not provisioned for workflow result delivery, so the workflow was not started. Open /channels, select this registration, and choose Repair workflow replies. This repairs Aevatar's workflow result delivery binding; provider webhook settings usually do not need changes. You can also start the workflow from a surface that can observe its result.";
@@ -86,6 +88,7 @@ public sealed class AevatarInvocationDispatcher
     private readonly IServiceRunQueryPort _serviceRunQueryPort;
     private readonly IGAgentRunTerminalQueryPort _terminalQueryPort;
     private readonly IWorkflowExecutionQueryApplicationService _workflowQueryService;
+    private readonly WorkflowStartReadModelObserver _workflowStartReadModelObserver;
     private readonly IWorkflowRunBackgroundDeliveryRegistrationPort? _workflowRunDeliveryRegistrationPort;
     private readonly IScopeWorkflowQueryPort? _scopeWorkflowQueryPort;
     private readonly ILogger<AevatarInvocationDispatcher> _logger;
@@ -105,7 +108,8 @@ public sealed class AevatarInvocationDispatcher
         IWorkflowExecutionQueryApplicationService workflowQueryService,
         IWorkflowRunBackgroundDeliveryRegistrationPort? workflowRunDeliveryRegistrationPort = null,
         ILogger<AevatarInvocationDispatcher>? logger = null,
-        IScopeWorkflowQueryPort? scopeWorkflowQueryPort = null)
+        IScopeWorkflowQueryPort? scopeWorkflowQueryPort = null,
+        TimeSpan? workflowStartObservationTimeout = null)
     {
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
         _actorRegistryQueryPort = actorRegistryQueryPort ?? throw new ArgumentNullException(nameof(actorRegistryQueryPort));
@@ -119,6 +123,9 @@ public sealed class AevatarInvocationDispatcher
         _serviceRunQueryPort = serviceRunQueryPort ?? throw new ArgumentNullException(nameof(serviceRunQueryPort));
         _terminalQueryPort = terminalQueryPort ?? throw new ArgumentNullException(nameof(terminalQueryPort));
         _workflowQueryService = workflowQueryService ?? throw new ArgumentNullException(nameof(workflowQueryService));
+        _workflowStartReadModelObserver = new WorkflowStartReadModelObserver(
+            _workflowQueryService,
+            workflowStartObservationTimeout);
         _workflowRunDeliveryRegistrationPort = workflowRunDeliveryRegistrationPort;
         _scopeWorkflowQueryPort = scopeWorkflowQueryPort;
         _logger = logger ?? NullLogger<AevatarInvocationDispatcher>.Instance;
@@ -479,6 +486,25 @@ public sealed class AevatarInvocationDispatcher
         var scope = workflowScope.Value!;
 
         var backgroundDelivery = ResolveWorkflowBackgroundDelivery(AgentToolRequestContext.Current);
+        if (wait == InvocationWaitMode.Complete)
+        {
+            // wait=complete is the caller's explicit promise to observe the run
+            // to its terminal state in-turn (via the observe tools) and compose
+            // the user-facing reply itself. Registering the background channel
+            // relay here would post the run's raw final output as a second,
+            // unformatted message — the exact behavior wait=complete opts out
+            // of. Skip the relay entirely; delivery-credential problems are
+            // then also irrelevant to this start.
+            if (backgroundDelivery.ShouldRegister)
+            {
+                _logger.LogInformation(
+                    "Channel workflow background delivery skipped: reason=wait_complete_caller_observes platform={Platform}",
+                    AgentToolRequestContext.Current?.Channel.Platform ?? string.Empty);
+            }
+
+            backgroundDelivery = WorkflowBackgroundDeliveryResolution.Disabled();
+        }
+
         if (backgroundDelivery.Error != null)
             return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(backgroundDelivery.Error), backgroundDelivery.Error);
         if (backgroundDelivery.ShouldRegister && _workflowRunDeliveryRegistrationPort is null)
@@ -596,10 +622,10 @@ public sealed class AevatarInvocationDispatcher
         CancellationToken ct)
     {
         WorkflowBackgroundDeliveryReservationContext? deliveryReservation = null;
+        var workflowCommandIdSeed = ResolveCommandId();
         string? workflowCorrelationIdSeed = null;
         if (backgroundDelivery.ShouldRegister)
         {
-            var workflowCommandIdSeed = ResolveCommandId();
             workflowCorrelationIdSeed = ResolveWorkflowCorrelationId(workflowCommandIdSeed);
             var reservation = await ReserveWorkflowRunBackgroundDeliveryAsync(
                     workflowCommandIdSeed,
@@ -619,7 +645,7 @@ public sealed class AevatarInvocationDispatcher
 
         command = command with
         {
-            CommandIdSeed = deliveryReservation?.Reservation.ExpectedWorkflowCommandId,
+            CommandIdSeed = workflowCommandIdSeed,
             CorrelationIdSeed = workflowCorrelationIdSeed,
             CompletionNotificationTarget = ToWorkflowCompletionNotificationTarget(deliveryReservation),
         };
@@ -717,6 +743,24 @@ public sealed class AevatarInvocationDispatcher
                 .ConfigureAwait(false);
         }
 
+        var mutationStage = await _workflowStartReadModelObserver.ObserveAsync(
+                scopeId,
+                receipt.ActorId,
+                receipt.CommandId,
+                ct)
+            .ConfigureAwait(false)
+            ? AgentToolReceiptMutationStage.ReadModelObserved
+            : AgentToolReceiptMutationStage.Accepted;
+        if (mutationStage != AgentToolReceiptMutationStage.ReadModelObserved)
+        {
+            _logger.LogWarning(
+                "Workflow start canonical read-model observation was unavailable: code={Code} scopeId={ScopeId} actorId={ActorId} commandId={CommandId}",
+                WorkflowStartReadModelUnavailableCode,
+                scopeId,
+                receipt.ActorId,
+                receipt.CommandId);
+        }
+
         return ToChatRunRequest(chatRunRequest, new InvocationToolResult
         {
             RunId = receipt.ActorId,
@@ -727,6 +771,7 @@ public sealed class AevatarInvocationDispatcher
             CorrelationId = receipt.CorrelationId,
             Wait = wait,
             WorkflowRunDelivery = workflowRunDeliveryReceipt,
+            MutationStage = mutationStage,
         }, scopeId);
     }
 
@@ -833,6 +878,7 @@ public sealed class AevatarInvocationDispatcher
             CommandId = commandId,
             CorrelationId = commandId,
             Wait = wait,
+            MutationStage = AgentToolReceiptMutationStage.Accepted,
         }, scope.ScopeId);
     }
 
@@ -2043,12 +2089,29 @@ public sealed class AevatarInvocationDispatcher
         if (parsed.IsMissing)
             return WorkflowCallerCredentialResolution.Success(null);
 
+        var supportsProxyDelegation = credentialKind is
+            NyxIdCallerCredentialKind.SourceReadableUserBearer or
+            NyxIdCallerCredentialKind.ProxyDelegation;
+        var authority = supportsProxyDelegation && context?.NyxIdAuthority.IsComplete == true
+            ? new WorkflowRunCallerNyxIdAuthority(
+                context.NyxIdAuthority.Platform!.Trim(),
+                context.NyxIdAuthority.Tenant?.Trim() ?? string.Empty,
+                context.NyxIdAuthority.ExternalUserId!.Trim(),
+                string.IsNullOrWhiteSpace(context.NyxIdAuthority.Scope)
+                    ? "proxy"
+                    : context.NyxIdAuthority.Scope.Trim(),
+                Normalize(context.SenderBinding.BindingId))
+            : null;
+        if (credentialKind == NyxIdCallerCredentialKind.SourceReadableUserBearer && authority != null)
+            credentialKind = NyxIdCallerCredentialKind.ProxyDelegation;
+
         var sourceReadableUserBearerToken = credentialKind == NyxIdCallerCredentialKind.ProxyDelegation
             ? AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(context?.Credentials)
             : null;
         return WorkflowCallerCredentialResolution.Success(
             new WorkflowRunCallerCredential(
                 parsed.NormalizedBearerToken,
+                NyxIdAuthority: authority,
                 Kind: credentialKind,
                 SourceReadableUserBearerToken: sourceReadableUserBearerToken));
     }

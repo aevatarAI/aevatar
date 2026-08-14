@@ -69,12 +69,31 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
             if (State.ActivationFailures.ContainsKey(command.RevisionId))
                 return;
 
-            await ReArmActivationForProjectionLagAsync(command);
+            await ReArmActivationForProjectionLagAsync(command, ActivationProjectionLagSource.RevisionCatalog);
             return;
         }
 
         var currentState = State.Clone();
-        var capabilityView = await _capabilityViewReader.GetAsync(command.Identity, command.RevisionId, CancellationToken.None);
+        ActivationCapabilityView capabilityView;
+        try
+        {
+            capabilityView = await _capabilityViewReader.GetAsync(
+                command.Identity,
+                command.RevisionId,
+                CancellationToken.None);
+        }
+        catch (ActivationCapabilityViewNotReadyException exception)
+        {
+            await ReArmActivationForProjectionLagAsync(
+                command,
+                exception.Projection switch
+                {
+                    ActivationCapabilityViewProjection.ServiceCatalog => ActivationProjectionLagSource.ServiceCatalog,
+                    _ => ActivationProjectionLagSource.CapabilityView,
+                });
+            return;
+        }
+
         var admissionDecision = await _admissionEvaluator.EvaluateAsync(
             new ActivationAdmissionRequest
             {
@@ -126,12 +145,14 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
             CancellationToken.None);
     }
 
-    // Bounded retry budget for tolerating revision-catalog projection lag during activation.
+    // Bounded retry budget for tolerating activation read-model projection lag.
     private const string ActivationProjectionRetryCallbackPrefix = "service-deployment-activation-projection-retry";
     private static readonly TimeSpan ActivationProjectionRetryInterval = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan ActivationProjectionRetryBudget = TimeSpan.FromMinutes(5);
 
-    private async Task ReArmActivationForProjectionLagAsync(ActivateServiceRevisionCommand command)
+    private async Task ReArmActivationForProjectionLagAsync(
+        ActivateServiceRevisionCommand command,
+        ActivationProjectionLagSource lagSource)
     {
         if (State.Deployments.Values.Any(x =>
                 string.Equals(x.RevisionId, command.RevisionId, StringComparison.Ordinal) &&
@@ -162,11 +183,23 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
 
         if (nowUtc >= deadlineUtc)
         {
+            var failureCode = lagSource == ActivationProjectionLagSource.RevisionCatalog
+                ? ServiceDeploymentActivationFailureCode.PreparedArtifactMissing
+                : ServiceDeploymentActivationFailureCode.CapabilityViewNotReady;
+            var failureReason = lagSource switch
+            {
+                ActivationProjectionLagSource.RevisionCatalog =>
+                    $"Prepared artifact for '{ServiceKeys.Build(command.Identity)}' revision '{command.RevisionId}' was not found before the activation deadline.",
+                ActivationProjectionLagSource.ServiceCatalog =>
+                    $"Required service-catalog projection for '{ServiceKeys.Build(command.Identity)}' revision '{command.RevisionId}' was not ready before the activation deadline.",
+                _ =>
+                    $"Required activation-capability-view projection for '{ServiceKeys.Build(command.Identity)}' revision '{command.RevisionId}' was not ready before the activation deadline.",
+            };
             await FailActivationAsync(
                 command.Identity,
                 command.RevisionId,
-                ServiceDeploymentActivationFailureCode.PreparedArtifactMissing,
-                $"Prepared artifact for '{ServiceKeys.Build(command.Identity)}' revision '{command.RevisionId}' was not found before the activation deadline.");
+                failureCode,
+                failureReason);
             return;
         }
 
@@ -177,7 +210,8 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
         retryCommand.ActivationDeadlineAt = Timestamp.FromDateTime(deadlineUtc);
 
         Logger.LogInformation(
-            "Activation deferred: revision-catalog projection not yet visible for service '{ServiceKey}' revision '{RevisionId}'. Re-arming activation in {DueSeconds:F1}s (deadline {Deadline:O}).",
+            "Activation deferred: required projection '{Projection}' is not yet visible for service '{ServiceKey}' revision '{RevisionId}'. Re-arming activation in {DueSeconds:F1}s (deadline {Deadline:O}).",
+            lagSource,
             ServiceKeys.Build(command.Identity),
             command.RevisionId,
             dueTime.TotalSeconds,
@@ -189,6 +223,13 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
             $"{ActivationProjectionRetryCallbackPrefix}:{command.RevisionId}",
             dueTime,
             retryCommand);
+    }
+
+    private enum ActivationProjectionLagSource
+    {
+        RevisionCatalog,
+        ServiceCatalog,
+        CapabilityView,
     }
 
     private async Task FailActivationAsync(

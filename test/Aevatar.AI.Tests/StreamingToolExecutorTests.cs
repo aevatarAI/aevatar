@@ -938,6 +938,41 @@ public class StreamingToolExecutorTests
         committed.Should().Be(yielded);
     }
 
+    [Fact]
+    public async Task PrepareBatch_ToolOwnedOperationAdmission_IsFrozenBeforeCheckpoint()
+    {
+        var admission = new AgentToolOperationAdmission(
+            "usvc-alpha",
+            "api-shop",
+            new AgentToolOperationIdentity.PublishedEndpoint("endpoint-alpha"),
+            AgentToolOperationAuthorizationBasis.PublishedContract,
+            "GET",
+            "/orders",
+            "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            [],
+            null,
+            AgentToolOperationResponsePolicy.TextOnly,
+            new AgentToolOperationExecutionPolicy(
+                AgentToolOperationRisk.ReadOnly,
+                AgentToolOperationApproval.None,
+                AgentToolOperationEnforcementOwner.Aevatar,
+                [AgentToolOperationExecutionMode.Interactive]),
+            "sha256:2222222222222222222222222222222222222222222222222222222222222222");
+        var tool = new OwnedAdmissionTool(admission);
+        var tools = new ToolManager();
+        tools.Register(tool);
+        var executor = NewStreamingToolExecutor(tools);
+
+        var prepared = await executor.PrepareBatchAsync(
+            "session-owned-admission",
+            0,
+            [new ToolCall { Id = "call-owned-admission", Name = tool.Name, ArgumentsJson = "{}" }]);
+
+        prepared.Should().ContainSingle();
+        prepared[0].ExecutionContext.OperationAdmission.Should().BeSameAs(admission);
+        tool.ReplayPolicyObservedAdmission.Should().BeSameAs(admission);
+    }
+
     // ─── Test helpers ───
 
     private static async Task AddToolAsync(
@@ -986,6 +1021,26 @@ public class StreamingToolExecutorTests
             Completions.Add(result);
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class OwnedAdmissionTool(AgentToolOperationAdmission admission) :
+        IAgentTool,
+        IAgentToolOperationAdmissionOwner
+    {
+        public string Name => "owned_admission";
+        public string Description => "owned admission fixture";
+        public string ParametersSchema => "{}";
+        public AgentToolOperationAdmission OperationAdmission { get; } = admission;
+        public AgentToolOperationAdmission? ReplayPolicyObservedAdmission { get; private set; }
+
+        public AgentToolReplayPolicy ResolveReplayPolicy(string argumentsJson)
+        {
+            ReplayPolicyObservedAdmission = AgentToolRequestContext.Current?.OperationAdmission;
+            return AgentToolReplayPolicy.ReadOnlyRetryable;
+        }
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult("{}");
     }
 
     private sealed class ConcurrencyTrackingTool : IAgentTool

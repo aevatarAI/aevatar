@@ -16,14 +16,19 @@ public sealed class NyxIdAssistantToolSourceTests
         "nyxid_catalog",
         "nyxid_llm_status",
         "nyxid_require_service",
+        "nyxid_request_key_create",
+        "nyxid_request_key_rotate",
         "nyxid_proxy",
         "nyxid_profile",
         "nyxid_mfa",
         "nyxid_services",
         "nyxid_api_keys",
+        "nyxid_durable_grants",
         "nyxid_nodes",
         "nyxid_node_credentials",
         "nyxid_service_pools",
+        "nyxid_developer_apps",
+        "nyxid_oauth_bindings",
         "nyxid_approvals",
         "nyxid_endpoints",
         "nyxid_external_keys",
@@ -45,9 +50,12 @@ public sealed class NyxIdAssistantToolSourceTests
         "nyxid_mfa",
         "nyxid_services",
         "nyxid_api_keys",
+        "nyxid_durable_grants",
         "nyxid_nodes",
         "nyxid_node_credentials",
         "nyxid_service_pools",
+        "nyxid_developer_apps",
+        "nyxid_oauth_bindings",
         "nyxid_approvals",
         "nyxid_endpoints",
         "nyxid_external_keys",
@@ -68,6 +76,9 @@ public sealed class NyxIdAssistantToolSourceTests
         var names = tools.Select(static tool => tool.Name).ToArray();
 
         names.Should().Equal(PinnedAssistantToolNames);
+        names.Should().NotContain(
+            "nyxid_service_accounts",
+            "NyxID restricts service-account reads to platform or organization administrators");
 
         foreach (var name in ManagementReadToolNames)
         {
@@ -146,6 +157,52 @@ public sealed class NyxIdAssistantToolSourceTests
         handler.LastMethod.Should().Be(HttpMethod.Get);
         handler.LastPathAndQuery.Should().Be("/api/v1/keys/service-alpha");
         handler.LastBearerToken.Should().Be("request-token");
+    }
+
+    [Fact]
+    public async Task ManagementReadTool_VerifiedHumanAssistantDelegation_ShouldCallPinnedReadApi()
+    {
+        var handler = new RecordingHandler();
+        using var client = CreateClient(handler);
+        var source = new NyxIdAssistantToolSource(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.test" },
+            client);
+        var services = (await source.DiscoverToolsAsync())
+            .Single(static tool => tool.Name == "nyxid_services");
+
+        using var _ = AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
+        {
+            Credentials = new AgentToolCredentials(
+                "proxy-delegation",
+                null,
+                null,
+                AgentToolNyxIdCredentialKind.ProxyDelegation),
+            Caller = new AgentToolCallerContext(
+                "scope-alpha",
+                "owner-alpha",
+                "turn-alpha",
+                "scope-alpha"),
+            NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                "nyxid",
+                null,
+                "owner-alpha",
+                "proxy"),
+            InvocationSurface = AgentToolInvocationSurface.HumanSession,
+            Chat = new AgentChatInvocationContext(
+                AgentChatInvocationSurface.NyxIdAssistant,
+                "conversation-alpha",
+                "turn-alpha",
+                "task-alpha",
+                null,
+                null),
+        });
+        var result = await services.ExecuteAsync(
+            """{"action":"show","id":"service-alpha"}""");
+
+        result.Should().Be("{}");
+        handler.RequestCount.Should().Be(1);
+        handler.LastPathAndQuery.Should().Be("/api/v1/keys/service-alpha");
+        handler.LastBearerToken.Should().Be("proxy-delegation");
     }
 
     [Fact]

@@ -1,6 +1,8 @@
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
+using Aevatar.AI.ToolProviders.NyxId.ExactServiceApprovals;
 using Aevatar.Authentication.Abstractions;
+using Aevatar.Configuration;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.Extensions.Configuration;
@@ -29,6 +31,25 @@ public static class ServiceCollectionExtensions
         // Old: singleton tool clients constructed or pinned raw HttpClient instances.
         // New: stateless API calls use AddHttpClient<T>; stateful caches use named clients through IHttpClientFactory.
         services.AddNyxIdApiAccess(configure);
+        return AddNyxIdToolConsumers(services);
+    }
+
+    /// <summary>
+    /// Registers the NyxID tool system with independently resolved internal transport, public API,
+    /// and public authority settings.
+    /// </summary>
+    public static IServiceCollection AddNyxIdTools(
+        this IServiceCollection services,
+        IConfiguration configuration,
+        Action<NyxIdToolOptions>? configure = null)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        services.AddNyxIdApiAccess(configuration, configure);
+        return AddNyxIdToolConsumers(services);
+    }
+
+    private static IServiceCollection AddNyxIdToolConsumers(IServiceCollection services)
+    {
         services.TryAddTransient<NyxIdServiceInstanceClient>();
         services.TryAddEnumerable(ServiceDescriptor.Transient<
             IExternalWorkflowCapabilitySource,
@@ -36,6 +57,15 @@ public static class ServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Transient<
             IExternalWorkflowCapabilitySource,
             NyxIdExplicitWorkflowCapabilitySource>());
+        services.TryAddEnumerable(ServiceDescriptor.Transient<
+            IExternalWorkflowCapabilitySource,
+            NyxIdCodeExecutionWorkflowCapabilitySource>());
+        services.TryAddTransient<NyxIdUserServiceAuthorityReader>();
+        services.TryAddTransient<NyxIdUserServiceRouteConverger>();
+        services.TryAddTransient<NyxIdCodeExecutionRoutePolicyReconciler>();
+        services.TryAddEnumerable(ServiceDescriptor.Transient<
+            IExternalWorkflowCapabilityAdmissionPreparer,
+            NyxIdCodeExecutionRouteAdmissionPreparer>());
         services.Replace(ServiceDescriptor.Singleton<
             IWorkflowFileMultipartUploadPort,
             NyxIdWorkflowFileMultipartUploadPort>());
@@ -49,11 +79,16 @@ public static class ServiceCollectionExtensions
         services.TryAddEnumerable(
             ServiceDescriptor.Transient<IAgentToolSource, NyxIdAgentToolSource>());
         services.TryAddTransient<NyxIdConnectedServiceInventoryToolSource>();
+        services.TryAddTransient<INyxIdAdmittedOperationToolFactory,
+            NyxIdAdmittedOperationToolFactory>();
 
         // Refactor (iter23/cluster-001-nyxid-tool-approval-polling):
         //   Old pattern: NyxID was registered as a generic local approval handler that blocked while polling.
         //   New principle: NyxID is a remote submit/status port; local approval/yield remains host-owned.
         services.TryAddTransient<IRemoteToolApprovalPort, NyxIdRemoteToolApprovalPort>();
+        services.TryAddSingleton<INyxIdExactServiceApprovalPort>(sp =>
+            new NyxIdExactServiceApprovalPort(
+                sp.GetRequiredService<INyxIdApiClientFactory>().CreateClient()));
 
         return services;
     }
@@ -94,19 +129,57 @@ public static class ServiceCollectionExtensions
         services.RemoveAll<NyxIdToolOptions>();
         services.AddSingleton(options);
 
-        var configuredBaseUrl = FirstConfiguredValue(
+        var configuredInternalApiBaseUrl = FirstConfiguredValue(
             configuration,
-            "Aevatar:NyxId:ApiBaseUrl",
+            "Aevatar:NyxId:InternalApiBaseUrl");
+        var configuredApiBaseUrl = FirstConfiguredValue(
+            configuration,
+            "Aevatar:NyxId:ApiBaseUrl");
+        var configuredAuthority = FirstConfiguredValue(
+            configuration,
             "Aevatar:NyxId:Authority",
             "Cli:App:NyxId:Authority",
             "Aevatar:Authentication:Authority");
-        if (configuredBaseUrl is not null)
-            options.BaseUrl = configuredBaseUrl;
+        var configuredInternalFallbackTimeout = FirstConfiguredValue(
+            configuration,
+            NyxIdTransportFallbackPolicy.TimeoutSecondsConfigurationKey);
+
+        if (configuredInternalApiBaseUrl is not null)
+        {
+            options.InternalApiBaseUrl = configuredInternalApiBaseUrl;
+            options.BaseUrl = configuredInternalApiBaseUrl;
+            options.ApiBaseUrl = configuredApiBaseUrl;
+            options.Authority = configuredAuthority;
+            options.PublicTransportFallbackBaseUrl =
+                configuredApiBaseUrl is not null &&
+                !UrlsEqual(configuredInternalApiBaseUrl, configuredApiBaseUrl)
+                    ? configuredApiBaseUrl
+                    : null;
+        }
+        else
+        {
+            var legacyPublicApiBaseUrl = configuredApiBaseUrl ?? configuredAuthority;
+            if (legacyPublicApiBaseUrl is not null)
+            {
+                options.InternalApiBaseUrl = null;
+                options.BaseUrl = legacyPublicApiBaseUrl;
+                options.ApiBaseUrl = legacyPublicApiBaseUrl;
+                options.Authority = configuredAuthority ?? configuredApiBaseUrl;
+                options.PublicTransportFallbackBaseUrl = null;
+            }
+        }
+        if (int.TryParse(configuredInternalFallbackTimeout, out var internalFallbackTimeoutSeconds) &&
+            internalFallbackTimeoutSeconds > 0)
+        {
+            options.InternalApiFallbackTimeoutSeconds =
+                NyxIdTransportFallbackPolicy.NormalizeTimeoutSeconds(internalFallbackTimeoutSeconds);
+        }
         configure?.Invoke(options);
 
         if (!services.Any(static descriptor =>
                 descriptor.ServiceType == typeof(NyxIdApiAccessRegistrationMarker)))
         {
+            services.TryAddSingleton(new NyxIdApiClientTransportPolicy());
             // Without an explicit Timeout the typed client inherits HttpClient's 100s default,
             // which aborts long codex_exec runs (managed 180s, private SSH 300s) before their
             // own deadline can report an honest failure.
@@ -115,11 +188,20 @@ public static class ServiceCollectionExtensions
             // still register a different NyxIdToolOptions instance, and the client must follow
             // whichever instance DI actually resolves.
             services.AddHttpClient<NyxIdApiClient>((provider, client) =>
-                client.Timeout = (provider.GetService<NyxIdToolOptions>() ?? new NyxIdToolOptions())
-                    .EffectiveMaxRequestDuration);
+                    client.Timeout = (provider.GetService<NyxIdToolOptions>() ?? new NyxIdToolOptions())
+                        .EffectiveMaxRequestDuration)
+                .ConfigurePrimaryHttpMessageHandler(static () => new HttpClientHandler
+                {
+                    // A redirect can reach the primary before failing DNS at a second host. Keeping
+                    // redirects visible guarantees DNS fallback only replays a request that never
+                    // connected to its original target.
+                    AllowAutoRedirect = false,
+                });
             services.AddSingleton<NyxIdApiAccessRegistrationMarker>();
         }
         services.TryAddSingleton<INyxIdApiClientFactory, HttpClientFactoryNyxIdApiClientFactory>();
+        services.TryAddTransient<INyxIdUserReadApi>(static sp => sp.GetRequiredService<NyxIdApiClient>());
+        services.TryAddSingleton<INyxIdActionEvidenceReadPort, NyxIdActionEvidenceReadPort>();
         return services;
     }
 
@@ -138,6 +220,20 @@ public static class ServiceCollectionExtensions
         }
 
         return null;
+    }
+
+    private static bool UrlsEqual(string left, string right)
+    {
+        if (!Uri.TryCreate(left.TrimEnd('/') + "/", UriKind.Absolute, out var leftUri) ||
+            !Uri.TryCreate(right.TrimEnd('/') + "/", UriKind.Absolute, out var rightUri))
+        {
+            return false;
+        }
+
+        return string.Equals(leftUri.Scheme, rightUri.Scheme, StringComparison.OrdinalIgnoreCase) &&
+               string.Equals(leftUri.Host, rightUri.Host, StringComparison.OrdinalIgnoreCase) &&
+               leftUri.Port == rightUri.Port &&
+               string.Equals(leftUri.AbsolutePath, rightUri.AbsolutePath, StringComparison.Ordinal);
     }
 
     private sealed class NyxIdApiAccessRegistrationMarker;

@@ -39,6 +39,11 @@ public class RuntimeCallbackEventizationTests
         ctx.Scheduled.Should().ContainSingle();
         ctx.Published.Should().NotContain(x => x.Event is StepCompletedEvent);
         var scheduled = ctx.Scheduled.Single();
+        ctx.LoadState<DelayModuleState>("delay")
+            .Pending["run-1:delay-step"]
+            .StepId
+            .Should()
+            .Be("delay-step");
 
         await module.HandleAsync(
             Wrap(

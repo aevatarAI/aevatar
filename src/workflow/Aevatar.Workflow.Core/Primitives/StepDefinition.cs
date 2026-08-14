@@ -13,6 +13,11 @@ public sealed class StepDefinition
     public required string Id { get; init; }
 
     /// <summary>
+    /// Authoring-owned display label for the workflow node. Runtime projections fall back to <see cref="Id"/>.
+    /// </summary>
+    public string? DisplayName { get; init; }
+
+    /// <summary>
     /// 步骤类型（如 llm_call、parallel、loop、conditional 等）。
     /// </summary>
     public required string Type { get; init; }
@@ -29,6 +34,11 @@ public sealed class StepDefinition
 
     /// <summary>Authoring-owned external capability selector; derived proof fields never enter this option.</summary>
     public ExternalWorkflowCapabilitySelector? Capability { get; init; }
+
+    /// <summary>
+    /// Static structured projection applied to an admitted tool response before durable persistence.
+    /// </summary>
+    public WorkflowToolResponseProjection? ResponseProjection { get; init; }
 
     /// <summary>
     /// Typed deterministic transform operation for bounded numeric, grouping, and template transforms.

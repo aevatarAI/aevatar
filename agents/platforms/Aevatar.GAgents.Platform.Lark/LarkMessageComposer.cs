@@ -309,7 +309,7 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
                     if (remainingTextLength <= 0)
                         break;
 
-                    var content = Truncate(tablePart.Table.RenderKeyValueText(), remainingTextLength);
+                    var content = Truncate(tablePart.KeyValueText, remainingTextLength);
                     if (string.IsNullOrWhiteSpace(content))
                         break;
 

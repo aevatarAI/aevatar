@@ -6,9 +6,12 @@ internal enum WorkflowCapabilityAdmissionResolution
 {
     Resolved,
     PlanMissing,
+    PlanSchemaRebindRequired,
+    PlanSchemaUnsupported,
     CallSiteMissing,
     CallSiteAmbiguous,
     SelectorMismatch,
+    ResponseProjectionMismatch,
 }
 
 internal readonly record struct WorkflowCapabilityAdmissionLookup(
@@ -20,9 +23,15 @@ internal readonly record struct WorkflowCapabilityAdmissionLookup(
     public string FailureCode => Resolution switch
     {
         WorkflowCapabilityAdmissionResolution.PlanMissing => "EXTERNAL_CAPABILITY_ADMISSION_PLAN_MISSING",
+        WorkflowCapabilityAdmissionResolution.PlanSchemaRebindRequired =>
+            WorkflowCapabilityAdmissionPlanIntegrity.RebindRequiredCode,
+        WorkflowCapabilityAdmissionResolution.PlanSchemaUnsupported =>
+            "EXTERNAL_CAPABILITY_ADMISSION_SCHEMA_UNSUPPORTED",
         WorkflowCapabilityAdmissionResolution.CallSiteMissing => "EXTERNAL_CAPABILITY_CALL_SITE_NOT_ADMITTED",
         WorkflowCapabilityAdmissionResolution.CallSiteAmbiguous => "EXTERNAL_CAPABILITY_CALL_SITE_AMBIGUOUS",
         WorkflowCapabilityAdmissionResolution.SelectorMismatch => "EXTERNAL_CAPABILITY_PROOF_SELECTOR_MISMATCH",
+        WorkflowCapabilityAdmissionResolution.ResponseProjectionMismatch =>
+            "EXTERNAL_CAPABILITY_RESPONSE_PROJECTION_MISMATCH",
         _ => string.Empty,
     };
 
@@ -30,12 +39,18 @@ internal readonly record struct WorkflowCapabilityAdmissionLookup(
     {
         WorkflowCapabilityAdmissionResolution.PlanMissing =>
             "this run has no committed external capability admission plan",
+        WorkflowCapabilityAdmissionResolution.PlanSchemaRebindRequired =>
+            "the committed admission plan schema requires workflow rebind",
+        WorkflowCapabilityAdmissionResolution.PlanSchemaUnsupported =>
+            "the committed admission plan schema is unsupported",
         WorkflowCapabilityAdmissionResolution.CallSiteMissing =>
             "this call site has no committed external capability admission proof",
         WorkflowCapabilityAdmissionResolution.CallSiteAmbiguous =>
             "this call site resolves to more than one committed admission proof",
         WorkflowCapabilityAdmissionResolution.SelectorMismatch =>
             "the committed admission proof does not match the compiled call-site selector",
+        WorkflowCapabilityAdmissionResolution.ResponseProjectionMismatch =>
+            "the committed admission proof does not match the compiled response projection",
         _ => string.Empty,
     };
 }
@@ -60,15 +75,55 @@ internal static class WorkflowCapabilityAdmissionRuntimeAccess
         ExternalToolInvocationSpec invocation)
     {
         ArgumentNullException.ThrowIfNull(invocation);
-        if (plan is null || plan.InvocationAdmissions.Count == 0)
+        if (plan is null)
             return new WorkflowCapabilityAdmissionLookup(WorkflowCapabilityAdmissionResolution.PlanMissing, null);
+        if (string.IsNullOrWhiteSpace(plan.SchemaVersion) && plan.InvocationAdmissions.Count == 0)
+            return new WorkflowCapabilityAdmissionLookup(WorkflowCapabilityAdmissionResolution.PlanMissing, null);
+        if (WorkflowCapabilityAdmissionPlanIntegrity.RequiresRebind(plan.SchemaVersion))
+        {
+            return new WorkflowCapabilityAdmissionLookup(
+                WorkflowCapabilityAdmissionResolution.PlanSchemaRebindRequired,
+                null);
+        }
+        if (!WorkflowCapabilityAdmissionPlanIntegrity.IsSupportedSchemaVersion(plan.SchemaVersion))
+        {
+            return new WorkflowCapabilityAdmissionLookup(
+                WorkflowCapabilityAdmissionResolution.PlanSchemaUnsupported,
+                null);
+        }
+        if (!string.Equals(
+                plan.SchemaVersion,
+                WorkflowCapabilityAdmissionPlanIntegrity.SchemaVersion,
+                StringComparison.Ordinal) &&
+            (invocation.ResponseProjection is not null ||
+             plan.InvocationAdmissions.Any(static admission => admission.ResponseProjection is not null)))
+        {
+            return new WorkflowCapabilityAdmissionLookup(
+                WorkflowCapabilityAdmissionResolution.PlanSchemaRebindRequired,
+                null);
+        }
+
+        if (plan.InvocationAdmissions.Count == 0)
+        {
+            return IsPreviousSchemaCodeExecution(plan, invocation)
+                ? PreviousSchemaCodeExecution()
+                : new WorkflowCapabilityAdmissionLookup(
+                    WorkflowCapabilityAdmissionResolution.PlanMissing,
+                    null);
+        }
 
         var callSiteId = invocation.CallSiteId?.Trim() ?? string.Empty;
         var matches = plan.InvocationAdmissions
             .Where(admission => string.Equals(admission.CallSiteId, callSiteId, StringComparison.Ordinal))
             .ToArray();
         if (matches.Length == 0)
-            return new WorkflowCapabilityAdmissionLookup(WorkflowCapabilityAdmissionResolution.CallSiteMissing, null);
+        {
+            return IsPreviousSchemaCodeExecution(plan, invocation)
+                ? PreviousSchemaCodeExecution()
+                : new WorkflowCapabilityAdmissionLookup(
+                    WorkflowCapabilityAdmissionResolution.CallSiteMissing,
+                    null);
+        }
         if (matches.Length > 1)
             return new WorkflowCapabilityAdmissionLookup(WorkflowCapabilityAdmissionResolution.CallSiteAmbiguous, null);
 
@@ -81,11 +136,36 @@ internal static class WorkflowCapabilityAdmissionRuntimeAccess
                 WorkflowCapabilityAdmissionResolution.SelectorMismatch,
                 null);
         }
+        if (!WorkflowToolResponseProjectionContract.AreEquivalent(
+                invocation.ResponseProjection,
+                admission.ResponseProjection))
+        {
+            return new WorkflowCapabilityAdmissionLookup(
+                WorkflowCapabilityAdmissionResolution.ResponseProjectionMismatch,
+                null);
+        }
 
         return new WorkflowCapabilityAdmissionLookup(
             WorkflowCapabilityAdmissionResolution.Resolved,
             admission.Clone());
     }
+
+    private static bool IsPreviousSchemaCodeExecution(
+        WorkflowCapabilityAdmissionPlan plan,
+        ExternalToolInvocationSpec invocation) =>
+        string.Equals(
+            plan.SchemaVersion,
+            WorkflowCapabilityAdmissionPlanIntegrity.PreviousSchemaVersion,
+            StringComparison.Ordinal) &&
+        string.Equals(
+            invocation.ToolName,
+            WorkflowAuthorizationDependencyEvaluator.CodeExecuteToolName,
+            StringComparison.OrdinalIgnoreCase) &&
+        invocation.Selector.SelectorCase ==
+        ExternalWorkflowCapabilitySelector.SelectorOneofCase.CodeExecution;
+
+    private static WorkflowCapabilityAdmissionLookup PreviousSchemaCodeExecution() =>
+        new(WorkflowCapabilityAdmissionResolution.Resolved, null);
 
     private static WorkflowCapabilityAdmissionPlan? GetPlan(IWorkflowExecutionContext ctx) =>
         ctx switch

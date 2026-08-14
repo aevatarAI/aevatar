@@ -657,6 +657,42 @@ public class BindingToolsTests
     }
 
     [Fact]
+    public async Task InspectExternalWorkflowCapabilityReadinessTool_AcceptsCanonicalCodeExecutionSelector()
+    {
+        var readinessPort = new StubExternalWorkflowCapabilityReadinessPort();
+        var tool = new InspectExternalWorkflowCapabilityReadinessTool(readinessPort);
+        AgentToolRequestContext.Current = CapabilityContext(
+            "owner-scope-alpha",
+            "caller-subject-alpha",
+            "caller-bearer-alpha",
+            "organization-bearer-alpha");
+
+        try
+        {
+            var result = await tool.ExecuteAsync(
+                """
+                {
+                  "selector": { "code_execution": {} },
+                  "execution_mode": "interactive"
+                }
+                """);
+
+            readinessPort.Request.Should().NotBeNull();
+            readinessPort.Request!.Selector.SelectorCase.Should()
+                .Be(ExternalWorkflowCapabilitySelector.SelectorOneofCase.CodeExecution);
+            tool.ParametersSchema.Should().Contain("code_execution");
+
+            using var document = JsonDocument.Parse(result);
+            document.RootElement.GetProperty("selected_selector")
+                .GetProperty("code_execution").ValueKind.Should().Be(JsonValueKind.Object);
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
     public async Task BindingAgentToolSource_RegistersExternalCapabilityToolsConditionally()
     {
         var source = new BindingAgentToolSource(
@@ -1518,6 +1554,11 @@ public class BindingToolsTests
                         ContractDigest = "server-derived-request-contract-digest",
                     },
                 },
+                ExternalWorkflowCapabilitySelector.SelectorOneofCase.CodeExecution =>
+                    new ExternalWorkflowCapabilityRef
+                    {
+                        CodeExecution = new CodeExecutionCapabilityRef(),
+                    },
                 _ => new ExternalWorkflowCapabilityRef(),
             };
             return Task.FromResult(readiness);

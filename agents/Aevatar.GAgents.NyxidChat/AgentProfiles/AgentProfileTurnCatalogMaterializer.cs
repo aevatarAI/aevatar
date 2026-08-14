@@ -1,12 +1,14 @@
 using System.Text;
 using System.Security.Cryptography;
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Prompting;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.ChatRouting.Abstractions;
+using Aevatar.GAgentService.Abstractions.AgentProfiles;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -14,6 +16,35 @@ namespace Aevatar.GAgents.NyxidChat.AgentProfiles;
 
 public sealed class AgentProfileTurnCatalogMaterializer
 {
+    internal const string ProfileTaskRouteIntentId = "nyxid_profile_task_route";
+    internal const string ProfileTaskRouteRoutingDescription =
+        "Perform an ordinary NyxID Assistant task, including invoking, reading from, or " +
+        "writing through an already-connected exact UserService. This route does not " +
+        "establish, add, reauthorize, or repair a missing service connection.";
+    internal static AgentProfileTurnClassificationCandidate ProfileTaskRouteCandidate { get; } =
+        new(
+            ProfileTaskRouteIntentId,
+            ProfileTaskRouteRoutingDescription,
+            AgentProfileSideEffectClass.ExternalHandoff);
+    private static readonly IReadOnlySet<string> ServiceConnectToolNames =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "nyxid_catalog",
+            "nyxid_require_service",
+        };
+    private static readonly IReadOnlySet<string> KeyCreateToolNames =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "nyxid_services",
+            "nyxid_request_key_create",
+        };
+    private static readonly IReadOnlySet<string> KeyRotateToolNames =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "nyxid_api_keys",
+            "nyxid_request_key_rotate",
+        };
+
     private readonly IToolSetRegistry _toolSetRegistry;
     private readonly IAgentProfileTurnClassifier _classifier;
     private readonly IExactRemoteSkillFetcher? _exactRemoteSkillFetcher;
@@ -37,13 +68,50 @@ public sealed class AgentProfileTurnCatalogMaterializer
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
-    public async Task<AgentProfileTurnAuthorityPreparation> PrepareAsync(
+    public Task<AgentProfileTurnAuthorityPreparation> PrepareAsync(
         AgentProfileSnapshot profile,
         string sessionId,
         string userMessage,
         IReadOnlyList<IAgentTool> registeredTools,
         AgentToolExecutionContext toolContext,
-        CancellationToken ct = default)
+        CancellationToken ct = default) =>
+        PrepareCoreAsync(
+            profile,
+            sessionId,
+            userMessage,
+            registeredTools,
+            toolContext,
+            includeBuiltInServiceConnectIntent: false,
+            llmControl: null,
+            ct);
+
+    internal Task<AgentProfileTurnAuthorityPreparation> PrepareNyxIdChatAsync(
+        AgentProfileSnapshot profile,
+        string sessionId,
+        string userMessage,
+        IReadOnlyList<IAgentTool> registeredTools,
+        AgentToolExecutionContext toolContext,
+        LLMControlContext? llmControl,
+        CancellationToken ct = default) =>
+        PrepareCoreAsync(
+            profile,
+            sessionId,
+            userMessage,
+            registeredTools,
+            toolContext,
+            includeBuiltInServiceConnectIntent: true,
+            llmControl,
+            ct);
+
+    private async Task<AgentProfileTurnAuthorityPreparation> PrepareCoreAsync(
+        AgentProfileSnapshot profile,
+        string sessionId,
+        string userMessage,
+        IReadOnlyList<IAgentTool> registeredTools,
+        AgentToolExecutionContext toolContext,
+        bool includeBuiltInServiceConnectIntent,
+        LLMControlContext? llmControl,
+        CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(profile);
         ArgumentNullException.ThrowIfNull(registeredTools);
@@ -111,7 +179,13 @@ public sealed class AgentProfileTurnCatalogMaterializer
                 diagnostics);
         }
 
-        var candidate = await SelectCandidateAsync(profile, userMessage, diagnostics, ct);
+        var candidate = await SelectCandidateAsync(
+            profile,
+            userMessage,
+            diagnostics,
+            includeBuiltInServiceConnectIntent,
+            llmControl,
+            ct);
         if (candidate is null)
         {
             return CreatePreparation(
@@ -316,10 +390,87 @@ public sealed class AgentProfileTurnCatalogMaterializer
             SelectTools(routeTools.Tools, eligible));
     }
 
+    public async Task<AgentProfileTurnCatalog> MaterializeBuiltInIntentAsync(
+        NyxIdChatTurnIntent intent,
+        AgentToolExecutionContext toolContext,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(toolContext);
+        var builtIn = ResolveBuiltInIntent(intent);
+        if (builtIn is null)
+            return RestrictedEmptyCatalog();
+
+        var diagnostics = new List<AgentProfileTurnDiagnostic>();
+        var routeTools = await DiscoverToolSetAsync(
+            ToolSetNames.NyxIdAssistantAdmission,
+            toolContext,
+            AgentProfileTurnDiagnosticCode.RouteToolSetUnavailable,
+            diagnostics,
+            ct);
+        if (routeTools.HadFailure)
+            return RestrictedEmptyCatalog(diagnostics);
+
+        var selectedTools = routeTools.Tools
+            .Where(pair => builtIn.ToolNames.Contains(pair.Key) &&
+                           toolContext.ToolVisibility.Allows(pair.Key))
+            .ToDictionary(static pair => pair.Key, static pair => pair.Value, StringComparer.OrdinalIgnoreCase);
+        if (selectedTools.Count != builtIn.ToolNames.Count ||
+            !builtIn.ToolNames.All(selectedTools.ContainsKey))
+        {
+            return RestrictedEmptyCatalog(diagnostics);
+        }
+
+        return new AgentProfileTurnCatalog(
+            builtIn.ToolNames,
+            profilePromptLayer: null,
+            selectedSkillPromptLayer: null,
+            builtIn.IntentId,
+            builtIn.IntentId,
+            diagnostics,
+            selectedTools.Values);
+    }
+
+    internal static AgentProfileTurnCatalog NarrowToBuiltInIntent(
+        NyxIdChatTurnIntent intent,
+        AgentProfileTurnCatalog catalog,
+        IEnumerable<string>? authorityCeilingToolNames = null)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        var builtIn = ResolveBuiltInIntent(intent);
+        if (builtIn is null)
+            return RestrictedEmptyCatalog(catalog.Diagnostics);
+
+        var allowed = new HashSet<string>(builtIn.ToolNames, StringComparer.OrdinalIgnoreCase);
+        allowed.IntersectWith(catalog.FinalAllowedToolNames);
+        if (authorityCeilingToolNames is not null)
+            allowed.IntersectWith(authorityCeilingToolNames);
+        var selectedTools = catalog.RouteOwnedTools
+            .Where(pair => allowed.Contains(pair.Key))
+            .ToDictionary(static pair => pair.Key, static pair => pair.Value, StringComparer.OrdinalIgnoreCase);
+        if (allowed.Count != builtIn.ToolNames.Count ||
+            selectedTools.Count != builtIn.ToolNames.Count ||
+            !builtIn.ToolNames.All(name =>
+                allowed.Contains(name) && selectedTools.ContainsKey(name)))
+        {
+            return RestrictedEmptyCatalog(catalog.Diagnostics);
+        }
+
+        return new AgentProfileTurnCatalog(
+            allowed,
+            catalog.ProfilePromptLayer,
+            catalog.SelectedSkillPromptLayer,
+            builtIn.IntentId,
+            catalog.CandidateIntentId,
+            catalog.Diagnostics,
+            selectedTools.Values);
+    }
+
     private async Task<AgentProfileSkillMember?> SelectCandidateAsync(
         AgentProfileSnapshot profile,
         string userMessage,
         List<AgentProfileTurnDiagnostic> diagnostics,
+        bool includeBuiltInServiceConnectIntent,
+        LLMControlContext? llmControl,
         CancellationToken ct)
     {
         var aliasMatches = profile.Members
@@ -340,7 +491,64 @@ public sealed class AgentProfileTurnCatalogMaterializer
             return null;
         }
 
-        if (profile.Members.Count == 0 || profile.ClassifierTimeoutMs <= 0)
+        if (includeBuiltInServiceConnectIntent)
+        {
+            var builtInMembers = new[]
+            {
+                profile.Members.FirstOrDefault(member => string.Equals(
+                    member.IntentId,
+                    NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
+                    StringComparison.Ordinal)) ?? CreateBuiltInServiceConnectMember(),
+                profile.Members.FirstOrDefault(member => string.Equals(
+                    member.IntentId,
+                    NyxIdChatTurnIntentClassifier.KeyCreateIntentId,
+                    StringComparison.Ordinal)) ?? CreateBuiltInKeyCreateMember(),
+                profile.Members.FirstOrDefault(member => string.Equals(
+                    member.IntentId,
+                    NyxIdChatTurnIntentClassifier.KeyRotateIntentId,
+                    StringComparison.Ordinal)) ?? CreateBuiltInKeyRotateMember(),
+            };
+            var builtInResult = await ClassifyAsync(
+                userMessage,
+                [
+                    NyxIdChatTurnIntentClassifier.ServiceConnectCandidate,
+                    NyxIdChatTurnIntentClassifier.KeyCreateCandidate,
+                    NyxIdChatTurnIntentClassifier.KeyRotateCandidate,
+                    ProfileTaskRouteCandidate,
+                ],
+                profile.ClassifierTimeoutMs,
+                llmControl,
+                ct);
+            var builtInMember = builtInMembers.SingleOrDefault(member => string.Equals(
+                member.IntentId,
+                builtInResult.IntentId,
+                StringComparison.Ordinal));
+            if (builtInResult.Status == AgentProfileTurnClassificationStatus.Matched &&
+                builtInMember is not null)
+            {
+                diagnostics.Add(new AgentProfileTurnDiagnostic(
+                    AgentProfileTurnDiagnosticCode.ClassifierMatched,
+                    builtInMember.IntentId));
+                return builtInMember;
+            }
+            if (builtInResult.Status != AgentProfileTurnClassificationStatus.NoMatch &&
+                !(builtInResult.Status == AgentProfileTurnClassificationStatus.Matched &&
+                  string.Equals(
+                      builtInResult.IntentId,
+                      ProfileTaskRouteIntentId,
+                      StringComparison.Ordinal)))
+            {
+                diagnostics.Add(new AgentProfileTurnDiagnostic(
+                    AgentProfileTurnDiagnosticCode.ClassifierFailed,
+                    builtInResult.FailureCode ?? "nyxid_builtin_classifier_failed"));
+                return null;
+            }
+        }
+
+        var candidates = profile.Members
+            .Take(StreamingAgentProfileTurnClassifier.MaximumCandidates)
+            .ToArray();
+        if (candidates.Length == 0 || profile.ClassifierTimeoutMs <= 0)
         {
             diagnostics.Add(new AgentProfileTurnDiagnostic(
                 AgentProfileTurnDiagnosticCode.ClassifierFailed,
@@ -348,29 +556,17 @@ public sealed class AgentProfileTurnCatalogMaterializer
             return null;
         }
 
-        AgentProfileTurnClassificationResult result;
-        try
-        {
-            result = await _classifier.ClassifyAsync(
-                new AgentProfileTurnClassificationRequest(
-                    userMessage ?? string.Empty,
-                    profile.Members.Take(32)
-                        .Select(static member => new AgentProfileTurnClassificationCandidate(
-                            member.IntentId,
-                            member.RoutingDescription,
-                            member.SideEffectClass))
-                        .ToArray(),
-                    TimeSpan.FromMilliseconds(profile.ClassifierTimeoutMs)),
-                ct);
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception)
-        {
-            result = AgentProfileTurnClassificationResult.Failed("classifier_exception");
-        }
+        var result = await ClassifyAsync(
+            userMessage,
+            candidates
+                .Select(static member => new AgentProfileTurnClassificationCandidate(
+                    member.IntentId,
+                    member.RoutingDescription,
+                    member.SideEffectClass))
+                .ToArray(),
+            profile.ClassifierTimeoutMs,
+            llmControl,
+            ct);
 
         if (result.Status == AgentProfileTurnClassificationStatus.NoMatch)
         {
@@ -388,7 +584,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
             return null;
         }
 
-        var member = profile.Members.SingleOrDefault(candidate =>
+        var member = candidates.SingleOrDefault(candidate =>
             string.Equals(candidate.IntentId, result.IntentId, StringComparison.Ordinal));
         if (member is null)
         {
@@ -403,6 +599,88 @@ public sealed class AgentProfileTurnCatalogMaterializer
             member.IntentId));
         return member;
     }
+
+    private async Task<AgentProfileTurnClassificationResult> ClassifyAsync(
+        string userMessage,
+        IReadOnlyList<AgentProfileTurnClassificationCandidate> candidates,
+        int timeoutMs,
+        LLMControlContext? llmControl,
+        CancellationToken ct)
+    {
+        if (timeoutMs <= 0)
+            return AgentProfileTurnClassificationResult.Failed("classifier_not_configured");
+
+        try
+        {
+            return await _classifier.ClassifyAsync(
+                new AgentProfileTurnClassificationRequest(
+                    userMessage ?? string.Empty,
+                    candidates,
+                    TimeSpan.FromMilliseconds(timeoutMs),
+                    llmControl),
+                ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            return AgentProfileTurnClassificationResult.Failed("classifier_exception");
+        }
+    }
+
+    private static AgentProfileSkillMember CreateBuiltInServiceConnectMember() =>
+        new()
+        {
+            IntentId = NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
+            RoutingDescription = NyxIdChatTurnIntentClassifier.ServiceConnectRoutingDescription,
+            TaskToolPolicy = new AgentProfileToolPolicy
+            {
+                ToolNames = { "nyxid_catalog", "nyxid_require_service" },
+            },
+            SideEffectClass = AgentProfileSideEffectClass.ExternalHandoff,
+        };
+
+    private static AgentProfileSkillMember CreateBuiltInKeyCreateMember() =>
+        new()
+        {
+            IntentId = NyxIdChatTurnIntentClassifier.KeyCreateIntentId,
+            RoutingDescription = NyxIdChatTurnIntentClassifier.KeyCreateRoutingDescription,
+            TaskToolPolicy = new AgentProfileToolPolicy
+            {
+                ToolNames = { "nyxid_services", "nyxid_request_key_create" },
+            },
+            SideEffectClass = AgentProfileSideEffectClass.ExternalHandoff,
+        };
+
+    private static AgentProfileSkillMember CreateBuiltInKeyRotateMember() =>
+        new()
+        {
+            IntentId = NyxIdChatTurnIntentClassifier.KeyRotateIntentId,
+            RoutingDescription = NyxIdChatTurnIntentClassifier.KeyRotateRoutingDescription,
+            TaskToolPolicy = new AgentProfileToolPolicy
+            {
+                ToolNames = { "nyxid_api_keys", "nyxid_request_key_rotate" },
+            },
+            SideEffectClass = AgentProfileSideEffectClass.ExternalHandoff,
+        };
+
+    private static BuiltInIntent? ResolveBuiltInIntent(NyxIdChatTurnIntent intent) => intent switch
+    {
+        NyxIdChatTurnIntent.ServiceConnect => new BuiltInIntent(
+            NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
+            ServiceConnectToolNames),
+        NyxIdChatTurnIntent.KeyCreate => new BuiltInIntent(
+            NyxIdChatTurnIntentClassifier.KeyCreateIntentId,
+            KeyCreateToolNames),
+        NyxIdChatTurnIntent.KeyRotate => new BuiltInIntent(
+            NyxIdChatTurnIntentClassifier.KeyRotateIntentId,
+            KeyRotateToolNames),
+        _ => null,
+    };
+
+    private sealed record BuiltInIntent(string IntentId, IReadOnlySet<string> ToolNames);
 
     private async Task<string?> FetchSelectedSkillAsync(
         AgentProfileSnapshot profile,
@@ -697,7 +975,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
                    AgentToolCapabilities.RequiresHumanSession,
                    StringComparer.Ordinal) ||
                !string.IsNullOrWhiteSpace(
-                   AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(toolContext.Credentials));
+                   AgentToolHumanSessionNyxIdCredential.ResolveBearerToken(toolContext));
     }
 
     private static bool DeclaresCapability(IAgentTool tool, string capability) =>
@@ -943,6 +1221,16 @@ public sealed class AgentProfileTurnCatalogMaterializer
                 message.Length > normalizedAlias.Length &&
                 char.IsWhiteSpace(message[normalizedAlias.Length]));
     }
+
+    private static AgentProfileTurnCatalog RestrictedEmptyCatalog(
+        IReadOnlyList<AgentProfileTurnDiagnostic>? diagnostics = null) =>
+        new(
+            [],
+            profilePromptLayer: null,
+            selectedSkillPromptLayer: null,
+            selectedIntentId: null,
+            candidateIntentId: null,
+            diagnostics);
 
     private sealed record ToolPolicyResolution(IReadOnlySet<string> Names, bool HadFailure);
 

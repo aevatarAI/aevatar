@@ -30,7 +30,10 @@ public sealed record WorkflowScheduleProvisioningRequest(
     [JsonIgnore]
     public WorkflowCapabilityAdmissionContext? CapabilityAdmission { get; init; }
 
-    /// <summary>Optional user prompt the scheduled run starts from.</summary>
+    /// <summary>
+    /// Optional JSON prompt template the scheduled run starts from. Schedule-owned
+    /// fire-time placeholders are rendered from the logical occurrence and timezone.
+    /// </summary>
     public string? Prompt { get; init; }
 
     /// <summary>

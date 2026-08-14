@@ -694,13 +694,18 @@ public sealed record ScheduledServiceInvocationDispatchReceipt(
     string TargetActorId,
     string CorrelationId);
 
+public sealed record ScheduledDispatchFireContext(
+    DateTimeOffset FireAtUtc,
+    string Timezone);
+
 public sealed record ScheduledServiceInvocationDispatchRequest(
     ServiceInvocationRequest Request,
     ScheduledServiceInvocationAuth? Auth = null,
     IReadOnlyDictionary<string, string>? Headers = null,
     bool ProjectNyxIdAccessTokenToWorkflowCallerCredential = false,
     string? ScheduleId = null,
-    ScheduledInvocationAuthorizationFact? AuthorizationFact = null);
+    ScheduledInvocationAuthorizationFact? AuthorizationFact = null,
+    ScheduledDispatchFireContext? FireContext = null);
 
 public interface IScheduledServiceInvocationDispatchPort
 {

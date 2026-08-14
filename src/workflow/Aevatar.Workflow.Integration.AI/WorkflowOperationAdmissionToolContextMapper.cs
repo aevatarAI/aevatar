@@ -23,8 +23,39 @@ public static class WorkflowOperationAdmissionToolContextMapper
                 MapPublished(admission),
             ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest =>
                 MapAuthored(admission),
+            ExternalWorkflowCapabilityRef.CapabilityOneofCase.CodeExecution =>
+                MapCodeExecution(admission),
             _ => null,
         };
+    }
+
+    private static AgentToolOperationAdmission MapCodeExecution(
+        WorkflowCapabilityInvocationAdmission admission)
+    {
+        var proof = admission.Capability.CodeExecution;
+        return new AgentToolOperationAdmission(
+            proof.UserServiceId,
+            proof.ServiceSlugSnapshot,
+            new AgentToolOperationIdentity.PlatformBuiltIn("code_execute"),
+            AgentToolOperationAuthorizationBasis.PlatformContract,
+            "POST",
+            "/execute",
+            proof.ContractDigest,
+            [],
+            null,
+            AgentToolOperationResponsePolicy.TextOnly,
+            new AgentToolOperationExecutionPolicy(
+                AgentToolOperationRisk.ReadOnly,
+                AgentToolOperationApproval.None,
+                AgentToolOperationEnforcementOwner.Aevatar,
+                proof.AllowedExecutionModes.Select(static mode => mode switch
+                {
+                    ExternalCapabilityExecutionMode.Interactive =>
+                        AgentToolOperationExecutionMode.Interactive,
+                    ExternalCapabilityExecutionMode.Durable =>
+                        AgentToolOperationExecutionMode.Durable,
+                    _ => AgentToolOperationExecutionMode.Unspecified,
+                }).ToArray()));
     }
 
     private static AgentToolOperationAdmission MapPublished(

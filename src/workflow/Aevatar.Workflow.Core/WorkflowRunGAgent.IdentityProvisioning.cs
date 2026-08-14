@@ -12,10 +12,25 @@ public sealed partial class WorkflowRunGAgent
         ArgumentNullException.ThrowIfNull(command);
         var binding = command.Binding
             ?? throw new InvalidOperationException("workflow Run ensure binding is required.");
+        var publisherActorId = ActiveInboundEnvelope?.Route?.PublisherActorId;
+        var decision = EvaluateRunDefinitionBind(State, binding, publisherActorId, verifyPublisher: true);
+        if (decision.Disposition == RunDefinitionBindDisposition.Ignore)
+            return;
+        if (decision.Disposition == RunDefinitionBindDisposition.Reject)
+            throw new InvalidOperationException(decision.Error);
 
-        if (string.IsNullOrWhiteSpace(State.WorkflowYaml) &&
-            string.IsNullOrWhiteSpace(State.DefinitionActorId) &&
-            string.IsNullOrWhiteSpace(State.RunId))
+        var requestedRunId = ResolveRequestedBindRunId(State, binding.RunId);
+        var isCurrentGeneration = !string.IsNullOrWhiteSpace(State.RunId) &&
+                                  string.Equals(
+                                      WorkflowRunIdNormalizer.Normalize(State.RunId),
+                                      requestedRunId,
+                                      StringComparison.Ordinal) &&
+                                  State.BindingGeneration == binding.BindingGeneration;
+        if (isCurrentGeneration)
+        {
+            EnsureExistingRunBindingMatches(binding);
+        }
+        else
         {
             await BindWorkflowRunDefinitionAsync(
                 binding.DefinitionActorId,
@@ -26,12 +41,16 @@ public sealed partial class WorkflowRunGAgent
                 binding.ScopeId,
                 binding.RunOrigin,
                 binding.ScheduleId,
+                binding.WorkflowId,
+                binding.RevisionId,
+                binding.DefinitionVersion,
                 binding.CapabilityAdmissionPlan,
-                binding.ExpectedExecutionMode);
-        }
-        else
-        {
-            EnsureExistingRunBindingMatches(binding);
+                binding.ExpectedExecutionMode,
+                binding.InitialLineage,
+                binding.ReusePolicy,
+                binding.BindingGeneration,
+                binding.ReuseAuthorityActorId,
+                publisherActorId);
         }
 
         if (string.IsNullOrWhiteSpace(binding.DefinitionActorId))
@@ -44,9 +63,7 @@ public sealed partial class WorkflowRunGAgent
 
     private void EnsureExistingRunBindingMatches(BindWorkflowRunDefinitionEvent binding)
     {
-        var requestedRunId = string.IsNullOrWhiteSpace(binding.RunId)
-            ? Id
-            : WorkflowRunIdNormalizer.Normalize(binding.RunId);
+        var requestedRunId = ResolveRequestedBindRunId(State, binding.RunId);
         var currentRunId = string.IsNullOrWhiteSpace(State.RunId)
             ? Id
             : WorkflowRunIdNormalizer.Normalize(State.RunId);
@@ -58,6 +75,15 @@ public sealed partial class WorkflowRunGAgent
             string.Equals(State.ScopeId, binding.ScopeId?.Trim(), StringComparison.Ordinal) &&
             string.Equals(State.RunOrigin, binding.RunOrigin?.Trim(), StringComparison.Ordinal) &&
             string.Equals(State.ScheduleId, binding.ScheduleId?.Trim(), StringComparison.Ordinal) &&
+            string.Equals(State.WorkflowId, binding.WorkflowId?.Trim(), StringComparison.Ordinal) &&
+            string.Equals(State.RevisionId?.Trim() ?? string.Empty, binding.RevisionId?.Trim() ?? string.Empty, StringComparison.Ordinal) &&
+            Math.Max(0, State.DefinitionVersion) == Math.Max(0, binding.DefinitionVersion) &&
+            NormalizeLiveReusePolicy(State.ReusePolicy) == NormalizeLiveReusePolicy(binding.ReusePolicy) &&
+            State.BindingGeneration == binding.BindingGeneration &&
+            string.Equals(
+                State.ReuseAuthorityActorId,
+                binding.ReuseAuthorityActorId?.Trim(),
+                StringComparison.Ordinal) &&
             State.ExpectedExecutionMode == binding.ExpectedExecutionMode &&
             string.Equals(
                 State.CapabilityAdmissionPlan?.AdmissionDigest ?? string.Empty,
@@ -91,4 +117,10 @@ public sealed partial class WorkflowRunGAgent
             normalizedIncoming.TryGetValue(entry.Key, out var yaml) &&
             string.Equals(entry.Value, yaml, StringComparison.Ordinal));
     }
+
+    private static WorkflowRunActorReusePolicy NormalizeLiveReusePolicy(
+        WorkflowRunActorReusePolicy policy) =>
+        policy == WorkflowRunActorReusePolicy.Unspecified
+            ? WorkflowRunActorReusePolicy.SingleRun
+            : policy;
 }

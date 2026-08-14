@@ -196,7 +196,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         var existingRevision = revisions?.Revisions.FirstOrDefault(x =>
             string.Equals(x.RevisionId, revisionId, StringComparison.Ordinal));
         if (existingRevision == null)
-            return true;
+            return !MatchesAcceptedRevisionCreation(request, identity, revisionId);
 
         if (!string.Equals(existingRevision.ImplementationKind, revisionSpec.ImplementationKind.ToString(), StringComparison.OrdinalIgnoreCase))
         {
@@ -248,6 +248,19 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         }
 
         return false;
+    }
+
+    private static bool MatchesAcceptedRevisionCreation(
+        ScopeBindingUpsertRequest request,
+        ServiceIdentity identity,
+        string revisionId)
+    {
+        var accepted = request.AcceptedRevisionCreation;
+        return accepted != null &&
+               request.AllowExistingRevisionReplay &&
+               string.Equals(request.ReplayRevisionId, revisionId, StringComparison.Ordinal) &&
+               string.Equals(accepted.RevisionId, revisionId, StringComparison.Ordinal) &&
+               string.Equals(accepted.ServiceKey, ServiceKeys.Build(identity), StringComparison.Ordinal);
     }
 
     private async Task<string> ComputeNonScriptingArtifactHashAsync(
@@ -328,8 +341,12 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
             ?? throw new InvalidOperationException("workflow authorization dependencies are required.");
         var capabilityAdmissionPlan = workflowSpec.CapabilityAdmissionPlan
             ?? throw new InvalidOperationException("workflow capability admission plan is required.");
+        var artifactRevisionSpec = revisionSpec.Clone();
+        artifactRevisionSpec.WorkflowSpec!.WorkflowId = string.IsNullOrWhiteSpace(workflowSpec.WorkflowId)
+            ? revisionSpec.RevisionId
+            : workflowSpec.WorkflowId;
         return WorkflowServiceRevisionArtifactBuilder.Build(
-            revisionSpec,
+            artifactRevisionSpec,
             resolvedWorkflowName,
             authorizationDependencies,
             capabilityAdmissionPlan);
@@ -405,25 +422,40 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
             : ScopeWorkflowCapabilityConventions.NormalizeWorkflowId(suppliedWorkflowId);
         var admissionContext = request.CapabilityAdmission;
         var executionMode = admissionContext?.ExecutionMode ?? ExternalCapabilityExecutionMode.Interactive;
+        var capabilityAccess = new ExternalWorkflowCapabilityAccessContext(
+            normalizedScopeId,
+            admissionContext?.CallerId ?? string.Empty,
+            admissionContext?.NyxIdCallerCredential,
+            admissionContext?.NyxIdOrganizationBearerToken);
         var capabilityAdmissionPlan = admissionContext?.ExistingPlan is { } existingPlan
-            ? await _capabilityAdmissionService.RevalidatePersistedAsync(
-                new PersistedWorkflowCapabilityAdmissionRequest(
-                    existingPlan,
-                    workflowBundle.EntryWorkflowYaml,
-                    workflowBundle.SubWorkflowYamls,
-                    "scope_binding_upsert",
-                    executionMode,
-                    workflowId,
-                    revisionId),
-                ct)
+            ? admissionContext.NyxIdCallerCredential is not null
+                ? await _capabilityAdmissionService.RefreshPersistedAsync(
+                    new RefreshPersistedWorkflowCapabilityAdmissionRequest(
+                        new PersistedWorkflowCapabilityAdmissionRequest(
+                            existingPlan,
+                            workflowBundle.EntryWorkflowYaml,
+                            workflowBundle.SubWorkflowYamls,
+                            "scope_binding_upsert",
+                            executionMode,
+                            workflowId,
+                            revisionId),
+                        capabilityAccess,
+                        explicitRequestConfirmations),
+                    ct)
+                : await _capabilityAdmissionService.RevalidatePersistedAsync(
+                    new PersistedWorkflowCapabilityAdmissionRequest(
+                        existingPlan,
+                        workflowBundle.EntryWorkflowYaml,
+                        workflowBundle.SubWorkflowYamls,
+                        "scope_binding_upsert",
+                        executionMode,
+                        workflowId,
+                        revisionId),
+                    ct)
             : await _capabilityAdmissionService.AdmitAsync(
                 new WorkflowExternalCapabilityAdmissionRequest(
-                new ExternalWorkflowCapabilityAccessContext(
-                    normalizedScopeId,
-                    admissionContext?.CallerId ?? string.Empty,
-                    admissionContext?.NyxIdCallerCredential,
-                    admissionContext?.NyxIdOrganizationBearerToken),
-                workflowBundle.EntryWorkflowYaml,
+                    capabilityAccess,
+                    workflowBundle.EntryWorkflowYaml,
                 workflowBundle.SubWorkflowYamls,
                 "scope_binding_upsert",
                 executionMode,

@@ -284,6 +284,74 @@ public sealed class WorkflowRunActorPortBranchTests
     }
 
     [Fact]
+    public async Task CreateRunAsync_WhenExistingNonExplicitRevisionIdentityMatches_ShouldReuseWithoutRebinding()
+    {
+        const string workflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        var runtime = new RecordingActorRuntime();
+        var plan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            workflowYaml,
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+            ExternalCapabilityExecutionMode.Interactive,
+            [],
+            [],
+            workflowId: "workflow-direct",
+            revisionId: "revision-direct");
+        var definitionAgent = CreateBoundDefinitionAgent(
+            workflowYaml,
+            plan,
+            workflowId: "workflow-direct",
+            revisionId: "revision-direct");
+        var definitionActor = new RecordingActor("definition-non-explicit", definitionAgent);
+        runtime.StoredActors[definitionActor.Id] = definitionActor;
+        runtime.ActorsToCreate.Enqueue(new RecordingActor("run-non-explicit", new StubAgent("run-non-explicit")));
+        var port = CreatePort(runtime);
+
+        var result = await port.CreateRunAsync(
+            new WorkflowDefinitionBinding(
+                definitionActor.Id,
+                "direct",
+                workflowYaml,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
+                CapabilityAdmissionPlan: plan,
+                WorkflowId: "workflow-direct",
+                RevisionId: "revision-direct"),
+            CancellationToken.None);
+
+        result.DefinitionActorId.Should().Be(definitionActor.Id);
+        result.CreatedActorIds.Should().Equal("run-non-explicit");
+        definitionActor.LastHandledEnvelope.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task CreateRunAsync_ShouldLeaveReceiptRunIdEmpty_WhenNoRoutableRunIdentityExists()
+    {
+        const string workflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        var runtime = new RecordingActorRuntime();
+        var definitionAgent = new WorkflowGAgent();
+        definitionAgent.State.WorkflowName = "direct";
+        definitionAgent.State.WorkflowYaml = workflowYaml;
+        definitionAgent.State.CapabilityAdmissionPlan = CreateCapabilityAdmissionPlan(workflowYaml);
+        definitionAgent.State.ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive;
+        runtime.StoredActors["definition-1"] = new RecordingActor("definition-1", definitionAgent);
+        runtime.ActorsToCreate.Enqueue(new RecordingActor("run-technical-address", new StubAgent("run")));
+        var port = CreatePort(runtime);
+
+        var result = await port.CreateRunAsync(
+            new WorkflowDefinitionBinding(
+                "definition-1",
+                "direct",
+                workflowYaml,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExternalCapabilityExecutionMode.Interactive),
+            CancellationToken.None);
+
+        result.ActorId.Should().Be("run-technical-address");
+        result.RunId.Should().BeEmpty();
+        result.RunId.Should().NotBe(result.ActorId);
+    }
+
+    [Fact]
     public async Task EnsureDefinitionAsync_WhenExistingExplicitIdentityDiffers_ShouldRejectWithoutRebinding()
     {
         const string workflowYaml = "name: direct\nroles: []\nsteps: []\n";
@@ -516,6 +584,95 @@ public sealed class WorkflowRunActorPortBranchTests
             .WithMessage("*payload does not match the requested Run definition*");
         runtime.CreateRequests.Should().BeEmpty();
         ((RecordingActor)runtime.StoredActors["definition-3"]).LastHandledEnvelope.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task CreateRunAsync_WhenExistingAdmissionPlanDiffers_ShouldFailWithoutCreatingRun()
+    {
+        const string workflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        var runtime = new RecordingActorRuntime();
+        var authoritativePlan = CreateCapabilityAdmissionPlan(workflowYaml);
+        var definitionAgent = new WorkflowGAgent();
+        definitionAgent.State.WorkflowName = "direct";
+        definitionAgent.State.WorkflowYaml = workflowYaml;
+        definitionAgent.State.CapabilityAdmissionPlan = authoritativePlan;
+        definitionAgent.State.ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive;
+        runtime.StoredActors["definition-plan"] = new RecordingActor("definition-plan", definitionAgent);
+        var port = CreatePort(runtime);
+        var stalePlan = authoritativePlan.Clone();
+        stalePlan.AdmissionDigest = "stale-admission-digest";
+
+        var act = () => port.CreateRunAsync(
+            new WorkflowDefinitionBinding(
+                "definition-plan",
+                "direct",
+                workflowYaml,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExternalCapabilityExecutionMode.Interactive,
+                CapabilityAdmissionPlan: stalePlan),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*payload does not match the requested Run definition*");
+        runtime.CreateRequests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CreateRunAsync_WhenAdmissionPlanAppearsAfterSnapshot_ShouldFailWithoutCreatingRun()
+    {
+        const string workflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        var runtime = new RecordingActorRuntime();
+        var definitionAgent = new WorkflowGAgent();
+        definitionAgent.State.WorkflowName = "direct";
+        definitionAgent.State.WorkflowYaml = workflowYaml;
+        definitionAgent.State.CapabilityAdmissionPlan = CreateCapabilityAdmissionPlan(workflowYaml);
+        definitionAgent.State.ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive;
+        runtime.StoredActors["definition-plan-added"] =
+            new RecordingActor("definition-plan-added", definitionAgent);
+        var port = CreatePort(runtime);
+
+        var act = () => port.CreateRunAsync(
+            new WorkflowDefinitionBinding(
+                "definition-plan-added",
+                "direct",
+                workflowYaml,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExternalCapabilityExecutionMode.Interactive,
+                RunOrigin: WorkflowRunOrigins.Webhook,
+                CapabilityAdmissionPlan: null),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*payload does not match the requested Run definition*");
+        runtime.CreateRequests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CreateRunAsync_WhenPinnedDefinitionVersionDiffers_ShouldFailWithoutCreatingRun()
+    {
+        const string workflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        var runtime = new RecordingActorRuntime();
+        var definitionAgent = new WorkflowGAgent();
+        definitionAgent.State.WorkflowName = "direct";
+        definitionAgent.State.WorkflowYaml = workflowYaml;
+        definitionAgent.State.ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive;
+        definitionAgent.State.Version = 7;
+        runtime.StoredActors["definition-version"] = new RecordingActor("definition-version", definitionAgent);
+        var port = CreatePort(runtime);
+
+        var act = () => port.CreateRunAsync(
+            new WorkflowDefinitionBinding(
+                "definition-version",
+                "direct",
+                workflowYaml,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExternalCapabilityExecutionMode.Interactive,
+                DefinitionVersion: 6),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*payload does not match the requested Run definition*");
+        runtime.CreateRequests.Should().BeEmpty();
     }
 
     [Fact]
@@ -1410,6 +1567,39 @@ public sealed class WorkflowRunActorPortBranchTests
         runtime.Linked.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task RecordForkChildAsync_ShouldActivateSourceRunAndDispatchTypedLineageEvent()
+    {
+        var runtime = new RecordingActorRuntime();
+        var sourceActor = new RecordingActor("source-run", new StubAgent("source-run"));
+        runtime.StoredActors["source-run"] = sourceActor;
+        var port = CreatePort(runtime);
+
+        await port.RecordForkChildAsync(
+            " source-run ",
+            " child-run ",
+            " child-actor ",
+            " original-run ",
+            " start-step ",
+            -2,
+            CancellationToken.None);
+
+        runtime.CreateRequests.Should().ContainSingle()
+            .Which.Should().Be((typeof(WorkflowRunGAgent), "source-run"));
+        runtime.Dispatches.Should().ContainSingle();
+        runtime.Dispatches[0].ActorId.Should().Be("source-run");
+        sourceActor.LastHandledEnvelope.Should().NotBeNull();
+        sourceActor.LastHandledEnvelope!.Route.GetTargetActorId().Should().BeEmpty();
+        var lineage = runtime.Dispatches[0].Envelope.Payload.Unpack<WorkflowRunLineageRecordedEvent>();
+        lineage.SourceRunId.Should().Be("source-run");
+        lineage.ChildRunId.Should().Be("child-run");
+        lineage.ChildActorId.Should().Be("child-actor");
+        lineage.OriginalRunId.Should().Be("original-run");
+        lineage.StartAtStepId.Should().Be("start-step");
+        lineage.Attempt.Should().Be(0);
+        lineage.RelationKind.Should().Be(WorkflowRunLineageRelationKind.RetryFork);
+    }
+
     private static WorkflowRunActorPort CreatePort(
         RecordingActorRuntime runtime,
         IWorkflowActorBindingReader? bindingReader = null,
@@ -1557,6 +1747,12 @@ public sealed class WorkflowRunActorPortBranchTests
             var createException = CreateExceptionFactory?.Invoke(agentType, id);
             if (createException != null)
                 throw createException;
+
+            if (!string.IsNullOrWhiteSpace(id) && StoredActors.TryGetValue(id, out var existingActor))
+            {
+                _lastCreatedActor = existingActor;
+                return Task.FromResult(existingActor);
+            }
 
             if (ActorsToCreate.Count > 0)
             {

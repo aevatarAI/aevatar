@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Abstractions.CodexExecution;
+using Aevatar.AI.Abstractions.CodeExecution;
 using Aevatar.AI.ToolProviders.NyxId.Tools;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Microsoft.Extensions.Logging;
@@ -18,18 +19,21 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
     private readonly ILogger _logger;
     private readonly INyxIdProxyFileArtifactIngress? _fileArtifactIngress;
     private readonly IReadOnlyList<ICodexExecutionPort> _codexExecutionPorts;
+    private readonly IReadOnlyList<ICodeExecutionPort> _codeExecutionPorts;
 
     public NyxIdAgentToolSource(
         NyxIdToolOptions options,
         NyxIdApiClient client,
         INyxIdProxyFileArtifactIngress? fileArtifactIngress = null,
         IEnumerable<ICodexExecutionPort>? codexExecutionPorts = null,
+        IEnumerable<ICodeExecutionPort>? codeExecutionPorts = null,
         ILogger<NyxIdAgentToolSource>? logger = null)
     {
         _options = options;
         _client = client;
         _fileArtifactIngress = fileArtifactIngress;
         _codexExecutionPorts = codexExecutionPorts?.ToArray() ?? [];
+        _codeExecutionPorts = codeExecutionPorts?.ToArray() ?? [];
         _logger = logger ?? NullLogger<NyxIdAgentToolSource>.Instance;
     }
 
@@ -38,7 +42,7 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
         // Refactor (iter25/cluster-025-nyxid-tool-discovery-actor-cache):
         //   Old pattern: NyxIdSpecCatalog + SpecFetchToken + IServiceDiscoveryCache 在仓库内建第二 catalog(NyxID 真实源的影子)
         //   New principle: NyxID 是唯一真实源;删除 in-process catalog 假权威面; routing 和 spec hints 请求时读取 live NyxID surface;保留 typed tools + live nyxid_proxy
-        if (string.IsNullOrWhiteSpace(_options.BaseUrl))
+        if (string.IsNullOrWhiteSpace(_options.EffectiveTransportBaseUrl))
         {
             _logger.LogDebug("NyxID base URL not configured, skipping NyxID tools");
             return Task.FromResult<IReadOnlyList<IAgentTool>>([]);
@@ -72,6 +76,8 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
             new NyxIdChannelEventsTool(_client),
             new NyxIdAdminTool(_client),
             new NyxIdRequireServiceTool(_client),
+            new NyxIdRequestKeyCreateTool(_client),
+            new NyxIdRequestKeyRotateTool(_client),
         };
 
         if (_options.EnableSshExecTool)
@@ -80,19 +86,32 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
             tools.Add(new NyxIdSshExecTool(sshExecutor, _options));
         }
 
-        tools.Add(new NyxIdCodeExecuteTool(_client, _logger, _options.SandboxServiceSlug));
+        AddCodeExecutionTool(tools);
         AddCodexExecutionTool(tools);
 
         _logger.LogInformation(
             "NyxID tools registered ({Count} tools, base URL: {BaseUrl}, ssh_exec={SshEnabled}, managed_codex_exec={ManagedCodexEnabled}, code_execute={CodeExecuteRegistered}, codex_exec={CodexExecRegistered})",
             tools.Count,
-            _options.BaseUrl,
+            _options.EffectiveTransportBaseUrl,
             _options.EnableSshExecTool,
             _options.EnableManagedCodexExecTool,
             tools.Any(static tool => tool is NyxIdCodeExecuteTool),
             tools.Any(static tool => tool is NyxIdCodexExecTool));
 
         return Task.FromResult<IReadOnlyList<IAgentTool>>(tools);
+    }
+
+    private void AddCodeExecutionTool(List<IAgentTool> tools)
+    {
+        if (_codeExecutionPorts.Count == 0)
+            return;
+        if (_codeExecutionPorts.Count != 1)
+        {
+            throw new InvalidOperationException(
+                "code_execute requires exactly one ICodeExecutionPort registration.");
+        }
+
+        tools.Add(new NyxIdCodeExecuteTool(_codeExecutionPorts[0]));
     }
 
     private void AddCodexExecutionTool(List<IAgentTool> tools)

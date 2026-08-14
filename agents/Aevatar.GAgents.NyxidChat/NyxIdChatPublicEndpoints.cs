@@ -70,6 +70,11 @@ public static partial class NyxIdChatEndpoints
                         http,
                         await HandlePublicInputAsync(http, scopeId, body, ct));
                     break;
+                case "plan.resolve":
+                    await ExecutePublicResultAsync(
+                        http,
+                        await HandlePublicPlanResolveAsync(http, scopeId, body, ct));
+                    break;
                 case "task.stop":
                     await ExecutePublicResultAsync(http, await HandlePublicStopAsync(http, scopeId, body, ct));
                     break;
@@ -173,7 +178,6 @@ public static partial class NyxIdChatEndpoints
     private static async Task<IResult> HandlePublicGetStateAsync(
         HttpContext http,
         string conversationId,
-        [FromServices] IGAgentActorRegistryQueryPort registryQueryPort,
         [FromServices] INyxIdChatConversationStateQueryPort stateQueryPort,
         CancellationToken ct)
     {
@@ -183,7 +187,6 @@ public static partial class NyxIdChatEndpoints
             http,
             scopeId,
             conversationId,
-            registryQueryPort,
             stateQueryPort,
             ct);
     }
@@ -324,6 +327,39 @@ public static partial class NyxIdChatEndpoints
             ct);
     }
 
+    private static Task<IResult> HandlePublicPlanResolveAsync(
+        HttpContext http,
+        string scopeId,
+        JsonElement body,
+        CancellationToken ct)
+    {
+        var request = Deserialize<PublicPlanResolveRequest>(body);
+        if (!request.Confirmed.HasValue)
+        {
+            return Task.FromResult(Results.Json(new
+            {
+                code = "PLAN_DECISION_REQUIRED",
+                message = "confirmed must be explicitly set to true or false.",
+            }, statusCode: StatusCodes.Status400BadRequest));
+        }
+
+        return HandlePlanResolveControlAsync(
+            http,
+            scopeId,
+            request.ConversationId ?? string.Empty,
+            request.TaskId ?? string.Empty,
+            new NyxIdChatPlanResolveRequest(
+                request.RequestId,
+                ResolveClientRequestId(http, request.ClientRequestId),
+                request.PlanId,
+                request.PlanRevision,
+                request.Confirmed.Value,
+                request.ExpectedStateVersion),
+            http.RequestServices.GetRequiredService<IScopeResourceAdmissionPort>(),
+            http.RequestServices.GetRequiredService<INyxIdChatControlCommandPort>(),
+            ct);
+    }
+
     private static Task<IResult> HandlePublicStopAsync(HttpContext http, string scopeId, JsonElement body, CancellationToken ct)
     {
         var request = Deserialize<PublicStopRequest>(body);
@@ -410,6 +446,18 @@ public static partial class NyxIdChatEndpoints
     private sealed record PublicInputRequest(
         string? Type, string? ConversationId, string? ClientRequestId, string? RequestId,
         NyxIdChatInputAnswerRequest? Answer, long ExpectedStateVersion = 0);
+
+    [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+    private sealed record PublicPlanResolveRequest(
+        string? Type,
+        string? ConversationId,
+        string? TaskId,
+        string? PlanId,
+        string? ClientRequestId,
+        string? RequestId,
+        int PlanRevision,
+        bool? Confirmed,
+        long ExpectedStateVersion = 0);
 
     [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
     private sealed record PublicStopRequest(

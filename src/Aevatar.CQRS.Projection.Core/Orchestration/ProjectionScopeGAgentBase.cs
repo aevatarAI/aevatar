@@ -45,7 +45,15 @@ public abstract class ProjectionScopeGAgentBase<TContext>
 
     protected override async Task OnDeactivateAsync(CancellationToken ct)
     {
-        await RemoveObservationRelayAsync(State.RootActorId, ct);
+        // A durable scope outlives a transient actor activation. Its relay is removed by
+        // explicit release; retaining it here also avoids a publication gap during rollover.
+        if (RuntimeMode != ProjectionRuntimeMode.DurableMaterialization ||
+            !State.Active ||
+            State.Released)
+        {
+            await RemoveObservationRelayAsync(State.RootActorId, ct);
+        }
+
         await base.OnDeactivateAsync(ct);
     }
 

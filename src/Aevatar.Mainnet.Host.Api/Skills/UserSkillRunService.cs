@@ -208,6 +208,13 @@ internal sealed class UserSkillRunService : IUserSkillRunService
                 "schedule_authorization_refresh_unavailable",
                 ex.Message);
         }
+        catch (StudioMemberAutomationCatalogRouteUnresolvedException ex)
+        {
+            return SkillScheduleOutcome.Failed(
+                "schedule_authorization_route_unresolved",
+                ex.Message,
+                ex.RequiredUserServiceIds);
+        }
         catch (StudioMemberAutomationCatalogRefreshSupersededException ex)
         {
             return SkillScheduleOutcome.Failed(

@@ -7,7 +7,7 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 public sealed class ChatRunRequestNormalizerEmptyInputTests
 {
     [Fact]
-    public void Normalize_ShouldRejectEmptyInputForTypedDefinitionActorSourceWithoutResolvedMemberWorkflow()
+    public void Normalize_ShouldRejectEmptyInputForTypedDefinitionActorSourceWithoutResolvedWorkflowService()
     {
         var result = ChatRunRequestNormalizer.Normalize(new ChatInput
         {
@@ -28,7 +28,7 @@ public sealed class ChatRunRequestNormalizerEmptyInputTests
     }
 
     [Fact]
-    public void Normalize_ShouldAllowEmptyInputForResolvedMemberWorkflow()
+    public void Normalize_ShouldAllowEmptyInputForResolvedWorkflowService()
     {
         var result = ChatRunRequestNormalizer.Normalize(
             new ChatInput
@@ -44,7 +44,7 @@ public sealed class ChatRunRequestNormalizerEmptyInputTests
                     },
                 },
             },
-            allowEmptyInputForResolvedMemberWorkflow: true);
+            allowEmptyInputForResolvedWorkflowService: true);
 
         result.Succeeded.Should().BeTrue();
         result.Request!.Prompt.Should().BeEmpty();
@@ -53,11 +53,11 @@ public sealed class ChatRunRequestNormalizerEmptyInputTests
     }
 
     [Fact]
-    public void NormalizeHttp_ShouldAllowEmptyResolvedMemberInputAndPreserveCallerCommandId()
+    public void NormalizeHttp_ShouldAllowEmptyResolvedWorkflowServiceInputAndPreserveCallerCommandId()
     {
         var result = ChatRunRequestNormalizer.Normalize(
-            BuildEmptyResolvedMemberHttpInput(),
-            allowEmptyInputForResolvedMemberWorkflow: true);
+            BuildEmptyResolvedWorkflowServiceHttpInput(),
+            allowEmptyInputForResolvedWorkflowService: true);
 
         result.Succeeded.Should().BeTrue();
         result.Request!.Prompt.Should().BeEmpty();
@@ -67,12 +67,12 @@ public sealed class ChatRunRequestNormalizerEmptyInputTests
     }
 
     [Fact]
-    public async Task NormalizeHttpAsync_ShouldAllowEmptyResolvedMemberInputAndPreserveCallerCommandId()
+    public async Task NormalizeHttpAsync_ShouldAllowEmptyResolvedWorkflowServiceInputAndPreserveCallerCommandId()
     {
         var result = await ChatRunRequestNormalizer.NormalizeAsync(
-            BuildEmptyResolvedMemberHttpInput(),
+            BuildEmptyResolvedWorkflowServiceHttpInput(),
             fileIngressPort: null,
-            allowEmptyInputForResolvedMemberWorkflow: true);
+            allowEmptyInputForResolvedWorkflowService: true);
 
         result.Succeeded.Should().BeTrue();
         result.Request!.Prompt.Should().BeEmpty();
@@ -101,7 +101,7 @@ public sealed class ChatRunRequestNormalizerEmptyInputTests
         result.Error.Should().Be(WorkflowChatRunStartError.PromptRequired);
     }
 
-    private static HttpChatInput BuildEmptyResolvedMemberHttpInput() =>
+    private static HttpChatInput BuildEmptyResolvedWorkflowServiceHttpInput() =>
         new()
         {
             Prompt = "   ",

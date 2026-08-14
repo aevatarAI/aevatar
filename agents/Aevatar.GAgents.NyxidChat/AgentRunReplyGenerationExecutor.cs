@@ -14,6 +14,7 @@ using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.AI.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Google.Protobuf;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.NyxidChat;
@@ -219,17 +220,15 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         }
 
         var output = new StringBuilder(workItem.StepState.AccumulatedText ?? string.Empty);
+        var initialOutputLength = output.Length;
         var skillRecoveryMessages = BuildSkillRecoveryMessages(workItem.StepState);
         var deferSkillRecoveryText = !workItem.StepState.FinalNoToolsStep &&
                                      llmRequest.ToolContext?.SkillRecovery.RequireOrnnSearchOnBlocker == true;
-        // A relay reply token can create exactly one visible reply. Buffer text while an
-        // approval-capable tool is in play so a model preamble cannot consume the token
-        // before the actor sends the approval card. CardKit uses its own Lark transport.
-        var deferApprovalCapableToolText = streamingState is not null &&
-                                          _relayOptions?.StreamingCardKitEnabled != true &&
-                                          llmRequest.Tools?.Any(static tool =>
-                                              tool.ApprovalMode != ToolApprovalMode.NeverRequire) == true;
-        List<LLMStreamChunk>? deferredLlmChunks = deferSkillRecoveryText || deferApprovalCapableToolText
+        // A tool-enabled LLM step may emit prose before its tool call. Buffer that step until
+        // its terminal shape is known so intermediate planning never becomes a visible reply.
+        // This applies to CardKit too: its separate transport does not make tool preambles final.
+        var deferPotentialToolCallText = !workItem.StepState.FinalNoToolsStep;
+        List<LLMStreamChunk>? deferredLlmChunks = deferSkillRecoveryText || deferPotentialToolCallText
             ? []
             : null;
 
@@ -317,16 +316,20 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             }
         }
 
+        var hasToolCalls = effectiveToolCalls is { Count: > 0 };
+        if (hasToolCalls && output.Length > initialOutputLength)
+            output.Length = initialOutputLength;
+
         var approvalRequired = HasApprovalRequiredToolCall(
             effectiveToolCalls,
             llmResult.AuthorizedTools,
             llmResult.AuthorizedToolContext);
-        if (deferredLlmChunks is not null && !approvalRequired)
+        if (deferredLlmChunks is not null && !approvalRequired && !hasToolCalls)
         {
             foreach (var chunk in deferredLlmChunks)
                 await DeliverLlmChunkAsync(chunk, ct).ConfigureAwait(false);
         }
-        if (streamingState is not null && !approvalRequired)
+        if (streamingState is not null && !approvalRequired && !hasToolCalls)
             await streamingState.FinalizeAsync(output.ToString(), ct).ConfigureAwait(false);
 
         var result = new AgentRunLlmStepResult
@@ -335,7 +338,9 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             Content = effectiveContent ?? string.Empty,
             ReasoningContent = llmResult.ReasoningContent ?? string.Empty,
             FinishReason = llmResult.FinishReason ?? string.Empty,
-            HasStreamedTextContent = !approvalRequired && !string.IsNullOrEmpty(llmResult.Content),
+            HasStreamedTextContent = !approvalRequired &&
+                                     !hasToolCalls &&
+                                     !string.IsNullOrEmpty(effectiveContent),
             ToolRequestId = llmRequest.ToolContext?.Request.RequestId ?? string.Empty,
         };
         if (AgentRunReplyStepMappers.ToProto(llmResult.Usage) is { } usage)
@@ -454,19 +459,45 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 continue;
 
             var argumentsJson = call.ArgumentsJson ?? string.Empty;
-            var callSafety = tool.GetCallSafety(argumentsJson);
+            var providerCallSafety = tool.GetCallSafety(argumentsJson);
+            var callSafety = ResolveEffectiveCallSafety(
+                tool,
+                providerCallSafety);
+            var operationAdmission = SnapshotOperationAdmission(tool, argumentsJson);
             snapshots.Add(new AgentRunAuthorizedToolCallSafety(
                 call.Id ?? string.Empty,
                 call.Name ?? string.Empty,
                 argumentsJson,
                 callSafety,
                 tool.SideEffectKind ?? string.Empty,
-                BuildToolDefinitionFingerprint(tool, callSafety),
-                ToolPresentationDescriptors.Snapshot(tool, call.Name ?? string.Empty, argumentsJson)));
+                BuildToolDefinitionFingerprint(
+                    tool,
+                    providerCallSafety,
+                    callSafety,
+                    operationAdmission),
+                ToolPresentationDescriptors.Snapshot(tool, call.Name ?? string.Empty, argumentsJson),
+                callSafety.RequiresApproval == true,
+                operationAdmission));
         }
 
         return snapshots;
     }
+
+    private static bool ResolveRequiresApproval(
+        IAgentTool tool,
+        AgentToolCallSafety safety)
+    {
+        if (tool.ApprovalMode == ToolApprovalMode.NeverRequire)
+            return false;
+        return safety.RequiresApproval ??
+               (tool.ApprovalMode == ToolApprovalMode.AlwaysRequire ||
+                (!safety.IsReadOnly && safety.IsDestructive));
+    }
+
+    private static AgentToolCallSafety ResolveEffectiveCallSafety(
+        IAgentTool tool,
+        AgentToolCallSafety safety) =>
+        safety with { RequiresApproval = ResolveRequiresApproval(tool, safety) };
 
     private static bool HasApprovalRequiredToolCall(
         IReadOnlyList<ToolCall>? toolCalls,
@@ -485,14 +516,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 continue;
 
             var safety = tool.GetCallSafety(call.ArgumentsJson ?? string.Empty);
-            if (tool.ApprovalMode == ToolApprovalMode.NeverRequire)
-                continue;
-            if (safety.RequiresApproval ??
-                (tool.ApprovalMode == ToolApprovalMode.AlwaysRequire ||
-                 (!safety.IsReadOnly && safety.IsDestructive)))
-            {
+            if (ResolveRequiresApproval(tool, safety))
                 return true;
-            }
         }
 
         return false;
@@ -514,6 +539,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             IsDestructive = source.CallSafety.IsDestructive,
             SideEffectKind = source.SideEffectKind ?? string.Empty,
             ToolDefinitionFingerprint = source.ToolDefinitionFingerprint ?? string.Empty,
+            OperationAdmission = source.OperationAdmission?.Clone(),
         };
 
     private async Task<LLMRequest> MaterializeFileRefMessagesAsync(LLMRequest request, CancellationToken ct)
@@ -591,6 +617,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             AgentRunReplyStepMappers.ToolContextFromProto(workItem.StepState).InputFileRefs.Count);
 
         AgentRunToolStepResult toolStepResult;
+        AgentRunToolAuthorizationOutcome authorizationOutcome;
         if (authorizedToolStep is not null)
         {
             if (transientAuthorizationMatched)
@@ -602,6 +629,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                     workItem.StepIndex,
                     FormatToolNames(toolCalls.Select(static call => call.Name)));
                 toolStepResult = await authorizedToolStep.ExecuteAsync(ct).ConfigureAwait(false);
+                authorizationOutcome = AgentRunToolAuthorizationOutcome.TransientMatched;
             }
             else
             {
@@ -612,6 +640,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                     workItem.StepIndex,
                     FormatToolNames(toolCalls.Select(static call => call.Name)));
                 toolStepResult = BuildUnauthorizedToolStepResult(toolCalls);
+                authorizationOutcome = AgentRunToolAuthorizationOutcome.Rejected;
             }
         }
         else if (workItem.AllowDurableToolAuthorization &&
@@ -619,6 +648,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                      .ConfigureAwait(false) is { } durableToolStepResult)
         {
             toolStepResult = durableToolStepResult;
+            authorizationOutcome = AgentRunToolAuthorizationOutcome.DurableMatched;
         }
         else
         {
@@ -629,7 +659,9 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 workItem.StepIndex,
                 FormatToolNames(toolCalls.Select(static call => call.Name)));
             toolStepResult = BuildUnauthorizedToolStepResult(toolCalls);
+            authorizationOutcome = AgentRunToolAuthorizationOutcome.Rejected;
         }
+        toolStepResult.AuthorizationOutcome = authorizationOutcome;
 
         return new AgentRunNextToolStepRequestedEvent
         {
@@ -659,6 +691,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 pendingApproval)
             .ConfigureAwait(false)
             ?? throw new InvalidOperationException("The approved AgentRun tool capability no longer matches the suspended call.");
+        toolStepResult.AuthorizationOutcome =
+            AgentRunToolAuthorizationOutcome.DurableMatched;
 
         return new AgentRunNextToolStepRequestedEvent
         {
@@ -906,7 +940,11 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         IAgentTool tool,
         string argumentsJson)
     {
-        var currentSafety = tool.GetCallSafety(argumentsJson);
+        var providerCallSafety = tool.GetCallSafety(argumentsJson);
+        var currentSafety = ResolveEffectiveCallSafety(
+            tool,
+            providerCallSafety);
+        var currentAdmission = SnapshotOperationAdmission(tool, argumentsJson);
         return authorization.HasRequiresApproval == currentSafety.RequiresApproval.HasValue &&
                authorization.RequiresApproval == (currentSafety.RequiresApproval ?? false) &&
                authorization.IsReadOnly == currentSafety.IsReadOnly &&
@@ -914,7 +952,11 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                string.Equals(authorization.SideEffectKind, tool.SideEffectKind ?? string.Empty, StringComparison.Ordinal) &&
                string.Equals(
                    authorization.ToolDefinitionFingerprint,
-                   BuildToolDefinitionFingerprint(tool, currentSafety),
+                   BuildToolDefinitionFingerprint(
+                       tool,
+                       providerCallSafety,
+                       currentSafety,
+                       currentAdmission),
                    StringComparison.Ordinal);
     }
 
@@ -929,18 +971,41 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         return values.Length == 0 ? "(none)" : string.Join(',', values);
     }
 
-    private static string BuildToolDefinitionFingerprint(IAgentTool tool, AgentToolCallSafety callSafety)
+    private static string BuildToolDefinitionFingerprint(
+        IAgentTool tool,
+        AgentToolCallSafety providerCallSafety,
+        AgentToolCallSafety effectiveCallSafety,
+        AgentToolOperationAdmissionPayload? operationAdmission)
     {
         var canonical = string.Join('\n',
             tool.Name ?? string.Empty,
             tool.Description ?? string.Empty,
             tool.ParametersSchema ?? string.Empty,
             tool.SideEffectKind ?? string.Empty,
-            callSafety.RequiresApproval.HasValue ? "1" : "0",
-            callSafety.RequiresApproval == true ? "1" : "0",
-            callSafety.IsReadOnly ? "1" : "0",
-            callSafety.IsDestructive ? "1" : "0");
+            ((int)tool.ApprovalMode).ToString(System.Globalization.CultureInfo.InvariantCulture),
+            providerCallSafety.RequiresApproval.HasValue ? "1" : "0",
+            providerCallSafety.RequiresApproval == true ? "1" : "0",
+            effectiveCallSafety.RequiresApproval == true ? "1" : "0",
+            effectiveCallSafety.IsReadOnly ? "1" : "0",
+            effectiveCallSafety.IsDestructive ? "1" : "0",
+            operationAdmission is null
+                ? string.Empty
+                : Convert.ToBase64String(operationAdmission.ToByteArray()));
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant();
+    }
+
+    private static AgentToolOperationAdmissionPayload? SnapshotOperationAdmission(
+        IAgentTool tool,
+        string argumentsJson)
+    {
+        if (tool is not IAgentToolOperationAdmissionOwner owner)
+            return null;
+
+        var payload = (AgentToolExecutionContext.Empty with
+        {
+            OperationAdmission = owner.ResolveOperationAdmission(argumentsJson),
+        }).ToPayload();
+        return payload.OperationAdmission?.Clone();
     }
 
     private static AgentRunToolStepResult BuildUnauthorizedToolStepResult(IReadOnlyList<ToolCall> toolCalls)
@@ -1199,37 +1264,55 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
     }
 
     // Re-supplies runtime credentials onto the token-less per-step control/tool-context read from the
-    // persisted (stripped) step-state. Reproduces BuildGenerationContextAsync's derivation from the
-    // transient request: owner token from the Activity user token, sender token re-minted from the
-    // retained binding identity (choice A — re-mint per step keeps the persisted waterline free of
-    // bearer tokens and hands each step a fresh short-lived sender token). On the owner-fallback step
-    // the run actor has cleared the Activity token and the sender binding, so the owner token comes
-    // from request.LlmControl (the bot-owner token it re-supplied) and no sender token is minted.
+    // persisted (stripped) step-state. The transient request carries the typed credential set, the
+    // Activity user token may override its owner token, and sender authority is re-minted from the
+    // retained binding identity. On the owner-fallback step the run actor has cleared the Activity
+    // token and sender binding, so request.LlmControl supplies the bot-owner token.
     private async Task<(LLMControlContext Control, AgentToolExecutionContext ToolContext)> ReSupplyRuntimeCredentialsAsync(
         NeedsLlmReplyEvent request,
         LLMControlContext stepControl,
         AgentToolExecutionContext planToolContext,
         CancellationToken ct)
     {
+        var requestCredentials = AgentToolExecutionContextMapper
+            .FromPayload(request.ToolContext)
+            .Credentials;
+        planToolContext = planToolContext with
+        {
+            Credentials = planToolContext.Credentials with
+            {
+                NyxIdAccessToken = NormalizeOptional(requestCredentials.NyxIdAccessToken) ??
+                                   planToolContext.Credentials.NyxIdAccessToken,
+                NyxIdOrgToken = NormalizeOptional(requestCredentials.NyxIdOrgToken) ??
+                                planToolContext.Credentials.NyxIdOrgToken,
+                SenderNyxIdAccessToken = NormalizeOptional(requestCredentials.SenderNyxIdAccessToken) ??
+                                         planToolContext.Credentials.SenderNyxIdAccessToken,
+                NyxIdCredentialKind = requestCredentials.NyxIdCredentialKind ==
+                                      AgentToolNyxIdCredentialKind.Unspecified
+                    ? planToolContext.Credentials.NyxIdCredentialKind
+                    : requestCredentials.NyxIdCredentialKind,
+                SourceReadableNyxIdAccessToken = NormalizeOptional(
+                                                     requestCredentials.SourceReadableNyxIdAccessToken) ??
+                                                 planToolContext.Credentials.SourceReadableNyxIdAccessToken,
+            },
+        };
         var requestControl = LLMControlContextMapper.FromPayload(request.LlmControl);
         requestControl = await ApplySenderTokenAsync(request, planToolContext, requestControl, ct).ConfigureAwait(false);
         requestControl = OverlayActivityUserToken(request, requestControl);
 
         var control = stepControl with
         {
-            NyxIdAccessToken = requestControl.NyxIdAccessToken,
-            NyxIdOrgToken = requestControl.NyxIdOrgToken,
-            SenderNyxIdAccessToken = requestControl.SenderNyxIdAccessToken,
+            NyxIdAccessToken = NormalizeOptional(requestControl.NyxIdAccessToken) ??
+                               planToolContext.Credentials.NyxIdAccessToken ??
+                               stepControl.NyxIdAccessToken,
+            NyxIdOrgToken = NormalizeOptional(requestControl.NyxIdOrgToken) ??
+                            planToolContext.Credentials.NyxIdOrgToken ??
+                            stepControl.NyxIdOrgToken,
+            SenderNyxIdAccessToken = NormalizeOptional(requestControl.SenderNyxIdAccessToken) ??
+                                     planToolContext.Credentials.SenderNyxIdAccessToken ??
+                                     stepControl.SenderNyxIdAccessToken,
         };
-        var toolContext = planToolContext with
-        {
-            Credentials = planToolContext.Credentials with
-            {
-                NyxIdAccessToken = requestControl.NyxIdAccessToken,
-                NyxIdOrgToken = requestControl.NyxIdOrgToken,
-                SenderNyxIdAccessToken = requestControl.SenderNyxIdAccessToken,
-            },
-        };
+        var toolContext = control.ToToolContext(planToolContext);
         return (control, toolContext);
     }
 

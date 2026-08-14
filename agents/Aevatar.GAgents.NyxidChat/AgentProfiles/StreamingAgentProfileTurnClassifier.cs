@@ -39,6 +39,7 @@ public sealed class StreamingAgentProfileTurnClassifier : IAgentProfileTurnClass
 
         var llmRequest = new LLMRequest
         {
+            RequestId = request.RequestId,
             Messages =
             [
                 ChatMessage.System(
@@ -47,9 +48,15 @@ public sealed class StreamingAgentProfileTurnClassifier : IAgentProfileTurnClass
                     "not an intermediate prerequisite or discovery step. " +
                     "When an external_handoff intent directly fulfills that outcome and a read_only " +
                     "intent only discovers a prerequisite, select the external_handoff intent. " +
+                    "Treat an unqualified request to connect an external service account as a hosted " +
+                    "service connection intent. Select a local or node credential-management intent " +
+                    "only when the user explicitly requests local CLI, node credential, credential " +
+                    "injection, or credential-management work. " +
                     "Return only JSON with status 'matched' and intent_id, or status 'no_match'."),
                 ChatMessage.User(input),
             ],
+            LlmControl = request.LlmControl,
+            RoutingContext = request.LlmControl?.ToRoutingContext(),
             Tools = null,
             ResponseFormat = LLMResponseFormat.ForJsonSchema<ClassificationPayload>(
                 "agent_profile_turn_classification"),

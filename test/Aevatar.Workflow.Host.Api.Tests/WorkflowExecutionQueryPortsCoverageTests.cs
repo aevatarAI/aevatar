@@ -12,42 +12,6 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 
 public sealed class WorkflowExecutionQueryPortsCoverageTests
 {
-    [Theory]
-    [InlineData("running", WorkflowRunCompletionStatus.Running)]
-    [InlineData("completed", WorkflowRunCompletionStatus.Completed)]
-    [InlineData("failed", WorkflowRunCompletionStatus.Failed)]
-    [InlineData("stopped", WorkflowRunCompletionStatus.Stopped)]
-    [InlineData("not_found", WorkflowRunCompletionStatus.NotFound)]
-    [InlineData("disabled", WorkflowRunCompletionStatus.Disabled)]
-    [InlineData("awaiting_tool_approval", WorkflowRunCompletionStatus.AwaitingToolApproval)]
-    [InlineData("waiting_for_signal", WorkflowRunCompletionStatus.WaitingForSignal)]
-    [InlineData("unknown", WorkflowRunCompletionStatus.Unknown)]
-    public void WorkflowExecutionReadModelMapper_ShouldMapCurrentStateStatuses(
-        string status,
-        WorkflowRunCompletionStatus expected)
-    {
-        var mapper = new WorkflowExecutionReadModelMapper();
-        var snapshot = mapper.ToActorSnapshot(new WorkflowExecutionCurrentStateDocument
-        {
-            Id = "actor-1",
-            RootActorId = "actor-1",
-            CommandId = "cmd-1",
-            Status = status,
-            FinalOutput = "done",
-            FinalError = "err",
-            SagaStatus = WorkflowSagaStatus.CompensationDeadLetter, DeadLetterFailedCompensationStepId = "refund_payment",
-            DeadLetterRemainingUncompensated = 2, DeadLetterError = "refund failed",
-            UpdatedAt = DateTimeOffset.Parse("2026-03-17T08:00:00+00:00"),
-        });
-
-        snapshot.CompletionStatus.Should().Be(expected);
-        snapshot.LastOutput.Should().Be("done");
-        snapshot.LastError.Should().Be("err");
-        snapshot.SagaStatus.Should().Be(WorkflowSagaStatus.CompensationDeadLetter);
-        snapshot.DeadLetterFailedCompensationStepId.Should().Be("refund_payment");
-        snapshot.DeadLetterRemainingUncompensated.Should().Be(2); snapshot.DeadLetterError.Should().Be("refund failed");
-    }
-
     [Fact]
     public void WorkflowExecutionReadModelMapper_ShouldExposeCurrentStateInputFileDescriptors()
     {
@@ -100,6 +64,7 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
     [Theory]
     [InlineData(WorkflowExecutionCompletionStatus.Running, WorkflowRunCompletionStatus.Running)]
     [InlineData(WorkflowExecutionCompletionStatus.Completed, WorkflowRunCompletionStatus.Completed)]
+    [InlineData(WorkflowExecutionCompletionStatus.TimedOut, WorkflowRunCompletionStatus.TimedOut)]
     [InlineData(WorkflowExecutionCompletionStatus.Failed, WorkflowRunCompletionStatus.Failed)]
     [InlineData(WorkflowExecutionCompletionStatus.Stopped, WorkflowRunCompletionStatus.Stopped)]
     [InlineData(WorkflowExecutionCompletionStatus.NotFound, WorkflowRunCompletionStatus.NotFound)]
@@ -497,7 +462,26 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
                             NodeId = "actor-1",
                             NodeType = "Actor",
                         },
+                        new ProjectionGraphNode
+                        {
+                            Scope = WorkflowExecutionGraphConstants.Scope,
+                            NodeId = "run:actor-1:cmd-1",
+                            NodeType = WorkflowExecutionGraphConstants.RunNodeType,
+                            Properties = new Dictionary<string, string>(StringComparer.Ordinal)
+                            {
+                                [WorkflowExecutionGraphConstants.RootActorIdPropertyKey] = "actor-1",
+                                [WorkflowExecutionGraphConstants.SourceStateVersionPropertyKey] = "12",
+                            },
+                        },
                     ],
+                },
+            },
+            reportReader: new RecordingDocumentReader<WorkflowRunInsightReportDocument>
+            {
+                Item = new WorkflowRunInsightReportDocument
+                {
+                    Id = "actor-1",
+                    StateVersion = 12,
                 },
             },
             currentStateReader: new RecordingDocumentReader<WorkflowExecutionCurrentStateDocument>
@@ -524,6 +508,7 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
 
         edges.Should().ContainSingle(x => x.EdgeId == "edge-1");
         subgraph.RootNodeId.Should().Be("actor-1");
+        subgraph.SourceStateVersion.Should().Be(12);
 
         harness.GraphStore.LastGraphEdgesQuery.Should().NotBeNull();
         harness.GraphStore.LastGraphEdgesQuery!.RootNodeId.Should().Be("actor-1");

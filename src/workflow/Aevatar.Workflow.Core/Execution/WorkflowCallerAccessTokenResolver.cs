@@ -11,7 +11,15 @@ internal static class WorkflowCallerAccessTokenResolver
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(credential);
-        if (WorkflowCallerCredentialTokens.ParseOptional(credential.BearerToken).IsValid)
+        var bearer = WorkflowCallerCredentialTokens.ParseOptional(credential.BearerToken);
+        var preservesWebhookBindingAgentKey =
+            credential.DurableCallerCredential?.SourceKind ==
+            Aevatar.Foundation.Abstractions.Credentials.DurableCallerCredentialSourceKind.WebhookBinding;
+        var shouldRefreshProxyDelegation =
+            credential.Kind == NyxIdCallerCredentialKind.ProxyDelegation &&
+            credential.NyxIdAuthority != null &&
+            !preservesWebhookBindingAgentKey;
+        if (bearer.IsValid && !shouldRefreshProxyDelegation)
             return credential;
         if (credential.NyxIdAuthority == null)
             return credential;
@@ -22,7 +30,9 @@ internal static class WorkflowCallerAccessTokenResolver
         return new WorkflowCallerCredential
         {
             BearerToken = token,
+            SourceReadableUserBearerToken = credential.SourceReadableUserBearerToken,
             NyxIdAuthority = credential.NyxIdAuthority.Clone(),
+            Kind = NyxIdCallerCredentialKind.ProxyDelegation,
         };
     }
 }

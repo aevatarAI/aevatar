@@ -67,13 +67,35 @@ Console Workflow Activity vNext uses the scope-owned catalogue endpoint:
 
 Contract:
 
-- `view=all` returns the deduplicated scope catalogue keyed by exact `workflowId`, preserving `hasDraftSource` and `hasCommittedSource` when both source read models contain the same workflow ID.
-- `view=drafts` returns only rows with an authoritative draft source, while still returning committed-source facts and capabilities when the same `workflowId` also has a committed workflow.
-- The backend applies scope authorization, view filtering, search, deterministic ordering, and cursor pagination in that order. Clients must not join draft/committed lists or filter an unbounded catalogue in memory.
+- `view=all` returns the scope catalogue keyed by exact `workflowId`, preserving `hasDraftSource` and `hasCommittedSource` when draft and published service facts converge on the same workflow row.
+- `view=drafts` returns only rows with an authoritative draft source, while still returning published service facts and capabilities when the same `workflowId` also has an active published service source.
+- The backend applies scope authorization, then reads the materialized `ScopeWorkflowCatalogueRowDocument` read model. The request path must not read Studio workspace drafts, Studio members, service catalogues, deployment catalogues, workflow actor bindings, event store, or write-model state to reconstruct catalogue rows.
+- The aggregate row is keyed as `{scopeId}:workflow:{workflowId}`. Draft and published workflow service sources merge by exact `workflowId`; Team and Member state are not inputs to this catalogue surface.
+- `ScopeWorkflowCatalogueSourceDocument` is an internal materialization input with two authority kinds only: `draft` from Studio workspace committed state and `service` from service/deployment committed state. Service facts carry committed actor, active revision, deployment ID, deployment status, and service identity.
+- Source documents use deterministic source IDs (`{scopeId}:{workflowId}:draft`, `{scopeId}:{workflowId}:service`) and deterministic materialized actor IDs, because the same workflow-keyed source can be refreshed from different underlying workspace or service actors over time.
+- Existing current-state read models are backfilled by host startup composition into draft/service source documents and refreshed aggregate rows before request-path reads rely on the catalogue. Backfill uses exact upserts/tombstones; it must not use search-based cleanup of just-written documents.
+- Row materialization composes the latest draft source and latest service source: draft name/description wins for editable display, service facts drive Activity/run capability, `updatedAtUtc` is the maximum source update time, and the row is deleted only after both source documents are absent.
+- View filtering, search, deterministic ordering, and cursor pagination are owned by the catalogue query port in that order. Clients must not join draft/committed lists or filter an unbounded catalogue in memory.
 - Deterministic ordering is `updatedAtUtc DESC`, then `workflowId ASC` using ordinal comparison. `nextPageToken` is an opaque cursor token returned by the previous response.
 - Search trims and normalizes the query with Unicode FormKC. Empty, omitted, or whitespace-only `query` values are equivalent to no search filter and do not create a separate freshness domain.
 - Searchable fields are `name`, `description`, and `workflowId`. `name` and `description` use ordinal case-insensitive substring matching; `workflowId` supports exact or prefix matching only. Chinese and English text are both matched after the same normalization.
 - Query length after trimming/normalization is capped by the response `search.maximumQueryLength`; invalid cursor or overlong query returns `400`.
 - Rows expose typed capabilities for `open`, `activity`, `rename`, and `delete`. Unavailable actions carry a typed unavailable reason instead of requiring the client to infer from sources.
-- Rows keep `workflowId`, committed `actorId`, deployment/service IDs, and other identities separate. `workflowId` must not be reused as `memberId` or `publishedServiceId`.
-- `freshness.refreshWatermarkUtc` is the maximum source `UpdatedAt` observed from the materialized draft workspace and committed workflow read models used by the query. It is a refresh watermark, not a synthetic local `StateVersion++`.
+- Rows keep `workflowId`, `publishedServiceId`, committed `actorId`, deployment/service IDs, and other identities separate. `workflowId` is the workflow-native merge key; it must not be reused as Team or Member identity.
+- `freshness.refreshWatermarkUtc` is the maximum authoritative source `UpdatedAt` materialized into the workflow catalogue row read model. Source and row write `StateVersion` values are derived from authority `UpdatedAt` watermarks; tombstones advance the same watermark so deletes cannot conflict with same-event upserts.
+
+## Scope workflow archive command
+
+Workflow Activity archives a published workflow through the scope-owned command endpoint:
+
+`POST /api/scopes/{scopeId}/workflows/{workflowId}:archive`
+
+The browser supplies only the independently typed `scopeId` and `workflowId`. After `AevatarScopeAccessGuard` validates the caller, the Application service resolves `publishedServiceId`, service app/namespace, and `deploymentId` from the authoritative scope workflow read model and dispatches deployment deactivation. The generic service-identity endpoint is not a browser fallback and its service-principal access requirements remain unchanged.
+
+Archive is accepted-only and preserves the editable draft, published revisions, committed facts, and Activity. The client reports success only after the exact `workflowId` is observed with a deactivated deployment. Permanent deletion, if introduced, requires a separate explicitly named purge contract.
+
+Workflow Activity presents one destructive list action according to the dominant row source:
+
+- draft-only rows expose `Delete draft`;
+- published rows expose `Archive`, whether or not a draft source also exists;
+- archived rows expose neither Archive nor Delete draft.

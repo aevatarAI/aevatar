@@ -3,6 +3,7 @@ using Aevatar.AI.Infrastructure.ToolExecution;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Capabilities;
+using Aevatar.Configuration;
 using Aevatar.GAgentService.Hosting.DependencyInjection;
 using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.Scripting.Hosting.CapabilityApi;
@@ -77,11 +78,8 @@ public static class AevatarPlatformHostBuilderExtensions
                 aiOptions.WebSearchNyxIdBaseUrl =
                     FirstConfiguredValue(
                         builder.Configuration,
-                        "Aevatar:Web:NyxIdBaseUrl",
-                        "Aevatar:NyxId:ApiBaseUrl",
-                        "Aevatar:NyxId:Authority",
-                        "Cli:App:NyxId:Authority",
-                        "Aevatar:Authentication:Authority");
+                        "Aevatar:Web:NyxIdBaseUrl")
+                    ?? NyxIdEndpointResolver.ResolvePublicApiBaseUrl(builder.Configuration);
                 aiOptions.WebSearchNyxIdSlug =
                     FirstConfiguredValue(
                         builder.Configuration,

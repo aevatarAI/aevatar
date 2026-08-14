@@ -16,6 +16,32 @@ enum NyxIdServiceAccessTokenSource {
   NYX_ID_SERVICE_ACCESS_TOKEN_SOURCE_ORGANIZATION = 2;
 }
 
+enum NyxIdServiceCredentialStatus {
+  NYX_ID_SERVICE_CREDENTIAL_STATUS_UNSPECIFIED = 0;
+  NYX_ID_SERVICE_CREDENTIAL_STATUS_ACTIVE = 1;
+  NYX_ID_SERVICE_CREDENTIAL_STATUS_EXPIRED = 2;
+  NYX_ID_SERVICE_CREDENTIAL_STATUS_REVOKED = 3;
+  NYX_ID_SERVICE_CREDENTIAL_STATUS_FAILED = 4;
+  NYX_ID_SERVICE_CREDENTIAL_STATUS_REFRESH_FAILED = 5;
+  NYX_ID_SERVICE_CREDENTIAL_STATUS_PENDING_AUTHORIZATION = 6;
+}
+
+enum NyxIdServiceNodeStatus {
+  NYX_ID_SERVICE_NODE_STATUS_UNSPECIFIED = 0;
+  NYX_ID_SERVICE_NODE_STATUS_NOT_BOUND = 1;
+  NYX_ID_SERVICE_NODE_STATUS_ONLINE = 2;
+  NYX_ID_SERVICE_NODE_STATUS_OFFLINE = 3;
+  NYX_ID_SERVICE_NODE_STATUS_DRAINING = 4;
+  NYX_ID_SERVICE_NODE_STATUS_UNKNOWN = 5;
+  NYX_ID_SERVICE_NODE_STATUS_INACCESSIBLE = 6;
+}
+
+message NyxIdServiceCallerExecutionReadiness {
+  NyxIdServiceCredentialStatus credential_status = 1;
+  bool connected = 2;
+  NyxIdServiceNodeStatus node_status = 3;
+}
+
 message NyxIdProxyRouteConstraint {
   oneof route {
     string catalog_service_id = 1;
@@ -38,6 +64,8 @@ message NyxIdServiceInstance {
   reserved "proxy_spec_service_id";
   NyxIdProxyRouteConstraint route_constraint = 12;
   bool credential_allowed = 13;
+  optional string catalog_service_slug = 14;
+  NyxIdServiceCallerExecutionReadiness caller_execution_readiness = 15;
 }
 
 message NyxIdServiceUpdateRequest {

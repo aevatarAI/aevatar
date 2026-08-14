@@ -20,7 +20,8 @@ internal sealed class WorkflowRunActorPort :
     IWorkflowDefinitionProvisioningPort,
     IWorkflowRunProvisioningPort,
     IWorkflowRunIdentityProvisioningPort,
-    IWorkflowRunIdentityExecutionPort
+    IWorkflowRunIdentityExecutionPort,
+    IWorkflowRunLineageRecordingPort
 {
     private const string WorkflowRunActorPortPublisherId = "workflow.run.actor.port";
     private readonly IActorRuntime _runtime;
@@ -114,6 +115,9 @@ internal sealed class WorkflowRunActorPort :
                     definition.ScopeId,
                     definition.RunOrigin,
                     definition.ScheduleId,
+                    definition.WorkflowId,
+                    definition.RevisionId,
+                    definition.DefinitionVersion,
                     definition.ExpectedExecutionMode,
                     definitionResolution.CapabilityAdmissionPlan),
                 ct);
@@ -121,7 +125,11 @@ internal sealed class WorkflowRunActorPort :
             return new WorkflowRunCreationReceipt(
                 runActor.Id,
                 definitionResolution.ActorId,
-                createdActorIds);
+                createdActorIds,
+                // Fix (review round 1, F2):
+                //   CreateRunAsync previously copied the technical actor id into RunId.
+                //   No authoritative routable run id exists here, so leave RunId empty for honest fallback.
+                RunId: string.Empty);
         }
         catch
         {
@@ -206,6 +214,9 @@ internal sealed class WorkflowRunActorPort :
                     definition.ScopeId,
                     definition.RunOrigin,
                     definition.ScheduleId,
+                    definition.WorkflowId,
+                    definition.RevisionId,
+                    definition.DefinitionVersion,
                     definition.ExpectedExecutionMode,
                     definitionResolution.CapabilityAdmissionPlan,
                     executionRequest,
@@ -221,7 +232,11 @@ internal sealed class WorkflowRunActorPort :
             return new WorkflowRunCreationReceipt(
                 runActor.Id,
                 definitionResolution.ActorId,
-                createdActorIds);
+                createdActorIds,
+                // Fix (review round 1, F2):
+                //   EnsureRunAsync has a caller-supplied routable run identity.
+                //   Populate RunId from the normalized request, not by reading the actor address back.
+                RunId: normalizedRunId);
         }
         catch
         {
@@ -230,6 +245,36 @@ internal sealed class WorkflowRunActorPort :
             await TryDestroyActorsAsync(createdActorIds);
             throw;
         }
+    }
+
+    public async Task RecordForkChildAsync(
+        string sourceRunId,
+        string childRunId,
+        string childActorId,
+        string originalRunId,
+        string startAtStepId,
+        int attempt,
+        CancellationToken ct = default)
+    {
+        var normalizedSourceRunId = NormalizeActorId(sourceRunId)
+            ?? throw new ArgumentException("Source Run id is required.", nameof(sourceRunId));
+        var normalizedChildRunId = NormalizeActorId(childRunId)
+            ?? throw new ArgumentException("Child Run id is required.", nameof(childRunId));
+
+        var sourceActor = await _runtime.CreateAsync<WorkflowRunGAgent>(
+            normalizedSourceRunId,
+            ct).ConfigureAwait(false);
+
+        await _dispatchPort.DispatchAsync(
+            sourceActor.Id,
+            CreateWorkflowRunLineageRecordedEnvelope(
+                normalizedSourceRunId,
+                normalizedChildRunId,
+                childActorId,
+                string.IsNullOrWhiteSpace(originalRunId) ? normalizedSourceRunId : originalRunId,
+                startAtStepId,
+                Math.Max(0, attempt)),
+            ct).ConfigureAwait(false);
     }
 
     public Task DestroyAsync(string actorId, CancellationToken ct = default)
@@ -428,7 +473,19 @@ internal sealed class WorkflowRunActorPort :
                 $"Workflow definition actor '{existingActor.Id}' does not have a materialized definition payload.");
         }
 
-        if (!IsSameDefinitionPayload(binding, definition))
+        var pinsAdmissionSnapshot = definition.CapabilityAdmissionPlan != null ||
+                                    definition.DefinitionVersion > 0 ||
+                                    string.Equals(
+                                        definition.RunOrigin,
+                                        WorkflowRunOrigins.Webhook,
+                                        StringComparison.Ordinal);
+        if (!IsSameDefinitionPayload(binding, definition) ||
+            (pinsAdmissionSnapshot &&
+             !string.Equals(
+                 binding.CapabilityAdmissionPlan?.AdmissionDigest ?? string.Empty,
+                 definition.CapabilityAdmissionPlan?.AdmissionDigest ?? string.Empty,
+                 StringComparison.Ordinal)) ||
+            (definition.DefinitionVersion > 0 && binding.SourceVersion != definition.DefinitionVersion))
         {
             throw new InvalidOperationException(
                 $"Workflow definition actor '{existingActor.Id}' payload does not match the requested Run definition.");
@@ -656,7 +713,7 @@ internal sealed class WorkflowRunActorPort :
             if (!boundHasRevisionId)
                 throw new WorkflowCapabilityAdmissionRebindRequiredException();
 
-            if (!requestedRequiresIdentity ||
+            if ((boundRequiresIdentity && !requestedRequiresIdentity) ||
                 !string.Equals(binding.WorkflowId, definition.WorkflowId, StringComparison.Ordinal) ||
                 !string.Equals(binding.RevisionId, definition.RevisionId, StringComparison.Ordinal))
             {
@@ -826,6 +883,9 @@ internal sealed class WorkflowRunActorPort :
         string? scopeId,
         string? runOrigin,
         string? scheduleId,
+        string? workflowId,
+        string? revisionId,
+        long definitionVersion,
         ExternalCapabilityExecutionMode expectedExecutionMode,
         WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan) =>
         new()
@@ -841,6 +901,9 @@ internal sealed class WorkflowRunActorPort :
                 scopeId,
                 runOrigin,
                 scheduleId,
+                workflowId,
+                revisionId,
+                definitionVersion,
                 expectedExecutionMode,
                 capabilityAdmissionPlan)),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication(WorkflowRunActorPortPublisherId, TopologyAudience.Self),
@@ -859,6 +922,9 @@ internal sealed class WorkflowRunActorPort :
         string? scopeId,
         string? runOrigin,
         string? scheduleId,
+        string? workflowId,
+        string? revisionId,
+        long definitionVersion,
         ExternalCapabilityExecutionMode expectedExecutionMode,
         WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan,
         WorkflowChatRequestEvent? executionRequest = null,
@@ -879,6 +945,9 @@ internal sealed class WorkflowRunActorPort :
                 scopeId,
                 runOrigin,
                 scheduleId,
+                workflowId,
+                revisionId,
+                definitionVersion,
                 expectedExecutionMode,
                 capabilityAdmissionPlan),
         };
@@ -920,6 +989,35 @@ internal sealed class WorkflowRunActorPort :
             {
                 CorrelationId = actorId ?? string.Empty,
                 CausationEventId = "workflow_run_stopped",
+            },
+        };
+
+    private static EventEnvelope CreateWorkflowRunLineageRecordedEnvelope(
+        string sourceRunId,
+        string childRunId,
+        string childActorId,
+        string originalRunId,
+        string startAtStepId,
+        int attempt) =>
+        new()
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(new WorkflowRunLineageRecordedEvent
+            {
+                SourceRunId = sourceRunId,
+                ChildRunId = childRunId,
+                ChildActorId = childActorId?.Trim() ?? string.Empty,
+                OriginalRunId = string.IsNullOrWhiteSpace(originalRunId) ? sourceRunId : originalRunId.Trim(),
+                StartAtStepId = startAtStepId?.Trim() ?? string.Empty,
+                Attempt = Math.Max(0, attempt),
+                RelationKind = WorkflowRunLineageRelationKind.RetryFork,
+            }),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(WorkflowRunActorPortPublisherId, TopologyAudience.Self),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = Guid.NewGuid().ToString("N"),
+                CausationEventId = "workflow_run_lineage_recorded",
             },
         };
 
@@ -965,6 +1063,9 @@ internal sealed class WorkflowRunActorPort :
         string? scopeId,
         string? runOrigin,
         string? scheduleId,
+        string? workflowId,
+        string? revisionId,
+        long definitionVersion,
         ExternalCapabilityExecutionMode expectedExecutionMode,
         WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan)
     {
@@ -977,6 +1078,9 @@ internal sealed class WorkflowRunActorPort :
             ScopeId = scopeId?.Trim() ?? string.Empty,
             RunOrigin = runOrigin?.Trim() ?? string.Empty,
             ScheduleId = scheduleId?.Trim() ?? string.Empty,
+            WorkflowId = workflowId?.Trim() ?? string.Empty,
+            RevisionId = revisionId?.Trim() ?? string.Empty,
+            DefinitionVersion = Math.Max(0, definitionVersion),
             CapabilityAdmissionPlan = capabilityAdmissionPlan?.Clone(),
             ExpectedExecutionMode = expectedExecutionMode,
         };

@@ -32,6 +32,8 @@
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.StreamingProxy\Aevatar.GAgents.StreamingProxy.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Studio.Infrastructure\Aevatar.Studio.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Abstractions\Aevatar.GAgentService.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Integration.AI\Aevatar.Workflow.Integration.AI.csproj" />
+    <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Application\Aevatar.Workflow.Application.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="coverlet.collector" />

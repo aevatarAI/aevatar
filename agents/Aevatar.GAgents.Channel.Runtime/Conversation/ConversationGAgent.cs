@@ -76,8 +76,8 @@ public sealed partial class ConversationGAgent :
     private const int RecentAttachmentActivityCap = 5;
     private const int RecentDeliveriesCap = 100;
     private const int MaxNyxRelayInterimUpdateRetryCount = 2;
-    private const string RelayReplyTokenSecretPurpose = "channel-relay-reply-token";
-    private const string RelayUserAccessTokenSecretPurpose = "channel-relay-user-access-token";
+    private const string RelayReplyTokenSecretPurpose = ChannelRelayRuntimeSecretPurposes.ReplyToken;
+    private const string RelayUserAccessTokenSecretPurpose = ChannelRelayRuntimeSecretPurposes.UserAccessToken;
     private static readonly TimeSpan RecentAttachmentActivityWindow = TimeSpan.FromMinutes(10);
     private const int RuntimeCredentialLocalOccRetryCount = 3;
 

@@ -294,6 +294,32 @@ public sealed class NyxIdChatSessionEventProjector
                     progressed));
         }
 
+        if (payload.Is(NyxIdChatOperationStepChangedCommittedEvent.Descriptor))
+        {
+            var committed = payload.Unpack<NyxIdChatOperationStepChangedCommittedEvent>();
+            if (!MatchesControllerKey(context, committed.Key) ||
+                !MatchesControllerState(context, committed.State))
+            {
+                return EmptyEntries;
+            }
+            return Entries(
+                context,
+                NyxIdChatConversationAguiFrameBuilder.BuildProgressCadence(committed));
+        }
+
+        if (payload.Is(NyxIdChatOperationStalledEvent.Descriptor))
+        {
+            var stalled = payload.Unpack<NyxIdChatOperationStalledEvent>();
+            if (!MatchesControllerKey(context, stalled.Key) ||
+                !MatchesControllerState(context, stalled.State))
+            {
+                return EmptyEntries;
+            }
+            return Entries(
+                context,
+                NyxIdChatConversationAguiFrameBuilder.BuildStalled(stalled));
+        }
+
         if (payload.Is(NyxIdChatOperationReconciledEvent.Descriptor))
         {
             var reconciled = payload.Unpack<NyxIdChatOperationReconciledEvent>();
@@ -392,6 +418,26 @@ public sealed class NyxIdChatSessionEventProjector
                 NyxIdChatConversationAguiFrameBuilder.BuildApprovalChanged(committed));
         }
 
+        if (payload.Is(NyxIdChatPlanResolutionCommittedEvent.Descriptor))
+        {
+            var committed = payload.Unpack<NyxIdChatPlanResolutionCommittedEvent>();
+            if (!MatchesControllerState(context, committed.State))
+                return EmptyEntries;
+            return Entries(
+                context,
+                NyxIdChatConversationAguiFrameBuilder.BuildPlanResolutionChanged(committed));
+        }
+
+        if (payload.Is(NyxIdChatPlanGateCapabilityExpiredCommittedEvent.Descriptor))
+        {
+            var committed = payload.Unpack<NyxIdChatPlanGateCapabilityExpiredCommittedEvent>();
+            if (!MatchesControllerState(context, committed.State))
+                return EmptyEntries;
+            return Entries(
+                context,
+                NyxIdChatConversationAguiFrameBuilder.BuildPlanGateCapabilityExpired(committed));
+        }
+
         if (payload.Is(NyxIdChatContinuationAdmissionCommittedEvent.Descriptor))
         {
             var committed = payload.Unpack<NyxIdChatContinuationAdmissionCommittedEvent>();
@@ -412,6 +458,30 @@ public sealed class NyxIdChatSessionEventProjector
                     context.SessionId,
                     committed,
                     committed.State?.ProgressSequence ?? 0));
+        }
+
+        if (payload.Is(NyxIdChatPendingSteeringContinuationFinalizedEvent.Descriptor))
+        {
+            var finalized = payload.Unpack<NyxIdChatPendingSteeringContinuationFinalizedEvent>();
+            var state = finalized.State;
+            var admission = state?.ContinuationAdmission;
+            if (state is null || admission is null ||
+                !string.Equals(admission.OriginTurnId, context.SessionId, StringComparison.Ordinal))
+            {
+                return EmptyEntries;
+            }
+
+            return Entries(
+                context,
+                NyxIdChatConversationAguiFrameBuilder.BuildContinuationChanged(
+                    context.RootActorId,
+                    context.SessionId,
+                    new NyxIdChatContinuationAdmissionCommittedEvent
+                    {
+                        Admission = admission.Clone(),
+                        State = state.Clone(),
+                    },
+                    state.ProgressSequence));
         }
 
         if (payload.Is(NyxIdChatStepControlCommittedEvent.Descriptor))

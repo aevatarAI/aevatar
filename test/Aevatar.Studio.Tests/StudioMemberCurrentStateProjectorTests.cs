@@ -28,7 +28,7 @@ public sealed class StudioMemberCurrentStateProjectorTests
     {
         var dispatcher = new RecordingWriteDispatcher<StudioMemberCurrentStateDocument>();
         var clock = new FixedProjectionClock(DateTimeOffset.Parse("2026-04-27T00:00:00Z"));
-        var projector = new StudioMemberCurrentStateProjector(dispatcher, clock);
+        var projector = CreateProjector(dispatcher, clock);
 
         var state = new StudioMemberState
         {
@@ -146,7 +146,7 @@ public sealed class StudioMemberCurrentStateProjectorTests
     public async Task ProjectAsync_ShouldDenormalizeScriptImplementation()
     {
         var dispatcher = new RecordingWriteDispatcher<StudioMemberCurrentStateDocument>();
-        var projector = new StudioMemberCurrentStateProjector(
+        var projector = CreateProjector(
             dispatcher, new FixedProjectionClock(DateTimeOffset.UtcNow));
 
         var state = new StudioMemberState
@@ -181,7 +181,7 @@ public sealed class StudioMemberCurrentStateProjectorTests
     public async Task ProjectAsync_ShouldProjectRenamedDisplayName()
     {
         var dispatcher = new RecordingWriteDispatcher<StudioMemberCurrentStateDocument>();
-        var projector = new StudioMemberCurrentStateProjector(
+        var projector = CreateProjector(
             dispatcher, new FixedProjectionClock(DateTimeOffset.UtcNow));
         var updatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-05-01T12:00:00Z"));
         var state = new StudioMemberState
@@ -222,7 +222,7 @@ public sealed class StudioMemberCurrentStateProjectorTests
     public async Task ProjectAsync_ShouldDeleteDocument_WhenMemberStateIsDeleted()
     {
         var dispatcher = new RecordingWriteDispatcher<StudioMemberCurrentStateDocument>();
-        var projector = new StudioMemberCurrentStateProjector(
+        var projector = CreateProjector(
             dispatcher, new FixedProjectionClock(DateTimeOffset.UtcNow));
         var deletedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-07-09T06:40:00Z"));
         var state = new StudioMemberState
@@ -266,7 +266,7 @@ public sealed class StudioMemberCurrentStateProjectorTests
     {
         var dispatcher = new RecordingWriteDispatcher<StudioMemberCurrentStateDocument>();
         var clock = new FixedProjectionClock(DateTimeOffset.UtcNow);
-        var projector = new StudioMemberCurrentStateProjector(dispatcher, clock);
+        var projector = CreateProjector(dispatcher, clock);
 
         // A bare event envelope without the CommittedStateEventPublished
         // wrapper must not produce a write — the projector is downstream of
@@ -288,7 +288,7 @@ public sealed class StudioMemberCurrentStateProjectorTests
     {
         var dispatcher = new RecordingWriteDispatcher<StudioMemberCurrentStateDocument>();
         var clock = new FixedProjectionClock(DateTimeOffset.UtcNow);
-        var projector = new StudioMemberCurrentStateProjector(dispatcher, clock);
+        var projector = CreateProjector(dispatcher, clock);
 
         await FluentActions
             .Awaiting(() => projector.ProjectAsync(null!, new EventEnvelope()).AsTask())
@@ -305,12 +305,21 @@ public sealed class StudioMemberCurrentStateProjectorTests
         var clock = new FixedProjectionClock(DateTimeOffset.UtcNow);
 
         FluentActions
-            .Invoking(() => new StudioMemberCurrentStateProjector(null!, clock))
+            .Invoking(() => new StudioMemberCurrentStateProjector(
+                null!,
+                clock))
             .Should().Throw<ArgumentNullException>();
         FluentActions
-            .Invoking(() => new StudioMemberCurrentStateProjector(dispatcher, null!))
+            .Invoking(() => new StudioMemberCurrentStateProjector(
+                dispatcher,
+                null!))
             .Should().Throw<ArgumentNullException>();
     }
+
+    private static StudioMemberCurrentStateProjector CreateProjector(
+        RecordingWriteDispatcher<StudioMemberCurrentStateDocument> dispatcher,
+        IProjectionClock clock) =>
+        new(dispatcher, clock);
 
     private static StudioMaterializationContext NewContext() => new()
     {

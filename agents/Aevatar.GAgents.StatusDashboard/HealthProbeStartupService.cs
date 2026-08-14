@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.StatusDashboard.Configuration;
 using Aevatar.GAgents.StatusDashboard.Executors;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -33,6 +34,7 @@ public sealed class HealthProbeStartupService : IHostedService, IDisposable
 
     public HealthProbeStartupService(
         IOptions<StatusDashboardOptions> options,
+        IConfiguration configuration,
         IActorRuntime actorRuntime,
         IActorDispatchPort dispatchPort,
         IHealthProbeExecutorRegistry executorRegistry,
@@ -40,7 +42,10 @@ public sealed class HealthProbeStartupService : IHostedService, IDisposable
         TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(options);
-        _manifest = StatusDashboardManifest.FromOptions(options.Value ?? new StatusDashboardOptions());
+        ArgumentNullException.ThrowIfNull(configuration);
+        _manifest = StatusDashboardManifest.FromOptions(
+            options.Value ?? new StatusDashboardOptions(),
+            configuration);
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _executorRegistry = executorRegistry ?? throw new ArgumentNullException(nameof(executorRegistry));

@@ -7,6 +7,7 @@ using Aevatar.Audit.Abstractions.Models;
 using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.Authentication.Abstractions;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Observatory;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using FluentAssertions;
@@ -75,6 +76,103 @@ public sealed class WorkflowRunObservatoryEndpointsAdminTests
         observatory.ListScopes.Should().ContainSingle().Which.Should().Be(OwnScope);
         adminQuery.ListAllCalls.Should().Be(0);
         authorizer.Calls.Should().Be(0); // own scope => no NyxID round-trip
+    }
+
+    [Fact]
+    public async Task ListRuns_ShouldKeepArrayResponseShape_ForExistingCallers()
+    {
+        var observatory = new FakeObservatory();
+        var http = BuildHttpContext(OwnScope, bearer: "tok");
+
+        var result = await WorkflowRunObservatoryEndpoints.ListRuns(
+            http,
+            observatory,
+            new FakeAdminQuery(),
+            new FakeAuthorizer(elevated: false),
+            NullLoggerFactory.Instance,
+            scope: null);
+        var (status, body) = await ExecuteWithBodyAsync(result, http);
+
+        status.Should().Be(200);
+        body.TrimStart().Should().StartWith("[");
+    }
+
+    [Fact]
+    public async Task ListActivityRuns_NoScope_UsesOwnScope_AndReturnsPagedEnvelope()
+    {
+        var observatory = new FakeObservatory
+        {
+            ActivityPage = new WorkflowActivityRunFeedPage
+            {
+                Items =
+                [
+                    new WorkflowActivityRunFeedRow
+                    {
+                        RunId = "run-alpha",
+                        ActorId = "actor-alpha",
+                        WorkflowId = "wf-alpha",
+                        ScopeId = OwnScope,
+                    },
+                ],
+                NextCursor = "cursor-next",
+                HasMore = true,
+                TotalCount = 1,
+            },
+        };
+        var adminQuery = new FakeAdminQuery();
+        var authorizer = new FakeAuthorizer(elevated: false);
+        var http = BuildHttpContext(OwnScope, bearer: "tok");
+
+        var result = await WorkflowRunObservatoryEndpoints.ListActivityRuns(
+            http,
+            observatory,
+            adminQuery,
+            authorizer,
+            NullLoggerFactory.Instance,
+            scope: null,
+            status: "completed",
+            workflowId: "wf-alpha",
+            q: "Test Member",
+            take: 25,
+            cursor: "cursor-current",
+            includeTotalCount: true);
+        var (status, body) = await ExecuteWithBodyAsync(result, http);
+
+        status.Should().Be(200);
+        body.TrimStart().Should().StartWith("{");
+        body.Should().Contain("\"items\"");
+        body.Should().Contain("\"nextCursor\":\"cursor-next\"");
+        observatory.ActivityListScopes.Should().ContainSingle().Which.Should().Be(OwnScope);
+        observatory.LastActivityFilter.Should().NotBeNull();
+        observatory.LastActivityFilter!.WorkflowId.Should().Be("wf-alpha");
+        observatory.LastActivityFilter.SearchText.Should().Be("Test Member");
+        observatory.LastActivityFilter.Cursor.Should().Be("cursor-current");
+        observatory.LastActivityFilter.IncludeTotalCount.Should().BeTrue();
+        observatory.LastActivityFilter.Take.Should().Be(25);
+        adminQuery.ListAllActivityCalls.Should().Be(0);
+        authorizer.Calls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ListActivityRuns_MalformedCursor_ReturnsBadRequest()
+    {
+        var observatory = new FakeObservatory
+        {
+            ActivityException = new ProjectionDocumentQueryCursorException("Malformed cursor."),
+        };
+        var http = BuildHttpContext(OwnScope, bearer: "tok");
+
+        var result = await WorkflowRunObservatoryEndpoints.ListActivityRuns(
+            http,
+            observatory,
+            new FakeAdminQuery(),
+            new FakeAuthorizer(elevated: false),
+            NullLoggerFactory.Instance,
+            cursor: "not-a-valid-cursor");
+        var (status, body) = await ExecuteWithBodyAsync(result, http);
+
+        status.Should().Be(400);
+        body.Should().Contain("malformed_cursor");
     }
 
     [Fact]
@@ -152,6 +250,34 @@ public sealed class WorkflowRunObservatoryEndpointsAdminTests
             scope: WorkflowRunObservatoryEndpoints.AllScopesToken);
 
         adminQuery.ListAllCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ListActivityRuns_AllScopes_Admin_UsesAdminActivityQuery()
+    {
+        var adminQuery = new FakeAdminQuery();
+        var authorizer = new FakeAuthorizer(elevated: true);
+        var http = BuildHttpContext(OwnScope, bearer: "tok");
+
+        await WorkflowRunObservatoryEndpoints.ListActivityRuns(
+            http,
+            new FakeObservatory(),
+            adminQuery,
+            authorizer,
+            NullLoggerFactory.Instance,
+            scope: WorkflowRunObservatoryEndpoints.AllScopesToken,
+            workflowId: "wf-alpha",
+            q: "run-alpha",
+            cursor: "cursor-current",
+            includeTotalCount: true);
+
+        adminQuery.ListAllActivityCalls.Should().Be(1);
+        adminQuery.LastActivityFilter.Should().NotBeNull();
+        adminQuery.LastActivityFilter!.WorkflowId.Should().Be("wf-alpha");
+        adminQuery.LastActivityFilter.SearchText.Should().Be("run-alpha");
+        adminQuery.LastActivityFilter.Cursor.Should().Be("cursor-current");
+        adminQuery.LastActivityFilter.IncludeTotalCount.Should().BeTrue();
+        authorizer.Calls.Should().Be(1);
     }
 
     [Fact]
@@ -553,13 +679,26 @@ public sealed class WorkflowRunObservatoryEndpointsAdminTests
     private sealed class FakeObservatory : IWorkflowRunObservatoryQueryService
     {
         public List<string> ListScopes { get; } = [];
+        public List<string> ActivityListScopes { get; } = [];
         public List<string> GetScopes { get; } = [];
         public ObservatoryRunDetail? Detail { get; init; }
+        public WorkflowActivityRunFeedFilter? LastActivityFilter { get; private set; }
+        public WorkflowActivityRunFeedPage ActivityPage { get; init; } = new();
+        public Exception? ActivityException { get; init; }
 
         public Task<IReadOnlyList<ObservatoryRunSummary>> ListRunsForScopeAsync(string scopeId, ObservatoryRunListFilter filter, CancellationToken ct = default)
         {
             ListScopes.Add(scopeId);
             return Task.FromResult<IReadOnlyList<ObservatoryRunSummary>>([]);
+        }
+
+        public Task<WorkflowActivityRunFeedPage> ListActivityRunsForScopeAsync(string scopeId, WorkflowActivityRunFeedFilter filter, CancellationToken ct = default)
+        {
+            ActivityListScopes.Add(scopeId);
+            LastActivityFilter = filter;
+            if (ActivityException is not null)
+                throw ActivityException;
+            return Task.FromResult(ActivityPage);
         }
 
         public Task<ObservatoryRunDetail?> GetRunForScopeAsync(string scopeId, string runId, CancellationToken ct = default)
@@ -578,15 +717,24 @@ public sealed class WorkflowRunObservatoryEndpointsAdminTests
     private sealed class FakeAdminQuery : IWorkflowRunAdminQueryService
     {
         public int ListAllCalls { get; private set; }
+        public int ListAllActivityCalls { get; private set; }
         public int GetRunCalls { get; private set; }
         public int GetRunGraphCalls { get; private set; }
         public ObservatoryRunDetail? Detail { get; init; }
         public ObservatoryRunGraph? Graph { get; init; }
+        public WorkflowActivityRunFeedFilter? LastActivityFilter { get; private set; }
 
         public Task<IReadOnlyList<ObservatoryRunSummary>> ListAllRunsAsync(ObservatoryRunListFilter filter, CancellationToken ct = default)
         {
             ListAllCalls++;
             return Task.FromResult<IReadOnlyList<ObservatoryRunSummary>>([]);
+        }
+
+        public Task<WorkflowActivityRunFeedPage> ListAllActivityRunsAsync(WorkflowActivityRunFeedFilter filter, CancellationToken ct = default)
+        {
+            ListAllActivityCalls++;
+            LastActivityFilter = filter;
+            return Task.FromResult(new WorkflowActivityRunFeedPage());
         }
 
         public Task<ObservatoryRunDetail?> GetRunAsync(string runId, CancellationToken ct = default)

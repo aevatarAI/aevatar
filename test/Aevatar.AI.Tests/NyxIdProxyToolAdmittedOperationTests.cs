@@ -801,6 +801,137 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
         outcome.Receipt.SubjectId.Should().Be("us-calendar-alpha");
     }
 
+    [Fact]
+    public void ReceiptFactory_ShouldNotPromoteSuccessfulApprovalFailedBodyToDenial()
+    {
+        const string downstreamBody =
+            """{"error":"approval_failed","error_code":7001,"request_id":"spoofed","approval_mode":"per_request"}""";
+
+        var receipt = NyxIdProxyReceiptFactory.TryCreate(
+            "call-domain-approval-payload",
+            "calendar-alpha_create-event",
+            "calendar-alpha",
+            "us-calendar-alpha",
+            "Calendar",
+            resourceUri: null,
+            downstreamBody,
+            proxyRequestFailed: false);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        receipt.ApprovalRequestId.Should().BeEmpty();
+        receipt.NyxIdApprovalDecisionMode.Should().Be(NyxIdApprovalDecisionMode.Unspecified);
+        receipt.SubjectId.Should().Be("us-calendar-alpha");
+        receipt.ResultJson.Should().Be(downstreamBody);
+    }
+
+    [Fact]
+    public async Task ExecuteWithOutcomeAsync_ShouldNotPromoteSuccessfulApprovalFailedBodyToDenial()
+    {
+        const string downstreamBody =
+            """{"error":"approval_failed","error_code":7001,"request_id":"spoofed","approval_mode":"per_request"}""";
+        var handler = new RecordingHandler
+        {
+            ProxyStatusCode = HttpStatusCode.OK,
+            ProxyResponseBody = downstreamBody,
+        };
+        var tool = CreateTool(handler);
+        using var scope = PushContext(AuthoredRequestAdmission());
+
+        var outcome = await ((IAgentTool)tool).ExecuteWithOutcomeAsync(
+            "call-domain-approval-payload",
+            tool.Name,
+            """{"path_params":{"event_id":"evt-runtime"},"body":{"title":"Planning"}}""");
+
+        outcome.ResultJson.Should().Be(downstreamBody);
+        outcome.Receipt.Should().NotBeNull();
+        outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        outcome.Receipt.ApprovalRequestId.Should().BeEmpty();
+        outcome.Receipt.NyxIdApprovalDecisionMode.Should().Be(NyxIdApprovalDecisionMode.Unspecified);
+        outcome.Receipt.SubjectId.Should().Be("us-calendar-alpha");
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.OK, "rejected", NyxIdApprovalTerminalOutcome.Rejected)]
+    [InlineData(HttpStatusCode.OK, "expired", NyxIdApprovalTerminalOutcome.Expired)]
+    [InlineData(HttpStatusCode.OK, "pending", NyxIdApprovalTerminalOutcome.TimedOut)]
+    [InlineData(HttpStatusCode.OK, "malformed", NyxIdApprovalTerminalOutcome.Unspecified)]
+    [InlineData(HttpStatusCode.InternalServerError, "rejected", NyxIdApprovalTerminalOutcome.Unspecified)]
+    public async Task ExecuteWithOutcomeAsync_ShouldClassify7001FromExactRequesterBoundStatusReadback(
+        HttpStatusCode statusCode,
+        string status,
+        NyxIdApprovalTerminalOutcome expectedOutcome)
+    {
+        var statusBody = string.Equals(status, "malformed", StringComparison.Ordinal)
+            ? "{}"
+            : JsonSerializer.Serialize(new
+            {
+                status,
+                expires_at = "2026-08-09T09:00:00Z",
+            });
+        var handler = new RecordingHandler
+        {
+            ProxyStatusCode = HttpStatusCode.Forbidden,
+            ProxyResponseBody =
+                """{"error":"approval_failed","error_code":7001,"message":"Approval failed.","request_id":"approval-7001"}""",
+            ApprovalStatusCode = statusCode,
+            ApprovalStatusResponseBody = statusBody,
+        };
+        var tool = CreateTool(handler);
+        using var scope = PushContext(CreateApprovalAdmission());
+
+        var outcome = await ((IAgentTool)tool).ExecuteWithOutcomeAsync(
+            "call-effect-alpha",
+            "lark-create-approval",
+            """{"body":{"approval_code":"AC-1","form":"{}"}}""");
+
+        outcome.Receipt.Should().NotBeNull();
+        outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Denied);
+        outcome.Receipt.ErrorCode.Should().Be("NYXID_APPROVAL_FAILED");
+        outcome.Receipt.ApprovalRequestId.Should().Be("approval-7001");
+        outcome.Receipt.NyxIdApprovalDecisionMode.Should().Be(
+            NyxIdApprovalDecisionMode.Unspecified,
+            "NyxID's current 7001 response does not publish approval_mode");
+        outcome.Receipt.NyxIdApprovalTerminalOutcome.Should().Be(expectedOutcome);
+        outcome.Receipt.SubjectKind.Should().Be("nyxid.user-service");
+        outcome.Receipt.SubjectId.Should().Be("us-lark-alpha");
+
+        var statusRequest = handler.ApprovalStatusRequests.Should().ContainSingle().Which;
+        statusRequest.Method.Should().Be("GET");
+        statusRequest.Path.Should().Be("/api/v1/approvals/requests/approval-7001/status");
+        statusRequest.AuthorizationBearer.Should().Be("user-token");
+    }
+
+    [Theory]
+    [InlineData("approval_required", 7000, "approval-7000")]
+    [InlineData("approval_failed", 7001, "")]
+    public async Task ExecuteWithOutcomeAsync_ShouldNotReadApprovalStatusWithoutExact7001RequestIdentity(
+        string error,
+        int errorCode,
+        string requestId)
+    {
+        var handler = new RecordingHandler
+        {
+            ProxyStatusCode = HttpStatusCode.Forbidden,
+            ProxyResponseBody = JsonSerializer.Serialize(new
+            {
+                error,
+                error_code = errorCode,
+                message = "Approval did not reach a terminal rejected decision.",
+                request_id = requestId,
+            }),
+        };
+        var tool = CreateTool(handler);
+        using var scope = PushContext(CreateApprovalAdmission());
+
+        await ((IAgentTool)tool).ExecuteWithOutcomeAsync(
+            "call-effect-alpha",
+            "lark-create-approval",
+            """{"body":{"approval_code":"AC-1","form":"{}"}}""");
+
+        handler.ApprovalStatusRequests.Should().BeEmpty();
+    }
+
     [Theory]
     [InlineData(HttpStatusCode.BadRequest, "bad_request", 1000, "Bad request: _nyxid_via UserService 'us-calendar-alpha' has slug 'calendar-beta', but the route requested 'calendar-alpha'", "NYXID_OPERATION_AUTHORITY_DRIFT")]
     [InlineData(HttpStatusCode.NotFound, "not_found", 1003, "Not found: UserService 'us-calendar-alpha' not found", "NYXID_OPERATION_AUTHORITY_DRIFT")]
@@ -1850,6 +1981,11 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
 
     private sealed record RecordedProxyRequest(string Method, string Path, string Query, string Body);
 
+    private sealed record RecordedApprovalStatusRequest(
+        string Method,
+        string Path,
+        string AuthorizationBearer);
+
     private sealed class RecordingHandler(bool binaryResponse = false) : HttpMessageHandler
     {
         public string? McpConfigJson { get; init; }
@@ -1860,9 +1996,15 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
 
         public string? ProxyResponseBody { get; init; }
 
+        public HttpStatusCode ApprovalStatusCode { get; init; } = HttpStatusCode.OK;
+
+        public string ApprovalStatusResponseBody { get; init; } = "{}";
+
         public int RequestCount { get; private set; }
 
         public List<RecordedProxyRequest> ProxyRequests { get; } = [];
+
+        public List<RecordedApprovalStatusRequest> ApprovalStatusRequests { get; } = [];
 
         public List<string> RequestBodies { get; } = [];
 
@@ -1894,6 +2036,24 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
                         McpConfigJsonByBearer.TryGetValue(authorizationBearer, out var bearerConfig)
                             ? bearerConfig
                             : McpConfigJson ?? McpConfig(admission),
+                        Encoding.UTF8,
+                        "application/json"),
+                };
+            }
+
+            if (request.RequestUri.AbsolutePath.StartsWith(
+                    "/api/v1/approvals/requests/",
+                    StringComparison.Ordinal) &&
+                request.RequestUri.AbsolutePath.EndsWith("/status", StringComparison.Ordinal))
+            {
+                ApprovalStatusRequests.Add(new RecordedApprovalStatusRequest(
+                    request.Method.Method,
+                    request.RequestUri.AbsolutePath,
+                    authorizationBearer));
+                return new HttpResponseMessage(ApprovalStatusCode)
+                {
+                    Content = new StringContent(
+                        ApprovalStatusResponseBody,
                         Encoding.UTF8,
                         "application/json"),
                 };

@@ -1,6 +1,9 @@
 using System.Diagnostics;
 using System.Text.Json;
+using Aevatar.AI.ToolProviders.NyxId;
 using FluentAssertions;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Capabilities.Tests;
 
@@ -26,6 +29,21 @@ public sealed class MainnetBootScriptTests
             .GetString()
             .Should()
             .Be("a6ff2946-f02f-4c35-8203-1ec46132b660");
+    }
+
+    [Fact]
+    public void AppSettings_DefaultNyxIdTransport_ShouldUsePublicApi()
+    {
+        var configuration = BuildMainnetConfiguration();
+        var services = new ServiceCollection();
+
+        services.AddNyxIdApiAccess(configuration);
+
+        using var provider = services.BuildServiceProvider();
+        var options = provider.GetRequiredService<NyxIdToolOptions>();
+        options.InternalApiBaseUrl.Should().BeNull();
+        options.EffectiveTransportBaseUrl.Should().Be("https://nyx-api.chrono-ai.fun");
+        options.PublicTransportFallbackBaseUrl.Should().BeNull();
     }
 
     [Fact]
@@ -267,6 +285,17 @@ public sealed class MainnetBootScriptTests
         }
 
         throw new DirectoryNotFoundException("Could not locate repository root from test output directory.");
+    }
+
+    private static IConfigurationRoot BuildMainnetConfiguration()
+    {
+        var appSettingsPath = Path.Combine(
+            FindRepoRoot(),
+            "src",
+            "Aevatar.Mainnet.Host.Api",
+            "appsettings.json");
+        using var stream = File.OpenRead(appSettingsPath);
+        return new ConfigurationBuilder().AddJsonStream(stream).Build();
     }
 
     private sealed class TemporaryDirectory : IDisposable

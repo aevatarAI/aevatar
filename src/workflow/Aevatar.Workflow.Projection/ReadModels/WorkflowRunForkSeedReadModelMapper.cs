@@ -32,7 +32,11 @@ public sealed class WorkflowRunForkSeedReadModelMapper
                 x => x.Key,
                 x => ToView(x.Value),
                 StringComparer.Ordinal),
-            source.CapabilityAdmissionPlan?.Clone());
+            source.CapabilityAdmissionPlan?.Clone(),
+            source.WorkflowId ?? string.Empty,
+            source.RevisionId ?? string.Empty,
+            source.DefinitionVersion,
+            ResolveOriginalRunId(source.Lineage, source.RunId));
     }
 
     public WorkflowRunForkSeedProjectionSnapshot ToProjectionSnapshot(WorkflowRunState state)
@@ -56,6 +60,8 @@ public sealed class WorkflowRunForkSeedReadModelMapper
             completedStepIds,
             lastFailedStepId,
             state.ScopeId ?? string.Empty,
+            state.RevisionId ?? string.Empty,
+            state.DefinitionVersion,
             kernelState?.InputFileRefs.Select(static fileRef => fileRef.Clone()).ToList() ?? [],
             kernelState?.IdempotencyByStepId.ToDictionary(
                 x => x.Key,
@@ -102,6 +108,17 @@ public sealed class WorkflowRunForkSeedReadModelMapper
             source.StepId ?? string.Empty,
             source.LogicalAttempt,
             source.IdempotencyKey ?? string.Empty);
+
+    private static string ResolveOriginalRunId(
+        Aevatar.Workflow.Abstractions.WorkflowRunLineage? lineage,
+        string? runId)
+    {
+        var originalRunId = lineage?.RetryFork?.OriginalRunId?.Trim() ?? string.Empty;
+        if (!string.IsNullOrWhiteSpace(originalRunId))
+            return originalRunId;
+
+        return runId?.Trim() ?? string.Empty;
+    }
 }
 
 public sealed record WorkflowRunForkSeedProjectionSnapshot(
@@ -112,5 +129,7 @@ public sealed record WorkflowRunForkSeedProjectionSnapshot(
     IReadOnlyList<string> CompletedStepIds,
     string LastFailedStepId,
     string ScopeId,
+    string RevisionId,
+    long DefinitionVersion,
     IReadOnlyList<WorkflowFileRef> InputFileRefs,
     IReadOnlyDictionary<string, WorkflowStepIdempotencyState> IdempotencyByStepId);

@@ -112,6 +112,50 @@ check_directory_build_version_guard() {
 
 check_directory_build_version_guard
 
+check_code_execution_nyxid_route_boundary() {
+  local expected_files
+  local resolver_files
+  local parser_files
+
+  expected_files="$(printf '%s\n' \
+    'src/Aevatar.AI.Infrastructure.ChronoSandbox/NyxIdCodeExecutionPort.cs' \
+    'src/Aevatar.AI.ToolProviders.NyxId/NyxIdCodeExecutionRoutePolicyReconciler.cs' \
+    'src/Aevatar.AI.ToolProviders.NyxId/NyxIdCodeExecutionRouteResolver.cs' \
+    'src/Aevatar.AI.ToolProviders.NyxId/NyxIdCodeExecutionWorkflowCapabilitySource.cs' \
+    | sort)"
+
+  resolver_files="$(
+    rg -l 'NyxIdCodeExecutionRouteResolver' src \
+      -g '!**/bin/**' \
+      -g '!**/obj/**' \
+      | sort
+  )"
+  if [[ "${resolver_files}" != "${expected_files}" ]]; then
+    printf '%s\n' "${resolver_files}"
+    echo "The NyxID code-execution route resolver is private to code_execute runtime and readiness."
+    exit 1
+  fi
+
+  parser_files="$(
+    rg -l 'ParseUserServiceRoutes' src \
+      -g '!**/bin/**' \
+      -g '!**/obj/**' \
+      | sort
+  )"
+  local expected_parser_files
+  expected_parser_files="$(printf '%s\n' \
+    'src/Aevatar.AI.ToolProviders.NyxId/NyxIdApiAccessContracts.cs' \
+    'src/Aevatar.AI.ToolProviders.NyxId/NyxIdUserServiceRouteConverger.cs' \
+    | sort)"
+  if [[ "${parser_files}" != "${expected_parser_files}" ]]; then
+    printf '%s\n' "${parser_files}"
+    echo "Exact NyxID route parsing must stay behind the generic route authority reader and must not change ordinary inventory consumers."
+    exit 1
+  fi
+}
+
+check_code_execution_nyxid_route_boundary
+
 # Refactor (v1/issue1466-first):
 #   Old: ChannelInboundEvent.registration_token looked like a durable runtime credential carrier.
 #   New: proto field 9/name are reserved and mappers/docs stay credential-free.
@@ -255,6 +299,7 @@ check_workflow_core_interaction_boundary
 
 bash tools/ci/aevatar_oauth_client_es_acl_guard.sh
 bash tools/ci/static_service_activation_guard.sh || exit $?
+bash tools/ci/nyxid_conformance_guard.sh
 
 # Refactor (iter158/cluster-001): stream-RPC outcome abstractions were deleted in PR #1165.
 # Do not reintroduce stream subscribe + first-outcome wait abstractions as an RPC reply path.

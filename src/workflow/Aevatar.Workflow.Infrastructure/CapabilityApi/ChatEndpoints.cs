@@ -76,7 +76,8 @@ public static class WorkflowCapabilityEndpoints
         Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential? trustedCallerCredential = null,
         CancellationToken cancellationToken = default,
         string? trustedScopeId = null,
-        bool allowEmptyInputForResolvedMemberWorkflow = false) =>
+        bool allowEmptyInputForResolvedWorkflowService = false,
+        Aevatar.Workflow.Abstractions.NyxIdCallerCredentialSelection? trustedNyxIdCredentialSelection = null) =>
         ChatRunRequestNormalizer.NormalizeAsync(
             input,
             fileIngressPort,
@@ -84,7 +85,8 @@ public static class WorkflowCapabilityEndpoints
             trustedCallerCredential,
             cancellationToken,
             trustedScopeId,
-            allowEmptyInputForResolvedMemberWorkflow);
+            allowEmptyInputForResolvedWorkflowService,
+            trustedNyxIdCredentialSelection);
 
     internal static async Task HandleChatPost(
         HttpContext http,
@@ -198,7 +200,7 @@ public static class WorkflowCapabilityEndpoints
         CancellationToken ct = default,
         Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedHook = null,
         IFileArtifactIngressPort? fileIngressPort = null,
-        bool allowEmptyInputForResolvedMemberWorkflow = false,
+        bool allowEmptyInputForResolvedWorkflowService = false,
         WorkflowDefinitionBinding? resolvedDefinitionBinding = null)
     {
         using var scope = ApiRequestScope.BeginHttp();
@@ -248,7 +250,8 @@ public static class WorkflowCapabilityEndpoints
                 trustedCallerCredential: callerCredential.Credential,
                 cancellationToken: ct,
                 trustedScopeId: trustedScopeId,
-                allowEmptyInputForResolvedMemberWorkflow: allowEmptyInputForResolvedMemberWorkflow);
+                allowEmptyInputForResolvedWorkflowService: allowEmptyInputForResolvedWorkflowService,
+                trustedNyxIdCredentialSelection: callerCredential.NyxIdCredentialSelection);
             if (!normalizedRequest.Succeeded)
             {
                 var (code, message) = ChatRunStartErrorMapper.ToCommandError(normalizedRequest.Error);
@@ -363,7 +366,8 @@ public static class WorkflowCapabilityEndpoints
                 defaultMetadata,
                 trustedCallerCredential: callerCredential.Credential,
                 cancellationToken: ct,
-                trustedScopeId: trustedScopeId);
+                trustedScopeId: trustedScopeId,
+                trustedNyxIdCredentialSelection: callerCredential.NyxIdCredentialSelection);
             if (!normalizedRequest.Succeeded)
             {
                 var (code, message) = ChatRunStartErrorMapper.ToCommandError(normalizedRequest.Error);
@@ -812,11 +816,12 @@ public static class WorkflowCapabilityEndpoints
             if (!dispatch.Succeeded || dispatch.Receipt == null)
                 return MapForkRunFailure(dispatch.Error, scope);
 
-            var statusUrl = BuildWorkflowRunStatusUrl(dispatch.Receipt.NewRunActorId);
+            var statusUrl = BuildWorkflowRunStatusUrl(dispatch.Receipt);
             return Results.Accepted(statusUrl, new
             {
                 accepted = true,
                 sourceRunId = dispatch.Receipt.SourceRunId,
+                newRunId = dispatch.Receipt.NewRunId,
                 newRunActorId = dispatch.Receipt.NewRunActorId,
                 workflowName = dispatch.Receipt.WorkflowName,
                 acceptedCommandId = dispatch.Receipt.CommandId,
@@ -837,6 +842,14 @@ public static class WorkflowCapabilityEndpoints
 
     private static string BuildWorkflowRunStatusUrl(WorkflowRunControlAcceptedReceipt receipt) =>
         BuildWorkflowRunStatusUrl(receipt.ActorId);
+
+    // Implement (issue #3251):
+    //   Behavior: fork receipts expose a routable run id while preserving the technical actor address.
+    //   Why this shape: status links must not treat NewRunActorId as the run identity when NewRunId exists.
+    private static string BuildWorkflowRunStatusUrl(WorkflowForkRunAcceptedReceipt receipt) =>
+        string.IsNullOrWhiteSpace(receipt.NewRunId)
+            ? BuildWorkflowRunStatusUrl(receipt.NewRunActorId)
+            : $"/api/workflow/observatory/runs/{Uri.EscapeDataString(receipt.NewRunId)}";
 
     // Refactor (iter165/cluster-003-workflow-actor-shaped-query-surface):
     //   Old pattern: accepted status links pointed at /api/actors/{actorId}.

@@ -93,6 +93,7 @@ public sealed class StudioCommittedStateProjectionActivationPlanProviderTests
             { typeof(StudioMemberBindingRunGAgent), StudioMemberBindingRunGAgent.ProjectionKind },
             { typeof(StudioTeamGAgent), StudioTeamGAgent.ProjectionKind },
             { typeof(StudioWorkspaceGAgent), StudioWorkspaceGAgent.ProjectionKind },
+            { typeof(ScopeWorkflowCatalogueRowGAgent), ScopeWorkflowCatalogueRowGAgent.ProjectionKind },
         };
 
     private static CommittedStatePublicationContext BuildContext(SystemType actorType, string actorId) =>

@@ -555,6 +555,7 @@ public sealed class InMemoryProjectionDocumentStore<TReadModel, TKey>
                 actualValue == null || EqualsFilterValue(actualValue, GetScalarValue(filter.Value)),
             ProjectionDocumentFilterOperator.In => GetCollectionValues(filter.Value)
                 .Any(expected => CompareNormalizedValues(actualValue, expected) == 0),
+            ProjectionDocumentFilterOperator.ContainsText => ContainsTextFilterValue(actualValue, GetScalarValue(filter.Value)),
             ProjectionDocumentFilterOperator.Gt => CompareNormalizedValues(actualValue, GetScalarValue(filter.Value)) > 0,
             ProjectionDocumentFilterOperator.Gte => CompareNormalizedValues(actualValue, GetScalarValue(filter.Value)) >= 0,
             ProjectionDocumentFilterOperator.Lt => CompareNormalizedValues(actualValue, GetScalarValue(filter.Value)) < 0,
@@ -568,6 +569,22 @@ public sealed class InMemoryProjectionDocumentStore<TReadModel, TKey>
             ? values.Cast<object?>().Any(value =>
                 CompareNormalizedValues(NormalizeComparableValue(value), expectedValue) == 0)
             : CompareNormalizedValues(actualValue, expectedValue) == 0;
+
+    private static bool ContainsTextFilterValue(object? actualValue, object? expectedValue)
+    {
+        var expectedText = expectedValue?.ToString()?.Trim();
+        if (string.IsNullOrEmpty(expectedText))
+            return true;
+
+        return actualValue switch
+        {
+            null => false,
+            string text => text.Contains(expectedText, StringComparison.OrdinalIgnoreCase),
+            IEnumerable values => values.Cast<object?>().Any(value =>
+                value?.ToString()?.Contains(expectedText, StringComparison.OrdinalIgnoreCase) == true),
+            _ => actualValue.ToString()?.Contains(expectedText, StringComparison.OrdinalIgnoreCase) == true,
+        };
+    }
 
     private static object? GetScalarValue(ProjectionDocumentValue value)
     {
@@ -636,7 +653,7 @@ public sealed class InMemoryProjectionDocumentStore<TReadModel, TKey>
         {
         }
 
-        throw new InvalidOperationException("Invalid InMemory projection document query cursor.");
+        throw new ProjectionDocumentQueryCursorException("Invalid InMemory projection document query cursor.");
     }
 
     private static TReadModel Clone(TReadModel source) => source.Clone();

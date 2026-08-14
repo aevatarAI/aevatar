@@ -153,7 +153,7 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
             return new WorkflowActorResolutionResult(
                 null,
                 workflowNameForRun,
-                WorkflowChatRunStartError.InvalidWorkflowYaml,
+                draftAdmission.FailureDetail.Error,
                 draftAdmission.FailureDetail);
         }
 
@@ -232,7 +232,7 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
                 return new WorkflowActorResolutionResult(
                     null,
                     workflowNameForRun,
-                    WorkflowChatRunStartError.InvalidWorkflowYaml,
+                    draftAdmission.FailureDetail.Error,
                     draftAdmission.FailureDetail);
             }
 
@@ -296,7 +296,8 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
                 SourceKind: sourceBinding.SourceKind,
                 CapabilityAdmissionPlan: sourceBinding.CapabilityAdmissionPlan?.Clone(),
                 WorkflowId: sourceBinding.WorkflowId,
-                RevisionId: sourceBinding.RevisionId),
+                RevisionId: sourceBinding.RevisionId,
+                DefinitionVersion: ResolveDefinitionVersionForExecution(sourceBinding)),
             wrapAsFallbackTrigger: true,
             ct);
 
@@ -373,7 +374,8 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
                 SourceKind: resolvedDefinitionBinding.SourceKind?.Trim() ?? string.Empty,
                 CapabilityAdmissionPlan: resolvedDefinitionBinding.CapabilityAdmissionPlan?.Clone(),
                 WorkflowId: resolvedDefinitionBinding.WorkflowId?.Trim() ?? string.Empty,
-                RevisionId: resolvedDefinitionBinding.RevisionId?.Trim() ?? string.Empty),
+                RevisionId: resolvedDefinitionBinding.RevisionId?.Trim() ?? string.Empty,
+                DefinitionVersion: Math.Max(0, resolvedDefinitionBinding.DefinitionVersion)),
             wrapAsFallbackTrigger: false,
             ct);
 
@@ -461,6 +463,11 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
         return registryDefinition?.DefinitionActorId ?? string.Empty;
     }
 
+    private static long ResolveDefinitionVersionForExecution(WorkflowActorBinding sourceBinding) =>
+        sourceBinding.ActorKind == WorkflowActorKind.Definition
+            ? Math.Max(0, sourceBinding.SourceVersion)
+            : 0;
+
     private static string ResolveScopeId(string? scopeId) =>
         string.IsNullOrWhiteSpace(scopeId) ? string.Empty : scopeId.Trim();
 
@@ -487,7 +494,8 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
                     request.CommandIdSeed ?? string.Empty,
                     request.CallerCredential,
                     workflowYaml,
-                    inlineWorkflowYamls),
+                    inlineWorkflowYamls,
+                    request.CallerNyxIdCredentialSelection),
                 ct);
             return new DraftRunCapabilityAdmissionPreparation(admission, null);
         }
@@ -496,7 +504,7 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
             return new DraftRunCapabilityAdmissionPreparation(
                 null,
                 WorkflowChatRunStartFailureDetail.Create(
-                    WorkflowChatRunStartError.InvalidWorkflowYaml,
+                    WorkflowChatRunStartError.ExternalCapabilityNotReady,
                     ex.Message,
                     ex.Readiness));
         }

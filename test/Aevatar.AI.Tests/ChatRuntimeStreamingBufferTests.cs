@@ -1779,7 +1779,11 @@ public sealed class ChatRuntimeStreamingBufferTests
         await foreach (var chunk in runtime.ChatStreamAsync("hello", turnCatalog: null))
             chunks.Add(chunk);
 
-        chunks.Should().BeEmpty();
+        chunks.Should().NotBeEmpty();
+        chunks.Should().OnlyContain(chunk =>
+            chunk.LLMInvocationStarted != null || chunk.LLMInvocationCompleted != null);
+        chunks.Should().Contain(chunk => chunk.LLMInvocationStarted != null);
+        chunks.Should().Contain(chunk => chunk.LLMInvocationCompleted != null);
     }
 
     private static bool IsSafeRejectedToolFailure(ChatMessage message, string toolName) =>

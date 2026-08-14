@@ -4,6 +4,7 @@ using System.Linq;
 using System.Net.Http;
 using System.Threading.Tasks;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Abstractions.CodeExecution;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
@@ -26,7 +27,8 @@ public class NyxIdAgentToolSourceHumanSessionGatingTests
         "nyxid_account", "nyxid_profile", "nyxid_mfa", "nyxid_sessions", "nyxid_api_keys",
         "nyxid_external_keys", "nyxid_nodes", "nyxid_endpoints", "nyxid_notifications",
         "nyxid_providers", "nyxid_orgs", "nyxid_admin", "nyxid_channel_bots", "nyxid_status",
-        "nyxid_services", "nyxid_approvals",
+        "nyxid_services", "nyxid_approvals", "nyxid_request_key_create",
+        "nyxid_request_key_rotate",
     };
 
     private static readonly HashSet<string> RelaySafeTools = new(StringComparer.Ordinal)
@@ -40,7 +42,8 @@ public class NyxIdAgentToolSourceHumanSessionGatingTests
     {
         var source = new NyxIdAgentToolSource(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
-            new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example" }, new HttpClient()));
+            new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example" }, new HttpClient()),
+            codeExecutionPorts: [new StubCodeExecutionPort()]);
 
         var tools = await source.DiscoverToolsAsync();
 
@@ -57,9 +60,27 @@ public class NyxIdAgentToolSourceHumanSessionGatingTests
 
         tools.Select(t => t.Name).Should().Contain(HumanSessionOnlyTools);
         tools.Select(t => t.Name).Should().Contain(RelaySafeTools);
+
+        var channelEvents = tools.Single(tool => tool.Name == "nyxid_channel_events");
+        channelEvents.Should().BeAssignableTo<IAgentToolCapabilityDescriptor>()
+            .Which.Capabilities.Should().Contain(AgentToolCapabilities.ExcludeFromNyxIdChat,
+                "channel-event mutation is Class X on the Assistant surface even though it remains relay-safe");
     }
 
     private static bool DeclaresHumanSession(IAgentTool tool) =>
         tool is IAgentToolCapabilityDescriptor descriptor &&
         descriptor.Capabilities.Contains(AgentToolCapabilities.RequiresHumanSession);
+
+    private sealed class StubCodeExecutionPort : ICodeExecutionPort
+    {
+        public Task<CodeExecutionOutcome> ExecuteAsync(
+            CodeExecutionRequest request,
+            CancellationToken ct = default) =>
+            Task.FromResult(CodeExecutionOutcome.Succeeded(
+                new CodeExecutionResult(string.Empty, string.Empty, 0),
+                new CodeExecutionRouteIdentity(
+                    "chrono-sandbox",
+                    "svc-code-alpha",
+                    CodeExecutionRouteIdentitySource.NyxIdUserServiceCatalog)));
+    }
 }

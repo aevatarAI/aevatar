@@ -19,8 +19,9 @@ public sealed class StudioMemberBindingRunGAgentStateTests
     [Theory]
     [InlineData(nameof(StudioMemberBindingRunGAgent.HandleAdmissionWatchdogFired))]
     [InlineData(nameof(StudioMemberBindingRunGAgent.HandlePlatformBindingWatchdogFired))]
-    [InlineData(nameof(StudioMemberBindingRunGAgent.HandlePlatformBindingReadinessTimedOut))]
-    [InlineData(nameof(StudioMemberBindingRunGAgent.HandlePlatformBindingFailed))]
+    [InlineData(nameof(StudioMemberBindingRunGAgent.HandlePlatformBindingCommandsCompleted))]
+    [InlineData(nameof(StudioMemberBindingRunGAgent.HandlePlatformBindingReadinessObservationTimedOut))]
+    [InlineData(nameof(StudioMemberBindingRunGAgent.HandlePlatformBindingExecutionFailed))]
     public void PlatformBindingContinuationHandlers_ShouldAllowSelfHandling(string handlerName)
     {
         var handler = typeof(StudioMemberBindingRunGAgent).GetMethod(handlerName)
@@ -169,16 +170,193 @@ public sealed class StudioMemberBindingRunGAgentStateTests
         var requested = _agent.Apply(new StudioMemberBindingRunState(), NewRequested());
         var admitted = ApplyAdmitted(requested);
 
-        var pending = _agent.Apply(admitted, new StudioMemberPlatformBindingStartRequested
+        var pending = _agent.Apply(admitted, new StudioMemberPlatformBindingExecutionStartRequested
         {
             BindingRunId = "bind-1",
             PlatformBindingCommandId = "platform-bind-1",
             RequestedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(1)),
+            ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+            ExecutionAttempt = 0,
         });
 
         pending.Status.Should().Be(StudioMemberBindingRunStatus.PlatformBindingPending);
         pending.PlatformBindingCommandId.Should().Be("platform-bind-1");
+        pending.PlatformBindingProtocolVersion.Should().Be(StudioMemberConventions.PlatformBindingProtocolVersion);
+        pending.PlatformExecutionAttempt.Should().Be(0);
+        pending.PlatformExecutionStage.Should().Be(StudioMemberPlatformBindingExecutionStage.AcceptancePending);
         pending.AttemptCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task HandlePlatformBindingStartRequested_ShouldAtomicallyCommitLegacyRollbackFenceBeforePortCall()
+    {
+        var requested = _agent.Apply(new StudioMemberBindingRunState(), NewRequested());
+        var admitted = ApplyAdmitted(requested);
+        var publisher = new RecordingEventPublisher();
+        var platformPort = new RecordingPlatformBindingCommandPort();
+        var eventSourcing = new RecordingEventSourcing(admitted);
+        var agent = NewHandlerAgent(
+            admitted,
+            publisher,
+            platformPort: platformPort,
+            eventSourcing: eventSourcing);
+        var start = new StudioMemberPlatformBindingExecutionStartRequested
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-1",
+            Request = requested.Request.Clone(),
+            Admitted = admitted.Admitted.Clone(),
+            RequestedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+            ExecutionAttempt = 0,
+        };
+
+        await agent.HandlePlatformBindingStartRequested(start);
+
+        var batch = eventSourcing.CommittedBatches.Should().ContainSingle().Subject;
+        batch.Should().HaveCount(3);
+        batch[0].Should().BeOfType<StudioMemberPlatformBindingExecutionStartRequested>();
+        batch[1].Should().BeOfType<StudioMemberPlatformBindingStartRequested>();
+        var legacyStarted = batch[2].Should()
+            .BeOfType<StudioMemberPlatformBindingExecutionStarted>().Subject;
+        legacyStarted.StartedAtUtc.ToDateTimeOffset().Year.Should().Be(9999);
+        platformPort.StartRequests.Should().ContainSingle();
+
+        var legacyEvents = NewLegacyPlatformEventPrefix().Take(2).Concat(batch);
+        var legacyState = ReplayAsDfe98c8Reader(legacyEvents);
+        legacyState.Status.Should().Be(StudioMemberBindingRunStatus.PlatformBindingPending);
+        legacyState.PlatformExecutionInFlight.Should().BeTrue();
+        legacyState.PlatformExecutionStartedAtUtc!.ToDateTimeOffset().Year.Should().Be(9999);
+        LegacyReaderWouldRecoverPlatformCommand(legacyState).Should().BeFalse();
+    }
+
+    [Fact]
+    public void ProtocolOneCommittedCutPoints_ShouldKeepDfe98c8ReaderBehindLegacyRollbackFence()
+    {
+        var requested = NewRequested();
+        var admitted = new StudioMemberBindingAdmittedEvent
+        {
+            BindingRunId = "bind-1",
+            ScopeId = "scope-1",
+            MemberId = "m-1",
+            PublishedServiceId = "member-m-1",
+            ImplementationKind = StudioMemberImplementationKind.Script,
+            DisplayName = "Script member",
+            AdmittedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
+        var protocolOneStart = new StudioMemberPlatformBindingExecutionStartRequested
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-1",
+            Request = requested.Request.Clone(),
+            Admitted = new StudioMemberBindingAdmittedSnapshot
+            {
+                MemberId = "m-1",
+                ScopeId = "scope-1",
+                PublishedServiceId = "member-m-1",
+                ImplementationKind = StudioMemberImplementationKind.Script,
+                DisplayName = "Script member",
+            },
+            RequestedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+            ExecutionAttempt = 0,
+        };
+        var committed = new List<IMessage>
+        {
+            requested,
+            admitted,
+            protocolOneStart,
+            new StudioMemberPlatformBindingStartRequested
+            {
+                BindingRunId = "bind-1",
+                PlatformBindingCommandId = "platform-1",
+                Request = protocolOneStart.Request.Clone(),
+                Admitted = protocolOneStart.Admitted.Clone(),
+                RequestedAtUtc = protocolOneStart.RequestedAtUtc.Clone(),
+            },
+            new StudioMemberPlatformBindingExecutionStarted
+            {
+                BindingRunId = "bind-1",
+                PlatformBindingCommandId = "platform-1",
+                StartedAtUtc = NewLegacyExecutionFenceTimestamp(),
+            },
+        };
+        var laterCutPoints = new IMessage[]
+        {
+            new StudioMemberPlatformBindingExecutionStartAccepted
+            {
+                BindingRunId = "bind-1",
+                PlatformBindingCommandId = "platform-1",
+                AcceptedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+                ExecutionAttempt = 0,
+            },
+            new StudioMemberPlatformBindingStageStarted
+            {
+                BindingRunId = "bind-1",
+                PlatformBindingCommandId = "platform-1",
+                ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+                ExecutionAttempt = 1,
+                ExecutionStage = StudioMemberPlatformBindingExecutionStage.CommandInFlight,
+                StageStartedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            },
+            NewCommandsCompleted(),
+            new StudioMemberPlatformBindingStageStarted
+            {
+                BindingRunId = "bind-1",
+                PlatformBindingCommandId = "platform-1",
+                ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+                ExecutionAttempt = 2,
+                ExecutionStage = StudioMemberPlatformBindingExecutionStage.ReadinessInFlight,
+                StageStartedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            },
+            new StudioMemberPlatformBindingReadinessObservationTimedOut
+            {
+                BindingRunId = "bind-1",
+                PlatformBindingCommandId = "platform-1",
+                ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+                ExecutionAttempt = 2,
+                TimedOutAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            },
+            new StudioMemberPlatformBindingStageStarted
+            {
+                BindingRunId = "bind-1",
+                PlatformBindingCommandId = "platform-1",
+                ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+                ExecutionAttempt = 3,
+                ExecutionStage = StudioMemberPlatformBindingExecutionStage.ReadinessInFlight,
+                StageStartedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            },
+        };
+
+        AssertDfe98c8ReaderRemainsFenced(committed, "v1 start fence");
+        foreach (var cutPoint in laterCutPoints)
+        {
+            committed.Add(cutPoint);
+            AssertDfe98c8ReaderRemainsFenced(committed, cutPoint.Descriptor.Name);
+        }
+
+        foreach (var terminal in new IMessage[]
+        {
+            NewExecutionSucceeded(3),
+            new StudioMemberPlatformBindingExecutionFailed
+            {
+                BindingRunId = "bind-1",
+                PlatformBindingCommandId = "platform-1",
+                ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+                ExecutionAttempt = 3,
+                ExecutionStage = StudioMemberPlatformBindingExecutionStage.ReadinessInFlight,
+                Failure = new StudioMemberBindingFailure
+                {
+                    Code = "READINESS_FAILED",
+                    Message = "synthetic terminal failure",
+                    FailedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                },
+            },
+        })
+        {
+            AssertDfe98c8ReaderRemainsFenced(committed.Append(terminal), terminal.Descriptor.Name);
+        }
     }
 
     [Fact]
@@ -186,11 +364,13 @@ public sealed class StudioMemberBindingRunGAgentStateTests
     {
         var pending = NewPlatformPendingState();
 
-        var afterDuplicateStart = _agent.Apply(pending, new StudioMemberPlatformBindingStartRequested
+        var afterDuplicateStart = _agent.Apply(pending, new StudioMemberPlatformBindingExecutionStartRequested
         {
             BindingRunId = "bind-1",
             PlatformBindingCommandId = "platform-2",
             RequestedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(10)),
+            ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+            ExecutionAttempt = 0,
         });
 
         afterDuplicateStart.Status.Should().Be(StudioMemberBindingRunStatus.PlatformBindingPending);
@@ -206,11 +386,13 @@ public sealed class StudioMemberBindingRunGAgentStateTests
         var platformPort = new RecordingPlatformBindingCommandPort();
         var agent = NewHandlerAgent(pending, publisher, platformPort: platformPort);
 
-        await agent.HandlePlatformBindingStartRequested(new StudioMemberPlatformBindingStartRequested
+        await agent.HandlePlatformBindingStartRequested(new StudioMemberPlatformBindingExecutionStartRequested
         {
             BindingRunId = "bind-1",
             PlatformBindingCommandId = "platform-2",
             RequestedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(10)),
+            ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+            ExecutionAttempt = 0,
         });
 
         platformPort.StartRequests.Should().BeEmpty();
@@ -241,14 +423,16 @@ public sealed class StudioMemberBindingRunGAgentStateTests
     [Fact]
     public void PlatformSucceeded_ShouldRecordTerminalResult()
     {
-        var accepted = NewPlatformPendingState();
+        var accepted = NewReadinessInFlightState(DateTimeOffset.UtcNow.AddSeconds(-1));
         var completedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(2));
 
-        var succeeded = _agent.Apply(accepted, new StudioMemberPlatformBindingSucceeded
+        var succeeded = _agent.Apply(accepted, new StudioMemberPlatformBindingExecutionSucceeded
         {
             BindingRunId = "bind-1",
             PlatformBindingCommandId = "platform-1",
             CompletedAtUtc = completedAt,
+            ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+            ExecutionAttempt = 2,
             Result = new StudioMemberPlatformBindingResult
             {
                 PublishedServiceId = "member-m-1",
@@ -260,17 +444,27 @@ public sealed class StudioMemberBindingRunGAgentStateTests
 
         succeeded.Status.Should().Be(StudioMemberBindingRunStatus.MemberNotificationPending);
         succeeded.PlatformResult.RevisionId.Should().Be("rev-1");
+        succeeded.PlatformBindingRecoverySnapshot.Should().BeNull();
+        succeeded.PlatformExecutionStage.Should()
+            .Be(StudioMemberPlatformBindingExecutionStage.Unspecified);
+        succeeded.PlatformExecutionInFlight.Should().BeFalse();
+        succeeded.PlatformExecutionStartedAtUtc.Should().BeNull();
+        succeeded.PlatformExecutionStageStartedAtUtc.Should().BeNull();
         succeeded.UpdatedAtUtc.Should().Be(completedAt);
     }
 
     [Fact]
     public void MemberTerminalAcknowledged_AfterPlatformSuccess_ShouldMarkRunSucceeded()
     {
-        var pendingNotification = _agent.Apply(NewPlatformPendingState(), new StudioMemberPlatformBindingSucceeded
+        var pendingNotification = _agent.Apply(
+            NewReadinessInFlightState(DateTimeOffset.UtcNow.AddSeconds(-1)),
+            new StudioMemberPlatformBindingExecutionSucceeded
         {
             BindingRunId = "bind-1",
             PlatformBindingCommandId = "platform-1",
             CompletedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(2)),
+            ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+            ExecutionAttempt = 2,
             Result = new StudioMemberPlatformBindingResult
             {
                 PublishedServiceId = "member-m-1",
@@ -295,13 +489,15 @@ public sealed class StudioMemberBindingRunGAgentStateTests
     [Fact]
     public void PlatformSucceeded_WithDifferentCommandId_ShouldBeIgnored()
     {
-        var accepted = NewPlatformPendingState();
+        var accepted = NewReadinessInFlightState(DateTimeOffset.UtcNow.AddSeconds(-1));
 
-        var stale = _agent.Apply(accepted, new StudioMemberPlatformBindingSucceeded
+        var stale = _agent.Apply(accepted, new StudioMemberPlatformBindingExecutionSucceeded
         {
             BindingRunId = "bind-1",
             PlatformBindingCommandId = "platform-stale",
             CompletedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(2)),
+            ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+            ExecutionAttempt = 2,
             Result = new StudioMemberPlatformBindingResult
             {
                 PublishedServiceId = "member-m-1",
@@ -317,13 +513,16 @@ public sealed class StudioMemberBindingRunGAgentStateTests
     [Fact]
     public void PlatformFailed_ShouldRecordTerminalFailure()
     {
-        var accepted = NewPlatformPendingState();
+        var accepted = NewInFlightState(DateTimeOffset.UtcNow.AddSeconds(-1));
         var failedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(2));
 
-        var failed = _agent.Apply(accepted, new StudioMemberPlatformBindingFailed
+        var failed = _agent.Apply(accepted, new StudioMemberPlatformBindingExecutionFailed
         {
             BindingRunId = "bind-1",
             PlatformBindingCommandId = "platform-1",
+            ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+            ExecutionAttempt = 1,
+            ExecutionStage = StudioMemberPlatformBindingExecutionStage.CommandInFlight,
             Failure = new StudioMemberBindingFailure
             {
                 Code = "SCOPE_BINDING_FAILED",
@@ -334,24 +533,34 @@ public sealed class StudioMemberBindingRunGAgentStateTests
 
         failed.Status.Should().Be(StudioMemberBindingRunStatus.MemberNotificationPending);
         failed.Failure.Code.Should().Be("SCOPE_BINDING_FAILED");
+        failed.PlatformBindingRecoverySnapshot.Should().BeNull();
+        failed.PlatformExecutionInFlight.Should().BeFalse();
+        failed.PlatformExecutionStartedAtUtc.Should().BeNull();
+        failed.PlatformExecutionStageStartedAtUtc.Should().BeNull();
         failed.UpdatedAtUtc.Should().Be(failedAt);
     }
 
     [Fact]
-    public void PlatformExecutionStarted_ShouldMarkExecutionInFlight()
+    public void PlatformExecutionStarted_ShouldRecordTypedTimestampAndLegacyFence()
     {
         var accepted = NewPlatformPendingState();
         var startedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(2));
 
-        var started = _agent.Apply(accepted, new StudioMemberPlatformBindingExecutionStarted
+        var started = _agent.Apply(accepted, new StudioMemberPlatformBindingStageStarted
         {
             BindingRunId = "bind-1",
             PlatformBindingCommandId = "platform-1",
-            StartedAtUtc = startedAt,
+            ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+            ExecutionAttempt = 1,
+            ExecutionStage = StudioMemberPlatformBindingExecutionStage.CommandInFlight,
+            StageStartedAtUtc = startedAt,
         });
 
+        started.PlatformExecutionStage.Should().Be(StudioMemberPlatformBindingExecutionStage.CommandInFlight);
+        started.PlatformExecutionAttempt.Should().Be(1);
+        started.PlatformExecutionStageStartedAtUtc.Should().Be(startedAt);
         started.PlatformExecutionInFlight.Should().BeTrue();
-        started.PlatformExecutionStartedAtUtc.Should().Be(startedAt);
+        started.PlatformExecutionStartedAtUtc!.ToDateTimeOffset().Year.Should().Be(9999);
         started.UpdatedAtUtc.Should().Be(startedAt);
     }
 
@@ -361,16 +570,20 @@ public sealed class StudioMemberBindingRunGAgentStateTests
         var startedAt = DateTimeOffset.UtcNow.AddSeconds(-10);
         var inFlight = NewInFlightState(startedAt);
 
-        var afterDuplicateAccepted = _agent.Apply(inFlight, new StudioMemberPlatformBindingAccepted
+        var afterDuplicateAccepted = _agent.Apply(inFlight, new StudioMemberPlatformBindingExecutionStartAccepted
         {
             BindingRunId = "bind-1",
             PlatformBindingCommandId = "platform-1",
             AcceptedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+            ExecutionAttempt = 0,
         });
 
-        afterDuplicateAccepted.PlatformExecutionInFlight.Should().BeTrue();
-        afterDuplicateAccepted.PlatformExecutionStartedAtUtc.Should()
+        afterDuplicateAccepted.PlatformExecutionStage.Should()
+            .Be(StudioMemberPlatformBindingExecutionStage.CommandInFlight);
+        afterDuplicateAccepted.PlatformExecutionStageStartedAtUtc.Should()
             .Be(Timestamp.FromDateTimeOffset(startedAt));
+        afterDuplicateAccepted.PlatformExecutionStartedAtUtc!.ToDateTimeOffset().Year.Should().Be(9999);
         afterDuplicateAccepted.PlatformBindingCommandId.Should().Be("platform-1");
     }
 
@@ -382,11 +595,13 @@ public sealed class StudioMemberBindingRunGAgentStateTests
         var scheduler = new RecordingRuntimeCallbackScheduler();
         var agent = NewHandlerAgent(inFlight, publisher, scheduler);
 
-        await agent.HandlePlatformBindingAccepted(new StudioMemberPlatformBindingAccepted
+        await agent.HandlePlatformBindingAccepted(new StudioMemberPlatformBindingExecutionStartAccepted
         {
             BindingRunId = "bind-1",
             PlatformBindingCommandId = "platform-1",
             AcceptedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+            ExecutionAttempt = 0,
         });
 
         scheduler.Timeouts.Should().BeEmpty();
@@ -401,35 +616,40 @@ public sealed class StudioMemberBindingRunGAgentStateTests
         var scheduler = new RecordingRuntimeCallbackScheduler();
         var agent = NewHandlerAgent(state, publisher, scheduler);
 
-        await agent.HandlePlatformBindingWatchdogFired(new StudioMemberPlatformBindingWatchdogFired
+        await agent.HandlePlatformBindingWatchdogFired(new StudioMemberPlatformBindingExecutionWatchdogFired
         {
             BindingRunId = "bind-1",
             PlatformBindingCommandId = "platform-1",
+            ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+            ExpectedExecutionAttempt = 1,
         });
 
         publisher.SentMessages.Should().BeEmpty();
         var callback = scheduler.Timeouts.Should().ContainSingle().Subject;
-        callback.CallbackId.Should().Be("studio-member-binding-watchdog:bind-1:platform-1");
+        callback.CallbackId.Should().Be("studio-member-binding-watchdog:v1:a1:bind-1:platform-1");
     }
 
     [Fact]
-    public async Task HandlePlatformBindingWatchdogFired_WhenInFlightIsStale_ShouldReexecuteAsRecovery()
+    public async Task HandlePlatformBindingWatchdogFired_WhenCommandIsStale_ShouldFailClosed()
     {
         var state = NewInFlightState(DateTimeOffset.UtcNow.AddMinutes(-3));
         var publisher = new RecordingEventPublisher();
-        var agent = NewHandlerAgent(state, publisher);
+        var eventSourcing = new RecordingEventSourcing(state);
+        var agent = NewHandlerAgent(state, publisher, eventSourcing: eventSourcing);
 
-        await agent.HandlePlatformBindingWatchdogFired(new StudioMemberPlatformBindingWatchdogFired
+        await agent.HandlePlatformBindingWatchdogFired(new StudioMemberPlatformBindingExecutionWatchdogFired
         {
             BindingRunId = "bind-1",
             PlatformBindingCommandId = "platform-1",
+            ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+            ExpectedExecutionAttempt = 1,
         });
 
-        var retry = publisher.SentMessages.Should().ContainSingle().Subject.Event
-            .Should().BeOfType<StudioMemberPlatformBindingExecuteRequested>().Subject;
-        retry.BindingRunId.Should().Be("bind-1");
-        retry.PlatformBindingCommandId.Should().Be("platform-1");
-        retry.RecoveryExecution.Should().BeTrue();
+        var failed = eventSourcing.CommittedEvents.OfType<StudioMemberPlatformBindingExecutionFailed>()
+            .Should().ContainSingle().Subject;
+        failed.Failure.Code.Should().Be("STUDIO_MEMBER_PLATFORM_BINDING_CHECKPOINT_UNAVAILABLE");
+        failed.ExecutionAttempt.Should().Be(1);
+        failed.ExecutionStage.Should().Be(StudioMemberPlatformBindingExecutionStage.CommandInFlight);
     }
 
     [Fact]
@@ -439,78 +659,171 @@ public sealed class StudioMemberBindingRunGAgentStateTests
         var publisher = new RecordingEventPublisher();
         var scheduler = new RecordingRuntimeCallbackScheduler();
         var platformPort = new RecordingPlatformBindingCommandPort();
-        var agent = NewHandlerAgent(state, publisher, scheduler, platformPort);
+        var eventSourcing = new RecordingEventSourcing(state);
+        var agent = NewHandlerAgent(state, publisher, scheduler, platformPort, eventSourcing);
 
-        await agent.HandlePlatformBindingExecuteRequested(new StudioMemberPlatformBindingExecuteRequested
+        await agent.HandlePlatformBindingExecuteRequested(new StudioMemberPlatformBindingStageExecuteRequested
         {
             BindingRunId = "bind-1",
             PlatformBindingCommandId = "platform-1",
+            ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+            ExpectedExecutionAttempt = 0,
         });
 
         platformPort.ExecuteRequests.Should().ContainSingle();
+        platformPort.ExecuteRequests[0].ExecutionAttempt.Should().Be(1);
+        platformPort.ExecuteRequests[0].ExecutionStage.Should()
+            .Be(StudioMemberPlatformBindingExecutionStage.CommandInFlight);
+        platformPort.ExecuteRequests[0].RecoverySnapshot.Should().BeNull();
+        var started = eventSourcing.CommittedEvents.Should().ContainSingle()
+            .Which.Should().BeOfType<StudioMemberPlatformBindingStageStarted>().Subject;
+        started.StageStartedAtUtc.Should().NotBeNull();
+        var committedState = StudioMemberBindingRunStateSetter.Get(agent);
+        committedState.PlatformExecutionStartedAtUtc!.ToDateTimeOffset().Year.Should().Be(9999);
         publisher.SentMessages.Should().BeEmpty();
         scheduler.Timeouts.Should().ContainSingle(request =>
-            request.CallbackId == "studio-member-binding-watchdog:bind-1:platform-1");
+            request.CallbackId == "studio-member-binding-watchdog:v1:a1:bind-1:platform-1");
     }
 
     [Fact]
-    public async Task HandlePlatformBindingReadinessTimedOut_ShouldRemainPendingAndScheduleWatchdog()
+    public async Task HandlePlatformBindingReadinessObservationTimedOut_ShouldRemainPendingAndScheduleWatchdog()
     {
-        var state = NewInFlightState(DateTimeOffset.UtcNow.AddSeconds(-10));
+        var state = NewReadinessInFlightState(DateTimeOffset.UtcNow.AddSeconds(-10));
         var timedOutAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(1));
-        var afterTimeout = _agent.Apply(state, new StudioMemberPlatformBindingReadinessTimedOut
+        var afterTimeout = _agent.Apply(state, new StudioMemberPlatformBindingReadinessObservationTimedOut
         {
             BindingRunId = "bind-1",
             PlatformBindingCommandId = "platform-1",
             ReadinessStatus = StudioMemberPlatformBindingReadinessStatus.ServingSetMissing,
             TimedOutAtUtc = timedOutAt,
+            ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+            ExecutionAttempt = 2,
         });
         var publisher = new RecordingEventPublisher();
         var scheduler = new RecordingRuntimeCallbackScheduler();
         var agent = NewHandlerAgent(state, publisher, scheduler);
 
-        await agent.HandlePlatformBindingReadinessTimedOut(new StudioMemberPlatformBindingReadinessTimedOut
+        await agent.HandlePlatformBindingReadinessObservationTimedOut(
+            new StudioMemberPlatformBindingReadinessObservationTimedOut
         {
             BindingRunId = "bind-1",
             PlatformBindingCommandId = "platform-1",
             ReadinessStatus = StudioMemberPlatformBindingReadinessStatus.ServingSetMissing,
             TimedOutAtUtc = timedOutAt,
+            ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+            ExecutionAttempt = 2,
         });
 
         afterTimeout.Status.Should().Be(StudioMemberBindingRunStatus.PlatformBindingPending);
-        afterTimeout.PlatformExecutionInFlight.Should().BeFalse();
-        afterTimeout.PlatformExecutionStartedAtUtc.Should().BeNull();
+        afterTimeout.PlatformExecutionStage.Should().Be(StudioMemberPlatformBindingExecutionStage.ReadinessPending);
+        afterTimeout.PlatformExecutionStageStartedAtUtc.Should().BeNull();
+        afterTimeout.PlatformExecutionInFlight.Should().BeTrue();
+        afterTimeout.PlatformExecutionStartedAtUtc!.ToDateTimeOffset().Year.Should().Be(9999);
+        afterTimeout.PlatformBindingRecoverySnapshot.Should().BeEquivalentTo(NewRecoverySnapshot());
         afterTimeout.UpdatedAtUtc.Should().Be(timedOutAt);
         publisher.SentMessages.Should().BeEmpty();
         scheduler.Timeouts.Should().ContainSingle(request =>
-            request.CallbackId == "studio-member-binding-watchdog:bind-1:platform-1");
+            request.CallbackId == "studio-member-binding-watchdog:v1:a2:bind-1:platform-1");
     }
 
     [Fact]
     public async Task HandlePlatformBindingWatchdogFired_AfterReadinessTimeout_ShouldRetryExecution()
     {
-        var state = NewInFlightState(DateTimeOffset.UtcNow.AddSeconds(-10));
-        var afterTimeout = _agent.Apply(state, new StudioMemberPlatformBindingReadinessTimedOut
+        var state = NewReadinessInFlightState(DateTimeOffset.UtcNow.AddSeconds(-10));
+        var afterTimeout = _agent.Apply(state, new StudioMemberPlatformBindingReadinessObservationTimedOut
         {
             BindingRunId = "bind-1",
             PlatformBindingCommandId = "platform-1",
             ReadinessStatus = StudioMemberPlatformBindingReadinessStatus.ServingSetMissing,
             TimedOutAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+            ExecutionAttempt = 2,
         });
         var publisher = new RecordingEventPublisher();
         var agent = NewHandlerAgent(afterTimeout, publisher);
 
-        await agent.HandlePlatformBindingWatchdogFired(new StudioMemberPlatformBindingWatchdogFired
+        await agent.HandlePlatformBindingWatchdogFired(new StudioMemberPlatformBindingExecutionWatchdogFired
         {
             BindingRunId = "bind-1",
             PlatformBindingCommandId = "platform-1",
+            ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+            ExpectedExecutionAttempt = 2,
         });
 
         var retry = publisher.SentMessages.Should().ContainSingle().Subject.Event
-            .Should().BeOfType<StudioMemberPlatformBindingExecuteRequested>().Subject;
+            .Should().BeOfType<StudioMemberPlatformBindingStageExecuteRequested>().Subject;
         retry.BindingRunId.Should().Be("bind-1");
         retry.PlatformBindingCommandId.Should().Be("platform-1");
-        retry.RecoveryExecution.Should().BeFalse();
+        retry.ProtocolVersion.Should().Be(StudioMemberConventions.PlatformBindingProtocolVersion);
+        retry.ExpectedExecutionAttempt.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task HandlePlatformBindingExecuteRequested_AfterReadinessTimeout_ShouldPassRecoverySnapshot()
+    {
+        var recoverySnapshot = NewRecoverySnapshot();
+        var afterTimeout = _agent.Apply(
+            NewReadinessInFlightState(DateTimeOffset.UtcNow.AddSeconds(-10)),
+            new StudioMemberPlatformBindingReadinessObservationTimedOut
+            {
+                BindingRunId = "bind-1",
+                PlatformBindingCommandId = "platform-1",
+                ReadinessStatus = StudioMemberPlatformBindingReadinessStatus.ServingSetMissing,
+                TimedOutAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+                ExecutionAttempt = 2,
+            });
+        var platformPort = new RecordingPlatformBindingCommandPort();
+        var agent = NewHandlerAgent(afterTimeout, new RecordingEventPublisher(), platformPort: platformPort);
+
+        await agent.HandlePlatformBindingExecuteRequested(new StudioMemberPlatformBindingStageExecuteRequested
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-1",
+            ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+            ExpectedExecutionAttempt = 2,
+        });
+
+        platformPort.ExecuteRequests.Should().ContainSingle().Which.RecoverySnapshot
+            .Should().BeEquivalentTo(recoverySnapshot);
+        platformPort.ExecuteRequests[0].ExecutionAttempt.Should().Be(3);
+        platformPort.ExecuteRequests[0].ExecutionStage.Should()
+            .Be(StudioMemberPlatformBindingExecutionStage.ReadinessInFlight);
+    }
+
+    [Fact]
+    public async Task ActivateAsync_AfterReadinessTimeout_ShouldRestoreReadinessRecoveryExecution()
+    {
+        var recoverySnapshot = NewRecoverySnapshot();
+        var afterTimeout = _agent.Apply(
+            NewReadinessInFlightState(DateTimeOffset.UtcNow.AddSeconds(-10)),
+            new StudioMemberPlatformBindingReadinessObservationTimedOut
+            {
+                BindingRunId = "bind-1",
+                PlatformBindingCommandId = "platform-1",
+                ReadinessStatus = StudioMemberPlatformBindingReadinessStatus.ServingSetMissing,
+                TimedOutAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+                ExecutionAttempt = 2,
+            });
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var platformPort = new RecordingPlatformBindingCommandPort();
+        var agent = NewHandlerAgent(
+            afterTimeout,
+            new RecordingEventPublisher(),
+            scheduler,
+            platformPort);
+
+        await agent.ActivateAsync();
+
+        var execute = scheduler.Timeouts.Should().ContainSingle(request =>
+                request.CallbackId == "studio-member-binding-execute:v1:a2:bind-1:platform-1")
+            .Subject.TriggerEnvelope.Payload.Unpack<StudioMemberPlatformBindingStageExecuteRequested>();
+        execute.ExpectedExecutionAttempt.Should().Be(2);
+
+        await agent.HandlePlatformBindingExecuteRequested(execute);
+        platformPort.ExecuteRequests.Should().ContainSingle().Which.RecoverySnapshot
+            .Should().BeEquivalentTo(recoverySnapshot);
     }
 
     [Fact]
@@ -525,30 +838,689 @@ public sealed class StudioMemberBindingRunGAgentStateTests
 
         publisher.SentMessages.Should().BeEmpty();
         var callback = scheduler.Timeouts.Should().ContainSingle().Subject;
-        callback.CallbackId.Should().Be("studio-member-binding-watchdog:bind-1:platform-1");
+        callback.CallbackId.Should().Be("studio-member-binding-watchdog:v1:a1:bind-1:platform-1");
         callback.TriggerEnvelope.Payload
-            .Unpack<StudioMemberPlatformBindingWatchdogFired>()
+            .Unpack<StudioMemberPlatformBindingExecutionWatchdogFired>()
             .PlatformBindingCommandId.Should().Be("platform-1");
     }
 
     [Fact]
-    public async Task ActivateAsync_WhenInFlightIsStale_ShouldScheduleRecoveryExecute()
+    public async Task ActivateAsync_WhenCommandInFlightIsStale_ShouldFailClosed()
     {
         var state = NewInFlightState(DateTimeOffset.UtcNow.AddMinutes(-3));
         var publisher = new RecordingEventPublisher();
         var scheduler = new RecordingRuntimeCallbackScheduler();
-        var agent = NewHandlerAgent(state, publisher, scheduler);
+        var eventSourcing = new RecordingEventSourcing(state);
+        var agent = NewHandlerAgent(state, publisher, scheduler, eventSourcing: eventSourcing);
 
         await agent.ActivateAsync();
 
-        var callback = scheduler.Timeouts.Should()
-            .ContainSingle(request => request.CallbackId == "studio-member-binding-execute:bind-1:platform-1")
-            .Subject;
-        var execute = callback.TriggerEnvelope.Payload.Unpack<StudioMemberPlatformBindingExecuteRequested>();
-        execute.PlatformBindingCommandId.Should().Be("platform-1");
-        execute.RecoveryExecution.Should().BeTrue();
-        publisher.SentMessages.Should().ContainSingle(message =>
-            message.Event is StudioMemberBindingPlatformPendingEvent);
+        scheduler.Timeouts.Should().BeEmpty();
+        var failed = eventSourcing.CommittedEvents.OfType<StudioMemberPlatformBindingExecutionFailed>()
+            .Should().ContainSingle().Subject;
+        failed.Failure.Code.Should().Be("STUDIO_MEMBER_PLATFORM_BINDING_CHECKPOINT_UNAVAILABLE");
+    }
+
+    [Fact]
+    public async Task HandleCommandsCompleted_ShouldCommitCheckpointBeforeSchedulingReadiness()
+    {
+        var state = NewInFlightState(DateTimeOffset.UtcNow.AddSeconds(-1));
+        var completed = NewCommandsCompleted();
+        var publisher = new RecordingEventPublisher();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var platformPort = new RecordingPlatformBindingCommandPort();
+        var agent = NewHandlerAgent(state, publisher, scheduler, platformPort);
+
+        await agent.HandlePlatformBindingCommandsCompleted(completed);
+
+        var committed = StudioMemberBindingRunStateSetter.Get(agent);
+        committed.PlatformExecutionStage.Should().Be(StudioMemberPlatformBindingExecutionStage.ReadinessPending);
+        committed.PlatformExecutionAttempt.Should().Be(1);
+        committed.PlatformBindingRecoverySnapshot.Should().BeEquivalentTo(completed.RecoverySnapshot);
+        committed.PlatformExecutionInFlight.Should().BeTrue();
+        committed.PlatformExecutionStartedAtUtc!.ToDateTimeOffset().Year.Should().Be(9999);
+        committed.PlatformExecutionStageStartedAtUtc.Should().BeNull();
+        platformPort.ExecuteRequests.Should().BeEmpty();
+        var execute = scheduler.Timeouts.Should().ContainSingle(request =>
+                request.CallbackId == "studio-member-binding-execute:v1:a1:bind-1:platform-1")
+            .Subject.TriggerEnvelope.Payload.Unpack<StudioMemberPlatformBindingStageExecuteRequested>();
+        execute.ExpectedExecutionAttempt.Should().Be(1);
+        publisher.SentMessages.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ActivateAsync_AfterCommittedCheckpoint_ShouldExecuteReadinessOnly()
+    {
+        var state = NewReadinessPendingState();
+        var publisher = new RecordingEventPublisher();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var platformPort = new RecordingPlatformBindingCommandPort();
+        var agent = NewHandlerAgent(state, publisher, scheduler, platformPort);
+
+        await agent.ActivateAsync();
+
+        var execute = scheduler.Timeouts.Should().ContainSingle(request =>
+                request.CallbackId == "studio-member-binding-execute:v1:a1:bind-1:platform-1")
+            .Subject.TriggerEnvelope.Payload.Unpack<StudioMemberPlatformBindingStageExecuteRequested>();
+        await agent.HandlePlatformBindingExecuteRequested(execute);
+
+        platformPort.StartRequests.Should().BeEmpty();
+        var readiness = platformPort.ExecuteRequests.Should().ContainSingle().Subject;
+        readiness.ExecutionStage.Should().Be(StudioMemberPlatformBindingExecutionStage.ReadinessInFlight);
+        readiness.ExecutionAttempt.Should().Be(2);
+        readiness.RecoverySnapshot.Should().BeEquivalentTo(NewRecoverySnapshot());
+        publisher.SentMessages.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleExecuteRequested_WhenDeliveredTwice_ShouldInvokePortOnce()
+    {
+        var state = NewPlatformPendingState();
+        var publisher = new RecordingEventPublisher();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var platformPort = new RecordingPlatformBindingCommandPort();
+        var agent = NewHandlerAgent(state, publisher, scheduler, platformPort);
+        var execute = new StudioMemberPlatformBindingStageExecuteRequested
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-1",
+            ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+            ExpectedExecutionAttempt = 0,
+        };
+
+        await agent.HandlePlatformBindingExecuteRequested(execute);
+        await agent.HandlePlatformBindingExecuteRequested(execute);
+
+        platformPort.ExecuteRequests.Should().ContainSingle();
+        scheduler.Timeouts.Should().ContainSingle();
+        publisher.SentMessages.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task StaleExecuteAndWatchdogCallbacks_ShouldHaveNoSideEffects()
+    {
+        var state = NewInFlightState(DateTimeOffset.UtcNow.AddSeconds(-10));
+        var publisher = new RecordingEventPublisher();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var platformPort = new RecordingPlatformBindingCommandPort();
+        var agent = NewHandlerAgent(state, publisher, scheduler, platformPort);
+
+        await agent.HandlePlatformBindingExecuteRequested(new StudioMemberPlatformBindingStageExecuteRequested
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-1",
+            ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+            ExpectedExecutionAttempt = 0,
+        });
+        await agent.HandlePlatformBindingWatchdogFired(new StudioMemberPlatformBindingExecutionWatchdogFired
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-1",
+            ProtocolVersion = 0,
+            ExpectedExecutionAttempt = 1,
+        });
+
+        platformPort.ExecuteRequests.Should().BeEmpty();
+        scheduler.Timeouts.Should().BeEmpty();
+        publisher.SentMessages.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task DuplicateCommandsCompleted_AfterCheckpoint_ShouldHaveNoSideEffects()
+    {
+        var publisher = new RecordingEventPublisher();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = NewHandlerAgent(
+            NewInFlightState(DateTimeOffset.UtcNow.AddSeconds(-1)),
+            publisher,
+            scheduler);
+        var completed = NewCommandsCompleted();
+
+        await agent.HandlePlatformBindingCommandsCompleted(completed);
+        await agent.HandlePlatformBindingCommandsCompleted(completed);
+
+        scheduler.Timeouts.Should().ContainSingle();
+        publisher.SentMessages.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task StaleCommandsCompleted_ShouldHaveNoSideEffects()
+    {
+        var publisher = new RecordingEventPublisher();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = NewHandlerAgent(
+            NewInFlightState(DateTimeOffset.UtcNow.AddSeconds(-1)),
+            publisher,
+            scheduler);
+        var completed = NewCommandsCompleted();
+        completed.ExecutionAttempt = 0;
+
+        await agent.HandlePlatformBindingCommandsCompleted(completed);
+
+        scheduler.Timeouts.Should().BeEmpty();
+        publisher.SentMessages.Should().BeEmpty();
+        StudioMemberBindingRunStateSetter.Get(agent).PlatformExecutionStage.Should()
+            .Be(StudioMemberPlatformBindingExecutionStage.CommandInFlight);
+    }
+
+    [Fact]
+    public async Task ReadinessStaleWatchdog_ShouldStartNewAttemptAndFenceOldContinuation()
+    {
+        var stale = NewReadinessInFlightState(DateTimeOffset.UtcNow.AddMinutes(-3));
+        var publisher = new RecordingEventPublisher();
+        var platformPort = new RecordingPlatformBindingCommandPort();
+        var agent = NewHandlerAgent(stale, publisher, platformPort: platformPort);
+
+        await agent.HandlePlatformBindingWatchdogFired(new StudioMemberPlatformBindingExecutionWatchdogFired
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-1",
+            ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+            ExpectedExecutionAttempt = 2,
+        });
+
+        var execute = publisher.SentMessages.Should().ContainSingle().Subject.Event
+            .Should().BeOfType<StudioMemberPlatformBindingStageExecuteRequested>().Subject;
+        await agent.HandlePlatformBindingExecuteRequested(execute);
+        platformPort.ExecuteRequests.Should().ContainSingle().Which.ExecutionAttempt.Should().Be(3);
+
+        var retried = StudioMemberBindingRunStateSetter.Get(agent);
+        retried.PlatformExecutionAttempt.Should().Be(3);
+        var afterOldSuccess = _agent.Apply(retried, NewExecutionSucceeded(executionAttempt: 2));
+        afterOldSuccess.Should().BeEquivalentTo(retried);
+    }
+
+    [Fact]
+    public void OldReadinessContinuations_AfterRetry_ShouldNotOverwriteState()
+    {
+        var retry = _agent.Apply(
+            NewReadinessInFlightState(DateTimeOffset.UtcNow.AddMinutes(-3)),
+            new StudioMemberPlatformBindingStageStarted
+            {
+                BindingRunId = "bind-1",
+                PlatformBindingCommandId = "platform-1",
+                ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+                ExecutionAttempt = 3,
+                ExecutionStage = StudioMemberPlatformBindingExecutionStage.ReadinessInFlight,
+                StageStartedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            });
+
+        var timeout = _agent.Apply(retry, new StudioMemberPlatformBindingReadinessObservationTimedOut
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-1",
+            TimedOutAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+            ExecutionAttempt = 2,
+        });
+        var success = _agent.Apply(retry, NewExecutionSucceeded(executionAttempt: 2));
+        var failure = _agent.Apply(retry, new StudioMemberPlatformBindingExecutionFailed
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-1",
+            ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+            ExecutionAttempt = 2,
+            ExecutionStage = StudioMemberPlatformBindingExecutionStage.ReadinessInFlight,
+            Failure = new StudioMemberBindingFailure
+            {
+                Code = "OLD_FAILURE",
+                Message = "old attempt",
+                FailedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            },
+        });
+
+        timeout.Should().BeEquivalentTo(retry);
+        success.Should().BeEquivalentTo(retry);
+        failure.Should().BeEquivalentTo(retry);
+    }
+
+    [Fact]
+    public async Task ActivateAsync_WhenLegacyPendingStateHasNoCheckpoint_ShouldFailClosedWithoutPortCalls()
+    {
+        var legacy = NewPlatformPendingState();
+        legacy.PlatformBindingProtocolVersion = 0;
+        legacy.PlatformExecutionAttempt = 0;
+        legacy.PlatformExecutionStage = StudioMemberPlatformBindingExecutionStage.Unspecified;
+        legacy.PlatformBindingRecoverySnapshot = null;
+        var publisher = new RecordingEventPublisher();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var platformPort = new RecordingPlatformBindingCommandPort();
+        var eventSourcing = new RecordingEventSourcing(legacy);
+        var agent = NewHandlerAgent(legacy, publisher, scheduler, platformPort, eventSourcing);
+
+        await agent.ActivateAsync();
+
+        platformPort.StartRequests.Should().BeEmpty();
+        platformPort.ExecuteRequests.Should().BeEmpty();
+        scheduler.Timeouts.Should().BeEmpty();
+        var failed = eventSourcing.CommittedEvents.Should().ContainSingle().Subject
+            .Should().BeOfType<StudioMemberPlatformBindingFailed>().Subject;
+        failed.Failure.Code.Should().Be("STUDIO_MEMBER_PLATFORM_BINDING_CHECKPOINT_UNAVAILABLE");
+        _agent.Apply(legacy, failed).Status.Should().Be(StudioMemberBindingRunStatus.MemberNotificationPending);
+        publisher.SentMessages.Should().ContainSingle().Which.Event.Should()
+            .BeOfType<StudioMemberBindingFailedEvent>();
+    }
+
+    [Fact]
+    public async Task LegacyWireReplay_WhenReadinessTimedOut_ShouldRebuildProtocolZeroPendingAndFailClosed()
+    {
+        var events = NewLegacyPlatformEventPrefix();
+        events.Add(new StudioMemberPlatformBindingReadinessTimedOut
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-1",
+            ReadinessStatus = StudioMemberPlatformBindingReadinessStatus.ServingSetMissing,
+            TimedOutAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+        var legacy = ReplayWireEvents(events);
+        var publisher = new RecordingEventPublisher();
+        var platformPort = new RecordingPlatformBindingCommandPort();
+        var eventSourcing = new RecordingEventSourcing(legacy);
+        var agent = NewHandlerAgent(
+            legacy,
+            publisher,
+            platformPort: platformPort,
+            eventSourcing: eventSourcing);
+
+        legacy.Status.Should().Be(StudioMemberBindingRunStatus.PlatformBindingPending);
+        legacy.PlatformBindingProtocolVersion.Should().Be(0);
+        legacy.PlatformExecutionAttempt.Should().Be(0);
+        legacy.PlatformExecutionStage.Should().Be(StudioMemberPlatformBindingExecutionStage.Unspecified);
+        legacy.PlatformExecutionInFlight.Should().BeFalse();
+
+        await agent.ActivateAsync();
+
+        platformPort.StartRequests.Should().BeEmpty();
+        platformPort.ExecuteRequests.Should().BeEmpty();
+        var failed = eventSourcing.CommittedEvents.Should().ContainSingle().Subject
+            .Should().BeOfType<StudioMemberPlatformBindingFailed>().Subject;
+        failed.Failure.Code.Should().Be("STUDIO_MEMBER_PLATFORM_BINDING_CHECKPOINT_UNAVAILABLE");
+        events.Add(failed);
+        var converted = ReplayWireEvents(events);
+        converted.Status.Should().Be(StudioMemberBindingRunStatus.MemberNotificationPending);
+        var legacyReaderWouldRecoverCommand = converted.Status == StudioMemberBindingRunStatus.PlatformBindingPending
+            && (!converted.PlatformExecutionInFlight
+                || converted.PlatformExecutionStartedAtUtc == null
+                || DateTimeOffset.UtcNow - converted.PlatformExecutionStartedAtUtc.ToDateTimeOffset()
+                    >= TimeSpan.FromMinutes(2));
+        legacyReaderWouldRecoverCommand.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task LegacyWireReplay_WhenSucceededAndAcknowledged_ShouldRebuildTerminalWithoutRecovery()
+    {
+        var events = NewLegacyPlatformEventPrefix();
+        events.Add(new StudioMemberPlatformBindingReadinessTimedOut
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-1",
+            TimedOutAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+        events.Add(NewLegacyExecutionStarted());
+        events.Add(new StudioMemberPlatformBindingSucceeded
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-1",
+            CompletedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Result = NewRecoverySnapshot().Result.Clone(),
+        });
+        events.Add(new StudioMemberBindingTerminalAcknowledged
+        {
+            BindingRunId = "bind-1",
+            Status = StudioMemberBindingRunStatus.Succeeded,
+            AcknowledgedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+        var legacy = ReplayWireEvents(events);
+        var publisher = new RecordingEventPublisher();
+        var platformPort = new RecordingPlatformBindingCommandPort();
+        var agent = NewHandlerAgent(legacy, publisher, platformPort: platformPort);
+
+        legacy.Status.Should().Be(StudioMemberBindingRunStatus.Succeeded);
+        legacy.PlatformResult.Should().NotBeNull();
+
+        await agent.ActivateAsync();
+
+        platformPort.StartRequests.Should().BeEmpty();
+        platformPort.ExecuteRequests.Should().BeEmpty();
+        publisher.SentMessages.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task LegacyWireReplay_WhenFailedAndAcknowledged_ShouldRebuildTerminalWithoutRecovery()
+    {
+        var events = NewLegacyPlatformEventPrefix();
+        events.Add(new StudioMemberPlatformBindingFailed
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-1",
+            Failure = new StudioMemberBindingFailure
+            {
+                Code = "LEGACY_BINDING_FAILED",
+                Message = "legacy terminal failure",
+                FailedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            },
+        });
+        events.Add(new StudioMemberBindingTerminalAcknowledged
+        {
+            BindingRunId = "bind-1",
+            Status = StudioMemberBindingRunStatus.Failed,
+            AcknowledgedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+        var legacy = ReplayWireEvents(events);
+        var publisher = new RecordingEventPublisher();
+        var platformPort = new RecordingPlatformBindingCommandPort();
+        var agent = NewHandlerAgent(legacy, publisher, platformPort: platformPort);
+
+        legacy.Status.Should().Be(StudioMemberBindingRunStatus.Failed);
+        legacy.Failure.Code.Should().Be("LEGACY_BINDING_FAILED");
+
+        await agent.ActivateAsync();
+
+        platformPort.StartRequests.Should().BeEmpty();
+        platformPort.ExecuteRequests.Should().BeEmpty();
+        publisher.SentMessages.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(2, 0)]
+    [InlineData(1, 3)]
+    public async Task UnsupportedWireStartReplay_ShouldRebuildPendingAndFailClosedWithoutPortCalls(
+        int protocolVersion,
+        int executionAttempt)
+    {
+        var events = NewLegacyPlatformEventPrefix().Take(2).ToList();
+        events.Add(new StudioMemberPlatformBindingExecutionStartRequested
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-unsupported",
+            RequestedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            ProtocolVersion = protocolVersion,
+            ExecutionAttempt = executionAttempt,
+        });
+        var pending = ReplayWireEvents(events);
+        var publisher = new RecordingEventPublisher();
+        var platformPort = new RecordingPlatformBindingCommandPort();
+        var eventSourcing = new RecordingEventSourcing(pending);
+        var agent = NewHandlerAgent(
+            pending,
+            publisher,
+            platformPort: platformPort,
+            eventSourcing: eventSourcing);
+
+        pending.Status.Should().Be(StudioMemberBindingRunStatus.PlatformBindingPending);
+        pending.PlatformBindingProtocolVersion.Should().Be(protocolVersion);
+        pending.PlatformExecutionAttempt.Should().Be(executionAttempt);
+        pending.PlatformExecutionStage.Should().Be(StudioMemberPlatformBindingExecutionStage.Unspecified);
+
+        await agent.ActivateAsync();
+
+        platformPort.StartRequests.Should().BeEmpty();
+        platformPort.ExecuteRequests.Should().BeEmpty();
+        var batch = eventSourcing.CommittedBatches.Should().ContainSingle().Subject;
+        batch.Should().HaveCount(3);
+        batch[0].Should().BeOfType<StudioMemberPlatformBindingStartRequested>();
+        batch[1].Should().BeOfType<StudioMemberPlatformBindingExecutionStarted>();
+        var failed = batch[2].Should().BeOfType<StudioMemberPlatformBindingExecutionFailed>().Subject;
+        failed.ProtocolVersion.Should().Be(protocolVersion);
+        failed.ExecutionAttempt.Should().Be(executionAttempt);
+        failed.ExecutionStage.Should().Be(StudioMemberPlatformBindingExecutionStage.Unspecified);
+        failed.Failure.Code.Should().Be("STUDIO_MEMBER_PLATFORM_BINDING_CHECKPOINT_UNAVAILABLE");
+        var legacyState = ReplayAsDfe98c8Reader(events.Concat(batch));
+        legacyState.Status.Should().Be(StudioMemberBindingRunStatus.PlatformBindingPending);
+        LegacyReaderWouldRecoverPlatformCommand(legacyState).Should().BeFalse();
+    }
+
+    [Fact]
+    public void LegacyPlatformBindingMessages_ShouldHaveNoLiveInboxHandlers()
+    {
+        var handlerPayloadTypes = typeof(StudioMemberBindingRunGAgent)
+            .GetMethods(BindingFlags.Instance | BindingFlags.Public)
+            .Where(method => method.GetCustomAttribute<EventHandlerAttribute>() != null)
+            .SelectMany(method => method.GetParameters())
+            .Select(parameter => parameter.ParameterType)
+            .ToArray();
+
+        handlerPayloadTypes.Should().NotContain(typeof(StudioMemberPlatformBindingSucceeded));
+        handlerPayloadTypes.Should().NotContain(typeof(StudioMemberPlatformBindingFailed));
+        handlerPayloadTypes.Should().NotContain(typeof(StudioMemberPlatformBindingReadinessTimedOut));
+        handlerPayloadTypes.Should().NotContain(typeof(StudioMemberPlatformBindingStartRequested));
+        handlerPayloadTypes.Should().NotContain(typeof(StudioMemberPlatformBindingAccepted));
+        handlerPayloadTypes.Should().NotContain(typeof(StudioMemberPlatformBindingExecuteRequested));
+        handlerPayloadTypes.Should().NotContain(typeof(StudioMemberPlatformBindingWatchdogFired));
+        handlerPayloadTypes.Should().NotContain(typeof(StudioMemberPlatformBindingExecutionStarted));
+    }
+
+    [Fact]
+    public async Task ActivateAsync_WhenLegacyProtocolHasCommandPendingStage_ShouldCommitMatchingFailClosedOutcome()
+    {
+        var mixed = NewPlatformPendingState();
+        mixed.PlatformBindingProtocolVersion = 0;
+        mixed.PlatformExecutionStage = StudioMemberPlatformBindingExecutionStage.CommandPending;
+        var publisher = new RecordingEventPublisher();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var platformPort = new RecordingPlatformBindingCommandPort();
+        var eventSourcing = new RecordingEventSourcing(mixed);
+        var agent = NewHandlerAgent(mixed, publisher, scheduler, platformPort, eventSourcing);
+
+        await agent.ActivateAsync();
+
+        platformPort.ExecuteRequests.Should().BeEmpty();
+        scheduler.Timeouts.Should().BeEmpty();
+        var failed = eventSourcing.CommittedEvents.OfType<StudioMemberPlatformBindingExecutionFailed>()
+            .Should().ContainSingle().Subject;
+        failed.ProtocolVersion.Should().Be(0);
+        failed.ExecutionStage.Should().Be(StudioMemberPlatformBindingExecutionStage.CommandPending);
+        failed.Failure.Code.Should().Be("STUDIO_MEMBER_PLATFORM_BINDING_CHECKPOINT_UNAVAILABLE");
+        _agent.Apply(mixed, failed).Status.Should().Be(StudioMemberBindingRunStatus.MemberNotificationPending);
+    }
+
+    [Fact]
+    public async Task ActivateAsync_WhenCurrentProtocolStageIsUnspecified_ShouldCommitFailClosedOutcome()
+    {
+        var mixed = NewPlatformPendingState();
+        mixed.PlatformExecutionStage = StudioMemberPlatformBindingExecutionStage.Unspecified;
+        mixed.PlatformBindingRecoverySnapshot = null;
+        var publisher = new RecordingEventPublisher();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var platformPort = new RecordingPlatformBindingCommandPort();
+        var eventSourcing = new RecordingEventSourcing(mixed);
+        var agent = NewHandlerAgent(mixed, publisher, scheduler, platformPort, eventSourcing);
+
+        await agent.ActivateAsync();
+
+        platformPort.StartRequests.Should().BeEmpty();
+        platformPort.ExecuteRequests.Should().BeEmpty();
+        scheduler.Timeouts.Should().BeEmpty();
+        var failed = eventSourcing.CommittedEvents.OfType<StudioMemberPlatformBindingExecutionFailed>()
+            .Should().ContainSingle().Subject;
+        failed.ProtocolVersion.Should().Be(StudioMemberConventions.PlatformBindingProtocolVersion);
+        failed.ExecutionAttempt.Should().Be(mixed.PlatformExecutionAttempt);
+        failed.ExecutionStage.Should().Be(StudioMemberPlatformBindingExecutionStage.Unspecified);
+        failed.Failure.Code.Should().Be("STUDIO_MEMBER_PLATFORM_BINDING_CHECKPOINT_UNAVAILABLE");
+        _agent.Apply(mixed, failed).Status.Should().Be(StudioMemberBindingRunStatus.MemberNotificationPending);
+    }
+
+    [Fact]
+    public async Task ActivateAsync_WhenFutureProtocolIsPending_ShouldCommitFailClosedWithoutExecutingCommand()
+    {
+        var future = NewPlatformPendingState();
+        future.PlatformBindingProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion + 1;
+        future.PlatformExecutionStage = StudioMemberPlatformBindingExecutionStage.CommandPending;
+        var publisher = new RecordingEventPublisher();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var platformPort = new RecordingPlatformBindingCommandPort();
+        var eventSourcing = new RecordingEventSourcing(future);
+        var agent = NewHandlerAgent(future, publisher, scheduler, platformPort, eventSourcing);
+
+        await agent.ActivateAsync();
+
+        platformPort.StartRequests.Should().BeEmpty();
+        platformPort.ExecuteRequests.Should().BeEmpty();
+        scheduler.Timeouts.Should().BeEmpty();
+        var failed = eventSourcing.CommittedEvents.OfType<StudioMemberPlatformBindingExecutionFailed>()
+            .Should().ContainSingle().Subject;
+        failed.ProtocolVersion.Should().Be(future.PlatformBindingProtocolVersion);
+        failed.ExecutionAttempt.Should().Be(future.PlatformExecutionAttempt);
+        failed.ExecutionStage.Should().Be(StudioMemberPlatformBindingExecutionStage.CommandPending);
+        failed.Failure.Code.Should().Be("STUDIO_MEMBER_PLATFORM_BINDING_CHECKPOINT_UNAVAILABLE");
+        _agent.Apply(future, failed).Status.Should().Be(StudioMemberBindingRunStatus.MemberNotificationPending);
+    }
+
+    [Fact]
+    public void FutureProtocolReadinessSuccess_ShouldNotCommitTerminalSuccess()
+    {
+        var future = NewReadinessInFlightState(DateTimeOffset.UtcNow.AddSeconds(-1));
+        future.PlatformBindingProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion + 1;
+        var succeeded = NewExecutionSucceeded(future.PlatformExecutionAttempt);
+        succeeded.ProtocolVersion = future.PlatformBindingProtocolVersion;
+
+        var afterSuccess = _agent.Apply(future, succeeded);
+
+        afterSuccess.Should().BeEquivalentTo(future);
+    }
+
+    [Fact]
+    public void StateWireContract_ShouldPreserveDeprecatedInFlightBitAndDefaultLegacyFence()
+    {
+        var current = NewReadinessInFlightState(DateTimeOffset.UtcNow.AddSeconds(-1));
+
+        var roundTripped = StudioMemberBindingRunState.Parser.ParseFrom(current.ToByteArray());
+
+        roundTripped.PlatformExecutionInFlight.Should().BeTrue();
+        roundTripped.PlatformExecutionStage.Should()
+            .Be(StudioMemberPlatformBindingExecutionStage.ReadinessInFlight);
+        roundTripped.PlatformExecutionAttempt.Should().Be(2);
+        roundTripped.PlatformExecutionStartedAtUtc!.ToDateTimeOffset().Year.Should().Be(9999);
+        roundTripped.PlatformExecutionStageStartedAtUtc.Should().NotBeNull();
+
+        var legacy = StudioMemberBindingRunState.Parser.ParseFrom(new StudioMemberBindingRunState
+        {
+            BindingRunId = "bind-legacy",
+            Status = StudioMemberBindingRunStatus.PlatformBindingPending,
+            PlatformBindingCommandId = "platform-legacy",
+            PlatformExecutionInFlight = true,
+        }.ToByteArray());
+        legacy.PlatformExecutionInFlight.Should().BeTrue();
+        legacy.PlatformBindingProtocolVersion.Should().Be(0);
+        legacy.PlatformExecutionAttempt.Should().Be(0);
+        legacy.PlatformExecutionStage.Should().Be(StudioMemberPlatformBindingExecutionStage.Unspecified);
+        legacy.PlatformExecutionStageStartedAtUtc.Should().BeNull();
+    }
+
+    [Fact]
+    public void ProtocolOnePendingStages_ShouldFenceLegacyReaderFromCommandRecovery()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var states = new[]
+        {
+            NewAcceptancePendingState(),
+            NewPlatformPendingState(),
+            NewInFlightState(now.AddMinutes(-3)),
+            NewReadinessPendingState(),
+            NewReadinessInFlightState(now.AddMinutes(-3)),
+        };
+
+        foreach (var state in states)
+        {
+            state.PlatformExecutionInFlight.Should().BeTrue();
+            state.PlatformExecutionStartedAtUtc.Should().NotBeNull();
+            var legacyReaderWouldRecoverCommand = !state.PlatformExecutionInFlight
+                || now - state.PlatformExecutionStartedAtUtc!.ToDateTimeOffset() >= TimeSpan.FromMinutes(2);
+            legacyReaderWouldRecoverCommand.Should().BeFalse(
+                $"legacy reader must not replay command for typed stage {state.PlatformExecutionStage}");
+        }
+    }
+
+    [Fact]
+    public void ProtocolOneReadinessTimeout_ShouldUseTypeUrlUnknownToLegacyReader()
+    {
+        var legacyTypeUrl = Any.Pack(new StudioMemberPlatformBindingReadinessTimedOut()).TypeUrl;
+        var protocolOneTypeUrl = Any.Pack(
+            new StudioMemberPlatformBindingReadinessObservationTimedOut()).TypeUrl;
+
+        protocolOneTypeUrl.Should().NotBe(legacyTypeUrl);
+        StudioMemberPlatformBindingReadinessTimedOut.Descriptor
+            .FindFieldByName("protocol_version").Should().BeNull();
+        StudioMemberPlatformBindingReadinessObservationTimedOut.Descriptor
+            .FindFieldByName("protocol_version")!.FieldNumber.Should().Be(5);
+    }
+
+    [Fact]
+    public void ProtocolOneTerminalOutcomes_ShouldUseTypeUrlsUnknownToLegacyReader()
+    {
+        var legacySuccessTypeUrl = Any.Pack(new StudioMemberPlatformBindingSucceeded()).TypeUrl;
+        var protocolOneSuccessTypeUrl = Any.Pack(
+            new StudioMemberPlatformBindingExecutionSucceeded()).TypeUrl;
+        var legacyFailureTypeUrl = Any.Pack(new StudioMemberPlatformBindingFailed()).TypeUrl;
+        var protocolOneFailureTypeUrl = Any.Pack(
+            new StudioMemberPlatformBindingExecutionFailed()).TypeUrl;
+
+        protocolOneSuccessTypeUrl.Should().NotBe(legacySuccessTypeUrl);
+        protocolOneFailureTypeUrl.Should().NotBe(legacyFailureTypeUrl);
+        StudioMemberPlatformBindingSucceeded.Descriptor
+            .FindFieldByName("protocol_version").Should().BeNull();
+        StudioMemberPlatformBindingSucceeded.Descriptor
+            .FindFieldByName("execution_attempt").Should().BeNull();
+        StudioMemberPlatformBindingFailed.Descriptor
+            .FindFieldByName("protocol_version").Should().BeNull();
+        StudioMemberPlatformBindingFailed.Descriptor
+            .FindFieldByName("execution_attempt").Should().BeNull();
+        StudioMemberPlatformBindingFailed.Descriptor
+            .FindFieldByName("execution_stage").Should().BeNull();
+        StudioMemberPlatformBindingExecutionSucceeded.Descriptor
+            .FindFieldByName("protocol_version")!.FieldNumber.Should().Be(5);
+        StudioMemberPlatformBindingExecutionFailed.Descriptor
+            .FindFieldByName("protocol_version")!.FieldNumber.Should().Be(4);
+    }
+
+    [Fact]
+    public void LegacyTerminalOutcomes_FromPriorAttempt_ShouldNotAffectProtocolOneRetry()
+    {
+        var retried = NewReadinessInFlightState(DateTimeOffset.UtcNow.AddSeconds(-1));
+        var legacySuccess = new StudioMemberPlatformBindingSucceeded
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-1",
+            CompletedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Result = NewRecoverySnapshot().Result.Clone(),
+        };
+        var legacyFailure = new StudioMemberPlatformBindingFailed
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-1",
+            Failure = new StudioMemberBindingFailure
+            {
+                Code = "STALE_ATTEMPT",
+                Message = "legacy attempt completed after protocol v1 retry",
+                FailedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            },
+        };
+
+        _agent.Apply(retried, legacySuccess).Should().BeEquivalentTo(retried);
+        _agent.Apply(retried, legacyFailure).Should().BeEquivalentTo(retried);
+    }
+
+    [Fact]
+    public void ProtocolOneControlMessages_ShouldUseTypeUrlsUnknownToLegacyReader()
+    {
+        Any.Pack(new StudioMemberPlatformBindingExecutionStartRequested()).TypeUrl.Should().NotBe(
+            Any.Pack(new StudioMemberPlatformBindingStartRequested()).TypeUrl);
+        Any.Pack(new StudioMemberPlatformBindingExecutionStartAccepted()).TypeUrl.Should().NotBe(
+            Any.Pack(new StudioMemberPlatformBindingAccepted()).TypeUrl);
+        Any.Pack(new StudioMemberPlatformBindingStageExecuteRequested()).TypeUrl.Should().NotBe(
+            Any.Pack(new StudioMemberPlatformBindingExecuteRequested()).TypeUrl);
+        Any.Pack(new StudioMemberPlatformBindingExecutionWatchdogFired()).TypeUrl.Should().NotBe(
+            Any.Pack(new StudioMemberPlatformBindingWatchdogFired()).TypeUrl);
+        Any.Pack(new StudioMemberPlatformBindingStageStarted()).TypeUrl.Should().NotBe(
+            Any.Pack(new StudioMemberPlatformBindingExecutionStarted()).TypeUrl);
+
+        StudioMemberPlatformBindingStartRequested.Descriptor.FindFieldByNumber(6).Should().BeNull();
+        StudioMemberPlatformBindingStartRequested.Descriptor
+            .FindFieldByName("protocol_version").Should().BeNull();
+        StudioMemberPlatformBindingExecutionStartRequested.Descriptor
+            .FindFieldByNumber(6)!.Name.Should().Be("protocol_version");
+        StudioMemberPlatformBindingExecutionStartRequested.Descriptor
+            .FindFieldByNumber(7)!.Name.Should().Be("execution_attempt");
     }
 
     [Fact]
@@ -578,12 +1550,14 @@ public sealed class StudioMemberBindingRunGAgentStateTests
     [Fact]
     public void TerminalState_ShouldIgnoreLaterPlatformFailure()
     {
-        var accepted = NewPlatformPendingState();
-        var succeeded = _agent.Apply(accepted, new StudioMemberPlatformBindingSucceeded
+        var accepted = NewReadinessInFlightState(DateTimeOffset.UtcNow.AddSeconds(-1));
+        var succeeded = _agent.Apply(accepted, new StudioMemberPlatformBindingExecutionSucceeded
         {
             BindingRunId = "bind-1",
             PlatformBindingCommandId = "platform-1",
             CompletedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(1)),
+            ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+            ExecutionAttempt = 2,
             Result = new StudioMemberPlatformBindingResult
             {
                 PublishedServiceId = "member-m-1",
@@ -592,10 +1566,13 @@ public sealed class StudioMemberBindingRunGAgentStateTests
             },
         });
 
-        var afterFailure = _agent.Apply(succeeded, new StudioMemberPlatformBindingFailed
+        var afterFailure = _agent.Apply(succeeded, new StudioMemberPlatformBindingExecutionFailed
         {
             BindingRunId = "bind-1",
             PlatformBindingCommandId = "platform-1",
+            ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+            ExecutionAttempt = 2,
+            ExecutionStage = StudioMemberPlatformBindingExecutionStage.ReadinessInFlight,
             Failure = new StudioMemberBindingFailure
             {
                 Code = "SCOPE_BINDING_FAILED",
@@ -608,6 +1585,122 @@ public sealed class StudioMemberBindingRunGAgentStateTests
         afterFailure.PlatformResult.RevisionId.Should().Be("rev-1");
         afterFailure.Failure.Should().BeNull();
     }
+
+    private StudioMemberBindingRunState ReplayWireEvents(IEnumerable<IMessage> events)
+    {
+        var state = new StudioMemberBindingRunState();
+        foreach (var evt in events)
+        {
+            var packed = Any.Pack(evt);
+            var wireEvent = evt.Descriptor.Parser.ParseFrom(packed.Value);
+            state = _agent.Apply(state, wireEvent);
+        }
+
+        return state;
+    }
+
+    private StudioMemberBindingRunState ReplayAsDfe98c8Reader(IEnumerable<IMessage> events)
+    {
+        var state = new StudioMemberBindingRunState();
+        foreach (var evt in events)
+        {
+            if (evt is not (StudioMemberBindingRunRequested
+                or StudioMemberBindingAdmittedEvent
+                or StudioMemberBindingRejectedEvent
+                or StudioMemberPlatformBindingStartRequested
+                or StudioMemberPlatformBindingAccepted
+                or StudioMemberPlatformBindingExecutionStarted
+                or StudioMemberPlatformBindingReadinessTimedOut
+                or StudioMemberPlatformBindingSucceeded
+                or StudioMemberPlatformBindingFailed
+                or StudioMemberBindingTerminalAcknowledged))
+            {
+                continue;
+            }
+
+            var packed = Any.Pack(evt);
+            var wireEvent = evt.Descriptor.Parser.ParseFrom(packed.Value);
+            state = _agent.Apply(state, wireEvent);
+        }
+
+        return state;
+    }
+
+    private void AssertDfe98c8ReaderRemainsFenced(IEnumerable<IMessage> events, string cutPoint)
+    {
+        var legacyState = ReplayAsDfe98c8Reader(events);
+        legacyState.Status.Should().Be(
+            StudioMemberBindingRunStatus.PlatformBindingPending,
+            $"dfe98c8 replay must remain pending after committed cut point {cutPoint}");
+        legacyState.PlatformExecutionInFlight.Should().BeTrue(
+            $"dfe98c8 replay must retain the poison bit after committed cut point {cutPoint}");
+        legacyState.PlatformExecutionStartedAtUtc!.ToDateTimeOffset().Year.Should().Be(
+            9999,
+            $"dfe98c8 replay must retain the poison timestamp after committed cut point {cutPoint}");
+        LegacyReaderWouldRecoverPlatformCommand(legacyState).Should().BeFalse(
+            $"dfe98c8 replay must not re-execute the platform command after {cutPoint}");
+    }
+
+    private static bool LegacyReaderWouldRecoverPlatformCommand(StudioMemberBindingRunState state)
+    {
+        if (state.Status == StudioMemberBindingRunStatus.Admitted)
+            return true;
+        if (state.Status != StudioMemberBindingRunStatus.PlatformBindingPending)
+            return false;
+        if (!state.PlatformExecutionInFlight || state.PlatformExecutionStartedAtUtc == null)
+            return true;
+
+        return DateTimeOffset.UtcNow - state.PlatformExecutionStartedAtUtc.ToDateTimeOffset()
+            >= TimeSpan.FromMinutes(2);
+    }
+
+    private static List<IMessage> NewLegacyPlatformEventPrefix()
+    {
+        var requested = NewRequested();
+        return
+        [
+            requested,
+            new StudioMemberBindingAdmittedEvent
+            {
+                BindingRunId = "bind-1",
+                ScopeId = "scope-1",
+                MemberId = "m-1",
+                PublishedServiceId = "member-m-1",
+                ImplementationKind = StudioMemberImplementationKind.Script,
+                DisplayName = "Script member",
+                AdmittedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            },
+            new StudioMemberPlatformBindingStartRequested
+            {
+                BindingRunId = "bind-1",
+                PlatformBindingCommandId = "platform-1",
+                Request = requested.Request.Clone(),
+                Admitted = new StudioMemberBindingAdmittedSnapshot
+                {
+                    MemberId = "m-1",
+                    ScopeId = "scope-1",
+                    PublishedServiceId = "member-m-1",
+                    ImplementationKind = StudioMemberImplementationKind.Script,
+                    DisplayName = "Script member",
+                },
+                RequestedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            },
+            new StudioMemberPlatformBindingAccepted
+            {
+                BindingRunId = "bind-1",
+                PlatformBindingCommandId = "platform-1",
+                AcceptedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            },
+            NewLegacyExecutionStarted(),
+        ];
+    }
+
+    private static StudioMemberPlatformBindingExecutionStarted NewLegacyExecutionStarted() => new()
+    {
+        BindingRunId = "bind-1",
+        PlatformBindingCommandId = "platform-1",
+        StartedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+    };
 
     private static StudioMemberBindingRunRequested NewRequested(
         Timestamp? requestedAt = null)
@@ -630,15 +1723,77 @@ public sealed class StudioMemberBindingRunGAgentStateTests
         };
     }
 
-    private StudioMemberBindingRunState NewPlatformPendingState()
+    private static StudioMemberPlatformBindingRecoverySnapshot NewRecoverySnapshot()
+    {
+        var snapshot = new StudioMemberPlatformBindingRecoverySnapshot
+        {
+            Result = new StudioMemberPlatformBindingResult
+            {
+                PublishedServiceId = "member-m-1",
+                RevisionId = "rev-platform-1",
+                ImplementationKind = StudioMemberImplementationKind.Script,
+                ExpectedActorId = "gagent-service:script-runtime:deployment-1",
+                ImplementationRef = new StudioMemberImplementationRef
+                {
+                    Script = new StudioMemberScriptRef
+                    {
+                        ScriptId = "script-1",
+                        ScriptRevision = "rev-platform-1",
+                    },
+                },
+            },
+            ExpectedDeploymentId = "deployment-1",
+        };
+        return snapshot;
+    }
+
+    private static StudioMemberPlatformBindingCommandsCompleted NewCommandsCompleted() => new()
+    {
+        BindingRunId = "bind-1",
+        PlatformBindingCommandId = "platform-1",
+        RecoverySnapshot = NewRecoverySnapshot(),
+        CompletedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+        ExecutionAttempt = 1,
+    };
+
+    private static StudioMemberPlatformBindingExecutionSucceeded NewExecutionSucceeded(int executionAttempt) => new()
+    {
+        BindingRunId = "bind-1",
+        PlatformBindingCommandId = "platform-1",
+        ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+        ExecutionAttempt = executionAttempt,
+        CompletedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        Result = NewRecoverySnapshot().Result.Clone(),
+    };
+
+    private static Timestamp NewLegacyExecutionFenceTimestamp() => Timestamp.FromDateTime(
+        new DateTime(9999, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+
+    private StudioMemberBindingRunState NewAcceptancePendingState()
     {
         var requested = _agent.Apply(new StudioMemberBindingRunState(), NewRequested());
         var admitted = ApplyAdmitted(requested);
-        return _agent.Apply(admitted, new StudioMemberPlatformBindingStartRequested
+        return _agent.Apply(admitted, new StudioMemberPlatformBindingExecutionStartRequested
         {
             BindingRunId = "bind-1",
             PlatformBindingCommandId = "platform-1",
             RequestedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(1)),
+            ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+            ExecutionAttempt = 0,
+        });
+    }
+
+    private StudioMemberBindingRunState NewPlatformPendingState()
+    {
+        var acceptancePending = NewAcceptancePendingState();
+        return _agent.Apply(acceptancePending, new StudioMemberPlatformBindingExecutionStartAccepted
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-1",
+            AcceptedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(1)),
+            ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+            ExecutionAttempt = 0,
         });
     }
 
@@ -659,11 +1814,42 @@ public sealed class StudioMemberBindingRunGAgentStateTests
     private StudioMemberBindingRunState NewInFlightState(DateTimeOffset startedAt)
     {
         var pending = NewPlatformPendingState();
-        return _agent.Apply(pending, new StudioMemberPlatformBindingExecutionStarted
+        return _agent.Apply(pending, new StudioMemberPlatformBindingStageStarted
         {
             BindingRunId = "bind-1",
             PlatformBindingCommandId = "platform-1",
-            StartedAtUtc = Timestamp.FromDateTimeOffset(startedAt),
+            ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+            ExecutionAttempt = 1,
+            ExecutionStage = StudioMemberPlatformBindingExecutionStage.CommandInFlight,
+            StageStartedAtUtc = Timestamp.FromDateTimeOffset(startedAt),
+        });
+    }
+
+    private StudioMemberBindingRunState NewReadinessPendingState()
+    {
+        var commandInFlight = NewInFlightState(DateTimeOffset.UtcNow.AddSeconds(-10));
+        return _agent.Apply(commandInFlight, new StudioMemberPlatformBindingCommandsCompleted
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-1",
+            RecoverySnapshot = NewRecoverySnapshot(),
+            CompletedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(-5)),
+            ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+            ExecutionAttempt = 1,
+        });
+    }
+
+    private StudioMemberBindingRunState NewReadinessInFlightState(DateTimeOffset startedAt)
+    {
+        var pending = NewReadinessPendingState();
+        return _agent.Apply(pending, new StudioMemberPlatformBindingStageStarted
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-1",
+            ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+            ExecutionAttempt = 2,
+            ExecutionStage = StudioMemberPlatformBindingExecutionStage.ReadinessInFlight,
+            StageStartedAtUtc = Timestamp.FromDateTimeOffset(startedAt),
         });
     }
 
@@ -671,11 +1857,12 @@ public sealed class StudioMemberBindingRunGAgentStateTests
         StudioMemberBindingRunState state,
         RecordingEventPublisher publisher,
         RecordingRuntimeCallbackScheduler? scheduler = null,
-        RecordingPlatformBindingCommandPort? platformPort = null)
+        RecordingPlatformBindingCommandPort? platformPort = null,
+        RecordingEventSourcing? eventSourcing = null)
     {
         var agent = new StudioMemberBindingRunGAgent(platformPort)
         {
-            EventSourcing = new RecordingEventSourcing(state),
+            EventSourcing = eventSourcing ?? new RecordingEventSourcing(state),
             EventPublisher = publisher,
             Services = new ServiceCollection()
                 .AddSingleton<IActorRuntimeCallbackScheduler>(
@@ -730,6 +1917,9 @@ public sealed class StudioMemberBindingRunGAgentStateTests
 
         public static void Set(StudioMemberBindingRunGAgent agent, StudioMemberBindingRunState state) =>
             StateField.SetValue(agent, state.Clone());
+
+        public static StudioMemberBindingRunState Get(StudioMemberBindingRunGAgent agent) =>
+            ((StudioMemberBindingRunState)StateField.GetValue(agent)!).Clone();
     }
 
     private static class GAgentIdSetter
@@ -747,7 +1937,10 @@ public sealed class StudioMemberBindingRunGAgentStateTests
         : IEventSourcingBehavior<StudioMemberBindingRunState>
     {
         private readonly List<IMessage> _pending = [];
+        private readonly StudioMemberBindingRunStateApplier _applier = new();
         public long CurrentVersion { get; private set; }
+        public List<IMessage> CommittedEvents { get; } = [];
+        public List<IReadOnlyList<IMessage>> CommittedBatches { get; } = [];
 
         public void RaiseEvent<TEvent>(TEvent evt) where TEvent : IMessage =>
             _pending.Add(evt);
@@ -755,6 +1948,8 @@ public sealed class StudioMemberBindingRunGAgentStateTests
         public Task<EventStoreCommitResult> ConfirmEventsAsync(CancellationToken ct = default)
         {
             var result = EventSourcingTestCommit.From(_pending, CurrentVersion);
+            CommittedBatches.Add(_pending.ToArray());
+            CommittedEvents.AddRange(_pending);
             CurrentVersion = result.LatestVersion;
             _pending.Clear();
             return Task.FromResult(result);
@@ -772,7 +1967,7 @@ public sealed class StudioMemberBindingRunGAgentStateTests
         }
 
         public StudioMemberBindingRunState TransitionState(StudioMemberBindingRunState current, IMessage evt) =>
-            current.Clone();
+            _applier.Apply(current, evt);
     }
 
     private sealed class RecordingEventPublisher : IEventPublisher
@@ -805,34 +2000,37 @@ public sealed class StudioMemberBindingRunGAgentStateTests
 
     private sealed class RecordingPlatformBindingCommandPort : IStudioMemberPlatformBindingCommandPort
     {
-        public List<StudioMemberPlatformBindingStartRequested> StartRequests { get; } = [];
+        public List<StudioMemberPlatformBindingExecutionStartRequested> StartRequests { get; } = [];
 
-        public List<StudioMemberPlatformBindingStartRequested> ExecuteRequests { get; } = [];
+        public List<StudioMemberPlatformBindingExecutionRequest> ExecuteRequests { get; } = [];
 
-        public Task<StudioMemberPlatformBindingAccepted> StartAsync(
+        public Task<StudioMemberPlatformBindingExecutionStartAccepted> StartAsync(
             string replyActorId,
-            StudioMemberPlatformBindingStartRequested request,
+            StudioMemberPlatformBindingExecutionStartRequested request,
             CancellationToken ct = default)
         {
             StartRequests.Add(request.Clone());
-            return Task.FromResult(new StudioMemberPlatformBindingAccepted
+            return Task.FromResult(new StudioMemberPlatformBindingExecutionStartAccepted
             {
                 BindingRunId = request.BindingRunId,
                 PlatformBindingCommandId = request.PlatformBindingCommandId,
                 AcceptedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                ProtocolVersion = request.ProtocolVersion,
+                ExecutionAttempt = request.ExecutionAttempt,
             });
         }
 
         public Task<StudioMemberPlatformBindingExecutionAccepted> ExecuteAsync(
             string replyActorId,
-            string platformBindingCommandId,
-            StudioMemberPlatformBindingStartRequested request,
+            StudioMemberPlatformBindingExecutionRequest request,
             CancellationToken ct = default)
         {
             ExecuteRequests.Add(request.Clone());
             return Task.FromResult(new StudioMemberPlatformBindingExecutionAccepted(
                 request.BindingRunId,
-                platformBindingCommandId));
+                request.PlatformBindingCommandId,
+                request.ProtocolVersion,
+                request.ExecutionAttempt));
         }
     }
 

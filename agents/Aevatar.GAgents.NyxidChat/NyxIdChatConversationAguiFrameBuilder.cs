@@ -58,6 +58,7 @@ internal static class NyxIdChatConversationAguiFrameBuilder
         if (progressed.Progress is null || progressed.ProgressSequence <= 0)
             return [];
 
+        var frames = new List<AGUIEvent>();
         var frame = progressed.Progress.ProgressCase switch
         {
             NyxIdChatOperationProgressSignal.ProgressOneofCase.Text => new AGUIEvent
@@ -87,13 +88,96 @@ internal static class NyxIdChatConversationAguiFrameBuilder
                         progressed.Progress.ToolStarted.ToolName),
                 },
             },
+            NyxIdChatOperationProgressSignal.ProgressOneofCase.Phase => null,
+            NyxIdChatOperationProgressSignal.ProgressOneofCase.StreamingBatch => null,
             _ => null,
         };
-        if (frame is null)
-            return [];
+        if (frame is not null)
+        {
+            frame.Sequence = progressed.ProgressSequence;
+            frames.Add(frame);
+        }
+        else if (progressed.Progress.ProgressCase ==
+                 NyxIdChatOperationProgressSignal.ProgressOneofCase.StreamingBatch)
+        {
+            frames.AddRange(progressed.Progress.StreamingBatch.Segments.Select(segment =>
+                BuildStreamingSegmentFrame(turnId, progressed.ProgressSequence, segment)));
+        }
 
-        frame.Sequence = progressed.ProgressSequence;
-        return [frame];
+        if (progressed.StepChangeKind != NyxIdChatStepChangeKind.Unspecified)
+        {
+            var task = progressed.State?.ActiveTask;
+            var step = task?.Steps.FirstOrDefault(candidate =>
+                KeysEqual(candidate.Operation?.Key, progressed.Progress.Key));
+            if (step is not null)
+            {
+                frames.AddRange(BuildTaskFrames(
+                    task!,
+                    [step],
+                    progressed.ProgressSequence,
+                    progressed.StepChangeKind));
+            }
+        }
+
+        return frames;
+    }
+
+    private static AGUIEvent BuildStreamingSegmentFrame(
+        string turnId,
+        long sequence,
+        NyxIdChatStreamingProgressSegment segment) =>
+        segment.ProgressCase switch
+        {
+            NyxIdChatStreamingProgressSegment.ProgressOneofCase.Text => new AGUIEvent
+            {
+                Sequence = sequence,
+                TextMessageContent = new TextMessageContentEvent
+                {
+                    MessageId = turnId,
+                    Delta = segment.Text.Delta,
+                },
+            },
+            NyxIdChatStreamingProgressSegment.ProgressOneofCase.Reasoning => new AGUIEvent
+            {
+                Sequence = sequence,
+                Custom = new CustomEvent
+                {
+                    Name = "aevatar.llm.reasoning",
+                    Payload = Any.Pack(segment.Reasoning),
+                },
+            },
+            _ => throw new InvalidOperationException("Streaming progress contains an empty segment."),
+        };
+
+    public static IReadOnlyList<AGUIEvent> BuildProgressCadence(
+        NyxIdChatOperationStepChangedCommittedEvent committed)
+    {
+        ArgumentNullException.ThrowIfNull(committed);
+        var task = committed.State?.ActiveTask;
+        var step = task?.Steps.FirstOrDefault(candidate =>
+            KeysEqual(candidate.Operation?.Key, committed.Key));
+        return step is null || committed.ProgressSequence <= 0
+            ? []
+            : BuildTaskFrames(
+                task!,
+                [step],
+                committed.ProgressSequence,
+                NyxIdChatStepChangeKind.Status);
+    }
+
+    public static IReadOnlyList<AGUIEvent> BuildStalled(NyxIdChatOperationStalledEvent stalled)
+    {
+        ArgumentNullException.ThrowIfNull(stalled);
+        var task = stalled.State?.ActiveTask;
+        var step = task?.Steps.FirstOrDefault(candidate =>
+            KeysEqual(candidate.Operation?.Key, stalled.Key));
+        return step is null || stalled.ProgressSequence <= 0
+            ? []
+            : BuildTaskFrames(
+                task!,
+                [step],
+                stalled.ProgressSequence,
+                NyxIdChatStepChangeKind.Status);
     }
 
     public static IReadOnlyList<AGUIEvent> BuildReconciled(
@@ -125,8 +209,18 @@ internal static class NyxIdChatConversationAguiFrameBuilder
         }
         AppendOperationEvidence(frames, reconciled, turnId);
 
+        if (reconciled.RefinesExistingTerminal)
+        {
+            return frames;
+        }
+
+        var recoverableTerminal =
+            state.ActiveTurn.Status == NyxIdChatTurnStatus.Active &&
+            state.ActiveTask.Status == NyxIdChatTaskStatus.Active &&
+            HasRecoverableTerminalStep(state.ActiveTask);
         if (state.ActiveTurn.Status == NyxIdChatTurnStatus.Active &&
-            state.ActiveTask.Status == NyxIdChatTaskStatus.Active)
+            state.ActiveTask.Status == NyxIdChatTaskStatus.Active &&
+            !recoverableTerminal)
         {
             return frames;
         }
@@ -136,8 +230,29 @@ internal static class NyxIdChatConversationAguiFrameBuilder
             Sequence = reconciled.ProgressSequence,
             TextMessageEnd = new TextMessageEndEvent { MessageId = turnId },
         });
-        frames.Add(BuildTerminal(actorId, turnId, state, reconciled.ProgressSequence));
+        frames.Add(recoverableTerminal
+            ? Finished(actorId, turnId, RunCompletionStatus.Blocked, reconciled.ProgressSequence)
+            : BuildTerminal(actorId, turnId, state, reconciled.ProgressSequence));
         return frames;
+    }
+
+    internal static bool IsRecoverableTerminalStep(
+        NyxIdChatStepStatus status,
+        bool retry,
+        bool skip) =>
+        (status == NyxIdChatStepStatus.Failed ||
+         status == NyxIdChatStepStatus.Cancelled ||
+         status == NyxIdChatStepStatus.Uncertain) &&
+        (retry || skip);
+
+    private static bool HasRecoverableTerminalStep(NyxIdChatTaskState task)
+    {
+        var step = task.Steps.FirstOrDefault(candidate =>
+            string.Equals(candidate.StepId, task.ActiveStepId, StringComparison.Ordinal));
+        return step is not null && IsRecoverableTerminalStep(
+            step.Status,
+            step.AvailableActions?.Retry == true,
+            step.AvailableActions?.Skip == true);
     }
 
     public static IReadOnlyList<AGUIEvent> BuildControlChanged(
@@ -171,7 +286,20 @@ internal static class NyxIdChatConversationAguiFrameBuilder
             return [];
 
         var frames = BuildTaskFrames(committed.Task, ResolveActiveOrLast(committed.Task), sequence);
-        frames.Insert(0, Custom(ActionRequestEventName, wirePayload, sequence));
+        if (committed.State is null ||
+            !NyxIdChatPlanGateDecisions.CanPublishAction(committed.State, committed.Request))
+        {
+            AppendTerminalIfNeeded(
+                frames,
+                actorId,
+                turnId,
+                committed.Task,
+                committed.OriginTurn,
+                sequence);
+            return frames;
+        }
+
+        frames.Add(Custom(ActionRequestEventName, wirePayload, sequence));
         AppendTerminalIfNeeded(frames, actorId, turnId, committed.Task, committed.OriginTurn, sequence);
         return frames;
     }
@@ -195,7 +323,13 @@ internal static class NyxIdChatConversationAguiFrameBuilder
         if (committed.Resolution is null || sequence <= 0)
             return [];
 
-        return [Custom(InputChangedEventName, committed.Resolution, sequence)];
+        var frames = new List<AGUIEvent>
+        {
+            Custom(InputChangedEventName, committed.Resolution, sequence),
+        };
+        if (committed.State?.ActiveTask is { } task)
+            frames.Add(Custom(TaskSnapshotEventName, task, sequence));
+        return frames;
     }
 
     public static IReadOnlyList<AGUIEvent> BuildApprovalChanged(
@@ -209,11 +343,75 @@ internal static class NyxIdChatConversationAguiFrameBuilder
         return [Custom(ApprovalChangedEventName, committed.Resolution, sequence)];
     }
 
+    public static IReadOnlyList<AGUIEvent> BuildPlanResolutionChanged(
+        NyxIdChatPlanResolutionCommittedEvent committed)
+    {
+        ArgumentNullException.ThrowIfNull(committed);
+        var sequence = committed.State?.ProgressSequence ?? 0;
+        if (committed.Resolution is null ||
+            committed.State?.ActiveTask is not { } task ||
+            committed.State.ActiveTurn is not { } turn ||
+            sequence <= 0)
+        {
+            return [];
+        }
+
+        var frames = BuildTaskFrames(task, ResolveActiveOrLast(task), sequence);
+        if (committed.Resolution.Confirmed)
+        {
+            var actionAdmission = task.Gate?.Admissions.SingleOrDefault(candidate =>
+                !string.IsNullOrWhiteSpace(candidate.ActionRequestId));
+            var request = actionAdmission is null
+                ? null
+                : committed.State.PendingActions.SingleOrDefault(candidate =>
+                    string.Equals(
+                        candidate.ActionRequestId,
+                        actionAdmission.ActionRequestId,
+                        StringComparison.Ordinal));
+            if (request is not null &&
+                NyxIdChatPlanGateDecisions.CanPublishAction(committed.State, request) &&
+                MapActionRequestWirePayload(request) is { } wirePayload)
+            {
+                frames.Add(Custom(ActionRequestEventName, wirePayload, sequence));
+            }
+        }
+        AppendTerminalIfNeeded(
+            frames,
+            committed.State.ConversationActorId,
+            turn.TurnId,
+            task,
+            turn,
+            sequence);
+        return frames;
+    }
+
+    public static IReadOnlyList<AGUIEvent> BuildPlanGateCapabilityExpired(
+        NyxIdChatPlanGateCapabilityExpiredCommittedEvent committed)
+    {
+        ArgumentNullException.ThrowIfNull(committed);
+        var sequence = committed.State?.ProgressSequence ?? 0;
+        if (committed.State?.ActiveTask is not { } task ||
+            committed.State.ActiveTurn is not { } turn ||
+            sequence <= 0)
+        {
+            return [];
+        }
+
+        var frames = BuildTaskFrames(task, ResolveActiveOrLast(task), sequence);
+        AppendTerminalIfNeeded(
+            frames,
+            committed.State.ConversationActorId,
+            turn.TurnId,
+            task,
+            turn,
+            sequence);
+        return frames;
+    }
+
     private static NyxIdAssistantActionRequestWirePayload? MapActionRequestWirePayload(
         NyxIdChatActionRequestState request)
     {
         if (request.SchemaVersion != NyxIdAssistantActionRegistry.SupportedSchemaVersion ||
-            request.Action != NyxIdAssistantActionKind.ServiceConnect ||
             request.Params is null)
         {
             return null;
@@ -231,9 +429,50 @@ internal static class NyxIdChatConversationAguiFrameBuilder
                 {
                     CustomService = request.Params.CustomServiceConnect.Clone(),
                 },
+            NyxIdAssistantActionParams.ParamsOneofCase.ServiceReauthorize =>
+                new NyxIdAssistantActionWireParams
+                {
+                    ServiceReauthorize = request.Params.ServiceReauthorize.Clone(),
+                },
+            NyxIdAssistantActionParams.ParamsOneofCase.KeyCreate =>
+                new NyxIdAssistantActionWireParams
+                {
+                    KeyCreateName = request.Params.KeyCreate.Name,
+                    KeyCreatePlatform = request.Params.KeyCreate.Platform,
+                    KeyCreateAllowedServiceIds = { request.Params.KeyCreate.AllowedServiceIds },
+                },
+            NyxIdAssistantActionParams.ParamsOneofCase.KeyRotate =>
+                new NyxIdAssistantActionWireParams
+                {
+                    KeyRotateKeyId = request.Params.KeyRotate.KeyId,
+                },
             _ => null,
         };
         if (wireParams is null)
+            return null;
+
+        var wireAction = request.Action switch
+        {
+            NyxIdAssistantActionKind.ServiceConnect
+                when request.Params.ParamsCase is
+                    NyxIdAssistantActionParams.ParamsOneofCase.CatalogServiceConnect or
+                    NyxIdAssistantActionParams.ParamsOneofCase.CustomServiceConnect =>
+                "service.connect",
+            NyxIdAssistantActionKind.ServiceReauthorize
+                when request.Params.ParamsCase ==
+                    NyxIdAssistantActionParams.ParamsOneofCase.ServiceReauthorize =>
+                "service.reauthorize",
+            NyxIdAssistantActionKind.KeyCreate
+                when request.Params.ParamsCase ==
+                    NyxIdAssistantActionParams.ParamsOneofCase.KeyCreate =>
+                "key.create",
+            NyxIdAssistantActionKind.KeyRotate
+                when request.Params.ParamsCase ==
+                    NyxIdAssistantActionParams.ParamsOneofCase.KeyRotate =>
+                "key.rotate",
+            _ => null,
+        };
+        if (wireAction is null)
             return null;
 
         return new NyxIdAssistantActionRequestWirePayload
@@ -244,7 +483,7 @@ internal static class NyxIdChatConversationAguiFrameBuilder
             TaskId = request.TaskId,
             StepId = request.StepId,
             ActionRequestId = request.ActionRequestId,
-            Action = "service.connect",
+            Action = wireAction,
             Params = wireParams,
         };
     }
@@ -278,14 +517,27 @@ internal static class NyxIdChatConversationAguiFrameBuilder
             });
             return frames;
         }
-        if (committed.Admission.Kind != NyxIdChatContinuationKind.Action ||
-            committed.State?.ActiveTask is not { } task ||
-            committed.State.ActiveTurn is not { } turn ||
-            !string.Equals(task.TurnId, turnId, StringComparison.Ordinal) ||
-            !string.Equals(turn.TurnId, turnId, StringComparison.Ordinal))
+        if (committed.State?.ActiveTask is not { } task ||
+            committed.State.ActiveTurn is not { } turn)
         {
             return frames;
         }
+
+        var publishesCurrentTask = committed.Admission.Kind switch
+        {
+            NyxIdChatContinuationKind.Action =>
+                string.Equals(task.TurnId, turnId, StringComparison.Ordinal) &&
+                string.Equals(turn.TurnId, turnId, StringComparison.Ordinal),
+            NyxIdChatContinuationKind.Steering =>
+                committed.Admission.Status == NyxIdChatContinuationAdmissionStatus.Started &&
+                string.Equals(
+                    committed.Admission.OriginTurnId,
+                    turnId,
+                    StringComparison.Ordinal),
+            _ => false,
+        };
+        if (!publishesCurrentTask)
+            return frames;
 
         frames.AddRange(BuildTaskFrames(task, ResolveActiveOrLast(task), sequence));
         AppendTerminalIfNeeded(frames, actorId, turnId, task, turn, sequence);
@@ -297,7 +549,8 @@ internal static class NyxIdChatConversationAguiFrameBuilder
         long sequence)
     {
         ArgumentNullException.ThrowIfNull(committed);
-        if (committed.Key is null ||
+        if (committed.ConsumedPostconditionFailure is not null ||
+            committed.Key is null ||
             committed.State?.ActiveTask is null ||
             committed.State.ActiveTurn is null ||
             sequence <= 0)
@@ -319,12 +572,7 @@ internal static class NyxIdChatConversationAguiFrameBuilder
                 ToolCallEnd = new ToolCallEndEvent
                 {
                     ToolCallId = receipt.CallId,
-                    Result = receipt.Status ==
-                        Aevatar.AI.Abstractions.AgentToolReceiptStatus.Success
-                        ? "completed"
-                        : string.IsNullOrWhiteSpace(receipt.ErrorMessage)
-                            ? "not completed"
-                            : receipt.ErrorMessage,
+                    Result = ResolveToolReceiptResult(receipt),
                 },
             });
         }
@@ -399,28 +647,30 @@ internal static class NyxIdChatConversationAguiFrameBuilder
     private static List<AGUIEvent> BuildTaskFrames(
         NyxIdChatTaskState task,
         IEnumerable<NyxIdChatTaskStepState> changedSteps,
-        long sequence)
+        long sequence,
+        NyxIdChatStepChangeKind? changeKind = null)
     {
         var frames = new List<AGUIEvent>
         {
             Custom(TaskSnapshotEventName, task, sequence),
         };
         frames.AddRange(changedSteps.Select(step =>
-            Custom(TaskStepChangedEventName, BuildStepChanged(task, step), sequence)));
+            Custom(TaskStepChangedEventName, BuildStepChanged(task, step, changeKind), sequence)));
         return frames;
     }
 
     private static NyxIdChatTaskStepChanged BuildStepChanged(
         NyxIdChatTaskState task,
-        NyxIdChatTaskStepState step) =>
+        NyxIdChatTaskStepState step,
+        NyxIdChatStepChangeKind? changeKind = null) =>
         new()
         {
             TaskId = task.TaskId,
             PlanRevision = task.PlanRevision,
             Step = step.Clone(),
-            ChangeKind = step.Status == NyxIdChatStepStatus.Cancelled
+            ChangeKind = changeKind ?? (step.Status == NyxIdChatStepStatus.Cancelled
                 ? NyxIdChatStepChangeKind.Cancelled
-                : NyxIdChatStepChangeKind.Status,
+                : NyxIdChatStepChangeKind.Status),
         };
 
     private static IEnumerable<NyxIdChatTaskStepState> ResolveChangedSteps(
@@ -489,15 +739,15 @@ internal static class NyxIdChatConversationAguiFrameBuilder
                 ToolCallEnd = new ToolCallEndEvent
                 {
                     ToolCallId = receipt.CallId,
-                    Result = receipt.Status == Aevatar.AI.Abstractions.AgentToolReceiptStatus.Success
-                        ? "completed"
-                        : string.IsNullOrWhiteSpace(receipt.ErrorMessage)
-                            ? "not completed"
-                            : receipt.ErrorMessage,
+                    Result = ResolveToolReceiptResult(receipt),
                 },
             });
         }
     }
+
+    private static string ResolveToolReceiptResult(
+        Aevatar.AI.Abstractions.AgentToolReceipt receipt) =>
+        NyxIdChatPublicToolReceiptResult.ResolvePresentationResult(receipt);
 
     private static void AppendTerminalIfNeeded(
         List<AGUIEvent> frames,

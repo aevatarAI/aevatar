@@ -612,13 +612,8 @@ public sealed class NyxIdRemoteCapabilityBroker :
         TokenServiceGrant grant,
         CancellationToken ct)
     {
-        using var request = new HttpRequestMessage(
-            HttpMethod.Get,
-            $"{_options.ResourceServerBaseUrl.Trim().TrimEnd('/')}{UserServicesEndpoint}");
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
-
         var http = CreateHttpClient();
-        using var response = await http.SendAsync(request, ct).ConfigureAwait(false);
+        using var response = await SendCatalogRequestAsync(http, accessToken, ct).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
             var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
@@ -640,6 +635,24 @@ public sealed class NyxIdRemoteCapabilityBroker :
             .Where(static resource => !string.IsNullOrWhiteSpace(resource))
             .Distinct(StringComparer.Ordinal)
             .ToArray();
+    }
+
+    private async Task<HttpResponseMessage> SendCatalogRequestAsync(
+        HttpClient http,
+        string accessToken,
+        CancellationToken ct)
+    {
+        using var request = CreateCatalogRequest(_options.PublicApiBaseUrl, accessToken);
+        return await http.SendAsync(request, ct).ConfigureAwait(false);
+    }
+
+    private static HttpRequestMessage CreateCatalogRequest(string? baseUrl, string accessToken)
+    {
+        var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"{baseUrl?.Trim().TrimEnd('/')}{UserServicesEndpoint}");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+        return request;
     }
 
     private static TokenServiceGrant ParseTokenServiceGrant(string accessToken)

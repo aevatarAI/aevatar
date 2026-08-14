@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package aevatar.ai.tool_providers;
 
+import "google/protobuf/struct.proto";
+
 option csharp_namespace = "Aevatar.AI.Abstractions.ToolProviders";
 
 enum AgentToolExecutionOwnerKind {
@@ -39,4 +41,201 @@ message AgentToolAdmissionFact {
   AgentToolReplayPolicy replay_policy = 9;
   reserved 10;
   reserved "admission_kind";
+}
+
+enum AgentToolOperationAuthorizationBasisPayload {
+  AGENT_TOOL_OPERATION_AUTHORIZATION_BASIS_PAYLOAD_UNSPECIFIED = 0;
+  AGENT_TOOL_OPERATION_AUTHORIZATION_BASIS_PAYLOAD_PUBLISHED_CONTRACT = 1;
+  AGENT_TOOL_OPERATION_AUTHORIZATION_BASIS_PAYLOAD_EXPLICIT_REQUEST = 2;
+  AGENT_TOOL_OPERATION_AUTHORIZATION_BASIS_PAYLOAD_PLATFORM_CONTRACT = 3;
+}
+
+enum AgentToolOperationRiskPayload {
+  AGENT_TOOL_OPERATION_RISK_PAYLOAD_UNSPECIFIED = 0;
+  AGENT_TOOL_OPERATION_RISK_PAYLOAD_READ_ONLY = 1;
+  AGENT_TOOL_OPERATION_RISK_PAYLOAD_WRITE = 2;
+  AGENT_TOOL_OPERATION_RISK_PAYLOAD_DESTRUCTIVE = 3;
+}
+
+enum AgentToolOperationApprovalPayload {
+  AGENT_TOOL_OPERATION_APPROVAL_PAYLOAD_UNSPECIFIED = 0;
+  AGENT_TOOL_OPERATION_APPROVAL_PAYLOAD_NONE = 1;
+  AGENT_TOOL_OPERATION_APPROVAL_PAYLOAD_REQUIRED = 2;
+}
+
+enum AgentToolOperationEnforcementOwnerPayload {
+  AGENT_TOOL_OPERATION_ENFORCEMENT_OWNER_PAYLOAD_UNSPECIFIED = 0;
+  AGENT_TOOL_OPERATION_ENFORCEMENT_OWNER_PAYLOAD_AEVATAR = 1;
+  AGENT_TOOL_OPERATION_ENFORCEMENT_OWNER_PAYLOAD_NYX_ID = 2;
+}
+
+enum AgentToolOperationExecutionModePayload {
+  AGENT_TOOL_OPERATION_EXECUTION_MODE_PAYLOAD_UNSPECIFIED = 0;
+  AGENT_TOOL_OPERATION_EXECUTION_MODE_PAYLOAD_INTERACTIVE = 1;
+  AGENT_TOOL_OPERATION_EXECUTION_MODE_PAYLOAD_DURABLE = 2;
+}
+
+enum AgentToolOperationParameterLocationPayload {
+  AGENT_TOOL_OPERATION_PARAMETER_LOCATION_PAYLOAD_UNSPECIFIED = 0;
+  AGENT_TOOL_OPERATION_PARAMETER_LOCATION_PAYLOAD_PATH = 1;
+  AGENT_TOOL_OPERATION_PARAMETER_LOCATION_PAYLOAD_QUERY = 2;
+  AGENT_TOOL_OPERATION_PARAMETER_LOCATION_PAYLOAD_HEADER = 3;
+}
+
+enum AgentToolOperationValueKindPayload {
+  AGENT_TOOL_OPERATION_VALUE_KIND_PAYLOAD_UNSPECIFIED = 0;
+  AGENT_TOOL_OPERATION_VALUE_KIND_PAYLOAD_STRING = 1;
+  AGENT_TOOL_OPERATION_VALUE_KIND_PAYLOAD_INTEGER = 2;
+  AGENT_TOOL_OPERATION_VALUE_KIND_PAYLOAD_NUMBER = 3;
+  AGENT_TOOL_OPERATION_VALUE_KIND_PAYLOAD_BOOLEAN = 4;
+  AGENT_TOOL_OPERATION_VALUE_KIND_PAYLOAD_OBJECT = 5;
+  AGENT_TOOL_OPERATION_VALUE_KIND_PAYLOAD_ARRAY = 6;
+}
+
+message AgentToolPublishedEndpointIdentityPayload {
+  string endpoint_id = 1;
+}
+
+message AgentToolAuthoredRequestIdentityPayload {
+  string request_contract_digest = 1;
+}
+
+message AgentToolPlatformBuiltInIdentityPayload {
+  string capability_id = 1;
+}
+
+message AgentToolOperationSchemaPropertyPayload {
+  string name = 1;
+  AgentToolOperationValueSchemaPayload schema = 2;
+}
+
+message AgentToolOperationValueSchemaPayload {
+  AgentToolOperationValueKindPayload kind = 1;
+  repeated AgentToolOperationSchemaPropertyPayload properties = 2;
+  repeated string required_properties = 3;
+  AgentToolOperationValueSchemaPayload items = 4;
+  repeated string allowed_values = 5;
+  bool additional_properties_allowed = 6;
+}
+
+message AgentToolOperationParameterPayload {
+  string name = 1;
+  AgentToolOperationParameterLocationPayload location = 2;
+  bool required = 3;
+  AgentToolOperationValueSchemaPayload schema = 4;
+}
+
+message AgentToolOperationRequestBodyPayload {
+  bool required = 1;
+  string media_type = 2;
+  AgentToolOperationValueSchemaPayload schema = 3;
+}
+
+message AgentToolOperationResponsePolicyPayload {
+  bool text_allowed = 1;
+  bool file_artifact_allowed = 2;
+  repeated string media_types = 3;
+}
+
+message AgentToolOperationExecutionPolicyPayload {
+  AgentToolOperationRiskPayload risk = 1;
+  AgentToolOperationApprovalPayload approval = 2;
+  AgentToolOperationEnforcementOwnerPayload enforcement_owner = 3;
+  repeated AgentToolOperationExecutionModePayload allowed_execution_modes = 4;
+}
+
+enum AgentToolReadBackMatchPayload {
+  AGENT_TOOL_READ_BACK_MATCH_PAYLOAD_UNSPECIFIED = 0;
+  AGENT_TOOL_READ_BACK_MATCH_PAYLOAD_EXISTS = 1;
+  AGENT_TOOL_READ_BACK_MATCH_PAYLOAD_ABSENT = 2;
+  AGENT_TOOL_READ_BACK_MATCH_PAYLOAD_EQUALS = 3;
+  AGENT_TOOL_READ_BACK_MATCH_PAYLOAD_ARRAY_CONTAINS_EQUALS = 4;
+}
+
+enum AgentToolReadBackExpectedValueSourcePayload {
+  AGENT_TOOL_READ_BACK_EXPECTED_VALUE_SOURCE_PAYLOAD_UNSPECIFIED = 0;
+  AGENT_TOOL_READ_BACK_EXPECTED_VALUE_SOURCE_PAYLOAD_FROZEN_VALUE = 1;
+  AGENT_TOOL_READ_BACK_EXPECTED_VALUE_SOURCE_PAYLOAD_PROVIDER_RESOURCE_ID = 2;
+}
+
+message AgentToolReadBackAssertionPayload {
+  AgentToolReadBackMatchPayload match = 1;
+  // RFC 6901 pointer within the bounded read projection's data member.
+  string json_pointer = 2;
+  google.protobuf.Value expected_value = 3;
+  // RFC 6901 pointer within each array element for ARRAY_CONTAINS_EQUALS.
+  string element_json_pointer = 4;
+  AgentToolReadBackExpectedValueSourcePayload expected_value_source = 5;
+}
+
+// Bounded exhaustive pagination for a server-sealed read-back. The actor-owned
+// verifier advances only through the typed continuation token and treats a
+// malformed or unterminated sequence as unavailable evidence.
+message AgentToolReadBackPaginationPayload {
+  string has_more_json_pointer = 1;
+  string page_token_json_pointer = 2;
+  AgentToolOperationParameterLocationPayload page_token_location = 3;
+  string page_token_argument_name = 4;
+  uint32 max_pages = 5;
+}
+
+// Read argument populated from the provider resource identity returned by the
+// effect. The actor persists only this target contract; the value remains in the
+// typed effect receipt and is injected immediately before the exact read.
+message AgentToolReadBackProviderResourceArgumentPayload {
+  AgentToolOperationParameterLocationPayload location = 1;
+  string argument_name = 2;
+}
+
+// Server-sealed read-back contract for proving whether an effect was applied.
+// The read operation must itself be a read-only admitted exact selector and may
+// not contain another read-back contract.
+message AgentToolOperationReadBackPayload {
+  AgentToolOperationAdmissionPayload read_operation = 1;
+  google.protobuf.Struct arguments = 2;
+  AgentToolReadBackAssertionPayload assertion = 3;
+  string check_name = 4;
+  // Optional exact typed evidence that proves the effect was not applied.
+  // When present, a generic assertion miss is unavailable rather than absence.
+  AgentToolReadBackAssertionPayload not_applied_assertion = 5;
+  AgentToolReadBackPaginationPayload pagination = 6;
+  AgentToolReadBackProviderResourceArgumentPayload provider_resource_argument = 7;
+  // RFC 6901 pointer into the bounded effect response that yields the exact
+  // provider resource identity needed by the frozen read-back contract.
+  string effect_result_identity_json_pointer = 8;
+}
+
+// Credential-free authorization fence captured from the exact model-visible
+// tool definition. Recovery may use it only to re-match the same current tool;
+// it is never an executable capability by itself.
+message AgentToolDurableAuthorizationSnapshotPayload {
+  bool has_requires_approval = 1;
+  bool requires_approval = 2;
+  bool is_read_only = 3;
+  bool is_destructive = 4;
+  string side_effect_kind = 5;
+  string tool_definition_fingerprint = 6;
+}
+
+// Exact server-sealed operation admission persisted with an actor-owned tool intent.
+// Credential material is deliberately absent and must be resolved again for recovery.
+message AgentToolOperationAdmissionPayload {
+  string service_instance_id = 1;
+  string service_slug = 2;
+  oneof identity {
+    AgentToolPublishedEndpointIdentityPayload published_endpoint = 3;
+    AgentToolAuthoredRequestIdentityPayload authored_request = 4;
+    AgentToolPlatformBuiltInIdentityPayload platform_built_in = 16;
+  }
+  AgentToolOperationAuthorizationBasisPayload authorization_basis = 5;
+  string http_method = 6;
+  string path_template = 7;
+  string contract_digest = 8;
+  repeated AgentToolOperationParameterPayload parameters = 9;
+  AgentToolOperationRequestBodyPayload request_body = 10;
+  AgentToolOperationResponsePolicyPayload response_policy = 11;
+  AgentToolOperationExecutionPolicyPayload execution_policy = 12;
+  string catalog_digest = 13;
+  AgentToolOperationReadBackPayload read_back = 14;
+  AgentToolDurableAuthorizationSnapshotPayload durable_authorization = 15;
 }

@@ -47,6 +47,10 @@ public sealed record ScopeBindingGAgentSpec(
     string AgentKind,
     IReadOnlyList<ScopeBindingGAgentEndpoint> Endpoints);
 
+public sealed record ScopeBindingAcceptedRevisionCreation(
+    string ServiceKey,
+    string RevisionId);
+
 public sealed record ScopeBindingUpsertRequest(
     string ScopeId,
     ScopeBindingImplementationKind ImplementationKind,
@@ -63,6 +67,9 @@ public sealed record ScopeBindingUpsertRequest(
 {
     [JsonIgnore]
     public WorkflowCapabilityAdmissionContext? CapabilityAdmission { get; init; }
+
+    [JsonIgnore]
+    public ScopeBindingAcceptedRevisionCreation? AcceptedRevisionCreation { get; init; }
 }
 
 public sealed record ScopeBindingWorkflowResult

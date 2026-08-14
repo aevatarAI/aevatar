@@ -7,6 +7,7 @@ using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Aevatar.Foundation.Runtime.Persistence;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Tests.Shared;
@@ -167,6 +168,11 @@ public sealed class NyxIdChatOrleansFirstTurnIntegrationTests
             {
                 services.AddSingleton(history);
                 services.AddSingleton(executor);
+                services.AddSingleton<INyxIdChatTurnOperationReconciliationPort,
+                    UnavailableNyxIdChatTurnOperationReconciliationPort>();
+                services.AddSingleton<INyxIdChatTurnOperationDispatchPort,
+                    NyxIdChatTurnOperationDispatchPort>();
+                services.AddSingleton(new NyxIdToolOptions());
                 services.AddSingleton(TimeProvider.System);
                 if (eventStore is not null)
                 {

@@ -48,10 +48,9 @@ Before any user can connect GitHub, the following must already be true:
   ```
   https://<your-nyx-api-host>/api/v1/providers/callback
   ```
-  Note the host is the **API/backend host**, not the dashboard host. In our
-  production environment this is `nyx-api.chrono-ai.fun`, while the dashboard
-  is served from `nyx.chrono-ai.fun` — both reach the same backend, but the
-  redirect URI registered on GitHub must use the API host.
+  Note the host is the **API/backend host**. In our production environment this
+  is `nyx-api.chrono-ai.fun`, and the redirect URI registered on GitHub must use
+  that API host.
 - The aevatar host is configured with the matching NyxID Authority
   (`appsettings.json` → `Aevatar:NyxId:Authority`) and the Lark relay path is
   live. See [`lark-nyx-cutover-runbook.md`](2026-04-22-lark-nyx-cutover-runbook.md)

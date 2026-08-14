@@ -13,10 +13,10 @@
   location.replace("/admin#/observatory" + (target.toString() ? "?" + target.toString() : ""));
 })();
 </script>
-<title>Workflow Run Observatory · 工作流运行观测台</title>
+<title>Workflow Run Observatory · 工作流请求轨迹观测台</title>
 <style>
   /* =========================================================================
-     Workflow Run Observatory — 只读运行观测台
+     Workflow Run Observatory — 请求轨迹观测与本人 scope 运行控制
      单文件、零外部依赖。深色为主，浅色全量支持。
      所有颜色走 CSS 自定义属性（设计令牌），不散落硬编码。
      ========================================================================= */
@@ -34,10 +34,10 @@
     --fg-strong: #f4f6fb;
     --muted:     #9aa3b2;
     --muted-2:   #6c7585;
-    --accent:    #5b8cff;
+    --accent:    #6f97ff;
     --accent-ink:#0b1020;
-    --accent-soft: rgba(91,140,255,.14);
-    --accent-line: rgba(91,140,255,.40);
+    --accent-soft: rgba(111,151,255,.15);
+    --accent-line: rgba(111,151,255,.42);
 
     --ok:    #3fb950;  --ok-soft:   rgba(63,185,80,.14);
     --warn:  #d29922;  --warn-soft: rgba(210,153,34,.15);
@@ -51,7 +51,7 @@
 
     --r-sm: 6px; --r: 9px; --r-lg: 13px; --r-pill: 999px;
     --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "PingFang SC",
+    --sans: "Alibaba PuHuiTi 2.0", "Alibaba PuHuiTi", "AlibabaSans", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "PingFang SC",
             "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
 
     --list-w: 320px;
@@ -80,10 +80,10 @@
       --fg-strong: #0b0f14;
       --muted:     #57606b;
       --muted-2:   #828b97;
-      --accent:    #2f63e0;
+      --accent:    #2f5cf6;
       --accent-ink:#ffffff;
-      --accent-soft: rgba(47,99,224,.10);
-      --accent-line: rgba(47,99,224,.34);
+      --accent-soft: rgba(47,92,246,.10);
+      --accent-line: rgba(47,92,246,.34);
       --ok:#1a7f37; --ok-soft:rgba(26,127,55,.12);
       --warn:#9a6700; --warn-soft:rgba(154,103,0,.12);
       --err:#cf222e; --err-soft:rgba(207,34,46,.10);
@@ -106,10 +106,10 @@
     --fg-strong: #0b0f14;
     --muted:     #57606b;
     --muted-2:   #828b97;
-    --accent:    #2f63e0;
+    --accent:    #2f5cf6;
     --accent-ink:#ffffff;
-    --accent-soft: rgba(47,99,224,.10);
-    --accent-line: rgba(47,99,224,.34);
+    --accent-soft: rgba(47,92,246,.10);
+    --accent-line: rgba(47,92,246,.34);
     --ok:#1a7f37; --ok-soft:rgba(26,127,55,.12);
     --warn:#9a6700; --warn-soft:rgba(154,103,0,.12);
     --err:#cf222e; --err-soft:rgba(207,34,46,.10);
@@ -196,7 +196,7 @@
   }
   .brand-name { font-weight: 650; letter-spacing: -.01em; color: var(--fg-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .brand-sub { color: var(--muted-2); font-size: 12px; white-space: nowrap; }
-  .pill-ro {
+  .pill-mode {
     font-size: 11px; font-weight: 650; letter-spacing: .04em; flex: 0 0 auto;
     padding: 2px 8px; border-radius: var(--r-pill);
     color: var(--muted); background: var(--neutral-soft); border: 1px solid var(--border);
@@ -412,7 +412,7 @@
   }
   .shell.has-banner { height: auto; min-height: calc(100dvh - var(--topbar-h) - var(--workspacebar-h)); }
 
-  /* ---- Runs list -------------------------------------------------------- */
+  /* ---- Request traces list --------------------------------------------- */
   .list-pane {
     border-right: 1px solid var(--border);
     display: flex; flex-direction: column; min-height: 0;
@@ -422,6 +422,7 @@
   .list-title-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
   .list-title { font-size: 13px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); display: inline-flex; align-items: center; gap: 8px; }
   .list-title .lt-ic { color: var(--muted-2); display: inline-grid; place-items: center; }
+  .list-coverage { margin-top: 5px; font-size: 11.5px; color: var(--muted-2); }
   /* count rendered as a small pill so the header reads as an intentional unit */
   .list-count {
     font-family: var(--mono); font-size: 11.5px; font-weight: 600; color: var(--muted);
@@ -438,6 +439,13 @@
   .chip[aria-pressed="true"] { color: var(--fg-strong); background: var(--panel-3); border-color: var(--muted-2); }
 
   .runlist { overflow-y: auto; flex: 1 1 auto; padding: 8px; min-height: 0; }
+  .trace-load-more {
+    display: block; width: calc(100% - 16px); margin: 8px; padding: 9px 12px;
+    border: 1px solid var(--border); border-radius: var(--r); background: var(--panel-2);
+    color: var(--muted); font-weight: 600; text-align: center;
+  }
+  .trace-load-more:hover:not(:disabled) { color: var(--fg); border-color: var(--muted-2); }
+  .trace-load-more:disabled { cursor: wait; opacity: .65; }
   .run-row {
     display: grid; grid-template-columns: auto 1fr; gap: 2px 11px;
     align-items: start; width: 100%; text-align: left;
@@ -446,9 +454,14 @@
     transition: background .12s, border-color .12s;
   }
   .run-row:hover { background: var(--panel-2); }
-  .run-row .dot { margin-top: 5px; grid-row: span 2; }
+  .run-row .dot { margin-top: 5px; grid-row: span 3; }
   .run-row .rn { font-weight: 640; color: var(--fg-strong); letter-spacing: -.005em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .run-row .rm { font-size: 12px; color: var(--muted); display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .run-row .rt-preview {
+    grid-column: 2; min-width: 0; margin-top: 2px; font-size: 11.5px; color: var(--muted-2);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .run-row .rt-preview .rt-label { margin-right: 6px; color: var(--muted); font-weight: 650; }
   .run-row .rm .id { font-family: var(--mono); font-size: 11.5px; color: var(--muted-2); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .run-row .rm .sep { color: var(--border); }
   .run-row .rm .rm-status { font-weight: 600; color: var(--muted); }
@@ -479,7 +492,7 @@
   .empty .es { font-size: 12.5px; max-width: 220px; }
 
   /* =========================================================================
-     Run detail
+     Request trace detail
      ========================================================================= */
   .detail-pane { overflow-y: auto; min-height: 0; display: flex; flex-direction: column; }
   .detail-inner { max-width: 980px; width: 100%; margin: 0 auto; padding: 22px 26px 64px; flex: 1 1 auto; }
@@ -487,14 +500,37 @@
   .backbar { display: none; }
 
   .run-header { display: flex; flex-direction: column; gap: 13px; }
+  .rh-eyebrow { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
   .rh-top { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-  .rh-title { font-size: 21px; font-weight: 700; letter-spacing: -.02em; color: var(--fg-strong); display: flex; align-items: center; gap: 10px; margin: 0; }
+  .rh-title { min-width:0; font-size: 21px; font-weight: 700; letter-spacing: -.02em; color: var(--fg-strong); display: flex; align-items: center; gap: 10px; margin: 0; overflow-wrap:anywhere; }
   .rh-title .dot { width: 11px; height: 11px; }
   .rh-meta { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; color: var(--muted); font-size: 12.5px; }
   .rh-meta .k { color: var(--muted-2); }
   .rh-meta .v { font-family: var(--mono); color: var(--fg); }
   .rh-meta .grp { display: inline-flex; gap: 6px; align-items: baseline; }
   .rh-meta .rid-grp { align-items: center; }
+  .run-stop-control { margin-left:auto; display:inline-flex; align-items:center; gap:9px; flex-wrap:wrap; }
+  .stop-run-button, .stop-confirm-button {
+    min-height:34px; display:inline-flex; align-items:center; justify-content:center; gap:7px;
+    padding:0 12px; border:1px solid color-mix(in oklab,var(--err) 52%,var(--border));
+    border-radius:var(--r); background:var(--err-soft); color:var(--err); font-size:12.5px; font-weight:700;
+    transition:color .15s,background .15s,border-color .15s,transform .08s;
+  }
+  .stop-run-button:hover, .stop-confirm-button:hover { background:color-mix(in oklab,var(--err-soft) 72%,var(--panel-3)); border-color:var(--err); }
+  .stop-run-button:active, .stop-confirm-button:active { transform:translateY(1px); }
+  .stop-run-button:disabled, .stop-confirm-button:disabled { opacity:.58; cursor:not-allowed; transform:none; }
+  .stop-accepted { display:inline-flex; align-items:center; gap:7px; color:var(--warn); font-size:12.5px; font-weight:650; }
+  .stop-confirmation {
+    display:flex; align-items:center; gap:12px; flex-wrap:wrap; padding:12px 14px;
+    border:1px solid color-mix(in oklab,var(--err) 44%,var(--border)); border-radius:var(--r);
+    background:var(--err-soft);
+  }
+  .stop-confirmation-copy { min-width:220px; flex:1 1 420px; }
+  .stop-confirmation-copy b { display:block; color:var(--fg-strong); font-size:13px; }
+  .stop-confirmation-copy span { display:block; margin-top:3px; color:var(--muted); font-size:12px; }
+  .stop-confirmation-actions { display:flex; align-items:center; gap:8px; margin-left:auto; }
+  .stop-confirmation .chip { min-height:34px; padding:0 12px; border-radius:var(--r); }
+  .stop-control-error { flex-basis:100%; color:var(--err); font-size:12px; }
 
   /* run id, broken into color-coded semantic chips (scope / 定义 / 运行) for legibility */
   .rid { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
@@ -569,16 +605,106 @@
   .approval-actions .btn-primary { width:auto; padding:7px 12px; }
 
   /* ---- Tabs ------------------------------------------------------------- */
-  .tabs { display: inline-flex; gap: 3px; padding: 3px; margin: 20px 0 0; background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--r-pill); }
+  .tabs {
+    display: inline-flex; max-width: 100%; gap: 3px; padding: 3px; margin: 20px 0 0;
+    overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--r-pill);
+  }
+  .tabs::-webkit-scrollbar { display: none; }
   .tab {
     padding: 6px 16px; border-radius: var(--r-pill); border: 0; background: transparent;
     color: var(--muted); font-size: 13px; font-weight: 600; transition: color .15s, background .15s;
-    display: inline-flex; align-items: center; gap: 7px;
+    display: inline-flex; flex: 0 0 auto; align-items: center; gap: 7px;
   }
   .tab:hover { color: var(--fg); }
   .tab[aria-selected="true"] { background: var(--panel); color: var(--fg-strong); box-shadow: var(--shadow-sm); }
   .tabpanel { margin-top: 18px; }
   .tabpanel[hidden] { display: none; }
+
+  /* ---- Request operation trajectory ------------------------------------- */
+  .operation-trajectory { display: grid; gap: 18px; }
+  .duration-overview {
+    border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--panel); overflow: hidden;
+  }
+  .do-head {
+    display: flex; align-items: flex-start; justify-content: space-between; gap: 16px;
+    padding: 12px 14px; border-bottom: 1px solid var(--border-soft); background: var(--panel-2);
+  }
+  .do-title { font-size: 13px; font-weight: 700; color: var(--fg-strong); }
+  .do-sub { margin-top: 3px; color: var(--muted); font-size: 11.5px; line-height: 1.45; }
+  .do-range { flex: 0 0 auto; font-family: var(--mono); font-size: 11px; color: var(--muted-2); white-space: nowrap; }
+  .duration-lanes { display: grid; }
+  .duration-lane {
+    display: grid; grid-template-columns: 112px minmax(0, 1fr); min-height: 64px;
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .duration-lane:last-child { border-bottom: 0; }
+  .dl-label { padding: 11px 12px; border-right: 1px solid var(--border-soft); display: grid; align-content: center; gap: 2px; }
+  .dl-name { display: inline-flex; align-items: center; gap: 7px; color: var(--fg-strong); font-size: 12px; font-weight: 700; }
+  .dl-name svg { width: 13px; height: 13px; }
+  .duration-lane[data-lane="input"] .dl-name { color: var(--ok); }
+  .duration-lane[data-lane="model"] .dl-name { color: var(--run); }
+  .duration-lane[data-lane="tools"] .dl-name { color: var(--accent); }
+  .dl-count { color: var(--muted-2); font-size: 10.5px; font-family: var(--mono); }
+  .dl-track {
+    position: relative; min-width: 0; margin: 10px 14px; height: 44px;
+    background: linear-gradient(90deg, var(--border-soft) 1px, transparent 1px) 0 0 / 25% 100%;
+  }
+  .dl-track::before { content: ""; position: absolute; left: 0; right: 0; top: 21px; height: 1px; background: var(--border); }
+  .dl-empty { position: absolute; left: 7px; top: 13px; color: var(--muted-2); font-size: 11px; }
+  .duration-mark {
+    --mark-color: var(--muted); position: absolute; top: calc(4px + var(--mark-row, 0) * 12px); height: 10px;
+    min-width: 5px; border: 0; border-radius: 3px; background: var(--mark-color); color: transparent;
+    box-shadow: 0 0 0 2px color-mix(in oklab, var(--mark-color) 14%, transparent); cursor: pointer;
+  }
+  .duration-mark:hover, .duration-mark:focus-visible { z-index: 3; box-shadow: 0 0 0 3px color-mix(in oklab, var(--mark-color) 28%, transparent); outline: none; }
+  .duration-mark.point { width: 7px !important; min-width: 7px; border-radius: 50%; }
+  .duration-mark[data-kind="input"] { --mark-color: var(--ok); }
+  .duration-mark[data-kind="model"] { --mark-color: var(--run); }
+  .duration-mark[data-kind="tool"] { --mark-color: var(--accent); }
+  .do-axis { display: grid; grid-template-columns: 112px minmax(0, 1fr); border-top: 1px solid var(--border-soft); }
+  .do-axis-label { border-right: 1px solid var(--border-soft); }
+  .do-ticks { display: flex; justify-content: space-between; padding: 6px 14px 8px; font-family: var(--mono); font-size: 10px; color: var(--muted-2); }
+  .duration-legend { display: flex; flex-wrap: wrap; gap: 12px; padding: 9px 14px; border-top: 1px solid var(--border-soft); color: var(--muted); font-size: 11px; }
+  .duration-legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .duration-legend i { width: 12px; height: 6px; border-radius: 2px; background: var(--muted-2); }
+  .duration-legend i.point { width: 7px; height: 7px; border-radius: 50%; background: var(--run); }
+
+  .operation-ledger { border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--panel); overflow: hidden; }
+  .ol-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 11px 14px; border-bottom: 1px solid var(--border); background: var(--panel-2); }
+  .ol-title { color: var(--fg-strong); font-size: 13px; font-weight: 700; }
+  .ol-count { color: var(--muted-2); font-family: var(--mono); font-size: 11px; }
+  .operation-row { border-bottom: 1px solid var(--border-soft); }
+  .operation-row:last-child { border-bottom: 0; }
+  .operation-summary {
+    width: 100%; display: grid; grid-template-columns: 28px 86px minmax(150px, 1fr) 78px 104px 82px 16px;
+    gap: 10px; align-items: center; padding: 10px 12px; border: 0; background: var(--panel); color: inherit; text-align: left;
+  }
+  .operation-summary:hover { background: var(--panel-2); }
+  .operation-summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .op-index, .op-time, .op-duration { font-family: var(--mono); font-size: 11px; color: var(--muted-2); font-variant-numeric: tabular-nums; }
+  .op-type { display: inline-flex; align-items: center; gap: 5px; min-width: 0; font-size: 10.5px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; }
+  .op-type svg { width: 12px; height: 12px; }
+  .op-type.input { color: var(--ok); }
+  .op-type.model { color: var(--run); }
+  .op-type.tool { color: var(--accent); }
+  .op-main { min-width: 0; display: grid; gap: 2px; }
+  .op-name { color: var(--fg-strong); font-size: 12.5px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .op-preview { color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .op-duration.unavailable { color: var(--muted-2); }
+  .op-state { justify-self: start; font-size: 10.5px; font-weight: 650; padding: 2px 7px; border: 1px solid var(--border); border-radius: var(--r-pill); color: var(--muted); white-space: nowrap; }
+  .op-state.ok { color: var(--ok); border-color: color-mix(in oklab, var(--ok) 28%, var(--border)); background: var(--ok-soft); }
+  .op-state.bad { color: var(--err); border-color: color-mix(in oklab, var(--err) 30%, var(--border)); background: var(--err-soft); }
+  .op-state.live { color: var(--run); border-color: color-mix(in oklab, var(--run) 30%, var(--border)); background: var(--run-soft); }
+  .op-chevron { color: var(--muted-2); transition: transform .16s ease; }
+  .operation-row[data-open="true"] .op-chevron { transform: rotate(90deg); }
+  .operation-detail { display: none; padding: 0 14px 14px 136px; background: var(--panel); }
+  .operation-row[data-open="true"] .operation-detail { display: grid; gap: 10px; }
+  .op-meta { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 5px 14px; padding: 10px 12px; border: 1px solid var(--border-soft); border-radius: var(--r-sm); background: var(--bg); font-size: 12px; }
+  .op-meta .k { color: var(--muted-2); }
+  .op-meta .v { color: var(--fg); font-family: var(--mono); word-break: break-word; }
+  .op-unavailable { color: var(--muted); font-size: 12px; padding: 8px 10px; border-left: 2px solid var(--muted-2); background: var(--panel-2); }
+  .op-text { margin: 0; padding: 11px 12px; max-height: 300px; overflow: auto; white-space: pre-wrap; word-break: break-word; background: var(--bg); border: 1px solid var(--border-soft); border-radius: var(--r-sm); color: var(--fg); font-family: var(--mono); font-size: 12px; line-height: 1.55; }
 
   /* =========================================================================
      Timeline — the centerpiece
@@ -935,7 +1061,7 @@
     .brand-sub { display: none; }
     .account .who { max-width: 92px; }
     /* topbar: stop secondary pills from being squeezed into ugly vertical char-wrap
-       (e.g. "已暂停"/"切换账户" stacking one glyph per line); let the brand truncate instead. */
+       (e.g. refresh/account labels stacking one glyph per line); let the brand truncate instead. */
     .topbar { gap: 8px; }
     .brand-name { overflow: hidden; text-overflow: ellipsis; }
     .workspacebar { padding:7px 10px; }
@@ -944,8 +1070,8 @@
     .workspace-action { width:34px; padding:0; justify-content:center; }
     /* release the fixed brand width on narrow screens so the nav reclaims the space */
     .brand { flex: 1 1 auto; width: auto; } .brand, .brand > div { min-width: 0; }
-    .pill-ro, .live, .iconbtn, .account, .linkbtn { flex-shrink: 0; }
-    .live, .linkbtn, .pill-ro { white-space: nowrap; }
+    .pill-mode, .live, .iconbtn, .account, .linkbtn { flex-shrink: 0; }
+    .live, .linkbtn, .pill-mode { white-space: nowrap; }
     .live .freshness { display: none; }
     /* mobile master-detail: one region visible at a time */
     body[data-mobile-view="list"] .detail-pane { display: none; }
@@ -964,17 +1090,28 @@
     .usage-strip { flex-direction: column; }
     .usage-cell { border-right: 0; border-bottom: 1px solid var(--border-soft); }
     .usage-cell:last-child { border-bottom: 0; }
+    .duration-lane, .do-axis { grid-template-columns: 82px minmax(0, 1fr); }
+    .dl-label { padding: 9px 8px; }
+    .do-head { align-items: stretch; flex-direction: column; gap: 5px; }
+    .do-range { white-space: normal; }
+    .operation-summary { grid-template-columns: 24px 74px minmax(0, 1fr) 72px 16px; gap: 7px; }
+    .operation-summary .op-time, .operation-summary .op-state { display: none; }
+    .operation-detail { padding: 0 10px 12px; }
     .graph-wrap { height: 62dvh; }
+    .run-stop-control { width:100%; margin-left:0; }
+    .stop-run-button { width:100%; }
+    .stop-confirmation-actions { width:100%; margin-left:0; }
+    .stop-confirmation-actions .chip, .stop-confirmation-actions .stop-confirm-button { flex:1 1 0; }
     /* node detail becomes a bottom sheet */
     .gnode-detail { top: auto; left: 8px; right: 8px; bottom: 8px; width: auto; max-width: none; max-height: 64%; }
   }
   @media (min-width: 761px) { .backbar { display: none !important; } }
 
-  /* phone: drop the most secondary topbar chrome (read-only pill, live indicator, account email)
+  /* phone: drop the most secondary topbar chrome (mode pill, live indicator, account email)
      so brand + theme + account/sign-out fit on one clean row without squeezing. */
   @media (max-width: 520px) {
     .topbar { gap: 6px; padding: 0 12px; }
-    .pill-ro, .live { display: none; }
+    .pill-mode, .live { display: none; }
     .account .who { display: none; }
   }
 
@@ -998,10 +1135,10 @@
    client; no server-side cookie/session, no NyxID change). All data flows through
    scope-gated bearer APIs; the page itself is the anonymous static shell.
    A small client cache backs the synchronous render contract (DataSource.*):
-     listRuns(status) <- GET /api/workflow/observatory/runs
+     listRuns(status) <- GET /api/workflow/observatory/activity-runs (paged request-trace feed)
      getRun(runId)    <- GET /api/workflow/observatory/runs/{runId}; admin drilldown uses /admin/runs/{runId}
      getGraph(runId)  <- GET /api/workflow/observatory/runs/{runId}/graph; admin drilldown uses /admin/runs/{runId}/graph
-   Read-only: there are no edit/run/stop calls anywhere.
+   Observatory data endpoints stay read-only. Owner actions use the canonical scope command APIs.
    =========================================================================== */
 const BACKEND_CONSOLE_CONFIG = __BACKEND_CONSOLE_CONFIG__;
 const CFG = {
@@ -1134,8 +1271,9 @@ function toAccount(info){ return info ? { label: info.email || info.preferred_us
 
 async function apiRequest(path, options){
   options = options || {};
+  const method = String(options.method || "GET").toUpperCase();
   const res = await fetchWithConsoleAuth(path, options);
-  if(res.status === 404) return null;
+  if(res.status === 404 && method === "GET") return null;
   if(!res.ok){
     let reason = "api-error-" + res.status;
     try { const body = await res.json(); reason = body.message || body.error || body.code || reason; } catch(e){}
@@ -1147,14 +1285,32 @@ async function apiRequest(path, options){
 }
 async function api(path){ return apiRequest(path); }
 
+/* The Activity feed is a distinct envelope. Keep its normalization as a pure seam so rendering never
+   mistakes pagination metadata for a trace, and so static-asset tests can probe contract drift. */
+function isActivityRunFeedEnvelope(value){
+  return !!value&&typeof value==="object"&&Array.isArray(value.items)&&typeof value.hasMore==="boolean";
+}
+function normalizeActivityRunFeed(value){
+  const source=value&&typeof value==="object"?value:{};
+  const total=source.totalCount==null?NaN:Number(source.totalCount);
+  return {
+    items:Array.isArray(source.items)?source.items:[],
+    nextCursor:typeof source.nextCursor==="string"&&source.nextCursor?source.nextCursor:null,
+    hasMore:source.hasMore===true,
+    totalCount:Number.isSafeInteger(total)&&total>=0?total:null
+  };
+}
+function activityRunFeedRequestPath(query){ return "/api/workflow/observatory/activity-runs"+(query||""); }
+
 /* client cache backing the synchronous render contract */
-const cache = { account:null, runs:[], details:{}, graphs:{} };
+const cache = { account:null, runs:[], runFeed:normalizeActivityRunFeed(null), details:{}, graphs:{} };
 const DataSource = {
   now: () => new Date().toISOString(),
   getAccount: () => cache.account || { label:"已登录" },
   // Filtering (status/origin/time) is pushed to the server query via listQueryParams; the cache already
   // holds the filtered set, so the list reads it as-is (no second client-side status pass).
   listRuns: () => cache.runs.slice(),
+  getRunFeed: () => cache.runFeed,
   getRun: (runId) => cache.details[runId] || null,
   getGraph: (runId) => cache.graphs[runId] || null
 };
@@ -1231,7 +1387,7 @@ const STATUS_OPTIONS = [
 const ORIGIN_OPTIONS = [
   ["", "全部来源"],
   ["draft","草稿运行"], ["member-invoke","成员调用"], ["default-invoke","默认调用"],
-  ["team-invoke","团队调用"], ["service-invoke","服务调用"], ["ad-hoc-chat","即席对话"], ["provisioned","计划调度"]
+  ["team-invoke","团队调用"], ["service-invoke","服务调用"], ["webhook","外部 Webhook"], ["ad-hoc-chat","即席对话"], ["provisioned","计划调度"]
 ];
 const ORIGIN_LABEL = Object.fromEntries(ORIGIN_OPTIONS.map(([v,l]) => [v,l]));
 const STATUS_VALUES = new Set(STATUS_OPTIONS.map(o => o[0]));
@@ -1240,7 +1396,7 @@ function readObservatoryRoute(search, hash){
   const query = new URLSearchParams(String(search || "").replace(/^\?/, ""));
   const legacyScope = /(?:^#|&)scope=([^&]+)/.exec(hash || "");
   const statusValues = new Set(["running","completed","failed","timed_out","stopped"]);
-  const tabValues = new Set(["timeline","steps","diagnostics","logs","artifacts","graph"]);
+  const tabValues = new Set(["timeline","trajectory","steps","diagnostics","logs","artifacts","graph"]);
   const status = (query.get("status") || "").trim();
   const tab = (query.get("tab") || "").trim();
   return {
@@ -1268,26 +1424,41 @@ function writeObservatoryRoute(patch){
   if(isEmbeddedInAdmin()) window.parent.postMessage({source:"aevatar-backend-console-suite",type:"observatory-route",query:route},location.origin);
   return route;
 }
-function observatoryRouteKey(route){
+/* The run list only depends on the filter fields (scope/status/origin/definition/schedule/from/to),
+   so its scroll position is keyed by those alone — selecting a run (which only changes run/tab)
+   must NOT reset the list scroll. The detail pane is keyed by run + tab, which are the fields that
+   determine its content. */
+function observatoryListKey(route){
   const r=route||{};
-  return ["scope","status","origin","definition","schedule","from","to","run","tab"]
+  return ["scope","status","origin","definition","schedule","from","to"]
     .map(key=>key+"="+encodeURIComponent(r[key]||"")).join("&");
 }
-function readObservatoryViewState(storage,key,route){
-  try {
-    const all=JSON.parse(storage.getItem(key)||"{}");
-    const value=all[observatoryRouteKey(route)]||{};
-    return {list:Math.max(0,Number(value.list)||0),detail:Math.max(0,Number(value.detail)||0)};
-  } catch(e){ return {list:0,detail:0}; }
+function observatoryDetailKey(route){
+  const r=route||{};
+  return "run=" + encodeURIComponent(r.run||"") + "&tab=" + encodeURIComponent(r.tab||"");
 }
-function writeObservatoryViewState(storage,key,route,position){
+function readObservatoryListState(storage,key,route){
+  try { const all=JSON.parse(storage.getItem(key)||"{}"); return Math.max(0,Number((all[observatoryListKey(route)]||{}).list)||0); }
+  catch(e){ return 0; }
+}
+function writeObservatoryListState(storage,key,route,position){
   try {
-    let all={};
-    try { all=JSON.parse(storage.getItem(key)||"{}")||{}; } catch(e){}
+    let all={}; try { all=JSON.parse(storage.getItem(key)||"{}")||{}; } catch(e){}
+    all[observatoryListKey(route)]={list:Math.max(0,Number(position)||0)};
+    storage.setItem(key,JSON.stringify(all));
+  } catch(e){}
+}
+function readObservatoryDetailState(storage,key,route){
+  try { const all=JSON.parse(storage.getItem(key+":detail")||"{}"); return Math.max(0,Number((all[observatoryDetailKey(route)]||{}).detail)||0); }
+  catch(e){ return 0; }
+}
+function writeObservatoryDetailState(storage,key,route,position){
+  try {
+    let all={}; try { all=JSON.parse(storage.getItem(key+":detail")||"{}")||{}; } catch(e){}
     const keys=Object.keys(all);
     if(keys.length>40) keys.slice(0,keys.length-40).forEach(existing=>delete all[existing]);
-    all[observatoryRouteKey(route)]={list:Math.max(0,Number(position&&position.list)||0),detail:Math.max(0,Number(position&&position.detail)||0)};
-    storage.setItem(key,JSON.stringify(all));
+    all[observatoryDetailKey(route)]={detail:Math.max(0,Number(position)||0)};
+    storage.setItem(key+":detail",JSON.stringify(all));
   } catch(e){}
 }
 function paneScrollPosition(pane,saved){
@@ -1313,9 +1484,10 @@ const filterState = (function(){
   return { status: pick(initialRoute.status, STATUS_VALUES), origin: initialRoute.origin, definition: initialRoute.definition, schedule: initialRoute.schedule, from: timestamp(initialRoute.from), to: timestamp(initialRoute.to), open };
 })();
 function originLabel(o){ return o ? (ORIGIN_LABEL[o] || o) : ""; }
-/* compose the runs LIST query: exact deep-link instants remain exact; native date input changes are
-   normalized before reaching this function. */
-function listQueryParams(){
+/* Compose the request-trace Activity feed query: exact deep-link instants remain exact; native date
+   input changes are normalized before reaching this function. totalCount is requested so the bounded
+   newest-N window and hasMore state can be labelled honestly. */
+function listQueryParams(cursor,take){
   const p = new URLSearchParams();
   if(adminState.isAdmin && adminState.currentScope) p.set("scope", adminState.currentScope);
   if(filterState.status) p.set("status", filterState.status);
@@ -1324,6 +1496,10 @@ function listQueryParams(){
   if(filterState.schedule) p.set("schedule", filterState.schedule);
   if(filterState.from) p.set("from", filterState.from);
   if(filterState.to) p.set("to", filterState.to);
+  const pageSize=Math.max(1,Math.min(500,Number(take)||100));
+  p.set("take", String(pageSize));
+  p.set("includeTotalCount", "true");
+  if(cursor) p.set("cursor", cursor);
   const s = p.toString();
   return s ? "?" + s : "";
 }
@@ -1354,17 +1530,25 @@ function toggleFilterPanel(){
 /* apply a single filter change: reset list scroll (existing convention), drop the stale run cache so
    the server-filtered set replaces it cleanly, and re-fetch + re-render. */
 function applyFilterChange(){
+  state.listRequestEpoch = (Number(state.listRequestEpoch) || 0) + 1;
+  state.loadingMore = false;
+  resetStopControlState();
   pendingListScrollReset = true;
   state.selectedRunId = null;
-  cache.runs = []; cache.details = {}; cache.graphs = {};
+  cache.runs = []; cache.runFeed = normalizeActivityRunFeed(null); cache.details = {}; cache.graphs = {};
+  state.lastSyncedAtUtc = null;
   lastRunsSig = "";
   state.scenario = "listLoading";
   writeObservatoryRoute({ status:filterState.status, origin:filterState.origin, definition:filterState.definition, schedule:filterState.schedule, from:filterState.from, to:filterState.to, run:"" });
   render();
-  (async () => { await refreshRuns(); lastRunsSig = runsSig(cache.runs); render(); })();
+  (async () => { const ok=await refreshRuns(); if(ok) state.lastSyncedAtUtc=new Date().toISOString(); lastRunsSig = runsSig(cache.runs,cache.runFeed); render(); })();
 }
 function clearSession(){
-  cache.account=null; cache.runs=[]; cache.details={}; cache.graphs={};
+  state.listRequestEpoch = (Number(state.listRequestEpoch) || 0) + 1;
+  state.loadingMore = false;
+  resetStopControlState();
+  cache.account=null; cache.runs=[]; cache.runFeed=normalizeActivityRunFeed(null); cache.details={}; cache.graphs={};
+  state.lastSyncedAtUtc=null;
   adminState.isAdmin=false; adminState.role=""; adminState.email=""; adminState.ownScope="";
   adminState.currentScope=null; adminState.inputDraft=""; adminState.runIdDraft=""; adminState.candidates=null; adminState.message="";
 }
@@ -1443,6 +1627,11 @@ const KIND = {
 // kinds that carry an assistant/role reply (real LLM response text in ev.content).
 const REPLY_KINDS = new Set(["Message", "TextMessage"]);
 const STEPTYPE_LABEL = { llm:"模型", tool:"工具", human:"人工" };
+const OPERATION_TYPE = {
+  input: { label:"Input" },
+  model: { label:"Model" },
+  tool: { label:"Tool" }
+};
 
 /* 06-23 detail enrichment: the AGUI event data bag (ev.data) is an open string->string map. We surface
    a tasteful whitelist of the high-value keys as chips (model + token usage) and tuck everything else
@@ -1492,6 +1681,38 @@ function initials(label){ return (label||"?").trim().charAt(0).toUpperCase(); }
 /* compact id for list rows: keep the unique tail (the run/scope hash); full id stays in the title */
 function tailId(s, keep){ s = String(s==null?"":s); return s.length > keep+2 ? "…" + s.slice(-keep) : s; }
 function midTrunc(s, max){ s = String(s==null?"":s); if(s.length <= max) return s; const h = Math.ceil((max-1)*0.62), t = (max-1) - h; return s.slice(0, h) + "…" + s.slice(s.length - t); }
+function requestTraceCountLabel(feed, shown){
+  const page=normalizeActivityRunFeed(feed),count=Math.max(0,Number(shown)||0);
+  if(page.totalCount!=null) return count<page.totalCount?count+" / "+page.totalCount:String(page.totalCount);
+  return page.hasMore?count+"+":String(count);
+}
+function requestTraceCoverageLabel(feed, shown){
+  const page=normalizeActivityRunFeed(feed),count=Math.max(0,Number(shown)||0);
+  if(page.totalCount!=null){
+    if(page.hasMore||count<page.totalCount) return `显示最近 ${count} 条，共 ${page.totalCount} 条；仍有更多请求轨迹`;
+    return `共 ${page.totalCount} 条请求轨迹`;
+  }
+  return page.hasMore?`显示最近 ${count} 条；仍有更多请求轨迹`:`当前显示 ${count} 条请求轨迹`;
+}
+function requestTracePreview(run){
+  const source=run||{},input=String(source.inputSummary||"").trim();
+  if(input) return "输入 · "+input;
+  const step=source.currentStep||{},stepInput=String(step.inputSummary||"").trim(),stepId=String(step.stepId||"").trim();
+  if(stepInput) return "当前步骤 · "+stepInput;
+  if(stepId) return "当前步骤 · "+stepId;
+  const initiator=source.initiator||{},display=String(initiator.displayValue||"").trim();
+  return display&&display!=="Unknown"?"发起方 · "+display:"请求轨迹 · "+String(source.runId||"");
+}
+function requestTraceDurationLabel(run, currentMs){
+  const source=run||{},duration=source.durationMs==null?NaN:Number(source.durationMs);
+  if(Number.isFinite(duration)&&duration>=0) return fmtDur(duration);
+  const started=parseT(source.startedAtUtc);
+  return source.status==="running"&&!isNaN(started)?fmtDur((currentMs==null?nowMs():currentMs)-started):"";
+}
+function requestTraceAriaLabel(run){
+  const source=run||{},workflow=String(source.workflowName||"未命名工作流"),status=STATUS_LABEL[source.status]||source.status||"未知";
+  return `请求轨迹，${workflow}，${status}，${requestTracePreview(source)}，runId ${source.runId||"未知"}`;
+}
 
 /* JSON 着色（仅用于显示）。注意：先 esc() 转义，引号已变成 &quot;，
    因此高亮要匹配 &quot; 而非字面引号。本数据中字符串均为单行且不含 & 实体。 */
@@ -1559,11 +1780,16 @@ const state = {
   selectedRunId: initialRoute.run || null,
   activeTab: initialRoute.tab,
   expanded: new Set(),  // tool-call ids expanded by default for the running run
+  expandedOperations: new Set(), // selected request's operation-ledger rows; survives near-live polling
   theme: localStorage.getItem("wro-theme") || null, // null = follow system
   selectedNodeId: null, // graph node whose detail drawer is open
   graphView: { zoom: 1, panX: 0, panY: 0, fitted: false }, // pan/zoom transform, survives polling re-renders
   immersive: sessionStorage.getItem(OBSERVATORY_IMMERSIVE_KEY) === "1",
   refreshing: false,
+  polling: false,
+  loadingMore: false,
+  listRequestEpoch: 0,
+  lastSyncedAtUtc: null,
 };
 function nowMs(){ return Date.now(); }
 
@@ -1587,16 +1813,18 @@ async function refreshObservatory(){
   if(state.refreshing) return;
   state.refreshing=true;
   try {
-    await refreshRuns();
-    lastRunsSig=runsSig(cache.runs);
-    if(state.selectedRunId){ await refreshDetail(state.selectedRunId); lastDetailSig=detailSig(cache.details[state.selectedRunId]); }
+    const listOk=await refreshRuns();
+    lastRunsSig=runsSig(cache.runs,cache.runFeed);
+    let detailOk=true;
+    if(state.selectedRunId){ detailOk=await refreshDetail(state.selectedRunId); lastDetailSig=detailSig(cache.details[state.selectedRunId]); }
+    if(listOk&&detailOk) state.lastSyncedAtUtc=new Date().toISOString();
   } finally { state.refreshing=false; render(); }
 }
 function renderWorkspaceBar(){
   const bar=el("div",{class:"workspacebar",role:"region","aria-label":"观测工作区"});
   const detail=currentDetail(),summary=detail&&detail.summary;
   const scope=adminState.currentScope===ALL_SCOPES?"全部 scope":(adminState.currentScope||adminState.ownScope||"我的 scope");
-  bar.appendChild(el("div",{class:"workspace-context"},`<span>${esc(scope)}</span><b title="${esc(summary&&summary.runId||"")}">${esc(summary&&summary.workflowName||summary&&summary.runId||"选择运行查看详情")}</b>`));
+  bar.appendChild(el("div",{class:"workspace-context"},`<span>${esc(scope)}</span><b title="${esc(summary&&summary.runId||"")}">${esc(summary&&summary.workflowName||summary&&summary.runId||"选择请求轨迹查看详情")}</b>`));
   const actions=el("div",{class:"workspace-actions"});
   const refresh=el("button",{class:"workspace-action",type:"button","aria-label":"刷新数据",title:"刷新数据"},`↻ <span>${state.refreshing?"刷新中…":"刷新数据"}</span>`);
   refresh.disabled=state.refreshing; refresh.addEventListener("click",refreshObservatory); actions.appendChild(refresh);
@@ -1636,19 +1864,19 @@ function renderTopbar(){
       <div style="min-width:0">
         <div class="brand-name">Aevatar Backend Console</div>
       </div>
-      <span class="pill-ro" title="只读视图，不可修改任何运行">只读</span>
+      <span class="pill-mode" title="本人 scope 可审批和停止运行；跨 scope 观测保持只读">观测 / 控制</span>
     </div>
     ${suiteNavHtml("observatory")}
     <div class="spacer"></div>`;
 
-  // live indicator (hidden on login)
+  // Refresh indicator (hidden on login). Both the Activity list and the selected detail use the same
+  // visible-page ~3s poll regardless of whether the selected trace is running or terminal.
   if(state.signedIn){
-    const sel = currentDetail();
-    const isRunning = sel && sel.summary.status === "running";
-    const live = el("div", { class:"live"+(isRunning?" is-live":""), role:"status", "aria-live":"polite", id:"liveChip", title:"页面每约 3 秒轮询一次" });
+    const synced=state.lastSyncedAtUtc;
+    const live = el("div", { class:"live is-live", role:"status", "aria-live":"polite", id:"liveChip", title:"页面可见时，请求轨迹列表与已选详情每约 3 秒从权威读模型刷新" });
     live.innerHTML = `<span class="dot" aria-hidden="true"></span>
-      <span>${isRunning?"实时":"已暂停"}</span>
-      <span class="freshness" data-since="${sel?sel.summary.updatedAtUtc:DataSource.now()}">${sel?relTime(sel.summary.updatedAtUtc, nowMs()):""} 更新</span>`;
+      <span>约 3 秒刷新</span>
+      <span class="freshness"${synced?` data-since="${synced}"`:""}>${synced?relTime(synced, nowMs())+" 同步":"等待首次同步"}</span>`;
     bar.appendChild(live);
   }
 
@@ -1678,8 +1906,8 @@ function renderTopbar(){
    =========================================================================== */
 function renderBanner(){
   const b = el("div", { class:"banner", role:"alert" });
-  b.innerHTML = `${ICON.alert}<span class="b-title">加载运行失败</span>
-     <span class="b-msg">无法连接到观测服务（HTTP 503）。已显示上次成功获取的快照；将在下次轮询时自动重试。</span>`;
+  b.innerHTML = `${ICON.alert}<span class="b-title">加载请求轨迹失败</span>
+     <span class="b-msg">无法连接到观测服务。已显示上次成功获取的轨迹快照；将在下次约 3 秒轮询时自动重试。</span>`;
   return b;
 }
 
@@ -1691,8 +1919,8 @@ function renderLogin(){
   const card = el("section", { class:"login-card", role:"region", "aria-label":"登录" });
   card.innerHTML = `
     <div class="login-mark" aria-hidden="true">${ICON.lock}</div>
-    <h1>登录以查看你的工作流运行</h1>
-    <p>只读访问你账户下的运行 —— 观察执行过程，不可修改任何内容。</p>`;
+    <h1>登录以查看工作流请求轨迹</h1>
+    <p>每次请求对应一条可追踪轨迹；可查看执行详情，并管理本人 scope 内的活动运行。</p>`;
   const btn = el("button", { class:"btn-primary", id:"signinBtn" }, "使用 nyxid 登录");
   btn.addEventListener("click", () => { beginLogin(); });
   card.appendChild(btn);
@@ -1766,7 +1994,7 @@ function renderFilterBar(){
   }
 
   // --- the controls panel (hidden when collapsed) ---
-  const bar = el("div", { class:"filterbar", id:"filterPanel", role:"group", "aria-label":"按状态、来源、更新时间筛选运行" });
+  const bar = el("div", { class:"filterbar", id:"filterPanel", role:"group", "aria-label":"按状态、来源、更新时间筛选请求轨迹" });
   if(!filterState.open) bar.hidden = true;
   bar.appendChild(renderSelect("flt-status", "状态", STATUS_OPTIONS, filterState.status,
     v => { filterState.status = v; applyFilterChange(); }));
@@ -1792,17 +2020,19 @@ function renderFilterBar(){
 }
 
 /* ===========================================================================
-   Render — runs list
+   Render — request traces list (one authoritative run row per request)
    =========================================================================== */
 function renderList(){
-  const pane = el("aside", { class:"list-pane", "aria-label":"运行列表" });
+  const pane = el("aside", { class:"list-pane", "aria-label":"请求轨迹列表" });
   const head = el("div", { class:"list-head" });
   const shown = state.scenario==="empty" ? 0 : DataSource.listRuns().length;
-  head.innerHTML = `<div class="list-title-row"><span class="list-title"><span class="lt-ic" aria-hidden="true">${ICON.list}</span>运行</span><span class="list-count" title="当前筛选下返回的运行数（最近 N）">${shown}</span></div>`;
+  const feed = DataSource.getRunFeed();
+  const coverage = requestTraceCoverageLabel(feed, shown);
+  head.innerHTML = `<div class="list-title-row"><span class="list-title"><span class="lt-ic" aria-hidden="true">${ICON.list}</span>请求轨迹</span><span class="list-count" title="${esc(coverage)}">${esc(requestTraceCountLabel(feed, shown))}</span></div><div class="list-coverage">${esc(coverage)}</div>`;
   pane.appendChild(head);
   pane.appendChild(renderFilterBar());
 
-  const listbox = el("div", { class:"runlist scroll", role:"list", "aria-label":"运行", tabindex:"-1" });
+  const listbox = el("div", { class:"runlist scroll", role:"list", "aria-label":"请求轨迹，每次请求一条", tabindex:"-1" });
 
   if(state.scenario === "listLoading"){
     for(let i=0;i<5;i++){
@@ -1817,18 +2047,18 @@ function renderList(){
   const runs = state.scenario === "empty" ? [] : DataSource.listRuns();
 
   if(runs.length === 0){
-    const isFiltered = state.scenario !== "empty" && hasActiveFilters();
+    const isFiltered = hasActiveFilters();
     listbox.appendChild(el("div", { class:"empty" }, `
       <div class="ic" aria-hidden="true">${ICON.inbox}</div>
-      <div class="et">${isFiltered ? "没有匹配的运行" : "暂无运行"}</div>
-      <div class="es">${isFiltered ? "当前筛选条件下没有运行，放宽状态、来源或时间范围再看看。" : "你的账户下还没有任何工作流运行。一旦有运行启动，就会出现在这里。"}</div>`));
+      <div class="et">${isFiltered ? "没有匹配的请求轨迹" : "暂无请求轨迹"}</div>
+      <div class="es">${isFiltered ? "当前筛选条件下没有请求轨迹，放宽状态、来源或时间范围再看看。" : "每次工作流请求都会形成一条独立轨迹；新请求被读模型观测后会出现在这里。"}</div>`));
     pane.appendChild(listbox);
     return pane;
   }
 
   runs.forEach(r => {
     const sel = state.selectedRunId === r.runId && state.scenario==="normal";
-    const row = el("button", { class:"run-row", role:"listitem", "aria-current": String(sel) });
+    const row = el("button", { class:"run-row", type:"button", role:"listitem", "aria-current": String(sel), "aria-label":requestTraceAriaLabel(r) });
     // scope id per row is only meaningful in the cross-scope (全部 scope) view, where rows differ in
     // scope. When a single concrete scope is selected it's the same id on every row (already shown in
     // the admin bar) — pure noise — so it's hidden there.
@@ -1846,25 +2076,39 @@ function renderList(){
     const originCol = olabel
       ? `<span class="sep">·</span><span class="rm-origin" title="运行来源：${esc(olabel)}">${esc(olabel)}</span>`
       : "";
+    const duration = requestTraceDurationLabel(r, nowMs());
+    const runningDurationAttr = r.status === "running" && r.startedAtUtc
+      ? ` data-duration="${esc(r.startedAtUtc)}"`
+      : "";
+    const durationCol = duration ? `<span class="sep">·</span><span title="请求轨迹用时"${runningDurationAttr}>${esc(duration)}</span>` : "";
+    const preview = requestTracePreview(r);
     row.innerHTML = `
       <span class="dot s-${r.status}" aria-hidden="true"></span>
       <span class="rn" title="${esc(r.workflowName)}">${esc(r.workflowName)}</span>
       <span class="rm">
         <span class="rm-status s-${r.status}">${STATUS_LABEL[r.status]||r.status}</span>${originCol}
+        ${durationCol}
         <span class="sep">·</span>
         <span data-since="${r.updatedAtUtc}">${relTime(r.updatedAtUtc, nowMs())}</span>
         <span class="sep">·</span>
         <span class="id" title="run id: ${esc(r.runId)}">${esc(midTrunc(parseRunId(r.runId).run, 16) || tailId(r.runId, 12))}</span>${scopeCol}
-      </span>`;
+      </span>
+      <span class="rt-preview" title="${esc(preview)}"><span class="rt-label">请求</span>${esc(preview.replace(/^(输入|当前步骤|发起方|请求轨迹) · /,""))}</span>`;
     row.addEventListener("click", () => selectRun(r.runId));
     listbox.appendChild(row);
   });
+  if(feed.hasMore && feed.nextCursor){
+    const loadMore = el("button", { class:"trace-load-more", type:"button" }, state.loadingMore ? "正在加载…" : "加载更早的请求轨迹");
+    loadMore.disabled = state.loadingMore;
+    loadMore.addEventListener("click", () => loadMoreRequestTraces());
+    listbox.appendChild(loadMore);
+  }
   pane.appendChild(listbox);
   return pane;
 }
 
 /* ===========================================================================
-   Render — detail
+   Render — selected request trace detail
    =========================================================================== */
 function currentDetail(){
   if(state.scenario === "notFound") return null;
@@ -1872,11 +2116,11 @@ function currentDetail(){
 }
 
 function renderDetail(){
-  const pane = el("section", { class:"detail-pane scroll", "aria-label":"运行详情" });
+  const pane = el("section", { class:"detail-pane scroll", "aria-label":"请求轨迹详情" });
 
   // mobile back bar
   const back = el("div", { class:"backbar" });
-  const backBtn = el("button", {}, `${ICON.back}<span>运行</span>`);
+  const backBtn = el("button", { type:"button", "aria-label":"返回请求轨迹列表" }, `${ICON.back}<span>请求轨迹</span>`);
   backBtn.addEventListener("click", () => { document.body.setAttribute("data-mobile-view","list"); });
   back.appendChild(backBtn);
   pane.appendChild(back);
@@ -1897,8 +2141,8 @@ function renderDetail(){
   if(state.scenario === "notFound"){
     pane.appendChild(el("div", { class:"detail-empty nf" }, `
       <div class="ic" aria-hidden="true">${ICON.ghost}</div>
-      <div class="dt">运行未找到</div>
-      <div class="ds">运行 <span class="mono">${esc(state.selectedRunId||"run_unknown")}</span> 不存在，或已超出你账户的可见范围。可能已被清理，或属于其他账户。</div>`));
+      <div class="dt">请求轨迹未找到</div>
+      <div class="ds">轨迹 <span class="mono">${esc(state.selectedRunId||"run_unknown")}</span> 不存在，或已超出你账户的可见范围。它可能已被清理，或属于其他账户。</div>`));
     return pane;
   }
 
@@ -1906,8 +2150,8 @@ function renderDetail(){
   if(!detail){
     pane.appendChild(el("div", { class:"detail-empty" }, `
       <div class="ic" aria-hidden="true">${ICON.cursor}</div>
-      <div class="dt">选择一个运行以查看执行过程</div>
-      <div class="ds">从左侧列表选择任意运行，自上而下阅读它的执行故事 —— 每一步做了什么、模型说了什么、调用了哪些工具。</div>`));
+      <div class="dt">选择一条请求轨迹查看详情</div>
+      <div class="ds">左侧每个 run 对应一次独立请求。选择任意轨迹，可查看步骤、模型回复、工具调用与最终结果。</div>`));
     return pane;
   }
 
@@ -1923,6 +2167,10 @@ function renderDetail(){
   const timelinePanel = el("div", { class:"tabpanel", id:"panel-timeline", role:"tabpanel", "aria-labelledby":"tab-timeline", tabindex:"0" });
   timelinePanel.appendChild(renderTimeline(detail));
   if(state.activeTab !== "timeline") timelinePanel.hidden = true;
+
+  const trajectoryPanel = el("div", { class:"tabpanel", id:"panel-trajectory", role:"tabpanel", "aria-labelledby":"tab-trajectory", tabindex:"0" });
+  trajectoryPanel.appendChild(renderTrajectory(detail));
+  if(state.activeTab !== "trajectory") trajectoryPanel.hidden = true;
 
   const stepsPanel = el("div", { class:"tabpanel", id:"panel-steps", role:"tabpanel", "aria-labelledby":"tab-steps", tabindex:"0" });
   stepsPanel.appendChild(renderSteps(detail));
@@ -1945,6 +2193,7 @@ function renderDetail(){
   if(state.activeTab !== "graph") graphPanel.hidden = true;
 
   tp.appendChild(timelinePanel);
+  tp.appendChild(trajectoryPanel);
   tp.appendChild(stepsPanel);
   tp.appendChild(diagnosticsPanel);
   tp.appendChild(logsPanel);
@@ -1981,9 +2230,9 @@ function renderRunIdChips(rid){
       : `<span class="rid-chip scope" title="scope: ${esc(rid.scope)}"><span class="rid-lab">scope</span><span class="rid-val">${esc(midTrunc(rid.scope, 14))}</span></span>`);
   }
   if(rid.def)   chips.push(`<span class="rid-chip def" title="workflow.definition: ${esc(rid.def)}"><span class="rid-lab">定义</span><span class="rid-val">${esc(midTrunc(rid.def, 16))}</span></span>`);
-  if(rid.run)   chips.push(`<span class="rid-chip run" title="run: ${esc(rid.run)}"><span class="rid-lab">运行</span><span class="rid-val">${esc(midTrunc(rid.run, 16))}</span></span>`);
+  if(rid.run)   chips.push(`<span class="rid-chip run" title="run: ${esc(rid.run)}"><span class="rid-lab">轨迹</span><span class="rid-val">${esc(midTrunc(rid.run, 16))}</span></span>`);
   if(chips.length === 0) chips.push(`<span class="rid-chip plain" title="${esc(rid.full)}"><span class="rid-val">${esc(midTrunc(rid.full, 30))}</span></span>`);
-  chips.push(`<button class="rid-copy" type="button" aria-label="复制完整运行 ID" title="复制完整运行 ID">${ICON.copy}</button>`);
+  chips.push(`<button class="rid-copy" type="button" aria-label="复制完整请求轨迹 runId" title="复制完整请求轨迹 runId">${ICON.copy}</button>`);
   return chips.join("");
 }
 
@@ -2001,15 +2250,17 @@ function renderRunHeader(detail){
 
   const head = el("header", { class:"run-header" });
   head.innerHTML = `
+    <div class="rh-eyebrow">请求轨迹详情</div>
     <div class="rh-top">
       <h1 class="rh-title"><span class="dot s-${s.status}" aria-hidden="true"></span>${esc(s.workflowName)}</h1>
       <span class="badge b-${s.status}"><span class="dot s-${s.status}" aria-hidden="true"></span>${STATUS_LABEL[s.status]||s.status}</span>
     </div>
     <div class="rh-meta">
-      <span class="grp rid-grp"><span class="k">运行 ID</span><span class="rid">${renderRunIdChips(parseRunId(s.runId))}</span></span>
+      <span class="grp rid-grp"><span class="k">轨迹 ID（runId）</span><span class="rid">${renderRunIdChips(parseRunId(s.runId))}</span></span>
       <span class="grp"><span class="k">用时</span><span class="v" ${(hasStart&&isRunning)?`data-duration="${s.startedAtUtc}"`:""}>${durStr}</span></span>
       <span class="grp"><span class="k">开始</span><span class="v">${startStr}</span></span>
     </div>`;
+  renderStopControl(detail,head);
 
   const copyBtn = head.querySelector(".rid-copy");
   if(copyBtn) copyBtn.addEventListener("click", async () => {
@@ -2124,8 +2375,8 @@ function renderDiagnostics(detail){
 }
 function renderNarrative(detail){
   const wrap=el("div",{class:"narrative"});
-  const input=el("details",{},`<summary>输入 · input</summary><pre class="issue-pre scroll">${esc(detail.input||"无输入")}</pre>`); input.open=true; wrap.appendChild(input);
-  const output=detail.finalOutput||(detail.summary.status==="running"?"运行尚未完成，最终输出尚未物化":"无最终输出");
+  const input=el("details",{},`<summary>请求输入 · input</summary><pre class="issue-pre scroll">${esc(detail.input||detail.inputSummary||"无输入")}</pre>`); input.open=true; wrap.appendChild(input);
+  const output=detail.finalOutput||(detail.summary.status==="running"?"请求轨迹仍在执行，最终输出尚未物化":"无最终输出");
   const final=el("details",{},`<summary>最终输出 · finalOutput</summary><pre class="issue-pre scroll">${esc(output)}</pre>`); final.open=true; wrap.appendChild(final);
   if(detail.finalError) wrap.appendChild(el("pre",{class:"issue-pre scroll"},esc(detail.finalError)));
   return wrap;
@@ -2163,6 +2414,124 @@ function renderArtifacts(detail){
   if(!detail.finalOutput){ wrap.appendChild(el("div",{class:"detail-empty"},'<div class="dt">暂无产出</div><div class="ds">当前详情契约没有正式 artifact 集合。</div>')); return wrap; }
   wrap.appendChild(el("p",{class:"diag-hint"},"派生下载：内容来自 finalOutput；不是正式 artifact read model。"));
   const button=el("button",{class:"chip",type:"button"},"下载 finalOutput"); button.addEventListener("click",()=>{const url=URL.createObjectURL(new Blob([detail.finalOutput],{type:"text/plain;charset=utf-8"}));const a=document.createElement("a");a.href=url;a.download="finalOutput.txt";a.click();URL.revokeObjectURL(url);}); wrap.appendChild(button); return wrap;
+}
+
+function resolveRunControlTarget(detail, selectedRunId, runs){
+  const summary=detail&&detail.summary,runId=String(selectedRunId||"").trim();
+  const detailRunId=String(summary&&summary.runId||"").trim();
+  if(!summary||summary.status!=="running"||!runId||detailRunId!==runId) return null;
+  const scopeId=String(summary.scopeId||"").trim();
+  if(!scopeId) return null;
+  const row=(runs||[]).find(item=>item&&item.runId===runId)||null;
+  if(row&&row.scopeId&&row.scopeId!==scopeId) return null;
+  return { scopeId, runId, actorId:row?String(row.actorId||"").trim():"" };
+}
+function canStopRun(target, ownerScope){
+  return !!(target&&target.scopeId&&String(ownerScope||"").trim()===target.scopeId);
+}
+function buildStopRequest(target, commandId){
+  const body={ reason:"user requested stop", commandId:String(commandId||"").trim() };
+  if(!body.commandId) throw new Error("stop-command-id-required");
+  if(target.actorId) body.actorId=target.actorId;
+  return {
+    path:"/api/scopes/"+encodeURIComponent(target.scopeId)+"/runs/"+encodeURIComponent(target.runId)+":stop",
+    body
+  };
+}
+async function requestStopRun(target, commandId){
+  const request=buildStopRequest(target,commandId);
+  const receipt=await apiRequest(request.path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(request.body)});
+  if(!receipt||receipt.accepted!==true) throw new Error("stop-not-accepted");
+  return receipt;
+}
+function stopTargetKey(target){ return [target.scopeId,target.runId].join("\n"); }
+const stopControlState={ key:"", selectedRunId:"", commandId:"", confirming:false, submitting:false, accepted:false, error:"" };
+function resetStopControlState(){
+  Object.assign(stopControlState,{key:"",selectedRunId:"",commandId:"",confirming:false,submitting:false,accepted:false,error:""});
+}
+function syncStopControlState(target){
+  const key=stopTargetKey(target);
+  if(stopControlState.key===key) return;
+  Object.assign(stopControlState,{key,selectedRunId:target.runId,commandId:"",confirming:false,submitting:false,accepted:false,error:""});
+}
+function ensureStopCommandId(target){
+  syncStopControlState(target);
+  if(!stopControlState.commandId) stopControlState.commandId="observatory-stop-"+randomString(24);
+  return stopControlState.commandId;
+}
+function openStopConfirmation(target){
+  syncStopControlState(target);
+  if(stopControlState.submitting||stopControlState.accepted) return;
+  ensureStopCommandId(target);
+  stopControlState.confirming=true;
+  stopControlState.error="";
+  render();
+  setTimeout(()=>document.getElementById("confirmStopRunButton")?.focus(),0);
+}
+function cancelStopConfirmation(target){
+  if(stopControlState.key!==stopTargetKey(target)||stopControlState.submitting) return;
+  stopControlState.confirming=false;
+  stopControlState.error="";
+  render();
+  setTimeout(()=>document.getElementById("stopCurrentRunButton")?.focus(),0);
+}
+async function submitStopRun(target){
+  syncStopControlState(target);
+  if(stopControlState.submitting||stopControlState.accepted) return false;
+  const attemptKey=stopControlState.key,commandId=ensureStopCommandId(target);
+  stopControlState.submitting=true;
+  stopControlState.error="";
+  render();
+  try {
+    await requestStopRun(target,commandId);
+    if(stopControlState.key!==attemptKey) return false;
+    stopControlState.accepted=true;
+    stopControlState.confirming=false;
+    return true;
+  } catch(e){
+    if(stopControlState.key===attemptKey){
+      const reason=String(e&&e.message||"").trim();
+      stopControlState.error=reason==="stop-not-accepted"
+        ? "服务未确认停止请求，请重试。"
+        : "停止请求失败"+(reason?"："+reason:"");
+    }
+    return false;
+  } finally {
+    if(stopControlState.key===attemptKey){ stopControlState.submitting=false; render(); }
+  }
+}
+function renderStopControl(detail, head){
+  const target=resolveRunControlTarget(detail,state.selectedRunId,cache.runs);
+  if(!target){
+    if(stopControlState.selectedRunId&&stopControlState.selectedRunId===state.selectedRunId) resetStopControlState();
+    return;
+  }
+  if(!canStopRun(target,adminState.ownScope)) return;
+  syncStopControlState(target);
+  const controls=el("div",{class:"run-stop-control"});
+  if(stopControlState.accepted){
+    controls.appendChild(el("span",{class:"stop-accepted",role:"status","aria-live":"polite"},`${ICON.stop}<span>停止请求已受理，等待 committed 状态更新</span>`));
+  } else {
+    const stop=el("button",{class:"stop-run-button",id:"stopCurrentRunButton",type:"button","aria-label":"停止当前 workflow 运行",title:"停止当前运行"},`${ICON.stop}<span>停止当前运行</span>`);
+    stop.disabled=stopControlState.submitting||stopControlState.confirming;
+    stop.addEventListener("click",()=>openStopConfirmation(target));
+    controls.appendChild(stop);
+  }
+  head.querySelector(".rh-top")?.appendChild(controls);
+  if(!stopControlState.confirming||stopControlState.accepted) return;
+  const panel=el("section",{class:"stop-confirmation",role:"group","aria-labelledby":"stopConfirmationTitle","aria-describedby":"stopConfirmationDescription"});
+  panel.innerHTML=`<div class="stop-confirmation-copy"><b id="stopConfirmationTitle">停止这次运行？</b><span id="stopConfirmationDescription">停止命令会排队处理；已开始的步骤可能先完成，已完成的步骤不会回滚。</span></div>`;
+  const actions=el("div",{class:"stop-confirmation-actions"});
+  const cancel=el("button",{class:"chip",type:"button"},"取消");
+  cancel.disabled=stopControlState.submitting;
+  cancel.addEventListener("click",()=>cancelStopConfirmation(target));
+  const confirm=el("button",{class:"stop-confirm-button",id:"confirmStopRunButton",type:"button"},stopControlState.submitting?"正在提交…":`${ICON.stop}<span>确认停止</span>`);
+  confirm.disabled=stopControlState.submitting;
+  confirm.addEventListener("click",()=>submitStopRun(target));
+  actions.appendChild(cancel); actions.appendChild(confirm); panel.appendChild(actions);
+  if(stopControlState.error) panel.appendChild(el("div",{class:"stop-control-error",role:"alert"},esc(stopControlState.error)));
+  panel.addEventListener("keydown",event=>{ if(event.key==="Escape"){ event.preventDefault(); cancelStopConfirmation(target); } });
+  head.appendChild(panel);
 }
 
 function findActiveApproval(detail){
@@ -2206,7 +2575,7 @@ function renderApprovalPanel(detail){
     ${toolApproval?`<p class="mono">工具：${esc(toolApproval.toolName || "unknown")} · Step：${esc(approval.stepId || "unknown")}</p>`:""}
     <pre class="approval-content scroll" tabindex="0">${esc(approval.suspensionContent || (toolApproval ? "该操作将执行已准入的写入工具调用。" : "（无待审内容）"))}</pre>`;
   const actions = el("div", { class:"approval-actions" });
-  if(!owner) actions.appendChild(el("span", {}, "该 Run 属于其他 scope；管理员观测为只读"));
+  if(!owner) actions.appendChild(el("span", {}, "该请求轨迹属于其他 scope；管理员观测为只读"));
   else if(approvalState.accepted) actions.appendChild(el("span", {}, "决定已接受（202），等待 committed 状态更新"));
   else {
     const submit = async approved => {
@@ -2233,10 +2602,10 @@ function renderApprovalPanel(detail){
   box.appendChild(actions); return box;
 }
 
-function detailTabIds(){ return ["timeline","steps","diagnostics","logs","artifacts","graph"]; }
+function detailTabIds(){ return ["timeline","trajectory","steps","diagnostics","logs","artifacts","graph"]; }
 function renderTabs(){
   const tablist = el("div", { class:"tabs", role:"tablist", "aria-label":"详情视图" });
-  const labels={timeline:["时间线",ICON.step],steps:["Steps",ICON.list],diagnostics:["诊断",ICON.alert],logs:["Logs",ICON.inbox],artifacts:["产出",ICON.flag],graph:["拓扑图",'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="5" cy="6" r="2.2"/><circle cx="5" cy="18" r="2.2"/><circle cx="19" cy="12" r="2.2"/><path d="M7 6.6 17 11M7 17.4 17 13"/></svg>']};
+  const labels={timeline:["时间线",ICON.step],trajectory:["轨迹",ICON.chat],steps:["Steps",ICON.list],diagnostics:["诊断",ICON.alert],logs:["Logs",ICON.inbox],artifacts:["产出",ICON.flag],graph:["拓扑图",'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="5" cy="6" r="2.2"/><circle cx="5" cy="18" r="2.2"/><circle cx="19" cy="12" r="2.2"/><path d="M7 6.6 17 11M7 17.4 17 13"/></svg>']};
   detailTabIds().forEach(id => {
     const [lab,ic]=labels[id];
     const t = el("button", { class:"tab", id:"tab-"+id, role:"tab", "aria-selected": String(state.activeTab===id), "aria-controls":"panel-"+id, tabindex: state.activeTab===id?"0":"-1" }, `${ic}<span>${lab}</span>`);
@@ -2323,6 +2692,278 @@ function renderDataDetails(data){
     det.appendChild(table);
     wrap.appendChild(det);
   }
+  return wrap;
+}
+
+/* ---- Request operation trajectory --------------------------------------
+   Typed operations are the authoritative ledger. Their stable operation id lets polling upsert the
+   same row while preserving expansion state. Legacy timeline points are used only for old reports. */
+function operationTypeIcon(type){
+  if(type==="input") return ICON.play;
+  if(type==="model") return ICON.chat;
+  return ICON.tool;
+}
+function operationTimestamp(value){
+  const parsed=parseT(value);
+  return Number.isFinite(parsed)?parsed:null;
+}
+function operationDurationLabel(ms){
+  const value=Number(ms);
+  if(!Number.isFinite(value)||value<0) return "不可用";
+  if(value<1000) return Math.round(value)+" ms";
+  if(value<10000) return (value/1000).toFixed(2)+" s";
+  if(value<60000) return (value/1000).toFixed(1)+" s";
+  const minutes=Math.floor(value/60000),seconds=Math.round((value%60000)/1000);
+  return minutes+"分"+String(seconds).padStart(2,"0")+"秒";
+}
+function operationRecordKey(type, preferred, timestamp, index){
+  const stable=String(preferred||"").trim();
+  return stable?[type,stable].join(":"):[type,String(timestamp||"unknown"),String(index)].join(":");
+}
+function operationDurationMs(startedAt,completedAt){
+  const start=operationTimestamp(startedAt),end=operationTimestamp(completedAt);
+  return start!=null&&end!=null&&end>=start?end-start:null;
+}
+function buildOperationRecords(detail){
+  const timeline=Array.isArray(detail.timeline)?detail.timeline:[];
+  const operations=Array.isArray(detail.operations)?detail.operations:[];
+  const runId=detail.summary&&detail.summary.runId||"run";
+  const startEvent=timeline.find(event=>event&&event.stage==="workflow.start");
+  const inputTimestamp=(startEvent&&startEvent.timestampUtc)||(detail.summary&&detail.summary.startedAtUtc)||null;
+  const fullInput=String(detail.input==null?"":detail.input);
+  const inputSummary=String(detail.inputSummary==null?"":detail.inputSummary);
+  const records=[{
+    key:operationRecordKey("input",runId,inputTimestamp,0),type:"input",timestamp:inputTimestamp,
+    title:"Request input",preview:(fullInput||inputSummary||"未记录输入内容").replace(/\s+/g," "),
+    content:fullInput||inputSummary,status:fullInput||inputSummary?"已提交":"内容不可用",statusTone:fullInput||inputSummary?"ok":"",
+    durationMs:null,durationSource:"当前详情契约没有 Input 的独立起止时间。",
+    fullInputAvailable:fullInput.length>0,sourceIndex:-1,anchorSequence:-1
+  }];
+
+  if(operations.length>0){
+    operations.forEach((operation,index)=>{
+      if(!operation||typeof operation!=="object") return;
+      const type=String(operation.kind||"").toLowerCase();
+      if(type!=="model"&&type!=="tool") return;
+      const sessionId=String(operation.sessionId||"");
+      const operationId=String(operation.operationId||operation.toolCallId||"");
+      const startedAt=operation.startedAtUtc||operation.startedAt||null;
+      const completedAt=operation.completedAtUtc||operation.completedAt||null;
+      const timestamp=startedAt||completedAt;
+      const durationMs=operationDurationMs(startedAt,completedAt);
+      const completed=operationTimestamp(completedAt)!=null;
+      const failed=completed&&operation.success===false;
+      const status=completed?(failed?"失败":"已完成"):"运行中";
+      const statusTone=completed?(failed?"bad":"ok"):"live";
+      const progressSequence=operation.progressSequence;
+      const anchorSequence=progressSequence!==null&&progressSequence!==undefined&&progressSequence!==""&&Number.isFinite(Number(progressSequence))
+        ?Number(progressSequence):index;
+
+      if(type==="model"){
+        const content=String(operation.output||"");
+        const reasoning=String(operation.reasoningContent||"");
+        const model=String(operation.model||"");
+        const tools=Array.isArray(operation.availableToolNames)?operation.availableToolNames.map(String).filter(Boolean):[];
+        const toolCallOnly=content.trim()==="";
+        const rawRound=operation.round;
+        const parsedRound=rawRound===null||rawRound===undefined||rawRound===""?null:Number(rawRound);
+        const round=Number.isSafeInteger(parsedRound)?parsedRound:null;
+        const event={agentId:String(operation.roleActorId||"assistant"),content};
+        const data={model,provider:operation.provider||"",finishReason:operation.finishReason||"",usage:operation.usage||{}};
+        records.push({
+          key:operationRecordKey("model",[sessionId||"session-unavailable",operationId||index].join(":"),timestamp,index),
+          type:"model",timestamp,startedAt,completedAt,title:model||(round==null?"Model response":`Model round ${round}`),
+          preview:(content||reasoning||"(tool call only)").replace(/\s+/g," "),content,reasoning,event,data,model,
+          provider:String(operation.provider||""),sessionId,operationId,round,
+          inputSummary:String(operation.inputSummary||""),availableToolNames:tools,usage:operation.usage||{},
+          finishReason:String(operation.finishReason||""),error:String(operation.error||""),
+          status,statusTone,durationMs,durationSource:durationMs==null?"仅在模型 start 与 completed 时间都已提交后显示 Duration。":"",
+          sourceIndex:index,anchorSequence,typed:true,toolCallOnly
+        });
+        return;
+      }
+
+      const tool={
+        callId:String(operation.toolCallId||operationId),toolName:String(operation.toolName||"unknown tool"),
+        argumentsJson:String(operation.argumentsJson||""),resultJson:String(operation.resultJson||""),
+        success:operation.success,error:String(operation.error||"")
+      };
+      records.push({
+        key:operationRecordKey("tool",[sessionId||"session-unavailable",operationId||tool.callId||index].join(":"),timestamp,index),
+        type:"tool",timestamp,startedAt,completedAt,title:tool.toolName,
+        preview:(tool.error||tool.resultJson||tool.argumentsJson||"等待工具结果").replace(/\s+/g," "),tool,
+        sessionId,operationId,status,statusTone,durationMs,
+        durationSource:durationMs==null?"仅在工具 start 与 completed 时间都已提交后显示 Duration。":"",
+        sourceIndex:index,anchorSequence,typed:true
+      });
+    });
+  } else {
+    timeline.forEach((event,index)=>{
+      if(!event) return;
+      const timestamp=event.timestampUtc||null;
+      if(REPLY_KINDS.has(event.kind)||event.stage==="role.reply"){
+        const data=event.data&&typeof event.data==="object"?event.data:{};
+        const sessionId=dataLookup(data,["session_id","sessionId"]);
+        const role=event.message||event.agentId||event.stepId||"assistant";
+        const content=String(event.content==null?"":event.content);
+        records.push({
+          key:operationRecordKey("model",[runId,sessionId||"session-unavailable",timestamp||"time-unavailable",index].join(":"),timestamp,index),type:"model",timestamp,
+          title:role,preview:(content||"(tool call only)").replace(/\s+/g," "),content,reasoning:"",event,data,
+          model:dataLookup(data,DATA_MODEL_KEYS),sessionId,status:"已提交",statusTone:"ok",durationMs:null,
+          durationSource:"历史轨迹只保留 committed 时间点，无法还原真实模型 Duration。",
+          sourceIndex:index,anchorSequence:index,typed:false,toolCallOnly:content.trim()===""
+        });
+        return;
+      }
+      if(event.kind==="ToolCall"||event.stage==="tool.call"){
+        const tool=event.toolCall||{};
+        const callId=String(tool.callId||dataLookup(event.data||{},["call_id","callId"]));
+        const name=String(tool.toolName||event.message||"unknown tool");
+        const error=String(tool.error||"");
+        const success=tool.success===true;
+        records.push({
+          key:operationRecordKey("tool",runId+":"+(callId||[name,timestamp,index].join(":")),timestamp,index),type:"tool",timestamp,title:name,
+          preview:(error||(tool.resultJson||tool.argumentsJson)||"未返回工具详情").replace(/\s+/g," "),tool,event,
+          status:success?"成功":tool.success===false||error?"失败":"结果未确认",statusTone:success?"ok":tool.success===false||error?"bad":"",
+          durationMs:null,durationSource:"历史轨迹只保留 committed 时间点，无法还原真实工具 Duration。",
+          sourceIndex:index,anchorSequence:index,typed:false
+        });
+      }
+    });
+  }
+
+  const typeOrder={input:0,model:1,tool:2};
+  records.sort((left,right)=>{
+    if(left.anchorSequence!==right.anchorSequence) return left.anchorSequence-right.anchorSequence;
+    const lt=operationTimestamp(left.timestamp),rt=operationTimestamp(right.timestamp);
+    if(lt==null&&rt!=null) return 1;
+    if(lt!=null&&rt==null) return -1;
+    if(lt!=null&&rt!=null&&lt!==rt) return lt-rt;
+    if(left.sourceIndex!==right.sourceIndex) return left.sourceIndex-right.sourceIndex;
+    return (typeOrder[left.type]||0)-(typeOrder[right.type]||0);
+  });
+  return records;
+}
+function openOperationRecord(key){
+  state.expandedOperations.add(key);
+  const row=Array.from(document.querySelectorAll(".operation-row")).find(item=>item.getAttribute("data-operation-key")===key);
+  if(!row) return;
+  row.setAttribute("data-open","true");
+  row.querySelector(".operation-summary")?.setAttribute("aria-expanded","true");
+  row.scrollIntoView({block:"nearest",behavior:"smooth"});
+}
+function renderDurationOverview(detail,records){
+  const overview=el("section",{class:"duration-overview","aria-label":"Input Model Tools Duration 总览"});
+  const modelRecords=records.filter(record=>record.type==="model"),toolRecords=records.filter(record=>record.type==="tool");
+  const timestamps=[];
+  records.forEach(record=>{
+    [record.timestamp,record.startedAt,record.completedAt].forEach(value=>{
+      const time=operationTimestamp(value);if(time!=null)timestamps.push(time);
+    });
+  });
+  const runStart=operationTimestamp(detail.summary&&detail.summary.startedAtUtc);
+  if(runStart!=null) timestamps.push(runStart);
+  const scaleStart=timestamps.length?Math.min(...timestamps):0;
+  let scaleEnd=timestamps.length?Math.max(...timestamps):scaleStart+1000;
+  if(scaleEnd<=scaleStart) scaleEnd=scaleStart+1000;
+  const span=scaleEnd-scaleStart;
+  const position=time=>Math.max(0,Math.min(99.2,((time-scaleStart)/span)*100));
+  const head=el("div",{class:"do-head"},`<div><div class="do-title">Duration overview</div><div class="do-sub">Input、每轮 Model response 与每次 Tool call 独立成记录。条形只使用已提交的真实 start / completed 时间。</div></div><div class="do-range">${scaleStart?clockUTC(new Date(scaleStart).toISOString())+" → "+clockUTC(new Date(scaleEnd).toISOString())+" UTC":"时间窗口不可用"}</div>`);
+  overview.appendChild(head);
+  const lanes=el("div",{class:"duration-lanes"});
+  const definitions=[
+    {id:"input",label:"Input",icon:ICON.play,records:records.filter(record=>record.type==="input")},
+    {id:"model",label:"Model",icon:ICON.chat,records:modelRecords},
+    {id:"tools",label:"Tools",icon:ICON.tool,records:toolRecords}
+  ];
+  definitions.forEach(definition=>{
+    const lane=el("div",{class:"duration-lane","data-lane":definition.id});
+    lane.appendChild(el("div",{class:"dl-label"},`<span class="dl-name">${definition.icon}<span>${definition.label}</span></span><span class="dl-count">${definition.records.length} record${definition.records.length===1?"":"s"}</span>`));
+    const track=el("div",{class:"dl-track"});
+    const marks=[];
+    definition.records.forEach((record,index)=>{
+      const time=operationTimestamp(record.timestamp);
+      if(time==null) return;
+      const start=operationTimestamp(record.startedAt),end=operationTimestamp(record.completedAt);
+      const interval=record.durationMs!=null&&start!=null&&end!=null;
+      const left=position(interval?start:time);
+      const width=interval?Math.max(.8,position(end)-left):0;
+      const duration=interval?operationDurationLabel(record.durationMs):"不可用";
+      const mark=el("button",{class:"duration-mark"+(interval?"":" point"),type:"button","data-kind":record.type,title:`${OPERATION_TYPE[record.type].label} · ${record.title} · Duration ${duration}`,style:`left:${left}%;${interval?`width:${width}%;`:""}--mark-row:${index%3}`});
+      mark.addEventListener("click",()=>openOperationRecord(record.key));
+      track.appendChild(mark);marks.push(mark);
+    });
+    if(marks.length===0) track.appendChild(el("span",{class:"dl-empty"},"暂无可定位的 committed 时间点"));
+    lane.appendChild(track);lanes.appendChild(lane);
+  });
+  overview.appendChild(lanes);
+  const axis=el("div",{class:"do-axis"});
+  axis.appendChild(el("span",{class:"do-axis-label"}));
+  axis.appendChild(el("div",{class:"do-ticks"},`<span>+0</span><span>+${operationDurationLabel(span/2)}</span><span>+${operationDurationLabel(span)}</span>`));
+  overview.appendChild(axis);
+  overview.appendChild(el("div",{class:"duration-legend"},'<span><i></i>真实 start → completed Duration</span><span><i class="point"></i>缺少任一端点 · Duration 不可用</span>'));
+  return overview;
+}
+function operationMeta(entries){
+  const meta=el("div",{class:"op-meta"});
+  entries.forEach(([key,value])=>{
+    meta.appendChild(el("span",{class:"k"},esc(key)));
+    meta.appendChild(el("span",{class:"v"},esc(value==null||value===""?"不可用":String(value))));
+  });
+  return meta;
+}
+function renderOperationDetail(record){
+  const detail=el("div",{class:"operation-detail",id:"operation-detail-"+record.key.replace(/[^a-zA-Z0-9_-]/g,"-")});
+  if(record.type==="input"){
+    detail.appendChild(operationMeta([["记录类型","Input"],["Committed 时间",record.timestamp||"不可用"],["Duration","不可用"],["内容来源",record.fullInputAvailable?"run-report Input（完整脱敏值）":"InputSummary 或不可用"]]));
+    detail.appendChild(el("div",{class:"op-unavailable"},esc(record.durationSource)));
+    detail.appendChild(el("pre",{class:"op-text scroll",tabindex:"0"},esc(record.content||"输入内容未记录或为空。")));
+  } else if(record.type==="model"){
+    const usage=record.usage||{};
+    detail.appendChild(operationMeta([["记录类型","Model response"],["Operation ID",record.operationId],["Round",record.round],["Agent",record.event.agentId],["Session",record.sessionId],["Model",record.model],["Provider",record.provider],["Started",record.startedAt||record.timestamp||"不可用"],["Completed",record.completedAt||"不可用"],["Duration",record.durationMs==null?"不可用":operationDurationLabel(record.durationMs)],["Finish reason",record.finishReason],["Prompt tokens",usage.promptTokens],["Completion tokens",usage.completionTokens],["Total tokens",usage.totalTokens]]));
+    if(record.durationMs==null) detail.appendChild(el("div",{class:"op-unavailable"},esc(record.durationSource)));
+    detail.appendChild(renderReplyBubble(record.event));
+    if(record.reasoning) detail.appendChild(el("pre",{class:"op-text scroll",tabindex:"0","aria-label":"模型 reasoning"},esc(record.reasoning)));
+    if(record.inputSummary) detail.appendChild(el("pre",{class:"op-text scroll",tabindex:"0","aria-label":"模型输入摘要"},esc(record.inputSummary)));
+    if(record.availableToolNames&&record.availableToolNames.length) detail.appendChild(el("div",{class:"op-unavailable"},`Available tools · ${esc(record.availableToolNames.join(", "))}`));
+    if(record.error) detail.appendChild(el("pre",{class:"op-text scroll",tabindex:"0"},esc(record.error)));
+    const data=renderDataDetails(record.data);if(data)detail.appendChild(data);
+  } else if(record.type==="tool"){
+    const tool=record.tool;
+    detail.appendChild(operationMeta([["记录类型","Tool call"],["Operation ID",record.operationId],["Tool",record.title],["Call ID",tool.callId],["Session",record.sessionId],["Started",record.startedAt||record.timestamp||"不可用"],["Completed",record.completedAt||"不可用"],["Duration",record.durationMs==null?"不可用":operationDurationLabel(record.durationMs)],["结果状态",record.status]]));
+    if(record.durationMs==null) detail.appendChild(el("div",{class:"op-unavailable"},esc(record.durationSource)));
+    detail.appendChild(jsonField("参数 · arguments",tool.argumentsJson));
+    if(tool.resultJson) detail.appendChild(jsonField("结果 · result",tool.resultJson));
+    if(tool.error) detail.appendChild(el("pre",{class:"op-text scroll",tabindex:"0"},esc(tool.error)));
+  }
+  return detail;
+}
+function renderOperationLedger(records){
+  const ledger=el("section",{class:"operation-ledger","aria-label":"逐条 operation 记录"});
+  ledger.appendChild(el("div",{class:"ol-head"},`<span class="ol-title">Operation ledger</span><span class="ol-count">${records.length} records · 按首次事件排序</span>`));
+  if(records.length===0){ledger.appendChild(el("div",{class:"detail-empty"},'<div class="dt">暂无 operation 记录</div>'));return ledger;}
+  records.forEach((record,index)=>{
+    const open=state.expandedOperations.has(record.key);
+    const detailId="operation-detail-"+record.key.replace(/[^a-zA-Z0-9_-]/g,"-");
+    const row=el("article",{class:"operation-row","data-open":String(open),"data-operation-key":record.key});
+    const summary=el("button",{class:"operation-summary",type:"button","aria-expanded":String(open),"aria-controls":detailId,"aria-label":`${OPERATION_TYPE[record.type].label} ${record.title}，${record.status}，Duration ${record.durationMs==null?"不可用":operationDurationLabel(record.durationMs)}`});
+    summary.innerHTML=`<span class="op-index">${String(index+1).padStart(2,"0")}</span><span class="op-type ${record.type}">${operationTypeIcon(record.type)}<span>${OPERATION_TYPE[record.type].label}</span></span><span class="op-main"><span class="op-name">${esc(record.title)}</span><span class="op-preview">${esc(record.preview||"—")}</span></span><span class="op-time">${record.timestamp?clockUTC(record.timestamp):"时间不可用"}</span><span class="op-duration ${record.durationMs==null?"unavailable":""}">${record.durationMs==null?"Duration 不可用":operationDurationLabel(record.durationMs)}</span><span class="op-state ${record.statusTone||""}">${esc(record.status)}</span><span class="op-chevron" aria-hidden="true">${ICON.chevron}</span>`;
+    summary.addEventListener("click",()=>{
+      const next=!state.expandedOperations.has(record.key);
+      if(next)state.expandedOperations.add(record.key);else state.expandedOperations.delete(record.key);
+      row.setAttribute("data-open",String(next));summary.setAttribute("aria-expanded",String(next));
+    });
+    row.appendChild(summary);row.appendChild(renderOperationDetail(record));ledger.appendChild(row);
+  });
+  return ledger;
+}
+
+function renderTrajectory(detail){
+  const wrap=el("div",{class:"operation-trajectory"});
+  const records=buildOperationRecords(detail);
+  wrap.appendChild(renderDurationOverview(detail,records));
+  wrap.appendChild(renderOperationLedger(records));
+  if(detail.summary.status==="running")wrap.appendChild(el("div",{class:"tl-tail",role:"status","aria-live":"polite"},'<span class="dot" aria-hidden="true"></span><span>运行进行中 · committed operation 将约每 3 秒追加</span>'));
   return wrap;
 }
 
@@ -2798,15 +3439,17 @@ function render(){
   const app = $("#app");
   const oldList=app.querySelector(".runlist"),oldDetail=app.querySelector(".detail-pane");
   const previousRoute=renderedObservatoryRoute;
+  /* Persist the live scroll of the panes we are about to replace. The list is keyed by the filter
+     fields only (so selecting a run does not erase its saved position); the detail by run + tab. */
   if((oldList||oldDetail)&&previousRoute){
-    const previousSaved=readObservatoryViewState(sessionStorage,OBSERVATORY_VIEW_KEY,previousRoute);
-    writeObservatoryViewState(sessionStorage,OBSERVATORY_VIEW_KEY,previousRoute,{list:paneScrollPosition(oldList,previousSaved.list),detail:paneScrollPosition(oldDetail,previousSaved.detail)});
+    writeObservatoryListState(sessionStorage,OBSERVATORY_VIEW_KEY,previousRoute,paneScrollPosition(oldList,readObservatoryListState(sessionStorage,OBSERVATORY_VIEW_KEY,previousRoute)));
+    writeObservatoryDetailState(sessionStorage,OBSERVATORY_VIEW_KEY,previousRoute,paneScrollPosition(oldDetail,readObservatoryDetailState(sessionStorage,OBSERVATORY_VIEW_KEY,previousRoute)));
   }
   const route=readObservatoryRoute(location.search,location.hash);
-  const saved=readObservatoryViewState(sessionStorage,OBSERVATORY_VIEW_KEY,route);
-  const sameRoute=previousRoute&&observatoryRouteKey(previousRoute)===observatoryRouteKey(route);
-  const prevListScroll=pendingListScrollReset?0:(sameRoute?paneScrollPosition(oldList,saved.list):saved.list);
-  const prevDetailScroll=pendingDetailScrollReset?0:(sameRoute?paneScrollPosition(oldDetail,saved.detail):saved.detail);
+  const sameListKey=previousRoute&&observatoryListKey(previousRoute)===observatoryListKey(route);
+  const sameDetailKey=previousRoute&&observatoryDetailKey(previousRoute)===observatoryDetailKey(route);
+  const prevListScroll=pendingListScrollReset?0:(sameListKey?paneScrollPosition(oldList,readObservatoryListState(sessionStorage,OBSERVATORY_VIEW_KEY,route)):readObservatoryListState(sessionStorage,OBSERVATORY_VIEW_KEY,route));
+  const prevDetailScroll=pendingDetailScrollReset?0:(sameDetailKey?paneScrollPosition(oldDetail,readObservatoryDetailState(sessionStorage,OBSERVATORY_VIEW_KEY,route)):readObservatoryDetailState(sessionStorage,OBSERVATORY_VIEW_KEY,route));
   pendingListScrollReset = false;
   pendingDetailScrollReset = false;
   renderedObservatoryRoute=route;
@@ -2829,7 +3472,8 @@ function render(){
   app.appendChild(shell);
 
   applyPaneScrollState(app.querySelector(".runlist"),app.querySelector(".detail-pane"),{list:prevListScroll,detail:prevDetailScroll});
-  writeObservatoryViewState(sessionStorage,OBSERVATORY_VIEW_KEY,route,{list:prevListScroll,detail:prevDetailScroll});
+  writeObservatoryListState(sessionStorage,OBSERVATORY_VIEW_KEY,route,prevListScroll);
+  writeObservatoryDetailState(sessionStorage,OBSERVATORY_VIEW_KEY,route,prevDetailScroll);
 }
 
 /* ===========================================================================
@@ -2837,9 +3481,11 @@ function render(){
    =========================================================================== */
 function selectRun(runId){
   pendingDetailScrollReset = true;
+  resetStopControlState();
   state.selectedRunId = runId;
   state.scenario = "detailLoading";
   state.activeTab = "timeline";
+  state.expandedOperations.clear();
   writeObservatoryRoute({ run:runId, tab:"timeline" });
   state.selectedNodeId = null;
   state.graphView = { zoom: 1, panX: 0, panY: 0, fitted: false };
@@ -2857,17 +3503,22 @@ async function fetchMe(){
 }
 
 function setScope(scope){
+  state.listRequestEpoch = (Number(state.listRequestEpoch) || 0) + 1;
+  state.loadingMore = false;
+  resetStopControlState();
   adminState.currentScope = scope;       // null = my runs · ALL_SCOPES · or a concrete scope id
   adminState.candidates = null; adminState.message = ""; adminState.inputDraft = "";
   pendingListScrollReset = true;         // new scope → fresh list, start at the top
   pendingDetailScrollReset = true;
   state.selectedRunId = null;
-  cache.runs = []; cache.details = {}; cache.graphs = {};
+  state.expandedOperations.clear();
+  cache.runs = []; cache.runFeed = normalizeActivityRunFeed(null); cache.details = {}; cache.graphs = {};
+  state.lastSyncedAtUtc = null;
   lastRunsSig = ""; lastDetailSig = "";
   state.scenario = "listLoading";
   writeObservatoryRoute({ scope:scope===ALL_SCOPES?"all":(scope||"mine"), run:"" });
   render();
-  (async () => { await refreshRuns(); lastRunsSig = runsSig(cache.runs); render(); })();
+  (async () => { const ok=await refreshRuns(); if(ok) state.lastSyncedAtUtc=new Date().toISOString(); lastRunsSig = runsSig(cache.runs,cache.runFeed); render(); })();
 }
 
 function goToInput(){
@@ -2900,7 +3551,7 @@ function renderAdminBar(){
   const view = el("span", { class:"ab-view" });
   view.innerHTML = adminState.currentScope === ALL_SCOPES
     ? "正在查看 <b>全部 scope</b>"
-    : (adminState.currentScope ? "正在查看 scope <b>" + esc(adminState.currentScope) + "</b>" : "正在查看 <b>我的运行</b>");
+    : (adminState.currentScope ? "正在查看 scope <b>" + esc(adminState.currentScope) + "</b>" : "正在查看 <b>我的请求轨迹</b>");
   bar.appendChild(view);
 
   const input = el("input", { class:"ab-input", type:"text", placeholder:"输入邮箱或 scope id…", "aria-label":"邮箱或 scope id", value: adminState.inputDraft || "" });
@@ -2913,11 +3564,11 @@ function renderAdminBar(){
   runInput.addEventListener("input", e => { adminState.runIdDraft = e.target.value; });
   runInput.addEventListener("keydown", e => { if(e.key === "Enter"){ e.preventDefault(); openRunInput(); } });
   bar.appendChild(runInput);
-  const openRun = el("button", { class:"chip" }, "打开运行"); openRun.addEventListener("click", openRunInput); bar.appendChild(openRun);
+  const openRun = el("button", { class:"chip" }, "打开请求轨迹"); openRun.addEventListener("click", openRunInput); bar.appendChild(openRun);
   const all = el("button", { class:"chip", "aria-pressed": String(adminState.currentScope === ALL_SCOPES) }, "全部 scope");
   all.addEventListener("click", () => setScope(ALL_SCOPES)); bar.appendChild(all);
   if(adminState.currentScope){
-    const back = el("button", { class:"linkbtn" }, "返回我的运行");
+    const back = el("button", { class:"linkbtn" }, "返回我的请求轨迹");
     back.addEventListener("click", () => setScope(null)); bar.appendChild(back);
   }
   if(adminState.message) bar.appendChild(el("span", { class:"ab-msg", role:"status" }, esc(adminState.message)));
@@ -2930,21 +3581,64 @@ function renderAdminBar(){
     });
     bar.appendChild(cands);
   }
-  bar.appendChild(el("div", { class:"ab-hint" }, "邮箱解析为该 NyxID 用户的 scope id（≈用户 id）；全部 scope 为最近若干条视图。"));
+  bar.appendChild(el("div", { class:"ab-hint" }, "邮箱解析为该 NyxID 用户的 scope id（≈用户 id）；全部 scope 显示 Activity feed 返回的最近请求轨迹，并明确标注是否还有更多。"));
   return bar;
 }
 
 async function refreshRuns(){
+  if(state.loadingMore) return false;
+  const requestEpoch=state.listRequestEpoch=(Number(state.listRequestEpoch)||0)+1;
   try {
-    const runs = await api("/api/workflow/observatory/runs" + listQueryParams());
-    cache.runs = runs || [];
+    const refreshTake=Math.min(Math.max(cache.runs.length,100),500);
+    const payload = await api(activityRunFeedRequestPath(listQueryParams(null,refreshTake)));
+    if(requestEpoch!==state.listRequestEpoch) return false;
+    if(!isActivityRunFeedEnvelope(payload)) throw new Error("invalid-activity-run-feed");
+    const feed = normalizeActivityRunFeed(payload);
+    if(cache.runs.length>refreshTake){
+      const previousFeed=cache.runFeed,byId=new Map(feed.items.map(run=>[run.runId,run]));
+      cache.runs.forEach(run=>{ if(!byId.has(run.runId)) byId.set(run.runId,run); });
+      cache.runs=Array.from(byId.values());
+      cache.runFeed={...feed,items:cache.runs,nextCursor:previousFeed.nextCursor,hasMore:previousFeed.hasMore};
+    } else {
+      cache.runFeed = feed;
+      cache.runs = feed.items;
+    }
     if(state.scenario === "listLoading" || state.scenario === "empty" || state.scenario === "globalError"){
       state.scenario = (cache.runs.length === 0) ? "empty" : "normal";
     }
     return true;
   } catch(e){
+    if(requestEpoch!==state.listRequestEpoch) return false;
     if(e.message !== "unauthorized") state.scenario = "globalError";
     return false;
+  }
+}
+
+async function loadMoreRequestTraces(){
+  const cursor=cache.runFeed&&cache.runFeed.nextCursor;
+  if(state.loadingMore||!cursor) return false;
+  const requestEpoch=state.listRequestEpoch=(Number(state.listRequestEpoch)||0)+1;
+  state.loadingMore=true;
+  render();
+  try {
+    const payload=await api(activityRunFeedRequestPath(listQueryParams(cursor)));
+    if(requestEpoch!==state.listRequestEpoch) return false;
+    if(!isActivityRunFeedEnvelope(payload)) throw new Error("invalid-activity-run-feed");
+    const next=normalizeActivityRunFeed(payload),byId=new Map(cache.runs.map(run=>[run.runId,run]));
+    next.items.forEach(run=>byId.set(run.runId,run));
+    cache.runs=Array.from(byId.values());
+    cache.runFeed={...next,items:cache.runs};
+    lastRunsSig=runsSig(cache.runs,cache.runFeed);
+    return true;
+  } catch(e){
+    if(requestEpoch!==state.listRequestEpoch) return false;
+    if(e.message!=="unauthorized") state.scenario="globalError";
+    return false;
+  } finally {
+    if(requestEpoch===state.listRequestEpoch){
+      state.loadingMore=false;
+      render();
+    }
   }
 }
 
@@ -2968,9 +3662,10 @@ async function refreshDetail(runId){
 }
 
 async function loadDetail(runId){
-  await refreshDetail(runId);
+  const ok=await refreshDetail(runId);
   lastDetailSig = detailSig(cache.details[runId]);
   render();
+  return ok;
 }
 
 async function loadGraph(runId){
@@ -2987,26 +3682,49 @@ async function loadGraph(runId){
 }
 
 /* ---- near-live polling (~3s, paused when tab hidden); history & live share it ---- */
-function runsSig(runs){ return runs.map(r => r.runId + ":" + r.status + ":" + r.updatedAtUtc + ":" + r.stateVersion).join("|"); }
-function detailSig(d){ return d ? (d.summary.status + ":" + d.summary.stateVersion + ":" + ((d.timeline && d.timeline.length) || 0) + ":" + ((d.diagnostics && d.diagnostics.length) || 0)) : "none"; }
+function runsSig(runs,feed){
+  const page=normalizeActivityRunFeed(feed);
+  const meta=[page.hasMore?"more":"end",page.totalCount==null?"unknown":page.totalCount].join(":");
+  return meta+"|"+(runs||[]).map(r => [r.runId,r.status,r.updatedAtUtc,r.stateVersion,r.inputSummary,r.durationMs,r.currentStep&&r.currentStep.stepId,r.currentStep&&r.currentStep.inputSummary].join(":")).join("|");
+}
+function detailSig(d){
+  if(!d) return "none";
+  const operationWatermark=(Array.isArray(d.operations)?d.operations:[]).map(operation=>[
+    operation.kind,operation.sessionId,operation.operationId,operation.progressSequence,
+    operation.startedAtUtc,operation.completedAtUtc,operation.success,
+    String(operation.output||"").length,String(operation.resultJson||"").length
+  ].join(":")).join("|");
+  return d.summary.status+":"+d.summary.stateVersion+":"+((d.timeline&&d.timeline.length)||0)+":"+((d.diagnostics&&d.diagnostics.length)||0)+":"+operationWatermark;
+}
 let lastRunsSig = "", lastDetailSig = "";
 
 async function poll(){
-  if(document.hidden || !state.signedIn) return;
-  let changed = false;
-  const before = state.scenario;
-  await refreshRuns();
-  const rs = runsSig(cache.runs);
-  if(rs !== lastRunsSig){ lastRunsSig = rs; changed = true; }
-  if(state.selectedRunId && state.scenario !== "notFound"){
-    await refreshDetail(state.selectedRunId);
-    const ds = detailSig(cache.details[state.selectedRunId]);
-    if(ds !== lastDetailSig){ lastDetailSig = ds; changed = true; }
+  if(document.hidden || !state.signedIn || state.polling) return;
+  state.polling=true;
+  try {
+    let changed = false;
+    const before = state.scenario;
+    const listOk=await refreshRuns();
+    const rs = runsSig(cache.runs,cache.runFeed);
+    if(rs !== lastRunsSig){ lastRunsSig = rs; changed = true; }
+    let detailOk=true;
+    if(state.selectedRunId){
+      detailOk=await refreshDetail(state.selectedRunId);
+      const ds = detailSig(cache.details[state.selectedRunId]);
+      if(ds !== lastDetailSig){ lastDetailSig = ds; changed = true; }
+    }
+    if(listOk&&detailOk) state.lastSyncedAtUtc=new Date().toISOString();
+    if(state.scenario !== before) changed = true;
+    if(changed){ render(); return; }
+    const chip = document.getElementById("liveChip");
+    if(chip && chip.classList.contains("is-live")){
+      const freshness=chip.querySelector(".freshness");
+      if(freshness&&state.lastSyncedAtUtc){ freshness.setAttribute("data-since",state.lastSyncedAtUtc); freshness.textContent="刚刚 同步"; }
+      chip.classList.add("is-polling"); setTimeout(() => chip.classList.remove("is-polling"), 600);
+    }
+  } finally {
+    state.polling=false;
   }
-  if(state.scenario !== before) changed = true;
-  if(changed){ render(); return; }
-  const chip = document.getElementById("liveChip");
-  if(chip && chip.classList.contains("is-live")){ chip.classList.add("is-polling"); setTimeout(() => chip.classList.remove("is-polling"), 600); }
 }
 let pollTimer = null;
 function startPolling(){ stopPolling(); pollTimer = setInterval(poll, CFG.pollMs); }
@@ -3019,7 +3737,7 @@ function updateRelTimes(){
   document.querySelectorAll("[data-since]").forEach(node => {
     const iso = node.getAttribute("data-since");
     const base = relTime(iso, now);
-    node.textContent = node.classList.contains("freshness") ? base + " 更新" : base;
+    node.textContent = node.classList.contains("freshness") ? base + " 同步" : base;
   });
   document.querySelectorAll("[data-duration]").forEach(node => {
     node.textContent = fmtDur(now - parseT(node.getAttribute("data-duration")));
@@ -3044,8 +3762,8 @@ document.addEventListener("keydown", event => {
 window.addEventListener("pagehide", () => {
   const list=document.querySelector(".runlist"),detail=document.querySelector(".detail-pane");
   const route=readObservatoryRoute(location.search,location.hash);
-  const saved=readObservatoryViewState(sessionStorage,OBSERVATORY_VIEW_KEY,route);
-  writeObservatoryViewState(sessionStorage,OBSERVATORY_VIEW_KEY,route,{list:paneScrollPosition(list,saved.list),detail:paneScrollPosition(detail,saved.detail)});
+  writeObservatoryListState(sessionStorage,OBSERVATORY_VIEW_KEY,route,paneScrollPosition(list,readObservatoryListState(sessionStorage,OBSERVATORY_VIEW_KEY,route)));
+  writeObservatoryDetailState(sessionStorage,OBSERVATORY_VIEW_KEY,route,paneScrollPosition(detail,readObservatoryDetailState(sessionStorage,OBSERVATORY_VIEW_KEY,route)));
 });
 (async function init(){
   try { await completeLoginIfCallback(); }
@@ -3057,9 +3775,11 @@ window.addEventListener("pagehide", () => {
   cache.account = toAccount(await fetchUserInfo()) || cache.account;
   await fetchMe();
   if(adminState.isAdmin) adminState.currentScope = initialRoute.scope === "all" ? ALL_SCOPES : (initialRoute.scope === "mine" ? null : initialRoute.scope);
-  await refreshRuns();
-  lastRunsSig = runsSig(cache.runs);
-  if(state.selectedRunId) await loadDetail(state.selectedRunId);
+  const listOk=await refreshRuns();
+  lastRunsSig = runsSig(cache.runs,cache.runFeed);
+  let detailOk=true;
+  if(state.selectedRunId) detailOk=await loadDetail(state.selectedRunId);
+  if(listOk&&detailOk) state.lastSyncedAtUtc=new Date().toISOString();
   render();
   // Admin-only: resolve scopeIds to nyxid display names in the background, then re-render so the
   // names appear in cross-scope rows and the run-detail scope chip without delaying the runs list.

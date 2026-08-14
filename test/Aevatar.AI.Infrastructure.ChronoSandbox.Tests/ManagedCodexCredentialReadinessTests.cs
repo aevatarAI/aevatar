@@ -3003,9 +3003,9 @@ public sealed class ManagedCodexCredentialReadinessTests
                 $"sec-{apiKeyId}",
                 "managed-codex-credential:nyxid::user-a",
                 Now.AddDays(30)),
-            ChronoSandboxUserServiceId = "us-sandbox",
+            ManagedCodexUserServiceId = "us-sandbox",
             ChronoLlmUserServiceId = "us-llm",
-            ChronoSandboxServiceSlug = "chrono-sandbox",
+            ManagedCodexServiceSlug = "chrono-sandbox",
             ExpiresAt = Timestamp.FromDateTimeOffset(Now.AddDays(30)),
             Status = ManagedCodexCredentialStatus.Active,
         };
@@ -3040,7 +3040,7 @@ public sealed class ManagedCodexCredentialReadinessTests
         [
             new ManagedCodexNyxIdService(
                 sandboxId,
-                ManagedCodexOptions.ChronoSandboxServiceSlug,
+                ManagedCodexOptions.ManagedCodexServiceSlug,
                 true,
                 "personal",
                 null,

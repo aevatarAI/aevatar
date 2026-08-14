@@ -17,6 +17,7 @@ public sealed record NyxIdChatNeedsYouDecision<TResolution>(
 public static class NyxIdChatNeedsYouDecisions
 {
     private const int ResolutionHistoryLimit = 32;
+    private const string ApprovalExpiryClientRequestId = "nyxid-chat-approval-expiry";
 
     public static NyxIdChatNeedsYouDecision<NyxIdChatPendingInputState> RequestInput(
         NyxIdChatConversationGAgentState state,
@@ -28,6 +29,7 @@ public static class NyxIdChatNeedsYouDecisions
         ArgumentNullException.ThrowIfNull(now);
 
         var normalizedOptions = command.Options.Select(NormalizeOption).ToArray();
+        var numericThreshold = command.NumericThreshold?.Clone();
         if (!MatchesConversation(state, command.ScopeId, command.ConversationActorId) ||
             !MatchesActiveTask(state, command.TurnId, command.TaskId, command.StepId) ||
             string.IsNullOrWhiteSpace(command.RequestId) ||
@@ -38,7 +40,9 @@ public static class NyxIdChatNeedsYouDecisions
                 string.IsNullOrWhiteSpace(option.OptionId) ||
                 string.IsNullOrWhiteSpace(option.Label)) ||
             normalizedOptions.Select(static option => option.OptionId)
-                .Distinct(StringComparer.Ordinal).Count() != normalizedOptions.Length)
+                .Distinct(StringComparer.Ordinal).Count() != normalizedOptions.Length ||
+            !IsValidNumericThreshold(numericThreshold, command.AllowFreeText,
+                command.MultiSelect, normalizedOptions.Length))
         {
             return NoCommit<NyxIdChatPendingInputState>(state);
         }
@@ -55,6 +59,8 @@ public static class NyxIdChatNeedsYouDecisions
             MultiSelect = command.MultiSelect,
             ToolCallId = command.ToolCallId.Trim(),
         };
+        if (numericThreshold is not null)
+            pending.NumericThreshold = numericThreshold;
         pending.Options.AddRange(normalizedOptions);
 
         if (state.RecentInputResolutions.Any(result =>
@@ -115,7 +121,8 @@ public static class NyxIdChatNeedsYouDecisions
             string.IsNullOrWhiteSpace(command.ClientRequestId) ||
             state.PendingInput is not { } pending ||
             !string.Equals(pending.RequestId, command.RequestId?.Trim(), StringComparison.Ordinal) ||
-            !TryNormalizeAnswer(pending, command.Answer, out var normalizedAnswer))
+            !TryNormalizeAnswer(pending, command.Answer, out var normalizedAnswer) ||
+            !TryResolveNumericThreshold(pending, normalizedAnswer, out var numericResolution))
         {
             return NoCommit<NyxIdChatInputResolutionState>(state);
         }
@@ -126,8 +133,11 @@ public static class NyxIdChatNeedsYouDecisions
             ClientRequestId = command.ClientRequestId.Trim(),
             Outcome = NyxIdChatNeedsYouResolutionOutcome.Accepted,
             AnswerSha256 = answerHash,
+            Answer = normalizedAnswer.Clone(),
             CommittedAt = now.Clone(),
         };
+        if (numericResolution is not null)
+            resolution.NumericThreshold = numericResolution;
         var next = state.Clone();
         next.PendingInput = null;
         next.LatestInputResolution = resolution.Clone();
@@ -178,6 +188,9 @@ public static class NyxIdChatNeedsYouDecisions
             return NoCommit<NyxIdChatApprovalResolutionState>(state);
         }
 
+        if (HasApprovalExpired(pending, now))
+            return CommitExpiredApproval(state, pending, now);
+
         var resolution = new NyxIdChatApprovalResolutionState
         {
             RequestId = pending.ApprovalRequestId,
@@ -197,6 +210,63 @@ public static class NyxIdChatNeedsYouDecisions
         if (nextCommand is null)
             return NoCommit<NyxIdChatApprovalResolutionState>(state);
         return new(true, false, next, resolution, nextCommand);
+    }
+
+    public static NyxIdChatNeedsYouDecision<NyxIdChatApprovalResolutionState> ExpireApproval(
+        NyxIdChatConversationGAgentState state,
+        NyxIdChatToolApprovalExpiredSignal signal,
+        Timestamp now)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentNullException.ThrowIfNull(signal);
+        ArgumentNullException.ThrowIfNull(now);
+
+        if (state.PendingApproval is not { } pending ||
+            !string.Equals(
+                pending.ApprovalRequestId,
+                signal.ApprovalRequestId,
+                StringComparison.Ordinal) ||
+            pending.ExpiresAt is null ||
+            signal.ExpectedExpiresAt is null ||
+            !pending.ExpiresAt.Equals(signal.ExpectedExpiresAt) ||
+            !HasApprovalExpired(pending, now))
+        {
+            return NoCommit<NyxIdChatApprovalResolutionState>(state);
+        }
+
+        return CommitExpiredApproval(state, pending, now);
+    }
+
+    private static bool HasApprovalExpired(
+        NyxIdChatPendingApprovalState pending,
+        Timestamp now) =>
+        pending.ExpiresAt is not null &&
+        now.ToDateTimeOffset() >= pending.ExpiresAt.ToDateTimeOffset();
+
+    // Expiry always fails closed: the committed resolution is a system-authored
+    // denial regardless of any late caller decision, and it never carries an
+    // approval continuation, so no effect can dispatch.
+    private static NyxIdChatNeedsYouDecision<NyxIdChatApprovalResolutionState> CommitExpiredApproval(
+        NyxIdChatConversationGAgentState state,
+        NyxIdChatPendingApprovalState pending,
+        Timestamp now)
+    {
+        var resolution = new NyxIdChatApprovalResolutionState
+        {
+            RequestId = pending.ApprovalRequestId,
+            ClientRequestId = ApprovalExpiryClientRequestId,
+            Outcome = NyxIdChatNeedsYouResolutionOutcome.Expired,
+            Approved = false,
+            DecisionSha256 = Hash(ApprovalExpiryClientRequestId),
+            CommittedAt = now.Clone(),
+        };
+        var next = state.Clone();
+        next.LatestApprovalResolution = resolution.Clone();
+        AppendBounded(next.RecentApprovalResolutions, resolution);
+        next.ProgressSequence = checked(Math.Max(0, next.ProgressSequence) + 1);
+        next.UpdatedAt = now.Clone();
+        NyxIdChatTaskLifecycle.ExpirePendingApproval(next, pending, now);
+        return new(true, false, next, resolution);
     }
 
     public static NyxIdChatConversationGAgentState RefreshAttention(
@@ -221,10 +291,22 @@ public static class NyxIdChatNeedsYouDecisions
             attention.AttentionKind = NyxIdChatAttentionKind.Approval;
             attention.AttentionSince = approval.AskedAt?.Clone();
         }
+        else if (ResolveStalledStep(next.ActiveTask) is { } stalledStep)
+        {
+            attention.AttentionKind = NyxIdChatAttentionKind.Stalled;
+            attention.AttentionSince = stalledStep.Operation.StalledAt?.Clone();
+        }
 
         next.Attention = attention;
         return next;
     }
+
+    private static NyxIdChatTaskStepState? ResolveStalledStep(NyxIdChatTaskState? task) =>
+        task?.Status == NyxIdChatTaskStatus.Active
+            ? task.Steps.FirstOrDefault(static step =>
+                step.Status == NyxIdChatStepStatus.Running &&
+                step.Operation?.StalledAt is not null)
+            : null;
 
     private static bool MatchesConversation(
         NyxIdChatConversationGAgentState state,
@@ -309,6 +391,50 @@ public static class NyxIdChatNeedsYouDecisions
         return true;
     }
 
+    private static bool IsValidNumericThreshold(
+        NyxIdChatNumericThresholdInputSpec? spec,
+        bool allowFreeText,
+        bool multiSelect,
+        int optionCount) =>
+        spec is null ||
+        allowFreeText &&
+        !multiSelect &&
+        optionCount == 0 &&
+        spec.MinimumValue <= spec.MaximumValue &&
+        spec.SuggestedValue >= spec.MinimumValue &&
+        spec.SuggestedValue <= spec.MaximumValue;
+
+    private static bool TryResolveNumericThreshold(
+        NyxIdChatPendingInputState pending,
+        NyxIdChatInputAnswer answer,
+        out NyxIdChatNumericThresholdResolution? resolution)
+    {
+        resolution = null;
+        if (pending.NumericThreshold is null)
+            return true;
+        if (answer.AnswerCase != NyxIdChatInputAnswer.AnswerOneofCase.FreeText ||
+            !long.TryParse(
+                answer.FreeText,
+                System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var effective) ||
+            effective < pending.NumericThreshold.MinimumValue ||
+            effective > pending.NumericThreshold.MaximumValue)
+        {
+            return false;
+        }
+
+        resolution = new NyxIdChatNumericThresholdResolution
+        {
+            SuggestedValue = pending.NumericThreshold.SuggestedValue,
+            EffectiveValue = effective,
+            Origin = effective == pending.NumericThreshold.SuggestedValue
+                ? NyxIdChatThresholdOrigin.Suggested
+                : NyxIdChatThresholdOrigin.UserOverride,
+        };
+        return true;
+    }
+
     private static NyxIdChatOperationDispatchCommand? ResumeAfterInput(
         NyxIdChatConversationGAgentState state,
         NyxIdChatPendingInputState pending,
@@ -353,7 +479,11 @@ public static class NyxIdChatNeedsYouDecisions
         continuationStep.AddedBy = NyxIdChatStepAddedBy.Replan;
         continuationStep.DependsOn.Add(inputStep.StepId);
         activeTask.Steps.Add(continuationStep);
-        activeTask.PlanRevision = Math.Max(1, activeTask.PlanRevision + 1);
+        NyxIdChatPlanRevisions.CommitChange(
+            activeTask,
+            NyxIdChatPlanRevisionCause.ScopeResolution,
+            now,
+            [continuationStep]);
         ActivateStep(state, continuationStep, now);
         var continuation = new NyxIdChatInputContinuationInput
         {
@@ -401,6 +531,8 @@ public static class NyxIdChatNeedsYouDecisions
             Kind = NyxIdChatStepKind.Tool,
             Phase = NyxIdChatOperationPhase.Requested,
             MayChangeExternalState = step.MayChangeExternalState,
+            Idempotent = !step.MayChangeExternalState,
+            IdempotencyKey = key.OperationId,
             RequestedAt = now.Clone(),
         };
         step.UpdatedAt = now.Clone();
@@ -415,6 +547,14 @@ public static class NyxIdChatNeedsYouDecisions
                 Approved = command.Approved,
                 ToolContext = command.ToolContext?.Clone(),
                 MayChangeExternalState = step.MayChangeExternalState,
+                IdempotencyKey = key.OperationId,
+                OperationAdmission = step.Source?.Tool?.OperationAdmission?.Clone(),
+                ExactServiceApproval = pending.ExactServiceApproval?.Clone(),
+                ToolCallId = pending.ToolCallId,
+                ToolName = pending.ToolName,
+                Presentation = NyxIdChatDurableToolPresentation.Snapshot(
+                    step.Source?.Tool?.Presentation,
+                    pending.ToolName),
             },
         };
     }

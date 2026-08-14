@@ -903,7 +903,7 @@ public sealed class WorkflowExplicitRequestAdmissionTests
             Paths.Add(path);
             if (path != "/api/v1/keys")
                 throw new InvalidOperationException($"Unexpected explicit admission request: {path}");
-            const string body = "{\"keys\":[{\"id\":\"usvc-alpha\",\"slug\":\"shared-slug\",\"label\":\"Example service\",\"catalog_service_name\":null,\"status\":\"active\",\"is_active\":true,\"credential_source\":{\"type\":\"personal\"}}]}";
+            const string body = "{\"keys\":[{\"id\":\"usvc-alpha\",\"slug\":\"shared-slug\",\"label\":\"Example service\",\"catalog_service_name\":null,\"status\":\"active\",\"is_active\":true,\"credential_source\":{\"type\":\"personal\"},\"connected\":true}]}";
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(body, Encoding.UTF8, "application/json"),

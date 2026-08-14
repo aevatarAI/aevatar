@@ -492,6 +492,79 @@ public sealed class AgentRunGAgentTests
         recoveredPublisher.Published.Should().ContainSingle(message => message is AgentRunNextToolStepRequestedEvent);
     }
 
+    [Fact]
+    public async Task HandleNextToolStepAsync_WhenApprovedContinuationSucceeds_ShouldPersistActorOwnedApprovalIdentity()
+    {
+        var publisher = new RecordingSelfEventPublisher();
+        var executor = new ApprovalTrackingReplyGenerationExecutor();
+        var runtime = CreateRunAgentWithExecutor(
+            new DispatchingActorRuntime(),
+            executor,
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions(),
+            publisher);
+        SetState(runtime, BuildPendingApprovalState());
+
+        await runtime.HandleToolApprovalDecisionAsync(BuildApprovalDecisionCommand(approved: true));
+        var continuation = publisher.Published.OfType<AgentRunNextToolStepRequestedEvent>().Single();
+        var returnedReceipt = continuation.ToolStepResult.ToolReceipts.Should().ContainSingle().Subject;
+        returnedReceipt.ApprovalRequestId.Should().BeEmpty();
+        returnedReceipt.ProviderResourceId.Should().Be("provider-resource-approval-1");
+
+        await runtime.HandleNextToolStepAsync(continuation);
+
+        var persistedReceipt = runtime.State.GenerationStep!.ToolReceipts.Should().ContainSingle().Subject;
+        persistedReceipt.ApprovalRequestId.Should().Be("tool-approval-1");
+        persistedReceipt.ProviderResourceId.Should().Be("provider-resource-approval-1");
+        runtime.State.GenerationStep.NextStepIndex.Should().Be(3);
+        runtime.State.PendingToolApproval.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task HandleNextToolStepAsync_WhenApprovedPendingStepDiffers_ShouldNotContaminateReceipt()
+    {
+        var publisher = new RecordingSelfEventPublisher();
+        var runtime = CreateRunAgentWithExecutor(
+            new DispatchingActorRuntime(),
+            new ApprovalTrackingReplyGenerationExecutor(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions(),
+            publisher);
+        var state = BuildPendingApprovalState();
+        state.PendingToolApproval!.Decision = AgentRunToolApprovalDecision.Approved;
+        state.PendingToolApproval.StepIndex = 3;
+        SetState(runtime, state);
+
+        await runtime.HandleNextToolStepAsync(new AgentRunNextToolStepRequestedEvent
+        {
+            RunId = state.RunId,
+            CorrelationId = state.CorrelationId,
+            TargetActorId = state.TargetActorId,
+            Attempt = state.GenerationAttempt,
+            StepIndex = 3,
+            Request = BuildApprovalDecisionCommand(approved: true).Request,
+            ToolStepResult = new AgentRunToolStepResult
+            {
+                AdvanceRound = true,
+                AuthorizationOutcome = AgentRunToolAuthorizationOutcome.DurableMatched,
+                ToolReceipts =
+                {
+                    new AgentToolReceipt
+                    {
+                        CallId = "call-approval-1",
+                        ToolName = "use_skill",
+                        Status = AgentToolReceiptStatus.Success,
+                        ProviderResourceId = "provider-resource-other-step",
+                    },
+                },
+            },
+        });
+
+        var persistedReceipt = runtime.State.GenerationStep!.ToolReceipts.Should().ContainSingle().Subject;
+        persistedReceipt.ApprovalRequestId.Should().BeEmpty();
+        persistedReceipt.ProviderResourceId.Should().Be("provider-resource-other-step");
+        runtime.State.PendingToolApproval.Should().NotBeNull();
+        runtime.State.PendingToolApproval!.StepIndex.Should().Be(3);
+    }
+
     [Theory]
     [InlineData("sender")]
     [InlineData("scope")]
@@ -4845,7 +4918,7 @@ public sealed class AgentRunGAgentTests
                             CallId = pendingApproval.ToolCallId,
                             ToolName = pendingApproval.ToolName,
                             Status = AgentToolReceiptStatus.Success,
-                            ApprovalRequestId = pendingApproval.ApprovalRequestId,
+                            ProviderResourceId = "provider-resource-approval-1",
                         },
                     },
                 },

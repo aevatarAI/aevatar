@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions.CodeExecution;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
@@ -29,6 +30,7 @@ using Aevatar.BackendConsole.Hosting;
 using Aevatar.Bootstrap.Extensions.AI;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.ChatRouting.Core;
+using Aevatar.Configuration;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Abstractions.AgentProfiles;
 using Aevatar.GAgentService.Application.AgentProfiles;
@@ -81,6 +83,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Mainnet.Host.Api.Hosting;
 
@@ -203,16 +206,15 @@ public static class MainnetHostBuilderExtensions
             });
         }
         builder.Services.AddNyxIdChat(builder.Configuration);
+        builder.Services.Replace(ServiceDescriptor.Singleton(
+            NyxIdChatCanaryEffectFaultOptions.EnabledFor(
+                "5d0d7b72-acff-49af-bb1b-9f30bbb7c102")));
         AddNyxIdChatAgentProfile(builder);
         builder.Services.AddStreamingProxy(builder.Configuration);
         builder.Services.AddChatbotClassifier();
         builder.Services.AddRetiredActorCleanup();
         builder.Services.AddChannelRuntime(builder.Configuration);
         builder.Services.AddChannelIdentity(builder.Configuration);
-        var configuredSandboxServiceSlug = builder.Configuration["Aevatar:NyxId:SandboxServiceSlug"];
-        var sandboxServiceSlug = string.IsNullOrWhiteSpace(configuredSandboxServiceSlug)
-            ? NyxIdToolOptions.DefaultSandboxServiceSlug
-            : configuredSandboxServiceSlug.Trim();
         builder.Services.Configure<NyxIdBrokerOptions>(options =>
         {
             var configuredRoute = builder.Configuration["Aevatar:NyxId:DefaultRoute"];
@@ -230,7 +232,7 @@ public static class MainnetHostBuilderExtensions
                 .Where(static serviceSlug => !string.IsNullOrWhiteSpace(serviceSlug))
                 .Select(static serviceSlug => serviceSlug!.Trim())
                 .Append(ornnSlug)
-                .Append(sandboxServiceSlug)
+                .Append(CodeExecutionContract.ServiceSlug)
                 .Distinct(StringComparer.Ordinal)
                 .ToArray();
         });
@@ -345,21 +347,109 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddChronoSandboxCodexExecution(
             builder.Configuration,
             builder.Environment.IsDevelopment() || builder.Environment.IsEnvironment("Testing"));
-        builder.Services.AddNyxIdTools(o =>
+        builder.Services.AddNyxIdTools(builder.Configuration, o =>
         {
-            // Override the single default (NyxIdToolOptions.DefaultBaseUrl) only when config provides a
-            // non-empty value; an absent/empty config key must NOT clobber the default to null.
-            var nyxAuthority = builder.Configuration["Aevatar:NyxId:ApiBaseUrl"]
-                               ?? builder.Configuration["Aevatar:NyxId:Authority"]
-                               ?? builder.Configuration["Cli:App:NyxId:Authority"]
-                               ?? builder.Configuration["Aevatar:Authentication:Authority"];
-            if (!string.IsNullOrWhiteSpace(nyxAuthority))
-                o.BaseUrl = nyxAuthority;
-            o.SandboxServiceSlug = sandboxServiceSlug;
             // SSH-backed tools are disabled unless the deployment opts in explicitly.
             // Even when exposed, their contract always requires a durable actor-owned grant.
             if (bool.TryParse(builder.Configuration["Aevatar:NyxId:EnableSshExecTool"], out var enableSsh))
                 o.EnableSshExecTool = enableSsh;
+            // Milestone 40 ships actor-owned connected-service effects on Mainnet. Other hosts
+            // retain NyxIdToolOptions' fail-closed default until they provide the same durable facts.
+            o.EnableAssistantConnectedServiceEffects = true;
+            o.AssistantOperationReadBackBindings.Add(new NyxIdAssistantOperationReadBackBinding
+            {
+                CatalogServiceSlug = "api-lark-bot",
+                EffectHttpMethod = "POST",
+                EffectPathTemplate = "/open-apis/im/v1/messages",
+                ReadHttpMethod = "GET",
+                ReadPathTemplate = "/open-apis/im/v1/messages/{message_id}",
+                CheckName = "lark_provider_message_visible_by_id",
+                Match = AgentToolReadBackMatch.ArrayContainsEquals,
+                JsonPointer = "/data/items",
+                ElementJsonPointer = "/message_id",
+                EffectResultIdentityJsonPointer = "/data/message_id",
+                ProviderResourceArgument = new NyxIdAssistantReadBackProviderResourceArgument
+                {
+                    ReadLocation = NyxIdAssistantOperationArgumentLocation.Path,
+                    ReadArgumentName = "message_id",
+                },
+            });
+            o.AssistantOperationReadBackBindings.Add(new NyxIdAssistantOperationReadBackBinding
+            {
+                CatalogServiceSlug = "api-lark-bot",
+                EffectHttpMethod = "POST",
+                EffectPathTemplate = "/open-apis/approval/v4/instances",
+                ReadHttpMethod = "GET",
+                ReadPathTemplate = "/open-apis/approval/v4/instances/{instance_id}",
+                CheckName = "lark_approval_instance_exists_by_caller_uuid",
+                Match = AgentToolReadBackMatch.Exists,
+                JsonPointer = "/data/instance_code",
+                EffectResultIdentityJsonPointer = "/data/instance_code",
+                ArgumentBindings =
+                [
+                    new NyxIdAssistantReadBackArgumentBinding
+                    {
+                        EffectLocation = NyxIdAssistantOperationArgumentLocation.Body,
+                        EffectArgumentName = "uuid",
+                        ReadLocation = NyxIdAssistantOperationArgumentLocation.Path,
+                        ReadArgumentName = "instance_id",
+                    },
+                ],
+                NotAppliedEvidence = new NyxIdAssistantReadBackNotAppliedEvidence
+                {
+                    JsonPointer = "/code",
+                    ExpectedValue = Value.ForNumber(1390003),
+                },
+            });
+            o.AssistantOperationReadBackBindings.Add(new NyxIdAssistantOperationReadBackBinding
+            {
+                CatalogServiceSlug = "api-lark-bot",
+                EffectHttpMethod = "POST",
+                EffectPathTemplate =
+                    "/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records",
+                ReadHttpMethod = "GET",
+                ReadPathTemplate =
+                    "/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records",
+                CheckName = "lark_bitable_record_exists_by_provider_identity",
+                Match = AgentToolReadBackMatch.ArrayContainsEquals,
+                JsonPointer = "/data/items",
+                ElementJsonPointer = "/record_id",
+                EffectResultIdentityJsonPointer = "/data/record/record_id",
+                ArgumentBindings =
+                [
+                    new NyxIdAssistantReadBackArgumentBinding
+                    {
+                        EffectLocation = NyxIdAssistantOperationArgumentLocation.Path,
+                        EffectArgumentName = "app_token",
+                        ReadLocation = NyxIdAssistantOperationArgumentLocation.Path,
+                        ReadArgumentName = "app_token",
+                    },
+                    new NyxIdAssistantReadBackArgumentBinding
+                    {
+                        EffectLocation = NyxIdAssistantOperationArgumentLocation.Path,
+                        EffectArgumentName = "table_id",
+                        ReadLocation = NyxIdAssistantOperationArgumentLocation.Path,
+                        ReadArgumentName = "table_id",
+                    },
+                ],
+                LiteralReadArguments =
+                [
+                    new NyxIdAssistantReadBackLiteralArgument
+                    {
+                        ReadLocation = NyxIdAssistantOperationArgumentLocation.Query,
+                        ReadArgumentName = "page_size",
+                        Value = Value.ForNumber(20),
+                    },
+                ],
+                Pagination = new NyxIdAssistantReadBackPagination
+                {
+                    HasMoreJsonPointer = "/data/has_more",
+                    PageTokenJsonPointer = "/data/page_token",
+                    PageTokenLocation = NyxIdAssistantOperationArgumentLocation.Query,
+                    PageTokenArgumentName = "page_token",
+                    MaxPages = 200,
+                },
+            });
             o.EnableManagedCodexExecTool = builder.Configuration.GetValue<bool>(
                 $"{ManagedCodexOptions.SectionName}:Enabled");
             o.MaxRequestDurationSeconds = builder.Configuration.GetValue(
@@ -392,25 +482,23 @@ public static class MainnetHostBuilderExtensions
             var urls = builder.Configuration[WebHostDefaults.ServerUrlsKey] ?? "http://127.0.0.1:5080";
             o.ApiBaseUrl = urls.Split(';').FirstOrDefault()?.Trim();
         });
-        builder.Services.AddWebTools(o =>
+        // AddAevatarPlatform registers WebToolOptions before Mainnet applies its host
+        // invariants. Replace that instance explicitly so a mounted appsettings.json
+        // cannot keep an obsolete provider slug alive through the earlier registration.
+        builder.Services.Replace(ServiceDescriptor.Singleton(new WebToolOptions
         {
-            o.NyxIdBaseUrl = FirstConfiguredValue(
-                builder.Configuration,
-                "Aevatar:Web:NyxIdBaseUrl",
-                "Aevatar:NyxId:ApiBaseUrl",
-                "Aevatar:NyxId:Authority",
-                "Cli:App:NyxId:Authority",
-                "Aevatar:Authentication:Authority");
-            o.NyxIdSearchSlug = FirstConfiguredValue(
-                builder.Configuration,
-                "Aevatar:Web:NyxIdSearchSlug",
-                "Aevatar:Web:SearchSlug",
-                "Aevatar:WebSearch:NyxIdSlug");
-            o.SearchApiBaseUrl = FirstConfiguredValue(
+            NyxIdBaseUrl = FirstConfiguredValue(
+                    builder.Configuration,
+                    "Aevatar:Web:NyxIdBaseUrl")
+                ?? NyxIdEndpointResolver.ResolvePublicApiBaseUrl(builder.Configuration),
+            // Mainnet Milestone 40 has one admitted search capability. Stale deployment
+            // overrides must not silently route the mounted web_search tool to another service.
+            NyxIdSearchSlug = "tavily-search",
+            SearchApiBaseUrl = FirstConfiguredValue(
                 builder.Configuration,
                 "Aevatar:Web:SearchApiBaseUrl",
-                "Aevatar:WebSearch:ApiBaseUrl");
-        });
+                "Aevatar:WebSearch:ApiBaseUrl"),
+        }));
         builder.Services.AddToolSetRegistry(options =>
         {
             options.AddToolSet(
@@ -457,14 +545,27 @@ public static class MainnetHostBuilderExtensions
             options.AddToolSet(
                 ToolSetNames.NyxIdConnectedServices,
                 [CreateToolSource<NyxIdConnectedServiceToolSource>],
-                "NyxID connected-service operations explicitly marked x-aevatar-tool, registered as individual tools.");
+                "NyxID request-local operations admitted from the exact MCP and connected-service inventory intersection.");
+            options.AddToolSet(
+                ToolSetNames.NyxIdAssistantAdmission,
+                [CreateToolSource<NyxIdAssistantToolSource>],
+                "Pinned local NyxID Assistant tools used by built-in admission intents without external discovery dependencies.");
             options.AddToolSet(
                 AgentProfilePolicies.NyxIdChatRouteToolSet,
                 [
                     CreateToolSource<NyxIdAssistantToolSource>,
+                    CreateToolSource<NyxIdConnectedServiceToolSource>,
+                    CreateToolSource<WebSearchAgentToolSource>,
                     CreateToolSource<AskUserAgentToolSource>,
+                    CreateToolSource<ConditionEvaluateAgentToolSource>,
+                    CreateToolSource<DomainEvidenceAgentToolSource>,
+                    CreateToolSource<SkillsAgentToolSource>,
+                    CreateToolSource<OrnnSearchAgentToolSource>,
+                    CreateToolSource<StartWorkflowToolSource>,
+                    CreateToolSource<ObserveRunToolSource>,
+                    CreateToolSource<ReadWorkflowRunArtifactToolSource>,
                 ],
-                "Pinned NyxID Assistant route: safe management reads, readiness, brokered proxy execution, and typed user input only.");
+                "Pinned NyxID Assistant route: safe management reads, admitted request-local connected-service operations, web and Ornn skill search, readiness, typed user input, explicit skill loading, and managed workflow execution with typed observation.");
         });
 
         return builder;
@@ -491,6 +592,7 @@ public static class MainnetHostBuilderExtensions
         app.MapNyxIdChatEndpoints();
         app.MapChatRoutePolicyAdminEndpoints();
         app.MapAgentProfileEndpoints();
+        app.MapDefaultVoiceAgentEndpoints();
         app.MapVoicePresenceCapabilityAdminEndpoints();
         app.MapVoiceConsoleEndpoints();
         app.MapAutoConsoleCallbackEndpoints();
@@ -536,7 +638,7 @@ public static class MainnetHostBuilderExtensions
         if (!string.IsNullOrWhiteSpace(builder.Configuration[audienceKey]))
             return;
 
-        // NyxID access tokens use its API BASE_URL as their audience. Identity assertions use
+        // NyxID access tokens use its public API BASE_URL as their audience. Identity assertions use
         // a separate audience and must not be reused for bearer-token validation.
         var nyxIdApiBaseUrl = builder.Configuration[NyxIdApiBaseUrlKey];
         if (string.IsNullOrWhiteSpace(nyxIdApiBaseUrl))

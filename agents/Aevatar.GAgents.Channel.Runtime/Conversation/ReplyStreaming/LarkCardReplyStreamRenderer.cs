@@ -5,8 +5,16 @@ namespace Aevatar.GAgents.Channel.Runtime;
 
 public sealed class LarkCardReplyStreamRenderer(
     IConversationCardTurnRunner runner,
-    ILogger<LarkCardReplyStreamRenderer> logger) : ILarkCardReplyStreamRenderer
+    ILogger<LarkCardReplyStreamRenderer> logger,
+    TimeProvider? timeProvider = null,
+    TimeSpan? operationTimeout = null) : ILarkCardReplyStreamRenderer
 {
+    private static readonly TimeSpan DefaultOperationTimeout = TimeSpan.FromSeconds(8);
+    private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
+    private readonly TimeSpan _operationTimeout = operationTimeout is { } configured && configured > TimeSpan.Zero
+        ? configured
+        : DefaultOperationTimeout;
+
     public bool CanHandle(ReplyOperationStepEvent evt) =>
         evt.PayloadCase == ReplyOperationStepEvent.PayloadOneofCase.LarkCard;
 
@@ -91,6 +99,34 @@ public sealed class LarkCardReplyStreamRenderer(
         return step;
     }
 
+    public ReplyOperationStepEvent CreateAbortStep(LarkCardAbortOperationStepInput input)
+    {
+        var operationId = LarkCardReplyOperationIds.BuildOperationId(
+            input.CorrelationId,
+            LarkCardOperationPhase.Abort,
+            input.Sequence,
+            input.Generation);
+        return new ReplyOperationStepEvent
+        {
+            OperationId = operationId,
+            OperationName = "lark-card-abort",
+            CorrelationId = input.CorrelationId,
+            LeaseEpoch = input.Generation,
+            LarkCard = new LarkCardOperationStepPayload
+            {
+                Operation = LarkCardOperationPhase.Abort,
+                Sequence = input.Sequence,
+                OperationGeneration = input.Generation,
+                Activity = input.ActivityForToken.Clone(),
+                CommandId = input.CommandId,
+                CardId = input.CardId,
+                CardMessageId = input.CardMessageId,
+                LastFlushedText = input.LastFlushedText,
+                AbortReason = input.Reason,
+            },
+        };
+    }
+
     public async Task ExecuteAsync(
         IReplyOperationActorContext context,
         ReplyOperationStepEvent evt,
@@ -108,7 +144,7 @@ public sealed class LarkCardReplyStreamRenderer(
             return;
         }
 
-        var runtimeContext = step.Operation == LarkCardOperationPhase.Finalize
+        var runtimeContext = step.Operation is LarkCardOperationPhase.Finalize or LarkCardOperationPhase.Abort
             ? context.BuildNyxRelayRuntimeContext(correlationId, step.Activity, string.Empty, 0)
             : context.BuildNyxRelayRuntimeContext(
                 step.Chunk?.CorrelationId,
@@ -131,6 +167,11 @@ public sealed class LarkCardReplyStreamRenderer(
                 await ExecuteFinalizeAsync(context, step, correlationId, runtimeContext, ct)
                     .ConfigureAwait(false);
                 return;
+            case LarkCardOperationPhase.Abort:
+                context.RestoreRuntimeTransportCredentials(step.Activity, runtimeContext);
+                await ExecuteAbortAsync(context, step, correlationId, runtimeContext, ct)
+                    .ConfigureAwait(false);
+                return;
         }
     }
 
@@ -145,10 +186,12 @@ public sealed class LarkCardReplyStreamRenderer(
         LarkCardOperationCompletedEvent signal;
         try
         {
-            var result = await runner.RunCardCreateAsync(
-                    chunk,
-                    step.StreamingElementId,
-                    runtimeContext,
+            var result = await ExecuteWithinOperationBudgetAsync(
+                    operationCt => runner.RunCardCreateAsync(
+                        chunk,
+                        step.StreamingElementId,
+                        runtimeContext,
+                        operationCt),
                     ct)
                 .ConfigureAwait(false);
             signal = new LarkCardOperationCompletedEvent
@@ -208,12 +251,14 @@ public sealed class LarkCardReplyStreamRenderer(
         LarkCardOperationCompletedEvent signal;
         try
         {
-            var result = await runner.RunCardStreamAsync(
-                    chunk,
-                    step.CardId,
-                    step.StreamingElementId,
-                    step.Sequence,
-                    runtimeContext,
+            var result = await ExecuteWithinOperationBudgetAsync(
+                    operationCt => runner.RunCardStreamAsync(
+                        chunk,
+                        step.CardId,
+                        step.StreamingElementId,
+                        step.Sequence,
+                        runtimeContext,
+                        operationCt),
                     ct)
                 .ConfigureAwait(false);
             signal = new LarkCardOperationCompletedEvent
@@ -281,14 +326,16 @@ public sealed class LarkCardReplyStreamRenderer(
         LarkCardOperationCompletedEvent signal;
         try
         {
-            var result = await runner.RunCardFinalizeAsync(
-                    activityForToken,
-                    step.CardId,
-                    step.StreamingElementId,
-                    step.FinalText,
-                    step.FinalDiffers,
-                    step.Sequence,
-                    runtimeContext,
+            var result = await ExecuteWithinOperationBudgetAsync(
+                    operationCt => runner.RunCardFinalizeAsync(
+                        activityForToken,
+                        step.CardId,
+                        step.StreamingElementId,
+                        step.FinalText,
+                        step.FinalDiffers,
+                        step.Sequence,
+                        runtimeContext,
+                        operationCt),
                     ct)
                 .ConfigureAwait(false);
             signal = new LarkCardOperationCompletedEvent
@@ -349,6 +396,82 @@ public sealed class LarkCardReplyStreamRenderer(
             .ConfigureAwait(false);
     }
 
+    private async Task ExecuteAbortAsync(
+        IReplyOperationActorContext context,
+        LarkCardOperationStepPayload step,
+        string correlationId,
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct)
+    {
+        var activityForToken = step.Activity?.Clone() ?? new ChatActivity();
+        LarkCardOperationCompletedEvent signal;
+        try
+        {
+            var result = await ExecuteWithinOperationBudgetAsync(
+                    operationCt => runner.RunCardAbortAsync(
+                        activityForToken,
+                        step.CardId,
+                        step.Sequence,
+                        runtimeContext,
+                        operationCt),
+                    ct)
+                .ConfigureAwait(false);
+            signal = new LarkCardOperationCompletedEvent
+            {
+                OperationId = LarkCardReplyOperationIds.BuildOperationId(
+                    correlationId,
+                    LarkCardOperationPhase.Abort,
+                    step.Sequence,
+                    step.OperationGeneration),
+                CorrelationId = correlationId,
+                Operation = LarkCardOperationPhase.Abort,
+                Sequence = step.Sequence,
+                OperationGeneration = step.OperationGeneration,
+                State = result.Success
+                    ? LarkCardOperationResultState.Succeeded
+                    : LarkCardOperationResultState.Failed,
+                RawResult = ToRawResult(result),
+                CardId = step.CardId,
+                CardMessageId = step.CardMessageId,
+                CommandId = step.CommandId,
+                Activity = CloneForDurableState(activityForToken) ?? new ChatActivity(),
+                LastFlushedText = step.LastFlushedText,
+                AbortReason = step.AbortReason,
+            };
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Card abort executor threw. correlation={CorrelationId}", correlationId);
+            signal = new LarkCardOperationCompletedEvent
+            {
+                OperationId = LarkCardReplyOperationIds.BuildOperationId(
+                    correlationId,
+                    LarkCardOperationPhase.Abort,
+                    step.Sequence,
+                    step.OperationGeneration),
+                CorrelationId = correlationId,
+                Operation = LarkCardOperationPhase.Abort,
+                Sequence = step.Sequence,
+                OperationGeneration = step.OperationGeneration,
+                State = LarkCardOperationResultState.Faulted,
+                RawResult = ToRawFault(ex),
+                CardId = step.CardId,
+                CardMessageId = step.CardMessageId,
+                CommandId = step.CommandId,
+                Activity = CloneForDurableState(activityForToken) ?? new ChatActivity(),
+                LastFlushedText = step.LastFlushedText,
+                AbortReason = step.AbortReason,
+            };
+        }
+
+        await context.DispatchReplyOperationCompletionAsync(
+                signal,
+                correlationId,
+                "Lark card abort",
+                ct)
+            .ConfigureAwait(false);
+    }
+
     private static LarkCardOperationRawResult ToRawResult(ConversationCardCreateResult result) =>
         new()
         {
@@ -357,7 +480,7 @@ public sealed class LarkCardReplyStreamRenderer(
             IsRateLimited = result.IsRateLimited,
             IsTableLimitExceeded = result.IsTableLimitExceeded,
             IsCardUnavailable = result.IsCardUnavailable,
-            IsPostSendFailure = result.IsPostSendFailure,
+            CreateDeliveryDisposition = result.DeliveryDisposition,
             RawErrorCode = result.ErrorCode ?? string.Empty,
             RawErrorSummary = result.ErrorSummary ?? string.Empty,
         };
@@ -379,6 +502,34 @@ public sealed class LarkCardReplyStreamRenderer(
             RawErrorCode = result.ErrorCode ?? string.Empty,
             RawErrorSummary = result.ErrorSummary ?? string.Empty,
         };
+
+    private static LarkCardOperationRawResult ToRawResult(ConversationCardAbortResult result) =>
+        new()
+        {
+            RawErrorCode = result.ErrorCode ?? string.Empty,
+            RawErrorSummary = result.ErrorSummary ?? string.Empty,
+        };
+
+    private async Task<TResult> ExecuteWithinOperationBudgetAsync<TResult>(
+        Func<CancellationToken, Task<TResult>> operation,
+        CancellationToken callerToken)
+    {
+        using var timeoutSource = new CancellationTokenSource(_operationTimeout, _timeProvider);
+        using var linkedSource = CancellationTokenSource.CreateLinkedTokenSource(
+            callerToken,
+            timeoutSource.Token);
+        try
+        {
+            return await operation(linkedSource.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException ex)
+            when (timeoutSource.IsCancellationRequested && !callerToken.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+                $"Lark card operation exceeded its {_operationTimeout.TotalSeconds:0.###}-second budget.",
+                ex);
+        }
+    }
 
     private static LarkCardOperationRawResult ToRawFault(Exception ex) =>
         new()

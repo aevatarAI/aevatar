@@ -1,0 +1,552 @@
+{
+  "specRevision": "f45febb057a7182dab2495d4c739d2bb8d7026f5",
+  "schemaVersion": 5,
+  "journeys": [
+    {
+      "variant": "uc1a-disconnected",
+      "conversationActorId": "conversation-uc1a",
+      "taskId": "task-uc1a-weekly-update",
+      "planId": "plan-uc1a-weekly-update",
+      "turnIds": [
+        "turn-uc1a-scope",
+        "turn-uc1a-github-connect",
+        "turn-uc1a-lark-connect",
+        "turn-uc1a-execute"
+      ],
+      "scope": {
+        "requestId": "input-uc1a-scope",
+        "prompt": "Answer together: confirm repositories repo-alpha and repo-beta, this week's merged-PR window, destination #eng-updates, audience, and tone.",
+        "options": [],
+        "allowFreeText": true,
+        "multiSelect": false,
+        "resolved": true
+      },
+      "services": [
+        {
+          "provider": "GitHub",
+          "catalogServiceSlug": "api-github",
+          "userServiceId": "usvc-github-alpha",
+          "initialStatus": "disconnected",
+          "finalStatus": "ready"
+        },
+        {
+          "provider": "Lark",
+          "catalogServiceSlug": "api-lark",
+          "userServiceId": "usvc-lark-alpha",
+          "initialStatus": "disconnected",
+          "finalStatus": "ready"
+        }
+      ],
+      "connectActions": [
+        {
+          "order": 2,
+          "actionRequestId": "action-uc1a-connect-github",
+          "originTurnId": "turn-uc1a-scope",
+          "continuationTurnId": "turn-uc1a-github-connect",
+          "serviceSlug": "api-github",
+          "resource": { "userService": { "userServiceId": "usvc-github-alpha" } },
+          "postcondition": "service.connected",
+          "effect": "confirmed"
+        },
+        {
+          "order": 4,
+          "actionRequestId": "action-uc1a-connect-lark",
+          "originTurnId": "turn-uc1a-github-connect",
+          "continuationTurnId": "turn-uc1a-lark-connect",
+          "serviceSlug": "api-lark",
+          "resource": { "userService": { "userServiceId": "usvc-lark-alpha" } },
+          "postcondition": "service.connected",
+          "effect": "confirmed"
+        }
+      ],
+      "plan": {
+        "schemaVersion": 5,
+        "actorId": "conversation-uc1a",
+        "taskId": "task-uc1a-weekly-update",
+        "turnId": "turn-uc1a-execute",
+        "planId": "plan-uc1a-weekly-update",
+        "planRevision": 4,
+        "title": "Prepare and publish the weekly engineering update",
+        "status": "succeeded",
+        "gate": {
+          "mode": "confirm",
+          "reason": "Publishing to Lark speaks on the user's behalf.",
+          "status": "satisfied"
+        },
+        "steps": [
+          {
+            "stepId": "step-uc1a-scope",
+            "order": 1,
+            "kind": "input",
+            "status": "done",
+            "description": "Assistant — resolve all weekly-update scope in one question.",
+            "source": { "input": { "requestId": "input-uc1a-scope" } },
+            "mayChangeExternalState": false,
+            "externalEffect": "not_applied"
+          },
+          {
+            "stepId": "step-uc1a-connect-github",
+            "order": 2,
+            "kind": "browser_action",
+            "status": "done",
+            "description": "NyxID — connect the exact GitHub service.",
+            "source": {
+              "browserAction": {
+                "action": "service_connect",
+                "actionRequestId": "action-uc1a-connect-github"
+              }
+            },
+            "mayChangeExternalState": true,
+            "externalEffect": "confirmed"
+          },
+          {
+            "stepId": "step-uc1a-verify-github-connect",
+            "order": 3,
+            "kind": "postcondition",
+            "status": "done",
+            "description": "NyxID — verify GitHub UserService usvc-github-alpha.",
+            "source": {
+              "postcondition": {
+                "actionRequestId": "action-uc1a-connect-github",
+                "check": "service.connected",
+                "providerResourceId": "usvc-github-alpha"
+              }
+            },
+            "mayChangeExternalState": false,
+            "externalEffect": "confirmed"
+          },
+          {
+            "stepId": "step-uc1a-connect-lark",
+            "order": 4,
+            "kind": "browser_action",
+            "status": "done",
+            "description": "NyxID — connect the exact Lark service.",
+            "source": {
+              "browserAction": {
+                "action": "service_connect",
+                "actionRequestId": "action-uc1a-connect-lark"
+              }
+            },
+            "mayChangeExternalState": true,
+            "externalEffect": "confirmed"
+          },
+          {
+            "stepId": "step-uc1a-verify-lark-connect",
+            "order": 5,
+            "kind": "postcondition",
+            "status": "done",
+            "description": "NyxID — verify Lark UserService usvc-lark-alpha.",
+            "source": {
+              "postcondition": {
+                "actionRequestId": "action-uc1a-connect-lark",
+                "check": "service.connected",
+                "providerResourceId": "usvc-lark-alpha"
+              }
+            },
+            "mayChangeExternalState": false,
+            "externalEffect": "confirmed"
+          },
+          {
+            "stepId": "step-uc1a-read-repo-alpha",
+            "order": 6,
+            "kind": "tool",
+            "status": "done",
+            "description": "GitHub — read this week's merged PRs from repo-alpha.",
+            "source": {
+              "tool": {
+                "toolName": "nyxid_api-github__pulls_list",
+                "serviceSlug": "api-github",
+                "serviceId": "usvc-github-alpha",
+                "readinessCapabilityId": "api-github",
+                "providerResourceId": "repo-alpha"
+              }
+            },
+            "mayChangeExternalState": false,
+            "externalEffect": "not_applied",
+            "operation": {
+              "conversationActorId": "conversation-uc1a",
+              "turnId": "turn-uc1a-execute",
+              "taskId": "task-uc1a-weekly-update",
+              "stepId": "step-uc1a-read-repo-alpha",
+              "operationId": "operation-uc1a-read-repo-alpha",
+              "operationGeneration": 1,
+              "kind": "tool",
+              "phase": "succeeded",
+              "mayChangeExternalState": false,
+              "idempotent": true
+            }
+          },
+          {
+            "stepId": "step-uc1a-read-repo-beta",
+            "order": 7,
+            "kind": "tool",
+            "status": "done",
+            "description": "GitHub — read this week's merged PRs from repo-beta.",
+            "source": {
+              "tool": {
+                "toolName": "nyxid_api-github__pulls_list",
+                "serviceSlug": "api-github",
+                "serviceId": "usvc-github-alpha",
+                "readinessCapabilityId": "api-github",
+                "providerResourceId": "repo-beta"
+              }
+            },
+            "mayChangeExternalState": false,
+            "externalEffect": "not_applied",
+            "operation": {
+              "conversationActorId": "conversation-uc1a",
+              "turnId": "turn-uc1a-execute",
+              "taskId": "task-uc1a-weekly-update",
+              "stepId": "step-uc1a-read-repo-beta",
+              "operationId": "operation-uc1a-read-repo-beta",
+              "operationGeneration": 1,
+              "kind": "tool",
+              "phase": "succeeded",
+              "mayChangeExternalState": false,
+              "idempotent": true
+            }
+          },
+          {
+            "stepId": "step-uc1a-draft",
+            "order": 8,
+            "kind": "llm",
+            "status": "done",
+            "description": "Assistant — draft the weekly update from both committed GitHub reads.",
+            "source": { "llm": { "model": "gpt-5" } },
+            "mayChangeExternalState": false,
+            "externalEffect": "not_applied",
+            "dependsOn": [
+              "step-uc1a-read-repo-alpha",
+              "step-uc1a-read-repo-beta"
+            ]
+          },
+          {
+            "stepId": "step-uc1a-publish",
+            "order": 9,
+            "kind": "tool",
+            "status": "done",
+            "description": "Lark — publish once to #eng-updates after NyxID approval.",
+            "source": {
+              "tool": {
+                "toolName": "nyxid_api-lark__im_message_create",
+                "serviceSlug": "api-lark",
+                "serviceId": "usvc-lark-alpha",
+                "readinessCapabilityId": "api-lark",
+                "providerResourceId": "lark-message-alpha"
+              }
+            },
+            "mayChangeExternalState": true,
+            "externalEffect": "confirmed",
+            "approvalRequestId": "approval-uc1a-lark-publish",
+            "approvalObservation": {
+              "approvalRequestId": "approval-uc1a-lark-publish",
+              "decisionMode": "per_request",
+              "receiptStatus": "success",
+              "subjectKind": "nyxid.user-service"
+            },
+            "operation": {
+              "conversationActorId": "conversation-uc1a",
+              "turnId": "turn-uc1a-execute",
+              "taskId": "task-uc1a-weekly-update",
+              "stepId": "step-uc1a-publish",
+              "operationId": "operation-uc1a-publish",
+              "operationGeneration": 2,
+              "kind": "tool",
+              "phase": "succeeded",
+              "mayChangeExternalState": true,
+              "idempotent": false
+            },
+            "dependsOn": ["step-uc1a-draft"]
+          },
+          {
+            "stepId": "step-uc1a-verify-message",
+            "order": 10,
+            "kind": "postcondition",
+            "status": "done",
+            "description": "Lark — read back the exact published message lark-message-alpha.",
+            "source": {
+              "postcondition": {
+                "check": "lark_provider_message_visible_by_id",
+                "providerResourceId": "lark-message-alpha"
+              }
+            },
+            "mayChangeExternalState": false,
+            "externalEffect": "confirmed",
+            "operation": {
+              "conversationActorId": "conversation-uc1a",
+              "turnId": "turn-uc1a-execute",
+              "taskId": "task-uc1a-weekly-update",
+              "stepId": "step-uc1a-verify-message",
+              "operationId": "operation-uc1a-verify-message",
+              "operationGeneration": 1,
+              "kind": "postcondition",
+              "phase": "succeeded",
+              "mayChangeExternalState": false,
+              "idempotent": true
+            },
+            "dependsOn": ["step-uc1a-publish"]
+          }
+        ]
+      },
+      "operationLedger": [
+        { "operationId": "operation-uc1a-read-repo-alpha", "kind": "provider_read", "providerResourceId": "repo-alpha", "dispatchCount": 1 },
+        { "operationId": "operation-uc1a-read-repo-beta", "kind": "provider_read", "providerResourceId": "repo-beta", "dispatchCount": 1 },
+        { "operationId": "operation-uc1a-publish", "kind": "provider_write", "providerResourceId": "lark-message-alpha", "dispatchCount": 1 },
+        { "operationId": "operation-uc1a-verify-message", "kind": "provider_read_back", "providerResourceId": "lark-message-alpha", "dispatchCount": 1 }
+      ],
+      "boundaries": [
+        {
+          "name": "blocked",
+          "live": { "stateVersion": 24, "progressSequence": 24, "taskId": "task-uc1a-weekly-update", "turnId": "turn-uc1a-lark-connect", "taskStatus": "blocked", "activeStepId": "step-uc1a-connect-lark", "operationId": null, "externalEffect": "not_started" },
+          "reload": { "stateVersion": 24, "progressSequence": 24, "taskId": "task-uc1a-weekly-update", "turnId": "turn-uc1a-lark-connect", "taskStatus": "blocked", "activeStepId": "step-uc1a-connect-lark", "operationId": null, "externalEffect": "not_started" }
+        },
+        {
+          "name": "running",
+          "live": { "stateVersion": 41, "progressSequence": 41, "taskId": "task-uc1a-weekly-update", "turnId": "turn-uc1a-execute", "taskStatus": "active", "activeStepId": "step-uc1a-publish", "operationId": "operation-uc1a-publish", "externalEffect": "not_started" },
+          "reload": { "stateVersion": 41, "progressSequence": 41, "taskId": "task-uc1a-weekly-update", "turnId": "turn-uc1a-execute", "taskStatus": "active", "activeStepId": "step-uc1a-publish", "operationId": "operation-uc1a-publish", "externalEffect": "not_started" }
+        },
+        {
+          "name": "terminal",
+          "live": { "stateVersion": 48, "progressSequence": 48, "taskId": "task-uc1a-weekly-update", "turnId": "turn-uc1a-execute", "taskStatus": "succeeded", "activeStepId": null, "operationId": null, "externalEffect": "confirmed" },
+          "reload": { "stateVersion": 48, "progressSequence": 48, "taskId": "task-uc1a-weekly-update", "turnId": "turn-uc1a-execute", "taskStatus": "succeeded", "activeStepId": null, "operationId": null, "externalEffect": "confirmed" }
+        }
+      ],
+      "artifact": {
+        "kind": "verified_lark_message",
+        "providerResourceId": "lark-message-alpha",
+        "destination": "#eng-updates",
+        "verificationOperationId": "operation-uc1a-verify-message",
+        "externalEffect": "confirmed"
+      }
+    },
+    {
+      "variant": "uc1b-ready",
+      "conversationActorId": "conversation-uc1b",
+      "taskId": "task-uc1b-weekly-update",
+      "planId": "plan-uc1b-weekly-update",
+      "turnIds": ["turn-uc1b-scope", "turn-uc1b-execute"],
+      "scope": {
+        "requestId": "input-uc1b-scope",
+        "prompt": "Answer together: confirm repositories repo-alpha and repo-beta, this week's merged-PR window, destination #eng-updates, audience, and tone.",
+        "options": [],
+        "allowFreeText": true,
+        "multiSelect": false,
+        "resolved": true
+      },
+      "services": [
+        {
+          "provider": "GitHub",
+          "catalogServiceSlug": "api-github",
+          "userServiceId": "usvc-github-alpha",
+          "initialStatus": "ready",
+          "finalStatus": "ready"
+        },
+        {
+          "provider": "Lark",
+          "catalogServiceSlug": "api-lark",
+          "userServiceId": "usvc-lark-alpha",
+          "initialStatus": "ready",
+          "finalStatus": "ready"
+        }
+      ],
+      "connectActions": [],
+      "plan": {
+        "schemaVersion": 5,
+        "actorId": "conversation-uc1b",
+        "taskId": "task-uc1b-weekly-update",
+        "turnId": "turn-uc1b-execute",
+        "planId": "plan-uc1b-weekly-update",
+        "planRevision": 2,
+        "title": "Prepare and publish the weekly engineering update",
+        "status": "succeeded",
+        "gate": {
+          "mode": "confirm",
+          "reason": "Publishing to Lark speaks on the user's behalf.",
+          "status": "satisfied"
+        },
+        "steps": [
+          {
+            "stepId": "step-uc1b-scope",
+            "order": 1,
+            "kind": "input",
+            "status": "done",
+            "description": "Assistant — resolve all weekly-update scope in one question.",
+            "source": { "input": { "requestId": "input-uc1b-scope" } },
+            "mayChangeExternalState": false,
+            "externalEffect": "not_applied"
+          },
+          {
+            "stepId": "step-uc1b-read-repo-alpha",
+            "order": 2,
+            "kind": "tool",
+            "status": "done",
+            "description": "GitHub — read this week's merged PRs from repo-alpha.",
+            "source": {
+              "tool": {
+                "toolName": "nyxid_api-github__pulls_list",
+                "serviceSlug": "api-github",
+                "serviceId": "usvc-github-alpha",
+                "readinessCapabilityId": "api-github",
+                "providerResourceId": "repo-alpha"
+              }
+            },
+            "mayChangeExternalState": false,
+            "externalEffect": "not_applied",
+            "operation": {
+              "conversationActorId": "conversation-uc1b",
+              "turnId": "turn-uc1b-execute",
+              "taskId": "task-uc1b-weekly-update",
+              "stepId": "step-uc1b-read-repo-alpha",
+              "operationId": "operation-uc1b-read-repo-alpha",
+              "operationGeneration": 1,
+              "kind": "tool",
+              "phase": "succeeded",
+              "mayChangeExternalState": false,
+              "idempotent": true
+            }
+          },
+          {
+            "stepId": "step-uc1b-read-repo-beta",
+            "order": 3,
+            "kind": "tool",
+            "status": "done",
+            "description": "GitHub — read this week's merged PRs from repo-beta.",
+            "source": {
+              "tool": {
+                "toolName": "nyxid_api-github__pulls_list",
+                "serviceSlug": "api-github",
+                "serviceId": "usvc-github-alpha",
+                "readinessCapabilityId": "api-github",
+                "providerResourceId": "repo-beta"
+              }
+            },
+            "mayChangeExternalState": false,
+            "externalEffect": "not_applied",
+            "operation": {
+              "conversationActorId": "conversation-uc1b",
+              "turnId": "turn-uc1b-execute",
+              "taskId": "task-uc1b-weekly-update",
+              "stepId": "step-uc1b-read-repo-beta",
+              "operationId": "operation-uc1b-read-repo-beta",
+              "operationGeneration": 1,
+              "kind": "tool",
+              "phase": "succeeded",
+              "mayChangeExternalState": false,
+              "idempotent": true
+            }
+          },
+          {
+            "stepId": "step-uc1b-draft",
+            "order": 4,
+            "kind": "llm",
+            "status": "done",
+            "description": "Assistant — draft the weekly update from both committed GitHub reads.",
+            "source": { "llm": { "model": "gpt-5" } },
+            "mayChangeExternalState": false,
+            "externalEffect": "not_applied",
+            "dependsOn": [
+              "step-uc1b-read-repo-alpha",
+              "step-uc1b-read-repo-beta"
+            ]
+          },
+          {
+            "stepId": "step-uc1b-publish",
+            "order": 5,
+            "kind": "tool",
+            "status": "done",
+            "description": "Lark — publish once to #eng-updates after NyxID approval.",
+            "source": {
+              "tool": {
+                "toolName": "nyxid_api-lark__im_message_create",
+                "serviceSlug": "api-lark",
+                "serviceId": "usvc-lark-alpha",
+                "readinessCapabilityId": "api-lark",
+                "providerResourceId": "lark-message-alpha"
+              }
+            },
+            "mayChangeExternalState": true,
+            "externalEffect": "confirmed",
+            "approvalRequestId": "approval-uc1b-lark-publish",
+            "approvalObservation": {
+              "approvalRequestId": "approval-uc1b-lark-publish",
+              "decisionMode": "per_request",
+              "receiptStatus": "success",
+              "subjectKind": "nyxid.user-service"
+            },
+            "operation": {
+              "conversationActorId": "conversation-uc1b",
+              "turnId": "turn-uc1b-execute",
+              "taskId": "task-uc1b-weekly-update",
+              "stepId": "step-uc1b-publish",
+              "operationId": "operation-uc1b-publish",
+              "operationGeneration": 2,
+              "kind": "tool",
+              "phase": "succeeded",
+              "mayChangeExternalState": true,
+              "idempotent": false
+            },
+            "dependsOn": ["step-uc1b-draft"]
+          },
+          {
+            "stepId": "step-uc1b-verify-message",
+            "order": 6,
+            "kind": "postcondition",
+            "status": "done",
+            "description": "Lark — read back the exact published message lark-message-alpha.",
+            "source": {
+              "postcondition": {
+                "check": "lark_provider_message_visible_by_id",
+                "providerResourceId": "lark-message-alpha"
+              }
+            },
+            "mayChangeExternalState": false,
+            "externalEffect": "confirmed",
+            "operation": {
+              "conversationActorId": "conversation-uc1b",
+              "turnId": "turn-uc1b-execute",
+              "taskId": "task-uc1b-weekly-update",
+              "stepId": "step-uc1b-verify-message",
+              "operationId": "operation-uc1b-verify-message",
+              "operationGeneration": 1,
+              "kind": "postcondition",
+              "phase": "succeeded",
+              "mayChangeExternalState": false,
+              "idempotent": true
+            },
+            "dependsOn": ["step-uc1b-publish"]
+          }
+        ]
+      },
+      "operationLedger": [
+        { "operationId": "operation-uc1b-read-repo-alpha", "kind": "provider_read", "providerResourceId": "repo-alpha", "dispatchCount": 1 },
+        { "operationId": "operation-uc1b-read-repo-beta", "kind": "provider_read", "providerResourceId": "repo-beta", "dispatchCount": 1 },
+        { "operationId": "operation-uc1b-publish", "kind": "provider_write", "providerResourceId": "lark-message-alpha", "dispatchCount": 1 },
+        { "operationId": "operation-uc1b-verify-message", "kind": "provider_read_back", "providerResourceId": "lark-message-alpha", "dispatchCount": 1 }
+      ],
+      "boundaries": [
+        {
+          "name": "blocked",
+          "live": { "stateVersion": 15, "progressSequence": 15, "taskId": "task-uc1b-weekly-update", "turnId": "turn-uc1b-execute", "taskStatus": "blocked", "activeStepId": "step-uc1b-publish", "operationId": "operation-uc1b-publish", "externalEffect": "not_applied" },
+          "reload": { "stateVersion": 15, "progressSequence": 15, "taskId": "task-uc1b-weekly-update", "turnId": "turn-uc1b-execute", "taskStatus": "blocked", "activeStepId": "step-uc1b-publish", "operationId": "operation-uc1b-publish", "externalEffect": "not_applied" }
+        },
+        {
+          "name": "running",
+          "live": { "stateVersion": 18, "progressSequence": 18, "taskId": "task-uc1b-weekly-update", "turnId": "turn-uc1b-execute", "taskStatus": "active", "activeStepId": "step-uc1b-publish", "operationId": "operation-uc1b-publish", "externalEffect": "not_started" },
+          "reload": { "stateVersion": 18, "progressSequence": 18, "taskId": "task-uc1b-weekly-update", "turnId": "turn-uc1b-execute", "taskStatus": "active", "activeStepId": "step-uc1b-publish", "operationId": "operation-uc1b-publish", "externalEffect": "not_started" }
+        },
+        {
+          "name": "terminal",
+          "live": { "stateVersion": 25, "progressSequence": 25, "taskId": "task-uc1b-weekly-update", "turnId": "turn-uc1b-execute", "taskStatus": "succeeded", "activeStepId": null, "operationId": null, "externalEffect": "confirmed" },
+          "reload": { "stateVersion": 25, "progressSequence": 25, "taskId": "task-uc1b-weekly-update", "turnId": "turn-uc1b-execute", "taskStatus": "succeeded", "activeStepId": null, "operationId": null, "externalEffect": "confirmed" }
+        }
+      ],
+      "artifact": {
+        "kind": "verified_lark_message",
+        "providerResourceId": "lark-message-alpha",
+        "destination": "#eng-updates",
+        "verificationOperationId": "operation-uc1b-verify-message",
+        "externalEffect": "confirmed"
+      }
+    }
+  ]
+}

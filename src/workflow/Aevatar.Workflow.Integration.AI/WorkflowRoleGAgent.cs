@@ -13,6 +13,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Foundation.Abstractions.Helpers;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Workflow.Abstractions;
@@ -114,6 +115,13 @@ public class WorkflowRoleGAgent(
             var toolContext = recoveryToolContext ??
                               llmControl.ToToolContext(
                                   AgentToolExecutionContextMapper.FromPayload(chatRequest.ToolContext));
+            if (recoveryToolContext is null)
+            {
+                toolContext = await ResolveInitialDurableToolContextAsync(
+                    chatRequest,
+                    toolContext,
+                    streamCt);
+            }
             if (publishStarted)
             {
                 if (!await TryEstablishWorkflowTurnAuthorityAsync(
@@ -321,6 +329,14 @@ public class WorkflowRoleGAgent(
     {
         var durable = checkpoint.CallerDurableCredential;
         if (checkpoint.RequiresRuntimeCredential &&
+            durable?.SourceKind == DurableCallerCredentialSourceKind.WebhookBinding)
+        {
+            // A webhook binding owns an exact Agent Key. Never replace it with
+            // an OAuth token issued from the accompanying human authority.
+            return await base.TryResolveRecoveryExecutionContextAsync(checkpoint, ct);
+        }
+
+        if (checkpoint.RequiresRuntimeCredential &&
             durable?.SourceKind == DurableCallerCredentialSourceKind.ScheduledDispatch &&
             durable.ScheduledCallerNyxIdAuthority is { } authority &&
             !string.IsNullOrWhiteSpace(authority.Platform) &&
@@ -362,6 +378,29 @@ public class WorkflowRoleGAgent(
         }
 
         return await base.TryResolveRecoveryExecutionContextAsync(checkpoint, ct);
+    }
+
+    private async Task<AgentToolExecutionContext> ResolveInitialDurableToolContextAsync(
+        ChatRequestEvent request,
+        AgentToolExecutionContext context,
+        CancellationToken ct)
+    {
+        if (request.CallerDurableCredential?.SourceKind !=
+            DurableCallerCredentialSourceKind.WebhookBinding)
+        {
+            return context;
+        }
+
+        var resolved = await base.TryResolveRecoveryExecutionContextAsync(
+            new RoleChatRecoveryCheckpoint
+            {
+                RequiresRuntimeCredential = true,
+                CallerDurableCredential = request.CallerDurableCredential.Clone(),
+                RecoveryContext = context.ToRecoveryPayload(),
+            },
+            ct);
+        return resolved ?? throw new InvalidOperationException(
+            "Workflow webhook caller credential is unavailable or no longer matches its binding descriptor.");
     }
 
     protected override async Task<IAgentTool?> ResolveRecoveryToolAsync(
@@ -691,13 +730,23 @@ public class WorkflowRoleGAgent(
             completed.ManagedHandoff = managedHandoff;
         if (session.AuthorizationRequired is { } authorizationRequired)
         {
-            completed.AuthorizationRequirement = new WorkflowInteractiveAuthorizationRequirement
+            var requirement = new WorkflowInteractiveAuthorizationRequirement
             {
                 ServiceSlug = authorizationRequired.ServiceSlug,
                 ReasonCode = authorizationRequired.ReasonCode,
                 SafeMessage = authorizationRequired.SafeMessage,
                 RequestedScopes = { authorizationRequired.RequestedScopes },
             };
+            if (authorizationRequired.KeyCreate is not null)
+            {
+                requirement.KeyCreate = new WorkflowInteractiveKeyCreateRequirement
+                {
+                    Name = authorizationRequired.KeyCreate.Name,
+                    Platform = authorizationRequired.KeyCreate.Platform,
+                    AllowedServiceIds = { authorizationRequired.KeyCreate.AllowedServiceIds },
+                };
+            }
+            completed.AuthorizationRequirement = requirement;
         }
         return completed;
     }
@@ -1321,6 +1370,7 @@ public class WorkflowRoleGAgent(
         var fullContent = new StringBuilder();
         var fullReasoning = new StringBuilder();
         var toolCalls = new WorkflowToolCallAccumulator();
+        var toolCallLifecycles = new List<WorkflowToolCallLifecycle>();
         var recoveredToolResults = recovery?.ToolResults ?? [];
         foreach (var recoveredToolResult in recoveredToolResults)
             toolCalls.TrackDelta(recoveredToolResult.ToolCall);
@@ -1365,7 +1415,7 @@ public class WorkflowRoleGAgent(
             return new WorkflowIntentReplayRecord(
                 fullContent.ToString(),
                 fullReasoning.ToString(),
-                toolCalls.BuildToolCalls(),
+                MergeCompletedToolCalls(toolCalls.BuildToolCalls(), toolCallLifecycles),
                 toolReceipts.Select(static receipt => receipt.Clone()).ToArray(),
                 normalizedToolResults,
                 contentParts.ToArray(),
@@ -1402,6 +1452,51 @@ public class WorkflowRoleGAgent(
         {
             await foreach (var chunk in stream)
             {
+                if (chunk.LLMInvocationStarted != null)
+                {
+                    await sessionDeltas.FlushAsync(CancellationToken.None);
+                    var started = chunk.LLMInvocationStarted;
+                    await PersistSessionProgressAsync(
+                        request.SessionId,
+                        progress =>
+                        {
+                            progress.ModelStarted = new RoleChatModelStartedProgress
+                            {
+                                OperationId = started.OperationId,
+                                Round = started.Round,
+                                Model = started.Model,
+                                Provider = started.Provider,
+                                InputSummary = started.InputSummary,
+                            };
+                            progress.ModelStarted.AvailableToolNames.Add(started.AvailableToolNames);
+                        },
+                        CancellationToken.None);
+                    continue;
+                }
+
+                if (chunk.LLMInvocationCompleted != null)
+                {
+                    await sessionDeltas.FlushAsync(CancellationToken.None);
+                    var completed = chunk.LLMInvocationCompleted;
+                    await PersistSessionProgressAsync(
+                        request.SessionId,
+                        progress => progress.ModelCompleted = new RoleChatModelCompletedProgress
+                        {
+                            OperationId = completed.OperationId,
+                            Round = completed.Round,
+                            Model = completed.Model,
+                            Content = completed.Content,
+                            ReasoningContent = completed.ReasoningContent,
+                            Usage = ToTokenUsagePayload(completed.Usage),
+                            FinishReason = completed.FinishReason,
+                            Success = completed.Success,
+                            Error = completed.Error,
+                        },
+                        CancellationToken.None);
+                    streamCt.ThrowIfCancellationRequested();
+                    continue;
+                }
+
                 streamCt.ThrowIfCancellationRequested();
 
                 if (chunk.Usage != null)
@@ -1439,8 +1534,9 @@ public class WorkflowRoleGAgent(
 
                 if (chunk.ToolCallStarted != null)
                 {
-                    await sessionDeltas.FlushAsync(streamCt);
+                    await sessionDeltas.FlushAsync(CancellationToken.None);
                     var started = chunk.ToolCallStarted;
+                    CaptureToolCallLifecycle(toolCallLifecycles, started);
                     await PersistSessionProgressAsync(
                         request.SessionId,
                         progress => progress.ToolStarted = new RoleChatToolStartedProgress
@@ -1452,13 +1548,13 @@ public class WorkflowRoleGAgent(
                                 started.ToolCall.Name),
                             OperationId = started.OperationId,
                         },
-                        streamCt);
+                        CancellationToken.None);
                     streamCt.ThrowIfCancellationRequested();
                 }
 
                 if (chunk.ToolCallCompleted != null)
                 {
-                    await sessionDeltas.FlushAsync(streamCt);
+                    await sessionDeltas.FlushAsync(CancellationToken.None);
                     var completed = chunk.ToolCallCompleted;
                     var toolResult = new ToolResultEvent
                     {
@@ -1478,8 +1574,13 @@ public class WorkflowRoleGAgent(
                             Result = toolResult.Clone(),
                             ToolName = completed.ToolName,
                             OperationId = completed.OperationId,
+                            SafeArgumentsJson = ResolveSafeToolCallArguments(
+                                completed,
+                                toolCallLifecycles,
+                                toolCalls.BuildToolCalls()),
                         },
-                        streamCt);
+                        CancellationToken.None);
+                    MarkToolCallCompleted(toolCallLifecycles, completed);
                     streamCt.ThrowIfCancellationRequested();
                 }
 
@@ -1487,6 +1588,17 @@ public class WorkflowRoleGAgent(
                 if (receipt != null && toolReceipts.All(existing => !existing.Equals(receipt)))
                     toolReceipts.Add(receipt.Clone());
             }
+
+            streamCt.ThrowIfCancellationRequested();
+            await sessionDeltas.FlushAsync(streamCt);
+        }
+        catch (OperationCanceledException) when (streamCt.IsCancellationRequested)
+        {
+            await PersistCancelledToolCallsAsync(
+                request.SessionId,
+                sessionDeltas,
+                toolCallLifecycles);
+            throw;
         }
         catch (Exception ex) when (
             ex is not OperationCanceledException and
@@ -1496,8 +1608,6 @@ public class WorkflowRoleGAgent(
             throw new WorkflowIntentStreamingException(CaptureReplay(), ex);
         }
 
-        streamCt.ThrowIfCancellationRequested();
-        await sessionDeltas.FlushAsync(streamCt);
         return CaptureReplay();
     }
 
@@ -1758,6 +1868,161 @@ public class WorkflowRoleGAgent(
                 TotalTokens = usage.TotalTokens,
                 Model = model ?? string.Empty,
             };
+
+    private static TokenUsagePayload? ToTokenUsagePayload(TokenUsage? usage) =>
+        usage is null
+            ? null
+            : new TokenUsagePayload
+            {
+                PromptTokens = usage.PromptTokens,
+                CompletionTokens = usage.CompletionTokens,
+                TotalTokens = usage.TotalTokens,
+            };
+
+    private static string ResolveSafeToolCallArguments(
+        ToolCallCompletedChunk completed,
+        IReadOnlyList<WorkflowToolCallLifecycle> lifecycles,
+        IReadOnlyList<ToolCall> toolCalls)
+    {
+        if (completed.Receipt is not null &&
+            ShouldRedactToolCallArguments(completed.CallId, [completed.Receipt]))
+        {
+            return string.Empty;
+        }
+
+        var lifecycle = FindToolCallLifecycle(lifecycles, completed.OperationId, completed.CallId);
+        var argumentsJson = lifecycle?.ArgumentsJson ?? toolCalls.LastOrDefault(toolCall =>
+            string.Equals(toolCall.Id, completed.CallId, StringComparison.Ordinal))?.ArgumentsJson;
+        return SecretScrubber.ScrubJson(argumentsJson);
+    }
+
+    private async Task PersistCancelledToolCallsAsync(
+        string sessionId,
+        RoleChatSessionDeltaBatcher sessionDeltas,
+        IReadOnlyList<WorkflowToolCallLifecycle> lifecycles)
+    {
+        var pending = lifecycles.Where(static lifecycle => !lifecycle.Completed).ToArray();
+        if (pending.Length == 0)
+            return;
+
+        await sessionDeltas.FlushAsync(CancellationToken.None);
+        foreach (var lifecycle in pending)
+        {
+            var result = new ToolResultEvent
+            {
+                CallId = lifecycle.CallId,
+                Success = false,
+                Error = "Tool execution was cancelled.",
+            };
+            await PersistSessionProgressAsync(
+                sessionId,
+                progress => progress.ToolCompleted = new RoleChatToolCompletedProgress
+                {
+                    Result = result,
+                    ToolName = lifecycle.ToolName,
+                    OperationId = lifecycle.OperationId,
+                    SafeArgumentsJson = SecretScrubber.ScrubJson(lifecycle.ArgumentsJson),
+                },
+                CancellationToken.None);
+            lifecycle.Completed = true;
+        }
+    }
+
+    private static void CaptureToolCallLifecycle(
+        List<WorkflowToolCallLifecycle> lifecycles,
+        ToolCallStartedChunk started)
+    {
+        var existing = FindToolCallLifecycle(
+            lifecycles,
+            started.OperationId,
+            started.ToolCall.Id);
+        if (existing is null)
+        {
+            lifecycles.Add(new WorkflowToolCallLifecycle(
+                started.OperationId,
+                started.ToolCall.Id,
+                started.ToolCall.Name,
+                started.ToolCall.ArgumentsJson));
+            return;
+        }
+
+        existing.ToolName = started.ToolCall.Name;
+        existing.ArgumentsJson = started.ToolCall.ArgumentsJson;
+    }
+
+    private static void MarkToolCallCompleted(
+        IReadOnlyList<WorkflowToolCallLifecycle> lifecycles,
+        ToolCallCompletedChunk completed)
+    {
+        var lifecycle = FindToolCallLifecycle(
+            lifecycles,
+            completed.OperationId,
+            completed.CallId);
+        if (lifecycle is not null)
+            lifecycle.Completed = true;
+    }
+
+    private static WorkflowToolCallLifecycle? FindToolCallLifecycle(
+        IReadOnlyList<WorkflowToolCallLifecycle> lifecycles,
+        string? operationId,
+        string? callId)
+    {
+        if (!string.IsNullOrWhiteSpace(operationId))
+        {
+            return lifecycles.LastOrDefault(candidate =>
+                string.Equals(candidate.OperationId, operationId, StringComparison.Ordinal));
+        }
+
+        return string.IsNullOrWhiteSpace(callId)
+            ? null
+            : lifecycles.LastOrDefault(candidate =>
+                string.Equals(candidate.CallId, callId, StringComparison.Ordinal));
+    }
+
+    private static IReadOnlyList<ToolCall> MergeCompletedToolCalls(
+        IReadOnlyList<ToolCall> accumulated,
+        IReadOnlyList<WorkflowToolCallLifecycle> lifecycles)
+    {
+        var merged = accumulated.Select(CloneToolCall).ToList();
+        foreach (var lifecycle in lifecycles)
+        {
+            if (!string.IsNullOrWhiteSpace(lifecycle.CallId) &&
+                merged.Any(candidate =>
+                    string.Equals(candidate.Id, lifecycle.CallId, StringComparison.Ordinal)))
+            {
+                continue;
+            }
+
+            merged.Add(new ToolCall
+            {
+                Id = lifecycle.CallId,
+                Name = lifecycle.ToolName,
+                ArgumentsJson = lifecycle.ArgumentsJson,
+            });
+        }
+
+        return merged;
+    }
+
+    private static ToolCall CloneToolCall(ToolCall toolCall) => new()
+    {
+        Id = toolCall.Id,
+        Name = toolCall.Name,
+        ArgumentsJson = toolCall.ArgumentsJson,
+    };
+
+    private sealed class WorkflowToolCallLifecycle(
+        string operationId,
+        string callId,
+        string toolName,
+        string argumentsJson)
+    {
+        public string OperationId { get; } = operationId;
+        public string CallId { get; } = callId;
+        public string ToolName { get; set; } = toolName;
+        public string ArgumentsJson { get; set; } = argumentsJson;
+        public bool Completed { get; set; }
+    }
 
     private sealed class WorkflowToolCallAccumulator
     {

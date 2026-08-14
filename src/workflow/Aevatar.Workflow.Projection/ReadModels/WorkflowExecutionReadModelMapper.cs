@@ -7,9 +7,11 @@ public sealed class WorkflowExecutionReadModelMapper
 {
     public WorkflowActorSnapshot ToActorSnapshot(WorkflowExecutionCurrentStateDocument source)
     {
-        return new WorkflowActorSnapshot
+        var snapshot = new WorkflowActorSnapshot
         {
             ActorId = source.RootActorId,
+            RunId = source.RunId,
+            WorkflowId = source.WorkflowId,
             WorkflowName = source.WorkflowName,
             ScopeId = source.ScopeId,
             RunOrigin = source.RunOrigin,
@@ -19,6 +21,7 @@ public sealed class WorkflowExecutionReadModelMapper
             LastEventId = source.LastEventId,
             LastUpdatedAt = source.UpdatedAt,
             StartedAtUtc = source.StartedAtUtcValue,
+            CompletedAtUtc = source.CompletedAtUtcValue,
             LastSuccess = source.Success,
             LastOutput = source.FinalOutput,
             LastError = source.FinalError,
@@ -32,8 +35,111 @@ public sealed class WorkflowExecutionReadModelMapper
             RoleReplyCount = 0,
             InputFileRefs = { source.InputFileRefs.Select(MapInputFileRef) },
             ConnectorApprovals = { source.ConnectorApprovals.Select(static approval => approval.Clone()) },
+            ActivityInitiator = MapActivityInitiator(source.ActivityInitiator),
+            InputSummary = source.InputSummary,
+            ActivityCurrentStep = MapActivityCurrentStep(source.ActivityCurrentStep),
+            ActivityFirstFailure = MapActivityFirstFailure(source.ActivityFirstFailure),
+            ActivityWaiting = MapActivityWaiting(source.ActivityWaiting),
+            RecoveryCapability = MapRecoveryCapability(source.RecoveryCapability),
+            Lineage = MapLineage(source.Lineage),
+        };
+        if (source.HasDurationMs)
+            snapshot.DurationMs = source.DurationMs;
+        return snapshot;
+    }
+
+    private static WorkflowRunRecoveryCapability MapRecoveryCapability(
+        WorkflowRunRecoveryCapabilityReadModel? source)
+    {
+        if (source == null)
+            return new WorkflowRunRecoveryCapability();
+
+        return new WorkflowRunRecoveryCapability
+        {
+            WorkflowDefinitionRevisionId = source.WorkflowDefinitionRevisionId ?? string.Empty,
+            WorkflowDefinitionVersion = source.WorkflowDefinitionVersion,
+            RetryFailedStep = MapRecoveryActionCapability(source.RetryFailedStep),
+            RunAgain = MapRecoveryActionCapability(source.RunAgain),
         };
     }
+
+    private static Aevatar.Workflow.Abstractions.WorkflowRunLineage MapLineage(
+        Aevatar.Workflow.Abstractions.WorkflowRunLineage? source) =>
+        source?.Clone() ?? new Aevatar.Workflow.Abstractions.WorkflowRunLineage
+        {
+            Availability = Aevatar.Workflow.Abstractions.WorkflowRunLineageAvailability.LegacyUnavailable,
+            UnavailableReason = "Run lineage is unavailable for this legacy run.",
+            RetryFork = new Aevatar.Workflow.Abstractions.WorkflowRunRetryForkLineage
+            {
+                Availability = Aevatar.Workflow.Abstractions.WorkflowRunLineageAvailability.LegacyUnavailable,
+            },
+            SubWorkflow = new Aevatar.Workflow.Abstractions.WorkflowRunSubWorkflowLineage
+            {
+                Availability = Aevatar.Workflow.Abstractions.WorkflowRunLineageAvailability.LegacyUnavailable,
+            },
+        };
+
+    private static WorkflowRecoveryActionCapability MapRecoveryActionCapability(
+        WorkflowRecoveryActionCapabilityReadModel? source)
+    {
+        if (source == null)
+            return new WorkflowRecoveryActionCapability
+            {
+                Eligibility = WorkflowRecoveryEligibility.Unavailable,
+                UnavailableReasonCode = WorkflowRecoveryUnavailableReasonCode.LegacyUnavailable,
+                UnavailableReason = "Recovery capability is unavailable for this legacy run.",
+            };
+
+        var capability = new WorkflowRecoveryActionCapability
+        {
+            Eligibility = MapRecoveryEligibility(source.Eligibility),
+            UnavailableReasonCode = MapRecoveryUnavailableReasonCode(source.UnavailableReasonCode),
+            UnavailableReason = source.UnavailableReason ?? string.Empty,
+            StartingStepId = source.StartingStepId ?? string.Empty,
+            ReusesPriorStepOutputs = source.ReusesPriorStepOutputs,
+            MayIncurModelOrToolCost = source.MayIncurModelOrToolCost,
+        };
+        capability.RecommendedActions.Add(source.RecommendedActions.Select(MapRecoveryRecommendedAction));
+        return capability;
+    }
+
+    private static WorkflowRecoveryEligibility MapRecoveryEligibility(
+        WorkflowRecoveryEligibilityReadModel value) =>
+        value switch
+        {
+            WorkflowRecoveryEligibilityReadModel.Eligible => WorkflowRecoveryEligibility.Eligible,
+            WorkflowRecoveryEligibilityReadModel.Ineligible => WorkflowRecoveryEligibility.Ineligible,
+            WorkflowRecoveryEligibilityReadModel.Unavailable => WorkflowRecoveryEligibility.Unavailable,
+            _ => WorkflowRecoveryEligibility.Unspecified,
+        };
+
+    private static WorkflowRecoveryUnavailableReasonCode MapRecoveryUnavailableReasonCode(
+        WorkflowRecoveryUnavailableReasonCodeReadModel value) =>
+        value switch
+        {
+            WorkflowRecoveryUnavailableReasonCodeReadModel.None => WorkflowRecoveryUnavailableReasonCode.None,
+            WorkflowRecoveryUnavailableReasonCodeReadModel.SourceRunNotTerminal => WorkflowRecoveryUnavailableReasonCode.SourceRunNotTerminal,
+            WorkflowRecoveryUnavailableReasonCodeReadModel.MissingSourceFact => WorkflowRecoveryUnavailableReasonCode.MissingSourceFact,
+            WorkflowRecoveryUnavailableReasonCodeReadModel.AuthorizationFailure => WorkflowRecoveryUnavailableReasonCode.AuthorizationFailure,
+            WorkflowRecoveryUnavailableReasonCodeReadModel.ConfigurationFailure => WorkflowRecoveryUnavailableReasonCode.ConfigurationFailure,
+            WorkflowRecoveryUnavailableReasonCodeReadModel.WorkflowDefinitionUnavailable => WorkflowRecoveryUnavailableReasonCode.WorkflowDefinitionUnavailable,
+            WorkflowRecoveryUnavailableReasonCodeReadModel.LegacyUnavailable => WorkflowRecoveryUnavailableReasonCode.LegacyUnavailable,
+            _ => WorkflowRecoveryUnavailableReasonCode.Unspecified,
+        };
+
+    private static WorkflowRecoveryRecommendedAction MapRecoveryRecommendedAction(
+        WorkflowRecoveryRecommendedActionReadModel value) =>
+        value switch
+        {
+            WorkflowRecoveryRecommendedActionReadModel.Retry => WorkflowRecoveryRecommendedAction.Retry,
+            WorkflowRecoveryRecommendedActionReadModel.RunAgain => WorkflowRecoveryRecommendedAction.RunAgain,
+            WorkflowRecoveryRecommendedActionReadModel.FixAccess => WorkflowRecoveryRecommendedAction.FixAccess,
+            WorkflowRecoveryRecommendedActionReadModel.ChangeConfiguration => WorkflowRecoveryRecommendedAction.ChangeConfiguration,
+            WorkflowRecoveryRecommendedActionReadModel.EditWorkflow => WorkflowRecoveryRecommendedAction.EditWorkflow,
+            WorkflowRecoveryRecommendedActionReadModel.EditInput => WorkflowRecoveryRecommendedAction.EditInput,
+            WorkflowRecoveryRecommendedActionReadModel.TechnicalDetails => WorkflowRecoveryRecommendedAction.TechnicalDetails,
+            _ => WorkflowRecoveryRecommendedAction.Unspecified,
+        };
 
     public WorkflowActorProjectionState ToActorProjectionState(WorkflowExecutionCurrentStateDocument source)
     {
@@ -76,6 +182,7 @@ public sealed class WorkflowExecutionReadModelMapper
                 .ToList(),
             Steps = source.Steps.Select(MapStepTrace).ToList(),
             RoleReplies = source.RoleReplies.Select(MapRoleReply).ToList(),
+            Operations = source.Operations.Select(MapOperation).ToList(),
             Timeline = source.Timeline.Select(MapTimelineEvent).ToList(),
             Usage = MapUsage(source.Usage),
             Summary = MapSummary(source.Summary),
@@ -138,16 +245,43 @@ public sealed class WorkflowExecutionReadModelMapper
     //   New principle: graph mapper methods produce workflow-run graph export subgraphs.
     public WorkflowRunGraphExportSubgraph ToWorkflowRunGraphExportSubgraph(
         string rootNodeId,
-        ProjectionGraphSubgraph source)
+        ProjectionGraphSubgraph source,
+        long sourceStateVersion = 0)
     {
         var subgraph = new WorkflowRunGraphExportSubgraph
         {
             RootNodeId = rootNodeId,
+            SourceStateVersion = sourceStateVersion > 0
+                ? sourceStateVersion
+                : ResolveGraphSourceStateVersion(rootNodeId, source),
         };
         subgraph.Nodes.Add(source.Nodes.Select(ToWorkflowRunGraphExportNode));
         subgraph.Edges.Add(source.Edges.Select(ToWorkflowRunGraphExportEdge));
         return subgraph;
     }
+
+    private static long ResolveGraphSourceStateVersion(string rootNodeId, ProjectionGraphSubgraph source)
+    {
+        var rootNodeIdValue = rootNodeId.Trim();
+        var versions = source.Nodes
+            .Where(node => string.Equals(node.NodeType, WorkflowExecutionGraphConstants.RunNodeType, StringComparison.Ordinal))
+            .Where(node =>
+                node.Properties.TryGetValue(WorkflowExecutionGraphConstants.RootActorIdPropertyKey, out var nodeRootActorId) &&
+                string.Equals(nodeRootActorId, rootNodeIdValue, StringComparison.Ordinal))
+            .Select(ReadSourceStateVersion)
+            .Where(version => version > 0)
+            .Distinct()
+            .ToList();
+
+        return versions.Count == 1 ? versions[0] : 0;
+    }
+
+    private static long ReadSourceStateVersion(ProjectionGraphNode node) =>
+        node.Properties.TryGetValue(WorkflowExecutionGraphConstants.SourceStateVersionPropertyKey, out var value) &&
+        long.TryParse(value, out var parsed) &&
+        parsed > 0
+            ? parsed
+            : 0;
 
     private static WorkflowRunCompletionStatus MapCompletionStatus(string? status)
     {
@@ -155,6 +289,7 @@ public sealed class WorkflowExecutionReadModelMapper
         {
             "running" => WorkflowRunCompletionStatus.Running,
             "completed" => WorkflowRunCompletionStatus.Completed,
+            "timed_out" => WorkflowRunCompletionStatus.TimedOut,
             "failed" => WorkflowRunCompletionStatus.Failed,
             "stopped" => WorkflowRunCompletionStatus.Stopped,
             "not_found" => WorkflowRunCompletionStatus.NotFound,
@@ -183,6 +318,55 @@ public sealed class WorkflowExecutionReadModelMapper
             OwnerScopeId = source.OwnerScopeId,
         };
 
+    private static WorkflowRunActivityInitiatorSnapshot MapActivityInitiator(
+        WorkflowRunActivityInitiatorReadModel? source) =>
+        source == null
+            ? new WorkflowRunActivityInitiatorSnapshot { Availability = "unavailable", DisplayValue = "Unknown" }
+            : new WorkflowRunActivityInitiatorSnapshot
+            {
+                Platform = source.Platform,
+                Tenant = source.Tenant,
+                ExternalUserId = source.ExternalUserId,
+                Scope = source.Scope,
+                BindingId = string.Empty,
+                DisplayValue = string.IsNullOrWhiteSpace(source.DisplayValue) ? "Unknown" : source.DisplayValue,
+                Availability = string.IsNullOrWhiteSpace(source.Availability) ? "unavailable" : source.Availability,
+            };
+
+    private static WorkflowRunActivityStepSnapshot MapActivityCurrentStep(
+        WorkflowRunActivityStepReadModel? source) =>
+        source == null
+            ? new WorkflowRunActivityStepSnapshot { Availability = "unavailable" }
+            : new WorkflowRunActivityStepSnapshot
+            {
+                StepId = source.StepId,
+                InputSummary = source.InputSummary,
+                Availability = string.IsNullOrWhiteSpace(source.Availability) ? "unavailable" : source.Availability,
+            };
+
+    private static WorkflowRunActivityFailureSnapshot MapActivityFirstFailure(
+        WorkflowRunActivityFailureReadModel? source) =>
+        source == null
+            ? new WorkflowRunActivityFailureSnapshot { Availability = "unavailable" }
+            : new WorkflowRunActivityFailureSnapshot
+            {
+                StepId = source.StepId,
+                Message = source.Message,
+                Availability = string.IsNullOrWhiteSpace(source.Availability) ? "unavailable" : source.Availability,
+            };
+
+    private static WorkflowRunActivityWaitingSnapshot MapActivityWaiting(
+        WorkflowRunActivityWaitingReadModel? source) =>
+        source == null
+            ? new WorkflowRunActivityWaitingSnapshot { Availability = "unavailable" }
+            : new WorkflowRunActivityWaitingSnapshot
+            {
+                StepId = source.StepId,
+                WaitingKind = source.WaitingKind,
+                Prompt = source.Prompt,
+                Availability = string.IsNullOrWhiteSpace(source.Availability) ? "unavailable" : source.Availability,
+            };
+
     private static WorkflowRunCompletionStatus MapCompletionStatus(
         WorkflowExecutionCompletionStatus status)
     {
@@ -190,6 +374,7 @@ public sealed class WorkflowExecutionReadModelMapper
         {
             WorkflowExecutionCompletionStatus.Running => WorkflowRunCompletionStatus.Running,
             WorkflowExecutionCompletionStatus.Completed => WorkflowRunCompletionStatus.Completed,
+            WorkflowExecutionCompletionStatus.TimedOut => WorkflowRunCompletionStatus.TimedOut,
             WorkflowExecutionCompletionStatus.Failed => WorkflowRunCompletionStatus.Failed,
             WorkflowExecutionCompletionStatus.Stopped => WorkflowRunCompletionStatus.Stopped,
             WorkflowExecutionCompletionStatus.NotFound => WorkflowRunCompletionStatus.NotFound,
@@ -232,6 +417,7 @@ public sealed class WorkflowExecutionReadModelMapper
         new()
         {
             StepId = source.StepId,
+            DisplayName = source.DisplayName,
             StepType = source.StepType,
             TargetRole = source.TargetRole,
             RequestedAt = source.RequestedAtUtcValue?.ToDateTimeOffset(),
@@ -261,6 +447,17 @@ public sealed class WorkflowExecutionReadModelMapper
                     ApprovalRequestId = source.ToolApprovalValue.ApprovalRequestId,
                 },
             Usage = MapUsage(source.Usage),
+            Outcome = MapStepOutcome(source.Outcome),
+        };
+
+    private static WorkflowRunStepOutcome MapStepOutcome(WorkflowExecutionStepOutcomeReadModel outcome) =>
+        outcome switch
+        {
+            WorkflowExecutionStepOutcomeReadModel.Succeeded => WorkflowRunStepOutcome.Succeeded,
+            WorkflowExecutionStepOutcomeReadModel.Failed => WorkflowRunStepOutcome.Failed,
+            WorkflowExecutionStepOutcomeReadModel.Waiting => WorkflowRunStepOutcome.Waiting,
+            WorkflowExecutionStepOutcomeReadModel.Skipped => WorkflowRunStepOutcome.Skipped,
+            _ => WorkflowRunStepOutcome.Unspecified,
         };
 
     private static WorkflowRunRoleReply MapRoleReply(WorkflowExecutionRoleReply source) =>
@@ -271,6 +468,33 @@ public sealed class WorkflowExecutionReadModelMapper
             SessionId = source.SessionId,
             Content = source.Content,
             ContentLength = source.ContentLength,
+        };
+
+    private static WorkflowRunOperation MapOperation(WorkflowRuntimeOperationReadModel source) =>
+        new()
+        {
+            SessionId = source.SessionId,
+            OperationId = source.OperationId,
+            ProgressSequence = source.ProgressSequence,
+            Round = source.Round,
+            Kind = source.Kind,
+            StartedAt = source.StartedAt,
+            CompletedAt = source.CompletedAt,
+            RoleActorId = source.RoleActorId,
+            Model = source.Model,
+            Provider = source.Provider,
+            InputSummary = source.InputSummary,
+            AvailableToolNames = source.AvailableToolNames.ToList(),
+            Output = source.Output,
+            ReasoningContent = source.ReasoningContent,
+            FinishReason = source.FinishReason,
+            Usage = MapUsage(source.Usage),
+            Success = source.Success,
+            Error = source.Error,
+            ToolCallId = source.ToolCallId,
+            ToolName = source.ToolName,
+            ArgumentsJson = source.ArgumentsJson,
+            ResultJson = source.ResultJson,
         };
 
     private static WorkflowRunTimelineEvent MapTimelineEvent(WorkflowExecutionTimelineEvent source) =>

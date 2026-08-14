@@ -42,6 +42,8 @@ const zhCNMessages = {
   'pages.gagents.index.platformBreadcrumb': '平台',
   'pages.chat.index.chatStopped': 'Chat 已停止。',
   'pages.chat.index.composerPlaceholder': '描述你想要的 workflow，或询问当前配置...',
+  'pages.chat.index.composerInputAnswer': '回答当前问题...',
+  'pages.chat.index.composerSteering': '调整当前任务...',
   'pages.chat.index.confirmAndCreate': '确认并创建',
   'pages.chat.index.confirmPrompt': '确认，请现在创建。',
   'pages.chat.index.continuationContextMissing':

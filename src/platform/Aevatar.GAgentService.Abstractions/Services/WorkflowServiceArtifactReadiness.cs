@@ -26,10 +26,8 @@ public static class WorkflowServiceArtifactReadiness
             return true;
 
         return WorkflowCapabilityAdmissionPlanIntegrity.RequiresRebind(admissionPlan.SchemaVersion)
-               || !string.Equals(
-                   admissionPlan.SchemaVersion,
-                   WorkflowCapabilityAdmissionPlanIntegrity.SchemaVersion,
-                   StringComparison.Ordinal)
+               || !WorkflowCapabilityAdmissionPlanIntegrity.IsSupportedSchemaVersion(
+                   admissionPlan.SchemaVersion)
                || admissionPlan.ExecutionMode == ExternalCapabilityExecutionMode.Unspecified
                || !Enum.IsDefined(admissionPlan.ExecutionMode)
                || workflowPlan.ExecutionMode != admissionPlan.ExecutionMode;

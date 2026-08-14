@@ -87,12 +87,14 @@ public sealed record WorkflowDefinitionBinding(
     string SourceKind = "",
     WorkflowCapabilityAdmissionPlan? CapabilityAdmissionPlan = null,
     string WorkflowId = "",
-    string RevisionId = "");
+    string RevisionId = "",
+    long DefinitionVersion = 0);
 
 public sealed record WorkflowRunCreationReceipt(
     string ActorId,
     string DefinitionActorId,
-    IReadOnlyList<string> CreatedActorIds);
+    IReadOnlyList<string> CreatedActorIds,
+    string RunId = "");
 
 public sealed record WorkflowDefinitionProvisioningReceipt(
     string ActorId,
@@ -161,7 +163,11 @@ public sealed record WorkflowRunForkSeedView(
     string FinalError,
     string ScopeId = "",
     IReadOnlyDictionary<string, WorkflowStepIdempotencyView>? IdempotencyByStepId = null,
-    WorkflowCapabilityAdmissionPlan? CapabilityAdmissionPlan = null)
+    WorkflowCapabilityAdmissionPlan? CapabilityAdmissionPlan = null,
+    string WorkflowId = "",
+    string RevisionId = "",
+    long DefinitionVersion = 0,
+    string OriginalRunId = "")
 {
     public WorkflowRunForkSeedView()
         : this(
@@ -176,7 +182,11 @@ public sealed record WorkflowRunForkSeedView(
             string.Empty,
             string.Empty,
             new Dictionary<string, WorkflowStepIdempotencyView>(StringComparer.Ordinal),
-            null)
+            null,
+            string.Empty,
+            string.Empty,
+            0,
+            string.Empty)
     {
     }
 }
@@ -317,6 +327,18 @@ public interface IWorkflowRunIdentityExecutionPort
         WorkflowChatRequestEvent executionRequest,
         string commandId,
         string correlationId,
+        CancellationToken ct = default);
+}
+
+public interface IWorkflowRunLineageRecordingPort
+{
+    Task RecordForkChildAsync(
+        string sourceRunId,
+        string childRunId,
+        string childActorId,
+        string originalRunId,
+        string startAtStepId,
+        int attempt,
         CancellationToken ct = default);
 }
 

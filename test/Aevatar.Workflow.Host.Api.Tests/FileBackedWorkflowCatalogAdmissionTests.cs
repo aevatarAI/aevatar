@@ -667,6 +667,14 @@ public sealed class FileBackedWorkflowCatalogAdmissionTests
             cancellationToken.ThrowIfCancellationRequested();
             return Task.FromResult(request.Plan.Clone());
         }
+
+        public Task<WorkflowCapabilityAdmissionPlan> RefreshPersistedAsync(
+            RefreshPersistedWorkflowCapabilityAdmissionRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(request.Persisted.Plan.Clone());
+        }
     }
 
     private sealed class RecordingWorkflowCapabilityAdmissionService(
@@ -678,6 +686,8 @@ public sealed class FileBackedWorkflowCatalogAdmissionTests
         public WorkflowExternalCapabilityAdmissionRequest? Request { get; private set; }
 
         public PersistedWorkflowCapabilityAdmissionRequest? PersistedRequest { get; private set; }
+
+        public RefreshPersistedWorkflowCapabilityAdmissionRequest? RefreshRequest { get; private set; }
 
         public Task<WorkflowCapabilityAdmissionPlan> AdmitAsync(
             WorkflowExternalCapabilityAdmissionRequest request,
@@ -704,6 +714,17 @@ public sealed class FileBackedWorkflowCatalogAdmissionTests
             if (failure is not null)
                 throw failure;
             return Task.FromResult(request.Plan.Clone());
+        }
+
+        public Task<WorkflowCapabilityAdmissionPlan> RefreshPersistedAsync(
+            RefreshPersistedWorkflowCapabilityAdmissionRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            RefreshRequest = request;
+            if (failure is not null)
+                throw failure;
+            return Task.FromResult(request.Persisted.Plan.Clone());
         }
     }
 

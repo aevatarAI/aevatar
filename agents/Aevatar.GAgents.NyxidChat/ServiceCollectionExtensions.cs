@@ -25,9 +25,10 @@ using Aevatar.GAgents.Channel.Abstractions.Slash;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
-using Aevatar.GAgents.NyxidChat.LlmSelection;
 using Aevatar.GAgents.NyxidChat.AgentProfiles;
+using Aevatar.GAgents.NyxidChat.LlmSelection;
 using Aevatar.GAgents.NyxidChat.Slash;
+using Aevatar.GAgents.NyxidChat.Voice;
 using Aevatar.GAgents.NyxidChat.WorkflowDraftRun;
 using Aevatar.GAgents.NyxidChat.WorkflowRunDelivery;
 using Aevatar.AGUI.Contracts;
@@ -52,6 +53,7 @@ public static class ServiceCollectionExtensions
         RuntimeHelpers.RunClassConstructor(typeof(NyxIdChatConversationGAgent).TypeHandle);
         RuntimeHelpers.RunClassConstructor(typeof(NyxIdChatTurnGAgent).TypeHandle);
         RuntimeHelpers.RunClassConstructor(typeof(NyxIdChatGAgent).TypeHandle);
+        RuntimeHelpers.RunClassConstructor(typeof(NyxIdVoiceGAgent).TypeHandle);
         RuntimeHelpers.RunClassConstructor(typeof(AgentRunGAgent).TypeHandle);
         RuntimeHelpers.RunClassConstructor(typeof(ChannelWorkflowDraftRunGAgent).TypeHandle);
         RuntimeHelpers.RunClassConstructor(typeof(WorkflowRunDeliveryGAgent).TypeHandle);
@@ -66,6 +68,10 @@ public static class ServiceCollectionExtensions
             services.AddNyxIdApiAccess(configuration);
         var assistantActionsOptions = BindAssistantActionsOptions(configuration);
         services.TryAddSingleton(assistantActionsOptions);
+        services.TryAddSingleton(BindPlanGateOptions(configuration));
+        services.TryAddSingleton(BindCanaryEffectFaultOptions(configuration));
+        services.TryAddSingleton<INyxIdChatCanaryEffectFaultAuthorizationPolicy,
+            NyxIdChatCanaryEffectFaultAuthorizationPolicy>();
         if (assistantActionsOptions.Enabled)
         {
             services.TryAddSingleton<NyxIdAssistantActionRegistrySnapshot>();
@@ -91,6 +97,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<StreamingAgentProfileTurnClassifier>();
         services.TryAddSingleton<IAgentProfileTurnClassifier>(sp =>
             sp.GetRequiredService<StreamingAgentProfileTurnClassifier>());
+        services.TryAddSingleton<INyxIdChatTurnIntentClassifier, NyxIdChatTurnIntentClassifier>();
         services.TryAddSingleton(sp => new AgentProfileTurnCatalogMaterializer(
             sp.GetRequiredService<IToolSetRegistry>(),
             sp.GetRequiredService<IAgentProfileTurnClassifier>(),
@@ -101,6 +108,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IChannelRelayProxyResponseClassifier, MissingChannelRelayProxyResponseClassifier>();
         services.TryAddSingleton<NyxIdChatLifecycleFacade>();
         services.TryAddSingleton<INyxIdChatControlCommandPort, NyxIdChatControlCommandPort>();
+        services.TryAddSingleton<INyxIdVoiceAgentCommandService, NyxIdVoiceAgentCommandService>();
         AddNyxIdLifecycleCommands(services);
 
         // ─── Channel LLM reply run dispatch ───
@@ -152,6 +160,9 @@ public static class ServiceCollectionExtensions
                     // the reply activity's TransportExtras) instead of the process-wide default, so a DM
                     // to one bot is answered by that bot's app and not a sibling under the same account.
                     sp.GetService<ILarkOutboundClientFactory>(),
+                    // Inbound turns bind the card through their single-use channel reply authority.
+                    // Proactive turns still use the scoped Lark proxy client above.
+                    sp.GetRequiredService<NyxIdApiClient>(),
                     sp.GetRequiredService<ILogger<ChannelCardConversationTurnRunner>>());
             }));
         }
@@ -191,12 +202,18 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ChannelNyxIdConnectedServiceInventoryToolSource>();
         services.TryAddSingleton<IAgentRunReplyGenerationExecutorPort, AgentRunReplyGenerationExecutor>();
         services.TryAddSingleton<INyxIdActionPostconditionPort>(sp =>
-            sp.GetService<INyxIdAuthorizationCatalogQueryPort>() is { } catalogQueryPort
-                ? new NyxIdActionPostconditionPort(
-                    catalogQueryPort,
-                    sp.GetRequiredService<TimeProvider>())
-                : new UnavailableNyxIdActionPostconditionPort());
+            new NyxIdActionPostconditionPort(
+                sp.GetService<INyxIdAuthorizationCatalogQueryPort>(),
+                sp.GetService<INyxIdActionEvidenceReadPort>(),
+                sp.GetRequiredService<TimeProvider>()));
+        services.TryAddSingleton<INyxIdChatDelegationCredentialLifecyclePort,
+            NyxIdChatDelegationCredentialLifecyclePort>();
         services.TryAddSingleton<INyxIdChatTurnOperationExecutor, NyxIdChatTurnOperationExecutor>();
+        services.TryAddSingleton<INyxIdChatToolVerificationPort, NyxIdChatToolVerificationPort>();
+        services.TryAddSingleton<INyxIdChatTurnOperationReconciliationPort,
+            AdmittedNyxIdChatTurnOperationReconciliationPort>();
+        services.TryAddSingleton<INyxIdChatTurnOperationDispatchPort,
+            NyxIdChatTurnOperationDispatchPort>();
         services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton<IAgentToolReceiptRenderer, AgentToolReceiptRenderer>();
         services.TryAddSingleton<ILarkCardReplyStreamRenderer, LarkCardReplyStreamRenderer>();
@@ -394,5 +411,26 @@ public static class ServiceCollectionExtensions
         var options = new NyxIdAssistantActionsOptions();
         configuration?.GetSection(NyxIdAssistantActionsOptions.ConfigSection).Bind(options);
         return options;
+    }
+
+    private static NyxIdChatPlanGateOptions BindPlanGateOptions(IConfiguration? configuration)
+    {
+        var options = new NyxIdChatPlanGateOptions();
+        configuration?.GetSection(NyxIdChatPlanGateOptions.ConfigSection).Bind(options);
+        if (options.ConfirmationThresholdSeconds <= 0)
+        {
+            throw new InvalidOperationException(
+                $"{NyxIdChatPlanGateOptions.ConfigSection}:ConfirmationThresholdSeconds must be positive.");
+        }
+
+        return options;
+    }
+
+    private static NyxIdChatCanaryEffectFaultOptions BindCanaryEffectFaultOptions(
+        IConfiguration? configuration)
+    {
+        var enabled = configuration?.GetValue<bool>(
+            $"{NyxIdChatCanaryEffectFaultOptions.ConfigSection}:Enabled") == true;
+        return new NyxIdChatCanaryEffectFaultOptions { Enabled = enabled };
     }
 }

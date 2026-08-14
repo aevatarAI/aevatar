@@ -2,6 +2,7 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.Configuration;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -17,7 +18,12 @@ public sealed class NyxIdApiAccessContractTests
     {
         var handler = new RecordingHandler();
         using var client = new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example/" },
+            new NyxIdToolOptions
+            {
+                BaseUrl = "http://nyxid.internal:3001/",
+                InternalApiBaseUrl = "http://nyxid.internal:3001/",
+                ApiBaseUrl = "https://nyx.example/",
+            },
             new HttpClient(handler),
             NullLogger<NyxIdApiClient>.Instance);
 
@@ -44,6 +50,58 @@ public sealed class NyxIdApiAccessContractTests
             .Should()
             .Equal("service-a", "service-b");
         body.RootElement.GetProperty("target_org_id").GetString().Should().Be("org-alpha");
+    }
+
+    [Fact]
+    public async Task Client_WithSplitHosts_ShouldKeepControlPlanePublicAndTransportCallsInternal()
+    {
+        var handler = new RecordingHandler();
+        using var client = new NyxIdApiClient(
+            new NyxIdToolOptions
+            {
+                BaseUrl = "http://nyxid.internal:3001/transport/",
+                InternalApiBaseUrl = "http://nyxid.internal:3001/transport/",
+                ApiBaseUrl = "https://nyx.example/public/",
+                PublicTransportFallbackBaseUrl = "https://nyx.example/public/",
+            },
+            new HttpClient(handler),
+            NullLogger<NyxIdApiClient>.Instance);
+
+        await client.GetCurrentUserAsync("token", CancellationToken.None);
+        await client.ListCatalogAsync("token", CancellationToken.None);
+        await client.CreateServiceAsync("token", """{"slug":"calendar"}""", CancellationToken.None);
+        await client.DeleteServiceAsync("token", "service-calendar", CancellationToken.None);
+        await client.GetLlmServicesAsync("token", CancellationToken.None);
+        await client.GetLlmRouteModelsBoundedAsync(
+            "token",
+            Aevatar.AI.Abstractions.LLMRouteKind.Gateway,
+            verifiedUserServiceId: null,
+            verifiedServiceSlug: null,
+            maxBytes: 1024,
+            ct: CancellationToken.None);
+        await client.ProxyRequestAsync(
+            "token",
+            "calendar",
+            "/v1/events",
+            HttpMethod.Get.Method,
+            body: null,
+            extraHeaders: null,
+            ct: CancellationToken.None);
+        await client.SshExecAsync(
+            "token",
+            "ssh-service",
+            """{"command":"true"}""",
+            CancellationToken.None);
+
+        handler.Requests.Select(static request => request.Uri).Should().Equal(
+            "https://nyx.example/public/api/v1/users/me",
+            "https://nyx.example/public/api/v1/catalog",
+            "https://nyx.example/public/api/v1/keys",
+            "https://nyx.example/public/api/v1/keys/service-calendar",
+            "https://nyx.example/public/api/v1/llm/services",
+            "https://nyx.example/public/api/v1/llm/gateway/v1/models",
+            "http://nyxid.internal:3001/transport/api/v1/proxy/s/calendar/v1/events",
+            "http://nyxid.internal:3001/transport/api/v1/ssh/ssh-service/exec");
     }
 
     [Fact]
@@ -76,7 +134,11 @@ public sealed class NyxIdApiAccessContractTests
                   "slug": "api-github",
                   "label": "GitHub",
                   "catalog_service_name": "GitHub API",
+                  "catalog_service_id": "catalog-github",
                   "is_active": true,
+                  "forward_access_token": false,
+                  "inject_delegation_token": true,
+                  "delegation_token_scope": "sandbox:execute",
                   "credential_source": { "type": "personal" },
                   "default_model": "gpt-5.5",
                   "endpoint_id": "ignored"
@@ -127,6 +189,63 @@ public sealed class NyxIdApiAccessContractTests
     }
 
     [Fact]
+    public void ParseUserServiceRoutes_ShouldMapRouteContractWithoutChangingOrdinaryParser()
+    {
+        const string response = """
+            {
+              "services": [{
+                "id": "service-code",
+                "slug": "chrono-sandbox",
+                "catalog_service_id": "catalog-chrono-sandbox",
+                "is_active": true,
+                "forward_access_token": false,
+                "inject_delegation_token": true,
+                "delegation_token_scope": "sandbox:execute",
+                "credential_source": { "type": "personal" }
+              }]
+            }
+            """;
+
+        var ordinary = NyxIdApiAccessResponseParser.ParseUserServices(response);
+        var routes = NyxIdApiAccessResponseParser.ParseUserServiceRoutes(response);
+
+        ordinary.Succeeded.Should().BeTrue();
+        ordinary.Value!.Services.Single().Should().BeEquivalentTo(new
+        {
+            CatalogServiceId = (string?)null,
+            ForwardAccessToken = (bool?)null,
+            InjectDelegationToken = (bool?)null,
+            DelegationTokenScope = (string?)null,
+        });
+        routes.Succeeded.Should().BeTrue();
+        routes.Value!.Services.Single().Should().BeEquivalentTo(new
+        {
+            CatalogServiceId = "catalog-chrono-sandbox",
+            ForwardAccessToken = (bool?)false,
+            InjectDelegationToken = (bool?)true,
+            DelegationTokenScope = "sandbox:execute",
+        });
+    }
+
+    [Fact]
+    public void ParseUserServices_WhenCodeExecutionOnlyFieldIsMalformed_ShouldRemainCompatible()
+    {
+        const string response = """
+            {"services":[{
+              "id":"service-github",
+              "slug":"api-github",
+              "is_active":true,
+              "forward_access_token":"invalid",
+              "credential_source":{"type":"personal"}
+            }]}
+            """;
+
+        NyxIdApiAccessResponseParser.ParseUserServices(response).Succeeded.Should().BeTrue();
+        NyxIdApiAccessResponseParser.ParseUserServiceRoutes(response).Succeeded
+            .Should().BeFalse();
+    }
+
+    [Fact]
     public void ParseUserServices_ShouldReadPublishedUnderscoreIdIdentity()
     {
         const string response = """
@@ -149,6 +268,8 @@ public sealed class NyxIdApiAccessContractTests
                 {
                   "id": "service-direct",
                   "slug": "api-github",
+                  "catalog_service_id": "catalog-api-github",
+                  "catalog_service_slug": "api-github",
                   "label": "GitHub",
                   "catalog_service_name": "GitHub API",
                   "status": "active",
@@ -199,7 +320,10 @@ public sealed class NyxIdApiAccessContractTests
                 null,
                 NyxIdUserServiceNodeStatus.NotBound,
                 new NyxIdUserServiceCredentialSource(
-                    NyxIdUserServiceCredentialSourceKind.Personal)),
+                    NyxIdUserServiceCredentialSourceKind.Personal),
+                "catalog-api-github",
+                "api-github",
+                true),
             new NyxIdUserServiceKey(
                 "service-node",
                 "api-linear",
@@ -215,7 +339,248 @@ public sealed class NyxIdApiAccessContractTests
                     "Alpha",
                     null,
                     NyxIdOrganizationRole.Member,
-                    true)));
+                    true),
+                null,
+                null,
+                true));
+    }
+
+    [Fact]
+    public void ParseUserServiceAuthorization_ShouldPreserveExactScopeAndAuthorizationEvidence()
+    {
+        const string response = """
+            {
+              "id": "service-alpha",
+              "api_key_id": "credential-alpha",
+              "status": "active",
+              "is_active": true,
+              "connected": true,
+              "connection_status": "active",
+              "granted_scopes": ["read:user", "repo"],
+              "last_authorized_at": "2026-08-10T07:00:00Z"
+            }
+            """;
+
+        var result = NyxIdApiAccessResponseParser.ParseUserServiceAuthorization(response);
+
+        result.Succeeded.Should().BeTrue();
+        result.Value.Should().BeEquivalentTo(new NyxIdUserServiceAuthorizationEvidence(
+            "service-alpha",
+            "credential-alpha",
+            true,
+            NyxIdUserServiceCredentialStatus.Active,
+            NyxIdOAuthConnectionStatus.Active,
+            ["read:user", "repo"],
+            DateTimeOffset.Parse("2026-08-10T07:00:00Z")));
+    }
+
+    [Theory]
+    [InlineData("\"expired\"", NyxIdOAuthConnectionStatus.Expired)]
+    [InlineData("null", NyxIdOAuthConnectionStatus.Unspecified)]
+    public void ParseUserServiceAuthorization_ShouldPreserveNonActiveConnectionStatus(
+        string connectionStatus,
+        NyxIdOAuthConnectionStatus expected)
+    {
+        var response = $$"""
+            {
+              "id": "service-alpha",
+              "api_key_id": "credential-alpha",
+              "status": "active",
+              "is_active": true,
+              "connected": true,
+              "connection_status": {{connectionStatus}},
+              "granted_scopes": ["repo"],
+              "last_authorized_at": "2026-08-10T07:00:00Z"
+            }
+            """;
+
+        var result = NyxIdApiAccessResponseParser.ParseUserServiceAuthorization(response);
+
+        result.Succeeded.Should().BeTrue();
+        result.Value!.OAuthConnectionStatus.Should().Be(expected);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(",\"connection_status\":\"unknown\"")]
+    public void ParseUserServiceAuthorization_WithoutTypedConnectionStatus_ShouldFailClosed(
+        string injectedConnectionStatus)
+    {
+        var response = $$"""
+            {
+              "id": "service-alpha",
+              "api_key_id": "credential-alpha",
+              "status": "active",
+              "is_active": true,
+              "connected": true,
+              "granted_scopes": ["repo"],
+              "last_authorized_at": "2026-08-10T07:00:00Z"
+              {{injectedConnectionStatus}}
+            }
+            """;
+
+        var result = NyxIdApiAccessResponseParser.ParseUserServiceAuthorization(response);
+
+        result.Succeeded.Should().BeFalse();
+        result.Failure.Should().Be(new NyxIdApiAccessFailure(
+            NyxIdApiAccessFailureKind.MalformedResponse,
+            "nyxid_user_service_authorization_response_malformed"));
+    }
+
+    [Fact]
+    public void ParseAgentApiKey_CurrentReadContract_ShouldPreserveFactsWithoutInventingLineage()
+    {
+        const string response = """
+            {
+              "id": "key-alpha",
+              "name": "Codex Key",
+              "scopes": "proxy account:read",
+              "platform": "codex",
+              "is_active": true,
+              "allowed_service_ids": ["service-alpha"],
+              "allow_all_services": false,
+              "allowed_node_ids": [],
+              "allow_all_nodes": false,
+              "created_at": "2026-08-10T07:00:00Z",
+              "future_safe_field": { "authority_source": "api_keys" },
+              "note": "Bearer",
+              "short_key_hint": "nyxid_ag_short"
+            }
+            """;
+
+        var result = NyxIdApiAccessResponseParser.ParseAgentApiKey(response);
+
+        result.Succeeded.Should().BeTrue();
+        result.Value.Should().BeEquivalentTo(new NyxIdAgentApiKeyEvidence(
+            "key-alpha",
+            "Codex Key",
+            ["proxy", "account:read"],
+            "codex",
+            true,
+            ["service-alpha"],
+            false,
+            [],
+            false,
+            DateTimeOffset.Parse("2026-08-10T07:00:00Z"),
+            null));
+    }
+
+    [Fact]
+    public void ParseAgentApiKey_DirectCreateVersionContract_ShouldAcceptNullPredecessor()
+    {
+        const string response = """
+            {
+              "id": "key-alpha",
+              "name": "Codex Key",
+              "scopes": "proxy",
+              "platform": "codex",
+              "is_active": true,
+              "allowed_service_ids": ["service-alpha"],
+              "allow_all_services": false,
+              "allowed_node_ids": [],
+              "allow_all_nodes": false,
+              "created_at": "2026-08-10T07:00:00Z",
+              "rotation_predecessor_id": null,
+              "state_version": 1,
+              "updated_at": "2026-08-10T07:00:00Z"
+            }
+            """;
+
+        var result = NyxIdApiAccessResponseParser.ParseAgentApiKey(response);
+
+        result.Succeeded.Should().BeTrue();
+        result.Value!.VersionEvidence.Should().Be(new NyxIdApiKeyVersionEvidence(
+            null,
+            1,
+            DateTimeOffset.Parse("2026-08-10T07:00:00Z")));
+    }
+
+    [Fact]
+    public void ParseAgentApiKey_VersionedRotationContract_ShouldPreserveTypedLineage()
+    {
+        const string response = """
+            {
+              "id": "key-beta",
+              "name": "Codex Key",
+              "scopes": "proxy",
+              "platform": "codex",
+              "is_active": true,
+              "allowed_service_ids": [],
+              "allow_all_services": false,
+              "allowed_node_ids": [],
+              "allow_all_nodes": false,
+              "created_at": "2026-08-10T07:00:00Z",
+              "rotation_predecessor_id": "key-alpha",
+              "state_version": 2,
+              "updated_at": "2026-08-10T07:00:01Z"
+            }
+            """;
+
+        var result = NyxIdApiAccessResponseParser.ParseAgentApiKey(response);
+
+        result.Succeeded.Should().BeTrue();
+        result.Value!.VersionEvidence.Should().Be(new NyxIdApiKeyVersionEvidence(
+            "key-alpha",
+            2,
+            DateTimeOffset.Parse("2026-08-10T07:00:01Z")));
+    }
+
+    [Theory]
+    [InlineData("\"full_key\":\"nyxid_ag_secret\",")]
+    [InlineData("\"ignored\":{\"access_token\":\"nested-secret\"},")]
+    [InlineData("\"ignored\":{\"AccessToken\":\"nested-secret\"},")]
+    [InlineData("\"Authorization\":\"Bearer nested-secret\",")]
+    [InlineData("\"note\":\"Bearer secret-in-innocuous-field\",")]
+    [InlineData("\"note\":\"nyxid_ag_1234567890abcdef\",")]
+    [InlineData("\"ignored\":{\"note\":\"Bearer nested-secret-value\"},")]
+    [InlineData("\"ignored\":[\"safe\",\"nyxid_ag_1234567890abcdef\"],")]
+    [InlineData("\"api_key\":\"nested-secret\",")]
+    [InlineData("\"token\":\"nested-secret\",")]
+    [InlineData("\"rotation_predecessor_id\":\"key-old\",")]
+    public void ParseAgentApiKey_SecretOrPartialLineage_ShouldFailClosed(string injectedField)
+    {
+        var response = $$"""
+            {
+              {{injectedField}}
+              "id": "key-alpha",
+              "name": "Codex Key",
+              "scopes": "proxy",
+              "is_active": true,
+              "allowed_service_ids": [],
+              "allow_all_services": false,
+              "allowed_node_ids": [],
+              "allow_all_nodes": false,
+              "created_at": "2026-08-10T07:00:00Z"
+            }
+            """;
+
+        var result = NyxIdApiAccessResponseParser.ParseAgentApiKey(response);
+
+        result.Succeeded.Should().BeFalse();
+        result.Value.Should().BeNull();
+        result.Failure.Should().Be(new NyxIdApiAccessFailure(
+            NyxIdApiAccessFailureKind.MalformedResponse,
+            "nyxid_agent_api_key_response_malformed"));
+        result.ToString().Should().NotContain("nyxid_ag_secret");
+    }
+
+    [Fact]
+    public async Task Client_ExactActionEvidenceReads_ShouldUseResourceSpecificGetRoutes()
+    {
+        var handler = new RecordingHandler();
+        using var client = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example/" },
+            new HttpClient(handler),
+            NullLogger<NyxIdApiClient>.Instance);
+
+        await client.GetServiceAsync("bearer-secret", "service-alpha", CancellationToken.None);
+        await client.GetApiKeyAsync("bearer-secret", "key-alpha", CancellationToken.None);
+
+        handler.Requests.Select(static request => (request.Method, request.Uri)).Should().Equal(
+            (HttpMethod.Get, "https://nyx.example/api/v1/keys/service-alpha"),
+            (HttpMethod.Get, "https://nyx.example/api/v1/api-keys/key-alpha"));
+        handler.Requests.Should().OnlyContain(static request =>
+            request.Authorization == "Bearer bearer-secret" && request.Body == null);
     }
 
     [Theory]
@@ -387,6 +752,7 @@ public sealed class NyxIdApiAccessContractTests
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
+                ["Aevatar:NyxId:InternalApiBaseUrl"] = " ",
                 ["Aevatar:NyxId:ApiBaseUrl"] = " https://api.nyx.test/ ",
                 ["Aevatar:NyxId:Authority"] = "https://authority.nyx.test",
                 ["Cli:App:NyxId:Authority"] = "https://cli.nyx.test",
@@ -401,6 +767,120 @@ public sealed class NyxIdApiAccessContractTests
         provider.GetRequiredService<NyxIdToolOptions>().BaseUrl.Should().Be("https://api.nyx.test/");
         provider.GetRequiredService<NyxIdApiClient>().Should().NotBeNull();
         provider.GetRequiredService<INyxIdApiClientFactory>().CreateClient().Should().NotBeNull();
+        provider.GetRequiredService<INyxIdActionEvidenceReadPort>()
+            .Should().BeOfType<NyxIdActionEvidenceReadPort>();
+    }
+
+    [Fact]
+    public void AddNyxIdApiAccess_ShouldSeparateInternalTransportPublicApiAndAuthority()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Aevatar:NyxId:InternalApiBaseUrl"] = " http://nyxid.internal:3001/ ",
+                ["Aevatar:NyxId:ApiBaseUrl"] = "https://api.nyx.test",
+                ["Aevatar:NyxId:Authority"] = "https://authority.nyx.test",
+                [NyxIdTransportFallbackPolicy.TimeoutSecondsConfigurationKey] = "7",
+            })
+            .Build();
+        var services = new ServiceCollection();
+
+        services.AddNyxIdApiAccess(configuration);
+
+        using var provider = services.BuildServiceProvider();
+        var options = provider.GetRequiredService<NyxIdToolOptions>();
+        options.BaseUrl.Should().Be("http://nyxid.internal:3001/");
+        options.InternalApiBaseUrl.Should().Be("http://nyxid.internal:3001/");
+        options.ApiBaseUrl.Should().Be("https://api.nyx.test");
+        options.Authority.Should().Be("https://authority.nyx.test");
+        options.PublicTransportFallbackBaseUrl.Should().Be("https://api.nyx.test");
+        options.InternalApiFallbackTimeoutSeconds.Should().Be(7);
+        options.EffectiveTransportBaseUrl.Should().Be("http://nyxid.internal:3001/");
+        options.EffectiveApiBaseUrl.Should().Be("https://api.nyx.test");
+        options.EffectiveAuthority.Should().Be("https://authority.nyx.test");
+    }
+
+    [Fact]
+    public void AddNyxIdApiAccess_WithInternalAndAuthorityButNoApi_ShouldFailClosedForPublicRest()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Aevatar:NyxId:InternalApiBaseUrl"] = "http://nyxid.internal:3001",
+                ["Aevatar:NyxId:Authority"] = "https://authority.nyx.test",
+            })
+            .Build();
+        var services = new ServiceCollection();
+
+        services.AddNyxIdApiAccess(configuration);
+
+        using var provider = services.BuildServiceProvider();
+        var options = provider.GetRequiredService<NyxIdToolOptions>();
+        options.InternalApiBaseUrl.Should().Be("http://nyxid.internal:3001");
+        options.EffectiveTransportBaseUrl.Should().Be("http://nyxid.internal:3001");
+        options.ApiBaseUrl.Should().BeNull();
+        options.EffectiveApiBaseUrl.Should().BeNull();
+        options.Authority.Should().Be("https://authority.nyx.test");
+        options.EffectiveAuthority.Should().Be("https://authority.nyx.test");
+        options.PublicTransportFallbackBaseUrl.Should().BeNull();
+    }
+
+    [Fact]
+    public void NyxIdToolOptions_WithDedicatedInternalTransport_ShouldNotExposeItAsPublicEndpoint()
+    {
+        var options = new NyxIdToolOptions
+        {
+            BaseUrl = "http://legacy-public.example.test",
+            InternalApiBaseUrl = "http://nyxid.internal:3001",
+        };
+
+        options.EffectiveTransportBaseUrl.Should().Be("http://nyxid.internal:3001");
+        options.EffectiveApiBaseUrl.Should().BeNull();
+        options.EffectiveAuthority.Should().BeNull();
+    }
+
+    [Fact]
+    public void AddNyxIdApiAccess_ShouldTreatPublicBaseUrlPathAsCaseSensitive()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Aevatar:NyxId:InternalApiBaseUrl"] = "https://nyx.example.test/Internal",
+                ["Aevatar:NyxId:ApiBaseUrl"] = "https://nyx.example.test/internal",
+                ["Aevatar:NyxId:Authority"] = "https://authority.nyx.test",
+            })
+            .Build();
+        var services = new ServiceCollection();
+
+        services.AddNyxIdApiAccess(configuration);
+
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<NyxIdToolOptions>().PublicTransportFallbackBaseUrl.Should()
+            .Be("https://nyx.example.test/internal");
+    }
+
+    [Fact]
+    public void AddNyxIdTools_WithoutInternalTransport_ShouldUsePublicApiWithoutFallback()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Aevatar:NyxId:ApiBaseUrl"] = " https://api.nyx.test/ ",
+                ["Aevatar:NyxId:Authority"] = " https://authority.nyx.test/ ",
+            })
+            .Build();
+        var services = new ServiceCollection();
+
+        services.AddNyxIdTools(configuration, options =>
+            options.ProxyFileArtifactMaxBytes = 12_345);
+
+        using var provider = services.BuildServiceProvider();
+        var options = provider.GetRequiredService<NyxIdToolOptions>();
+        options.BaseUrl.Should().Be("https://api.nyx.test/");
+        options.ApiBaseUrl.Should().Be("https://api.nyx.test/");
+        options.Authority.Should().Be("https://authority.nyx.test/");
+        options.PublicTransportFallbackBaseUrl.Should().BeNull();
+        options.ProxyFileArtifactMaxBytes.Should().Be(12_345);
     }
 
     [Theory]
@@ -417,7 +897,10 @@ public sealed class NyxIdApiAccessContractTests
         services.AddNyxIdApiAccess(configuration);
 
         using var provider = services.BuildServiceProvider();
-        provider.GetRequiredService<NyxIdToolOptions>().BaseUrl.Should().Be(value);
+        var options = provider.GetRequiredService<NyxIdToolOptions>();
+        options.BaseUrl.Should().Be(value);
+        options.ApiBaseUrl.Should().Be(value);
+        options.Authority.Should().Be(value);
     }
 
     [Fact]
@@ -427,7 +910,6 @@ public sealed class NyxIdApiAccessContractTests
         services.AddNyxIdTools(options =>
         {
             options.BaseUrl = "https://tools-first.test";
-            options.SandboxServiceSlug = "sandbox-tools-first";
             options.EnableSshExecTool = true;
             options.ProxyFileArtifactMaxBytes = 42_000_000;
         });
@@ -437,7 +919,6 @@ public sealed class NyxIdApiAccessContractTests
         using var provider = services.BuildServiceProvider();
         var options = provider.GetRequiredService<NyxIdToolOptions>();
         options.BaseUrl.Should().Be("https://api-later.test");
-        options.SandboxServiceSlug.Should().Be("sandbox-tools-first");
         options.EnableSshExecTool.Should().BeTrue();
         options.ProxyFileArtifactMaxBytes.Should().Be(42_000_000);
         AssertApiAccessRegistrationsAreSingle(services);
@@ -451,7 +932,6 @@ public sealed class NyxIdApiAccessContractTests
 
         services.AddNyxIdTools(options =>
         {
-            options.SandboxServiceSlug = "sandbox-tools-later";
             options.EnableManagedCodexExecTool = true;
             options.ProxyFileArtifactMaxBytes = 37_000_000;
         });
@@ -459,7 +939,6 @@ public sealed class NyxIdApiAccessContractTests
         using var provider = services.BuildServiceProvider();
         var options = provider.GetRequiredService<NyxIdToolOptions>();
         options.BaseUrl.Should().Be("https://api-first.test");
-        options.SandboxServiceSlug.Should().Be("sandbox-tools-later");
         options.EnableManagedCodexExecTool.Should().BeTrue();
         options.ProxyFileArtifactMaxBytes.Should().Be(37_000_000);
         AssertApiAccessRegistrationsAreSingle(services);
@@ -487,6 +966,9 @@ public sealed class NyxIdApiAccessContractTests
         services.Count(static descriptor => descriptor.ServiceType == typeof(NyxIdApiClient))
             .Should().Be(2);
         services.Count(static descriptor => descriptor.ServiceType == typeof(INyxIdApiClientFactory))
+            .Should().Be(1);
+        services.Count(static descriptor =>
+                descriptor.ServiceType == typeof(INyxIdActionEvidenceReadPort))
             .Should().Be(1);
     }
 

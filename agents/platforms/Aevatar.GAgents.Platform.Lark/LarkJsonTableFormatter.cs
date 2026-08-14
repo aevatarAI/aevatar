@@ -17,6 +17,7 @@ public static class LarkJsonTableFormatter
     private const int MaxHeaderLength = 120;
     private const int MaxTableTextLength = 24_000;
     private const int MaxDepth = 8;
+    private const int KeyValueIndentSize = 4;
     private const string TruncationMarker = "...[truncated]";
 
     public static bool ContainsConvertibleJson(string? text) => Parse(text).HasTables;
@@ -37,7 +38,7 @@ public static class LarkJsonTableFormatter
         {
             return new LarkJsonTablePresentation(
             [
-                new LarkJsonTablePart(BuildTable(completeJson), NativeEligible: true),
+                BuildTablePart(completeJson, nativeEligible: true),
             ]);
         }
 
@@ -55,9 +56,7 @@ public static class LarkJsonTableFormatter
                     TryParseJson(fencedContent, requireContainer: false, out var fencedJson))
                 {
                     AppendText(parts, source[textStart..cursor]);
-                    parts.Add(new LarkJsonTablePart(
-                        BuildTable(fencedJson),
-                        NativeEligible: tableCount < MaxNativeTables));
+                    parts.Add(BuildTablePart(fencedJson, tableCount < MaxNativeTables));
                     tableCount++;
                     textStart = fenceEnd;
                 }
@@ -72,9 +71,7 @@ public static class LarkJsonTableFormatter
                 if (TryParseJson(inlineContent, requireContainer: true, out var inlineJson))
                 {
                     AppendText(parts, source[textStart..cursor]);
-                    parts.Add(new LarkJsonTablePart(
-                        BuildTable(inlineJson),
-                        NativeEligible: tableCount < MaxNativeTables));
+                    parts.Add(BuildTablePart(inlineJson, tableCount < MaxNativeTables));
                     tableCount++;
                     textStart = inlineEnd;
                 }
@@ -88,9 +85,7 @@ public static class LarkJsonTableFormatter
                 TryParseJson(source[cursor..containerEnd], requireContainer: true, out var containerJson))
             {
                 AppendText(parts, source[textStart..cursor]);
-                parts.Add(new LarkJsonTablePart(
-                    BuildTable(containerJson),
-                    NativeEligible: tableCount < MaxNativeTables));
+                parts.Add(BuildTablePart(containerJson, tableCount < MaxNativeTables));
                 tableCount++;
                 textStart = containerEnd;
                 cursor = containerEnd;
@@ -105,6 +100,227 @@ public static class LarkJsonTableFormatter
 
         AppendText(parts, source[textStart..]);
         return new LarkJsonTablePresentation(parts);
+    }
+
+    private static LarkJsonTablePart BuildTablePart(JsonElement root, bool nativeEligible) =>
+        new(
+            BuildTable(root),
+            RenderKeyValueText(root),
+            nativeEligible);
+
+    private static string RenderKeyValueText(JsonElement root)
+    {
+        var builder = new StringBuilder();
+        AppendKeyValueElement(builder, key: null, root, depth: 0);
+        return Truncate(builder.ToString().TrimEnd(), MaxTableTextLength);
+    }
+
+    private static void AppendKeyValueElement(
+        StringBuilder builder,
+        string? key,
+        JsonElement element,
+        int depth)
+    {
+        if (builder.Length >= MaxTableTextLength)
+            return;
+
+        if (element.ValueKind == JsonValueKind.String &&
+            TryParseJson(element.GetString() ?? string.Empty, requireContainer: true, out var embeddedJson))
+        {
+            element = embeddedJson;
+        }
+
+        if (depth >= MaxDepth)
+        {
+            AppendKeyValueLine(builder, depth, key ?? "Value", "(nested value)");
+            return;
+        }
+
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                AppendKeyValueObject(builder, key, element, depth);
+                break;
+            case JsonValueKind.Array:
+                AppendKeyValueArray(builder, key, element, depth);
+                break;
+            case JsonValueKind.String when ContainsLineBreak(element.GetString()):
+                // Multiline text (card bodies, approval descriptions, …) loses
+                // its meaning when line breaks are collapsed into "; ". Render
+                // it as an indented block under the key instead.
+                AppendKeyValueMultilineBlock(builder, depth, key ?? "Value", element.GetString() ?? string.Empty);
+                break;
+            default:
+                AppendKeyValueLine(builder, depth, key ?? "Value", FormatKeyValueScalar(element));
+                break;
+        }
+    }
+
+    private static bool ContainsLineBreak(string? value) =>
+        value is not null && (value.Contains('\n') || value.Contains('\r'));
+
+    private static void AppendKeyValueMultilineBlock(
+        StringBuilder builder,
+        int depth,
+        string key,
+        string value)
+    {
+        AppendKeyValueHeader(builder, depth, key);
+        var lines = value
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace('\r', '\n')
+            .Split('\n');
+        foreach (var line in lines)
+        {
+            if (builder.Length >= MaxTableTextLength)
+                return;
+
+            var trimmed = line.TrimEnd();
+            if (trimmed.Length == 0)
+            {
+                builder.AppendLine();
+                continue;
+            }
+
+            AppendKeyValueIndent(builder, depth + 1);
+            builder.AppendLine(trimmed);
+        }
+    }
+
+    private static void AppendKeyValueObject(
+        StringBuilder builder,
+        string? key,
+        JsonElement element,
+        int depth)
+    {
+        var properties = element.EnumerateObject().Take(MaxRows + 1).ToArray();
+        if (properties.Length == 0)
+        {
+            AppendKeyValueLine(builder, depth, key ?? "Value", "(empty object)");
+            return;
+        }
+
+        var childDepth = depth;
+        if (!string.IsNullOrWhiteSpace(key))
+        {
+            AppendKeyValueHeader(builder, depth, key);
+            childDepth++;
+        }
+
+        foreach (var property in properties.Take(MaxRows))
+        {
+            AppendKeyValueElement(builder, property.Name, property.Value, childDepth);
+            if (builder.Length >= MaxTableTextLength)
+                return;
+        }
+
+        if (properties.Length > MaxRows)
+        {
+            AppendKeyValueLine(
+                builder,
+                childDepth,
+                "...",
+                $"More than {MaxRows} fields; remaining fields were not shown.");
+        }
+    }
+
+    private static void AppendKeyValueArray(
+        StringBuilder builder,
+        string? key,
+        JsonElement element,
+        int depth)
+    {
+        var items = element.EnumerateArray().Take(MaxRows + 1).ToArray();
+        if (items.Length == 0)
+        {
+            AppendKeyValueLine(builder, depth, key ?? "Value", "(empty array)");
+            return;
+        }
+
+        var itemDepth = depth;
+        if (!string.IsNullOrWhiteSpace(key))
+        {
+            AppendKeyValueHeader(builder, depth, key);
+            itemDepth++;
+        }
+
+        for (var index = 0; index < Math.Min(items.Length, MaxRows); index++)
+        {
+            if (index > 0)
+                AppendKeyValueBlankLine(builder);
+
+            AppendKeyValueLine(
+                builder,
+                itemDepth,
+                "Item",
+                (index + 1).ToString(CultureInfo.InvariantCulture));
+            AppendKeyValueElement(builder, key: null, items[index], itemDepth + 1);
+            if (builder.Length >= MaxTableTextLength)
+                return;
+        }
+
+        if (items.Length > MaxRows)
+        {
+            AppendKeyValueLine(
+                builder,
+                itemDepth,
+                "...",
+                $"More than {MaxRows} items; remaining items were not shown.");
+        }
+    }
+
+    private static string FormatKeyValueScalar(JsonElement element) =>
+        NormalizeKeyValueLineText(
+            element.ValueKind switch
+            {
+                JsonValueKind.String => element.GetString() ?? string.Empty,
+                JsonValueKind.Number => element.GetRawText(),
+                JsonValueKind.True => "true",
+                JsonValueKind.False => "false",
+                JsonValueKind.Null => "(null)",
+                JsonValueKind.Undefined => "(undefined)",
+                _ => string.Empty,
+            },
+            string.Empty);
+
+    private static void AppendKeyValueHeader(StringBuilder builder, int depth, string key)
+    {
+        AppendKeyValueIndent(builder, depth);
+        builder
+            .Append(NormalizeKeyValueLineText(key, "Value"))
+            .AppendLine(":");
+    }
+
+    private static void AppendKeyValueLine(
+        StringBuilder builder,
+        int depth,
+        string key,
+        string value)
+    {
+        AppendKeyValueIndent(builder, depth);
+        builder
+            .Append(NormalizeKeyValueLineText(key, "Value"))
+            .Append(": ")
+            .AppendLine(NormalizeKeyValueLineText(value, string.Empty));
+    }
+
+    private static void AppendKeyValueIndent(StringBuilder builder, int depth) =>
+        builder.Append(' ', Math.Max(0, depth) * KeyValueIndentSize);
+
+    private static void AppendKeyValueBlankLine(StringBuilder builder)
+    {
+        if (builder.Length > 1 && builder[^1] == '\n' && builder[^2] != '\n')
+            builder.AppendLine();
+    }
+
+    private static string NormalizeKeyValueLineText(string? value, string fallback)
+    {
+        var normalized = (value ?? string.Empty)
+            .Replace("\r\n", "; ", StringComparison.Ordinal)
+            .Replace("\r", "; ", StringComparison.Ordinal)
+            .Replace("\n", "; ", StringComparison.Ordinal)
+            .Trim();
+        return normalized.Length == 0 ? fallback : normalized;
     }
 
     private static LarkJsonTable BuildTable(JsonElement root)
@@ -627,7 +843,7 @@ internal sealed record LarkJsonTablePresentation(IReadOnlyList<LarkJsonPresentat
                     builder.Append(text.Text);
                     break;
                 case LarkJsonTablePart table:
-                    AppendSeparated(builder, table.Table.RenderKeyValueText());
+                    AppendSeparated(builder, table.KeyValueText);
                     break;
             }
         }
@@ -662,6 +878,7 @@ internal sealed record LarkJsonTextPart(string Text) : LarkJsonPresentationPart;
 
 internal sealed record LarkJsonTablePart(
     LarkJsonTable Table,
+    string KeyValueText,
     bool NativeEligible) : LarkJsonPresentationPart;
 
 internal sealed record LarkJsonTable(
@@ -709,90 +926,6 @@ internal sealed record LarkJsonTable(
         };
     }
 
-    public string RenderKeyValueText()
-    {
-        var builder = new StringBuilder();
-        if (!string.IsNullOrWhiteSpace(Title))
-            AppendKeyValue(builder, "Section", Title);
-
-        if (IsFieldValueTable())
-        {
-            foreach (var row in Rows)
-                AppendKeyValue(builder, GetCell(row, 0), GetCell(row, 1));
-            return builder.ToString().TrimEnd();
-        }
-
-        if (IsItemFieldValueTable())
-        {
-            string? currentItem = null;
-            foreach (var row in Rows)
-            {
-                var item = GetCell(row, 0);
-                if (!string.Equals(item, currentItem, StringComparison.Ordinal))
-                {
-                    AppendRowSeparator(builder);
-                    AppendKeyValue(builder, "Item", item);
-                    currentItem = item;
-                }
-                AppendKeyValue(builder, GetCell(row, 1), GetCell(row, 2));
-            }
-            return builder.ToString().TrimEnd();
-        }
-
-        var hasItemColumn = Columns.Any(static column =>
-            string.Equals(column.DisplayName, "Item", StringComparison.OrdinalIgnoreCase));
-        for (var rowIndex = 0; rowIndex < Rows.Count; rowIndex++)
-        {
-            if (rowIndex > 0 || (builder.Length > 0 && Rows.Count > 1))
-                AppendRowSeparator(builder);
-            if (Rows.Count > 1 && !hasItemColumn)
-                AppendKeyValue(builder, "Item", (rowIndex + 1).ToString(CultureInfo.InvariantCulture));
-
-            var row = Rows[rowIndex];
-            for (var columnIndex = 0; columnIndex < Columns.Count; columnIndex++)
-                AppendKeyValue(builder, Columns[columnIndex].DisplayName, GetCell(row, columnIndex));
-        }
-
-        return builder.ToString().TrimEnd();
-    }
-
-    private bool IsFieldValueTable() =>
-        Columns.Count == 2 &&
-        string.Equals(Columns[0].DisplayName, "Field", StringComparison.Ordinal) &&
-        string.Equals(Columns[1].DisplayName, "Value", StringComparison.Ordinal);
-
-    private bool IsItemFieldValueTable() =>
-        Columns.Count == 3 &&
-        string.Equals(Columns[0].DisplayName, "Item", StringComparison.Ordinal) &&
-        string.Equals(Columns[1].DisplayName, "Field", StringComparison.Ordinal) &&
-        string.Equals(Columns[2].DisplayName, "Value", StringComparison.Ordinal);
-
-    private static string GetCell(IReadOnlyList<string> row, int index) =>
-        index < row.Count ? row[index] ?? string.Empty : string.Empty;
-
-    private static void AppendKeyValue(StringBuilder builder, string? key, string? value)
-    {
-        builder
-            .Append(NormalizeLineText(key, "Value"))
-            .Append(": ")
-            .AppendLine(NormalizeLineText(value, string.Empty));
-    }
-
-    private static void AppendRowSeparator(StringBuilder builder)
-    {
-        if (builder.Length > 0 && builder[^1] == '\n')
-            builder.AppendLine();
-    }
-
-    private static string NormalizeLineText(string? value, string fallback)
-    {
-        var normalized = (value ?? string.Empty)
-            .Replace("\r\n", "; ", StringComparison.Ordinal)
-            .Replace("\r", "; ", StringComparison.Ordinal)
-            .Replace("\n", "; ", StringComparison.Ordinal)
-            .Trim();
-        return normalized.Length == 0 ? fallback : normalized;
-    }
 }
 
 internal sealed record LarkJsonTableColumn(string Key, string DisplayName);

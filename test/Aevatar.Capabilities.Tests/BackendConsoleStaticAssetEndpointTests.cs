@@ -38,7 +38,6 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         html.Should().Contain(
             "\"resources\":[\"https://api.example.test/api/v1/proxy/s/aevatar\",\"https://api.example.test/api/v1/proxy/s/ornn-api\"]");
         html.Should().NotContain("__BACKEND_CONSOLE_CONFIG__");
-        html.Should().NotContain("https://nyx.chrono-ai.fun");
         html.Should().NotContain("https://nyx-api.chrono-ai.fun");
         html.Should().NotContain("37a93189-2734-406e-bca1-7dbdf25c5a53");
         if (path == "/cqrs")
@@ -51,6 +50,9 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         {
             html.Should().Contain("var NYX_API=BACKEND_CONSOLE_CONFIG.nyxidApi");
             html.Should().Contain("fetch(NYX_API+'/api/v1/admin/users");
+            html.Should().Contain("var FLEET_RUN_WINDOW=500;");
+            html.Should().Contain("Object.keys(NYX_USERS).forEach(function(sid){ scopeIds[sid]=1; });");
+            html.Should().Contain("/api/workflow/observatory/runs?scope=__all__&take='+FLEET_RUN_WINDOW");
             html.Should().NotContain("var NYX_AUTHORITY=BACKEND_CONSOLE_CONFIG.authority");
             // ADR-0018: only the deliberately narrowed voice-realtime purpose keeps
             // explicit resources; the session login sends none.
@@ -72,8 +74,15 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             html.Should().Contain("class=\"site-header\"");
             html.Should().Contain("id=\"composerForm\"");
             html.Should().Contain("生产环境 · 操作会影响真实数据，高风险操作需要确认");
-            html.Should().Contain("app.js?v=20260807-m40-studio-shell");
-            html.Should().Contain("styles.css?v=20260807-m40-studio-shell");
+            html.Should().Contain("app.js?v=20260814-m46-nyxid-api-routing");
+            html.Should().Contain("styles.css?v=20260814-m46-nyxid-api-routing");
+            html.Should().Contain("id=\"traceViewButton\"");
+            html.Should().Contain("id=\"requestTracePanel\"");
+            html.Should().Contain("Operation ledger");
+            html.Should().Contain("id=\"traceOperationOverview\"");
+            html.Should().Contain("aria-label=\"Input、Model、Tools Duration 概览\"");
+            html.Should().Contain("id=\"traceOperationList\"");
+            html.Should().Contain("id=\"traceOperationSection\"");
             html.Should().NotContain("class=\"brand-mark\"");
             html.Should().NotContain("Aevatar Studio · 工作流实录");
             html.Should().NotContain("从意图到交付的真实对话");
@@ -105,6 +114,107 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             html.Should().Contain("requestAdminShellTokenRefresh(");
             html.Should().Contain("rejectedAccessToken");
         }
+    }
+
+    [Fact]
+    public async Task AdminShell_Fleet_ShouldIncludeNyxIdUsersWithoutRuns()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+            const start = html.indexOf('function mapFleetCompanies(runs){');
+            const end = html.indexOf('function loadFleet(rerender){', start);
+            assert.notEqual(start, -1, 'fleet mapper must exist');
+            assert.notEqual(end, -1, 'fleet loader must follow mapper');
+
+            const context = {
+              NYX_USERS: {
+                'scope-active': {display_name:'Active Org',email:'active@example.test'},
+                'scope-idle': {display_name:'Idle Org',email:'idle@example.test'}
+              },
+              FLEET_RUNS_BY_SCOPE: {},
+              fleetRunActive(status){ return status === 'running'; },
+              fleetRunFailed(status){ return status === 'failed' || status === 'timed_out'; },
+              fleetRunSuccess(status){ return status === 'completed'; },
+              fleetHealth(total, failed){ return total ? (failed ? 'red' : 'green') : 'grey'; },
+              fleetAgoMins(){ return null; },
+              fleetAgo(){ return '—'; },
+              fleetOrgProfile(scopeId){
+                const user = context.NYX_USERS[scopeId];
+                return {name:user.display_name,email:user.email,avatar:null,isAdmin:false};
+              }
+            };
+            vm.createContext(context);
+            vm.runInContext(html.slice(start, end), context);
+
+            const companies = context.mapFleetCompanies([{
+              id:'run-active',name:'workflow-active',status:'completed',scope:'scope-active',
+              updatedAtUtc:'2026-08-09T00:00:00Z'
+            }]);
+            assert.equal(companies.length, 2);
+            const active = companies.find(company => company.id === 'scope-active');
+            const idle = companies.find(company => company.id === 'scope-idle');
+            assert.equal(active.runsTotal, 1);
+            assert.equal(active.isEmpty, false);
+            assert.equal(idle.runsTotal, 0);
+            assert.equal(idle.isEmpty, true);
+            assert.deepEqual(Object.keys(context.FLEET_RUNS_BY_SCOPE), ['scope-active']);
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
+    public async Task AdminShell_Fleet_ShouldNotBlockPlatformAdminWhenNyxIdDirectoryForbids()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+            const start = html.indexOf('function loadFleet(rerender){');
+            const end = html.indexOf('/* 集团 KPI', start);
+            assert.notEqual(start, -1, 'fleet loader must exist');
+            assert.notEqual(end, -1, 'fleet KPI must follow loader');
+
+            const calls = [];
+            const context = {
+              Promise, Date, calls,
+              FLEET_ERR:null, FLEET_FORBIDDEN:false, FLEET_LOADING:false, FLEET_LOADED:false, FLEET_STAMP:0,
+              FLEET_DIRECTORY_STATUS:'pending', FLEET_RUN_WINDOW:500, FLEET_COMPANIES:[], COMPANIES:[],
+              NYX_USERS_ATTEMPTED:false, NYX_USERS:{'stale-user':{}},
+              loadNyxUsers(){ return Promise.resolve({forbidden:true}); },
+              adminJson(url){ calls.push(url); return Promise.resolve([{scope:'scope-active'}]); },
+              mapFleetRuns(runs){ return runs; },
+              mapFleetCompanies(runs){ return runs.map(run => ({id:run.scope})); }
+            };
+            vm.createContext(context);
+            vm.runInContext(html.slice(start, end), context);
+
+            (async () => {
+              await context.loadFleet();
+              assert.equal(context.FLEET_FORBIDDEN, false, 'NyxID directory denial must not deny the board');
+              assert.equal(context.FLEET_ERR, null);
+              assert.equal(context.FLEET_LOADED, true);
+              assert.equal(context.FLEET_DIRECTORY_STATUS, 'forbidden');
+              assert.deepEqual(Object.keys(context.NYX_USERS), [], 'stale directory entries must be discarded');
+              assert.equal(context.FLEET_COMPANIES.length, 1);
+              assert.equal(context.FLEET_COMPANIES[0].id, 'scope-active');
+              assert.deepEqual(calls, ['/api/workflow/observatory/runs?scope=__all__&take=500']);
+            })().catch(error => { console.error(error); process.exitCode = 1; });
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
     }
 
     [Fact]
@@ -2637,6 +2747,130 @@ public sealed class BackendConsoleStaticAssetEndpointTests
                 "adminApi('/api/workflow/skills/'+encodeURIComponent(s.guid)+'/schedule'")
             .Should()
             .Contain("teamId:");
+    }
+
+    [Fact]
+    public async Task AdminShell_Schedules_ShouldLoadScopeOwnedTeamAutomationsAndUseCanonicalActions()
+    {
+        await using var app = await CreateAppAsync();
+        var admin = await app.GetTestClient().GetStringAsync("/admin");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+            const start = html.indexOf('var SCHEDULES_DATA=[];');
+            const end = html.indexOf('/* cron 预览', start);
+            assert.notEqual(start, -1, 'schedule state must exist');
+            assert.notEqual(end, -1, 'schedule preview must follow schedule actions');
+
+            const listCalls = [];
+            const actionCalls = [];
+            const current = {
+              scheduleId:'sch-current',displayName:'Current automation',cronExpression:'0 9 * * *',
+              timezone:'Asia/Singapore',enabled:true,scheduleKind:1,targetKind:1,
+              fireCount:6,failureCount:1,lastError:'',lastErrorCode:'',lastAuthorizationErrorCode:'',
+              teamAutomationLifecycleStatus:2,teamOwnerScopeId:'scope/alpha',teamId:'team-alpha',
+              teamOwnerMemberId:'m-alpha',stateVersion:17
+            };
+            const legacy = {
+              scheduleId:'sch-legacy',displayName:'Legacy generic',cronExpression:'0 8 * * *',
+              timezone:'UTC',enabled:true,scheduleKind:1,targetKind:1,fireCount:4,failureCount:2,
+              lastError:'legacy failure',lastErrorCode:'LEGACY_FAILURE'
+            };
+            const context = {
+              Promise, Date, JSON, encodeURIComponent,
+              ACCOUNT:{scope:'scope/alpha',admin:true},
+              adminJson(url) {
+                listCalls.push(url);
+                return Promise.resolve(url.includes('ownerKind=studio_member_automation')
+                  ? {items:[current]} : {items:[legacy]});
+              },
+              adminApi(url, options) { actionCalls.push({url,options}); return Promise.resolve({ok:true}); },
+              toast() {}, _rand(){ return 'nonce-alpha'; }, confirm(){ return true; },
+              setInterval(){ return 1; }, clearInterval() {}, document:{hidden:false}
+            };
+            vm.createContext(context);
+            vm.runInContext(html.slice(start, end), context);
+
+            (async () => {
+              await context.loadSchedules();
+              assert.deepEqual(listCalls, [
+                '/api/schedules?ownerKind=studio_member_automation&ownerScopeId=scope%2Falpha&take=200&includeTotalCount=true',
+                '/api/schedules?take=50'
+              ]);
+              assert.equal(context.SCHEDULES_DATA.length, 1);
+              assert.equal(context.SCHEDULES_DATA[0].ownerScopeId, 'scope/alpha');
+              assert.equal(context.SCHEDULES_DATA[0].teamId, 'team-alpha');
+              assert.equal(context.SCHEDULES_DATA[0].memberId, 'm-alpha');
+              assert.equal(context.SCHEDULES_LEGACY_DATA.length, 1);
+              assert.equal(context.SCHEDULES_LEGACY_DATA[0].legacy, true);
+
+              await context.schedAction('sch-current', 'pause');
+              assert.equal(actionCalls.length, 1);
+              assert.equal(actionCalls[0].url,
+                '/api/scopes/scope%2Falpha/teams/team-alpha/members/m-alpha/automations/sch-current/pause');
+              assert.equal(actionCalls[0].options.method, 'POST');
+              const body = JSON.parse(actionCalls[0].options.body);
+              assert.equal(body.operationId, 'admin-schedule-pause-nonce-alpha');
+              assert.equal(body.idempotencyKey,
+                'admin-schedule:sch-current:admin-schedule-pause-nonce-alpha');
+            })().catch(error => { console.error(error); process.exitCode = 1; });
+            """;
+
+        var result = await RunNodeAsync(script, admin);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+        admin.Should().Contain("历史 Generic 任务（只读）");
+        admin.Should().Contain("这些资源来自旧 Generic 调度入口，不是当前 Team/member automation");
+    }
+
+    [Fact]
+    public async Task AdminShell_Schedules_ShouldDistinguishCurrentFailuresFromHistoricalFailuresAndOverdueFires()
+    {
+        await using var app = await CreateAppAsync();
+        var admin = await app.GetTestClient().GetStringAsync("/admin");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+            const start = html.indexOf('var SCHEDULES_DATA=[];');
+            const end = html.indexOf('/* cron 预览', start);
+            const context = {Promise, Date, JSON, encodeURIComponent};
+            vm.createContext(context);
+            vm.runInContext(html.slice(start, end), context);
+
+            const recovered = context.mapSchedRow({
+              scheduleId:'recovered',displayName:'Recovered',enabled:true,
+              fireCount:6,failureCount:1,lastError:'',lastErrorCode:'',
+              lastAuthorizationErrorCode:'',teamAutomationLifecycleStatus:2
+            }, false);
+            const runFailed = context.mapSchedRow({
+              scheduleId:'run-failed',displayName:'Run failed',enabled:true,
+              fireCount:2,failureCount:1,lastError:'safe failure',lastErrorCode:'DISPATCH_FAILED',
+              teamAutomationLifecycleStatus:2
+            }, false);
+            const authorizationFailed = context.mapSchedRow({
+              scheduleId:'auth-failed',displayName:'Authorization failed',enabled:true,
+              fireCount:0,failureCount:0,lastAuthorizationErrorCode:'AUTH_REQUIRED',
+              teamAutomationLifecycleStatus:3
+            }, false);
+
+            assert.equal(recovered.currentFailure, false,
+              'a lifetime failure counter must not make a recovered schedule currently failed');
+            assert.equal(runFailed.currentFailure, true);
+            assert.equal(authorizationFailed.currentFailure, true);
+            context.SCHED_FILTER = 'failing';
+            assert.equal(context._schPass(recovered), false);
+            assert.equal(context._schPass(runFailed), true);
+            assert.equal(context._schPass(authorizationFailed), true);
+            assert.equal(context._schNext('2020-01-01T00:00:00Z'), '已逾期');
+            """;
+
+        var result = await RunNodeAsync(script, admin);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
     }
 
     [Fact]

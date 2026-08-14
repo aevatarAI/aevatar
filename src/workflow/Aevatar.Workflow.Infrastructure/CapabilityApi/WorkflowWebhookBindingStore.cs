@@ -1,0 +1,449 @@
+using System.Collections.Concurrent;
+using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Workflow.Abstractions;
+using Google.Protobuf;
+using Microsoft.Extensions.Options;
+using StackExchange.Redis;
+
+namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
+
+/// <summary>
+/// A webhook route binding managed as scope-owned DATA, not host deployment
+/// configuration. Static <see cref="WorkflowWebhookIngressOptions.Bindings"/>
+/// entries remain supported as an operator fallback, but adding a
+/// webhook-driven workflow must not require touching appsettings or
+/// redeploying the host: scope members register bindings through the
+/// management API and the ingress resolves them dynamically by route key.
+/// </summary>
+public sealed record WorkflowWebhookBindingRecord(
+    string RouteKey,
+    string ScopeId,
+    string WorkflowName,
+    string? SourceId,
+    string? PromptTemplate,
+    string? PromptJsonPath,
+    string? DeliveryIdHeader,
+    string? DeliveryIdJsonPath,
+    string HmacSecret,
+    string? HmacSignatureHeader,
+    string? HmacTimestampHeader,
+    int MaxTimestampSkewSeconds,
+    long UpdatedAtUnixMs,
+    string? DefinitionActorId = null,
+    string? TargetRevisionId = null,
+    string? PreviousHmacSecret = null,
+    string? TimeZoneId = null,
+    WorkflowCallerNyxIdAuthority? CallerAuthority = null,
+    WorkflowUnattendedEffectAuthorization? UnattendedEffectAuthorization = null,
+    DurableCallerCredentialRef? CallerDurableCredential = null)
+{
+    public WorkflowWebhookIngressBindingOptions ToBindingOptions() => new()
+    {
+        RouteKey = RouteKey,
+        SourceId = SourceId,
+        WorkflowName = WorkflowName,
+        DefinitionActorId = DefinitionActorId,
+        TargetRevisionId = TargetRevisionId,
+        ScopeId = ScopeId,
+        PromptTemplate = PromptTemplate,
+        PromptJsonPath = PromptJsonPath,
+        TimeZoneId = TimeZoneId,
+        DeliveryIdHeader = DeliveryIdHeader,
+        DeliveryIdJsonPath = DeliveryIdJsonPath,
+        HmacSecret = HmacSecret,
+        PreviousHmacSecret = PreviousHmacSecret,
+        HmacSignatureHeader = HmacSignatureHeader,
+        HmacTimestampHeader = HmacTimestampHeader,
+        MaxTimestampSkewSeconds = MaxTimestampSkewSeconds,
+    };
+}
+
+public interface IWorkflowWebhookBindingStore
+{
+    Task<WorkflowWebhookBindingRecord?> GetAsync(string routeKey, CancellationToken ct = default);
+
+    /// <summary>
+    /// Atomically creates a route or updates it when it is already owned by
+    /// the same scope. Returns false when another scope owns the route.
+    /// </summary>
+    Task<bool> TryPutOwnedAsync(WorkflowWebhookBindingRecord record, CancellationToken ct = default);
+
+    Task<WorkflowWebhookBindingPutResult> PutOwnedAsync(
+        WorkflowWebhookBindingRecord record,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Atomically removes a route only while it is still owned by the
+    /// expected scope. A concurrent delete-and-rebind can never remove the
+    /// replacement owner's binding.
+    /// </summary>
+    Task<bool> TryDeleteOwnedAsync(
+        string routeKey,
+        string scopeId,
+        CancellationToken ct = default);
+
+    Task<WorkflowWebhookBindingDeleteResult> DeleteOwnedAsync(
+        string routeKey,
+        string scopeId,
+        CancellationToken ct = default);
+
+    Task<IReadOnlyList<WorkflowWebhookBindingRecord>> ListByScopeAsync(string scopeId, CancellationToken ct = default);
+}
+
+public sealed record WorkflowWebhookBindingPutResult(
+    bool Succeeded,
+    WorkflowWebhookBindingRecord? PreviousRecord);
+
+public sealed record WorkflowWebhookBindingDeleteResult(
+    bool Succeeded,
+    WorkflowWebhookBindingRecord? RemovedRecord);
+
+internal sealed class InMemoryWorkflowWebhookBindingStore : IWorkflowWebhookBindingStore
+{
+    private readonly ConcurrentDictionary<string, WorkflowWebhookBindingRecord> _records =
+        new(StringComparer.Ordinal);
+
+    public Task<WorkflowWebhookBindingRecord?> GetAsync(string routeKey, CancellationToken ct = default)
+    {
+        _records.TryGetValue(routeKey, out var record);
+        return Task.FromResult(record is null ? null : CloneRecord(record));
+    }
+
+    public async Task<bool> TryPutOwnedAsync(
+        WorkflowWebhookBindingRecord record,
+        CancellationToken ct = default) => (await PutOwnedCoreAsync(record, ct)).Succeeded;
+
+    public Task<WorkflowWebhookBindingPutResult> PutOwnedAsync(
+        WorkflowWebhookBindingRecord record,
+        CancellationToken ct = default) => PutOwnedCoreAsync(record, ct);
+
+    private Task<WorkflowWebhookBindingPutResult> PutOwnedCoreAsync(
+        WorkflowWebhookBindingRecord record,
+        CancellationToken ct)
+    {
+        while (true)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (_records.TryGetValue(record.RouteKey, out var existing))
+            {
+                if (!string.Equals(existing.ScopeId, record.ScopeId, StringComparison.Ordinal))
+                    return Task.FromResult(new WorkflowWebhookBindingPutResult(false, null));
+
+                if (_records.TryUpdate(record.RouteKey, CloneRecord(record), existing))
+                    return Task.FromResult(new WorkflowWebhookBindingPutResult(true, CloneRecord(existing)));
+                continue;
+            }
+
+            if (_records.TryAdd(record.RouteKey, CloneRecord(record)))
+                return Task.FromResult(new WorkflowWebhookBindingPutResult(true, null));
+        }
+    }
+
+    public async Task<bool> TryDeleteOwnedAsync(
+        string routeKey,
+        string scopeId,
+        CancellationToken ct = default) => (await DeleteOwnedCoreAsync(routeKey, scopeId, ct)).Succeeded;
+
+    public Task<WorkflowWebhookBindingDeleteResult> DeleteOwnedAsync(
+        string routeKey,
+        string scopeId,
+        CancellationToken ct = default) => DeleteOwnedCoreAsync(routeKey, scopeId, ct);
+
+    private Task<WorkflowWebhookBindingDeleteResult> DeleteOwnedCoreAsync(
+        string routeKey,
+        string scopeId,
+        CancellationToken ct)
+    {
+        while (true)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (!_records.TryGetValue(routeKey, out var existing) ||
+                !string.Equals(existing.ScopeId, scopeId, StringComparison.Ordinal))
+            {
+                return Task.FromResult(new WorkflowWebhookBindingDeleteResult(false, null));
+            }
+
+            var removed = ((ICollection<KeyValuePair<string, WorkflowWebhookBindingRecord>>)_records)
+                .Remove(new KeyValuePair<string, WorkflowWebhookBindingRecord>(routeKey, existing));
+            if (removed)
+                return Task.FromResult(new WorkflowWebhookBindingDeleteResult(true, CloneRecord(existing)));
+        }
+    }
+
+    public Task<IReadOnlyList<WorkflowWebhookBindingRecord>> ListByScopeAsync(
+        string scopeId,
+        CancellationToken ct = default)
+    {
+        IReadOnlyList<WorkflowWebhookBindingRecord> result = _records.Values
+            .Where(record => string.Equals(record.ScopeId, scopeId, StringComparison.Ordinal))
+            .OrderBy(static record => record.RouteKey, StringComparer.Ordinal)
+            .Select(CloneRecord)
+            .ToArray();
+        return Task.FromResult(result);
+    }
+
+    private static WorkflowWebhookBindingRecord CloneRecord(WorkflowWebhookBindingRecord source) =>
+        source with
+        {
+            CallerAuthority = source.CallerAuthority?.Clone(),
+            UnattendedEffectAuthorization = source.UnattendedEffectAuthorization?.Clone(),
+            CallerDurableCredential = source.CallerDurableCredential?.Clone(),
+        };
+}
+
+internal sealed class RedisWorkflowWebhookBindingStore : IWorkflowWebhookBindingStore
+{
+    private readonly WorkflowWebhookReplayRedisConnection _connection;
+    private readonly IWorkflowWebhookBindingSecretCipher _secretCipher;
+    private readonly int _database;
+    private readonly string _keyPrefix;
+
+    public RedisWorkflowWebhookBindingStore(
+        WorkflowWebhookReplayRedisConnection connection,
+        IWorkflowWebhookBindingSecretCipher secretCipher,
+        IOptions<WorkflowWebhookIngressOptions> options)
+    {
+        _connection = connection;
+        _secretCipher = secretCipher;
+        _database = options.Value.RedisDatabase;
+        _keyPrefix = string.IsNullOrWhiteSpace(options.Value.RedisKeyPrefix)
+            ? "aevatar:workflow:webhook-replay"
+            : options.Value.RedisKeyPrefix.Trim();
+    }
+
+    private StackExchange.Redis.IDatabase Database => _connection.GetDatabase(_database);
+
+    public async Task<WorkflowWebhookBindingRecord?> GetAsync(string routeKey, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        var value = await Database.StringGetAsync(BindingKey(routeKey));
+        if (value.IsNullOrEmpty || !TryParseState((byte[])value!, out var state))
+            return null;
+
+        return FromState(state);
+    }
+
+    public async Task<bool> TryPutOwnedAsync(
+        WorkflowWebhookBindingRecord record,
+        CancellationToken ct = default) => (await PutOwnedAsync(record, ct)).Succeeded;
+
+    public async Task<WorkflowWebhookBindingPutResult> PutOwnedAsync(
+        WorkflowWebhookBindingRecord record,
+        CancellationToken ct = default)
+    {
+        var payload = ToState(record).ToByteArray();
+        var bindingKey = BindingKey(record.RouteKey);
+        var database = Database;
+
+        // Optimistic Redis transaction closes the check-then-write ownership
+        // race without requiring payload parsing support in the server's Lua
+        // implementation. Same-scope concurrent updates retry against the
+        // latest value; another scope can never replace the route.
+        for (var attempt = 0; attempt < 8; attempt++)
+        {
+            ct.ThrowIfCancellationRequested();
+            var existingValue = await database.StringGetAsync(bindingKey);
+            // An unparseable value is a pre-proto legacy record: it is dead
+            // weight (no reader can use it), so a PUT may reclaim the route.
+            if (!existingValue.IsNullOrEmpty &&
+                TryParseState((byte[])existingValue!, out var existing) &&
+                !string.Equals(existing.ScopeId, record.ScopeId, StringComparison.Ordinal))
+            {
+                return new WorkflowWebhookBindingPutResult(false, null);
+            }
+
+            var transaction = database.CreateTransaction();
+            transaction.AddCondition(existingValue.IsNullOrEmpty
+                ? Condition.KeyNotExists(bindingKey)
+                : Condition.StringEqual(bindingKey, existingValue));
+            _ = transaction.StringSetAsync(bindingKey, payload);
+            _ = transaction.SetAddAsync(ScopeIndexKey(record.ScopeId), record.RouteKey);
+            if (await transaction.ExecuteAsync())
+            {
+                var previous = existingValue.IsNullOrEmpty ||
+                               !TryParseState((byte[])existingValue!, out var previousState)
+                    ? null
+                    : FromState(previousState);
+                return new WorkflowWebhookBindingPutResult(true, previous);
+            }
+        }
+
+        throw new InvalidOperationException(
+            "Workflow webhook binding could not be updated because the route changed concurrently.");
+    }
+
+    public async Task<bool> TryDeleteOwnedAsync(
+        string routeKey,
+        string scopeId,
+        CancellationToken ct = default) => (await DeleteOwnedAsync(routeKey, scopeId, ct)).Succeeded;
+
+    public async Task<WorkflowWebhookBindingDeleteResult> DeleteOwnedAsync(
+        string routeKey,
+        string scopeId,
+        CancellationToken ct = default)
+    {
+        var bindingKey = BindingKey(routeKey);
+        var database = Database;
+        for (var attempt = 0; attempt < 8; attempt++)
+        {
+            ct.ThrowIfCancellationRequested();
+            var existingValue = await database.StringGetAsync(bindingKey);
+            if (existingValue.IsNullOrEmpty)
+                return new WorkflowWebhookBindingDeleteResult(false, null);
+
+            // Unparseable legacy values are deletable by any scope: they are
+            // unusable dead weight and blocking cleanup would wedge the route.
+            if (TryParseState((byte[])existingValue!, out var existing) &&
+                !string.Equals(existing.ScopeId, scopeId, StringComparison.Ordinal))
+            {
+                return new WorkflowWebhookBindingDeleteResult(false, null);
+            }
+
+            var transaction = database.CreateTransaction();
+            transaction.AddCondition(Condition.StringEqual(bindingKey, existingValue));
+            _ = transaction.KeyDeleteAsync(bindingKey);
+            _ = transaction.SetRemoveAsync(ScopeIndexKey(scopeId), routeKey);
+            if (await transaction.ExecuteAsync())
+            {
+                var removed = TryParseState((byte[])existingValue!, out var removedState)
+                    ? FromState(removedState)
+                    : null;
+                return new WorkflowWebhookBindingDeleteResult(true, removed);
+            }
+        }
+
+        throw new InvalidOperationException(
+            "Workflow webhook binding could not be deleted because the route changed concurrently.");
+    }
+
+    public async Task<IReadOnlyList<WorkflowWebhookBindingRecord>> ListByScopeAsync(
+        string scopeId,
+        CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        var members = await Database.SetMembersAsync(ScopeIndexKey(scopeId));
+        var records = new List<WorkflowWebhookBindingRecord>(members.Length);
+        foreach (var member in members)
+        {
+            var record = await GetAsync(member.ToString(), ct);
+            // Self-heal index entries whose binding was deleted out-of-band.
+            if (record == null)
+                await Database.SetRemoveAsync(ScopeIndexKey(scopeId), member);
+            else if (string.Equals(record.ScopeId, scopeId, StringComparison.Ordinal))
+                records.Add(record);
+        }
+
+        return records
+            .OrderBy(static record => record.RouteKey, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    internal static bool TryParseState(byte[] value, out WorkflowWebhookBindingState state)
+    {
+        try
+        {
+            state = WorkflowWebhookBindingState.Parser.ParseFrom(value);
+            // A proto parse can "succeed" on garbage; a real record always
+            // carries its route key and scope.
+            return state.RouteKey.Length > 0 && state.ScopeId.Length > 0;
+        }
+        catch (Google.Protobuf.InvalidProtocolBufferException)
+        {
+            state = new WorkflowWebhookBindingState();
+            return false;
+        }
+    }
+
+    private RedisKey BindingKey(string routeKey) => $"{_keyPrefix}:bindings:{routeKey}";
+
+    private RedisKey ScopeIndexKey(string scopeId) => $"{_keyPrefix}:bindings-by-scope:{scopeId}";
+
+    private WorkflowWebhookBindingState ToState(WorkflowWebhookBindingRecord record)
+    {
+        var state = new WorkflowWebhookBindingState
+        {
+            RouteKey = record.RouteKey,
+            ScopeId = record.ScopeId,
+            WorkflowName = record.WorkflowName,
+            SourceId = record.SourceId ?? string.Empty,
+            PromptTemplate = record.PromptTemplate ?? string.Empty,
+            PromptJsonPath = record.PromptJsonPath ?? string.Empty,
+            DeliveryIdHeader = record.DeliveryIdHeader ?? string.Empty,
+            DeliveryIdJsonPath = record.DeliveryIdJsonPath ?? string.Empty,
+            ProtectedHmacSecret = _secretCipher.Protect(record.HmacSecret),
+            HmacSignatureHeader = record.HmacSignatureHeader ?? string.Empty,
+            HmacTimestampHeader = record.HmacTimestampHeader ?? string.Empty,
+            MaxTimestampSkewSeconds = record.MaxTimestampSkewSeconds,
+            UpdatedAtUnixMs = record.UpdatedAtUnixMs,
+            DefinitionActorId = record.DefinitionActorId ?? string.Empty,
+            TargetRevisionId = record.TargetRevisionId ?? string.Empty,
+            ProtectedPreviousHmacSecret = record.PreviousHmacSecret == null
+                ? string.Empty
+                : _secretCipher.Protect(record.PreviousHmacSecret),
+            TimeZoneId = record.TimeZoneId ?? string.Empty,
+            // Field 18 may exist in records produced by the retired bearer-token
+            // workaround. It is intentionally never populated or consumed.
+            ProtectedCallerBearerToken = string.Empty,
+            ProtectedCallerAuthorization = ProtectCallerAuthorization(record),
+        };
+        if (record.CallerDurableCredential != null)
+            state.CallerDurableCredential = record.CallerDurableCredential.Clone();
+        return state;
+    }
+
+    private WorkflowWebhookBindingRecord FromState(WorkflowWebhookBindingState state)
+    {
+        var callerAuthorization = ReadCallerAuthorization(state);
+        return new WorkflowWebhookBindingRecord(
+            RouteKey: state.RouteKey,
+            ScopeId: state.ScopeId,
+            WorkflowName: state.WorkflowName,
+            SourceId: NullIfEmpty(state.SourceId),
+            PromptTemplate: NullIfEmpty(state.PromptTemplate),
+            PromptJsonPath: NullIfEmpty(state.PromptJsonPath),
+            DeliveryIdHeader: NullIfEmpty(state.DeliveryIdHeader),
+            DeliveryIdJsonPath: NullIfEmpty(state.DeliveryIdJsonPath),
+            HmacSecret: _secretCipher.Unprotect(state.ProtectedHmacSecret),
+            HmacSignatureHeader: NullIfEmpty(state.HmacSignatureHeader),
+            HmacTimestampHeader: NullIfEmpty(state.HmacTimestampHeader),
+            MaxTimestampSkewSeconds: state.MaxTimestampSkewSeconds,
+            UpdatedAtUnixMs: state.UpdatedAtUnixMs,
+            DefinitionActorId: NullIfEmpty(state.DefinitionActorId),
+            TargetRevisionId: NullIfEmpty(state.TargetRevisionId),
+            PreviousHmacSecret: state.ProtectedPreviousHmacSecret.Length == 0
+                ? null
+                : _secretCipher.Unprotect(state.ProtectedPreviousHmacSecret),
+            TimeZoneId: NullIfEmpty(state.TimeZoneId),
+            CallerAuthority: callerAuthorization.CallerAuthority,
+            UnattendedEffectAuthorization: callerAuthorization.Authorization,
+            CallerDurableCredential: state.CallerDurableCredential?.Clone());
+    }
+
+    private string ProtectCallerAuthorization(WorkflowWebhookBindingRecord record)
+    {
+        if (record.CallerAuthority is null || record.UnattendedEffectAuthorization is null)
+            return string.Empty;
+
+        var state = new WorkflowWebhookCallerAuthorizationState
+        {
+            CallerAuthority = record.CallerAuthority.Clone(),
+            UnattendedEffectAuthorization = record.UnattendedEffectAuthorization.Clone(),
+        };
+        return _secretCipher.Protect(Convert.ToBase64String(state.ToByteArray()));
+    }
+
+    private (WorkflowCallerNyxIdAuthority? CallerAuthority,
+        WorkflowUnattendedEffectAuthorization? Authorization) ReadCallerAuthorization(
+        WorkflowWebhookBindingState state)
+    {
+        if (string.IsNullOrWhiteSpace(state.ProtectedCallerAuthorization))
+            return (null, null);
+
+        var plaintext = _secretCipher.Unprotect(state.ProtectedCallerAuthorization);
+        var decoded = WorkflowWebhookCallerAuthorizationState.Parser.ParseFrom(
+            Convert.FromBase64String(plaintext));
+        return (decoded.CallerAuthority?.Clone(), decoded.UnattendedEffectAuthorization?.Clone());
+    }
+
+    private static string? NullIfEmpty(string value) => value.Length == 0 ? null : value;
+}

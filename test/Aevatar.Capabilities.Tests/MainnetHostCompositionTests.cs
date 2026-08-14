@@ -4,6 +4,7 @@ using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Abstractions.CodexExecution;
+using Aevatar.AI.Abstractions.CodeExecution;
 using Aevatar.AI.Application.CodexExecution;
 using Aevatar.AI.Infrastructure.ChronoSandbox;
 using Aevatar.AI.Infrastructure.ToolExecution;
@@ -49,6 +50,7 @@ using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.GAgentService.Infrastructure.AgentProfiles;
 using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
+using Aevatar.GAgents.Channel.Identity.DependencyInjection;
 using Aevatar.GAgents.Channel.Identity.Broker;
 using Aevatar.GAgents.Channel.NyxIdRelay.Outbound;
 using Aevatar.GAgents.Channel.Runtime;
@@ -142,6 +144,25 @@ public sealed class MainnetHostCompositionTests
     }
 
     [Fact]
+    public void AddAevatarMainnetHost_ShouldAllowCanaryEffectFaultOnlyForCanonicalShareOpsOwner()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder();
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        var options = app.Services.GetRequiredService<NyxIdChatCanaryEffectFaultOptions>();
+
+        options.Enabled.Should().BeTrue();
+        options.AllowedOwnerSubjects.Should().Equal(
+            "5d0d7b72-acff-49af-bb1b-9f30bbb7c102");
+    }
+
+    [Fact]
     public void AddAevatarMainnetHost_ShouldResolveWorkflowScheduleProvisioningComposition()
     {
         using var home = new TemporaryAevatarHomeScope();
@@ -187,6 +208,7 @@ public sealed class MainnetHostCompositionTests
         builder.AddMainnetDistributedOrleansHost();
         builder.AddAevatarPlatform(options => options.EnableMakerExtensions = true);
         builder.AddGAgentServiceCapabilityBundle();
+        builder.Services.AddChannelIdentity(builder.Configuration);
         builder.Services.AddAuditTrailCore(builder.Configuration);
         builder.Services.AddMainnetAgentProjectionDocumentStores(builder.Configuration);
         builder.Services.AddSingleton(Substitute.For<IScheduledAgentCredentialLifecycle>());
@@ -297,9 +319,7 @@ public sealed class MainnetHostCompositionTests
         brokerOptions.RequiredLlmServiceSlug.Should().Be(LlmDefaults.NyxIdRoute);
         brokerOptions.AdditionalRequiredServiceSlugs.Should().Equal(
             OrnnOptions.DefaultNyxIdSlug,
-            NyxIdToolOptions.DefaultSandboxServiceSlug);
-        app.Services.GetRequiredService<NyxIdToolOptions>()
-            .SandboxServiceSlug.Should().Be(NyxIdToolOptions.DefaultSandboxServiceSlug);
+            CodeExecutionContract.ServiceSlug);
         app.Services.GetRequiredService<IServiceRolloutCommandObservationQueryReader>().Should().NotBeNull();
         app.Services.GetRequiredService<INyxIdChatAgentProfileResolver>()
             .Should()
@@ -353,6 +373,7 @@ public sealed class MainnetHostCompositionTests
                 port.TargetKind == CodexExecutionTarget.TargetOneofCase.ManagedSandbox)
             .Which;
         managedCodexPort.Should().BeOfType<ManagedCodexExecutionCoordinator>();
+        app.Services.GetServices<ICodeExecutionPort>().Should().ContainSingle();
         app.Services.GetServices<IHealthProbeExecutor>()
             .Select(static executor => executor.Kind)
             .Should()
@@ -420,7 +441,7 @@ public sealed class MainnetHostCompositionTests
             "github-api",
             "lark-api",
             OrnnOptions.DefaultNyxIdSlug,
-            NyxIdToolOptions.DefaultSandboxServiceSlug);
+            CodeExecutionContract.ServiceSlug);
     }
 
     [Fact]
@@ -480,7 +501,7 @@ public sealed class MainnetHostCompositionTests
             options.EnableCors = false;
         });
         builder.Services.PostConfigure<NyxIdBrokerOptions>(options =>
-            options.AdditionalRequiredServiceSlugs = [NyxIdToolOptions.DefaultSandboxServiceSlug]);
+            options.AdditionalRequiredServiceSlugs = [CodeExecutionContract.ServiceSlug]);
 
         using var app = builder.Build();
         var act = () => app.Services.GetRequiredService<IStartupValidator>().Validate();
@@ -509,8 +530,30 @@ public sealed class MainnetHostCompositionTests
         act.Should()
             .Throw<OptionsValidationException>()
             .WithMessage(
-                $"*AdditionalRequiredServiceSlugs*{NyxIdToolOptions.DefaultSandboxServiceSlug}*" +
-                "Aevatar:NyxId:SandboxServiceSlug*");
+                $"*AdditionalRequiredServiceSlugs*{CodeExecutionContract.ServiceSlug}*" +
+                "code execution contract*");
+    }
+
+    [Fact]
+    public void AddAevatarMainnetHost_WithNonCanonicalSandboxSlug_ShouldFailStartupValidation()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder(new Dictionary<string, string?>
+        {
+            ["Aevatar:NyxId:SandboxServiceSlug"] = "hostile-sandbox",
+        });
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        var act = () => app.Services.GetRequiredService<IStartupValidator>().Validate();
+
+        act.Should()
+            .Throw<OptionsValidationException>()
+            .WithMessage("*SandboxServiceSlug*cannot override*chrono-sandbox*");
     }
 
     [Fact]
@@ -662,6 +705,7 @@ public sealed class MainnetHostCompositionTests
         registry.GetRegisteredNames().Should().Equal(
             AgentProfilePolicies.NyxIdChatRouteToolSet,
             ToolSetNames.LarkSelfNotify,
+            ToolSetNames.NyxIdAssistantAdmission,
             ToolSetNames.NyxIdConnectedServices,
             ToolSetNames.WorkspaceDefault);
 
@@ -727,8 +771,20 @@ public sealed class MainnetHostCompositionTests
             .Subject;
         nyxIdChatToolSources.Select(static source => source.GetType()).Should().Equal(
             typeof(NyxIdAssistantToolSource),
-            typeof(AskUserAgentToolSource));
+            typeof(NyxIdConnectedServiceToolSource),
+            typeof(WebSearchAgentToolSource),
+            typeof(AskUserAgentToolSource),
+            typeof(ConditionEvaluateAgentToolSource),
+            typeof(DomainEvidenceAgentToolSource),
+            typeof(SkillsAgentToolSource),
+            typeof(OrnnSearchAgentToolSource),
+            typeof(StartWorkflowToolSource),
+            typeof(ObserveRunToolSource),
+            typeof(ReadWorkflowRunArtifactToolSource));
         nyxIdChatToolSources.Should().NotContain(source => source is NyxIdAgentToolSource);
+        nyxIdChatToolSources.Should().NotContain(source =>
+            source is NyxIdConnectedServiceInventoryToolSource);
+        nyxIdChatToolSources.Should().ContainSingle(source => source is WebSearchAgentToolSource);
         nyxIdChatToolSources.Should().NotContain(source => source is WebAgentToolSource);
         var scheduleQueries = app.Services.GetRequiredService<IStudioMemberAutomationQueryPort>();
         var scheduleMutations = app.Services.GetRequiredService<IStudioMemberWorkflowSchedulePort>();
@@ -758,21 +814,69 @@ public sealed class MainnetHostCompositionTests
         nyxIdConnectedServices.Sources.Should().ContainSingle(source => source is NyxIdConnectedServiceToolSource);
         workspace.Sources.Should().NotContain(source => source is NyxIdConnectedServiceToolSource);
 
+        var nyxIdAssistantAdmission = registry.Resolve(ToolSetNames.NyxIdAssistantAdmission);
+        nyxIdAssistantAdmission.IsSuccess.Should().BeTrue(nyxIdAssistantAdmission.Error?.Message);
+        nyxIdAssistantAdmission.Sources.Should().ContainSingle(source => source is NyxIdAssistantToolSource);
+        nyxIdAssistantAdmission.Sources.Should().NotContain(source =>
+            source is NyxIdConnectedServiceToolSource);
+
         var nyxIdChatProfile = registry.Resolve(AgentProfilePolicies.NyxIdChatRouteToolSet);
         nyxIdChatProfile.IsSuccess.Should().BeTrue(nyxIdChatProfile.Error?.Message);
         nyxIdChatProfile.Sources.Select(static source => source.GetType()).Should().Equal(
             typeof(NyxIdAssistantToolSource),
-            typeof(AskUserAgentToolSource));
+            typeof(NyxIdConnectedServiceToolSource),
+            typeof(WebSearchAgentToolSource),
+            typeof(AskUserAgentToolSource),
+            typeof(ConditionEvaluateAgentToolSource),
+            typeof(DomainEvidenceAgentToolSource),
+            typeof(SkillsAgentToolSource),
+            typeof(OrnnSearchAgentToolSource),
+            typeof(StartWorkflowToolSource),
+            typeof(ObserveRunToolSource),
+            typeof(ReadWorkflowRunArtifactToolSource));
         nyxIdChatProfile.Sources.Should().NotContain(source => source is NyxIdAgentToolSource);
-        nyxIdChatProfile.Sources.Should().NotContain(source =>
+        nyxIdChatProfile.Sources.Should().ContainSingle(source =>
             source is NyxIdConnectedServiceToolSource);
+        nyxIdChatProfile.Sources.Should().NotContain(source =>
+            source is NyxIdConnectedServiceInventoryToolSource);
+        nyxIdChatProfile.Sources.Should().ContainSingle(source => source is WebSearchAgentToolSource);
         nyxIdChatProfile.Sources.Should().NotContain(source => source is WebAgentToolSource);
+        nyxIdChatProfile.Sources.Should().NotContain(source => source is OrnnAgentToolSource);
+        var nyxIdChatWebTools = await nyxIdChatProfile.Sources
+            .OfType<WebSearchAgentToolSource>()
+            .Single()
+            .DiscoverToolsAsync();
+        nyxIdChatWebTools.Select(static tool => tool.Name).Should()
+            .ContainSingle().Which.Should().Be("web_search");
         var nyxIdChatInputTools = await nyxIdChatProfile.Sources
             .OfType<AskUserAgentToolSource>()
             .Single()
             .DiscoverToolsAsync();
         nyxIdChatInputTools.Select(static tool => tool.Name).Should()
             .ContainSingle().Which.Should().Be("ask_user");
+        var nyxIdChatConditionTools = await nyxIdChatProfile.Sources
+            .OfType<ConditionEvaluateAgentToolSource>()
+            .Single()
+            .DiscoverToolsAsync();
+        var conditionTool = nyxIdChatConditionTools.Should().ContainSingle().Which;
+        conditionTool.Name.Should().Be("condition_evaluate");
+        conditionTool.IsReadOnly.Should().BeTrue();
+        var domainEvidenceTools = await nyxIdChatProfile.Sources
+            .OfType<DomainEvidenceAgentToolSource>()
+            .Single()
+            .DiscoverToolsAsync();
+        domainEvidenceTools.Select(static tool => tool.Name).Should().Equal(
+            "reimbursement_evidence_commit",
+            "candidate_screening_evidence_commit");
+        domainEvidenceTools.Should().OnlyContain(static tool => tool.IsReadOnly);
+        var nyxIdChatOrnnTools = await nyxIdChatProfile.Sources
+            .OfType<OrnnSearchAgentToolSource>()
+            .Single()
+            .DiscoverToolsAsync();
+        nyxIdChatOrnnTools.Select(static tool => tool.Name).Should().Equal("ornn_search_skills");
+        nyxIdChatOrnnTools.Should().NotContain(tool =>
+            tool.Name == "ornn_publish_skill" ||
+            tool.Name == "ornn_update_skill");
 
         var voice = registry.Resolve("voice.realtime");
         voice.IsSuccess.Should().BeFalse();
@@ -780,6 +884,7 @@ public sealed class MainnetHostCompositionTests
 
         var unknown = registry.Resolve("missing.set");
         unknown.IsSuccess.Should().BeFalse();
+        unknown.Sources.Should().BeEmpty();
         unknown.Error!.Code.Should().Be(ToolSetResolveError.UnknownNameCode);
     }
 
@@ -1002,6 +1107,198 @@ public sealed class MainnetHostCompositionTests
         using var app = builder.Build();
         app.Services.GetRequiredService<NyxIdToolOptions>()
             .MaxRequestDurationSeconds.Should().Be(420);
+    }
+
+    [Fact]
+    public void AddAevatarMainnetHost_ShouldPreferInternalNyxIdTransportWithoutExposingItAsAuthority()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        using var internalApiBaseUrl = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__NyxId__InternalApiBaseUrl",
+            " http://nyxid.internal:3001/ ");
+        using var internalTransportEnabled = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__NyxId__EnableInternalApiTransport", "true");
+        using var apiBaseUrl = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__NyxId__ApiBaseUrl",
+            "https://nyx-api.example.test");
+        using var authority = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__NyxId__Authority",
+            "https://nyx-authority.example.test");
+        var builder = CreateBuilder();
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        var nyxIdOptions = app.Services.GetRequiredService<NyxIdToolOptions>();
+        nyxIdOptions.BaseUrl.Should().Be("http://nyxid.internal:3001/");
+        nyxIdOptions.InternalApiBaseUrl.Should().Be("http://nyxid.internal:3001/");
+        nyxIdOptions.EffectiveTransportBaseUrl.Should().Be("http://nyxid.internal:3001/");
+        nyxIdOptions.ApiBaseUrl.Should().Be("https://nyx-api.example.test");
+        nyxIdOptions.Authority.Should().Be("https://nyx-authority.example.test");
+        nyxIdOptions.PublicTransportFallbackBaseUrl.Should().Be("https://nyx-api.example.test");
+        app.Services.GetRequiredService<WebToolOptions>().NyxIdBaseUrl
+            .Should().Be("https://nyx-api.example.test");
+        builder.Configuration["Aevatar:NyxId:Authority"]
+            .Should().Be("https://nyx-authority.example.test");
+    }
+
+    [Fact]
+    public void AddAevatarMainnetHost_StaleInternalNyxIdTransportWithoutOptIn_ShouldUsePublicApi()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        using var internalApiBaseUrl = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__NyxId__InternalApiBaseUrl",
+            "http://stale-nyxid.internal:3001");
+        using var internalTransportEnabled = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__NyxId__EnableInternalApiTransport", "false");
+        using var internalFallbackTimeout = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__NyxId__InternalApiFallbackTimeoutSeconds", "7");
+        using var apiBaseUrl = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__NyxId__ApiBaseUrl",
+            "https://nyx-api.example.test");
+        using var authority = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__NyxId__Authority",
+            "https://nyx-authority.example.test");
+        var builder = CreateBuilder();
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        var nyxIdOptions = app.Services.GetRequiredService<NyxIdToolOptions>();
+        nyxIdOptions.InternalApiBaseUrl.Should().BeNull();
+        nyxIdOptions.EffectiveTransportBaseUrl.Should().Be("https://nyx-api.example.test");
+        nyxIdOptions.ApiBaseUrl.Should().Be("https://nyx-api.example.test");
+        nyxIdOptions.Authority.Should().Be("https://nyx-authority.example.test");
+        nyxIdOptions.PublicTransportFallbackBaseUrl.Should().BeNull();
+        nyxIdOptions.InternalApiFallbackTimeoutSeconds.Should().Be(7);
+    }
+
+    [Fact]
+    public async Task AddAevatarMainnetHost_WithInternalAndAuthorityButNoPublicApi_ShouldFailClosedWebSearch()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        using var internalApiBaseUrl = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__NyxId__InternalApiBaseUrl",
+            "http://nyxid.internal:3001");
+        using var internalTransportEnabled = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__NyxId__EnableInternalApiTransport", "true");
+        using var apiBaseUrl = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__NyxId__ApiBaseUrl",
+            " ");
+        using var authority = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__NyxId__Authority",
+            "https://nyx-authority.example.test");
+        var builder = CreateBuilder();
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        var webOptions = app.Services.GetRequiredService<WebToolOptions>();
+        webOptions.NyxIdBaseUrl.Should().BeNull();
+        webOptions.NyxIdSearchSlug.Should().Be("tavily-search");
+
+        var result = await app.Services.GetRequiredService<WebApiClient>()
+            .SearchAsync("caller-token", "Aevatar", 1, CancellationToken.None);
+
+        result.Error.Should().NotBeNull();
+        result.Error!.Code.Should().Be("search_backend_not_configured");
+    }
+
+    [Fact]
+    public async Task AddAevatarMainnetHost_ShouldShipConnectedServiceEffects()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var webSearchHandler = new MainnetWebSearchHandler();
+        var builder = CreateBuilder(new Dictionary<string, string?>
+        {
+            ["Aevatar:Web:NyxIdSearchSlug"] = "api-firecrawl",
+        });
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+        builder.Services
+            .AddHttpClient<WebApiClient>()
+            .ConfigurePrimaryHttpMessageHandler(() => webSearchHandler);
+
+        var registeredWebOptions = builder.Services
+            .Where(static descriptor => descriptor.ServiceType == typeof(WebToolOptions))
+            .Should()
+            .ContainSingle()
+            .Which.ImplementationInstance
+            .Should()
+            .BeOfType<WebToolOptions>()
+            .Subject;
+        registeredWebOptions.NyxIdSearchSlug.Should().Be("tavily-search");
+
+        using var app = builder.Build();
+        var options = app.Services.GetRequiredService<NyxIdToolOptions>();
+        app.Services.GetRequiredService<WebToolOptions>().NyxIdSearchSlug.Should().Be("tavily-search");
+        var searchResult = await app.Services.GetRequiredService<WebApiClient>()
+            .SearchAsync("caller-token", "Aevatar", 1, CancellationToken.None);
+        searchResult.Error.Should().BeNull();
+        webSearchHandler.Method.Should().Be(HttpMethod.Post);
+        webSearchHandler.RequestUri.Should().EndWith(
+            "/api/v1/proxy/s/tavily-search/search");
+        options.EnableAssistantConnectedServiceEffects.Should().BeTrue();
+        options.AssistantOperationReadBackBindings.Should().HaveCount(3);
+        var readBack = options.AssistantOperationReadBackBindings.Single(binding =>
+            binding.EffectPathTemplate == "/open-apis/im/v1/messages");
+        readBack.CatalogServiceSlug.Should().Be("api-lark-bot");
+        readBack.EffectHttpMethod.Should().Be("POST");
+        readBack.EffectPathTemplate.Should().Be("/open-apis/im/v1/messages");
+        readBack.ReadHttpMethod.Should().Be("GET");
+        readBack.ReadPathTemplate.Should().Be("/open-apis/im/v1/messages/{message_id}");
+        readBack.CheckName.Should().Be("lark_provider_message_visible_by_id");
+        readBack.Match.Should().Be(AgentToolReadBackMatch.ArrayContainsEquals);
+        readBack.JsonPointer.Should().Be("/data/items");
+        readBack.ElementJsonPointer.Should().Be("/message_id");
+        readBack.EffectResultIdentityJsonPointer.Should().Be("/data/message_id");
+        readBack.ProviderResourceArgument.Should().NotBeNull();
+        readBack.ProviderResourceArgument!.ReadLocation.Should()
+            .Be(NyxIdAssistantOperationArgumentLocation.Path);
+        readBack.ProviderResourceArgument.ReadArgumentName.Should().Be("message_id");
+        readBack.EffectArgumentConstraints.Should().BeEmpty();
+        readBack.LiteralReadArguments.Should().BeEmpty();
+
+        var approvalReadBack = options.AssistantOperationReadBackBindings.Single(binding =>
+            binding.EffectPathTemplate == "/open-apis/approval/v4/instances");
+        approvalReadBack.ReadPathTemplate.Should().Be(
+            "/open-apis/approval/v4/instances/{instance_id}");
+        approvalReadBack.Match.Should().Be(AgentToolReadBackMatch.Exists);
+        approvalReadBack.JsonPointer.Should().Be("/data/instance_code");
+        approvalReadBack.ArgumentBindings.Should().ContainSingle().Which
+            .EffectArgumentName.Should().Be("uuid");
+        approvalReadBack.NotAppliedEvidence.Should().NotBeNull();
+        approvalReadBack.NotAppliedEvidence!.JsonPointer.Should().Be("/code");
+        approvalReadBack.NotAppliedEvidence.ExpectedValue.NumberValue.Should().Be(1390003);
+
+        var bitableReadBack = options.AssistantOperationReadBackBindings.Single(binding =>
+            binding.EffectPathTemplate.Contains("/bitable/", StringComparison.Ordinal));
+        bitableReadBack.Match.Should().Be(AgentToolReadBackMatch.ArrayContainsEquals);
+        bitableReadBack.JsonPointer.Should().Be("/data/items");
+        bitableReadBack.ElementJsonPointer.Should().Be("/record_id");
+        bitableReadBack.EffectResultIdentityJsonPointer.Should().Be("/data/record/record_id");
+        bitableReadBack.ArgumentBindings.Should().HaveCount(2);
+        bitableReadBack.Pagination.Should().NotBeNull();
+        bitableReadBack.Pagination!.HasMoreJsonPointer.Should().Be("/data/has_more");
+        bitableReadBack.Pagination.PageTokenJsonPointer.Should().Be("/data/page_token");
+        bitableReadBack.Pagination.PageTokenArgumentName.Should().Be("page_token");
+        bitableReadBack.Pagination.MaxPages.Should().Be(200);
     }
 
     [Theory]
@@ -1301,20 +1598,29 @@ public sealed class MainnetHostCompositionTests
     }
 
     [Theory]
-    [InlineData(" ", " https://nyx-api.example.test ", "https://nyx-api.example.test")]
-    [InlineData("urn:custom:aevatar-api", "https://nyx-api.example.test", "urn:custom:aevatar-api")]
-    public void AddAevatarMainnetHost_ShouldUseNyxIdApiAudienceWhenDeploymentOmitsIt(
+    [InlineData(" ", " https://nyx-api.example.test ", "https://nyx-issuer.example.test", "https://nyx-api.example.test")]
+    [InlineData("urn:custom:aevatar-api", "https://nyx-api.example.test", "https://nyx-issuer.example.test", "urn:custom:aevatar-api")]
+    public void AddAevatarMainnetHost_ShouldUseNyxIdApiBaseUrlAsAudienceWhenDeploymentOmitsIt(
         string configuredAudience,
         string nyxIdApiBaseUrl,
+        string nyxIdAuthority,
         string expectedAudience)
     {
         using var home = new TemporaryAevatarHomeScope();
         using var audience = new EnvironmentVariableScope(
             "AEVATAR_Aevatar__Authentication__Audience",
             configuredAudience);
+        using var authority = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__NyxId__Authority",
+            nyxIdAuthority);
         using var apiBaseUrl = new EnvironmentVariableScope(
             "AEVATAR_Aevatar__NyxId__ApiBaseUrl",
             nyxIdApiBaseUrl);
+        using var internalApiBaseUrl = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__NyxId__InternalApiBaseUrl",
+            "http://nyxid.internal:3001");
+        using var internalTransportEnabled = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__NyxId__EnableInternalApiTransport", "true");
         var audienceKey = $"{AevatarAuthenticationOptions.SectionName}:Audience";
         var builder = CreateBuilder(environmentName: Environments.Production);
 
@@ -1334,9 +1640,17 @@ public sealed class MainnetHostCompositionTests
         using var audience = new EnvironmentVariableScope(
             "AEVATAR_Aevatar__Authentication__Audience",
             " ");
+        using var authority = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__NyxId__Authority",
+            "https://nyx-issuer.example.test");
         using var apiBaseUrl = new EnvironmentVariableScope(
             "AEVATAR_Aevatar__NyxId__ApiBaseUrl",
             " ");
+        using var internalApiBaseUrl = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__NyxId__InternalApiBaseUrl",
+            "http://nyxid.internal:3001");
+        using var internalTransportEnabled = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__NyxId__EnableInternalApiTransport", "true");
         var builder = CreateBuilder(environmentName: Environments.Production);
 
         var act = () => builder.AddAevatarMainnetHost(options =>
@@ -1666,7 +1980,7 @@ public sealed class MainnetHostCompositionTests
         private const string RegistryJson = """
             {
               "schema_version": 4,
-              "revision": "nyxid-assistant-actions.v4",
+              "revision": "nyxid-assistant-actions.v5",
               "actions": [
                 {
                   "action": "service.connect",
@@ -1719,6 +2033,60 @@ public sealed class MainnetHostCompositionTests
                   "risk": "grant",
                   "tier": "v1",
                   "remember_eligible": true
+                },
+                {
+                  "action": "service.reauthorize",
+                  "description": "Reauthorize a connected service through the NyxID browser journey.",
+                  "params_schema": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["userServiceId", "requestedScopes"],
+                    "properties": {
+                      "userServiceId": {"type": "string"},
+                      "requestedScopes": {
+                        "type": "array",
+                        "items": {"type": "string"}
+                      }
+                    }
+                  },
+                  "risk": "grant",
+                  "tier": "v1",
+                  "remember_eligible": false
+                },
+                {
+                  "action": "key.create",
+                  "description": "Create a scoped API key through the NyxID browser journey.",
+                  "params_schema": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["name", "platform", "allowedServiceIds"],
+                    "properties": {
+                      "name": {"type": "string"},
+                      "platform": {"type": "string"},
+                      "allowedServiceIds": {
+                        "type": "array",
+                        "items": {"type": "string"}
+                      }
+                    }
+                  },
+                  "risk": "grant",
+                  "tier": "v1",
+                  "remember_eligible": false
+                },
+                {
+                  "action": "key.rotate",
+                  "description": "Rotate an API key through the NyxID browser journey.",
+                  "params_schema": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["keyId"],
+                    "properties": {
+                      "keyId": {"type": "string"}
+                    }
+                  },
+                  "risk": "grant",
+                  "tier": "v1",
+                  "remember_eligible": false
                 }
               ]
             }
@@ -1739,6 +2107,25 @@ public sealed class MainnetHostCompositionTests
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(RegistryJson),
+            });
+        }
+    }
+
+    private sealed class MainnetWebSearchHandler : HttpMessageHandler
+    {
+        public HttpMethod? Method { get; private set; }
+
+        public string? RequestUri { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            Method = request.Method;
+            RequestUri = request.RequestUri?.AbsoluteUri;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"results":[]}"""),
             });
         }
     }

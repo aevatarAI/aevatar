@@ -11,6 +11,18 @@ namespace Aevatar.AI.Tests;
 public sealed class WebSearchToolExecutionTests
 {
     [Fact]
+    public async Task WebSearchSource_ShouldExposeOnlyWebSearch()
+    {
+        var options = new WebToolOptions { SearchApiBaseUrl = "https://search.test" };
+        using var client = new WebApiClient(options, new HttpClient(new RecordingHttpMessageHandler(
+            _ => new HttpResponseMessage(HttpStatusCode.OK))));
+
+        var tools = await new WebSearchAgentToolSource(options, client).DiscoverToolsAsync();
+
+        tools.Select(static tool => tool.Name).Should().Equal("web_search");
+    }
+
+    [Fact]
     public async Task DiscoverToolsAsync_WhenSearchBackendIsNotConfigured_ShouldExposeSearchWithTypedBlocker()
     {
         var handler = new RecordingHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
@@ -70,6 +82,45 @@ public sealed class WebSearchToolExecutionTests
         request.RequestUri!.AbsoluteUri.Should().Be("https://search.test/search?q=aevatar%20docs&limit=3");
         request.Headers.Authorization!.Scheme.Should().Be("Bearer");
         request.Headers.Authorization!.Parameter.Should().Be("token-1");
+    }
+
+    [Fact]
+    public async Task Uc2DinnerResearch_ShouldExecuteOneReadOnlySearchWithTypedEvidence()
+    {
+        var handler = new RecordingHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("""
+                {
+                  "results": [
+                    {
+                      "title": "North Olive",
+                      "url": "https://example.test/north-olive",
+                      "snippet": "Greek menu, vegetarian choices, Friday dinner hours"
+                    }
+                  ]
+                }
+                """),
+        });
+        using var http = new HttpClient(handler);
+        var search = CreateTool(http);
+        using var _ = AgentToolContextScope.Push(WithNyxIdAccessToken("token-uc2"));
+
+        const string arguments =
+            "{\"query\":\"Greek dinner northern Singapore Friday 6 to 7 pm\",\"max_results\":5}";
+        var result = await search.ExecuteAsync(arguments);
+        var receipt = search.CreateResultReceipt("call-uc2-search", search.Name, arguments, result);
+
+        search.Name.Should().Be("web_search");
+        search.IsReadOnly.Should().BeTrue();
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        receipt.ToolName.Should().Be("web_search");
+        using var document = JsonDocument.Parse(receipt.ResultJson);
+        document.RootElement.GetProperty("results")[0].GetProperty("title").GetString()
+            .Should().Be("North Olive");
+        var request = handler.Requests.Should().ContainSingle().Subject;
+        request.RequestUri!.AbsoluteUri.Should().Be(
+            "https://search.test/search?q=Greek%20dinner%20northern%20Singapore%20Friday%206%20to%207%20pm&limit=5");
     }
 
     [Fact]
@@ -220,6 +271,38 @@ public sealed class WebSearchToolExecutionTests
         var root = document.RootElement;
         root.GetProperty("query").GetString().Should().Be("lark send message docs");
         root.GetProperty("limit").GetInt32().Should().Be(3);
+    }
+
+    [Fact]
+    public async Task SearchAsync_WithTavilyNyxIdSlug_ShouldUseNyxIdSlugProxyAndMapResults()
+    {
+        var handler = new RecordingHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(
+                """{"results":[{"title":"Aevatar","url":"https://aevatar.ai","content":"Actor framework"}]}"""),
+        });
+        using var http = new HttpClient(handler);
+        var client = new WebApiClient(
+            new WebToolOptions
+            {
+                NyxIdBaseUrl = "https://nyxid.example.test",
+                NyxIdSearchSlug = "tavily-search",
+            },
+            http);
+
+        var result = await client.SearchAsync("token-6", "aevatar actor framework", 4, CancellationToken.None);
+
+        result.Error.Should().BeNull();
+        result.Results.Should().ContainSingle().Which.Should().Be(
+            new WebSearchResultItem("Aevatar", "https://aevatar.ai", "Actor framework"));
+        var request = handler.Requests.Should().ContainSingle().Subject;
+        request.Method.Should().Be(HttpMethod.Post);
+        request.RequestUri!.AbsoluteUri.Should().Be(
+            "https://nyxid.example.test/api/v1/proxy/s/tavily-search/search");
+        request.Headers.Authorization!.Parameter.Should().Be("token-6");
+        using var document = JsonDocument.Parse(await request.Content!.ReadAsStringAsync());
+        document.RootElement.GetProperty("query").GetString().Should().Be("aevatar actor framework");
+        document.RootElement.GetProperty("max_results").GetInt32().Should().Be(4);
     }
 
     private static WebSearchTool CreateTool(HttpClient http)
