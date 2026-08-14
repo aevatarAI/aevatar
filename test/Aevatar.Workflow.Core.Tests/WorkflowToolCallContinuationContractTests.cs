@@ -28,4 +28,5 @@ public sealed class WorkflowToolCallContinuationContractTests
             descriptor.FindFieldByName("continuation_token").Should().BeNull();
         }
     }
+
 }

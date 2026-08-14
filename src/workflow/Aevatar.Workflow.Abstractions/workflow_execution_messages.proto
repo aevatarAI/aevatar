@@ -1454,7 +1454,7 @@ message WorkflowLeaseRejectedEvent
 message WorkflowLeaseExpirationFiredEvent
 {
   string lease_key = 1;
-  string holder_token = 2;
+  string holder_fence_id = 2;
   int64 generation = 3;
   int64 expires_at_unix_ms = 4;
 }
