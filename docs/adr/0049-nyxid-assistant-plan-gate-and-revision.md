@@ -102,4 +102,3 @@ Fixtures must prove:
 - scope resolution, failure recovery, steering, and user revision each increment once with typed provenance;
 - reload reconstructs identical revision history; and
 - Tier B emits no NyxID approval fact before a returned request ID.
-
