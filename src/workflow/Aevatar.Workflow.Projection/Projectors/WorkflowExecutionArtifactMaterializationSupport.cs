@@ -929,6 +929,7 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         return (status ?? string.Empty).Trim() switch
         {
             "completed" => WorkflowExecutionCompletionStatus.Completed,
+            "timed_out" => WorkflowExecutionCompletionStatus.TimedOut,
             "failed" => WorkflowExecutionCompletionStatus.Failed,
             "stopped" => WorkflowExecutionCompletionStatus.Stopped,
             "running" => existing == WorkflowExecutionCompletionStatus.WaitingForSignal
@@ -942,6 +943,7 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         (status ?? string.Empty).Trim() switch
         {
             "completed" => true,
+            "timed_out" => false,
             "failed" => false,
             "stopped" => false,
             _ => null,
@@ -949,6 +951,7 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
 
     private static bool IsTerminalStatus(string? status) =>
         string.Equals(status, "completed", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(status, "timed_out", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(status, "failed", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(status, "stopped", StringComparison.OrdinalIgnoreCase);
 

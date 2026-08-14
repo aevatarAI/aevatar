@@ -289,6 +289,7 @@ public sealed class WorkflowExecutionReadModelMapper
         {
             "running" => WorkflowRunCompletionStatus.Running,
             "completed" => WorkflowRunCompletionStatus.Completed,
+            "timed_out" => WorkflowRunCompletionStatus.TimedOut,
             "failed" => WorkflowRunCompletionStatus.Failed,
             "stopped" => WorkflowRunCompletionStatus.Stopped,
             "not_found" => WorkflowRunCompletionStatus.NotFound,
@@ -373,6 +374,7 @@ public sealed class WorkflowExecutionReadModelMapper
         {
             WorkflowExecutionCompletionStatus.Running => WorkflowRunCompletionStatus.Running,
             WorkflowExecutionCompletionStatus.Completed => WorkflowRunCompletionStatus.Completed,
+            WorkflowExecutionCompletionStatus.TimedOut => WorkflowRunCompletionStatus.TimedOut,
             WorkflowExecutionCompletionStatus.Failed => WorkflowRunCompletionStatus.Failed,
             WorkflowExecutionCompletionStatus.Stopped => WorkflowRunCompletionStatus.Stopped,
             WorkflowExecutionCompletionStatus.NotFound => WorkflowRunCompletionStatus.NotFound,

@@ -53,6 +53,62 @@ public sealed class NyxIdChatPublicToolReceiptResultTests
     }
 
     [Fact]
+    public void BuildDurableReceiptEvidence_WorkflowStart_WithMismatchedCommandIdentity_ShouldFailClosed()
+    {
+        var receipt = new AgentToolReceipt
+        {
+            CallId = "assistant-tool-call-alpha",
+            ToolName = "aevatar_start_workflow",
+            Status = AgentToolReceiptStatus.Success,
+            SubjectId = "workflow-run-actor-alpha",
+            MutationStage = AgentToolReceiptMutationStage.ReadModelObserved,
+            ResultJson = JsonSerializer.Serialize(new
+            {
+                run_id = "workflow-run-actor-alpha",
+                actor_id = "workflow-run-actor-alpha",
+                command_id = "workflow-command-alpha",
+                status = "streaming",
+                mutation_stage = "read_model_observed",
+            }),
+        };
+
+        var durable = NyxIdChatConversationGAgent.BuildDurableReceiptEvidence(receipt);
+
+        durable.Should().NotBeNull();
+        durable!.ResultJson.Should().BeEmpty();
+        NyxIdChatPublicToolReceiptResult.ResolvePresentationResult(durable).Should()
+            .Contain("PUBLIC_RECEIPT_UNAVAILABLE");
+    }
+
+    [Fact]
+    public void BuildDurableReceiptEvidence_WorkflowStart_WithUnboundRunIdentity_ShouldFailClosed()
+    {
+        var receipt = new AgentToolReceipt
+        {
+            CallId = "assistant-tool-call-alpha",
+            ToolName = "aevatar_start_workflow",
+            Status = AgentToolReceiptStatus.Success,
+            SubjectId = "trusted-workflow-run",
+            MutationStage = AgentToolReceiptMutationStage.Accepted,
+            ResultJson = JsonSerializer.Serialize(new
+            {
+                run_id = "untrusted-workflow-run",
+                actor_id = "untrusted-workflow-run",
+                command_id = "assistant-tool-call-alpha",
+                status = "accepted",
+                mutation_stage = "accepted",
+            }),
+        };
+
+        var durable = NyxIdChatConversationGAgent.BuildDurableReceiptEvidence(receipt);
+
+        durable.Should().NotBeNull();
+        durable!.ResultJson.Should().BeEmpty();
+        NyxIdChatPublicToolReceiptResult.ResolvePresentationResult(durable).Should()
+            .Contain("PUBLIC_RECEIPT_UNAVAILABLE");
+    }
+
+    [Fact]
     public void BuildDurableReceiptEvidence_ManagedWorkflowStart_ShouldKeepDistinctRunAndActorIds()
     {
         var receipt = new AgentToolReceipt
@@ -378,6 +434,9 @@ public sealed class NyxIdChatPublicToolReceiptResultTests
     [InlineData("completed", true, true)]
     [InlineData("failed", true, false)]
     [InlineData("stopped", true, false)]
+    [InlineData("Running", false, false)]
+    [InlineData("TimedOut", true, false)]
+    [InlineData("TimedOut", false, true)]
     public void BuildDurableReceiptEvidence_ContradictoryArtifactState_ShouldFailClosed(
         string status,
         bool success,
@@ -417,6 +476,8 @@ public sealed class NyxIdChatPublicToolReceiptResultTests
     [InlineData("pending", "\"true\"", "true")]
     [InlineData("pending", "null", "true")]
     [InlineData("pending", "1", "true")]
+    [InlineData("Running", "\"false\"", "false")]
+    [InlineData("Running", "null", "false")]
     [InlineData("completed", "\"true\"", "false")]
     [InlineData("completed", "true", "\"false\"")]
     [InlineData("completed", "true", "null")]
@@ -482,6 +543,137 @@ public sealed class NyxIdChatPublicToolReceiptResultTests
         document.RootElement.GetProperty("status").GetString().Should().Be("pending");
         document.RootElement.GetProperty("pending").GetBoolean().Should().BeTrue();
         document.RootElement.TryGetProperty("success", out _).Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData("Running")]
+    [InlineData("AwaitingToolApproval")]
+    [InlineData("WaitingForSignal")]
+    public void BuildDurableReceiptEvidence_MaterializedNonTerminalArtifact_ShouldProjectTypedPending(
+        string status)
+    {
+        var receipt = new AgentToolReceipt
+        {
+            CallId = "artifact-call-alpha",
+            ToolName = "aevatar_read_workflow_run_artifact",
+            Status = AgentToolReceiptStatus.Success,
+            SubjectId = "run-alpha",
+            ResultJson = JsonSerializer.Serialize(new
+            {
+                workflow_run_id = "run-alpha",
+                artifact_actor_id = "workflow-run-actor-alpha",
+                root_actor_id = "workflow-run-actor-alpha",
+                artifact = "report",
+                workflow_name = "synthetic_invoice_review",
+                status,
+                state_version = 24,
+                command_id = "workflow-command-alpha",
+            }),
+        };
+
+        var durable = NyxIdChatConversationGAgent.BuildDurableReceiptEvidence(receipt);
+
+        durable.Should().NotBeNull();
+        using var document = JsonDocument.Parse(durable!.ResultJson);
+        document.RootElement.GetProperty("workflow_run_id").GetString().Should().Be("run-alpha");
+        document.RootElement.GetProperty("artifact_actor_id").GetString().Should()
+            .Be("workflow-run-actor-alpha");
+        document.RootElement.GetProperty("status").GetString().Should().Be("pending");
+        document.RootElement.GetProperty("pending").GetBoolean().Should().BeTrue();
+        document.RootElement.TryGetProperty("success", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public void BuildDurableReceiptEvidence_MaterializedNonTerminalArtifactWithFalseSuccess_ShouldProjectTypedPending()
+    {
+        var receipt = new AgentToolReceipt
+        {
+            CallId = "artifact-call-alpha",
+            ToolName = "aevatar_read_workflow_run_artifact",
+            Status = AgentToolReceiptStatus.Success,
+            SubjectId = "run-alpha",
+            ResultJson = JsonSerializer.Serialize(new
+            {
+                workflow_run_id = "run-alpha",
+                artifact_actor_id = "workflow-run-actor-alpha",
+                root_actor_id = "workflow-run-actor-alpha",
+                artifact = "report",
+                workflow_name = "synthetic_invoice_review",
+                status = "Running",
+                success = false,
+                state_version = 24,
+                command_id = "workflow-command-alpha",
+            }),
+        };
+
+        var durable = NyxIdChatConversationGAgent.BuildDurableReceiptEvidence(receipt);
+
+        durable.Should().NotBeNull();
+        using var document = JsonDocument.Parse(durable!.ResultJson);
+        document.RootElement.GetProperty("status").GetString().Should().Be("pending");
+        document.RootElement.GetProperty("pending").GetBoolean().Should().BeTrue();
+        document.RootElement.TryGetProperty("success", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public void BuildDurableReceiptEvidence_MaterializedNonTerminalArtifactClaimingSuccess_ShouldFailClosed()
+    {
+        var receipt = new AgentToolReceipt
+        {
+            CallId = "artifact-call-alpha",
+            ToolName = "aevatar_read_workflow_run_artifact",
+            Status = AgentToolReceiptStatus.Success,
+            SubjectId = "run-alpha",
+            ResultJson = JsonSerializer.Serialize(new
+            {
+                workflow_run_id = "run-alpha",
+                artifact_actor_id = "workflow-run-actor-alpha",
+                root_actor_id = "workflow-run-actor-alpha",
+                artifact = "report",
+                workflow_name = "synthetic_invoice_review",
+                status = "Running",
+                success = true,
+                state_version = 24,
+                command_id = "workflow-command-alpha",
+            }),
+        };
+
+        var durable = NyxIdChatConversationGAgent.BuildDurableReceiptEvidence(receipt);
+
+        durable.Should().NotBeNull();
+        durable!.ResultJson.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void BuildDurableReceiptEvidence_TimedOutArtifact_ShouldProjectTypedTerminalFailure()
+    {
+        var receipt = new AgentToolReceipt
+        {
+            CallId = "artifact-call-alpha",
+            ToolName = "aevatar_read_workflow_run_artifact",
+            Status = AgentToolReceiptStatus.Success,
+            SubjectId = "run-alpha",
+            ResultJson = JsonSerializer.Serialize(new
+            {
+                workflow_run_id = "run-alpha",
+                artifact_actor_id = "workflow-run-actor-alpha",
+                root_actor_id = "workflow-run-actor-alpha",
+                artifact = "report",
+                workflow_name = "synthetic_invoice_review",
+                status = "TimedOut",
+                success = false,
+                state_version = 25,
+                command_id = "workflow-command-alpha",
+            }),
+        };
+
+        var durable = NyxIdChatConversationGAgent.BuildDurableReceiptEvidence(receipt);
+
+        durable.Should().NotBeNull();
+        using var document = JsonDocument.Parse(durable!.ResultJson);
+        document.RootElement.GetProperty("status").GetString().Should().Be("timed_out");
+        document.RootElement.GetProperty("success").GetBoolean().Should().BeFalse();
+        document.RootElement.GetProperty("state_version").GetInt64().Should().Be(25);
     }
 
     [Fact]
