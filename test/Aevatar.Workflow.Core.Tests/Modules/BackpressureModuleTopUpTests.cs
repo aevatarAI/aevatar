@@ -297,6 +297,43 @@ public sealed class BackpressureModuleTopUpTests
     }
 
     [Fact]
+    public async Task ForEachModule_TwentyConcurrentChildren_ShouldCheckpointDispatchLedgerAsBatch()
+    {
+        var module = new ForEachModule();
+        var context = new RecordingWorkflowContext();
+        var items = string.Join("\n---\n", Enumerable.Range(0, 20).Select(index => $"item-{index}"));
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "foreach-batch",
+                StepType = "foreach",
+                RunId = "run-batch",
+                Input = items,
+                Parameters =
+                {
+                    ["sub_step_type"] = "transform",
+                    ["max_concurrent_workers"] = "20",
+                },
+            }),
+            context,
+            CancellationToken.None);
+
+        var requests = context.Published.Select(x => x.Event).OfType<StepRequestEvent>().ToArray();
+        requests.Should().HaveCount(20);
+        requests.Select(request => request.StepId)
+            .Should().Equal(Enumerable.Range(0, 20).Select(index => $"foreach-batch_item_{index}"));
+        context.SaveAttempts.Should().Be(2,
+            "the durable intent fence and one batch acknowledgement are sufficient for 20 children");
+
+        var state = context.LoadState<ForEachModuleState>("foreach");
+        var parent = state.Parents["run-batch:foreach-batch"];
+        parent.PendingDispatches.Should().BeEmpty();
+        parent.DispatchedStepIds.Should().HaveCount(20);
+        state.Backpressure.ActiveWorkers.Should().Be(20);
+    }
+
+    [Fact]
     public async Task ForEachModule_DuplicateParentRequest_ShouldPreserveProgressAndNotRedispatchBatch()
     {
         var module = new ForEachModule();
@@ -439,6 +476,55 @@ public sealed class BackpressureModuleTopUpTests
     }
 
     [Fact]
+    public async Task ForEachModule_PartialBatchPublishFailure_ShouldCheckpointAndRecoverRemainingChildren()
+    {
+        var module = new ForEachModule();
+        var context = new RecordingWorkflowContext
+        {
+            FailPublishOnce = evt => evt is StepRequestEvent { StepId: "foreach-batch-recover_item_7" },
+        };
+        var items = string.Join("\n---\n", Enumerable.Range(0, 20).Select(index => $"item-{index}"));
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "foreach-batch-recover",
+                StepType = "foreach",
+                RunId = "run-batch-recover",
+                Input = items,
+                Parameters =
+                {
+                    ["sub_step_type"] = "transform",
+                    ["max_concurrent_workers"] = "20",
+                },
+            }),
+            context,
+            CancellationToken.None);
+
+        context.Published.Select(x => x.Event).OfType<StepRequestEvent>().Select(request => request.StepId)
+            .Should().Equal(Enumerable.Range(0, 7).Select(index => $"foreach-batch-recover_item_{index}"));
+        context.SaveAttempts.Should().Be(2);
+        var checkpoint = context.LoadState<ForEachModuleState>("foreach")
+            .Parents["run-batch-recover:foreach-batch-recover"];
+        checkpoint.DispatchedStepIds.Should().HaveCount(7);
+        checkpoint.PendingDispatches.Select(entry => entry.StepId)
+            .Should().Equal(Enumerable.Range(7, 13).Select(index => $"foreach-batch-recover_item_{index}"));
+
+        var retry = context.Scheduled.Should().ContainSingle().Subject.Event
+            .Should().BeOfType<ForEachPublicationRetryFiredEvent>().Subject;
+        context.Published.Clear();
+        await module.HandleAsync(Envelope(retry), context, CancellationToken.None);
+
+        context.Published.Select(x => x.Event).OfType<StepRequestEvent>().Select(request => request.StepId)
+            .Should().Equal(Enumerable.Range(7, 13).Select(index => $"foreach-batch-recover_item_{index}"));
+        context.SaveAttempts.Should().Be(3);
+        var recovered = context.LoadState<ForEachModuleState>("foreach")
+            .Parents["run-batch-recover:foreach-batch-recover"];
+        recovered.PendingDispatches.Should().BeEmpty();
+        recovered.DispatchedStepIds.Should().HaveCount(20);
+    }
+
+    [Fact]
     public async Task ForEachModule_PostDispatchPublishSaveFailure_ShouldPropagateAndKeepDurableIntent()
     {
         var module = new ForEachModule();
@@ -470,6 +556,59 @@ public sealed class BackpressureModuleTopUpTests
         durableParent.PendingDispatches.Should().ContainSingle()
             .Which.StepId.Should().Be("foreach-dispatch-save-failure_item_0");
         durableParent.DispatchedStepIds.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ForEachModule_BatchAcknowledgementSaveFailure_ShouldReplayStableChildIdentities()
+    {
+        var module = new ForEachModule();
+        var context = new RecordingWorkflowContext
+        {
+            FailSaveAttempt = 2,
+        };
+        var parentRequest = new StepRequestEvent
+        {
+            StepId = "foreach-batch-save-failure",
+            StepType = "foreach",
+            RunId = "run-batch-save-failure",
+            ExecutionId = "parent-execution",
+            IdempotencyKey = "parent-idempotency",
+            Input = string.Join("\n---\n", Enumerable.Range(0, 20).Select(index => $"item-{index}")),
+            Parameters =
+            {
+                ["sub_step_type"] = "transform",
+                ["max_concurrent_workers"] = "20",
+            },
+        };
+
+        var firstAttempt = () => module.HandleAsync(
+            Envelope(parentRequest),
+            context,
+            CancellationToken.None);
+        await firstAttempt.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("simulated save failure");
+
+        var firstBatch = context.Published.Select(x => x.Event).OfType<StepRequestEvent>().ToArray();
+        firstBatch.Should().HaveCount(20);
+        var durableParent = context.LoadState<ForEachModuleState>("foreach")
+            .Parents["run-batch-save-failure:foreach-batch-save-failure:execution:parent-execution"];
+        durableParent.PendingDispatches.Should().HaveCount(20);
+        durableParent.DispatchedStepIds.Should().BeEmpty();
+
+        context.Published.Clear();
+        await module.HandleAsync(Envelope(parentRequest), context, CancellationToken.None);
+
+        var replayedBatch = context.Published.Select(x => x.Event).OfType<StepRequestEvent>().ToArray();
+        replayedBatch.Should().HaveCount(20);
+        replayedBatch.Select(request => request.StepId).Should().Equal(firstBatch.Select(request => request.StepId));
+        replayedBatch.Select(request => request.ExecutionId)
+            .Should().Equal(firstBatch.Select(request => request.ExecutionId));
+        replayedBatch.Select(request => request.IdempotencyKey)
+            .Should().Equal(firstBatch.Select(request => request.IdempotencyKey));
+        context.SaveAttempts.Should().Be(4);
+        context.LoadState<ForEachModuleState>("foreach")
+            .Parents["run-batch-save-failure:foreach-batch-save-failure:execution:parent-execution"]
+            .PendingDispatches.Should().BeEmpty();
     }
 
     [Fact]

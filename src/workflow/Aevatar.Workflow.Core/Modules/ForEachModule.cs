@@ -484,6 +484,9 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
         IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
+        var checkpointRequired = false;
+        var retryParentKeys = new HashSet<string>(StringComparer.Ordinal);
+
         foreach (var (parentKey, parentState) in state.Parents.ToArray())
         {
             foreach (var entry in parentState.PendingDispatches.ToArray())
@@ -491,6 +494,7 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
                 if (parentState.CollectedStepIds.Contains(entry.StepId))
                 {
                     RemovePendingDispatch(parentState, entry.StepId);
+                    checkpointRequired = true;
                     continue;
                 }
 
@@ -514,15 +518,24 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
                         "ForEach child publication remains pending run={RunId} step={StepId}",
                         entry.RunId,
                         entry.StepId);
-                    await TrySchedulePublicationRetryAsync(parentKey, ctx, ct);
+                    retryParentKeys.Add(parentKey);
                     break;
                 }
 
                 AddIfMissing(parentState.DispatchedStepIds, entry.StepId);
                 RemovePendingDispatch(parentState, entry.StepId);
-                await SaveStateAsync(state, ctx, ct);
+                checkpointRequired = true;
             }
         }
+
+        // Every intent was durable before publication. A single acknowledgement checkpoint after
+        // the batch removes successful intents; if it fails, stable child identities make replay
+        // safe and the original durable intents remain authoritative.
+        if (checkpointRequired)
+            await SaveStateAsync(state, ctx, ct);
+
+        foreach (var parentKey in retryParentKeys)
+            await TrySchedulePublicationRetryAsync(parentKey, ctx, ct);
     }
 
     private static async Task PublishPendingCompletionAsync(
