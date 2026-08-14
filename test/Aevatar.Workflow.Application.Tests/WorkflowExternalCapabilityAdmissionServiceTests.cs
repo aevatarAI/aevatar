@@ -792,6 +792,47 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
     }
 
     [Fact]
+    public async Task AdmitAsync_ShouldSealResponseProjectionIntoTheCallSiteAdmission()
+    {
+        const string yaml = "name: wf-alpha\nsteps: []\n";
+        var capability = NyxIdCapability();
+        var dependencies = Dependencies(capability);
+        dependencies.ExternalInvocations[0].ResponseProjection = new WorkflowToolResponseProjection
+        {
+            Fields =
+            {
+                new WorkflowToolResponseProjectionField
+                {
+                    OutputName = "instance_code",
+                    Operations =
+                    {
+                        new WorkflowToolResponseProjectionOperation
+                        {
+                            JsonPointer = "/data/instance_code",
+                        },
+                    },
+                },
+            },
+        };
+        var service = new WorkflowExternalCapabilityAdmissionService(
+            new StubParser(WorkflowYamlParseResult.Success("wf-alpha", dependencies)),
+            new StubReadinessPort(Ready(capability)),
+            new FixedTimeProvider());
+
+        var plan = await service.AdmitAsync(Request(yaml));
+
+        plan.InvocationAdmissions.Should().ContainSingle().Which.ResponseProjection
+            .Should().Be(dependencies.ExternalInvocations[0].ResponseProjection);
+        WorkflowCapabilityAdmissionPlanIntegrity.CheckCompatibility(
+                plan,
+                yaml,
+                new Dictionary<string, string>(),
+                ExternalCapabilityExecutionMode.Interactive,
+                dependencies.ExternalInvocations)
+            .Succeeded.Should().BeTrue();
+    }
+
+    [Fact]
     public async Task AdmitAsync_CodeExecute_ShouldCommitExactRouteProof()
     {
         const string yaml = "name: code-workflow\nsteps: []\n";

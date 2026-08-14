@@ -779,6 +779,60 @@ public sealed class WorkflowAuthorizationDependenciesTests
         result.ServiceGrantPolicy.Should().Be(WorkflowServiceGrantPolicy.Required);
     }
 
+    [Fact]
+    public void EvaluateAuthorizationDependencies_ShouldCompileForeachResponseProjectionIntoSynthesizedCallSite()
+    {
+        const string yaml = """
+            name: fin-history
+            roles: []
+            steps:
+              - id: fetch-details
+                type: foreach
+                capability:
+                  nyxid_request:
+                    user_service_id: us-lark-alpha
+                    method: GET
+                    path_template: /approval/instances/{instance_code}
+                    body_mode: none
+                    response_mode: text
+                    risk: read_only
+                response_projection:
+                  fields:
+                    instance_code:
+                      - pointer: /data/instance_code
+                    vendor:
+                      - pointer: /data/form
+                      - parse_json: true
+                      - match:
+                          pointer: /id
+                          equals: field-list
+                      - pointer: /value/0
+                      - match:
+                          pointer: /id
+                          equals: vendor-widget
+                      - pointer: /value
+                parameters:
+                  sub_step_type: tool_call
+                  sub_param_tool: nyxid_proxy
+                  sub_param_arguments: '{"path_params":{"instance_code":"${input}"}}'
+            """;
+
+        var dependencies = new WorkflowGAgent().EvaluateAuthorizationDependencies(yaml);
+
+        var invocation = dependencies!.ExternalInvocations.Should().ContainSingle().Subject;
+        invocation.CallSiteId.Should().Be("fin-history/fetch-details/sub-step");
+        invocation.ResponseProjection.Fields.Select(static field => field.OutputName)
+            .Should().Equal("instance_code", "vendor");
+        invocation.ResponseProjection.Fields[1].Operations.Select(static operation => operation.OperationCase)
+            .Should().Equal(
+                WorkflowToolResponseProjectionOperation.OperationOneofCase.JsonPointer,
+                WorkflowToolResponseProjectionOperation.OperationOneofCase.ParseJson,
+                WorkflowToolResponseProjectionOperation.OperationOneofCase.ArrayMatch,
+                WorkflowToolResponseProjectionOperation.OperationOneofCase.JsonPointer,
+                WorkflowToolResponseProjectionOperation.OperationOneofCase.ArrayMatch,
+                WorkflowToolResponseProjectionOperation.OperationOneofCase.JsonPointer);
+    }
+
     [Theory]
     [InlineData("service_id")]
     [InlineData("service")]
@@ -1092,6 +1146,7 @@ public sealed class WorkflowAuthorizationDependenciesTests
         dependencies.ExternalInvocations.Select(invocation => new WorkflowCapabilityInvocationAdmission
         {
             CallSiteId = invocation.CallSiteId,
+            ResponseProjection = invocation.ResponseProjection?.Clone(),
             Capability = invocation.Selector.SelectorCase switch
             {
                 ExternalWorkflowCapabilitySelector.SelectorOneofCase.HostConnector =>

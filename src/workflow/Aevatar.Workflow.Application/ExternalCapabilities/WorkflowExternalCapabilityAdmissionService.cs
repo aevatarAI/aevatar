@@ -234,6 +234,7 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
             {
                 CallSiteId = invocation.CallSiteId,
                 Capability = capability.Clone(),
+                ResponseProjection = invocation.ResponseProjection?.Clone(),
             };
         }
 
@@ -353,6 +354,7 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
             CallSiteId = invocation.CallSiteId,
             Capability = admittedCapability,
             NyxIdExplicitRequestGrant = grant,
+            ResponseProjection = invocation.ResponseProjection?.Clone(),
         };
     }
 

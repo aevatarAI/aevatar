@@ -195,6 +195,7 @@ public sealed class WorkflowParser
             TargetRole = s.TargetRole ?? s.Role,
             Parameters = WorkflowPrimitiveCatalog.CanonicalizeStepTypeParameters(parameters),
             Capability = MapCapability(s.Capability),
+            ResponseProjection = MapResponseProjection(s.ResponseProjection),
             TransformOperation = MapTransformOperation(canonicalType, parameters),
             Presentation = presentation,
             AgentToolScope = agentToolScope,
@@ -248,6 +249,57 @@ public sealed class WorkflowParser
         selector.QueryParameters.Add(NormalizeNames(request.QueryParameters, StringComparer.Ordinal));
         selector.HeaderParameters.Add(NormalizeNames(request.HeaderParameters, StringComparer.OrdinalIgnoreCase));
         return new ExternalWorkflowCapabilitySelector { NyxIdRequest = selector };
+    }
+
+    private static WorkflowToolResponseProjection? MapResponseProjection(
+        RawToolResponseProjection? rawProjection)
+    {
+        if (rawProjection is null)
+            return null;
+
+        var projection = new WorkflowToolResponseProjection();
+        foreach (var (outputName, rawOperations) in
+                 (rawProjection.Fields ?? new Dictionary<string, List<RawToolResponseProjectionOperation>>())
+                 .OrderBy(static field => field.Key, StringComparer.Ordinal))
+        {
+            var field = new WorkflowToolResponseProjectionField
+            {
+                OutputName = outputName ?? string.Empty,
+            };
+            foreach (var rawOperation in rawOperations ?? [])
+                field.Operations.Add(MapResponseProjectionOperation(rawOperation));
+            projection.Fields.Add(field);
+        }
+
+        return projection;
+    }
+
+    private static WorkflowToolResponseProjectionOperation MapResponseProjectionOperation(
+        RawToolResponseProjectionOperation rawOperation)
+    {
+        ArgumentNullException.ThrowIfNull(rawOperation);
+        var populated = (rawOperation.Pointer is null ? 0 : 1) +
+                        (rawOperation.ParseJson.HasValue ? 1 : 0) +
+                        (rawOperation.ArrayMatch is null ? 0 : 1);
+        if (populated != 1)
+        {
+            throw new InvalidOperationException(
+                "Each response_projection operation must contain exactly one of pointer, parse_json, or match.");
+        }
+
+        if (rawOperation.Pointer is not null)
+            return new WorkflowToolResponseProjectionOperation { JsonPointer = rawOperation.Pointer };
+        if (rawOperation.ParseJson.HasValue)
+            return new WorkflowToolResponseProjectionOperation { ParseJson = rawOperation.ParseJson.Value };
+
+        return new WorkflowToolResponseProjectionOperation
+        {
+            ArrayMatch = new WorkflowToolResponseProjectionArrayMatch
+            {
+                ElementJsonPointer = rawOperation.ArrayMatch!.Pointer ?? string.Empty,
+                ExpectedString = rawOperation.ArrayMatch.ExpectedString ?? string.Empty,
+            },
+        };
     }
 
     private static IEnumerable<string> NormalizeNames(IEnumerable<string>? values, StringComparer comparer) =>
@@ -1503,6 +1555,8 @@ public sealed class WorkflowParser
         public object? AllowedTools { get; set; }
         public object? ToolSets { get; set; }
         public RawStepCapability? Capability { get; set; }
+        [YamlMember(Alias = "response_projection")]
+        public RawToolResponseProjection? ResponseProjection { get; set; }
         public object? InteractionSpec { get; set; }
         public object? InteractionTemplateSpec { get; set; }
         public string? DeliveryTargetId { get; set; }
@@ -1525,6 +1579,30 @@ public sealed class WorkflowParser
 
         [YamlMember(Alias = "nyxid_request")]
         public RawNyxIdRequestSelector? NyxIdRequest { get; set; }
+    }
+
+    private sealed class RawToolResponseProjection
+    {
+        public Dictionary<string, List<RawToolResponseProjectionOperation>>? Fields { get; set; }
+    }
+
+    private sealed class RawToolResponseProjectionOperation
+    {
+        public string? Pointer { get; set; }
+
+        [YamlMember(Alias = "parse_json")]
+        public bool? ParseJson { get; set; }
+
+        [YamlMember(Alias = "match")]
+        public RawToolResponseProjectionArrayMatch? ArrayMatch { get; set; }
+    }
+
+    private sealed class RawToolResponseProjectionArrayMatch
+    {
+        public string? Pointer { get; set; }
+
+        [YamlMember(Alias = "equals")]
+        public string? ExpectedString { get; set; }
     }
 
     private sealed class RawNyxIdOperationSelector

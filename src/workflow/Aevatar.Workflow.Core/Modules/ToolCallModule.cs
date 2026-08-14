@@ -18,7 +18,28 @@ namespace Aevatar.Workflow.Core.Modules;
 public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
 {
     internal const string ModuleStateKey = "tool_call";
+    private const string ProjectedToolFailureCode = "WORKFLOW_PROJECTED_TOOL_CALL_FAILED";
+    private const string ProjectedToolFailureMessage =
+        "The projected tool call failed before a durable response was produced.";
+    private const string NyxIdProxyHttpFailurePrefix = "NYXID_PROXY_HTTP_";
     private static readonly TimeSpan PublicationRetryDelay = TimeSpan.FromMilliseconds(250);
+    private static readonly HashSet<string> ProjectionSafeFailureCodes = new(StringComparer.Ordinal)
+    {
+        "authorization_required",
+        "credential_denied",
+        "invalid_tool_execution_identity",
+        "tool_admission_conflict",
+        "tool_admission_unavailable",
+        "tool_denied",
+        "tool_error",
+        "tool_execution_already_started",
+        "tool_outcome_unknown",
+        "NYXID_PROXY_FORBIDDEN",
+        "NYXID_PROXY_RESPONSE_TOO_LARGE",
+        "NYXID_PROXY_SERVICE_ID_REQUIRED",
+        "NYXID_PROXY_SERVICE_SCOPE_FORBIDDEN",
+        "NYXID_PROXY_UNAUTHORIZED",
+    };
 
     internal static TimeSpan DurablePublicationRetryDelay => PublicationRetryDelay;
 
@@ -167,6 +188,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             return;
         }
 
+        result = ApplyResponseProjection(request, result, ctx);
         await PersistAndPublishToolOutcomeAsync(state, ctx, request, toolName, callId, result, ct);
     }
 
@@ -521,6 +543,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             result = WorkflowToolExecutionResult.Failed(string.Empty, string.Empty, ex.Message);
         }
 
+        result = ApplyResponseProjection(resumedRequest, result, ctx);
         if (result.Failure is { TerminalInvoked: false, Retryable: true } retryableFailure)
         {
             ctx.Logger.LogWarning(
@@ -557,6 +580,71 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             pending.ApprovalRequestId,
             WorkflowToolCallTerminalDecision.Approved,
             ct);
+    }
+
+    private static WorkflowToolExecutionResult ApplyResponseProjection(
+        StepRequestEvent request,
+        WorkflowToolExecutionResult result,
+        IWorkflowExecutionContext ctx)
+    {
+        var projection = request.ExternalInvocation?.ResponseProjection;
+        if (projection is null || result.PendingApproval is not null)
+            return result;
+
+        // A provider failure remains the authoritative failure, but its response body must not
+        // bypass an authored persistence boundary.
+        if (result.Failure is not null)
+        {
+            var safeCode = IsProjectionSafeFailureCode(result.Failure.ErrorCode)
+                ? result.Failure.ErrorCode
+                : ProjectedToolFailureCode;
+            return result with
+            {
+                ResultJson = string.Empty,
+                Failure = result.Failure with
+                {
+                    ErrorCode = safeCode,
+                    ErrorMessage = ProjectedToolFailureMessage,
+                },
+            };
+        }
+
+        try
+        {
+            return result with
+            {
+                ResultJson = WorkflowToolResponseProjector.Project(result.ResultJson, projection),
+            };
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or ArgumentException)
+        {
+            ctx.Logger.LogWarning(
+                exception,
+                "ToolCall: response projection failed before persistence run={RunId} step={StepId}",
+                request.RunId,
+                request.StepId);
+            return WorkflowToolExecutionResult.Failed(
+                string.Empty,
+                "WORKFLOW_TOOL_RESPONSE_PROJECTION_FAILED",
+                "The tool response did not satisfy the admitted response projection.",
+                terminalInvoked: true,
+                retryable: false);
+        }
+    }
+
+    private static bool IsProjectionSafeFailureCode(string errorCode)
+    {
+        if (string.IsNullOrEmpty(errorCode))
+            return false;
+
+        if (ProjectionSafeFailureCodes.Contains(errorCode))
+            return true;
+
+        return errorCode.Length == NyxIdProxyHttpFailurePrefix.Length + 3 &&
+               errorCode.StartsWith(NyxIdProxyHttpFailurePrefix, StringComparison.Ordinal) &&
+               errorCode[NyxIdProxyHttpFailurePrefix.Length] is >= '1' and <= '5' &&
+               errorCode[NyxIdProxyHttpFailurePrefix.Length + 1] is >= '0' and <= '9' &&
+               errorCode[NyxIdProxyHttpFailurePrefix.Length + 2] is >= '0' and <= '9';
     }
 
     private static bool TryResolvePending(

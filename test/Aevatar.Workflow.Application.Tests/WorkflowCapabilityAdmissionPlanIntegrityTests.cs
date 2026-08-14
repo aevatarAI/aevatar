@@ -121,6 +121,66 @@ public sealed class WorkflowCapabilityAdmissionPlanIntegrityTests
     }
 
     [Fact]
+    public void CheckCompatibility_ShouldBindResponseProjectionToInvocationAndAdmissionDigest()
+    {
+        var fixture = ExplicitRequestFixture(ExternalCapabilityExecutionMode.Interactive);
+        var projection = new WorkflowToolResponseProjection
+        {
+            Fields =
+            {
+                new WorkflowToolResponseProjectionField
+                {
+                    OutputName = "instance_code",
+                    Operations =
+                    {
+                        new WorkflowToolResponseProjectionOperation
+                        {
+                            JsonPointer = "/data/instance_code",
+                        },
+                    },
+                },
+            },
+        };
+        fixture.ExpectedInvocations[0].ResponseProjection = projection.Clone();
+        fixture.Plan.InvocationAdmissions[0].ResponseProjection = projection.Clone();
+        Rehash(fixture.Plan);
+        Check(fixture).Succeeded.Should().BeTrue();
+
+        var admittedPointer = fixture.Plan.InvocationAdmissions[0]
+            .ResponseProjection.Fields[0].Operations[0];
+        var expectedPointer = fixture.ExpectedInvocations[0]
+            .ResponseProjection.Fields[0].Operations[0];
+        admittedPointer.JsonPointer = "/data/other_instance_code";
+        expectedPointer.JsonPointer = "/data/other_instance_code";
+
+        Check(fixture).Failure.Should().Be(
+            WorkflowCapabilityAdmissionCompatibilityFailure.AdmissionDigestMismatch);
+    }
+
+    [Fact]
+    public void CheckCompatibility_ShouldRejectResponseProjectionThatDiffersAtTheSameCallSite()
+    {
+        var fixture = ExplicitRequestFixture(ExternalCapabilityExecutionMode.Interactive);
+        fixture.ExpectedInvocations[0].ResponseProjection = new WorkflowToolResponseProjection
+        {
+            Fields =
+            {
+                new WorkflowToolResponseProjectionField
+                {
+                    OutputName = "status",
+                    Operations =
+                    {
+                        new WorkflowToolResponseProjectionOperation { JsonPointer = "/data/status" },
+                    },
+                },
+            },
+        };
+
+        Check(fixture).Failure.Should().Be(
+            WorkflowCapabilityAdmissionCompatibilityFailure.InvocationMismatch);
+    }
+
+    [Fact]
     public void CheckCompatibility_WithMalformedDurableOwner_ShouldReturnTypedFailure()
     {
         var fixture = ExplicitRequestFixture(ExternalCapabilityExecutionMode.Durable);

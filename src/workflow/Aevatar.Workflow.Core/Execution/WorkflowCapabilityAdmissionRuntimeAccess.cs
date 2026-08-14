@@ -9,6 +9,7 @@ internal enum WorkflowCapabilityAdmissionResolution
     CallSiteMissing,
     CallSiteAmbiguous,
     SelectorMismatch,
+    ResponseProjectionMismatch,
 }
 
 internal readonly record struct WorkflowCapabilityAdmissionLookup(
@@ -23,6 +24,8 @@ internal readonly record struct WorkflowCapabilityAdmissionLookup(
         WorkflowCapabilityAdmissionResolution.CallSiteMissing => "EXTERNAL_CAPABILITY_CALL_SITE_NOT_ADMITTED",
         WorkflowCapabilityAdmissionResolution.CallSiteAmbiguous => "EXTERNAL_CAPABILITY_CALL_SITE_AMBIGUOUS",
         WorkflowCapabilityAdmissionResolution.SelectorMismatch => "EXTERNAL_CAPABILITY_PROOF_SELECTOR_MISMATCH",
+        WorkflowCapabilityAdmissionResolution.ResponseProjectionMismatch =>
+            "EXTERNAL_CAPABILITY_RESPONSE_PROJECTION_MISMATCH",
         _ => string.Empty,
     };
 
@@ -36,6 +39,8 @@ internal readonly record struct WorkflowCapabilityAdmissionLookup(
             "this call site resolves to more than one committed admission proof",
         WorkflowCapabilityAdmissionResolution.SelectorMismatch =>
             "the committed admission proof does not match the compiled call-site selector",
+        WorkflowCapabilityAdmissionResolution.ResponseProjectionMismatch =>
+            "the committed admission proof does not match the compiled response projection",
         _ => string.Empty,
     };
 }
@@ -94,6 +99,14 @@ internal static class WorkflowCapabilityAdmissionRuntimeAccess
         {
             return new WorkflowCapabilityAdmissionLookup(
                 WorkflowCapabilityAdmissionResolution.SelectorMismatch,
+                null);
+        }
+        if (!WorkflowToolResponseProjectionContract.AreEquivalent(
+                invocation.ResponseProjection,
+                admission.ResponseProjection))
+        {
+            return new WorkflowCapabilityAdmissionLookup(
+                WorkflowCapabilityAdmissionResolution.ResponseProjectionMismatch,
                 null);
         }
 

@@ -380,7 +380,10 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
             }
 
             if (!string.Equals(expected[index].CallSiteId, actual[index].CallSiteId, StringComparison.Ordinal) ||
-                !selectorMatches)
+                !selectorMatches ||
+                !WorkflowToolResponseProjectionContract.AreEquivalent(
+                    expected[index].ResponseProjection,
+                    actual[index].ResponseProjection))
             {
                 return Failed(
                     WorkflowCapabilityAdmissionCompatibilityFailure.InvocationMismatch,
@@ -650,6 +653,18 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
                 throw new InvalidOperationException("Workflow external invocation tool name is invalid.");
             }
             ValidateSelector(invocation.Selector);
+            if (invocation.ResponseProjection is not null)
+            {
+                if (!string.Equals(invocation.ToolName, "nyxid_proxy", StringComparison.OrdinalIgnoreCase) ||
+                    invocation.Selector.SelectorCase is not (
+                        ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdOperation or
+                        ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdRequest))
+                {
+                    throw new InvalidOperationException(
+                        "Workflow tool response projection is only valid for a NyxID proxy invocation.");
+                }
+                WorkflowToolResponseProjectionContract.ValidateOrThrow(invocation.ResponseProjection);
+            }
         }
         EnsureUniqueCallSites(invocations.Select(static invocation => invocation.CallSiteId));
     }
@@ -681,6 +696,18 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
         {
             throw new InvalidOperationException(
                 "Workflow capability invocation admission proof is required.");
+        }
+
+        if (admission.ResponseProjection is not null)
+        {
+            if (admission.Capability.CapabilityCase is not (
+                    ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService or
+                    ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest))
+            {
+                throw new InvalidOperationException(
+                    "Workflow tool response projection is not valid for this capability proof.");
+            }
+            WorkflowToolResponseProjectionContract.ValidateOrThrow(admission.ResponseProjection);
         }
 
         switch (admission.Capability.CapabilityCase)

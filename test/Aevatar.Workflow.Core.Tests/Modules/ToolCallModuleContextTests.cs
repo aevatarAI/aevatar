@@ -10,6 +10,7 @@ using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Text.Json;
 
 namespace Aevatar.Workflow.Core.Tests.Modules;
 
@@ -85,6 +86,187 @@ public sealed class ToolCallModuleContextTests
         tool.Requests.Should().BeEmpty();
         LastCompleted(ctx).Success.Should().BeFalse();
         LastCompleted(ctx).Error.Should().Contain(expectedCode);
+    }
+
+    [Fact]
+    public async Task ToolCallModule_ShouldProjectNestedJsonBeforeDurableCompletionPersistence()
+    {
+        const string form =
+            """[{"id":"field-list","value":[[{"id":"vendor-widget","value":"Acme Pte Ltd"},{"id":"secret-widget","value":"secret-bank-account"}]]}]""";
+        var response = JsonSerializer.Serialize(new
+        {
+            code = 0,
+            data = new
+            {
+                instance_code = "instance-1",
+                status = "PENDING",
+                form,
+                sensitive_member_id = "ou-sensitive-member",
+            },
+        });
+        var projection = ApprovalDetailProjection();
+        var tool = new FakeAgentTool("nyxid_proxy", _ => response);
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext
+        {
+            CapabilityAdmissionPlan = AdmissionPlan("wf-alpha/call_proxy", projection: projection),
+            FailNextPublishType = typeof(WorkflowToolCallCompletedEvent),
+        };
+
+        var act = () => ExecuteToolCallAsync(
+            module,
+            ctx,
+            tool.Name,
+            executionId: "exec-projection",
+            externalInvocation: NyxIdInvocation("wf-alpha/call_proxy", projection: projection));
+
+        await act.Should().ThrowAsync<WorkflowDurablePublicationPendingException>();
+        var durable = ctx.LoadState<ToolCallModuleState>("tool_call")
+            .Completions.Should().ContainSingle().Subject;
+        durable.ToolCompletion.ResultJson.Should().Be(
+            "{\"instance_code\":\"instance-1\",\"status\":\"PENDING\",\"vendor\":\"Acme Pte Ltd\"}");
+        durable.StepCompletion.Output.Should().Be(durable.ToolCompletion.ResultJson);
+        durable.ToString().Should().NotContain("secret-bank-account");
+        durable.ToString().Should().NotContain("ou-sensitive-member");
+    }
+
+    [Fact]
+    public async Task ToolCallModule_ShouldFailWithoutPersistingRawResponse_WhenProjectionDoesNotMatch()
+    {
+        const string rawResponse =
+            """{"code":0,"data":{"instance_code":"instance-1","status":"PENDING","form":"[]","sensitive":"must-not-persist"}}""";
+        var projection = ApprovalDetailProjection();
+        var tool = new FakeAgentTool("nyxid_proxy", _ => rawResponse);
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext
+        {
+            CapabilityAdmissionPlan = AdmissionPlan("wf-alpha/call_proxy", projection: projection),
+        };
+
+        await ExecuteToolCallAsync(
+            module,
+            ctx,
+            tool.Name,
+            externalInvocation: NyxIdInvocation("wf-alpha/call_proxy", projection: projection));
+
+        var toolCompletion = ctx.Published.Select(static item => item.Event)
+            .OfType<WorkflowToolCallCompletedEvent>()
+            .Should().ContainSingle().Subject;
+        toolCompletion.Success.Should().BeFalse();
+        toolCompletion.ResultJson.Should().BeEmpty();
+        toolCompletion.Error.Should().Contain("WORKFLOW_TOOL_RESPONSE_PROJECTION_FAILED");
+        LastCompleted(ctx).Output.Should().BeEmpty();
+        ctx.Published.Select(static item => item.Event).Select(static item => item.ToString())
+            .Should().NotContain(static value => value.Contains("must-not-persist", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ToolCallModule_ShouldSanitizeProjectedProviderFailureBeforeDurablePersistenceAndReplay()
+    {
+        const string sensitiveMarker = "sensitive-marker";
+        var projection = ApprovalDetailProjection();
+        var tool = new ScriptedResultWorkflowTool(
+            "nyxid_proxy",
+            WorkflowToolExecutionResult.Failed(
+                $$"""{"raw":"{{sensitiveMarker}}"}""",
+                "NYXID_PROXY_HTTP_503",
+                $"Provider response contained {sensitiveMarker}."));
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext
+        {
+            CapabilityAdmissionPlan = AdmissionPlan("wf-alpha/call_proxy", projection: projection),
+            FailNextPublishType = typeof(WorkflowToolCallCompletedEvent),
+        };
+
+        var firstAttempt = () => ExecuteToolCallAsync(
+            module,
+            ctx,
+            tool.Name,
+            executionId: "exec-projected-failure",
+            externalInvocation: NyxIdInvocation("wf-alpha/call_proxy", projection: projection));
+
+        await firstAttempt.Should().ThrowAsync<WorkflowDurablePublicationPendingException>();
+        tool.ExecuteCalls.Should().Be(1);
+        var durableState = ctx.LoadState<ToolCallModuleState>("tool_call");
+        var durable = durableState.Completions.Should().ContainSingle().Subject;
+        durable.ToolCompletion.ResultJson.Should().BeEmpty();
+        durable.ToolCompletion.Error.Should().Contain("NYXID_PROXY_HTTP_503");
+        durable.ToolCompletion.Error.Should().Contain(
+            "The projected tool call failed before a durable response was produced.");
+        durableState.ToString().Should().NotContain(sensitiveMarker);
+
+        await ExecuteToolCallAsync(
+            module,
+            ctx,
+            tool.Name,
+            executionId: "exec-projected-failure",
+            externalInvocation: NyxIdInvocation("wf-alpha/call_proxy", projection: projection));
+
+        tool.ExecuteCalls.Should().Be(1);
+        var publishedCompletions = ctx.Published.Select(static item => item.Event)
+            .Where(static item => item is WorkflowToolCallCompletedEvent or StepCompletedEvent)
+            .ToList();
+        publishedCompletions.Should().HaveCount(2);
+        publishedCompletions.Select(static item => item.ToString())
+            .Should().NotContain(value => value.Contains(sensitiveMarker, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ToolCallModule_ShouldReplaceUntrustedProjectedProviderFailureCode()
+    {
+        const string sensitiveMarker = "sensitive-marker";
+        var projection = ApprovalDetailProjection();
+        var tool = new ScriptedResultWorkflowTool(
+            "nyxid_proxy",
+            WorkflowToolExecutionResult.Failed(
+                "{}",
+                $"NYXID_PROXY_HTTP_503-{sensitiveMarker}",
+                "Provider failure."));
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext
+        {
+            CapabilityAdmissionPlan = AdmissionPlan("wf-alpha/call_proxy", projection: projection),
+        };
+
+        await ExecuteToolCallAsync(
+            module,
+            ctx,
+            tool.Name,
+            externalInvocation: NyxIdInvocation("wf-alpha/call_proxy", projection: projection));
+
+        var toolCompletion = ctx.Published.Select(static item => item.Event)
+            .OfType<WorkflowToolCallCompletedEvent>()
+            .Should().ContainSingle().Subject;
+        toolCompletion.Error.Should().Contain("WORKFLOW_PROJECTED_TOOL_CALL_FAILED");
+        toolCompletion.Error.Should().NotContain(sensitiveMarker);
+    }
+
+    [Fact]
+    public async Task ToolCallModule_ShouldRejectProjectionThatDiffersFromAdmissionProof()
+    {
+        var admittedProjection = ApprovalDetailProjection();
+        var runtimeProjection = ApprovalDetailProjection();
+        runtimeProjection.Fields.Single(static field => field.OutputName == "status")
+            .Operations[0].JsonPointer = "/data/other_status";
+        var tool = new RecordingWorkflowTool("nyxid_proxy");
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext
+        {
+            CapabilityAdmissionPlan = AdmissionPlan(
+                "wf-alpha/call_proxy",
+                projection: admittedProjection),
+        };
+
+        await ExecuteToolCallAsync(
+            module,
+            ctx,
+            tool.Name,
+            externalInvocation: NyxIdInvocation(
+                "wf-alpha/call_proxy",
+                projection: runtimeProjection));
+
+        tool.Requests.Should().BeEmpty();
+        LastCompleted(ctx).Error.Should().Contain("EXTERNAL_CAPABILITY_RESPONSE_PROJECTION_MISMATCH");
     }
 
     [Fact]
@@ -754,7 +936,8 @@ public sealed class ToolCallModuleContextTests
     private static ExternalToolInvocationSpec NyxIdInvocation(
         string callSiteId,
         string userServiceId = "us-shop-alpha",
-        string operationId = "get_item") =>
+        string operationId = "get_item",
+        WorkflowToolResponseProjection? projection = null) =>
         new()
         {
             CallSiteId = callSiteId,
@@ -767,6 +950,7 @@ public sealed class ToolCallModuleContextTests
                     EndpointId = operationId,
                 },
             },
+            ResponseProjection = projection?.Clone(),
         };
 
     private static ExternalToolInvocationSpec CodeExecutionInvocation(string callSiteId) =>
@@ -783,7 +967,8 @@ public sealed class ToolCallModuleContextTests
     private static WorkflowCapabilityAdmissionPlan AdmissionPlan(
         string callSiteId,
         string userServiceId = "us-shop-alpha",
-        string operationId = "get_item")
+        string operationId = "get_item",
+        WorkflowToolResponseProjection? projection = null)
     {
         var plan = new WorkflowCapabilityAdmissionPlan
         {
@@ -804,9 +989,51 @@ public sealed class ToolCallModuleContextTests
                     ContractDigest = "server-derived-digest",
                 },
             },
+            ResponseProjection = projection?.Clone(),
         });
         return plan;
     }
+
+    private static WorkflowToolResponseProjection ApprovalDetailProjection()
+    {
+        var projection = new WorkflowToolResponseProjection();
+        projection.Fields.Add(Field("instance_code", Pointer("/data/instance_code")));
+        projection.Fields.Add(Field("status", Pointer("/data/status")));
+        projection.Fields.Add(Field(
+            "vendor",
+            Pointer("/data/form"),
+            ParseJson(),
+            Match("/id", "field-list"),
+            Pointer("/value/0"),
+            Match("/id", "vendor-widget"),
+            Pointer("/value")));
+        return projection;
+    }
+
+    private static WorkflowToolResponseProjectionField Field(
+        string outputName,
+        params WorkflowToolResponseProjectionOperation[] operations) =>
+        new()
+        {
+            OutputName = outputName,
+            Operations = { operations },
+        };
+
+    private static WorkflowToolResponseProjectionOperation Pointer(string pointer) =>
+        new() { JsonPointer = pointer };
+
+    private static WorkflowToolResponseProjectionOperation ParseJson() =>
+        new() { ParseJson = true };
+
+    private static WorkflowToolResponseProjectionOperation Match(string pointer, string expected) =>
+        new()
+        {
+            ArrayMatch = new WorkflowToolResponseProjectionArrayMatch
+            {
+                ElementJsonPointer = pointer,
+                ExpectedString = expected,
+            },
+        };
 
     private static async Task ExecuteToolCallAsync(
         ToolCallModule module,
