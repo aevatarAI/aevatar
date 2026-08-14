@@ -325,22 +325,60 @@ public sealed class AppScopedWorkflowService
             draft.UpdatedAtUtc);
     }
 
-    private string AlignWorkflowYamlName(string yaml, string workflowName)
+    private static string AlignWorkflowYamlName(string yaml, string workflowName)
     {
         if (string.IsNullOrWhiteSpace(yaml) || string.IsNullOrWhiteSpace(workflowName))
             return yaml;
 
-        var parsed = _yamlDocumentService.Parse(yaml);
-        if (parsed.Document == null)
-            return yaml;
-
-        if (string.Equals(parsed.Document.Name?.Trim(), workflowName, StringComparison.Ordinal))
-            return yaml;
-
-        return _yamlDocumentService.Serialize(parsed.Document with
+        var alignedNameLine = $"name: {FormatWorkflowNameScalar(workflowName)}";
+        var lines = yaml.Split('\n');
+        for (var index = 0; index < lines.Length; index++)
         {
-            Name = workflowName,
-        });
+            var line = lines[index];
+            var withoutCarriageReturn = line.TrimEnd('\r');
+            if (!IsTopLevelNameLine(withoutCarriageReturn))
+                continue;
+
+            lines[index] = line.EndsWith('\r')
+                ? alignedNameLine + "\r"
+                : alignedNameLine;
+            return string.Join('\n', lines);
+        }
+
+        return alignedNameLine + "\n" + yaml;
+    }
+
+    private static bool IsTopLevelNameLine(string line)
+    {
+        if (!line.StartsWith("name", StringComparison.Ordinal))
+            return false;
+
+        for (var index = "name".Length; index < line.Length; index++)
+        {
+            var character = line[index];
+            if (character == ':')
+                return true;
+
+            if (character != ' ' && character != '\t')
+                return false;
+        }
+
+        return false;
+    }
+
+    private static string FormatWorkflowNameScalar(string workflowName)
+    {
+        if (workflowName.All(static character =>
+                char.IsLetterOrDigit(character) ||
+                character == ' ' ||
+                character == '_' ||
+                character == '-' ||
+                character == '.'))
+        {
+            return workflowName;
+        }
+
+        return "'" + workflowName.Replace("'", "''", StringComparison.Ordinal) + "'";
     }
 
     private static string ResolveDraftWorkflowName(

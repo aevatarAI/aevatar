@@ -497,6 +497,9 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
             workspaceCommandPort: workspacePort);
         var yaml = """
             name: x_digest
+            when_to_use: Use when generating weekly reports.
+            on_failure:
+              mode: fail
             steps:
               - id: fetch
                 type: tool_call
@@ -519,6 +522,8 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
         saved.WorkflowId.Should().Be("wf-alpha");
         saved.WorkflowName.Should().Be("X Digest");
         saved.Yaml.Should().Contain("name: X Digest");
+        saved.Yaml.Should().Contain("when_to_use: Use when generating weekly reports.");
+        saved.Yaml.Should().Contain("on_failure:");
         accepted.WorkflowId.Should().Be("wf-alpha");
         accepted.Accepted.Should().BeTrue();
         accepted.Readiness.Stage.Should().Be("projection_pending");
