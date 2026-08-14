@@ -104,7 +104,7 @@ public sealed class OrleansActorStreamCoverageTests
     }
 
     [Fact]
-    public async Task RelayAsync_WhenPublishFails_ShouldSwallowAndContinue()
+    public async Task RelayAsync_WhenPublishFails_ShouldContinueAndThrowAggregate()
     {
         var provider = new RecordingOrleansStreamProvider();
         provider.GetRecordedStream("bad-target").ThrowOnPublish = true;
@@ -126,8 +126,7 @@ public sealed class OrleansActorStreamCoverageTests
         var stream = CreateStream(provider: provider, forwardingRegistry: registry);
 
         var act = () => stream.ProduceAsync(new StringValue { Value = "continue" });
-        await act.Should().NotThrowAsync();
-
+        (await act.Should().ThrowAsync<AggregateException>()).Which.InnerExceptions.Should().ContainSingle();
         provider.GetRecordedStream("good-target").Published.Should().ContainSingle();
     }
 
