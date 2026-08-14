@@ -47,10 +47,30 @@ public sealed class MainnetBootScriptTests
     }
 
     [Fact]
-    public void AppSettings_ExplicitInternalNyxIdTransport_ShouldRemainPrimary()
+    public void AppSettings_DistributedNyxIdTombstone_ShouldOverrideLegacyBaseInternalTransport()
+    {
+        var configuration = BuildMainnetConfiguration(baseOverrides: new Dictionary<string, string?>
+        {
+            ["Aevatar:NyxId:InternalApiBaseUrl"] =
+                "http://nyxid-backend-production-api-svc.chronoai-platform.svc.cluster.local:3001",
+        });
+        var services = new ServiceCollection();
+
+        services.AddNyxIdApiAccess(configuration);
+
+        configuration["Aevatar:NyxId:InternalApiBaseUrl"].Should().BeEmpty();
+        using var provider = services.BuildServiceProvider();
+        var options = provider.GetRequiredService<NyxIdToolOptions>();
+        options.InternalApiBaseUrl.Should().BeNull();
+        options.EffectiveTransportBaseUrl.Should().Be("https://nyx-api.chrono-ai.fun");
+        options.PublicTransportFallbackBaseUrl.Should().BeNull();
+    }
+
+    [Fact]
+    public void AppSettings_ExplicitEnvironmentInternalNyxIdTransport_ShouldRemainPrimary()
     {
         const string internalApiBaseUrl = "http://nyxid.internal:3001";
-        var configuration = BuildMainnetConfiguration(new Dictionary<string, string?>
+        var configuration = BuildMainnetConfiguration(environmentOverrides: new Dictionary<string, string?>
         {
             ["Aevatar:NyxId:InternalApiBaseUrl"] = internalApiBaseUrl,
         });
@@ -307,17 +327,21 @@ public sealed class MainnetBootScriptTests
     }
 
     private static IConfigurationRoot BuildMainnetConfiguration(
-        IReadOnlyDictionary<string, string?>? overrides = null)
+        IReadOnlyDictionary<string, string?>? baseOverrides = null,
+        IReadOnlyDictionary<string, string?>? environmentOverrides = null)
     {
-        var appSettingsPath = Path.Combine(
+        var sourceDirectory = Path.Combine(
             FindRepoRoot(),
             "src",
-            "Aevatar.Mainnet.Host.Api",
-            "appsettings.json");
-        using var stream = File.OpenRead(appSettingsPath);
-        var builder = new ConfigurationBuilder().AddJsonStream(stream);
-        if (overrides is not null)
-            builder.AddInMemoryCollection(overrides);
+            "Aevatar.Mainnet.Host.Api");
+        using var baseStream = File.OpenRead(Path.Combine(sourceDirectory, "appsettings.json"));
+        using var distributedStream = File.OpenRead(Path.Combine(sourceDirectory, "appsettings.Distributed.json"));
+        var builder = new ConfigurationBuilder().AddJsonStream(baseStream);
+        if (baseOverrides is not null)
+            builder.AddInMemoryCollection(baseOverrides);
+        builder.AddJsonStream(distributedStream);
+        if (environmentOverrides is not null)
+            builder.AddInMemoryCollection(environmentOverrides);
         return builder.Build();
     }
 
