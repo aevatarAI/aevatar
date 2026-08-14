@@ -3507,6 +3507,45 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
+    public async Task StartWorkflow_WhenSourceReadableCredentialHasAuthority_ShouldProjectRefreshableDelegation()
+    {
+        var harness = new Harness();
+        harness.WorkflowDispatch.Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
+            .Success(new WorkflowChatRunAcceptedReceipt("workflow-actor", "wf-main", "wf-command", "wf-correlation"));
+        var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
+
+        using var _ = PushContext(
+            callId: "call-workflow-source-readable-authority",
+            channelPlatform: "lark",
+            senderBindingId: "binding-source-readable",
+            nyxIdCredentialKind: AgentToolNyxIdCredentialKind.SourceReadableUserBearer,
+            nyxIdAuthority: new AgentToolNyxIdAuthorityContext(
+                "lark",
+                "tenant-1",
+                "external-user-1"));
+        var output = await tool.ExecuteAsync("""
+            {
+              "workflow_id": "wf-main",
+              "inputs": { "prompt": "run workflow" },
+              "wait": "stream"
+            }
+            """);
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        var callerCredential = harness.WorkflowDispatch.Command!.CallerCredential;
+        callerCredential.Should().NotBeNull();
+        callerCredential!.BearerToken.Should().Be("access-token");
+        callerCredential.SourceReadableUserBearerToken.Should().Be("access-token");
+        callerCredential.Kind.Should().Be(NyxIdCallerCredentialKind.ProxyDelegation);
+        callerCredential.NyxIdAuthority.Should().NotBeNull();
+        callerCredential.NyxIdAuthority!.Platform.Should().Be("lark");
+        callerCredential.NyxIdAuthority.Tenant.Should().Be("tenant-1");
+        callerCredential.NyxIdAuthority.ExternalUserId.Should().Be("external-user-1");
+        callerCredential.NyxIdAuthority.Scope.Should().Be("proxy");
+        callerCredential.NyxIdAuthority.BindingId.Should().Be("binding-source-readable");
+    }
+
+    [Fact]
     public async Task StartWorkflow_ShouldKeepTrustedControlInTypedFields_NotMetadataBag()
     {
         var harness = new Harness();
@@ -4637,7 +4676,8 @@ public sealed class AevatarInvocationToolSourceTests
         AgentToolNyxIdCredentialKind nyxIdCredentialKind = AgentToolNyxIdCredentialKind.Unspecified,
         string? organizationAccessToken = "org-token",
         string? senderAccessToken = "sender-token",
-        string? sourceReadableAccessToken = null) =>
+        string? sourceReadableAccessToken = null,
+        AgentToolNyxIdAuthorityContext? nyxIdAuthority = null) =>
         AgentToolContextScope.Push(new AgentToolExecutionContext(
             new AgentToolRequestIdentity(requestId, callId),
             new AgentToolCredentials(
@@ -4656,7 +4696,7 @@ public sealed class AevatarInvocationToolSourceTests
                 null,
                 ToDeliveryCredential(durableReplyCredentialRef, durableReplyCredentialExpiresAtUnixMs),
                 "bot-reg-1"),
-            new AgentToolSenderBindingContext("binding-1", senderNyxUserId),
+            new AgentToolSenderBindingContext(senderBindingId, senderNyxUserId),
             new LLMRequestRoutingContext("model-1", "route-1", 4, "memory"),
             new AgentToolConnectedServicesContext("""{"service":"ctx"}"""),
             workflowRuntime ?? AgentWorkflowRuntimeContext.Empty,
@@ -4665,6 +4705,7 @@ public sealed class AevatarInvocationToolSourceTests
         {
             InputFileRefs = inputFileRefs ?? [],
             ExecutionOwner = AgentToolExecutionOwners.HostService(nameof(AevatarInvocationToolSourceTests)),
+            NyxIdAuthority = nyxIdAuthority ?? AgentToolNyxIdAuthorityContext.Empty,
         });
 
     private sealed class StartingAdmissionLedger : IAgentToolAdmissionLedger

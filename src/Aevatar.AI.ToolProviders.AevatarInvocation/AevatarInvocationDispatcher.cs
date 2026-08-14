@@ -20,6 +20,7 @@ using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using WorkflowRunCallerCredential = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential;
+using WorkflowRunCallerNyxIdAuthority = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerNyxIdAuthority;
 
 namespace Aevatar.AI.ToolProviders.AevatarInvocation;
 
@@ -2088,12 +2089,29 @@ public sealed class AevatarInvocationDispatcher
         if (parsed.IsMissing)
             return WorkflowCallerCredentialResolution.Success(null);
 
+        var supportsProxyDelegation = credentialKind is
+            NyxIdCallerCredentialKind.SourceReadableUserBearer or
+            NyxIdCallerCredentialKind.ProxyDelegation;
+        var authority = supportsProxyDelegation && context?.NyxIdAuthority.IsComplete == true
+            ? new WorkflowRunCallerNyxIdAuthority(
+                context.NyxIdAuthority.Platform!.Trim(),
+                context.NyxIdAuthority.Tenant?.Trim() ?? string.Empty,
+                context.NyxIdAuthority.ExternalUserId!.Trim(),
+                string.IsNullOrWhiteSpace(context.NyxIdAuthority.Scope)
+                    ? "proxy"
+                    : context.NyxIdAuthority.Scope.Trim(),
+                Normalize(context.SenderBinding.BindingId))
+            : null;
+        if (credentialKind == NyxIdCallerCredentialKind.SourceReadableUserBearer && authority != null)
+            credentialKind = NyxIdCallerCredentialKind.ProxyDelegation;
+
         var sourceReadableUserBearerToken = credentialKind == NyxIdCallerCredentialKind.ProxyDelegation
             ? AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(context?.Credentials)
             : null;
         return WorkflowCallerCredentialResolution.Success(
             new WorkflowRunCallerCredential(
                 parsed.NormalizedBearerToken,
+                NyxIdAuthority: authority,
                 Kind: credentialKind,
                 SourceReadableUserBearerToken: sourceReadableUserBearerToken));
     }
