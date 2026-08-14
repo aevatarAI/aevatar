@@ -269,31 +269,10 @@ public static class IdentityServiceCollectionExtensions
         {
             services.Configure<NyxIdBrokerOptions>(options =>
             {
-                var internalApiBaseUrl =
-                    configuration[NyxIdBrokerOptions.InternalApiBaseUrlConfigurationKey];
                 var publicApiBaseUrl =
                     configuration[NyxIdBrokerOptions.ApiBaseUrlConfigurationKey];
-                options.TransportBaseUrl =
-                    (!string.IsNullOrWhiteSpace(internalApiBaseUrl)
-                        ? internalApiBaseUrl
-                        : publicApiBaseUrl ?? string.Empty)
-                    .Trim()
-                    .TrimEnd('/');
                 var normalizedPublicApiBaseUrl = publicApiBaseUrl?.Trim().TrimEnd('/');
-                options.PublicTransportFallbackBaseUrl =
-                    !string.IsNullOrWhiteSpace(internalApiBaseUrl) &&
-                    !string.IsNullOrWhiteSpace(normalizedPublicApiBaseUrl) &&
-                    !UrlsEqual(options.TransportBaseUrl, normalizedPublicApiBaseUrl)
-                        ? normalizedPublicApiBaseUrl
-                        : null;
-                if (int.TryParse(
-                        configuration[NyxIdTransportFallbackPolicy.TimeoutSecondsConfigurationKey],
-                        out var internalFallbackTimeoutSeconds) &&
-                    internalFallbackTimeoutSeconds > 0)
-                {
-                    options.InternalApiFallbackTimeoutSeconds =
-                        NyxIdTransportFallbackPolicy.NormalizeTimeoutSeconds(internalFallbackTimeoutSeconds);
-                }
+                options.PublicApiBaseUrl = normalizedPublicApiBaseUrl ?? string.Empty;
                 options.ResourceServerBaseUrl =
                     (normalizedPublicApiBaseUrl ?? string.Empty)
                     .Trim()
@@ -306,9 +285,7 @@ public static class IdentityServiceCollectionExtensions
         services.AddHttpClient(NyxIdRemoteCapabilityBroker.HttpClientName)
             .ConfigurePrimaryHttpMessageHandler(static () => new HttpClientHandler
             {
-                // The public retry is allowed only when the primary connection was never
-                // established. Keep redirects visible so a failure after a 3xx cannot be
-                // misclassified as a pre-connect failure against the internal transport.
+                // Broker control-plane requests must not silently cross origins through redirects.
                 AllowAutoRedirect = false,
             });
         services.TryAddSingleton<NyxIdRemoteCapabilityBroker>();
@@ -357,20 +334,6 @@ public static class IdentityServiceCollectionExtensions
         services.TryAddSingleton<ChannelSlashCommandRegistry>();
 
         return services;
-    }
-
-    private static bool UrlsEqual(string left, string right)
-    {
-        if (!Uri.TryCreate(left.TrimEnd('/') + "/", UriKind.Absolute, out var leftUri) ||
-            !Uri.TryCreate(right.TrimEnd('/') + "/", UriKind.Absolute, out var rightUri))
-        {
-            return false;
-        }
-
-        return string.Equals(leftUri.Scheme, rightUri.Scheme, StringComparison.OrdinalIgnoreCase) &&
-               string.Equals(leftUri.Host, rightUri.Host, StringComparison.OrdinalIgnoreCase) &&
-               leftUri.Port == rightUri.Port &&
-               string.Equals(leftUri.AbsolutePath, rightUri.AbsolutePath, StringComparison.Ordinal);
     }
 
     private static IServiceCollection AddIdentityOAuthCommandDispatch<TCommand, TAgent>(

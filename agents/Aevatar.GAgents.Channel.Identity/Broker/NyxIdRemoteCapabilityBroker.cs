@@ -4,7 +4,6 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using Aevatar.Configuration;
 using Aevatar.Foundation.Abstractions.Helpers;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity;
@@ -643,67 +642,8 @@ public sealed class NyxIdRemoteCapabilityBroker :
         string accessToken,
         CancellationToken ct)
     {
-        using var request = CreateCatalogRequest(_options.TransportBaseUrl, accessToken);
-        if (string.IsNullOrWhiteSpace(_options.PublicTransportFallbackBaseUrl))
-            return await http.SendAsync(request, ct).ConfigureAwait(false);
-
-        using var totalRequestCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        if (http.Timeout != Timeout.InfiniteTimeSpan)
-            totalRequestCts.CancelAfter(http.Timeout);
-        using var primaryAttemptCts = CancellationTokenSource.CreateLinkedTokenSource(totalRequestCts.Token);
-        var primaryTimeout = _options.EffectiveInternalApiFallbackTimeout;
-        primaryAttemptCts.CancelAfter(primaryTimeout);
-
-        HttpResponseMessage primaryResponse;
-        try
-        {
-            primaryResponse = await http.SendAsync(
-                    request,
-                    HttpCompletionOption.ResponseHeadersRead,
-                    primaryAttemptCts.Token)
-                .ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (
-            !ct.IsCancellationRequested &&
-            !totalRequestCts.IsCancellationRequested &&
-            primaryAttemptCts.IsCancellationRequested)
-        {
-            _logger.LogWarning(
-                "NyxID internal user-service catalog returned no response headers within {TimeoutSeconds}s; retrying the configured public transport once",
-                primaryTimeout.TotalSeconds);
-            return await SendCatalogFallbackAsync(http, accessToken, totalRequestCts.Token)
-                .ConfigureAwait(false);
-        }
-        catch (HttpRequestException exception) when (
-            NyxIdTransportFailureClassifier.IsPreConnectFailure(exception) &&
-            !ct.IsCancellationRequested &&
-            !totalRequestCts.IsCancellationRequested)
-        {
-            return await SendCatalogFallbackAsync(http, accessToken, totalRequestCts.Token)
-                .ConfigureAwait(false);
-        }
-
-        try
-        {
-            await primaryResponse.Content.LoadIntoBufferAsync(totalRequestCts.Token).ConfigureAwait(false);
-            return primaryResponse;
-        }
-        catch
-        {
-            primaryResponse.Dispose();
-            throw;
-        }
-    }
-
-    private async Task<HttpResponseMessage> SendCatalogFallbackAsync(
-        HttpClient http,
-        string accessToken,
-        CancellationToken ct)
-    {
-        using var fallbackRequest = CreateCatalogRequest(
-            _options.PublicTransportFallbackBaseUrl,
-            accessToken);
-        return await http.SendAsync(fallbackRequest, ct).ConfigureAwait(false);
+        using var request = CreateCatalogRequest(_options.PublicApiBaseUrl, accessToken);
+        return await http.SendAsync(request, ct).ConfigureAwait(false);
     }
 
     private static HttpRequestMessage CreateCatalogRequest(string? baseUrl, string accessToken)

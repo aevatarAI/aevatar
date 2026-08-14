@@ -1,5 +1,4 @@
 using System.Net;
-using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using Aevatar.Foundation.Abstractions.Helpers;
@@ -23,7 +22,6 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
     private static readonly byte[] HmacKey =
         Convert.FromHexString("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
     private const string OAuthAuthority = "https://id.example.test";
-    private const string InternalApiBaseUrl = "http://nyxid.internal:3001";
     private const string ResourceServerBaseUrl = "https://api.example.test";
     private const string RequiredLlmServiceSlug = "chrono-llm-public";
     private const string RequiredOrnnServiceSlug = "ornn-api";
@@ -435,219 +433,8 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
 
         result.AccessToken.Should().Be(accessToken);
         handler.Requests.Should().HaveCount(2);
-        handler.Requests[1].Uri.Should().Be($"{InternalApiBaseUrl}/api/v1/user-services");
+        handler.Requests[1].Uri.Should().Be($"{ResourceServerBaseUrl}/api/v1/user-services");
         handler.Requests[1].Authorization.Should().Be($"Bearer {accessToken}");
-    }
-
-    [Fact]
-    public async Task IssueShortLivedByBindingIdAsync_WhenInternalCatalogDnsFails_ShouldUsePublicFallbackOnce()
-    {
-        var accessToken = CreateAccessToken(new { sub = "owner-user", scope = "proxy" });
-        var handler = new CatalogFallbackHandler(
-            TokenExchangeResponse(accessToken),
-            UserServiceCatalogResponse(
-                ("svc-aevatar", RequiredAevatarResource),
-                ("svc-llm", RequiredLlmResource),
-                ("svc-ornn", RequiredOrnnResource),
-                ("svc-sandbox", RequiredSandboxResource)),
-            HttpRequestError.NameResolutionError);
-        var broker = NewBroker(
-            NewSnapshot(NyxIdRedirectUriResolver.Resolve()),
-            options: new NyxIdBrokerOptions
-            {
-                TransportBaseUrl = InternalApiBaseUrl,
-                PublicTransportFallbackBaseUrl = ResourceServerBaseUrl,
-                ResourceServerBaseUrl = ResourceServerBaseUrl,
-                RequiredLlmServiceSlug = RequiredLlmServiceSlug,
-                AdditionalRequiredServiceSlugs = [RequiredOrnnServiceSlug, RequiredSandboxServiceSlug],
-            },
-            httpHandler: handler);
-
-        var result = await broker.IssueShortLivedByBindingIdAsync(
-            SampleSubject(),
-            "bnd-dns-fallback",
-            new CapabilityScope { Value = AevatarOAuthClientScopes.Proxy });
-
-        result.AccessToken.Should().Be(accessToken);
-        handler.Requests.Select(static request => request.Uri).Should().Equal(
-            $"{OAuthAuthority}/oauth/token",
-            $"{InternalApiBaseUrl}/api/v1/user-services",
-            $"{ResourceServerBaseUrl}/api/v1/user-services");
-        handler.Requests[1].Authorization.Should().Be($"Bearer {accessToken}");
-        handler.Requests[2].Authorization.Should().Be($"Bearer {accessToken}");
-    }
-
-    [Fact]
-    public async Task IssueShortLivedByBindingIdAsync_WhenInternalCatalogRefusesConnection_ShouldUsePublicFallbackOnce()
-    {
-        var accessToken = CreateAccessToken(new { sub = "owner-user", scope = "proxy" });
-        var handler = new CatalogFallbackHandler(
-            TokenExchangeResponse(accessToken),
-            UserServiceCatalogResponse(
-                ("svc-aevatar", RequiredAevatarResource),
-                ("svc-llm", RequiredLlmResource),
-                ("svc-ornn", RequiredOrnnResource),
-                ("svc-sandbox", RequiredSandboxResource)),
-            HttpRequestError.ConnectionError,
-            socketError: SocketError.ConnectionRefused);
-        var broker = NewBroker(
-            NewSnapshot(NyxIdRedirectUriResolver.Resolve()),
-            options: new NyxIdBrokerOptions
-            {
-                TransportBaseUrl = InternalApiBaseUrl,
-                PublicTransportFallbackBaseUrl = ResourceServerBaseUrl,
-                ResourceServerBaseUrl = ResourceServerBaseUrl,
-                RequiredLlmServiceSlug = RequiredLlmServiceSlug,
-                AdditionalRequiredServiceSlugs = [RequiredOrnnServiceSlug, RequiredSandboxServiceSlug],
-            },
-            httpHandler: handler);
-
-        var result = await broker.IssueShortLivedByBindingIdAsync(
-            SampleSubject(),
-            "bnd-refused-fallback",
-            new CapabilityScope { Value = AevatarOAuthClientScopes.Proxy });
-
-        result.AccessToken.Should().Be(accessToken);
-        handler.Requests.Select(static request => request.Uri).Should().Equal(
-            $"{OAuthAuthority}/oauth/token",
-            $"{InternalApiBaseUrl}/api/v1/user-services",
-            $"{ResourceServerBaseUrl}/api/v1/user-services");
-    }
-
-    [Fact]
-    public async Task IssueShortLivedByBindingIdAsync_WhenInternalCatalogHeadersTimeout_ShouldUsePublicFallbackOnce()
-    {
-        var accessToken = CreateAccessToken(new { sub = "owner-user", scope = "proxy" });
-        var handler = new CatalogHeaderTimeoutHandler(
-            TokenExchangeResponse(accessToken),
-            UserServiceCatalogResponse(
-                ("svc-aevatar", RequiredAevatarResource),
-                ("svc-llm", RequiredLlmResource),
-                ("svc-ornn", RequiredOrnnResource),
-                ("svc-sandbox", RequiredSandboxResource)));
-        var broker = NewBroker(
-            NewSnapshot(NyxIdRedirectUriResolver.Resolve()),
-            options: new NyxIdBrokerOptions
-            {
-                TransportBaseUrl = InternalApiBaseUrl,
-                PublicTransportFallbackBaseUrl = ResourceServerBaseUrl,
-                ResourceServerBaseUrl = ResourceServerBaseUrl,
-                RequiredLlmServiceSlug = RequiredLlmServiceSlug,
-                AdditionalRequiredServiceSlugs = [RequiredOrnnServiceSlug, RequiredSandboxServiceSlug],
-                InternalApiFallbackTimeoutSeconds = 1,
-            },
-            httpHandler: handler);
-
-        var result = await broker.IssueShortLivedByBindingIdAsync(
-            SampleSubject(),
-            "bnd-header-timeout-fallback",
-            new CapabilityScope { Value = AevatarOAuthClientScopes.Proxy });
-
-        result.AccessToken.Should().Be(accessToken);
-        handler.Requests.Select(static request => request.Uri).Should().Equal(
-            $"{OAuthAuthority}/oauth/token",
-            $"{InternalApiBaseUrl}/api/v1/user-services",
-            $"{ResourceServerBaseUrl}/api/v1/user-services");
-        handler.Requests[1].Authorization.Should().Be($"Bearer {accessToken}");
-        handler.Requests[2].Authorization.Should().Be($"Bearer {accessToken}");
-    }
-
-    [Fact]
-    public async Task IssueShortLivedByBindingIdAsync_WhenCallerCancelsCatalogWait_ShouldNotFallback()
-    {
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
-        var accessToken = CreateAccessToken(new { sub = "owner-user", scope = "proxy" });
-        var handler = new CatalogHeaderTimeoutHandler(
-            TokenExchangeResponse(accessToken),
-            UserServiceCatalogResponse());
-        var broker = NewBroker(
-            NewSnapshot(NyxIdRedirectUriResolver.Resolve()),
-            options: new NyxIdBrokerOptions
-            {
-                TransportBaseUrl = InternalApiBaseUrl,
-                PublicTransportFallbackBaseUrl = ResourceServerBaseUrl,
-                ResourceServerBaseUrl = ResourceServerBaseUrl,
-                RequiredLlmServiceSlug = RequiredLlmServiceSlug,
-                AdditionalRequiredServiceSlugs = [RequiredOrnnServiceSlug, RequiredSandboxServiceSlug],
-                InternalApiFallbackTimeoutSeconds = 1,
-            },
-            httpHandler: handler);
-
-        var act = () => broker.IssueShortLivedByBindingIdAsync(
-            SampleSubject(),
-            "bnd-caller-cancel",
-            new CapabilityScope { Value = AevatarOAuthClientScopes.Proxy },
-            cts.Token);
-
-        await act.Should().ThrowAsync<OperationCanceledException>();
-        handler.Requests.Select(static request => request.Uri).Should().Equal(
-            $"{OAuthAuthority}/oauth/token",
-            $"{InternalApiBaseUrl}/api/v1/user-services");
-    }
-
-    [Fact]
-    public async Task IssueShortLivedByBindingIdAsync_WhenInternalCatalogConnectionFails_ShouldNotFallback()
-    {
-        var accessToken = CreateAccessToken(new { sub = "owner-user", scope = "proxy" });
-        var handler = new CatalogFallbackHandler(
-            TokenExchangeResponse(accessToken),
-            UserServiceCatalogResponse(),
-            HttpRequestError.ConnectionError);
-        var broker = NewBroker(
-            NewSnapshot(NyxIdRedirectUriResolver.Resolve()),
-            options: new NyxIdBrokerOptions
-            {
-                TransportBaseUrl = InternalApiBaseUrl,
-                PublicTransportFallbackBaseUrl = ResourceServerBaseUrl,
-                ResourceServerBaseUrl = ResourceServerBaseUrl,
-                RequiredLlmServiceSlug = RequiredLlmServiceSlug,
-                AdditionalRequiredServiceSlugs = [RequiredOrnnServiceSlug, RequiredSandboxServiceSlug],
-            },
-            httpHandler: handler);
-
-        var act = () => broker.IssueShortLivedByBindingIdAsync(
-            SampleSubject(),
-            "bnd-no-connection-fallback",
-            new CapabilityScope { Value = AevatarOAuthClientScopes.Proxy });
-
-        await act.Should().ThrowAsync<HttpRequestException>();
-        handler.Requests.Select(static request => request.Uri).Should().Equal(
-            $"{OAuthAuthority}/oauth/token",
-            $"{InternalApiBaseUrl}/api/v1/user-services");
-    }
-
-    [Fact]
-    public async Task IssueShortLivedByBindingIdAsync_WhenCatalogDnsFailureRacesCancellation_ShouldNotFallback()
-    {
-        using var cts = new CancellationTokenSource();
-        var accessToken = CreateAccessToken(new { sub = "owner-user", scope = "proxy" });
-        var handler = new CatalogFallbackHandler(
-            TokenExchangeResponse(accessToken),
-            UserServiceCatalogResponse(),
-            HttpRequestError.NameResolutionError,
-            cts);
-        var broker = NewBroker(
-            NewSnapshot(NyxIdRedirectUriResolver.Resolve()),
-            options: new NyxIdBrokerOptions
-            {
-                TransportBaseUrl = InternalApiBaseUrl,
-                PublicTransportFallbackBaseUrl = ResourceServerBaseUrl,
-                ResourceServerBaseUrl = ResourceServerBaseUrl,
-                RequiredLlmServiceSlug = RequiredLlmServiceSlug,
-                AdditionalRequiredServiceSlugs = [RequiredOrnnServiceSlug, RequiredSandboxServiceSlug],
-            },
-            httpHandler: handler);
-
-        var act = () => broker.IssueShortLivedByBindingIdAsync(
-            SampleSubject(),
-            "bnd-cancel-dns-race",
-            new CapabilityScope { Value = AevatarOAuthClientScopes.Proxy },
-            cts.Token);
-
-        await act.Should().ThrowAsync<OperationCanceledException>();
-        handler.Requests.Select(static request => request.Uri).Should().Equal(
-            $"{OAuthAuthority}/oauth/token",
-            $"{InternalApiBaseUrl}/api/v1/user-services");
     }
 
     [Fact]
@@ -802,13 +589,13 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
         var provider = new FakeOAuthClientProvider(snapshot);
         options ??= new NyxIdBrokerOptions
         {
-            TransportBaseUrl = $" {InternalApiBaseUrl}/// ",
+            PublicApiBaseUrl = $" {ResourceServerBaseUrl}/// ",
             ResourceServerBaseUrl = $" {ResourceServerBaseUrl}/// ",
             RequiredLlmServiceSlug = RequiredLlmServiceSlug,
             AdditionalRequiredServiceSlugs = [RequiredOrnnServiceSlug, RequiredSandboxServiceSlug],
         };
-        if (string.IsNullOrWhiteSpace(options.TransportBaseUrl))
-            options.TransportBaseUrl = $" {InternalApiBaseUrl}/// ";
+        if (string.IsNullOrWhiteSpace(options.PublicApiBaseUrl))
+            options.PublicApiBaseUrl = $" {ResourceServerBaseUrl}/// ";
         if (string.IsNullOrWhiteSpace(options.ResourceServerBaseUrl))
             options.ResourceServerBaseUrl = $" {ResourceServerBaseUrl}/// ";
         return new NyxIdRemoteCapabilityBroker(
@@ -960,82 +747,6 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(_responseBodies.Dequeue()),
-            };
-        }
-    }
-
-    private sealed class CatalogFallbackHandler(
-        string tokenResponse,
-        string catalogResponse,
-        HttpRequestError transportFailure,
-        CancellationTokenSource? cancelBeforeTransportFailure = null,
-        SocketError? socketError = null) : HttpMessageHandler
-    {
-        public List<(string? Uri, string? Authorization)> Requests { get; } = [];
-
-        protected override Task<HttpResponseMessage> SendAsync(
-            HttpRequestMessage request,
-            CancellationToken cancellationToken)
-        {
-            Requests.Add((
-                request.RequestUri?.ToString(),
-                request.Headers.Authorization?.ToString()));
-            if (Requests.Count == 1)
-            {
-                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-                {
-                    Content = new StringContent(tokenResponse),
-                });
-            }
-
-            if (Requests.Count == 2)
-            {
-                cancelBeforeTransportFailure?.Cancel();
-                throw new HttpRequestException(
-                    transportFailure,
-                    "simulated transport failure",
-                    socketError.HasValue ? new SocketException((int)socketError.Value) : null);
-            }
-
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent(catalogResponse),
-            });
-        }
-    }
-
-    private sealed class CatalogHeaderTimeoutHandler(
-        string tokenResponse,
-        string catalogResponse) : HttpMessageHandler
-    {
-        public List<(string? Uri, string? Authorization)> Requests { get; } = [];
-
-        protected override async Task<HttpResponseMessage> SendAsync(
-            HttpRequestMessage request,
-            CancellationToken cancellationToken)
-        {
-            Requests.Add((
-                request.RequestUri?.ToString(),
-                request.Headers.Authorization?.ToString()));
-            if (Requests.Count == 1)
-            {
-                return new HttpResponseMessage(HttpStatusCode.OK)
-                {
-                    Content = new StringContent(tokenResponse),
-                };
-            }
-
-            if (Requests.Count == 2)
-            {
-                await new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)
-                    .Task
-                    .WaitAsync(cancellationToken);
-                throw new InvalidOperationException("The infinite primary wait completed without cancellation.");
-            }
-
-            return new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent(catalogResponse),
             };
         }
     }

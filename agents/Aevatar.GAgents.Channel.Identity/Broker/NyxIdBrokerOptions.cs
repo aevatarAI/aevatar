@@ -1,4 +1,3 @@
-using Aevatar.Configuration;
 using Aevatar.GAgents.Channel.Identity;
 
 namespace Aevatar.GAgents.Channel.Identity.Broker;
@@ -10,32 +9,14 @@ namespace Aevatar.GAgents.Channel.Identity.Broker;
 /// </summary>
 public sealed class NyxIdBrokerOptions
 {
-    public const string InternalApiBaseUrlConfigurationKey = "Aevatar:NyxId:InternalApiBaseUrl";
     public const string ApiBaseUrlConfigurationKey = "Aevatar:NyxId:ApiBaseUrl";
     public const string ResourceServerBaseUrlConfigurationKey = ApiBaseUrlConfigurationKey;
 
     /// <summary>
-    /// Effective NyxID HTTP transport base URL used for server-to-server API calls.
-    /// This prefers the internal cluster address and must not be used as an
-    /// OAuth issuer, audience, or RFC 8707 resource identity.
+    /// Public NyxID REST API base URL used for account and user-service control-plane calls.
+    /// It must never resolve from the cluster-local transport setting.
     /// </summary>
-    public string TransportBaseUrl { get; set; } = string.Empty;
-
-    /// <summary>
-    /// Optional public NyxID REST endpoint used when the cluster-local transport fails
-    /// before connecting, or when a safe request exceeds its response-header budget.
-    /// </summary>
-    public string? PublicTransportFallbackBaseUrl { get; set; }
-
-    /// <summary>
-    /// Response-header budget for a safe request sent to <see cref="TransportBaseUrl"/> before the
-    /// broker retries the same request once against <see cref="PublicTransportFallbackBaseUrl"/>.
-    /// </summary>
-    public int InternalApiFallbackTimeoutSeconds { get; set; } =
-        NyxIdTransportFallbackPolicy.DefaultTimeoutSeconds;
-
-    public TimeSpan EffectiveInternalApiFallbackTimeout =>
-        NyxIdTransportFallbackPolicy.EffectiveTimeout(InternalApiFallbackTimeoutSeconds);
+    public string PublicApiBaseUrl { get; set; } = string.Empty;
 
     /// <summary>
     /// Canonical public NyxID API base URL used for RFC 8707 resource indicators.

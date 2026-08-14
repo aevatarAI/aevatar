@@ -146,25 +146,26 @@ public sealed class NyxIdApiClientPublicTransportFallbackTests
         result.Should().Be("""{"ok":true}""");
     }
 
-    [Theory]
-    [InlineData("keys", "/api/v1/keys")]
-    [InlineData("current-user", "/api/v1/users/me")]
-    public async Task SafeDirectRead_WhenInternalHeadersTimeout_RetriesPublicTransportOnce(
-        string operation,
-        string expectedPath)
+    [Fact]
+    public async Task SafeProxyRead_WhenInternalHeadersTimeout_RetriesPublicTransportOnce()
     {
         var handler = new HeaderTimeoutThenResponseHandler(
             () => JsonResponse("""{"ok":true}"""));
         using var client = CreateClient(handler, internalFallbackTimeoutSeconds: 1);
 
-        var result = operation == "keys"
-            ? await client.ListServicesAsync("access-token", CancellationToken.None)
-            : await client.GetCurrentUserAsync("access-token", CancellationToken.None);
+        var result = await client.ProxyRequestAsync(
+            "access-token",
+            "calendar",
+            "/v1/events",
+            HttpMethod.Get.Method,
+            body: null,
+            extraHeaders: null,
+            ct: CancellationToken.None);
 
         result.Should().Be("""{"ok":true}""");
         handler.Requests.Select(static request => request.Uri).Should().Equal(
-            $"{PrimaryBaseUrl}{expectedPath}",
-            $"{FallbackBaseUrl}{expectedPath}");
+            $"{PrimaryBaseUrl}/api/v1/proxy/s/calendar/v1/events",
+            $"{FallbackBaseUrl}/api/v1/proxy/s/calendar/v1/events");
         handler.Requests.Should().OnlyContain(request =>
             request.Authorization == "Bearer access-token");
     }
@@ -177,33 +178,46 @@ public sealed class NyxIdApiClientPublicTransportFallbackTests
         using var client = CreateClient(handler, internalFallbackTimeoutSeconds: 1);
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
 
-        var act = () => client.CreateServiceAsync(
+        var act = () => client.ProxyRequestAsync(
             "access-token",
-            """{"slug":"calendar"}""",
-            cts.Token);
+            "calendar",
+            "/v1/events",
+            HttpMethod.Post.Method,
+            """{"name":"new event"}""",
+            extraHeaders: null,
+            ct: cts.Token);
 
         await act.Should().ThrowAsync<OperationCanceledException>();
         handler.Requests.Should().ContainSingle();
-        handler.Requests[0].Uri.Should().Be($"{PrimaryBaseUrl}/api/v1/keys");
+        handler.Requests[0].Uri.Should().Be(
+            $"{PrimaryBaseUrl}/api/v1/proxy/s/calendar/v1/events");
     }
 
     [Fact]
-    public async Task SafeDirectRead_WhenCallerCancelsPrimaryWait_DoesNotRetry()
+    public async Task SafeProxyRead_WhenCallerCancelsPrimaryWait_DoesNotRetry()
     {
         var handler = new HeaderTimeoutThenResponseHandler(
             () => JsonResponse("""{"unexpected":true}"""));
         using var client = CreateClient(handler, internalFallbackTimeoutSeconds: 1);
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
 
-        var act = () => client.ListServicesAsync("access-token", cts.Token);
+        var act = () => client.ProxyRequestAsync(
+            "access-token",
+            "calendar",
+            "/v1/events",
+            HttpMethod.Get.Method,
+            body: null,
+            extraHeaders: null,
+            ct: cts.Token);
 
         await act.Should().ThrowAsync<OperationCanceledException>();
         handler.Requests.Should().ContainSingle();
-        handler.Requests[0].Uri.Should().Be($"{PrimaryBaseUrl}/api/v1/keys");
+        handler.Requests[0].Uri.Should().Be(
+            $"{PrimaryBaseUrl}/api/v1/proxy/s/calendar/v1/events");
     }
 
     [Fact]
-    public async Task SafeDirectRead_WhenBodyFailsAfterPrimaryHeaders_DoesNotRetry()
+    public async Task SafeProxyRead_WhenBodyFailsAfterPrimaryHeaders_DoesNotRetry()
     {
         var handler = new StaticResponseHandler(new HttpResponseMessage(HttpStatusCode.OK)
         {
@@ -211,14 +225,21 @@ public sealed class NyxIdApiClientPublicTransportFallbackTests
         });
         using var client = CreateClient(handler, internalFallbackTimeoutSeconds: 1);
 
-        var result = await client.ListServicesAsync("access-token", CancellationToken.None);
+        var result = await client.ProxyRequestAsync(
+            "access-token",
+            "calendar",
+            "/v1/events",
+            HttpMethod.Get.Method,
+            body: null,
+            extraHeaders: null,
+            ct: CancellationToken.None);
 
         handler.SendCount.Should().Be(1);
         result.Should().Contain("\"status\":0");
     }
 
     [Fact]
-    public async Task SafeDirectRead_WhenTlsHandshakeFails_DoesNotRetry()
+    public async Task SafeProxyRead_WhenTlsHandshakeFails_DoesNotRetry()
     {
         var handler = new ThrowingHandler(new HttpRequestException(
             HttpRequestError.SecureConnectionError,
@@ -226,7 +247,14 @@ public sealed class NyxIdApiClientPublicTransportFallbackTests
             null));
         using var client = CreateClient(handler, internalFallbackTimeoutSeconds: 1);
 
-        var result = await client.ListServicesAsync("access-token", CancellationToken.None);
+        var result = await client.ProxyRequestAsync(
+            "access-token",
+            "calendar",
+            "/v1/events",
+            HttpMethod.Get.Method,
+            body: null,
+            extraHeaders: null,
+            ct: CancellationToken.None);
 
         handler.SendCount.Should().Be(1);
         result.Should().Contain("\"status\":0");
@@ -430,6 +458,8 @@ public sealed class NyxIdApiClientPublicTransportFallbackTests
             new NyxIdToolOptions
             {
                 BaseUrl = PrimaryBaseUrl,
+                InternalApiBaseUrl = PrimaryBaseUrl,
+                ApiBaseUrl = FallbackBaseUrl,
                 PublicTransportFallbackBaseUrl = FallbackBaseUrl,
                 InternalApiFallbackTimeoutSeconds = internalFallbackTimeoutSeconds,
             },

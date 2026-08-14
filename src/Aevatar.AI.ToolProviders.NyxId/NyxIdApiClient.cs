@@ -332,7 +332,7 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
         if (string.IsNullOrWhiteSpace(delegationToken))
             return new NyxIdDelegationRefreshResult(false, Detail: "missing_delegation_token");
 
-        var url = $"{GetBaseUrl()}/api/v1/delegation/refresh";
+        var url = $"{GetPublicApiBaseUrl()}/api/v1/delegation/refresh";
         using var request = new HttpRequestMessage(HttpMethod.Post, url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", delegationToken.Trim());
         var response = await SendTextResponseAsync(
@@ -626,7 +626,7 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
     {
         using var request = new HttpRequestMessage(
             HttpMethod.Get,
-            $"{GetBaseUrl()}{LLMSelectionPolicy.GatewayRoute}/models");
+            $"{GetPublicApiBaseUrl()}{LLMSelectionPolicy.GatewayRoute}/models");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         request.Headers.TryAddWithoutValidation(UserAgentHeaderName, DefaultProxyUserAgent);
         return await SendTextResponseAsync(request, maxBytes, ct);
@@ -795,7 +795,7 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
     {
         ArgumentNullException.ThrowIfNull(body);
 
-        var baseUrl = GetBaseUrl();
+        var baseUrl = GetTransportBaseUrl();
         var normalizedPath = path.TrimStart('/');
         var url = $"{baseUrl}/api/v1/proxy/s/{Uri.EscapeDataString(slug)}/{normalizedPath}";
 
@@ -835,7 +835,7 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
         ArgumentException.ThrowIfNullOrWhiteSpace(fileContentType);
         ArgumentNullException.ThrowIfNull(fileContent);
 
-        var baseUrl = GetBaseUrl();
+        var baseUrl = GetTransportBaseUrl();
         var normalizedPath = path.TrimStart('/');
         var url = $"{baseUrl}/api/v1/proxy/s/{Uri.EscapeDataString(slug)}/{normalizedPath}";
 
@@ -955,7 +955,7 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(slug);
         ArgumentNullException.ThrowIfNull(path);
-        var baseUrl = GetBaseUrl();
+        var baseUrl = GetTransportBaseUrl();
         var normalizedPath = path.TrimStart('/');
         var fragmentIndex = normalizedPath.IndexOf('#', StringComparison.Ordinal);
         if (fragmentIndex >= 0)
@@ -997,7 +997,7 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
     /// surfaces this in its description so the LLM does not call HTTP-typed services here).
     /// </remarks>
     public Task<string> SshExecAsync(string token, string serviceIdOrSlug, string body, CancellationToken ct) =>
-        PostAsync(token, $"/api/v1/ssh/{Uri.EscapeDataString(serviceIdOrSlug)}/exec", body, ct);
+        PostTransportAsync(token, $"/api/v1/ssh/{Uri.EscapeDataString(serviceIdOrSlug)}/exec", body, ct);
 
     // ─── API Keys ───
 
@@ -1702,9 +1702,13 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
 
     // ─── HTTP helpers ───
 
-    private string GetBaseUrl() =>
+    private string GetTransportBaseUrl() =>
         _options.EffectiveTransportBaseUrl?.TrimEnd('/') ??
         throw new InvalidOperationException("NyxID transport base URL is not configured.");
+
+    private string GetPublicApiBaseUrl() =>
+        _options.EffectiveApiBaseUrl?.TrimEnd('/') ??
+        throw new InvalidOperationException("NyxID public API base URL is not configured.");
 
     private static bool ApplyExtraHeaders(
         HttpRequestMessage request,
@@ -1769,7 +1773,7 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
 
     internal async Task<string> GetAsync(string token, string path, CancellationToken ct)
     {
-        var url = $"{GetBaseUrl()}{path}";
+        var url = $"{GetPublicApiBaseUrl()}{path}";
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         return await SendAsync(request, ct);
@@ -1777,7 +1781,7 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
 
     internal async Task<string> PostAsync(string token, string path, string body, CancellationToken ct)
     {
-        var url = $"{GetBaseUrl()}{path}";
+        var url = $"{GetPublicApiBaseUrl()}{path}";
         using var request = new HttpRequestMessage(HttpMethod.Post, url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         request.Content = new StringContent(body, Encoding.UTF8, "application/json");
@@ -1786,7 +1790,7 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
 
     internal async Task<string> PostWithoutAuthAsync(string path, string body, CancellationToken ct)
     {
-        var url = $"{GetBaseUrl()}{path}";
+        var url = $"{GetPublicApiBaseUrl()}{path}";
         using var request = new HttpRequestMessage(HttpMethod.Post, url);
         request.Content = new StringContent(body, Encoding.UTF8, "application/json");
         return await SendAsync(request, ct);
@@ -1794,7 +1798,7 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
 
     internal async Task<string> PatchAsync(string token, string path, string body, CancellationToken ct)
     {
-        var url = $"{GetBaseUrl()}{path}";
+        var url = $"{GetPublicApiBaseUrl()}{path}";
         using var request = new HttpRequestMessage(HttpMethod.Patch, url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         request.Content = new StringContent(body, Encoding.UTF8, "application/json");
@@ -1803,7 +1807,7 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
 
     internal async Task<string> PutAsync(string token, string path, string body, CancellationToken ct)
     {
-        var url = $"{GetBaseUrl()}{path}";
+        var url = $"{GetPublicApiBaseUrl()}{path}";
         using var request = new HttpRequestMessage(HttpMethod.Put, url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         request.Content = new StringContent(body, Encoding.UTF8, "application/json");
@@ -1812,9 +1816,22 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
 
     internal async Task<string> DeleteAsync(string token, string path, CancellationToken ct)
     {
-        var url = $"{GetBaseUrl()}{path}";
+        var url = $"{GetPublicApiBaseUrl()}{path}";
         using var request = new HttpRequestMessage(HttpMethod.Delete, url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        return await SendAsync(request, ct);
+    }
+
+    private async Task<string> PostTransportAsync(
+        string token,
+        string path,
+        string body,
+        CancellationToken ct)
+    {
+        var url = $"{GetTransportBaseUrl()}{path}";
+        using var request = new HttpRequestMessage(HttpMethod.Post, url);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        request.Content = new StringContent(body, Encoding.UTF8, "application/json");
         return await SendAsync(request, ct);
     }
 

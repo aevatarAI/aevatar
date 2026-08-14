@@ -18,7 +18,12 @@ public sealed class NyxIdApiAccessContractTests
     {
         var handler = new RecordingHandler();
         using var client = new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example/" },
+            new NyxIdToolOptions
+            {
+                BaseUrl = "http://nyxid.internal:3001/",
+                InternalApiBaseUrl = "http://nyxid.internal:3001/",
+                ApiBaseUrl = "https://nyx.example/",
+            },
             new HttpClient(handler),
             NullLogger<NyxIdApiClient>.Instance);
 
@@ -45,6 +50,58 @@ public sealed class NyxIdApiAccessContractTests
             .Should()
             .Equal("service-a", "service-b");
         body.RootElement.GetProperty("target_org_id").GetString().Should().Be("org-alpha");
+    }
+
+    [Fact]
+    public async Task Client_WithSplitHosts_ShouldKeepControlPlanePublicAndTransportCallsInternal()
+    {
+        var handler = new RecordingHandler();
+        using var client = new NyxIdApiClient(
+            new NyxIdToolOptions
+            {
+                BaseUrl = "http://nyxid.internal:3001/transport/",
+                InternalApiBaseUrl = "http://nyxid.internal:3001/transport/",
+                ApiBaseUrl = "https://nyx.example/public/",
+                PublicTransportFallbackBaseUrl = "https://nyx.example/public/",
+            },
+            new HttpClient(handler),
+            NullLogger<NyxIdApiClient>.Instance);
+
+        await client.GetCurrentUserAsync("token", CancellationToken.None);
+        await client.ListCatalogAsync("token", CancellationToken.None);
+        await client.CreateServiceAsync("token", """{"slug":"calendar"}""", CancellationToken.None);
+        await client.DeleteServiceAsync("token", "service-calendar", CancellationToken.None);
+        await client.GetLlmServicesAsync("token", CancellationToken.None);
+        await client.GetLlmRouteModelsBoundedAsync(
+            "token",
+            Aevatar.AI.Abstractions.LLMRouteKind.Gateway,
+            verifiedUserServiceId: null,
+            verifiedServiceSlug: null,
+            maxBytes: 1024,
+            ct: CancellationToken.None);
+        await client.ProxyRequestAsync(
+            "token",
+            "calendar",
+            "/v1/events",
+            HttpMethod.Get.Method,
+            body: null,
+            extraHeaders: null,
+            ct: CancellationToken.None);
+        await client.SshExecAsync(
+            "token",
+            "ssh-service",
+            """{"command":"true"}""",
+            CancellationToken.None);
+
+        handler.Requests.Select(static request => request.Uri).Should().Equal(
+            "https://nyx.example/public/api/v1/users/me",
+            "https://nyx.example/public/api/v1/catalog",
+            "https://nyx.example/public/api/v1/keys",
+            "https://nyx.example/public/api/v1/keys/service-calendar",
+            "https://nyx.example/public/api/v1/llm/services",
+            "https://nyx.example/public/api/v1/llm/gateway/v1/models",
+            "http://nyxid.internal:3001/transport/api/v1/proxy/s/calendar/v1/events",
+            "http://nyxid.internal:3001/transport/api/v1/ssh/ssh-service/exec");
     }
 
     [Fact]
