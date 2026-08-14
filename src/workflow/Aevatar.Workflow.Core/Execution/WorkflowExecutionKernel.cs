@@ -522,7 +522,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         }
         catch (Exception ex) when (
             !ct.IsCancellationRequested &&
-            !WorkflowRuntimeInfrastructureFailurePolicy.IsCommittedStatePublicationFailure(ex))
+            !WorkflowRuntimeInfrastructureFailurePolicy.IsCommitConsistencyFailure(ex))
         {
             ctx.Logger.LogError(
                 ex,
@@ -834,7 +834,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         }
         catch (Exception ex) when (
             !ct.IsCancellationRequested &&
-            !WorkflowRuntimeInfrastructureFailurePolicy.IsCommittedStatePublicationFailure(ex))
+            !WorkflowRuntimeInfrastructureFailurePolicy.IsCommitConsistencyFailure(ex))
         {
             ctx.Logger.LogError(
                 ex,
@@ -1244,7 +1244,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         }
         catch (Exception ex) when (
             !ct.IsCancellationRequested &&
-            !WorkflowRuntimeInfrastructureFailurePolicy.IsCommittedStatePublicationFailure(ex))
+            !WorkflowRuntimeInfrastructureFailurePolicy.IsCommitConsistencyFailure(ex))
         {
             if (timeoutLease != null)
             {
@@ -1259,7 +1259,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                     await SaveStateAsync(state, ctx, CancellationToken.None);
                 }
                 catch (Exception saveEx) when (
-                    !WorkflowRuntimeInfrastructureFailurePolicy.IsCommittedStatePublicationFailure(saveEx))
+                    !WorkflowRuntimeInfrastructureFailurePolicy.IsCommitConsistencyFailure(saveEx))
                 {
                     ctx.Logger.LogError(
                         saveEx,
@@ -1301,7 +1301,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         }
         catch (Exception saveEx) when (
             !ct.IsCancellationRequested &&
-            !WorkflowRuntimeInfrastructureFailurePolicy.IsCommittedStatePublicationFailure(saveEx))
+            !WorkflowRuntimeInfrastructureFailurePolicy.IsCommitConsistencyFailure(saveEx))
         {
             ctx.Logger.LogError(
                 saveEx,

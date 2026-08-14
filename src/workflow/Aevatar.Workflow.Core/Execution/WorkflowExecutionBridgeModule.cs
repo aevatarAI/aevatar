@@ -37,6 +37,16 @@ internal sealed class WorkflowExecutionBridgeModule : IEventModule<IEventHandler
             {
                 await executor.HandleAsync(envelope, workflowContext, ct);
             }
+            catch (Exception ex) when (
+                ex is IRuntimeEnvelopeRetryableException ||
+                WorkflowRuntimeInfrastructureFailurePolicy.IsCommitConsistencyFailure(ex))
+            {
+                ctx.Logger.LogWarning(
+                    ex,
+                    "workflow_execution_bridge: executor requires runtime redelivery run={RunId}",
+                    _stateHost.RunId);
+                throw;
+            }
             catch (WorkflowDurablePublicationPendingException ex)
             {
                 ctx.Logger.LogWarning(

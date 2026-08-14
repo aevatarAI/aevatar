@@ -36,6 +36,24 @@ public sealed class RuntimeEnvelopeRetryPolicyTests
         retry.Runtime.Retry.LastErrorType.Should().Be(nameof(CommittedStatePublicationException));
     }
 
+    [Fact]
+    public void RuntimeRetryableMarker_ShouldBeRetryableByDefaultThroughWrappers()
+    {
+        var policy = RuntimeEnvelopeRetryPolicy.FromValues(null, null);
+        var source = new EventEnvelope { Id = "runtime-retryable-source" };
+        var marker = new RuntimeRetryableTestException();
+
+        policy.TryBuildRetryEnvelope(
+                source,
+                new AggregateException(new InvalidOperationException("wrapper", marker)),
+                out var retry,
+                out var nextAttempt)
+            .Should().BeTrue();
+
+        nextAttempt.Should().Be(1);
+        retry.Runtime.Retry.LastErrorType.Should().Be(nameof(AggregateException));
+    }
+
     [Theory]
     [InlineData(typeof(EventStoreOptimisticConcurrencyException))]
     [InlineData(typeof(EventStoreVersionDriftException))]
@@ -82,5 +100,9 @@ public sealed class RuntimeEnvelopeRetryPolicyTests
             stateEvent,
             CommittedStatePublicationFailureStage.AdapterAcceptance,
             new InvalidOperationException("injected"));
+    }
+
+    private sealed class RuntimeRetryableTestException : Exception, IRuntimeEnvelopeRetryableException
+    {
     }
 }

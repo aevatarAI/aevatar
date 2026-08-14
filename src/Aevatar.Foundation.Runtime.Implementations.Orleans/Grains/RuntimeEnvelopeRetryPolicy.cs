@@ -80,18 +80,19 @@ internal sealed class RuntimeEnvelopeRetryPolicy
     }
 
     private bool ShouldRetry(Exception exception) =>
-        !RetryOnlyRecoverableConcurrencyFailures || ContainsRecoverableConcurrencyFailure(exception);
+        !RetryOnlyRecoverableConcurrencyFailures || ContainsDefaultRetryableFailure(exception);
 
-    private static bool ContainsRecoverableConcurrencyFailure(Exception exception)
+    private static bool ContainsDefaultRetryableFailure(Exception exception)
     {
         return exception switch
         {
+            IRuntimeEnvelopeRetryableException => true,
             EventStoreOptimisticConcurrencyException => true,
             CommittedStatePublicationException => true,
             AggregateException aggregate =>
-                aggregate.InnerExceptions.Any(ContainsRecoverableConcurrencyFailure),
+                aggregate.InnerExceptions.Any(ContainsDefaultRetryableFailure),
             _ when exception.InnerException is not null =>
-                ContainsRecoverableConcurrencyFailure(exception.InnerException),
+                ContainsDefaultRetryableFailure(exception.InnerException),
             _ => false,
         };
     }

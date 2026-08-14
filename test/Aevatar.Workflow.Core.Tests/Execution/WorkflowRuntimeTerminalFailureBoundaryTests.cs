@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Workflow.Abstractions;
@@ -89,7 +90,7 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
     }
 
     [Fact]
-    public void InfrastructureFailurePolicy_ShouldRecognizeWrappedCommittedStatePublicationFailures()
+    public void InfrastructureFailurePolicy_ShouldRecognizeWrappedCommitConsistencyFailures()
     {
         var publicationFailure = new CommittedStatePublicationException(
             "run-1",
@@ -101,15 +102,25 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
             CommittedStatePublicationFailureStage.AdapterAcceptance,
             new InvalidOperationException("stream adapter unavailable"));
 
-        WorkflowRuntimeInfrastructureFailurePolicy.IsCommittedStatePublicationFailure(
+        WorkflowRuntimeInfrastructureFailurePolicy.IsCommitConsistencyFailure(
                 new InvalidOperationException("runtime wrapper", publicationFailure))
             .Should()
             .BeTrue();
-        WorkflowRuntimeInfrastructureFailurePolicy.IsCommittedStatePublicationFailure(
+        WorkflowRuntimeInfrastructureFailurePolicy.IsCommitConsistencyFailure(
                 new AggregateException(new InvalidOperationException("other"), publicationFailure))
             .Should()
             .BeTrue();
-        WorkflowRuntimeInfrastructureFailurePolicy.IsCommittedStatePublicationFailure(
+        WorkflowRuntimeInfrastructureFailurePolicy.IsCommitConsistencyFailure(
+                new EventStoreOptimisticConcurrencyException("run-1", 6, 7))
+            .Should()
+            .BeTrue();
+        WorkflowRuntimeInfrastructureFailurePolicy.IsCommitConsistencyFailure(
+                new InvalidOperationException(
+                    "runtime wrapper",
+                    new EventStoreVersionDriftException("run-1", 6, 7)))
+            .Should()
+            .BeTrue();
+        WorkflowRuntimeInfrastructureFailurePolicy.IsCommitConsistencyFailure(
                 new InvalidOperationException("ordinary workflow failure"))
             .Should()
             .BeFalse();
@@ -143,6 +154,84 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
         failed.FailureOutcome.Should().Be(WorkflowStepFailureOutcome.OutcomeUncertain);
         failed.Error.Should().StartWith("step_executor_failed: step 'step-1' (tool_call) failed during executor: ");
         failed.Error.Should().NotContain("super-secret-token");
+    }
+
+    [Fact]
+    public async Task Bridge_ShouldPropagateRuntimeRetryablePublicationPending_ForInboundRedelivery()
+    {
+        var expected = new WorkflowRuntimeEnvelopeRetryablePublicationPendingException(
+            "pending",
+            new InvalidOperationException("transport unavailable"));
+        var bridge = new WorkflowExecutionBridgeModule(
+            [new DurablePublicationPendingExecutor(expected)],
+            new RecordingStateHost { RunId = "run-1" });
+        var ctx = new RecordingEventHandlerContext();
+
+        var error = await FluentActions.Awaiting(() => bridge.HandleAsync(
+                Envelope(new StepRequestEvent
+                {
+                    RunId = "run-1",
+                    StepId = "foreach-step",
+                    StepType = "foreach",
+                    ExecutionId = "exec-1",
+                }),
+                ctx,
+                CancellationToken.None))
+            .Should()
+            .ThrowAsync<WorkflowRuntimeEnvelopeRetryablePublicationPendingException>();
+
+        error.Which.Should().BeSameAs(expected);
+        ctx.Published.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Bridge_ShouldPropagateCommitConsistencyFailure_ForRuntimeRecovery()
+    {
+        var expected = new EventStoreOptimisticConcurrencyException("run-1", 6, 7);
+        var bridge = new WorkflowExecutionBridgeModule(
+            [new DurablePublicationPendingExecutor(expected)],
+            new RecordingStateHost { RunId = "run-1" });
+        var ctx = new RecordingEventHandlerContext();
+
+        var error = await FluentActions.Awaiting(() => bridge.HandleAsync(
+                Envelope(new StepRequestEvent
+                {
+                    RunId = "run-1",
+                    StepId = "foreach-step",
+                    StepType = "foreach",
+                    ExecutionId = "exec-1",
+                }),
+                ctx,
+                CancellationToken.None))
+            .Should()
+            .ThrowAsync<EventStoreOptimisticConcurrencyException>();
+
+        error.Which.Should().BeSameAs(expected);
+        ctx.Published.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Bridge_ShouldSwallowActorOwnedDurablePublicationPending()
+    {
+        var bridge = new WorkflowExecutionBridgeModule(
+            [new DurablePublicationPendingExecutor(new WorkflowDurablePublicationPendingException(
+                "pending",
+                new InvalidOperationException("callback already scheduled")))],
+            new RecordingStateHost { RunId = "run-1" });
+        var ctx = new RecordingEventHandlerContext();
+
+        await bridge.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                RunId = "run-1",
+                StepId = "tool-step",
+                StepType = "tool_call",
+                ExecutionId = "exec-1",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Should().BeEmpty();
     }
 
     [Fact]
@@ -894,6 +983,20 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
                 },
                 TopologyAudience.Self,
                 ct);
+    }
+
+    private sealed class DurablePublicationPendingExecutor(Exception exception)
+        : IEventModule<IWorkflowExecutionContext>
+    {
+        public string Name => "durable_publication_pending_executor";
+
+        public int Priority => 0;
+
+        public bool CanHandle(EventEnvelope envelope) =>
+            envelope.Payload?.Is(StepRequestEvent.Descriptor) == true;
+
+        public Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct) =>
+            throw exception;
     }
 
     private sealed class RecordingEventHandlerContext : IEventHandlerContext

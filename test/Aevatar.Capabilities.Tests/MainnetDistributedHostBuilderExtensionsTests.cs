@@ -38,6 +38,8 @@ public sealed class MainnetDistributedHostBuilderExtensionsTests
         using var queueCacheSize = new EnvironmentVariableScope("AEVATAR_Orleans__QueueCacheSize", "512");
         using var maxEventDeliveryTime = new EnvironmentVariableScope(
             "AEVATAR_Orleans__MaxEventDeliveryTime", "00:04:00");
+        using var responseTimeout = new EnvironmentVariableScope(
+            "AEVATAR_Orleans__ResponseTimeout", "00:05:00");
         using var keyringFile = TemporaryKeyringFile.Create();
         using var keyringPath = new EnvironmentVariableScope("AEVATAR_ActorRuntime__SecretStoreKeyringPath", keyringFile.Path);
 
@@ -56,6 +58,8 @@ public sealed class MainnetDistributedHostBuilderExtensionsTests
         runtimeOptions.QueueCount.Should().Be(6);
         runtimeOptions.QueueCacheSize.Should().Be(512);
         runtimeOptions.MaxEventDeliveryTime.Should().Be(TimeSpan.FromMinutes(4));
+        app.Services.GetRequiredService<IOptions<SiloMessagingOptions>>().Value.ResponseTimeout
+            .Should().Be(TimeSpan.FromMinutes(5));
         transportOptions.TopicPartitionCount.Should().Be(6);
         transportOptions.TopicName.Should().Be("mainnet-kafka-provider-events");
         transportOptions.ReceiverBufferCapacity.Should().Be(96);
@@ -181,6 +185,50 @@ public sealed class MainnetDistributedHostBuilderExtensionsTests
 
         app.Services.GetRequiredService<AevatarOrleansRuntimeOptions>().QueueCacheSize
             .Should().BeGreaterThanOrEqualTo(AevatarOrleansRuntimeOptions.DefaultQueueCacheSize);
+    }
+
+    [Fact]
+    public void AddMainnetDistributedOrleansHost_DistributedProfile_ShouldKeepResponseTimeoutAboveDeliveryTime()
+    {
+        var builder = CreateBuilder(new Dictionary<string, string?>
+        {
+            ["ActorRuntime:Provider"] = "Orleans",
+        });
+
+        builder.AddAevatarDefaultHost(options => options.AllowLocalFileSecretsStore = false);
+        builder.AddMainnetDistributedOrleansHost();
+
+        using var app = builder.Build();
+        var maxEventDeliveryTime = app.Services
+            .GetRequiredService<AevatarOrleansRuntimeOptions>()
+            .MaxEventDeliveryTime;
+        var responseTimeout = app.Services
+            .GetRequiredService<IOptions<SiloMessagingOptions>>()
+            .Value.ResponseTimeout;
+
+        responseTimeout.Should().Be(TimeSpan.FromMinutes(4));
+        responseTimeout.Should().BeGreaterThan(maxEventDeliveryTime);
+    }
+
+    [Theory]
+    [InlineData("00:03:00")]
+    [InlineData("00:02:59")]
+    public void AddMainnetDistributedOrleansHost_ResponseTimeoutNotAboveDeliveryTime_ShouldThrow(
+        string configuredResponseTimeout)
+    {
+        using var responseTimeout = new EnvironmentVariableScope(
+            "AEVATAR_Orleans__ResponseTimeout", configuredResponseTimeout);
+        var builder = CreateBuilder(new Dictionary<string, string?>
+        {
+            ["ActorRuntime:Provider"] = "Orleans",
+        });
+
+        builder.AddAevatarDefaultHost(options => options.AllowLocalFileSecretsStore = false);
+
+        var act = () => builder.AddMainnetDistributedOrleansHost();
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("Orleans:ResponseTimeout must be greater than Orleans:MaxEventDeliveryTime.");
     }
 
     private static WebApplicationBuilder CreateBuilder(Dictionary<string, string?> values)

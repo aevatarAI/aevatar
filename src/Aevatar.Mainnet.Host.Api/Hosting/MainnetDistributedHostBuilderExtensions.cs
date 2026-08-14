@@ -13,6 +13,8 @@ namespace Aevatar.Mainnet.Host.Api.Hosting;
 
 public static class MainnetDistributedHostBuilderExtensions
 {
+    private static readonly TimeSpan DefaultResponseTimeoutMargin = TimeSpan.FromMinutes(1);
+
     public static WebApplicationBuilder AddMainnetDistributedOrleansHost(this WebApplicationBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
@@ -40,6 +42,8 @@ public static class MainnetDistributedHostBuilderExtensions
         builder.Host.UseOrleans(siloBuilder =>
         {
             ConfigureClustering(siloBuilder, hostOptions, runtimeOptions.OrleansGarnetConnectionString);
+            siloBuilder.Configure<SiloMessagingOptions>(options =>
+                options.ResponseTimeout = hostOptions.ResponseTimeout);
 
             siloBuilder.AddAevatarFoundationRuntimeOrleans(orleansOptions =>
             {
@@ -309,6 +313,28 @@ public static class MainnetDistributedHostBuilderExtensions
             options.MaxEventDeliveryTime = maxEventDeliveryTime;
         }
 
+        var configuredResponseTimeout = configuration["Orleans:ResponseTimeout"];
+        if (string.IsNullOrWhiteSpace(configuredResponseTimeout))
+        {
+            options.ResponseTimeout = options.MaxEventDeliveryTime + DefaultResponseTimeoutMargin;
+        }
+        else if (TimeSpan.TryParse(configuredResponseTimeout, out var responseTimeout) &&
+                 responseTimeout > TimeSpan.Zero)
+        {
+            options.ResponseTimeout = responseTimeout;
+        }
+        else
+        {
+            throw new FormatException(
+                $"Invalid Orleans:ResponseTimeout value '{configuredResponseTimeout}'.");
+        }
+
+        if (options.ResponseTimeout <= options.MaxEventDeliveryTime)
+        {
+            throw new InvalidOperationException(
+                "Orleans:ResponseTimeout must be greater than Orleans:MaxEventDeliveryTime.");
+        }
+
         var configuredListenOnAnyHostAddress = configuration["Orleans:ListenOnAnyHostAddress"];
         if (bool.TryParse(configuredListenOnAnyHostAddress, out var listenOnAnyHostAddress))
             options.ListenOnAnyHostAddress = listenOnAnyHostAddress;
@@ -375,6 +401,9 @@ public static class MainnetDistributedHostBuilderExtensions
 
         public TimeSpan MaxEventDeliveryTime { get; set; } =
             AevatarOrleansRuntimeOptions.DefaultMaxEventDeliveryTime;
+
+        public TimeSpan ResponseTimeout { get; set; } =
+            AevatarOrleansRuntimeOptions.DefaultMaxEventDeliveryTime + DefaultResponseTimeoutMargin;
 
         public bool ListenOnAnyHostAddress { get; set; }
     }

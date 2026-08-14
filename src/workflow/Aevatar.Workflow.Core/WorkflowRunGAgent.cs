@@ -396,6 +396,7 @@ public sealed partial class WorkflowRunGAgent
         await base.OnActivateAsync(ct);
         InstallCognitiveModules();
         await RecoverToolCallDurablePublicationsAsync(ct);
+        await RecoverForEachDurablePublicationsAsync(ct);
 
         if (string.Equals(State.Status, RunningStatus, StringComparison.OrdinalIgnoreCase))
             await SendWorkflowRunStartedNotificationAsync(ct);
@@ -422,6 +423,58 @@ public sealed partial class WorkflowRunGAgent
         await base.OnCommittedStatePublicationRecoveredAsync(envelope, ct);
         await DispatchPendingInteractiveActionContinuationsAsync(ct);
         await RecoverToolCallDurablePublicationsAsync(ct);
+        await RecoverForEachDurablePublicationsAsync(ct);
+    }
+
+    private async Task RecoverForEachDurablePublicationsAsync(CancellationToken ct)
+    {
+        var packed = State.ExecutionStates.GetValueOrDefault(ForEachModule.ModuleStateKey);
+        if (packed == null || !packed.Is(ForEachModuleState.Descriptor))
+            return;
+
+        var state = packed.Unpack<ForEachModuleState>();
+        foreach (var retry in ForEachModule.BuildPendingPublicationRetries(state))
+        {
+            try
+            {
+                await ScheduleSelfDurableTimeoutAsync(
+                    ForEachModule.BuildPublicationRetryCallbackId(retry),
+                    ForEachModule.DurablePublicationRetryDelay,
+                    retry,
+                    ForEachModule.BuildPublicationRetryOptions(retry),
+                    ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception scheduleException)
+            {
+                Logger.LogWarning(
+                    scheduleException,
+                    "ForEach publication recovery scheduling failed; falling back to typed self continuation. actor={ActorId} parent={ParentKey}",
+                    Id,
+                    retry.ParentKey);
+                try
+                {
+                    await PublishAsync(
+                        retry.Clone(),
+                        TopologyAudience.Self,
+                        ct,
+                        ForEachModule.BuildPublicationRetryOptions(retry));
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception continuationException)
+                {
+                    throw new WorkflowDurablePublicationPendingException(
+                        "Durable foreach publication recovery remains pending during activation.",
+                        continuationException);
+                }
+            }
+        }
     }
 
     private async Task RecoverToolCallDurablePublicationsAsync(CancellationToken ct)
@@ -902,7 +955,7 @@ public sealed partial class WorkflowRunGAgent
         }
         catch (Exception ex) when (
             !ct.IsCancellationRequested &&
-            !WorkflowRuntimeInfrastructureFailurePolicy.IsCommittedStatePublicationFailure(ex))
+            !WorkflowRuntimeInfrastructureFailurePolicy.IsCommitConsistencyFailure(ex))
         {
             Logger.LogError(
                 ex,
@@ -922,7 +975,7 @@ public sealed partial class WorkflowRunGAgent
             }
             catch (Exception terminalEx) when (
                 !ct.IsCancellationRequested &&
-                !WorkflowRuntimeInfrastructureFailurePolicy.IsCommittedStatePublicationFailure(terminalEx))
+                !WorkflowRuntimeInfrastructureFailurePolicy.IsCommitConsistencyFailure(terminalEx))
             {
                 Logger.LogError(
                     terminalEx,

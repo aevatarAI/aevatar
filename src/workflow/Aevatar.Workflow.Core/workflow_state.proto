@@ -649,12 +649,29 @@ message ForEachParentState
   repeated string collected_step_ids = 3;
   repeated WorkflowFileRef item_file_refs = 4;
   string items_source = 5;
+  repeated BackpressureQueueEntry pending_dispatches = 6;
+  repeated string dispatched_step_ids = 7;
+  repeated string settled_worker_step_ids = 8;
+  StepCompletedEvent pending_completion = 9;
+  string parent_run_id = 10;
+  string parent_step_id = 11;
+  string parent_execution_id = 12;
+  string parent_idempotency_key = 13;
+  map<string, string> child_execution_ids = 14;
 }
 
 message ForEachModuleState
 {
+  reserved 4;
+  reserved "completion_tombstone_order";
   map<string, ForEachParentState> parents = 1;
   BackpressureQueueState backpressure = 2;
+  map<string, bool> completion_tombstones = 3;
+}
+
+message ForEachPublicationRetryFiredEvent
+{
+  string parent_key = 1;
 }
 
 message MapReduceItemResult
@@ -871,6 +888,8 @@ message BackpressureQueueEntry
   map<string, string> parameters = 6;
   repeated WorkflowFileRef input_file_refs = 7;
   ExternalToolInvocationSpec external_invocation = 8;
+  string execution_id = 9;
+  string idempotency_key = 10;
 }
 
 message BackpressureQueueState
