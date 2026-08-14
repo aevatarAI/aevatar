@@ -406,6 +406,32 @@ describe('Workflow Activity vNext run detail console', () => {
     );
   });
 
+  it('bounds the published-runs rail inside the run detail viewport and scrolls its history list', async () => {
+    renderWithQueryClient(
+      <RunDetailPage runId="run-source-alpha" scopeId="scope-alpha" />,
+    );
+
+    expect(
+      await screen.findByRole('heading', { name: 'Published runs' }),
+    ).toBeInTheDocument();
+
+    expect(document.querySelector('main.wa-vnext__main')).toHaveClass(
+      'wa-vnext__main--run-detail',
+    );
+    expect(document.querySelector('.wa-vnext__content')).toHaveClass(
+      'wa-vnext__content--run-detail',
+    );
+    expect(document.querySelector('.wa-vnext-run-detail')).toHaveClass(
+      'wa-vnext-run-detail--bounded',
+    );
+
+    const railList = document.querySelector('.wa-vnext-run-detail__rail-list');
+    expect(railList).toBeInstanceOf(HTMLElement);
+    expect(railList).toHaveStyle({
+      overflowY: 'auto',
+    });
+  });
+
   it('keeps the selected workflow history visible when the immutable detail request fails', async () => {
     mockSearch = '?workflowId=wf-alpha';
     mockWorkflowActivityApi.getRun.mockRejectedValue(

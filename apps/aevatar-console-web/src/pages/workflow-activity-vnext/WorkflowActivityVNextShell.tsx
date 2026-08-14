@@ -22,10 +22,12 @@ import { workflowActivityVNextCss } from './styles';
 type ShellProps = {
   readonly activeSection: WorkflowActivitySection;
   readonly children: React.ReactNode;
+  readonly contentClassName?: string;
   readonly description?: string;
   readonly footer?: React.ReactNode;
   readonly headerActions?: React.ReactNode;
   readonly heading?: React.ReactNode;
+  readonly mainClassName?: string;
   readonly mainRef?: React.Ref<HTMLElement>;
   readonly onNavigate?: (target: string) => void;
   readonly scopeId: string;
@@ -106,10 +108,12 @@ function Navigation({
 const WorkflowActivityVNextShell: React.FC<ShellProps> = ({
   activeSection,
   children,
+  contentClassName,
   description,
   footer,
   headerActions,
   heading,
+  mainClassName,
   mainRef,
   onNavigate,
   scopeId,
@@ -134,7 +138,11 @@ const WorkflowActivityVNextShell: React.FC<ShellProps> = ({
           <div className="wa-vnext__header-actions">{headerActions}</div>
         ) : null}
       </header>
-      <div className="wa-vnext__content">{children}</div>
+      <div
+        className={`wa-vnext__content${contentClassName ? ` ${contentClassName}` : ''}`}
+      >
+        {children}
+      </div>
     </>
   );
 
@@ -185,7 +193,7 @@ const WorkflowActivityVNextShell: React.FC<ShellProps> = ({
         />
       </aside>
       <main
-        className={`wa-vnext__main${footer ? ' wa-vnext__main--with-footer' : ''}`}
+        className={`wa-vnext__main${footer ? ' wa-vnext__main--with-footer' : ''}${mainClassName ? ` ${mainClassName}` : ''}`}
         ref={mainRef}
       >
         {footer ? (

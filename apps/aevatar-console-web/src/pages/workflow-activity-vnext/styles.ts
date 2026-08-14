@@ -94,6 +94,7 @@ export const workflowActivityVNextCss = `
   overscroll-behavior: contain;
 }
 .wa-vnext__main--with-footer { display: grid; grid-template-rows: minmax(0, 1fr) auto; overflow: hidden; }
+.wa-vnext__main--run-detail { display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; }
 .wa-vnext__main-scroll { min-height: 0; min-width: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; }
 .wa-vnext__main-footer { min-width: 0; }
 .wa-vnext__header {
@@ -110,6 +111,7 @@ export const workflowActivityVNextCss = `
 .wa-vnext__header p { color: var(--wa-muted); font-size: 12px; line-height: 17px; margin: 7px 0 0; max-width: 760px; text-wrap: pretty; }
 .wa-vnext__header-actions { align-items: center; display: flex; flex: 0 0 auto; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
 .wa-vnext__content { min-width: 0; padding: 18px 40px 48px; }
+.wa-vnext__content--run-detail { display: flex; min-height: 0; overflow: hidden; padding-bottom: 40px; }
 .wa-vnext__toolbar { align-items: center; display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; margin-bottom: 12px; min-height: 32px; }
 .wa-vnext__toolbar-search { flex: 0 1 320px; max-width: 100%; width: 320px; }
 .wa-vnext__toolbar-filters { justify-content: flex-end; }
@@ -345,8 +347,11 @@ export const workflowActivityVNextCss = `
   color: #111827;
   display: grid;
   grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
+  flex: 1 1 auto;
   height: 100%;
+  max-height: 100%;
   min-height: 0;
+  overflow: hidden;
   width: 100%;
 }
 .wa-vnext-run-detail__rail {
@@ -356,6 +361,7 @@ export const workflowActivityVNextCss = `
   flex-direction: column;
   min-height: 0;
   min-width: 0;
+  overflow: hidden;
 }
 .wa-vnext-run-detail__rail-header {
   align-items: center;
@@ -377,8 +383,11 @@ export const workflowActivityVNextCss = `
   flex-direction: column;
   gap: 6px;
   min-height: 0;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 12px;
+  scrollbar-gutter: stable;
 }
 .wa-vnext-run-detail__run {
   background: transparent;

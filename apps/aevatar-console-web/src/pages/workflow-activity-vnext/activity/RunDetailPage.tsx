@@ -792,6 +792,7 @@ const RunDetailPage: React.FC<{
       return (
         <WorkflowActivityVNextShell
           activeSection="activity"
+          contentClassName="wa-vnext__content--run-detail"
           description={t(
             'workflowActivityVNext.run.detailFallbackDescription',
             'The run detail request is unavailable, but the selected Activity row is still visible.',
@@ -813,8 +814,9 @@ const RunDetailPage: React.FC<{
             fallbackHistoryRun.workflowName ||
             t('workflowActivityVNext.run.title', 'Run details')
           }
+          mainClassName="wa-vnext__main--run-detail"
         >
-          <div className="wa-vnext-run-detail">
+          <div className="wa-vnext-run-detail wa-vnext-run-detail--bounded">
             {renderHistoryRail(
               fallbackHistoryRun.workflowName,
               historyEntries,
@@ -1010,6 +1012,7 @@ const RunDetailPage: React.FC<{
   return (
     <WorkflowActivityVNextShell
       activeSection="activity"
+      contentClassName="wa-vnext__content--run-detail"
       description={t(
         'workflowActivityVNext.run.description',
         'Review the result, steps, and history for this run.',
@@ -1045,8 +1048,9 @@ const RunDetailPage: React.FC<{
         run.summary.workflowName ||
         t('workflowActivityVNext.run.title', 'Run details')
       }
+      mainClassName="wa-vnext__main--run-detail"
     >
-      <div className="wa-vnext-run-detail">
+      <div className="wa-vnext-run-detail wa-vnext-run-detail--bounded">
         {renderHistoryRail(
           run.summary.workflowName,
           effectiveHistory,
