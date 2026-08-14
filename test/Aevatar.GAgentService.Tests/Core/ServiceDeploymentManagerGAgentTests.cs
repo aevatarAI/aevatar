@@ -226,6 +226,81 @@ public sealed class ServiceDeploymentManagerGAgentTests
     }
 
     [Fact]
+    public async Task HandleActivateAsync_ShouldReArmUntilServiceCatalogProjectionCatchesUp()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+        await revisionCatalog.UpsertRevisionAsync(
+            ServiceKeys.Build(identity),
+            "r1",
+            GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1"));
+        var capabilityViewReader = new DeferredCapabilityViewReader();
+        var activator = new RecordingRuntimeActivator();
+        activator.ActivationResults.Enqueue(new ServiceRuntimeActivationResult("dep-r1", "actor-r1", "active"));
+        var scheduler = new RecordingCallbackScheduler();
+        var agent = CreateAgent(
+            new InMemoryEventStore(),
+            revisionCatalog,
+            activator,
+            ServiceActorIds.Deployment(identity),
+            scheduler: scheduler,
+            capabilityViewReader: capabilityViewReader);
+        await agent.ActivateAsync();
+
+        await agent.HandleActivateAsync(new ActivateServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r1",
+        });
+
+        capabilityViewReader.RequestCount.Should().Be(1);
+        activator.ActivationRequests.Should().BeEmpty();
+        scheduler.ScheduledTimeouts.Should().ContainSingle();
+        agent.State.PendingActivations.Should().ContainKey("r1");
+
+        capabilityViewReader.IsReady = true;
+        var rearmed = scheduler.ScheduledTimeouts[0].Payload.Unpack<ActivateServiceRevisionCommand>();
+        await agent.HandleActivateAsync(rearmed);
+
+        capabilityViewReader.RequestCount.Should().Be(2);
+        activator.ActivationRequests.Should().ContainSingle();
+        agent.State.Deployments.Should().ContainKey("dep-r1");
+        agent.State.PendingActivations.Should().NotContainKey("r1");
+    }
+
+    [Fact]
+    public async Task HandleActivateAsync_ShouldCommitCapabilityViewFailure_WhenServiceCatalogLagExceedsDeadline()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+        await revisionCatalog.UpsertRevisionAsync(
+            ServiceKeys.Build(identity),
+            "r1",
+            GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1"));
+        var scheduler = new RecordingCallbackScheduler();
+        var agent = CreateAgent(
+            new InMemoryEventStore(),
+            revisionCatalog,
+            new RecordingRuntimeActivator(),
+            ServiceActorIds.Deployment(identity),
+            scheduler: scheduler,
+            capabilityViewReader: new DeferredCapabilityViewReader());
+        await agent.ActivateAsync();
+
+        await agent.HandleActivateAsync(new ActivateServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r1",
+            ActivationDeadlineAt = Timestamp.FromDateTime(DateTime.UtcNow.AddMinutes(-1)),
+        });
+
+        agent.State.ActivationFailures["r1"].FailureCode
+            .Should().Be(ServiceDeploymentActivationFailureCode.CapabilityViewNotReady);
+        agent.State.ActivationFailures["r1"].FailureReason.Should().Contain("service-catalog projection");
+        scheduler.ScheduledTimeouts.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task HandleActivateAsync_ShouldReuseActorOwnedDeadlineAcrossReplayAndExternalRetry()
     {
         var eventStore = new InMemoryEventStore();
@@ -549,7 +624,8 @@ public sealed class ServiceDeploymentManagerGAgentTests
         RecordingRuntimeActivator activator,
         string actorId,
         RecordingDispatchPort? dispatchPort = null,
-        RecordingCallbackScheduler? scheduler = null)
+        RecordingCallbackScheduler? scheduler = null,
+        IActivationCapabilityViewReader? capabilityViewReader = null)
     {
         return GAgentServiceTestKit.CreateStatefulAgent<ServiceDeploymentManagerGAgent, ServiceDeploymentState>(
             eventStore,
@@ -557,7 +633,7 @@ public sealed class ServiceDeploymentManagerGAgentTests
             () => new ServiceDeploymentManagerGAgent(
                 dispatchPort ?? new RecordingDispatchPort(),
                 revisionCatalog,
-                new AlwaysReadyCapabilityViewReader(),
+                capabilityViewReader ?? new AlwaysReadyCapabilityViewReader(),
                 new AllowActivationAdmissionEvaluator(),
                 activator),
             scheduler == null
@@ -583,6 +659,34 @@ public sealed class ServiceDeploymentManagerGAgentTests
             string revisionId,
             CancellationToken ct = default)
         {
+            return Task.FromResult(new ActivationCapabilityView
+            {
+                Identity = identity.Clone(),
+                RevisionId = revisionId,
+            });
+        }
+    }
+
+    private sealed class DeferredCapabilityViewReader : IActivationCapabilityViewReader
+    {
+        public bool IsReady { get; set; }
+
+        public int RequestCount { get; private set; }
+
+        public Task<ActivationCapabilityView> GetAsync(
+            ServiceIdentity identity,
+            string revisionId,
+            CancellationToken ct = default)
+        {
+            RequestCount++;
+            if (!IsReady)
+            {
+                throw new ActivationCapabilityViewNotReadyException(
+                    ServiceKeys.Build(identity),
+                    revisionId,
+                    ActivationCapabilityViewProjection.ServiceCatalog);
+            }
+
             return Task.FromResult(new ActivationCapabilityView
             {
                 Identity = identity.Clone(),
