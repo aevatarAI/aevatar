@@ -18,6 +18,14 @@ internal static class WorkflowArtifactFactBuilder
         EventEnvelope envelope,
         string actorId,
         string? stateRunId,
+        out IMessage artifactFact) =>
+        TryBuild(envelope, actorId, stateRunId, requireTypedRunId: false, out artifactFact);
+
+    public static bool TryBuild(
+        EventEnvelope envelope,
+        string actorId,
+        string? stateRunId,
+        bool requireTypedRunId,
         out IMessage artifactFact)
     {
         artifactFact = null!;
@@ -30,19 +38,31 @@ internal static class WorkflowArtifactFactBuilder
 
         // O1: the committed RoleChatSessionCompletedEvent is the richer source — it carries tool_calls
         // (arguments) plus tool_receipts (result/success/error). Prefer it so tool detail is surfaced.
-        if (TryBuildWorkflowRoleReplyFromRoleChatSession(envelope, normalizedRunId, out var roleChatReplyFact))
+        if (TryBuildWorkflowRoleReplyFromRoleChatSession(
+                envelope,
+                normalizedRunId,
+                requireTypedRunId,
+                out var roleChatReplyFact))
         {
             artifactFact = roleChatReplyFact;
             return true;
         }
 
-        if (TryBuildWorkflowRoleReplyRecordedEvent(envelope, normalizedRunId, out var roleReplyFact))
+        if (TryBuildWorkflowRoleReplyRecordedEvent(
+                envelope,
+                normalizedRunId,
+                requireTypedRunId,
+                out var roleReplyFact))
         {
             artifactFact = roleReplyFact;
             return true;
         }
 
-        if (TryBuildWorkflowRuntimeOperationRecordedEvent(envelope, normalizedRunId, out var operationFact))
+        if (TryBuildWorkflowRuntimeOperationRecordedEvent(
+                envelope,
+                normalizedRunId,
+                requireTypedRunId,
+                out var operationFact))
         {
             artifactFact = operationFact;
             return true;
@@ -104,7 +124,8 @@ internal static class WorkflowArtifactFactBuilder
 
     private static bool TryBuildWorkflowRuntimeOperationRecordedEvent(
         EventEnvelope envelope,
-        string runId,
+        string fallbackRunId,
+        bool requireTypedRunId,
         out WorkflowRuntimeOperationRecordedEvent evt)
     {
         evt = null!;
@@ -116,6 +137,16 @@ internal static class WorkflowArtifactFactBuilder
             return false;
 
         var progress = published.StateEvent.EventData.Unpack<RoleChatSessionProgressedEvent>();
+        if (!TryResolveCommittedSessionRunId(
+                published,
+                progress.SessionId,
+                explicitRunId: null,
+                fallbackRunId,
+                requireTypedRunId,
+                out var runId))
+        {
+            return false;
+        }
         var publisherActorId = envelope.Route?.PublisherActorId ?? string.Empty;
         evt = new WorkflowRuntimeOperationRecordedEvent
         {
@@ -205,7 +236,8 @@ internal static class WorkflowArtifactFactBuilder
 
     private static bool TryBuildWorkflowRoleReplyRecordedEvent(
         EventEnvelope envelope,
-        string runId,
+        string fallbackRunId,
+        bool requireTypedRunId,
         out WorkflowRoleReplyRecordedEvent evt)
     {
         evt = null!;
@@ -221,6 +253,16 @@ internal static class WorkflowArtifactFactBuilder
         }
 
         var completed = published.StateEvent.EventData.Unpack<WorkflowLlmInvocationCompletedEvent>();
+        if (!TryResolveCommittedSessionRunId(
+                published,
+                completed.SessionId,
+                completed.RunId,
+                fallbackRunId,
+                requireTypedRunId,
+                out var runId))
+        {
+            return false;
+        }
         var publisherActorId = envelope.Route?.PublisherActorId ?? string.Empty;
         // Refactor (iter15/cluster-028):
         //   Old pattern: parsed childActorId prefix to derive RoleId via string split.
@@ -245,7 +287,8 @@ internal static class WorkflowArtifactFactBuilder
     // the workflow run timeline. tool_calls (arguments) join tool_receipts (results) by call_id.
     private static bool TryBuildWorkflowRoleReplyFromRoleChatSession(
         EventEnvelope envelope,
-        string runId,
+        string fallbackRunId,
+        bool requireTypedRunId,
         out WorkflowRoleReplyRecordedEvent evt)
     {
         evt = null!;
@@ -261,6 +304,16 @@ internal static class WorkflowArtifactFactBuilder
         }
 
         var completed = published.StateEvent.EventData.Unpack<RoleChatSessionCompletedEvent>();
+        if (!TryResolveCommittedSessionRunId(
+                published,
+                completed.SessionId,
+                completed.WorkflowLlmCompletionDeliveryContext?.RunId,
+                fallbackRunId,
+                requireTypedRunId,
+                out var runId))
+        {
+            return false;
+        }
         var publisherActorId = envelope.Route?.PublisherActorId ?? string.Empty;
         var roleId = string.IsNullOrWhiteSpace(completed.RoleId) ? publisherActorId : completed.RoleId;
 
@@ -277,6 +330,36 @@ internal static class WorkflowArtifactFactBuilder
         };
         evt.ToolCalls.AddRange(BuildEnrichedToolCalls(completed));
         return true;
+    }
+
+    private static bool TryResolveCommittedSessionRunId(
+        CommittedStateEventPublished published,
+        string? sessionId,
+        string? explicitRunId,
+        string fallbackRunId,
+        bool requireTypedRunId,
+        out string runId)
+    {
+        var typedRunId = explicitRunId?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(typedRunId) &&
+            published.StateRoot?.Is(RoleGAgentState.Descriptor) == true)
+        {
+            var roleState = published.StateRoot.Unpack<RoleGAgentState>();
+            if (!string.IsNullOrWhiteSpace(sessionId) &&
+                roleState.Sessions.TryGetValue(sessionId, out var session))
+            {
+                typedRunId = session.WorkflowLlmCompletionDeliveryContext?.RunId?.Trim() ?? string.Empty;
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(typedRunId))
+        {
+            runId = requireTypedRunId ? string.Empty : fallbackRunId;
+            return !requireTypedRunId;
+        }
+
+        runId = WorkflowRunIdNormalizer.Normalize(typedRunId);
+        return !string.IsNullOrWhiteSpace(runId);
     }
 
     private static WorkflowArtifactSourceIdentity BuildSourceIdentity(

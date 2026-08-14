@@ -18,6 +18,7 @@ message WorkflowState
     string lifecycle = 3;
     string definition_actor_id = 4;
     int32 definition_version = 5;
+    int64 binding_generation = 6;
   }
 
   message PendingSubWorkflowInvocation
@@ -39,6 +40,7 @@ message WorkflowState
     string root_run_id = 15;
     int32 depth = 16;
     repeated WorkflowFileRef input_file_refs = 17;
+    int64 binding_generation = 18;
   }
 
   message PendingSubWorkflowDefinitionResolution
@@ -97,6 +99,7 @@ message WorkflowRunState
     string lifecycle = 3;
     string definition_actor_id = 4;
     int32 definition_version = 5;
+    int64 binding_generation = 6;
   }
 
   message PendingSubWorkflowInvocation
@@ -118,6 +121,7 @@ message WorkflowRunState
     string root_run_id = 15;
     int32 depth = 16;
     repeated WorkflowFileRef input_file_refs = 17;
+    int64 binding_generation = 18;
   }
 
   message PendingSubWorkflowDefinitionResolution
@@ -208,6 +212,9 @@ message WorkflowRunState
   // Highest observed committed state version per child publisher. This is diagnostic only;
   // exact deduplication uses processed_artifact_sources because delivery may be out of order.
   map<string, int64> processed_artifact_state_versions_by_publisher = 56;
+  aevatar.workflow.WorkflowRunActorReusePolicy reuse_policy = 57;
+  int64 binding_generation = 58;
+  string reuse_authority_actor_id = 59;
 }
 
 message WorkflowRunInitiatorState

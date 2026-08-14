@@ -545,8 +545,64 @@ public sealed partial class WorkflowRunGAgent
         WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan,
         ExternalCapabilityExecutionMode expectedExecutionMode,
         WorkflowRunLineage? initialLineage = null,
+        WorkflowRunActorReusePolicy reusePolicy = WorkflowRunActorReusePolicy.SingleRun,
+        long bindingGeneration = 0,
+        string? reuseAuthorityActorId = null,
+        string? bindPublisherActorId = null,
         CancellationToken ct = default)
     {
+        var requestedRunId = ResolveRequestedBindRunId(State, runId);
+        var normalizedReusePolicy = reusePolicy == WorkflowRunActorReusePolicy.Unspecified
+            ? WorkflowRunActorReusePolicy.SingleRun
+            : reusePolicy;
+        var bindDefinitionEvent = new BindWorkflowRunDefinitionEvent
+        {
+            DefinitionActorId = definitionActorId ?? string.Empty,
+            WorkflowName = workflowName ?? string.Empty,
+            WorkflowYaml = workflowYaml ?? string.Empty,
+            RunId = requestedRunId,
+            ScopeId = scopeId?.Trim() ?? string.Empty,
+            RunOrigin = runOrigin?.Trim() ?? string.Empty,
+            ScheduleId = scheduleId?.Trim() ?? string.Empty,
+            WorkflowId = workflowId?.Trim() ?? string.Empty,
+            RevisionId = revisionId?.Trim() ?? string.Empty,
+            DefinitionVersion = Math.Max(0, definitionVersion),
+            CapabilityAdmissionPlan = capabilityAdmissionPlan?.Clone(),
+            ExpectedExecutionMode = expectedExecutionMode,
+            ReusePolicy = normalizedReusePolicy,
+            BindingGeneration = bindingGeneration,
+            ReuseAuthorityActorId = reuseAuthorityActorId?.Trim() ?? string.Empty,
+        };
+        if (initialLineage != null)
+            bindDefinitionEvent.InitialLineage = initialLineage.Clone();
+        if (inlineWorkflowYamls != null)
+        {
+            foreach (var (key, value) in inlineWorkflowYamls)
+                bindDefinitionEvent.InlineWorkflowYamls[key] = value;
+        }
+
+        var bindDecision = EvaluateRunDefinitionBind(
+            State,
+            bindDefinitionEvent,
+            bindPublisherActorId,
+            verifyPublisher: true);
+        if (bindDecision.Disposition == RunDefinitionBindDisposition.Ignore)
+        {
+            Logger.LogInformation(
+                "Ignore stale definition bind for workflow run. actor={ActorId} currentRun={RunId} requestedRun={RequestedRunId} currentGeneration={CurrentGeneration} requestedGeneration={RequestedGeneration} status={Status}",
+                Id,
+                RunId,
+                requestedRunId,
+                State.BindingGeneration,
+                bindingGeneration,
+                State.Status);
+            return;
+        }
+        if (bindDecision.Disposition == RunDefinitionBindDisposition.Reject)
+        {
+            throw new InvalidOperationException(bindDecision.Error);
+        }
+
         if (expectedExecutionMode == ExternalCapabilityExecutionMode.Unspecified ||
             !System.Enum.IsDefined(expectedExecutionMode))
         {
@@ -563,33 +619,6 @@ public sealed partial class WorkflowRunGAgent
         EnsureWorkflowNameCanBind(workflowName);
         var childActorIdsToReset = CaptureDerivedChildActorIdsForReset();
         var stateBeforeBind = State.Clone();
-        var bindDefinitionEvent = new BindWorkflowRunDefinitionEvent
-        {
-            DefinitionActorId = definitionActorId ?? string.Empty,
-            WorkflowName = workflowName ?? string.Empty,
-            WorkflowYaml = workflowYaml ?? string.Empty,
-            RunId = string.IsNullOrWhiteSpace(runId) ? Id : WorkflowRunIdNormalizer.Normalize(runId),
-            ScopeId = scopeId?.Trim() ?? string.Empty,
-            RunOrigin = runOrigin?.Trim() ?? string.Empty,
-            ScheduleId = scheduleId?.Trim() ?? string.Empty,
-            WorkflowId = workflowId?.Trim() ?? string.Empty,
-            RevisionId = revisionId?.Trim() ?? string.Empty,
-            DefinitionVersion = Math.Max(0, definitionVersion),
-            CapabilityAdmissionPlan = capabilityAdmissionPlan?.Clone(),
-            ExpectedExecutionMode = expectedExecutionMode,
-        };
-        if (initialLineage != null)
-        {
-            // Fix (review round 1, F1):
-            //   Sub-workflow child lineage was stamped before dispatch but dropped before bind commit.
-            //   Preserve InitialLineage in the authoritative bind event and cover the bind handler path.
-            bindDefinitionEvent.InitialLineage = initialLineage.Clone();
-        }
-        if (inlineWorkflowYamls != null)
-        {
-            foreach (var (key, value) in inlineWorkflowYamls)
-                bindDefinitionEvent.InlineWorkflowYamls[key] = value;
-        }
 
         await PersistDomainEventAsync(bindDefinitionEvent, ct);
         await _subWorkflowOrchestrator.CancelPendingDefinitionResolutionTimeoutsAsync(stateBeforeBind, CancellationToken.None);
@@ -614,7 +643,11 @@ public sealed partial class WorkflowRunGAgent
             request.DefinitionVersion,
             request.CapabilityAdmissionPlan,
             request.ExpectedExecutionMode,
-            request.InitialLineage);
+            request.InitialLineage,
+            request.ReusePolicy,
+            request.BindingGeneration,
+            request.ReuseAuthorityActorId,
+            ActiveInboundEnvelope?.Route?.PublisherActorId);
 
     public override Task<string> GetDescriptionAsync()
     {
@@ -622,10 +655,60 @@ public sealed partial class WorkflowRunGAgent
         return Task.FromResult($"WorkflowRunGAgent[{State.WorkflowName}] run={RunId} ({status})");
     }
 
+    protected override async Task<bool> PrepareEnvelopeHandlingAsync(
+        EventEnvelope envelope,
+        CancellationToken ct)
+    {
+        if (!await base.PrepareEnvelopeHandlingAsync(envelope, ct))
+            return false;
+        if (envelope.Payload?.Is(StartWorkflowEvent.Descriptor) != true)
+            return true;
+
+        var start = envelope.Payload.Unpack<StartWorkflowEvent>();
+        var requestedRunId = string.IsNullOrWhiteSpace(start.RunId)
+            ? WorkflowRunIdNormalizer.Normalize(State.RunId)
+            : WorkflowRunIdNormalizer.Normalize(start.RunId);
+        var currentRunId = WorkflowRunIdNormalizer.Normalize(State.RunId);
+        var valid = !string.IsNullOrWhiteSpace(currentRunId) &&
+                    string.Equals(currentRunId, requestedRunId, StringComparison.Ordinal) &&
+                    start.BindingGeneration == State.BindingGeneration &&
+                    !IsTerminalStatus(State.Status) &&
+                    IsValidCommittedReuseBinding(State);
+        if (valid && State.ReusePolicy == WorkflowRunActorReusePolicy.SerialSingleton)
+        {
+            var publisherActorId = envelope.Route?.PublisherActorId?.Trim() ?? string.Empty;
+            valid = string.Equals(publisherActorId, State.ReuseAuthorityActorId, StringComparison.Ordinal) ||
+                    string.Equals(publisherActorId, Id, StringComparison.Ordinal);
+        }
+
+        if (valid)
+            return true;
+
+        Logger.LogWarning(
+            "Ignore fenced workflow start. actor={ActorId} currentRun={CurrentRunId} requestedRun={RequestedRunId} currentGeneration={CurrentGeneration} requestedGeneration={RequestedGeneration} status={Status}",
+            Id,
+            currentRunId,
+            requestedRunId,
+            State.BindingGeneration,
+            start.BindingGeneration,
+            State.Status);
+        return false;
+    }
+
     [EventHandler]
     public async Task HandleChatRequest(WorkflowChatRequestEvent request)
     {
         ArgumentNullException.ThrowIfNull(request);
+        if (IsTerminalStatus(State.Status))
+        {
+            Logger.LogInformation(
+                "Ignore chat request for terminal workflow run. actor={ActorId} run={RunId} status={Status}",
+                Id,
+                RunId,
+                State.Status);
+            return;
+        }
+
         var commandId = ActiveInboundEnvelope?.Id?.Trim() ?? string.Empty;
         var correlationId = ActiveInboundEnvelope?.Propagation?.CorrelationId?.Trim() ?? string.Empty;
         if (!TryAcquireChatCommandExecutionLease(commandId))
@@ -823,6 +906,7 @@ public sealed partial class WorkflowRunGAgent
             Input = executionInput,
             RunId = runId,
             ForkSeed = request.ForkSeed,
+            BindingGeneration = State.BindingGeneration,
         };
         start.InputFileRefs.Add(inputFileRefs.Select(static fileRef => fileRef.Clone()));
         return start;
@@ -879,6 +963,16 @@ public sealed partial class WorkflowRunGAgent
     [EventHandler]
     public async Task HandleReplaceWorkflowDefinitionAndExecute(ReplaceWorkflowDefinitionAndExecuteEvent request)
     {
+        if (IsTerminalStatus(State.Status))
+        {
+            Logger.LogInformation(
+                "Ignore dynamic definition replacement for terminal workflow run. actor={ActorId} run={RunId} status={Status}",
+                Id,
+                RunId,
+                State.Status);
+            return;
+        }
+
         var yaml = request.WorkflowYaml ?? string.Empty;
         if (string.IsNullOrWhiteSpace(yaml))
         {
@@ -939,6 +1033,7 @@ public sealed partial class WorkflowRunGAgent
                 WorkflowName = _compiledWorkflow.Name,
                 Input = request.Input ?? string.Empty,
                 RunId = runId,
+                BindingGeneration = State.BindingGeneration,
             },
             sessionId: string.Empty,
             CancellationToken.None);
@@ -1740,6 +1835,16 @@ public sealed partial class WorkflowRunGAgent
 
     public async Task HandleWorkflowCompleted(WorkflowCompletedEvent evt, string? sessionId = null)
     {
+        if (IsMismatchedRunIdentity(State, evt.RunId))
+        {
+            Logger.LogWarning(
+                "Ignore WorkflowCompletedEvent with mismatched run id. actor={ActorId} stateRun={StateRunId} eventRun={EventRunId}",
+                Id,
+                State.RunId,
+                evt.RunId);
+            return;
+        }
+
         if (ShouldIgnoreWorkflowCompleted(State))
         {
             Logger.LogDebug(
@@ -2070,8 +2175,27 @@ public sealed partial class WorkflowRunGAgent
     {
         ArgumentNullException.ThrowIfNull(envelope);
 
-        if (!WorkflowArtifactFactBuilder.TryBuild(envelope, Id, State.RunId, out var artifactFact))
+        var requireTypedRunId = State.ReusePolicy == WorkflowRunActorReusePolicy.SerialSingleton;
+        if (!WorkflowArtifactFactBuilder.TryBuild(
+                envelope,
+                Id,
+                State.RunId,
+                requireTypedRunId,
+                out var artifactFact))
             return;
+
+        var artifactRunId = ResolveRunOwnedTransitionRunId(artifactFact);
+        if ((requireTypedRunId && string.IsNullOrWhiteSpace(artifactRunId)) ||
+            (!string.IsNullOrWhiteSpace(artifactRunId) && IsMismatchedRunIdentity(State, artifactRunId)))
+        {
+            Logger.LogWarning(
+                "Ignore fenced workflow artifact. actor={ActorId} currentRun={CurrentRunId} artifactRun={ArtifactRunId} artifactType={ArtifactType}",
+                Id,
+                State.RunId,
+                artifactRunId,
+                artifactFact.Descriptor.FullName);
+            return;
+        }
 
         var source = ResolveArtifactSource(artifactFact);
         if (source != null &&
@@ -2318,8 +2442,13 @@ public sealed partial class WorkflowRunGAgent
             configurator.Configure(module, _compiledWorkflow);
     }
 
-    protected override WorkflowRunState TransitionState(WorkflowRunState current, IMessage evt) =>
-        StateTransitionMatcher
+    protected override WorkflowRunState TransitionState(WorkflowRunState current, IMessage evt)
+    {
+        var eventRunId = ResolveRunOwnedTransitionRunId(evt);
+        if (eventRunId is not null && IsMismatchedRunIdentity(current, eventRunId))
+            return current;
+
+        return StateTransitionMatcher
             .Match(current, evt)
             .On<BindWorkflowRunDefinitionEvent>(ApplyBindWorkflowRunDefinition)
             .On<WorkflowRunCompletionNotificationTargetAdoptedEvent>(ApplyWorkflowRunCompletionNotificationTargetAdopted)
@@ -2360,6 +2489,7 @@ public sealed partial class WorkflowRunGAgent
             .On<SubWorkflowInvocationHandoffAdvancedEvent>(SubWorkflowOrchestrator.ApplySubWorkflowInvocationHandoffAdvanced)
             .On<SubWorkflowInvocationCompletedEvent>(SubWorkflowOrchestrator.ApplySubWorkflowInvocationCompleted)
             .OrCurrent();
+    }
 
     private static WorkflowRunState ApplyInteractiveActionHandoffDispatched(
         WorkflowRunState current,
@@ -2492,15 +2622,18 @@ public sealed partial class WorkflowRunGAgent
 
     private WorkflowRunState ApplyBindWorkflowRunDefinition(WorkflowRunState current, BindWorkflowRunDefinitionEvent evt)
     {
+        var decision = EvaluateRunDefinitionBind(current, evt, publisherActorId: null, verifyPublisher: false);
+        if (decision.Disposition != RunDefinitionBindDisposition.Accept)
+            return current;
+
+        var eventRunId = ResolveRequestedBindRunId(current, evt.RunId);
         var next = current.Clone();
         next.DefinitionActorId = evt.DefinitionActorId?.Trim() ?? string.Empty;
         next.WorkflowYaml = evt.WorkflowYaml ?? string.Empty;
         next.WorkflowName = string.IsNullOrWhiteSpace(evt.WorkflowName)
             ? current.WorkflowName
             : evt.WorkflowName.Trim();
-        next.RunId = string.IsNullOrWhiteSpace(evt.RunId)
-            ? (string.IsNullOrWhiteSpace(current.RunId) ? Id : current.RunId)
-            : WorkflowRunIdNormalizer.Normalize(evt.RunId);
+        next.RunId = eventRunId;
         next.ScopeId = string.IsNullOrWhiteSpace(evt.ScopeId)
             ? current.ScopeId
             : evt.ScopeId.Trim();
@@ -2521,12 +2654,16 @@ public sealed partial class WorkflowRunGAgent
             : evt.DefinitionVersion;
         next.CapabilityAdmissionPlan = evt.CapabilityAdmissionPlan?.Clone();
         next.ExpectedExecutionMode = evt.ExpectedExecutionMode;
+        next.ReusePolicy = evt.ReusePolicy;
+        next.BindingGeneration = evt.BindingGeneration;
+        next.ReuseAuthorityActorId = evt.ReuseAuthorityActorId?.Trim() ?? string.Empty;
         next.Status = "bound";
         next.Input = string.Empty;
         next.FinalOutput = string.Empty;
         next.FinalError = string.Empty;
         next.TerminalRecoveryFailureKind = WorkflowRecoveryFailureKind.Unspecified;
         next.CompletedAtUtc = null;
+        next.StartedAtUtc = null;
         next.ClearDurationMs();
         next.Initiator = null;
         next.ForkAttempt = 0;
@@ -2554,6 +2691,10 @@ public sealed partial class WorkflowRunGAgent
         next.TerminalNotificationAttempt = 0;
         next.TerminalNotificationDeliveryStatus = WorkflowRunTerminalNotificationDeliveryStatus.Unspecified;
         next.TerminalNotificationRetryCallbackId = string.Empty;
+        next.CurrentTurnId = string.Empty;
+        next.InteractiveActionHandoffs.Clear();
+        next.ProcessedArtifactSources.Clear();
+        next.ProcessedArtifactStateVersionsByPublisher.Clear();
         next.Lineage = evt.InitialLineage == null
             ? CreateUnavailableLineage("Run lineage is unavailable for this run.")
             : EnsureLineage(evt.InitialLineage);
@@ -2612,6 +2753,11 @@ public sealed partial class WorkflowRunGAgent
 
     private static WorkflowRunState ApplyWorkflowRunExecutionStarted(WorkflowRunState current, WorkflowRunExecutionStartedEvent evt)
     {
+        // A run actor owns one run. A start observed after that run reaches a
+        // terminal state is stale/redelivered and must not reopen it.
+        if (IsTerminalStatus(current.Status))
+            return current;
+
         var next = current.Clone();
         next.RunId = string.IsNullOrWhiteSpace(evt.RunId) ? current.RunId : WorkflowRunIdNormalizer.Normalize(evt.RunId);
         next.WorkflowName = string.IsNullOrWhiteSpace(evt.WorkflowName) ? current.WorkflowName : evt.WorkflowName.Trim();
@@ -3187,6 +3333,9 @@ public sealed partial class WorkflowRunGAgent
 
     private static WorkflowRunState ApplyWorkflowStopped(WorkflowRunState current, WorkflowStoppedEvent evt)
     {
+        if (IsTerminalStatus(current.Status))
+            return current;
+
         var next = current.Clone();
         next.Status = StoppedStatus;
         next.FinalOutput = string.Empty;
@@ -3206,6 +3355,9 @@ public sealed partial class WorkflowRunGAgent
 
     private static WorkflowRunState ApplyWorkflowCompleted(WorkflowRunState current, WorkflowCompletedEvent evt)
     {
+        if (ShouldIgnoreWorkflowCompleted(current))
+            return current;
+
         var next = current.Clone();
         next.Status = evt.Success ? CompletedStatus : FailedStatus;
         next.FinalOutput = evt.Output ?? string.Empty;
@@ -3226,6 +3378,9 @@ public sealed partial class WorkflowRunGAgent
         WorkflowRunState current,
         WorkflowRunTerminalTimingRecordedEvent evt)
     {
+        if (current.CompletedAtUtc != null)
+            return current;
+
         var next = current.Clone();
         ApplyTerminalTiming(next, evt.CompletedAtUtc);
         return next;
@@ -3251,6 +3406,9 @@ public sealed partial class WorkflowRunGAgent
 
     private static WorkflowRunState ApplyWorkflowRunStopped(WorkflowRunState current, WorkflowRunStoppedEvent evt)
     {
+        if (IsTerminalStatus(current.Status))
+            return current;
+
         var next = current.Clone();
         next.Status = StoppedStatus;
         next.FinalOutput = string.Empty;
@@ -3431,6 +3589,318 @@ public sealed partial class WorkflowRunGAgent
         string.Equals(status, CompletedStatus, StringComparison.OrdinalIgnoreCase) ||
         string.Equals(status, FailedStatus, StringComparison.OrdinalIgnoreCase) ||
         string.Equals(status, StoppedStatus, StringComparison.OrdinalIgnoreCase);
+
+    private string ResolveRequestedBindRunId(WorkflowRunState state, string? requestedRunId)
+    {
+        if (!string.IsNullOrWhiteSpace(requestedRunId))
+            return WorkflowRunIdNormalizer.Normalize(requestedRunId);
+
+        return string.IsNullOrWhiteSpace(state.RunId)
+            ? WorkflowRunIdNormalizer.Normalize(Id)
+            : WorkflowRunIdNormalizer.Normalize(state.RunId);
+    }
+
+    private RunDefinitionBindDecision EvaluateRunDefinitionBind(
+        WorkflowRunState current,
+        BindWorkflowRunDefinitionEvent requested,
+        string? publisherActorId,
+        bool verifyPublisher)
+    {
+        if (!System.Enum.IsDefined(requested.ReusePolicy))
+            return RejectRunDefinitionBind("workflow Run reuse policy is invalid.");
+
+        var requestedRunId = ResolveRequestedBindRunId(current, requested.RunId);
+        var requestedAuthority = requested.ReuseAuthorityActorId?.Trim() ?? string.Empty;
+        var requestedPolicy = requested.ReusePolicy == WorkflowRunActorReusePolicy.Unspecified
+            ? WorkflowRunActorReusePolicy.SingleRun
+            : requested.ReusePolicy;
+        var requestedIsSingleton = requestedPolicy == WorkflowRunActorReusePolicy.SerialSingleton;
+        if (requestedIsSingleton)
+        {
+            if (requested.BindingGeneration <= 0 || string.IsNullOrWhiteSpace(requestedAuthority))
+            {
+                return RejectRunDefinitionBind(
+                    "workflow_call singleton bind requires a positive generation and reuse authority.");
+            }
+        }
+        else if (requested.BindingGeneration != 0 || !string.IsNullOrWhiteSpace(requestedAuthority))
+        {
+            return RejectRunDefinitionBind(
+                "single-run workflow bind cannot declare a reuse generation or authority.");
+        }
+
+        var currentIsSingleton = current.ReusePolicy == WorkflowRunActorReusePolicy.SerialSingleton;
+        var expectedPublisher = requestedIsSingleton
+            ? requestedAuthority
+            : currentIsSingleton
+                ? current.ReuseAuthorityActorId?.Trim() ?? string.Empty
+                : string.Empty;
+        if (verifyPublisher &&
+            !string.IsNullOrWhiteSpace(expectedPublisher) &&
+            !string.Equals(expectedPublisher, publisherActorId?.Trim(), StringComparison.Ordinal))
+        {
+            return RejectRunDefinitionBind("workflow Run reuse authority does not match the bind publisher.");
+        }
+
+        if (string.IsNullOrWhiteSpace(current.RunId))
+        {
+            if (requestedIsSingleton && requested.BindingGeneration != 1)
+                return RejectRunDefinitionBind("workflow_call singleton initial binding generation must be 1.");
+            return AcceptRunDefinitionBind();
+        }
+
+        if (!IsValidCommittedReuseBinding(current))
+            return RejectRunDefinitionBind("workflow Run has an invalid committed reuse binding.");
+
+        if (!verifyPublisher &&
+            current.ReusePolicy == WorkflowRunActorReusePolicy.Unspecified &&
+            requested.ReusePolicy == WorkflowRunActorReusePolicy.Unspecified)
+        {
+            // Historical streams predate actor reuse policy and may contain
+            // multiple binds on one actor. Replay their original semantics;
+            // live commands are normalized to SingleRun before persistence.
+            return AcceptRunDefinitionBind();
+        }
+
+        var currentRunId = WorkflowRunIdNormalizer.Normalize(current.RunId);
+        var sameRun = string.Equals(currentRunId, requestedRunId, StringComparison.Ordinal);
+        if (!currentIsSingleton)
+        {
+            if (requestedIsSingleton)
+                return RejectRunDefinitionBind("single-run workflow actor cannot be upgraded to singleton reuse.");
+            if (!sameRun)
+            {
+                if (IsTerminalStatus(current.Status))
+                    return IgnoreRunDefinitionBind();
+                return RejectRunDefinitionBind(
+                    $"workflow Run '{Id}' is already bound to a different run identity.");
+            }
+            if (IsTerminalStatus(current.Status))
+                return IgnoreRunDefinitionBind();
+            if (verifyPublisher)
+            {
+                return SameCanonicalRunBinding(current, requested)
+                    ? IgnoreRunDefinitionBind()
+                    : RejectRunDefinitionBind(
+                        "workflow Run is already bound to a different definition or identity; binding payload cannot change within a binding generation.");
+            }
+
+            // Internal dynamic_workflow replacement commits its authoritative
+            // bind event directly. Historical replay must continue to apply it;
+            // externally handled binds already passed the canonical equality gate.
+            return IsTerminalStatus(current.Status)
+                ? IgnoreRunDefinitionBind()
+                : AcceptRunDefinitionBind();
+        }
+
+        var currentAuthority = current.ReuseAuthorityActorId?.Trim() ?? string.Empty;
+        if (!requestedIsSingleton)
+        {
+            // A pre-generation bind from the same parent can arrive after a rolling
+            // deployment. It cannot mutate a generation-fenced actor.
+            return requested.BindingGeneration == 0
+                ? IgnoreRunDefinitionBind()
+                : RejectRunDefinitionBind("workflow_call singleton reuse policy cannot change.");
+        }
+        if (!string.Equals(currentAuthority, requestedAuthority, StringComparison.Ordinal))
+            return RejectRunDefinitionBind("workflow Run reuse authority cannot change.");
+
+        if (requested.BindingGeneration < current.BindingGeneration ||
+            (requested.BindingGeneration == current.BindingGeneration && !sameRun))
+        {
+            return IgnoreRunDefinitionBind();
+        }
+        if (requested.BindingGeneration == current.BindingGeneration)
+        {
+            if (IsTerminalStatus(current.Status))
+                return IgnoreRunDefinitionBind();
+            if (verifyPublisher)
+            {
+                return SameCanonicalRunBinding(current, requested)
+                    ? IgnoreRunDefinitionBind()
+                    : RejectRunDefinitionBind(
+                        "workflow Run is already bound to a different definition or identity; binding payload cannot change within a binding generation.");
+            }
+
+            return IsTerminalStatus(current.Status)
+                ? IgnoreRunDefinitionBind()
+                : AcceptRunDefinitionBind();
+        }
+        if (requested.BindingGeneration != current.BindingGeneration + 1)
+            return RejectRunDefinitionBind("workflow_call singleton binding generation must advance by exactly one.");
+        if (sameRun)
+            return RejectRunDefinitionBind("workflow_call singleton next generation requires a new run identity.");
+        if (!IsTerminalStatus(current.Status))
+            return RejectRunDefinitionBind("workflow_call singleton cannot advance while the current run is active.");
+        if (!SameDefinitionAuthority(current, requested))
+            return RejectRunDefinitionBind("workflow Run definition authority cannot change across singleton generations.");
+
+        return AcceptRunDefinitionBind();
+    }
+
+    private static bool SameDefinitionAuthority(
+        WorkflowRunState current,
+        BindWorkflowRunDefinitionEvent requested)
+    {
+        var currentDefinitionActorId = current.DefinitionActorId?.Trim() ?? string.Empty;
+        var requestedDefinitionActorId = requested.DefinitionActorId?.Trim() ?? string.Empty;
+        if (!string.IsNullOrWhiteSpace(currentDefinitionActorId) ||
+            !string.IsNullOrWhiteSpace(requestedDefinitionActorId))
+        {
+            return string.Equals(currentDefinitionActorId, requestedDefinitionActorId, StringComparison.Ordinal);
+        }
+
+        return string.Equals(
+            WorkflowRunIdNormalizer.NormalizeWorkflowName(current.WorkflowName),
+            WorkflowRunIdNormalizer.NormalizeWorkflowName(requested.WorkflowName),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    private bool SameCanonicalRunBinding(
+        WorkflowRunState current,
+        BindWorkflowRunDefinitionEvent requested)
+    {
+        var requestedPolicy = requested.ReusePolicy == WorkflowRunActorReusePolicy.Unspecified
+            ? WorkflowRunActorReusePolicy.SingleRun
+            : requested.ReusePolicy;
+        var expectedLineage = requested.InitialLineage == null
+            ? CreateUnavailableLineage("Run lineage is unavailable for this run.")
+            : EnsureLineage(requested.InitialLineage);
+
+        return string.Equals(
+                   WorkflowRunIdNormalizer.Normalize(current.RunId),
+                   ResolveRequestedBindRunId(current, requested.RunId),
+                   StringComparison.Ordinal) &&
+               string.Equals(
+                   current.DefinitionActorId?.Trim(),
+                   requested.DefinitionActorId?.Trim(),
+                   StringComparison.Ordinal) &&
+               string.Equals(
+                   WorkflowRunIdNormalizer.NormalizeWorkflowName(current.WorkflowName),
+                   WorkflowRunIdNormalizer.NormalizeWorkflowName(requested.WorkflowName),
+                   StringComparison.OrdinalIgnoreCase) &&
+               string.Equals(current.WorkflowYaml, requested.WorkflowYaml, StringComparison.Ordinal) &&
+               InlineWorkflowYamlsEqual(current.InlineWorkflowYamls, requested.InlineWorkflowYamls) &&
+               string.Equals(current.ScopeId?.Trim(), requested.ScopeId?.Trim(), StringComparison.Ordinal) &&
+               string.Equals(current.RunOrigin?.Trim(), requested.RunOrigin?.Trim(), StringComparison.Ordinal) &&
+               string.Equals(current.ScheduleId?.Trim(), requested.ScheduleId?.Trim(), StringComparison.Ordinal) &&
+               string.Equals(current.WorkflowId?.Trim(), requested.WorkflowId?.Trim(), StringComparison.Ordinal) &&
+               string.Equals(current.RevisionId?.Trim(), requested.RevisionId?.Trim(), StringComparison.Ordinal) &&
+               Math.Max(0, current.DefinitionVersion) == Math.Max(0, requested.DefinitionVersion) &&
+               current.ExpectedExecutionMode == requested.ExpectedExecutionMode &&
+               NormalizeLiveReusePolicy(current.ReusePolicy) == requestedPolicy &&
+               current.BindingGeneration == requested.BindingGeneration &&
+               string.Equals(
+                   current.ReuseAuthorityActorId?.Trim(),
+                   requested.ReuseAuthorityActorId?.Trim(),
+                   StringComparison.Ordinal) &&
+               Equals(current.CapabilityAdmissionPlan, requested.CapabilityAdmissionPlan) &&
+               Equals(EnsureLineage(current.Lineage), expectedLineage);
+    }
+
+    private static bool IsValidCommittedReuseBinding(WorkflowRunState state) =>
+        state.ReusePolicy switch
+        {
+            WorkflowRunActorReusePolicy.Unspecified or WorkflowRunActorReusePolicy.SingleRun =>
+                state.BindingGeneration == 0 && string.IsNullOrWhiteSpace(state.ReuseAuthorityActorId),
+            WorkflowRunActorReusePolicy.SerialSingleton =>
+                state.BindingGeneration > 0 && !string.IsNullOrWhiteSpace(state.ReuseAuthorityActorId),
+            _ => false,
+        };
+
+    private static RunDefinitionBindDecision AcceptRunDefinitionBind() =>
+        new(RunDefinitionBindDisposition.Accept, string.Empty);
+
+    private static RunDefinitionBindDecision IgnoreRunDefinitionBind() =>
+        new(RunDefinitionBindDisposition.Ignore, string.Empty);
+
+    private static RunDefinitionBindDecision RejectRunDefinitionBind(string error) =>
+        new(RunDefinitionBindDisposition.Reject, error);
+
+    private enum RunDefinitionBindDisposition
+    {
+        Accept,
+        Ignore,
+        Reject,
+    }
+
+    private readonly record struct RunDefinitionBindDecision(
+        RunDefinitionBindDisposition Disposition,
+        string Error);
+
+    private static bool IsMismatchedRunIdentity(WorkflowRunState state, string? eventRunId)
+    {
+        if (string.IsNullOrWhiteSpace(state.RunId) || string.IsNullOrWhiteSpace(eventRunId))
+            return false;
+
+        return !string.Equals(
+            WorkflowRunIdNormalizer.Normalize(state.RunId),
+            WorkflowRunIdNormalizer.Normalize(eventRunId),
+            StringComparison.Ordinal);
+    }
+
+    private static string? ResolveRunOwnedTransitionRunId(IMessage evt)
+    {
+        if (StateTransitionMatcher.TryExtract<WorkflowRunCompletionNotificationTargetAdoptedEvent>(evt, out var target))
+            return target.WorkflowRunId;
+        if (StateTransitionMatcher.TryExtract<WorkflowRunExecutionStartedEvent>(evt, out var started))
+            return started.RunId;
+        if (StateTransitionMatcher.TryExtract<WorkflowRunExecutionContextUpdatedEvent>(evt, out var contextUpdated))
+            return contextUpdated.RunId;
+        if (StateTransitionMatcher.TryExtract<WorkflowRunExecutionContextClearedEvent>(evt, out var contextCleared))
+            return contextCleared.RunId;
+        if (StateTransitionMatcher.TryExtract<WorkflowRunLineageRecordedEvent>(evt, out var lineage))
+            return lineage.SourceRunId;
+        if (StateTransitionMatcher.TryExtract<CompensableStepDispatchedEvent>(evt, out var compensable))
+            return compensable.RunId;
+        if (StateTransitionMatcher.TryExtract<StepRequestEvent>(evt, out var stepRequest))
+            return stepRequest.RunId;
+        if (StateTransitionMatcher.TryExtract<StepCompletedEvent>(evt, out var stepCompleted))
+            return stepCompleted.RunId;
+        if (StateTransitionMatcher.TryExtract<WorkflowSuspendedEvent>(evt, out var suspended))
+            return suspended.RunId;
+        if (StateTransitionMatcher.TryExtract<WorkflowToolApprovalResumeRejectedEvent>(evt, out var resumeRejected))
+            return resumeRejected.RunId;
+        if (StateTransitionMatcher.TryExtract<WaitingForSignalEvent>(evt, out var waitingForSignal))
+            return waitingForSignal.RunId;
+        if (StateTransitionMatcher.TryExtract<WorkflowSignalBufferedEvent>(evt, out var signalBuffered))
+            return signalBuffered.RunId;
+        if (StateTransitionMatcher.TryExtract<WorkflowExternalApprovalContinuationRegisteredEvent>(evt, out var approvalRegistered))
+            return approvalRegistered.RunId;
+        if (StateTransitionMatcher.TryExtract<WorkflowExternalApprovalContinuationClearedEvent>(evt, out var approvalCleared))
+            return approvalCleared.RunId;
+        if (StateTransitionMatcher.TryExtract<CompensationRequestEvent>(evt, out var compensationRequested))
+            return compensationRequested.RunId;
+        if (StateTransitionMatcher.TryExtract<CompensationStepCompletedEvent>(evt, out var compensationStepCompleted))
+            return compensationStepCompleted.RunId;
+        if (StateTransitionMatcher.TryExtract<WorkflowCompensationCompletedEvent>(evt, out var compensationCompleted))
+            return compensationCompleted.RunId;
+        if (StateTransitionMatcher.TryExtract<WorkflowCompensationFailedEvent>(evt, out var compensationFailed))
+            return compensationFailed.RunId;
+        if (StateTransitionMatcher.TryExtract<WorkflowCompensationRetryRequestedEvent>(evt, out var compensationRetry))
+            return compensationRetry.RunId;
+        if (StateTransitionMatcher.TryExtract<WorkflowStoppedEvent>(evt, out var stopped))
+            return stopped.RunId;
+        if (StateTransitionMatcher.TryExtract<WorkflowCompletedEvent>(evt, out var completed))
+            return completed.RunId;
+        if (StateTransitionMatcher.TryExtract<WorkflowRunTerminalTimingRecordedEvent>(evt, out var terminalTiming))
+            return terminalTiming.RunId;
+        if (StateTransitionMatcher.TryExtract<WorkflowRunStoppedEvent>(evt, out var runStopped))
+            return runStopped.RunId;
+        if (StateTransitionMatcher.TryExtract<WorkflowRunTerminalNotificationPreparedEvent>(evt, out var notificationPrepared))
+            return notificationPrepared.Notification?.WorkflowRunId;
+        if (StateTransitionMatcher.TryExtract<WorkflowRoleReplyRecordedEvent>(evt, out var roleReply))
+            return roleReply.RunId;
+        if (StateTransitionMatcher.TryExtract<WorkflowRuntimeOperationRecordedEvent>(evt, out var runtimeOperation))
+            return runtimeOperation.RunId;
+        if (StateTransitionMatcher.TryExtract<WorkflowInteractiveActionHandoffDispatchedEvent>(evt, out var handoff))
+            return handoff.TerminalContinuation?.RunId;
+        if (StateTransitionMatcher.TryExtract<SubWorkflowDefinitionResolutionRegisteredEvent>(evt, out var resolution))
+            return resolution.ParentRunId;
+        if (StateTransitionMatcher.TryExtract<SubWorkflowInvocationRegisteredEvent>(evt, out var invocation))
+            return invocation.ParentRunId;
+        return null;
+    }
 
     private static bool ShouldIgnoreWorkflowCompleted(WorkflowRunState state) =>
         state.TerminalWorkflowCompletionRecorded ||
@@ -4225,6 +4695,9 @@ public sealed partial class WorkflowRunGAgent
             ExpectedExecutionMode = State.ExpectedExecutionMode,
             InitialLineage = State.Lineage?.Clone(),
             InlineWorkflowYamls = { State.InlineWorkflowYamls },
+            ReusePolicy = State.ReusePolicy,
+            BindingGeneration = State.BindingGeneration,
+            ReuseAuthorityActorId = State.ReuseAuthorityActorId ?? string.Empty,
         }, ct);
         await _subWorkflowOrchestrator.CancelPendingDefinitionResolutionTimeoutsAsync(stateBeforeBind, CancellationToken.None);
         RebuildCompiledWorkflowCache();

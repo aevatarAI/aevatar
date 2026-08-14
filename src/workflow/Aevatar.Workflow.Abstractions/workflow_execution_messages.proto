@@ -429,7 +429,24 @@ message StartWorkflowEvent
   WorkflowRunForkSeed fork_seed = 5;
   WorkflowToolRuntimeContextPayload workflow_runtime = 6;
   repeated WorkflowFileRef input_file_refs = 7;
+  // Monotonic bind generation for a deliberately reusable run actor. Legacy and
+  // single-run actors use zero. The execution boundary rejects a Start whose
+  // generation does not match the actor's committed binding.
+  int64 binding_generation = 8;
 }
+
+enum WorkflowRunActorReusePolicy
+{
+  // Historical bind events did not declare actor reuse. Live commands normalize
+  // this value to SINGLE_RUN; replay keeps the legacy event semantics intact.
+  WORKFLOW_RUN_ACTOR_REUSE_POLICY_UNSPECIFIED = 0;
+  // A normal workflow Run actor can never change run identity.
+  WORKFLOW_RUN_ACTOR_REUSE_POLICY_SINGLE_RUN = 1;
+  // Internal workflow_call singleton actors may advance serially to the next
+  // run identity when the typed authority and generation fence both match.
+  WORKFLOW_RUN_ACTOR_REUSE_POLICY_SERIAL_SINGLETON = 2;
+}
+
 message BindWorkflowRunDefinitionEvent
 {
   string definition_actor_id = 1;
@@ -457,6 +474,11 @@ message BindWorkflowRunDefinitionEvent
   // Authoritative committed definition version/watermark used by this run. Zero means unavailable.
   int64 definition_version = 13;
   WorkflowRunLineage initial_lineage = 14;
+  WorkflowRunActorReusePolicy reuse_policy = 15;
+  int64 binding_generation = 16;
+  // Parent WorkflowRunGAgent that owns singleton reuse. Empty for single-run
+  // actors. The live bind handler verifies this against the envelope publisher.
+  string reuse_authority_actor_id = 17;
 }
 
 // Idempotent provisioning command for a stable Run actor identity. The first
@@ -888,6 +910,7 @@ message SubWorkflowBindingUpsertedEvent
   string lifecycle = 3;
   string definition_actor_id = 4;
   int32 definition_version = 5;
+  int64 binding_generation = 6;
 }
 message SubWorkflowInvocationRegisteredEvent
 {
@@ -908,6 +931,7 @@ message SubWorkflowInvocationRegisteredEvent
   string root_run_id = 15;
   int32 depth = 16;
   repeated WorkflowFileRef input_file_refs = 17;
+  int64 binding_generation = 18;
 }
 message SubWorkflowInvocationHandoffAdvancedEvent
 {
