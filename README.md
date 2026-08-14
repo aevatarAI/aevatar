@@ -75,7 +75,7 @@ curl -X POST http://localhost:5100/api/chat \
 
 ### NyxID 部署端点
 
-Mainnet 部署必须分别配置 NyxID 的三类地址：`Aevatar:NyxId:Authority` 只用于公开 OIDC issuer/discovery，`Aevatar:NyxId:ApiBaseUrl` 用于公开 REST、LLM gateway、浏览器和 webhook 地址，`Aevatar:NyxId:InternalApiBaseUrl` 只用于集群内的服务端 REST 调用。服务端 REST 在内网目标明确尚未建立连接时会改走 `ApiBaseUrl` 重试一次；此外，仅 `GET/HEAD/OPTIONS` 在内网响应头等待超过 `Aevatar:NyxId:InternalApiFallbackTimeoutSeconds`（默认 5 秒）时可向公网重放一次。mutation 超时、TLS、连接重置、调用方取消、重定向、任意 HTTP 响应，以及已收到响应头后的 body 读取失败都不会触发重放。完整配置与降级语义见 [NyxID LLM Provider 集成指南](docs/canon/nyxid-llm-integration.md#aevatar-端配置管理员)。
+Mainnet 部署必须配置 NyxID 的两类公开地址：`Aevatar:NyxId:Authority` 只用于公开 OIDC issuer/discovery，`Aevatar:NyxId:ApiBaseUrl` 用于公开 REST、LLM gateway、浏览器和 webhook 地址。`Aevatar:NyxId:InternalApiBaseUrl` 仅在需要集群内服务端 REST transport 时配置；Mainnet 默认使用公网，只有同时显式设置 `Aevatar:NyxId:EnableInternalApiTransport=true` 和合法的 internal URL 才启用内网 transport。服务端 REST 在内网目标明确尚未建立连接时会改走 `ApiBaseUrl` 重试一次；此外，仅 `GET/HEAD/OPTIONS` 在内网响应头等待超过 `Aevatar:NyxId:InternalApiFallbackTimeoutSeconds`（默认 5 秒）时可向公网重放一次。mutation 超时、TLS、连接重置、调用方取消、重定向、任意 HTTP 响应，以及已收到响应头后的 body 读取失败都不会触发重放。完整配置与降级语义见 [NyxID LLM Provider 集成指南](docs/canon/nyxid-llm-integration.md#aevatar-端配置管理员)。
 
 ---
 

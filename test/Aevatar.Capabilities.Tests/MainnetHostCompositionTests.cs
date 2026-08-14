@@ -1116,6 +1116,8 @@ public sealed class MainnetHostCompositionTests
         using var internalApiBaseUrl = new EnvironmentVariableScope(
             "AEVATAR_Aevatar__NyxId__InternalApiBaseUrl",
             " http://nyxid.internal:3001/ ");
+        using var internalTransportEnabled = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__NyxId__EnableInternalApiTransport", "true");
         using var apiBaseUrl = new EnvironmentVariableScope(
             "AEVATAR_Aevatar__NyxId__ApiBaseUrl",
             "https://nyx-api.example.test");
@@ -1145,12 +1147,49 @@ public sealed class MainnetHostCompositionTests
     }
 
     [Fact]
+    public void AddAevatarMainnetHost_StaleInternalNyxIdTransportWithoutOptIn_ShouldUsePublicApi()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        using var internalApiBaseUrl = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__NyxId__InternalApiBaseUrl",
+            "http://stale-nyxid.internal:3001");
+        using var internalTransportEnabled = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__NyxId__EnableInternalApiTransport", "false");
+        using var internalFallbackTimeout = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__NyxId__InternalApiFallbackTimeoutSeconds", "7");
+        using var apiBaseUrl = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__NyxId__ApiBaseUrl",
+            "https://nyx-api.example.test");
+        using var authority = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__NyxId__Authority",
+            "https://nyx-authority.example.test");
+        var builder = CreateBuilder();
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        var nyxIdOptions = app.Services.GetRequiredService<NyxIdToolOptions>();
+        nyxIdOptions.InternalApiBaseUrl.Should().BeNull();
+        nyxIdOptions.EffectiveTransportBaseUrl.Should().Be("https://nyx-api.example.test");
+        nyxIdOptions.ApiBaseUrl.Should().Be("https://nyx-api.example.test");
+        nyxIdOptions.Authority.Should().Be("https://nyx-authority.example.test");
+        nyxIdOptions.PublicTransportFallbackBaseUrl.Should().BeNull();
+        nyxIdOptions.InternalApiFallbackTimeoutSeconds.Should().Be(7);
+    }
+
+    [Fact]
     public async Task AddAevatarMainnetHost_WithInternalAndAuthorityButNoPublicApi_ShouldFailClosedWebSearch()
     {
         using var home = new TemporaryAevatarHomeScope();
         using var internalApiBaseUrl = new EnvironmentVariableScope(
             "AEVATAR_Aevatar__NyxId__InternalApiBaseUrl",
             "http://nyxid.internal:3001");
+        using var internalTransportEnabled = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__NyxId__EnableInternalApiTransport", "true");
         using var apiBaseUrl = new EnvironmentVariableScope(
             "AEVATAR_Aevatar__NyxId__ApiBaseUrl",
             " ");
@@ -1580,6 +1619,8 @@ public sealed class MainnetHostCompositionTests
         using var internalApiBaseUrl = new EnvironmentVariableScope(
             "AEVATAR_Aevatar__NyxId__InternalApiBaseUrl",
             "http://nyxid.internal:3001");
+        using var internalTransportEnabled = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__NyxId__EnableInternalApiTransport", "true");
         var audienceKey = $"{AevatarAuthenticationOptions.SectionName}:Audience";
         var builder = CreateBuilder(environmentName: Environments.Production);
 
@@ -1608,6 +1649,8 @@ public sealed class MainnetHostCompositionTests
         using var internalApiBaseUrl = new EnvironmentVariableScope(
             "AEVATAR_Aevatar__NyxId__InternalApiBaseUrl",
             "http://nyxid.internal:3001");
+        using var internalTransportEnabled = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__NyxId__EnableInternalApiTransport", "true");
         var builder = CreateBuilder(environmentName: Environments.Production);
 
         var act = () => builder.AddAevatarMainnetHost(options =>

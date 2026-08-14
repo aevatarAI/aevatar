@@ -13,6 +13,9 @@ namespace Aevatar.Mainnet.Host.Api.Hosting;
 
 public static class MainnetDistributedHostBuilderExtensions
 {
+    private const string NyxIdInternalApiBaseUrlKey = "Aevatar:NyxId:InternalApiBaseUrl";
+    private const string NyxIdEnableInternalApiTransportKey =
+        "Aevatar:NyxId:EnableInternalApiTransport";
     private static readonly TimeSpan DefaultResponseTimeoutMargin = TimeSpan.FromMinutes(1);
 
     public static WebApplicationBuilder AddMainnetDistributedOrleansHost(this WebApplicationBuilder builder)
@@ -31,6 +34,7 @@ public static class MainnetDistributedHostBuilderExtensions
         // (Projection__*, ASPNETCORE_ENVIRONMENT) are used by CI/cluster scripts.
         builder.Configuration.AddEnvironmentVariables("AEVATAR_");
         builder.Configuration.AddEnvironmentVariables();
+        ApplyNyxIdInternalTransportGate(builder.Configuration);
 
         var runtimeOptions = ResolveRuntimeOptions(builder.Configuration);
         builder.Services.AddAevatarRuntimeSecretStores(runtimeOptions);
@@ -76,6 +80,38 @@ public static class MainnetDistributedHostBuilderExtensions
         });
 
         return builder;
+    }
+
+    private static void ApplyNyxIdInternalTransportGate(ConfigurationManager configuration)
+    {
+        var enabled = string.Equals(
+            configuration[NyxIdEnableInternalApiTransportKey]?.Trim(),
+            bool.TrueString,
+            StringComparison.OrdinalIgnoreCase);
+        if (!enabled)
+        {
+            // A mounted Distributed ConfigMap replaces the image's JSON file. Keep stale internal
+            // endpoints inert unless the deployment explicitly opts into the internal transport.
+            configuration.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [NyxIdInternalApiBaseUrlKey] = string.Empty,
+            });
+            return;
+        }
+
+        var internalApiBaseUrl = configuration[NyxIdInternalApiBaseUrlKey]?.Trim();
+        if (string.IsNullOrWhiteSpace(internalApiBaseUrl) ||
+            !Uri.TryCreate(internalApiBaseUrl, UriKind.Absolute, out var uri) ||
+            (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps) ||
+            string.IsNullOrWhiteSpace(uri.Host) ||
+            !string.IsNullOrEmpty(uri.UserInfo) ||
+            !string.IsNullOrEmpty(uri.Query) ||
+            !string.IsNullOrEmpty(uri.Fragment))
+        {
+            throw new InvalidOperationException(
+                $"'{NyxIdInternalApiBaseUrlKey}' must be an absolute HTTP(S) base URL without " +
+                $"userinfo, query, or fragment when '{NyxIdEnableInternalApiTransportKey}' is true.");
+        }
     }
 
     private static void ConfigureClustering(
