@@ -178,6 +178,14 @@ accepted for dispatch, not committed. The UI waits for a newer committed state v
 approval as resolved. The Artifacts tab is deliberately labelled as a download derived from `finalOutput`; the
 current detail contract does not claim a formal artifact collection.
 
+The same owner boundary applies to stopping a running workflow. For an own-scope `running` selection, the page
+uses the Activity row's independent `runId` and `actorId` fields to submit the existing
+`POST /api/scopes/{scopeId}/runs/{runId}:stop` command with a stable `commandId`; it never parses or aliases one
+identity into the other. If an exact deep link is not present in the current Activity window, the page may omit
+`actorId` and let the canonical scope endpoint resolve the explicit `runId`. Cross-scope administrator views do
+not expose this command. An accepted response remains a pending stop request until polling observes a committed
+terminal status; the page must not optimistically rewrite the run as stopped.
+
 Run detail responses expose `diagnostics` assembled from the committed workflow current-state snapshot and the
 materialized run-report artifact. Diagnostics are query-time explanations for operators; they are not durable log
 entries or deletion tombstones and must not be presented as either. Admin controls accept a run id through an
@@ -212,4 +220,4 @@ window is empty, and offers no mutation controls.
 6. owning projects declare the embedded resources;
 7. no `wwwroot` or frontend build chain appears in page assets.
 
-`bash tools/ci/workflow_observatory_readonly_guard.sh` keeps the observatory-specific read-only and query-port invariants while checking the embedded asset form instead of the old C# string form.
+`bash tools/ci/workflow_observatory_readonly_guard.sh` keeps the observatory-specific read-query and query-port invariants while checking the embedded asset form instead of the old C# string form.

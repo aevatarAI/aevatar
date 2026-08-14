@@ -16,7 +16,7 @@
 <title>Workflow Run Observatory · 工作流请求轨迹观测台</title>
 <style>
   /* =========================================================================
-     Workflow Run Observatory — 只读请求轨迹观测台
+     Workflow Run Observatory — 请求轨迹观测与本人 scope 运行控制
      单文件、零外部依赖。深色为主，浅色全量支持。
      所有颜色走 CSS 自定义属性（设计令牌），不散落硬编码。
      ========================================================================= */
@@ -196,7 +196,7 @@
   }
   .brand-name { font-weight: 650; letter-spacing: -.01em; color: var(--fg-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .brand-sub { color: var(--muted-2); font-size: 12px; white-space: nowrap; }
-  .pill-ro {
+  .pill-mode {
     font-size: 11px; font-weight: 650; letter-spacing: .04em; flex: 0 0 auto;
     padding: 2px 8px; border-radius: var(--r-pill);
     color: var(--muted); background: var(--neutral-soft); border: 1px solid var(--border);
@@ -502,13 +502,35 @@
   .run-header { display: flex; flex-direction: column; gap: 13px; }
   .rh-eyebrow { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
   .rh-top { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-  .rh-title { font-size: 21px; font-weight: 700; letter-spacing: -.02em; color: var(--fg-strong); display: flex; align-items: center; gap: 10px; margin: 0; }
+  .rh-title { min-width:0; font-size: 21px; font-weight: 700; letter-spacing: -.02em; color: var(--fg-strong); display: flex; align-items: center; gap: 10px; margin: 0; overflow-wrap:anywhere; }
   .rh-title .dot { width: 11px; height: 11px; }
   .rh-meta { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; color: var(--muted); font-size: 12.5px; }
   .rh-meta .k { color: var(--muted-2); }
   .rh-meta .v { font-family: var(--mono); color: var(--fg); }
   .rh-meta .grp { display: inline-flex; gap: 6px; align-items: baseline; }
   .rh-meta .rid-grp { align-items: center; }
+  .run-stop-control { margin-left:auto; display:inline-flex; align-items:center; gap:9px; flex-wrap:wrap; }
+  .stop-run-button, .stop-confirm-button {
+    min-height:34px; display:inline-flex; align-items:center; justify-content:center; gap:7px;
+    padding:0 12px; border:1px solid color-mix(in oklab,var(--err) 52%,var(--border));
+    border-radius:var(--r); background:var(--err-soft); color:var(--err); font-size:12.5px; font-weight:700;
+    transition:color .15s,background .15s,border-color .15s,transform .08s;
+  }
+  .stop-run-button:hover, .stop-confirm-button:hover { background:color-mix(in oklab,var(--err-soft) 72%,var(--panel-3)); border-color:var(--err); }
+  .stop-run-button:active, .stop-confirm-button:active { transform:translateY(1px); }
+  .stop-run-button:disabled, .stop-confirm-button:disabled { opacity:.58; cursor:not-allowed; transform:none; }
+  .stop-accepted { display:inline-flex; align-items:center; gap:7px; color:var(--warn); font-size:12.5px; font-weight:650; }
+  .stop-confirmation {
+    display:flex; align-items:center; gap:12px; flex-wrap:wrap; padding:12px 14px;
+    border:1px solid color-mix(in oklab,var(--err) 44%,var(--border)); border-radius:var(--r);
+    background:var(--err-soft);
+  }
+  .stop-confirmation-copy { min-width:220px; flex:1 1 420px; }
+  .stop-confirmation-copy b { display:block; color:var(--fg-strong); font-size:13px; }
+  .stop-confirmation-copy span { display:block; margin-top:3px; color:var(--muted); font-size:12px; }
+  .stop-confirmation-actions { display:flex; align-items:center; gap:8px; margin-left:auto; }
+  .stop-confirmation .chip { min-height:34px; padding:0 12px; border-radius:var(--r); }
+  .stop-control-error { flex-basis:100%; color:var(--err); font-size:12px; }
 
   /* run id, broken into color-coded semantic chips (scope / 定义 / 运行) for legibility */
   .rid { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
@@ -1048,8 +1070,8 @@
     .workspace-action { width:34px; padding:0; justify-content:center; }
     /* release the fixed brand width on narrow screens so the nav reclaims the space */
     .brand { flex: 1 1 auto; width: auto; } .brand, .brand > div { min-width: 0; }
-    .pill-ro, .live, .iconbtn, .account, .linkbtn { flex-shrink: 0; }
-    .live, .linkbtn, .pill-ro { white-space: nowrap; }
+    .pill-mode, .live, .iconbtn, .account, .linkbtn { flex-shrink: 0; }
+    .live, .linkbtn, .pill-mode { white-space: nowrap; }
     .live .freshness { display: none; }
     /* mobile master-detail: one region visible at a time */
     body[data-mobile-view="list"] .detail-pane { display: none; }
@@ -1076,16 +1098,20 @@
     .operation-summary .op-time, .operation-summary .op-state { display: none; }
     .operation-detail { padding: 0 10px 12px; }
     .graph-wrap { height: 62dvh; }
+    .run-stop-control { width:100%; margin-left:0; }
+    .stop-run-button { width:100%; }
+    .stop-confirmation-actions { width:100%; margin-left:0; }
+    .stop-confirmation-actions .chip, .stop-confirmation-actions .stop-confirm-button { flex:1 1 0; }
     /* node detail becomes a bottom sheet */
     .gnode-detail { top: auto; left: 8px; right: 8px; bottom: 8px; width: auto; max-width: none; max-height: 64%; }
   }
   @media (min-width: 761px) { .backbar { display: none !important; } }
 
-  /* phone: drop the most secondary topbar chrome (read-only pill, live indicator, account email)
+  /* phone: drop the most secondary topbar chrome (mode pill, live indicator, account email)
      so brand + theme + account/sign-out fit on one clean row without squeezing. */
   @media (max-width: 520px) {
     .topbar { gap: 6px; padding: 0 12px; }
-    .pill-ro, .live { display: none; }
+    .pill-mode, .live { display: none; }
     .account .who { display: none; }
   }
 
@@ -1112,7 +1138,7 @@
      listRuns(status) <- GET /api/workflow/observatory/activity-runs (paged request-trace feed)
      getRun(runId)    <- GET /api/workflow/observatory/runs/{runId}; admin drilldown uses /admin/runs/{runId}
      getGraph(runId)  <- GET /api/workflow/observatory/runs/{runId}/graph; admin drilldown uses /admin/runs/{runId}/graph
-   Read-only: there are no edit/run/stop calls anywhere.
+   Observatory data endpoints stay read-only. Owner actions use the canonical scope command APIs.
    =========================================================================== */
 const BACKEND_CONSOLE_CONFIG = __BACKEND_CONSOLE_CONFIG__;
 const CFG = {
@@ -1245,8 +1271,9 @@ function toAccount(info){ return info ? { label: info.email || info.preferred_us
 
 async function apiRequest(path, options){
   options = options || {};
+  const method = String(options.method || "GET").toUpperCase();
   const res = await fetchWithConsoleAuth(path, options);
-  if(res.status === 404) return null;
+  if(res.status === 404 && method === "GET") return null;
   if(!res.ok){
     let reason = "api-error-" + res.status;
     try { const body = await res.json(); reason = body.message || body.error || body.code || reason; } catch(e){}
@@ -1505,6 +1532,7 @@ function toggleFilterPanel(){
 function applyFilterChange(){
   state.listRequestEpoch = (Number(state.listRequestEpoch) || 0) + 1;
   state.loadingMore = false;
+  resetStopControlState();
   pendingListScrollReset = true;
   state.selectedRunId = null;
   cache.runs = []; cache.runFeed = normalizeActivityRunFeed(null); cache.details = {}; cache.graphs = {};
@@ -1518,6 +1546,7 @@ function applyFilterChange(){
 function clearSession(){
   state.listRequestEpoch = (Number(state.listRequestEpoch) || 0) + 1;
   state.loadingMore = false;
+  resetStopControlState();
   cache.account=null; cache.runs=[]; cache.runFeed=normalizeActivityRunFeed(null); cache.details={}; cache.graphs={};
   state.lastSyncedAtUtc=null;
   adminState.isAdmin=false; adminState.role=""; adminState.email=""; adminState.ownScope="";
@@ -1835,7 +1864,7 @@ function renderTopbar(){
       <div style="min-width:0">
         <div class="brand-name">Aevatar Backend Console</div>
       </div>
-      <span class="pill-ro" title="只读视图，不可修改任何运行">只读</span>
+      <span class="pill-mode" title="本人 scope 可审批和停止运行；跨 scope 观测保持只读">观测 / 控制</span>
     </div>
     ${suiteNavHtml("observatory")}
     <div class="spacer"></div>`;
@@ -1891,7 +1920,7 @@ function renderLogin(){
   card.innerHTML = `
     <div class="login-mark" aria-hidden="true">${ICON.lock}</div>
     <h1>登录以查看工作流请求轨迹</h1>
-    <p>每次请求对应一条只读轨迹；可查看执行详情，但不能修改运行事实。</p>`;
+    <p>每次请求对应一条可追踪轨迹；可查看执行详情，并管理本人 scope 内的活动运行。</p>`;
   const btn = el("button", { class:"btn-primary", id:"signinBtn" }, "使用 nyxid 登录");
   btn.addEventListener("click", () => { beginLogin(); });
   card.appendChild(btn);
@@ -2231,6 +2260,7 @@ function renderRunHeader(detail){
       <span class="grp"><span class="k">用时</span><span class="v" ${(hasStart&&isRunning)?`data-duration="${s.startedAtUtc}"`:""}>${durStr}</span></span>
       <span class="grp"><span class="k">开始</span><span class="v">${startStr}</span></span>
     </div>`;
+  renderStopControl(detail,head);
 
   const copyBtn = head.querySelector(".rid-copy");
   if(copyBtn) copyBtn.addEventListener("click", async () => {
@@ -2384,6 +2414,124 @@ function renderArtifacts(detail){
   if(!detail.finalOutput){ wrap.appendChild(el("div",{class:"detail-empty"},'<div class="dt">暂无产出</div><div class="ds">当前详情契约没有正式 artifact 集合。</div>')); return wrap; }
   wrap.appendChild(el("p",{class:"diag-hint"},"派生下载：内容来自 finalOutput；不是正式 artifact read model。"));
   const button=el("button",{class:"chip",type:"button"},"下载 finalOutput"); button.addEventListener("click",()=>{const url=URL.createObjectURL(new Blob([detail.finalOutput],{type:"text/plain;charset=utf-8"}));const a=document.createElement("a");a.href=url;a.download="finalOutput.txt";a.click();URL.revokeObjectURL(url);}); wrap.appendChild(button); return wrap;
+}
+
+function resolveRunControlTarget(detail, selectedRunId, runs){
+  const summary=detail&&detail.summary,runId=String(selectedRunId||"").trim();
+  const detailRunId=String(summary&&summary.runId||"").trim();
+  if(!summary||summary.status!=="running"||!runId||detailRunId!==runId) return null;
+  const scopeId=String(summary.scopeId||"").trim();
+  if(!scopeId) return null;
+  const row=(runs||[]).find(item=>item&&item.runId===runId)||null;
+  if(row&&row.scopeId&&row.scopeId!==scopeId) return null;
+  return { scopeId, runId, actorId:row?String(row.actorId||"").trim():"" };
+}
+function canStopRun(target, ownerScope){
+  return !!(target&&target.scopeId&&String(ownerScope||"").trim()===target.scopeId);
+}
+function buildStopRequest(target, commandId){
+  const body={ reason:"user requested stop", commandId:String(commandId||"").trim() };
+  if(!body.commandId) throw new Error("stop-command-id-required");
+  if(target.actorId) body.actorId=target.actorId;
+  return {
+    path:"/api/scopes/"+encodeURIComponent(target.scopeId)+"/runs/"+encodeURIComponent(target.runId)+":stop",
+    body
+  };
+}
+async function requestStopRun(target, commandId){
+  const request=buildStopRequest(target,commandId);
+  const receipt=await apiRequest(request.path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(request.body)});
+  if(!receipt||receipt.accepted!==true) throw new Error("stop-not-accepted");
+  return receipt;
+}
+function stopTargetKey(target){ return [target.scopeId,target.runId].join("\n"); }
+const stopControlState={ key:"", selectedRunId:"", commandId:"", confirming:false, submitting:false, accepted:false, error:"" };
+function resetStopControlState(){
+  Object.assign(stopControlState,{key:"",selectedRunId:"",commandId:"",confirming:false,submitting:false,accepted:false,error:""});
+}
+function syncStopControlState(target){
+  const key=stopTargetKey(target);
+  if(stopControlState.key===key) return;
+  Object.assign(stopControlState,{key,selectedRunId:target.runId,commandId:"",confirming:false,submitting:false,accepted:false,error:""});
+}
+function ensureStopCommandId(target){
+  syncStopControlState(target);
+  if(!stopControlState.commandId) stopControlState.commandId="observatory-stop-"+randomString(24);
+  return stopControlState.commandId;
+}
+function openStopConfirmation(target){
+  syncStopControlState(target);
+  if(stopControlState.submitting||stopControlState.accepted) return;
+  ensureStopCommandId(target);
+  stopControlState.confirming=true;
+  stopControlState.error="";
+  render();
+  setTimeout(()=>document.getElementById("confirmStopRunButton")?.focus(),0);
+}
+function cancelStopConfirmation(target){
+  if(stopControlState.key!==stopTargetKey(target)||stopControlState.submitting) return;
+  stopControlState.confirming=false;
+  stopControlState.error="";
+  render();
+  setTimeout(()=>document.getElementById("stopCurrentRunButton")?.focus(),0);
+}
+async function submitStopRun(target){
+  syncStopControlState(target);
+  if(stopControlState.submitting||stopControlState.accepted) return false;
+  const attemptKey=stopControlState.key,commandId=ensureStopCommandId(target);
+  stopControlState.submitting=true;
+  stopControlState.error="";
+  render();
+  try {
+    await requestStopRun(target,commandId);
+    if(stopControlState.key!==attemptKey) return false;
+    stopControlState.accepted=true;
+    stopControlState.confirming=false;
+    return true;
+  } catch(e){
+    if(stopControlState.key===attemptKey){
+      const reason=String(e&&e.message||"").trim();
+      stopControlState.error=reason==="stop-not-accepted"
+        ? "服务未确认停止请求，请重试。"
+        : "停止请求失败"+(reason?"："+reason:"");
+    }
+    return false;
+  } finally {
+    if(stopControlState.key===attemptKey){ stopControlState.submitting=false; render(); }
+  }
+}
+function renderStopControl(detail, head){
+  const target=resolveRunControlTarget(detail,state.selectedRunId,cache.runs);
+  if(!target){
+    if(stopControlState.selectedRunId&&stopControlState.selectedRunId===state.selectedRunId) resetStopControlState();
+    return;
+  }
+  if(!canStopRun(target,adminState.ownScope)) return;
+  syncStopControlState(target);
+  const controls=el("div",{class:"run-stop-control"});
+  if(stopControlState.accepted){
+    controls.appendChild(el("span",{class:"stop-accepted",role:"status","aria-live":"polite"},`${ICON.stop}<span>停止请求已受理，等待 committed 状态更新</span>`));
+  } else {
+    const stop=el("button",{class:"stop-run-button",id:"stopCurrentRunButton",type:"button","aria-label":"停止当前 workflow 运行",title:"停止当前运行"},`${ICON.stop}<span>停止当前运行</span>`);
+    stop.disabled=stopControlState.submitting||stopControlState.confirming;
+    stop.addEventListener("click",()=>openStopConfirmation(target));
+    controls.appendChild(stop);
+  }
+  head.querySelector(".rh-top")?.appendChild(controls);
+  if(!stopControlState.confirming||stopControlState.accepted) return;
+  const panel=el("section",{class:"stop-confirmation",role:"group","aria-labelledby":"stopConfirmationTitle","aria-describedby":"stopConfirmationDescription"});
+  panel.innerHTML=`<div class="stop-confirmation-copy"><b id="stopConfirmationTitle">停止这次运行？</b><span id="stopConfirmationDescription">停止命令会排队处理；已开始的步骤可能先完成，已完成的步骤不会回滚。</span></div>`;
+  const actions=el("div",{class:"stop-confirmation-actions"});
+  const cancel=el("button",{class:"chip",type:"button"},"取消");
+  cancel.disabled=stopControlState.submitting;
+  cancel.addEventListener("click",()=>cancelStopConfirmation(target));
+  const confirm=el("button",{class:"stop-confirm-button",id:"confirmStopRunButton",type:"button"},stopControlState.submitting?"正在提交…":`${ICON.stop}<span>确认停止</span>`);
+  confirm.disabled=stopControlState.submitting;
+  confirm.addEventListener("click",()=>submitStopRun(target));
+  actions.appendChild(cancel); actions.appendChild(confirm); panel.appendChild(actions);
+  if(stopControlState.error) panel.appendChild(el("div",{class:"stop-control-error",role:"alert"},esc(stopControlState.error)));
+  panel.addEventListener("keydown",event=>{ if(event.key==="Escape"){ event.preventDefault(); cancelStopConfirmation(target); } });
+  head.appendChild(panel);
 }
 
 function findActiveApproval(detail){
@@ -3333,6 +3481,7 @@ function render(){
    =========================================================================== */
 function selectRun(runId){
   pendingDetailScrollReset = true;
+  resetStopControlState();
   state.selectedRunId = runId;
   state.scenario = "detailLoading";
   state.activeTab = "timeline";
@@ -3356,6 +3505,7 @@ async function fetchMe(){
 function setScope(scope){
   state.listRequestEpoch = (Number(state.listRequestEpoch) || 0) + 1;
   state.loadingMore = false;
+  resetStopControlState();
   adminState.currentScope = scope;       // null = my runs · ALL_SCOPES · or a concrete scope id
   adminState.candidates = null; adminState.message = ""; adminState.inputDraft = "";
   pendingListScrollReset = true;         // new scope → fresh list, start at the top

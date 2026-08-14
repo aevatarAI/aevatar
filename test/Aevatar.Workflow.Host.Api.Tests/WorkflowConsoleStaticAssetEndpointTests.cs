@@ -2117,7 +2117,7 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
     }
 
     [Fact]
-    public async Task WorkflowObservatory_ShouldOwnRouteStateAndOwnerOnlyApprovalActions()
+    public async Task WorkflowObservatory_ShouldOwnRouteStateAndOwnerOnlyRunControlActions()
     {
         var html = await GetObservatoryHtmlAsync();
         const string script = """
@@ -2126,8 +2126,16 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
             const html = require('node:fs').readFileSync(0, 'utf8');
 
             function functionSource(name, nextName) {
-              const start = html.indexOf('function ' + name + '(');
-              const end = html.indexOf('\nfunction ' + nextName + '(', start);
+              const starts = [
+                html.indexOf('function ' + name + '('),
+                html.indexOf('async function ' + name + '('),
+              ].filter(index => index !== -1);
+              const start = starts.length ? Math.min(...starts) : -1;
+              const ends = [
+                html.indexOf('\nfunction ' + nextName + '(', start),
+                html.indexOf('\nasync function ' + nextName + '(', start),
+              ].filter(index => index !== -1);
+              const end = ends.length ? Math.min(...ends) : -1;
               assert.notEqual(start, -1, name + ' must exist in the served observatory asset');
               assert.notEqual(end, -1, nextName + ' must follow ' + name);
               return html.slice(start, end);
@@ -2138,6 +2146,9 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
             vm.runInContext(`
               ${functionSource('readObservatoryRoute', 'writeObservatoryRoute')}
               ${functionSource('runDetailRequestPath', 'runGraphRequestPath')}
+              ${functionSource('resolveRunControlTarget', 'canStopRun')}
+              ${functionSource('canStopRun', 'buildStopRequest')}
+              ${functionSource('buildStopRequest', 'requestStopRun')}
               ${functionSource('findActiveApproval', 'canApproveRun')}
               ${functionSource('canApproveRun', 'buildApprovalRequest')}
               ${functionSource('buildApprovalRequest', 'renderApprovalPanel')}
@@ -2155,10 +2166,41 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
             assert.equal(vm.runInContext('runDetailRequestPath', context)('run-external', { isAdmin:true, currentScope:null, ownScope:'scope-owner' }, [], false), '/api/workflow/observatory/admin/runs/run-external');
             assert.equal(vm.runInContext('runDetailRequestPath', context)('run-external', { isAdmin:true, currentScope:'scope-external', ownScope:'scope-owner' }, [], false), '/api/workflow/observatory/runs/run-external?scope=scope-external');
 
-            const detail = { summary: { runId: 'run-alpha', scopeId: 'scope-alpha' }, steps: [
+            const detail = { summary: { runId: 'run-alpha', scopeId: 'scope-alpha', status: 'running' }, steps: [
               { stepId: 'named-approval-only', suspensionType: '', completedAtUtc: null },
               { stepId: 'review', suspensionType: 'human_approval', completedAtUtc: null }
             ] };
+            const stopDetail = { summary: { runId: 'run alpha/1', scopeId: 'scope-alpha', status: 'running' } };
+            const target = vm.runInContext('resolveRunControlTarget', context)(stopDetail, 'run alpha/1', [{
+              runId: 'run alpha/1', actorId: 'actor-alpha', scopeId: 'scope-alpha', status: 'running'
+            }]);
+            assert.deepEqual(JSON.parse(JSON.stringify(target)), {
+              scopeId: 'scope-alpha', runId: 'run alpha/1', actorId: 'actor-alpha'
+            });
+            assert.equal(vm.runInContext('canStopRun', context)(target, 'scope-alpha'), true);
+            assert.equal(vm.runInContext('canStopRun', context)(target, 'scope-admin'), false);
+            assert.equal(vm.runInContext('canStopRun', context)(target, ''), false);
+            assert.deepEqual(JSON.parse(JSON.stringify(vm.runInContext('buildStopRequest', context)(target, 'stop-command-alpha'))), {
+              path: '/api/scopes/scope-alpha/runs/run%20alpha%2F1:stop',
+              body: { reason: 'user requested stop', commandId: 'stop-command-alpha', actorId: 'actor-alpha' }
+            });
+            const deepLinkTarget = vm.runInContext('resolveRunControlTarget', context)(
+              { summary: { runId: 'run-deep-link', scopeId: 'scope-alpha', status: 'running' } },
+              'run-deep-link', []);
+            assert.deepEqual(JSON.parse(JSON.stringify(deepLinkTarget)), {
+              scopeId: 'scope-alpha', runId: 'run-deep-link', actorId: ''
+            });
+            assert.equal(vm.runInContext('resolveRunControlTarget', context)(
+              { summary: { runId: 'run-stale', scopeId: 'scope-alpha', status: 'running' } },
+              'run alpha/1', [{ runId: 'run alpha/1', actorId: 'actor-alpha', scopeId: 'scope-alpha' }]
+            ), null);
+            assert.equal(vm.runInContext('resolveRunControlTarget', context)(
+              { summary: { runId: 'run alpha/1', scopeId: 'scope-alpha', status: 'stopped' } },
+              'run alpha/1', [{ runId: 'run alpha/1', actorId: 'actor-alpha', scopeId: 'scope-alpha' }]
+            ), null);
+            assert.equal(vm.runInContext('resolveRunControlTarget', context)(stopDetail, 'run alpha/1', [{
+              runId: 'run alpha/1', actorId: 'actor-other', scopeId: 'scope-other'
+            }]), null);
             const approval = vm.runInContext('findActiveApproval', context)(detail);
             assert.equal(approval.stepId, 'review');
             assert.equal(vm.runInContext('canApproveRun', context)(detail, 'scope-alpha'), true);
@@ -2191,12 +2233,266 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
 
         result.ExitCode.Should().Be(0, result.Error);
         html.Should().Contain("批准并继续");
+        html.Should().Contain("停止当前运行");
+        html.Should().Contain("停止请求已受理，等待 committed 状态更新");
+        html.Should().Contain("stop-not-accepted");
         html.Should().Contain("/api/scopes/");
         html.Should().Contain(":resume");
+        html.Should().Contain(":stop");
+        html.Should().NotContain("不可修改任何运行");
         html.Should().Contain("function renderTimeline(detail)");
         html.Should().Contain("function renderTrajectory(detail)");
         html.Should().Contain("aria-label\":\"事件时间线\"");
         html.Should().Contain("id:\"panel-trajectory\"");
+    }
+
+    [Fact]
+    public async Task WorkflowObservatory_ApiRequest_ShouldTreatOnlyGetNotFoundAsEmpty()
+    {
+        var html = await GetObservatoryHtmlAsync();
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name, nextName) {
+              const starts = [
+                html.indexOf('function ' + name + '('),
+                html.indexOf('async function ' + name + '('),
+              ].filter(index => index !== -1);
+              const start = starts.length ? Math.min(...starts) : -1;
+              const ends = [
+                html.indexOf('\nfunction ' + nextName + '(', start),
+                html.indexOf('\nasync function ' + nextName + '(', start),
+              ].filter(index => index !== -1);
+              const end = ends.length ? Math.min(...ends) : -1;
+              assert.notEqual(start, -1, name + ' must exist in the served observatory asset');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return html.slice(start, end);
+            }
+            function response(status, body) {
+              return {
+                status,
+                ok: status >= 200 && status < 300,
+                async json(){ return body; },
+                async text(){ return body == null ? '' : JSON.stringify(body); }
+              };
+            }
+
+            let nextResponse = null;
+            const calls = [];
+            const context = {
+              fetchWithConsoleAuth: async (path, options) => {
+                calls.push({ path, options: options || {} });
+                return nextResponse;
+              }
+            };
+            vm.createContext(context);
+            vm.runInContext(`
+              ${functionSource('apiRequest', 'api')}
+              ${functionSource('buildStopRequest', 'requestStopRun')}
+              ${functionSource('requestStopRun', 'stopTargetKey')}
+            `, context);
+
+            (async function(){
+              nextResponse = response(404, { code:'QUERY_NOT_FOUND' });
+              assert.equal(await context.apiRequest('/api/query/missing'), null);
+
+              for(const [status, code] of [[404,'SCOPE_RUN_NOT_FOUND'],[403,'SCOPE_ACCESS_DENIED'],[409,'SCOPE_RUN_AMBIGUOUS'],[500,'STOP_FAILED']]){
+                nextResponse = response(status, { code });
+                await assert.rejects(
+                  () => context.apiRequest('/api/scopes/scope-alpha/runs/run-alpha:stop', { method:'POST' }),
+                  new RegExp(code)
+                );
+              }
+
+              nextResponse = response(202, { accepted:true, acceptedCommandId:'command-alpha' });
+              assert.deepEqual(
+                JSON.parse(JSON.stringify(await context.apiRequest('/api/scopes/scope-alpha/runs/run-alpha:stop', { method:'POST' }))),
+                { accepted:true, acceptedCommandId:'command-alpha' }
+              );
+              assert.equal(calls.at(-1).options.method, 'POST');
+
+              nextResponse = response(202, { accepted:true, acceptedCommandId:'command-alpha' });
+              assert.deepEqual(
+                JSON.parse(JSON.stringify(await context.requestStopRun(
+                  { scopeId:'scope alpha', runId:'run alpha/1', actorId:'actor-alpha' },
+                  'command-alpha'))),
+                { accepted:true, acceptedCommandId:'command-alpha' }
+              );
+              const stopCall = calls.at(-1);
+              assert.equal(stopCall.path, '/api/scopes/scope%20alpha/runs/run%20alpha%2F1:stop');
+              assert.equal(stopCall.options.method, 'POST');
+              assert.equal(stopCall.options.headers['Content-Type'], 'application/json');
+              assert.deepEqual(JSON.parse(stopCall.options.body), {
+                reason:'user requested stop', commandId:'command-alpha', actorId:'actor-alpha'
+              });
+
+              nextResponse = response(202, { accepted:false });
+              await assert.rejects(
+                () => context.requestStopRun(
+                  { scopeId:'scope-alpha', runId:'run-alpha', actorId:'actor-alpha' },
+                  'command-alpha'),
+                /stop-not-accepted/
+              );
+            })().catch(error => { console.error(error); process.exitCode = 1; });
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
+    public async Task WorkflowObservatory_StopControl_ShouldLockAttemptsReuseCommandIdAndIgnoreStaleCompletion()
+    {
+        var html = await GetObservatoryHtmlAsync();
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            const targetStart = html.indexOf('function resolveRunControlTarget(');
+            const buildRequestStart = html.indexOf('\nfunction buildStopRequest(', targetStart);
+            const stateStart = html.indexOf('function stopTargetKey(');
+            const end = html.indexOf('\nfunction findActiveApproval(', stateStart);
+            assert.notEqual(targetStart, -1, 'stop target resolution must exist in the served observatory asset');
+            assert.notEqual(buildRequestStart, -1, 'buildStopRequest must follow stop target resolution');
+            assert.notEqual(stateStart, -1, 'stop control state must exist in the served observatory asset');
+            assert.notEqual(end, -1, 'approval helpers must follow the stop control');
+
+            let renderCount = 0;
+            const context = {
+              randomString: () => 'stable-command-suffix',
+              render: () => { renderCount += 1; },
+              requestStopRun: null,
+              document: { getElementById: () => null },
+              setTimeout: () => 0
+            };
+            vm.createContext(context);
+            vm.runInContext(html.slice(targetStart, buildRequestStart) + '\n' + html.slice(stateStart, end), context);
+
+            const targetA = { scopeId:'scope-alpha', runId:'run-alpha', actorId:'actor-alpha' };
+            const targetB = { scopeId:'scope-alpha', runId:'run-beta', actorId:'actor-beta' };
+
+            (async function(){
+              const calls = [];
+              let releaseFirst;
+              context.requestStopRun = (target, commandId) => {
+                calls.push({ target, commandId });
+                return new Promise(resolve => { releaseFirst = resolve; });
+              };
+              const first = context.submitStopRun(targetA);
+              const duplicate = await context.submitStopRun(targetA);
+              assert.equal(duplicate, false);
+              assert.equal(calls.length, 1, 'pending lock must prevent a duplicate stop command');
+              releaseFirst({ accepted:true });
+              assert.equal(await first, true);
+              let state = vm.runInContext('stopControlState', context);
+              assert.equal(state.accepted, true);
+              assert.equal(state.commandId, 'observatory-stop-stable-command-suffix');
+
+              context.resetStopControlState();
+              context.requestStopRun = async (target, commandId) => {
+                calls.push({ target, commandId });
+                throw new Error('network-down');
+              };
+              assert.equal(await context.submitStopRun(targetA), false);
+              const retryCommandId = vm.runInContext('stopControlState.commandId', context);
+              assert.equal(await context.submitStopRun(targetA), false);
+              assert.equal(vm.runInContext('stopControlState.commandId', context), retryCommandId);
+              assert.equal(calls.at(-1).commandId, retryCommandId, 'manual retry must reuse the same command id');
+
+              context.resetStopControlState();
+              let releaseStale;
+              context.requestStopRun = () => new Promise(resolve => { releaseStale = resolve; });
+              const stale = context.submitStopRun(targetA);
+              context.syncStopControlState(targetB);
+              releaseStale({ accepted:true });
+              assert.equal(await stale, false);
+              state = vm.runInContext('stopControlState', context);
+              assert.equal(state.key, 'scope-alpha\nrun-beta');
+              assert.equal(state.accepted, false, 'an old response must not mark the newly selected run accepted');
+
+              context.resetStopControlState();
+              context.openStopConfirmation({scopeId:'scope-alpha', runId:'run-alpha', actorId:''});
+              const hydratedCommandId = vm.runInContext('stopControlState.commandId', context);
+              context.syncStopControlState(targetA);
+              state = vm.runInContext('stopControlState', context);
+              assert.equal(state.key, 'scope-alpha\nrun-alpha');
+              assert.equal(state.commandId, hydratedCommandId, 'actor id hydration must preserve command identity');
+              assert.equal(state.confirming, true, 'actor id hydration must preserve confirmation state');
+
+              function createNode(tag, attrs = {}, content) {
+                const listeners = {};
+                return {
+                  tag, attrs:{...attrs}, children:[], innerHTML:content == null ? '' : String(content),
+                  disabled:false, listeners,
+                  appendChild(child){ this.children.push(child); return child; },
+                  addEventListener(type, listener){ listeners[type] = listener; },
+                  querySelector(){ return null; },
+                  focus(){},
+                };
+              }
+              function createHead(){
+                const top = createNode('div', {class:'rh-top'});
+                const head = createNode('header');
+                head.querySelector = selector => selector === '.rh-top' ? top : null;
+                return {head, top};
+              }
+
+              context.el = createNode;
+              context.ICON = {stop:'[stop]'};
+              context.esc = value => String(value).replace(/[&<>\"]/g, character => ({
+                '&':'&amp;', '<':'&lt;', '>':'&gt;', '\"':'&quot;',
+              })[character]);
+              context.state = {selectedRunId:'run-alpha'};
+              context.cache = {runs:[{runId:'run-alpha', actorId:'actor-alpha', scopeId:'scope-alpha'}]};
+              context.adminState = {ownScope:'scope-alpha'};
+              const detail = {summary:{runId:'run-alpha', scopeId:'scope-alpha', status:'running'}};
+
+              context.resetStopControlState();
+              let rendered = createHead();
+              context.renderStopControl(detail, rendered.head);
+              assert.equal(rendered.top.children.length, 1, 'own-scope running detail must show one stop control');
+              const stopButton = rendered.top.children[0].children[0];
+              assert.equal(stopButton.attrs.id, 'stopCurrentRunButton');
+              stopButton.listeners.click();
+              assert.equal(vm.runInContext('stopControlState.confirming', context), true);
+
+              rendered = createHead();
+              context.renderStopControl(detail, rendered.head);
+              assert.equal(rendered.head.children.length, 1, 'confirmation panel must render below the header');
+              const panel = rendered.head.children[0];
+              assert.equal(panel.attrs.role, 'group', 'inline confirmation must not claim modal dialog behavior');
+              const confirmationCommandId = vm.runInContext('stopControlState.commandId', context);
+              let escaped = false;
+              panel.listeners.keydown({key:'Escape', preventDefault(){ escaped = true; }});
+              assert.equal(escaped, true);
+              assert.equal(vm.runInContext('stopControlState.confirming', context), false);
+              assert.equal(
+                vm.runInContext('stopControlState.commandId', context), confirmationCommandId,
+                'cancel/reopen must keep the same idempotency key for the selected run');
+
+              context.adminState.ownScope = 'scope-other';
+              rendered = createHead();
+              context.renderStopControl(detail, rendered.head);
+              assert.equal(rendered.top.children.length, 0, 'cross-scope detail must stay read-only');
+
+              context.adminState.ownScope = 'scope-alpha';
+              context.resetStopControlState();
+              context.syncStopControlState(targetA);
+              vm.runInContext('stopControlState.accepted = true', context);
+              rendered = createHead();
+              context.renderStopControl(detail, rendered.head);
+              assert.equal(rendered.top.children[0].children[0].attrs.role, 'status');
+              assert.ok(renderCount > 0);
+            })().catch(error => { console.error(error); process.exitCode = 1; });
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
     }
 
     [Fact]
@@ -2284,6 +2580,7 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
               routePatch: null,
               writeObservatoryRoute: null,
               document: {body: {setAttribute() {}}},
+              resetStopControlState() {},
               render() {},
               loadDetail() {},
             };
