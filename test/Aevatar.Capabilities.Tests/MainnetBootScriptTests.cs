@@ -1,6 +1,9 @@
 using System.Diagnostics;
 using System.Text.Json;
+using Aevatar.AI.ToolProviders.NyxId;
 using FluentAssertions;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Capabilities.Tests;
 
@@ -26,6 +29,40 @@ public sealed class MainnetBootScriptTests
             .GetString()
             .Should()
             .Be("a6ff2946-f02f-4c35-8203-1ec46132b660");
+    }
+
+    [Fact]
+    public void AppSettings_DefaultNyxIdTransport_ShouldUsePublicApi()
+    {
+        var configuration = BuildMainnetConfiguration();
+        var services = new ServiceCollection();
+
+        services.AddNyxIdApiAccess(configuration);
+
+        using var provider = services.BuildServiceProvider();
+        var options = provider.GetRequiredService<NyxIdToolOptions>();
+        options.InternalApiBaseUrl.Should().BeNull();
+        options.EffectiveTransportBaseUrl.Should().Be("https://nyx-api.chrono-ai.fun");
+        options.PublicTransportFallbackBaseUrl.Should().BeNull();
+    }
+
+    [Fact]
+    public void AppSettings_ExplicitInternalNyxIdTransport_ShouldRemainPrimary()
+    {
+        const string internalApiBaseUrl = "http://nyxid.internal:3001";
+        var configuration = BuildMainnetConfiguration(new Dictionary<string, string?>
+        {
+            ["Aevatar:NyxId:InternalApiBaseUrl"] = internalApiBaseUrl,
+        });
+        var services = new ServiceCollection();
+
+        services.AddNyxIdApiAccess(configuration);
+
+        using var provider = services.BuildServiceProvider();
+        var options = provider.GetRequiredService<NyxIdToolOptions>();
+        options.InternalApiBaseUrl.Should().Be(internalApiBaseUrl);
+        options.EffectiveTransportBaseUrl.Should().Be(internalApiBaseUrl);
+        options.PublicTransportFallbackBaseUrl.Should().Be("https://nyx-api.chrono-ai.fun");
     }
 
     [Fact]
@@ -267,6 +304,21 @@ public sealed class MainnetBootScriptTests
         }
 
         throw new DirectoryNotFoundException("Could not locate repository root from test output directory.");
+    }
+
+    private static IConfigurationRoot BuildMainnetConfiguration(
+        IReadOnlyDictionary<string, string?>? overrides = null)
+    {
+        var appSettingsPath = Path.Combine(
+            FindRepoRoot(),
+            "src",
+            "Aevatar.Mainnet.Host.Api",
+            "appsettings.json");
+        using var stream = File.OpenRead(appSettingsPath);
+        var builder = new ConfigurationBuilder().AddJsonStream(stream);
+        if (overrides is not null)
+            builder.AddInMemoryCollection(overrides);
+        return builder.Build();
     }
 
     private sealed class TemporaryDirectory : IDisposable
