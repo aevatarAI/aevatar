@@ -106,6 +106,16 @@ function decodeScopeWorkflowCatalogueCommittedFacts(
       ['deploymentStatus', 'DeploymentStatus'],
       `${label}.deploymentStatus`,
     ),
+    serviceAppId: readString(
+      record,
+      ['serviceAppId', 'ServiceAppId'],
+      `${label}.serviceAppId`,
+    ),
+    serviceNamespace: readString(
+      record,
+      ['serviceNamespace', 'ServiceNamespace'],
+      `${label}.serviceNamespace`,
+    ),
   };
 }
 
@@ -159,6 +169,11 @@ function decodeScopeWorkflowCatalogueRow(
     committed: decodeScopeWorkflowCatalogueCommittedFacts(
       record.committed ?? record.Committed,
       `${label}.committed`,
+    ),
+    publishedServiceId: readNullableString(
+      record,
+      ['publishedServiceId', 'PublishedServiceId'],
+      `${label}.publishedServiceId`,
     ),
   };
 }

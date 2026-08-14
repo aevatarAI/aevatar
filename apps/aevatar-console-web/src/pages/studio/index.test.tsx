@@ -6351,26 +6351,31 @@ describe('StudioPage', () => {
         updatedAtUtc: '2026-03-18T00:10:00Z',
       },
     ]);
-    mockScopeRuntimeApi.listServices
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([
+    const draft2Service = {
+      serviceId: 'default',
+      displayName: 'draft2',
+      deploymentStatus: 'Active',
+      primaryActorId: 'actor-default',
+      endpoints: [
         {
-          serviceId: 'default',
-          displayName: 'draft2',
-          deploymentStatus: 'Active',
-          primaryActorId: 'actor-default',
-          endpoints: [
-            {
-              endpointId: 'chat',
-              displayName: 'Chat',
-              kind: 'chat',
-              description: 'Chat with the published workflow.',
-              requestTypeUrl: '',
-              responseTypeUrl: '',
-            },
-          ],
+          endpointId: 'chat',
+          displayName: 'Chat',
+          kind: 'chat',
+          description: 'Chat with the published workflow.',
+          requestTypeUrl: '',
+          responseTypeUrl: '',
         },
-      ]);
+      ],
+    };
+    let serviceCatalogVisible = false;
+    mockScopeRuntimeApi.listServices.mockImplementation(async () => {
+      if (!serviceCatalogVisible) {
+        serviceCatalogVisible = true;
+        return [];
+      }
+
+      return [draft2Service];
+    });
     (studioApi.getScopeBinding as jest.Mock).mockResolvedValueOnce(null);
     (studioApi.getMemberBindingRun as jest.Mock).mockResolvedValueOnce({
       bindingRunId: 'bind-member-workflow-1',

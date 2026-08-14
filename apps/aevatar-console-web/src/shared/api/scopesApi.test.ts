@@ -76,6 +76,7 @@ describe('scopesApi workflow catalogue', () => {
             hasCommittedSource: true,
             updatedAtUtc: '2026-08-04T10:00:00Z',
             updatedAtSource: 'committed',
+            publishedServiceId: 'svc-alpha',
             capabilities: {
               open: { available: true, unavailableReason: null },
               activity: { available: true, unavailableReason: null },
@@ -90,6 +91,8 @@ describe('scopesApi workflow catalogue', () => {
               activeRevisionId: 'rev-alpha',
               deploymentId: 'dep-alpha',
               deploymentStatus: 'Active',
+              serviceAppId: 'workflow-app',
+              serviceNamespace: 'workflow-namespace',
             },
           },
           {
@@ -154,6 +157,7 @@ describe('scopesApi workflow catalogue', () => {
     expect(response.nextPageToken).toBe('next token');
     expect(response.items[0]).toMatchObject({
       workflowId: 'wf-alpha',
+      publishedServiceId: 'svc-alpha',
       capabilities: {
         open: { available: true, unavailableReason: null },
         activity: { available: true, unavailableReason: null },
@@ -164,6 +168,8 @@ describe('scopesApi workflow catalogue', () => {
         serviceKey: 'scope-alpha:workflow:default:svc-alpha',
         actorId: 'actor-alpha',
         deploymentId: 'dep-alpha',
+        serviceAppId: 'workflow-app',
+        serviceNamespace: 'workflow-namespace',
       },
     });
     expect(response.items[1]?.committed).toBeNull();
