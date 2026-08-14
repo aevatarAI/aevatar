@@ -1341,7 +1341,7 @@ message WorkflowToolCallAttemptCompletedEvent
     WorkflowToolCallAttemptApprovalRequiredOutcome approval_required = 7;
     WorkflowToolCallAttemptFailureOutcome failure = 8;
   }
-  string continuation_token = 9;
+  string continuation_id = 9;
 }
 
 enum WorkflowLeaseConflictPolicy {
@@ -1524,7 +1524,7 @@ message WorkflowToolCallTimeoutFiredEvent
   string execution_id = 3;
   string call_id = 4;
   int32 timeout_ms = 5;
-  string continuation_token = 6;
+  string continuation_id = 6;
 }
 message WorkflowToolCallRetryFiredEvent
 {
@@ -1533,7 +1533,7 @@ message WorkflowToolCallRetryFiredEvent
   string execution_id = 3;
   string call_id = 4;
   int32 attempt = 5;
-  string continuation_token = 6;
+  string continuation_id = 6;
 }
 message WorkflowToolCallExecutionRecoveryFiredEvent
 {
@@ -1542,7 +1542,7 @@ message WorkflowToolCallExecutionRecoveryFiredEvent
   string execution_id = 3;
   string call_id = 4;
   int32 attempt = 5;
-  string continuation_token = 6;
+  string continuation_id = 6;
 }
 message WorkflowConnectorAttemptCompletedEvent {
   string run_id = 1;

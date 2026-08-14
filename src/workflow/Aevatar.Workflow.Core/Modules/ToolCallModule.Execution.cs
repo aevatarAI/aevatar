@@ -77,7 +77,7 @@ public sealed partial class ToolCallModule
             recovery.Timeout.StepId,
             recovery.Timeout.CallId,
             recovery.Timeout.ExecutionId) &&
-        MatchesContinuationToken(pending, recovery.Timeout.ContinuationToken);
+        MatchesContinuationId(pending, recovery.Timeout.ContinuationId);
 
     internal static IReadOnlyList<PendingApprovalWatchdogRecovery> BuildPendingApprovalWatchdogRecoveries(
         ToolCallModuleState state,
@@ -130,7 +130,7 @@ public sealed partial class ToolCallModule
                    recovery.Timeout.StepId,
                    recovery.Timeout.CallId,
                    recovery.Timeout.ExecutionId) &&
-               string.Equals(pending.ContinuationToken, recovery.Timeout.ContinuationToken, StringComparison.Ordinal);
+               string.Equals(pending.ContinuationId, recovery.Timeout.ContinuationId, StringComparison.Ordinal);
     }
 
     internal static IReadOnlyList<PendingExecutionRetryRecovery> BuildPendingExecutionRetryRecoveries(
@@ -190,7 +190,7 @@ public sealed partial class ToolCallModule
             recovery.Recovery.StepId,
             recovery.Recovery.CallId,
             recovery.Recovery.ExecutionId) &&
-        MatchesContinuationToken(pending, recovery.Recovery.ContinuationToken);
+        MatchesContinuationId(pending, recovery.Recovery.ContinuationId);
 
     private static async Task EnsureExecutionRecoveryWakeupAsync(
         PendingToolCallExecutionState pending,
@@ -219,6 +219,7 @@ public sealed partial class ToolCallModule
         {
             scheduleFailure = exception;
             ctx.Logger.LogWarning(
+                exception,
                 "ToolCall: pending execution recovery scheduling failed run={RunId} step={StepId} attempt={Attempt} failure_type={FailureType}; attempting self continuation",
                 pending.RunId,
                 pending.StepId,
@@ -284,6 +285,7 @@ public sealed partial class ToolCallModule
         catch (Exception exception)
         {
             ctx.Logger.LogWarning(
+                exception,
                 "ToolCall: pending execution watchdog recovery failed run={RunId} step={StepId} failure_type={FailureType}",
                 pending.RunId,
                 pending.StepId,
@@ -302,7 +304,7 @@ public sealed partial class ToolCallModule
                 pending.CallId,
                 pending.ExecutionId) ||
             persistedPending.Attempt != pending.Attempt ||
-            !MatchesContinuationToken(persistedPending, pending.ContinuationToken))
+            !MatchesContinuationId(persistedPending, pending.ContinuationId))
         {
             await WorkflowRuntimeCallbackLeaseSupport.TryCancelAsync(
                 ctx,
@@ -330,7 +332,7 @@ public sealed partial class ToolCallModule
             recovery.Retry.StepId,
             recovery.Retry.CallId,
             recovery.Retry.ExecutionId) &&
-        MatchesContinuationToken(pending, recovery.Retry.ContinuationToken);
+        MatchesContinuationId(pending, recovery.Retry.ContinuationId);
 
     private static PendingToolCallExecutionState BuildPendingExecution(
         StepRequestEvent request,
@@ -344,7 +346,7 @@ public sealed partial class ToolCallModule
         RuntimeSecretReference protectedMaterialReference,
         string protectedMaterialDigestSha256,
         long absoluteTimeoutDeadlineUnixMs = 0,
-        string continuationToken = "",
+        string continuationId = "",
         int initialAttempt = 1)
     {
         var timeoutDeadlineUnixMs = absoluteTimeoutDeadlineUnixMs > 0
@@ -363,9 +365,9 @@ public sealed partial class ToolCallModule
             ApprovalRequestId = NormalizeRequired(approvalRequestId),
             TerminalDecision = terminalDecision,
             Attempt = Math.Max(1, initialAttempt),
-            ContinuationToken = string.IsNullOrWhiteSpace(continuationToken)
+            ContinuationId = string.IsNullOrWhiteSpace(continuationId)
                 ? Guid.NewGuid().ToString("N")
-                : continuationToken.Trim(),
+                : continuationId.Trim(),
             ProtectedMaterialReference = protectedMaterialReference.Clone(),
             ProtectedMaterialDigestSha256 = protectedMaterialDigestSha256,
             ExecutionPhase = WorkflowToolCallExecutionPhase.ExecutionPending,
@@ -418,6 +420,7 @@ public sealed partial class ToolCallModule
         catch (Exception exception)
         {
             ctx.Logger.LogWarning(
+                exception,
                 "ToolCall: watchdog scheduling failed run={RunId} step={StepId} failure_type={FailureType}",
                 pending.RunId,
                 pending.StepId,
@@ -486,7 +489,7 @@ public sealed partial class ToolCallModule
             executionRequest,
             responseProjection?.Clone(),
             persistedPending.Attempt,
-            persistedPending.ContinuationToken,
+            persistedPending.ContinuationId,
             persistedPending.TimeoutDeadlineUnixMs))
         {
             return;
@@ -532,7 +535,7 @@ public sealed partial class ToolCallModule
         WorkflowToolExecutionRequest executionRequest,
         WorkflowToolResponseProjection? responseProjection,
         int attempt,
-        string continuationToken,
+        string continuationId,
         long timeoutDeadlineUnixMs,
         BackgroundExecutionRegistration registration,
         CancellationToken executionToken)
@@ -578,7 +581,7 @@ public sealed partial class ToolCallModule
             var completed = BuildAttemptCompletedSignal(
                 executionRequest,
                 attempt,
-                continuationToken,
+                continuationId,
                 result);
             await PublishCompletionSignalOrDeferToWatchdogAsync(
                 ctx,
@@ -622,6 +625,7 @@ public sealed partial class ToolCallModule
             catch (Exception publishException)
             {
                 _logger.LogWarning(
+                    publishException,
                     "ToolCall: completion signal publication failed run={RunId} step={StepId} attempt={Attempt} failure_type={FailureType}; scheduling durable continuation",
                     completed.RunId,
                     completed.StepId,
@@ -646,6 +650,7 @@ public sealed partial class ToolCallModule
             catch (Exception scheduleException)
             {
                 _logger.LogWarning(
+                    scheduleException,
                     "ToolCall: completion continuation unavailable run={RunId} step={StepId} attempt={Attempt} transport_attempt={TransportAttempt} failure_type={FailureType}; retrying before authored deadline",
                     completed.RunId,
                     completed.StepId,
@@ -670,7 +675,7 @@ public sealed partial class ToolCallModule
         WorkflowToolExecutionRequest executionRequest,
         WorkflowToolResponseProjection? responseProjection,
         int attempt,
-        string continuationToken,
+        string continuationId,
         long timeoutDeadlineUnixMs)
     {
         var backgroundExecutionKey = BuildExecutionKey(executionRequest.CallId, executionRequest.ExecutionId);
@@ -693,7 +698,7 @@ public sealed partial class ToolCallModule
                 executionRequest,
                 responseProjection,
                 attempt,
-                continuationToken,
+                continuationId,
                 timeoutDeadlineUnixMs,
                 registration,
                 executionToken),
@@ -713,7 +718,7 @@ public sealed partial class ToolCallModule
     private void ReleaseBackgroundExecutionAfterDurableSuccessor(
         string pendingKey,
         int expectedAttempt,
-        string expectedContinuationToken,
+        string expectedContinuationId,
         IWorkflowExecutionContext ctx)
     {
         var state = WorkflowExecutionStateAccess.Load<ToolCallModuleState>(ctx, ModuleStateKey);
@@ -721,8 +726,8 @@ public sealed partial class ToolCallModule
             current.ExecutionPhase == WorkflowToolCallExecutionPhase.ExecutionPending &&
             current.Attempt == expectedAttempt &&
             string.Equals(
-                current.ContinuationToken,
-                NormalizeRequired(expectedContinuationToken),
+                current.ContinuationId,
+                NormalizeRequired(expectedContinuationId),
                 StringComparison.Ordinal))
         {
             return;
@@ -861,14 +866,14 @@ public sealed partial class ToolCallModule
                 expected.StepId,
                 expected.CallId,
                 expected.ExecutionId) ||
-            !MatchesContinuationToken(pending, expected.ContinuationToken) ||
+            !MatchesContinuationId(pending, expected.ContinuationId) ||
             pending.Attempt != expected.Attempt)
         {
             return;
         }
 
         var expectedAttempt = pending.Attempt;
-        var expectedContinuationToken = pending.ContinuationToken;
+        var expectedContinuationId = pending.ContinuationId;
         try
         {
             state.PendingExecutions.Remove(pendingKey);
@@ -899,7 +904,7 @@ public sealed partial class ToolCallModule
             ReleaseBackgroundExecutionAfterDurableSuccessor(
                 pendingKey,
                 expectedAttempt,
-                expectedContinuationToken,
+                expectedContinuationId,
                 ctx);
         }
     }
@@ -963,7 +968,7 @@ public sealed partial class ToolCallModule
                 completed.StepId,
                 completed.CallId,
                 completed.ExecutionId) ||
-            !MatchesContinuationToken(pending, completed.ContinuationToken) ||
+            !MatchesContinuationId(pending, completed.ContinuationId) ||
             pending.Attempt != completed.Attempt ||
             pending.ExecutionPhase != WorkflowToolCallExecutionPhase.ExecutionPending)
         {
@@ -971,7 +976,7 @@ public sealed partial class ToolCallModule
         }
 
         var expectedAttempt = pending.Attempt;
-        var expectedContinuationToken = pending.ContinuationToken;
+        var expectedContinuationId = pending.ContinuationId;
         try
         {
             var materialResolution = await ResolveAndVerifyProtectedMaterialAsync(
@@ -1026,7 +1031,7 @@ public sealed partial class ToolCallModule
                     pending.TimeoutDeadlineUnixMs,
                     pending.TimeoutCallbackId,
                     pending.TimeoutLease,
-                    pending.ContinuationToken,
+                    pending.ContinuationId,
                     pending.Attempt,
                     new WorkflowToolApprovalPendingOutcome(
                         approval.ApprovalRequestId,
@@ -1079,7 +1084,7 @@ public sealed partial class ToolCallModule
             ReleaseBackgroundExecutionAfterDurableSuccessor(
                 pendingKey,
                 expectedAttempt,
-                expectedContinuationToken,
+                expectedContinuationId,
                 ctx);
         }
     }
@@ -1133,7 +1138,7 @@ public sealed partial class ToolCallModule
                 timeout.StepId,
                 timeout.CallId,
                 timeout.ExecutionId) ||
-            !MatchesContinuationToken(pending, timeout.ContinuationToken) ||
+            !MatchesContinuationId(pending, timeout.ContinuationId) ||
             !MatchesExecutionTimeout(envelope, pending))
         {
             return;
@@ -1248,6 +1253,7 @@ public sealed partial class ToolCallModule
         catch (Exception exception)
         {
             ctx.Logger.LogWarning(
+                exception,
                 "ToolCall: pre-terminal retry scheduling failed run={RunId} step={StepId} attempt={Attempt} failure_type={FailureType}; attempting immediate continuation",
                 pending.RunId,
                 pending.StepId,
@@ -1264,6 +1270,7 @@ public sealed partial class ToolCallModule
             catch (Exception continuationException)
             {
                 ctx.Logger.LogWarning(
+                    continuationException,
                     "ToolCall: immediate retry continuation failed run={RunId} step={StepId} attempt={Attempt} failure_type={FailureType}; activation recovery or watchdog remains authoritative",
                     pending.RunId,
                     pending.StepId,
@@ -1297,7 +1304,7 @@ public sealed partial class ToolCallModule
         if (pending.Attempt != retry.Attempt ||
             pending.ExecutionPhase != WorkflowToolCallExecutionPhase.RetryPending ||
             !MatchesExecutionIdentity(pending, retry.RunId, retry.StepId, retry.CallId, retry.ExecutionId) ||
-            !MatchesContinuationToken(pending, retry.ContinuationToken) ||
+            !MatchesContinuationId(pending, retry.ContinuationId) ||
             !MatchesExecutionRetry(envelope, pending))
         {
             return;
@@ -1433,7 +1440,7 @@ public sealed partial class ToolCallModule
             executionRequest,
             request.ExternalInvocation?.ResponseProjection?.Clone(),
             pending.Attempt,
-            pending.ContinuationToken,
+            pending.ContinuationId,
             pending.TimeoutDeadlineUnixMs))
         {
             await CompletePendingDeadlineAsync(
@@ -1473,7 +1480,7 @@ public sealed partial class ToolCallModule
                 recovery.StepId,
                 recovery.CallId,
                 recovery.ExecutionId) ||
-            !MatchesContinuationToken(pending, recovery.ContinuationToken) ||
+            !MatchesContinuationId(pending, recovery.ContinuationId) ||
             !IsTrustedExecutionRecoveryEnvelope(envelope, ctx, pending))
         {
             return;
@@ -1616,7 +1623,7 @@ public sealed partial class ToolCallModule
                 executionRequest,
                 request.ExternalInvocation?.ResponseProjection?.Clone(),
                 pending.Attempt,
-                pending.ContinuationToken,
+                pending.ContinuationId,
                 pending.TimeoutDeadlineUnixMs))
         {
             await CompletePendingDeadlineAsync(
@@ -1630,7 +1637,7 @@ public sealed partial class ToolCallModule
     private static WorkflowToolCallAttemptCompletedEvent BuildAttemptCompletedSignal(
         WorkflowToolExecutionRequest request,
         int attempt,
-        string continuationToken,
+        string continuationId,
         WorkflowToolExecutionResult result)
     {
         var completed = new WorkflowToolCallAttemptCompletedEvent
@@ -1640,7 +1647,7 @@ public sealed partial class ToolCallModule
             ExecutionId = request.ExecutionId,
             CallId = request.CallId,
             Attempt = attempt,
-            ContinuationToken = continuationToken,
+            ContinuationId = continuationId,
         };
         if (result.PendingApproval is { } approval)
         {
@@ -1749,7 +1756,7 @@ public sealed partial class ToolCallModule
             ExecutionId = pending.ExecutionId,
             CallId = pending.CallId,
             TimeoutMs = pending.TimeoutMs,
-            ContinuationToken = pending.ContinuationToken,
+            ContinuationId = pending.ContinuationId,
         };
 
     private static WorkflowToolCallTimeoutFiredEvent BuildTimeoutEvent(PendingToolCallApprovalState pending) =>
@@ -1760,7 +1767,7 @@ public sealed partial class ToolCallModule
             ExecutionId = pending.ExecutionId,
             CallId = pending.ToolCallId,
             TimeoutMs = pending.TimeoutMs,
-            ContinuationToken = pending.ContinuationToken,
+            ContinuationId = pending.ContinuationId,
         };
 
     private static WorkflowToolCallRetryFiredEvent BuildRetryEvent(PendingToolCallExecutionState pending) =>
@@ -1771,7 +1778,7 @@ public sealed partial class ToolCallModule
             ExecutionId = pending.ExecutionId,
             CallId = pending.CallId,
             Attempt = pending.Attempt,
-            ContinuationToken = pending.ContinuationToken,
+            ContinuationId = pending.ContinuationId,
         };
 
     private static WorkflowToolCallExecutionRecoveryFiredEvent BuildExecutionRecoveryEvent(
@@ -1783,7 +1790,7 @@ public sealed partial class ToolCallModule
             ExecutionId = pending.ExecutionId,
             CallId = pending.CallId,
             Attempt = pending.Attempt,
-            ContinuationToken = pending.ContinuationToken,
+            ContinuationId = pending.ContinuationId,
         };
 
     private static bool MatchesExecutionTimeout(
@@ -1802,7 +1809,7 @@ public sealed partial class ToolCallModule
         PendingToolCallApprovalState pending,
         WorkflowToolCallTimeoutFiredEvent timeout)
     {
-        if (!string.Equals(pending.ContinuationToken, timeout.ContinuationToken, StringComparison.Ordinal))
+        if (!string.Equals(pending.ContinuationId, timeout.ContinuationId, StringComparison.Ordinal))
             return false;
 
         if (pending.TimeoutLease != null)
@@ -1850,11 +1857,11 @@ public sealed partial class ToolCallModule
             callId,
             executionId);
 
-    private static bool MatchesContinuationToken(
+    private static bool MatchesContinuationId(
         PendingToolCallExecutionState pending,
-        string? continuationToken) =>
-        !string.IsNullOrWhiteSpace(pending.ContinuationToken) &&
-        string.Equals(pending.ContinuationToken, continuationToken?.Trim(), StringComparison.Ordinal);
+        string? continuationId) =>
+        !string.IsNullOrWhiteSpace(pending.ContinuationId) &&
+        string.Equals(pending.ContinuationId, continuationId?.Trim(), StringComparison.Ordinal);
 
     private static bool IsTrustedCompletionEnvelope(
         EventEnvelope envelope,
@@ -1936,7 +1943,7 @@ public sealed partial class ToolCallModule
             pending.CallId,
             pending.ExecutionId,
             pending.Attempt.ToString(CultureInfo.InvariantCulture),
-            pending.ContinuationToken);
+            pending.ContinuationId);
 
     private static string BuildToolStartedOperationId(PendingToolCallExecutionState pending) =>
         RuntimeCallbackKeyComposer.BuildCallbackId(
@@ -1954,7 +1961,7 @@ public sealed partial class ToolCallModule
             completed.CallId,
             completed.ExecutionId,
             completed.Attempt.ToString(CultureInfo.InvariantCulture),
-            completed.ContinuationToken);
+            completed.ContinuationId);
 
     private static string BuildCompletionSignalCallbackId(WorkflowToolCallAttemptCompletedEvent completed) =>
         RuntimeCallbackKeyComposer.BuildCallbackId(
@@ -1964,7 +1971,7 @@ public sealed partial class ToolCallModule
             completed.CallId,
             completed.ExecutionId,
             completed.Attempt.ToString(CultureInfo.InvariantCulture),
-            completed.ContinuationToken);
+            completed.ContinuationId);
 
     private static string BuildExecutionKey(string? callId, string? executionId) =>
         BuildCompletionKey(callId, executionId);

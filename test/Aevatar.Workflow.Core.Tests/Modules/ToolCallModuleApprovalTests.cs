@@ -76,7 +76,7 @@ public sealed class ToolCallModuleApprovalTests
         pendingState.ExecutionPhase.Should().Be(WorkflowToolCallExecutionPhase.ApprovalPending);
         pendingState.TimeoutMs.Should().BeGreaterThan(0);
         pendingState.TimeoutDeadlineUnixMs.Should().BeGreaterThan(ctx.UtcNow.ToUnixTimeMilliseconds());
-        pendingState.ContinuationToken.Should().NotBeNullOrWhiteSpace();
+        pendingState.ContinuationId.Should().NotBeNullOrWhiteSpace();
         pendingState.Attempt.Should().Be(1);
         pendingState.ArgumentsJson.Should().BeEmpty();
         pendingState.Input.Should().BeEmpty();
@@ -639,7 +639,7 @@ public sealed class ToolCallModuleApprovalTests
                 candidate.CallId == pending.CallId &&
                 candidate.ExecutionId == pending.ExecutionId &&
                 candidate.Attempt == pending.Attempt &&
-                candidate.ContinuationToken == pending.ContinuationToken);
+                candidate.ContinuationId == pending.ContinuationId);
             ctx.Published.RemoveAll(item => ReferenceEquals(item.Event, completed));
 
             await module.HandleAsync(ctx.PublishedEnvelope(completed), ctx, CancellationToken.None);
