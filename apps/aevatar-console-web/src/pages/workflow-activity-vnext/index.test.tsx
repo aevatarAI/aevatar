@@ -19,6 +19,15 @@ import {
 } from '../../../tests/reactQueryTestUtils';
 import WorkflowActivityVNextPage from './index';
 
+type SerializableWorkflowDocument = {
+  readonly name?: string;
+};
+
+type SaveWorkflowRequestProbe = {
+  readonly workflowName: string;
+  readonly yaml: string;
+};
+
 let mockLocation = '/scopes/scope-alpha/workflow-activity-vnext/workflows';
 let mockHistoryMutatesLocation = false;
 const mockLocationSubscribers = new Set<() => void>();
@@ -2140,28 +2149,34 @@ describe('Workflow Activity vNext editor', () => {
 
   it('enables Save workflow only while the loaded workflow has unsaved changes', async () => {
     mockStudioApi.serializeYaml.mockImplementationOnce(
-      async ({ document: nextDocument }) => ({
+      async ({
+        document: nextDocument,
+      }: {
+        document: SerializableWorkflowDocument;
+      }) => ({
         yaml: `name: ${nextDocument.name}\nroles: []\nsteps: []\n`,
         document: nextDocument,
         findings: [],
       }),
     );
-    mockStudioApi.saveWorkflow.mockImplementationOnce(async (input) => ({
-      kind: 'materialized',
-      workflow: {
-        workflowId: 'wf-draft-new',
-        name: input.workflowName,
-        fileName: 'committed-source.yaml',
-        filePath: '/workflows/committed-source.yaml',
-        directoryId: 'directory-alpha',
-        directoryLabel: 'Workflows',
-        yaml: input.yaml,
-        updatedAtUtc: '2026-08-04T10:01:00Z',
-        document: { name: input.workflowName, roles: [], steps: [] },
-        draftExists: true,
-        findings: [],
-      },
-    }));
+    mockStudioApi.saveWorkflow.mockImplementationOnce(
+      async (input: SaveWorkflowRequestProbe) => ({
+        kind: 'materialized',
+        workflow: {
+          workflowId: 'wf-draft-new',
+          name: input.workflowName,
+          fileName: 'committed-source.yaml',
+          filePath: '/workflows/committed-source.yaml',
+          directoryId: 'directory-alpha',
+          directoryLabel: 'Workflows',
+          yaml: input.yaml,
+          updatedAtUtc: '2026-08-04T10:01:00Z',
+          document: { name: input.workflowName, roles: [], steps: [] },
+          draftExists: true,
+          findings: [],
+        },
+      }),
+    );
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
     const workflowName = await screen.findByRole('textbox', {
