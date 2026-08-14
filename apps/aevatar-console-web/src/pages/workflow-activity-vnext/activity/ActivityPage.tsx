@@ -1,8 +1,4 @@
-import {
-  CloseOutlined,
-  ReloadOutlined,
-  SearchOutlined,
-} from '@ant-design/icons';
+import { CloseOutlined, SearchOutlined } from '@ant-design/icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getLocale } from '@umijs/max';
 import { Button, DatePicker, Input, Pagination, Select, Space } from 'antd';
@@ -29,7 +25,6 @@ import { getRunStatusPresentation } from './runPresentation';
 
 const supportedRunStatuses = new Set(['running', 'completed', 'failed']);
 const activityPageSize = 25;
-const activitySearchDebounceMs = 300;
 const activityRunsQueryPrefix = ['workflow-activity-vnext', 'activity-runs'];
 
 function normalizeRunStatusFilter(value: string | null): string {
@@ -106,10 +101,28 @@ interface ActivityPaginationState {
   readonly cursors: readonly (string | undefined)[];
 }
 
+type ActivityDraftFilters = {
+  readonly search: string;
+  readonly status: string;
+  readonly origin: string;
+  readonly fromUtc: string;
+  readonly toUtc: string;
+};
+
 function createActivityPaginationState(
   filterKey: string,
 ): ActivityPaginationState {
   return { filterKey, page: 1, cursors: [undefined] };
+}
+
+function createDraftActivityFilters(
+  search: string,
+  status: string,
+  origin: string,
+  fromUtc: string,
+  toUtc: string,
+): ActivityDraftFilters {
+  return { search, status, origin, fromUtc, toUtc };
 }
 
 const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
@@ -129,7 +142,20 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
   const fromUtc = params.get('from')?.trim() ?? '';
   const toUtc = params.get('to')?.trim() ?? '';
   const search = params.get('q') ?? '';
-  const [searchInput, setSearchInput] = React.useState(search);
+  const committedFilters = React.useMemo(
+    () => ({ search, status, origin, fromUtc, toUtc }),
+    [fromUtc, origin, search, status, toUtc],
+  );
+  const [draftFilters, setDraftFilters] = React.useState<ActivityDraftFilters>(
+    () =>
+      createDraftActivityFilters(
+        committedFilters.search,
+        committedFilters.status,
+        committedFilters.origin,
+        committedFilters.fromUtc,
+        committedFilters.toUtc,
+      ),
+  );
   const [now, setNow] = React.useState(() => Date.now());
   const filterKey = React.useMemo(
     () =>
@@ -205,17 +231,16 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
   }, [rawStatus, replaceParam, status]);
 
   React.useEffect(() => {
-    setSearchInput(search);
-  }, [search]);
-
-  React.useEffect(() => {
-    if (searchInput === search) return;
-    const timer = window.setTimeout(
-      () => replaceParam('q', searchInput),
-      activitySearchDebounceMs,
+    setDraftFilters(
+      createDraftActivityFilters(
+        committedFilters.search,
+        committedFilters.status,
+        committedFilters.origin,
+        committedFilters.fromUtc,
+        committedFilters.toUtc,
+      ),
     );
-    return () => window.clearTimeout(timer);
-  }, [replaceParam, search, searchInput]);
+  }, [committedFilters]);
 
   React.useEffect(() => {
     if (pagination.filterKey === filterKey) return;
@@ -256,7 +281,6 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
     [buildActivityRunFilter, scopeId],
   );
   const canQueryActivityRuns = !workflowFilterPresent || Boolean(workflowId);
-
   const runs = useQuery({
     queryKey: activityRunsQueryKey(currentCursor),
     queryFn: () => fetchActivityPage(currentCursor),
@@ -265,7 +289,51 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
     retry: false,
   });
 
+  const commitDraftFilters = React.useCallback(() => {
+    const next = new URLSearchParams(location.search);
+    const apply = (name: string, value: string) => {
+      if (value) next.set(name, value);
+      else next.delete(name);
+    };
+
+    apply('q', draftFilters.search.trim());
+    apply('status', normalizeRunStatusFilter(draftFilters.status));
+    apply('origin', draftFilters.origin.trim());
+    apply('from', draftFilters.fromUtc.trim());
+    apply('to', draftFilters.toUtc.trim());
+
+    const currentSearch = new URLSearchParams(location.search).toString();
+    const nextSearch = next.toString();
+    if (nextSearch === currentSearch) {
+      void runs.refetch();
+      return;
+    }
+
+    history.replace(
+      `${location.pathname}${nextSearch ? `?${nextSearch}` : ''}`,
+    );
+  }, [
+    draftFilters.origin,
+    draftFilters.fromUtc,
+    draftFilters.search,
+    draftFilters.status,
+    draftFilters.toUtc,
+    location.pathname,
+    location.search,
+    runs,
+  ]);
+
   const currentRuns = runs.data?.items ?? [];
+  const runDetailQuery = React.useCallback(
+    (run: WorkflowActivityRunFeedRow) => {
+      const rowWorkflowId = run.workflowId.trim();
+      if (rowWorkflowId || workflowId) {
+        return { workflowId: rowWorkflowId || workflowId || undefined };
+      }
+      return { definition: definition || undefined };
+    },
+    [definition, workflowId],
+  );
   const hasRunningRun = currentRuns.some(
     (run) => run.status.trim().toLowerCase() === 'running',
   );
@@ -383,8 +451,12 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
         'Review recent workflow runs and open one for details.',
       )}
       headerActions={
-        <Button icon={<ReloadOutlined />} onClick={() => void runs.refetch()}>
-          {t('workflowActivityVNext.common.refresh', 'Refresh')}
+        <Button
+          icon={<SearchOutlined />}
+          onClick={commitDraftFilters}
+          type="primary"
+        >
+          {t('workflowActivityVNext.activity.searchButton', 'Search')}
         </Button>
       }
       scopeId={scopeId}
@@ -417,14 +489,19 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
             'Search runs',
           )}
           className="wa-vnext__toolbar-search"
-          onChange={(event) => setSearchInput(event.target.value)}
+          onChange={(event) =>
+            setDraftFilters((previous) => ({
+              ...previous,
+              search: event.target.value,
+            }))
+          }
           placeholder={t(
             'workflowActivityVNext.activity.search',
             'Search runs',
           )}
           prefix={<SearchOutlined />}
           role="searchbox"
-          value={searchInput}
+          value={draftFilters.search}
         />
         <Space className="wa-vnext__toolbar-filters" wrap>
           <Select
@@ -432,7 +509,12 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
               'workflowActivityVNext.activity.statusFilter',
               'Run status',
             )}
-            onChange={(value) => replaceParam('status', value)}
+            onChange={(value) =>
+              setDraftFilters((previous) => ({
+                ...previous,
+                status: value,
+              }))
+            }
             options={[
               {
                 label: t(
@@ -460,14 +542,19 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                 value: 'failed',
               },
             ]}
-            value={status}
+            value={draftFilters.status}
           />
           <Select
             aria-label={t(
               'workflowActivityVNext.activity.originFilter',
               'Run source',
             )}
-            onChange={(value) => replaceParam('origin', value)}
+            onChange={(value) =>
+              setDraftFilters((previous) => ({
+                ...previous,
+                origin: value,
+              }))
+            }
             options={[
               {
                 label: t(
@@ -509,17 +596,18 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                 value: 'schedule',
               },
             ]}
-            value={origin}
+            value={draftFilters.origin}
           />
           <DatePicker.RangePicker
             allowEmpty={[true, true]}
             onChange={(range) =>
-              replaceParams((next) => {
+              setDraftFilters((previous) => {
                 const [after, before] = range ?? [];
-                if (after) next.set('from', after.toISOString());
-                else next.delete('from');
-                if (before) next.set('to', before.toISOString());
-                else next.delete('to');
+                return {
+                  ...previous,
+                  fromUtc: after ? after.toISOString() : '',
+                  toUtc: before ? before.toISOString() : '',
+                };
               })
             }
             placeholder={[
@@ -534,8 +622,12 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
             ]}
             showTime
             value={[
-              fromUtc && dayjs(fromUtc).isValid() ? dayjs(fromUtc) : null,
-              toUtc && dayjs(toUtc).isValid() ? dayjs(toUtc) : null,
+              draftFilters.fromUtc && dayjs(draftFilters.fromUtc).isValid()
+                ? dayjs(draftFilters.fromUtc)
+                : null,
+              draftFilters.toUtc && dayjs(draftFilters.toUtc).isValid()
+                ? dayjs(draftFilters.toUtc)
+                : null,
             ]}
           />
           {definition && !workflowFilterPresent ? (
@@ -626,6 +718,7 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
         <>
           <TableScrollRegion
             ariaLabel={t('workflowActivityVNext.activity.title', 'Activity')}
+            className="wa-vnext__activity-table-region"
           >
             <table className="wa-vnext__table">
               <colgroup>
@@ -681,14 +774,22 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                       key={run.runId}
                       onClick={() =>
                         history.push(
-                          buildWorkflowActivityRunHref(scopeId, run.runId),
+                          buildWorkflowActivityRunHref(
+                            scopeId,
+                            run.runId,
+                            runDetailQuery(run),
+                          ),
                         )
                       }
                       onKeyDown={(event) => {
                         if (event.key !== 'Enter' && event.key !== ' ') return;
                         event.preventDefault();
                         history.push(
-                          buildWorkflowActivityRunHref(scopeId, run.runId),
+                          buildWorkflowActivityRunHref(
+                            scopeId,
+                            run.runId,
+                            runDetailQuery(run),
+                          ),
                         );
                       }}
                       tabIndex={0}
@@ -699,7 +800,31 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                           'Workflow',
                         )}
                       >
-                        <span className="wa-vnext__title">{workflowName}</span>
+                        <button
+                          className="wa-vnext__run-link"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            history.push(
+                              buildWorkflowActivityRunHref(
+                                scopeId,
+                                run.runId,
+                                runDetailQuery(run),
+                              ),
+                            );
+                          }}
+                          style={{
+                            background: 'transparent',
+                            border: 0,
+                            color: 'var(--wa-blue)',
+                            padding: 0,
+                            textAlign: 'left',
+                          }}
+                          type="button"
+                        >
+                          <span className="wa-vnext__title">
+                            {workflowName}
+                          </span>
+                        </button>
                       </td>
                       <td
                         data-label={t(

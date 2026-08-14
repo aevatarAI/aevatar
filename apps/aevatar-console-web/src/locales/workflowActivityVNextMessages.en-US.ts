@@ -31,6 +31,7 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.activity.previousPage': 'Previous page',
   'workflowActivityVNext.activity.search': 'Search runs',
   'workflowActivityVNext.activity.searchAria': 'Search runs',
+  'workflowActivityVNext.activity.searchButton': 'Search',
   'workflowActivityVNext.activity.statusCancelled': 'Cancelled',
   'workflowActivityVNext.activity.statusCompleted': 'Completed',
   'workflowActivityVNext.activity.statusFilter': 'Run status',
@@ -374,13 +375,22 @@ const workflowActivityVNextMessages = {
     'The request was accepted. Open the new run to follow its progress.',
   'workflowActivityVNext.run.fromStep': 'From step {step}',
   'workflowActivityVNext.run.graph': 'Graph',
+  'workflowActivityVNext.run.graphEmpty': 'No graph is available yet.',
+  'workflowActivityVNext.run.graphEmptyDescription':
+    'This run has not materialized a graph view yet.',
   'workflowActivityVNext.run.graphLoading': 'Loading run graph…',
   'workflowActivityVNext.run.graphSummary': '{nodes} nodes · {edges} edges',
   'workflowActivityVNext.run.graphUnavailable': 'Run graph unavailable',
+  'workflowActivityVNext.run.historyLoading': 'Loading run history…',
+  'workflowActivityVNext.run.historyUnavailable': 'Run history is unavailable.',
   'workflowActivityVNext.run.input': 'Input',
   'workflowActivityVNext.run.loading': 'Loading run…',
   'workflowActivityVNext.run.loadingDescription': 'Loading run details…',
+  'workflowActivityVNext.run.logs': 'Logs',
   'workflowActivityVNext.run.newActorId': 'Run address',
+  'workflowActivityVNext.run.noHistory': 'No published runs yet.',
+  'workflowActivityVNext.run.noHistoryDescription':
+    'This workflow has no other runs in the current history context.',
   'workflowActivityVNext.run.noSteps': 'No steps are available yet.',
   'workflowActivityVNext.run.noDiagnostics': 'No diagnostics were returned.',
   'workflowActivityVNext.run.noTimeline': 'No timeline events are visible yet.',
@@ -401,7 +411,14 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.run.relatedRuns': 'Related runs',
   'workflowActivityVNext.run.lineageUnavailable':
     'Related run history is unavailable.',
+  'workflowActivityVNext.run.detailFallbackDescription':
+    'The run detail request is unavailable, but the selected Activity row is still visible.',
+  'workflowActivityVNext.run.detailUnavailableTitle':
+    'Detailed run data is temporarily unavailable.',
+  'workflowActivityVNext.run.detailUnavailableDescription':
+    'The selected run remains highlighted in its workflow history. Retry to load its immutable detail, graph, timeline, and output.',
   'workflowActivityVNext.run.noRelatedRuns': 'No related runs.',
+  'workflowActivityVNext.run.openRunAria': 'Open {runId}',
   'workflowActivityVNext.run.retryHistory': 'Retry history',
   'workflowActivityVNext.run.retry': 'Retry failed step',
   'workflowActivityVNext.run.retryUnavailable':
@@ -415,6 +432,7 @@ const workflowActivityVNextMessages = {
     "This creates a separate run. The source run won't change.",
   'workflowActivityVNext.run.subWorkflows': 'Sub-workflows',
   'workflowActivityVNext.run.childRuns': 'Child runs',
+  'workflowActivityVNext.run.details': 'Details',
   'workflowActivityVNext.run.attempt': 'Attempt',
   'workflowActivityVNext.run.depth': 'Depth',
   'workflowActivityVNext.run.definitionRevision': 'Definition revision',

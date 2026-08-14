@@ -4,6 +4,23 @@ function encode(value: string): string {
   return encodeURIComponent(value.trim());
 }
 
+function buildQuerySuffix(
+  query?: Readonly<Record<string, string | undefined>>,
+): string {
+  if (!query) {
+    return '';
+  }
+
+  return Object.entries(query)
+    .map(([key, value]) => [key.trim(), value?.trim() ?? ''] as const)
+    .filter(([key, value]) => Boolean(key) && Boolean(value))
+    .map(
+      ([key, value]) =>
+        `${encodeURIComponent(key)}=${encodeURIComponent(value)}`,
+    )
+    .join('&');
+}
+
 export function buildWorkflowActivityBaseHref(scopeId: string): string {
   return `/scopes/${encode(scopeId)}/workflow-activity-vnext`;
 }
@@ -36,6 +53,9 @@ export function buildWorkflowActivityEditorRunHref(
 export function buildWorkflowActivityRunHref(
   scopeId: string,
   runId: string,
+  query?: Readonly<Record<string, string | undefined>>,
 ): string {
-  return `${buildWorkflowActivitySectionHref(scopeId, 'activity')}/${encode(runId)}`;
+  const base = `${buildWorkflowActivitySectionHref(scopeId, 'activity')}/${encode(runId)}`;
+  const suffix = buildQuerySuffix(query);
+  return suffix ? `${base}?${suffix}` : base;
 }

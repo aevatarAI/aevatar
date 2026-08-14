@@ -1,11 +1,5 @@
 import { QueryClient } from '@tanstack/react-query';
-import {
-  act,
-  fireEvent,
-  screen,
-  waitFor,
-  within,
-} from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import * as React from 'react';
 import { history } from '@/shared/navigation/history';
 import {
@@ -245,39 +239,28 @@ describe('Workflow Activity vNext Activity ledger', () => {
     );
   });
 
-  it('debounces Activity search before updating the URL and feed query', async () => {
-    jest.useFakeTimers();
-    const view = renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
+  it('waits for Search before submitting Activity filter changes', async () => {
+    renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
 
-    try {
-      expect(mockListActivityRuns).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(mockListActivityRuns).toHaveBeenCalledTimes(1));
 
-      const searchInput = screen.getByRole('searchbox', {
-        name: 'Search runs',
-      });
-      fireEvent.change(searchInput, { target: { value: 's' } });
-      fireEvent.change(searchInput, { target: { value: 'su' } });
-      fireEvent.change(searchInput, { target: { value: 'support' } });
+    const searchInput = screen.getByRole('searchbox', {
+      name: 'Search runs',
+    });
+    fireEvent.change(searchInput, { target: { value: 'support' } });
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Run status' }));
+    fireEvent.click(await screen.findByText('Failed'));
 
-      expect(searchInput).toHaveValue('support');
-      await act(async () => {
-        await jest.advanceTimersByTimeAsync(299);
-      });
-      expect(history.replace).not.toHaveBeenCalled();
-      expect(mockListActivityRuns).toHaveBeenCalledTimes(1);
+    expect(searchInput).toHaveValue('support');
+    expect(history.replace).not.toHaveBeenCalled();
+    expect(mockListActivityRuns).toHaveBeenCalledTimes(1);
 
-      await act(async () => {
-        await jest.advanceTimersByTimeAsync(1);
-      });
-      expect(history.replace).toHaveBeenLastCalledWith(
-        '/scopes/scope-alpha/workflow-activity-vnext/activity?q=support',
-      );
-      expect(mockListActivityRuns).toHaveBeenCalledTimes(1);
-    } finally {
-      view.unmount();
-      jest.clearAllTimers();
-      jest.useRealTimers();
-    }
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+
+    expect(history.replace).toHaveBeenLastCalledWith(
+      '/scopes/scope-alpha/workflow-activity-vnext/activity?q=support&status=failed',
+    );
+    expect(mockListActivityRuns).toHaveBeenCalledTimes(1);
   });
 
   it('keeps the activity list focused on user-facing run facts', async () => {
@@ -332,6 +315,7 @@ describe('Workflow Activity vNext Activity ledger', () => {
 
     const activityRegion = screen.getByRole('region', { name: 'Activity' });
     expect(activityRegion).toHaveAttribute('tabindex', '0');
+    expect(activityRegion).toHaveClass('wa-vnext__activity-table-region');
     expect(
       within(activityRegion).getByText('Customer follow-up').closest('td'),
     ).toHaveAttribute('data-label', 'Workflow');
@@ -357,7 +341,7 @@ describe('Workflow Activity vNext Activity ledger', () => {
     fireEvent.click(customerRunRow);
 
     expect(history.push).toHaveBeenLastCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/activity/run-customer',
+      '/scopes/scope-alpha/workflow-activity-vnext/activity/run-customer?workflowId=wf-alpha',
     );
   });
 
@@ -381,7 +365,7 @@ describe('Workflow Activity vNext Activity ledger', () => {
 
     fireEvent.keyDown(customerRunRow, { key: 'Enter' });
     expect(history.push).toHaveBeenLastCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/activity/run-customer',
+      '/scopes/scope-alpha/workflow-activity-vnext/activity/run-customer?workflowId=wf-alpha',
     );
 
     fireEvent.keyDown(customerRunRow, { key: ' ' });
