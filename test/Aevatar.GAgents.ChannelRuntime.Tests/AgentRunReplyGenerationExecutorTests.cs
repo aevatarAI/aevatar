@@ -570,7 +570,9 @@ public sealed class AgentRunReplyGenerationExecutorTests
         var execution = await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
 
         provider.Requests.Should().ContainSingle();
-        publishedChunks.Should().ContainSingle().Which.DeltaContent.Should().Be("workflow completed");
+        publishedChunks.Should().ContainSingle(chunk => chunk.LLMInvocationStarted != null);
+        publishedChunks.Should().ContainSingle(chunk => chunk.DeltaContent == "workflow completed");
+        publishedChunks.Should().ContainSingle(chunk => chunk.LLMInvocationCompleted != null);
         execution.Continuation.LlmStepResult.AccumulatedText.Should().Be("workflow completed");
         execution.Continuation.LlmStepResult.Content.Should().Be("workflow completed");
         execution.Continuation.LlmStepResult.ToolCalls.Should().BeEmpty();

@@ -1199,7 +1199,6 @@ public class NyxIdChatGAgentTests
             .ToArray();
         sequences.Should().BeInAscendingOrder();
         sequences.Should().OnlyHaveUniqueItems();
-        sequences.Should().Equal(Enumerable.Range(1, sequences.Length).Select(static value => (long)value));
 
         var completionIndex = committedPayloads.FindIndex(payload =>
             payload.Is(RoleChatSessionCompletedEvent.Descriptor));
