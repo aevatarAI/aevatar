@@ -2,6 +2,7 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.Configuration;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -722,6 +723,7 @@ public sealed class NyxIdApiAccessContractTests
                 ["Aevatar:NyxId:InternalApiBaseUrl"] = " http://nyxid.internal:3001/ ",
                 ["Aevatar:NyxId:ApiBaseUrl"] = "https://api.nyx.test",
                 ["Aevatar:NyxId:Authority"] = "https://authority.nyx.test",
+                [NyxIdTransportFallbackPolicy.TimeoutSecondsConfigurationKey] = "7",
             })
             .Build();
         var services = new ServiceCollection();
@@ -735,6 +737,7 @@ public sealed class NyxIdApiAccessContractTests
         options.ApiBaseUrl.Should().Be("https://api.nyx.test");
         options.Authority.Should().Be("https://authority.nyx.test");
         options.PublicTransportFallbackBaseUrl.Should().Be("https://api.nyx.test");
+        options.InternalApiFallbackTimeoutSeconds.Should().Be(7);
         options.EffectiveTransportBaseUrl.Should().Be("http://nyxid.internal:3001/");
         options.EffectiveApiBaseUrl.Should().Be("https://api.nyx.test");
         options.EffectiveAuthority.Should().Be("https://authority.nyx.test");

@@ -644,20 +644,66 @@ public sealed class NyxIdRemoteCapabilityBroker :
         CancellationToken ct)
     {
         using var request = CreateCatalogRequest(_options.TransportBaseUrl, accessToken);
+        if (string.IsNullOrWhiteSpace(_options.PublicTransportFallbackBaseUrl))
+            return await http.SendAsync(request, ct).ConfigureAwait(false);
+
+        using var totalRequestCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        if (http.Timeout != Timeout.InfiniteTimeSpan)
+            totalRequestCts.CancelAfter(http.Timeout);
+        using var primaryAttemptCts = CancellationTokenSource.CreateLinkedTokenSource(totalRequestCts.Token);
+        var primaryTimeout = _options.EffectiveInternalApiFallbackTimeout;
+        primaryAttemptCts.CancelAfter(primaryTimeout);
+
+        HttpResponseMessage primaryResponse;
         try
         {
-            return await http.SendAsync(request, ct).ConfigureAwait(false);
+            primaryResponse = await http.SendAsync(
+                    request,
+                    HttpCompletionOption.ResponseHeadersRead,
+                    primaryAttemptCts.Token)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (
+            !ct.IsCancellationRequested &&
+            !totalRequestCts.IsCancellationRequested &&
+            primaryAttemptCts.IsCancellationRequested)
+        {
+            _logger.LogWarning(
+                "NyxID internal user-service catalog returned no response headers within {TimeoutSeconds}s; retrying the configured public transport once",
+                primaryTimeout.TotalSeconds);
+            return await SendCatalogFallbackAsync(http, accessToken, totalRequestCts.Token)
+                .ConfigureAwait(false);
         }
         catch (HttpRequestException exception) when (
             NyxIdTransportFailureClassifier.IsPreConnectFailure(exception) &&
             !ct.IsCancellationRequested &&
-            !string.IsNullOrWhiteSpace(_options.PublicTransportFallbackBaseUrl))
+            !totalRequestCts.IsCancellationRequested)
         {
-            using var fallbackRequest = CreateCatalogRequest(
-                _options.PublicTransportFallbackBaseUrl,
-                accessToken);
-            return await http.SendAsync(fallbackRequest, ct).ConfigureAwait(false);
+            return await SendCatalogFallbackAsync(http, accessToken, totalRequestCts.Token)
+                .ConfigureAwait(false);
         }
+
+        try
+        {
+            await primaryResponse.Content.LoadIntoBufferAsync(totalRequestCts.Token).ConfigureAwait(false);
+            return primaryResponse;
+        }
+        catch
+        {
+            primaryResponse.Dispose();
+            throw;
+        }
+    }
+
+    private async Task<HttpResponseMessage> SendCatalogFallbackAsync(
+        HttpClient http,
+        string accessToken,
+        CancellationToken ct)
+    {
+        using var fallbackRequest = CreateCatalogRequest(
+            _options.PublicTransportFallbackBaseUrl,
+            accessToken);
+        return await http.SendAsync(fallbackRequest, ct).ConfigureAwait(false);
     }
 
     private static HttpRequestMessage CreateCatalogRequest(string? baseUrl, string accessToken)

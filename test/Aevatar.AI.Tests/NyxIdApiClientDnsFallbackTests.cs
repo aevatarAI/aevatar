@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Net.Sockets;
 using System.Text;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.Configuration;
 using FluentAssertions;
 
 namespace Aevatar.AI.Tests;
@@ -143,6 +144,92 @@ public sealed class NyxIdApiClientPublicTransportFallbackTests
 
         handler.SendCount.Should().Be(2);
         result.Should().Be("""{"ok":true}""");
+    }
+
+    [Theory]
+    [InlineData("keys", "/api/v1/keys")]
+    [InlineData("current-user", "/api/v1/users/me")]
+    public async Task SafeDirectRead_WhenInternalHeadersTimeout_RetriesPublicTransportOnce(
+        string operation,
+        string expectedPath)
+    {
+        var handler = new HeaderTimeoutThenResponseHandler(
+            () => JsonResponse("""{"ok":true}"""));
+        using var client = CreateClient(handler, internalFallbackTimeoutSeconds: 1);
+
+        var result = operation == "keys"
+            ? await client.ListServicesAsync("access-token", CancellationToken.None)
+            : await client.GetCurrentUserAsync("access-token", CancellationToken.None);
+
+        result.Should().Be("""{"ok":true}""");
+        handler.Requests.Select(static request => request.Uri).Should().Equal(
+            $"{PrimaryBaseUrl}{expectedPath}",
+            $"{FallbackBaseUrl}{expectedPath}");
+        handler.Requests.Should().OnlyContain(request =>
+            request.Authorization == "Bearer access-token");
+    }
+
+    [Fact]
+    public async Task Mutation_WhenCallerCancelsBeforeHeaders_DoesNotRetry()
+    {
+        var handler = new HeaderTimeoutThenResponseHandler(
+            () => JsonResponse("""{"unexpected":true}"""));
+        using var client = CreateClient(handler, internalFallbackTimeoutSeconds: 1);
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+
+        var act = () => client.CreateServiceAsync(
+            "access-token",
+            """{"slug":"calendar"}""",
+            cts.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        handler.Requests.Should().ContainSingle();
+        handler.Requests[0].Uri.Should().Be($"{PrimaryBaseUrl}/api/v1/keys");
+    }
+
+    [Fact]
+    public async Task SafeDirectRead_WhenCallerCancelsPrimaryWait_DoesNotRetry()
+    {
+        var handler = new HeaderTimeoutThenResponseHandler(
+            () => JsonResponse("""{"unexpected":true}"""));
+        using var client = CreateClient(handler, internalFallbackTimeoutSeconds: 1);
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+
+        var act = () => client.ListServicesAsync("access-token", cts.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        handler.Requests.Should().ContainSingle();
+        handler.Requests[0].Uri.Should().Be($"{PrimaryBaseUrl}/api/v1/keys");
+    }
+
+    [Fact]
+    public async Task SafeDirectRead_WhenBodyFailsAfterPrimaryHeaders_DoesNotRetry()
+    {
+        var handler = new StaticResponseHandler(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new FaultingContent(new IOException("body read failed")),
+        });
+        using var client = CreateClient(handler, internalFallbackTimeoutSeconds: 1);
+
+        var result = await client.ListServicesAsync("access-token", CancellationToken.None);
+
+        handler.SendCount.Should().Be(1);
+        result.Should().Contain("\"status\":0");
+    }
+
+    [Fact]
+    public async Task SafeDirectRead_WhenTlsHandshakeFails_DoesNotRetry()
+    {
+        var handler = new ThrowingHandler(new HttpRequestException(
+            HttpRequestError.SecureConnectionError,
+            "tls failed",
+            null));
+        using var client = CreateClient(handler, internalFallbackTimeoutSeconds: 1);
+
+        var result = await client.ListServicesAsync("access-token", CancellationToken.None);
+
+        handler.SendCount.Should().Be(1);
+        result.Should().Contain("\"status\":0");
     }
 
     [Fact]
@@ -336,12 +423,15 @@ public sealed class NyxIdApiClientPublicTransportFallbackTests
         result.Should().Contain("\"status\":0");
     }
 
-    private static NyxIdApiClient CreateClient(HttpMessageHandler handler) =>
+    private static NyxIdApiClient CreateClient(
+        HttpMessageHandler handler,
+        int internalFallbackTimeoutSeconds = NyxIdTransportFallbackPolicy.DefaultTimeoutSeconds) =>
         new(
             new NyxIdToolOptions
             {
                 BaseUrl = PrimaryBaseUrl,
                 PublicTransportFallbackBaseUrl = FallbackBaseUrl,
+                InternalApiFallbackTimeoutSeconds = internalFallbackTimeoutSeconds,
             },
             new HttpClient(handler),
             new NyxIdApiClientTransportPolicy());
@@ -403,6 +493,28 @@ public sealed class NyxIdApiClientPublicTransportFallbackTests
         }
     }
 
+    private sealed class HeaderTimeoutThenResponseHandler(
+        Func<HttpResponseMessage> responseFactory) : HttpMessageHandler
+    {
+        public List<CapturedRequest> Requests { get; } = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            Requests.Add(await CapturedRequest.CreateAsync(request, cancellationToken));
+            if (Requests.Count == 1)
+            {
+                await new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)
+                    .Task
+                    .WaitAsync(cancellationToken);
+                throw new InvalidOperationException("The infinite primary wait completed without cancellation.");
+            }
+
+            return responseFactory();
+        }
+    }
+
     private sealed class CancelThenThrowHandler(CancellationTokenSource cancellation) : HttpMessageHandler
     {
         public int SendCount { get; private set; }
@@ -430,6 +542,19 @@ public sealed class NyxIdApiClientPublicTransportFallbackTests
         {
             SendCount++;
             return Task.FromResult(response);
+        }
+    }
+
+    private sealed class FaultingContent(Exception exception) : HttpContent
+    {
+        protected override Task SerializeToStreamAsync(
+            Stream stream,
+            TransportContext? context) => Task.FromException(exception);
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = 0;
+            return false;
         }
     }
 

@@ -8,6 +8,7 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Core.Streaming;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Configuration;
 using Aevatar.Configuration.BackendConsole;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventSourcing;
@@ -285,6 +286,13 @@ public static class IdentityServiceCollectionExtensions
                     !UrlsEqual(options.TransportBaseUrl, normalizedPublicApiBaseUrl)
                         ? normalizedPublicApiBaseUrl
                         : null;
+                if (int.TryParse(
+                        configuration[NyxIdTransportFallbackPolicy.TimeoutSecondsConfigurationKey],
+                        out var internalFallbackTimeoutSeconds) &&
+                    internalFallbackTimeoutSeconds > 0)
+                {
+                    options.InternalApiFallbackTimeoutSeconds = internalFallbackTimeoutSeconds;
+                }
                 options.ResourceServerBaseUrl =
                     (normalizedPublicApiBaseUrl ?? string.Empty)
                     .Trim()

@@ -5,6 +5,7 @@ using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Configuration;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.GAgents.Channel.Abstractions;
@@ -221,6 +222,7 @@ public sealed class ServiceCollectionExtensionsTests
                     " https://api.example.test/// ",
                 [NyxIdBrokerOptions.InternalApiBaseUrlConfigurationKey] =
                     " http://nyxid.internal:3001/// ",
+                [NyxIdTransportFallbackPolicy.TimeoutSecondsConfigurationKey] = "7",
             })
             .Build();
 
@@ -232,6 +234,7 @@ public sealed class ServiceCollectionExtensionsTests
         var options = provider.GetRequiredService<IOptions<NyxIdBrokerOptions>>().Value;
         options.TransportBaseUrl.Should().Be("http://nyxid.internal:3001");
         options.PublicTransportFallbackBaseUrl.Should().Be("https://api.example.test");
+        options.InternalApiFallbackTimeoutSeconds.Should().Be(7);
         options.ResourceServerBaseUrl.Should().Be("https://api.example.test");
         var handler = provider.GetRequiredService<IHttpMessageHandlerFactory>()
             .CreateHandler(NyxIdRemoteCapabilityBroker.HttpClientName);

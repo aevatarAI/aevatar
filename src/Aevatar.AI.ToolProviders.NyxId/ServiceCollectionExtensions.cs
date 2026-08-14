@@ -2,6 +2,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 using Aevatar.AI.ToolProviders.NyxId.ExactServiceApprovals;
 using Aevatar.Authentication.Abstractions;
+using Aevatar.Configuration;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.Extensions.Configuration;
@@ -139,6 +140,9 @@ public static class ServiceCollectionExtensions
             "Aevatar:NyxId:Authority",
             "Cli:App:NyxId:Authority",
             "Aevatar:Authentication:Authority");
+        var configuredInternalFallbackTimeout = FirstConfiguredValue(
+            configuration,
+            NyxIdTransportFallbackPolicy.TimeoutSecondsConfigurationKey);
 
         if (configuredInternalApiBaseUrl is not null)
         {
@@ -163,6 +167,11 @@ public static class ServiceCollectionExtensions
                 options.Authority = configuredAuthority ?? configuredApiBaseUrl;
                 options.PublicTransportFallbackBaseUrl = null;
             }
+        }
+        if (int.TryParse(configuredInternalFallbackTimeout, out var internalFallbackTimeoutSeconds) &&
+            internalFallbackTimeoutSeconds > 0)
+        {
+            options.InternalApiFallbackTimeoutSeconds = internalFallbackTimeoutSeconds;
         }
         configure?.Invoke(options);
 

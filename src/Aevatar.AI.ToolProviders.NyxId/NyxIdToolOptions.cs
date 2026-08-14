@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.Configuration;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.AI.ToolProviders.NyxId;
@@ -181,6 +182,17 @@ public sealed class NyxIdToolOptions
     /// so manually constructed options never fall back to an unrelated default endpoint.
     /// </summary>
     public string? PublicTransportFallbackBaseUrl { get; set; }
+
+    /// <summary>
+    /// Maximum time to wait for response headers from an explicitly configured internal transport
+    /// before replaying a safe request once against <see cref="PublicTransportFallbackBaseUrl"/>.
+    /// This budget never applies to mutations or public-only deployments.
+    /// </summary>
+    public int InternalApiFallbackTimeoutSeconds { get; set; } =
+        NyxIdTransportFallbackPolicy.DefaultTimeoutSeconds;
+
+    public TimeSpan EffectiveInternalApiFallbackTimeout =>
+        NyxIdTransportFallbackPolicy.EffectiveTimeout(InternalApiFallbackTimeoutSeconds);
 
     public string? EffectiveTransportBaseUrl => FirstNonEmpty(InternalApiBaseUrl, ApiBaseUrl, BaseUrl);
 

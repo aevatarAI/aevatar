@@ -2061,23 +2061,99 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
             fallbackUri = resolvedFallbackUri;
         }
 
+        if (replay is null || fallbackUri is null)
+            return await _http.SendAsync(request, completionOption, ct);
+
+        if (!NyxIdTransportFallbackPolicy.CanReplayAfterResponseHeaderTimeout(request.Method))
+        {
+            try
+            {
+                return await _http.SendAsync(request, completionOption, ct);
+            }
+            catch (HttpRequestException ex) when (
+                NyxIdTransportFailureClassifier.IsPreConnectFailure(ex) &&
+                !ct.IsCancellationRequested)
+            {
+                LogPreConnectFallback(request.Method, ex);
+                return await SendFallbackAsync(replay, fallbackUri, completionOption, ct);
+            }
+        }
+
+        // HttpClient's timeout is per SendAsync call. Keep one outer budget across the primary and
+        // fallback attempts while using a shorter, independent budget only until primary headers.
+        using var totalRequestCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        if (_http.Timeout != Timeout.InfiniteTimeSpan)
+            totalRequestCts.CancelAfter(_http.Timeout);
+        using var primaryAttemptCts = CancellationTokenSource.CreateLinkedTokenSource(totalRequestCts.Token);
+        var primaryTimeout = _options.EffectiveInternalApiFallbackTimeout;
+        primaryAttemptCts.CancelAfter(primaryTimeout);
+
+        HttpResponseMessage primaryResponse;
         try
         {
-            return await _http.SendAsync(request, completionOption, ct);
+            primaryResponse = await _http.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                primaryAttemptCts.Token);
+        }
+        catch (OperationCanceledException) when (
+            !ct.IsCancellationRequested &&
+            !totalRequestCts.IsCancellationRequested &&
+            primaryAttemptCts.IsCancellationRequested)
+        {
+            _logger.LogWarning(
+                "NyxID primary transport returned no response headers within {TimeoutSeconds}s for safe {Method}; retrying the configured public transport once",
+                primaryTimeout.TotalSeconds,
+                request.Method);
+            return await SendFallbackAsync(
+                replay,
+                fallbackUri,
+                completionOption,
+                totalRequestCts.Token);
         }
         catch (HttpRequestException ex) when (
             NyxIdTransportFailureClassifier.IsPreConnectFailure(ex) &&
             !ct.IsCancellationRequested &&
-            replay is not null &&
-            fallbackUri is not null)
+            !totalRequestCts.IsCancellationRequested)
         {
-            _logger.LogWarning(
-                "NyxID primary transport could not establish a connection for {Method} ({Failure}); retrying the configured public transport once",
-                request.Method,
-                ex.HttpRequestError);
-            using var fallbackRequest = replay.CreateRequest(fallbackUri);
-            return await _http.SendAsync(fallbackRequest, completionOption, ct);
+            LogPreConnectFallback(request.Method, ex);
+            return await SendFallbackAsync(
+                replay,
+                fallbackUri,
+                completionOption,
+                totalRequestCts.Token);
         }
+
+        if (completionOption == HttpCompletionOption.ResponseContentRead)
+        {
+            try
+            {
+                await primaryResponse.Content.LoadIntoBufferAsync(totalRequestCts.Token);
+            }
+            catch
+            {
+                primaryResponse.Dispose();
+                throw;
+            }
+        }
+
+        return primaryResponse;
+    }
+
+    private void LogPreConnectFallback(HttpMethod method, HttpRequestException exception) =>
+        _logger.LogWarning(
+            "NyxID primary transport could not establish a connection for {Method} ({Failure}); retrying the configured public transport once",
+            method,
+            exception.HttpRequestError);
+
+    private async Task<HttpResponseMessage> SendFallbackAsync(
+        ReplayableRequest replay,
+        Uri fallbackUri,
+        HttpCompletionOption completionOption,
+        CancellationToken ct)
+    {
+        using var fallbackRequest = replay.CreateRequest(fallbackUri);
+        return await _http.SendAsync(fallbackRequest, completionOption, ct);
     }
 
     private bool TryBuildPublicTransportFallbackUri(Uri? requestUri, out Uri fallbackUri)

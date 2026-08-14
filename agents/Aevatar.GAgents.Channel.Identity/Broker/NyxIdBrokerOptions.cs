@@ -1,3 +1,4 @@
+using Aevatar.Configuration;
 using Aevatar.GAgents.Channel.Identity;
 
 namespace Aevatar.GAgents.Channel.Identity.Broker;
@@ -21,10 +22,20 @@ public sealed class NyxIdBrokerOptions
     public string TransportBaseUrl { get; set; } = string.Empty;
 
     /// <summary>
-    /// Optional public NyxID REST endpoint used only when the cluster-local transport
-    /// fails before DNS resolution or socket connection completes.
+    /// Optional public NyxID REST endpoint used when the cluster-local transport fails
+    /// before connecting, or when a safe request exceeds its response-header budget.
     /// </summary>
     public string? PublicTransportFallbackBaseUrl { get; set; }
+
+    /// <summary>
+    /// Response-header budget for a safe request sent to <see cref="TransportBaseUrl"/> before the
+    /// broker retries the same request once against <see cref="PublicTransportFallbackBaseUrl"/>.
+    /// </summary>
+    public int InternalApiFallbackTimeoutSeconds { get; set; } =
+        NyxIdTransportFallbackPolicy.DefaultTimeoutSeconds;
+
+    public TimeSpan EffectiveInternalApiFallbackTimeout =>
+        NyxIdTransportFallbackPolicy.EffectiveTimeout(InternalApiFallbackTimeoutSeconds);
 
     /// <summary>
     /// Canonical public NyxID API base URL used for RFC 8707 resource indicators.
