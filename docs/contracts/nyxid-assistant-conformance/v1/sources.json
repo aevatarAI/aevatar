@@ -2,8 +2,8 @@
   "schema_version": 1,
   "aevatar": {
     "repository": "https://github.com/AevatarAI/aevatar.git",
-    "revision": "dbfdfb5cac802c8bd6e496b09da3665d61bcbbda",
-    "contract_files_sha256": "13710909bdc0a251d171e356442dd397ad5392baacd35f2be73a9202956fde0c",
+    "revision": "940937727f9180bcb37e6a35235699a35a14baef",
+    "contract_files_sha256": "1533f3c0de0fc880950084a95c7b0456a728d3ec39523c1710b966fc2ebcbb1d",
     "files": {
       "agents/Aevatar.GAgents.NyxidChat/NyxIdActionPostconditionPort.cs": "4dfe12f2699a1b193d80273d2ae6e4066e1a78b79325cf52c711af47b1b4ec46",
       "agents/Aevatar.GAgents.NyxidChat/NyxIdAssistantActionRegistry.cs": "1daa67dc2cad48249268990e525ada39b65a580d150a9ae8ed896d5392f6a130",
@@ -12,12 +12,12 @@
       "agents/Aevatar.GAgents.NyxidChat/protos/nyxid_chat_recovery_secret.proto": "07dbc449a732df6c7a6d0a97054ddbe35a517f4af4c5670b05ed0bea0bf2011a",
       "agents/Aevatar.GAgents.NyxidChat/protos/nyxid_chat_task.proto": "767aa8352e7e7b8cdadfab4f31c55ecc847298ce8c926c56d3af89759390647a",
       "docs/adr/0048-nyxid-assistant-operation-class-boundary.md": "30c9de6c6e77a7aee14f0eb4a2f74bd15b8874bcfed88ba957cdd8213b9114eb",
-      "src/Aevatar.AI.Abstractions/ai_messages.proto": "fceddf82a591ac839deb40e40a288b45b3b1be8f9fb964ab0b100894bc381f63",
+      "src/Aevatar.AI.Abstractions/ai_messages.proto": "f92d1935df098ce58cdf794d3f3e4d5f4a9e4c71610508cefcc014035aec649d",
       "src/Aevatar.AI.ToolProviders.NyxId/NyxIdApiAccessContracts.cs": "5b438c99211a43f4f9233f67f9d00b8c0dbf1d1f36cda64c51b72bfe3792f56d",
       "src/Aevatar.AI.ToolProviders.NyxId/NyxIdAssistantToolSource.cs": "1b033df9cb55c741e9b52054cbd4a91067f03c8c3797bd076a7e3d6133eb0fcb",
       "src/Aevatar.AI.ToolProviders.NyxId/Tools/NyxIdRequestKeyCreateTool.cs": "2c4f2cda99154f2e667c6cfd291497e697ef11df17f081f96ec70070a8af8b8c",
       "src/Aevatar.AI.ToolProviders.NyxId/Tools/NyxIdRequestKeyRotateTool.cs": "18212bb64644cfbca401065bccce439ea5fa00316deff57d730a0d9ac2650e53",
-      "src/Aevatar.Mainnet.Host.Api/Hosting/MainnetHostBuilderExtensions.cs": "b2a88d5ff8b657614996f8e35ae547f3de1605378cdd00400d4e1c50ab738611"
+      "src/Aevatar.Mainnet.Host.Api/Hosting/MainnetHostBuilderExtensions.cs": "fe2e63c6c1ce0c10e88ae58ecbe762563e65fe544e7e080fe567c026e9782304"
     }
   },
   "nyxid": {
