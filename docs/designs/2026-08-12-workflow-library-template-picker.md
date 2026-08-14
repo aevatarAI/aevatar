@@ -38,8 +38,6 @@ The page contains:
 - a clear `Start from a template` heading and a way back to the New workflow
   method selection;
 - search and sort controls;
-- optional filters that narrow the current template list without creating a
-  separate category-first journey;
 - one scan-friendly list of templates; and
 - pagination or result count when the catalog requires it.
 
@@ -61,8 +59,7 @@ mandatory gate before workflow creation.
 ### 2. View template - detail modal
 
 The detail modal is opened only by `View`. It overlays the template browser so
-closing it returns the user to the same search, filters, sort, and scroll
-position.
+closing it returns the user to the same search, sort, and scroll position.
 
 The modal contains:
 
@@ -138,7 +135,7 @@ The flow PNG is an export artifact, not a third Excalidraw frame.
 
 ## Accessibility and responsive behavior
 
-- Search, sort, filters, `View`, and `Use template` are keyboard reachable.
+- Search, sort, `View`, and `Use template` are keyboard reachable.
 - Row actions use explicit accessible names that include the template name.
 - Modal focus moves to the dialog when opened, remains trapped inside it, and
   returns to the originating `View` action when closed.
