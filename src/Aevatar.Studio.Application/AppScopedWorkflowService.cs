@@ -3,6 +3,7 @@ using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Domain.Studio.Models;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.Extensions.Logging;
+using YamlDotNet.RepresentationModel;
 
 using Aevatar.Studio.Application.Studio;
 using Aevatar.Studio.Application.Studio.Services;
@@ -376,10 +377,41 @@ public sealed class AppScopedWorkflowService
         if (string.Equals(parsed.Document.Name?.Trim(), workflowName, StringComparison.Ordinal))
             return yaml;
 
-        return _yamlDocumentService.Serialize(parsed.Document with
+        var stream = new YamlStream();
+        using (var reader = new StringReader(yaml))
         {
-            Name = workflowName,
-        });
+            stream.Load(reader);
+        }
+
+        if (stream.Documents.Count == 0 || stream.Documents[0].RootNode is not YamlMappingNode root)
+            return yaml;
+
+        if (!TrySetRootScalar(root, "name", workflowName))
+            return yaml;
+
+        using var writer = new StringWriter();
+        stream.Save(writer, assignAnchors: false);
+        return writer.ToString();
+    }
+
+    private static bool TrySetRootScalar(YamlMappingNode root, string key, string value)
+    {
+        foreach (var child in root.Children)
+        {
+            if (child.Key is not YamlScalarNode scalarKey)
+                continue;
+
+            if (!string.Equals(scalarKey.Value, key, StringComparison.Ordinal))
+                continue;
+
+            if (child.Value is not YamlScalarNode scalarValue)
+                return false;
+
+            scalarValue.Value = value;
+            return true;
+        }
+
+        return false;
     }
 
     private static string EnsureYamlExtension(string fileName)

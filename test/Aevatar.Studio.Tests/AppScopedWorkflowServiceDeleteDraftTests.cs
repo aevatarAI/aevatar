@@ -140,11 +140,14 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
                 DirectoryId: "scope:scope-1",
                 WorkflowName: "周报2",
                 FileName: null,
-                Yaml: "name: 生成周报\ndescription: weekly report\nsteps: []\n"));
+                Yaml: "name: 生成周报\ndescription: weekly report\nwhen_to_use: keep this\non_failure: notify\nsteps: []\n"));
 
         var savedDraft = workspacePort.SavedDrafts.Should().ContainSingle().Subject;
         savedDraft.WorkflowName.Should().Be("周报2");
         savedDraft.Yaml.Should().Contain("name: 周报2");
+        savedDraft.Yaml.Should().Contain("description: weekly report");
+        savedDraft.Yaml.Should().Contain("when_to_use: keep this");
+        savedDraft.Yaml.Should().Contain("on_failure: notify");
         savedDraft.Yaml.Should().NotContain("name: 生成周报");
         (await service.GetDraftAsync("scope-1", accepted.WorkflowId))!.Name.Should().Be("周报2");
         (await service.ListDraftsAsync("scope-1")).Should().ContainSingle()
