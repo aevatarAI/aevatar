@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using Aevatar.AI.Abstractions;
 using Aevatar.Capabilities;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
