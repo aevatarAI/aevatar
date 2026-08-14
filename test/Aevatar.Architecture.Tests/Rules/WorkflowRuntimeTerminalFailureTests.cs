@@ -115,6 +115,24 @@ public sealed class WorkflowRuntimeTerminalFailureTests
                 "Workflow start dispatch must go through PublishStartWorkflowOrTerminalFailureAsync"
             },
             {
+                "durable definition start bypasses terminalization helper",
+                sources => sources.ReplaceInMethod(
+                    RunAgentFile,
+                    "DrainDynamicDefinitionStartAsync",
+                    "await PublishStartWorkflowOrTerminalFailureAsync(",
+                    "await PublishAsync("),
+                "Workflow direct execution entry must reach its durable start continuation"
+            },
+            {
+                "durable definition entry stops draining its start continuation",
+                sources => sources.ReplaceInMethod(
+                    RunAgentFile,
+                    "HandleReplaceWorkflowDefinitionAndExecute",
+                    "ReplaceWorkflowDefinitionBypassingBindingAsync",
+                    "ReplaceWorkflowDefinitionWithoutStartingAsync"),
+                "Workflow direct execution entry must reach its durable start continuation"
+            },
+            {
                 "start terminalization stops committing workflow completion",
                 sources => sources.ReplaceInMethod(
                     RunAgentFile,
@@ -232,10 +250,17 @@ public sealed class WorkflowRuntimeTerminalFailureTests
         }
 
         var executeWorkflow = index.GetMethod(RunAgentFile, "HandleReplaceWorkflowDefinitionAndExecute");
-        if (!RuntimeFailureSyntaxQueries.Invokes(executeWorkflow, "PublishStartWorkflowOrTerminalFailureAsync"))
+        var replaceDefinition = index.GetMethod(RunAgentFile, "ReplaceWorkflowDefinitionBypassingBindingAsync");
+        var drainDefinition = index.GetMethod(RunAgentFile, "DrainPendingDefinitionBindingContinuationAsync");
+        var drainStart = index.GetMethod(RunAgentFile, "DrainDynamicDefinitionStartAsync");
+        if (!RuntimeFailureSyntaxQueries.Invokes(executeWorkflow, "ReplaceWorkflowDefinitionBypassingBindingAsync") ||
+            !RuntimeFailureSyntaxQueries.Invokes(replaceDefinition, "DrainPendingDefinitionBindingContinuationAsync") ||
+            !RuntimeFailureSyntaxQueries.Invokes(drainDefinition, "DrainDynamicDefinitionStartAsync") ||
+            !RuntimeFailureSyntaxQueries.Invokes(drainStart, "PublishStartWorkflowOrTerminalFailureAsync"))
         {
             violations.Add(
-                "Workflow start dispatch must go through PublishStartWorkflowOrTerminalFailureAsync for direct executions.");
+                "Workflow direct execution entry must reach its durable start continuation through " +
+                "PublishStartWorkflowOrTerminalFailureAsync.");
         }
 
         var publishStartFailure = index.GetMethod(RunAgentFile, "PublishStartWorkflowOrTerminalFailureAsync");
