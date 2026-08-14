@@ -106,11 +106,11 @@ internal sealed class ScopeWorkflowCatalogueBackfillHostedService : IHostedServi
             }
 
             if (!deploymentCatalogsByServiceKey.TryGetValue(serviceCatalog.Id, out var deploymentCatalog) ||
-                ResolveActiveDeployment(deploymentCatalog) is not { } activeDeployment ||
+                ResolveDeployment(deploymentCatalog) is not { } deployment ||
                 !revisionCatalogsByServiceKey.TryGetValue(serviceCatalog.Id, out var revisionCatalog) ||
                 !TryResolveWorkflowRevision(
                     revisionCatalog,
-                    activeDeployment.RevisionId,
+                    deployment.RevisionId,
                     serviceCatalog.ServiceId,
                     out var revision,
                     out var workflowId))
@@ -118,7 +118,7 @@ internal sealed class ScopeWorkflowCatalogueBackfillHostedService : IHostedServi
                 continue;
             }
 
-            var serviceSource = ToServiceSource(serviceCatalog, deploymentCatalog, revision, activeDeployment, workflowId);
+            var serviceSource = ToServiceSource(serviceCatalog, deploymentCatalog, revision, deployment, workflowId);
             currentServiceSourceIds.Add(serviceSource.Id);
             await _catalogueWriteDispatcher.UpsertAsync(serviceSource, cancellationToken);
             await RefreshRowAsync(
@@ -325,9 +325,8 @@ internal sealed class ScopeWorkflowCatalogueBackfillHostedService : IHostedServi
         }
     }
 
-    private static ServiceDeploymentReadModel? ResolveActiveDeployment(ServiceDeploymentCatalogReadModel deploymentCatalog) =>
+    private static ServiceDeploymentReadModel? ResolveDeployment(ServiceDeploymentCatalogReadModel deploymentCatalog) =>
         deploymentCatalog.Deployments
-            .Where(static deployment => string.Equals(deployment.Status, ServiceDeploymentStatus.Active.ToString(), StringComparison.Ordinal))
             .OrderByDescending(static deployment => deployment.UpdatedAt)
             .ThenBy(static deployment => deployment.DeploymentId, StringComparer.Ordinal)
             .FirstOrDefault();

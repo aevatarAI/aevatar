@@ -63,8 +63,8 @@ internal sealed class ScopeWorkflowCatalogueServiceSourceProjector
         }
 
         var revisionCatalog = await _revisionCatalogReader.GetAsync(serviceKey, ct);
-        var activeDeployment = ResolveActiveDeployment(state.Deployments.Values);
-        await MaterializeAsync(state.Identity, serviceKey, revisionCatalog, activeDeployment, eventId, observedAt, ct);
+        var deployment = ResolveDeployment(state.Deployments.Values);
+        await MaterializeAsync(state.Identity, serviceKey, revisionCatalog, deployment, eventId, observedAt, ct);
     }
 
     public async ValueTask ProjectRevisionCatalogAsync(
@@ -92,7 +92,7 @@ internal sealed class ScopeWorkflowCatalogueServiceSourceProjector
             return;
 
         var deploymentCatalog = await _deploymentCatalogReader.GetAsync(serviceKey, ct);
-        var activeDeployment = ResolveActiveDeployment(deploymentCatalog?.Deployments);
+        var deployment = ResolveDeployment(deploymentCatalog?.Deployments);
         var observedAt = CommittedStateEventEnvelope.ResolveTimestamp(envelope, _clock.UtcNow);
         var revisionCatalog = ToRevisionCatalogReadModel(
             context,
@@ -105,7 +105,7 @@ internal sealed class ScopeWorkflowCatalogueServiceSourceProjector
             state.Identity,
             serviceKey,
             revisionCatalog,
-            activeDeployment,
+            deployment,
             stateEvent.EventId ?? string.Empty,
             observedAt,
             ct);
@@ -171,16 +171,14 @@ internal sealed class ScopeWorkflowCatalogueServiceSourceProjector
         return true;
     }
 
-    private static ServiceDeploymentRecord? ResolveActiveDeployment(IEnumerable<ServiceDeploymentRecord>? deployments) =>
+    private static ServiceDeploymentRecord? ResolveDeployment(IEnumerable<ServiceDeploymentRecord>? deployments) =>
         deployments?
-            .Where(static deployment => deployment.Status == ServiceDeploymentStatus.Active)
             .OrderByDescending(static deployment => deployment.UpdatedAt?.ToDateTimeOffset() ?? DateTimeOffset.UnixEpoch)
             .ThenBy(static deployment => deployment.DeploymentId, StringComparer.Ordinal)
             .FirstOrDefault();
 
-    private static ServiceDeploymentRecord? ResolveActiveDeployment(IEnumerable<ServiceDeploymentReadModel>? deployments) =>
+    private static ServiceDeploymentRecord? ResolveDeployment(IEnumerable<ServiceDeploymentReadModel>? deployments) =>
         deployments?
-            .Where(static deployment => string.Equals(deployment.Status, ServiceDeploymentStatus.Active.ToString(), StringComparison.Ordinal))
             .OrderByDescending(static deployment => deployment.UpdatedAt)
             .ThenBy(static deployment => deployment.DeploymentId, StringComparer.Ordinal)
             .Select(static deployment => new ServiceDeploymentRecord
@@ -188,7 +186,9 @@ internal sealed class ScopeWorkflowCatalogueServiceSourceProjector
                 DeploymentId = deployment.DeploymentId,
                 RevisionId = deployment.RevisionId,
                 PrimaryActorId = deployment.PrimaryActorId,
-                Status = ServiceDeploymentStatus.Active,
+                Status = global::System.Enum.TryParse<ServiceDeploymentStatus>(deployment.Status, ignoreCase: true, out var status)
+                    ? status
+                    : ServiceDeploymentStatus.Unspecified,
                 UpdatedAt = Timestamp.FromDateTimeOffset(deployment.UpdatedAt),
             })
             .FirstOrDefault();
