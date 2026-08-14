@@ -1362,6 +1362,93 @@ public sealed partial class ToolCallModule :
         IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
+        if (!CanMergeCompletionCheckpoints(completion))
+        {
+            await PublishCompletionEventsWithLegacyCheckpointsAsync(state, completion, ctx, ct);
+            return;
+        }
+
+        if (completion.ToolCompletion != null && !completion.ToolCompletionPublished)
+        {
+            await ExecuteDurablePublicationAsync(
+                () => ctx.PublishAsync(
+                    completion.ToolCompletion.Clone(),
+                    TopologyAudience.Self,
+                    ct,
+                    BuildPublicationOptions("workflow-tool-call-completed", completion)),
+                "tool completion",
+                ct);
+        }
+
+        if (completion.StepCompletion != null && !completion.StepCompletionPublished)
+        {
+            await ExecuteDurablePublicationAsync(
+                () => ctx.PublishAsync(
+                    completion.StepCompletion.Clone(),
+                    TopologyAudience.Self,
+                    ct,
+                    BuildPublicationOptions("workflow-tool-step-completed", completion)),
+                "step completion",
+                ct);
+        }
+
+        if (completion.ProtectedMaterialReference != null)
+        {
+            await ExecuteDurablePublicationAsync(
+                async () =>
+                {
+                    if (!await RevokeOrConfirmProtectedMaterialUnavailableAsync(
+                            completion.ProtectedMaterialReference,
+                            ctx,
+                            ct))
+                    {
+                        throw new InvalidOperationException(
+                            "Protected tool-call material cleanup remains pending.");
+                    }
+                },
+                "protected tool-call material cleanup",
+                ct);
+        }
+
+        // Step-less outcomes have no StepCompleted fact to duplicate. Typed step completions are
+        // deduplicated by the WorkflowRun consumer, so one final checkpoint can atomically replace
+        // the outbox entry with its terminal tombstone after publication and cleanup succeed.
+        await ExecuteDurablePublicationAsync(
+            () => CompressCompletionToTombstoneAsync(state, completion, ctx, ct),
+            "completion tombstone checkpoint",
+            ct);
+    }
+
+    private static bool CanMergeCompletionCheckpoints(
+        WorkflowToolCallCompletionOutboxEntry completion)
+    {
+        var stepCompletion = completion.StepCompletion;
+        if (stepCompletion == null)
+            return true;
+
+        return !string.IsNullOrWhiteSpace(completion.RunId) &&
+               !string.IsNullOrWhiteSpace(completion.StepId) &&
+               !string.IsNullOrWhiteSpace(completion.ExecutionId) &&
+               string.Equals(
+                   NormalizeRequired(completion.RunId),
+                   NormalizeRequired(stepCompletion.RunId),
+                   StringComparison.Ordinal) &&
+               string.Equals(
+                   NormalizeRequired(completion.StepId),
+                   NormalizeRequired(stepCompletion.StepId),
+                   StringComparison.Ordinal) &&
+               string.Equals(
+                   NormalizeRequired(completion.ExecutionId),
+                   NormalizeRequired(stepCompletion.ExecutionId),
+                   StringComparison.Ordinal);
+    }
+
+    private static async Task PublishCompletionEventsWithLegacyCheckpointsAsync(
+        ToolCallModuleState state,
+        WorkflowToolCallCompletionOutboxEntry completion,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
         if (completion.ToolCompletion != null && !completion.ToolCompletionPublished)
         {
             await ExecuteDurablePublicationAsync(

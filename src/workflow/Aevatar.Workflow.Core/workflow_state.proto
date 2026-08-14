@@ -216,6 +216,10 @@ message WorkflowRunState
   int64 binding_generation = 58;
   string reuse_authority_actor_id = 59;
   WorkflowRunDefinitionBindingContinuationState pending_definition_binding_continuation = 60;
+  // Exact run-owned identities for committed StepCompleted artifact facts that carry an
+  // execution id. Tool-call step completion publication is at-least-once, so entries are
+  // retained for the run lifetime.
+  map<string, bool> processed_step_completion_keys = 61;
 }
 
 message WorkflowRunDefinitionBindingContinuationState

@@ -1038,6 +1038,158 @@ public sealed class ToolCallModuleContextTests
     }
 
     [Fact]
+    public async Task ToolCallModule_WhenToolCompletionPublishesBeforeTransportFailure_ShouldReplayWithStableOperationId()
+    {
+        var tool = new CountingAgentTool("counting_tool", _ => """{"ok":true}""");
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext
+        {
+            FailAfterNextPublishType = typeof(WorkflowToolCallCompletedEvent),
+        };
+
+        var firstAttempt = () => ExecuteToolCallAsync(
+            module,
+            ctx,
+            tool.Name,
+            executionId: "exec-tool-published");
+        await firstAttempt.Should().ThrowAsync<WorkflowDurablePublicationPendingException>()
+            .WithMessage("Durable workflow tool completion remains pending.");
+
+        var retained = ctx.LoadState<ToolCallModuleState>("tool_call");
+        var retainedCompletion = retained.Completions.Should().ContainSingle().Subject;
+        retainedCompletion.ToolCompletionPublished.Should().BeFalse();
+        retainedCompletion.StepCompletionPublished.Should().BeFalse();
+        retained.CompletionTombstones.Should().BeEmpty();
+
+        await ExecuteToolCallAsync(module, ctx, tool.Name, executionId: "exec-tool-published");
+
+        tool.ExecuteCalls.Should().Be(1);
+        var toolPublications = ctx.Published.Select(static item => item.Event)
+            .OfType<WorkflowToolCallCompletedEvent>()
+            .ToList();
+        toolPublications.Should().HaveCount(2);
+        toolPublications.Select(ctx.PublishedOperationId).Distinct()
+            .Should().ContainSingle().Which.Should().NotBeNullOrWhiteSpace();
+        ctx.Published.Select(static item => item.Event)
+            .OfType<StepCompletedEvent>().Should().ContainSingle();
+        var settled = ctx.LoadState<ToolCallModuleState>("tool_call");
+        settled.Completions.Should().BeEmpty();
+        settled.CompletionTombstones.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenStepCompletionPublishesBeforeTransportFailure_ShouldReplayWithStableOperationIds()
+    {
+        var tool = new CountingAgentTool("counting_tool", _ => """{"ok":true}""");
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext
+        {
+            FailAfterNextPublishType = typeof(StepCompletedEvent),
+        };
+
+        var firstAttempt = () => ExecuteToolCallAsync(
+            module,
+            ctx,
+            tool.Name,
+            executionId: "exec-step-published");
+        await firstAttempt.Should().ThrowAsync<WorkflowDurablePublicationPendingException>()
+            .WithMessage("Durable workflow step completion remains pending.");
+
+        var retained = ctx.LoadState<ToolCallModuleState>("tool_call");
+        var retainedCompletion = retained.Completions.Should().ContainSingle().Subject;
+        retainedCompletion.ToolCompletionPublished.Should().BeFalse();
+        retainedCompletion.StepCompletionPublished.Should().BeFalse();
+        retainedCompletion.ProtectedMaterialReference.Should().NotBeNull();
+        retained.CompletionTombstones.Should().BeEmpty();
+
+        await ExecuteToolCallAsync(module, ctx, tool.Name, executionId: "exec-step-published");
+
+        tool.ExecuteCalls.Should().Be(1);
+        var toolPublications = ctx.Published.Select(static item => item.Event)
+            .OfType<WorkflowToolCallCompletedEvent>()
+            .ToList();
+        var stepPublications = ctx.Published.Select(static item => item.Event)
+            .OfType<StepCompletedEvent>()
+            .ToList();
+        toolPublications.Should().HaveCount(2);
+        stepPublications.Should().HaveCount(2);
+        toolPublications.Select(ctx.PublishedOperationId).Distinct()
+            .Should().ContainSingle().Which.Should().NotBeNullOrWhiteSpace();
+        stepPublications.Select(ctx.PublishedOperationId).Distinct()
+            .Should().ContainSingle().Which.Should().NotBeNullOrWhiteSpace();
+        var settled = ctx.LoadState<ToolCallModuleState>("tool_call");
+        settled.Completions.Should().BeEmpty();
+        settled.CompletionTombstones.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenCompletionSettles_ShouldUseOnlyOutboxAndTombstoneStateSaves()
+    {
+        var tool = new CountingAgentTool("counting_tool", _ => "{}");
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext();
+
+        await ExecuteToolCallAsync(
+            module,
+            ctx,
+            "missing_tool",
+            executionId: "exec-two-checkpoints");
+
+        tool.ExecuteCalls.Should().Be(0);
+        ctx.StateSaveCalls.Should().Be(2);
+        ctx.Published.Select(static item => item.Event)
+            .OfType<WorkflowToolCallCompletedEvent>().Should().ContainSingle();
+        ctx.Published.Select(static item => item.Event)
+            .OfType<StepCompletedEvent>().Should().ContainSingle();
+        var settled = ctx.LoadState<ToolCallModuleState>("tool_call");
+        settled.Completions.Should().BeEmpty();
+        settled.CompletionTombstones.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenExecutionIdentityIsMissing_ShouldRetainLegacyPublicationCheckpoints()
+    {
+        var module = CreateModule(new CountingAgentTool("counting_tool", _ => "{}"));
+        var ctx = new RecordingWorkflowContext
+        {
+            FailNextPublishType = typeof(StepCompletedEvent),
+        };
+
+        var firstAttempt = () => ExecuteToolCallAsync(
+            module,
+            ctx,
+            "missing_tool",
+            executionId: string.Empty);
+        await firstAttempt.Should().ThrowAsync<WorkflowDurablePublicationPendingException>()
+            .WithMessage("Durable workflow step completion remains pending.");
+
+        var retained = ctx.LoadState<ToolCallModuleState>("tool_call")
+            .Completions.Should().ContainSingle().Subject;
+        retained.ToolCompletionPublished.Should().BeTrue();
+        retained.StepCompletionPublished.Should().BeFalse();
+        ctx.StateSaveCalls.Should().Be(2);
+        ctx.Published.Select(static item => item.Event)
+            .OfType<WorkflowToolCallCompletedEvent>().Should().ContainSingle();
+        ctx.Published.Select(static item => item.Event)
+            .OfType<StepCompletedEvent>().Should().BeEmpty();
+
+        await ExecuteToolCallAsync(
+            module,
+            ctx,
+            "missing_tool",
+            executionId: string.Empty);
+
+        ctx.StateSaveCalls.Should().Be(4);
+        ctx.Published.Select(static item => item.Event)
+            .OfType<WorkflowToolCallCompletedEvent>().Should().ContainSingle();
+        ctx.Published.Select(static item => item.Event)
+            .OfType<StepCompletedEvent>().Should().ContainSingle();
+        var settled = ctx.LoadState<ToolCallModuleState>("tool_call");
+        settled.Completions.Should().BeEmpty();
+        settled.CompletionTombstones.Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task ToolCallModule_WhenOnlyStepCompletionIsUnpublished_ShouldReplayOnlyThatEvent()
     {
         var tool = new CountingAgentTool("counting_tool", _ => "{}");
@@ -1837,18 +1989,26 @@ public sealed class ToolCallModuleContextTests
         var pendingCleanup = ctx.LoadState<ToolCallModuleState>("tool_call")
             .Completions.Should().ContainSingle().Subject;
         pendingCleanup.ProtectedMaterialReference.Should().NotBeNull();
-        pendingCleanup.ToolCompletionPublished.Should().BeTrue();
-        pendingCleanup.StepCompletionPublished.Should().BeTrue();
+        pendingCleanup.ToolCompletionPublished.Should().BeFalse();
+        pendingCleanup.StepCompletionPublished.Should().BeFalse();
 
         await ExecuteToolCallAsync(module, ctx, tool.Name, executionId: "exec-cleanup");
 
         store.RevokeCalls.Should().Be(2);
         tool.ExecuteCalls.Should().Be(1);
         ctx.LoadState<ToolCallModuleState>("tool_call").CompletionTombstones.Should().ContainSingle();
-        ctx.Published.Select(static item => item.Event)
-            .OfType<WorkflowToolCallCompletedEvent>().Should().ContainSingle();
-        ctx.Published.Select(static item => item.Event)
-            .OfType<StepCompletedEvent>().Should().ContainSingle();
+        var toolPublications = ctx.Published.Select(static item => item.Event)
+            .OfType<WorkflowToolCallCompletedEvent>()
+            .ToList();
+        var stepPublications = ctx.Published.Select(static item => item.Event)
+            .OfType<StepCompletedEvent>()
+            .ToList();
+        toolPublications.Should().HaveCount(2);
+        stepPublications.Should().HaveCount(2);
+        toolPublications.Select(ctx.PublishedOperationId).Distinct()
+            .Should().ContainSingle().Which.Should().NotBeNullOrWhiteSpace();
+        stepPublications.Select(ctx.PublishedOperationId).Distinct()
+            .Should().ContainSingle().Which.Should().NotBeNullOrWhiteSpace();
     }
 
     [Fact]
@@ -2665,6 +2825,8 @@ public sealed class ToolCallModuleContextTests
 
         public System.Type? FailNextPublishType { get; set; }
 
+        public System.Type? FailAfterNextPublishType { get; set; }
+
         public int FailPublicationRetrySchedulesRemaining { get; set; }
 
         public int FailPublicationRetryPublishesRemaining { get; set; }
@@ -2678,6 +2840,8 @@ public sealed class ToolCallModuleContextTests
         public int FailStateSavesRemaining { get; set; }
 
         public int FailStatePublicationsAfterCommitRemaining { get; set; }
+
+        public int StateSaveCalls { get; private set; }
 
         public TaskCompletionSource<bool> AttemptCompletionScheduleFailureObserved { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -2709,6 +2873,9 @@ public sealed class ToolCallModuleContextTests
             return envelope;
         }
 
+        public string PublishedOperationId(IMessage evt) =>
+            _publishedOptions.GetValueOrDefault(evt)?.Delivery?.OperationId ?? string.Empty;
+
         public TState LoadState<TState>(string scopeKey)
             where TState : class, IMessage<TState>, new()
         {
@@ -2730,6 +2897,7 @@ public sealed class ToolCallModuleContextTests
             where TState : class, IMessage<TState>
         {
             ct.ThrowIfCancellationRequested();
+            StateSaveCalls++;
             if (FailStateSavesRemaining > 0)
             {
                 FailStateSavesRemaining--;
@@ -2896,6 +3064,12 @@ public sealed class ToolCallModuleContextTests
             Published.Add((evt, direction));
             _publishedOptions[evt] = options?.DeepClone();
             _publishedEvents.Writer.TryWrite(evt);
+            if (FailAfterNextPublishType?.IsInstanceOfType(evt) == true)
+            {
+                FailAfterNextPublishType = null;
+                throw new InvalidOperationException("simulated post-publication failure");
+            }
+
             return Task.CompletedTask;
         }
 

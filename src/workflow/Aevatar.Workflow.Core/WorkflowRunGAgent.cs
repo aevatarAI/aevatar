@@ -2666,6 +2666,10 @@ public sealed partial class WorkflowRunGAgent
             return;
         }
 
+        var stepCompletionKey = BuildStepCompletionArtifactKey(artifactFact as StepCompletedEvent);
+        if (stepCompletionKey != null && State.ProcessedStepCompletionKeys.ContainsKey(stepCompletionKey))
+            return;
+
         await PersistDomainEventAsync(artifactFact, CancellationToken.None);
     }
 
@@ -3083,6 +3087,25 @@ public sealed partial class WorkflowRunGAgent
             _ => null,
         };
 
+    private static string? BuildStepCompletionArtifactKey(StepCompletedEvent? completion)
+    {
+        // Legacy and composite-module completions without an execution identity cannot be
+        // safely deduplicated because the same step can legitimately run more than once.
+        if (completion == null ||
+            string.IsNullOrWhiteSpace(completion.RunId) ||
+            string.IsNullOrWhiteSpace(completion.StepId) ||
+            string.IsNullOrWhiteSpace(completion.ExecutionId))
+        {
+            return null;
+        }
+
+        return RuntimeCallbackKeyComposer.BuildKey(
+            '|',
+            WorkflowRunIdNormalizer.Normalize(completion.RunId),
+            completion.StepId.Trim(),
+            completion.ExecutionId.Trim());
+    }
+
     private static bool IsProcessedArtifactSource(
         WorkflowRunState state,
         WorkflowArtifactSourceIdentity? source) =>
@@ -3175,6 +3198,7 @@ public sealed partial class WorkflowRunGAgent
         next.InteractiveActionHandoffs.Clear();
         next.ProcessedArtifactSources.Clear();
         next.ProcessedArtifactStateVersionsByPublisher.Clear();
+        next.ProcessedStepCompletionKeys.Clear();
         next.Lineage = evt.InitialLineage == null
             ? CreateUnavailableLineage("Run lineage is unavailable for this run.")
             : EnsureLineage(evt.InitialLineage);
@@ -3678,6 +3702,10 @@ public sealed partial class WorkflowRunGAgent
         var stepId = evt.StepId?.Trim() ?? string.Empty;
         if (string.IsNullOrWhiteSpace(stepId))
             return next;
+
+        var completionKey = BuildStepCompletionArtifactKey(evt);
+        if (completionKey != null)
+            next.ProcessedStepCompletionKeys[completionKey] = true;
 
         var workflow = ResolveWorkflowForTransition(current);
         var step = string.IsNullOrWhiteSpace(stepId) ? null : workflow?.GetStep(stepId);

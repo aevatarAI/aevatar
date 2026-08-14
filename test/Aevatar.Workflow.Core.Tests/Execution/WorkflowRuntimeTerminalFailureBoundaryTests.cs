@@ -722,18 +722,25 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
             .Where(x => x.Is(WorkflowToolCallCompletedEvent.Descriptor))
             .Should().ContainSingle();
         ctx.Published.Select(x => x.Event)
-            .Should().NotContain(x => x.Is(StepCompletedEvent.Descriptor));
+            .Where(x => x.Is(StepCompletedEvent.Descriptor))
+            .Should().ContainSingle();
 
         await bridge.HandleAsync(Envelope(retry), ctx, CancellationToken.None);
 
         tool.ExecuteCalls.Should().Be(1);
-        ctx.Published.Select(x => x.Event)
-            .Where(x => x.Is(WorkflowToolCallCompletedEvent.Descriptor))
-            .Should().HaveCount(2);
-        ctx.Published.Select(x => x.Event)
-            .Where(x => x.Is(StepCompletedEvent.Descriptor))
-            .Should().ContainSingle()
-            .Which.Unpack<StepCompletedEvent>().Success.Should().BeTrue();
+        var toolPublications = ctx.Published
+            .Where(x => x.Event.Is(WorkflowToolCallCompletedEvent.Descriptor))
+            .ToList();
+        var stepPublications = ctx.Published
+            .Where(x => x.Event.Is(StepCompletedEvent.Descriptor))
+            .ToList();
+        toolPublications.Should().HaveCount(2);
+        stepPublications.Should().HaveCount(2);
+        toolPublications.Select(x => x.Options?.Delivery?.OperationId)
+            .Distinct().Should().ContainSingle().Which.Should().NotBeNullOrWhiteSpace();
+        stepPublications.Select(x => x.Options?.Delivery?.OperationId)
+            .Distinct().Should().ContainSingle().Which.Should().NotBeNullOrWhiteSpace();
+        stepPublications.Should().OnlyContain(x => x.Event.Unpack<StepCompletedEvent>().Success);
         host.States[ToolCallModule.ModuleStateKey]
             .Unpack<ToolCallModuleState>()
             .CompletionTombstones.Should().ContainSingle();
