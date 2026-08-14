@@ -58,6 +58,7 @@ jest.mock('@/shared/api/workflowActivityApi', () => {
       forkRun: jest.fn(),
       getRun: jest.fn(),
       getRunGraph: jest.fn(),
+      listActivityRuns: jest.fn(),
       listRuns: jest.fn(),
     },
   };
@@ -92,6 +93,7 @@ const mockWorkflowActivityApi = jest.requireMock(
   getRun: jest.Mock;
   getRunGraph: jest.Mock;
   listRuns: jest.Mock;
+  listActivityRuns: jest.Mock;
 };
 
 function buildRunDetail() {
@@ -217,6 +219,63 @@ function buildRunDetail() {
   };
 }
 
+function buildActivityRow(
+  overrides: Partial<{
+    runId: string;
+    workflowId: string;
+    workflowName: string;
+    status: string;
+    runOrigin: string;
+    success: boolean | null;
+    startedAtUtc: string | null;
+    updatedAtUtc: string;
+  }> = {},
+) {
+  return {
+    runId: overrides.runId ?? 'run-source-alpha',
+    actorId: 'actor-technical-alpha',
+    workflowId: overrides.workflowId ?? 'wf-alpha',
+    workflowName: overrides.workflowName ?? 'Incident review',
+    scopeId: 'scope-alpha',
+    status: overrides.status ?? 'failed',
+    runOrigin: overrides.runOrigin ?? 'draft',
+    success: overrides.success ?? false,
+    initiator: {
+      platform: 'nyxid',
+      tenant: 'tenant-alpha',
+      externalUserId: 'user-alpha',
+      scope: 'scope-alpha',
+      bindingId: 'binding-alpha',
+      displayValue: 'Abigail',
+      availability: 'available',
+    },
+    inputSummary: 'Investigate checkout latency',
+    currentStep: {
+      stepId: 'step-failed',
+      inputSummary: 'Connector request',
+      availability: 'available',
+    },
+    firstFailure: {
+      stepId: 'step-failed',
+      message: 'Approval timed out',
+      availability: 'available',
+    },
+    waiting: {
+      stepId: '',
+      waitingKind: '',
+      prompt: '',
+      availability: 'unavailable',
+    },
+    startedAtUtc: overrides.startedAtUtc ?? '2026-08-04T10:00:00Z',
+    completedAtUtc: null,
+    updatedAtUtc: overrides.updatedAtUtc ?? '2026-08-04T10:01:00Z',
+    durationMs: 60000,
+    stateVersion: 7,
+    recoveryCapability: buildRunDetail().recoveryCapability,
+    lineage: buildRunDetail().lineage,
+  };
+}
+
 describe('Workflow Activity vNext run detail console', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -273,6 +332,12 @@ describe('Workflow Activity vNext run detail console', () => {
         runOrigin: 'draft',
       },
     ]);
+    mockWorkflowActivityApi.listActivityRuns.mockResolvedValue({
+      items: [],
+      nextCursor: null,
+      hasMore: false,
+      totalCount: 0,
+    });
     mockWorkflowActivityApi.forkRun.mockResolvedValue({
       accepted: true,
       sourceRunId: 'run-source-alpha',
@@ -338,6 +403,69 @@ describe('Workflow Activity vNext run detail console', () => {
 
     expect(history.push).toHaveBeenLastCalledWith(
       '/scopes/scope-alpha/workflow-activity-vnext/activity/run-source-beta?definition=definition-alpha',
+    );
+  });
+
+  it('keeps the selected workflow history visible when the immutable detail request fails', async () => {
+    mockSearch = '?workflowId=wf-alpha';
+    mockWorkflowActivityApi.getRun.mockRejectedValue(
+      new Error(
+        'Error occurred while trying to proxy: 127.0.0.1:5173/api/workflow/observatory/runs/run-source-alpha',
+      ),
+    );
+    mockWorkflowActivityApi.listActivityRuns.mockResolvedValue({
+      items: [
+        buildActivityRow(),
+        buildActivityRow({
+          runId: 'run-source-beta',
+          status: 'completed',
+          success: true,
+          updatedAtUtc: '2026-08-04T09:01:00Z',
+        }),
+      ],
+      nextCursor: null,
+      hasMore: false,
+      totalCount: 2,
+    });
+
+    renderWithQueryClient(
+      <RunDetailPage runId="run-source-alpha" scopeId="scope-alpha" />,
+    );
+
+    await waitFor(() =>
+      expect(mockWorkflowActivityApi.listActivityRuns).toHaveBeenCalledWith(
+        'scope-alpha',
+        {
+          workflowId: 'wf-alpha',
+          take: 100,
+        },
+      ),
+    );
+
+    expect(
+      await screen.findByRole('heading', { name: 'Published runs' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', { name: 'Incident review' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Detailed run data is temporarily unavailable.'),
+    ).toBeInTheDocument();
+    expect(screen.getByText('Approval timed out')).toBeInTheDocument();
+
+    const selectedRun = screen.getByRole('button', {
+      name: 'Open run-source-alpha',
+    });
+    expect(selectedRun).toHaveAttribute('aria-current', 'true');
+
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Open run-source-beta',
+      }),
+    );
+
+    expect(history.push).toHaveBeenLastCalledWith(
+      '/scopes/scope-alpha/workflow-activity-vnext/activity/run-source-beta?workflowId=wf-alpha',
     );
   });
 });

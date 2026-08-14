@@ -30,6 +30,7 @@ import GraphCanvas from '@/shared/graphs/GraphCanvas';
 import { t } from '@/shared/i18n/messages';
 import type {
   WorkflowActivityRunDetail,
+  WorkflowActivityRunFeedRow,
   WorkflowActivityRunGraph,
   WorkflowActivityRunSummary,
   WorkflowActivityStep,
@@ -58,6 +59,12 @@ import {
 import { getRunOriginLabel, getRunStatusPresentation } from './runPresentation';
 
 type RunStatusTone = 'default' | 'processing' | 'success' | 'warning' | 'error';
+
+type RunHistoryEntry = WorkflowActivityRunSummary & {
+  readonly context?: string;
+  readonly inputSummary?: string;
+  readonly workflowId?: string;
+};
 
 function trimOptional(value: string | null | undefined): string {
   return value?.trim() ?? '';
@@ -446,6 +453,48 @@ function formatRunTime(run: WorkflowActivityRunSummary): string {
   return formatDateTime(run.updatedAtUtc);
 }
 
+function compareRunsByUpdatedTime(
+  left: WorkflowActivityRunSummary,
+  right: WorkflowActivityRunSummary,
+): number {
+  const leftTime =
+    Date.parse(
+      trimOptional(left.updatedAtUtc) || trimOptional(left.startedAtUtc),
+    ) || 0;
+  const rightTime =
+    Date.parse(
+      trimOptional(right.updatedAtUtc) || trimOptional(right.startedAtUtc),
+    ) || 0;
+  if (leftTime !== rightTime) return rightTime - leftTime;
+  return left.runId.localeCompare(right.runId);
+}
+
+function toHistoryEntryFromFeedRow(
+  row: WorkflowActivityRunFeedRow,
+): RunHistoryEntry {
+  const context =
+    trimOptional(row.firstFailure.message) ||
+    trimOptional(row.waiting.prompt) ||
+    trimOptional(row.waiting.waitingKind) ||
+    trimOptional(row.currentStep.inputSummary) ||
+    trimOptional(row.inputSummary);
+
+  return {
+    runId: row.runId,
+    workflowName: row.workflowName,
+    status: row.status,
+    success: row.success,
+    startedAtUtc: row.startedAtUtc,
+    updatedAtUtc: row.updatedAtUtc,
+    stateVersion: row.stateVersion,
+    scopeId: row.scopeId,
+    runOrigin: row.runOrigin,
+    context,
+    inputSummary: row.inputSummary,
+    workflowId: row.workflowId,
+  };
+}
+
 const RunDetailPage: React.FC<{
   readonly runId: string;
   readonly scopeId: string;
@@ -457,6 +506,12 @@ const RunDetailPage: React.FC<{
     [location.search],
   );
   const definitionId = params.get('definition')?.trim() ?? '';
+  const routeWorkflowId = params.get('workflowId')?.trim() ?? '';
+  const routeRunQuery = React.useMemo(() => {
+    if (routeWorkflowId) return { workflowId: routeWorkflowId };
+    if (definitionId) return { definition: definitionId };
+    return undefined;
+  }, [definitionId, routeWorkflowId]);
   const detail = useQuery({
     queryKey: ['workflow-activity-vnext', 'run-detail', scopeId, runId],
     queryFn: () => workflowActivityApi.getRun(scopeId, runId),
@@ -468,12 +523,26 @@ const RunDetailPage: React.FC<{
     retry: false,
   });
   const historyRuns = useQuery({
-    queryKey: ['workflow-activity-vnext', 'run-history', scopeId, definitionId],
-    queryFn: () =>
-      workflowActivityApi.listRuns(scopeId, {
+    queryKey: [
+      'workflow-activity-vnext',
+      'run-history',
+      scopeId,
+      routeWorkflowId || definitionId,
+    ],
+    queryFn: async (): Promise<RunHistoryEntry[]> => {
+      if (routeWorkflowId) {
+        const page = await workflowActivityApi.listActivityRuns(scopeId, {
+          workflowId: routeWorkflowId,
+          take: 100,
+        });
+        return page.items.map(toHistoryEntryFromFeedRow);
+      }
+
+      return workflowActivityApi.listRuns(scopeId, {
         definitionActorIds: definitionId ? [definitionId] : undefined,
         take: 100,
-      }),
+      });
+    },
     retry: false,
   });
   const [forking, setForking] = React.useState(false);
@@ -504,7 +573,7 @@ const RunDetailPage: React.FC<{
           const returnTo = buildWorkflowActivityRunHref(
             scopeId,
             runId,
-            definitionId ? { definition: definitionId } : undefined,
+            routeRunQuery,
           );
           history.push(`/login?redirect=${encodeURIComponent(returnTo)}`);
           return;
@@ -526,7 +595,7 @@ const RunDetailPage: React.FC<{
           return;
       }
     },
-    [detail, definitionId, graph, historyRuns, runId, scopeId],
+    [detail, graph, historyRuns, routeRunQuery, runId, scopeId],
   );
 
   React.useEffect(() => {
@@ -586,7 +655,121 @@ const RunDetailPage: React.FC<{
     if (await fork(pendingRecovery.stepId)) setPendingRecovery(null);
   };
 
-  if (detail.isPending || historyRuns.isPending) {
+  const historyEntries = React.useMemo(
+    () => [...(historyRuns.data ?? [])].sort(compareRunsByUpdatedTime),
+    [historyRuns.data],
+  );
+  const fallbackHistoryRun =
+    historyEntries.find((entry) => entry.runId === runId) ?? null;
+
+  const openRun = React.useCallback(
+    (targetRunId: string) => {
+      history.push(
+        buildWorkflowActivityRunHref(scopeId, targetRunId, routeRunQuery),
+      );
+      setSelectedStepId('');
+    },
+    [routeRunQuery, scopeId],
+  );
+
+  const renderHistoryRail = (
+    workflowName: string,
+    entries: readonly RunHistoryEntry[],
+    selectedRunId: string,
+  ) => (
+    <aside className="wa-vnext-run-detail__rail">
+      <div className="wa-vnext-run-detail__rail-header">
+        <div className="wa-vnext-run-detail__rail-title">
+          <Typography.Title level={5} style={{ margin: 0 }}>
+            {t(
+              'pages.runs.memberPublishedRuns.publishedRuns',
+              'Published runs',
+            )}
+          </Typography.Title>
+          <Typography.Text ellipsis type="secondary">
+            {workflowName ||
+              t('workflowActivityVNext.common.unknown', 'Unknown')}
+          </Typography.Text>
+        </div>
+      </div>
+      <div className="wa-vnext-run-detail__rail-list">
+        {historyRuns.isPending ? (
+          <div className="wa-vnext__state wa-vnext__state--compact">
+            <p>
+              {t(
+                'workflowActivityVNext.run.historyLoading',
+                'Loading run history…',
+              )}
+            </p>
+          </div>
+        ) : historyRuns.isError ? (
+          <Alert
+            showIcon
+            type="error"
+            message={t(
+              'workflowActivityVNext.run.historyUnavailable',
+              'Run history is unavailable.',
+            )}
+            description={errorMessage(historyRuns.error)}
+          />
+        ) : entries.length ? (
+          entries.map((entry) => {
+            const selected = entry.runId === selectedRunId;
+            const selectedStatus = getRunStatusPresentation(entry.status);
+            return (
+              <button
+                aria-current={selected ? 'true' : undefined}
+                aria-label={t(
+                  'workflowActivityVNext.run.openRunAria',
+                  'Open {runId}',
+                  {
+                    runId: entry.runId,
+                  },
+                )}
+                className={`wa-vnext-run-detail__run${selected ? ' wa-vnext-run-detail__run--selected' : ''}`}
+                key={entry.runId}
+                onClick={() => openRun(entry.runId)}
+                type="button"
+              >
+                <div className="wa-vnext-run-detail__run-title">
+                  <Tag
+                    className={getRunBadgeClass(entry.status)}
+                    style={{ marginInlineEnd: 0 }}
+                  >
+                    {selectedStatus.label}
+                  </Tag>
+                  <Typography.Text ellipsis style={{ minWidth: 0 }}>
+                    {formatRunTime(entry)}
+                  </Typography.Text>
+                </div>
+                <Typography.Text ellipsis type="secondary">
+                  {entry.runOrigin ||
+                    t('workflowActivityVNext.common.unknown', 'Unknown')}
+                </Typography.Text>
+              </button>
+            );
+          })
+        ) : (
+          <div className="wa-vnext__state wa-vnext__state--compact">
+            <h3>
+              {t(
+                'workflowActivityVNext.run.noHistory',
+                'No published runs yet.',
+              )}
+            </h3>
+            <p>
+              {t(
+                'workflowActivityVNext.run.noHistoryDescription',
+                'This workflow has no other runs in the current history context.',
+              )}
+            </p>
+          </div>
+        )}
+      </div>
+    </aside>
+  );
+
+  if (detail.isPending) {
     return (
       <WorkflowActivityVNextShell
         activeSection="activity"
@@ -605,6 +788,102 @@ const RunDetailPage: React.FC<{
   }
 
   if (detail.isError || !detail.data) {
+    if (fallbackHistoryRun) {
+      return (
+        <WorkflowActivityVNextShell
+          activeSection="activity"
+          description={t(
+            'workflowActivityVNext.run.detailFallbackDescription',
+            'The run detail request is unavailable, but the selected Activity row is still visible.',
+          )}
+          headerActions={
+            <Button
+              icon={<ReloadOutlined />}
+              onClick={() => {
+                void detail.refetch();
+                void graph.refetch();
+                void historyRuns.refetch();
+              }}
+            >
+              {t('workflowActivityVNext.common.refresh', 'Refresh')}
+            </Button>
+          }
+          scopeId={scopeId}
+          title={
+            fallbackHistoryRun.workflowName ||
+            t('workflowActivityVNext.run.title', 'Run details')
+          }
+        >
+          <div className="wa-vnext-run-detail">
+            {renderHistoryRail(
+              fallbackHistoryRun.workflowName,
+              historyEntries,
+              fallbackHistoryRun.runId,
+            )}
+            <section className="wa-vnext-run-detail__stage">
+              <header className="wa-vnext-run-detail__stage-header">
+                <div className="wa-vnext-run-detail__stage-title">
+                  <Space wrap size={8}>
+                    <Typography.Title level={4} style={{ margin: 0 }}>
+                      {formatDateTime(fallbackHistoryRun.updatedAtUtc)}
+                    </Typography.Title>
+                    <Tag
+                      className={getRunBadgeClass(fallbackHistoryRun.status)}
+                      style={{ marginInlineEnd: 0 }}
+                    >
+                      {
+                        getRunStatusPresentation(fallbackHistoryRun.status)
+                          .label
+                      }
+                    </Tag>
+                  </Space>
+                  <Typography.Text ellipsis type="secondary">
+                    {fallbackHistoryRun.workflowName ||
+                      t('workflowActivityVNext.common.unknown', 'Unknown')}
+                    {' · '}
+                    {getRunOriginLabel(fallbackHistoryRun.runOrigin)}
+                  </Typography.Text>
+                </div>
+              </header>
+              <Alert
+                showIcon
+                type="warning"
+                message={t(
+                  'workflowActivityVNext.run.detailUnavailableTitle',
+                  'Detailed run data is temporarily unavailable.',
+                )}
+                description={
+                  <>
+                    <p>
+                      {t(
+                        'workflowActivityVNext.run.detailUnavailableDescription',
+                        'The selected run remains highlighted in its workflow history. Retry to load its immutable detail, graph, timeline, and output.',
+                      )}
+                    </p>
+                    {fallbackHistoryRun.context ? (
+                      <Typography.Paragraph>
+                        {fallbackHistoryRun.context}
+                      </Typography.Paragraph>
+                    ) : null}
+                    {detail.error ? (
+                      <TechnicalDetails>
+                        {errorMessage(detail.error)}
+                      </TechnicalDetails>
+                    ) : null}
+                  </>
+                }
+                action={
+                  <Button onClick={() => void detail.refetch()}>
+                    {t('workflowActivityVNext.common.retry', 'Retry')}
+                  </Button>
+                }
+              />
+            </section>
+          </div>
+        </WorkflowActivityVNextShell>
+      );
+    }
+
     return (
       <WorkflowActivityVNextShell
         activeSection="activity"
@@ -638,36 +917,27 @@ const RunDetailPage: React.FC<{
 
   const run = detail.data;
   const statusPresentation = getRunStatusPresentation(run.summary.status);
-  const historyEntries = [...(historyRuns.data ?? [])].sort((left, right) => {
-    const leftTime =
-      Date.parse(
-        trimOptional(left.updatedAtUtc) || trimOptional(left.startedAtUtc),
-      ) || 0;
-    const rightTime =
-      Date.parse(
-        trimOptional(right.updatedAtUtc) || trimOptional(right.startedAtUtc),
-      ) || 0;
-    if (leftTime !== rightTime) return rightTime - leftTime;
-    return left.runId.localeCompare(right.runId);
-  });
   const normalizedWorkflowName = trimOptional(
     run.summary.workflowName,
   ).toLowerCase();
-  const scopedHistoryEntries = normalizedWorkflowName
-    ? historyEntries.filter(
-        (entry) =>
-          trimOptional(entry.workflowName).toLowerCase() ===
-          normalizedWorkflowName,
-      )
-    : historyEntries;
+  const scopedHistoryEntries = routeWorkflowId
+    ? historyEntries
+    : normalizedWorkflowName
+      ? historyEntries.filter(
+          (entry) =>
+            trimOptional(entry.workflowName).toLowerCase() ===
+            normalizedWorkflowName,
+        )
+      : historyEntries;
+  const currentRunHistoryEntry: RunHistoryEntry = run.summary;
   const effectiveHistory = scopedHistoryEntries.some(
     (entry) => entry.runId === run.summary.runId,
   )
     ? scopedHistoryEntries
-    : [run.summary, ...scopedHistoryEntries];
+    : [currentRunHistoryEntry, ...scopedHistoryEntries];
   const selectedHistoryRun =
     effectiveHistory.find((entry) => entry.runId === run.summary.runId) ??
-    run.summary;
+    currentRunHistoryEntry;
   const graphView = buildExecutionGraph(run, graph.data, selectedStepId);
   const selectedStep =
     graphView.orderedSteps.find((step) => step.stepId === selectedStepId) ??
@@ -680,17 +950,6 @@ const RunDetailPage: React.FC<{
   const runDurationMs = getRunDurationMs(run, graphView.orderedSteps);
   const selectedStepTitle = getStepDisplayName(selectedStep);
   const selectedStepDuration = formatDurationMs(selectedStep?.durationMs);
-
-  const openRun = (targetRunId: string) => {
-    history.push(
-      buildWorkflowActivityRunHref(
-        scopeId,
-        targetRunId,
-        definitionId ? { definition: definitionId } : undefined,
-      ),
-    );
-    setSelectedStepId('');
-  };
 
   const renderGraph = () => {
     if (graph.isError) {
@@ -788,95 +1047,11 @@ const RunDetailPage: React.FC<{
       }
     >
       <div className="wa-vnext-run-detail">
-        <aside className="wa-vnext-run-detail__rail">
-          <div className="wa-vnext-run-detail__rail-header">
-            <div className="wa-vnext-run-detail__rail-title">
-              <Typography.Title level={5} style={{ margin: 0 }}>
-                {t(
-                  'pages.runs.memberPublishedRuns.publishedRuns',
-                  'Published runs',
-                )}
-              </Typography.Title>
-              <Typography.Text ellipsis type="secondary">
-                {run.summary.workflowName ||
-                  t('workflowActivityVNext.common.unknown', 'Unknown')}
-              </Typography.Text>
-            </div>
-            <Button
-              icon={<ReloadOutlined />}
-              loading={historyRuns.isFetching}
-              onClick={() => void historyRuns.refetch()}
-              shape="circle"
-              size="small"
-              aria-label={t('workflowActivityVNext.common.refresh', 'Refresh')}
-            />
-          </div>
-          <div className="wa-vnext-run-detail__rail-list">
-            {historyRuns.isError ? (
-              <Alert
-                showIcon
-                type="error"
-                message={t(
-                  'workflowActivityVNext.run.historyUnavailable',
-                  'Run history is unavailable.',
-                )}
-                description={errorMessage(historyRuns.error)}
-              />
-            ) : effectiveHistory.length ? (
-              effectiveHistory.map((entry) => {
-                const selected = entry.runId === selectedHistoryRun.runId;
-                const selectedStatus = getRunStatusPresentation(entry.status);
-                return (
-                  <button
-                    aria-current={selected ? 'true' : undefined}
-                    aria-label={t(
-                      'workflowActivityVNext.run.openRunAria',
-                      'Open {runId}',
-                      {
-                        runId: entry.runId,
-                      },
-                    )}
-                    className={`wa-vnext-run-detail__run${selected ? ' wa-vnext-run-detail__run--selected' : ''}`}
-                    key={entry.runId}
-                    onClick={() => openRun(entry.runId)}
-                    type="button"
-                  >
-                    <div className="wa-vnext-run-detail__run-title">
-                      <Tag
-                        className={getRunBadgeClass(entry.status)}
-                        style={{ marginInlineEnd: 0 }}
-                      >
-                        {selectedStatus.label}
-                      </Tag>
-                      <Typography.Text ellipsis style={{ minWidth: 0 }}>
-                        {formatRunTime(entry)}
-                      </Typography.Text>
-                    </div>
-                    <Typography.Text ellipsis type="secondary">
-                      {entry.runOrigin ||
-                        t('workflowActivityVNext.common.unknown', 'Unknown')}
-                    </Typography.Text>
-                  </button>
-                );
-              })
-            ) : (
-              <div className="wa-vnext__state wa-vnext__state--compact">
-                <h3>
-                  {t(
-                    'workflowActivityVNext.run.noHistory',
-                    'No published runs yet.',
-                  )}
-                </h3>
-                <p>
-                  {t(
-                    'workflowActivityVNext.run.noHistoryDescription',
-                    'This workflow has no other runs in the current history context.',
-                  )}
-                </p>
-              </div>
-            )}
-          </div>
-        </aside>
+        {renderHistoryRail(
+          run.summary.workflowName,
+          effectiveHistory,
+          selectedHistoryRun.runId,
+        )}
         <section className="wa-vnext-run-detail__stage">
           <header className="wa-vnext-run-detail__stage-header">
             <div className="wa-vnext-run-detail__stage-title">
@@ -900,23 +1075,6 @@ const RunDetailPage: React.FC<{
                 {' · '}
                 {getRunOriginLabel(run.summary.runOrigin)}
               </Typography.Text>
-            </div>
-            <div className="wa-vnext-run-detail__stage-actions">
-              <Button
-                icon={<ReloadOutlined />}
-                loading={
-                  detail.isFetching ||
-                  graph.isFetching ||
-                  historyRuns.isFetching
-                }
-                onClick={() => {
-                  void detail.refetch();
-                  void graph.refetch();
-                  void historyRuns.refetch();
-                }}
-              >
-                {t('workflowActivityVNext.common.refresh', 'Refresh')}
-              </Button>
             </div>
           </header>
           {receipt ? (

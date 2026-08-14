@@ -324,6 +324,16 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
   ]);
 
   const currentRuns = runs.data?.items ?? [];
+  const runDetailQuery = React.useCallback(
+    (run: WorkflowActivityRunFeedRow) => {
+      const rowWorkflowId = run.workflowId.trim();
+      if (rowWorkflowId || workflowId) {
+        return { workflowId: rowWorkflowId || workflowId || undefined };
+      }
+      return { definition: definition || undefined };
+    },
+    [definition, workflowId],
+  );
   const hasRunningRun = currentRuns.some(
     (run) => run.status.trim().toLowerCase() === 'running',
   );
@@ -764,18 +774,22 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                       key={run.runId}
                       onClick={() =>
                         history.push(
-                          buildWorkflowActivityRunHref(scopeId, run.runId, {
-                            definition: definition || undefined,
-                          }),
+                          buildWorkflowActivityRunHref(
+                            scopeId,
+                            run.runId,
+                            runDetailQuery(run),
+                          ),
                         )
                       }
                       onKeyDown={(event) => {
                         if (event.key !== 'Enter' && event.key !== ' ') return;
                         event.preventDefault();
                         history.push(
-                          buildWorkflowActivityRunHref(scopeId, run.runId, {
-                            definition: definition || undefined,
-                          }),
+                          buildWorkflowActivityRunHref(
+                            scopeId,
+                            run.runId,
+                            runDetailQuery(run),
+                          ),
                         );
                       }}
                       tabIndex={0}
@@ -791,9 +805,11 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                           onClick={(event) => {
                             event.stopPropagation();
                             history.push(
-                              buildWorkflowActivityRunHref(scopeId, run.runId, {
-                                definition: definition || undefined,
-                              }),
+                              buildWorkflowActivityRunHref(
+                                scopeId,
+                                run.runId,
+                                runDetailQuery(run),
+                              ),
                             );
                           }}
                           style={{

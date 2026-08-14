@@ -341,7 +341,7 @@ describe('Workflow Activity vNext Activity ledger', () => {
     fireEvent.click(customerRunRow);
 
     expect(history.push).toHaveBeenLastCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/activity/run-customer',
+      '/scopes/scope-alpha/workflow-activity-vnext/activity/run-customer?workflowId=wf-alpha',
     );
   });
 
@@ -365,7 +365,7 @@ describe('Workflow Activity vNext Activity ledger', () => {
 
     fireEvent.keyDown(customerRunRow, { key: 'Enter' });
     expect(history.push).toHaveBeenLastCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/activity/run-customer',
+      '/scopes/scope-alpha/workflow-activity-vnext/activity/run-customer?workflowId=wf-alpha',
     );
 
     fireEvent.keyDown(customerRunRow, { key: ' ' });
