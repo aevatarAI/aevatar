@@ -411,10 +411,10 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                     return;
                 }
 
-                if (IsTimeoutError(evt.Error))
+                if (HasUncertainOutcome(evt) || IsTimeoutError(evt.Error))
                 {
                     ctx.Logger.LogError(
-                        "workflow_loop: run={RunId} step={StepId} timed out and run will fail. error={Error}",
+                        "workflow_loop: run={RunId} step={StepId} has an uncertain external outcome and run will fail. error={Error}",
                         runId,
                         evt.StepId,
                         evt.Error);
@@ -898,6 +898,22 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         if (policy == null)
             return false;
 
+        if (evt.RetryDisposition == WorkflowStepRetryDisposition.Forbidden)
+        {
+            ctx.Logger.LogWarning(
+                "workflow_loop: step={StepId} callee forbids an outer retry for this physical outcome",
+                step.Id);
+            return false;
+        }
+
+        if (HasUncertainOutcome(evt))
+        {
+            ctx.Logger.LogWarning(
+                "workflow_loop: step={StepId} outcome is uncertain and is not retried to avoid repeating an external side effect",
+                step.Id);
+            return false;
+        }
+
         if (IsTimeoutError(evt.Error))
         {
             ctx.Logger.LogWarning(
@@ -1210,8 +1226,10 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             var request = BuildStepRequest(step, input, fileRefs, state, ctx);
             var idempotency = ResolveAndPersistStepIdempotency(step, state);
             request.IdempotencyKey = idempotency.IdempotencyKey;
-            var effectiveTimeoutMs = ResolveStepTimeoutMs(step, dispatchKind);
-            var timeoutCallbackId = effectiveTimeoutMs > 0
+            var effectiveTimeoutMs = NormalizeStepTimeoutMs(ResolveStepTimeoutMs(step, dispatchKind));
+            request.TimeoutMs = effectiveTimeoutMs;
+            var kernelTimeoutMs = UsesModuleOwnedTimeout(step) ? 0 : effectiveTimeoutMs;
+            var timeoutCallbackId = kernelTimeoutMs > 0
                 ? BuildStepTimeoutCallbackId(state.RunId, step.Id, ResolveInboundEnvelopeId(ctx))
                 : string.Empty;
 
@@ -1228,7 +1246,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             state.CurrentStepTimeoutCallbackId = timeoutCallbackId;
             await SaveStateAsync(state, ctx, ct);
 
-            timeoutLease = await ScheduleStepTimeoutLeaseAsync(timeoutCallbackId, step, effectiveTimeoutMs, state.RunId, ctx, ct);
+            timeoutLease = await ScheduleStepTimeoutLeaseAsync(timeoutCallbackId, step, kernelTimeoutMs, state.RunId, ctx, ct);
             if (timeoutLease != null)
             {
                 state.TimeoutsByStepId[step.Id] = WorkflowRuntimeCallbackLeaseStateCodec.ToState(timeoutLease);
@@ -1402,6 +1420,9 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
     private static bool IsTimeoutError(string? error) =>
         !string.IsNullOrWhiteSpace(error) &&
         TimeoutErrorPattern.IsMatch(error);
+
+    private static bool HasUncertainOutcome(StepCompletedEvent completion) =>
+        completion.FailureOutcome == WorkflowStepFailureOutcome.OutcomeUncertain;
 
     private async Task<RuntimeCallbackLease?> ScheduleStepTimeoutLeaseAsync(
         string callbackId,
@@ -2366,6 +2387,8 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             state.CurrentStepId);
 
         var request = BuildStepRequest(step, state.CurrentStepInput, state.CurrentStepInputFileRefs, state, ctx);
+        request.TimeoutMs = NormalizeStepTimeoutMs(
+            ResolveStepTimeoutMs(step, ResolveRetryDispatchKind(state, step.Id)));
 
         // Restore the saved execution_id so stale-completion protection works after resume
         if (state.ExecutionIdsByStepId.TryGetValue(step.Id, out var savedExecutionId))
@@ -2472,6 +2495,15 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         dispatchKind == WorkflowStepDispatchKind.Compensation
             ? step.TimeoutMs is > 0 ? step.TimeoutMs.Value : DefaultCompensationTimeoutMs
             : step.TimeoutMs is > 0 ? step.TimeoutMs.Value : 0;
+
+    private static int NormalizeStepTimeoutMs(int timeoutMs) =>
+        timeoutMs > 0 ? Math.Clamp(timeoutMs, 100, 600_000) : 0;
+
+    private static bool UsesModuleOwnedTimeout(StepDefinition step) =>
+        string.Equals(
+            WorkflowPrimitiveCatalog.ToCanonicalType(step.Type),
+            "tool_call",
+            StringComparison.OrdinalIgnoreCase);
 
     private static WorkflowStepDispatchKind ResolveRetryDispatchKind(
         WorkflowExecutionKernelState state,

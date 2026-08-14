@@ -40,6 +40,12 @@ enum WorkflowStepFailureOutcome {
   WORKFLOW_STEP_FAILURE_OUTCOME_OUTCOME_UNCERTAIN = 2;
 }
 
+enum WorkflowStepRetryDisposition {
+  WORKFLOW_STEP_RETRY_DISPOSITION_UNSPECIFIED = 0;
+  WORKFLOW_STEP_RETRY_DISPOSITION_ALLOWED = 1;
+  WORKFLOW_STEP_RETRY_DISPOSITION_FORBIDDEN = 2;
+}
+
 enum WorkflowRunTerminalStatus {
   WORKFLOW_RUN_TERMINAL_STATUS_UNSPECIFIED = 0;
   WORKFLOW_RUN_TERMINAL_STATUS_COMPLETED = 1;
@@ -779,6 +785,9 @@ message StepRequestEvent
   // Runtime copy of the workflow-node display name for this executed step. Falls back to step_id
   // when the authoring model did not provide a distinct label.
   string display_name = 12;
+  // Effective authored step timeout after runtime normalization. Modules that own an
+  // eventized external-operation watchdog use this instead of creating a second timeout policy.
+  int32 timeout_ms = 13;
 }
 message WorkflowUsageMetrics {
   int32 prompt_tokens = 1;
@@ -825,6 +834,7 @@ message StepCompletedEvent {
   WorkflowFileItemResultSet file_item_results = 16;
   WorkflowRecoveryFailureKind recovery_failure_kind = 17;
   WorkflowStepCompletionOutcome outcome = 18;
+  WorkflowStepRetryDisposition retry_disposition = 19;
 }
 message SubWorkflowInvokeRequestedEvent
 {
@@ -1277,7 +1287,7 @@ message WorkflowToolCallStartedEvent
   string step_id = 2;
   string tool_name = 3;
   string call_id = 4;
-  string arguments_json = 5;
+  string arguments_json = 5 [deprecated = true];
 }
 
 message WorkflowToolCallCompletedEvent
@@ -1289,6 +1299,49 @@ message WorkflowToolCallCompletedEvent
   string result_json = 5;
   string error = 6;
   WorkflowManagedHandoffOutcome managed_handoff = 7;
+}
+
+message WorkflowToolCallAttemptSuccessOutcome
+{
+  string result_json = 1;
+  WorkflowManagedHandoffOutcome managed_handoff = 2;
+}
+
+message WorkflowToolCallAttemptApprovalRequiredOutcome
+{
+  string approval_request_id = 1;
+  string tool_name = 2;
+  string tool_call_id = 3;
+  string approval_mode = 4;
+  bool is_read_only = 5;
+  bool is_destructive = 6;
+}
+
+message WorkflowToolCallAttemptFailureOutcome
+{
+  string result_json = 1;
+  string error_code = 2;
+  string error_message = 3;
+  bool terminal_invoked = 4;
+  bool retryable = 5;
+}
+
+// Internal self-signal emitted only after the provider response has crossed its
+// authored projection boundary. Actor-owned state is reconciled by the receiver.
+message WorkflowToolCallAttemptCompletedEvent
+{
+  string run_id = 1;
+  string step_id = 2;
+  string execution_id = 3;
+  string call_id = 4;
+  int32 attempt = 5;
+  oneof outcome
+  {
+    WorkflowToolCallAttemptSuccessOutcome success = 6;
+    WorkflowToolCallAttemptApprovalRequiredOutcome approval_required = 7;
+    WorkflowToolCallAttemptFailureOutcome failure = 8;
+  }
+  string continuation_token = 9;
 }
 
 enum WorkflowLeaseConflictPolicy {
@@ -1464,6 +1517,33 @@ message WorkflowStepRetryBackoffFiredEvent { string run_id = 1; string step_id =
 message DelayStepTimeoutFiredEvent { string run_id = 1; string step_id = 2; int32 duration_ms = 3; }
 message LlmCallWatchdogTimeoutFiredEvent { string run_id = 1; string step_id = 2; string session_id = 3; int32 timeout_ms = 4; }
 message WorkflowConnectorTimeoutFiredEvent { string run_id = 1; string step_id = 2; string operation_id = 3; int32 timeout_ms = 4; int32 attempt = 5; }
+message WorkflowToolCallTimeoutFiredEvent
+{
+  string run_id = 1;
+  string step_id = 2;
+  string execution_id = 3;
+  string call_id = 4;
+  int32 timeout_ms = 5;
+  string continuation_token = 6;
+}
+message WorkflowToolCallRetryFiredEvent
+{
+  string run_id = 1;
+  string step_id = 2;
+  string execution_id = 3;
+  string call_id = 4;
+  int32 attempt = 5;
+  string continuation_token = 6;
+}
+message WorkflowToolCallExecutionRecoveryFiredEvent
+{
+  string run_id = 1;
+  string step_id = 2;
+  string execution_id = 3;
+  string call_id = 4;
+  int32 attempt = 5;
+  string continuation_token = 6;
+}
 message WorkflowConnectorAttemptCompletedEvent {
   string run_id = 1;
   string step_id = 2;

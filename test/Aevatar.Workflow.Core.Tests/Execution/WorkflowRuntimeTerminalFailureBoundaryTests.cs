@@ -1,4 +1,6 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Persistence;
@@ -14,6 +16,7 @@ using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Threading.Channels;
 
 namespace Aevatar.Workflow.Core.Tests.Execution;
 
@@ -211,7 +214,7 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
     }
 
     [Fact]
-    public async Task Bridge_ShouldSwallowActorOwnedDurablePublicationPending()
+    public async Task Bridge_ShouldPropagateActorOwnedDurablePublicationPending_ForRuntimeRedelivery()
     {
         var bridge = new WorkflowExecutionBridgeModule(
             [new DurablePublicationPendingExecutor(new WorkflowDurablePublicationPendingException(
@@ -220,18 +223,139 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
             new RecordingStateHost { RunId = "run-1" });
         var ctx = new RecordingEventHandlerContext();
 
+        var failure = await FluentActions.Awaiting(() => bridge.HandleAsync(
+                Envelope(new StepRequestEvent
+                {
+                    RunId = "run-1",
+                    StepId = "tool-step",
+                    StepType = "tool_call",
+                    ExecutionId = "exec-1",
+                }),
+                ctx,
+                CancellationToken.None))
+            .Should().ThrowAsync<WorkflowDurablePublicationPendingException>();
+
+        failure.Which.Should().BeAssignableTo<IRuntimeEnvelopeRetryableException>();
+        ctx.Published.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Bridge_ForEachToolCalls_ShouldOverlapTenExecutionsAndReachSingleParentCompletion()
+    {
+        const int expectedConcurrency = 10;
+        const string runId = "run-foreach-tool-overlap";
+        const string parentStepId = "foreach-tools";
+        var tool = new OverlappingWorkflowTool("blocking_tool", expectedConcurrency);
+        var host = new RecordingStateHost { RunId = runId };
+        var bridge = new WorkflowExecutionBridgeModule(
+            [
+                new ForEachModule(),
+                new ToolCallModule(
+                    [new SingleWorkflowToolSource(tool)],
+                    NullLogger<ToolCallModule>.Instance),
+            ],
+            host);
+        var ctx = new RecordingEventHandlerContext();
+
         await bridge.HandleAsync(
             Envelope(new StepRequestEvent
             {
-                RunId = "run-1",
-                StepId = "tool-step",
-                StepType = "tool_call",
-                ExecutionId = "exec-1",
+                RunId = runId,
+                StepId = parentStepId,
+                StepType = "foreach",
+                ExecutionId = "foreach-exec-1",
+                Input = string.Join("\n---\n", Enumerable.Range(0, expectedConcurrency).Select(static i => $"item-{i}")),
+                Parameters =
+                {
+                    ["sub_step_type"] = "tool_call",
+                    ["sub_param_tool"] = tool.Name,
+                    ["min_concurrent_workers"] = expectedConcurrency.ToString(),
+                    ["max_concurrent_workers"] = expectedConcurrency.ToString(),
+                },
             }),
             ctx,
             CancellationToken.None);
 
-        ctx.Published.Should().BeEmpty();
+        var childRequests = ctx.Published
+            .Select(static publication => publication.Event)
+            .Where(static payload => payload.Is(StepRequestEvent.Descriptor))
+            .Select(static payload => payload.Unpack<StepRequestEvent>())
+            .ToArray();
+        childRequests.Should().HaveCount(expectedConcurrency);
+        ctx.Published.Clear();
+
+        var sequentialPump = Task.Run(async () =>
+        {
+            foreach (var child in childRequests)
+                await bridge.HandleAsync(Envelope(child), ctx, CancellationToken.None);
+        });
+        try
+        {
+            await tool.AllExpectedExecutionsEntered.WaitAsync(TimeSpan.FromSeconds(5));
+            tool.ExecuteCalls.Should().Be(expectedConcurrency);
+            tool.MaxActiveExecutions.Should().Be(expectedConcurrency);
+            host.States[ToolCallModule.ModuleStateKey]
+                .Unpack<ToolCallModuleState>()
+                .PendingExecutions.Should().HaveCount(expectedConcurrency);
+        }
+        finally
+        {
+            tool.ReleaseAll();
+            await sequentialPump.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+
+        var attemptCompletions = new List<RecordedPublication>(expectedConcurrency);
+        for (var i = 0; i < expectedConcurrency; i++)
+        {
+            attemptCompletions.Add(await ctx.WaitForPublishedAsync(static publication =>
+                publication.Event.Is(WorkflowToolCallAttemptCompletedEvent.Descriptor)));
+        }
+
+        var childCompletions = new List<StepCompletedEvent>(expectedConcurrency);
+        foreach (var publication in attemptCompletions)
+        {
+            var attemptCompletion = publication.Event.Unpack<WorkflowToolCallAttemptCompletedEvent>();
+            var envelope = Envelope(attemptCompletion);
+            envelope.Route = EnvelopeRouteSemantics.CreateTopologyPublication(ctx.AgentId, TopologyAudience.Self);
+            envelope.Runtime = new EnvelopeRuntime
+            {
+                DeliveryIdentity = new DeliveryIdentity
+                {
+                    OperationId = publication.Options?.Delivery?.OperationId ?? string.Empty,
+                },
+            };
+            await bridge.HandleAsync(envelope, ctx, CancellationToken.None);
+            childCompletions.Add((await ctx.WaitForPublishedAsync(candidate =>
+                    candidate.Event.Is(StepCompletedEvent.Descriptor) &&
+                    string.Equals(
+                        candidate.Event.Unpack<StepCompletedEvent>().StepId,
+                        attemptCompletion.StepId,
+                        StringComparison.Ordinal)))
+                .Event.Unpack<StepCompletedEvent>());
+        }
+
+        var settledToolState = host.States[ToolCallModule.ModuleStateKey]
+            .Unpack<ToolCallModuleState>();
+        settledToolState.PendingExecutions.Should().BeEmpty();
+        settledToolState.CompletionTombstones.Should().HaveCount(expectedConcurrency);
+
+        childCompletions.Should().HaveCount(expectedConcurrency)
+            .And.OnlyContain(static completion => completion.Success);
+
+        foreach (var childCompletion in childCompletions)
+            await bridge.HandleAsync(Envelope(childCompletion), ctx, CancellationToken.None);
+
+        var parentCompletion = (await ctx.WaitForPublishedAsync(candidate =>
+                candidate.Event.Is(StepCompletedEvent.Descriptor) &&
+                string.Equals(
+                    candidate.Event.Unpack<StepCompletedEvent>().StepId,
+                    parentStepId,
+                    StringComparison.Ordinal)))
+            .Event.Unpack<StepCompletedEvent>();
+        parentCompletion.Success.Should().BeTrue();
+        host.States[ForEachModule.ModuleStateKey]
+            .Unpack<ForEachModuleState>()
+            .CompletionTombstones.Should().ContainSingle();
     }
 
     [Fact]
@@ -259,12 +383,14 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
         };
 
         await bridge.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+        await DrainToolAttemptCompletionAsync(bridge, ctx);
 
         tool.ExecuteCalls.Should().Be(1);
         ctx.Published.Select(x => x.Event)
             .Where(x => x.Is(StepCompletedEvent.Descriptor))
             .Should().BeEmpty();
         var retry = ctx.Scheduled
+            .Where(x => x.Event.Is(WorkflowToolCallPublicationRetryFiredEvent.Descriptor))
             .Select(x => x.Event.Unpack<WorkflowToolCallPublicationRetryFiredEvent>())
             .Should().ContainSingle()
             .Subject;
@@ -285,6 +411,81 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
         var recovered = host.States[ToolCallModule.ModuleStateKey].Unpack<ToolCallModuleState>();
         recovered.Completions.Should().BeEmpty();
         recovered.CompletionTombstones.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task Bridge_ShouldLetOriginalAttemptRedeliveryDrainPersistedApprovalSuspension()
+    {
+        var rejectApprovalPublication = true;
+        var pending = new WorkflowToolApprovalPendingOutcome(
+            "approval-1",
+            "danger",
+            "workflow:run-1:danger-step:exec-1",
+            "{}",
+            "AlwaysRequire",
+            false,
+            true);
+        var tool = new RecordingWorkflowTool(
+            "danger",
+            _ => new WorkflowToolExecutionResult(string.Empty, PendingApproval: pending));
+        var executor = new ToolCallModule(
+            [new SingleWorkflowToolSource(tool)],
+            NullLogger<ToolCallModule>.Instance);
+        var host = new RecordingStateHost { RunId = "run-1" };
+        var bridge = new WorkflowExecutionBridgeModule([executor], host);
+        var ctx = new RecordingEventHandlerContext
+        {
+            FailPublish = evt => rejectApprovalPublication &&
+                                 evt is WorkflowToolCallPublicationRetryFiredEvent or WorkflowSuspendedEvent,
+            FailSchedule = evt => rejectApprovalPublication &&
+                                  evt is WorkflowToolCallPublicationRetryFiredEvent,
+        };
+        var request = new StepRequestEvent
+        {
+            RunId = "run-1",
+            StepId = "danger-step",
+            StepType = "tool_call",
+            ExecutionId = "exec-1",
+            Parameters = { ["tool"] = tool.Name },
+        };
+
+        await bridge.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+        var publication = await ctx.WaitForPublishedAsync(static candidate =>
+            candidate.Event.Is(WorkflowToolCallAttemptCompletedEvent.Descriptor));
+        var completion = publication.Event.Unpack<WorkflowToolCallAttemptCompletedEvent>();
+        var completionEnvelope = Envelope(completion);
+        completionEnvelope.Route = EnvelopeRouteSemantics.CreateTopologyPublication(
+            ctx.AgentId,
+            TopologyAudience.Self);
+        completionEnvelope.Runtime = new EnvelopeRuntime
+        {
+            DeliveryIdentity = new DeliveryIdentity
+            {
+                OperationId = publication.Options?.Delivery?.OperationId ?? string.Empty,
+            },
+        };
+
+        await FluentActions.Awaiting(() =>
+                bridge.HandleAsync(completionEnvelope, ctx, CancellationToken.None))
+            .Should().ThrowAsync<WorkflowDurablePublicationPendingException>();
+
+        tool.ExecuteCalls.Should().Be(1);
+        var durable = host.States[ToolCallModule.ModuleStateKey].Unpack<ToolCallModuleState>();
+        durable.PendingExecutions.Should().BeEmpty();
+        durable.PendingApprovals.Values.Should().ContainSingle()
+            .Which.SuspensionPublished.Should().BeFalse();
+
+        rejectApprovalPublication = false;
+        await bridge.HandleAsync(completionEnvelope, ctx, CancellationToken.None);
+
+        tool.ExecuteCalls.Should().Be(1);
+        ctx.Published.Select(static item => item.Event)
+            .Where(static item => item.Is(WorkflowSuspendedEvent.Descriptor))
+            .Should().ContainSingle();
+        host.States[ToolCallModule.ModuleStateKey]
+            .Unpack<ToolCallModuleState>()
+            .PendingApprovals.Values.Should().ContainSingle()
+            .Which.SuspensionPublished.Should().BeTrue();
     }
 
     [Fact]
@@ -320,12 +521,14 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
         };
 
         await bridge.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+        await DrainToolAttemptCompletionAsync(bridge, ctx);
 
         tool.ExecuteCalls.Should().Be(1);
         ctx.Published.Select(x => x.Event)
             .Where(x => x.Is(StepCompletedEvent.Descriptor))
             .Should().BeEmpty();
         var retry = ctx.Scheduled
+            .Where(x => x.Event.Is(WorkflowToolCallPublicationRetryFiredEvent.Descriptor))
             .Select(x => x.Event.Unpack<WorkflowToolCallPublicationRetryFiredEvent>())
             .Should().ContainSingle()
             .Subject;
@@ -361,7 +564,7 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
         var ctx = new RecordingEventHandlerContext
         {
             FailPublish = evt => evt is WorkflowToolCallCompletedEvent,
-            FailSchedule = true,
+            FailSchedule = evt => evt is WorkflowToolCallPublicationRetryFiredEvent,
         };
         var request = new StepRequestEvent
         {
@@ -373,9 +576,10 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
         };
 
         await bridge.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+        await DrainToolAttemptCompletionAsync(bridge, ctx);
 
         tool.ExecuteCalls.Should().Be(1);
-        ctx.ScheduleAttempts.Should().Be(1);
+        ctx.ScheduleAttempts.Should().Be(2);
         var retry = ctx.Published.Select(x => x.Event)
             .Where(x => x.Is(WorkflowToolCallPublicationRetryFiredEvent.Descriptor))
             .Should().ContainSingle()
@@ -388,10 +592,14 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
             .Unpack<ToolCallModuleState>()
             .Completions.Should().ContainSingle();
 
-        await bridge.HandleAsync(Envelope(retry), ctx, CancellationToken.None);
+        var redelivery = await FluentActions.Awaiting(() =>
+                bridge.HandleAsync(Envelope(retry), ctx, CancellationToken.None))
+            .Should()
+            .ThrowAsync<WorkflowRuntimeEnvelopeRetryablePublicationPendingException>();
+        redelivery.Which.Should().BeAssignableTo<IRuntimeEnvelopeRetryableException>();
 
         tool.ExecuteCalls.Should().Be(1);
-        ctx.ScheduleAttempts.Should().Be(2);
+        ctx.ScheduleAttempts.Should().Be(3);
         ctx.Published.Select(x => x.Event)
             .Where(x => x.Is(WorkflowToolCallPublicationRetryFiredEvent.Descriptor))
             .Should().ContainSingle();
@@ -424,7 +632,7 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
         var ctx = new RecordingEventHandlerContext
         {
             FailPublish = evt => evt is WorkflowSuspendedEvent,
-            FailSchedule = true,
+            FailSchedule = evt => evt is WorkflowToolCallPublicationRetryFiredEvent,
         };
         var request = new StepRequestEvent
         {
@@ -436,9 +644,10 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
         };
 
         await bridge.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+        await DrainToolAttemptCompletionAsync(bridge, ctx);
 
         tool.ExecuteCalls.Should().Be(1);
-        ctx.ScheduleAttempts.Should().Be(1);
+        ctx.ScheduleAttempts.Should().Be(2);
         var retry = ctx.Published.Select(x => x.Event)
             .Where(x => x.Is(WorkflowToolCallPublicationRetryFiredEvent.Descriptor))
             .Should().ContainSingle()
@@ -452,10 +661,14 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
             .PendingApprovals.Values.Should().ContainSingle()
             .Which.SuspensionPublished.Should().BeFalse();
 
-        await bridge.HandleAsync(Envelope(retry), ctx, CancellationToken.None);
+        var redelivery = await FluentActions.Awaiting(() =>
+                bridge.HandleAsync(Envelope(retry), ctx, CancellationToken.None))
+            .Should()
+            .ThrowAsync<WorkflowRuntimeEnvelopeRetryablePublicationPendingException>();
+        redelivery.Which.Should().BeAssignableTo<IRuntimeEnvelopeRetryableException>();
 
         tool.ExecuteCalls.Should().Be(1);
-        ctx.ScheduleAttempts.Should().Be(2);
+        ctx.ScheduleAttempts.Should().Be(3);
         ctx.Published.Select(x => x.Event)
             .Where(x => x.Is(WorkflowToolCallPublicationRetryFiredEvent.Descriptor))
             .Should().ContainSingle();
@@ -479,7 +692,7 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
         var host = new RecordingStateHost
         {
             RunId = "run-1",
-            FailSaveAttempt = 2,
+            FailSaveAttempt = 4,
         };
         var bridge = new WorkflowExecutionBridgeModule([executor], host);
         var ctx = new RecordingEventHandlerContext();
@@ -493,6 +706,7 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
         };
 
         await bridge.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+        await DrainToolAttemptCompletionAsync(bridge, ctx);
 
         tool.ExecuteCalls.Should().Be(1);
         host.States[ToolCallModule.ModuleStateKey]
@@ -500,6 +714,7 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
             .Completions.Should().ContainSingle()
             .Which.ToolCompletionPublished.Should().BeFalse();
         var retry = ctx.Scheduled.Select(x => x.Event)
+            .Where(x => x.Is(WorkflowToolCallPublicationRetryFiredEvent.Descriptor))
             .Select(x => x.Unpack<WorkflowToolCallPublicationRetryFiredEvent>())
             .Should().ContainSingle()
             .Subject;
@@ -894,6 +1109,74 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
     }
 
     [Fact]
+    public async Task Kernel_ShouldNotRetryOutcomeUncertainToolFailure()
+    {
+        var workflow = new WorkflowDefinition
+        {
+            Name = "wf",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "step-1",
+                    Type = "tool_call",
+                    Retry = new StepRetryPolicy
+                    {
+                        MaxAttempts = 3,
+                        DelayMs = 0,
+                    },
+                },
+            ],
+        };
+        var host = new RecordingStateHost { RunId = "run-1" };
+        var module = new WorkflowExecutionKernel(workflow, host);
+        var ctx = new RecordingEventHandlerContext();
+
+        await module.HandleAsync(
+            Envelope(new StartWorkflowEvent
+            {
+                RunId = "run-1",
+                WorkflowName = "wf",
+                Input = "hello",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var firstRequest = ctx.Published
+            .Select(x => x.Event)
+            .Where(x => x.Is(StepRequestEvent.Descriptor))
+            .Select(x => x.Unpack<StepRequestEvent>())
+            .Should()
+            .ContainSingle()
+            .Subject;
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                RunId = "run-1",
+                StepId = "step-1",
+                Success = false,
+                Error = "tool 'proxy' execution failed: tool_outcome_unknown: external result cannot be proven",
+                ExecutionId = firstRequest.ExecutionId,
+                FailureOutcome = WorkflowStepFailureOutcome.OutcomeUncertain,
+            }),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Select(x => x.Event)
+            .Should()
+            .NotContain(x => x.Is(StepRequestEvent.Descriptor));
+        ctx.Published.Select(x => x.Event)
+            .Where(x => x.Is(WorkflowCompletedEvent.Descriptor))
+            .Select(x => x.Unpack<WorkflowCompletedEvent>())
+            .Should()
+            .ContainSingle()
+            .Which.Success.Should().BeFalse();
+    }
+
+    [Fact]
     public async Task Kernel_ShouldPublishTerminalFailure_WhenCompletionHandlingThrowsAfterRunIsActive()
     {
         var workflow = new WorkflowDefinition
@@ -951,6 +1234,29 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
         Payload = Any.Pack(payload),
     };
 
+    private static async Task DrainToolAttemptCompletionAsync(
+        WorkflowExecutionBridgeModule bridge,
+        RecordingEventHandlerContext ctx)
+    {
+        var publication = await ctx.WaitForPublishedAsync(static candidate =>
+            candidate.Event.Is(WorkflowToolCallAttemptCompletedEvent.Descriptor));
+        var completion = publication.Event.Unpack<WorkflowToolCallAttemptCompletedEvent>();
+        var envelope = Envelope(completion);
+        envelope.Route = EnvelopeRouteSemantics.CreateTopologyPublication(ctx.AgentId, TopologyAudience.Self);
+        envelope.Runtime = new EnvelopeRuntime
+        {
+            DeliveryIdentity = new DeliveryIdentity
+            {
+                OperationId = publication.Options?.Delivery?.OperationId ?? string.Empty,
+            },
+        };
+        var failure = await FluentActions.Awaiting(() =>
+                bridge.HandleAsync(envelope, ctx, CancellationToken.None))
+            .Should()
+            .ThrowAsync<WorkflowDurablePublicationPendingException>();
+        failure.Which.Should().BeAssignableTo<IRuntimeEnvelopeRetryableException>();
+    }
+
     private sealed class ThrowingStepExecutor : IEventModule<IWorkflowExecutionContext>
     {
         public string Name => "throwing_executor";
@@ -1001,6 +1307,9 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
 
     private sealed class RecordingEventHandlerContext : IEventHandlerContext
     {
+        private readonly Channel<RecordedPublication> _publishedEvents =
+            Channel.CreateUnbounded<RecordedPublication>();
+
         public string AgentId { get; } = "agent-1";
 
         public EventEnvelope InboundEnvelope { get; } = new()
@@ -1019,15 +1328,27 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
 
         public System.Type? FailNextPublishType { get; set; }
 
-        public bool FailSchedule { get; init; }
+        public Func<IMessage, bool>? FailSchedule { get; init; }
 
         public int ScheduleAttempts { get; private set; }
 
-        public List<(Any Event, TopologyAudience Direction)> Published { get; } = [];
+        public List<RecordedPublication> Published { get; } = [];
 
         public List<RuntimeCallbackLease> Canceled { get; } = [];
 
         public List<(string CallbackId, Any Event)> Scheduled { get; } = [];
+
+        public async Task<RecordedPublication> WaitForPublishedAsync(
+            Func<RecordedPublication, bool> predicate)
+        {
+            while (true)
+            {
+                var publication = await _publishedEvents.Reader.ReadAsync().AsTask()
+                    .WaitAsync(TimeSpan.FromSeconds(5));
+                if (predicate(publication))
+                    return publication;
+            }
+        }
 
         public Task PublishAsync<TEvent>(
             TEvent evt,
@@ -1046,7 +1367,9 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
             if (FailPublish?.Invoke(evt) == true)
                 throw new InvalidOperationException("publish failed with bearer super-secret-token");
 
-            Published.Add((Any.Pack(evt), direction));
+            var publication = new RecordedPublication(Any.Pack(evt), direction, options?.DeepClone());
+            Published.Add(publication);
+            _publishedEvents.Writer.TryWrite(publication);
             return Task.CompletedTask;
         }
 
@@ -1067,7 +1390,7 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
         {
             ct.ThrowIfCancellationRequested();
             ScheduleAttempts++;
-            if (FailSchedule)
+            if (FailSchedule?.Invoke(evt) == true)
                 throw new InvalidOperationException("schedule failed");
 
             Scheduled.Add((callbackId, Any.Pack(evt)));
@@ -1090,6 +1413,11 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
         }
     }
 
+    private sealed record RecordedPublication(
+        Any Event,
+        TopologyAudience Direction,
+        EventEnvelopePublishOptions? Options);
+
     private sealed class RecordingWorkflowTool(
         string name,
         Func<WorkflowToolExecutionRequest, WorkflowToolExecutionResult> execute) : IWorkflowTool
@@ -1108,6 +1436,60 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
         }
     }
 
+    private sealed class OverlappingWorkflowTool(string name, int expectedExecutions) : IWorkflowTool
+    {
+        private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _allExpectedExecutionsEntered =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _activeExecutions;
+        private int _executeCalls;
+        private int _maxActiveExecutions;
+
+        public string Name { get; } = name;
+
+        public int ExecuteCalls => Volatile.Read(ref _executeCalls);
+
+        public int MaxActiveExecutions => Volatile.Read(ref _maxActiveExecutions);
+
+        public Task AllExpectedExecutionsEntered => _allExpectedExecutionsEntered.Task;
+
+        public async Task<WorkflowToolExecutionResult> ExecuteAsync(
+            WorkflowToolExecutionRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            var executeCalls = Interlocked.Increment(ref _executeCalls);
+            var active = Interlocked.Increment(ref _activeExecutions);
+            UpdateMaxActive(active);
+            if (executeCalls == expectedExecutions)
+                _allExpectedExecutionsEntered.TrySetResult();
+
+            try
+            {
+                await _release.Task.WaitAsync(ct);
+                return WorkflowToolExecutionResult.Success("{}");
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _activeExecutions);
+            }
+        }
+
+        public void ReleaseAll() => _release.TrySetResult();
+
+        private void UpdateMaxActive(int candidate)
+        {
+            var observed = Volatile.Read(ref _maxActiveExecutions);
+            while (candidate > observed)
+            {
+                var prior = Interlocked.CompareExchange(ref _maxActiveExecutions, candidate, observed);
+                if (prior == observed)
+                    return;
+                observed = prior;
+            }
+        }
+    }
+
     private sealed class SingleWorkflowToolSource(IWorkflowTool tool) : IWorkflowToolSource
     {
         public Task<IReadOnlyList<IWorkflowTool>> GetToolsAsync(CancellationToken ct = default)
@@ -1117,11 +1499,13 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
         }
     }
 
-    private sealed class RecordingStateHost : IWorkflowExecutionStateHost
+    private sealed class RecordingStateHost : IWorkflowExecutionStateHost, IRuntimeSecretStoreAccessor
     {
         public string RunId { get; init; } = "run-1";
 
         public WorkflowExecutionRuntimeContext RuntimeContext { get; } = new();
+
+        public IRuntimeSecretStore? RuntimeSecretStore { get; } = new InMemoryRuntimeSecretStore();
 
         public WorkflowRunExecutionContextState ExecutionContextSnapshot { get; } = new();
 
@@ -1225,7 +1609,10 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
 
     private sealed class NullServiceProvider : IServiceProvider
     {
-        public object? GetService(System.Type serviceType) => null;
+        private readonly IRuntimeSecretStore _runtimeSecretStore = new InMemoryRuntimeSecretStore();
+
+        public object? GetService(System.Type serviceType) =>
+            serviceType == typeof(IRuntimeSecretStore) ? _runtimeSecretStore : null;
     }
 
     private sealed class StubAgent(string id) : IAgent

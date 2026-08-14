@@ -3,6 +3,11 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Execution;
 
+internal interface IWorkflowExecutionBackgroundWorkOwner
+{
+    void CancelBackgroundWork();
+}
+
 internal sealed class WorkflowExecutionBridgeModule : IEventModule<IEventHandlerContext>
 {
     private readonly IReadOnlyList<IEventModule<IWorkflowExecutionContext>> _executors;
@@ -21,6 +26,12 @@ internal sealed class WorkflowExecutionBridgeModule : IEventModule<IEventHandler
     public string Name => "workflow_execution_bridge";
 
     public int Priority => 0;
+
+    internal void CancelBackgroundWork()
+    {
+        foreach (var owner in _executors.OfType<IWorkflowExecutionBackgroundWorkOwner>())
+            owner.CancelBackgroundWork();
+    }
 
     public bool CanHandle(EventEnvelope envelope) =>
         _executors.Any(x => x.CanHandle(envelope));
@@ -53,7 +64,7 @@ internal sealed class WorkflowExecutionBridgeModule : IEventModule<IEventHandler
                     ex,
                     "workflow_execution_bridge: durable executor publication remains pending run={RunId}",
                     _stateHost.RunId);
-                return;
+                throw;
             }
             catch (Exception ex) when (envelope.Payload?.Is(StepRequestEvent.Descriptor) == true)
             {

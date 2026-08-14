@@ -10,6 +10,7 @@ public static class CredentialSecretPurposes
     public const string WorkflowCallerSourceReadableUserBearerToken =
         "workflow.caller-source-readable-user-bearer-token";
     public const string WorkflowSecureInputValue = "workflow.secure-input-value";
+    public const string WorkflowToolCallProtectedMaterial = "workflow.tool-call-protected-material";
     public const string WorkflowConnectorExternalActionMaterial = "workflow.connector-external-action-material";
     public const string WorkflowConnectorExternalActionCompletion = "workflow.connector-external-action-completion";
     public const string DeviceHmacSigningKey = "device.hmac-signing-key";
