@@ -224,6 +224,74 @@ public sealed class ServiceServingProjectorAndQueryTests
     }
 
     [Fact]
+    public async Task ServingSetProjector_ShouldAcceptExactReplay_AndSurfaceConflictingVersion()
+    {
+        var store = new RecordingDocumentStore<ServiceServingSetReadModel>(x => x.Id)
+        {
+            EnforceMonotonicWrites = true,
+        };
+        var projector = new ServiceServingSetProjector(store, new FixedProjectionClock(DateTimeOffset.UtcNow));
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var context = new ServiceServingSetProjectionContext
+        {
+            RootActorId = "tenant:app:default:svc",
+            ProjectionKind = "service-serving",
+        };
+        var observedAt = DateTimeOffset.Parse("2026-03-15T08:00:00+00:00");
+        var committed = BuildCommittedEnvelope(
+            new ServiceServingSetUpdatedEvent
+            {
+                Identity = identity.Clone(),
+                Generation = 10,
+                RolloutId = "rollout-a",
+                Targets = { CreateTarget("dep-a", "r1", "actor-a", 100, "run") },
+            },
+            new StringValue { Value = "state" },
+            eventId: "evt-serving-10",
+            stateVersion: 10,
+            observedAt: observedAt);
+
+        await projector.ProjectAsync(context, committed);
+        await projector.ProjectAsync(context, committed.Clone());
+
+        await projector.ProjectAsync(
+            context,
+            BuildCommittedEnvelope(
+                new ServiceServingSetUpdatedEvent
+                {
+                    Identity = identity.Clone(),
+                    Generation = 9,
+                    RolloutId = "rollout-stale",
+                    Targets = { CreateTarget("dep-stale", "r0", "actor-stale", 100, "run") },
+                },
+                new StringValue { Value = "state" },
+                eventId: "evt-serving-9",
+                stateVersion: 9,
+                observedAt: observedAt.AddMinutes(-1)));
+
+        var conflicting = BuildCommittedEnvelope(
+            new ServiceServingSetUpdatedEvent
+            {
+                Identity = identity.Clone(),
+                Generation = 10,
+                RolloutId = "rollout-conflict",
+                Targets = { CreateTarget("dep-b", "r2", "actor-b", 100, "run") },
+            },
+            new StringValue { Value = "state" },
+            eventId: "evt-serving-10",
+            stateVersion: 10,
+            observedAt: observedAt);
+
+        Func<Task> act = async () => await projector.ProjectAsync(context, conflicting);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*serving-set projection*state version 10: Conflict*");
+        var snapshot = await store.GetAsync(ServiceKeys.Build(identity));
+        snapshot!.LastEventId.Should().Be("evt-serving-10");
+        snapshot.ActiveRolloutId.Should().Be("rollout-a");
+    }
+
+    [Fact]
     public async Task RolloutProjectorAndQueryReader_ShouldProjectLifecycleAcrossEvents()
     {
         var store = new RecordingDocumentStore<ServiceRolloutReadModel>(x => x.Id);
@@ -687,6 +755,74 @@ public sealed class ServiceServingProjectorAndQueryTests
             ProjectionKind = "service-traffic",
         };
         (await reader.GetAsync(GAgentServiceTestKit.CreateIdentity())).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task TrafficViewProjector_ShouldAcceptExactReplay_AndSurfaceConflictingVersion()
+    {
+        var store = new RecordingDocumentStore<ServiceTrafficViewReadModel>(x => x.Id)
+        {
+            EnforceMonotonicWrites = true,
+        };
+        var projector = new ServiceTrafficViewProjector(store, new FixedProjectionClock(DateTimeOffset.UtcNow));
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var context = new ServiceTrafficViewProjectionContext
+        {
+            RootActorId = "tenant:app:default:svc",
+            ProjectionKind = "service-traffic",
+        };
+        var observedAt = DateTimeOffset.Parse("2026-03-15T08:00:00+00:00");
+        var committed = BuildCommittedEnvelope(
+            new ServiceServingSetUpdatedEvent
+            {
+                Identity = identity.Clone(),
+                Generation = 10,
+                RolloutId = "rollout-a",
+                Targets = { CreateTarget("dep-a", "r1", "actor-a", 100, "run") },
+            },
+            new StringValue { Value = "state" },
+            eventId: "evt-serving-10",
+            stateVersion: 10,
+            observedAt: observedAt);
+
+        await projector.ProjectAsync(context, committed);
+        await projector.ProjectAsync(context, committed.Clone());
+
+        await projector.ProjectAsync(
+            context,
+            BuildCommittedEnvelope(
+                new ServiceServingSetUpdatedEvent
+                {
+                    Identity = identity.Clone(),
+                    Generation = 9,
+                    RolloutId = "rollout-stale",
+                    Targets = { CreateTarget("dep-stale", "r0", "actor-stale", 100, "run") },
+                },
+                new StringValue { Value = "state" },
+                eventId: "evt-serving-9",
+                stateVersion: 9,
+                observedAt: observedAt.AddMinutes(-1)));
+
+        var conflicting = BuildCommittedEnvelope(
+            new ServiceServingSetUpdatedEvent
+            {
+                Identity = identity.Clone(),
+                Generation = 10,
+                RolloutId = "rollout-conflict",
+                Targets = { CreateTarget("dep-b", "r2", "actor-b", 100, "run") },
+            },
+            new StringValue { Value = "state" },
+            eventId: "evt-serving-10",
+            stateVersion: 10,
+            observedAt: observedAt);
+
+        Func<Task> act = async () => await projector.ProjectAsync(context, conflicting);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*traffic-view projection*state version 10: Conflict*");
+        var snapshot = await store.GetAsync(ServiceKeys.Build(identity));
+        snapshot!.LastEventId.Should().Be("evt-serving-10");
+        snapshot.ActiveRolloutId.Should().Be("rollout-a");
     }
 
     private static EventEnvelope BuildEnvelope<T>(T evt)
