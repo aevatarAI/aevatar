@@ -94,6 +94,10 @@ public static class ServiceCollectionExtensions
 
         services.AddCurrentStateProjectionMaterializer<
             StudioMaterializationContext,
+            LLMModelCatalogPolicyCurrentStateProjector>();
+
+        services.AddCurrentStateProjectionMaterializer<
+            StudioMaterializationContext,
             GAgentRegistryCurrentStateProjector>();
 
         services.AddCurrentStateProjectionMaterializer<
@@ -199,6 +203,10 @@ public static class ServiceCollectionExtensions
             UserConfigCurrentStateDocumentMetadataProvider>();
 
         services.TryAddSingleton<
+            IProjectionDocumentMetadataProvider<LLMModelCatalogPolicyCurrentStateDocument>,
+            LLMModelCatalogPolicyCurrentStateDocumentMetadataProvider>();
+
+        services.TryAddSingleton<
             IProjectionDocumentMetadataProvider<GAgentRegistryCurrentStateDocument>,
             GAgentRegistryCurrentStateDocumentMetadataProvider>();
 
@@ -271,6 +279,7 @@ public static class ServiceCollectionExtensions
 
         // Query ports (read side)
         services.TryAddSingleton<IUserConfigQueryPort, ProjectionUserConfigQueryPort>();
+        services.TryAddSingleton<ILLMModelCatalogPolicyQueryPort, ProjectionLLMModelCatalogPolicyQueryPort>();
         services.TryAddSingleton<IUserMemoryQueryPort, ProjectionUserMemoryQueryPort>();
         services.TryAddSingleton<IStudioMemberQueryPort, ProjectionStudioMemberQueryPort>();
         services.TryAddSingleton<IContentArtifactQueryPort, ProjectionContentArtifactQueryPort>();
@@ -286,6 +295,9 @@ public static class ServiceCollectionExtensions
 
         // Command services (write side)
         services.TryAddSingleton<IUserConfigCommandService, ActorDispatchUserConfigCommandService>();
+        services.TryAddSingleton<
+            ILLMModelCatalogPolicyCommandPort,
+            ActorDispatchLLMModelCatalogPolicyCommandService>();
         services.TryAddSingleton<IStudioMemberCommandPort, ActorDispatchStudioMemberCommandService>();
         services.TryAddSingleton<
             IStudioWorkflowScheduleProvisioningCommandPort,

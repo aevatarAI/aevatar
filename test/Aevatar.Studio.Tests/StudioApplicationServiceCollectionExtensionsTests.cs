@@ -85,6 +85,18 @@ public sealed class StudioApplicationServiceCollectionExtensionsTests
         services.Should().ContainSingle(x => x.ServiceType == typeof(IUserConfigService))
             .Which.ImplementationType.Should().Be(typeof(UserConfigService));
         services.Should().ContainSingle(x =>
+            x.ServiceType == typeof(ILLMModelCatalogPolicyApplicationService) &&
+            x.ImplementationType == typeof(LLMModelCatalogPolicyApplicationService) &&
+            x.Lifetime == ServiceLifetime.Singleton);
+        services.Should().ContainSingle(x =>
+            x.ServiceType == typeof(ILLMModelDiscoveryApplicationService) &&
+            x.ImplementationType == typeof(LLMModelDiscoveryApplicationService) &&
+            x.Lifetime == ServiceLifetime.Singleton);
+        services.Should().ContainSingle(x =>
+            x.ServiceType == typeof(ILLMModelRouteApplicationService) &&
+            x.ImplementationType == typeof(LLMModelRouteApplicationService) &&
+            x.Lifetime == ServiceLifetime.Singleton);
+        services.Should().ContainSingle(x =>
             x.ServiceType == typeof(IScopeWorkflowPublishedServiceDescriptorSource) &&
             x.ImplementationType == typeof(StudioMemberScopeWorkflowDescriptorSource) &&
             x.Lifetime == ServiceLifetime.Singleton);

@@ -75,6 +75,7 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
             RegisterElasticsearch<GAgentRegistryCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<UserMemoryCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<UserConfigCurrentStateDocument>(services, configuration);
+            RegisterElasticsearch<LLMModelCatalogPolicyCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<StudioMemberCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<StudioMemberBindingRunCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<StudioTeamCurrentStateDocument>(services, configuration);
@@ -116,6 +117,7 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
             RegisterInMemory<GAgentRegistryCurrentStateDocument>(services);
             RegisterInMemory<UserMemoryCurrentStateDocument>(services);
             RegisterInMemory<UserConfigCurrentStateDocument>(services);
+            RegisterInMemory<LLMModelCatalogPolicyCurrentStateDocument>(services);
             RegisterInMemory<StudioMemberCurrentStateDocument>(services);
             RegisterInMemory<StudioMemberBindingRunCurrentStateDocument>(services);
             RegisterInMemory<StudioTeamCurrentStateDocument>(services);
@@ -197,6 +199,7 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
                && HasDocumentReaderForProvider<GAgentRegistryCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<UserMemoryCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<UserConfigCurrentStateDocument>(services, providerKind)
+               && HasDocumentReaderForProvider<LLMModelCatalogPolicyCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<StudioMemberCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<StudioMemberBindingRunCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<StudioTeamCurrentStateDocument>(services, providerKind)
@@ -242,6 +245,7 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
     {
         return TypeRegistry.FromMessages(
             UserConfigGAgentState.Descriptor,
+            LLMModelCatalogPolicyGAgentState.Descriptor,
             GAgentRegistryState.Descriptor,
             ConnectorCatalogState.Descriptor,
             RoleCatalogState.Descriptor,

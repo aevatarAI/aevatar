@@ -24,6 +24,7 @@ public sealed class StudioCommittedStateProjectionActivationPlanProvider : IProj
         new Dictionary<Type, string>
         {
             [typeof(UserConfigGAgent)] = UserConfigGAgent.ProjectionKind,
+            [typeof(LLMModelCatalogPolicyGAgent)] = LLMModelCatalogPolicyGAgent.ProjectionKind,
             [typeof(GAgentRegistryGAgent)] = GAgentRegistryGAgent.ProjectionKind,
             [typeof(ConnectorCatalogGAgent)] = ConnectorCatalogGAgent.ProjectionKind,
             [typeof(RoleCatalogGAgent)] = RoleCatalogGAgent.ProjectionKind,

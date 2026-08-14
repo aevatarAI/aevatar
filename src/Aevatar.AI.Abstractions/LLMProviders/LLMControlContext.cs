@@ -13,6 +13,8 @@ public sealed record LLMControlContext(
 {
     public static LLMControlContext Empty { get; } = new(null, null, null, null, null, null, null);
 
+    public LLMRouteTarget? RouteTarget { get; init; }
+
     public AgentToolExecutionContext ToToolContext(AgentToolExecutionContext? baseContext = null)
     {
         var context = baseContext ?? AgentToolExecutionContext.Empty;
@@ -28,6 +30,7 @@ public sealed record LLMControlContext(
             {
                 ModelOverride = Normalize(ModelOverride) ?? context.Routing.ModelOverride,
                 NyxIdRoutePreference = Normalize(NyxIdRoutePreference) ?? context.Routing.NyxIdRoutePreference,
+                RouteTarget = RouteTarget?.Clone() ?? context.Routing.RouteTarget?.Clone(),
                 MaxToolRoundsOverride = MaxToolRoundsOverride ?? context.Routing.MaxToolRoundsOverride,
                 UserMemoryPrompt = Normalize(UserMemoryPrompt) ?? context.Routing.UserMemoryPrompt,
             },
@@ -41,6 +44,7 @@ public sealed record LLMControlContext(
         {
             ModelOverride = Normalize(ModelOverride) ?? routing.ModelOverride,
             NyxIdRoutePreference = Normalize(NyxIdRoutePreference) ?? routing.NyxIdRoutePreference,
+            RouteTarget = RouteTarget?.Clone() ?? routing.RouteTarget?.Clone(),
             MaxToolRoundsOverride = MaxToolRoundsOverride ?? routing.MaxToolRoundsOverride,
             UserMemoryPrompt = Normalize(UserMemoryPrompt) ?? routing.UserMemoryPrompt,
         };

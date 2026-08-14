@@ -146,6 +146,24 @@ Backend Admin 的 Studio 从 `/admin#/studio` 进入。Admin shell 通过 Mainne
 `/admin/studio` 页面路由装载 canonical Studio 静态资源，并在嵌入时移除 Studio 自带顶栏；
 `/workflow/studio` 仅保留为独立 Studio surface，不再是 Admin 导航的目标。
 
+Backend Admin 的模型目录从 `/admin#/models` 进入。当前 scope 与平台默认分别使用以下
+API：
+
+- `GET|PUT|DELETE /api/scopes/{scopeId}/llm-model-catalog`
+- `GET /api/scopes/{scopeId}/llm-model-catalog/candidates`
+- `GET|PUT /api/admin/llm-model-catalog`
+- `GET /api/admin/llm-model-catalog/candidates`
+
+`LLMModelCatalogPolicyGAgent` 是每个 platform/scope policy 的唯一写侧权威；提交命令只返回
+`202 Accepted`，客户端必须等待 current-state projection 的后续 GET 同时返回更高
+`stateVersion` 和等于本次 `mutationId` 的 `lastMutationId` 才能确认物化。版本前进但 mutation
+不同表示本次修改已被并发更新取代，客户端必须加载最新配置并提示重试。平台策略始终是 `custom_replace`，并用精确
+`catalogServiceId` 保存可移植的默认来源；scope 可以 `inherit_platform`，也可以用精确
+`userServiceId` 保存完整 `custom_replace`。显式空的 `custom_replace` 是有效空目录，不会
+回退平台默认。每个来源必须保存非空 `explicit_models` 列表，不存在 wildcard/all-models
+模式。`serviceSlugSnapshot` 必须是 policy 内唯一的 NyxID canonical slug；它只充当公开模型
+命名空间，不替代 exact service identity 或授权判断。
+
 Responses / Messages 直连接口也挂在主机上，外部推荐经 NyxID proxy 访问：
 
 - `GET /v1/models`
@@ -156,7 +174,11 @@ Responses / Messages 直连接口也挂在主机上，外部推荐经 NyxID prox
 
 说明：
 
-- `/v1/models` 会聚合当前调用者在 NyxID 上可达的 LLM service，并返回 `<service-slug>/<model>` 形态的模型 id。创建请求会把 service slug 解析成 NyxID route preference，裸 model 名仍作为旧调用方兼容路径。
+- `/v1/models` 要求 bearer，只用于 caller-scope resolver 得到 `scopeId`；discovery service 只接收 `scopeId`，不接收 bearer，也不执行 HTTP 请求。它只读取 effective policy current-state projection，运行时不读取 human-only 的 `/api/v1/keys`、`/api/v1/services` 或 `/api/v1/user-services`，也不调用上游 `/models`。Admin candidate inventory 只是配置辅助，不是运行时事实。
+- scope `custom_replace`（包括显式空来源）是完整替换且永不回退；scope policy 缺失或 `inherit_platform` 时使用平台 projection，所需平台 projection 缺失或不可用时返回 `503 model_catalog_unavailable`。缺失或非法 caller authentication 返回 `401`；显式空有效策略返回 `200 OK` 与 `data: []`。不存在按来源失败、部分成功或上游认证状态分类。
+- `/v1/models` 把每个显式 model 确定性映射为 `<serviceSlugSnapshot>/<upstreamModelId>` 并按完整 `id` 做 ordinal 排序；`created=0`，`owned_by` 与 `group` 等于 slug，optional rich metadata 为 null 并从 JSON 省略。
+- qualified invocation 必须用 slug 与 upstream model ID 对同一份 effective policy 做 exact match。平台来源生成携带 exact `catalogServiceId` 的 typed target；scope 来源生成携带 exact `userServiceId` 与 canonical slug snapshot 的 typed target。slug 不是 authoritative identity。未知 slug/model 返回 `404 model_not_found`，routing projection 不可用返回 `503 model_route_unavailable`；裸 model 名只保留为旧调用方兼容路径。
+- qualified invocation 走 NyxID REST proxy plane，调用 bearer 必须具备 `proxy` 或 `proxy:*` capability；只有 `llm:proxy` 的旧 token 只能覆盖 gateway，不能调用配置后的 `<serviceSlugSnapshot>/<upstreamModelId>`。
 - `/v1/responses` 是 OpenAI Responses 兼容主入口；`previous_response_id` 会通过 response session read model 校验同一调用者、同一 ingress origin 下的上一条 response。`function_call_output` 会按上一条 response 的 forwarded tool call 记录用 `call_id` 对账。
 - `stream=true` 时返回 Responses 风格 SSE：`response.created`、`response.output_item.added`、`response.output_text.delta`、`response.output_text.done`、`response.output_item.done`、`response.completed`；失败时输出 `response.failed` / `error`。
 - `Authorization: Bearer <token>` 只在请求上下文中透传，不会落盘；持久化的 response session 只记录 NyxID `/me` 解析出的 caller scope 与 opaque `response.id`。

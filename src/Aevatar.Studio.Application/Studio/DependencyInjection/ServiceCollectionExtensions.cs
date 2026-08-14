@@ -89,6 +89,16 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IChannelUserLlmPreferencePort, ChannelUserLlmPreferencePort>();
         services.TryAddSingleton<IUserConfigService, UserConfigService>();
         services.TryAddSingleton<IUserLlmPreferenceService, UserLlmPreferenceService>();
+        services.TryAddSingleton<LLMModelSourceResolver>();
+        services.TryAddSingleton<
+            ILLMModelCatalogPolicyApplicationService,
+            LLMModelCatalogPolicyApplicationService>();
+        services.TryAddSingleton<
+            ILLMModelDiscoveryApplicationService,
+            LLMModelDiscoveryApplicationService>();
+        services.TryAddSingleton<
+            ILLMModelRouteApplicationService,
+            LLMModelRouteApplicationService>();
 
         // Override the platform resolver so existing member-first invoke /
         // runs / binding routes resolve to the same

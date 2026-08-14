@@ -1138,7 +1138,14 @@ public partial class NyxIdChatEndpointsCoverageTests
             ModelOverride: "relay-model",
             NyxIdRoutePreference: "/api/v1/proxy/s/relay-provider",
             MaxToolRoundsOverride: 7,
-            UserMemoryPrompt: "remember this"));
+            UserMemoryPrompt: "remember this")
+        {
+            RouteTarget = new LLMRouteTarget
+            {
+                UserServiceId = "us-relay",
+                ServiceSlugSnapshot = "relay-provider",
+            },
+        });
         context.Response.Body.Position = 0;
         var body = await new StreamReader(context.Response.Body).ReadToEndAsync();
         body.Should().Contain("RUN_STARTED");

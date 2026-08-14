@@ -16,7 +16,7 @@ owner: eanzhao
 
 | 入口 | 协议形态 | 状态 | 说明 |
 |---|---|---|---|
-| `GET /v1/models` | OpenAI models list | 已上线 | 聚合调用者在 NyxID 上可达的 LLM 服务模型 |
+| `GET /v1/models` | OpenAI models list | 已上线 | 返回当前 scope effective policy 中显式配置的模型 |
 | `POST /v1/responses` | OpenAI Responses 兼容 | 已上线 | 主入口，支持 streaming、工具声明、`previous_response_id` continuation |
 | `POST /v1/responses/{id}/cancel` | OpenAI Responses cancel | 已上线 | 取消可见的 response session |
 | `POST /v1/messages` | Anthropic Messages facade | 已上线 | 给 Messages-only 客户端使用，共享直连工具分类 |
@@ -62,7 +62,9 @@ Aevatar endpoint 本身标记为 anonymous，不是因为免鉴权，而是因�
 
 ## 3. 模型清单与路由
 
-`GET /v1/models` 会从 NyxID LLM service catalog 取到调用者可见的服务，再 fan-out 到每个服务的 `/models` 平面。Aevatar 返回给客户端的模型 id 统一带服务前缀：
+`GET /v1/models` 先解析 caller scope，再只读该 scope 的 effective model catalog policy
+current-state projection。scope 可以完整替换平台默认，也可以继承平台默认；显式空替换不会回退。
+每个配置来源必须列出至少一个精确模型 ID，Aevatar 返回的 id 统一带服务前缀：
 
 ```text
 <service-slug>/<model-id>
@@ -75,21 +77,30 @@ chrono-llm/gpt-5.5
 llm-anthropic/claude-haiku-4-5
 ```
 
-每个 model entry 还会尽量带上：
+每个 model entry 稳定包含：
 
-- `route_value`：NyxID 真实 route，例如 `/api/v1/proxy/s/chrono-llm`
 - `group` / `owned_by`：服务 slug
-- `context_length`
-- `max_output_tokens`
-- `display_name`
-- `description`
+- `created`：固定为 `0`
+
+当前 policy 不存储 `context_length`、`max_output_tokens`、`display_name` 或 `description`，
+因此这些扩展字段从 JSON 省略。列模型不会调用 NyxID `/api/v1/keys`、`/api/v1/services`
+或任一上游 `/models`，也不会按 URL、display name 或 `llm` 子串推断服务能力。
 
 发起 `/v1/responses` 或 `/v1/messages` 时，客户端应该优先使用 `/v1/models` 返回的完整 id。Aevatar 会解析 `<service-slug>/<model>`：
 
-1. 如果 prefix 像 NyxID service slug，并能在调用者 catalog 中解析到 route，Aevatar 会把 route 写入 `NyxIdRoutePreference`，再把裸 model 传给下游 provider。
-2. 如果 prefix 解析不到，或模型名本来就是裸模型名，Aevatar 走默认 gateway fallback，让 NyxID gateway 自己按 model 名处理。
+1. qualified model 必须在 effective policy 中精确命中同一 slug 和模型 ID，否则返回 `404 model_not_found`。
+2. scope 自定义来源把 exact `userServiceId + serviceSlugSnapshot` 写入 typed `LLMRouteTarget`；平台默认来源写入 exact `catalogServiceId + serviceSlugSnapshot`。
+3. NyxID provider 分别调用 `/api/v1/proxy/s/{slug}?_nyxid_via={userServiceId}` 或 `/api/v1/proxy/{catalogServiceId}`；NyxID 在 proxy 边界最终校验 caller、组织权限和 API-key `allowed_service_ids`。
+4. policy/read model 暂不可读时返回 `503 model_route_unavailable`，不会回退到字符串猜测。
 
-裸模型名仍然保留是为了兼容旧调用方；新客户端不要依赖裸名自动路由。
+这两种 qualified route 都属于 NyxID REST proxy plane，因此调用 bearer 必须具备 `proxy`
+或 `proxy:*` capability。只有 `llm:proxy` 的旧 token 仅覆盖 LLM gateway，不足以调用
+`<service-slug>/<model>`；调用方必须重新签发包含 REST proxy capability 的 token。
+
+裸模型名仍保留 gateway 或 owner UserConfig fallback，供旧调用方兼容；新客户端不要依赖裸名自动路由。
+Admin 的 `/admin#/models` 页面使用 `/api/v1/keys`（scope）和 `/api/v1/services`
+（平台管理员）作为配置候选，但候选 inventory 不是运行时事实。保存配置不会创建 NyxID binding
+或授予权限，所以一个已列出的模型仍可能在调用时被 NyxID 拒绝。
 
 ## 4. Responses 主入口
 
@@ -250,7 +261,9 @@ Aevatar service catalog 的 `externalExposure` 是 service definition 拥有的 
 
 这个事实不属于 service binding。Binding 只表达本 service 依赖的下游资源；`externalExposure` 表达本 service 自身对外暴露后的可发现信息。Aevatar 不会因为该字段自动向 NyxID 注册服务，也不会把该字段接入 dispatcher 路由。写入仍走 service definition 的窄 external exposure 更新入口，读取走 service catalog readmodel 与现有 service/scope service API 响应。
 
-因此 API key 至少需要 `proxy` scope，或更宽的 proxy scope。生产上可以用 `--allowed-services` 收紧到 Aevatar 与目标 LLM 服务；调试时可以先用 `--allow-all-services` 验证链路。
+因此 API key 至少需要 `proxy` scope，或更宽的 `proxy:*` scope；`llm:proxy` 不能替代这项
+REST proxy capability。生产上可以用 `--allowed-services` 收紧到 Aevatar 与目标 LLM 服务；
+调试时可以先用 `--allow-all-services` 验证链路。
 
 `--allowed-services` 必须填 `nyxid service list --output json` 里的 UserService id，不是 catalog id。填错时常见错误是 `api_key_scope_forbidden_legacy`。
 
@@ -262,9 +275,11 @@ Aevatar service catalog 的 `externalExposure` 是 service definition 拥有的 
 - `src/Aevatar.Mainnet.Host.Api/Messages/MessagesEndpoints.cs`
 - `src/Aevatar.Mainnet.Host.Api/ChatCompletions/ChatCompletionsEndpoints.cs`
 
-模型聚合与路由：
+模型目录与路由：
 
-- `src/Aevatar.Mainnet.Host.Api/Responses/ResponsesModelsAggregator.cs`
+- `src/Aevatar.Mainnet.Host.Api/ModelCatalog/LLMModelCatalogEndpoints.cs`
+- `src/Aevatar.Studio.Application/Studio/Services/LLMModelRouteApplicationService.cs`
+- `src/Aevatar.Studio.Projection/QueryPorts/ProjectionLLMModelCatalogPolicyQueryPort.cs`
 - `src/Aevatar.Mainnet.Host.Api/Responses/ResponsesRouteResolver.cs`
 - `src/Aevatar.Mainnet.Host.Api/Responses/ResponsesApiModels.cs`
 

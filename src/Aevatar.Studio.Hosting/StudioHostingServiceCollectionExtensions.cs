@@ -59,6 +59,9 @@ internal static class StudioHostingServiceCollectionExtensions
         AddWorkOrderExecutionWorker(services, configuration);
         services.Configure<NyxIdLlmCatalogCacheOptions>(
             configuration.GetSection(NyxIdLlmCatalogCacheOptions.SectionName));
+        services.TryAddSingleton<
+            INyxIdModelSourceInventoryPort,
+            NyxIdModelSourceInventoryHttpClient>();
         services.TryAddSingleton<NyxIdLlmCatalogHttpClient>();
         services.TryAddSingleton<IUserLlmCatalogPort>(sp => new CachedNyxIdLlmCatalogPort(
             sp.GetRequiredService<NyxIdLlmCatalogHttpClient>(),

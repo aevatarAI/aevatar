@@ -7,6 +7,7 @@ import "Protos/voice_presence.proto";
 import "ToolProviders/agent_tool_admission.proto";
 import "Tools/tool_presentation.proto";
 import "google/protobuf/timestamp.proto";
+import "llm_selection.proto";
 
 enum ChatContentPartKind {
   CHAT_CONTENT_PART_KIND_UNSPECIFIED = 0;
@@ -105,6 +106,7 @@ message LLMControlContextPayload {
   string nyx_id_route_preference = 5;
   optional int32 max_tool_rounds_override = 6;
   string user_memory_prompt = 7;
+  LLMRouteTarget route_target = 8;
 }
 
 enum TelegramBridgeOperation {
@@ -376,6 +378,7 @@ message LLMRequestRoutingContextPayload {
   string nyx_id_route_preference = 2;
   optional int32 max_tool_rounds_override = 3;
   string user_memory_prompt = 4;
+  LLMRouteTarget route_target = 5;
 }
 
 message AgentToolConnectedServicesContextPayload {

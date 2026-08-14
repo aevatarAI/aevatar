@@ -48,7 +48,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Protobuf Include="ReadModels/studio_projection_readmodels.proto" GrpcServices="None" AdditionalImportDirs="../Aevatar.AI.Abstractions;../Aevatar.Foundation.Abstractions" />
+    <Protobuf Include="ReadModels/studio_projection_readmodels.proto" GrpcServices="None" AdditionalImportDirs="../Aevatar.AI.Abstractions;../Aevatar.Foundation.Abstractions;../../agents/Aevatar.GAgents.UserConfig" />
   </ItemGroup>
 
   <ItemGroup>

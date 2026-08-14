@@ -78,6 +78,7 @@ public sealed class ChatRuntimeStepExecutor
                     : ToolCallLoop.ComposeRoundCallId(baseRequest.RequestId, round)),
             RoutingContext = baseRequest.RoutingContext,
             LlmControl = baseRequest.LlmControl,
+            RouteTarget = baseRequest.RouteTarget?.Clone(),
             Tools = finalNoTools ? null : baseRequest.Tools,
             Model = baseRequest.Model,
             Temperature = baseRequest.Temperature,

@@ -5,6 +5,7 @@ option csharp_namespace = "Aevatar.Studio.Projection.ReadModels";
 import "google/protobuf/any.proto";
 import "google/protobuf/timestamp.proto";
 import "llm_selection.proto";
+import "llm_model_catalog_policy_messages.proto";
 import "Tools/tool_presentation.proto";
 
 message ContentArtifactCitationDocument {
@@ -291,6 +292,22 @@ message UserConfigCurrentStateDocument {
   int32 max_tool_rounds = 15;
   string github_username = 16;
   aevatar.ai.LLMSelection llm_selection = 17;
+}
+
+// Actor-scoped current-state replica for LLMModelCatalogPolicyGAgent.
+// The committed actor version is the sole state_version authority.
+message LLMModelCatalogPolicyCurrentStateDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at = 5;
+
+  aevatar.gagents.user_config.LLMModelCatalogPolicyOwnerType owner_type = 20;
+  string scope_id = 21;
+  aevatar.gagents.user_config.LLMModelCatalogPolicyMode mode = 22;
+  repeated aevatar.gagents.user_config.LLMModelCatalogPolicySource sources = 23;
+  string last_mutation_id = 24;
 }
 
 // ─── GAgentRegistry Current State ReadModel ───
