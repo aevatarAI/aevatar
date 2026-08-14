@@ -495,7 +495,14 @@ public sealed class AgentToolAdmissionLedgerTests
             {
                 var ready = WaitForReadyAsync(process);
                 var exited = process.WaitForExitAsync();
-                if (await Task.WhenAny(ready, exited) != ready)
+                var readinessTimeout = Task.Delay(TimeSpan.FromSeconds(10));
+                var readinessOutcome = await Task.WhenAny(ready, exited, readinessTimeout);
+                if (readinessOutcome == readinessTimeout)
+                {
+                    throw new TimeoutException(
+                        $"redis-server {ExpectedVersion} did not become ready within 10 seconds.");
+                }
+                if (readinessOutcome != ready)
                 {
                     throw new InvalidOperationException(
                         $"redis-server exited before readiness: {await process.StandardError.ReadToEndAsync()}");
@@ -511,7 +518,10 @@ public sealed class AgentToolAdmissionLedgerTests
             catch
             {
                 if (!process.HasExited)
+                {
                     process.Kill(entireProcessTree: true);
+                    await process.WaitForExitAsync();
+                }
                 process.Dispose();
                 throw;
             }
@@ -573,9 +583,23 @@ public sealed class AgentToolAdmissionLedgerTests
 
             foreach (var directory in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
             {
+                var normalizedDirectory = directory;
+                if (OperatingSystem.IsWindows())
+                {
+                    normalizedDirectory = directory.Trim();
+                    if (normalizedDirectory.Length >= 2 &&
+                        normalizedDirectory[0] == '"' &&
+                        normalizedDirectory[^1] == '"')
+                    {
+                        normalizedDirectory = normalizedDirectory[1..^1];
+                    }
+                }
+                if (normalizedDirectory.Length == 0)
+                    continue;
+
                 foreach (var executableName in executableNames)
                 {
-                    var candidate = Path.Combine(directory.Trim(), executableName);
+                    var candidate = Path.Combine(normalizedDirectory, executableName);
                     if (File.Exists(candidate) && HasExpectedVersion(candidate))
                         return candidate;
                 }
