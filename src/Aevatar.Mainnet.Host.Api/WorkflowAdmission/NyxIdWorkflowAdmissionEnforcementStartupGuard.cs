@@ -76,7 +76,7 @@ internal sealed class NyxIdWorkflowAdmissionEnforcementStartupGuard(
                 if (deactivatedServiceDefinitions.Contains(document.ActorId))
                     continue;
 
-                if (!await HasValidV4PlanAsync(
+                if (!await HasValidStartupPlanAsync(
                         document.CapabilityAdmissionPlan,
                         document.WorkflowYaml,
                         document.InlineWorkflowYamlEntries,
@@ -160,7 +160,7 @@ internal sealed class NyxIdWorkflowAdmissionEnforcementStartupGuard(
             foreach (var document in page.Items)
             {
                 if (!IsTerminal(document.Status) &&
-                    !await HasValidV4PlanAsync(
+                    !await HasValidStartupPlanAsync(
                         document.CapabilityAdmissionPlan,
                         document.WorkflowYaml,
                         document.InlineWorkflowYamlEntries,
@@ -176,7 +176,7 @@ internal sealed class NyxIdWorkflowAdmissionEnforcementStartupGuard(
         return failures;
     }
 
-    private async Task<bool> HasValidV4PlanAsync(
+    private async Task<bool> HasValidStartupPlanAsync(
         WorkflowCapabilityAdmissionPlan? plan,
         string? workflowYaml,
         IReadOnlyDictionary<string, string> inlineWorkflowYamls,
@@ -202,14 +202,11 @@ internal sealed class NyxIdWorkflowAdmissionEnforcementStartupGuard(
             {
                 return true;
             }
-            if (plan is null ||
-                !WorkflowCapabilityAdmissionPlanIntegrity.IsSupportedSchemaVersion(plan.SchemaVersion))
-            {
+            if (plan is null || !TryCreateStartupValidationPlan(plan, out var validationPlan))
                 return false;
-            }
 
             WorkflowCapabilityAdmissionPlanIntegrity.ValidateOrThrow(
-                plan,
+                validationPlan,
                 workflowYaml ?? string.Empty,
                 inlineWorkflowYamls,
                 plan.ExecutionMode,
@@ -220,6 +217,37 @@ internal sealed class NyxIdWorkflowAdmissionEnforcementStartupGuard(
         {
             return false;
         }
+    }
+
+    private static bool TryCreateStartupValidationPlan(
+        WorkflowCapabilityAdmissionPlan plan,
+        out WorkflowCapabilityAdmissionPlan validationPlan)
+    {
+        validationPlan = plan;
+        if (WorkflowCapabilityAdmissionPlanIntegrity.IsSupportedSchemaVersion(plan.SchemaVersion))
+            return true;
+
+        // V5 inventory may exist while v6 rolls out. It is allowed to keep the host available only
+        // after its original digest and current definition still validate; runtime and persisted
+        // revalidation continue to reject v5 until the workflow is rebound as v6.
+        if (!string.Equals(
+                plan.SchemaVersion,
+                WorkflowCapabilityAdmissionPlanIntegrity.CodeRouteSchemaVersion,
+                StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(plan.AdmissionDigest) ||
+            !string.Equals(
+                plan.AdmissionDigest,
+                WorkflowCapabilityAdmissionPlanIntegrity.ComputeAdmissionDigest(plan),
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        validationPlan = plan.Clone();
+        validationPlan.SchemaVersion = WorkflowCapabilityAdmissionPlanIntegrity.SchemaVersion;
+        validationPlan.AdmissionDigest =
+            WorkflowCapabilityAdmissionPlanIntegrity.ComputeAdmissionDigest(validationPlan);
+        return true;
     }
 
     private static bool IsTerminal(string? status) =>

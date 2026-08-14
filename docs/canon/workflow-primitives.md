@@ -144,7 +144,7 @@ flowchart LR
     T --> U["Exact proxy route _nyxid_via=user_service_id"]
 ```
 
-所有普通 write entry（Scope upsert、Studio draft/provision/bind、skill mount、prepare、publish、startup file materialization）统一调用 `IWorkflowExternalCapabilityAdmissionService`，但契约明确区分两条路径。首次 live admission 在 mutation 前重新 parse YAML，以 authenticated caller 的 transient authority/credential 读取 live sources，并生成 `external-capability-admission.v5` plan。Actor 已持有 plan 的后续 prepare、publish 或 Studio handoff 只调用 credential-free persisted revalidation；每个调用点必须按当前业务契约独立提供 expected execution mode，并与 plan 精确匹配，禁止从待验证 plan 自身回读 mode。该路径不伪造 caller、不使用 `appId`/`serviceId` 替代 owner，也不重复外部 readiness read。既有 v4 NyxID proof 继续有效；v4 尚未表达的 `code_execute` 调用由 runtime 每次按 canonical contract 解析和复核，不要求用户 rebind。V2 与 v3 plan 仍需 rebind。
+所有普通 write entry（Scope upsert、Studio draft/provision/bind、skill mount、prepare、publish、startup file materialization）统一调用 `IWorkflowExternalCapabilityAdmissionService`，但契约明确区分两条路径。首次 live admission 在 mutation 前重新 parse YAML，以 authenticated caller 的 transient authority/credential 读取 live sources，并生成 `external-capability-admission.v6` plan。Actor 已持有 plan 的后续 prepare、publish 或 Studio handoff 只调用 credential-free persisted revalidation；每个调用点必须按当前业务契约独立提供 expected execution mode，并与 plan 精确匹配，禁止从待验证 plan 自身回读 mode。该路径不伪造 caller、不使用 `appId`/`serviceId` 替代 owner，也不重复外部 readiness read。既有 v4 NyxID proof 继续有效；v4 尚未表达的 `code_execute` 调用由 runtime 每次按 canonical contract 解析和复核，不要求用户 rebind。V2、v3 与未封存 response projection 的 v5 plan 均需 rebind。
 
 其中 Aevatar 所有权上下文与 NyxID authority 是两个独立 contract：`scope_id`、`owner_scope_id`、`owner_subject` 不得填入 NyxID caller；live admission 只接受认证入口提供的 typed NyxID user identity，缺失即返回 typed blocker。
 
@@ -156,6 +156,7 @@ YAML 的 exact capability 规则：
 - `nyxid_proxy` has exactly one selector: `capability.nyxid_operation { user_service_id, endpoint_id }` (`PublishedEndpoint`) or `capability.nyxid_request { user_service_id, method, path_template, query_parameters, header_parameters, body_mode, body_required, response_mode, risk? }` (`AuthoredRequest`). Both are static and mutually exclusive. `risk` accepts `read_only`、`write` or `destructive`; omitted contracts preserve the method-derived v1 digest, while an explicit risk is bound into the v2 request digest.
 - Published-operation slug/method/path/schema/source facts come from `/api/v1/mcp/config` at admission. Authored-request admission reads only exact UserService inventory, derives the slug constraint server-side, and requires a separate authenticated binder confirmation to create the typed grant. Dynamic selector, missing selector/grant, caller-authored proof fields, secret-bearing headers, and runtime route/policy overrides fail closed.
 - ordinary、nested、`foreach`/`for_each`/`foreach_llm` 与 `while`/`loop` 共享同一 invocation compiler。循环 primitive 的 selector 写在 owner step 的 `capability` 上，编译器为其 synthesized tool sub-step 生成稳定 `<workflow>/<step>/sub-step` call-site；每个 item/iteration 只能改变 runtime arguments，不能改变服务或 endpoint。
+- Admitted `nyxid_proxy` steps may declare a root-level `response_projection.fields` map. The compiler normalizes it into a typed projection and seals it into the call-site admission digest; runtime rejects a different or missing projection. Each field is an ordered chain of RFC 6901 `pointer`, `parse_json: true`, or exact-unique array `match { pointer, equals }` operations. Projection runs before any tool completion enters workflow durable state or a committed event. Missing paths, wrong types, invalid encoded JSON, zero/multiple matches, or projected output above 64 KiB fail closed without retaining the raw provider response. A provider failure under an authored projection also persists only a stable safe code and message.
 - `sub_param_` 仍是通用的 synthesized sub-step 参数前缀；`sub_param_prompt`、`sub_param_workflow`、`sub_param_prompt_prefix` 与其他非工具用法保持原语义，不承载 capability proof。
 - API key、bearer、OAuth secret、cookie 和 downstream credential 不得进入 Chat、YAML、actor state、read model、receipt 或 log。Credential setup 只在 NyxID 或 Host Connector trusted boundary 完成。
 
@@ -504,6 +505,39 @@ steps:
       sub_param_tool: nyxid_proxy
       sub_param_arguments: >-
         {"path_params":{"object_id":"${input}"},"response_mode":"text"}
+```
+
+需要阻止完整 provider body 进入 workflow state 时，在同一个 owner step 上声明确定性投影；
+`foreach` 的每个 synthesized 子调用都会在合并输出前应用它：
+
+```yaml
+steps:
+  - id: fetch_each_approval
+    type: foreach
+    capability:
+      nyxid_request:
+        user_service_id: us-lark-alpha
+        method: GET
+        path_template: /approval/instances/{instance_code}
+        body_mode: none
+        response_mode: text
+        risk: read_only
+    response_projection:
+      fields:
+        instance_code:
+          - pointer: /data/instance_code
+        vendor:
+          - pointer: /data/form
+          - parse_json: true
+          - match: { pointer: /id, equals: payment-lines }
+          - pointer: /value/0
+          - match: { pointer: /id, equals: vendor }
+          - pointer: /value
+    parameters:
+      sub_step_type: tool_call
+      sub_param_tool: nyxid_proxy
+      sub_param_arguments: >-
+        {"path_params":{"instance_code":"${input}"}}
 ```
 
 `while`/`loop` 使用 `step: tool_call` 时遵循同一规则。编译期缺少静态 selector，或 authored request 缺少匹配 grant，就直接产生 typed admission blocker，不能以空 capability plan 进入运行时。`file_artifact` is allowed only for an authored GET with `body_mode=none`; it retains managed workflow context, exact proxy authority, ingress byte limits, and `IWorkflowFileIngressPort` handling.

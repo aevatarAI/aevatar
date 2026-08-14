@@ -161,6 +161,42 @@ public sealed class NyxIdWorkflowAdmissionEnforcementStartupGuardTests
     }
 
     [Fact]
+    public async Task StartAsync_WhenEnforce_ShouldAllowIntegrityValidV5InventoryDuringV6Rollout()
+    {
+        var validV5 = AsV5(ValidV3Plan());
+        var definitions = new PagedReader<WorkflowActorBindingDocument>(
+            [[Definition("wf-v5", validV5)]]);
+        var runs = new PagedReader<WorkflowExecutionCurrentStateDocument>(
+            [[Run("run-v5-active", "running", validV5)]]);
+        var guard = CreateGuard(
+            NyxIdManagedWorkflowAdmissionMode.Enforce,
+            definitions,
+            runs,
+            new PagedReader<ServiceDeploymentCatalogReadModel>([]));
+
+        await guard.StartAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task StartAsync_WhenEnforce_ShouldRejectV5InventoryWithInvalidDigest()
+    {
+        var invalidV5 = AsV5(ValidV3Plan());
+        invalidV5.AdmissionDigest = "tampered";
+        var definitions = new PagedReader<WorkflowActorBindingDocument>(
+            [[Definition("wf-v5-invalid", invalidV5)]]);
+        var guard = CreateGuard(
+            NyxIdManagedWorkflowAdmissionMode.Enforce,
+            definitions,
+            new PagedReader<WorkflowExecutionCurrentStateDocument>([]),
+            new PagedReader<ServiceDeploymentCatalogReadModel>([]));
+
+        var act = () => guard.StartAsync(CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*CAPABILITY_ADMISSION_REBIND_REQUIRED*definitions=1*wf-v5-invalid*");
+    }
+
+    [Fact]
     public async Task StartAsync_WhenEnforce_ShouldAllowProoflessInventoryWithoutExternalCallSites()
     {
         var definitions = new PagedReader<WorkflowActorBindingDocument>(
@@ -293,6 +329,14 @@ public sealed class NyxIdWorkflowAdmissionEnforcementStartupGuardTests
             ExternalCapabilityExecutionMode.Interactive,
             invocationAdmissions: [],
             sourceStamps: []);
+
+    private static WorkflowCapabilityAdmissionPlan AsV5(WorkflowCapabilityAdmissionPlan plan)
+    {
+        var v5 = plan.Clone();
+        v5.SchemaVersion = WorkflowCapabilityAdmissionPlanIntegrity.CodeRouteSchemaVersion;
+        v5.AdmissionDigest = WorkflowCapabilityAdmissionPlanIntegrity.ComputeAdmissionDigest(v5);
+        return v5;
+    }
 
     private static WorkflowCapabilityAdmissionPlan LegacyPlan() =>
         new()

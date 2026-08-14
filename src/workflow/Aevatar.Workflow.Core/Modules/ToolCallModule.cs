@@ -170,10 +170,26 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         }
         catch (Exception ex)
         {
-            ctx.Logger.LogWarning(ex, "ToolCall: step={StepId} tool={Tool} execution failed", request.StepId, toolName);
-            result = WorkflowToolExecutionResult.Failed(string.Empty, string.Empty, ex.Message);
+            if (request.ExternalInvocation?.ResponseProjection is null)
+            {
+                ctx.Logger.LogWarning(
+                    ex,
+                    "ToolCall: step={StepId} tool={Tool} execution failed",
+                    request.StepId,
+                    toolName);
+                result = WorkflowToolExecutionResult.Failed(string.Empty, string.Empty, ex.Message);
+            }
+            else
+            {
+                ctx.Logger.LogWarning(
+                    "ToolCall: step={StepId} tool={Tool} execution failed before response projection",
+                    request.StepId,
+                    toolName);
+                result = ProjectedToolFailure();
+            }
         }
 
+        result = ApplyResponseProjection(request, result, ctx);
         if (result.PendingApproval != null)
         {
             await SuspendForApprovalAsync(
@@ -184,11 +200,11 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
                 callId,
                 issuedAtUnixMs,
                 result.PendingApproval,
+                argumentsJson,
                 ct);
             return;
         }
 
-        result = ApplyResponseProjection(request, result, ctx);
         await PersistAndPublishToolOutcomeAsync(state, ctx, request, toolName, callId, result, ct);
     }
 
@@ -535,12 +551,23 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         }
         catch (Exception ex)
         {
-            ctx.Logger.LogWarning(
-                ex,
-                "ToolCall: step={StepId} tool={Tool} approved replay failed",
-                pending.StepId,
-                pending.ToolName);
-            result = WorkflowToolExecutionResult.Failed(string.Empty, string.Empty, ex.Message);
+            if (resumedRequest.ExternalInvocation?.ResponseProjection is null)
+            {
+                ctx.Logger.LogWarning(
+                    ex,
+                    "ToolCall: step={StepId} tool={Tool} approved replay failed",
+                    pending.StepId,
+                    pending.ToolName);
+                result = WorkflowToolExecutionResult.Failed(string.Empty, string.Empty, ex.Message);
+            }
+            else
+            {
+                ctx.Logger.LogWarning(
+                    "ToolCall: step={StepId} tool={Tool} approved replay failed before response projection",
+                    pending.StepId,
+                    pending.ToolName);
+                result = ProjectedToolFailure();
+            }
         }
 
         result = ApplyResponseProjection(resumedRequest, result, ctx);
@@ -565,6 +592,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
                 pending.ToolCallId,
                 pending.IssuedAtUnixMs,
                 result.PendingApproval,
+                pending.ArgumentsJson,
                 ct);
             return;
         }
@@ -588,8 +616,24 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         IWorkflowExecutionContext ctx)
     {
         var projection = request.ExternalInvocation?.ResponseProjection;
-        if (projection is null || result.PendingApproval is not null)
+        if (projection is null)
             return result;
+
+        if (result.PendingApproval is not null)
+        {
+            if (result.Failure is not null ||
+                result.ManagedHandoff is not null ||
+                !string.IsNullOrEmpty(result.ResultJson))
+            {
+                ctx.Logger.LogWarning(
+                    "ToolCall: projected response returned an inconsistent approval outcome run={RunId} step={StepId}",
+                    request.RunId,
+                    request.StepId);
+                return ProjectedToolFailure();
+            }
+
+            return result;
+        }
 
         // A provider failure remains the authoritative failure, but its response body must not
         // bypass an authored persistence boundary.
@@ -619,7 +663,6 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         catch (Exception exception) when (exception is InvalidOperationException or ArgumentException)
         {
             ctx.Logger.LogWarning(
-                exception,
                 "ToolCall: response projection failed before persistence run={RunId} step={StepId}",
                 request.RunId,
                 request.StepId);
@@ -646,6 +689,14 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
                errorCode[NyxIdProxyHttpFailurePrefix.Length + 1] is >= '0' and <= '9' &&
                errorCode[NyxIdProxyHttpFailurePrefix.Length + 2] is >= '0' and <= '9';
     }
+
+    private static WorkflowToolExecutionResult ProjectedToolFailure() =>
+        WorkflowToolExecutionResult.Failed(
+            string.Empty,
+            ProjectedToolFailureCode,
+            ProjectedToolFailureMessage,
+            terminalInvoked: true,
+            retryable: false);
 
     private static bool TryResolvePending(
         ToolCallModuleState state,
@@ -732,6 +783,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         string callId,
         long issuedAtUnixMs,
         WorkflowToolApprovalPendingOutcome pending,
+        string argumentsJson,
         CancellationToken ct)
     {
         var pendingState = new PendingToolCallApprovalState
@@ -742,7 +794,9 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             ToolName = NormalizeRequired(toolName),
             ToolCallId = NormalizeRequired(callId),
             ApprovalRequestId = NormalizeRequired(pending.ApprovalRequestId),
-            ArgumentsJson = pending.ArgumentsJson ?? string.Empty,
+            // The executed request is authoritative. A tool may request approval, but it may not
+            // replace the arguments that will be persisted and replayed after approval.
+            ArgumentsJson = argumentsJson ?? string.Empty,
             IdempotencyKey = request.IdempotencyKey ?? string.Empty,
             ExternalInvocation = request.ExternalInvocation?.Clone(),
             IssuedAtUnixMs = issuedAtUnixMs,

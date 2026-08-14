@@ -10,6 +10,7 @@ using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Text;
 using System.Text.Json;
 
 namespace Aevatar.Workflow.Core.Tests.Modules;
@@ -161,6 +162,46 @@ public sealed class ToolCallModuleContextTests
     }
 
     [Fact]
+    public async Task ToolCallModule_ShouldFailWithoutPersistingRawResponse_WhenProjectionExceedsDurableLimit()
+    {
+        const string sensitiveMarker = "oversized-sensitive-marker";
+        var response = JsonSerializer.Serialize(new
+        {
+            payload = sensitiveMarker + new string('x', 64 * 1024),
+        });
+        var projection = new WorkflowToolResponseProjection
+        {
+            Fields =
+            {
+                Field("payload", Pointer("/payload")),
+            },
+        };
+        var tool = new FakeAgentTool("nyxid_proxy", _ => response);
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext
+        {
+            CapabilityAdmissionPlan = AdmissionPlan("wf-alpha/call_proxy", projection: projection),
+        };
+
+        await ExecuteToolCallAsync(
+            module,
+            ctx,
+            tool.Name,
+            externalInvocation: NyxIdInvocation("wf-alpha/call_proxy", projection: projection));
+
+        var toolCompletion = ctx.Published.Select(static item => item.Event)
+            .OfType<WorkflowToolCallCompletedEvent>()
+            .Should().ContainSingle().Subject;
+        toolCompletion.Success.Should().BeFalse();
+        toolCompletion.ResultJson.Should().BeEmpty();
+        toolCompletion.Error.Should().Contain("WORKFLOW_TOOL_RESPONSE_PROJECTION_FAILED");
+        ctx.LoadState<ToolCallModuleState>("tool_call").ToString()
+            .Should().NotContain(sensitiveMarker);
+        ctx.Published.Select(static item => item.Event).Select(static item => item.ToString())
+            .Should().NotContain(value => value.Contains(sensitiveMarker, StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task ToolCallModule_ShouldSanitizeProjectedProviderFailureBeforeDurablePersistenceAndReplay()
     {
         const string sensitiveMarker = "sensitive-marker";
@@ -239,6 +280,120 @@ public sealed class ToolCallModuleContextTests
             .Should().ContainSingle().Subject;
         toolCompletion.Error.Should().Contain("WORKFLOW_PROJECTED_TOOL_CALL_FAILED");
         toolCompletion.Error.Should().NotContain(sensitiveMarker);
+    }
+
+    [Fact]
+    public async Task ToolCallModule_ShouldSanitizeProjectedToolExceptionsBeforeLoggingOrPersistence()
+    {
+        const string sensitiveMarker = "sensitive-exception-marker";
+        var projection = ApprovalDetailProjection();
+        var tool = new FakeAgentTool(
+            "nyxid_proxy",
+            _ => throw new InvalidOperationException($"Provider response contained {sensitiveMarker}."));
+        var logger = new RecordingLogger();
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext
+        {
+            Logger = logger,
+            CapabilityAdmissionPlan = AdmissionPlan("wf-alpha/call_proxy", projection: projection),
+        };
+
+        await ExecuteToolCallAsync(
+            module,
+            ctx,
+            tool.Name,
+            externalInvocation: NyxIdInvocation("wf-alpha/call_proxy", projection: projection));
+
+        var toolCompletion = ctx.Published.Select(static item => item.Event)
+            .OfType<WorkflowToolCallCompletedEvent>()
+            .Should().ContainSingle().Subject;
+        toolCompletion.Error.Should().Contain("WORKFLOW_PROJECTED_TOOL_CALL_FAILED");
+        ctx.LoadState<ToolCallModuleState>("tool_call").ToString()
+            .Should().NotContain(sensitiveMarker);
+        logger.Entries.Should().NotContain(
+            entry => entry.Contains(sensitiveMarker, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ToolCallModule_ShouldPersistAuthoritativeArguments_WhenProjectedToolRequestsApproval()
+    {
+        const string sensitiveMarker = "provider-replaced-arguments";
+        const string requestArguments = "{\"visible\":true}";
+        var projection = ApprovalDetailProjection();
+        var tool = new ScriptedResultWorkflowTool(
+            "nyxid_proxy",
+            new WorkflowToolExecutionResult(
+                string.Empty,
+                PendingApproval: new WorkflowToolApprovalPendingOutcome(
+                    "approval-alpha",
+                    "nyxid_proxy",
+                    "tool-call-alpha",
+                    $"{{\"raw\":\"{sensitiveMarker}\"}}",
+                    "interactive",
+                    IsReadOnly: true,
+                    IsDestructive: false)));
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext
+        {
+            CapabilityAdmissionPlan = AdmissionPlan("wf-alpha/call_proxy", projection: projection),
+        };
+
+        await ExecuteToolCallAsync(
+            module,
+            ctx,
+            tool.Name,
+            input: requestArguments,
+            executionId: "exec-approval",
+            externalInvocation: NyxIdInvocation("wf-alpha/call_proxy", projection: projection));
+
+        var durable = ctx.LoadState<ToolCallModuleState>("tool_call");
+        durable.PendingApprovals.Should().ContainSingle();
+        durable.PendingApprovals.Values.Single().ArgumentsJson.Should().Be(requestArguments);
+        durable.ToString().Should().NotContain(sensitiveMarker);
+    }
+
+    [Theory]
+    [InlineData(0, true)]
+    [InlineData(1, false)]
+    public async Task ToolCallModule_ShouldEnforceProjectedResponseByteLimit(
+        int bytesOverLimit,
+        bool expectedSuccess)
+    {
+        const string sensitiveMarker = "sensitive-boundary-marker";
+        const string jsonEnvelope = "{\"payload\":\"\"}";
+        var payloadLength = WorkflowToolResponseProjectionContract.MaxProjectedResponseBytes -
+                            Encoding.UTF8.GetByteCount(jsonEnvelope) +
+                            bytesOverLimit;
+        var payload = sensitiveMarker + new string('x', payloadLength - sensitiveMarker.Length);
+        var response = JsonSerializer.Serialize(new { payload });
+        var projection = PayloadProjection();
+        var tool = new FakeAgentTool("nyxid_proxy", _ => response);
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext
+        {
+            CapabilityAdmissionPlan = AdmissionPlan("wf-alpha/call_proxy", projection: projection),
+        };
+
+        await ExecuteToolCallAsync(
+            module,
+            ctx,
+            tool.Name,
+            externalInvocation: NyxIdInvocation("wf-alpha/call_proxy", projection: projection));
+
+        var completion = LastCompleted(ctx);
+        completion.Success.Should().Be(expectedSuccess);
+        if (expectedSuccess)
+        {
+            Encoding.UTF8.GetByteCount(completion.Output).Should()
+                .Be(WorkflowToolResponseProjectionContract.MaxProjectedResponseBytes);
+        }
+        else
+        {
+            completion.Output.Should().BeEmpty();
+            completion.Error.Should().Contain("WORKFLOW_TOOL_RESPONSE_PROJECTION_FAILED");
+            ctx.Published.Select(static item => item.Event).Select(static item => item.ToString())
+                .Should().NotContain(value => value.Contains(sensitiveMarker, StringComparison.Ordinal));
+        }
     }
 
     [Fact]
@@ -338,6 +493,125 @@ public sealed class ToolCallModuleContextTests
 
         tool.Requests.Should().ContainSingle().Which.InvocationAdmission.Should().BeNull();
         LastCompleted(ctx).Success.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ToolCallModule_PreviousSchemaNyxIdProof_ShouldRemainExecutable()
+    {
+        var tool = new RecordingWorkflowTool("nyxid_proxy");
+        var module = CreateModule(tool);
+        var plan = AdmissionPlan("wf-alpha/call_proxy");
+        plan.SchemaVersion = WorkflowCapabilityAdmissionPlanIntegrity.PreviousSchemaVersion;
+        var ctx = new RecordingWorkflowContext { CapabilityAdmissionPlan = plan };
+
+        await ExecuteToolCallAsync(
+            module,
+            ctx,
+            tool.Name,
+            externalInvocation: NyxIdInvocation("wf-alpha/call_proxy"));
+
+        tool.Requests.Should().ContainSingle();
+        LastCompleted(ctx).Success.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ToolCallModule_PreviousSchemaProjectedProof_ShouldRequireRebind()
+    {
+        var projection = ApprovalDetailProjection();
+        var tool = new RecordingWorkflowTool("nyxid_proxy");
+        var module = CreateModule(tool);
+        var plan = AdmissionPlan("wf-alpha/call_proxy", projection: projection);
+        plan.SchemaVersion = WorkflowCapabilityAdmissionPlanIntegrity.PreviousSchemaVersion;
+        var ctx = new RecordingWorkflowContext { CapabilityAdmissionPlan = plan };
+
+        await ExecuteToolCallAsync(
+            module,
+            ctx,
+            tool.Name,
+            externalInvocation: NyxIdInvocation("wf-alpha/call_proxy", projection: projection));
+
+        tool.Requests.Should().BeEmpty();
+        LastCompleted(ctx).Success.Should().BeFalse();
+        LastCompleted(ctx).Error.Should().Contain(
+            WorkflowCapabilityAdmissionPlanIntegrity.RebindRequiredCode);
+    }
+
+    [Fact]
+    public async Task ToolCallModule_V5ProjectedProof_ShouldRequireRebindBeforeDirectExecution()
+    {
+        var projection = ApprovalDetailProjection();
+        var tool = new RecordingWorkflowTool("nyxid_proxy");
+        var module = CreateModule(tool);
+        var plan = AdmissionPlan("wf-alpha/call_proxy", projection: projection);
+        plan.SchemaVersion = WorkflowCapabilityAdmissionPlanIntegrity.CodeRouteSchemaVersion;
+        var ctx = new RecordingWorkflowContext { CapabilityAdmissionPlan = plan };
+
+        await ExecuteToolCallAsync(
+            module,
+            ctx,
+            tool.Name,
+            externalInvocation: NyxIdInvocation("wf-alpha/call_proxy", projection: projection));
+
+        tool.Requests.Should().BeEmpty();
+        LastCompleted(ctx).Success.Should().BeFalse();
+        LastCompleted(ctx).Error.Should().Contain(
+            WorkflowCapabilityAdmissionPlanIntegrity.RebindRequiredCode);
+    }
+
+    [Fact]
+    public async Task ToolCallModule_V5ProjectedProof_ShouldRequireRebindBeforeResumeExecution()
+    {
+        const string stepId = "call_proxy";
+        const string executionId = "exec-approval";
+        const string toolCallId = "workflow:run-1:call_proxy:exec-approval";
+        const string approvalRequestId = "approval-alpha";
+        var projection = ApprovalDetailProjection();
+        var invocation = NyxIdInvocation("wf-alpha/call_proxy", projection: projection);
+        var plan = AdmissionPlan("wf-alpha/call_proxy", projection: projection);
+        plan.SchemaVersion = WorkflowCapabilityAdmissionPlanIntegrity.CodeRouteSchemaVersion;
+        var tool = new RecordingWorkflowTool("nyxid_proxy");
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext { CapabilityAdmissionPlan = plan };
+        var pending = new PendingToolCallApprovalState
+        {
+            RunId = ctx.RunId,
+            StepId = stepId,
+            ExecutionId = executionId,
+            ToolName = tool.Name,
+            ToolCallId = toolCallId,
+            ApprovalRequestId = approvalRequestId,
+            ArgumentsJson = "{}",
+            ExternalInvocation = invocation,
+        };
+        await ctx.SaveStateAsync("tool_call", new ToolCallModuleState
+        {
+            PendingApprovals =
+            {
+                [$"{ctx.RunId}:{stepId}:{executionId}:{toolCallId}:{approvalRequestId}"] = pending,
+            },
+        });
+
+        await module.HandleAsync(
+            Envelope(new WorkflowResumedEvent
+            {
+                RunId = ctx.RunId,
+                StepId = stepId,
+                Approved = true,
+                ToolApproval = new WorkflowToolApprovalResume
+                {
+                    ExecutionId = executionId,
+                    ToolCallId = toolCallId,
+                    ApprovalRequestId = approvalRequestId,
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        tool.Requests.Should().BeEmpty();
+        LastCompleted(ctx).Success.Should().BeFalse();
+        LastCompleted(ctx).Error.Should().Contain(
+            WorkflowCapabilityAdmissionPlanIntegrity.RebindRequiredCode);
+        ctx.LoadState<ToolCallModuleState>("tool_call").PendingApprovals.Should().BeEmpty();
     }
 
     [Fact]
@@ -1010,6 +1284,13 @@ public sealed class ToolCallModuleContextTests
         return projection;
     }
 
+    private static WorkflowToolResponseProjection PayloadProjection()
+    {
+        var projection = new WorkflowToolResponseProjection();
+        projection.Fields.Add(Field("payload", Pointer("/payload")));
+        return projection;
+    }
+
     private static WorkflowToolResponseProjectionField Field(
         string outputName,
         params WorkflowToolResponseProjectionOperation[] operations) =>
@@ -1201,6 +1482,26 @@ public sealed class ToolCallModuleContextTests
         }
     }
 
+    private sealed class RecordingLogger : ILogger
+    {
+        public List<string> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            Entries.Add(formatter(state, exception) + (exception?.ToString() ?? string.Empty));
+        }
+    }
+
     private sealed class RecordingWorkflowContext
         : IWorkflowExecutionContext, IWorkflowExecutionRuntimeContextAccessor, IWorkflowExecutionStateHost
     {
@@ -1224,7 +1525,7 @@ public sealed class ToolCallModuleContextTests
 
         public IServiceProvider Services { get; } = new EmptyServiceProvider();
 
-        public ILogger Logger { get; } = NullLogger.Instance;
+        public ILogger Logger { get; init; } = NullLogger.Instance;
 
         public WorkflowExecutionRuntimeContext RuntimeContext { get; } = new();
 

@@ -28,10 +28,11 @@ public sealed record WorkflowCapabilityAdmissionCompatibilityResult(
 
 public static class WorkflowCapabilityAdmissionPlanIntegrity
 {
-    public const string SchemaVersion = "external-capability-admission.v5";
+    public const string SchemaVersion = "external-capability-admission.v6";
     public const string LegacySchemaVersion = "external-capability-admission.v2";
     public const string OpenApiSchemaVersion = "external-capability-admission.v3";
     public const string PreviousSchemaVersion = "external-capability-admission.v4";
+    public const string CodeRouteSchemaVersion = "external-capability-admission.v5";
     public const string RebindRequiredCode = "CAPABILITY_ADMISSION_REBIND_REQUIRED";
     public const string NyxIdAuthority = "nyxid";
 
@@ -286,6 +287,14 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
             .Select(static invocation => invocation.Clone())
             .OrderBy(static invocation => invocation.CallSiteId, StringComparer.Ordinal)
             .ToArray();
+        if (!string.Equals(plan.SchemaVersion, SchemaVersion, StringComparison.Ordinal) &&
+            (expected.Any(static invocation => invocation.ResponseProjection is not null) ||
+             plan.InvocationAdmissions.Any(static admission => admission.ResponseProjection is not null)))
+        {
+            return Failed(
+                WorkflowCapabilityAdmissionCompatibilityFailure.RebindRequiredSchema,
+                new WorkflowCapabilityAdmissionRebindRequiredException());
+        }
         if (string.Equals(plan.SchemaVersion, PreviousSchemaVersion, StringComparison.Ordinal))
         {
             // V4 predates code-execution admission proofs. Preserve existing plans while runtime
@@ -983,7 +992,8 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
 
     public static bool RequiresRebind(string? schemaVersion) =>
         string.Equals(schemaVersion, LegacySchemaVersion, StringComparison.Ordinal) ||
-        string.Equals(schemaVersion, OpenApiSchemaVersion, StringComparison.Ordinal);
+        string.Equals(schemaVersion, OpenApiSchemaVersion, StringComparison.Ordinal) ||
+        string.Equals(schemaVersion, CodeRouteSchemaVersion, StringComparison.Ordinal);
 
     public static bool IsSupportedSchemaVersion(string? schemaVersion) =>
         string.Equals(schemaVersion, SchemaVersion, StringComparison.Ordinal) ||

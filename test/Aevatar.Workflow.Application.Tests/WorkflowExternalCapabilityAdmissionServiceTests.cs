@@ -12,9 +12,11 @@ namespace Aevatar.Workflow.Application.Tests;
 public sealed class WorkflowExternalCapabilityAdmissionServiceTests
 {
     [Fact]
-    public void AdmissionPlanContract_ShouldUseV5CodeRouteAdmissionsAsTheOnlyCurrentFactSource()
+    public void AdmissionPlanContract_ShouldUseV6ResponseProjectionAdmissionsAsTheOnlyCurrentFactSource()
     {
         WorkflowCapabilityAdmissionPlanIntegrity.SchemaVersion.Should()
+            .Be("external-capability-admission.v6");
+        WorkflowCapabilityAdmissionPlanIntegrity.CodeRouteSchemaVersion.Should()
             .Be("external-capability-admission.v5");
 
         var create = typeof(WorkflowCapabilityAdmissionPlanIntegrity)
@@ -889,7 +891,7 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
 
         var plan = await service.AdmitAsync(Request(yaml));
 
-        plan.SchemaVersion.Should().Be("external-capability-admission.v5");
+        plan.SchemaVersion.Should().Be("external-capability-admission.v6");
         plan.InvocationAdmissions.Should().ContainSingle().Which
             .Capability.CodeExecution.UserServiceId.Should().Be("us-code-alpha");
         plan.SourceStamps.Should().ContainSingle().Which.SourceKind.Should()
@@ -1626,6 +1628,7 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
     [Theory]
     [InlineData("external-capability-admission.v2")]
     [InlineData("external-capability-admission.v3")]
+    [InlineData("external-capability-admission.v5")]
     public async Task RevalidatePersistedAsync_ShouldClassifyRebindSchemaBeforeParsingOldAuthoring(
         string schemaVersion)
     {

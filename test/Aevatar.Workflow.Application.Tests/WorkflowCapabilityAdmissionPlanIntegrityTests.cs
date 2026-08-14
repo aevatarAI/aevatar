@@ -30,7 +30,7 @@ public sealed class WorkflowCapabilityAdmissionPlanIntegrityTests
         switch (mutation)
         {
             case "schema":
-                fixture.Plan.SchemaVersion = "external-capability-admission.v6";
+                fixture.Plan.SchemaVersion = "external-capability-admission.v7";
                 break;
             case "mode":
                 fixture.Plan.ExecutionMode = ExternalCapabilityExecutionMode.Durable;
@@ -95,11 +95,14 @@ public sealed class WorkflowCapabilityAdmissionPlanIntegrityTests
         result.Failure.Should().Be(expected);
     }
 
-    [Fact]
-    public void CheckCompatibility_WithLegacySchema_ShouldRequireRebind()
+    [Theory]
+    [InlineData(WorkflowCapabilityAdmissionPlanIntegrity.LegacySchemaVersion)]
+    [InlineData(WorkflowCapabilityAdmissionPlanIntegrity.OpenApiSchemaVersion)]
+    [InlineData(WorkflowCapabilityAdmissionPlanIntegrity.CodeRouteSchemaVersion)]
+    public void CheckCompatibility_WithLegacySchema_ShouldRequireRebind(string schemaVersion)
     {
         var fixture = HostFixture();
-        fixture.Plan.SchemaVersion = WorkflowCapabilityAdmissionPlanIntegrity.OpenApiSchemaVersion;
+        fixture.Plan.SchemaVersion = schemaVersion;
 
         var result = Check(fixture);
 
@@ -178,6 +181,31 @@ public sealed class WorkflowCapabilityAdmissionPlanIntegrityTests
 
         Check(fixture).Failure.Should().Be(
             WorkflowCapabilityAdmissionCompatibilityFailure.InvocationMismatch);
+    }
+
+    [Fact]
+    public void CheckCompatibility_V5Plan_ShouldRequireRebindBeforeProjectedInvocation()
+    {
+        var fixture = ExplicitRequestFixture(ExternalCapabilityExecutionMode.Interactive);
+        fixture.Plan.SchemaVersion = WorkflowCapabilityAdmissionPlanIntegrity.CodeRouteSchemaVersion;
+        fixture.ExpectedInvocations[0].ResponseProjection = new WorkflowToolResponseProjection
+        {
+            Fields =
+            {
+                new WorkflowToolResponseProjectionField
+                {
+                    OutputName = "status",
+                    Operations =
+                    {
+                        new WorkflowToolResponseProjectionOperation { JsonPointer = "/data/status" },
+                    },
+                },
+            },
+        };
+        Rehash(fixture.Plan);
+
+        Check(fixture).Failure.Should().Be(
+            WorkflowCapabilityAdmissionCompatibilityFailure.RebindRequiredSchema);
     }
 
     [Fact]
