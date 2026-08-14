@@ -155,6 +155,20 @@ internal static class NyxIdChatTaskPlanJsonFormatter
 
     private static bool TryNormalizeNyxIdEnumValue(string value, out string normalized)
     {
+        normalized = value switch
+        {
+            "TOOL_PRESENTATION_KIND_GENERIC" => "generic",
+            "TOOL_PRESENTATION_KIND_BUILT_IN" => "builtIn",
+            "TOOL_PRESENTATION_KIND_NYX_ID_OPERATION" => "nyxIdOperation",
+            "TOOL_PRESENTATION_KIND_MCP" => "mcp",
+            "TOOL_PRESENTATION_KIND_SKILL" => "skill",
+            "TOOL_AVAILABILITY_AVAILABLE" => "available",
+            "TOOL_AVAILABILITY_UNAVAILABLE" => "unavailable",
+            _ => string.Empty,
+        };
+        if (normalized.Length > 0)
+            return true;
+
         string[] prefixes =
         [
             "NYX_ID_APPROVAL_DECISION_MODE_",

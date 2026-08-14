@@ -225,6 +225,8 @@ public sealed class NyxIdChatStateEndpointTests
         var presentation = currentTask["steps"]![0]!["source"]!["tool"]!["presentation"]!;
         presentation["invocationName"]!.GetValue<string>().Should().Be("repository_update");
         presentation["displayName"]!.GetValue<string>().Should().Be("Repository maintenance");
+        presentation["kind"]!.GetValue<string>().Should().Be("skill");
+        presentation["availability"]!.GetValue<string>().Should().Be("available");
         presentation["skill"]!["skillName"]!.GetValue<string>().Should()
             .Be("repository-maintenance");
         presentation["skill"]!["source"]!.GetValue<string>().Should().Be("remote");
