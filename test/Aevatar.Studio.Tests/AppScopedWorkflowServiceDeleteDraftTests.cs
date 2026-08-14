@@ -126,6 +126,32 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
     }
 
     [Fact]
+    public async Task CreateDraftAsync_WhenWorkflowNameDiffersFromYamlName_ShouldPersistRequestedWorkflowName()
+    {
+        using var environment = new ScopedWorkflowEnvironment();
+        var workspacePort = new RecordingStudioWorkspacePorts();
+        var service = environment.CreateService(
+            workspaceQueryPort: workspacePort,
+            workspaceCommandPort: workspacePort);
+
+        var accepted = await service.CreateDraftAsync(
+            "scope-1",
+            new SaveWorkflowDraftRequest(
+                DirectoryId: "scope:scope-1",
+                WorkflowName: "周报2",
+                FileName: null,
+                Yaml: "name: 生成周报\ndescription: weekly report\nsteps: []\n"));
+
+        var savedDraft = workspacePort.SavedDrafts.Should().ContainSingle().Subject;
+        savedDraft.WorkflowName.Should().Be("周报2");
+        savedDraft.Yaml.Should().Contain("name: 周报2");
+        savedDraft.Yaml.Should().NotContain("name: 生成周报");
+        (await service.GetDraftAsync("scope-1", accepted.WorkflowId))!.Name.Should().Be("周报2");
+        (await service.ListDraftsAsync("scope-1")).Should().ContainSingle()
+            .Which.Name.Should().Be("周报2");
+    }
+
+    [Fact]
     public async Task CreateDraftAsync_WhenFilePathAlreadyExists_ShouldRejectNewOpaqueWorkflowId()
     {
         using var environment = new ScopedWorkflowEnvironment();

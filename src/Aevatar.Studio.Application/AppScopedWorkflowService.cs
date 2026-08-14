@@ -123,7 +123,8 @@ public sealed class AppScopedWorkflowService
         if (!parsed.Succeeded)
             throw new InvalidOperationException(parsed.Error);
 
-        var workflowName = NormalizeRequired(parsed.WorkflowName, nameof(request.WorkflowName));
+        var workflowName = NormalizeRequired(request.WorkflowName, nameof(request.WorkflowName));
+        normalizedYaml = AlignWorkflowYamlName(normalizedYaml, workflowName);
         var workspaceQueryPort = _workspaceQueryPort
             ?? throw new InvalidOperationException("Scoped workflow workspace query port is not configured.");
         var workspaceCommandPort = _workspaceCommandPort
@@ -364,6 +365,21 @@ public sealed class AppScopedWorkflowService
             throw new InvalidOperationException($"{fieldName} is required.");
 
         return normalized;
+    }
+
+    private string AlignWorkflowYamlName(string yaml, string workflowName)
+    {
+        var parsed = _yamlDocumentService.Parse(yaml);
+        if (parsed.Document is null)
+            return yaml;
+
+        if (string.Equals(parsed.Document.Name?.Trim(), workflowName, StringComparison.Ordinal))
+            return yaml;
+
+        return _yamlDocumentService.Serialize(parsed.Document with
+        {
+            Name = workflowName,
+        });
     }
 
     private static string EnsureYamlExtension(string fileName)
