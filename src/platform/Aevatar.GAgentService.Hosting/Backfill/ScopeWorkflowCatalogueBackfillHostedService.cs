@@ -106,7 +106,7 @@ internal sealed class ScopeWorkflowCatalogueBackfillHostedService : IHostedServi
             }
 
             if (!deploymentCatalogsByServiceKey.TryGetValue(serviceCatalog.Id, out var deploymentCatalog) ||
-                ResolveDeployment(deploymentCatalog) is not { } deployment ||
+                ResolveDeployment(serviceCatalog, deploymentCatalog) is not { } deployment ||
                 !revisionCatalogsByServiceKey.TryGetValue(serviceCatalog.Id, out var revisionCatalog) ||
                 !TryResolveWorkflowRevision(
                     revisionCatalog,
@@ -325,11 +325,48 @@ internal sealed class ScopeWorkflowCatalogueBackfillHostedService : IHostedServi
         }
     }
 
-    private static ServiceDeploymentReadModel? ResolveDeployment(ServiceDeploymentCatalogReadModel deploymentCatalog) =>
-        deploymentCatalog.Deployments
+    private static ServiceDeploymentReadModel? ResolveDeployment(
+        ServiceCatalogReadModel serviceCatalog,
+        ServiceDeploymentCatalogReadModel deploymentCatalog) =>
+        ResolveDefaultDeployment(deploymentCatalog.Deployments, serviceCatalog.DefaultServingRevisionId)
+        ?? ResolveActiveDeployment(deploymentCatalog.Deployments)
+        ?? ResolveFallbackDeployment(deploymentCatalog.Deployments);
+
+    private static ServiceDeploymentReadModel? ResolveDefaultDeployment(
+        IEnumerable<ServiceDeploymentReadModel> deployments,
+        string? defaultServingRevisionId)
+    {
+        if (string.IsNullOrWhiteSpace(defaultServingRevisionId))
+            return null;
+
+        return deployments
+            .Where(deployment => string.Equals(deployment.RevisionId, defaultServingRevisionId, StringComparison.Ordinal))
+            .OrderByDescending(static deployment => IsActiveDeployment(deployment))
+            .ThenByDescending(static deployment => ResolveDeploymentActivationTime(deployment))
+            .ThenByDescending(static deployment => deployment.UpdatedAt)
+            .ThenBy(static deployment => deployment.DeploymentId, StringComparer.Ordinal)
+            .FirstOrDefault();
+    }
+
+    private static ServiceDeploymentReadModel? ResolveActiveDeployment(IEnumerable<ServiceDeploymentReadModel> deployments) =>
+        deployments
+            .Where(static deployment => IsActiveDeployment(deployment))
+            .OrderByDescending(static deployment => ResolveDeploymentActivationTime(deployment))
+            .ThenByDescending(static deployment => deployment.UpdatedAt)
+            .ThenBy(static deployment => deployment.DeploymentId, StringComparer.Ordinal)
+            .FirstOrDefault();
+
+    private static ServiceDeploymentReadModel? ResolveFallbackDeployment(IEnumerable<ServiceDeploymentReadModel> deployments) =>
+        deployments
             .OrderByDescending(static deployment => deployment.UpdatedAt)
             .ThenBy(static deployment => deployment.DeploymentId, StringComparer.Ordinal)
             .FirstOrDefault();
+
+    private static bool IsActiveDeployment(ServiceDeploymentReadModel deployment) =>
+        string.Equals(deployment.Status, ServiceDeploymentStatus.Active.ToString(), StringComparison.Ordinal);
+
+    private static DateTimeOffset ResolveDeploymentActivationTime(ServiceDeploymentReadModel deployment) =>
+        deployment.ActivatedAt ?? deployment.UpdatedAt;
 
     private static bool TryResolveWorkflowRevision(
         ServiceRevisionCatalogReadModel revisionCatalog,
