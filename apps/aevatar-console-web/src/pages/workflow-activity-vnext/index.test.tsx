@@ -2139,6 +2139,29 @@ describe('Workflow Activity vNext editor', () => {
   });
 
   it('enables Save workflow only while the loaded workflow has unsaved changes', async () => {
+    mockStudioApi.serializeYaml.mockImplementationOnce(
+      async ({ document: nextDocument }) => ({
+        yaml: `name: ${nextDocument.name}\nroles: []\nsteps: []\n`,
+        document: nextDocument,
+        findings: [],
+      }),
+    );
+    mockStudioApi.saveWorkflow.mockImplementationOnce(async (input) => ({
+      kind: 'materialized',
+      workflow: {
+        workflowId: 'wf-draft-new',
+        name: input.workflowName,
+        fileName: 'committed-source.yaml',
+        filePath: '/workflows/committed-source.yaml',
+        directoryId: 'directory-alpha',
+        directoryLabel: 'Workflows',
+        yaml: input.yaml,
+        updatedAtUtc: '2026-08-04T10:01:00Z',
+        document: { name: input.workflowName, roles: [], steps: [] },
+        draftExists: true,
+        findings: [],
+      },
+    }));
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
     const workflowName = await screen.findByRole('textbox', {
@@ -2160,6 +2183,17 @@ describe('Workflow Activity vNext editor', () => {
 
     await waitFor(() =>
       expect(mockStudioApi.saveWorkflow).toHaveBeenCalledTimes(1),
+    );
+    expect(mockStudioApi.serializeYaml).toHaveBeenCalledWith({
+      document: expect.objectContaining({
+        name: 'Committed source updated',
+      }),
+    });
+    expect(mockStudioApi.saveWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workflowName: 'Committed source updated',
+        yaml: 'name: Committed source updated\nroles: []\nsteps: []\n',
+      }),
     );
     await waitFor(() => expect(saveWorkflowButton).toBeDisabled());
     expect(
