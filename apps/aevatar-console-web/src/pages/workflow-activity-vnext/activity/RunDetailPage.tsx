@@ -207,8 +207,9 @@ function getRunDurationMs(
   run: WorkflowActivityRunDetail | WorkflowActivityRunSummary,
   steps?: readonly WorkflowActivityStep[],
 ): number | null {
-  const startedAt = Date.parse(trimOptional(run.summary.startedAtUtc));
-  const updatedAt = Date.parse(trimOptional(run.summary.updatedAtUtc));
+  const summary = 'summary' in run ? run.summary : run;
+  const startedAt = Date.parse(trimOptional(summary.startedAtUtc));
+  const updatedAt = Date.parse(trimOptional(summary.updatedAtUtc));
   if (
     Number.isFinite(startedAt) &&
     Number.isFinite(updatedAt) &&

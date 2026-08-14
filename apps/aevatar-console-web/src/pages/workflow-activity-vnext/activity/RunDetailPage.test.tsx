@@ -7,6 +7,15 @@ import {
 } from '../../../../tests/reactQueryTestUtils';
 import RunDetailPage from './RunDetailPage';
 
+type WorkflowActivityRunDetailFixture =
+  import('@/shared/models/workflowActivity').WorkflowActivityRunDetail;
+type WorkflowActivityRunFeedRowFixture =
+  import('@/shared/models/workflowActivity').WorkflowActivityRunFeedRow;
+type WorkflowRunLineageFixture =
+  import('@/shared/models/workflowActivity').WorkflowRunLineage;
+type WorkflowRunRecoveryCapabilityFixture =
+  import('@/shared/models/workflowActivity').WorkflowRunRecoveryCapability;
+
 let mockSearch = '';
 
 const mockConsoleToast = {
@@ -96,7 +105,56 @@ const mockWorkflowActivityApi = jest.requireMock(
   listActivityRuns: jest.Mock;
 };
 
-function buildRunDetail() {
+function buildRecoveryCapability(): WorkflowRunRecoveryCapabilityFixture {
+  return {
+    retryFailedStep: {
+      eligibility: 1,
+      unavailableReasonCode: 0,
+      unavailableReason: '',
+      recommendedActions: [1],
+      startingStepId: 'step-failed',
+      reusesPriorStepOutputs: true,
+      mayIncurModelOrToolCost: true,
+    },
+    runAgain: {
+      eligibility: 1,
+      unavailableReasonCode: 0,
+      unavailableReason: '',
+      recommendedActions: [1],
+      startingStepId: 'step-root',
+      reusesPriorStepOutputs: false,
+      mayIncurModelOrToolCost: true,
+    },
+    workflowDefinitionRevisionId: 'revision-alpha',
+    workflowDefinitionVersion: 3,
+  };
+}
+
+function buildLineage(): WorkflowRunLineageFixture {
+  return {
+    availability: 0,
+    retryFork: {
+      availability: 0,
+      sourceRunId: '',
+      originalRunId: '',
+      attempt: 0,
+      startAtStepId: '',
+      childRuns: [],
+    },
+    subWorkflow: {
+      availability: 0,
+      parentRunId: '',
+      parentActorId: '',
+      parentStepId: '',
+      rootRunId: '',
+      depth: 0,
+      childRuns: [],
+    },
+    unavailableReason: '',
+  };
+}
+
+function buildRunDetail(): WorkflowActivityRunDetailFixture {
   return {
     summary: {
       runId: 'run-source-alpha',
@@ -216,6 +274,8 @@ function buildRunDetail() {
       totalTokens: 12,
       cost: 0.02,
     },
+    recoveryCapability: buildRecoveryCapability(),
+    lineage: buildLineage(),
   };
 }
 
@@ -230,7 +290,8 @@ function buildActivityRow(
     startedAtUtc: string | null;
     updatedAtUtc: string;
   }> = {},
-) {
+): WorkflowActivityRunFeedRowFixture {
+  const detail = buildRunDetail();
   return {
     runId: overrides.runId ?? 'run-source-alpha',
     actorId: 'actor-technical-alpha',
@@ -271,8 +332,8 @@ function buildActivityRow(
     updatedAtUtc: overrides.updatedAtUtc ?? '2026-08-04T10:01:00Z',
     durationMs: 60000,
     stateVersion: 7,
-    recoveryCapability: buildRunDetail().recoveryCapability,
-    lineage: buildRunDetail().lineage,
+    recoveryCapability: detail.recoveryCapability,
+    lineage: detail.lineage,
   };
 }
 
