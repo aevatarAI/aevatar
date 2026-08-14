@@ -211,19 +211,23 @@ Gateway 的强类型 canonical route 是 `/api/v1/llm/gateway/v1`。Console Sett
 
 ## Aevatar 端配置（管理员）
 
-在 `appsettings.json` 中配置 NyxID Authority 即可。系统会自动注册 NyxID LLM Provider：
+在 `appsettings.json` 中分别配置 NyxID 的公开 OIDC、公开 API 和可选的集群内 REST 地址。系统会自动注册 NyxID LLM Provider：
 
 ```json
 {
   "Aevatar": {
     "NyxId": {
-      "Authority": "https://your-nyxid-domain"
+      "Authority": "https://your-nyxid-domain",
+      "ApiBaseUrl": "https://your-nyxid-domain",
+      "InternalApiBaseUrl": "http://nyxid-api.namespace.svc.cluster.local:3001"
     }
   }
 }
 ```
 
-Gateway Endpoint 自动推导为 `{Authority}/api/v1/llm/gateway/v1`。
+`Authority` 只承担公开 OIDC issuer、discovery 和 JWKS；`ApiBaseUrl` 承担公开 REST、LLM gateway、浏览器地址、webhook/resource URI 以及 Assistant action registry；`InternalApiBaseUrl` 只承担 Aevatar 服务端到 NyxID REST 的集群内传输。Gateway Endpoint 从 `ApiBaseUrl` 推导为 `{ApiBaseUrl}/api/v1/llm/gateway/v1`，chat/LLM 不使用集群内地址。
+
+当同时配置 `InternalApiBaseUrl` 与 `ApiBaseUrl` 时，服务端 REST 首选内网地址。只有 DNS、拒绝连接或 host/network unreachable 明确表明尚未连接到内网目标时，客户端才使用相同 method、path/query、authorization、headers 和 body 向公开 API 重试一次。超时、TLS、连接重置、Host 取消、重定向以及任意 HTTP 响应都不重放，multipart 请求也不重放。Assistant action registry 若在启动期因网络、HTTP、读取、JSON 或契约校验失败而不可用，只禁用本进程的 Assistant browser actions；Host 与普通 chat 仍继续启动。Host 自身的取消信号不会被该降级吞掉。
 
 ---
 

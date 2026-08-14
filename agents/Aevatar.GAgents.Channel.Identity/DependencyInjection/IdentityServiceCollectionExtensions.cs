@@ -294,7 +294,14 @@ public static class IdentityServiceCollectionExtensions
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IValidateOptions<NyxIdBrokerOptions>, NyxIdBrokerOptionsValidator>());
         services.TryAddSingleton<StateTokenCodec>();
-        services.AddHttpClient(NyxIdRemoteCapabilityBroker.HttpClientName);
+        services.AddHttpClient(NyxIdRemoteCapabilityBroker.HttpClientName)
+            .ConfigurePrimaryHttpMessageHandler(static () => new HttpClientHandler
+            {
+                // The public retry is allowed only when the primary connection was never
+                // established. Keep redirects visible so a failure after a 3xx cannot be
+                // misclassified as a pre-connect failure against the internal transport.
+                AllowAutoRedirect = false,
+            });
         services.TryAddSingleton<NyxIdRemoteCapabilityBroker>();
         services.TryAddSingleton<INyxIdCapabilityBroker>(sp => sp.GetRequiredService<NyxIdRemoteCapabilityBroker>());
         services.TryAddSingleton<INyxIdConnectedServiceInventoryCapabilityIssuer>(sp =>

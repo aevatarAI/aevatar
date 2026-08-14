@@ -179,7 +179,12 @@ public partial class NyxIdChatEndpointsCoverageTests
         {
             RequestServices = new ServiceCollection()
                 .AddLogging()
-                .AddSingleton(new NyxIdToolOptions { BaseUrl = prefix.TrimEnd('/') })
+                .AddSingleton(new NyxIdToolOptions
+                {
+                    BaseUrl = "http://nyxid.internal.invalid:3001",
+                    InternalApiBaseUrl = "http://nyxid.internal.invalid:3001",
+                    ApiBaseUrl = prefix.TrimEnd('/'),
+                })
                 .BuildServiceProvider(),
         };
         context.Request.Method = HttpMethods.Post;

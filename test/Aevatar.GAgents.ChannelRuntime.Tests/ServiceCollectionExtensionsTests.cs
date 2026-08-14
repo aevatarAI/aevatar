@@ -233,6 +233,12 @@ public sealed class ServiceCollectionExtensionsTests
         options.TransportBaseUrl.Should().Be("http://nyxid.internal:3001");
         options.PublicTransportFallbackBaseUrl.Should().Be("https://api.example.test");
         options.ResourceServerBaseUrl.Should().Be("https://api.example.test");
+        var handler = provider.GetRequiredService<IHttpMessageHandlerFactory>()
+            .CreateHandler(NyxIdRemoteCapabilityBroker.HttpClientName);
+        while (handler is DelegatingHandler { InnerHandler: { } innerHandler })
+            handler = innerHandler;
+        handler.Should().BeOfType<HttpClientHandler>()
+            .Which.AllowAutoRedirect.Should().BeFalse();
         services.Should().NotContain(descriptor =>
             descriptor.ServiceType == typeof(IHostedService) &&
             descriptor.ImplementationType == typeof(AevatarOAuthClientEsAclStartupGuard));
