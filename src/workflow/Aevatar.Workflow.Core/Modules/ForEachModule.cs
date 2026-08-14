@@ -33,6 +33,7 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
     private const int MaxConcurrentChildPublications = BackpressureHelper.DefaultMaxConcurrentWorkers;
     internal static TimeSpan DurablePublicationRetryDelay => TimeSpan.FromSeconds(1);
     private readonly WorkflowExpressionEvaluator _expressionEvaluator = new();
+    private readonly HashSet<AcceptedChildPublicationKey> _acceptedChildPublications = [];
 
     /// <summary>Module name.</summary>
     public string Name => "foreach";
@@ -55,7 +56,7 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
         if (payload.Is(ForEachPublicationRetryFiredEvent.Descriptor))
         {
             var retry = payload.Unpack<ForEachPublicationRetryFiredEvent>();
-            var state = WorkflowExecutionStateAccess.Load<ForEachModuleState>(ctx, ModuleStateKey);
+            var state = LoadState(ctx);
             if (state.Parents.TryGetValue(retry.ParentKey, out var retryParent) &&
                 retryParent.PendingCompletion != null)
             {
@@ -72,7 +73,7 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
             if (evt.StepType != "foreach") return;
             var runId = WorkflowRunIdNormalizer.Normalize(evt.RunId);
             var parentKey = BuildParentAttemptKey(runId, evt.StepId, evt.ExecutionId);
-            var state = WorkflowExecutionStateAccess.Load<ForEachModuleState>(ctx, ModuleStateKey);
+            var state = LoadState(ctx);
 
             if (state.CompletionTombstones.ContainsKey(parentKey))
                 return;
@@ -82,7 +83,7 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
             if (state.Parents.TryGetValue(parentKey, out var existingParent))
             {
                 MigrateLegacyParentState(existingParent, runId, evt.StepId);
-                await SaveStateAsync(state, ctx, ct);
+                await SaveStateWithAcceptedChildPublicationsAsync(state, ctx, ct);
                 if (existingParent.PendingCompletion != null)
                     await PublishPendingCompletionAsync(state, parentKey, existingParent, ctx, ct);
                 else
@@ -95,7 +96,7 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
             {
                 // Moving the map entry and enriching its identity are persisted together. The
                 // redelivery may only recover already-durable publication intents after that point.
-                await SaveStateAsync(state, ctx, ct);
+                await SaveStateWithAcceptedChildPublicationsAsync(state, ctx, ct);
                 if (existingParent.PendingCompletion != null)
                     await PublishPendingCompletionAsync(state, parentKey, existingParent, ctx, ct);
                 else
@@ -237,7 +238,7 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
             // Ignore nested children like "_item_0_sub_1" or "_item_0_vote".
             var parsedParent = TryGetParentFromDirectItemStepId(evt.StepId);
             var runId = WorkflowRunIdNormalizer.Normalize(evt.RunId);
-            var state = WorkflowExecutionStateAccess.Load<ForEachModuleState>(ctx, ModuleStateKey);
+            var state = LoadState(ctx);
 
             if (parsedParent == null ||
                 !TryResolveParentState(
@@ -264,14 +265,15 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
                 return;
             }
 
-            // A completion proves that a pending publish escaped even if the post-publish checkpoint failed.
+            // A completion settles the retained durable intent even if this activation did not
+            // observe the original publication acceptance.
             RemovePendingDispatch(parentState, evt.StepId);
             AddIfMissing(parentState.DispatchedStepIds, evt.StepId);
 
             // A worker is settled exactly once. Replays may still recover a durable top-up intent.
             if (parentState.CollectedStepIds.Contains(evt.StepId))
             {
-                await SaveStateAsync(state, ctx, ct);
+                await SaveStateWithAcceptedChildPublicationsAsync(state, ctx, ct);
                 await PublishPendingDispatchesAsync(state, ctx, ct);
                 return;
             }
@@ -326,7 +328,7 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
 
             // Completion settlement, queue cursor advancement, top-up intents, and terminal outbox
             // are one durable checkpoint before any resulting publication.
-            await SaveStateAsync(state, ctx, ct);
+            await SaveStateWithAcceptedChildPublicationsAsync(state, ctx, ct);
 
             if (parentState.PendingCompletion != null)
                 await PublishPendingCompletionAsync(state, parentKey, parentState, ctx, ct);
@@ -480,7 +482,7 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
         }
     }
 
-    private static async Task PublishPendingDispatchesAsync(
+    private async Task PublishPendingDispatchesAsync(
         ForEachModuleState state,
         IWorkflowExecutionContext ctx,
         CancellationToken ct)
@@ -502,7 +504,12 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
                 }
 
                 identityCheckpointRequired |= EnsureStableChildIdentity(entry, parentState);
-                pendingPublications.Add(new PendingDispatchPublication(parentKey, parentState, entry));
+                if (_acceptedChildPublications.Contains(
+                        BuildAcceptedChildPublicationKey(parentKey, entry)))
+                {
+                    continue;
+                }
+                pendingPublications.Add(new PendingDispatchPublication(parentKey, entry));
             }
         }
 
@@ -534,14 +541,13 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
                 continue;
             }
 
-            AddIfMissing(result.ParentState.DispatchedStepIds, result.Entry.StepId);
-            RemovePendingDispatch(result.ParentState, result.Entry.StepId);
-            checkpointRequired = true;
+            _acceptedChildPublications.Add(
+                BuildAcceptedChildPublicationKey(result.ParentKey, result.Entry));
         }
 
-        // Every intent was durable before publication. A single acknowledgement checkpoint after
-        // the batch removes successful intents; if it fails, stable child identities make replay
-        // safe and the original durable intents remain authoritative.
+        // Successful publication acceptance is an actor-local optimization, not authoritative
+        // state. The next required state checkpoint folds accepted intents into the dispatch
+        // ledger. A crash before then replays the durable intent with the same stable identity.
         if (checkpointRequired)
             await SaveStateAsync(state, ctx, ct);
 
@@ -575,7 +581,6 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
 
     private sealed record PendingDispatchPublication(
         string ParentKey,
-        ForEachParentState ParentState,
         BackpressureQueueEntry Entry);
 
     private sealed record PendingDispatchPublicationResult(
@@ -584,10 +589,70 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
     {
         public string ParentKey => Publication.ParentKey;
 
-        public ForEachParentState ParentState => Publication.ParentState;
-
         public BackpressureQueueEntry Entry => Publication.Entry;
     }
+
+    private ForEachModuleState LoadState(IWorkflowExecutionContext ctx)
+    {
+        var state = WorkflowExecutionStateAccess.Load<ForEachModuleState>(ctx, ModuleStateKey);
+        PruneAcceptedChildPublications(state);
+        return state;
+    }
+
+    private async Task SaveStateWithAcceptedChildPublicationsAsync(
+        ForEachModuleState state,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        StageAcceptedChildPublicationAcknowledgements(state);
+        await SaveStateAsync(state, ctx, ct);
+        PruneAcceptedChildPublications(state);
+    }
+
+    private void StageAcceptedChildPublicationAcknowledgements(ForEachModuleState state)
+    {
+        foreach (var (parentKey, parentState) in state.Parents)
+        {
+            foreach (var entry in parentState.PendingDispatches.ToArray())
+            {
+                if (!_acceptedChildPublications.Contains(
+                        BuildAcceptedChildPublicationKey(parentKey, entry)))
+                {
+                    continue;
+                }
+
+                AddIfMissing(parentState.DispatchedStepIds, entry.StepId);
+                RemovePendingDispatch(parentState, entry.StepId);
+            }
+        }
+    }
+
+    private void PruneAcceptedChildPublications(ForEachModuleState state)
+    {
+        if (_acceptedChildPublications.Count == 0)
+            return;
+
+        var durablePending = state.Parents
+            .SelectMany(parent => parent.Value.PendingDispatches.Select(entry =>
+                BuildAcceptedChildPublicationKey(parent.Key, entry)))
+            .ToHashSet();
+        _acceptedChildPublications.RemoveWhere(key => !durablePending.Contains(key));
+    }
+
+    private static AcceptedChildPublicationKey BuildAcceptedChildPublicationKey(
+        string parentKey,
+        BackpressureQueueEntry entry) =>
+        new(
+            parentKey,
+            entry.StepId,
+            entry.ExecutionId,
+            entry.IdempotencyKey);
+
+    private readonly record struct AcceptedChildPublicationKey(
+        string ParentKey,
+        string StepId,
+        string ExecutionId,
+        string IdempotencyKey);
 
     private static async Task PublishPendingCompletionAsync(
         ForEachModuleState state,

@@ -25,6 +25,74 @@ namespace Aevatar.Workflow.Core.Tests;
 public sealed class WorkflowRunToolCallPublicationRecoveryTests
 {
     [Fact]
+    public async Task Activation_ShouldSchedulePersistedForEachPublicationForNonTerminalRun()
+    {
+        const string actorId = "run-foreach-publication-recovery";
+        var store = new InMemoryEventStore();
+        var seed = CreateAgent(actorId, store, new RecordingCallbackScheduler(), out _, out _);
+        await seed.ActivateAsync();
+        await BindForEachWorkflowAsync(seed, actorId);
+        await ((IWorkflowExecutionStateHost)seed).UpsertExecutionStateAsync(
+            ForEachModule.ModuleStateKey,
+            Any.Pack(CreatePendingForEachState(actorId)));
+
+        var scheduler = new RecordingCallbackScheduler();
+        var recovered = CreateAgent(actorId, store, scheduler, out _, out var publisher);
+        await recovered.ActivateAsync();
+
+        recovered.State.Compiled.Should().BeTrue(recovered.State.CompilationError);
+        recovered.State.ExecutionStates[ForEachModule.ModuleStateKey]
+            .Unpack<ForEachModuleState>()
+            .Parents[$"{actorId}:foreach-step"]
+            .PendingDispatches.Should().ContainSingle();
+
+        var retry = scheduler.TimeoutRequests
+            .Where(request => request.TriggerEnvelope.Payload?.Is(
+                ForEachPublicationRetryFiredEvent.Descriptor) == true)
+            .Should().ContainSingle().Subject;
+        retry.TriggerEnvelope.Payload!.Unpack<ForEachPublicationRetryFiredEvent>()
+            .ParentKey.Should().Be($"{actorId}:foreach-step");
+
+        await recovered.HandleEventAsync(retry.TriggerEnvelope);
+
+        var replayed = publisher.Published.Select(item => item.Event).OfType<StepRequestEvent>()
+            .Should().ContainSingle().Subject;
+        replayed.StepId.Should().Be("foreach-step_item_0");
+        replayed.ExecutionId.Should().Be("foreach-child-execution");
+        replayed.IdempotencyKey.Should().Be("foreach-child-idempotency");
+    }
+
+    [Fact]
+    public async Task TerminalActivation_ShouldNotSchedulePersistedForEachPublication()
+    {
+        const string actorId = "run-foreach-terminal-publication";
+        var store = new InMemoryEventStore();
+        var seed = CreateAgent(actorId, store, new RecordingCallbackScheduler(), out _, out _);
+        await seed.ActivateAsync();
+        await BindForEachWorkflowAsync(seed, actorId);
+        await ((IWorkflowExecutionStateHost)seed).UpsertExecutionStateAsync(
+            ForEachModule.ModuleStateKey,
+            Any.Pack(CreatePendingForEachState(actorId)));
+        await PersistForTestAsync(seed, new WorkflowCompletedEvent
+        {
+            RunId = actorId,
+            WorkflowName = "tool_recovery",
+            Success = true,
+            Output = "done",
+        });
+
+        var scheduler = new RecordingCallbackScheduler();
+        var recovered = CreateAgent(actorId, store, scheduler, out _, out _);
+        await recovered.ActivateAsync();
+
+        recovered.State.Status.Should().Be("completed");
+        scheduler.TimeoutRequests
+            .Where(request => request.TriggerEnvelope.Payload?.Is(
+                ForEachPublicationRetryFiredEvent.Descriptor) == true)
+            .Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task Activation_ShouldScheduleAndDrainPersistedCompletionOutboxWithoutExecutingTool()
     {
         const string actorId = "run-tool-completion-recovery";
@@ -1300,6 +1368,36 @@ public sealed class WorkflowRunToolCallPublicationRecoveryTests
         return state;
     }
 
+    private static ForEachModuleState CreatePendingForEachState(string runId)
+    {
+        var state = new ForEachModuleState
+        {
+            Backpressure = BackpressureHelper.Initialize(1),
+        };
+        state.Backpressure.ActiveWorkers = 1;
+        state.Parents[$"{runId}:foreach-step"] = new ForEachParentState
+        {
+            Expected = 1,
+            ParentRunId = runId,
+            ParentStepId = "foreach-step",
+            PendingDispatches =
+            {
+                BackpressureHelper.ToQueueEntry(
+                    "foreach-step_item_0",
+                    "tool_call",
+                    runId,
+                    "input",
+                    string.Empty,
+                    null,
+                    executionId: "foreach-child-execution",
+                    idempotencyKey: "foreach-child-idempotency"),
+            },
+        };
+        state.Parents[$"{runId}:foreach-step"].ChildExecutionIds["foreach-step_item_0"] =
+            "foreach-child-execution";
+        return state;
+    }
+
     private static ToolCallModuleState CreateTerminalToolState(
         string runId,
         params RuntimeSecretReference[] references)
@@ -1481,6 +1579,40 @@ public sealed class WorkflowRunToolCallPublicationRecoveryTests
             bind.ReuseAuthorityActorId);
     }
 
+    private static Task BindForEachWorkflowAsync(WorkflowRunGAgent agent, string runId)
+    {
+        var bind = CreateBindEvent(runId);
+        bind.WorkflowName = "foreach_recovery";
+        bind.WorkflowYaml = """
+                            name: foreach_recovery
+                            roles: []
+                            steps:
+                              - id: foreach-step
+                                type: foreach
+                                parameters:
+                                  sub_step_type: tool_call
+                                  sub_param_tool: counting_tool
+                            """;
+        return agent.BindWorkflowRunDefinitionAsync(
+            bind.DefinitionActorId,
+            bind.WorkflowYaml,
+            bind.WorkflowName,
+            bind.InlineWorkflowYamls,
+            bind.RunId,
+            bind.ScopeId,
+            bind.RunOrigin,
+            bind.ScheduleId,
+            bind.WorkflowId,
+            bind.RevisionId,
+            bind.DefinitionVersion,
+            bind.CapabilityAdmissionPlan,
+            bind.ExpectedExecutionMode,
+            bind.InitialLineage,
+            bind.ReusePolicy,
+            bind.BindingGeneration,
+            bind.ReuseAuthorityActorId);
+    }
+
     private static void SetAgentId(GAgentBase agent, string agentId)
     {
         var method = typeof(GAgentBase).GetMethod("SetId", BindingFlags.Instance | BindingFlags.NonPublic);
@@ -1495,6 +1627,7 @@ public sealed class WorkflowRunToolCallPublicationRecoveryTests
         public IReadOnlyList<WorkflowModuleRegistration> Modules { get; } =
         [
             WorkflowModuleRegistration.Create<ToolCallModule>("tool_call"),
+            WorkflowModuleRegistration.Create<ForEachModule>("foreach"),
         ];
 
         public IReadOnlyList<IWorkflowModuleDependencyExpander> DependencyExpanders { get; } =
@@ -1509,7 +1642,12 @@ public sealed class WorkflowRunToolCallPublicationRecoveryTests
     {
         public bool TryCreate(string name, out IEventModule<IWorkflowExecutionContext>? created)
         {
-            created = string.Equals(name, "tool_call", StringComparison.OrdinalIgnoreCase) ? module : null;
+            created = name.ToLowerInvariant() switch
+            {
+                "tool_call" => module,
+                "foreach" => new ForEachModule(),
+                _ => null,
+            };
             return created != null;
         }
     }

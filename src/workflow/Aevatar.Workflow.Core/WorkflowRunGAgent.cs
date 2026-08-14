@@ -466,6 +466,9 @@ public sealed partial class WorkflowRunGAgent
 
     private async Task RecoverForEachDurablePublicationsAsync(CancellationToken ct)
     {
+        if (IsTerminalStatus(State.Status) && !IsCompensating(State))
+            return;
+
         var packed = State.ExecutionStates.GetValueOrDefault(ForEachModule.ModuleStateKey);
         if (packed == null || !packed.Is(ForEachModuleState.Descriptor))
             return;

@@ -84,6 +84,12 @@ public sealed class BackpressureModuleTopUpTests
 
         context.Published.Select(x => x.Event).OfType<StepRequestEvent>().Select(x => x.StepId)
             .Should().Equal("foreach-floor_item_0", "foreach-floor_item_1");
+        context.SaveAttempts.Should().Be(1);
+        var initialParent = context.LoadState<ForEachModuleState>("foreach")
+            .Parents["run-foreach-floor:foreach-floor"];
+        initialParent.PendingDispatches.Select(entry => entry.StepId)
+            .Should().Equal("foreach-floor_item_0", "foreach-floor_item_1");
+        initialParent.DispatchedStepIds.Should().BeEmpty();
 
         context.Published.Clear();
 
@@ -100,6 +106,14 @@ public sealed class BackpressureModuleTopUpTests
 
         context.Published.Select(x => x.Event).OfType<StepRequestEvent>().Select(x => x.StepId)
             .Should().Equal("foreach-floor_item_2");
+        context.SaveAttempts.Should().Be(2,
+            "the child settlement and accepted publication acknowledgements share one checkpoint");
+        var settledParent = context.LoadState<ForEachModuleState>("foreach")
+            .Parents["run-foreach-floor:foreach-floor"];
+        settledParent.PendingDispatches.Select(entry => entry.StepId)
+            .Should().Equal("foreach-floor_item_2");
+        settledParent.DispatchedStepIds.Should()
+            .Equal("foreach-floor_item_0", "foreach-floor_item_1");
     }
 
     [Fact]
@@ -297,7 +311,7 @@ public sealed class BackpressureModuleTopUpTests
     }
 
     [Fact]
-    public async Task ForEachModule_TwentyConcurrentChildren_ShouldCheckpointDispatchLedgerAsBatch()
+    public async Task ForEachModule_TwentyConcurrentChildren_ShouldRetainDurableIntentsUntilSettlement()
     {
         var module = new ForEachModule();
         var context = new RecordingWorkflowContext();
@@ -323,13 +337,13 @@ public sealed class BackpressureModuleTopUpTests
         requests.Should().HaveCount(20);
         requests.Select(request => request.StepId)
             .Should().Equal(Enumerable.Range(0, 20).Select(index => $"foreach-batch_item_{index}"));
-        context.SaveAttempts.Should().Be(2,
-            "the durable intent fence and one batch acknowledgement are sufficient for 20 children");
+        context.SaveAttempts.Should().Be(1,
+            "child publication acceptance must not add a checkpoint after the durable intent fence");
 
         var state = context.LoadState<ForEachModuleState>("foreach");
         var parent = state.Parents["run-batch:foreach-batch"];
-        parent.PendingDispatches.Should().BeEmpty();
-        parent.DispatchedStepIds.Should().HaveCount(20);
+        parent.PendingDispatches.Should().HaveCount(20);
+        parent.DispatchedStepIds.Should().BeEmpty();
         state.Backpressure.ActiveWorkers.Should().Be(20);
     }
 
@@ -383,7 +397,11 @@ public sealed class BackpressureModuleTopUpTests
         }
 
         context.Published.Select(x => x.Event).OfType<StepRequestEvent>().Should().HaveCount(20);
-        context.SaveAttempts.Should().Be(2);
+        context.SaveAttempts.Should().Be(1);
+        var durableParent = context.LoadState<ForEachModuleState>("foreach")
+            .Parents["run-overlap:foreach-overlap"];
+        durableParent.PendingDispatches.Should().HaveCount(20);
+        durableParent.DispatchedStepIds.Should().BeEmpty();
     }
 
     [Fact]
@@ -536,7 +554,7 @@ public sealed class BackpressureModuleTopUpTests
         replayed.Take(5).Select(request => request.IdempotencyKey)
             .Should().Equal(escaped.Select(request => request.IdempotencyKey));
         context.LoadState<ForEachModuleState>("foreach")
-            .Parents["run-cancel:foreach-cancel"].PendingDispatches.Should().BeEmpty();
+            .Parents["run-cancel:foreach-cancel"].PendingDispatches.Should().HaveCount(20);
     }
 
     [Fact]
@@ -678,7 +696,44 @@ public sealed class BackpressureModuleTopUpTests
         recovered.ExecutionId.Should().Be("foreach-child-execution:run-recover:foreach-recover:0");
         recovered.IdempotencyKey.Should().Be("foreach-child:run-recover:foreach-recover:0");
         context.LoadState<ForEachModuleState>("foreach")
-            .Parents["run-recover:foreach-recover"].PendingDispatches.Should().BeEmpty();
+            .Parents["run-recover:foreach-recover"].PendingDispatches.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ForEachModule_AmbiguousPublishFailure_ShouldReplayStableChildIdentity()
+    {
+        var module = new ForEachModule();
+        var context = new RecordingWorkflowContext
+        {
+            ThrowAfterPublishOnce = evt => evt is StepRequestEvent { StepId: "foreach-ambiguous_item_0" },
+        };
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "foreach-ambiguous",
+                StepType = "foreach",
+                RunId = "run-ambiguous",
+                Input = "alpha",
+                Parameters = { ["sub_step_type"] = "transform" },
+            }),
+            context,
+            CancellationToken.None);
+
+        var escaped = context.Published.Select(x => x.Event).OfType<StepRequestEvent>()
+            .Should().ContainSingle().Subject;
+        var retry = context.Scheduled.Should().ContainSingle().Subject.Event
+            .Should().BeOfType<ForEachPublicationRetryFiredEvent>().Subject;
+
+        context.Published.Clear();
+        await module.HandleAsync(Envelope(retry), context, CancellationToken.None);
+
+        var replayed = context.Published.Select(x => x.Event).OfType<StepRequestEvent>()
+            .Should().ContainSingle().Subject;
+        replayed.StepId.Should().Be(escaped.StepId);
+        replayed.ExecutionId.Should().Be(escaped.ExecutionId);
+        replayed.IdempotencyKey.Should().Be(escaped.IdempotencyKey);
+        context.SaveAttempts.Should().Be(1);
     }
 
     [Fact]
@@ -729,17 +784,20 @@ public sealed class BackpressureModuleTopUpTests
             CancellationToken.None);
 
         identityWasDurableBeforePublish.Should().BeTrue();
-        context.SaveAttempts.Should().Be(3, "the legacy identity fence precedes the acknowledgement checkpoint");
+        context.SaveAttempts.Should().Be(2, "the legacy identity fence is the only publication checkpoint");
         var published = context.Published.Select(x => x.Event).OfType<StepRequestEvent>()
             .Should().ContainSingle().Subject;
         published.ExecutionId.Should()
             .Be("foreach-child-execution:run-legacy-pending:foreach-legacy-pending:0");
         published.IdempotencyKey.Should()
             .Be("foreach-child:run-legacy-pending:foreach-legacy-pending:0");
+        var durableParent = context.LoadState<ForEachModuleState>("foreach").Parents[parentKey];
+        durableParent.PendingDispatches.Should().ContainSingle();
+        durableParent.DispatchedStepIds.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task ForEachModule_PartialBatchPublishFailure_ShouldCheckpointSuccessesAndRecoverOnlyFailedChild()
+    public async Task ForEachModule_PartialBatchPublishFailure_ShouldRetryOnlyFailedChildWithoutAckCheckpoint()
     {
         var module = new ForEachModule();
         var context = new RecordingWorkflowContext
@@ -768,12 +826,11 @@ public sealed class BackpressureModuleTopUpTests
             .Should().Equal(Enumerable.Range(0, 20)
                 .Where(index => index != 7)
                 .Select(index => $"foreach-batch-recover_item_{index}"));
-        context.SaveAttempts.Should().Be(2);
+        context.SaveAttempts.Should().Be(1);
         var checkpoint = context.LoadState<ForEachModuleState>("foreach")
             .Parents["run-batch-recover:foreach-batch-recover"];
-        checkpoint.DispatchedStepIds.Should().HaveCount(19);
-        checkpoint.PendingDispatches.Select(entry => entry.StepId)
-            .Should().Equal("foreach-batch-recover_item_7");
+        checkpoint.DispatchedStepIds.Should().BeEmpty();
+        checkpoint.PendingDispatches.Should().HaveCount(20);
 
         var retry = context.Scheduled.Should().ContainSingle().Subject.Event
             .Should().BeOfType<ForEachPublicationRetryFiredEvent>().Subject;
@@ -782,55 +839,68 @@ public sealed class BackpressureModuleTopUpTests
 
         context.Published.Select(x => x.Event).OfType<StepRequestEvent>().Select(request => request.StepId)
             .Should().Equal("foreach-batch-recover_item_7");
-        context.SaveAttempts.Should().Be(3);
+        context.SaveAttempts.Should().Be(1);
         var recovered = context.LoadState<ForEachModuleState>("foreach")
             .Parents["run-batch-recover:foreach-batch-recover"];
-        recovered.PendingDispatches.Should().BeEmpty();
-        recovered.DispatchedStepIds.Should().HaveCount(20);
+        recovered.PendingDispatches.Should().HaveCount(20);
+        recovered.DispatchedStepIds.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task ForEachModule_PostDispatchPublishSaveFailure_ShouldPropagateAndKeepDurableIntent()
+    public async Task ForEachModule_SettlementSaveFailure_ShouldRetainAcceptanceCacheAndAvoidSameActivationReplay()
     {
         var module = new ForEachModule();
-        var context = new RecordingWorkflowContext
-        {
-            FailSaveAttempt = 2,
-        };
-
-        var act = () => module.HandleAsync(
+        var context = new RecordingWorkflowContext();
+        await module.HandleAsync(
             Envelope(new StepRequestEvent
             {
                 StepId = "foreach-dispatch-save-failure",
                 StepType = "foreach",
                 RunId = "run-dispatch-save-failure",
-                Input = "alpha",
+                Input = "alpha\n---\nbeta",
                 Parameters = { ["sub_step_type"] = "transform" },
             }),
             context,
             CancellationToken.None);
+        var firstChild = context.Published.Select(x => x.Event).OfType<StepRequestEvent>().First();
+        context.Published.Clear();
+        context.FailSaveAttempt = 2;
+
+        var completion = new StepCompletedEvent
+        {
+            StepId = firstChild.StepId,
+            RunId = firstChild.RunId,
+            ExecutionId = firstChild.ExecutionId,
+            Success = true,
+            Output = "A",
+        };
+        var act = () => module.HandleAsync(Envelope(completion), context, CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("simulated save failure");
 
-        context.Published.Select(x => x.Event).OfType<StepRequestEvent>()
-            .Should().ContainSingle().Which.StepId.Should().Be("foreach-dispatch-save-failure_item_0");
-        context.Scheduled.Should().BeEmpty();
+        context.Published.Should().BeEmpty();
         var durableParent = context.LoadState<ForEachModuleState>("foreach")
             .Parents["run-dispatch-save-failure:foreach-dispatch-save-failure"];
-        durableParent.PendingDispatches.Should().ContainSingle()
-            .Which.StepId.Should().Be("foreach-dispatch-save-failure_item_0");
+        durableParent.PendingDispatches.Should().HaveCount(2);
         durableParent.DispatchedStepIds.Should().BeEmpty();
+
+        context.FailSaveAttempt = null;
+        await module.HandleAsync(Envelope(completion), context, CancellationToken.None);
+
+        context.Published.Select(x => x.Event).OfType<StepRequestEvent>().Should().BeEmpty();
+        var settledParent = context.LoadState<ForEachModuleState>("foreach")
+            .Parents["run-dispatch-save-failure:foreach-dispatch-save-failure"];
+        settledParent.PendingDispatches.Should().BeEmpty();
+        settledParent.DispatchedStepIds.Should().HaveCount(2);
+        settledParent.CollectedStepIds.Should().Equal(firstChild.StepId);
     }
 
     [Fact]
-    public async Task ForEachModule_BatchAcknowledgementSaveFailure_ShouldReplayStableChildIdentities()
+    public async Task ForEachModule_NewModuleInstance_ShouldReplayDurableBatchWithStableChildIdentities()
     {
         var module = new ForEachModule();
-        var context = new RecordingWorkflowContext
-        {
-            FailSaveAttempt = 2,
-        };
+        var context = new RecordingWorkflowContext();
         var parentRequest = new StepRequestEvent
         {
             StepId = "foreach-batch-save-failure",
@@ -846,12 +916,10 @@ public sealed class BackpressureModuleTopUpTests
             },
         };
 
-        var firstAttempt = () => module.HandleAsync(
+        await module.HandleAsync(
             Envelope(parentRequest),
             context,
             CancellationToken.None);
-        await firstAttempt.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("simulated save failure");
 
         var firstBatch = context.Published.Select(x => x.Event).OfType<StepRequestEvent>().ToArray();
         firstBatch.Should().HaveCount(20);
@@ -861,7 +929,8 @@ public sealed class BackpressureModuleTopUpTests
         durableParent.DispatchedStepIds.Should().BeEmpty();
 
         context.Published.Clear();
-        await module.HandleAsync(Envelope(parentRequest), context, CancellationToken.None);
+        var recoveredModule = new ForEachModule();
+        await recoveredModule.HandleAsync(Envelope(parentRequest), context, CancellationToken.None);
 
         var replayedBatch = context.Published.Select(x => x.Event).OfType<StepRequestEvent>().ToArray();
         replayedBatch.Should().HaveCount(20);
@@ -870,10 +939,10 @@ public sealed class BackpressureModuleTopUpTests
             .Should().Equal(firstBatch.Select(request => request.ExecutionId));
         replayedBatch.Select(request => request.IdempotencyKey)
             .Should().Equal(firstBatch.Select(request => request.IdempotencyKey));
-        context.SaveAttempts.Should().Be(4);
+        context.SaveAttempts.Should().Be(2);
         context.LoadState<ForEachModuleState>("foreach")
             .Parents["run-batch-save-failure:foreach-batch-save-failure:execution:parent-execution"]
-            .PendingDispatches.Should().BeEmpty();
+            .PendingDispatches.Should().HaveCount(20);
     }
 
     [Fact]
@@ -1401,6 +1470,8 @@ public sealed class BackpressureModuleTopUpTests
 
         public Func<IMessage, bool>? FailPublishOnce { get; set; }
 
+        public Func<IMessage, bool>? ThrowAfterPublishOnce { get; set; }
+
         public int? FailSaveAttempt { get; set; }
 
         public int SaveAttempts { get; private set; }
@@ -1476,6 +1547,11 @@ public sealed class BackpressureModuleTopUpTests
                 }
 
                 Published.Add((evt, audience));
+                if (ThrowAfterPublishOnce?.Invoke(evt) == true)
+                {
+                    ThrowAfterPublishOnce = null;
+                    throw new InvalidOperationException("simulated ambiguous publish failure");
+                }
             }
         }
 
