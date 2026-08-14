@@ -11,7 +11,7 @@ public sealed class NyxIdBrokerOptions
 {
     public const string InternalApiBaseUrlConfigurationKey = "Aevatar:NyxId:InternalApiBaseUrl";
     public const string ApiBaseUrlConfigurationKey = "Aevatar:NyxId:ApiBaseUrl";
-    public const string ResourceServerBaseUrlConfigurationKey = "Aevatar:NyxId:Authority";
+    public const string ResourceServerBaseUrlConfigurationKey = ApiBaseUrlConfigurationKey;
 
     /// <summary>
     /// Effective NyxID HTTP transport base URL used for server-to-server API calls.
@@ -21,7 +21,13 @@ public sealed class NyxIdBrokerOptions
     public string TransportBaseUrl { get; set; } = string.Empty;
 
     /// <summary>
-    /// Canonical public NyxID authority used for RFC 8707 resource indicators.
+    /// Optional public NyxID REST endpoint used only when the cluster-local transport
+    /// fails before DNS resolution or socket connection completes.
+    /// </summary>
+    public string? PublicTransportFallbackBaseUrl { get; set; }
+
+    /// <summary>
+    /// Canonical public NyxID API base URL used for RFC 8707 resource indicators.
     /// This remains independent from the HTTP transport base URL.
     /// </summary>
     public string ResourceServerBaseUrl { get; set; } = string.Empty;

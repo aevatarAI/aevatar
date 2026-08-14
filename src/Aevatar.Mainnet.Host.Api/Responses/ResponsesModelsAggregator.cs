@@ -1,5 +1,6 @@
 using System.Net.Http.Headers;
 using System.Text.Json;
+using Aevatar.Configuration;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -68,10 +69,10 @@ internal sealed class NyxIdResponsesModelsAggregator : IResponsesModelsAggregato
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(bearerToken);
 
-        var authority = ResolveAuthorityBase();
-        if (string.IsNullOrWhiteSpace(authority))
+        var apiBaseUrl = ResolveApiBaseUrl();
+        if (string.IsNullOrWhiteSpace(apiBaseUrl))
         {
-            _logger.LogWarning("NyxID authority is not configured; returning empty models list.");
+            _logger.LogWarning("NyxID public API base URL is not configured; returning empty models list.");
             return Array.Empty<ResponsesModelEntry>();
         }
 
@@ -97,7 +98,7 @@ internal sealed class NyxIdResponsesModelsAggregator : IResponsesModelsAggregato
             return Array.Empty<ResponsesModelEntry>();
 
         var fetchTasks = readyServices
-            .Select(service => FetchAndNormalizeAsync(authority, service, bearerToken, ct))
+            .Select(service => FetchAndNormalizeAsync(apiBaseUrl, service, bearerToken, ct))
             .ToList();
         var groups = await Task.WhenAll(fetchTasks).ConfigureAwait(false);
         var entries = groups.SelectMany(static g => g).ToList();
@@ -326,25 +327,6 @@ internal sealed class NyxIdResponsesModelsAggregator : IResponsesModelsAggregato
         return null;
     }
 
-    /// <summary>Mirrors the authority-resolution chain in
-    /// <c>NyxIdLlmCatalogHttpClient.ResolveNyxIdAuthorityBase</c> so both clients agree on which
-    /// NyxID instance to fan out against.</summary>
-    private string? ResolveAuthorityBase()
-    {
-        var authority = _configuration["Cli:App:NyxId:Authority"]
-            ?? _configuration["Aevatar:NyxId:Authority"]
-            ?? _configuration["Aevatar:Authentication:Authority"];
-
-        if (string.IsNullOrWhiteSpace(authority))
-            return null;
-
-        var trimmed = authority.Trim().TrimEnd('/');
-        if (!Uri.TryCreate(trimmed, UriKind.Absolute, out _))
-            return null;
-
-        const string gatewaySuffix = "/api/v1/llm/gateway/v1";
-        return trimmed.EndsWith(gatewaySuffix, StringComparison.OrdinalIgnoreCase)
-            ? trimmed[..^gatewaySuffix.Length]
-            : trimmed;
-    }
+    private string? ResolveApiBaseUrl() =>
+        NyxIdEndpointResolver.ResolvePublicApiBaseUrl(_configuration);
 }

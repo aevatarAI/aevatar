@@ -242,9 +242,15 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
     }
 
     [Fact]
-    public async Task InspectAsync_ShouldRequireExactServiceAndEndpointSelection()
+    public async Task InspectAsync_ShouldUsePublicApiForSelectionRemediationLocator()
     {
-        var source = CreateSource(new CatalogHandler { Body = Config(Service()) });
+        var source = CreateSource(
+            new CatalogHandler { Body = Config(Service()) },
+            configuredOptions: new NyxIdToolOptions
+            {
+                BaseUrl = "http://nyxid.internal:3001",
+                ApiBaseUrl = "https://nyxid.example.test/",
+            });
 
         var result = await source.InspectAsync(
             Access(),
@@ -255,6 +261,8 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
         result.Status.Should().Be(ExternalCapabilityReadinessStatus.OperationSelectionRequired);
         result.Blockers.Should().ContainSingle().Which.Code.Should()
             .Be("NYXID_OPERATION_SELECTION_REQUIRED");
+        result.Remediations.Should().ContainSingle().Which.TrustedLocator.Should()
+            .Be("https://nyxid.example.test");
     }
 
     [Fact]
@@ -823,9 +831,10 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
 
     private static NyxIdExternalWorkflowCapabilitySource CreateSource(
         CatalogHandler handler,
-        INyxIdAuthorizationCatalogQueryPort? queryPort = null)
+        INyxIdAuthorizationCatalogQueryPort? queryPort = null,
+        NyxIdToolOptions? configuredOptions = null)
     {
-        var options = new NyxIdToolOptions { BaseUrl = "https://nyxid.invalid" };
+        var options = configuredOptions ?? new NyxIdToolOptions { BaseUrl = "https://nyxid.invalid" };
         return new NyxIdExternalWorkflowCapabilitySource(
             new NyxIdApiClient(options, new HttpClient(handler)),
             options,

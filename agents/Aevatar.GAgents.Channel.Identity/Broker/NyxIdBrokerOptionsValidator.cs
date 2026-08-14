@@ -13,6 +13,13 @@ internal sealed class NyxIdBrokerOptionsValidator : IValidateOptions<NyxIdBroker
             options.TransportBaseUrl,
             nameof(NyxIdBrokerOptions.TransportBaseUrl),
             failures);
+        if (!string.IsNullOrWhiteSpace(options.PublicTransportFallbackBaseUrl))
+        {
+            ValidateBaseUrl(
+                options.PublicTransportFallbackBaseUrl,
+                nameof(NyxIdBrokerOptions.PublicTransportFallbackBaseUrl),
+                failures);
+        }
         ValidateBaseUrl(
             options.ResourceServerBaseUrl,
             nameof(NyxIdBrokerOptions.ResourceServerBaseUrl),

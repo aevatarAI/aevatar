@@ -147,6 +147,31 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
         participants.Single().Model.Should().Be("legacy-model");
     }
 
+    [Fact]
+    public async Task ResolveParticipantsAsync_WithSplitNyxIdHosts_ShouldUseOnlyPublicApiBaseUrl()
+    {
+        var handler = new StreamingProxyHttpHandler();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Aevatar:NyxId:InternalApiBaseUrl"] = "http://nyxid.internal:3001",
+                ["Aevatar:NyxId:ApiBaseUrl"] = "https://nyx-api.example.test",
+                ["Aevatar:NyxId:Authority"] = "https://nyx-authority.example.test",
+            })
+            .Build();
+        var (coordinator, _) = CreateCoordinator(null, null, handler, configuration);
+
+        var participants = await coordinator.ResolveParticipantsAsync(
+            "scope-1",
+            "room-1",
+            "test-token",
+            CancellationToken.None);
+
+        participants.Should().HaveCount(3);
+        handler.RequestUris.Should().ContainSingle()
+            .Which.Should().Be("https://nyx-api.example.test/api/v1/llm/services");
+    }
+
     private static StreamingProxyChatParticipantReplyRequested BuildReplyRequest(
         StreamingProxyNyxParticipantDefinition participant,
         IReadOnlyList<StreamingProxyNyxParticipantDefinition> activeParticipants,
@@ -187,14 +212,15 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
     private static (StreamingProxyNyxParticipantCoordinator Coordinator, RecordingLlmProvider Provider) CreateCoordinator(
         Func<LLMRequest, LLMResponse>? responseFactory,
         Func<LLMRequest, IReadOnlyList<LLMStreamChunk>>? streamFactory,
-        StreamingProxyHttpHandler? handler = null)
+        StreamingProxyHttpHandler? handler = null,
+        IConfiguration? configuration = null)
     {
         handler ??= new StreamingProxyHttpHandler();
         var httpClient = new HttpClient(handler);
         var httpClientFactory = new StubHttpClientFactory(httpClient);
         var provider = new RecordingLlmProvider(responseFactory, streamFactory);
         var llmFactory = new StubLlmProviderFactory(provider);
-        var configuration = new ConfigurationBuilder()
+        configuration ??= new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["Cli:App:NyxId:Authority"] = "https://nyx.example.com",
@@ -268,11 +294,13 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
             """;
 
         public List<string> RequestPaths { get; } = [];
+        public List<string> RequestUris { get; } = [];
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var path = request.RequestUri?.AbsolutePath ?? string.Empty;
             RequestPaths.Add(path);
+            RequestUris.Add(request.RequestUri?.AbsoluteUri ?? string.Empty);
             if (path.EndsWith("/api/v1/llm/services", StringComparison.Ordinal))
             {
                 return Task.FromResult(servicesNotFound

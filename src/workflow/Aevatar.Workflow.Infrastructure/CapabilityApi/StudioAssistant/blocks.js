@@ -1,4 +1,4 @@
-import { validateActionRequest } from "./protocol.js?v=20260814-m45-model-operations";
+import { validateActionRequest } from "./protocol.js?v=20260814-m46-nyxid-api-routing";
 
 // Assistant prose is always Markdown text. Executable cards are built only
 // from actor-authored, schema-v4 action requests.

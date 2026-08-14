@@ -270,14 +270,23 @@ public static class IdentityServiceCollectionExtensions
             {
                 var internalApiBaseUrl =
                     configuration[NyxIdBrokerOptions.InternalApiBaseUrlConfigurationKey];
+                var publicApiBaseUrl =
+                    configuration[NyxIdBrokerOptions.ApiBaseUrlConfigurationKey];
                 options.TransportBaseUrl =
                     (!string.IsNullOrWhiteSpace(internalApiBaseUrl)
                         ? internalApiBaseUrl
-                        : configuration[NyxIdBrokerOptions.ApiBaseUrlConfigurationKey] ?? string.Empty)
+                        : publicApiBaseUrl ?? string.Empty)
                     .Trim()
                     .TrimEnd('/');
+                var normalizedPublicApiBaseUrl = publicApiBaseUrl?.Trim().TrimEnd('/');
+                options.PublicTransportFallbackBaseUrl =
+                    !string.IsNullOrWhiteSpace(internalApiBaseUrl) &&
+                    !string.IsNullOrWhiteSpace(normalizedPublicApiBaseUrl) &&
+                    !UrlsEqual(options.TransportBaseUrl, normalizedPublicApiBaseUrl)
+                        ? normalizedPublicApiBaseUrl
+                        : null;
                 options.ResourceServerBaseUrl =
-                    (configuration[NyxIdBrokerOptions.ResourceServerBaseUrlConfigurationKey] ?? string.Empty)
+                    (normalizedPublicApiBaseUrl ?? string.Empty)
                     .Trim()
                     .TrimEnd('/');
             });
@@ -332,6 +341,20 @@ public static class IdentityServiceCollectionExtensions
         services.TryAddSingleton<ChannelSlashCommandRegistry>();
 
         return services;
+    }
+
+    private static bool UrlsEqual(string left, string right)
+    {
+        if (!Uri.TryCreate(left.TrimEnd('/') + "/", UriKind.Absolute, out var leftUri) ||
+            !Uri.TryCreate(right.TrimEnd('/') + "/", UriKind.Absolute, out var rightUri))
+        {
+            return false;
+        }
+
+        return string.Equals(leftUri.Scheme, rightUri.Scheme, StringComparison.OrdinalIgnoreCase) &&
+               string.Equals(leftUri.Host, rightUri.Host, StringComparison.OrdinalIgnoreCase) &&
+               leftUri.Port == rightUri.Port &&
+               string.Equals(leftUri.AbsolutePath, rightUri.AbsolutePath, StringComparison.Ordinal);
     }
 
     private static IServiceCollection AddIdentityOAuthCommandDispatch<TCommand, TAgent>(

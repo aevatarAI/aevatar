@@ -1,4 +1,4 @@
-import { normalizeReadinessSnapshot } from "./readiness.js?v=20260814-m45-model-operations";
+import { normalizeReadinessSnapshot } from "./readiness.js?v=20260814-m46-nyxid-api-routing";
 
 const nativeFetch = globalThis.fetch.bind(globalThis);
 const backendConfig = globalThis.__AEVATAR_ASSISTANT_CONFIG__ || {};
@@ -8,8 +8,8 @@ const config = Object.freeze({
   clientId: String(backendConfig.clientId || "").trim(),
   scope: String(backendConfig.scope || "").trim(),
   resources: uniqueStrings(backendConfig.resources),
-  nyxidApi: trimBaseUrl(backendConfig.nyxidApi || backendConfig.authority),
-  nyxidWeb: trimBaseUrl(backendConfig.nyxidWeb || backendConfig.authority),
+  nyxidApi: trimBaseUrl(backendConfig.nyxidApi),
+  nyxidWeb: trimBaseUrl(backendConfig.nyxidWeb || backendConfig.nyxidApi),
   storageKey: String(backendConfig.storageKey || "aevatar-studio:session"),
   enableStudioWireInspector: backendConfig.enableStudioWireInspector === true,
   redirectUri: `${location.origin}/auto/callback`,

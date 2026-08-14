@@ -1,4 +1,4 @@
-import "./transport.js?v=20260814-m45-model-operations";
+import "./transport.js?v=20260814-m46-nyxid-api-routing";
 import {
   consumeSse,
   mergeUsage,
@@ -9,21 +9,21 @@ import {
   redact,
   safeJson,
   validateActionContinuation,
-} from "./protocol.js?v=20260814-m45-model-operations";
+} from "./protocol.js?v=20260814-m46-nyxid-api-routing";
 import {
   buildConnectCardBlock,
   connectCardSteps,
   connectorInitial,
   splitMessageSegments,
-} from "./blocks.js?v=20260814-m45-model-operations";
+} from "./blocks.js?v=20260814-m46-nyxid-api-routing";
 import {
   actorCan,
   applyCurrentStateResult,
   createActorProjection,
   reduceActorEvent,
   restoreCachedAction,
-} from "./actor-state.js?v=20260814-m45-model-operations";
-import { describeReadinessFailure } from "./readiness.js?v=20260814-m45-model-operations";
+} from "./actor-state.js?v=20260814-m46-nyxid-api-routing";
+import { describeReadinessFailure } from "./readiness.js?v=20260814-m46-nyxid-api-routing";
 
 const PREFERENCES_KEY = "aevatar-studio:assistant-preferences:v4";
 const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;

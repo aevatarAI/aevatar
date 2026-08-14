@@ -25,11 +25,13 @@ internal sealed class NyxRelayOidcDocumentHandler : HttpMessageHandler
     }
 
     public int JwksRequests { get; private set; }
+    public List<string> RequestUris { get; } = [];
 
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var uri = request.RequestUri?.AbsoluteUri ?? string.Empty;
+        RequestUris.Add(uri);
         if (uri.EndsWith("/.well-known/openid-configuration", StringComparison.Ordinal))
         {
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)

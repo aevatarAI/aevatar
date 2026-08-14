@@ -1,5 +1,6 @@
 using Aevatar.GAgents.StatusDashboard.Configuration;
 using FluentAssertions;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 
 namespace Aevatar.GAgents.StatusDashboard.Tests;
@@ -50,7 +51,8 @@ public sealed class HealthStatusQueryPortTests
             await store.UpsertAsync(snapshot);
         var port = new HealthStatusQueryPort(
             store,
-            Options.Create(new StatusDashboardOptions()));
+            Options.Create(new StatusDashboardOptions()),
+            new ConfigurationBuilder().Build());
 
         var results = await port.ListAllAsync();
 

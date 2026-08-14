@@ -85,7 +85,8 @@ public static partial class NyxIdChatEndpoints
                 if (string.IsNullOrWhiteSpace(token))
                     return Results.Json(new { error = "Provide token via X-Test-Token header" });
 
-                var baseUrl = (nyxOptions.BaseUrl ?? "https://nyx-api.chrono-ai.fun").TrimEnd('/');
+                var baseUrl = (nyxOptions.EffectiveTransportBaseUrl ?? "https://nyx-api.chrono-ai.fun")
+                    .TrimEnd('/');
                 var gateway = $"{baseUrl}/api/v1/llm/gateway/v1/chat/completions";
                 var body = """{"model":"gpt-5.4","messages":[{"role":"user","content":"hi"}],"max_tokens":10}""";
 

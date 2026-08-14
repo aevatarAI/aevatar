@@ -5,7 +5,9 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
+using Aevatar.Configuration;
 using Aevatar.GAgents.Channel.Abstractions;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -117,6 +119,7 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
     private readonly NyxIdToolOptions _options;
     private readonly ILogger _logger;
     private readonly bool _ownsHttpClient;
+    private readonly bool _allowPublicTransportFallback;
 
     internal static bool TryParseProxyError(string? response, out NyxIdProxyError? error)
     {
@@ -196,13 +199,45 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
         NyxIdToolOptions options,
         HttpClient? httpClient = null,
         ILogger<NyxIdApiClient>? logger = null)
+        : this(
+            options,
+            httpClient,
+            logger,
+            allowPublicTransportFallback: httpClient is null)
     {
-        _options = options;
+    }
+
+    [ActivatorUtilitiesConstructor]
+    public NyxIdApiClient(
+        NyxIdToolOptions options,
+        HttpClient httpClient,
+        NyxIdApiClientTransportPolicy transportPolicy,
+        ILogger<NyxIdApiClient>? logger = null)
+        : this(
+            options,
+            httpClient ?? throw new ArgumentNullException(nameof(httpClient)),
+            logger,
+            allowPublicTransportFallback: transportPolicy is not null)
+    {
+        ArgumentNullException.ThrowIfNull(transportPolicy);
+    }
+
+    private NyxIdApiClient(
+        NyxIdToolOptions options,
+        HttpClient? httpClient,
+        ILogger<NyxIdApiClient>? logger,
+        bool allowPublicTransportFallback)
+    {
+        _options = options ?? throw new ArgumentNullException(nameof(options));
         // Refactor (iter10/cluster-019):
         // Old: singleton DI registration could construct and permanently pin a raw HttpClient.
         // New: DI registers this as an AddHttpClient<T> typed client; only manual construction owns this fallback.
-        _http = httpClient ?? new HttpClient();
+        _http = httpClient ?? new HttpClient(new HttpClientHandler
+        {
+            AllowAutoRedirect = false,
+        });
         _ownsHttpClient = httpClient is null;
+        _allowPublicTransportFallback = allowPublicTransportFallback;
         // Only a self-created client may be configured here: mutating Timeout on a caller-supplied
         // HttpClient throws once it has started a request, and its owner sets its own policy.
         if (_ownsHttpClient)
@@ -825,7 +860,7 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
         }
 
         ApplyIdempotencyKey(request, httpMethod);
-        return await SendAsync(request, ct);
+        return await SendAsync(request, ct, allowPublicTransportFallback: false);
     }
 
     public async Task<NyxIdProxyBinaryResponse> ProxyGetBinaryResponseAsync(
@@ -1668,7 +1703,8 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
     // ─── HTTP helpers ───
 
     private string GetBaseUrl() =>
-        _options.BaseUrl?.TrimEnd('/') ?? throw new InvalidOperationException("NyxID base URL is not configured.");
+        _options.EffectiveTransportBaseUrl?.TrimEnd('/') ??
+        throw new InvalidOperationException("NyxID transport base URL is not configured.");
 
     private static bool ApplyExtraHeaders(
         HttpRequestMessage request,
@@ -1782,16 +1818,24 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
         return await SendAsync(request, ct);
     }
 
-    private async Task<string> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
-        (await SendTextResponseAsync(request, ct)).Content;
+    private async Task<string> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken ct,
+        bool allowPublicTransportFallback = true) =>
+        (await SendTextResponseAsync(request, ct, allowPublicTransportFallback)).Content;
 
     private async Task<NyxIdProxyTextResponse> SendTextResponseAsync(
         HttpRequestMessage request,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool allowPublicTransportFallback = true)
     {
         try
         {
-            using var response = await _http.SendAsync(request, ct);
+            using var response = await SendWithPublicTransportFallbackAsync(
+                request,
+                HttpCompletionOption.ResponseContentRead,
+                allowPublicTransportFallback,
+                ct);
             var content = await response.Content.ReadAsStringAsync(ct);
 
             if (!response.IsSuccessStatusCode)
@@ -1844,9 +1888,10 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
     {
         try
         {
-            using var response = await _http.SendAsync(
+            using var response = await SendWithPublicTransportFallbackAsync(
                 request,
                 HttpCompletionOption.ResponseHeadersRead,
+                allowPublicTransportFallback: true,
                 ct);
             var contentType = response.Content.Headers.ContentType?.ToString();
             var fileName = ResolveContentDispositionFileName(response);
@@ -1930,9 +1975,10 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
     {
         try
         {
-            using var response = await _http.SendAsync(
+            using var response = await SendWithPublicTransportFallbackAsync(
                 request,
                 HttpCompletionOption.ResponseHeadersRead,
+                allowPublicTransportFallback: true,
                 ct);
             if (response.Content.Headers.ContentLength is { } contentLength &&
                 contentLength > maxBytes)
@@ -1996,6 +2042,159 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
                 false,
                 string.Empty,
                 Detail: "bounded_proxy_transport_failure");
+        }
+    }
+
+    private async Task<HttpResponseMessage> SendWithPublicTransportFallbackAsync(
+        HttpRequestMessage request,
+        HttpCompletionOption completionOption,
+        bool allowPublicTransportFallback,
+        CancellationToken ct)
+    {
+        ReplayableRequest? replay = null;
+        Uri? fallbackUri = null;
+        if (_allowPublicTransportFallback &&
+            allowPublicTransportFallback &&
+            TryBuildPublicTransportFallbackUri(request.RequestUri, out var resolvedFallbackUri))
+        {
+            replay = await ReplayableRequest.CreateAsync(request, ct);
+            fallbackUri = resolvedFallbackUri;
+        }
+
+        try
+        {
+            return await _http.SendAsync(request, completionOption, ct);
+        }
+        catch (HttpRequestException ex) when (
+            NyxIdTransportFailureClassifier.IsPreConnectFailure(ex) &&
+            !ct.IsCancellationRequested &&
+            replay is not null &&
+            fallbackUri is not null)
+        {
+            _logger.LogWarning(
+                "NyxID primary transport could not establish a connection for {Method} ({Failure}); retrying the configured public transport once",
+                request.Method,
+                ex.HttpRequestError);
+            using var fallbackRequest = replay.CreateRequest(fallbackUri);
+            return await _http.SendAsync(fallbackRequest, completionOption, ct);
+        }
+    }
+
+    private bool TryBuildPublicTransportFallbackUri(Uri? requestUri, out Uri fallbackUri)
+    {
+        fallbackUri = null!;
+        if (requestUri is null || !requestUri.IsAbsoluteUri ||
+            string.IsNullOrWhiteSpace(_options.EffectiveTransportBaseUrl) ||
+            string.IsNullOrWhiteSpace(_options.PublicTransportFallbackBaseUrl) ||
+            !Uri.TryCreate(
+                _options.EffectiveTransportBaseUrl.TrimEnd('/') + "/",
+                UriKind.Absolute,
+                out var primaryBaseUri) ||
+            !Uri.TryCreate(
+                _options.PublicTransportFallbackBaseUrl.TrimEnd('/') + "/",
+                UriKind.Absolute,
+                out var publicBaseUri) ||
+            Uri.Compare(
+                requestUri,
+                primaryBaseUri,
+                UriComponents.SchemeAndServer,
+                UriFormat.Unescaped,
+                StringComparison.OrdinalIgnoreCase) != 0)
+        {
+            return false;
+        }
+
+        var primaryPath = primaryBaseUri.AbsolutePath.TrimEnd('/');
+        var requestPath = requestUri.AbsolutePath;
+        if (primaryPath.Length > 0 &&
+            !string.Equals(requestPath, primaryPath, StringComparison.Ordinal) &&
+            !requestPath.StartsWith(primaryPath + "/", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var relativePath = primaryPath.Length == 0
+            ? requestPath
+            : requestPath[primaryPath.Length..];
+        var publicPath = publicBaseUri.AbsolutePath.TrimEnd('/');
+        var fallbackValue =
+            $"{publicBaseUri.GetLeftPart(UriPartial.Authority)}{publicPath}{relativePath}{requestUri.Query}";
+        if (!Uri.TryCreate(fallbackValue, UriKind.Absolute, out var candidateFallbackUri) ||
+            AreSameTransportUri(requestUri, candidateFallbackUri))
+        {
+            return false;
+        }
+
+        fallbackUri = candidateFallbackUri;
+        return true;
+    }
+
+    private static bool AreSameTransportUri(Uri left, Uri right) =>
+        string.Equals(left.Scheme, right.Scheme, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(left.Host, right.Host, StringComparison.OrdinalIgnoreCase) &&
+        left.Port == right.Port &&
+        string.Equals(left.PathAndQuery, right.PathAndQuery, StringComparison.Ordinal);
+
+    private sealed record ReplayableRequest(
+        HttpMethod Method,
+        Version Version,
+        HttpVersionPolicy VersionPolicy,
+        IReadOnlyList<KeyValuePair<string, string[]>> Headers,
+        byte[]? Content,
+        IReadOnlyList<KeyValuePair<string, string[]>> ContentHeaders)
+    {
+        public static async Task<ReplayableRequest> CreateAsync(
+            HttpRequestMessage request,
+            CancellationToken ct)
+        {
+            var content = request.Content is null
+                ? null
+                : await request.Content.ReadAsByteArrayAsync(ct);
+            return new ReplayableRequest(
+                request.Method,
+                request.Version,
+                request.VersionPolicy,
+                SnapshotHeaders(request.Headers, skipHost: true),
+                content,
+                request.Content is null
+                    ? []
+                    : SnapshotHeaders(request.Content.Headers, skipHost: false));
+        }
+
+        public HttpRequestMessage CreateRequest(Uri uri)
+        {
+            var request = new HttpRequestMessage(Method, uri)
+            {
+                Version = Version,
+                VersionPolicy = VersionPolicy,
+            };
+            RestoreHeaders(request.Headers, Headers);
+
+            if (Content is not null)
+            {
+                request.Content = new ByteArrayContent(Content);
+                request.Content.Headers.Clear();
+                RestoreHeaders(request.Content.Headers, ContentHeaders);
+            }
+
+            return request;
+        }
+
+        private static IReadOnlyList<KeyValuePair<string, string[]>> SnapshotHeaders(
+            System.Net.Http.Headers.HttpHeaders headers,
+            bool skipHost) =>
+            headers
+                .Where(header => !skipHost ||
+                                 !string.Equals(header.Key, "Host", StringComparison.OrdinalIgnoreCase))
+                .Select(header => new KeyValuePair<string, string[]>(header.Key, header.Value.ToArray()))
+                .ToArray();
+
+        private static void RestoreHeaders(
+            System.Net.Http.Headers.HttpHeaders target,
+            IEnumerable<KeyValuePair<string, string[]>> headers)
+        {
+            foreach (var header in headers)
+                target.TryAddWithoutValidation(header.Key, header.Value);
         }
     }
 

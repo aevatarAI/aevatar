@@ -74,8 +74,8 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             html.Should().Contain("class=\"site-header\"");
             html.Should().Contain("id=\"composerForm\"");
             html.Should().Contain("生产环境 · 操作会影响真实数据，高风险操作需要确认");
-            html.Should().Contain("app.js?v=20260814-m45-model-operations");
-            html.Should().Contain("styles.css?v=20260814-m45-model-operations");
+            html.Should().Contain("app.js?v=20260814-m46-nyxid-api-routing");
+            html.Should().Contain("styles.css?v=20260814-m46-nyxid-api-routing");
             html.Should().Contain("id=\"traceViewButton\"");
             html.Should().Contain("id=\"requestTracePanel\"");
             html.Should().Contain("Operation ledger");

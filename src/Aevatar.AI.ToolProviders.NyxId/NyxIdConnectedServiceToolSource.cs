@@ -33,7 +33,7 @@ public sealed class NyxIdConnectedServiceToolSource : IAgentToolSource
 
     public async Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(_options.BaseUrl))
+        if (string.IsNullOrWhiteSpace(_options.EffectiveTransportBaseUrl))
             return [];
         var context = AgentToolRequestContext.Current;
         var executionToken = context?.Credentials.NyxIdAccessToken;

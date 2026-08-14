@@ -53,7 +53,7 @@ internal sealed class NyxIdAssistantActionRegistryHttpSource
 
     public async Task<string> FetchAsync(CancellationToken ct)
     {
-        var baseUrl = _options.BaseUrl?.Trim();
+        var baseUrl = _options.EffectiveApiBaseUrl?.Trim();
         if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var baseUri) ||
             (!string.Equals(baseUri.Scheme, Uri.UriSchemeHttp, StringComparison.Ordinal) &&
              !string.Equals(baseUri.Scheme, Uri.UriSchemeHttps, StringComparison.Ordinal)))

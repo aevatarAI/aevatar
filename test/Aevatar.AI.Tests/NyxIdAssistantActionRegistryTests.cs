@@ -415,7 +415,11 @@ public sealed class NyxIdAssistantActionRegistryTests
         var client = new HttpClient(handler);
         var source = new NyxIdAssistantActionRegistryHttpSource(
             new StubHttpClientFactory(client),
-            new NyxIdToolOptions { BaseUrl = "https://nyxid.example.test/" });
+            new NyxIdToolOptions
+            {
+                BaseUrl = "http://nyxid.internal:3001/",
+                ApiBaseUrl = "https://nyxid.example.test/",
+            });
 
         var json = await source.FetchAsync(CancellationToken.None);
 

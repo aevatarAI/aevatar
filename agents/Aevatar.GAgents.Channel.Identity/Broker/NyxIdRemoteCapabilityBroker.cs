@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Aevatar.Configuration;
 using Aevatar.Foundation.Abstractions.Helpers;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity;
@@ -612,13 +613,8 @@ public sealed class NyxIdRemoteCapabilityBroker :
         TokenServiceGrant grant,
         CancellationToken ct)
     {
-        using var request = new HttpRequestMessage(
-            HttpMethod.Get,
-            $"{_options.TransportBaseUrl.Trim().TrimEnd('/')}{UserServicesEndpoint}");
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
-
         var http = CreateHttpClient();
-        using var response = await http.SendAsync(request, ct).ConfigureAwait(false);
+        using var response = await SendCatalogRequestAsync(http, accessToken, ct).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
             var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
@@ -640,6 +636,37 @@ public sealed class NyxIdRemoteCapabilityBroker :
             .Where(static resource => !string.IsNullOrWhiteSpace(resource))
             .Distinct(StringComparer.Ordinal)
             .ToArray();
+    }
+
+    private async Task<HttpResponseMessage> SendCatalogRequestAsync(
+        HttpClient http,
+        string accessToken,
+        CancellationToken ct)
+    {
+        using var request = CreateCatalogRequest(_options.TransportBaseUrl, accessToken);
+        try
+        {
+            return await http.SendAsync(request, ct).ConfigureAwait(false);
+        }
+        catch (HttpRequestException exception) when (
+            NyxIdTransportFailureClassifier.IsPreConnectFailure(exception) &&
+            !ct.IsCancellationRequested &&
+            !string.IsNullOrWhiteSpace(_options.PublicTransportFallbackBaseUrl))
+        {
+            using var fallbackRequest = CreateCatalogRequest(
+                _options.PublicTransportFallbackBaseUrl,
+                accessToken);
+            return await http.SendAsync(fallbackRequest, ct).ConfigureAwait(false);
+        }
+    }
+
+    private static HttpRequestMessage CreateCatalogRequest(string? baseUrl, string accessToken)
+    {
+        var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"{baseUrl?.Trim().TrimEnd('/')}{UserServicesEndpoint}");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+        return request;
     }
 
     private static TokenServiceGrant ParseTokenServiceGrant(string accessToken)

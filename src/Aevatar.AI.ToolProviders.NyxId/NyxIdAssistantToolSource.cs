@@ -35,7 +35,7 @@ public sealed class NyxIdAssistantToolSource : IAgentToolSource
 
     public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(_options.BaseUrl))
+        if (string.IsNullOrWhiteSpace(_options.EffectiveTransportBaseUrl))
             return Task.FromResult<IReadOnlyList<IAgentTool>>([]);
 
         IReadOnlyList<IAgentTool> tools =

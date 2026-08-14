@@ -33,11 +33,12 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         using var reader = new StreamReader(http.Response.Body);
         var html = await reader.ReadToEndAsync();
         html.Should().Contain(marker);
-        html.Should().Contain("https://id.example.test");
+        html.Should().Contain("https://authority.example.test");
         html.Should().Contain("client-example");
         html.Should().Contain("console:test");
         html.Should().Contain("https://api.example.test/api/v1/proxy/s/aevatar");
-        html.Should().Contain("\"nyxidWeb\":\"https://web.example.test\"");
+        html.Should().Contain("\"nyxidWeb\":\"https://api.example.test\"");
+        html.Should().NotContain("http://nyxid.internal:3001");
         html.Should().NotContain("__BACKEND_CONSOLE_CONFIG__");
         html.Should().NotContain("37a93189-2734-406e-bca1-7dbdf25c5a53");
         if (endpoint == "admin-observatory")
@@ -195,7 +196,7 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         var marked = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantMarked);
         var purify = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantPurify);
 
-        app.Should().Contain("import \"./transport.js?v=20260814-m45-model-operations\"");
+        app.Should().Contain("import \"./transport.js?v=20260814-m46-nyxid-api-routing\"");
         app.Should().Contain("async function sendPrompt(");
         app.Should().Contain("async function loadConversations(");
         app.Should().Contain("async function refreshActorState(");
@@ -319,13 +320,13 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         app.Should().NotContain("freeText.className = \"needs-you-free-text\"");
         styles.Should().Contain("@media (max-width:");
         html.Should().Contain("<meta name=\"color-scheme\" content=\"only light\"");
-        html.Should().Contain("app.js?v=20260814-m45-model-operations");
-        html.Should().Contain("styles.css?v=20260814-m45-model-operations");
-        app.Should().Contain("transport.js?v=20260814-m45-model-operations");
-        app.Should().Contain("readiness.js?v=20260814-m45-model-operations");
-        transport.Should().Contain("readiness.js?v=20260814-m45-model-operations");
-        actorState.Should().Contain("protocol.js?v=20260814-m45-model-operations");
-        blocks.Should().Contain("protocol.js?v=20260814-m45-model-operations");
+        html.Should().Contain("app.js?v=20260814-m46-nyxid-api-routing");
+        html.Should().Contain("styles.css?v=20260814-m46-nyxid-api-routing");
+        app.Should().Contain("transport.js?v=20260814-m46-nyxid-api-routing");
+        app.Should().Contain("readiness.js?v=20260814-m46-nyxid-api-routing");
+        transport.Should().Contain("readiness.js?v=20260814-m46-nyxid-api-routing");
+        actorState.Should().Contain("protocol.js?v=20260814-m46-nyxid-api-routing");
+        blocks.Should().Contain("protocol.js?v=20260814-m46-nyxid-api-routing");
         html.Should().Contain("<span class=\"brand-name\">Aevatar Studio</span>");
         html.Should().NotContain("class=\"brand-mark\"");
         styles.Should().Contain("color-scheme: only light");
@@ -1729,10 +1730,10 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
 
         entryVersions.Should().NotBeEmpty();
         entryVersions.Should().OnlyContain(static version =>
-            version == "20260814-m45-model-operations");
+            version == "20260814-m46-nyxid-api-routing");
         transitiveVersions.Should().NotBeEmpty();
         transitiveVersions.Should().OnlyContain(static version =>
-            version == "20260814-m45-model-operations");
+            version == "20260814-m46-nyxid-api-routing");
         html.Should().Contain("styles.css?v=");
         html.Should().Contain("app.js?v=");
         app.Should().Contain("transport.js?v=");
@@ -3563,11 +3564,12 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["Aevatar:BackendConsole:OidcAuthority"] = "https://id.example.test",
+                ["Aevatar:BackendConsole:OidcAuthority"] = "https://authority.example.test",
                 ["Aevatar:BackendConsole:OidcClientId"] = "client-example",
                 ["Aevatar:BackendConsole:OidcScope"] = "openid profile",
-                ["Aevatar:BackendConsole:NyxApiBaseUrl"] = "https://api.example.test",
-                ["Aevatar:NyxId:Authority"] = "https://web.example.test",
+                ["Aevatar:NyxId:ApiBaseUrl"] = "https://api.example.test",
+                ["Aevatar:NyxId:Authority"] = "https://authority.example.test",
+                ["Aevatar:NyxId:InternalApiBaseUrl"] = "http://nyxid.internal:3001",
                 ["Aevatar:BackendConsole:StorageKey"] = "console:test",
             })
             .Build();

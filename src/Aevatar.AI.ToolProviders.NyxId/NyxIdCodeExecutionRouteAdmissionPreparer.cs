@@ -39,7 +39,7 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparer(
         ArgumentNullException.ThrowIfNull(selector);
         if (selector.SelectorCase != SelectorKind ||
             executionMode == ExternalCapabilityExecutionMode.Unspecified ||
-            string.IsNullOrWhiteSpace(options.BaseUrl))
+            string.IsNullOrWhiteSpace(options.EffectiveTransportBaseUrl))
         {
             return;
         }

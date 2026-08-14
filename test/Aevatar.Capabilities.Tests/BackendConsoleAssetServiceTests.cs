@@ -46,6 +46,7 @@ public sealed class BackendConsoleAssetServiceTests
         html.Should().Contain(
             "\"resources\":[\"https://api.example.test/api/v1/proxy/s/aevatar\",\"https://api.example.test/api/v1/proxy/s/ornn-api\",\"https://resource.example.test/custom\"]");
         html.Should().Contain("\"nyxidApi\":\"https://api.example.test\"");
+        html.Should().Contain("\"nyxidWeb\":\"https://api.example.test\"");
         html.Should().Contain("\"storageKey\":\"console:test\"");
         html.Should().Contain("\"enableStudioWireInspector\":true");
         html.Should().NotContain("__BACKEND_CONSOLE_CONFIG__");
@@ -79,6 +80,7 @@ public sealed class BackendConsoleAssetServiceTests
         html.Should().Contain(
             "\"resources\":[\"https://env-api.example.test/api/v1/proxy/s/aevatar\",\"https://env-api.example.test/api/v1/proxy/s/ornn-api\"]");
         html.Should().Contain("\"nyxidApi\":\"https://env-api.example.test\"");
+        html.Should().Contain("\"nyxidWeb\":\"https://env-api.example.test\"");
         html.Should().Contain("\"storageKey\":\"env-storage\"");
         html.Should().Contain("\"defaultReturnPath\":\"/voice\"");
     }
@@ -116,8 +118,9 @@ public sealed class BackendConsoleAssetServiceTests
         html.Should().Contain("\"clientId\":\"client-example\"");
         html.Should().Contain("\"scope\":\"openid profile offline_access\"");
         html.Should().Contain(
-            "\"resources\":[\"https://nyx.example.test/api/v1/proxy/s/aevatar\",\"https://nyx.example.test/api/v1/proxy/s/ornn-api\"]");
-        html.Should().Contain("\"nyxidApi\":\"https://nyx.example.test\"");
+            "\"resources\":[\"https://nyx-api.example.test/api/v1/proxy/s/aevatar\",\"https://nyx-api.example.test/api/v1/proxy/s/ornn-api\"]");
+        html.Should().Contain("\"nyxidApi\":\"https://nyx-api.example.test\"");
+        html.Should().Contain("\"nyxidWeb\":\"https://nyx-api.example.test\"");
         html.Should().NotContain("http://nyxid.internal:3001");
         html.Should().Contain("\"storageKey\":\"console:test\"");
         html.Should().NotContain("__BACKEND_CONSOLE_CONFIG__");

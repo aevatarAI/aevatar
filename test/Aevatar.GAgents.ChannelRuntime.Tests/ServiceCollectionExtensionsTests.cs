@@ -221,8 +221,6 @@ public sealed class ServiceCollectionExtensionsTests
                     " https://api.example.test/// ",
                 [NyxIdBrokerOptions.InternalApiBaseUrlConfigurationKey] =
                     " http://nyxid.internal:3001/// ",
-                [NyxIdBrokerOptions.ResourceServerBaseUrlConfigurationKey] =
-                    " https://api.example.test/// ",
             })
             .Build();
 
@@ -233,6 +231,7 @@ public sealed class ServiceCollectionExtensionsTests
             services);
         var options = provider.GetRequiredService<IOptions<NyxIdBrokerOptions>>().Value;
         options.TransportBaseUrl.Should().Be("http://nyxid.internal:3001");
+        options.PublicTransportFallbackBaseUrl.Should().Be("https://api.example.test");
         options.ResourceServerBaseUrl.Should().Be("https://api.example.test");
         services.Should().NotContain(descriptor =>
             descriptor.ServiceType == typeof(IHostedService) &&
@@ -241,7 +240,7 @@ public sealed class ServiceCollectionExtensionsTests
 
     [Theory]
     [InlineData(NyxIdBrokerOptions.InternalApiBaseUrlConfigurationKey, "not-a-url", "TransportBaseUrl")]
-    [InlineData(NyxIdBrokerOptions.ResourceServerBaseUrlConfigurationKey, " ", "ResourceServerBaseUrl")]
+    [InlineData(NyxIdBrokerOptions.ApiBaseUrlConfigurationKey, "not-a-url", "PublicTransportFallbackBaseUrl")]
     public void AddChannelIdentity_WithInvalidNyxIdBaseUrl_ShouldFailOptionsValidation(
         string configurationKey,
         string configuredValue,
@@ -251,7 +250,6 @@ public sealed class ServiceCollectionExtensionsTests
         {
             [NyxIdBrokerOptions.ApiBaseUrlConfigurationKey] = "https://api.example.test",
             [NyxIdBrokerOptions.InternalApiBaseUrlConfigurationKey] = "http://nyxid.internal:3001",
-            [NyxIdBrokerOptions.ResourceServerBaseUrlConfigurationKey] = "https://api.example.test",
             [configurationKey] = configuredValue,
         };
         var configuration = new ConfigurationBuilder()
@@ -275,7 +273,6 @@ public sealed class ServiceCollectionExtensionsTests
             {
                 [NyxIdBrokerOptions.InternalApiBaseUrlConfigurationKey] = " ",
                 [NyxIdBrokerOptions.ApiBaseUrlConfigurationKey] = " https://api.example.test/ ",
-                [NyxIdBrokerOptions.ResourceServerBaseUrlConfigurationKey] = "https://authority.example.test",
             })
             .Build();
         var services = new ServiceCollection();
@@ -284,6 +281,29 @@ public sealed class ServiceCollectionExtensionsTests
 
         provider.GetRequiredService<IOptions<NyxIdBrokerOptions>>().Value.TransportBaseUrl
             .Should().Be("https://api.example.test");
+        provider.GetRequiredService<IOptions<NyxIdBrokerOptions>>().Value.PublicTransportFallbackBaseUrl
+            .Should().BeNull();
+    }
+
+    [Fact]
+    public void AddChannelIdentity_ShouldTreatTransportPathAsCaseSensitive()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [NyxIdBrokerOptions.InternalApiBaseUrlConfigurationKey] =
+                    "https://api.example.test/Internal",
+                [NyxIdBrokerOptions.ApiBaseUrlConfigurationKey] =
+                    "https://api.example.test/internal",
+            })
+            .Build();
+        var services = new ServiceCollection();
+        services.AddChannelIdentity(configuration);
+        using var provider = services.BuildServiceProvider();
+
+        provider.GetRequiredService<IOptions<NyxIdBrokerOptions>>()
+            .Value.PublicTransportFallbackBaseUrl.Should()
+            .Be("https://api.example.test/internal");
     }
 
     [Fact]

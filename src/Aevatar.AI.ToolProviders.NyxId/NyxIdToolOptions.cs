@@ -155,8 +155,43 @@ public sealed class NyxIdToolOptions
     /// </summary>
     public const string DefaultBaseUrl = "https://nyx-api.chrono-ai.fun/";
 
-    /// <summary>NyxID REST API base URL. Defaults to <see cref="DefaultBaseUrl"/>.</summary>
+    /// <summary>
+    /// Legacy single-endpoint URL. Configuration-aware registration also assigns the effective
+    /// transport here for compatibility with existing consumers; new code should use
+    /// <see cref="EffectiveTransportBaseUrl"/>.
+    /// </summary>
     public string? BaseUrl { get; set; } = DefaultBaseUrl;
+
+    /// <summary>
+    /// Dedicated server-to-server NyxID REST transport URL. A deployment may point this at the
+    /// NyxID backend's cluster-local service. It must never be exposed as an OAuth issuer,
+    /// browser locator, or third-party webhook URL.
+    /// </summary>
+    public string? InternalApiBaseUrl { get; set; }
+
+    /// <summary>Public, browser-reachable NyxID REST API URL.</summary>
+    public string? ApiBaseUrl { get; set; }
+
+    /// <summary>Public NyxID OAuth/OIDC issuer and discovery authority.</summary>
+    public string? Authority { get; set; }
+
+    /// <summary>
+    /// Optional public REST fallback derived from <c>Aevatar:NyxId:ApiBaseUrl</c> when the
+    /// primary transport is explicitly internal. It is separate from <see cref="ApiBaseUrl"/>
+    /// so manually constructed options never fall back to an unrelated default endpoint.
+    /// </summary>
+    public string? PublicTransportFallbackBaseUrl { get; set; }
+
+    public string? EffectiveTransportBaseUrl => FirstNonEmpty(InternalApiBaseUrl, ApiBaseUrl, BaseUrl);
+
+    public string? EffectiveApiBaseUrl => FirstNonEmpty(
+        ApiBaseUrl,
+        InternalApiBaseUrl is null ? BaseUrl : null);
+
+    public string? EffectiveAuthority => FirstNonEmpty(
+        Authority,
+        InternalApiBaseUrl is null ? ApiBaseUrl : null,
+        InternalApiBaseUrl is null ? BaseUrl : null);
 
     /// <summary>
     /// When <c>true</c>, expose the <c>ssh_exec</c> tool to the LLM. This option is
@@ -227,4 +262,7 @@ public sealed class NyxIdToolOptions
             MaxRequestDurationSeconds <= 0
                 ? DefaultMaxRequestDurationSeconds
                 : MaxRequestDurationSeconds);
+
+    private static string? FirstNonEmpty(params string?[] values) =>
+        values.FirstOrDefault(static value => !string.IsNullOrWhiteSpace(value))?.Trim();
 }

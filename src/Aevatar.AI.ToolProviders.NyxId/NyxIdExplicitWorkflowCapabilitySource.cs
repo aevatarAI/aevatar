@@ -58,7 +58,7 @@ public sealed class NyxIdExplicitWorkflowCapabilitySource(
                 "NYXID_ADMISSION_SOURCE_CREDENTIAL_REQUIRED",
                 "A source-readable caller NyxID credential is required.");
         }
-        if (string.IsNullOrWhiteSpace(options.BaseUrl))
+        if (string.IsNullOrWhiteSpace(options.EffectiveTransportBaseUrl))
         {
             return Failure(
                 selector, executionMode, ExternalCapabilityReadinessStatus.SourceStale,
