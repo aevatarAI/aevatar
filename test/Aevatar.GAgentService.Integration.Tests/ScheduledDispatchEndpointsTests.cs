@@ -3227,7 +3227,6 @@ public sealed class ScheduledDispatchEndpointsTests
         public Task<ScheduledDispatchMutationReceipt> EnableAsync(
             string scheduleId,
             string reason,
-            ScheduledDispatchMutationContext? context = null,
             CancellationToken ct = default)
         {
             Enabled.Add((scheduleId, reason));
@@ -3247,7 +3246,6 @@ public sealed class ScheduledDispatchEndpointsTests
         public Task<ScheduledDispatchMutationReceipt> DisableAsync(
             string scheduleId,
             string reason,
-            ScheduledDispatchMutationContext? context = null,
             CancellationToken ct = default)
         {
             Disabled.Add((scheduleId, reason));
@@ -3267,7 +3265,6 @@ public sealed class ScheduledDispatchEndpointsTests
         public Task<ScheduledDispatchMutationReceipt> DeleteAsync(
             string scheduleId,
             string reason,
-            ScheduledDispatchMutationContext? context = null,
             CancellationToken ct = default)
         {
             Deleted.Add((scheduleId, reason));
@@ -3420,10 +3417,7 @@ public sealed class ScheduledDispatchEndpointsTests
                 [new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero)]));
         }
 
-        public Task<ScheduledDispatchRunNowReceipt> RunNowAsync(
-            string scheduleId,
-            ScheduledDispatchMutationContext? context = null,
-            CancellationToken ct = default)
+        public Task<ScheduledDispatchRunNowReceipt> RunNowAsync(string scheduleId, CancellationToken ct = default)
         {
             if (RunNowException != null)
                 throw RunNowException;

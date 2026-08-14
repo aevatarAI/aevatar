@@ -244,7 +244,7 @@ public sealed class AgentBuilderTool : IAgentTool
         if (!IsScheduledWorkflowAgent(entry.AgentType))
             return JsonSerializer.Serialize(new { error = $"Agent '{entry.AgentId}' does not support delete_agent" });
 
-        await scheduledDispatchService.DeleteAsync(entry.AgentId, "delete_agent", ct: ct);
+        await scheduledDispatchService.DeleteAsync(entry.AgentId, "delete_agent", ct);
 
         await catalogCommandPort.RetryCredentialRevocationsAsync(caller, token, ct);
         await catalogCommandPort.TombstoneAsync(entry.AgentId, ct, token);
@@ -451,13 +451,13 @@ public sealed class AgentBuilderTool : IAgentTool
             switch (action)
             {
                 case LifecycleAction.Run:
-                    await scheduledDispatchService.RunNowAsync(entry.AgentId, ct: ct);
+                    await scheduledDispatchService.RunNowAsync(entry.AgentId, ct);
                     break;
                 case LifecycleAction.Disable:
-                    await scheduledDispatchService.DisableAsync(entry.AgentId, reason, ct: ct);
+                    await scheduledDispatchService.DisableAsync(entry.AgentId, reason, ct);
                     break;
                 case LifecycleAction.Enable:
-                    await scheduledDispatchService.EnableAsync(entry.AgentId, reason, ct: ct);
+                    await scheduledDispatchService.EnableAsync(entry.AgentId, reason, ct);
                     break;
                 default:
                     throw new ArgumentOutOfRangeException(nameof(action), action, null);

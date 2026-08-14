@@ -62,7 +62,6 @@ public static class ScopeWorkflowEndpoints
             .Produces<ScopeWorkflowDetail>(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status400BadRequest)
             .Produces(StatusCodes.Status404NotFound);
-        group.MapScopeWorkflowScheduleEndpoints();
         return app;
     }
 

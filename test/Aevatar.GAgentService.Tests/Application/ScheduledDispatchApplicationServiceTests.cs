@@ -916,53 +916,6 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Fact]
-    public async Task WorkflowExpectedTargetMutation_ShouldRejectDifferentProjectedServiceTargetBeforeDispatch()
-    {
-        var actorPort = new RecordingScheduledDispatchActorPort();
-        var queryPort = new RecordingScheduledDispatchQueryPort
-        {
-            Detail = CreateSummaryDetail(
-                "schedule-alpha",
-                ScheduledDispatchTargetKind.ServiceInvocation,
-                ScheduledDispatchScheduleKind.Workflow,
-                ScheduledDispatchCredentialRequirementTargetKind.WorkflowService,
-                ScheduledDispatchCredentialSourceKind.ScheduledInvocationAgentKey) with
-            {
-                Schedule = CreateSummaryDetail(
-                    "schedule-alpha",
-                    ScheduledDispatchTargetKind.ServiceInvocation,
-                    ScheduledDispatchScheduleKind.Workflow,
-                    ScheduledDispatchCredentialRequirementTargetKind.WorkflowService,
-                    ScheduledDispatchCredentialSourceKind.ScheduledInvocationAgentKey).Schedule with
-                {
-                    ServiceId = "svc-other",
-                    ServiceEndpointId = "chat",
-                    ServiceKey = "svc-key-alpha",
-                },
-            },
-        };
-        var service = new ScheduledDispatchApplicationService(
-            actorPort,
-            queryPort,
-            new ScheduledDispatchTargetPreparationService(),
-            new NoopScheduledDispatchCredentialAdmissionPort());
-        var context = new ScheduledDispatchMutationContext(
-            ExpectedServiceTarget: new ScheduledDispatchExpectedServiceTarget(
-                ScheduledDispatchScheduleKind.Workflow,
-                ScheduledDispatchTargetKind.ServiceInvocation,
-                "chat",
-                "svc-alpha",
-                "svc-key-alpha"));
-
-        var act = () => service.DisableAsync("schedule-alpha", "cleanup", context);
-
-        await act.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
-        queryPort.GetScheduleIds.Should().ContainSingle().Which.Should().Be("schedule-alpha");
-        actorPort.ResolvedScheduleIds.Should().BeEmpty();
-        actorPort.Disabled.Should().BeEmpty();
-    }
-
-    [Fact]
     public async Task RetryTeamAutomationRevocationAsync_ShouldUseActorOwnedOperationIdentity()
     {
         const string scheduleId = "schedule-revocation-alpha";

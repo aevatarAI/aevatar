@@ -283,18 +283,10 @@ public sealed record ScheduledServiceInvocationAuth
 public sealed record ScheduledDispatchMutationContext(
     string? AuthenticatedScopeId = null,
     ScheduledServiceInvocationNyxIdSubjectRef? AuthenticatedNyxIdOwnerSubject = null,
-    TeamMemberAutomationOwner? TeamAutomationOwner = null,
-    ScheduledDispatchExpectedServiceTarget? ExpectedServiceTarget = null)
+    TeamMemberAutomationOwner? TeamAutomationOwner = null)
 {
     public static ScheduledDispatchMutationContext None { get; } = new();
 }
-
-public sealed record ScheduledDispatchExpectedServiceTarget(
-    ScheduledDispatchScheduleKind ScheduleKind,
-    ScheduledDispatchTargetKind TargetKind,
-    string ServiceEndpointId,
-    string ServiceId,
-    string? ServiceKey = null);
 
 public sealed record ScheduledDispatchCredentialAdmissionRequest(
     ScheduledDispatchMutationContext Context,
@@ -775,19 +767,16 @@ public interface IScheduledDispatchApplicationService
     Task<ScheduledDispatchMutationReceipt> EnableAsync(
         string scheduleId,
         string reason,
-        ScheduledDispatchMutationContext? context = null,
         CancellationToken ct = default);
 
     Task<ScheduledDispatchMutationReceipt> DisableAsync(
         string scheduleId,
         string reason,
-        ScheduledDispatchMutationContext? context = null,
         CancellationToken ct = default);
 
     Task<ScheduledDispatchMutationReceipt> DeleteAsync(
         string scheduleId,
         string reason,
-        ScheduledDispatchMutationContext? context = null,
         CancellationToken ct = default);
 
     Task<ScheduledDispatchMutationReceipt> DeleteTeamAutomationAsync(
@@ -820,7 +809,6 @@ public interface IScheduledDispatchApplicationService
 
     Task<ScheduledDispatchRunNowReceipt> RunNowAsync(
         string scheduleId,
-        ScheduledDispatchMutationContext? context = null,
         CancellationToken ct = default);
 
     Task<TeamAutomationCommittedMutationReceipt> BeginTeamAutomationCredentialOperationAsync(

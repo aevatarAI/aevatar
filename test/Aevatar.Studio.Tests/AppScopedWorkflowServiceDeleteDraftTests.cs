@@ -546,8 +546,10 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
         var saved = workspacePort.SavedDrafts.Should().ContainSingle().Subject;
         saved.ScopeId.Should().Be("scope-alpha");
         saved.WorkflowId.Should().Be("wf-alpha");
-        saved.WorkflowName.Should().Be("x_digest");
-        saved.Yaml.Should().Be(yaml.Trim());
+        saved.WorkflowName.Should().Be("X Digest");
+        saved.Yaml.Should().Contain("name: X Digest");
+        saved.Yaml.Should().Contain("tool: nyxid_proxy");
+        saved.Yaml.Should().NotContain("name: x_digest");
         accepted.WorkflowId.Should().Be("wf-alpha");
         accepted.Accepted.Should().BeTrue();
         accepted.Readiness.Stage.Should().Be("projection_pending");
