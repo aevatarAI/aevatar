@@ -450,6 +450,7 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
   }, [adoptReadableWorkflow, document, materialization.retry]);
 
   const save = React.useCallback(async () => {
+    const normalizedWorkflowTitle = workflowTitle.trim();
     const followsCanonicalRouteReplacement =
       pendingRouteWorkflowIdRef.current === workflow?.workflowId;
     if (
@@ -459,7 +460,7 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
       savingRef.current ||
       receiptPending ||
       structuralMutationPendingRef.current ||
-      !workflowTitle.trim()
+      !normalizedWorkflowTitle
     )
       return false;
     savingRef.current = true;
@@ -470,7 +471,10 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
       const parsedDocument = await parseCurrentYaml();
       if (!parsedDocument) return false;
       const serialized = await studioApi.serializeYaml({
-        document: parsedDocument,
+        document: {
+          ...parsedDocument,
+          name: normalizedWorkflowTitle,
+        },
       });
       setFindings(serialized.findings);
       if (hasBlockingFindings(serialized.document, serialized.findings))
@@ -489,10 +493,14 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
         directoryId,
         draftExists: workflow.draftExists,
         fileName: workflow.fileName,
-        layout: buildStudioWorkflowLayout(workflowTitle, graph.nodes, layout),
+        layout: buildStudioWorkflowLayout(
+          normalizedWorkflowTitle,
+          graph.nodes,
+          layout,
+        ),
         scopeId,
         workflowId: workflow.workflowId,
-        workflowName: workflowTitle,
+        workflowName: normalizedWorkflowTitle,
         yaml: serialized.yaml,
       });
       const submittedSnapshot: SubmittedSaveSnapshot = {
