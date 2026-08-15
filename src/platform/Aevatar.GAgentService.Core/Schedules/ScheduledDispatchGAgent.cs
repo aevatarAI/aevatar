@@ -1273,7 +1273,8 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                     AuthorizationFact: ToRuntimeAuthorizationFact(effectiveAuthorizationFact),
                     FireContext: new ScheduledDispatchFireContext(
                         scheduledFireAt,
-                        State.Timezone)),
+                        State.Timezone),
+                    ScheduleOperationId: State.TeamAutomationOperationId),
                 ct);
             return new ScheduledDispatchReceipt(
                 receipt.Accepted,

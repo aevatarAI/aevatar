@@ -64,9 +64,16 @@
   <ItemGroup>
     <EmbeddedResource Include="BackendConsole\admin.html" />
     <EmbeddedResource Include="BackendConsole\auto-callback.html" />
+    <EmbeddedResource Include="BackendConsole\delivery.html" />
     <EmbeddedResource Include="Status\status.html" />
     <EmbeddedResource Include="Cqrs\cqrs-observatory.html" />
     <EmbeddedResource Include="Voice\voice-console.html" />
     <EmbeddedResource Include="Skills\workflow-skills.html" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="..\..\workflows\*.yaml" Link="workflows\%(Filename)%(Extension)">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
   </ItemGroup>
 </Project>

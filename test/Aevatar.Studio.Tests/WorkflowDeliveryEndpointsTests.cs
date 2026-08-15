@@ -1,0 +1,552 @@
+using System.Security.Claims;
+using Aevatar.Authentication.Abstractions;
+using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Channel.Identity.Abstractions;
+using Aevatar.GAgentService.Abstractions;
+using Aevatar.Studio.Application.Delivery;
+using Aevatar.Studio.Hosting.Endpoints;
+using FluentAssertions;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.HttpResults;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.FileProviders;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
+
+namespace Aevatar.Studio.Tests;
+
+public sealed class WorkflowDeliveryEndpointsTests
+{
+    private const string CustomerScopeId = "scope-customer-alpha";
+    private const string CustomerUserId = "user-customer-alpha";
+    private const string DeliveryId = "delivery-beta";
+    private const string TeamId = "team-gamma";
+
+    [Theory]
+    [InlineData("list")]
+    [InlineData("parse")]
+    [InlineData("create")]
+    public async Task AdminEndpoints_WhenGrantIsNotAllowedUserId_ShouldForbidWithoutCallingService(
+        string operation)
+    {
+        var service = new RecordingWorkflowDeliveryService();
+        var authorizer = new FixedPlatformAdminAuthorizer(new PlatformCaller(
+            IsElevated: true,
+            Role: "admin",
+            Email: "admin@example.test",
+            UserId: "admin-not-allowlisted",
+            GrantSource: PlatformAdminGrantSources.AllowedEmail));
+        var http = CreateContext("scope-admin-view", "user-admin-view");
+
+        var result = operation switch
+        {
+            "list" => await WorkflowDeliveryEndpoints.ListPackagesAsync(
+                http,
+                service,
+                authorizer,
+                CancellationToken.None),
+            "parse" => await WorkflowDeliveryEndpoints.ParsePackageAsync(
+                http,
+                new WorkflowDeliveryPackageRequest("workflow-package-alpha"),
+                service,
+                authorizer,
+                CancellationToken.None),
+            "create" => await WorkflowDeliveryEndpoints.CreateRequestAsync(
+                http,
+                new WorkflowDeliveryCreateRequest(
+                    "workflow-create-alpha",
+                    "package-version-alpha",
+                    "scope-target-delta",
+                    "delivery-create-key-alpha"),
+                service,
+                authorizer,
+                CancellationToken.None),
+            _ => throw new ArgumentOutOfRangeException(nameof(operation)),
+        };
+
+        result.Should().BeOfType<ForbidHttpResult>();
+        service.InvocationCount.Should().Be(0);
+        authorizer.ResolveCalls.Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData(true, "admin-allowed-alpha", PlatformAdminGrantSources.AllowedUserId, true)]
+    [InlineData(false, "admin-not-elevated", PlatformAdminGrantSources.AllowedUserId, false)]
+    [InlineData(true, " ", PlatformAdminGrantSources.AllowedUserId, false)]
+    [InlineData(true, "admin-email-grant", PlatformAdminGrantSources.AllowedEmail, false)]
+    [InlineData(true, "admin-role-grant", PlatformAdminGrantSources.NyxIdPlatformRole, false)]
+    public async Task Session_ShouldDeriveViewerFromUniqueClaimsAndRequireExactAdminGrant(
+        bool isElevated,
+        string adminUserId,
+        string grantSource,
+        bool expectedAdmin)
+    {
+        const string sessionScopeId = "scope-session-epsilon";
+        const string sessionUserId = "user-session-zeta";
+        var authorizer = new FixedPlatformAdminAuthorizer(new PlatformCaller(
+            isElevated,
+            "admin",
+            "session-admin@example.test",
+            adminUserId,
+            grantSource));
+        var http = CreateContext(sessionScopeId, sessionUserId);
+
+        var result = await WorkflowDeliveryEndpoints.GetSessionAsync(
+            http,
+            authorizer,
+            CancellationToken.None);
+
+        var session = result.Should().BeOfType<Ok<WorkflowDeliverySessionResponse>>()
+            .Subject.Value!;
+        session.Should().NotBeNull();
+        session.ScopeId.Should().Be(sessionScopeId);
+        session.Viewer.UserId.Should().Be(sessionUserId);
+        session.IsAdmin.Should().Be(expectedAdmin);
+        session.CanCreateDeliveries.Should().Be(expectedAdmin);
+    }
+
+    [Fact]
+    public async Task Publish_WhenRouteScopeDiffersFromUniqueClaim_ShouldForbidWithoutCallingService()
+    {
+        const string routeScopeId = "scope-route-eta";
+        var service = new RecordingWorkflowDeliveryService();
+        var bindingQuery = new RecordingIdentityBindingQueryPort();
+        var http = CreateContext(CustomerScopeId, CustomerUserId, bindingQuery);
+
+        var result = await WorkflowDeliveryEndpoints.PublishAsync(
+            http,
+            routeScopeId,
+            DeliveryId,
+            CreatePublishRequest(),
+            service,
+            bindingQuery,
+            CancellationToken.None);
+
+        result.Should().BeAssignableTo<IStatusCodeHttpResult>()
+            .Which.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
+        service.InvocationCount.Should().Be(0);
+        bindingQuery.ResolveCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task CreateConnectLink_ShouldUseConfiguredBaseUrlInsteadOfRequestHost()
+    {
+        var service = new RecordingWorkflowDeliveryService();
+        var http = CreateContext(CustomerScopeId, CustomerUserId);
+        http.Request.Scheme = "https";
+        http.Request.Host = new HostString("attacker.example");
+
+        var result = await WorkflowDeliveryEndpoints.CreateConnectLinkAsync(
+            http,
+            CustomerScopeId,
+            DeliveryId,
+            "lark",
+            service,
+            Options.Create(new WorkflowDeliveryOptions
+            {
+                ConsoleBaseUrl = "https://aevatar.example/console",
+            }),
+            new TestHostEnvironment(),
+            CancellationToken.None);
+
+        result.Should().BeOfType<Ok<WorkflowDeliveryConnectLinkResponse>>();
+        service.ConnectLinkCallback.Should().Be(
+            new Uri("https://aevatar.example/console/delivery?deliveryId=delivery-beta"));
+        service.ConnectLinkCallback!.Fragment.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CreateConnectLink_WhenDistributedBaseUrlIsMissing_ShouldFailClosed()
+    {
+        var service = new RecordingWorkflowDeliveryService();
+        var http = CreateContext(CustomerScopeId, CustomerUserId);
+        http.Request.Scheme = "https";
+        http.Request.Host = new HostString("attacker.example");
+
+        var result = await WorkflowDeliveryEndpoints.CreateConnectLinkAsync(
+            http,
+            CustomerScopeId,
+            DeliveryId,
+            "lark",
+            service,
+            Options.Create(new WorkflowDeliveryOptions()),
+            new TestHostEnvironment { EnvironmentName = "Distributed" },
+            CancellationToken.None);
+
+        result.Should().BeAssignableTo<IStatusCodeHttpResult>()
+            .Which.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        service.InvocationCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task CreateConnectLink_InDevelopment_ShouldAllowLoopbackRequestFallback()
+    {
+        var service = new RecordingWorkflowDeliveryService();
+        var http = CreateContext(CustomerScopeId, CustomerUserId);
+        http.Request.Scheme = "http";
+        http.Request.Host = new HostString("127.0.0.1", 5100);
+        http.Request.PathBase = "/gateway";
+
+        var result = await WorkflowDeliveryEndpoints.CreateConnectLinkAsync(
+            http,
+            CustomerScopeId,
+            DeliveryId,
+            "lark",
+            service,
+            Options.Create(new WorkflowDeliveryOptions()),
+            new TestHostEnvironment { EnvironmentName = Environments.Development },
+            CancellationToken.None);
+
+        result.Should().BeOfType<Ok<WorkflowDeliveryConnectLinkResponse>>();
+        service.ConnectLinkCallback.Should().Be(
+            new Uri("http://127.0.0.1:5100/gateway/delivery?deliveryId=delivery-beta"));
+    }
+
+    [Fact]
+    public async Task CreateConnectLink_InDevelopment_ShouldRejectNonLoopbackRequestFallback()
+    {
+        var service = new RecordingWorkflowDeliveryService();
+        var http = CreateContext(CustomerScopeId, CustomerUserId);
+        http.Request.Scheme = "https";
+        http.Request.Host = new HostString("attacker.example");
+
+        var result = await WorkflowDeliveryEndpoints.CreateConnectLinkAsync(
+            http,
+            CustomerScopeId,
+            DeliveryId,
+            "lark",
+            service,
+            Options.Create(new WorkflowDeliveryOptions()),
+            new TestHostEnvironment { EnvironmentName = Environments.Development },
+            CancellationToken.None);
+
+        result.Should().BeAssignableTo<IStatusCodeHttpResult>()
+            .Which.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        service.InvocationCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task GetConnectStatus_ShouldReadProjectedStatusWithoutForwardingBearer()
+    {
+        var service = new RecordingWorkflowDeliveryService();
+        var http = CreateContext(CustomerScopeId, CustomerUserId);
+        http.Request.Headers.Remove("Authorization");
+
+        var result = await WorkflowDeliveryEndpoints.GetConnectStatusAsync(
+            http,
+            CustomerScopeId,
+            DeliveryId,
+            "lark",
+            service,
+            CancellationToken.None);
+
+        var response = result.Should().BeOfType<Ok<WorkflowDeliveryConnectStatusResponse>>()
+            .Subject.Value!;
+        response.Status.Should().Be("pending");
+        service.GetConnectionCalls.Should().Be(1);
+        service.RefreshConnectionCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task RefreshConnectStatus_ShouldReturn202WithoutClaimingObservedState()
+    {
+        var service = new RecordingWorkflowDeliveryService();
+        var http = CreateContext(CustomerScopeId, CustomerUserId);
+
+        var result = await WorkflowDeliveryEndpoints.RefreshConnectStatusAsync(
+            http,
+            CustomerScopeId,
+            DeliveryId,
+            "lark",
+            service,
+            CancellationToken.None);
+
+        var accepted = result.Should()
+            .BeOfType<Accepted<WorkflowDeliveryConnectionRefreshAcceptedResponse>>()
+            .Subject;
+        accepted.Value!.Status.Should().Be("refresh_accepted");
+        accepted.Location.Should().Be(accepted.Value.StatusUrl);
+        service.RefreshConnectionCalls.Should().Be(1);
+        service.GetConnectionCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Publish_WhenApplicationPersistsAcceptedInstallation_ShouldReturn202WithoutClaimingProvisioning()
+    {
+        var response = new WorkflowInstallationAcceptedResponse(
+            "installation-theta",
+            "accepted",
+            $"/api/scopes/{CustomerScopeId}/installations/installation-theta",
+            "/admin#/studio/team-gamma");
+        var service = new RecordingWorkflowDeliveryService { PublishResponse = response };
+        var bindingQuery = new RecordingIdentityBindingQueryPort();
+        var http = CreateContext(CustomerScopeId, CustomerUserId, bindingQuery);
+
+        var result = await WorkflowDeliveryEndpoints.PublishAsync(
+            http,
+            CustomerScopeId,
+            DeliveryId,
+            CreatePublishRequest(),
+            service,
+            bindingQuery,
+            CancellationToken.None);
+
+        result.Should().BeAssignableTo<IStatusCodeHttpResult>()
+            .Which.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        var accepted = result.Should().BeOfType<Accepted<WorkflowInstallationAcceptedResponse>>().Subject;
+        accepted.Location.Should().Be(response.StatusUrl);
+        accepted.Value.Should().BeSameAs(response);
+        accepted.Value!.Status.Should().Be("accepted").And.NotBe("provisioning_accepted").And.NotBe("ready");
+        service.PublishCalls.Should().Be(1);
+        service.PublishedScopeId.Should().Be(CustomerScopeId);
+        service.PublishedDeliveryId.Should().Be(DeliveryId);
+        service.PublishedCaller!.CallerCredential.ExternalUserId.Should().Be(CustomerUserId);
+        service.PublishedCaller.AuthenticatedOwner!.VerifiedBindingId.Should().Be("binding-kappa");
+        service.PublishedCaller.AuthenticatedOwner.SubjectPlatform.Should().Be("nyxid");
+        service.PublishedCaller.AuthenticatedOwner.SubjectTenant.Should().BeEmpty();
+    }
+
+    private static WorkflowDeliveryPublishRequest CreatePublishRequest() =>
+        new(
+            TeamId,
+            "publish-key-iota",
+            TriggerIntent: new WorkflowDeliveryTriggerRequest("none"));
+
+    private static HttpContext CreateContext(
+        string scopeId,
+        string userId,
+        IExternalIdentityBindingQueryPort? bindingQuery = null)
+    {
+        var services = new ServiceCollection()
+            .AddLogging()
+            .AddSingleton<IConfiguration>(new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Aevatar:Authentication:Enabled"] = "true",
+                })
+                .Build())
+            .AddSingleton<IHostEnvironment>(new TestHostEnvironment());
+        if (bindingQuery is not null)
+            services.AddSingleton<IExternalIdentityBindingQueryPort>(bindingQuery);
+
+        var http = new DefaultHttpContext
+        {
+            User = new ClaimsPrincipal(new ClaimsIdentity(
+            [
+                new Claim("scope_id", scopeId),
+                new Claim("sub", userId),
+                new Claim("name", "Delivery Viewer"),
+                new Claim("email", "viewer@example.test"),
+            ],
+            "test")),
+            RequestServices = services.BuildServiceProvider(),
+        };
+        http.Request.Headers.Authorization = "Bearer delivery-runtime-token";
+        return http;
+    }
+
+    private sealed class FixedPlatformAdminAuthorizer(PlatformCaller caller) : IPlatformAdminAuthorizer
+    {
+        public int ResolveCalls { get; private set; }
+
+        public Task<PlatformCaller> ResolveCallerAsync(
+            string bearerToken,
+            CancellationToken ct = default)
+        {
+            ResolveCalls++;
+            bearerToken.Should().Be("delivery-runtime-token");
+            return Task.FromResult(caller);
+        }
+    }
+
+    private sealed class RecordingIdentityBindingQueryPort : IExternalIdentityBindingQueryPort
+    {
+        public int ResolveCalls { get; private set; }
+
+        public Task<BindingId?> ResolveAsync(
+            ExternalSubjectRef externalSubject,
+            CancellationToken ct = default)
+        {
+            ResolveCalls++;
+            return Task.FromResult<BindingId?>(new BindingId { Value = "binding-kappa" });
+        }
+    }
+
+    private sealed class RecordingWorkflowDeliveryService : IWorkflowDeliveryService
+    {
+        public WorkflowInstallationAcceptedResponse PublishResponse { get; init; } =
+            new(
+                "installation-default",
+                "accepted",
+                "/api/scopes/scope-default/installations/installation-default",
+                null);
+
+        public WorkflowDeliveryConnectStatusResponse ConnectStatusResponse { get; init; } =
+            new(
+                "lark",
+                "pending",
+                null,
+                DateTimeOffset.Parse("2026-08-16T14:15:16Z"));
+
+        public WorkflowDeliveryConnectionRefreshAcceptedResponse RefreshConnectionResponse { get; init; } =
+            new(
+                "lark",
+                "refresh_accepted",
+                $"/api/scopes/{CustomerScopeId}/delivery-requests/{DeliveryId}/connections/lark");
+
+        public int InvocationCount { get; private set; }
+        public int PublishCalls { get; private set; }
+        public int GetConnectionCalls { get; private set; }
+        public int RefreshConnectionCalls { get; private set; }
+        public string? PublishedDeliveryId { get; private set; }
+        public string? PublishedScopeId { get; private set; }
+        public WorkflowDeliveryCallerContext? PublishedCaller { get; private set; }
+        public Uri? ConnectLinkCallback { get; private set; }
+
+        public Task<WorkflowDeliveryPackageListResponse> ListPackagesAsync(
+            string principalId,
+            CancellationToken ct = default) =>
+            Unexpected<WorkflowDeliveryPackageListResponse>();
+
+        public Task<WorkflowDeliveryPackageView> GetPackageAsync(
+            string workflowName,
+            string principalId,
+            CancellationToken ct = default) =>
+            Unexpected<WorkflowDeliveryPackageView>();
+
+        public Task<WorkflowDeliveryAcceptedResponse> CreateAsync(
+            string principalId,
+            WorkflowDeliveryCreateRequest request,
+            CancellationToken ct = default) =>
+            Unexpected<WorkflowDeliveryAcceptedResponse>();
+
+        public Task<WorkflowDeliveryListResponse> ListAdminAsync(CancellationToken ct = default) =>
+            Unexpected<WorkflowDeliveryListResponse>();
+
+        public Task<WorkflowDeliveryListResponse> ListCustomerAsync(
+            string scopeId,
+            CancellationToken ct = default) =>
+            Unexpected<WorkflowDeliveryListResponse>();
+
+        public Task<WorkflowDeliveryView?> GetAdminAsync(
+            string deliveryId,
+            CancellationToken ct = default) =>
+            Unexpected<WorkflowDeliveryView?>();
+
+        public Task<WorkflowDeliveryView?> GetCustomerAsync(
+            string deliveryId,
+            string scopeId,
+            CancellationToken ct = default) =>
+            Unexpected<WorkflowDeliveryView?>();
+
+        public Task<WorkflowDeliveryView> ValidateAccessAsync(
+            string deliveryId,
+            string scopeId,
+            CancellationToken ct = default) =>
+            Unexpected<WorkflowDeliveryView>();
+
+        public Task RevokeAsync(
+            string deliveryId,
+            string principalId,
+            CancellationToken ct = default) =>
+            Unexpected();
+
+        public Task<WorkflowDeliveryConnectLinkResponse> CreateConnectLinkAsync(
+            string deliveryId,
+            string scopeId,
+            string slotKey,
+            string bearerToken,
+            Uri callbackUrl,
+            CancellationToken ct = default)
+        {
+            InvocationCount++;
+            ConnectLinkCallback = callbackUrl;
+            return Task.FromResult(new WorkflowDeliveryConnectLinkResponse(
+                slotKey,
+                "pending",
+                "https://nyx.example/connect/redacted",
+                DateTimeOffset.Parse("2026-08-16T14:15:16Z")));
+        }
+
+        public Task<WorkflowDeliveryConnectStatusResponse> GetConnectStatusAsync(
+            string deliveryId,
+            string scopeId,
+            string slotKey,
+            CancellationToken ct = default)
+        {
+            InvocationCount++;
+            GetConnectionCalls++;
+            return Task.FromResult(ConnectStatusResponse);
+        }
+
+        public Task<WorkflowDeliveryConnectionRefreshAcceptedResponse> RefreshConnectStatusAsync(
+            string deliveryId,
+            string scopeId,
+            string slotKey,
+            string bearerToken,
+            CancellationToken ct = default)
+        {
+            InvocationCount++;
+            RefreshConnectionCalls++;
+            bearerToken.Should().Be("delivery-runtime-token");
+            return Task.FromResult(RefreshConnectionResponse);
+        }
+
+        public Task<WorkflowDeliveryConfigurationValidationResponse> ValidateConfigurationAsync(
+            string deliveryId,
+            string scopeId,
+            WorkflowDeliveryValidateConfigurationRequest request,
+            WorkflowCapabilityAdmissionContext capabilityContext,
+            CancellationToken ct = default) =>
+            Unexpected<WorkflowDeliveryConfigurationValidationResponse>();
+
+        public Task<WorkflowInstallationAcceptedResponse> PublishAsync(
+            string deliveryId,
+            string scopeId,
+            WorkflowDeliveryPublishRequest request,
+            WorkflowDeliveryCallerContext caller,
+            CancellationToken ct = default)
+        {
+            InvocationCount++;
+            PublishCalls++;
+            PublishedDeliveryId = deliveryId;
+            PublishedScopeId = scopeId;
+            PublishedCaller = caller;
+            return Task.FromResult(PublishResponse);
+        }
+
+        public Task<WorkflowInstallationView?> GetInstallationAsync(
+            string scopeId,
+            string installationId,
+            CancellationToken ct = default) =>
+            Unexpected<WorkflowInstallationView?>();
+
+        public Task<WorkflowInstallationAcceptedResponse> RetryAsync(
+            string scopeId,
+            string installationId,
+            WorkflowDeliveryCallerContext caller,
+            CancellationToken ct = default) =>
+            Unexpected<WorkflowInstallationAcceptedResponse>();
+
+        private Task<T> Unexpected<T>()
+        {
+            InvocationCount++;
+            return Task.FromException<T>(new InvalidOperationException("Workflow delivery service was not expected to be called."));
+        }
+
+        private Task Unexpected()
+        {
+            InvocationCount++;
+            return Task.FromException(new InvalidOperationException("Workflow delivery service was not expected to be called."));
+        }
+    }
+
+    private sealed class TestHostEnvironment : IHostEnvironment
+    {
+        public string EnvironmentName { get; set; } = Environments.Production;
+        public string ApplicationName { get; set; } = "Aevatar.Studio.Tests";
+        public string ContentRootPath { get; set; } = AppContext.BaseDirectory;
+        public IFileProvider ContentRootFileProvider { get; set; } = new NullFileProvider();
+    }
+}

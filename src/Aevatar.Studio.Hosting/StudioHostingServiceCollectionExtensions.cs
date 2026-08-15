@@ -4,6 +4,7 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Hosting.DependencyInjection;
 using Aevatar.Studio.Application;
+using Aevatar.Studio.Application.Delivery;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.DependencyInjection;
@@ -15,6 +16,7 @@ using Aevatar.Studio.Hosting.ContentArtifacts;
 using Aevatar.Studio.Hosting.Endpoints;
 using Aevatar.Studio.Hosting.WorkflowBoards;
 using Aevatar.Studio.Hosting.WorkOrders;
+using Aevatar.Studio.Hosting.WorkflowDeliveries;
 using Aevatar.Studio.Hosting.NyxId;
 using Aevatar.Studio.Infrastructure.DependencyInjection;
 using Aevatar.Studio.Infrastructure.ScopeResolution; // DefaultAppScopeResolver
@@ -37,6 +39,7 @@ internal static class StudioHostingServiceCollectionExtensions
     {
         services.TryAddSingleton(configuration);
         services.Configure<StudioHostingOptions>(configuration.GetSection(StudioHostingOptions.SectionName));
+        services.Configure<WorkflowDeliveryOptions>(configuration.GetSection(WorkflowDeliveryOptions.SectionName));
         services.Configure<UserLlmSettingsOptions>(configuration.GetSection("Aevatar:Studio:UserLlmSettings"));
         services.AddControllers()
             .AddApplicationPart(typeof(EditorController).Assembly)
@@ -57,6 +60,7 @@ internal static class StudioHostingServiceCollectionExtensions
         services.AddSingleton<IAppScopeResolver, DefaultAppScopeResolver>();
         services.AddStudioApplication();
         AddWorkOrderExecutionWorker(services, configuration);
+        AddWorkflowDeliveryContinuationWorker(services, configuration);
         services.Configure<NyxIdLlmCatalogCacheOptions>(
             configuration.GetSection(NyxIdLlmCatalogCacheOptions.SectionName));
         services.TryAddSingleton<
@@ -140,5 +144,15 @@ internal static class StudioHostingServiceCollectionExtensions
         services.Configure<WorkOrderExecutionWorkerOptions>(
             configuration.GetSection(WorkOrderExecutionWorkerOptions.SectionName));
         services.AddHostedService<WorkOrderExecutionWorker>();
+    }
+
+    private static void AddWorkflowDeliveryContinuationWorker(
+        IServiceCollection services,
+        IConfiguration configuration)
+    {
+        services.Configure<WorkflowDeliveryContinuationWorkerOptions>(
+            configuration.GetSection(WorkflowDeliveryContinuationWorkerOptions.SectionName));
+        services.TryAddSingleton<WorkflowDeliveryContinuationScanner>();
+        services.AddHostedService<WorkflowDeliveryContinuationWorker>();
     }
 }

@@ -12,6 +12,7 @@ using Aevatar.GAgents.RoleCatalog;
 using Aevatar.GAgents.StudioMember;
 using Aevatar.GAgents.StudioTeam;
 using Aevatar.GAgents.WorkOrder;
+using Aevatar.GAgents.WorkflowDelivery;
 using Aevatar.Studio.Workspace;
 using Aevatar.Studio.Application.Studio.ProjectionRecovery;
 using Aevatar.Studio.Infrastructure.ProjectionRecovery;
@@ -91,6 +92,7 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
                 StudioWorkspaceVersionRegressionRepairService>();
             RegisterElasticsearch<ContentArtifactCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<WorkOrderCurrentStateDocument>(services, configuration);
+            RegisterElasticsearch<WorkflowDeliveryCurrentStateDocument>(services, configuration);
         }
         else
         {
@@ -124,6 +126,7 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
             RegisterInMemory<StudioWorkspaceCurrentStateDocument>(services);
             RegisterInMemory<ContentArtifactCurrentStateDocument>(services);
             RegisterInMemory<WorkOrderCurrentStateDocument>(services);
+            RegisterInMemory<WorkflowDeliveryCurrentStateDocument>(services);
         }
 
         return services;
@@ -205,7 +208,8 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
                && HasDocumentReaderForProvider<StudioTeamCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<StudioWorkspaceCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<ContentArtifactCurrentStateDocument>(services, providerKind)
-               && HasDocumentReaderForProvider<WorkOrderCurrentStateDocument>(services, providerKind);
+               && HasDocumentReaderForProvider<WorkOrderCurrentStateDocument>(services, providerKind)
+               && HasDocumentReaderForProvider<WorkflowDeliveryCurrentStateDocument>(services, providerKind);
     }
 
     private static bool HasAnyDocumentReader<TDoc>(IServiceCollection services)
@@ -257,7 +261,8 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
             StudioTeamState.Descriptor,
             StudioWorkspaceState.Descriptor,
             ContentArtifactState.Descriptor,
-            WorkOrderState.Descriptor);
+            WorkOrderState.Descriptor,
+            WorkflowDeliveryState.Descriptor);
     }
 
 }

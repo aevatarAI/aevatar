@@ -20,6 +20,7 @@ public sealed class BackendConsoleStaticAssetEndpointTests
     [InlineData("/admin", "Aevatar Backend Console")]
     [InlineData("/admin/studio", "<title>Aevatar Studio</title>")]
     [InlineData("/auto/callback", "正在完成登录")]
+    [InlineData("/delivery", "Workflow Delivery Center")]
     [InlineData("/cqrs", "CQRS")]
     [InlineData("/voice", "Voice")]
     [InlineData("/workflow/skills", "Skills")]
@@ -95,6 +96,20 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             html.Should().Contain("normalizeResources(pending.resources) : []");
             html.Should().NotContain("normalizeResources(RESOURCES)");
         }
+        else if (path == "/delivery")
+        {
+            html.Should().Contain("const BACKEND_CONSOLE_CONFIG = {\"authority\":");
+            html.Should().Contain("GET /api/delivery/session");
+            html.Should().Contain("/api/delivery/packages");
+            html.Should().Contain(":validate-config");
+            html.Should().Contain(":publish");
+            html.Should().Contain(":retry");
+            html.Should().Contain("/connections/");
+            html.Should().Contain(":connect");
+            html.Should().Contain("status === \"ready\"");
+            html.Should().NotContain("demoMode");
+            html.Should().NotContain("MutationObserver");
+        }
         else if (path == "/voice")
         {
             html.Should().Contain("async function fetchWithConsoleAuth(");
@@ -114,6 +129,67 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             html.Should().Contain("requestAdminShellTokenRefresh(");
             html.Should().Contain("rejectedAccessToken");
         }
+    }
+
+    [Fact]
+    public async Task DeliveryShell_ShouldUseRealApiStateAndKeepAcceptedSeparateFromReady()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/delivery");
+
+        html.Should().Contain("class DeliveryApi");
+        html.Should().Contain("session() { return this.request(\"/api/delivery/session\"); }");
+        html.Should().Contain("packages() { return this.request(\"/api/delivery/packages\"); }");
+        html.Should().Contain("validateAccess(deliveryId)");
+        html.Should().Contain("revokeRequest(deliveryId)");
+        html.Should().Contain("async function revokeDeliveryRequest(id)");
+        html.Should().Contain("HTTP 202 不是完成状态；请刷新列表观察服务端提交结果。");
+        html.Should().Contain("createConnectLink(scopeId, deliveryId, slotKey)");
+        html.Should().Contain("connectStatus(scopeId, deliveryId, slotKey)");
+        html.Should().Contain("const ready = status === \"ready\";");
+        html.Should().Contain("HTTP 202 只表示进入处理队列");
+        html.Should().Contain("needs_action：尚未创建可用的 NyxID 连接");
+        html.Should().Contain("workflowName: text(first(selected, [\"workflowName\"], \"\"))");
+        html.Should().Contain("idempotencyKey: state.adminCreateIdempotencyKey || newIdempotencyKey()");
+        html.Should().Contain("body.confirmations = riskConfirmations().map");
+        html.Should().Contain("attestedRisk: text(first(risk, [\"attestedRisk\"], \"\"))");
+        html.Should().Contain("body.idempotencyKey = idempotencyKey");
+        html.Should().Contain("triggerOptionKind(option) === \"one_shot\"");
+        html.Should().Contain("first(detail, [\"availableTriggerIntents\"], [])");
+        html.Should().NotContain("[\"triggerIntents\", \"availableTriggerIntents\"]");
+        html.Should().Contain("function deliveryAcceptancePolicy(detail)");
+        html.Should().Contain("first(deliveryPackage(detail), [\"acceptancePolicy\"], {})");
+        html.Should().Contain("first(policy, [\"automaticAcceptanceSupported\"], false) === true");
+        html.Should().Contain("function eligibleTriggerOptions(detail)");
+        html.Should().Contain("const availableTriggers = eligibleTriggerOptions(detail);");
+        html.Should().Contain("return triggerOptionKind(option) === \"none\";");
+        html.Should().Contain("first(policy, [\"limitation\"], \"\")");
+        html.Should().Contain("仅支持发布，自动验收不可用");
+        html.Should().Contain("Schedule 是独立 trigger intent，不修改 Workflow YAML。");
+        html.Should().Contain("connectionRuntime: Object.create(null)");
+        html.Should().Contain("verificationStatus");
+        html.Should().Contain("verificationReference");
+        html.Should().Contain("contentDigest");
+        html.Should().NotContain("evidenceItems.map(String)");
+        html.Should().NotContain("connectionReferences: connectionReferences()");
+        html.Should().Contain("routeHref(\"customer-detail\", id)");
+        html.Should().Contain("function restoreConnectReturnRoute()");
+        html.Should().Contain("parameters.get(\"deliveryId\")");
+        html.Should().NotContain("DemoApi");
+        html.Should().NotContain("demoMode");
+        html.Should().NotContain("MutationObserver");
+        html.Should().NotContain("setInterval(");
+        html.Should().NotContain("demo-installation");
+        html.Should().NotContain("demo-team");
+    }
+
+    [Fact]
+    public async Task DeliveryShellEndpoint_ShouldRemainGetOnly()
+    {
+        await using var app = await CreateAppAsync();
+        using var response = await app.GetTestClient().PostAsync("/delivery", content: null);
+
+        response.StatusCode.Should().Be(HttpStatusCode.MethodNotAllowed);
     }
 
     [Fact]
@@ -3738,6 +3814,7 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         var app = builder.Build();
         app.MapAdminConsoleEndpoints();
         app.MapAutoConsoleCallbackEndpoints();
+        app.MapDeliveryConsoleEndpoints();
         app.MapCqrsObservatoryPageEndpoints();
         app.MapVoiceConsoleEndpoints();
         app.MapWorkflowSkillsEndpoints();

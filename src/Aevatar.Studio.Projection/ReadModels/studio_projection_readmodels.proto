@@ -6,6 +6,7 @@ import "google/protobuf/any.proto";
 import "google/protobuf/timestamp.proto";
 import "llm_selection.proto";
 import "llm_model_catalog_policy_messages.proto";
+import "workflow_delivery_messages.proto";
 import "Tools/tool_presentation.proto";
 
 message ContentArtifactCitationDocument {
@@ -164,6 +165,31 @@ message WorkOrderCurrentStateDocument {
   string failure_source = 74;
   string failure_reference_id = 75;
   string terminal_reason = 76;
+}
+
+// Actor-scoped current-state replica for WorkflowDeliveryGAgent. The immutable
+// package source remains available to the application boundary, while public
+// delivery responses are responsible for selecting the fields they expose.
+message WorkflowDeliveryCurrentStateDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at = 5;
+
+  string delivery_id = 20;
+  aevatar.gagents.workflow_delivery.WorkflowPackageVersionSnapshot package = 21;
+  string target_scope_id = 22;
+  google.protobuf.Timestamp expires_at_utc = 23;
+  string note = 24;
+  aevatar.gagents.workflow_delivery.WorkflowDeliveryLifecycleStatus lifecycle_status = 25;
+  string created_by = 26;
+  google.protobuf.Timestamp created_at_utc = 27;
+  google.protobuf.Timestamp accessed_at_utc = 28;
+  string revoked_by = 29;
+  google.protobuf.Timestamp revoked_at_utc = 30;
+  repeated aevatar.gagents.workflow_delivery.WorkflowDeliveryConnectionState connections = 31;
+  aevatar.gagents.workflow_delivery.WorkflowInstallationState installation = 32;
 }
 
 // ─── Workflow Board Execution Materialized View ───

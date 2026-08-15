@@ -96,6 +96,8 @@ public sealed class StudioMemberServiceContractAndRevisionTests
         contract.StreamFrameFormat.Should().Be("workflow-run-event");
         contract.InvocationReadiness.CanInvoke.Should().BeTrue();
         contract.InvocationReadiness.Status.Should().Be(StudioMemberInvocationReadinessStatusNames.Ready);
+        contract.PublishedServiceStateVersion.Should().Be(41);
+        contract.BoundRevisionStateVersion.Should().Be(42);
     }
 
     [Fact]
@@ -496,7 +498,11 @@ public sealed class StudioMemberServiceContractAndRevisionTests
             DeploymentStatus: "Active",
             Endpoints: endpoints,
             PolicyIds: [],
-            UpdatedAt: DateTimeOffset.UtcNow);
+            UpdatedAt: DateTimeOffset.UtcNow)
+        {
+            StateVersion = 41,
+            LastEventId = "service-event-41",
+        };
 
     private static ServiceRevisionCatalogSnapshot NewRevisions(
         ServiceImplementationKind implementationKind,
@@ -520,7 +526,9 @@ public sealed class StudioMemberServiceContractAndRevisionTests
                     PublishedAt: null,
                     RetiredAt: status == ServiceRevisionStatus.Retired ? DateTimeOffset.UtcNow : null),
             ],
-            UpdatedAt: DateTimeOffset.UtcNow);
+            UpdatedAt: DateTimeOffset.UtcNow,
+            StateVersion: 42,
+            LastEventId: "revision-event-42");
     }
 
     private sealed class InMemoryMemberQueryPort : IStudioMemberQueryPort

@@ -66,7 +66,10 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         var prepared = await BuildInvocationRequestAsync(firePreparedDispatch, ct);
         try
         {
-            var request = WithScheduleId(prepared.Request, firePreparedDispatch.ScheduleId);
+            var request = WithScheduleAttribution(
+                prepared.Request,
+                firePreparedDispatch.ScheduleId,
+                firePreparedDispatch.ScheduleOperationId);
             _logger.LogInformation(
                 "Scheduled service invocation credential projection prepared. scheduleId={ScheduleId} serviceKey={ServiceKey} endpointId={EndpointId} hasConnectorAuthorization={HasConnectorAuthorization} hasOwnerLlmToken={HasOwnerLlmToken} hasSenderLlmToken={HasSenderLlmToken}",
                 firePreparedDispatch.ScheduleId ?? string.Empty,
@@ -563,16 +566,26 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         }
     }
 
-    private static ServiceInvocationRequest WithScheduleId(ServiceInvocationRequest request, string? scheduleId)
+    private static ServiceInvocationRequest WithScheduleAttribution(
+        ServiceInvocationRequest request,
+        string? scheduleId,
+        string? scheduleOperationId)
     {
-        if (string.IsNullOrWhiteSpace(scheduleId))
+        var normalizedScheduleId = scheduleId?.Trim() ?? string.Empty;
+        var normalizedOperationId = scheduleOperationId?.Trim() ?? string.Empty;
+        if ((normalizedScheduleId.Length == 0 ||
+             string.Equals(request.ScheduleId, normalizedScheduleId, StringComparison.Ordinal)) &&
+            (normalizedOperationId.Length == 0 ||
+             string.Equals(request.ScheduleOperationId, normalizedOperationId, StringComparison.Ordinal)))
+        {
             return request;
-
-        if (string.Equals(request.ScheduleId, scheduleId.Trim(), StringComparison.Ordinal))
-            return request;
+        }
 
         var cloned = request.Clone();
-        cloned.ScheduleId = scheduleId.Trim();
+        if (normalizedScheduleId.Length != 0)
+            cloned.ScheduleId = normalizedScheduleId;
+        if (normalizedOperationId.Length != 0)
+            cloned.ScheduleOperationId = normalizedOperationId;
         return cloned;
     }
 

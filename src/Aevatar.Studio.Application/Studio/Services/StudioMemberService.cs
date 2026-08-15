@@ -867,7 +867,11 @@ public sealed class StudioMemberService : IStudioMemberService
                 : null,
             FetchExample: smokeTestSupported
                 ? BuildFetchExample(invokePath, supportsSse, endpoint.RequestTypeUrl)
-                : null);
+                : null)
+        {
+            PublishedServiceStateVersion = service.StateVersion,
+            BoundRevisionStateVersion = revisions?.StateVersion ?? 0,
+        };
     }
 
     private static string BuildMemberInvokePath(string scopeId, string memberId, string endpointId) =>

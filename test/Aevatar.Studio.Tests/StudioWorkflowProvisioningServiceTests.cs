@@ -1226,6 +1226,48 @@ public sealed class StudioWorkflowProvisioningServiceTests
     }
 
     [Fact]
+    public async Task ProvisionAsync_DeliveryRetry_ShouldReplayCurrentIntentAndAdvanceNextAttempt()
+    {
+        var member = NewMemberService();
+        var bindingPort = new RecordingBindingPort(member, WorkflowId, RevisionId);
+        var scheduleCommand = new RecordingScheduleProvisioningCommandPort();
+        var sut = new StudioWorkflowProvisioningService(
+            member,
+            bindingPort,
+            scheduleCommand,
+            new StudioWorkflowCapabilityAdmissionTestService());
+        var attemptOne = new ProvisionWorkflowRequest(
+            "Workflow Alpha [delivery-alpha]",
+            "name: monitor",
+            Prompt: string.Empty)
+        {
+            TeamId = TeamId,
+            AuthenticatedOwner = TestAuthenticatedOwner(),
+            ScheduleOperationId = " installation-alpha:provision:a1 ",
+            ScheduleIdempotencyKey = " publish-alpha ",
+        };
+
+        var first = await sut.ProvisionAsync(ScopeId, Caller, attemptOne);
+        var replay = await sut.ProvisionAsync(
+            ScopeId,
+            Caller,
+            attemptOne with { ScheduleOperationId = "installation-alpha:provision:a1" });
+        var retry = await sut.ProvisionAsync(
+            ScopeId,
+            Caller,
+            attemptOne with { ScheduleOperationId = "installation-alpha:provision:a2" });
+
+        scheduleCommand.Intents.Should().HaveCount(3);
+        scheduleCommand.Intents[0].ScheduleOperationId.Should().Be("installation-alpha:provision:a1");
+        scheduleCommand.Intents[1].ProvisioningId.Should().Be(scheduleCommand.Intents[0].ProvisioningId);
+        scheduleCommand.Intents[2].ProvisioningId.Should().NotBe(scheduleCommand.Intents[0].ProvisioningId);
+        scheduleCommand.Intents.Select(static intent => intent.ScheduleIdempotencyKey)
+            .Should().OnlyContain(key => key == "publish-alpha");
+        first.ScheduleProvisioningId.Should().Be(replay.ScheduleProvisioningId);
+        retry.ScheduleProvisioningId.Should().NotBe(first.ScheduleProvisioningId);
+    }
+
+    [Fact]
     public async Task ProvisionAsync_ThreadsAuthenticatedOwnerSubjectRefIntoDispatchAuth()
     {
         var member = NewMemberService();
@@ -2144,11 +2186,14 @@ public sealed class StudioWorkflowProvisioningServiceTests
     {
         public StudioWorkflowScheduleProvisioningIntent? Intent { get; private set; }
 
+        public List<StudioWorkflowScheduleProvisioningIntent> Intents { get; } = [];
+
         public Task<StudioWorkflowScheduleProvisioningAcceptance> AcceptAsync(
             StudioWorkflowScheduleProvisioningIntent intent,
             CancellationToken ct = default)
         {
             Intent = intent;
+            Intents.Add(intent);
             return Task.FromResult(new StudioWorkflowScheduleProvisioningAcceptance(
                 true,
                 intent.ProvisioningId,

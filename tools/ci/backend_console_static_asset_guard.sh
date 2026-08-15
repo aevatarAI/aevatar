@@ -22,6 +22,7 @@ violations=0
 asset_files=(
   "src/Aevatar.Mainnet.Host.Api/BackendConsole/admin.html"
   "src/Aevatar.Mainnet.Host.Api/BackendConsole/auto-callback.html"
+  "src/Aevatar.Mainnet.Host.Api/BackendConsole/delivery.html"
   "src/Aevatar.Mainnet.Host.Api/Status/status.html"
   "src/Aevatar.Mainnet.Host.Api/Cqrs/cqrs-observatory.html"
   "src/Aevatar.Mainnet.Host.Api/Voice/voice-console.html"
@@ -45,6 +46,7 @@ asset_files=(
 config_asset_files=(
   "src/Aevatar.Mainnet.Host.Api/BackendConsole/admin.html"
   "src/Aevatar.Mainnet.Host.Api/BackendConsole/auto-callback.html"
+  "src/Aevatar.Mainnet.Host.Api/BackendConsole/delivery.html"
   "src/Aevatar.Mainnet.Host.Api/Cqrs/cqrs-observatory.html"
   "src/Aevatar.Mainnet.Host.Api/Voice/voice-console.html"
   "src/Aevatar.Mainnet.Host.Api/Skills/workflow-skills.html"
@@ -70,6 +72,7 @@ old_carriers=(
 pure_static_endpoint_files=(
   "src/Aevatar.Mainnet.Host.Api/BackendConsole/AdminConsoleEndpoints.cs"
   "src/Aevatar.Mainnet.Host.Api/BackendConsole/AutoConsoleCallbackEndpoints.cs"
+  "src/Aevatar.Mainnet.Host.Api/BackendConsole/DeliveryConsoleEndpoints.cs"
   "src/Aevatar.Mainnet.Host.Api/Cqrs/CqrsObservatoryPageEndpoints.cs"
   "src/Aevatar.Mainnet.Host.Api/Voice/VoiceConsoleEndpoints.cs"
   "src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/WorkflowStudioEndpoints.cs"

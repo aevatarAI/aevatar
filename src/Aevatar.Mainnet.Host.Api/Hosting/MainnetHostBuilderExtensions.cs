@@ -583,6 +583,7 @@ public static class MainnetHostBuilderExtensions
         app.MapVoiceConsoleEndpoints();
         app.MapAutoConsoleCallbackEndpoints();
         app.MapAdminConsoleEndpoints();
+        app.MapDeliveryConsoleEndpoints();
         app.MapCqrsObservatoryPageEndpoints();
         app.MapCqrsObservatoryApiEndpoints();
         app.MapStreamingProxyEndpoints();

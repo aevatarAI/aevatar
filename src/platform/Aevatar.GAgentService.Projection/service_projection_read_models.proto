@@ -306,6 +306,7 @@ message ServiceRunCurrentStateReadModel {
   string last_error = 23;
   string schedule_id = 24;
   repeated aevatar.content_artifacts.ContentArtifactReference result_artifacts = 25;
+  string schedule_operation_id = 26;
 }
 // --- GAgentRunTerminalReadModel ---
 

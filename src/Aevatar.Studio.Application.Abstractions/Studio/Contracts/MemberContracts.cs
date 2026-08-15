@@ -419,7 +419,20 @@ public sealed record StudioMemberEndpointContractResponse(
     string RevisionId,
     StudioMemberInvocationReadinessResponse InvocationReadiness,
     string? CurlExample = null,
-    string? FetchExample = null);
+    string? FetchExample = null)
+{
+    /// <summary>
+    /// Committed source version of the published-service catalog replica used
+    /// to build this endpoint contract.
+    /// </summary>
+    public long PublishedServiceStateVersion { get; init; }
+
+    /// <summary>
+    /// Committed source version of the revision catalog that contains
+    /// <see cref="RevisionId"/>.
+    /// </summary>
+    public long BoundRevisionStateVersion { get; init; }
+}
 
 /// <summary>
 /// Activation result for a member's binding revision. Carries
