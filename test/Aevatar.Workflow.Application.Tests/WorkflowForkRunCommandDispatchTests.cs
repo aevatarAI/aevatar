@@ -394,6 +394,46 @@ public sealed class WorkflowForkRunCommandDispatchTests
     }
 
     [Fact]
+    public async Task ResolveAsync_WhenEditedArtifactInvalidatesSourceAdmission_ShouldDropPlanAndPassPreflight()
+    {
+        var sourceYaml = WorkflowYaml("source");
+        var editedYaml = WorkflowYaml("edited");
+        var sourcePlan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            sourceYaml,
+            new Dictionary<string, string>(StringComparer.Ordinal),
+            ExternalCapabilityExecutionMode.Interactive,
+            [],
+            []);
+        var seedPort = new RecordingSeedQueryPort
+        {
+            View = CreateSeedView(
+                "completed",
+                workflowYaml: sourceYaml,
+                workflowId: "wf-source",
+                revisionId: "rev-source",
+                definitionVersion: 23,
+                capabilityAdmissionPlan: sourcePlan),
+        };
+        var runPort = new RecordingRunProvisioningPort
+        {
+            ValidateArtifactOnCreate = true,
+        };
+        var resolver = CreateResolver(seedPort, runPort);
+
+        var result = await resolver.ResolveAsync(new WorkflowForkRunCommand(
+            SourceRunId: "source-run",
+            StartAtStepId: "step-b",
+            InlineYaml: editedYaml));
+
+        result.Succeeded.Should().BeTrue();
+        var binding = runPort.CreateRunBindings.Should().ContainSingle().Which;
+        binding.WorkflowId.Should().BeEmpty();
+        binding.RevisionId.Should().BeEmpty();
+        binding.DefinitionVersion.Should().Be(0);
+        binding.CapabilityAdmissionPlan.Should().BeNull();
+    }
+
+    [Fact]
     public async Task ResolveAsync_WhenEditedInlineYamlAddsExternalInvocation_ShouldFailClosedWithoutSourcePlan()
     {
         var sourceYaml = WorkflowYaml("source");
