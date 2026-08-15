@@ -749,6 +749,7 @@ message ForEachItemResult
   int32 index = 3;
   WorkflowFileRef file_ref = 4;
   string error = 5;
+  string step_id = 6;
 }
 
 message ForEachParentState
@@ -776,6 +777,8 @@ message ForEachModuleState
   map<string, ForEachParentState> parents = 1;
   BackpressureQueueState backpressure = 2;
   map<string, bool> completion_tombstones = 3;
+  map<string, string> completed_child_outputs = 5;
+  string completed_child_outputs_run_id = 6;
 }
 
 message ForEachPublicationRetryFiredEvent

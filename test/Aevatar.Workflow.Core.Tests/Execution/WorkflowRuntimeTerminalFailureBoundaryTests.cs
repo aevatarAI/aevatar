@@ -452,35 +452,47 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
     [InlineData("foreach-parent_execution_0123456789abcdef_item_42")]
     public async Task Kernel_ShouldNotCheckpointDirectForEachChildCompletion(string childStepId)
     {
+        const string runId = "run-foreach";
+        const string parentStepId = "foreach-parent";
+        const string childExecutionId = "child-execution";
         var workflow = new WorkflowDefinition
         {
             Name = "foreach-workflow",
             Roles = [],
             Steps =
             [
-                new StepDefinition { Id = "foreach-parent", Type = "for_each" },
+                new StepDefinition { Id = parentStepId, Type = "for_each" },
             ],
         };
-        var host = new RecordingStateHost { RunId = "run-foreach" };
+        var host = new RecordingStateHost { RunId = runId };
         var kernel = new WorkflowExecutionKernel(workflow, host);
         var ctx = new RecordingEventHandlerContext();
 
         await kernel.HandleAsync(
             Envelope(new StartWorkflowEvent
             {
-                RunId = "run-foreach",
+                RunId = runId,
                 WorkflowName = workflow.Name,
                 Input = "item",
             }),
             ctx,
             CancellationToken.None);
+        var kernelState = host.States[WorkflowExecutionKernel.ModuleStateKey]
+            .Unpack<WorkflowExecutionKernelState>();
+        host.States[ForEachModule.ModuleStateKey] = Any.Pack(CreateForEachAttemptState(
+            runId,
+            parentStepId,
+            kernelState.ExecutionIdsByStepId[parentStepId],
+            childStepId,
+            childExecutionId));
         var saveAttemptsBeforeCompletion = host.SaveAttempts;
 
         await kernel.HandleAsync(
             Envelope(new StepCompletedEvent
             {
-                RunId = "run-foreach",
+                RunId = runId,
                 StepId = childStepId,
+                ExecutionId = childExecutionId,
                 Success = true,
                 Output = "child-output",
             }),
@@ -488,9 +500,9 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
             CancellationToken.None);
 
         host.SaveAttempts.Should().Be(saveAttemptsBeforeCompletion);
-        var kernelState = host.States[WorkflowExecutionKernel.ModuleStateKey]
+        kernelState = host.States[WorkflowExecutionKernel.ModuleStateKey]
             .Unpack<WorkflowExecutionKernelState>();
-        kernelState.CurrentStepId.Should().Be("foreach-parent");
+        kernelState.CurrentStepId.Should().Be(parentStepId);
         kernelState.Variables.Should().NotContainKey(childStepId);
     }
 
@@ -526,6 +538,14 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
             }),
             ctx,
             CancellationToken.None);
+        var kernelState = host.States[WorkflowExecutionKernel.ModuleStateKey]
+            .Unpack<WorkflowExecutionKernelState>();
+        host.States[ForEachModule.ModuleStateKey] = Any.Pack(CreateForEachAttemptState(
+            "run-internal",
+            "foreach-parent",
+            kernelState.ExecutionIdsByStepId["foreach-parent"],
+            childStepId,
+            "child-execution"));
         var saveAttemptsBeforeCompletion = host.SaveAttempts;
 
         await kernel.HandleAsync(
@@ -533,6 +553,7 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
             {
                 RunId = "run-internal",
                 StepId = childStepId,
+                ExecutionId = "child-execution",
                 Success = true,
                 Output = "internal-output",
             }),
@@ -543,6 +564,218 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
         host.States[WorkflowExecutionKernel.ModuleStateKey]
             .Unpack<WorkflowExecutionKernelState>()
             .Variables.Should().Contain(childStepId, "internal-output");
+    }
+
+    [Theory]
+    [InlineData("missing_foreach_state")]
+    [InlineData("missing_parent_run_id")]
+    [InlineData("wrong_parent_run_id")]
+    [InlineData("missing_parent_step_id")]
+    [InlineData("wrong_parent_step_id")]
+    [InlineData("missing_parent_execution_id")]
+    [InlineData("wrong_parent_execution_id")]
+    [InlineData("missing_child_membership")]
+    [InlineData("missing_expected_child_execution_id")]
+    [InlineData("wrong_expected_child_execution_id")]
+    [InlineData("missing_received_child_execution_id")]
+    [InlineData("missing_kernel_parent_execution_id")]
+    public async Task Kernel_ShouldPreserveCheckpoint_WhenForEachAttemptLedgerIsIncompleteOrMismatched(
+        string mismatch)
+    {
+        const string runId = "run-foreach-ledger-mismatch";
+        const string parentStepId = "foreach-parent";
+        const string childStepId = "foreach-parent_execution_0123456789abcdef_item_0";
+        const string childExecutionId = "child-execution";
+        var workflow = new WorkflowDefinition
+        {
+            Name = "foreach-ledger-mismatch",
+            Roles = [],
+            Steps = [new StepDefinition { Id = parentStepId, Type = "foreach" }],
+        };
+        var host = new RecordingStateHost { RunId = runId };
+        var kernel = new WorkflowExecutionKernel(workflow, host);
+        var ctx = new RecordingEventHandlerContext();
+
+        await kernel.HandleAsync(
+            Envelope(new StartWorkflowEvent
+            {
+                RunId = runId,
+                WorkflowName = workflow.Name,
+                Input = "item",
+            }),
+            ctx,
+            CancellationToken.None);
+        var kernelState = host.States[WorkflowExecutionKernel.ModuleStateKey]
+            .Unpack<WorkflowExecutionKernelState>();
+        var parentExecutionId = kernelState.ExecutionIdsByStepId[parentStepId];
+        var forEachState = CreateForEachAttemptState(
+            runId,
+            parentStepId,
+            parentExecutionId,
+            childStepId,
+            childExecutionId);
+        var parentState = forEachState.Parents.Values.Should().ContainSingle().Subject;
+        switch (mismatch)
+        {
+            case "missing_foreach_state":
+                break;
+            case "missing_parent_run_id":
+                parentState.ParentRunId = string.Empty;
+                host.States[ForEachModule.ModuleStateKey] = Any.Pack(forEachState);
+                break;
+            case "wrong_parent_run_id":
+                parentState.ParentRunId = "other-run";
+                host.States[ForEachModule.ModuleStateKey] = Any.Pack(forEachState);
+                break;
+            case "missing_parent_step_id":
+                parentState.ParentStepId = string.Empty;
+                host.States[ForEachModule.ModuleStateKey] = Any.Pack(forEachState);
+                break;
+            case "wrong_parent_step_id":
+                parentState.ParentStepId = "other-parent";
+                host.States[ForEachModule.ModuleStateKey] = Any.Pack(forEachState);
+                break;
+            case "missing_parent_execution_id":
+                parentState.ParentExecutionId = string.Empty;
+                host.States[ForEachModule.ModuleStateKey] = Any.Pack(forEachState);
+                break;
+            case "wrong_parent_execution_id":
+                parentState.ParentExecutionId = "other-parent-execution";
+                host.States[ForEachModule.ModuleStateKey] = Any.Pack(forEachState);
+                break;
+            case "missing_child_membership":
+                parentState.ChildExecutionIds.Clear();
+                host.States[ForEachModule.ModuleStateKey] = Any.Pack(forEachState);
+                break;
+            case "missing_expected_child_execution_id":
+                parentState.ChildExecutionIds[childStepId] = string.Empty;
+                host.States[ForEachModule.ModuleStateKey] = Any.Pack(forEachState);
+                break;
+            case "wrong_expected_child_execution_id":
+                parentState.ChildExecutionIds[childStepId] = "other-child-execution";
+                host.States[ForEachModule.ModuleStateKey] = Any.Pack(forEachState);
+                break;
+            case "missing_received_child_execution_id":
+                host.States[ForEachModule.ModuleStateKey] = Any.Pack(forEachState);
+                break;
+            case "missing_kernel_parent_execution_id":
+                kernelState.ExecutionIdsByStepId.Remove(parentStepId);
+                host.States[WorkflowExecutionKernel.ModuleStateKey] = Any.Pack(kernelState);
+                host.States[ForEachModule.ModuleStateKey] = Any.Pack(forEachState);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(mismatch), mismatch, null);
+        }
+
+        var saveAttemptsBeforeCompletion = host.SaveAttempts;
+        await kernel.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                RunId = runId,
+                StepId = childStepId,
+                ExecutionId = mismatch == "missing_received_child_execution_id"
+                    ? string.Empty
+                    : childExecutionId,
+                Success = true,
+                Output = "compatibility-output",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        host.SaveAttempts.Should().Be(saveAttemptsBeforeCompletion + 1);
+        host.States[WorkflowExecutionKernel.ModuleStateKey]
+            .Unpack<WorkflowExecutionKernelState>()
+            .Variables.Should().Contain(childStepId, "compatibility-output");
+    }
+
+    [Fact]
+    public async Task Bridge_ForEachNewRun_ShouldDiscardCompletedChildOutputsFromPreviousRun()
+    {
+        const string runId = "current-run";
+        var host = new RecordingStateHost { RunId = runId };
+        host.States[ForEachModule.ModuleStateKey] = Any.Pack(new ForEachModuleState
+        {
+            CompletedChildOutputsRunId = "previous-run",
+            CompletedChildOutputs =
+            {
+                ["previous-child"] = "previous-output",
+            },
+        });
+        var bridge = new WorkflowExecutionBridgeModule([new ForEachModule()], host);
+
+        await bridge.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                RunId = runId,
+                StepId = "foreach-parent",
+                StepType = "foreach",
+                ExecutionId = "parent-execution",
+                Input = "item",
+                Parameters =
+                {
+                    ["sub_step_type"] = "notify",
+                },
+            }),
+            new RecordingEventHandlerContext(),
+            CancellationToken.None);
+
+        var state = host.States[ForEachModule.ModuleStateKey].Unpack<ForEachModuleState>();
+        state.CompletedChildOutputs.Should().BeEmpty();
+        state.CompletedChildOutputsRunId.Should().BeEmpty();
+        state.Parents.Values.Should().ContainSingle()
+            .Which.ParentRunId.Should().Be(runId);
+    }
+
+    [Theory]
+    [InlineData(false, "previous-run")]
+    [InlineData(false, "")]
+    [InlineData(true, "previous-run")]
+    [InlineData(true, "   ")]
+    public async Task BridgeAndForEach_ShouldIgnoreFencedStepRequestWithoutMutatingCurrentRun(
+        bool invokeForEachDirectly,
+        string requestedRunId)
+    {
+        const string currentRunId = "current-run";
+        var host = new RecordingStateHost { RunId = currentRunId };
+        var retainedState = new ForEachModuleState
+        {
+            CompletedChildOutputsRunId = currentRunId,
+            CompletedChildOutputs =
+            {
+                ["current-child"] = "current-output",
+            },
+        };
+        host.States[ForEachModule.ModuleStateKey] = Any.Pack(retainedState);
+        var retainedPackedState = host.States[ForEachModule.ModuleStateKey].Clone();
+        var ctx = new RecordingEventHandlerContext();
+        var request = Envelope(new StepRequestEvent
+        {
+            RunId = requestedRunId,
+            StepId = "foreach-parent",
+            StepType = "foreach",
+            ExecutionId = "stale-parent-execution",
+            Input = "stale-item",
+            Parameters =
+            {
+                ["sub_step_type"] = "notify",
+            },
+        });
+
+        if (invokeForEachDirectly)
+        {
+            var workflowContext = WorkflowExecutionContextAdapter.Create(ctx, host);
+            await new ForEachModule().HandleAsync(request, workflowContext, CancellationToken.None);
+        }
+        else
+        {
+            var bridge = new WorkflowExecutionBridgeModule([new ForEachModule()], host);
+            await bridge.HandleAsync(request, ctx, CancellationToken.None);
+        }
+
+        host.SaveAttempts.Should().Be(0);
+        host.ClearAttempts.Should().Be(0);
+        host.States[ForEachModule.ModuleStateKey].Should().Be(retainedPackedState);
+        ctx.Published.Should().BeEmpty();
     }
 
     [Theory]
@@ -634,9 +867,15 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
             .Subject;
         parentCompletion.Success.Should().BeTrue();
         parentCompletion.Output.Should().Be("output-0\n---\noutput-1\n---\noutput-2");
-        host.States[ForEachModule.ModuleStateKey]
-            .Unpack<ForEachModuleState>()
-            .CompletionTombstones.Should().ContainSingle();
+        var completedForEachState = host.States[ForEachModule.ModuleStateKey]
+            .Unpack<ForEachModuleState>();
+        completedForEachState.CompletionTombstones.Should().ContainSingle();
+        completedForEachState.CompletedChildOutputsRunId.Should().Be(runId);
+        completedForEachState.CompletedChildOutputs.Should().BeEquivalentTo(
+            childRequests.ToDictionary(
+                static request => request.StepId,
+                request => $"output-{Array.IndexOf(childRequests, request)}",
+                StringComparer.Ordinal));
 
         var saveAttemptsBeforeParentCompletion = host.SaveAttempts;
         await kernel.HandleAsync(Envelope(parentCompletion), ctx, CancellationToken.None);
@@ -1531,6 +1770,26 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
         Payload = Any.Pack(payload),
     };
 
+    private static ForEachModuleState CreateForEachAttemptState(
+        string runId,
+        string parentStepId,
+        string parentExecutionId,
+        string childStepId,
+        string childExecutionId)
+    {
+        var state = new ForEachModuleState();
+        var parent = new ForEachParentState
+        {
+            Expected = 1,
+            ParentRunId = runId,
+            ParentStepId = parentStepId,
+            ParentExecutionId = parentExecutionId,
+        };
+        parent.ChildExecutionIds[childStepId] = childExecutionId;
+        state.Parents[$"{runId}:{parentStepId}:execution:test"] = parent;
+        return state;
+    }
+
     private static async Task DrainToolAttemptCompletionAsync(
         WorkflowExecutionBridgeModule bridge,
         RecordingEventHandlerContext ctx)
@@ -1822,6 +2081,8 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
 
         public int SaveAttempts { get; private set; }
 
+        public int ClearAttempts { get; private set; }
+
         public bool FailRecordCompensableDispatch { get; init; }
 
         public bool StartCompensationWhenLedgerRecorded { get; init; }
@@ -1852,6 +2113,7 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
 
         public Task ClearExecutionStateAsync(string scopeKey, CancellationToken ct = default)
         {
+            ClearAttempts++;
             States.Remove(scopeKey);
             return Task.CompletedTask;
         }

@@ -305,7 +305,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         var current = _workflow.GetStep(evt.StepId);
         if (current == null)
         {
-            if (IsCurrentForEachDirectChildCompletion(state, evt.StepId))
+            if (IsCurrentForEachDirectChildCompletion(state, evt, ctx))
             {
                 ctx.Logger.LogDebug(
                     "workflow_loop: ignore foreach child completion step={StepId} parent={ParentStepId}",
@@ -558,18 +558,42 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
 
     private bool IsCurrentForEachDirectChildCompletion(
         WorkflowExecutionKernelState state,
-        string? childStepId)
+        StepCompletedEvent completion,
+        IWorkflowExecutionContext ctx)
     {
+        var childStepId = completion.StepId ?? string.Empty;
+        var childExecutionId = completion.ExecutionId ?? string.Empty;
         if (string.IsNullOrWhiteSpace(childStepId) || string.IsNullOrWhiteSpace(state.CurrentStepId))
             return false;
 
         var currentStep = _workflow.GetStep(state.CurrentStepId);
-        return currentStep != null &&
-               string.Equals(
-                   WorkflowPrimitiveCatalog.ToCanonicalType(currentStep.Type),
-                   "foreach",
-                   StringComparison.Ordinal) &&
-               ForEachModule.IsDirectChildStepId(currentStep.Id, childStepId);
+        if (currentStep == null ||
+            !string.Equals(
+                WorkflowPrimitiveCatalog.ToCanonicalType(currentStep.Type),
+                "foreach",
+                StringComparison.Ordinal) ||
+            !ForEachModule.IsDirectChildStepId(currentStep.Id, childStepId) ||
+            string.IsNullOrWhiteSpace(state.RunId) ||
+            string.IsNullOrWhiteSpace(childExecutionId) ||
+            !state.ExecutionIdsByStepId.TryGetValue(currentStep.Id, out var parentExecutionId) ||
+            string.IsNullOrWhiteSpace(parentExecutionId))
+        {
+            return false;
+        }
+
+        var forEachState = WorkflowExecutionStateAccess.Load<ForEachModuleState>(
+            ctx,
+            ForEachModule.ModuleStateKey);
+        return forEachState.Parents.Values.Any(parent =>
+            !string.IsNullOrWhiteSpace(parent.ParentRunId) &&
+            !string.IsNullOrWhiteSpace(parent.ParentStepId) &&
+            !string.IsNullOrWhiteSpace(parent.ParentExecutionId) &&
+            string.Equals(parent.ParentRunId, state.RunId, StringComparison.Ordinal) &&
+            string.Equals(parent.ParentStepId, currentStep.Id, StringComparison.Ordinal) &&
+            string.Equals(parent.ParentExecutionId, parentExecutionId, StringComparison.Ordinal) &&
+            parent.ChildExecutionIds.TryGetValue(childStepId, out var expectedChildExecutionId) &&
+            !string.IsNullOrWhiteSpace(expectedChildExecutionId) &&
+            string.Equals(expectedChildExecutionId, childExecutionId, StringComparison.Ordinal));
     }
 
     private async Task HandleCompensationRequestAsync(

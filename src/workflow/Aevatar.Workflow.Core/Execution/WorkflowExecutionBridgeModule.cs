@@ -25,7 +25,8 @@ internal sealed class WorkflowExecutionBridgeModule : IEventModule<IEventHandler
 
     public string Name => "workflow_execution_bridge";
 
-    public int Priority => 0;
+    // The kernel must inspect child completions before foreach mutates its attempt ledger.
+    public int Priority => 1;
 
     internal void CancelBackgroundWork()
     {
@@ -38,6 +39,20 @@ internal sealed class WorkflowExecutionBridgeModule : IEventModule<IEventHandler
 
     public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
     {
+        if (envelope.Payload?.Is(StepRequestEvent.Descriptor) == true)
+        {
+            var request = envelope.Payload.Unpack<StepRequestEvent>();
+            if (!WorkflowExecutionStateAccess.MatchesAuthoritativeRun(_stateHost.RunId, request.RunId))
+            {
+                ctx.Logger.LogWarning(
+                    "workflow_execution_bridge: ignore fenced step request currentRun={CurrentRunId} requestedRun={RequestedRunId} step={StepId}",
+                    _stateHost.RunId,
+                    request.RunId,
+                    request.StepId);
+                return;
+            }
+        }
+
         var workflowContext = WorkflowExecutionContextAdapter.Create(ctx, _stateHost);
         foreach (var executor in _executors)
         {

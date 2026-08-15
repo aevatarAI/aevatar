@@ -92,6 +92,107 @@ public sealed class WorkflowRunToolCallPublicationRecoveryTests
             .Should().BeEmpty();
     }
 
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public async Task ForEachChildCompletion_ShouldAvoidKernelCheckpointAndPreserveObservatoryArtifact(
+        int itemCount)
+    {
+        const string actorId = "run-foreach-child-checkpoint";
+        var store = new InMemoryEventStore();
+        var agent = CreateAgent(
+            actorId,
+            store,
+            new RecordingCallbackScheduler(),
+            out _,
+            out var publisher);
+        await agent.ActivateAsync();
+        await BindForEachWorkflowAsync(agent, actorId);
+
+        await agent.HandleEventAsync(EnvelopeFrom(actorId, new StartWorkflowEvent
+        {
+            RunId = actorId,
+            WorkflowName = "foreach_recovery",
+            Input = string.Join("\n---\n", Enumerable.Range(0, itemCount).Select(static index => $"item-{index}")),
+        }));
+        var parentRequest = publisher.Published
+            .Select(static publication => publication.Event)
+            .OfType<StepRequestEvent>()
+            .Should().ContainSingle(request => request.StepId == "foreach-step")
+            .Subject;
+        publisher.Published.Clear();
+
+        await agent.HandleEventAsync(EnvelopeFrom(actorId, parentRequest));
+        var childRequests = publisher.Published
+            .Select(static publication => publication.Event)
+            .OfType<StepRequestEvent>()
+            .OrderBy(static request => request.StepId, StringComparer.Ordinal)
+            .ToArray();
+        childRequests.Should().HaveCount(itemCount);
+        publisher.Published.Clear();
+
+        var child = childRequests[0];
+        var completion = new StepCompletedEvent
+        {
+            RunId = actorId,
+            StepId = child.StepId,
+            ExecutionId = child.ExecutionId,
+            Success = true,
+            Output = "child-output-0",
+        };
+        var versionBeforeCompletion = await store.GetVersionAsync(actorId);
+
+        await agent.HandleEventAsync(EnvelopeFrom(actorId, completion));
+
+        var committed = await store.GetEventsAsync(actorId, versionBeforeCompletion);
+        var executionStateUpserts = committed
+            .Where(static item => item.EventData?.Is(WorkflowExecutionStateUpsertedEvent.Descriptor) == true)
+            .Select(static item => item.EventData!.Unpack<WorkflowExecutionStateUpsertedEvent>())
+            .ToArray();
+        var expectedForEachCheckpoints = itemCount == 1 ? 2 : 1;
+        executionStateUpserts.Should().HaveCount(expectedForEachCheckpoints)
+            .And.OnlyContain(upsert => upsert.ScopeKey == ForEachModule.ModuleStateKey);
+        committed.Should().HaveCount(expectedForEachCheckpoints + 1,
+            "a non-terminal child needs one foreach checkpoint, while the terminal child also " +
+            "checkpoints accepted parent-completion outbox cleanup; neither path checkpoints the kernel");
+        (await store.GetVersionAsync(actorId))
+            .Should().Be(versionBeforeCompletion + expectedForEachCheckpoints + 1);
+
+        var observableCompletion = committed
+            .Where(static item => item.EventData?.Is(StepCompletedEvent.Descriptor) == true)
+            .Select(static item => item.EventData!.Unpack<StepCompletedEvent>())
+            .Should().ContainSingle().Subject;
+        observableCompletion.Should().BeEquivalentTo(completion);
+        agent.State.ProcessedStepCompletionKeys.Should().ContainSingle();
+
+        var forEachState = agent.State.ExecutionStates[ForEachModule.ModuleStateKey]
+            .Unpack<ForEachModuleState>();
+        if (itemCount == 1)
+        {
+            forEachState.Parents.Should().BeEmpty();
+            forEachState.CompletionTombstones.Should().ContainSingle();
+            forEachState.CompletedChildOutputs.Should().Contain(child.StepId, completion.Output);
+            publisher.Published
+                .Select(static publication => publication.Event)
+                .OfType<StepCompletedEvent>()
+                .Should().ContainSingle(parentCompletion => parentCompletion.StepId == "foreach-step");
+        }
+        else
+        {
+            var parent = forEachState.Parents.Values.Should().ContainSingle().Subject;
+            parent.Collected.Should().ContainSingle(result =>
+                result.StepId == child.StepId && result.Output == completion.Output);
+            publisher.Published
+                .Select(static publication => publication.Event)
+                .OfType<StepCompletedEvent>()
+                .Should().BeEmpty();
+        }
+
+        agent.State.ExecutionStates[WorkflowExecutionKernel.ModuleStateKey]
+            .Unpack<WorkflowExecutionKernelState>()
+            .Variables.Should().NotContainKey(child.StepId);
+    }
+
     [Fact]
     public async Task Activation_ShouldScheduleAndDrainPersistedCompletionOutboxWithoutExecutingTool()
     {

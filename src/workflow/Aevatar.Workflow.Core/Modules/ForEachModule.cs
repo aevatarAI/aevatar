@@ -71,9 +71,20 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
         {
             var evt = payload.Unpack<StepRequestEvent>();
             if (evt.StepType != "foreach") return;
+            if (!WorkflowExecutionStateAccess.MatchesAuthoritativeRun(ctx.RunId, evt.RunId))
+            {
+                ctx.Logger.LogWarning(
+                    "ForEach: ignore fenced request currentRun={CurrentRunId} requestedRun={RequestedRunId} step={StepId}",
+                    ctx.RunId,
+                    evt.RunId,
+                    evt.StepId);
+                return;
+            }
+
             var runId = WorkflowRunIdNormalizer.Normalize(evt.RunId);
             var parentKey = BuildParentAttemptKey(runId, evt.StepId, evt.ExecutionId);
             var state = LoadState(ctx);
+            FenceCompletedChildOutputsToRun(state, runId);
 
             if (state.CompletionTombstones.ContainsKey(parentKey))
                 return;
@@ -734,6 +745,7 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
             return;
         }
 
+        PreserveCompletedChildOutputs(state, parentState);
         state.Parents.Remove(parentKey);
         AddCompletionTombstone(state, parentKey);
         if (state.Parents.Count == 0)
@@ -988,6 +1000,34 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
         state.CompletionTombstones[parentKey] = true;
     }
 
+    private static void PreserveCompletedChildOutputs(
+        ForEachModuleState state,
+        ForEachParentState parentState)
+    {
+        if (string.IsNullOrWhiteSpace(parentState.ParentRunId))
+            return;
+
+        FenceCompletedChildOutputsToRun(state, parentState.ParentRunId);
+        state.CompletedChildOutputsRunId = parentState.ParentRunId;
+        foreach (var result in parentState.Collected)
+        {
+            if (!string.IsNullOrWhiteSpace(result.StepId))
+                state.CompletedChildOutputs[result.StepId] = result.Output ?? string.Empty;
+        }
+    }
+
+    private static void FenceCompletedChildOutputsToRun(ForEachModuleState state, string runId)
+    {
+        if (state.CompletedChildOutputs.Count == 0 ||
+            string.Equals(state.CompletedChildOutputsRunId, runId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        state.CompletedChildOutputs.Clear();
+        state.CompletedChildOutputsRunId = string.Empty;
+    }
+
     private static bool IsInputFileRefsSource(ForEachParentState parentState) =>
         string.Equals(parentState.ItemsSource, InputFileRefsItemsSource, StringComparison.OrdinalIgnoreCase);
 
@@ -1023,8 +1063,12 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
         IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
-        if (state.Parents.Count == 0 && state.CompletionTombstones.Count == 0)
+        if (state.Parents.Count == 0 &&
+            state.CompletionTombstones.Count == 0 &&
+            state.CompletedChildOutputs.Count == 0)
+        {
             return WorkflowExecutionStateAccess.ClearAsync(ctx, ModuleStateKey, ct);
+        }
 
         return WorkflowExecutionStateAccess.SaveAsync(ctx, ModuleStateKey, state, ct);
     }

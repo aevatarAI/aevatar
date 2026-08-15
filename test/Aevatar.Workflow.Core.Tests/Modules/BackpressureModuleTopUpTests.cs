@@ -17,7 +17,7 @@ public sealed class BackpressureModuleTopUpTests
     public async Task ParallelFanOutModule_ShouldHonorMinConcurrentWorkersAndTopUp()
     {
         var module = new ParallelFanOutModule();
-        var context = new RecordingWorkflowContext();
+        var context = new RecordingWorkflowContext("run-parallel-floor");
 
         await module.HandleAsync(
             Envelope(new StepRequestEvent
@@ -63,7 +63,7 @@ public sealed class BackpressureModuleTopUpTests
     public async Task ForEachModule_ShouldHonorMinConcurrentWorkersAndTopUp()
     {
         var module = new ForEachModule();
-        var context = new RecordingWorkflowContext();
+        var context = new RecordingWorkflowContext("run-foreach-floor");
 
         await module.HandleAsync(
             Envelope(new StepRequestEvent
@@ -120,7 +120,7 @@ public sealed class BackpressureModuleTopUpTests
     public async Task ForEachModule_ShouldDispatchOneChildPerInputFileRefInOrder()
     {
         var module = new ForEachModule();
-        var context = new RecordingWorkflowContext();
+        var context = new RecordingWorkflowContext("run-foreach-files");
         var first = BuildWorkflowFileRef("file-a");
         var second = BuildWorkflowFileRef("file-b");
 
@@ -153,7 +153,7 @@ public sealed class BackpressureModuleTopUpTests
     public async Task ForEachModule_ShouldPreserveQueuedInputFileRefWhenBackpressureTopsUp()
     {
         var module = new ForEachModule();
-        var context = new RecordingWorkflowContext();
+        var context = new RecordingWorkflowContext("run-foreach-files-floor");
         var first = BuildWorkflowFileRef("file-a");
         var second = BuildWorkflowFileRef("file-b");
 
@@ -201,7 +201,7 @@ public sealed class BackpressureModuleTopUpTests
     public async Task ForEachModule_ShouldPublishTypedFileResultsWithPerFileErrors()
     {
         var module = new ForEachModule();
-        var context = new RecordingWorkflowContext();
+        var context = new RecordingWorkflowContext("run-foreach-files-result");
         var first = BuildWorkflowFileRef("file-a");
         var second = BuildWorkflowFileRef("file-b");
 
@@ -272,7 +272,7 @@ public sealed class BackpressureModuleTopUpTests
     public async Task ForEachModule_ShouldCheckpointAllDispatchIntentsBeforePublishingChildren()
     {
         var module = new ForEachModule();
-        var context = new RecordingWorkflowContext();
+        var context = new RecordingWorkflowContext("run-checkpoint");
         var checkpointObserved = false;
         EventEnvelopePublishOptions? firstChildOptions = null;
 
@@ -314,7 +314,7 @@ public sealed class BackpressureModuleTopUpTests
     public async Task ForEachModule_TwentyConcurrentChildren_ShouldRetainDurableIntentsUntilSettlement()
     {
         var module = new ForEachModule();
-        var context = new RecordingWorkflowContext();
+        var context = new RecordingWorkflowContext("run-batch");
         var items = string.Join("\n---\n", Enumerable.Range(0, 20).Select(index => $"item-{index}"));
 
         await module.HandleAsync(
@@ -351,7 +351,7 @@ public sealed class BackpressureModuleTopUpTests
     public async Task ForEachModule_TwentyConcurrentChildren_ShouldOverlapPublicationsAfterIntentFence()
     {
         var module = new ForEachModule();
-        var context = new RecordingWorkflowContext();
+        var context = new RecordingWorkflowContext("run-overlap");
         var allPublicationsStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var releasePublications = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var startedCount = 0;
@@ -408,7 +408,7 @@ public sealed class BackpressureModuleTopUpTests
     public async Task ForEachModule_FortyChildren_ShouldCapConcurrentPublicationsAtTwenty()
     {
         var module = new ForEachModule();
-        var context = new RecordingWorkflowContext();
+        var context = new RecordingWorkflowContext("run-cap");
         var firstBatchStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var releasePublications = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var startedCount = 0;
@@ -480,7 +480,7 @@ public sealed class BackpressureModuleTopUpTests
     public async Task ForEachModule_PartiallyCancelledConcurrentPublication_ShouldReplayEntireDurableBatch()
     {
         var module = new ForEachModule();
-        var context = new RecordingWorkflowContext();
+        var context = new RecordingWorkflowContext("run-cancel");
         var allPublicationsStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var holdPublications = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var startedCount = 0;
@@ -561,7 +561,7 @@ public sealed class BackpressureModuleTopUpTests
     public async Task ForEachModule_DuplicateParentRequest_ShouldPreserveProgressAndNotRedispatchBatch()
     {
         var module = new ForEachModule();
-        var context = new RecordingWorkflowContext();
+        var context = new RecordingWorkflowContext("run-replay");
         var parentRequest = new StepRequestEvent
         {
             StepId = "foreach-replay",
@@ -601,7 +601,7 @@ public sealed class BackpressureModuleTopUpTests
     public async Task ForEachModule_ParentRedeliveryWithExecutionId_ShouldAdoptLegacyStateWithoutRefanout()
     {
         var module = new ForEachModule();
-        var context = new RecordingWorkflowContext();
+        var context = new RecordingWorkflowContext("run-upgrade");
         var legacyState = new ForEachModuleState
         {
             Backpressure = BackpressureHelper.Initialize(1),
@@ -666,7 +666,7 @@ public sealed class BackpressureModuleTopUpTests
     public async Task ForEachModule_FailedInitialChildPublish_ShouldRecoverFromDurableRetry()
     {
         var module = new ForEachModule();
-        var context = new RecordingWorkflowContext
+        var context = new RecordingWorkflowContext("run-recover")
         {
             FailPublishOnce = evt => evt is StepRequestEvent { StepId: "foreach-recover_item_0" },
         };
@@ -703,7 +703,7 @@ public sealed class BackpressureModuleTopUpTests
     public async Task ForEachModule_AmbiguousPublishFailure_ShouldReplayStableChildIdentity()
     {
         var module = new ForEachModule();
-        var context = new RecordingWorkflowContext
+        var context = new RecordingWorkflowContext("run-ambiguous")
         {
             ThrowAfterPublishOnce = evt => evt is StepRequestEvent { StepId: "foreach-ambiguous_item_0" },
         };
@@ -740,7 +740,7 @@ public sealed class BackpressureModuleTopUpTests
     public async Task ForEachModule_LegacyPendingChild_ShouldFenceStableIdentityBeforePublishing()
     {
         var module = new ForEachModule();
-        var context = new RecordingWorkflowContext();
+        var context = new RecordingWorkflowContext("run-legacy-pending");
         var parentKey = "run-legacy-pending:foreach-legacy-pending";
         var state = new ForEachModuleState
         {
@@ -800,7 +800,7 @@ public sealed class BackpressureModuleTopUpTests
     public async Task ForEachModule_PartialBatchPublishFailure_ShouldRetryOnlyFailedChildWithoutAckCheckpoint()
     {
         var module = new ForEachModule();
-        var context = new RecordingWorkflowContext
+        var context = new RecordingWorkflowContext("run-batch-recover")
         {
             FailPublishOnce = evt => evt is StepRequestEvent { StepId: "foreach-batch-recover_item_7" },
         };
@@ -850,7 +850,7 @@ public sealed class BackpressureModuleTopUpTests
     public async Task ForEachModule_SettlementSaveFailure_ShouldRetainAcceptanceCacheAndAvoidSameActivationReplay()
     {
         var module = new ForEachModule();
-        var context = new RecordingWorkflowContext();
+        var context = new RecordingWorkflowContext("run-dispatch-save-failure");
         await module.HandleAsync(
             Envelope(new StepRequestEvent
             {
@@ -900,7 +900,7 @@ public sealed class BackpressureModuleTopUpTests
     public async Task ForEachModule_NewModuleInstance_ShouldReplayDurableBatchWithStableChildIdentities()
     {
         var module = new ForEachModule();
-        var context = new RecordingWorkflowContext();
+        var context = new RecordingWorkflowContext("run-batch-save-failure");
         var parentRequest = new StepRequestEvent
         {
             StepId = "foreach-batch-save-failure",
@@ -949,7 +949,7 @@ public sealed class BackpressureModuleTopUpTests
     public async Task ForEachModule_DuplicateChildCompletion_ShouldNotSettleWorkerOrTopUpTwice()
     {
         var module = new ForEachModule();
-        var context = new RecordingWorkflowContext();
+        var context = new RecordingWorkflowContext("run-settlement");
         await module.HandleAsync(
             Envelope(new StepRequestEvent
             {
@@ -993,7 +993,7 @@ public sealed class BackpressureModuleTopUpTests
     public async Task ForEachModule_LegacyCollectedCompletion_ShouldNotSettleWorkerAgain()
     {
         var module = new ForEachModule();
-        var context = new RecordingWorkflowContext();
+        var context = new RecordingWorkflowContext("run-legacy");
         var legacyState = new ForEachModuleState
         {
             Backpressure = BackpressureHelper.Initialize(1),
@@ -1032,7 +1032,7 @@ public sealed class BackpressureModuleTopUpTests
     public async Task ForEachModule_FailedTopUpPublish_ShouldRecoverFromDuplicateCompletion()
     {
         var module = new ForEachModule();
-        var context = new RecordingWorkflowContext();
+        var context = new RecordingWorkflowContext("run-topup-recover");
         await module.HandleAsync(
             Envelope(new StepRequestEvent
             {
@@ -1075,7 +1075,7 @@ public sealed class BackpressureModuleTopUpTests
     public async Task ForEachModule_FailedTerminalPublish_ShouldRetryThenKeepTombstone()
     {
         var module = new ForEachModule();
-        var context = new RecordingWorkflowContext();
+        var context = new RecordingWorkflowContext("run-terminal-recover");
         var parentRequest = new StepRequestEvent
         {
             StepId = "foreach-terminal-recover",
@@ -1121,7 +1121,7 @@ public sealed class BackpressureModuleTopUpTests
     public async Task ForEachModule_PostTerminalPublishSaveFailure_ShouldPropagateAndKeepDurableOutbox()
     {
         var module = new ForEachModule();
-        var context = new RecordingWorkflowContext();
+        var context = new RecordingWorkflowContext("run-terminal-save-failure");
         await module.HandleAsync(
             Envelope(new StepRequestEvent
             {
@@ -1163,7 +1163,7 @@ public sealed class BackpressureModuleTopUpTests
     public async Task ForEachModule_NewParentExecutionAfterTombstone_ShouldRunAgain()
     {
         var module = new ForEachModule();
-        var context = new RecordingWorkflowContext();
+        var context = new RecordingWorkflowContext("run-attempt");
         var firstParent = new StepRequestEvent
         {
             StepId = "foreach-attempt",
@@ -1213,7 +1213,7 @@ public sealed class BackpressureModuleTopUpTests
     public async Task ForEachModule_SequentialParentAfterTombstone_ShouldUseNewBackpressureConfiguration()
     {
         var module = new ForEachModule();
-        var context = new RecordingWorkflowContext();
+        var context = new RecordingWorkflowContext("run-sequential");
         var firstParent = new StepRequestEvent
         {
             StepId = "foreach-sequential",
@@ -1266,7 +1266,7 @@ public sealed class BackpressureModuleTopUpTests
     public async Task ForEachModule_OldParentRequestAfterMoreThan256Attempts_ShouldRemainSuppressed()
     {
         var module = new ForEachModule();
-        var context = new RecordingWorkflowContext();
+        var context = new RecordingWorkflowContext("run-many-attempts");
         var parentRequest = new StepRequestEvent
         {
             StepId = "foreach-many-attempts",
@@ -1296,7 +1296,7 @@ public sealed class BackpressureModuleTopUpTests
     public async Task ForEachModule_StaleChildFromPreviousExecution_ShouldNotPolluteNewAttempt()
     {
         var module = new ForEachModule();
-        var context = new RecordingWorkflowContext();
+        var context = new RecordingWorkflowContext("run-stale-attempt");
         var firstParent = new StepRequestEvent
         {
             StepId = "foreach-stale-attempt",
@@ -1350,7 +1350,7 @@ public sealed class BackpressureModuleTopUpTests
     public async Task MapReduceModule_ShouldHonorMinConcurrentWorkersAndTopUp()
     {
         var module = new MapReduceModule();
-        var context = new RecordingWorkflowContext();
+        var context = new RecordingWorkflowContext("run-map-floor");
 
         await module.HandleAsync(
             Envelope(new StepRequestEvent
@@ -1393,7 +1393,7 @@ public sealed class BackpressureModuleTopUpTests
     public async Task WaitSignalModule_ShouldAllowExtendedLongTimeoutWindow()
     {
         var module = new WaitSignalModule();
-        var context = new RecordingWorkflowContext();
+        var context = new RecordingWorkflowContext("run-long-wait");
 
         await module.HandleAsync(
             Envelope(new StepRequestEvent
@@ -1444,7 +1444,7 @@ public sealed class BackpressureModuleTopUpTests
             OwnerScopeId = "scope-owner",
         };
 
-    private sealed class RecordingWorkflowContext : IWorkflowExecutionContext
+    private sealed class RecordingWorkflowContext(string runId) : IWorkflowExecutionContext
     {
         private readonly Dictionary<string, Any> _states = new(StringComparer.Ordinal);
         private readonly Dictionary<string, long> _callbackGenerations = new(StringComparer.Ordinal);
@@ -1458,7 +1458,7 @@ public sealed class BackpressureModuleTopUpTests
 
         public string AgentId => "workflow-agent";
 
-        public string RunId => "workflow-run";
+        public string RunId { get; } = runId;
 
         public IServiceProvider Services { get; } = new EmptyServiceProvider();
 
