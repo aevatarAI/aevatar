@@ -302,6 +302,50 @@ public sealed class WorkflowAuthorizationDependenciesTests
     }
 
     [Fact]
+    public async Task BindWorkflowDefinition_WhenCanonicalStateIsUnchanged_ShouldNotAppendOrAdvanceVersion()
+    {
+        const string rootYaml = "name: root-workflow\nroles: []\nsteps: []\n";
+        const string childYaml = "name: child-workflow\nroles: []\nsteps: []\n";
+        var behaviorFactory = new InMemoryWorkflowEventSourcingBehaviorFactory();
+        var agent = new WorkflowGAgent
+        {
+            EventSourcingBehaviorFactory = behaviorFactory,
+        };
+
+        await agent.BindWorkflowDefinitionAsync(
+            rootYaml,
+            " root-workflow ",
+            new Dictionary<string, string> { [" child-workflow "] = childYaml },
+            scopeId: null,
+            sourceKind: null,
+            capabilityAdmissionPlan: null,
+            workflowId: null,
+            revisionId: null,
+            expectedExecutionMode: ExternalCapabilityExecutionMode.Interactive);
+
+        agent.State.Version.Should().Be(1);
+        behaviorFactory.CommittedEvents.Should().ContainSingle()
+            .Which.Should().BeOfType<BindWorkflowDefinitionEvent>();
+
+        await agent.BindWorkflowDefinitionAsync(
+            rootYaml,
+            "root-workflow",
+            new Dictionary<string, string> { ["child-workflow"] = childYaml },
+            scopeId: string.Empty,
+            sourceKind: " builtin ",
+            capabilityAdmissionPlan: null,
+            workflowId: string.Empty,
+            revisionId: string.Empty,
+            expectedExecutionMode: ExternalCapabilityExecutionMode.Interactive);
+
+        agent.State.Version.Should().Be(1);
+        agent.State.InlineWorkflowYamls.Keys.Should().Equal("child-workflow");
+        agent.State.ScopeId.Should().BeEmpty();
+        agent.State.SourceKind.Should().Be("builtin");
+        behaviorFactory.CommittedEvents.Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task BindWorkflowDefinition_WhenExplicitIdentityChanges_ShouldRejectAndPreserveAuthority()
     {
         var yaml = ExactNyxIdRequestWorkflowYaml();

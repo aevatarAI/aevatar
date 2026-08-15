@@ -467,6 +467,26 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
         "STUDIO_MEMBER_PLATFORM_BINDING_ACTIVATION_CAPABILITY_VIEW_NOT_READY",
         "platform service activation failed because capability readiness was not established.")]
     [InlineData(
+        ServiceDeploymentActivationFailureCode.AdmissionRejected,
+        "STUDIO_MEMBER_PLATFORM_BINDING_ACTIVATION_ADMISSION_REJECTED",
+        "platform service activation was rejected by admission policy.")]
+    [InlineData(
+        ServiceDeploymentActivationFailureCode.AdmissionEvaluationFailed,
+        "STUDIO_MEMBER_PLATFORM_BINDING_ACTIVATION_ADMISSION_EVALUATION_FAILED",
+        "platform service activation admission evaluation failed.")]
+    [InlineData(
+        ServiceDeploymentActivationFailureCode.RuntimeActivationFailed,
+        "STUDIO_MEMBER_PLATFORM_BINDING_RUNTIME_ACTIVATION_FAILED",
+        "platform service runtime activation failed.")]
+    [InlineData(
+        ServiceDeploymentActivationFailureCode.ServingTargetDeliveryFailed,
+        "STUDIO_MEMBER_PLATFORM_BINDING_SERVING_TARGET_DELIVERY_FAILED",
+        "platform service activation could not deliver serving targets.")]
+    [InlineData(
+        ServiceDeploymentActivationFailureCode.ActivationDependencyUnavailable,
+        "STUDIO_MEMBER_PLATFORM_BINDING_ACTIVATION_DEPENDENCY_UNAVAILABLE",
+        "platform service activation dependency was unavailable.")]
+    [InlineData(
         (ServiceDeploymentActivationFailureCode)999,
         "STUDIO_MEMBER_PLATFORM_BINDING_ACTIVATION_FAILED",
         "platform service activation failed.")]

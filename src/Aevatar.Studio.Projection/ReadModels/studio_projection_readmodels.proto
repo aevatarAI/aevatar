@@ -1073,6 +1073,9 @@ message StudioMemberBindingRunCurrentStateDocument {
   string status = 24;
   string platform_binding_command_id = 25;
   int32 attempt_count = 26;
+  string platform_execution_stage = 27;
+  int32 platform_execution_attempt = 28;
+  string last_readiness_status = 29;
 
   string failure_code = 30;
   string failure_message = 31;

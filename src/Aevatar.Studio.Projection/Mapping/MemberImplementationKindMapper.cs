@@ -58,4 +58,40 @@ public static class MemberImplementationKindMapper
         StudioMemberBindingRunStatus.Rejected => StudioMemberBindingRunStatusNames.Rejected,
         _ => string.Empty,
     };
+
+    public static string ToWireName(StudioMemberPlatformBindingExecutionStage stage) => stage switch
+    {
+        StudioMemberPlatformBindingExecutionStage.AcceptancePending =>
+            StudioMemberPlatformBindingExecutionStageNames.AcceptancePending,
+        StudioMemberPlatformBindingExecutionStage.CommandPending =>
+            StudioMemberPlatformBindingExecutionStageNames.CommandPending,
+        StudioMemberPlatformBindingExecutionStage.CommandInFlight =>
+            StudioMemberPlatformBindingExecutionStageNames.CommandInFlight,
+        StudioMemberPlatformBindingExecutionStage.ReadinessPending =>
+            StudioMemberPlatformBindingExecutionStageNames.ReadinessPending,
+        StudioMemberPlatformBindingExecutionStage.ReadinessInFlight =>
+            StudioMemberPlatformBindingExecutionStageNames.ReadinessInFlight,
+        _ => string.Empty,
+    };
+
+    public static string ToWireName(StudioMemberPlatformBindingReadinessStatus status) => status switch
+    {
+        StudioMemberPlatformBindingReadinessStatus.ServiceCatalogMissing =>
+            StudioMemberPlatformBindingReadinessStatusNames.ServiceCatalogMissing,
+        StudioMemberPlatformBindingReadinessStatus.ServingSetMissing =>
+            StudioMemberPlatformBindingReadinessStatusNames.ServingSetMissing,
+        StudioMemberPlatformBindingReadinessStatus.EligibleServingTargetMissing =>
+            StudioMemberPlatformBindingReadinessStatusNames.EligibleServingTargetMissing,
+        StudioMemberPlatformBindingReadinessStatus.ServiceCatalogTargetMissing =>
+            StudioMemberPlatformBindingReadinessStatusNames.ServiceCatalogTargetMissing,
+        StudioMemberPlatformBindingReadinessStatus.Ready =>
+            StudioMemberPlatformBindingReadinessStatusNames.Ready,
+        StudioMemberPlatformBindingReadinessStatus.TrafficViewTargetMissing =>
+            StudioMemberPlatformBindingReadinessStatusNames.TrafficViewTargetMissing,
+        StudioMemberPlatformBindingReadinessStatus.PreparedArtifactMissing =>
+            StudioMemberPlatformBindingReadinessStatusNames.PreparedArtifactMissing,
+        StudioMemberPlatformBindingReadinessStatus.InvocationCatalogNotReady =>
+            StudioMemberPlatformBindingReadinessStatusNames.InvocationCatalogNotReady,
+        _ => string.Empty,
+    };
 }

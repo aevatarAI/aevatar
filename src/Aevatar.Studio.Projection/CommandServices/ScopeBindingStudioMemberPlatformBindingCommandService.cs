@@ -25,6 +25,16 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
         "STUDIO_MEMBER_PLATFORM_BINDING_ACTIVATION_REVISION_PREPARATION_FAILED";
     private const string ActivationCapabilityViewNotReadyFailureCode =
         "STUDIO_MEMBER_PLATFORM_BINDING_ACTIVATION_CAPABILITY_VIEW_NOT_READY";
+    private const string ActivationAdmissionRejectedFailureCode =
+        "STUDIO_MEMBER_PLATFORM_BINDING_ACTIVATION_ADMISSION_REJECTED";
+    private const string ActivationAdmissionEvaluationFailedFailureCode =
+        "STUDIO_MEMBER_PLATFORM_BINDING_ACTIVATION_ADMISSION_EVALUATION_FAILED";
+    private const string RuntimeActivationFailedFailureCode =
+        "STUDIO_MEMBER_PLATFORM_BINDING_RUNTIME_ACTIVATION_FAILED";
+    private const string ServingTargetDeliveryFailedFailureCode =
+        "STUDIO_MEMBER_PLATFORM_BINDING_SERVING_TARGET_DELIVERY_FAILED";
+    private const string ActivationDependencyUnavailableFailureCode =
+        "STUDIO_MEMBER_PLATFORM_BINDING_ACTIVATION_DEPENDENCY_UNAVAILABLE";
     private const string RecoverySnapshotInvalidFailureCode =
         "STUDIO_MEMBER_PLATFORM_BINDING_RECOVERY_SNAPSHOT_INVALID";
 
@@ -783,6 +793,21 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
             ServiceDeploymentActivationFailureCode.CapabilityViewNotReady =>
                 (ActivationCapabilityViewNotReadyFailureCode,
                     "platform service activation failed because capability readiness was not established."),
+            ServiceDeploymentActivationFailureCode.AdmissionRejected =>
+                (ActivationAdmissionRejectedFailureCode,
+                    "platform service activation was rejected by admission policy."),
+            ServiceDeploymentActivationFailureCode.AdmissionEvaluationFailed =>
+                (ActivationAdmissionEvaluationFailedFailureCode,
+                    "platform service activation admission evaluation failed."),
+            ServiceDeploymentActivationFailureCode.RuntimeActivationFailed =>
+                (RuntimeActivationFailedFailureCode,
+                    "platform service runtime activation failed."),
+            ServiceDeploymentActivationFailureCode.ServingTargetDeliveryFailed =>
+                (ServingTargetDeliveryFailedFailureCode,
+                    "platform service activation could not deliver serving targets."),
+            ServiceDeploymentActivationFailureCode.ActivationDependencyUnavailable =>
+                (ActivationDependencyUnavailableFailureCode,
+                    "platform service activation dependency was unavailable."),
             _ => (ActivationFailedFailureCode, "platform service activation failed."),
         };
 

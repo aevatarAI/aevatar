@@ -1,10 +1,12 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using System.Runtime.ExceptionServices;
 
 namespace Aevatar.GAgents.StudioMember;
 
@@ -14,12 +16,19 @@ namespace Aevatar.GAgents.StudioMember;
 [GAgent("studio.member-binding-run")]
 public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindingRunState>, IProjectedActor
 {
+    private const string MemberDeletedFailureCode = "STUDIO_MEMBER_DELETED";
     private const string PlatformBindingCheckpointUnavailableFailureCode =
         "STUDIO_MEMBER_PLATFORM_BINDING_CHECKPOINT_UNAVAILABLE";
+    private const string PlatformBindingReadinessTimeoutFailureCode =
+        "STUDIO_MEMBER_PLATFORM_BINDING_READINESS_TIMEOUT";
+    private const string PlatformBindingReadinessTimeoutFailureMessage =
+        "platform binding readiness was not observed before the actor-owned deadline.";
     private static readonly TimeSpan AdmissionWatchdogDelay = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan PlatformBindingExecuteInitialDelay = TimeSpan.FromMilliseconds(100);
     private static readonly TimeSpan PlatformBindingWatchdogDelay = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan PlatformBindingExecutionStaleAfter = TimeSpan.FromMinutes(2);
+    private static readonly TimeSpan PlatformBindingReadinessBudget = TimeSpan.FromMinutes(6);
+    private static readonly TimeSpan MemberTerminalNotificationWatchdogDelay = TimeSpan.FromSeconds(30);
     private static readonly Timestamp LegacyPlatformExecutionFenceAtUtc = Timestamp.FromDateTime(
         new DateTime(9999, 1, 1, 0, 0, 0, DateTimeKind.Utc));
     private readonly IStudioMemberPlatformBindingCommandPort? _platformBindingPort;
@@ -96,6 +105,13 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
     [EventHandler(EndpointName = "admitBindingRun")]
     public async Task HandleAdmitted(StudioMemberBindingAdmittedEvent evt)
     {
+        if (IsRuntimeEnvelopeRedelivery()
+            && IsExactCommittedAdmission(evt))
+        {
+            await SendPlatformBindingStartRequestedAsync(evt.AdmittedAtUtc);
+            return;
+        }
+
         if (!CanAcceptAdmission(evt.BindingRunId))
             return;
 
@@ -156,6 +172,13 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
     [EventHandler(EndpointName = "acceptPlatformBinding", AllowSelfHandling = true)]
     public async Task HandlePlatformBindingAccepted(StudioMemberPlatformBindingExecutionStartAccepted evt)
     {
+        if (IsRuntimeEnvelopeRedelivery()
+            && IsExactCommittedPlatformBindingAcceptance(evt))
+        {
+            await SendPlatformBindingPendingAndExecuteAsync(evt.AcceptedAtUtc);
+            return;
+        }
+
         if (!CanAcceptPlatformBindingAccepted(evt))
             return;
 
@@ -166,12 +189,32 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
     [EventHandler(EndpointName = "executePlatformBinding", AllowSelfHandling = true)]
     public async Task HandlePlatformBindingExecuteRequested(StudioMemberPlatformBindingStageExecuteRequested evt)
     {
+        if (CanRecoverMemberTerminalNotificationForExecuteRequested(evt))
+        {
+            await SendMemberTerminalNotificationAsync();
+            return;
+        }
+
+        if (IsRuntimeEnvelopeRedelivery()
+            && IsExactCommittedPlatformBindingStageStart(evt))
+        {
+            await SchedulePlatformBindingWatchdogAsync();
+            return;
+        }
+
         if (!CanAcceptPlatformBindingExecuteRequested(evt))
             return;
 
         if (!HasSupportedPlatformBindingProtocol(State))
         {
             await FailCheckpointUnavailableAsync();
+            return;
+        }
+
+        if (IsReadinessExecutionStage(State.PlatformExecutionStage)
+            && HasPlatformReadinessDeadlineExpired(DateTimeOffset.UtcNow))
+        {
+            await FailPlatformReadinessTimeoutAsync();
             return;
         }
 
@@ -205,20 +248,22 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
 
         if (_platformBindingPort == null)
         {
-            await SendToAsync(Id, new StudioMemberPlatformBindingExecutionFailed
-            {
-                BindingRunId = evt.BindingRunId,
-                PlatformBindingCommandId = evt.PlatformBindingCommandId,
-                Failure = new StudioMemberBindingFailure
+            await RunWithPlatformBindingWatchdogAsync(
+                () => SendToAsync(Id, new StudioMemberPlatformBindingExecutionFailed
                 {
-                    Code = "STUDIO_MEMBER_PLATFORM_BINDING_PORT_UNAVAILABLE",
-                    Message = "studio member platform binding command port is not registered.",
-                    FailedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                },
-                ProtocolVersion = State.PlatformBindingProtocolVersion,
-                ExecutionAttempt = State.PlatformExecutionAttempt,
-                ExecutionStage = State.PlatformExecutionStage,
-            });
+                    BindingRunId = evt.BindingRunId,
+                    PlatformBindingCommandId = evt.PlatformBindingCommandId,
+                    Failure = new StudioMemberBindingFailure
+                    {
+                        Code = "STUDIO_MEMBER_PLATFORM_BINDING_PORT_UNAVAILABLE",
+                        Message = "studio member platform binding command port is not registered.",
+                        FailedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                    },
+                    ProtocolVersion = State.PlatformBindingProtocolVersion,
+                    ExecutionAttempt = State.PlatformExecutionAttempt,
+                    ExecutionStage = State.PlatformExecutionStage,
+                }),
+                ct: default);
             return;
         }
 
@@ -235,20 +280,37 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
         if (State.PlatformBindingRecoverySnapshot != null)
             executionRequest.RecoverySnapshot = State.PlatformBindingRecoverySnapshot.Clone();
 
-        await _platformBindingPort.ExecuteAsync(Id, executionRequest);
-
-        await SchedulePlatformBindingWatchdogAsync();
+        await RunWithPlatformBindingWatchdogAsync(
+            () => _platformBindingPort.ExecuteAsync(Id, executionRequest),
+            ct: default);
     }
 
     [EventHandler(EndpointName = "platformBindingWatchdog", AllowSelfHandling = true)]
     public async Task HandlePlatformBindingWatchdogFired(StudioMemberPlatformBindingExecutionWatchdogFired evt)
     {
+        if (CanRecoverMemberTerminalNotification(
+                evt.BindingRunId,
+                evt.PlatformBindingCommandId,
+                evt.ProtocolVersion,
+                evt.ExpectedExecutionAttempt))
+        {
+            await SendMemberTerminalNotificationAsync();
+            return;
+        }
+
         if (!CanAcceptPlatformBindingWatchdog(evt))
             return;
 
         if (!HasSupportedPlatformBindingProtocol(State))
         {
             await FailCheckpointUnavailableAsync();
+            return;
+        }
+
+        if (IsReadinessExecutionStage(State.PlatformExecutionStage)
+            && HasPlatformReadinessDeadlineExpired(DateTimeOffset.UtcNow))
+        {
+            await FailPlatformReadinessTimeoutAsync();
             return;
         }
 
@@ -280,10 +342,30 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
     [EventHandler(EndpointName = "platformBindingCommandsCompleted", AllowSelfHandling = true)]
     public async Task HandlePlatformBindingCommandsCompleted(StudioMemberPlatformBindingCommandsCompleted evt)
     {
+        if (CanRecoverMemberTerminalNotification(
+                evt.BindingRunId,
+                evt.PlatformBindingCommandId,
+                evt.ProtocolVersion,
+                evt.ExecutionAttempt))
+        {
+            await SendMemberTerminalNotificationAsync();
+            return;
+        }
+
+        if (IsRuntimeEnvelopeRedelivery()
+            && IsExactCommittedPlatformBindingCommandsCompleted(evt))
+        {
+            await SchedulePlatformBindingExecuteRequestedAsync(PlatformBindingExecuteInitialDelay);
+            return;
+        }
+
         if (!CanAcceptPlatformBindingCommandsCompleted(evt))
             return;
 
-        await PersistDomainEventAsync(evt);
+        var committed = evt.Clone();
+        committed.ReadinessDeadlineAtUtc = Timestamp.FromDateTimeOffset(
+            DateTimeOffset.UtcNow.Add(PlatformBindingReadinessBudget));
+        await PersistDomainEventAsync(committed);
         await SchedulePlatformBindingExecuteRequestedAsync(PlatformBindingExecuteInitialDelay);
     }
 
@@ -291,6 +373,23 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
     public async Task HandlePlatformBindingReadinessObservationTimedOut(
         StudioMemberPlatformBindingReadinessObservationTimedOut evt)
     {
+        if (CanRecoverMemberTerminalNotification(
+                evt.BindingRunId,
+                evt.PlatformBindingCommandId,
+                evt.ProtocolVersion,
+                evt.ExecutionAttempt))
+        {
+            await SendMemberTerminalNotificationAsync();
+            return;
+        }
+
+        if (IsRuntimeEnvelopeRedelivery()
+            && IsExactCommittedPlatformBindingReadinessObservationTimeout(evt))
+        {
+            await SchedulePlatformBindingWatchdogAsync();
+            return;
+        }
+
         if (!CanAcceptPlatformBindingReadinessResult(
                 evt.BindingRunId,
                 evt.PlatformBindingCommandId,
@@ -299,18 +398,47 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
             return;
 
         await PersistDomainEventAsync(evt);
+        if (HasPlatformReadinessDeadlineExpired(DateTimeOffset.UtcNow))
+        {
+            await FailPlatformReadinessTimeoutAsync();
+            return;
+        }
+
         await SchedulePlatformBindingWatchdogAsync();
     }
 
     [EventHandler(EndpointName = "completePlatformBinding")]
     public async Task HandlePlatformBindingExecutionSucceeded(StudioMemberPlatformBindingExecutionSucceeded evt)
     {
+        if (CanRecoverMemberTerminalNotification(
+                evt.BindingRunId,
+                evt.PlatformBindingCommandId,
+                evt.ProtocolVersion,
+                evt.ExecutionAttempt))
+        {
+            await SendMemberTerminalNotificationAsync();
+            return;
+        }
+
+        if (IsRuntimeEnvelopeRedelivery()
+            && IsExactCommittedPlatformBindingSuccess(evt))
+        {
+            await SendMemberTerminalNotificationAsync();
+            return;
+        }
+
         if (!CanAcceptPlatformBindingReadinessResult(
                 evt.BindingRunId,
                 evt.PlatformBindingCommandId,
                 evt.ProtocolVersion,
                 evt.ExecutionAttempt))
             return;
+
+        if (HasPlatformReadinessDeadlineExpired(DateTimeOffset.UtcNow))
+        {
+            await FailPlatformReadinessTimeoutAsync();
+            return;
+        }
 
         await PersistDomainEventAsync(evt);
         await SendMemberTerminalNotificationAsync();
@@ -319,6 +447,23 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
     [EventHandler(EndpointName = "failPlatformBinding", AllowSelfHandling = true)]
     public async Task HandlePlatformBindingExecutionFailed(StudioMemberPlatformBindingExecutionFailed evt)
     {
+        if (CanRecoverMemberTerminalNotification(
+                evt.BindingRunId,
+                evt.PlatformBindingCommandId,
+                evt.ProtocolVersion,
+                evt.ExecutionAttempt))
+        {
+            await SendMemberTerminalNotificationAsync();
+            return;
+        }
+
+        if (IsRuntimeEnvelopeRedelivery()
+            && IsExactCommittedPlatformBindingFailure(evt))
+        {
+            await SendMemberTerminalNotificationAsync();
+            return;
+        }
+
         if (!CanAcceptPlatformBindingFailure(evt))
             return;
 
@@ -326,13 +471,51 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
         await SendMemberTerminalNotificationAsync();
     }
 
+    [EventHandler(EndpointName = "terminateMemberBindingAuthority")]
+    public async Task HandleMemberBindingAuthorityTerminated(StudioMemberBindingAuthorityTerminated evt)
+    {
+        if (!HasCanonicalMemberAuthorityPublisher()
+            || !CanApplyMemberBindingAuthorityTermination(State, evt))
+        {
+            return;
+        }
+
+        if (IsSameMemberBindingAuthorityTermination(State, evt))
+        {
+            if (!IsRuntimeEnvelopeRedelivery())
+                return;
+        }
+        else
+        {
+            await PersistDomainEventAsync(evt);
+        }
+
+        await SendMemberTerminalNotificationAsync();
+    }
+
     [EventHandler(EndpointName = "acknowledgeMemberBindingTerminal", AllowSelfHandling = true)]
     public async Task HandleMemberBindingTerminalAcknowledged(StudioMemberBindingTerminalAcknowledged evt)
     {
-        if (!CanAcceptMemberTerminalAcknowledgement(evt.BindingRunId, evt.Status))
+        if (!HasCanonicalMemberAuthorityPublisher()
+            || !CanAcceptMemberTerminalAcknowledgement(evt.BindingRunId, evt.Status))
+        {
             return;
+        }
 
         await PersistDomainEventAsync(evt);
+    }
+
+    [EventHandler(
+        EndpointName = "memberTerminalNotificationWatchdog",
+        AllowSelfHandling = true,
+        OnlySelfHandling = true)]
+    public async Task HandleMemberTerminalNotificationWatchdogFired(
+        StudioMemberBindingTerminalNotificationWatchdogFired evt)
+    {
+        if (!CanAcceptMemberTerminalNotificationWatchdog(evt))
+            return;
+
+        await SendMemberTerminalNotificationAsync();
     }
 
     protected override StudioMemberBindingRunState TransitionState(
@@ -358,6 +541,9 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
             .On<StudioMemberPlatformBindingFailed>(ApplyLegacyPlatformBindingFailed)
             .On<StudioMemberPlatformBindingExecutionSucceeded>(ApplyPlatformBindingExecutionSucceeded)
             .On<StudioMemberPlatformBindingExecutionFailed>(ApplyPlatformBindingExecutionFailed)
+            .On<StudioMemberBindingAuthorityTerminated>(ApplyMemberBindingAuthorityTerminated)
+            .On<StudioMemberBindingTerminalNotificationAttemptStarted>(
+                ApplyMemberTerminalNotificationAttemptStarted)
             .On<StudioMemberBindingTerminalAcknowledged>(ApplyMemberBindingTerminalAcknowledged)
             .OrCurrent();
     }
@@ -445,6 +631,10 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
         ApplyLegacyPlatformExecutionFence(next);
         next.PlatformExecutionStageStartedAtUtc = null;
         next.PlatformBindingRecoverySnapshot = null;
+        next.PlatformReadinessDeadlineAtUtc = null;
+        next.LastPlatformReadinessStatus = StudioMemberPlatformBindingReadinessStatus.Unspecified;
+        next.MemberNotificationAttempt = 0;
+        next.MemberNotificationAttemptedAtUtc = null;
         next.PlatformBindingProtocolVersion = evt.ProtocolVersion;
         next.PlatformExecutionAttempt = evt.ExecutionAttempt;
         next.PlatformExecutionStage = StudioMemberPlatformBindingExecutionStage.AcceptancePending;
@@ -528,6 +718,9 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
         next.PlatformExecutionStage = StudioMemberPlatformBindingExecutionStage.ReadinessPending;
         ApplyLegacyPlatformExecutionFence(next);
         next.PlatformExecutionStageStartedAtUtc = null;
+        next.PlatformReadinessDeadlineAtUtc = evt.ReadinessDeadlineAtUtc?.Clone()
+            ?? BuildPlatformReadinessDeadline(state, evt.CompletedAtUtc);
+        next.LastPlatformReadinessStatus = StudioMemberPlatformBindingReadinessStatus.Unspecified;
         next.UpdatedAtUtc = evt.CompletedAtUtc;
         return next;
     }
@@ -622,6 +815,7 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
         next.PlatformExecutionInFlight = false;
         next.PlatformExecutionStartedAtUtc = null;
         next.PlatformExecutionStageStartedAtUtc = null;
+        next.LastPlatformReadinessStatus = evt.ReadinessStatus;
         next.UpdatedAtUtc = evt.TimedOutAtUtc;
         return next;
     }
@@ -681,6 +875,8 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
         next.PlatformExecutionStage = StudioMemberPlatformBindingExecutionStage.ReadinessPending;
         ApplyLegacyPlatformExecutionFence(next);
         next.PlatformExecutionStageStartedAtUtc = null;
+        next.LastPlatformReadinessStatus = evt.ReadinessStatus;
+        next.PlatformReadinessDeadlineAtUtc ??= BuildPlatformReadinessDeadline(state, evt.TimedOutAtUtc);
         next.UpdatedAtUtc = evt.TimedOutAtUtc;
         return next;
     }
@@ -706,6 +902,9 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
         next.PlatformExecutionStartedAtUtc = null;
         next.PlatformExecutionStageStartedAtUtc = null;
         next.PlatformBindingRecoverySnapshot = null;
+        next.LastPlatformReadinessStatus = StudioMemberPlatformBindingReadinessStatus.Ready;
+        next.MemberNotificationAttempt = 0;
+        next.MemberNotificationAttemptedAtUtc = null;
         next.UpdatedAtUtc = evt.CompletedAtUtc;
         return next;
     }
@@ -720,13 +919,54 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
         var next = state.Clone();
         next.Status = StudioMemberBindingRunStatus.MemberNotificationPending;
         next.Failure = evt.Failure?.Clone();
-        next.PlatformExecutionStage = StudioMemberPlatformBindingExecutionStage.Unspecified;
         next.PlatformExecutionInFlight = false;
         next.PlatformExecutionStartedAtUtc = null;
         next.PlatformExecutionStageStartedAtUtc = null;
         next.PlatformBindingRecoverySnapshot = null;
+        next.MemberNotificationAttempt = 0;
+        next.MemberNotificationAttemptedAtUtc = null;
         if (evt.Failure?.FailedAtUtc != null)
             next.UpdatedAtUtc = evt.Failure.FailedAtUtc;
+        return next;
+    }
+
+    private static StudioMemberBindingRunState ApplyMemberBindingAuthorityTerminated(
+        StudioMemberBindingRunState state,
+        StudioMemberBindingAuthorityTerminated evt)
+    {
+        if (!CanApplyMemberBindingAuthorityTermination(state, evt)
+            || IsSameMemberBindingAuthorityTermination(state, evt))
+        {
+            return state;
+        }
+
+        var next = state.Clone();
+        next.Status = StudioMemberBindingRunStatus.MemberNotificationPending;
+        next.Failure = evt.Failure.Clone();
+        next.PlatformResult = null;
+        next.PlatformExecutionInFlight = false;
+        next.PlatformExecutionStartedAtUtc = null;
+        next.PlatformExecutionStageStartedAtUtc = null;
+        next.PlatformBindingRecoverySnapshot = null;
+        next.UpdatedAtUtc = evt.Failure.FailedAtUtc.Clone();
+        return next;
+    }
+
+    private static StudioMemberBindingRunState ApplyMemberTerminalNotificationAttemptStarted(
+        StudioMemberBindingRunState state,
+        StudioMemberBindingTerminalNotificationAttemptStarted evt)
+    {
+        if (IsStale(state, evt.BindingRunId)
+            || state.Status != StudioMemberBindingRunStatus.MemberNotificationPending
+            || evt.NotificationAttempt != state.MemberNotificationAttempt + 1
+            || evt.AttemptedAtUtc == null)
+        {
+            return state;
+        }
+
+        var next = state.Clone();
+        next.MemberNotificationAttempt = evt.NotificationAttempt;
+        next.MemberNotificationAttemptedAtUtc = evt.AttemptedAtUtc.Clone();
         return next;
     }
 
@@ -760,6 +1000,38 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
             or StudioMemberBindingRunStatus.Failed
             or StudioMemberBindingRunStatus.Rejected;
 
+    private static bool CanApplyMemberBindingAuthorityTermination(
+        StudioMemberBindingRunState state,
+        StudioMemberBindingAuthorityTerminated evt) =>
+        !string.IsNullOrEmpty(state.BindingRunId)
+        && string.Equals(state.BindingRunId, evt.BindingRunId, StringComparison.Ordinal)
+        && string.Equals(state.ScopeId, evt.ScopeId, StringComparison.Ordinal)
+        && string.Equals(state.MemberId, evt.MemberId, StringComparison.Ordinal)
+        && evt.Failure != null
+        && string.Equals(evt.Failure.Code, MemberDeletedFailureCode, StringComparison.Ordinal)
+        && evt.Failure.FailedAtUtc != null
+        && !IsTerminal(state.Status);
+
+    private static bool IsSameMemberBindingAuthorityTermination(
+        StudioMemberBindingRunState state,
+        StudioMemberBindingAuthorityTerminated evt) =>
+        state.Status == StudioMemberBindingRunStatus.MemberNotificationPending
+        && state.PlatformResult == null
+        && state.Failure != null
+        && state.Failure.Equals(evt.Failure);
+
+    private bool HasCanonicalMemberAuthorityPublisher()
+    {
+        if (ActiveInboundEnvelope == null)
+            return true;
+
+        var publisherActorId = ActiveInboundEnvelope.Route?.PublisherActorId?.Trim() ?? string.Empty;
+        return string.Equals(
+            publisherActorId,
+            StudioMemberConventions.BuildActorId(State.ScopeId, State.MemberId),
+            StringComparison.Ordinal);
+    }
+
     private bool CanAcceptRunEvent(string bindingRunId) =>
         !string.IsNullOrEmpty(State.BindingRunId)
         && string.Equals(State.BindingRunId, bindingRunId, StringComparison.Ordinal)
@@ -769,6 +1041,22 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
         !string.IsNullOrEmpty(State.BindingRunId)
         && string.Equals(State.BindingRunId, bindingRunId, StringComparison.Ordinal)
         && State.Status == StudioMemberBindingRunStatus.AdmissionPending;
+
+    private bool IsExactCommittedAdmission(StudioMemberBindingAdmittedEvent evt) =>
+        State.Status == StudioMemberBindingRunStatus.Admitted
+        && State.Admitted != null
+        && string.Equals(State.BindingRunId, evt.BindingRunId, StringComparison.Ordinal)
+        && string.Equals(State.ScopeId, evt.ScopeId, StringComparison.Ordinal)
+        && string.Equals(State.MemberId, evt.MemberId, StringComparison.Ordinal)
+        && string.Equals(State.Admitted.ScopeId, evt.ScopeId, StringComparison.Ordinal)
+        && string.Equals(State.Admitted.MemberId, evt.MemberId, StringComparison.Ordinal)
+        && string.Equals(
+            State.Admitted.PublishedServiceId,
+            evt.PublishedServiceId,
+            StringComparison.Ordinal)
+        && State.Admitted.ImplementationKind == evt.ImplementationKind
+        && string.Equals(State.Admitted.DisplayName, evt.DisplayName, StringComparison.Ordinal)
+        && Equals(State.UpdatedAtUtc, evt.AdmittedAtUtc);
 
     private bool CanAcceptPlatformBindingStart(StudioMemberPlatformBindingExecutionStartRequested evt)
     {
@@ -804,6 +1092,18 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
             evt.ProtocolVersion,
             evt.ExecutionAttempt);
 
+    private bool IsExactCommittedPlatformBindingAcceptance(
+        StudioMemberPlatformBindingExecutionStartAccepted evt) =>
+        State.Status == StudioMemberBindingRunStatus.PlatformBindingPending
+        && State.PlatformExecutionStage == StudioMemberPlatformBindingExecutionStage.CommandPending
+        && HasSupportedPlatformBindingProtocol(State)
+        && HasMatchingPlatformFence(
+            State,
+            evt.PlatformBindingCommandId,
+            evt.ProtocolVersion,
+            evt.ExecutionAttempt)
+        && Equals(State.UpdatedAtUtc, evt.AcceptedAtUtc);
+
     private bool CanAcceptPlatformBindingExecuteRequested(StudioMemberPlatformBindingStageExecuteRequested evt)
     {
         if (!CanAcceptPlatformBindingFence(
@@ -827,6 +1127,20 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
         };
     }
 
+    private bool IsExactCommittedPlatformBindingStageStart(
+        StudioMemberPlatformBindingStageExecuteRequested evt) =>
+        State.Status == StudioMemberBindingRunStatus.PlatformBindingPending
+        && HasSupportedPlatformBindingProtocol(State)
+        && string.Equals(State.BindingRunId, evt.BindingRunId, StringComparison.Ordinal)
+        && HasMatchingPlatformProtocolAndCommand(
+            State,
+            evt.PlatformBindingCommandId,
+            evt.ProtocolVersion)
+        && (long)State.PlatformExecutionAttempt == (long)evt.ExpectedExecutionAttempt + 1
+        && State.PlatformExecutionStage is (
+            StudioMemberPlatformBindingExecutionStage.CommandInFlight
+            or StudioMemberPlatformBindingExecutionStage.ReadinessInFlight);
+
     private bool CanAcceptPlatformBindingWatchdog(StudioMemberPlatformBindingExecutionWatchdogFired evt) =>
         CanAcceptPlatformBindingFence(
             evt.BindingRunId,
@@ -842,6 +1156,72 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
             evt.ExecutionAttempt,
             StudioMemberPlatformBindingExecutionStage.CommandInFlight)
         && evt.RecoverySnapshot != null;
+
+    private bool IsExactCommittedPlatformBindingCommandsCompleted(
+        StudioMemberPlatformBindingCommandsCompleted evt) =>
+        evt.RecoverySnapshot != null
+        && State.Status == StudioMemberBindingRunStatus.PlatformBindingPending
+        && State.PlatformExecutionStage == StudioMemberPlatformBindingExecutionStage.ReadinessPending
+        && HasMatchingPlatformFence(
+            State,
+            evt.PlatformBindingCommandId,
+            evt.ProtocolVersion,
+            evt.ExecutionAttempt)
+        && Equals(State.PlatformBindingRecoverySnapshot, evt.RecoverySnapshot);
+
+    private bool IsExactCommittedPlatformBindingReadinessObservationTimeout(
+        StudioMemberPlatformBindingReadinessObservationTimedOut evt) =>
+        State.Status == StudioMemberBindingRunStatus.PlatformBindingPending
+        && State.PlatformExecutionStage == StudioMemberPlatformBindingExecutionStage.ReadinessPending
+        && HasMatchingPlatformFence(
+            State,
+            evt.PlatformBindingCommandId,
+            evt.ProtocolVersion,
+            evt.ExecutionAttempt)
+        && State.LastPlatformReadinessStatus == evt.ReadinessStatus
+        && Equals(State.UpdatedAtUtc, evt.TimedOutAtUtc);
+
+    private bool CanRecoverMemberTerminalNotification(
+        string bindingRunId,
+        string platformBindingCommandId,
+        int protocolVersion,
+        int executionAttempt) =>
+        IsRuntimeEnvelopeRedelivery()
+        && State.Status == StudioMemberBindingRunStatus.MemberNotificationPending
+        && string.Equals(State.BindingRunId, bindingRunId, StringComparison.Ordinal)
+        && HasMatchingPlatformFence(
+            State,
+            platformBindingCommandId,
+            protocolVersion,
+            executionAttempt);
+
+    private bool CanRecoverMemberTerminalNotificationForExecuteRequested(
+        StudioMemberPlatformBindingStageExecuteRequested evt)
+    {
+        if (!IsRuntimeEnvelopeRedelivery())
+            return false;
+
+        if (CanRecoverMemberTerminalNotification(
+                evt.BindingRunId,
+                evt.PlatformBindingCommandId,
+                evt.ProtocolVersion,
+                evt.ExpectedExecutionAttempt))
+        {
+            return true;
+        }
+
+        return State.Status == StudioMemberBindingRunStatus.MemberNotificationPending
+            && string.Equals(State.BindingRunId, evt.BindingRunId, StringComparison.Ordinal)
+            && HasMatchingPlatformProtocolAndCommand(
+                State,
+                evt.PlatformBindingCommandId,
+                evt.ProtocolVersion)
+            && (long)State.PlatformExecutionAttempt ==
+                (long)evt.ExpectedExecutionAttempt + 1;
+    }
+
+    private bool IsRuntimeEnvelopeRedelivery() =>
+        ActiveInboundEnvelope?.Runtime?.Retry?.Attempt > 0;
 
     private bool CanAcceptPlatformBindingReadinessResult(
         string bindingRunId,
@@ -889,6 +1269,52 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
         && (status == StudioMemberBindingRunStatus.Succeeded || status == StudioMemberBindingRunStatus.Failed)
         && ((status == StudioMemberBindingRunStatus.Succeeded && State.PlatformResult != null)
             || (status == StudioMemberBindingRunStatus.Failed && State.Failure != null));
+
+    private bool IsExactCommittedPlatformBindingSuccess(
+        StudioMemberPlatformBindingExecutionSucceeded evt) =>
+        State.Status == StudioMemberBindingRunStatus.MemberNotificationPending
+        && State.Failure == null
+        && State.PlatformResult != null
+        && string.Equals(State.BindingRunId, evt.BindingRunId, StringComparison.Ordinal)
+        && HasMatchingPlatformFence(
+            State,
+            evt.PlatformBindingCommandId,
+            evt.ProtocolVersion,
+            evt.ExecutionAttempt)
+        && State.PlatformResult.Equals(evt.Result)
+        && Equals(State.UpdatedAtUtc, evt.CompletedAtUtc);
+
+    private bool IsExactCommittedPlatformBindingFailure(
+        StudioMemberPlatformBindingExecutionFailed evt) =>
+        State.Status == StudioMemberBindingRunStatus.MemberNotificationPending
+        && State.PlatformResult == null
+        && State.Failure != null
+        && string.Equals(State.BindingRunId, evt.BindingRunId, StringComparison.Ordinal)
+        && HasMatchingPlatformFence(
+            State,
+            evt.PlatformBindingCommandId,
+            evt.ProtocolVersion,
+            evt.ExecutionAttempt)
+        && State.PlatformExecutionStage == evt.ExecutionStage
+        && State.Failure.Equals(evt.Failure);
+
+    private bool CanAcceptMemberTerminalNotificationWatchdog(
+        StudioMemberBindingTerminalNotificationWatchdogFired evt)
+    {
+        if (string.IsNullOrEmpty(State.BindingRunId)
+            || !string.Equals(State.BindingRunId, evt.BindingRunId, StringComparison.Ordinal)
+            || State.Status != StudioMemberBindingRunStatus.MemberNotificationPending
+            || evt.ExpectedNotificationAttempt <= 0)
+        {
+            return false;
+        }
+
+        // The watchdog is scheduled before its attempt-start event is committed.
+        // It can therefore observe either side of that commit boundary, but no
+        // older or further-future attempt.
+        var attemptDelta = (long)evt.ExpectedNotificationAttempt - State.MemberNotificationAttempt;
+        return attemptDelta is 0 or 1;
+    }
 
     private bool IsPlatformExecutionStale()
     {
@@ -1009,6 +1435,15 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
             return true;
         }
 
+        if (string.Equals(
+                evt.Failure?.Code,
+                PlatformBindingReadinessTimeoutFailureCode,
+                StringComparison.Ordinal))
+        {
+            return HasSupportedPlatformBindingProtocol(state)
+                && IsReadinessExecutionStage(state.PlatformExecutionStage);
+        }
+
         if (!HasSupportedPlatformBindingProtocol(state))
             return false;
 
@@ -1036,6 +1471,10 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
     private static bool HasSupportedPlatformBindingProtocol(StudioMemberBindingRunState state) =>
         state.PlatformBindingProtocolVersion == StudioMemberConventions.PlatformBindingProtocolVersion;
 
+    private static bool IsReadinessExecutionStage(StudioMemberPlatformBindingExecutionStage stage) =>
+        stage is StudioMemberPlatformBindingExecutionStage.ReadinessPending
+            or StudioMemberPlatformBindingExecutionStage.ReadinessInFlight;
+
     private static bool IsValidExecutionStageTransition(
         StudioMemberPlatformBindingExecutionStage current,
         StudioMemberPlatformBindingExecutionStage next) =>
@@ -1056,9 +1495,7 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
             StudioMemberBindingRunStatus.PlatformBindingPending =>
                 State.Admitted != null && !string.IsNullOrEmpty(State.PlatformBindingCommandId),
             StudioMemberBindingRunStatus.MemberNotificationPending =>
-                State.Admitted != null
-                && !string.IsNullOrEmpty(State.PlatformBindingCommandId)
-                && (State.PlatformResult != null || State.Failure != null),
+                State.PlatformResult != null || State.Failure != null,
             _ => false,
         };
 
@@ -1083,7 +1520,7 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
     }
 
     private Task ScheduleAdmissionWatchdogAsync(CancellationToken ct = default) =>
-        ScheduleSelfDurableTimeoutAsync(
+        ScheduleBindingRunRecoveryTimeoutAsync(
             BuildAdmissionWatchdogCallbackId(State.BindingRunId),
             AdmissionWatchdogDelay,
             new StudioMemberBindingAdmissionWatchdogFired
@@ -1092,10 +1529,12 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
             },
             ct: ct);
 
-    private Task SendPlatformBindingStartRequestedAsync(Timestamp? requestedAtUtc = null, CancellationToken ct = default)
+    private async Task SendPlatformBindingStartRequestedAsync(
+        Timestamp? requestedAtUtc = null,
+        CancellationToken ct = default)
     {
         if (State.Admitted == null)
-            return Task.CompletedTask;
+            return;
 
         var platformBindingCommandId = State.Status == StudioMemberBindingRunStatus.PlatformBindingPending
             ? State.PlatformBindingCommandId
@@ -1103,19 +1542,33 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
                 State.BindingRunId,
                 State.AttemptCount + 1);
 
-        return SendToAsync(
-            Id,
-            new StudioMemberPlatformBindingExecutionStartRequested
-            {
-                BindingRunId = State.BindingRunId,
-                PlatformBindingCommandId = platformBindingCommandId,
-                Request = State.Request.Clone(),
-                Admitted = State.Admitted.Clone(),
-                RequestedAtUtc = requestedAtUtc ?? State.UpdatedAtUtc ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
-                ExecutionAttempt = 0,
-            },
-            ct);
+        try
+        {
+            await SendToAsync(
+                Id,
+                new StudioMemberPlatformBindingExecutionStartRequested
+                {
+                    BindingRunId = State.BindingRunId,
+                    PlatformBindingCommandId = platformBindingCommandId,
+                    Request = State.Request.Clone(),
+                    Admitted = State.Admitted.Clone(),
+                    RequestedAtUtc = requestedAtUtc ?? State.UpdatedAtUtc
+                        ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                    ProtocolVersion = StudioMemberConventions.PlatformBindingProtocolVersion,
+                    ExecutionAttempt = 0,
+                },
+                ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            throw new StudioMemberBindingRunRecoveryPublicationPendingException(
+                "Committed admission still requires its platform-binding self continuation.",
+                exception);
+        }
     }
 
     private async Task SendPlatformBindingPendingAndExecuteAsync(
@@ -1147,6 +1600,13 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
         if (!HasSupportedPlatformBindingProtocol(State))
         {
             await FailCheckpointUnavailableAsync(ct);
+            return;
+        }
+
+        if (IsReadinessExecutionStage(State.PlatformExecutionStage)
+            && HasPlatformReadinessDeadlineExpired(DateTimeOffset.UtcNow))
+        {
+            await SendPlatformBindingWatchdogFiredAsync(ct);
             return;
         }
 
@@ -1182,7 +1642,7 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
         if (string.IsNullOrEmpty(State.PlatformBindingCommandId) || State.Admitted == null)
             return Task.CompletedTask;
 
-        return ScheduleSelfDurableTimeoutAsync(
+        return ScheduleBindingRunRecoveryTimeoutAsync(
             BuildPlatformBindingExecuteCallbackId(
                 State.BindingRunId,
                 State.PlatformBindingCommandId,
@@ -1210,6 +1670,40 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
                 ExpectedExecutionAttempt = State.PlatformExecutionAttempt,
             },
             ct);
+
+    private Task SendPlatformBindingWatchdogFiredAsync(CancellationToken ct = default) =>
+        SendToAsync(
+            Id,
+            new StudioMemberPlatformBindingExecutionWatchdogFired
+            {
+                BindingRunId = State.BindingRunId,
+                PlatformBindingCommandId = State.PlatformBindingCommandId,
+                ProtocolVersion = State.PlatformBindingProtocolVersion,
+                ExpectedExecutionAttempt = State.PlatformExecutionAttempt,
+            },
+            ct);
+
+    private async Task FailPlatformReadinessTimeoutAsync(
+        Timestamp? failedAtUtc = null,
+        CancellationToken ct = default)
+    {
+        await PersistDomainEventAsync(new StudioMemberPlatformBindingExecutionFailed
+        {
+            BindingRunId = State.BindingRunId,
+            PlatformBindingCommandId = State.PlatformBindingCommandId,
+            ProtocolVersion = State.PlatformBindingProtocolVersion,
+            ExecutionAttempt = State.PlatformExecutionAttempt,
+            ExecutionStage = State.PlatformExecutionStage,
+            Failure = new StudioMemberBindingFailure
+            {
+                Code = PlatformBindingReadinessTimeoutFailureCode,
+                Message = PlatformBindingReadinessTimeoutFailureMessage,
+                FailedAtUtc = failedAtUtc?.Clone()
+                    ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            },
+        }, ct);
+        await SendMemberTerminalNotificationAsync(ct);
+    }
 
     private async Task FailCheckpointUnavailableAsync(CancellationToken ct = default)
     {
@@ -1252,11 +1746,26 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
         await SendMemberTerminalNotificationAsync(ct);
     }
 
-    private Task SendMemberTerminalNotificationAsync(CancellationToken ct = default)
+    private async Task SendMemberTerminalNotificationAsync(CancellationToken ct = default)
     {
+        if (State.Status != StudioMemberBindingRunStatus.MemberNotificationPending
+            || (State.PlatformResult == null && State.Failure == null))
+        {
+            return;
+        }
+
+        var notificationAttempt = State.MemberNotificationAttempt + 1;
+        await ScheduleMemberTerminalNotificationWatchdogAsync(notificationAttempt, ct);
+        await PersistDomainEventAsync(new StudioMemberBindingTerminalNotificationAttemptStarted
+        {
+            BindingRunId = State.BindingRunId,
+            NotificationAttempt = notificationAttempt,
+            AttemptedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        }, ct);
+
         if (State.PlatformResult != null)
         {
-            return SendToAsync(
+            await SendToAsync(
                 StudioMemberConventions.BuildActorId(State.ScopeId, State.MemberId),
                 new StudioMemberBindingCompletedEvent
                 {
@@ -1271,11 +1780,12 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
                     CompletedAtUtc = State.UpdatedAtUtc ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
                 },
                 ct);
+            return;
         }
 
         if (State.Failure != null)
         {
-            return SendToAsync(
+            await SendToAsync(
                 StudioMemberConventions.BuildActorId(State.ScopeId, State.MemberId),
                 new StudioMemberBindingFailedEvent
                 {
@@ -1286,16 +1796,29 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
                 },
                 ct);
         }
-
-        return Task.CompletedTask;
     }
+
+    private Task ScheduleMemberTerminalNotificationWatchdogAsync(
+        int notificationAttempt,
+        CancellationToken ct = default) =>
+        ScheduleBindingRunRecoveryTimeoutAsync(
+            BuildMemberTerminalNotificationWatchdogCallbackId(
+                State.BindingRunId,
+                notificationAttempt),
+            MemberTerminalNotificationWatchdogDelay,
+            new StudioMemberBindingTerminalNotificationWatchdogFired
+            {
+                BindingRunId = State.BindingRunId,
+                ExpectedNotificationAttempt = notificationAttempt,
+            },
+            ct: ct);
 
     private Task SchedulePlatformBindingWatchdogAsync(CancellationToken ct = default)
     {
         if (string.IsNullOrEmpty(State.PlatformBindingCommandId) || State.Admitted == null)
             return Task.CompletedTask;
 
-        return ScheduleSelfDurableTimeoutAsync(
+        return ScheduleBindingRunRecoveryTimeoutAsync(
             BuildPlatformBindingWatchdogCallbackId(
                 State.BindingRunId,
                 State.PlatformBindingCommandId,
@@ -1310,6 +1833,71 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
                 ExpectedExecutionAttempt = State.PlatformExecutionAttempt,
             },
             ct: ct);
+    }
+
+    private async Task RunWithPlatformBindingWatchdogAsync(
+        Func<Task> operation,
+        CancellationToken ct)
+    {
+        Exception? operationFailure = null;
+        try
+        {
+            await operation();
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            operationFailure = exception;
+        }
+
+        try
+        {
+            await SchedulePlatformBindingWatchdogAsync(ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception scheduleFailure) when (operationFailure != null)
+        {
+            throw new StudioMemberBindingRunRecoverySchedulePendingException(
+                "Platform binding execution failed and its durable recovery watchdog could not be scheduled.",
+                new AggregateException(operationFailure, scheduleFailure));
+        }
+
+        if (operationFailure != null)
+            ExceptionDispatchInfo.Capture(operationFailure).Throw();
+    }
+
+    private async Task<RuntimeCallbackLease> ScheduleBindingRunRecoveryTimeoutAsync(
+        string callbackId,
+        TimeSpan dueTime,
+        IMessage evt,
+        EventEnvelopePublishOptions? options = null,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            return await ScheduleSelfDurableTimeoutAsync(
+                callbackId,
+                dueTime,
+                evt,
+                options,
+                ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            throw new StudioMemberBindingRunRecoverySchedulePendingException(
+                "Committed binding-run progress still requires a durable recovery callback.",
+                exception);
+        }
     }
 
     private static bool IsSameRequest(
@@ -1341,8 +1929,38 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
         int expectedExecutionAttempt) =>
         $"studio-member-binding-execute:v{protocolVersion}:a{expectedExecutionAttempt}:{bindingRunId}:{platformBindingCommandId}";
 
+    private static Timestamp BuildPlatformReadinessDeadline(
+        StudioMemberBindingRunState state,
+        Timestamp? eventAtUtc)
+    {
+        var committedAnchor = eventAtUtc
+            ?? state.PlatformExecutionStageStartedAtUtc
+            ?? state.UpdatedAtUtc
+            ?? state.AcceptedAtUtc;
+        if (committedAnchor == null)
+            return Timestamp.FromDateTimeOffset(DateTimeOffset.UnixEpoch);
+
+        return Timestamp.FromDateTimeOffset(
+            committedAnchor.ToDateTimeOffset().Add(PlatformBindingReadinessBudget));
+    }
+
+    private bool HasPlatformReadinessDeadlineExpired(DateTimeOffset observedAtUtc)
+    {
+        var deadline = State.PlatformReadinessDeadlineAtUtc?.ToDateTimeOffset()
+            ?? State.UpdatedAtUtc?.ToDateTimeOffset().Add(PlatformBindingReadinessBudget)
+            ?? State.PlatformExecutionStageStartedAtUtc?.ToDateTimeOffset().Add(PlatformBindingReadinessBudget)
+            ?? State.AcceptedAtUtc?.ToDateTimeOffset().Add(PlatformBindingReadinessBudget)
+            ?? DateTimeOffset.UnixEpoch;
+        return observedAtUtc >= deadline;
+    }
+
     private static string BuildAdmissionWatchdogCallbackId(string bindingRunId) =>
         $"studio-member-binding-admission-watchdog:{bindingRunId}";
+
+    private static string BuildMemberTerminalNotificationWatchdogCallbackId(
+        string bindingRunId,
+        int notificationAttempt) =>
+        $"studio-member-binding-terminal-notification-watchdog:a{notificationAttempt}:{bindingRunId}";
 
     private static string BuildPlatformBindingWatchdogCallbackId(
         string bindingRunId,

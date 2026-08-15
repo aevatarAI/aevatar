@@ -44,6 +44,8 @@ sequenceDiagram
 - readiness 只能在 command completion checkpoint committed 后启动。
 - checkpoint 之后的恢复只查询 readiness，不再次执行 `UpsertAsync`。
 - 每次 execution 使用 protocol version 与递增 attempt fencing，旧 callback 和旧 continuation 无副作用。
+- command checkpoint 由 actor 建立六分钟 readiness 总预算，到期后以稳定错误码终结，不能无限回到 pending。
+- member terminal notification 使用持久化 attempt 与 durable watchdog 恢复，发送丢失不会让 run 永久卡住。
 - 无法证明 command 是否完成的状态 fail closed，不猜测、不重放。
 - recovery snapshot 在进入 query port 前按 binding request 做完整 typed validation。
 
@@ -58,9 +60,11 @@ flowchart LR
     B -->|"attempt + 1; started committed"| C["COMMAND_IN_FLIGHT"]
     C -->|"commands completed + snapshot committed"| D["READINESS_PENDING"]
     D -->|"attempt + 1; started committed"| E["READINESS_IN_FLIGHT"]
-    E -->|"typed timeout committed"| D
+    E -->|"typed timeout; before deadline"| D
+    D -->|"actor deadline expired"| G["MEMBER_NOTIFICATION_PENDING"]
+    E -->|"actor deadline expired"| G
     E -->|"typed success committed"| F["MEMBER_NOTIFICATION_PENDING"]
-    A -->|"typed failure"| G["MEMBER_NOTIFICATION_PENDING"]
+    A -->|"typed failure"| G
     C -->|"typed failure"| G
     E -->|"typed failure"| G
 ```
@@ -70,10 +74,10 @@ flowchart LR
 | `ACCEPTANCE_PENDING` | `StartAsync` 取得 fenced accepted receipt | 重发 start request |
 | `COMMAND_PENDING` | 无 | 调度 command execution |
 | `COMMAND_IN_FLIGHT` | 恰好一次 `UpsertAsync` | fresh 时只恢复 watchdog；stale 时 fail closed |
-| `READINESS_PENDING` | 无 | 调度 readiness execution |
-| `READINESS_IN_FLIGHT` | 只读 readiness query | fresh 时只恢复 watchdog；stale 时新 attempt 重试 query |
+| `READINESS_PENDING` | 无 | deadline 前调度 readiness execution；到期后 fail closed |
+| `READINESS_IN_FLIGHT` | 只读 readiness query | deadline 前 fresh 时只恢复 watchdog、stale 时新 attempt 重试 query；到期后 fail closed |
 
-`StudioMemberPlatformBindingCommandsCompleted` 是两阶段边界。它携带 `StudioMemberPlatformBindingRecoverySnapshot`，只有 event-store commit 完成后 actor 才调度 readiness。终态成功或失败会清除 snapshot、started timestamp、typed stage 与 deprecated in-flight bit。
+`StudioMemberPlatformBindingCommandsCompleted` 是两阶段边界。它携带 `StudioMemberPlatformBindingRecoverySnapshot`，只有 event-store commit 完成后 actor 才调度 readiness。成功和失败都会清除 snapshot、stage started timestamp 与 deprecated in-flight bit。成功把 typed stage 置为 `UNSPECIFIED` 并记录 `READY`；失败保留失败发生时的 typed stage、execution attempt 与最后一次 readiness status，供 read model 和 API 诊断。
 
 ## 4. Attempt fencing
 
@@ -89,6 +93,32 @@ flowchart LR
 readiness stale recovery 从 attempt `N` 提交新的 `StudioMemberPlatformBindingStageStarted(N+1)` 后才执行 query。因此 attempt `N` 的 timeout、success 或 failure 即使晚到，也不能覆盖 attempt `N+1` 的状态。
 
 command stage 不做同样的重试：`COMMAND_IN_FLIGHT` stale 表示系统无法从 committed state 证明 `UpsertAsync` 是否已经完成，必须以 `STUDIO_MEMBER_PLATFORM_BINDING_CHECKPOINT_UNAVAILABLE` 结束。重复执行 command 会把不确定性扩散到 platform write side。
+
+### 4.1 Actor-owned readiness deadline
+
+actor 接收并验证 `StudioMemberPlatformBindingCommandsCompleted` 后，以自己的当前时间建立 `UtcNow + 6 分钟` 的 `platform_readiness_deadline_at_utc`。入站 `completed_at_utc` 和 `readiness_deadline_at_utc` 都不能延长或缩短 live run 的预算；reducer 只为没有该字段的历史 event 保留确定性的 replay fallback，依次使用 event timestamp、committed stage timestamp、committed `updated_at_utc` 和 committed `accepted_at_utc`。这些时间全部缺失时写入 Unix epoch deadline，使恢复确定性 fail closed；reducer 不读取 wall clock。旧 snapshot 的 live recovery 同样只读取 committed `updated_at_utc`、stage timestamp 和 `accepted_at_utc`，全部缺失时把 deadline 解析为 Unix epoch，不会继续创建无界 readiness attempt。
+
+readiness execute、watchdog、timeout continuation 和 success continuation 都在当前 attempt fence 下检查该 deadline。deadline 后到达的 success 即使携带更早的 `completed_at_utc` 也不能抢先提交成功；actor 统一提交 `STUDIO_MEMBER_PLATFORM_BINDING_READINESS_TIMEOUT`。activation 发现已过期时发送带当前 attempt 的 self watchdog，由普通 handler 提交失败，不在 lifecycle hook 内直接推进状态。
+
+### 4.2 Terminal notification recovery 与可观测性
+
+platform outcome committed 后先进入 `MEMBER_NOTIFICATION_PENDING`。每次通知前 actor 先为 attempt `N+1` 调度 30 秒 durable watchdog，再提交 `StudioMemberBindingTerminalNotificationAttemptStarted(N+1)`，最后发送 completed/failed notification。watchdog 只接受 scheduled attempt 与 committed `member_notification_attempt` 差值为 `0` 或 `1`：差值 `1` 恢复 schedule 成功但 commit 尚未发生的窗口，差值 `0` 恢复 commit 成功但 send 未完成的窗口；更旧或更远期的 callback 无副作用。若 platform outcome 已提交、首次 watchdog schedule 失败，runtime 对完全相同 success/failure outcome 的重投会验证 command、protocol、attempt、result/failure 和完成时间，再重新进入通知；非精确或已被 member authority 覆盖的 outcome 仍无副作用。该 watchdog handler 同时声明 `AllowSelfHandling` 与 `OnlySelfHandling`，外部 direct envelope 不能触发重发。
+
+member 删除 active binding 时，在同一 commit 中写入 `StudioMemberBindingFailedEvent(STUDIO_MEMBER_DELETED)` 与 tombstone，再向 binding-run 发送 typed `StudioMemberBindingAuthorityTerminated`。该 continuation 的 durable intent 来自 member 已提交的 binding failure state：delete commit 后、send 前崩溃时，同一 delete request 或 member activation 都会从 tombstone 重建并重发 continuation，不新增 domain event；因此恢复不依赖 transport 必然重投原 delete envelope。普通 tombstone replay 仍无副作用。
+
+binding-run 只接受 binding run、scope、member、失败码和失败时间都匹配，且真实 envelope publisher 是 canonical member actor 的 termination。它持久化 member authority 的终止事实，进入 `MEMBER_NOTIFICATION_PENDING`，清除未 ACK 的 platform result、in-flight timestamp 与 recovery snapshot，同时保留 platform stage/attempt/readiness 和现有 notification attempt 诊断。activation 恢复该状态只依赖 committed `platform_result` 或 `failure`，不要求 admission snapshot 或 platform command ID，因此 admission pending/admitted 阶段发生删除也能恢复通知。若 platform success/failure 已先进入通知阶段，termination 仍以 member authority 为准覆盖它；若 termination 先到，迟到 platform outcome 因状态 fence 无副作用。同一 termination replay 不重复持久化，但会推进通知到 `N+1`，使旧 watchdog 失效。deleted member 仅对与 authoritative deletion failure 完全一致的 failed notification 返回 ACK；旧 success 或不匹配的旧 failure 会重发 termination，避免 termination 首次发送失败时由 status-only ACK 抢先终结 run。binding-run 最终进入 `FAILED` 后，遗留 watchdog 不再发送。termination 与 terminal ACK 的真实 envelope 都必须来自 canonical member actor；foreign ACK 不能提前终止 watchdog。
+
+binding-run read model 和查询/API 暴露 `platformExecutionStage`、`platformExecutionAttempt` 与 `lastReadinessStatus`。失败终态保留这些诊断字段，因此调用方可区分 command、readiness 和具体 activation 阶段，而不需要解析脱敏错误文案；成功终态的 stage 为 `UNSPECIFIED`，`lastReadinessStatus` 为 `READY`。
+
+### 4.3 Deployment activation 与 workflow authority
+
+`ServiceDeploymentManagerGAgent` 先提交 pending activation，再注册 durable retry callback。callback scheduler 是唤醒机制，不是权威状态；pending commit 后若 scheduler 调用失败，除调用方已经取消的 `OperationCanceledException` 外，actor 抛出实现 `IRuntimeEnvelopeRetryableException` 的 `ServiceDeploymentActivationRetrySchedulePendingException`，要求 runtime 重投同一 envelope。重投使用 committed activation attempt、operation ID 和 phase 恢复，不依赖进程内标记。
+
+serving target ACK 的成功边界由 deployment manager 的 inbox 观察顺序决定。只有 manager 在 actor-owned deadline 之前处理到 canonical ACK 才能提交成功；恰好 deadline 或 deadline 之后均由 timeout fence 获胜。ACK 携带的 `AppliedAt` 来自另一执行节点，只保留为诊断字段，不能用更早的时间绕过 manager deadline。
+
+workflow runtime provisioning 允许 projection lag 导致重复派发 bind，但 `WorkflowGAgent` 是定义 authority。每次 bind 仍先完成 YAML、inline workflow、execution mode、identity 和 capability admission plan 的完整校验，再用同一个 reducer 计算 canonical next state；将候选版本恢复为当前版本后，若 protobuf state 完全相等则直接返回，不追加 `BindWorkflowDefinitionEvent`。因此 bind 已提交但调用方失败、进程重启或 read model 持续滞后时，相同 activation operation 只产生一个 authoritative bind event，不需要 singleton 或进程内幂等字典。
+
+activation checkpoint reducer 不读取 wall clock。缺失 optional timestamp 时，依次使用事件内已提交时间、现有 pending record 的已提交时间；链路仍为空时使用 Unix epoch。相同 event stream 在不同进程和不同时间重放必须得到逐字节相同的 `ServiceDeploymentState`。
 
 ## 5. Recovery snapshot 契约
 
@@ -176,7 +206,10 @@ legacy compatibility fence 只保证旧 reader 不重放 protocol v1 command，�
 | command/upsert 或 command result mapping 失败 | `STUDIO_MEMBER_PLATFORM_BINDING_FAILED` | 否 |
 | recovery snapshot 不可信 | `STUDIO_MEMBER_PLATFORM_BINDING_RECOVERY_SNAPSHOT_INVALID` | 否 |
 | readiness query 抛错 | `STUDIO_MEMBER_PLATFORM_BINDING_READINESS_FAILED` | 否 |
-| readiness 有界超时 | committed timeout，回到 `READINESS_PENDING` | 否，只重试 query |
+| 单次 readiness observation 超时且总预算未到 | committed timeout，回到 `READINESS_PENDING` | 否，只重试 query |
+| actor-owned readiness 总预算到期 | `STUDIO_MEMBER_PLATFORM_BINDING_READINESS_TIMEOUT` | 否 |
+| activation admission rejected/evaluation failed | `STUDIO_MEMBER_PLATFORM_BINDING_ACTIVATION_ADMISSION_REJECTED` / `STUDIO_MEMBER_PLATFORM_BINDING_ACTIVATION_ADMISSION_EVALUATION_FAILED` | 否 |
+| runtime activation/serving delivery/dependency failure | `STUDIO_MEMBER_PLATFORM_BINDING_RUNTIME_ACTIVATION_FAILED` / `STUDIO_MEMBER_PLATFORM_BINDING_SERVING_TARGET_DELIVERY_FAILED` / `STUDIO_MEMBER_PLATFORM_BINDING_ACTIVATION_DEPENDENCY_UNAVAILABLE` | 否 |
 | command in-flight stale 或 legacy checkpoint 缺失 | `STUDIO_MEMBER_PLATFORM_BINDING_CHECKPOINT_UNAVAILABLE` | 否 |
 | continuation dispatch 失败 | 记录一次错误，由 committed actor stage + watchdog 恢复 | 否 |
 
@@ -190,7 +223,14 @@ command service 对每次 execution 最多派发一个 typed outcome。若 outco
 - duplicate execute 只调用一次 port，stale execute/watchdog/continuation 无副作用。
 - command-in-flight stale、legacy protocol `0`、future protocol 与当前协议非法 stage 均 fail closed，且 failure 自身能在相同 fence 下提交。
 - readiness retry 递增 attempt，旧 attempt 的 timeout/success/failure 均被 fencing。
-- terminal transition 清除 snapshot、typed stage、timestamp 与 deprecated bit。
+- actor 接收 command checkpoint 时建立六分钟 deadline，不信任伪造的远期 completion/deadline；deadline 后 timeout、watchdog、execute 和迟到 success 均产生稳定 timeout failure。
+- activation 恢复的旧 attempt watchdog 在新 attempt 开始后无副作用。
+- terminal transition 清除 snapshot、stage timestamp 与 deprecated bit；failure 保留 typed stage、attempt 和 last readiness，success 记录 `READY` 并把 stage 置为 `UNSPECIFIED`。
+- member notification 先调度 attempt `N+1` watchdog、再提交 attempt、最后发送；callback 覆盖 schedule→commit 与 commit→send 两个 crash window，exact terminal outcome 重投覆盖 outcome commit→schedule failure，外部 envelope 被 self-only gate 拒绝，ACK 后旧 watchdog 无副作用。
+- member delete 先原子提交 active binding 的 typed failure 与 tombstone，再发送可由 delete replay 或 activation 从 tombstone 重建的 typed authority termination；binding-run 在 admission pending/admitted/platform pending 任一阶段都能从 committed failure 恢复，以删除失败覆盖未 ACK 的 platform outcome，拒绝 foreign/stale continuation、foreign ACK 与迟到 platform outcome；termination 首次发送失败后，deleted member 对旧 success/failure 均重发 termination，只对 exact deletion failure ACK，并在 canonical ACK 后停止 watchdog。
+- legacy deadline fallback 只读取 event/committed state timestamp；时间全部缺失时 reducer 和 live recovery 都使用 Unix epoch，并对相同输入 replay 出相同 bytes。
+- read model/query/API 投影 `platformExecutionStage`、`platformExecutionAttempt`、`lastReadinessStatus`。
+- DeploymentManager activation failure 4-8 分别映射为 admission rejected、admission evaluation failed、runtime activation failed、serving target delivery failed 与 activation dependency unavailable，不回退为笼统错误。
 - workflow/script/GAgent snapshot identity、revision、actor 与 endpoint 契约精确验证。
 - durable workflow owner 直接复用 committed admission plan，不重建 caller credentials。
 - command 与 readiness 的 success/failure continuation dispatch failure 均只尝试一个 outcome。
