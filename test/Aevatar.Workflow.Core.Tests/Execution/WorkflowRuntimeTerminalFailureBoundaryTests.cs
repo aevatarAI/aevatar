@@ -358,6 +358,296 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
             .CompletionTombstones.Should().ContainSingle();
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Bridge_ForEachToolCalls_ShouldTopUpAfterFirstChildCompletion(bool recreateForEachBeforeCompletion)
+    {
+        const int expectedConcurrency = 10;
+        const int totalItems = expectedConcurrency + 1;
+        const string runId = "run-foreach-tool-top-up";
+        const string parentStepId = "foreach-tools";
+        var tool = new OverlappingWorkflowTool("blocking_tool", expectedConcurrency);
+        var host = new RecordingStateHost { RunId = runId };
+        var toolCallModule = new ToolCallModule(
+            [new SingleWorkflowToolSource(tool)],
+            NullLogger<ToolCallModule>.Instance);
+        var bridge = new WorkflowExecutionBridgeModule(
+            [new ForEachModule(), toolCallModule],
+            host);
+        var ctx = new RecordingEventHandlerContext();
+
+        await bridge.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                RunId = runId,
+                StepId = parentStepId,
+                StepType = "foreach",
+                ExecutionId = "foreach-exec-1",
+                Input = string.Join("\n---\n", Enumerable.Range(0, totalItems).Select(static i => $"item-{i}")),
+                Parameters =
+                {
+                    ["sub_step_type"] = "tool_call",
+                    ["sub_param_tool"] = tool.Name,
+                    ["min_concurrent_workers"] = expectedConcurrency.ToString(),
+                    ["max_concurrent_workers"] = expectedConcurrency.ToString(),
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var childRequests = ctx.Published
+            .Select(static publication => publication.Event)
+            .Where(static payload => payload.Is(StepRequestEvent.Descriptor))
+            .Select(static payload => payload.Unpack<StepRequestEvent>())
+            .ToArray();
+        childRequests.Should().HaveCount(expectedConcurrency);
+        ctx.Published.Clear();
+
+        foreach (var child in childRequests)
+            await bridge.HandleAsync(Envelope(child), ctx, CancellationToken.None);
+
+        await tool.AllExpectedExecutionsEntered.WaitAsync(TimeSpan.FromSeconds(5));
+        tool.ReleaseExecution(1);
+
+        var attemptPublication = await ctx.WaitForPublishedAsync(static publication =>
+            publication.Event.Is(WorkflowToolCallAttemptCompletedEvent.Descriptor));
+        var attemptCompletion = attemptPublication.Event.Unpack<WorkflowToolCallAttemptCompletedEvent>();
+        var attemptEnvelope = Envelope(attemptCompletion);
+        attemptEnvelope.Route = EnvelopeRouteSemantics.CreateTopologyPublication(ctx.AgentId, TopologyAudience.Self);
+        attemptEnvelope.Runtime = new EnvelopeRuntime
+        {
+            DeliveryIdentity = new DeliveryIdentity
+            {
+                OperationId = attemptPublication.Options?.Delivery?.OperationId ?? string.Empty,
+            },
+        };
+        await bridge.HandleAsync(attemptEnvelope, ctx, CancellationToken.None);
+
+        var childCompletion = (await ctx.WaitForPublishedAsync(candidate =>
+                candidate.Event.Is(StepCompletedEvent.Descriptor) &&
+                string.Equals(
+                    candidate.Event.Unpack<StepCompletedEvent>().StepId,
+                    attemptCompletion.StepId,
+                    StringComparison.Ordinal)))
+            .Event.Unpack<StepCompletedEvent>();
+
+        var completionBridge = recreateForEachBeforeCompletion
+            ? new WorkflowExecutionBridgeModule([new ForEachModule(), toolCallModule], host)
+            : bridge;
+        await completionBridge.HandleAsync(Envelope(childCompletion), ctx, CancellationToken.None);
+
+        ctx.Published
+            .Select(static publication => publication.Event)
+            .Where(static payload => payload.Is(StepRequestEvent.Descriptor))
+            .Select(static payload => payload.Unpack<StepRequestEvent>())
+            .Should()
+            .ContainSingle(request => request.Input == "item-10");
+
+        tool.ReleaseAll();
+    }
+
+    [Theory]
+    [InlineData("foreach-parent_item_0")]
+    [InlineData("foreach-parent_execution_0123456789abcdef_item_42")]
+    public async Task Kernel_ShouldNotCheckpointDirectForEachChildCompletion(string childStepId)
+    {
+        var workflow = new WorkflowDefinition
+        {
+            Name = "foreach-workflow",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition { Id = "foreach-parent", Type = "for_each" },
+            ],
+        };
+        var host = new RecordingStateHost { RunId = "run-foreach" };
+        var kernel = new WorkflowExecutionKernel(workflow, host);
+        var ctx = new RecordingEventHandlerContext();
+
+        await kernel.HandleAsync(
+            Envelope(new StartWorkflowEvent
+            {
+                RunId = "run-foreach",
+                WorkflowName = workflow.Name,
+                Input = "item",
+            }),
+            ctx,
+            CancellationToken.None);
+        var saveAttemptsBeforeCompletion = host.SaveAttempts;
+
+        await kernel.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                RunId = "run-foreach",
+                StepId = childStepId,
+                Success = true,
+                Output = "child-output",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        host.SaveAttempts.Should().Be(saveAttemptsBeforeCompletion);
+        var kernelState = host.States[WorkflowExecutionKernel.ModuleStateKey]
+            .Unpack<WorkflowExecutionKernelState>();
+        kernelState.CurrentStepId.Should().Be("foreach-parent");
+        kernelState.Variables.Should().NotContainKey(childStepId);
+    }
+
+    [Theory]
+    [InlineData("foreach", "foreach-parent_item_0_nested")]
+    [InlineData("foreach", "foreach-parent_item_00")]
+    [InlineData("foreach", "foreach-parent_execution_0123456789abcde_item_0")]
+    [InlineData("foreach", "other-parent_item_0")]
+    [InlineData("notify", "foreach-parent_item_0")]
+    public async Task Kernel_ShouldPreserveUnknownCompletionCheckpoint_WhenItIsNotCurrentForEachDirectChild(
+        string currentStepType,
+        string childStepId)
+    {
+        var workflow = new WorkflowDefinition
+        {
+            Name = "internal-completion-workflow",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition { Id = "foreach-parent", Type = currentStepType },
+            ],
+        };
+        var host = new RecordingStateHost { RunId = "run-internal" };
+        var kernel = new WorkflowExecutionKernel(workflow, host);
+        var ctx = new RecordingEventHandlerContext();
+
+        await kernel.HandleAsync(
+            Envelope(new StartWorkflowEvent
+            {
+                RunId = "run-internal",
+                WorkflowName = workflow.Name,
+                Input = "input",
+            }),
+            ctx,
+            CancellationToken.None);
+        var saveAttemptsBeforeCompletion = host.SaveAttempts;
+
+        await kernel.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                RunId = "run-internal",
+                StepId = childStepId,
+                Success = true,
+                Output = "internal-output",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        host.SaveAttempts.Should().Be(saveAttemptsBeforeCompletion + 1);
+        host.States[WorkflowExecutionKernel.ModuleStateKey]
+            .Unpack<WorkflowExecutionKernelState>()
+            .Variables.Should().Contain(childStepId, "internal-output");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task KernelAndBridge_ForEachDirectChildren_ShouldRecoverAndCheckpointOnlyMergedParent(
+        bool recreateForEachAfterFirstCompletion)
+    {
+        const string runId = "run-foreach-kernel-checkpoints";
+        const string parentStepId = "foreach-parent";
+        var workflow = new WorkflowDefinition
+        {
+            Name = "foreach-kernel-checkpoints",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = parentStepId,
+                    Type = "foreach",
+                    Next = "done",
+                    Parameters =
+                    {
+                        ["sub_step_type"] = "notify",
+                        ["min_concurrent_workers"] = "3",
+                        ["max_concurrent_workers"] = "3",
+                    },
+                },
+                new StepDefinition { Id = "done", Type = "notify" },
+            ],
+        };
+        var host = new RecordingStateHost { RunId = runId };
+        var kernel = new WorkflowExecutionKernel(workflow, host);
+        var foreachBridge = new WorkflowExecutionBridgeModule([new ForEachModule()], host);
+        var ctx = new RecordingEventHandlerContext();
+
+        await kernel.HandleAsync(
+            Envelope(new StartWorkflowEvent
+            {
+                RunId = runId,
+                WorkflowName = workflow.Name,
+                Input = "item-0\n---\nitem-1\n---\nitem-2",
+            }),
+            ctx,
+            CancellationToken.None);
+        var parentRequest = ctx.Published
+            .Select(static publication => publication.Event)
+            .Where(static payload => payload.Is(StepRequestEvent.Descriptor))
+            .Select(static payload => payload.Unpack<StepRequestEvent>())
+            .Should().ContainSingle().Subject;
+        ctx.Published.Clear();
+
+        await foreachBridge.HandleAsync(Envelope(parentRequest), ctx, CancellationToken.None);
+        var childRequests = ctx.Published
+            .Select(static publication => publication.Event)
+            .Where(static payload => payload.Is(StepRequestEvent.Descriptor))
+            .Select(static payload => payload.Unpack<StepRequestEvent>())
+            .OrderBy(static request => request.Input, StringComparer.Ordinal)
+            .ToArray();
+        childRequests.Should().HaveCount(3);
+        ctx.Published.Clear();
+
+        for (var i = 0; i < childRequests.Length; i++)
+        {
+            var child = childRequests[i];
+            var childCompletion = new StepCompletedEvent
+            {
+                RunId = runId,
+                StepId = child.StepId,
+                ExecutionId = child.ExecutionId,
+                Success = true,
+                Output = $"output-{i}",
+            };
+            var saveAttemptsBeforeKernel = host.SaveAttempts;
+
+            await kernel.HandleAsync(Envelope(childCompletion), ctx, CancellationToken.None);
+
+            host.SaveAttempts.Should().Be(saveAttemptsBeforeKernel);
+            await foreachBridge.HandleAsync(Envelope(childCompletion), ctx, CancellationToken.None);
+            if (recreateForEachAfterFirstCompletion && i == 0)
+                foreachBridge = new WorkflowExecutionBridgeModule([new ForEachModule()], host);
+        }
+
+        var parentCompletion = ctx.Published
+            .Select(static publication => publication.Event)
+            .Where(static payload => payload.Is(StepCompletedEvent.Descriptor))
+            .Select(static payload => payload.Unpack<StepCompletedEvent>())
+            .Should().ContainSingle(completion => completion.StepId == parentStepId)
+            .Subject;
+        parentCompletion.Success.Should().BeTrue();
+        parentCompletion.Output.Should().Be("output-0\n---\noutput-1\n---\noutput-2");
+        host.States[ForEachModule.ModuleStateKey]
+            .Unpack<ForEachModuleState>()
+            .CompletionTombstones.Should().ContainSingle();
+
+        var saveAttemptsBeforeParentCompletion = host.SaveAttempts;
+        await kernel.HandleAsync(Envelope(parentCompletion), ctx, CancellationToken.None);
+
+        host.SaveAttempts.Should().BeGreaterThan(saveAttemptsBeforeParentCompletion);
+        var kernelState = host.States[WorkflowExecutionKernel.ModuleStateKey]
+            .Unpack<WorkflowExecutionKernelState>();
+        kernelState.CurrentStepId.Should().Be("done");
+        kernelState.Variables[parentStepId].Should().Be(parentCompletion.Output);
+    }
+
     [Fact]
     public async Task Bridge_ShouldLetActorOwnedRetryDrainPersistedToolCompletionWithoutUncertainOutcome()
     {
@@ -1446,6 +1736,7 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
     private sealed class OverlappingWorkflowTool(string name, int expectedExecutions) : IWorkflowTool
     {
         private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<int, TaskCompletionSource> _executionReleases = new();
         private readonly TaskCompletionSource _allExpectedExecutionsEntered =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _activeExecutions;
@@ -1473,7 +1764,10 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
 
             try
             {
-                await _release.Task.WaitAsync(ct);
+                var executionRelease = _executionReleases.GetOrAdd(
+                    executeCalls,
+                    static _ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+                await Task.WhenAny(_release.Task, executionRelease.Task).WaitAsync(ct);
                 return WorkflowToolExecutionResult.Success("{}");
             }
             finally
@@ -1483,6 +1777,12 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
         }
 
         public void ReleaseAll() => _release.TrySetResult();
+
+        public void ReleaseExecution(int executeCall) =>
+            _executionReleases.GetOrAdd(
+                executeCall,
+                static _ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously))
+                .TrySetResult();
 
         private void UpdateMaxActive(int candidate)
         {

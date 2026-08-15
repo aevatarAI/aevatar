@@ -354,6 +354,53 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
         return $"{parentStepId}_execution_{attemptHash}_item_{itemIndex}";
     }
 
+    internal static bool IsDirectChildStepId(string parentStepId, string childStepId)
+    {
+        if (string.IsNullOrWhiteSpace(parentStepId) || string.IsNullOrWhiteSpace(childStepId) ||
+            !childStepId.StartsWith(parentStepId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var suffix = childStepId[parentStepId.Length..];
+        if (IsDirectItemSuffix(suffix))
+            return true;
+
+        const string executionMarker = "_execution_";
+        const int attemptHashLength = 16;
+        if (!suffix.StartsWith(executionMarker, StringComparison.Ordinal) ||
+            suffix.Length <= executionMarker.Length + attemptHashLength)
+        {
+            return false;
+        }
+
+        var attemptHash = suffix.AsSpan(executionMarker.Length, attemptHashLength);
+        foreach (var value in attemptHash)
+        {
+            if (value is not (>= '0' and <= '9') and not (>= 'a' and <= 'f'))
+                return false;
+        }
+
+        return IsDirectItemSuffix(suffix[(executionMarker.Length + attemptHashLength)..]);
+    }
+
+    private static bool IsDirectItemSuffix(string suffix)
+    {
+        const string itemMarker = "_item_";
+        if (!suffix.StartsWith(itemMarker, StringComparison.Ordinal))
+            return false;
+
+        var itemIndexText = suffix.AsSpan(itemMarker.Length);
+        return itemIndexText.Length > 0 &&
+               (itemIndexText.Length == 1 || itemIndexText[0] != '0') &&
+               int.TryParse(
+                   itemIndexText,
+                   System.Globalization.NumberStyles.None,
+                   System.Globalization.CultureInfo.InvariantCulture,
+                   out var itemIndex) &&
+               itemIndex >= 0;
+    }
+
     private static string? TryGetParentFromDirectItemStepId(string stepId)
     {
         var marker = "_item_";

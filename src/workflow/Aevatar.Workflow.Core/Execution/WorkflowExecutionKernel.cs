@@ -6,6 +6,7 @@ using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
 using Aevatar.Workflow.Core.Expressions;
+using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Core.Primitives;
 using Microsoft.Extensions.Logging;
 
@@ -304,6 +305,15 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         var current = _workflow.GetStep(evt.StepId);
         if (current == null)
         {
+            if (IsCurrentForEachDirectChildCompletion(state, evt.StepId))
+            {
+                ctx.Logger.LogDebug(
+                    "workflow_loop: ignore foreach child completion step={StepId} parent={ParentStepId}",
+                    evt.StepId,
+                    state.CurrentStepId);
+                return;
+            }
+
             ctx.Logger.LogDebug("workflow_loop: ignore internal completion step={StepId}", evt.StepId);
             if (!string.IsNullOrWhiteSpace(evt.StepId))
             {
@@ -544,6 +554,22 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 evt,
                 CancellationToken.None);
         }
+    }
+
+    private bool IsCurrentForEachDirectChildCompletion(
+        WorkflowExecutionKernelState state,
+        string? childStepId)
+    {
+        if (string.IsNullOrWhiteSpace(childStepId) || string.IsNullOrWhiteSpace(state.CurrentStepId))
+            return false;
+
+        var currentStep = _workflow.GetStep(state.CurrentStepId);
+        return currentStep != null &&
+               string.Equals(
+                   WorkflowPrimitiveCatalog.ToCanonicalType(currentStep.Type),
+                   "foreach",
+                   StringComparison.Ordinal) &&
+               ForEachModule.IsDirectChildStepId(currentStep.Id, childStepId);
     }
 
     private async Task HandleCompensationRequestAsync(
