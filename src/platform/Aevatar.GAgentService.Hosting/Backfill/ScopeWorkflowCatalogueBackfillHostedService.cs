@@ -14,7 +14,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgentService.Hosting.Backfill;
 
-internal sealed class ScopeWorkflowCatalogueBackfillHostedService : IHostedService
+internal sealed class ScopeWorkflowCatalogueBackfillHostedService : BackgroundService
 {
     private const int SourceReadTake = 10_000;
 
@@ -53,33 +53,40 @@ internal sealed class ScopeWorkflowCatalogueBackfillHostedService : IHostedServi
         _logger = logger;
     }
 
-    public async Task StartAsync(CancellationToken cancellationToken)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        await Task.Yield();
+
+        await RunBackfillOnceAsync(stoppingToken);
+    }
+
+    internal async Task RunBackfillOnceAsync(CancellationToken cancellationToken)
     {
         // The backfill is convergence acceleration, not a boot invariant: the
         // event-driven projectors keep the catalogue converging regardless,
         // and a pod restart re-runs the backfill. It must therefore never
-        // abort host startup — during a rolling upgrade the first new-image
+        // fault the background service — during a rolling upgrade the first new-image
         // pod can hit actors an old-image silo cannot resolve
         // (UnknownAgentKindException, which additionally has no Orleans
-        // codec), and failing StartAsync here crash-loops the rollout.
+        // codec), and propagating that failure would stop the host.
         try
         {
-            await RunBackfillAsync(cancellationToken);
+            await RunBackfillCoreAsync(cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            throw;
+            return;
         }
         catch (Exception ex)
         {
             _logger.LogError(
                 ex,
-                "Scope workflow catalogue backfill failed; continuing host startup. " +
+                "Scope workflow catalogue backfill failed; background execution has stopped. " +
                 "Event-driven projections keep the catalogue converging and a pod restart re-runs the backfill.");
         }
     }
 
-    private async Task RunBackfillAsync(CancellationToken cancellationToken)
+    private async Task RunBackfillCoreAsync(CancellationToken cancellationToken)
     {
         var serviceCatalogs = await QueryAllAsync(_serviceCatalogReader, cancellationToken);
         var deploymentCatalogs = await QueryAllAsync(_deploymentCatalogReader, cancellationToken);
@@ -203,8 +210,6 @@ internal sealed class ScopeWorkflowCatalogueBackfillHostedService : IHostedServi
             staleServiceCount,
             staleDraftCount);
     }
-
-    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
     private static async Task<IReadOnlyList<TReadModel>> QueryAllAsync<TReadModel>(
         IProjectionDocumentReader<TReadModel, string> reader,

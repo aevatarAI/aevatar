@@ -3,13 +3,9 @@ using System.Text;
 using Aevatar.Configuration;
 using Aevatar.GAgents.WorkflowDelivery;
 using Aevatar.Studio.Application.Delivery;
-using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
-using Aevatar.Workflow.Application.Workflows;
 using Aevatar.Workflow.Core.Primitives;
-using Aevatar.Workflow.Infrastructure.Workflows;
 using FluentAssertions;
-using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace Aevatar.Studio.Tests;
@@ -133,15 +129,12 @@ public sealed class WorkflowDeliveryPackageCatalogTests
 
     private static WorkflowDeliveryPackageCatalog CreateCatalog(IReadOnlyList<string> allowedWorkflowNames)
     {
-        var definitions = new WorkflowDefinitionCatalog();
-        var loader = new WorkflowDefinitionFileLoader();
-        loader.LoadInto(
-            definitions,
-            [AevatarPaths.RepoRootWorkflows],
-            NullLogger.Instance);
-        definitions.Register(
-            "delivery_catalog_fixture_outside_allowlist",
-            """
+        var packageDirectory = Path.Combine(AevatarPaths.RepoRoot, "delivery-workflows");
+        var sources = AllowedWorkflowNames.ToDictionary(
+            static name => name,
+            name => File.ReadAllText(Path.Combine(packageDirectory, $"{name}.yaml")),
+            StringComparer.Ordinal);
+        sources["delivery_catalog_fixture_outside_allowlist"] = """
             name: delivery_catalog_fixture_outside_allowlist
             steps:
               - id: complete
@@ -149,17 +142,28 @@ public sealed class WorkflowDeliveryPackageCatalogTests
                 parameters:
                   target: result
                   value: done
-            """,
-            ExternalCapabilityExecutionMode.Interactive);
+            """;
 
         return new WorkflowDeliveryPackageCatalog(
-            definitions,
+            new DictionaryWorkflowDeliveryPackageSource(sources),
             new RealWorkflowDefinitionParser(),
             Options.Create(new WorkflowDeliveryOptions
             {
                 AllowedWorkflowNames = [.. allowedWorkflowNames],
             }),
             TimeProvider.System);
+    }
+
+    private sealed class DictionaryWorkflowDeliveryPackageSource(
+        IReadOnlyDictionary<string, string> sources) : IWorkflowDeliveryPackageSource
+    {
+        public Task<string?> ReadSourceYamlAsync(
+            string workflowName,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(sources.GetValueOrDefault(workflowName));
+        }
     }
 
     private static WorkflowPackageVersionSnapshot Mutate(

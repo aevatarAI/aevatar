@@ -6,6 +6,8 @@ public sealed class WorkflowDeliveryOptions
 
     public IList<string> AllowedWorkflowNames { get; set; } = [];
 
+    public string PackageDirectory { get; set; } = "delivery-workflows";
+
     public int DefaultExpiryHours { get; set; } = 168;
 
     public int MaximumExpiryHours { get; set; } = 720;

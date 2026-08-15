@@ -5,6 +5,7 @@ using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.GAgents.ChatHistory;
 using Aevatar.GAgents.ChatHistory.DependencyInjection;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
+using Aevatar.Studio.Application.Delivery;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Authoring;
 using Aevatar.Studio.Application.Studio.ProjectionRecovery;
@@ -12,6 +13,7 @@ using Aevatar.Studio.Domain.Studio.Compatibility;
 using Aevatar.Studio.Domain.Studio.Services;
 using Aevatar.Studio.Infrastructure.ActorBacked;
 using Aevatar.Studio.Infrastructure.Authoring;
+using Aevatar.Studio.Infrastructure.Delivery;
 using Aevatar.Studio.Infrastructure.Middleware;
 using Aevatar.Studio.Infrastructure.NyxId;
 using Aevatar.Studio.Infrastructure.Serialization;
@@ -46,6 +48,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<WorkflowDocumentNormalizer>();
         services.AddSingleton<WorkflowValidator>();
         services.AddSingleton<IWorkflowYamlDocumentService, YamlWorkflowDocumentService>();
+        services.TryAddSingleton<IWorkflowDeliveryPackageSource, FileWorkflowDeliveryPackageSource>();
         services.TryAddSingleton<INyxIdConnectLinkPort, NyxIdConnectLinkHttpClient>();
         // Refactor (iter16/cluster-meta-studio-actor-substrate):
         //   Old: FileStudioWorkspaceStore was a shadow store reading/writing JSON files in workspace dir, with no clear actor ownership of workspace facts

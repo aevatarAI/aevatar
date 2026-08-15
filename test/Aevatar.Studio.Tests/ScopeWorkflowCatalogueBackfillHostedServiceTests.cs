@@ -34,7 +34,7 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
             .WithFormatDefaultValues(true));
 
     [Fact]
-    public async Task StartAsync_ShouldBackfillDraftAndServiceSourcesFromWorkflowNativeCurrentStateReadModels()
+    public async Task RunBackfillOnceAsync_ShouldBackfillDraftAndServiceSourcesFromWorkflowNativeCurrentStateReadModels()
     {
         var serviceCatalog = new ServiceCatalogReadModel
         {
@@ -103,7 +103,7 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
             rowWriter,
             sourceReader);
 
-        await service.StartAsync(CancellationToken.None);
+        await service.RunBackfillOnceAsync(CancellationToken.None);
 
         sourceWriter.Upserts.Select(static source => source.SourceKind)
             .Should().BeEquivalentTo([
@@ -132,7 +132,7 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
     }
 
     [Fact]
-    public async Task StartAsync_ShouldUsePublishedServiceId_WhenWorkflowPlanHasNoExplicitBindingIdentity()
+    public async Task RunBackfillOnceAsync_ShouldUsePublishedServiceId_WhenWorkflowPlanHasNoExplicitBindingIdentity()
     {
         var serviceCatalog = new ServiceCatalogReadModel
         {
@@ -185,7 +185,7 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
             rowWriter,
             sourceReader);
 
-        await service.StartAsync(CancellationToken.None);
+        await service.RunBackfillOnceAsync(CancellationToken.None);
 
         var serviceSource = sourceWriter.Upserts.Should().ContainSingle().Subject;
         serviceSource.Id.Should().Be("scope-1:published-service-1:service");
@@ -200,7 +200,7 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
     }
 
     [Fact]
-    public async Task StartAsync_ShouldDeleteStaleDraftSourcesForParsedWorkspaceScope()
+    public async Task RunBackfillOnceAsync_ShouldDeleteStaleDraftSourcesForParsedWorkspaceScope()
     {
         var workspaceState = new StudioWorkspaceState
         {
@@ -240,7 +240,7 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
             rowWriter,
             sourceReader);
 
-        await service.StartAsync(CancellationToken.None);
+        await service.RunBackfillOnceAsync(CancellationToken.None);
 
         sourceWriter.Upserts.Should().ContainSingle(source => source.Id == "scope-1:wf-current:draft");
         sourceWriter.DeleteMarkers.Should().ContainSingle().Which.Should().Be(new ProjectionDocumentDeleteMarker(
@@ -255,7 +255,7 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
     }
 
     [Fact]
-    public async Task StartAsync_ShouldDeleteStaleServiceSourcesByWorkflowKey()
+    public async Task RunBackfillOnceAsync_ShouldDeleteStaleServiceSourcesByWorkflowKey()
     {
         var staleServiceSource = ExistingServiceSource("scope-1", "wf-old", "published-service-1");
         var sourceWriter = new RecordingCatalogueSourceDispatcher();
@@ -282,7 +282,7 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
             rowWriter,
             sourceReader);
 
-        await service.StartAsync(CancellationToken.None);
+        await service.RunBackfillOnceAsync(CancellationToken.None);
 
         sourceWriter.DeleteMarkers.Should().ContainSingle().Which.Id.Should().Be("scope-1:wf-old:service");
         rowWriter.Commands.Should().ContainSingle(command => command.WorkflowId == "wf-old" &&
@@ -291,7 +291,7 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
     }
 
     [Fact]
-    public async Task StartAsync_ShouldUseDefaultServingRevision_WhenOlderDeploymentWasDeactivatedLater()
+    public async Task RunBackfillOnceAsync_ShouldUseDefaultServingRevision_WhenOlderDeploymentWasDeactivatedLater()
     {
         var serviceCatalog = new ServiceCatalogReadModel
         {
@@ -350,7 +350,7 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
             rowWriter,
             sourceReader);
 
-        await service.StartAsync(CancellationToken.None);
+        await service.RunBackfillOnceAsync(CancellationToken.None);
 
         var serviceSource = sourceWriter.Upserts.Should().ContainSingle().Subject;
         serviceSource.WorkflowId.Should().Be("wf-active");
@@ -360,7 +360,7 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
     }
 
     [Fact]
-    public async Task StartAsync_ShouldBackfillDeactivatedServiceSourcesFromWorkflowNativeCurrentStateReadModels()
+    public async Task RunBackfillOnceAsync_ShouldBackfillDeactivatedServiceSourcesFromWorkflowNativeCurrentStateReadModels()
     {
         var serviceCatalog = new ServiceCatalogReadModel
         {
@@ -408,7 +408,7 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
             rowWriter,
             sourceReader);
 
-        await service.StartAsync(CancellationToken.None);
+        await service.RunBackfillOnceAsync(CancellationToken.None);
 
         var serviceSource = sourceWriter.Upserts.Should().ContainSingle().Subject;
         serviceSource.WorkflowId.Should().Be("wf-archived");
@@ -419,7 +419,7 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
     }
 
     [Fact]
-    public async Task StartAsync_ShouldSkipMalformedWorkflowServiceRevisionWithoutFailingBackfill()
+    public async Task RunBackfillOnceAsync_ShouldSkipMalformedWorkflowServiceRevisionWithoutFailingBackfill()
     {
         var sourceWriter = new RecordingCatalogueSourceDispatcher();
         var rowWriter = new RecordingCatalogueRowDispatcher();
@@ -463,14 +463,14 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
             rowWriter,
             sourceReader);
 
-        await service.StartAsync(CancellationToken.None);
+        await service.RunBackfillOnceAsync(CancellationToken.None);
 
         sourceWriter.Upserts.Should().BeEmpty();
         rowWriter.Commands.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task StartAsync_ShouldNotFailHostStartup_WhenRowRefreshThrows()
+    public async Task RunBackfillOnceAsync_ShouldNotFail_WhenRowRefreshThrows()
     {
         // Production regression (2026-08-13): during a rolling upgrade the
         // first new-image pod backfilled rows whose actors only resolve on
@@ -502,10 +502,34 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
             rowWriter,
             sourceReader);
 
-        var start = async () => await service.StartAsync(CancellationToken.None);
+        var start = async () => await service.RunBackfillOnceAsync(CancellationToken.None);
 
         await start.Should().NotThrowAsync();
         rowWriter.Attempts.Should().BeGreaterThan(0, "the backfill must have tried the row before skipping it");
+    }
+
+    [Fact]
+    public async Task StartAsync_ShouldNotWaitForBackfillCompletion()
+    {
+        var blockingReader = new BlockingProjectionDocumentReader<ServiceCatalogReadModel>();
+        var sourceWriter = new RecordingCatalogueSourceDispatcher();
+        var sourceReader = new RecordingCatalogueSourceReader([], sourceWriter);
+        var service = new ScopeWorkflowCatalogueBackfillHostedService(
+            blockingReader,
+            new StubProjectionDocumentReader<ServiceDeploymentCatalogReadModel>([]),
+            new StubProjectionDocumentReader<ServiceRevisionCatalogReadModel>([]),
+            new StubProjectionDocumentReader<StudioWorkspaceCurrentStateDocument>([]),
+            new StubProjectionDocumentReader<ScopeWorkflowCatalogueSourceDocument>([]),
+            sourceWriter,
+            new ScopeWorkflowCatalogueRowMaterializer(sourceReader, new RecordingCatalogueRowDispatcher()),
+            new StubWorkflowYamlDocumentService(),
+            NullLogger<ScopeWorkflowCatalogueBackfillHostedService>.Instance);
+
+        var startTask = service.StartAsync(CancellationToken.None);
+
+        startTask.IsCompletedSuccessfully.Should().BeTrue();
+        await blockingReader.QueryStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await service.StopAsync(CancellationToken.None);
     }
 
     [Fact]
@@ -1130,6 +1154,28 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
                 NextCursor = null,
                 TotalCount = documents.Count,
             });
+    }
+
+    private sealed class BlockingProjectionDocumentReader<TReadModel>
+        : IProjectionDocumentReader<TReadModel, string>
+        where TReadModel : class, IProjectionReadModel
+    {
+        private readonly TaskCompletionSource<ProjectionDocumentQueryResult<TReadModel>> _pending = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource QueryStarted { get; } = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<TReadModel?> GetAsync(string key, CancellationToken ct = default) =>
+            Task.FromResult(default(TReadModel));
+
+        public async Task<ProjectionDocumentQueryResult<TReadModel>> QueryAsync(
+            ProjectionDocumentQuery query,
+            CancellationToken ct = default)
+        {
+            QueryStarted.TrySetResult();
+            return await _pending.Task.WaitAsync(ct);
+        }
     }
 
     private sealed class RecordingCatalogueSourceReader(

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Net;
 using Aevatar.BackendConsole.Hosting;
+using Aevatar.Configuration;
 using Aevatar.Mainnet.Host.Api.BackendConsole;
 using Aevatar.Mainnet.Host.Api.Cqrs;
 using Aevatar.Mainnet.Host.Api.Skills;
@@ -16,6 +17,15 @@ namespace Aevatar.Capabilities.Tests;
 
 public sealed class BackendConsoleStaticAssetEndpointTests
 {
+    private static readonly string[] DeliveryWorkflowNames =
+    [
+        "hr_onboarding_email_approval",
+        "hr_monthly_attendance_approval",
+        "hr_attendance_fill_reminder",
+        "fin_invoice_precheck_approval",
+        "fin_budget_variance_monitor",
+    ];
+
     [Theory]
     [InlineData("/admin", "Aevatar Backend Console")]
     [InlineData("/admin/studio", "<title>Aevatar Studio</title>")]
@@ -190,6 +200,37 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         using var response = await app.GetTestClient().PostAsync("/delivery", content: null);
 
         response.StatusCode.Should().Be(HttpStatusCode.MethodNotAllowed);
+    }
+
+    [Fact]
+    public void DeliveryWorkflowPackages_ShouldBePublishedOutsideStartupWorkflowDirectory()
+    {
+        foreach (var workflowName in DeliveryWorkflowNames)
+        {
+            var packagePath = Path.Combine(
+                AppContext.BaseDirectory,
+                "delivery-workflows",
+                $"{workflowName}.yaml");
+            var startupWorkflowPath = Path.Combine(
+                AppContext.BaseDirectory,
+                "workflows",
+                $"{workflowName}.yaml");
+            var repositoryPackagePath = Path.Combine(
+                AevatarPaths.RepoRoot,
+                "delivery-workflows",
+                $"{workflowName}.yaml");
+            var repositoryStartupWorkflowPath = Path.Combine(
+                AevatarPaths.RepoRootWorkflows,
+                $"{workflowName}.yaml");
+
+            File.Exists(packagePath).Should().BeTrue($"{workflowName} must be available to Delivery");
+            File.Exists(startupWorkflowPath).Should().BeFalse(
+                $"{workflowName} must not enter the global startup Workflow Catalog");
+            File.Exists(repositoryPackagePath).Should().BeTrue(
+                $"{workflowName} must have a dedicated Delivery source");
+            File.Exists(repositoryStartupWorkflowPath).Should().BeFalse(
+                $"{workflowName} must not be discoverable as a repository startup workflow");
+        }
     }
 
     [Fact]

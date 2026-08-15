@@ -21,23 +21,30 @@ public interface IWorkflowDeliveryPackageCatalog
         CancellationToken ct = default);
 }
 
+public interface IWorkflowDeliveryPackageSource
+{
+    Task<string?> ReadSourceYamlAsync(
+        string workflowName,
+        CancellationToken ct = default);
+}
+
 public sealed class WorkflowDeliveryPackageCatalog : IWorkflowDeliveryPackageCatalog
 {
     private static readonly IReadOnlyDictionary<string, PackageDefinition> Definitions =
         BuildDefinitions();
 
-    private readonly IWorkflowDefinitionCatalog _workflowCatalog;
+    private readonly IWorkflowDeliveryPackageSource _packageSource;
     private readonly IWorkflowDefinitionParser _parser;
     private readonly IOptions<WorkflowDeliveryOptions> _options;
     private readonly TimeProvider _timeProvider;
 
     public WorkflowDeliveryPackageCatalog(
-        IWorkflowDefinitionCatalog workflowCatalog,
+        IWorkflowDeliveryPackageSource packageSource,
         IWorkflowDefinitionParser parser,
         IOptions<WorkflowDeliveryOptions> options,
         TimeProvider timeProvider)
     {
-        _workflowCatalog = workflowCatalog ?? throw new ArgumentNullException(nameof(workflowCatalog));
+        _packageSource = packageSource ?? throw new ArgumentNullException(nameof(packageSource));
         _parser = parser ?? throw new ArgumentNullException(nameof(parser));
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
@@ -65,11 +72,10 @@ public sealed class WorkflowDeliveryPackageCatalog : IWorkflowDeliveryPackageCat
         if (!Definitions.TryGetValue(normalizedName, out var definition))
             throw new WorkflowDeliveryPackageNotAllowedException(normalizedName);
 
-        var registration = _workflowCatalog.GetDefinition(normalizedName)
+        var sourceYaml = await _packageSource.ReadSourceYamlAsync(normalizedName, ct)
             ?? throw new WorkflowDeliveryPackageUnavailableException(
                 normalizedName,
-                $"Allowlisted workflow '{normalizedName}' is not loaded in the workflow definition catalog.");
-        var sourceYaml = registration.WorkflowYaml;
+                $"Allowlisted workflow package '{normalizedName}' is unavailable.");
         var parse = await _parser.ParseWorkflowYamlAsync(sourceYaml, ct);
         if (!parse.Succeeded || !string.Equals(parse.WorkflowName, normalizedName, StringComparison.Ordinal))
         {
