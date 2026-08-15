@@ -3,6 +3,7 @@ using Aevatar.GAgents.WorkOrder;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
+using Aevatar.Studio.Application.Delivery;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.DependencyInjection;
@@ -14,6 +15,7 @@ using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.Studio.Tests;
 
@@ -152,6 +154,97 @@ public sealed class StudioApplicationServiceCollectionExtensionsTests
         services.Should().ContainSingle(x =>
             x.ServiceType == typeof(IHostedService) &&
             x.ImplementationType == typeof(WorkOrderExecutionWorker));
+    }
+
+    [Fact]
+    public void AddStudioHostingCore_WhenDeliverySectionIsMissing_ShouldUseShippedWorkflowAllowlist()
+    {
+        var options = ResolveDeliveryOptions(new ConfigurationBuilder().Build());
+
+        options.AllowedWorkflowNames.Should().Equal(
+            "hr_onboarding_email_approval",
+            "hr_monthly_attendance_approval",
+            "hr_attendance_fill_reminder",
+            "fin_invoice_precheck_approval",
+            "fin_budget_variance_monitor");
+    }
+
+    [Fact]
+    public void AddStudioHostingCore_WhenDeliveryAllowlistIsConfigured_ShouldPreserveExactSubset()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddJsonStream(new MemoryStream("""
+                {"Aevatar":{"Delivery":{"UseShippedWorkflowAllowlist":true}}}
+                """u8.ToArray()))
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [$"{WorkflowDeliveryOptions.SectionName}:AllowedWorkflowNames:0"] =
+                    "fin_invoice_precheck_approval",
+                [$"{WorkflowDeliveryOptions.SectionName}:AllowedWorkflowNames:1"] =
+                    "hr_onboarding_email_approval",
+            })
+            .Build();
+
+        var options = ResolveDeliveryOptions(configuration);
+
+        options.AllowedWorkflowNames.Should().Equal(
+            "fin_invoice_precheck_approval",
+            "hr_onboarding_email_approval");
+    }
+
+    [Fact]
+    public void AddStudioHostingCore_WhenDeliveryAllowlistIsExplicitlyEmpty_ShouldRemainEmpty()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddJsonStream(new MemoryStream("""
+                {"Aevatar":{"Delivery":{"UseShippedWorkflowAllowlist":true}}}
+                """u8.ToArray()))
+            .AddJsonStream(new MemoryStream("""
+                {"Aevatar":{"Delivery":{"AllowedWorkflowNames":[]}}}
+                """u8.ToArray()))
+            .Build();
+
+        var options = ResolveDeliveryOptions(configuration);
+
+        options.AllowedWorkflowNames.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void AddStudioHostingCore_WhenShippedAllowlistIsExplicitlyEnabled_ShouldUseShippedWorkflows()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [$"{WorkflowDeliveryOptions.SectionName}:UseShippedWorkflowAllowlist"] = "true",
+            })
+            .Build();
+
+        var options = ResolveDeliveryOptions(configuration);
+
+        options.AllowedWorkflowNames.Should().Equal(WorkflowDeliveryOptions.ShippedWorkflowNames);
+    }
+
+    [Fact]
+    public void AddStudioHostingCore_WhenDeliverySectionOmitsAllowlistAndOptIn_ShouldRemainEmpty()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [$"{WorkflowDeliveryOptions.SectionName}:PackageDirectory"] = "delivery-workflows",
+            })
+            .Build();
+
+        var options = ResolveDeliveryOptions(configuration);
+
+        options.AllowedWorkflowNames.Should().BeEmpty();
+    }
+
+    private static WorkflowDeliveryOptions ResolveDeliveryOptions(IConfiguration configuration)
+    {
+        var services = new ServiceCollection();
+        services.AddStudioHostingCore(configuration);
+        using var provider = services.BuildServiceProvider();
+        return provider.GetRequiredService<IOptions<WorkflowDeliveryOptions>>().Value;
     }
 
     private static void AddSchedulePortDependencies(IServiceCollection services)

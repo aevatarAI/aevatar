@@ -127,6 +127,19 @@ public sealed class WorkflowDeliveryPackageCatalogTests
             .WithMessage("*unsupported workflow package*");
     }
 
+    [Fact]
+    public async Task ListAsync_WhenConfiguredAllowlistIsEmpty_ShouldFailClosed()
+    {
+        var catalog = CreateCatalog([]);
+
+        var act = () => catalog.ListAsync(
+            "admin-alpha",
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*AllowedWorkflowNames must not be empty*");
+    }
+
     private static WorkflowDeliveryPackageCatalog CreateCatalog(IReadOnlyList<string> allowedWorkflowNames)
     {
         var packageDirectory = Path.Combine(AevatarPaths.RepoRoot, "delivery-workflows");

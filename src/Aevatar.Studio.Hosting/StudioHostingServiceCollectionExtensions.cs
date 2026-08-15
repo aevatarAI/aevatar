@@ -39,7 +39,18 @@ internal static class StudioHostingServiceCollectionExtensions
     {
         services.TryAddSingleton(configuration);
         services.Configure<StudioHostingOptions>(configuration.GetSection(StudioHostingOptions.SectionName));
-        services.Configure<WorkflowDeliveryOptions>(configuration.GetSection(WorkflowDeliveryOptions.SectionName));
+        var deliverySection = configuration.GetSection(WorkflowDeliveryOptions.SectionName);
+        var allowedWorkflowNamesSection = deliverySection.GetSection(
+            nameof(WorkflowDeliveryOptions.AllowedWorkflowNames));
+        services.Configure<WorkflowDeliveryOptions>(deliverySection);
+        services.PostConfigure<WorkflowDeliveryOptions>(options =>
+        {
+            if (!deliverySection.Exists() ||
+                (!allowedWorkflowNamesSection.Exists() && options.UseShippedWorkflowAllowlist))
+            {
+                options.AllowedWorkflowNames = [.. WorkflowDeliveryOptions.ShippedWorkflowNames];
+            }
+        });
         services.Configure<UserLlmSettingsOptions>(configuration.GetSection("Aevatar:Studio:UserLlmSettings"));
         services.AddControllers()
             .AddApplicationPart(typeof(EditorController).Assembly)
