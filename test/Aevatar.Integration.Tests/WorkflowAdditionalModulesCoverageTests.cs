@@ -1517,7 +1517,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             {
                 StepId = "foreach-escaped",
                 StepType = "foreach",
-                RunId = "run-foreach",
+                RunId = ctx.RunId,
                 Input = "a\n---\nb",
                 Parameters =
                 {
@@ -1532,13 +1532,17 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         escapedDispatches.Should().HaveCount(2);
         escapedDispatches[0].Input.Should().Be("a");
         escapedDispatches[1].Input.Should().Be("b");
+        escapedDispatches.Should().OnlyContain(child => child.RunId == ctx.RunId);
+        escapedDispatches.Should().OnlyContain(child => !string.IsNullOrWhiteSpace(child.ExecutionId));
+        escapedDispatches.Select(child => child.ExecutionId).Should().OnlyHaveUniqueItems();
         ctx.Published.Clear();
 
         await module.HandleAsync(
             Envelope(new StepCompletedEvent
             {
-                StepId = "foreach-escaped_item_0",
-                RunId = "run-foreach",
+                StepId = escapedDispatches[0].StepId,
+                RunId = escapedDispatches[0].RunId,
+                ExecutionId = escapedDispatches[0].ExecutionId,
                 Success = true,
                 Output = "A",
             }),
@@ -1547,8 +1551,9 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         await module.HandleAsync(
             Envelope(new StepCompletedEvent
             {
-                StepId = "foreach-escaped_item_1",
-                RunId = "run-foreach",
+                StepId = escapedDispatches[1].StepId,
+                RunId = escapedDispatches[1].RunId,
+                ExecutionId = escapedDispatches[1].ExecutionId,
                 Success = true,
                 Output = "B",
             }),
@@ -1557,7 +1562,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
 
         var merged = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
         merged.StepId.Should().Be("foreach-escaped");
-        merged.RunId.Should().Be("run-foreach");
+        merged.RunId.Should().Be(ctx.RunId);
         merged.Success.Should().BeTrue();
         merged.Output.Should().Be("A\n---\nB");
         ctx.Published.Clear();
@@ -1567,7 +1572,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             {
                 StepId = "foreach-json",
                 StepType = "foreach",
-                RunId = "run-foreach-json",
+                RunId = ctx.RunId,
                 Input = "[\"x\",\"y\"]",
                 Parameters = { ["sub_step_type"] = "assign" },
             }),
@@ -1578,6 +1583,9 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         jsonDispatches.Should().HaveCount(2);
         jsonDispatches[0].Input.Should().Be("x");
         jsonDispatches[1].Input.Should().Be("y");
+        jsonDispatches.Should().OnlyContain(child => child.RunId == ctx.RunId);
+        jsonDispatches.Should().OnlyContain(child => !string.IsNullOrWhiteSpace(child.ExecutionId));
+        jsonDispatches.Select(child => child.ExecutionId).Should().OnlyHaveUniqueItems();
     }
 
     [Fact]

@@ -287,6 +287,7 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
             {
                 StepId = "foreach-1",
                 StepType = "foreach",
+                RunId = ctx.RunId,
                 Input = "",
             };
 
@@ -295,6 +296,7 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
             ctx.Published.Should().ContainSingle();
             var completed = ctx.Published[0].evt.Should().BeOfType<StepCompletedEvent>().Subject;
             completed.StepId.Should().Be("foreach-1");
+            completed.RunId.Should().Be(ctx.RunId);
             completed.Success.Should().BeTrue();
             completed.Output.Should().BeEmpty();
         }
@@ -308,6 +310,7 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
             {
                 StepId = "foreach-2",
                 StepType = "foreach",
+                RunId = ctx.RunId,
                 Input = "alpha\n---\nbeta",
                 Parameters =
                 {
@@ -326,15 +329,40 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
             subRequests[0].TargetRole.Should().Be("worker_role");
             subRequests[0].Parameters["op"].Should().Be("uppercase");
             subRequests[1].StepId.Should().Be("foreach-2_item_1");
+            subRequests.Should().OnlyContain(child => child.RunId == ctx.RunId);
+            subRequests.Should().OnlyContain(child => !string.IsNullOrWhiteSpace(child.ExecutionId));
+            subRequests.Select(child => child.ExecutionId).Should().OnlyHaveUniqueItems();
 
             var countBeforeCompletions = ctx.Published.Count;
-            await module.HandleAsync(Envelope(new StepCompletedEvent { StepId = "foreach-2_item_0", Success = true, Output = "A" }), ctx, CancellationToken.None);
-            await module.HandleAsync(Envelope(new StepCompletedEvent { StepId = "foreach-2_item_0_sub_1", Success = true, Output = "IGNORED" }), ctx, CancellationToken.None);
-            await module.HandleAsync(Envelope(new StepCompletedEvent { StepId = "foreach-2_item_1", Success = false, Output = "B" }), ctx, CancellationToken.None);
+            await module.HandleAsync(Envelope(new StepCompletedEvent
+            {
+                StepId = subRequests[0].StepId,
+                RunId = subRequests[0].RunId,
+                ExecutionId = subRequests[0].ExecutionId,
+                Success = true,
+                Output = "A",
+            }), ctx, CancellationToken.None);
+            await module.HandleAsync(Envelope(new StepCompletedEvent
+            {
+                StepId = $"{subRequests[0].StepId}_sub_1",
+                RunId = subRequests[0].RunId,
+                ExecutionId = subRequests[0].ExecutionId,
+                Success = true,
+                Output = "IGNORED",
+            }), ctx, CancellationToken.None);
+            await module.HandleAsync(Envelope(new StepCompletedEvent
+            {
+                StepId = subRequests[1].StepId,
+                RunId = subRequests[1].RunId,
+                ExecutionId = subRequests[1].ExecutionId,
+                Success = false,
+                Output = "B",
+            }), ctx, CancellationToken.None);
 
             var delta = ctx.Published.Skip(countBeforeCompletions).Select(x => x.evt).OfType<StepCompletedEvent>().ToList();
             delta.Should().ContainSingle();
             delta[0].StepId.Should().Be("foreach-2");
+            delta[0].RunId.Should().Be(ctx.RunId);
             delta[0].Success.Should().BeFalse();
             delta[0].Output.Should().Be("A\n---\nB");
         }
@@ -348,7 +376,7 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
             {
                 StepId = "foreach-arguments",
                 StepType = "foreach",
-                RunId = "run-foreach-arguments",
+                RunId = ctx.RunId,
                 Input = "[\"instance-alpha\",\"instance-beta\"]",
                 Parameters =
                 {
@@ -368,6 +396,9 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
                 .Should().Be("instance-alpha");
             secondArguments.RootElement.GetProperty("path_params").GetProperty("instance_id").GetString()
                 .Should().Be("instance-beta");
+            subRequests.Should().OnlyContain(child => child.RunId == ctx.RunId);
+            subRequests.Should().OnlyContain(child => !string.IsNullOrWhiteSpace(child.ExecutionId));
+            subRequests.Select(child => child.ExecutionId).Should().OnlyHaveUniqueItems();
         }
 
         [Fact]
