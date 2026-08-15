@@ -71,6 +71,12 @@ public sealed record LLMModelCatalogView(
     IReadOnlyList<LLMModelCatalogPolicySource> EffectiveSources,
     string? LastMutationId);
 
+public sealed record LLMModelSourceDiscoveryView(
+    string SourceIdentity,
+    string ServiceSlug,
+    IReadOnlyList<string> ModelIds,
+    string? DefaultModelId);
+
 public sealed record LLMModelDescriptor(
     string Id,
     long Created,
@@ -121,6 +127,16 @@ public interface ILLMModelCatalogPolicyApplicationService
 
     Task<IReadOnlyList<NyxIdPlatformModelSourceService>> GetPlatformCandidatesAsync(
         string bearerToken,
+        CancellationToken ct = default);
+
+    Task<LLMModelSourceDiscoveryView> DiscoverScopeModelsAsync(
+        string bearerToken,
+        string userServiceId,
+        CancellationToken ct = default);
+
+    Task<LLMModelSourceDiscoveryView> DiscoverPlatformModelsAsync(
+        string bearerToken,
+        string catalogServiceId,
         CancellationToken ct = default);
 }
 

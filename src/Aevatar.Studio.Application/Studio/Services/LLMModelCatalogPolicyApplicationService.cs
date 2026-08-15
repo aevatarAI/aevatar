@@ -9,15 +9,18 @@ internal sealed class LLMModelCatalogPolicyApplicationService : ILLMModelCatalog
     private readonly ILLMModelCatalogPolicyQueryPort _queryPort;
     private readonly ILLMModelCatalogPolicyCommandPort _commandPort;
     private readonly INyxIdModelSourceInventoryPort _inventoryPort;
+    private readonly INyxIdModelDiscoveryPort _modelDiscoveryPort;
 
     public LLMModelCatalogPolicyApplicationService(
         ILLMModelCatalogPolicyQueryPort queryPort,
         ILLMModelCatalogPolicyCommandPort commandPort,
-        INyxIdModelSourceInventoryPort inventoryPort)
+        INyxIdModelSourceInventoryPort inventoryPort,
+        INyxIdModelDiscoveryPort modelDiscoveryPort)
     {
         _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
         _commandPort = commandPort ?? throw new ArgumentNullException(nameof(commandPort));
         _inventoryPort = inventoryPort ?? throw new ArgumentNullException(nameof(inventoryPort));
+        _modelDiscoveryPort = modelDiscoveryPort ?? throw new ArgumentNullException(nameof(modelDiscoveryPort));
     }
 
     public async Task<LLMModelCatalogView> GetScopeAsync(
@@ -175,6 +178,132 @@ internal sealed class LLMModelCatalogPolicyApplicationService : ILLMModelCatalog
             throw Unavailable(
                 "NYXID_INVENTORY_UNAVAILABLE",
                 "The NyxID service catalog is temporarily unavailable.",
+                ex);
+        }
+    }
+
+    public async Task<LLMModelSourceDiscoveryView> DiscoverScopeModelsAsync(
+        string bearerToken,
+        string userServiceId,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(bearerToken);
+        var sourceIdentity = ValidateSourceIdentity(userServiceId, "userServiceId");
+        try
+        {
+            var inventory = await _inventoryPort
+                .GetScopeModelSourcesAsync(bearerToken, ct)
+                .ConfigureAwait(false);
+            var source = inventory.Services.FirstOrDefault(candidate =>
+                string.Equals(candidate.UserServiceId, sourceIdentity, StringComparison.Ordinal));
+            if (source is null)
+            {
+                throw Conflict(
+                    "NYXID_MODEL_SOURCE_NOT_FOUND",
+                    "The selected NyxID user service is no longer present in the authoritative inventory.");
+            }
+            if (!source.IsCallable)
+            {
+                throw Conflict(
+                    "NYXID_MODEL_SOURCE_UNAVAILABLE",
+                    "The selected NyxID user service is not currently callable.");
+            }
+
+            var discovered = await _modelDiscoveryPort
+                .GetScopeModelsAsync(bearerToken, source.Slug, source.UserServiceId, ct)
+                .ConfigureAwait(false);
+            return new LLMModelSourceDiscoveryView(
+                source.UserServiceId,
+                source.Slug,
+                discovered.ModelIds,
+                discovered.DefaultModelId);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (LLMModelCatalogApplicationException)
+        {
+            throw;
+        }
+        catch (NyxIdModelSourceInventoryException ex)
+        {
+            throw MapInventoryFailure(
+                ex,
+                "The authoritative NyxID key inventory is temporarily unavailable.");
+        }
+        catch (NyxIdModelDiscoveryException ex)
+        {
+            throw MapDiscoveryFailure(ex);
+        }
+        catch (Exception ex)
+        {
+            throw Unavailable(
+                "NYXID_MODELS_UNAVAILABLE",
+                "The selected service's model list is temporarily unavailable.",
+                ex);
+        }
+    }
+
+    public async Task<LLMModelSourceDiscoveryView> DiscoverPlatformModelsAsync(
+        string bearerToken,
+        string catalogServiceId,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(bearerToken);
+        var sourceIdentity = ValidateSourceIdentity(catalogServiceId, "catalogServiceId");
+        try
+        {
+            var inventory = await _inventoryPort
+                .GetPlatformCatalogServicesAsync(bearerToken, ct)
+                .ConfigureAwait(false);
+            var source = inventory.Services.FirstOrDefault(candidate =>
+                string.Equals(candidate.CatalogServiceId, sourceIdentity, StringComparison.Ordinal));
+            if (source is null)
+            {
+                throw Conflict(
+                    "NYXID_MODEL_SOURCE_NOT_FOUND",
+                    "The selected NyxID catalog service is no longer present in the authoritative inventory.");
+            }
+            if (!source.IsSelectable)
+            {
+                throw Conflict(
+                    "NYXID_MODEL_SOURCE_UNAVAILABLE",
+                    "The selected NyxID catalog service is not currently selectable as a platform default.");
+            }
+
+            var discovered = await _modelDiscoveryPort
+                .GetPlatformModelsAsync(bearerToken, source.CatalogServiceId, ct)
+                .ConfigureAwait(false);
+            return new LLMModelSourceDiscoveryView(
+                source.CatalogServiceId,
+                source.Slug,
+                discovered.ModelIds,
+                discovered.DefaultModelId);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (LLMModelCatalogApplicationException)
+        {
+            throw;
+        }
+        catch (NyxIdModelSourceInventoryException ex)
+        {
+            throw MapInventoryFailure(
+                ex,
+                "The NyxID service catalog is temporarily unavailable.");
+        }
+        catch (NyxIdModelDiscoveryException ex)
+        {
+            throw MapDiscoveryFailure(ex);
+        }
+        catch (Exception ex)
+        {
+            throw Unavailable(
+                "NYXID_MODELS_UNAVAILABLE",
+                "The selected service's model list is temporarily unavailable.",
                 ex);
         }
     }
@@ -512,8 +641,27 @@ internal sealed class LLMModelCatalogPolicyApplicationService : ILLMModelCatalog
         return normalized;
     }
 
+    private static string ValidateSourceIdentity(string? sourceIdentity, string fieldName)
+    {
+        var normalized = Normalize(sourceIdentity);
+        if (normalized is null)
+            throw Invalid("SERVICE_ID_REQUIRED", $"{fieldName} is required.");
+        if (ContainsControlCharacter(normalized))
+            throw Invalid("INVALID_SERVICE_ID", $"{fieldName} must not contain control characters.");
+        if (ExceedsUtf8Limit(normalized, LLMModelCatalogPolicyLimits.MaxServiceIdentityUtf8Bytes))
+        {
+            throw Invalid(
+                "SERVICE_ID_TOO_LONG",
+                $"{fieldName} must be at most {LLMModelCatalogPolicyLimits.MaxServiceIdentityUtf8Bytes} UTF-8 bytes.");
+        }
+        return normalized;
+    }
+
     private static LLMModelCatalogApplicationException Invalid(string code, string message) =>
         new(LLMModelCatalogApplicationErrorKind.InvalidRequest, code, message);
+
+    private static LLMModelCatalogApplicationException Conflict(string code, string message) =>
+        new(LLMModelCatalogApplicationErrorKind.Conflict, code, message);
 
     private static LLMModelCatalogApplicationException Unavailable(
         string code,
@@ -537,6 +685,32 @@ internal sealed class LLMModelCatalogPolicyApplicationService : ILLMModelCatalog
                 "NyxID denied access to the requested inventory.",
                 exception),
             _ => Unavailable("NYXID_INVENTORY_UNAVAILABLE", unavailableMessage, exception),
+        };
+
+    private static LLMModelCatalogApplicationException MapDiscoveryFailure(
+        NyxIdModelDiscoveryException exception) =>
+        exception.Kind switch
+        {
+            NyxIdModelDiscoveryFailureKind.UpstreamRejected => Unavailable(
+                "NYXID_MODELS_UPSTREAM_REJECTED",
+                "The selected service rejected model discovery. Verify its credential and upstream access.",
+                exception),
+            NyxIdModelDiscoveryFailureKind.EndpointNotFound => Unavailable(
+                "NYXID_MODELS_ENDPOINT_UNAVAILABLE",
+                "The selected service does not expose a usable /models endpoint.",
+                exception),
+            NyxIdModelDiscoveryFailureKind.ResponseInvalid => Unavailable(
+                "NYXID_MODELS_RESPONSE_INVALID",
+                "The selected service returned an invalid model list.",
+                exception),
+            NyxIdModelDiscoveryFailureKind.ResponseTooLarge => Unavailable(
+                "NYXID_MODELS_RESPONSE_TOO_LARGE",
+                "The selected service returned a model list that exceeds the supported limit.",
+                exception),
+            _ => Unavailable(
+                "NYXID_MODELS_UNAVAILABLE",
+                "The selected service's model list is temporarily unavailable.",
+                exception),
         };
 
     private static string? Normalize(string? value) =>

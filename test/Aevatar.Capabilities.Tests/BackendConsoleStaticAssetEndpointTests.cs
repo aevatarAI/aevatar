@@ -248,6 +248,7 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             "ACCOUNT&&ACCOUNT.admin?'<button type=\"button\" data-models-owner=\"platform\"");
         html.Should().Contain("/api/scopes/'+encodeURIComponent(scope)+'/llm-model-catalog");
         html.Should().Contain("/api/admin/llm-model-catalog");
+        html.Should().Contain("base+'/candidates/'+encodeURIComponent(exactIdentity)+'/models'");
         html.Should().Contain("custom_replace，系统不会回退到平台默认");
         html.Should().Contain("模型按公开 ID 稳定排序");
         html.Should().NotContain("来源顺序即返回顺序");
@@ -287,6 +288,16 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         html.Should().Contain("aria-labelledby=\"models-editor-title\" aria-describedby=\"models-editor-description\"");
         html.Should().Contain("label for=\"models-editor-candidate\"");
         html.Should().Contain("label for=\"models-editor-manual-id\"");
+        html.Should().Contain("data-models-discover");
+        html.Should().Contain("data-models-discovery-search");
+        html.Should().Contain("data-models-toggle-filtered aria-checked=\"");
+        html.Should().Contain("data-models-clear-discovered");
+        html.Should().Contain("role=\"group\" aria-label=\"已发现模型\"");
+        html.Should().Contain("role=\"alert\" aria-live=\"assertive\"");
+        html.Should().Contain("input.indeterminate=input.getAttribute('aria-checked')==='mixed'");
+        html.Should().Contain(".models-discovery-list{display:flex;max-height:230px;");
+        html.Should().Contain(".models-discovery-list{max-height:34dvh;}");
+        html.Should().Contain("if((curParts()[0]||'')!=='models')modelsCatalogLeavePage()");
         html.Should().Contain("modelsCatalogTrapEditorFocus(root,event)");
         html.Should().Contain("element.inert=true");
         html.Should().Contain("syncAccountFromStoredToken(token)");
@@ -327,18 +338,20 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             }
 
             const context = {
-              assert, console, Promise, MODELS_REQUEST:0, ACCOUNT:{admin:true},
-              MODELS_STATE:{owner:'scope',editor:null}, esc:value => String(value), ICON:{empty:''}
+              assert, console, Promise, MODELS_REQUEST:0, MODELS_DISCOVERY_REQUEST:0,
+              ACCOUNT:{admin:true}, MODELS_STATE:{owner:'scope',editor:null},
+              esc:value => String(value), ICON:{empty:''}, modelsCatalogRenderIfActive(){}
             };
             vm.createContext(context);
             vm.runInContext(
               sourceBetween('var MODELS_LIMITS=', 'function modelsCatalogUniqueStrings(') +
               sourceBetween('function modelsCatalogUniqueStrings(', 'function modelsCatalogMutationId(') +
               sourceBetween('function modelsCatalogCandidateIdentity(', 'function modelsCatalogSourceId(') +
+              sourceBetween('function modelsCatalogOpenEditor(', 'function modelsCatalogEditorFocusSelector(') +
               sourceBetween('function modelsCatalogEditorFocusSelector(', 'function modelsCatalogAddManualModel(') +
               sourceBetween('function modelsCatalogValidateSources(', 'async function modelsCatalogSave(') +
               sourceBetween('function modelsCatalogModelFilter(', 'function modelsCatalogCandidateOptions(') +
-              sourceBetween('function mountModelsCatalog(', '/* ---------------- 侧栏 + 账号'),
+              sourceBetween('function modelsCatalogApplyDiscoveryCheckboxState(', '/* ---------------- 侧栏 + 账号'),
               context);
 
             vm.runInContext(`
@@ -594,6 +607,60 @@ public sealed class BackendConsoleStaticAssetEndpointTests
               assert.equal(modelsCatalogEditorRetainsCandidate(retainedEditor, null), true,
                 'an already-saved source missing from live inventory remains editable');
 
+              const discoveryState = {
+                draft:{mode:'custom_replace',sources:[]},
+                candidates:[
+                  modelsCatalogNormalizeCandidate({
+                    userServiceId:'user-alpha',catalogServiceId:'catalog-alpha',
+                    serviceSlug:'chrono-alpha',displayName:'Chrono Alpha',isCallable:true
+                  }),
+                  modelsCatalogNormalizeCandidate({
+                    userServiceId:'user-beta',catalogServiceId:'catalog-beta',
+                    serviceSlug:'chrono-beta',displayName:'Chrono Beta',isCallable:true
+                  })
+                ]
+              };
+              MODELS_STATE.scope=discoveryState;
+              MODELS_STATE.editor={
+                owner:'scope',index:null,persistedKey:'',candidateKey:'user-alpha',error:null,
+                source:modelsCatalogNormalizeSource({
+                  sourceId:'source-new',userServiceId:'user-alpha',catalogServiceId:'catalog-alpha',
+                  serviceSlugSnapshot:'chrono-alpha',
+                  modelSelection:{mode:'explicit_models',modelIds:['alpha-only']}
+                },'scope'),
+                discovery:{loading:false,loaded:true,error:null,sourceIdentity:'user-alpha',
+                  serviceSlug:'chrono-alpha',modelIds:['alpha-only'],search:'alpha',request:17}
+              };
+              modelsCatalogSelectCandidate('user-beta');
+              assert.deepEqual(Array.from(MODELS_STATE.editor.source.modelSelection.modelIds),[],
+                'switching an exact service identity must clear models owned by the previous service');
+              assert.equal(MODELS_STATE.editor.discovery.loaded,false);
+              assert.deepEqual(Array.from(MODELS_STATE.editor.discovery.modelIds),[],
+                'switching candidates must discard the previous discovery result');
+              assert.equal(MODELS_STATE.editor.source.serviceSlugSnapshot,'chrono-beta');
+
+              const policyFullState={draft:{sources:Array.from({length:8},(_,i)=>
+                validScopeSource(i,Array.from({length:256},(_,j)=>'model-'+i+'-'+j)))}};
+              MODELS_STATE.scope=policyFullState;
+              assert.match(modelsCatalogEditorSelectionProblem({owner:'scope',index:null},['one-more']),
+                /最多允许 2048 个模型 ID/,
+                'editor additions must enforce the policy limit before source save');
+
+              const filteredEditor={discovery:{search:'codex',modelIds:['gpt-5.4','gpt-5.4-codex','o3-codex']}};
+              assert.deepEqual(Array.from(modelsCatalogDiscoveryItems(filteredEditor),item=>item.modelId),
+                ['gpt-5.4-codex','o3-codex']);
+              modelsCatalogEndpoint=owner=>owner==='platform'
+                ?'/api/admin/llm-model-catalog'
+                :'/api/scopes/scope-alpha/llm-model-catalog';
+              assert.equal(modelsCatalogDiscoveryEndpoint('scope','user/service alpha'),
+                '/api/scopes/scope-alpha/llm-model-catalog/candidates/user%2Fservice%20alpha/models');
+              assert.equal(modelsCatalogDiscoveryEndpoint('platform','catalog-alpha'),
+                '/api/admin/llm-model-catalog/candidates/catalog-alpha/models');
+              assert.equal(modelsCatalogDiscoveryErrorMessage({
+                status:409,body:{detail:'candidate no longer callable'}
+              }),'candidate no longer callable · HTTP 409',
+                'discovery 409 must preserve its problem detail rather than report a policy conflict');
+
               let focused='';
               const first={disabled:false,focus(){focused='first';}};
               const last={disabled:false,focus(){focused='last';}};
@@ -638,8 +705,8 @@ public sealed class BackendConsoleStaticAssetEndpointTests
               };
               mountModelsCatalog(fakeRoot);
               mountModelsCatalog(fakeRoot);
-              assert.equal(fakeRoot.listenerCount, 3,
-                'the stable view root must receive one click/change/keydown listener set');
+              assert.equal(fakeRoot.listenerCount, 4,
+                'the stable view root must receive one click/change/input/keydown listener set');
             `, context);
 
             const ownerState = {
@@ -652,9 +719,13 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             context.modelsCatalogOwnerState = () => ownerState;
             context.modelsCatalogEndpoint = (_, candidates) => candidates ? '/candidates' : '/catalog';
             context.modelsCatalogRenderIfActive = () => {};
-            context.modelsCatalogErrorMessage = error => String(error);
+            context.modelsCatalogErrorMessage = error => String(error && error.body || error);
             context.responses = [];
-            context.modelsCatalogResponse = async () => context.responses.shift();
+            context.discoveryRequestPaths = [];
+            context.modelsCatalogResponse = async path => {
+              context.discoveryRequestPaths.push(path);
+              return context.responses.shift();
+            };
             vm.runInContext(
               sourceBetween('async function loadModelsCatalog(', 'function modelsCatalogCandidateIdentity('),
               context);
@@ -735,6 +806,61 @@ public sealed class BackendConsoleStaticAssetEndpointTests
               assert.equal(ownerState.loaded, true,
                 'retry must recover after authorization becomes available again');
               assert.equal(ownerState.draftBaseVersion, 11);
+
+              ownerState.draft = {mode:'custom_replace',sources:[]};
+              ownerState.candidates = [
+                context.modelsCatalogNormalizeCandidate({
+                  userServiceId:'user-alpha',catalogServiceId:'catalog-alpha',serviceSlug:'chrono-alpha',
+                  displayName:'Chrono Alpha',isCallable:true,availabilityReason:'available'
+                }),
+                context.modelsCatalogNormalizeCandidate({
+                  userServiceId:'user-beta',catalogServiceId:'catalog-beta',serviceSlug:'chrono-beta',
+                  displayName:'Chrono Beta',isCallable:true,availabilityReason:'available'
+                })
+              ];
+              context.MODELS_STATE.editor = {
+                owner:'scope',index:null,persistedKey:'',candidateKey:'user-alpha',error:null,
+                source:context.modelsCatalogNormalizeSource({
+                  sourceId:'source-discovery',userServiceId:'user-alpha',catalogServiceId:'catalog-alpha',
+                  serviceSlugSnapshot:'chrono-alpha',
+                  modelSelection:{mode:'explicit_models',modelIds:['alpha-manual']}
+                },'scope'),
+                discovery:context.modelsCatalogNewDiscoveryState()
+              };
+              let resolveAlphaDiscovery;
+              context.responses.push(new Promise(resolve => { resolveAlphaDiscovery = resolve; }));
+              const alphaDiscovery = context.modelsCatalogDiscoverModels();
+              context.modelsCatalogSelectCandidate('user-beta');
+              resolveAlphaDiscovery({forbidden:false,status:200,body:{
+                sourceIdentity:'user-alpha',serviceSlug:'chrono-alpha',modelIds:['alpha-remote']
+              }});
+              await alphaDiscovery;
+              assert.equal(context.MODELS_STATE.editor.candidateKey,'user-beta');
+              assert.equal(context.MODELS_STATE.editor.discovery.loaded,false);
+              assert.deepEqual(Array.from(context.MODELS_STATE.editor.discovery.modelIds),[],
+                'a completed request for the prior candidate must not write into the new candidate');
+              assert.equal(context.discoveryRequestPaths.at(-1),
+                '/catalog/candidates/user-alpha/models');
+
+              context.responses.push({forbidden:false,status:200,body:{
+                sourceIdentity:'user-wrong',serviceSlug:'chrono-beta',modelIds:['wrong-model']
+              }});
+              await context.modelsCatalogDiscoverModels();
+              assert.match(context.MODELS_STATE.editor.discovery.error,/sourceIdentity/,
+                'discovery errors remain local to the editor discovery state');
+              assert.equal(context.MODELS_STATE.editor.error,null);
+
+              context.responses.push({forbidden:false,status:200,body:{
+                sourceIdentity:'user-beta',serviceSlug:'chrono-beta',
+                defaultModelId:'gpt-5.4',modelIds:['gpt-5.5','gpt-5.4','gpt-5.5']
+              }});
+              await context.modelsCatalogDiscoverModels();
+              assert.equal(context.MODELS_STATE.editor.discovery.error,null);
+              assert.equal(context.MODELS_STATE.editor.discovery.loaded,true);
+              assert.deepEqual(Array.from(context.MODELS_STATE.editor.discovery.modelIds),
+                ['gpt-5.4','gpt-5.5'],
+                'retry stores a unique stable model list for the exact candidate');
+              assert.equal(context.MODELS_STATE.editor.discovery.defaultModelId,'gpt-5.4');
             })().catch(error => { console.error(error); process.exitCode = 1; });
             """;
 

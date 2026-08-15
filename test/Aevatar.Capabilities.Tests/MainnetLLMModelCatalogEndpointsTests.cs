@@ -624,6 +624,92 @@ public sealed class MainnetLLMModelCatalogEndpointsTests
     }
 
     [Fact]
+    public async Task GetScopeCandidateModels_ShouldResolveExactIdentityAndUseAuthoritativeSlug()
+    {
+        var inventory = new StubInventoryPort
+        {
+            ScopeServices = [ScopeService("user-chrono", "catalog-chrono", "chrono-llm")],
+        };
+        var discovery = new StubModelDiscoveryPort
+        {
+            ScopeModels = new NyxIdDiscoveredModels(["gpt-5.4-mini", "gpt-5.5"], "gpt-5.5"),
+        };
+        await using var app = await CreateAppAsync(inventory: inventory, modelDiscovery: discovery);
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"/api/scopes/{ScopeId}/llm-model-catalog/candidates/user-chrono/models");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "scope-token");
+
+        var response = await app.GetTestClient().SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        using var json = JsonDocument.Parse(body);
+        json.RootElement.GetProperty("sourceIdentity").GetString().Should().Be("user-chrono");
+        json.RootElement.GetProperty("serviceSlug").GetString().Should().Be("chrono-llm");
+        json.RootElement.GetProperty("modelIds").EnumerateArray()
+            .Select(static item => item.GetString()).Should().Equal("gpt-5.4-mini", "gpt-5.5");
+        json.RootElement.GetProperty("defaultModelId").GetString().Should().Be("gpt-5.5");
+        discovery.ScopeRequests.Should().ContainSingle().Which.Should().Be(
+            ("scope-token", "chrono-llm", "user-chrono"));
+        discovery.PlatformRequests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetScopeCandidateModels_WhenExactCandidateIsMissing_ShouldNotProbeProxy()
+    {
+        var discovery = new StubModelDiscoveryPort();
+        await using var app = await CreateAppAsync(
+            inventory: new StubInventoryPort
+            {
+                ScopeServices = [ScopeService("user-other", "catalog-chrono", "chrono-llm")],
+            },
+            modelDiscovery: discovery);
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"/api/scopes/{ScopeId}/llm-model-catalog/candidates/user-forged/models");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "scope-token");
+
+        var response = await app.GetTestClient().SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict, body);
+        body.Should().Contain("NYXID_MODEL_SOURCE_NOT_FOUND");
+        discovery.ScopeRequests.Should().BeEmpty();
+        discovery.PlatformRequests.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(NyxIdModelDiscoveryFailureKind.UpstreamRejected, HttpStatusCode.ServiceUnavailable)]
+    [InlineData(NyxIdModelDiscoveryFailureKind.ResponseInvalid, HttpStatusCode.ServiceUnavailable)]
+    public async Task GetScopeCandidateModels_WhenDiscoveryFails_ShouldMapTypedFailure(
+        NyxIdModelDiscoveryFailureKind failureKind,
+        HttpStatusCode expectedStatus)
+    {
+        var discovery = new StubModelDiscoveryPort
+        {
+            ScopeFailure = new NyxIdModelDiscoveryException(
+                failureKind,
+                HttpStatusCode.BadGateway,
+                "safe discovery failure"),
+        };
+        await using var app = await CreateAppAsync(
+            inventory: new StubInventoryPort
+            {
+                ScopeServices = [ScopeService("user-chrono", "catalog-chrono", "chrono-llm")],
+            },
+            modelDiscovery: discovery);
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"/api/scopes/{ScopeId}/llm-model-catalog/candidates/user-chrono/models");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "scope-token");
+
+        var response = await app.GetTestClient().SendAsync(request);
+
+        response.StatusCode.Should().Be(expectedStatus);
+    }
+
+    [Fact]
     public async Task GetScopeCandidates_WithUnsupportedTransportOrSlug_ShouldRemainVisibleButUnavailable()
     {
         var inventory = new StubInventoryPort
@@ -820,6 +906,39 @@ public sealed class MainnetLLMModelCatalogEndpointsTests
     }
 
     [Fact]
+    public async Task GetPlatformCandidateModels_ShouldRequireAdminAndUseExactCatalogIdentity()
+    {
+        var inventory = new StubInventoryPort
+        {
+            PlatformServices =
+            [
+                PlatformService(
+                    "catalog-chrono-public",
+                    "chrono-llm-public",
+                    NyxIdCatalogServiceVisibilityKind.Public),
+            ],
+        };
+        var discovery = new StubModelDiscoveryPort
+        {
+            PlatformModels = new NyxIdDiscoveredModels(["gpt-5.4", "gpt-5.5"], null),
+        };
+        await using var app = await CreateAppAsync(inventory: inventory, modelDiscovery: discovery);
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            "/api/admin/llm-model-catalog/candidates/catalog-chrono-public/models");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "admin-token");
+
+        var response = await app.GetTestClient().SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        body.Should().Contain("chrono-llm-public");
+        discovery.PlatformRequests.Should().ContainSingle().Which.Should().Be(
+            ("admin-token", "catalog-chrono-public"));
+        inventory.LastPlatformBearer.Should().Be("admin-token");
+    }
+
+    [Fact]
     public async Task GetPlatform_WhenCallerIsNotElevated_ShouldReturnForbidden()
     {
         await using var app = await CreateAppAsync(authorizer: new DeniedAuthorizer());
@@ -869,10 +988,34 @@ public sealed class MainnetLLMModelCatalogEndpointsTests
                 "internal"),
             requiresUserCredential);
 
+    private static NyxIdScopeModelSourceService ScopeService(
+        string userServiceId,
+        string catalogServiceId,
+        string slug) =>
+        new(
+            userServiceId,
+            catalogServiceId,
+            slug,
+            slug,
+            slug,
+            true,
+            new NyxIdModelSourceServiceType(NyxIdModelSourceServiceTypeKind.HTTP, "http"),
+            new NyxIdPersonalCredentialSource(),
+            new NyxIdModelSourceCredentialStatus(NyxIdModelSourceCredentialStatusKind.Active, "active"),
+            CredentialMissing: false,
+            new NyxIdModelSourceConnectionStatus(
+                NyxIdModelSourceConnectionStatusKind.NotApplicable,
+                WireValue: null),
+            NodeId: null,
+            new NyxIdModelSourceNodeStatus(
+                NyxIdModelSourceNodeStatusKind.NotApplicable,
+                WireValue: null));
+
     private static async Task<WebApplication> CreateAppAsync(
         StubPolicyQueryPort? query = null,
         StubPolicyCommandPort? commands = null,
         StubInventoryPort? inventory = null,
+        StubModelDiscoveryPort? modelDiscovery = null,
         IPlatformAdminAuthorizer? authorizer = null)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
@@ -888,6 +1031,8 @@ public sealed class MainnetLLMModelCatalogEndpointsTests
         builder.Services.AddSingleton<ILLMModelCatalogPolicyQueryPort>(query ?? new StubPolicyQueryPort());
         builder.Services.AddSingleton<ILLMModelCatalogPolicyCommandPort>(commands ?? new StubPolicyCommandPort());
         builder.Services.AddSingleton<INyxIdModelSourceInventoryPort>(inventory ?? new StubInventoryPort());
+        builder.Services.AddSingleton<INyxIdModelDiscoveryPort>(
+            modelDiscovery ?? new StubModelDiscoveryPort());
         builder.Services.AddSingleton<IPlatformAdminAuthorizer>(authorizer ?? new ElevatedAuthorizer());
         builder.Services.AddStudioApplication();
 
@@ -962,6 +1107,39 @@ public sealed class MainnetLLMModelCatalogEndpointsTests
             if (ScopeFailure is not null)
                 return Task.FromException<NyxIdScopeModelSourceInventory>(ScopeFailure);
             return Task.FromResult(new NyxIdScopeModelSourceInventory(ScopeServices));
+        }
+    }
+
+    private sealed class StubModelDiscoveryPort : INyxIdModelDiscoveryPort
+    {
+        public NyxIdDiscoveredModels ScopeModels { get; init; } = new([], null);
+        public NyxIdDiscoveredModels PlatformModels { get; init; } = new([], null);
+        public Exception? ScopeFailure { get; init; }
+        public Exception? PlatformFailure { get; init; }
+        public List<(string BearerToken, string ServiceSlug, string UserServiceId)> ScopeRequests { get; } = [];
+        public List<(string BearerToken, string CatalogServiceId)> PlatformRequests { get; } = [];
+
+        public Task<NyxIdDiscoveredModels> GetScopeModelsAsync(
+            string bearerToken,
+            string serviceSlug,
+            string userServiceId,
+            CancellationToken ct)
+        {
+            ScopeRequests.Add((bearerToken, serviceSlug, userServiceId));
+            return ScopeFailure is null
+                ? Task.FromResult(ScopeModels)
+                : Task.FromException<NyxIdDiscoveredModels>(ScopeFailure);
+        }
+
+        public Task<NyxIdDiscoveredModels> GetPlatformModelsAsync(
+            string bearerToken,
+            string catalogServiceId,
+            CancellationToken ct)
+        {
+            PlatformRequests.Add((bearerToken, catalogServiceId));
+            return PlatformFailure is null
+                ? Task.FromResult(PlatformModels)
+                : Task.FromException<NyxIdDiscoveredModels>(PlatformFailure);
         }
     }
 

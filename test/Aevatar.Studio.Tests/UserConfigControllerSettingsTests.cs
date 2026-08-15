@@ -86,7 +86,7 @@ public sealed class UserConfigControllerSettingsTests
                 "chrono-llm-public",
                 "Chrono LLM (public)"))
             .RespondToPathWith(
-                "/api/v1/proxy/s/chrono-llm-public/models",
+                "/api/v1/proxy/s/chrono-llm-public/models?_nyxid_via=us-chrono-public",
                 """
                 {
                   "object": "list",
@@ -120,7 +120,7 @@ public sealed class UserConfigControllerSettingsTests
                 "/api/v1/keys",
                 "/api/v1/proxy/services?per_page=100",
                 "/api/v1/user-services",
-                "/api/v1/proxy/s/chrono-llm-public/models");
+                "/api/v1/proxy/s/chrono-llm-public/models?_nyxid_via=us-chrono-public");
     }
 
     [Fact]
@@ -135,8 +135,6 @@ public sealed class UserConfigControllerSettingsTests
                   "service_slug": "chrono-llm",
                   "display_name": "Chrono LLM",
                   "route_value": "/api/v1/proxy/s/chrono-llm",
-                  "default_model": "gpt-5.5",
-                  "models": ["gpt-5.5"],
                   "status": "ready",
                   "source": "user_service",
                   "allowed": true
@@ -193,7 +191,13 @@ public sealed class UserConfigControllerSettingsTests
                 }
               ]
             }
-            """);
+            """)
+            .RespondToPathWith(
+                "/api/v1/proxy/s/chrono-llm/models?_nyxid_via=us-alpha",
+                """{"data":[{"id":"model-alpha"}]}""")
+            .RespondToPathWith(
+                "/api/v1/proxy/s/chrono-llm/models?_nyxid_via=us-beta",
+                """{"data":[{"id":"model-beta"}]}""");
         var catalog = CreateCatalogPort(httpHandler);
 
         var result = await catalog.GetServicesAsync("user-token-1", CancellationToken.None);
@@ -206,7 +210,18 @@ public sealed class UserConfigControllerSettingsTests
         result.Services.Select(service => service.Identity!.NyxIdUserServiceId)
             .Should()
             .NotContain(["llm-diagnostic-id", "key-alpha", "catalog-alpha"]);
+        result.Services.Single(service => service.Identity!.NyxIdUserServiceId == "us-alpha")
+            .ModelCatalog.ModelIds.Should().Equal("model-alpha");
+        result.Services.Single(service => service.Identity!.NyxIdUserServiceId == "us-beta")
+            .ModelCatalog.ModelIds.Should().Equal("model-beta");
         httpHandler.Requests.Select(request => request.Path).Should().Contain("/api/v1/user-services");
+        httpHandler.Requests
+            .Select(request => request.Path)
+            .Where(path => path.Contains("/models", StringComparison.Ordinal))
+            .Should()
+            .Equal(
+                "/api/v1/proxy/s/chrono-llm/models?_nyxid_via=us-alpha",
+                "/api/v1/proxy/s/chrono-llm/models?_nyxid_via=us-beta");
     }
 
     [Fact]
@@ -513,7 +528,9 @@ public sealed class UserConfigControllerSettingsTests
             }
             """))
             .RespondToUserServicesWith(PersonalUserServicesJson("us-chrono", "chrono-llm", "Chrono LLM"))
-            .RespondToPathWith("/api/v1/proxy/s/chrono-llm/models", """{"data":[]}""");
+            .RespondToPathWith(
+                "/api/v1/proxy/s/chrono-llm/models?_nyxid_via=us-chrono",
+                """{"data":[]}""");
         var controller = CreateController(
             current: UserServiceConfig("gpt-5.5", "chrono-llm", "us-chrono"),
             httpHandler: httpHandler,
@@ -538,7 +555,7 @@ public sealed class UserConfigControllerSettingsTests
                 "/api/v1/keys",
                 "/api/v1/proxy/services?per_page=100",
                 "/api/v1/user-services",
-                "/api/v1/proxy/s/chrono-llm/models");
+                "/api/v1/proxy/s/chrono-llm/models?_nyxid_via=us-chrono");
     }
 
     [Fact]

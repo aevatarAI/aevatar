@@ -67,6 +67,13 @@ The two policy owners have deliberately different portable identities:
   must be unique within the policy. It is the stable public model namespace, not an authoritative
   service identity or an access grant.
 
+`custom_replace` is also the user override boundary. It replaces the platform default as a whole;
+there is no source-by-source merge. This includes an explicitly empty override. To return a scope
+to the administrator-managed default, the client sends
+`DELETE /api/scopes/{scopeId}/llm-model-catalog` with the current `expectedStateVersion` and a
+`mutationId`. The committed scope mode then becomes `inherit_platform`; reset does not copy the
+current platform sources into scope-owned state.
+
 This policy controls discovery, not permission. Saving a source does not create a NyxID service,
 bind credentials, make an organization credential usable, or grant proxy access. Runtime model
 listing and qualified invocation resolve from the persisted policy and never call the human-only
@@ -75,6 +82,25 @@ authority when the resolved target is invoked at the proxy boundary. The Admin c
 the only consumers of those human inventory endpoints: scope candidates come from `/api/v1/keys`,
 platform candidates from `/api/v1/services`, and they are configuration aids rather than runtime
 facts.
+
+Model inventory can be fetched on demand while editing a source. These configuration-only APIs are:
+
+- `GET /api/scopes/{scopeId}/llm-model-catalog/candidates/{userServiceId}/models`;
+- `GET /api/admin/llm-model-catalog/candidates/{catalogServiceId}/models`.
+
+The scope endpoint re-reads the caller's authoritative NyxID inventory, requires an ordinal exact
+`userServiceId` match that is currently callable, derives the canonical slug from that match, and
+then requests the upstream service's `/models` through
+`/api/v1/proxy/s/{serviceSlug}/models?_nyxid_via={userServiceId}`. The platform endpoint re-reads
+the authoritative catalog inventory, requires an ordinal exact `catalogServiceId` match that is
+currently selectable, and requests `/api/v1/proxy/{catalogServiceId}/models`. A caller cannot
+supply a trusted slug, URL, or proxy destination to either endpoint.
+
+A successful discovery response contains `sourceIdentity`, `serviceSlug`, sorted unique
+`modelIds`, and an optional `defaultModelId`. It is an editing suggestion, not a policy mutation or
+a runtime fact. The operator selects models and persists them as `explicit_models` through the
+corresponding policy `PUT`; an upstream discovery failure fails the request, while a valid empty
+upstream list remains an empty suggestion. Runtime reads do not repeat this fetch.
 
 Aevatar must never classify an LLM source or repair a missing identity from URL text, display name,
 service name, or the presence of `llm` in any of those strings. A canonical slug is accepted only as
@@ -116,7 +142,10 @@ Qualified invocation uses the same effective policy as listing and requires an o
 for both `serviceSlugSnapshot` and `upstreamModelId`. A match produces a typed target: a platform
 source supplies its exact `catalogServiceId`, while a scope source supplies its exact
 `userServiceId` together with the canonical slug snapshot. The slug remains a public namespace and
-never becomes authoritative identity. An unknown qualified slug or model returns
+never becomes authoritative identity. Every qualified model ID returned by `/v1/models` is resolved
+through this same policy path by both `POST /v1/chat/completions` and `POST /v1/responses`; subject
+to NyxID proxy authorization and upstream availability, the same ID is therefore invocable through
+either API. An unknown qualified slug or model returns
 `404 model_not_found`; a routing-projection failure returns `503 model_route_unavailable`. Bare
 model routing remains a legacy compatibility path. Runtime routing does not read external inventory
 or keep an in-process per-bearer catalog/slug cache.

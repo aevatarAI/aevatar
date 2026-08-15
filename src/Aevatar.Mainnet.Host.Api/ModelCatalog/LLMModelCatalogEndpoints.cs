@@ -20,12 +20,14 @@ internal static class LLMModelCatalogEndpoints
         scopes.MapPut("", PutScopeAsync);
         scopes.MapDelete("", ResetScopeAsync);
         scopes.MapGet("/candidates", GetScopeCandidatesAsync);
+        scopes.MapGet("/candidates/{userServiceId}/models", GetScopeCandidateModelsAsync);
 
         var admin = app.MapGroup("/api/admin/llm-model-catalog")
             .WithTags("LLMModelCatalogAdmin");
         admin.MapGet("", GetPlatformAsync);
         admin.MapPut("", PutPlatformAsync);
         admin.MapGet("/candidates", GetPlatformCandidatesAsync);
+        admin.MapGet("/candidates/{catalogServiceId}/models", GetPlatformCandidateModelsAsync);
         return app;
     }
 
@@ -169,6 +171,41 @@ internal static class LLMModelCatalogEndpoints
         }
     }
 
+    private static async Task<IResult> GetScopeCandidateModelsAsync(
+        HttpContext http,
+        string scopeId,
+        string userServiceId,
+        [FromServices] ILLMModelCatalogPolicyApplicationService service,
+        CancellationToken ct)
+    {
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+        if (!TryGetBearerToken(http, out var bearerToken))
+            return Error(StatusCodes.Status401Unauthorized, "AUTHENTICATION_REQUIRED", "Bearer token is required.");
+
+        try
+        {
+            var discovery = await service
+                .DiscoverScopeModelsAsync(bearerToken, userServiceId, ct)
+                .ConfigureAwait(false);
+            return Results.Json(new
+            {
+                sourceIdentity = discovery.SourceIdentity,
+                serviceSlug = discovery.ServiceSlug,
+                modelIds = discovery.ModelIds,
+                defaultModelId = discovery.DefaultModelId,
+            });
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (LLMModelCatalogApplicationException ex)
+        {
+            return ToError(ex);
+        }
+    }
+
     private static async Task<IResult> GetPlatformAsync(
         HttpContext http,
         [FromServices] IPlatformAdminAuthorizer? authorizer,
@@ -260,6 +297,40 @@ internal static class LLMModelCatalogEndpoints
                     serviceCategory = candidate.ServiceCategory.WireValue,
                     requiresUserCredential = candidate.RequiresUserCredential,
                 }),
+            });
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (LLMModelCatalogApplicationException ex)
+        {
+            return ToError(ex);
+        }
+    }
+
+    private static async Task<IResult> GetPlatformCandidateModelsAsync(
+        HttpContext http,
+        string catalogServiceId,
+        [FromServices] IPlatformAdminAuthorizer? authorizer,
+        [FromServices] ILLMModelCatalogPolicyApplicationService service,
+        CancellationToken ct)
+    {
+        var authorization = await AuthorizePlatformAdminAsync(http, authorizer, ct).ConfigureAwait(false);
+        if (authorization.Error is not null)
+            return authorization.Error;
+
+        try
+        {
+            var discovery = await service
+                .DiscoverPlatformModelsAsync(authorization.BearerToken, catalogServiceId, ct)
+                .ConfigureAwait(false);
+            return Results.Json(new
+            {
+                sourceIdentity = discovery.SourceIdentity,
+                serviceSlug = discovery.ServiceSlug,
+                modelIds = discovery.ModelIds,
+                defaultModelId = discovery.DefaultModelId,
             });
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
