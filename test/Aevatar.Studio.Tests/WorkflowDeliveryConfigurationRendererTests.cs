@@ -81,6 +81,56 @@ public sealed class WorkflowDeliveryConfigurationRendererTests
         package.SourceYaml.Should().Be(SourceYaml);
     }
 
+    [Fact]
+    public void Render_WhenRequiredConfigurationFieldIsMissing_ShouldRejectInsteadOfKeepingPackageDefault()
+    {
+        var package = Package();
+        var renderer = new WorkflowDeliveryConfigurationRenderer();
+
+        var action = () => renderer.Render(
+            package,
+            new Dictionary<string, JsonElement>(),
+            new Dictionary<string, string>
+            {
+                ["mail"] = "user-service-alpha",
+            });
+
+        var exception = action.Should().Throw<WorkflowDeliveryConfigurationException>().Which;
+        exception.Code.Should().Be("CONFIGURATION_FIELD_REQUIRED");
+        exception.Message.Should().Contain("threshold");
+        package.SourceYaml.Should().Be(SourceYaml);
+    }
+
+    [Fact]
+    public void Render_WhenOptionalConfigurationFieldIsMissing_ShouldKeepPackageDefault()
+    {
+        var package = Package();
+        package.VariableSchema.Add(new WorkflowDeliveryVariableDefinition
+        {
+            Key = "keep",
+            Label = "Keep",
+            Description = "Optional passthrough",
+            Kind = WorkflowDeliveryVariableKind.String,
+            Required = false,
+            YamlPointer = "/steps/0/parameters/value",
+            JsonPointer = "/nested/keep",
+        });
+        var renderer = new WorkflowDeliveryConfigurationRenderer();
+
+        var result = renderer.Render(
+            package,
+            new Dictionary<string, JsonElement>
+            {
+                ["threshold"] = Json("25"),
+            },
+            new Dictionary<string, string>
+            {
+                ["mail"] = "user-service-alpha",
+            });
+
+        result.ResolvedYaml.Should().Contain("\"keep\":\"yes\"");
+    }
+
     private static WorkflowPackageVersionSnapshot Package()
     {
         var package = new WorkflowPackageVersionSnapshot

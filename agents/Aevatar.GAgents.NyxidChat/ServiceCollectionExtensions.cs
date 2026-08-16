@@ -114,7 +114,13 @@ public static class ServiceCollectionExtensions
         // ─── Channel LLM reply run dispatch ───
         services.TryAddSingleton<IChannelLlmReplyRunDispatcher, AgentRunDispatcher>();
         services.TryAddSingleton<IAgentRunToolApprovalDecisionDispatcher, AgentRunToolApprovalDecisionDispatcher>();
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelSlashCommandHandler, ChannelWorkflowDraftRunSlashCommandHandler>());
+        // The two-generic overload keeps the concrete implementation type visible to
+        // TryAddEnumerable; a Func<IServiceProvider, IChannelSlashCommandHandler> factory
+        // would be indistinguishable from every other handler registered for this service.
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IChannelSlashCommandHandler, ChannelWorkflowDraftRunSlashCommandHandler>(sp =>
+                new ChannelWorkflowDraftRunSlashCommandHandler(
+                    sp.GetService<Aevatar.GAgentService.Abstractions.Ports.IScopeWorkflowQueryPort>())));
         services.TryAddSingleton<ChannelSlashCommandRegistry>();
         services.TryAddSingleton<ChannelWorkflowDraftRunIntentParser>();
         services.TryAddSingleton<ChannelWorkflowDraftRunAdmission>(sp =>

@@ -108,6 +108,17 @@ public sealed class WorkflowDeliveryContinuationScanner
             {
                 if (delivery.Installation?.Status != status)
                     continue;
+                // Revoking or expiring a delivery withdraws the administrator's authority to
+                // keep provisioning into the customer's scope. The actor guards the customer's
+                // own mutations, but every continuation here runs off the read model with no
+                // request to reject, so the withdrawal has to be honoured before resuming.
+                if (!IsDeliveryAvailable(delivery))
+                {
+                    _logger.LogInformation(
+                        "Skipping workflow delivery continuation for delivery {DeliveryId}: the delivery is no longer available.",
+                        delivery.DeliveryId);
+                    continue;
+                }
                 try
                 {
                     await continueAsync(delivery, ct);
@@ -133,6 +144,10 @@ public sealed class WorkflowDeliveryContinuationScanner
         }
         while (cursor != null);
     }
+
+    private bool IsDeliveryAvailable(WorkflowDeliverySnapshot delivery) =>
+        delivery.LifecycleStatus != WorkflowDeliveryLifecycleStatus.Revoked &&
+        delivery.ExpiresAtUtc > _timeProvider.GetUtcNow();
 
     private static string? NormalizeCursor(string? cursor) =>
         string.IsNullOrWhiteSpace(cursor) ? null : cursor.Trim();

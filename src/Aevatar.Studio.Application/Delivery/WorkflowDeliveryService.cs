@@ -50,6 +50,7 @@ public sealed class WorkflowDeliveryService : IWorkflowDeliveryService
     private readonly IStudioWorkflowProvisioningService _provisioning;
     private readonly IOptions<WorkflowDeliveryOptions> _options;
     private readonly TimeProvider _timeProvider;
+    private readonly Uri? _consoleWebBaseUri;
 
     public WorkflowDeliveryService(
         IWorkflowDeliveryPackageCatalog packages,
@@ -71,6 +72,15 @@ public sealed class WorkflowDeliveryService : IWorkflowDeliveryService
         _provisioning = provisioning ?? throw new ArgumentNullException(nameof(provisioning));
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
+        var configuredConsoleWebBaseUrl = _options.Value.ConsoleWebBaseUrl;
+        if (string.IsNullOrWhiteSpace(configuredConsoleWebBaseUrl))
+            _consoleWebBaseUri = null;
+        else if (WorkflowDeliveryConsoleLink.TryNormalizeBaseUrl(configuredConsoleWebBaseUrl, out var consoleWebBaseUri))
+            _consoleWebBaseUri = consoleWebBaseUri;
+        else
+            throw new InvalidOperationException(
+                $"{WorkflowDeliveryOptions.SectionName}:{nameof(WorkflowDeliveryOptions.ConsoleWebBaseUrl)} " +
+                "must be an absolute HTTPS origin (or a loopback HTTP origin) without userinfo, query, or fragment.");
     }
 
     public async Task<WorkflowDeliveryPackageListResponse> ListPackagesAsync(
@@ -378,7 +388,7 @@ public sealed class WorkflowDeliveryService : IWorkflowDeliveryService
                 installation.InstallationId,
                 InstallationStatusName(installation.Status),
                 BuildInstallationStatusUrl(delivery.TargetScopeId, installation.InstallationId),
-                BuildStudioUrl(installation));
+                BuildConsoleUrl(installation));
 
         var attempt = checked(installation.Attempt + 1);
         var operationId = BuildProvisionOperationId(installation.InstallationId, attempt);
@@ -770,7 +780,7 @@ public sealed class WorkflowDeliveryService : IWorkflowDeliveryService
             policy.Limitation);
     }
 
-    private static WorkflowInstallationView ToInstallationView(WorkflowInstallationSnapshot installation) =>
+    private WorkflowInstallationView ToInstallationView(WorkflowInstallationSnapshot installation) =>
         new(
             installation.InstallationId,
             installation.ScopeId,
@@ -793,12 +803,36 @@ public sealed class WorkflowDeliveryService : IWorkflowDeliveryService
                     evidence.VerificationReference,
                     evidence.ContentDigest)).ToArray() ?? [],
             installation.UpdatedAtUtc,
-            BuildStudioUrl(installation));
+            BuildConsoleUrl(installation),
+            BuildChannelRunCommand(installation));
 
-    private static string? BuildStudioUrl(WorkflowInstallationSnapshot installation) =>
-        string.IsNullOrWhiteSpace(installation.MemberId)
+    /// <summary>
+    /// Absolute product-console URL, or <see langword="null"/> when the console-web origin
+    /// is unconfigured. Never a same-origin path: this API host does not serve the console.
+    /// </summary>
+    private string? BuildConsoleUrl(WorkflowInstallationSnapshot installation) =>
+        WorkflowDeliveryConsoleLink.BuildMemberWorkflowUrl(
+            _consoleWebBaseUri,
+            installation.ScopeId,
+            installation.TeamId,
+            installation.MemberId);
+
+    /// <summary>
+    /// The exact channel slash command that runs this installed workflow from a bound
+    /// messaging channel. It is only meaningful once the published workflow identity
+    /// exists, so it stays null until then.
+    /// <para>
+    /// The command is not universally runnable: the channel admission path resolves the
+    /// workflow in the BOT REGISTRATION's scope, so it only reaches this installation when
+    /// the bot is registered in this installation's own scope. Delivery does not create that
+    /// registration and cannot assert it, so any surface rendering this command must state
+    /// the precondition rather than present it as a ready-to-use entry point.
+    /// </para>
+    /// </summary>
+    private static string? BuildChannelRunCommand(WorkflowInstallationSnapshot installation) =>
+        string.IsNullOrWhiteSpace(installation.WorkflowId)
             ? null
-            : $"/scopes/{Uri.EscapeDataString(installation.ScopeId)}/teams/{Uri.EscapeDataString(installation.TeamId)}/members/{Uri.EscapeDataString(installation.MemberId)}/workflow";
+            : $"/workflow run {installation.WorkflowId}";
 
     private string DeliveryStatusName(WorkflowDeliverySnapshot delivery) =>
         delivery.LifecycleStatus == DeliveryLifecycleStatus.Revoked

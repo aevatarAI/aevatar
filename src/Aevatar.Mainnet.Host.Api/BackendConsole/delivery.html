@@ -709,6 +709,20 @@
       }
     }
 
+    // The product console is a different host from this API. A console link must therefore
+    // be an absolute URL the server built from its configured console-web origin; resolving
+    // a relative path against this page's origin would produce a link that does not exist.
+    function absoluteHttpUrl(value) {
+      if (!text(value)) return "";
+      try {
+        const parsed = new URL(value);
+        if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return "";
+        return parsed.toString();
+      } catch (error) {
+        return "";
+      }
+    }
+
     function statusTone(status) {
       const value = String(status || "").toLowerCase();
       if (["ready", "completed", "connected", "active", "valid"].indexOf(value) >= 0) return "success";
@@ -1283,6 +1297,16 @@
     function errorDescription(error) {
       if (!(error instanceof ApiError)) {
         return { tone: "danger", title: "页面载入失败", message: error && error.message ? error.message : String(error) };
+      }
+      // Publish resolves a NyxID automation authority that only the product console's login
+      // commits. A customer who reached this page from a delivery link alone has no such
+      // binding, and the server's raw message does not say where to get one.
+      if (error.code === "DELIVERY_AUTHORIZATION_BINDING_REQUIRED") {
+        return {
+          tone: "warning",
+          title: "需要先在 Aevatar Console 完成一次 NyxID 登录",
+          message: "发布需要一条由 Aevatar Console 登录流程写入的 NyxID 授权绑定，当前账号还没有。请先用同一个 NyxID 账号登录 Aevatar Console，然后回到本页重试发布。"
+        };
       }
       const states = {
         403: { title: "没有访问权限", message: error.message },
@@ -1887,7 +1911,7 @@
         idempotencyKey: "",
         connectionRuntime: Object.create(null),
         connectionErrors: Object.create(null),
-        consoleUrl: safeHttpUrl(first(detail, ["studioUrl", "consoleUrl"], "")),
+        consoleUrl: absoluteHttpUrl(first(detail, ["consoleUrl"], "")),
         busy: "",
         clientError: ""
       };
@@ -2066,7 +2090,11 @@
         return notice(description.tone, description.title, description.message);
       }
       if (!state.customer.teams.length) {
-        return emptyBlock("没有可发布的 Team", "当前 scope 未返回具备发布权限的 Team。");
+        // Publish requires an existing Team, and this page cannot create one. A brand-new
+        // scope therefore dead-ends here unless the customer is told where Teams are created.
+        return emptyBlock(
+          "没有可发布的 Team",
+          "当前 scope 未返回具备发布权限的 Team。请先在 Aevatar Console 创建 Team，然后回到本页刷新。");
       }
       return h("div", { className: "team-list" }, state.customer.teams.map(function (team) {
         const id = teamId(team);
@@ -2641,7 +2669,7 @@
         state.customer.acceptedHttpStatus = result.status;
         state.customer.acceptedAtMs = result.status === 202 ? Date.now() : 0;
         state.customer.installation = response;
-        state.customer.consoleUrl = safeHttpUrl(first(response, ["studioUrl", "consoleUrl"], ""));
+        state.customer.consoleUrl = absoluteHttpUrl(first(response, ["consoleUrl"], ""));
         state.notice = result.status === 202
           ? { tone: "info", title: "发布请求已受理", message: "HTTP 202 只表示进入处理队列；只有安装状态 ready 才表示成功。" }
           : { tone: "info", title: "已获得安装记录", message: "正在读取服务端安装状态。" };
@@ -2743,6 +2771,80 @@
       }
     }
 
+    function copyButton(value, label) {
+      if (!text(value)) return null;
+      return h("button", {
+        className: "button secondary",
+        type: "button",
+        onClick: function (event) {
+          const button = event.currentTarget;
+          const original = label;
+          const done = function (ok) {
+            button.textContent = ok ? "已复制" : "复制失败";
+            announce(ok ? "已复制到剪贴板" : "复制失败，请手动选择文本");
+            window.setTimeout(function () { button.textContent = original; }, 2000);
+          };
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(value).then(function () { done(true); }, function () { done(false); });
+          } else {
+            done(false);
+          }
+        },
+        text: label
+      });
+    }
+
+    // Ready means the workflow is published and runnable — but the two places a customer
+    // actually uses it (the product console and a bound messaging channel) are separate
+    // surfaces this page cannot reach. Both entry points are therefore stated explicitly,
+    // and each is omitted rather than guessed when the server did not return it.
+    function renderUsageSection(consoleUrl, channelRunCommand, workflowId) {
+      const rows = [];
+      rows.push(
+        h("div", { className: "stage-row" },
+          h("span", { className: "stage-index", text: "1" }),
+          h("div", null,
+            h("strong", { text: "在 Aevatar Console 中运行" }),
+            consoleUrl
+              ? h("p", { text: "打开该 Team 成员的 workflow 页面，可查看定义、手动运行并查看运行记录。" })
+              : h("p", { text: "服务端未配置 Aevatar:Delivery:ConsoleWebBaseUrl，无法生成 Console 链接；请联系交付管理员补充该配置。" })
+          ),
+          consoleUrl
+            ? h("a", {
+                className: "button primary",
+                href: consoleUrl,
+                target: "_blank",
+                rel: "noopener noreferrer",
+                text: "打开 Console"
+              })
+            : badge("warning", "未配置")
+        )
+      );
+      if (channelRunCommand) {
+        rows.push(
+          h("div", { className: "stage-row" },
+            h("span", { className: "stage-index", text: "2" }),
+            h("div", null,
+              h("strong", { text: "在已绑定的 Lark / 消息渠道中运行" }),
+              h("p", { text: "该指令在机器人注册所在的 scope 内解析 workflow，因此机器人必须注册在本次交付的目标 scope（" + text(first(installation, ["scopeId"], ""), "本 scope") + "）下，否则会提示未找到 workflow。" }),
+              h("p", { className: "mono", text: channelRunCommand }),
+              h("p", { text: "在会话中发送 /workflow list 可列出该 scope 的 workflow 及其运行指令。" })
+            ),
+            copyButton(channelRunCommand, "复制指令")
+          )
+        );
+      }
+      return h("section", { className: "section", style: { marginTop: "16px" } },
+        h("div", { className: "section-head" },
+          h("div", null,
+            h("h2", { text: "现在如何使用" }),
+            h("p", { text: "安装已 ready，以下是本次交付真实可用的两个入口。" })
+          )
+        ),
+        h("div", { className: "stage-list" }, rows)
+      );
+    }
+
     function renderInstallation() {
       if (!state.customer.installationId) {
         return notice("info", "尚未发布", "完成配置校验后可提交发布。");
@@ -2776,8 +2878,10 @@
       const evidenceItems = array(evidenceValue);
       const explicitRetryable = first(installation, ["retryable", "canRetry"], undefined);
       const retryable = explicitRetryable === true || (explicitRetryable === undefined && status === "failed");
-      const consoleUrl = safeHttpUrl(first(installation, ["consoleUrl", "studioUrl", "openInConsoleUrl"], "")) ||
+      const consoleUrl = absoluteHttpUrl(first(installation, ["consoleUrl"], "")) ||
         state.customer.consoleUrl;
+      const channelRunCommand = text(first(installation, ["channelRunCommand"], ""));
+      const workflowId = text(first(installation, ["workflowId"], ""));
       const title = ready ? "安装已就绪" : (status === "failed" ? "安装失败" : "安装状态");
       const message = ready
         ? "服务端 installation.status 已确认 ready。"
@@ -2794,6 +2898,9 @@
           h("dt", { text: "更新时间" }), h("dd", { text: formatDate(first(installation, ["updatedAt", "updatedAtUtc"], "")) })
         )
       );
+      if (ready) {
+        body.append(renderUsageSection(consoleUrl, channelRunCommand, workflowId));
+      }
       if (stages.length) {
         body.append(
           h("div", { className: "stage-list", style: { marginTop: "12px" } }, stages.map(function (stage, index) {

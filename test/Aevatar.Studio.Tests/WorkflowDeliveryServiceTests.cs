@@ -245,7 +245,7 @@ public sealed class WorkflowDeliveryServiceTests
     }
 
     [Fact]
-    public async Task GetInstallationAsync_WhenMemberIsKnown_ShouldReturnCanonicalStudioMemberUrl()
+    public async Task GetInstallationAsync_WhenMemberIsKnown_ShouldReturnAbsoluteConsoleUrlAndChannelRunCommand()
     {
         var now = DateTimeOffset.Parse("2026-08-16T01:00:00Z");
         var installation = new WorkflowInstallationSnapshot(
@@ -279,14 +279,80 @@ public sealed class WorkflowDeliveryServiceTests
             1,
             now,
             now);
+        var context = new TestContext(
+            DeliverySnapshot() with { Installation = installation },
+            options: new WorkflowDeliveryOptions
+            {
+                ConsoleWebBaseUrl = "https://aevatar-console.aevatar.ai",
+            });
+
+        var result = await context.Service.GetInstallationAsync("scope-alpha", "installation-alpha");
+
+        result.Should().NotBeNull();
+        result!.ConsoleUrl.Should().Be(
+            "https://aevatar-console.aevatar.ai/scopes/scope-alpha/teams/team-alpha/members/m-alpha/workflow");
+        result.ChannelRunCommand.Should().Be("/workflow run wf-alpha");
+    }
+
+    [Fact]
+    public async Task GetInstallationAsync_WhenConsoleWebBaseUrlIsUnconfigured_ShouldOmitConsoleUrl()
+    {
+        var now = DateTimeOffset.Parse("2026-08-16T01:00:00Z");
+        var installation = ProvisionedInstallation(now);
         var context = new TestContext(DeliverySnapshot() with { Installation = installation });
 
         var result = await context.Service.GetInstallationAsync("scope-alpha", "installation-alpha");
 
         result.Should().NotBeNull();
-        result!.StudioUrl.Should().Be(
-            "/scopes/scope-alpha/teams/team-alpha/members/m-alpha/workflow");
+        result!.ConsoleUrl.Should().BeNull();
+        result.ChannelRunCommand.Should().Be("/workflow run wf-alpha");
     }
+
+    [Fact]
+    public void Constructor_WhenConsoleWebBaseUrlIsNotAnAbsoluteHttpsOrigin_ShouldFailFast()
+    {
+        var action = () => new TestContext(
+            options: new WorkflowDeliveryOptions
+            {
+                ConsoleWebBaseUrl = "/scopes",
+            });
+
+        action.Should().Throw<InvalidOperationException>()
+            .WithMessage("*ConsoleWebBaseUrl*");
+    }
+
+    private static WorkflowInstallationSnapshot ProvisionedInstallation(DateTimeOffset now) =>
+        new(
+            "installation-alpha",
+            "publish-alpha",
+            "scope-alpha",
+            "team-alpha",
+            new Dictionary<string, string>(),
+            new Dictionary<string, string>(),
+            new WorkflowDeliveryTriggerIntent(WorkflowDeliveryTriggerKind.None, null, null, false),
+            "source-alpha",
+            "resolved-alpha",
+            "name: workflow-alpha\nsteps: []\n",
+            [],
+            new WorkflowCapabilityAdmissionPlan(),
+            null,
+            "installation-alpha:provision:a1",
+            WorkflowInstallationStatus.ProvisioningAccepted,
+            "provisioning_accepted",
+            null,
+            null,
+            "wf-alpha",
+            "m-alpha",
+            "svc-alpha",
+            "rev-alpha",
+            "binding-alpha",
+            null,
+            null,
+            null,
+            null,
+            1,
+            now,
+            now);
 
     private static WorkflowDeliveryPublishRequest PublishRequest(string digest, string risk) =>
         new(
@@ -368,7 +434,8 @@ public sealed class WorkflowDeliveryServiceTests
     {
         public TestContext(
             WorkflowDeliverySnapshot? snapshot = null,
-            INyxIdConnectLinkPort? connectLinks = null)
+            INyxIdConnectLinkPort? connectLinks = null,
+            WorkflowDeliveryOptions? options = null)
         {
             Commands = new RecordingCommandPort();
             Queries = new StubQueryPort(snapshot ?? DeliverySnapshot());
@@ -382,7 +449,7 @@ public sealed class WorkflowDeliveryServiceTests
                 connectLinks ?? new UnusedConnectLinkPort(),
                 Preview,
                 Provisioning,
-                Options.Create(new WorkflowDeliveryOptions()),
+                Options.Create(options ?? new WorkflowDeliveryOptions()),
                 new FixedTimeProvider(DateTimeOffset.Parse("2026-08-16T02:00:00Z")));
         }
 

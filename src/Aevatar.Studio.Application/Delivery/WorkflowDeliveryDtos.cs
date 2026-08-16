@@ -110,7 +110,8 @@ public sealed record WorkflowInstallationView(
     string? AcceptanceRunId,
     IReadOnlyList<WorkflowInstallationEvidenceView> Evidence,
     DateTimeOffset UpdatedAt,
-    string? StudioUrl);
+    string? ConsoleUrl,
+    string? ChannelRunCommand);
 
 public sealed record WorkflowDeliveryView(
     string DeliveryId,
@@ -153,7 +154,7 @@ public sealed record WorkflowInstallationAcceptedResponse(
     string InstallationId,
     string Status,
     string StatusUrl,
-    string? StudioUrl);
+    string? ConsoleUrl);
 
 public sealed record WorkflowDeliveryConnectLinkResponse(
     string SlotKey,

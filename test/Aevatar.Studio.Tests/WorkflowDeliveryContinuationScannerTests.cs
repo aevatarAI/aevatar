@@ -243,6 +243,74 @@ public sealed class WorkflowDeliveryContinuationScannerTests
             throw new NotSupportedException();
     }
 
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task ScanOnceAsync_WhenDeliveryIsRevokedOrExpired_ShouldNotResumeProvisioningIntoTheCustomerScope(
+        bool revoked,
+        bool expired)
+    {
+        var delivery = WorkflowDeliveryProvisioningExecutorTests.Delivery(
+            WorkflowInstallationStatus.ProvisioningAccepted,
+            pageSuffix: "withdrawn");
+        var now = DateTimeOffset.Parse("2026-08-16T06:00:00Z");
+        if (revoked)
+        {
+            delivery = delivery with
+            {
+                LifecycleStatus = WorkflowDeliveryLifecycleStatus.Revoked,
+                RevokedBy = "admin-alpha",
+                RevokedAtUtc = now,
+            };
+        }
+
+        if (expired)
+            delivery = delivery with { ExpiresAtUtc = now.AddMinutes(-1) };
+
+        var materializer = new RecordingArtifactMaterializer();
+        var readiness = new RecordingReadinessReconciler();
+        var commands = new RecordingCommandPort();
+        var scanner = new WorkflowDeliveryContinuationScanner(
+            new SingleDeliveryQueryPort(delivery),
+            new RecordingProvisioningExecutor(),
+            materializer,
+            readiness,
+            commands,
+            new FixedTimeProvider(now),
+            NullLogger<WorkflowDeliveryContinuationScanner>.Instance,
+            Options.Create(new WorkflowDeliveryContinuationWorkerOptions()));
+
+        await scanner.ScanOnceAsync();
+
+        materializer.Deliveries.Should().BeEmpty();
+        readiness.Deliveries.Should().BeEmpty();
+        commands.Failures.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ScanOnceAsync_WhenDeliveryIsActiveAndUnexpired_ShouldStillResumeContinuation()
+    {
+        var delivery = WorkflowDeliveryProvisioningExecutorTests.Delivery(
+            WorkflowInstallationStatus.ProvisioningAccepted,
+            pageSuffix: "active");
+        var materializer = new RecordingArtifactMaterializer();
+        var readiness = new RecordingReadinessReconciler();
+        var scanner = new WorkflowDeliveryContinuationScanner(
+            new SingleDeliveryQueryPort(delivery),
+            new RecordingProvisioningExecutor(),
+            materializer,
+            readiness,
+            new RecordingCommandPort(),
+            new FixedTimeProvider(DateTimeOffset.Parse("2026-08-16T06:00:00Z")),
+            NullLogger<WorkflowDeliveryContinuationScanner>.Instance,
+            Options.Create(new WorkflowDeliveryContinuationWorkerOptions()));
+
+        await scanner.ScanOnceAsync();
+
+        readiness.Deliveries.Select(static item => item.DeliveryId).Should().Equal("delivery-active");
+    }
+
     private sealed class SingleDeliveryQueryPort(WorkflowDeliverySnapshot delivery) : IWorkflowDeliveryQueryPort
     {
         public Task<WorkflowDeliveryListResult> ListAsync(

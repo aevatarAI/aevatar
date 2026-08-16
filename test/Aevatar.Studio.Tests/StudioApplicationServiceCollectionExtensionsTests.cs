@@ -239,6 +239,45 @@ public sealed class StudioApplicationServiceCollectionExtensionsTests
         options.AllowedWorkflowNames.Should().BeEmpty();
     }
 
+    [Theory]
+    [InlineData("https://aevatar-console.aevatar.ai")]
+    [InlineData("http://localhost:8000")]
+    public void AddStudioHostingCore_WhenConsoleWebBaseUrlIsAValidOrigin_ShouldKeepIt(string value)
+    {
+        var options = ResolveDeliveryOptions(DeliveryConfiguration("ConsoleWebBaseUrl", value));
+
+        options.ConsoleWebBaseUrl.Should().Be(value);
+    }
+
+    [Fact]
+    public void AddStudioHostingCore_WhenConsoleWebBaseUrlIsUnset_ShouldRemainEmpty()
+    {
+        var options = ResolveDeliveryOptions(new ConfigurationBuilder().Build());
+
+        options.ConsoleWebBaseUrl.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("/scopes")]
+    [InlineData("http://aevatar-console.aevatar.ai")]
+    [InlineData("https://aevatar-console.aevatar.ai?next=/scopes")]
+    public void AddStudioHostingCore_WhenConsoleWebBaseUrlIsInvalid_ShouldFailFastInsteadOfDroppingTheConsoleLink(
+        string value)
+    {
+        var action = () => ResolveDeliveryOptions(DeliveryConfiguration("ConsoleWebBaseUrl", value));
+
+        action.Should().Throw<InvalidOperationException>()
+            .WithMessage("*ConsoleWebBaseUrl*");
+    }
+
+    private static IConfiguration DeliveryConfiguration(string key, string value) =>
+        new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [$"{WorkflowDeliveryOptions.SectionName}:{key}"] = value,
+            })
+            .Build();
+
     private static WorkflowDeliveryOptions ResolveDeliveryOptions(IConfiguration configuration)
     {
         var services = new ServiceCollection();

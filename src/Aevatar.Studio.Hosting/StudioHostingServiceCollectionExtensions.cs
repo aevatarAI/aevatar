@@ -50,6 +50,16 @@ internal static class StudioHostingServiceCollectionExtensions
             {
                 options.AllowedWorkflowNames = [.. WorkflowDeliveryOptions.ShippedWorkflowNames];
             }
+
+            // A misconfigured console-web origin would silently degrade to "no console link"
+            // for every customer, so a present-but-invalid value fails the host instead.
+            if (!string.IsNullOrWhiteSpace(options.ConsoleWebBaseUrl) &&
+                !WorkflowDeliveryConsoleLink.TryNormalizeBaseUrl(options.ConsoleWebBaseUrl, out _))
+            {
+                throw new InvalidOperationException(
+                    $"{WorkflowDeliveryOptions.SectionName}:{nameof(WorkflowDeliveryOptions.ConsoleWebBaseUrl)} " +
+                    "must be an absolute HTTPS origin (or a loopback HTTP origin) without userinfo, query, or fragment.");
+            }
         });
         services.Configure<UserLlmSettingsOptions>(configuration.GetSection("Aevatar:Studio:UserLlmSettings"));
         services.AddControllers()

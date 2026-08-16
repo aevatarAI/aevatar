@@ -41,6 +41,21 @@ public sealed class WorkflowDeliveryConfigurationRenderer : IWorkflowDeliveryCon
         if (unknown.Length != 0)
             throw new WorkflowDeliveryConfigurationException("UNKNOWN_CONFIGURATION_FIELD", $"Unknown configuration field '{unknown[0]}'.");
 
+        // Every unsupplied required variable leaves the package author's own default in the
+        // installed YAML. Those defaults are real production identifiers, so omitting a
+        // required field must fail closed rather than silently install someone else's target.
+        var missing = package.VariableSchema
+            .Where(item => item.Required && !supplied.ContainsKey(item.Key))
+            .Select(static item => item.Key)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        if (missing.Length != 0)
+        {
+            throw new WorkflowDeliveryConfigurationException(
+                "CONFIGURATION_FIELD_REQUIRED",
+                $"Configuration field '{missing[0]}' is required.");
+        }
+
         WorkflowYamlResourceGuard.Validate(package.SourceYaml);
         var stream = new YamlStream();
         try
