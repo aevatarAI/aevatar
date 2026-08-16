@@ -303,12 +303,15 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         ProvisionWorkflowRequest request,
         CancellationToken ct)
     {
-        var revisionId = BuildProvisionRevisionId(
+        var provisionalRevisionId = BuildProvisionRevisionId(
             provisionKey,
             workflowId,
             workflowYaml,
             executionMode,
             inlineWorkflowYamls: inlineWorkflowYamls);
+        var revisionId = ResolvePersistedExplicitRequestRevisionId(
+            existingPlan,
+            provisionalRevisionId);
         var mayBindResolvedRevision = existingPlan is null &&
                                       CanBindProvisionedConfirmationIdentity(suppliedConfirmations);
 
@@ -376,6 +379,22 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         }
 
         return new ProvisionRevisionAdmission(resolvedRevisionId, reboundPlan);
+    }
+
+    private static string ResolvePersistedExplicitRequestRevisionId(
+        WorkflowCapabilityAdmissionPlan? existingPlan,
+        string provisionalRevisionId)
+    {
+        var persistedGrant = existingPlan?.InvocationAdmissions
+            .Select(static admission => admission.NyxIdExplicitRequestGrant)
+            .FirstOrDefault(static grant => grant is not null);
+
+        // PrepareAsync may bind an admitted plan to the final, admission-discriminated
+        // revision. A later continuation must revalidate that exact persisted identity,
+        // not the provisional revision used before the plan existed.
+        return persistedGrant?.RevisionId.Length > 0
+            ? persistedGrant.RevisionId
+            : provisionalRevisionId;
     }
 
     private static bool CanBindProvisionedConfirmationIdentity(

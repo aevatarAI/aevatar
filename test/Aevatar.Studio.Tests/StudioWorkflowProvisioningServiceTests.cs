@@ -988,6 +988,66 @@ public sealed class StudioWorkflowProvisioningServiceTests
         member.BindRequest.Should().NotBeNull();
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ProvisionAsync_WithPlanReturnedByPrepare_ShouldReuseItsBoundRevisionIdentity(
+        bool includeCallerCredential)
+    {
+        var admission = StudioExplicitRequestAdmissionTestKit.CreateAdmissionService();
+        var member = NewMemberService();
+        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        var sut = NewService(member, schedule, admission);
+        var provisionalIdentity = ProvisionIdentity(
+            "scope-studio-alpha",
+            "team-alpha",
+            "Monitor");
+        var prepareRequest = new ProvisionWorkflowRequest(
+            "Monitor",
+            StudioExplicitRequestAdmissionTestKit.WorkflowYaml)
+        {
+            TeamId = "team-alpha",
+            AuthenticatedOwner = TestAuthenticatedOwner(),
+            CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(
+                [StudioExplicitRequestAdmissionTestKit.MatchingConfirmation(
+                    string.Empty,
+                    string.Empty)],
+                ExternalCapabilityExecutionMode.Durable),
+        };
+
+        var preparation = await sut.PrepareAsync(
+            "scope-studio-alpha",
+            Caller,
+            prepareRequest);
+
+        preparation.RevisionId.Should().NotBe(provisionalIdentity.RevisionId);
+        preparation.CapabilityAdmissionPlan.InvocationAdmissions.Should()
+            .ContainSingle().Which.NyxIdExplicitRequestGrant.RevisionId.Should()
+            .Be(preparation.RevisionId);
+        member.GetCallCount.Should().Be(0);
+        member.CreateInvoked.Should().BeFalse();
+
+        await sut.ProvisionAsync(
+            "scope-studio-alpha",
+            Caller,
+            new ProvisionWorkflowRequest(
+                "Monitor",
+                StudioExplicitRequestAdmissionTestKit.WorkflowYaml)
+            {
+                TeamId = "team-alpha",
+                AuthenticatedOwner = TestAuthenticatedOwner(),
+                CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(
+                    existingPlan: preparation.CapabilityAdmissionPlan,
+                    executionMode: ExternalCapabilityExecutionMode.Durable,
+                    includeCallerCredential: includeCallerCredential),
+            });
+
+        member.BindRequest.Should().NotBeNull();
+        member.BindRequest!.RevisionId.Should().Be(preparation.RevisionId);
+        admission.RefreshRequests.Should().HaveCount(includeCallerCredential ? 1 : 0);
+        admission.PersistedRequests.Should().HaveCount(includeCallerCredential ? 0 : 1);
+    }
+
     [Fact]
     public async Task ProvisionAsync_RejectsMissingTeamId_BeforeAdmissionOrProvisioning()
     {
